@@ -296,21 +296,35 @@ mod oracle_export {
     /// Not an assertion about ART: a hook so `xdftool` can be pointed at an
     /// image ART wrote. Set `ART_ADF_OUT` to a path and run the suite; the
     /// cross-check itself is a manual step, recorded in STATUS.
+    ///
+    /// The disk is formatted by *this* module and then filled by
+    /// `core/volume/write`, which is the combination a user's disk really goes
+    /// through — the writer's own export hooks start from
+    /// `core::volume::fixture`, so without this one nothing checks that
+    /// `create_blank_adf`'s output is a volume the writer and amitools agree
+    /// about.
     #[test]
     fn export_adf_for_oracle_when_asked() {
+        use crate::core::volume::device::FileRegionMut;
+        use crate::core::volume::write::VolumeWriter;
+        use crate::core::volume::{DosType, VolumeGeometry};
+
         let Ok(dest) = std::env::var("ART_ADF_OUT") else {
             return;
         };
+        let dest = std::path::PathBuf::from(dest);
         let image =
             super::create_blank_adf("Work", crate::core::adf::FileSystemType::Ffs, false).unwrap();
         std::fs::write(&dest, image).unwrap();
 
-        // Add a file the way the application does, so the oracle sees what a
-        // user's disk would really contain.
-        crate::core::adf::mutate_disk_file(std::path::Path::new(&dest), |img, fs_type| {
-            crate::core::adf::mutate::add_file(img, 0, "Readme", b"hello from ART", fs_type)?;
-            Ok(())
-        })
-        .unwrap();
+        // Add a file the way the application does: through the one filesystem
+        // writer ART has, so the oracle sees what a user's disk would contain.
+        let geometry = VolumeGeometry::floppy_dd(DosType::new(*b"DOS\x01"));
+        let mut device =
+            FileRegionMut::open(&dest, 0, geometry.total_bytes(), geometry.block_size).unwrap();
+        let mut writer = VolumeWriter::open(&mut device, geometry, &dest, 0).unwrap();
+        writer
+            .add_file(0, "Readme", b"hello from ART", Default::default())
+            .unwrap();
     }
 }

@@ -1,8 +1,16 @@
-//! ADF (Amiga Disk File) engine — read and write Phase 1.
+//! ADF (Amiga Disk File) engine — reading, validating and formatting.
 //!
 //! Parses AmigaDOS floppy images (OFS and FFS), walks the filesystem, extracts
-//! files, validates image integrity, creates new blank/formatted disks, and
-//! applies mutations (inject, mkdir, delete, rename).
+//! files, validates image integrity and creates new blank/formatted disks.
+//!
+//! **Mutation does not live here.** It used to: `core/adf/mutate.rs` was a
+//! second AmigaDOS writer that worked on a whole image in memory and hardcoded
+//! a DD floppy's geometry — block 880 as the root, 881 as the only bitmap
+//! block, 1760 as the size — which is right for every ADF and wrong for every
+//! hard disk. [`crate::core::volume::write`] is that same set of operations
+//! with the geometry as a parameter, working through a block device, and it is
+//! now the only filesystem writer in ART. Two writers meant two ideas of the
+//! same disk; one of them had to go.
 
 pub mod bcpl;
 pub mod blocks;
@@ -12,7 +20,6 @@ pub mod create;
 pub mod extract;
 pub mod fs;
 pub mod hash;
-pub mod mutate;
 pub mod validate;
 
 pub use bootblock::{BootBlock, FileSystemType};
@@ -187,67 +194,14 @@ impl AdfImage {
 /// The result of a successful on-disk mutation.
 ///
 /// Carries the backup location so the UI can tell the user where the previous
-/// version went (spec §92: state what will be backed up).
+/// version went (spec §92: state what will be backed up). The mutation itself
+/// is performed by [`crate::core::volume::write::VolumeWriter`]; this type is
+/// what `commands/adf.rs` hands the frontend afterwards.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MutationOutcome {
     pub info: AdfInfo,
     /// Absolute path of the backup taken before writing, when one was made.
     pub backup_path: Option<String>,
-}
-
-/// Safely perform a transactional mutation on an on-disk ADF file.
-///
-/// Implements the spec §57 pipeline:
-/// `read → parse → mutate → validate → backup → atomic commit`.
-///
-/// The original file is not touched until the mutated image has been re-parsed
-/// and validated. If validation fails the error propagates and the on-disk
-/// image is left exactly as it was.
-pub fn mutate_disk_file<F>(path: &std::path::Path, mutate_fn: F) -> CoreResult<MutationOutcome>
-where
-    F: FnOnce(&mut Vec<u8>, FileSystemType) -> CoreResult<()>,
-{
-    let mut bytes = std::fs::read(path)?;
-
-    // Parse the bootblock directly rather than building a throwaway AdfImage,
-    // so the buffer is never cloned (an ADF is ~880 KB, an HDF far larger).
-    if bytes.len() < DD_SIZE {
-        return Err(CoreError::Malformed {
-            format: "adf".into(),
-            detail: format!(
-                "file too small for DD floppy (got {} bytes, expected {})",
-                bytes.len(),
-                DD_SIZE
-            ),
-        });
-    }
-    let fs_type = BootBlock::parse(&bytes[..1024])?.fs_type;
-
-    mutate_fn(&mut bytes, fs_type)?;
-
-    // Re-parse and validate the mutated bytes BEFORE they reach the disk.
-    let updated_adf = AdfImage::from_bytes(bytes)?;
-    let report = updated_adf.validate()?;
-    if report.status == HealthStatus::Problem {
-        return Err(CoreError::Malformed {
-            format: "adf".into(),
-            detail: "modification resulted in invalid filesystem structure; \
-                     the original image was not modified"
-                .into(),
-        });
-    }
-
-    // Back up the previous contents, then swap the new image in atomically.
-    let backup = crate::core::safety::guarded_write(
-        path,
-        updated_adf.bytes(),
-        crate::core::safety::BackupPolicy::DISK_IMAGE,
-    )?;
-
-    Ok(MutationOutcome {
-        info: updated_adf.info()?,
-        backup_path: backup.map(|p| p.to_string_lossy().into_owned()),
-    })
 }
 
 #[cfg(test)]
@@ -361,82 +315,20 @@ mod mod_tests {
         );
     }
 
-    // --- mutate_disk_file: the spec §57 data-safety pipeline ---
-
-    fn scratch_disk(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("art-mutate-{tag}-{stamp}"));
-        std::fs::create_dir_all(&dir).unwrap();
-        let disk = dir.join("disk.adf");
-        std::fs::write(&disk, make_blank_ffs_image()).unwrap();
-        (dir, disk)
-    }
-
-    #[test]
-    fn mutation_backs_up_the_previous_version() {
-        let (dir, disk) = scratch_disk("backup");
-        let before = std::fs::read(&disk).unwrap();
-
-        let outcome = mutate_disk_file(&disk, |img, fs_type| {
-            crate::core::adf::mutate::add_file(img, 880, "Note.txt", b"hi", fs_type)?;
-            Ok(())
-        })
-        .unwrap();
-
-        let backup = outcome
-            .backup_path
-            .expect("a backup should have been taken");
-        // The backup holds the pre-modification image, byte for byte.
-        assert_eq!(std::fs::read(&backup).unwrap(), before);
-        // And the live file really did change.
-        assert_ne!(std::fs::read(&disk).unwrap(), before);
-        assert_eq!(outcome.info.file_count, 1);
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn failed_mutation_leaves_the_original_untouched() {
-        let (dir, disk) = scratch_disk("failed");
-        let before = std::fs::read(&disk).unwrap();
-
-        let result = mutate_disk_file(&disk, |_img, _fs| {
-            Err(CoreError::InvalidInput("deliberate failure".into()))
-        });
-
-        assert!(result.is_err());
-        assert_eq!(
-            std::fs::read(&disk).unwrap(),
-            before,
-            "a failed mutation must not modify the on-disk image"
-        );
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn mutation_that_corrupts_the_image_is_not_committed() {
-        let (dir, disk) = scratch_disk("corrupt");
-        let before = std::fs::read(&disk).unwrap();
-
-        // Wipe the root block: the mutation "succeeds" but the resulting image
-        // is structurally invalid, so validation must reject the commit.
-        let result = mutate_disk_file(&disk, |img, _fs| {
-            let root = 880 * blocks::BLOCK_SIZE;
-            img[root..root + blocks::BLOCK_SIZE].fill(0);
-            Ok(())
-        });
-
-        assert!(result.is_err(), "corrupting mutation should be rejected");
-        assert_eq!(
-            std::fs::read(&disk).unwrap(),
-            before,
-            "the original must survive a rejected mutation"
-        );
-        std::fs::remove_dir_all(&dir).ok();
-    }
+    // The spec §57 data-safety pipeline used to be tested here, against
+    // `mutate_disk_file`. That function is gone and the pipeline now lives in
+    // `commands/volume_write.rs::with_volume`, so its tests live beside it:
+    //
+    // - the backup holds the previous image byte for byte
+    //   → `commands::volume_write::tests::
+    //      a_write_backs_up_the_previous_version_byte_for_byte`
+    // - a failure after the mutation never reaches the disk
+    //   → `commands::adf::tests::a_failure_after_the_mutation_never_reaches_the_disk`
+    //   and `commands::volume_write::tests::
+    //        a_refused_operation_leaves_the_image_byte_for_byte_unchanged`
+    // - a write that would not validate is rolled back whole
+    //   → `core::volume::write::tests::
+    //      a_failed_validation_rolls_the_whole_operation_back`
 
     /// Open an image some other tool wrote and print what ART made of it.
     ///

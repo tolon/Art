@@ -18,10 +18,11 @@ use crate::error::{AppError, AppResult};
 ///
 /// Called from *inside* a [`with_volume`] closure, while the session's
 /// device is still open — never from a second, independent file open after
-/// the session ends. `core::adf::mutate`'s old `mutate_disk_file` built its
-/// `AdfInfo` from the same in-memory buffer it was about to write, with no
-/// further I/O; this is that same shape for the volume writer. Re-opening the
-/// file afterwards instead would trade that guarantee for a race: the moment
+/// the session ends. The retired `core::adf::mutate` writer's `mutate_disk_file`
+/// built its `AdfInfo` from the same in-memory buffer it was about to write,
+/// with no further I/O; this is that same shape for the volume writer, which is
+/// now ART's only filesystem writer. Re-opening the file afterwards instead
+/// would trade that guarantee for a race: the moment
 /// this session's handle is released, another process (an antivirus
 /// scan-on-close, a search indexer) can briefly lock the file, and a second
 /// open racing that lock would report an already-durable, successful write as

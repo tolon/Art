@@ -1124,8 +1124,8 @@ mod tests {
     }
 
     /// Nested folders in the archive are recreated once, not once per file —
-    /// carried over from the old `core::adf::mutate` install path, now proved
-    /// against the volume writer instead.
+    /// carried over from the retired `core::adf::mutate` install path, now
+    /// proved against the volume writer instead.
     #[test]
     fn installing_recreates_nested_folders_once() {
         use crate::core::jobs::NoProgress;

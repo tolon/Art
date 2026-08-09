@@ -1051,8 +1051,10 @@ mod tests {
         let data = vec![9u8; 100 * 512];
 
         let before = with_writer(&disk, |w| w.free_blocks()).unwrap();
-        let added =
-            with_writer(&disk, |w| w.add_file(0, "Big.bin", &data, FileMeta::default())).unwrap();
+        let added = with_writer(&disk, |w| {
+            w.add_file(0, "Big.bin", &data, FileMeta::default())
+        })
+        .unwrap();
         // More than the header plus its data: the extension block is in there.
         assert!(
             before - added.free_blocks > 1 + 100,
