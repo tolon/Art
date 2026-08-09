@@ -559,7 +559,7 @@ export function AminetStudio() {
   const empty = (stats?.total ?? 0) === 0;
 
   return (
-    <div style={{ maxWidth: 1100 }}>
+    <div>
       <h1 style={{ fontSize: 20 }}>{t("nav.aminet")}</h1>
       <p className="muted" style={{ marginTop: 4 }}>
         Aminet is the store. ART is the courier and the customs officer — every

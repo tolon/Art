@@ -111,7 +111,7 @@ export function GotekStudio() {
   const activeSlot = selectedSlotIdx !== null ? slots[selectedSlotIdx] : slots[0];
 
   return (
-    <div style={{ maxWidth: 980 }}>
+    <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h1 style={{ fontSize: 20, margin: 0 }}>{t("nav.gotek")} — Gotek & FlashFloppy Studio</h1>
         <div style={{ display: "flex", gap: 8 }}>

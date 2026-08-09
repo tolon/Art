@@ -158,7 +158,7 @@ export function WinuaeStudio() {
   }
 
   return (
-    <div style={{ maxWidth: 980 }}>
+    <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h1 style={{ fontSize: 20, margin: 0 }}>{t("nav.winuae")} — WinUAE Studio</h1>
         {install && (

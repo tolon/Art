@@ -1057,7 +1057,7 @@ export function FileManager() {
   }
 
   return (
-    <div>
+    <div className="app-content-wide">
       <h1 style={{ fontSize: 20 }}>{t("nav.files")}</h1>
       <p className="muted" style={{ marginTop: 4 }}>
         Two panes. Put a folder on one side and a disk image on the other, then

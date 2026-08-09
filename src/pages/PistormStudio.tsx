@@ -156,7 +156,7 @@ export function PistormStudio() {
   }
 
   return (
-    <div style={{ maxWidth: 980 }}>
+    <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h1 style={{ fontSize: 20, margin: 0 }}>{t("nav.pistorm")} — PiStorm & Emu68 Studio</h1>
         <div style={{ display: "flex", gap: 8 }}>

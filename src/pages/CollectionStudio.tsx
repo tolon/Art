@@ -122,7 +122,7 @@ export function CollectionStudio() {
   }
 
   return (
-    <div style={{ maxWidth: 1040 }}>
+    <div>
       {/* Top Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
         <div>

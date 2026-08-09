@@ -29,6 +29,48 @@
   padding: 24px 28px;
 }
 
+/* One place decides how wide content gets, so a page never has to. Pages that
+   genuinely want the full width (the two-pane manager) opt out with
+   `.app-content-wide` on their own root. */
+.app-content > * {
+  max-width: 1180px;
+  margin-inline: auto;
+}
+.app-content > .app-content-wide {
+  max-width: none;
+}
+
+/* The page never scrolls sideways (see `.app-content`), so anything genuinely
+   wider than the window — a hex dump row, a block table — scrolls inside its
+   own box rather than dragging the whole layout with it. */
+.scroll-x {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+/* Below this the sidebar's labels cost more than they give. */
+@media (max-width: 1000px) {
+  .app-shell {
+    grid-template-columns: 60px 1fr;
+  }
+  .sidebar-brand,
+  .sidebar-link span:not(.sidebar-icon) {
+    display: none;
+  }
+  .sidebar-link {
+    justify-content: center;
+  }
+  .app-content {
+    padding: 16px 14px;
+  }
+}
+
+@media (max-width: 760px) {
+  .quick-actions {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
 /* ---- Sidebar --------------------------------------------------------- */
 
 .sidebar {

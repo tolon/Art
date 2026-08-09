@@ -69,7 +69,7 @@ export function HexTools() {
   }
 
   return (
-    <div style={{ maxWidth: 980 }}>
+    <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h1 style={{ fontSize: 20, margin: 0 }}>{t("nav.tools")} — Forensic Hex & Sector Inspector</h1>
         <button className="btn btn-sm btn-primary" onClick={handleOpenFile} disabled={busy}>

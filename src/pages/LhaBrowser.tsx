@@ -73,7 +73,7 @@ export function LhaBrowser() {
   }
 
   return (
-    <div style={{ maxWidth: 980 }}>
+    <div>
       <h1 style={{ fontSize: 20 }}>{t("nav.archiveTools")} — LHA Browser</h1>
       <div style={{ display: "flex", gap: 8, margin: "12px 0", flexWrap: "wrap" }}>
         <button className="btn btn-primary" onClick={chooseArchive} disabled={busy}>

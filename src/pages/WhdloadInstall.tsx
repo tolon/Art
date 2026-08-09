@@ -176,7 +176,7 @@ export function WhdloadInstall() {
   const ready = plan !== null && plan.refusal === null && busy === null;
 
   return (
-    <div style={{ maxWidth: 780 }}>
+    <div>
       <h1 style={{ fontSize: 20 }}>{t("nav.whdload")}</h1>
       <p className="muted" style={{ marginTop: 4 }}>
         Put a WHDLoad package on a hard disk, in one step. ART checks what is in
