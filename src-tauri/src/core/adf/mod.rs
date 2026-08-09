@@ -195,22 +195,6 @@ pub struct MutationOutcome {
     pub backup_path: Option<String>,
 }
 
-impl MutationOutcome {
-    /// Build the ADF commands' outcome after a write through the volume writer.
-    ///
-    /// The two writers report different shapes: the volume writer's
-    /// [`crate::core::volume::write::WriteOutcome`] describes what changed,
-    /// while the ADF commands have always returned a fresh [`AdfInfo`] snapshot
-    /// of the whole disk. Rather than invent a partial `AdfInfo` from the write
-    /// outcome's few fields, this re-opens the image the writer just committed
-    /// — the one place that reconciles the two shapes, so the frontend
-    /// contract is unchanged by which writer produced the result.
-    pub fn from_write(image: &std::path::Path, backup_path: Option<String>) -> CoreResult<Self> {
-        let info = AdfImage::open(image)?.info()?;
-        Ok(Self { info, backup_path })
-    }
-}
-
 /// Safely perform a transactional mutation on an on-disk ADF file.
 ///
 /// Implements the spec §57 pipeline:

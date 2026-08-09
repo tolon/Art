@@ -173,6 +173,32 @@ impl<'a> VolumeWriter<'a> {
         &self.geometry
     }
 
+    /// Every block of the volume, concatenated into one buffer — the shape
+    /// `core::adf::AdfImage` expects.
+    ///
+    /// Reads through the device this session already has open, block by
+    /// block, rather than a second independent file open. A caller that just
+    /// committed a write and wants a fresh in-memory snapshot must build it
+    /// from *this* session, not by reopening the file: the moment a handle to
+    /// a just-modified file is released, another process (an antivirus
+    /// scan-on-close, a search indexer) can briefly lock it, and a second
+    /// open racing that lock would report a durable, already-successful write
+    /// as a failure. Reading through the still-open handle cannot hit that
+    /// race.
+    ///
+    /// Only sensible for a volume small enough to hold entirely in memory —
+    /// an ADF, not a multi-gigabyte hard disk partition.
+    pub fn all_bytes(&self) -> CoreResult<Vec<u8>> {
+        let block_size = self.geometry.block_size;
+        let mut out = Vec::with_capacity(self.geometry.total_blocks as usize * block_size);
+        let mut buf = vec![0u8; block_size];
+        for block in 0..self.geometry.total_blocks {
+            self.device.read_block(block, &mut buf)?;
+            out.extend_from_slice(&buf);
+        }
+        Ok(out)
+    }
+
     /// Blocks the bitmap reports as free.
     pub fn free_blocks(&self) -> CoreResult<usize> {
         Ok(Allocator::load(self.device, &self.geometry)?.free_count())
