@@ -330,6 +330,24 @@ def check_read_back_the_other_way(work: Path) -> None:
     )
 
 
+def boot_block_checksum(bootblock_bytes: bytes) -> int:
+    """Mirror `BootBlock::compute_checksum` in `core/adf/bootblock.rs` exactly.
+
+    A 32-bit sum of every longword across the first 1024 bytes, with
+    end-around carry (the checksum field itself, offset 4, treated as zero
+    while summing), then complemented. Verified against amitools' own
+    checksum on an untouched `xdftool`-written boot block before trusting it
+    here — the two agreed (`0xe33d0e72`), so this is not an invented variant.
+    """
+    total = 0
+    for i in range(0, 1024, 4):
+        word = 0 if i == 4 else int.from_bytes(bootblock_bytes[i : i + 4], "big")
+        added = total + word
+        carry = 1 if added >= (1 << 32) else 0
+        total = (added % (1 << 32) + carry) % (1 << 32)
+    return (~total) & 0xFFFFFFFF
+
+
 def check_bootable_adf_opens(work: Path) -> None:
     """A *bootable* floppy amitools wrote, opened by ART.
 
@@ -340,21 +358,28 @@ def check_bootable_adf_opens(work: Path) -> None:
 
     `xdftool ... format ... + boot install` is not quite enough by itself:
     amitools' own `BootBlock.write()` unconditionally echoes the *correct*
-    root block number into bytes 8..11 (a legacy field of its own model, not
-    part of the real AmigaDOS format — real boot code starts right there).
-    For a standard DD floppy that value is 880, which is also the right
-    answer, so the pre-fix bug happened to compute the right root block by
-    coincidence on this exact fixture and the check would have passed against
-    the bug it exists to catch. Confirmed by running this check's assertions
-    against the pre-fix `AdfImage::from_bytes` (commit before d622412): it
-    also printed `root=880` here.
+    root block number into bytes 8..11 on every DOS bootblock it writes —
+    with or without `boot install` — because that is a legacy field of its
+    own model, not part of the real AmigaDOS format (real boot code starts
+    right there). For a standard DD floppy that value is 880, which is also
+    the right answer, so the pre-fix bug happened to compute the right root
+    block by coincidence on this exact fixture and the check would have
+    passed against the bug it exists to catch. Confirmed by running this
+    check's assertions against the pre-fix `AdfImage::from_bytes` (the commit
+    before d622412, in a throwaway worktree): it also printed `root=880`.
 
-    So after amitools installs real boot code (which lands at byte 12
-    onward), the real code is shifted 4 bytes earlier to overwrite that
-    coincidental echo — still genuine 68000 instructions amitools generated,
-    just where a real bootable disk's boot code actually starts. Against the
-    pre-fix reader this decodes as a block number far outside the image and
-    fails with "block ... out of range"; against the fix it is never read.
+    So the whole boot-code region (byte 12 onward — genuine 68000
+    instructions amitools generated, not fabricated) is moved 4 bytes
+    earlier, overwriting that coincidental echo; the 4 bytes vacated at the
+    very end of the block become zero. That move invalidates the boot-block
+    checksum amitools computed, so the checksum is recomputed with ART's own
+    algorithm and rewritten — otherwise this would test ART against a disk
+    no real Amiga would accept as bootable, which is a weaker claim than the
+    check's name makes. `xdftool boot show` on the altered file confirms
+    amitools itself still considers it checksum-valid before ART ever sees
+    it. Against the pre-fix reader the moved bytes decode as a block number
+    far outside the image and fail with "block ... out of range"; against the
+    fix they are never read as a block number at all.
     """
     print("Bootable ADF written by amitools, opened by ART:")
     image = work / "bootable.adf"
@@ -365,27 +390,46 @@ def check_bootable_adf_opens(work: Path) -> None:
         failures.append("amitools could not create a bootable image")
         return
 
-    # Prove the fixture is actually bootable — otherwise the test proves nothing.
     data = bytearray(image.read_bytes())
-    if data[8:12] == b"\0\0\0\0":
+
+    # Prove boot code was actually installed. Bytes 8..11 alone are not a
+    # useful signal — see the docstring, amitools writes those regardless of
+    # `boot install`. The discriminating region is byte 12 onward, where real
+    # boot code lands only if `boot install` actually did something.
+    if not any(data[12:1024]):
         print("  FAIL the fixture has no boot code, so it does not exercise the bug")
         failures.append("the bootable fixture was not bootable")
         return
     print("  ok   the fixture really carries boot code")
 
-    # Overwrite amitools' root-block echo at 8..11 with the boot code that
-    # actually starts at byte 12 — see the docstring. Without this, bytes
-    # 8..11 hold 880 (the true root block) and the pre-fix bug would read the
-    # right answer by accident, proving nothing.
-    root_block_echo = data[8:12]
-    real_boot_code = data[12:16]
-    if real_boot_code == root_block_echo:
+    root_block_echo = bytes(data[8:12])
+    if root_block_echo == bytes(data[12:16]):
         print("  FAIL boot code is indistinguishable from the root-block echo")
         failures.append("the bootable fixture could not be made to exercise the bug")
         return
-    data[8:12] = real_boot_code
+
+    # Move (not copy) the boot code 4 bytes earlier: what was at 12..1024 is
+    # now at 8..1020, and the last 4 bytes of the block — now vacated — are
+    # zeroed rather than left duplicated.
+    data[8:1024] = data[12:1024] + bytearray(4)
+    if bytes(data[8:12]) == root_block_echo:
+        print("  FAIL the move did not disturb the root-block echo")
+        failures.append("the bootable fixture could not be made to exercise the bug")
+        return
+    print("  ok   the root-block-shaped coincidence at 8..11 was overwritten by real boot code")
+
+    # The move invalidated amitools' checksum; recompute it with ART's own
+    # algorithm so the altered fixture is still one amitools — and a real
+    # Amiga — would accept as bootable.
+    data[4:8] = boot_block_checksum(bytes(data)).to_bytes(4, "big")
     image.write_bytes(bytes(data))
-    print("  ok   the root-block-shaped coincidence at 8..11 was replaced with real boot code")
+
+    boot_info = oracle(["xdftool", str(image), "boot", "show"])
+    expect(
+        "the altered fixture's checksum still validates under amitools",
+        boot_info,
+        "bootable: True",
+    )
 
     out = run(
         [
