@@ -141,7 +141,50 @@ fn build_plan(
 
     let (scratch, unpack_skipped) = unpack_for_install(archive, &NoProgress)?;
     let entries = walk(scratch.path())?;
-    let layout = analyse(&entries)?;
+
+    // `analyse` failing here means the archive unpacked fine but holds no
+    // WHDLoad pack — that is an answer about the archive, not a fault in ART
+    // (§68's identifiers are for faults). There is no drawer to name and
+    // nothing to cost, so the plan reports the refusal with those fields at
+    // their honest empty/zero rather than guessing at a layout that was never
+    // found. `volume_name` is left blank too: reading it would mean mounting
+    // the disk for a refusal that has nothing to do with the disk.
+    let layout = match analyse(&entries) {
+        Ok(layout) => layout,
+        Err(CoreError::InvalidInput(reason)) => {
+            return Ok(WhdloadPlan {
+                verdict,
+                layout: PackLayout {
+                    root: String::new(),
+                    name: String::new(),
+                    slave: String::new(),
+                    icon: None,
+                    outside: Vec::new(),
+                    needs_installer: false,
+                },
+                drawer: String::new(),
+                volume_name: String::new(),
+                cost: CopyPlan {
+                    files: 0,
+                    directories: 0,
+                    total_bytes: 0,
+                    blocks_needed: 0,
+                    blocks_free: 0,
+                    block_size: 0,
+                    name_problems: Vec::new(),
+                    collisions: Vec::new(),
+                    split_icons: Vec::new(),
+                },
+                name_taken: false,
+                refusal: Some(reason),
+            });
+        }
+        // Any other error out of `analyse` (there is none today, but the
+        // match stays exhaustive on purpose) is a real fault, not an answer
+        // about the archive — it keeps its identifier and reaches the error
+        // banner.
+        Err(other) => return Err(other),
+    };
 
     let pack_root = if layout.root.is_empty() {
         scratch.path().to_path_buf()
@@ -834,9 +877,65 @@ mod tests {
         std::fs::write(&image, &bytes).unwrap();
         let before = std::fs::read(&image).unwrap();
 
-        assert!(build_plan(&archive, &image, 0, 0).is_err());
+        // Not a fault: the plan builds fine and reports why ART will not
+        // install it — a genuinely broken archive is the one that still
+        // throws, see `a_missing_pack_is_a_refusal_and_a_broken_archive_is_still_an_error`.
+        let plan = build_plan(&archive, &image, 0, 0).unwrap();
+        assert!(
+            plan.refusal.is_some(),
+            "an archive with no slave must be refused, not errored"
+        );
         assert!(run_install(&archive, &image, 0, 0, &NoProgress).is_err());
         assert_eq!(std::fs::read(&image).unwrap(), before);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The split this task exists for: a plan that cannot find a pack is a
+    /// refusal (data, `Ok` with `refusal` set, no `ART-*` identifier), while an
+    /// archive ART genuinely cannot read is a fault (`Err`, with one). Both
+    /// reach `build_plan` the same way — as a `.lha` path — so this is the
+    /// contract that must hold for every future caller, not just the UI.
+    #[test]
+    fn a_missing_pack_is_a_refusal_and_a_broken_archive_is_still_an_error() {
+        let dir = scratch("split");
+
+        // No `.slave` anywhere: a real archive, nothing wrong with it, it is
+        // simply not a WHDLoad package. `build_plan` must succeed and say so.
+        let ordinary = dir.join("Docs.lha");
+        std::fs::write(
+            &ordinary,
+            crate::core::lha::tests::make_lha_with(&[("Docs/readme.txt", b"just documents")]),
+        )
+        .unwrap();
+
+        let image = dir.join("Games.hdf");
+        let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
+        std::fs::write(&image, &bytes).unwrap();
+
+        let plan = build_plan(&ordinary, &image, 0, 0)
+            .expect("a plan without a pack is still a plan, not an error");
+        let refusal = plan
+            .refusal
+            .expect("no .slave in the archive must be reported as a refusal");
+        assert!(refusal.contains("not a WHDLoad pack"), "{refusal}");
+        assert!(
+            !refusal.contains("ART-"),
+            "a refusal carries no error identifier: {refusal}"
+        );
+
+        // A corrupt archive is a different question entirely: ART could not
+        // even read it, which is a fault and must keep throwing with its
+        // identifier so it reaches the red banner, not the amber one.
+        let broken = dir.join("Broken.lha");
+        std::fs::write(&broken, b"not an lha file at all").unwrap();
+
+        let err = build_plan(&broken, &image, 0, 0)
+            .expect_err("an unreadable archive must still be a real error");
+        assert!(
+            matches!(err, CoreError::Malformed { .. }),
+            "expected a malformed-archive error, got {err:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

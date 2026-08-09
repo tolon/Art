@@ -46,7 +46,6 @@ export function WhdloadInstall() {
   const [volumeIndex, setVolumeIndex] = useState<number | null>(null);
 
   const [plan, setPlan] = useState<WhdloadPlan | null>(null);
-  const [planRefusal, setPlanRefusal] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<WhdloadOutcome | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -101,14 +100,11 @@ export function WhdloadInstall() {
     }
     setBusy("Looking inside the package…");
     setError(null);
-    setPlanRefusal(null);
     try {
       setPlan(await whdloadPlan(archive, image, volumeIndex));
     } catch (e) {
-      // A plan that cannot even be built is still an answer about the archive,
-      // not a fault in ART. It is shown where the package was chosen.
       setPlan(null);
-      setPlanRefusal(String(e).replace(/^invalid input: /, ""));
+      setError(String(e));
     } finally {
       setBusy(null);
     }
@@ -216,13 +212,6 @@ export function WhdloadInstall() {
         )}
 
         {plan && <Detection plan={plan} powerMode={powerMode} />}
-        {planRefusal && (
-          <Refusal
-            title="This is not a package ART can install"
-            reason={planRefusal}
-            suggestion="Open it in Archive Tools to see what is inside."
-          />
-        )}
       </section>
 
       {/* ---- 2. the disk ---- */}
