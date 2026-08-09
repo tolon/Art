@@ -5,13 +5,42 @@ use std::path::PathBuf;
 use tauri::State;
 
 use super::oplog::{user_operation, write_result};
+use crate::commands::volume_write::{with_volume, MutationResult};
 use crate::core::adf::{
-    add_file, create_directory, delete_entry, mutate_disk_file, rename_entry, save_new_adf,
-    AdfImage, AdfInfo, FileEntry, FileSystemType, MutationOutcome, ValidationReport,
+    save_new_adf, AdfImage, AdfInfo, FileEntry, FileSystemType, MutationOutcome, ValidationReport,
 };
-use crate::core::error::CoreError;
+use crate::core::error::{CoreError, CoreResult};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
+
+/// One place where an ADF command becomes a volume write.
+///
+/// An ADF is a bare volume at index 0. Routing every mutation through the
+/// volume writer is what stops ADF Studio and the file manager holding two
+/// different ideas of the same disk.
+fn add_file_at(
+    image: &std::path::Path,
+    dir_block: Option<u32>,
+    source: &std::path::Path,
+    name: Option<String>,
+) -> CoreResult<MutationResult> {
+    let data = std::fs::read(source)?;
+    let chosen = name.unwrap_or_else(|| {
+        source
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default()
+    });
+
+    crate::commands::volume_write::write_bytes_into(
+        image,
+        0,
+        dir_block.unwrap_or(0),
+        &chosen,
+        &data,
+        false,
+    )
+}
 
 /// Open an ADF and return high-level info (volume, filesystem, capacity...).
 #[tauri::command]
@@ -89,19 +118,17 @@ pub fn adf_add_file(
     target_name: Option<String>,
     oplog: State<'_, JsonlOperationLog>,
 ) -> AppResult<MutationOutcome> {
-    let file_data = std::fs::read(&source_file_path)?;
-    let p = PathBuf::from(&source_file_path);
+    let image = PathBuf::from(&path);
+    let source = PathBuf::from(&source_file_path);
     let name = target_name
-        .or_else(|| p.file_name().map(|s| s.to_string_lossy().to_string()))
+        .clone()
+        .or_else(|| source.file_name().map(|s| s.to_string_lossy().to_string()))
         .unwrap_or_else(|| "unnamed".to_string());
 
-    let target_dir = dir_block.unwrap_or(0);
-    let byte_count = file_data.len();
-    let result = mutate_disk_file(&PathBuf::from(&path), |img, fs_type| {
-        add_file(img, target_dir, &name, &file_data, fs_type)?;
-        Ok(())
-    })
-    .map_err(Into::into);
+    let byte_count = std::fs::metadata(&source).map(|m| m.len()).unwrap_or(0);
+    let result = add_file_at(&image, dir_block, &source, Some(name.clone()))
+        .and_then(|mutation| MutationOutcome::from_write(&image, mutation.backup))
+        .map_err(AppError::from);
 
     write_result(
         &oplog,
@@ -129,12 +156,11 @@ pub fn adf_create_directory(
     name: String,
     oplog: State<'_, JsonlOperationLog>,
 ) -> AppResult<MutationOutcome> {
+    let image = PathBuf::from(&path);
     let target_dir = parent_block.unwrap_or(0);
-    let result = mutate_disk_file(&PathBuf::from(&path), |img, _| {
-        create_directory(img, target_dir, &name)?;
-        Ok(())
-    })
-    .map_err(Into::into);
+    let result = with_volume(&image, 0, |writer| writer.make_dir(target_dir, name.trim()))
+        .and_then(|(_, _, backup)| MutationOutcome::from_write(&image, backup))
+        .map_err(AppError::from);
 
     write_result(
         &oplog,
@@ -160,12 +186,11 @@ pub fn adf_delete_entry(
     header_block: u32,
     oplog: State<'_, JsonlOperationLog>,
 ) -> AppResult<MutationOutcome> {
+    let image = PathBuf::from(&path);
     let target_dir = parent_block.unwrap_or(0);
-    let result = mutate_disk_file(&PathBuf::from(&path), |img, _| {
-        delete_entry(img, target_dir, header_block)?;
-        Ok(())
-    })
-    .map_err(Into::into);
+    let result = with_volume(&image, 0, |writer| writer.delete(target_dir, header_block))
+        .and_then(|(_, _, backup)| MutationOutcome::from_write(&image, backup))
+        .map_err(AppError::from);
 
     write_result(
         &oplog,
@@ -192,12 +217,13 @@ pub fn adf_rename_entry(
     new_name: String,
     oplog: State<'_, JsonlOperationLog>,
 ) -> AppResult<MutationOutcome> {
+    let image = PathBuf::from(&path);
     let target_dir = parent_block.unwrap_or(0);
-    let result = mutate_disk_file(&PathBuf::from(&path), |img, _| {
-        rename_entry(img, target_dir, header_block, &new_name)?;
-        Ok(())
+    let result = with_volume(&image, 0, |writer| {
+        writer.rename(target_dir, header_block, new_name.trim())
     })
-    .map_err(Into::into);
+    .and_then(|(_, _, backup)| MutationOutcome::from_write(&image, backup))
+    .map_err(AppError::from);
 
     write_result(
         &oplog,
@@ -213,4 +239,58 @@ pub fn adf_rename_entry(
     );
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::adf::create::create_blank_adf;
+    use crate::core::adf::FileSystemType;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("art-cmd-adf-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The same operation the file manager performs, through the ADF commands.
+    /// Both must land on `core/volume` so the two screens cannot disagree.
+    #[test]
+    fn adding_a_file_goes_through_the_volume_writer() {
+        let dir = scratch("add");
+        let path = dir.join("disk.adf");
+        std::fs::write(
+            &path,
+            create_blank_adf("Work", FileSystemType::Ffs, false).unwrap(),
+        )
+        .unwrap();
+
+        let source = dir.join("Readme");
+        std::fs::write(&source, b"hello from ART").unwrap();
+
+        let outcome = add_file_at(&path, None, &source, Some("Readme".into())).unwrap();
+        assert!(outcome.verified, "the volume writer verifies what it wrote");
+
+        // Read it back through the volume path, which is now the only path.
+        let entry = crate::commands::volume_write::pick_volume(&path, 0).unwrap();
+        let (device, geometry) = crate::core::volume::mount::mount(&path, &entry).unwrap();
+        let set = crate::core::volume::write::layout::BlockSet::new(geometry.block_size);
+        let found = crate::core::volume::write::dir::find_entry(
+            &device,
+            &set,
+            &geometry,
+            geometry.root_block,
+            "Readme",
+        )
+        .unwrap()
+        .expect("the file must be on the disk");
+        assert_eq!(
+            crate::core::volume::write::file::read_file(&device, &set, &geometry, found.block)
+                .unwrap(),
+            b"hello from ART"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

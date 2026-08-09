@@ -1002,6 +1002,39 @@ fn run_copy_in_staged(
     }
 }
 
+/// Write bytes into a volume, replacing an existing entry when asked.
+///
+/// Shared by the `volume_write_bytes` command and the ADF commands, so both
+/// take the same route through the writer rather than disagreeing about the
+/// same disk.
+pub fn write_bytes_into(
+    image: &Path,
+    volume_index: usize,
+    dir_block: u32,
+    name: &str,
+    contents: &[u8],
+    replace: bool,
+) -> CoreResult<MutationResult> {
+    let (outcome, strategy, backup) = with_writer(image, volume_index, |writer| {
+        if let Some(existing) = writer.find(dir_block, name)? {
+            if !replace {
+                return Err(CoreError::InvalidInput(format!(
+                    "'{name}' is already there"
+                )));
+            }
+            writer.delete(dir_block, existing.block)?;
+        }
+        writer.add_file(dir_block, name, contents, Default::default())
+    })?;
+
+    Ok(result_of(
+        outcome,
+        strategy,
+        backup,
+        outcome_block_size(image, volume_index),
+    ))
+}
+
 /// Write a file the frontend supplied as bytes.
 ///
 /// Used by the checkout/checkin round trip (§6) and the small-file drop path,
@@ -1021,21 +1054,14 @@ pub fn volume_write_bytes(
     let parent = dir_block.unwrap_or(0);
     let chosen = name.trim().to_string();
 
-    let result = with_writer(&image, volume_index, |writer| {
-        if let Some(existing) = writer.find(parent, &chosen)? {
-            if !replace.unwrap_or(false) {
-                return Err(CoreError::InvalidInput(format!(
-                    "'{chosen}' is already there"
-                )));
-            }
-            writer.delete(parent, existing.block)?;
-        }
-        writer.add_file(parent, &chosen, &contents, Default::default())
-    })
-    .map(|(outcome, strategy, backup)| {
-        let block_size = outcome_block_size(&image, volume_index);
-        result_of(outcome, strategy, backup, block_size)
-    })
+    let result = write_bytes_into(
+        &image,
+        volume_index,
+        parent,
+        &chosen,
+        &contents,
+        replace.unwrap_or(false),
+    )
     .map_err(AppError::from);
 
     write_result(
