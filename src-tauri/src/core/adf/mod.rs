@@ -30,6 +30,17 @@ pub const DD_TOTAL_BLOCKS: usize = 1760;
 /// Total byte size of a DD ADF.
 pub const DD_SIZE: usize = DD_TOTAL_BLOCKS * blocks::BLOCK_SIZE;
 
+/// Where the root block of an image of this size lives.
+///
+/// One place, deliberately. ART used to read this from the boot block, where
+/// no such field exists (ART-037); the value is computed, and it is computed
+/// here so two call sites cannot drift apart the way the reader and the
+/// writer once did.
+pub fn root_block_of(image: &[u8]) -> u32 {
+    let total_blocks = (image.len() / blocks::BLOCK_SIZE) as u32;
+    crate::core::volume::VolumeGeometry::root_block_for(total_blocks)
+}
+
 /// High-level information about an opened ADF (serialised to the frontend).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdfInfo {
@@ -77,12 +88,7 @@ impl AdfImage {
 
         // Parse bootblock (sectors 0 & 1 = 1024 bytes)
         let bootblock = BootBlock::parse(&image[..1024])?;
-
-        // The root block is derived from the volume's size, not read from the
-        // boot block — a boot block has no such field. Verified against
-        // ADFlib (`adfVolCalcRootBlk`) and amitools (`calc_root_blk`).
-        let total_blocks = (image.len() / blocks::BLOCK_SIZE) as u32;
-        let root_block_num = crate::core::volume::VolumeGeometry::root_block_for(total_blocks);
+        let root_block_num = root_block_of(&image);
 
         Ok(Self {
             image,
