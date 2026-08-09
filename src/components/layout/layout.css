@@ -40,6 +40,13 @@
   max-width: none;
 }
 
+/* The job bar is chrome, not page content: it belongs to the window rather
+   than to whatever screen is open, so it spans the full width even on pages
+   that centre their content. */
+.app-content > .job-bar {
+  max-width: none;
+}
+
 /* The page never scrolls sideways (see `.app-content`), so anything genuinely
    wider than the window — a hex dump row, a block table — scrolls inside its
    own box rather than dragging the whole layout with it. */
