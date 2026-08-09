@@ -30,6 +30,15 @@ pub const DD_TOTAL_BLOCKS: usize = 1760;
 /// Total byte size of a DD ADF.
 pub const DD_SIZE: usize = DD_TOTAL_BLOCKS * blocks::BLOCK_SIZE;
 
+/// The number of whole blocks an image holds, derived from its own length.
+///
+/// One place, deliberately: DD and HD ADFs differ only in block count, and
+/// every consumer of that count (root-block placement, bitmap size, reported
+/// capacity) must agree on it or they silently disagree about the same disk.
+pub fn total_blocks_of(image: &[u8]) -> usize {
+    image.len() / blocks::BLOCK_SIZE
+}
+
 /// Where the root block of an image of this size lives.
 ///
 /// One place, deliberately. ART used to read this from the boot block, where
@@ -37,7 +46,7 @@ pub const DD_SIZE: usize = DD_TOTAL_BLOCKS * blocks::BLOCK_SIZE;
 /// here so two call sites cannot drift apart the way the reader and the
 /// writer once did.
 pub fn root_block_of(image: &[u8]) -> u32 {
-    let total_blocks = (image.len() / blocks::BLOCK_SIZE) as u32;
+    let total_blocks = total_blocks_of(image) as u32;
     crate::core::volume::VolumeGeometry::root_block_for(total_blocks)
 }
 
@@ -102,9 +111,12 @@ impl AdfImage {
         let root = blocks::RootBlock::parse(self.block(self.root_block_num)?)?;
         let stats = fs::walk_and_count(&self.image, self.root_block_num)?;
         let bm_block = self.block(root.bitmap_block)?;
-        let bm = blocks::Bitmap::parse(bm_block, DD_TOTAL_BLOCKS)?;
 
-        let capacity_bytes = (DD_TOTAL_BLOCKS * blocks::BLOCK_SIZE) as u64;
+        // The image's own size, not a floppy-shaped assumption. An HD ADF has
+        // twice the blocks and its bitmap describes twice as many.
+        let total_blocks = total_blocks_of(&self.image);
+        let bm = blocks::Bitmap::parse(bm_block, total_blocks)?;
+        let capacity_bytes = (total_blocks * blocks::BLOCK_SIZE) as u64;
         let used_bytes = (bm.used_count() * blocks::BLOCK_SIZE) as u64;
         let free_bytes = (bm.free_count() * blocks::BLOCK_SIZE) as u64;
 
@@ -327,6 +339,27 @@ mod mod_tests {
 
         let opened = AdfImage::from_bytes(image).expect("an HD ADF must open");
         assert_eq!(opened.info().unwrap().root_block, 1760);
+    }
+
+    #[test]
+    fn an_hd_image_reports_its_real_capacity() {
+        let mut image = vec![0u8; 3520 * blocks::BLOCK_SIZE];
+        image[0..4].copy_from_slice(b"DOS\x01");
+
+        let root = 1760 * blocks::BLOCK_SIZE;
+        image[root..root + 4].copy_from_slice(&2i32.to_be_bytes());
+        image[root + 12..root + 16].copy_from_slice(&72u32.to_be_bytes());
+        // bm_pages[0] → block 1761, and bm_flag valid.
+        image[root + 312..root + 316].copy_from_slice(&(-1i32).to_be_bytes());
+        image[root + 316..root + 320].copy_from_slice(&1761u32.to_be_bytes());
+        image[root + 508..root + 512].copy_from_slice(&1i32.to_be_bytes());
+
+        let info = AdfImage::from_bytes(image).unwrap().info().unwrap();
+        assert_eq!(
+            info.capacity_bytes,
+            3520 * blocks::BLOCK_SIZE as u64,
+            "an HD image is 1.76 MB, not 880 KB"
+        );
     }
 
     // --- mutate_disk_file: the spec §57 data-safety pipeline ---
