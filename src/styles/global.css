@@ -75,6 +75,40 @@ h3 {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
 }
+
+/* A control that cannot be used has to look like it. Without this a disabled
+   primary button keeps its accent fill and reads as ready. */
+.btn:disabled,
+.btn[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: grayscale(0.6);
+}
+.btn:disabled:hover,
+.btn[aria-disabled="true"]:hover {
+  background: var(--bg-elevated);
+}
+.btn-primary:disabled:hover {
+  background: var(--accent);
+}
+
+/* Keyboard users need to see where they are. `:focus-visible` rather than
+   `:focus` so a mouse click does not leave a ring behind. */
+.btn:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .btn-warn {
   background: color-mix(in srgb, var(--warn) 18%, var(--bg-elevated));
   color: var(--warn);
