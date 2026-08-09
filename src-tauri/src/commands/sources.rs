@@ -630,10 +630,19 @@ pub fn sources_install_adf(
         return Err(CoreError::InvalidInput(format!("'{adf}' is not a disk image")).into());
     }
 
-    // `into` is accepted for wire compatibility but no longer routes the
-    // install: the volume writer navigates by block, not by path, and the
-    // only caller never sends anything but the root (§41.5.3).
-    let _ = into;
+    // The volume writer navigates by block, not by path, so a subfolder
+    // string is not something this command can honour — and silently
+    // dropping it would let a caller send "Tools" and never learn why the
+    // package landed in the root instead. Refuse loudly rather than that.
+    let into = into.unwrap_or_default();
+    let into = into.trim().trim_matches('/');
+    if !into.is_empty() {
+        return Err(CoreError::InvalidInput(format!(
+            "installing into a subfolder ('{into}') is not supported by this command; \
+             use sources_install_volume with a directory block instead"
+        ))
+        .into());
+    }
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
@@ -653,6 +662,21 @@ pub fn sources_install_adf(
             let folder = crate::core::volume::write::copy::HostFolder::new(scratch.path(), true);
             // An ADF is a bare volume at index 0 — the same install, a
             // different destination (§41.5.3).
+            //
+            // Explain before modify (§92): refuse atomically, with real
+            // numbers, before a single block is written. `run_copy_in_folder`
+            // itself lands what fits and reports the rest, which is right for
+            // a general-purpose copy but wrong for an install — a WHDLoad
+            // pack missing its `.slave` because it did not fit is not a
+            // partial success, it is a broken result nobody was warned about.
+            let plan =
+                crate::commands::volume_write::plan_copy_in_folder(&adf_path, 0, 0, &folder)?;
+            if !plan.fits() {
+                return Err(CoreError::SafetyRefused(plan.shortfall().unwrap_or_else(
+                    || "this will not fit; nothing was changed".into(),
+                )));
+            }
+
             let (report, backup) = crate::commands::volume_write::run_copy_in_folder(
                 &adf_path,
                 0,
@@ -904,6 +928,26 @@ pub fn sources_install_volume(
             // slave's S and P bits are the difference between a game that
             // starts and one that does not (§7.2).
             let folder = crate::core::volume::write::copy::HostFolder::new(scratch.path(), true);
+
+            // Explain before modify (§92): refuse atomically, with real
+            // numbers, before a single block is written — the same guarantee
+            // the ADF destination gets. `run_copy_in_folder` lands what fits
+            // and reports the rest, which is right for the general-purpose F5
+            // copy but wrong for an install: a game half-copied onto a hard
+            // disk partition because it did not fit is a broken result, not a
+            // partial one, and the user was never asked about it.
+            let plan = crate::commands::volume_write::plan_copy_in_folder(
+                &image_path,
+                volume_index,
+                parent,
+                &folder,
+            )?;
+            if !plan.fits() {
+                return Err(CoreError::SafetyRefused(plan.shortfall().unwrap_or_else(
+                    || "this will not fit; nothing was changed".into(),
+                )));
+            }
+
             let (report, _) = crate::commands::volume_write::run_copy_in_folder(
                 &image_path,
                 volume_index,
@@ -1123,15 +1167,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// §57's "unchanged on failure" guarantee moved with the write: the
-    /// volume writer does not refuse a batch outright the way
-    /// `core::adf::mutate`'s install used to. It writes what fits and reports
-    /// the rest as skipped, with a reason — the same graceful-partial
-    /// contract `sources_install_volume` already relies on (§41.5.3). This
-    /// proves the ADF destination gets that contract too, not the old
-    /// all-or-nothing refusal.
+    /// §92 explain before modify, and §57's "unchanged on failure" guarantee:
+    /// an install that will not fit must be refused atomically, with real
+    /// numbers, before a single block is written — never landed partially. A
+    /// WHDLoad pack missing its `.slave` because it did not fit is not a
+    /// partial success; it is a broken, non-bootable result the user was
+    /// never warned about. `plan_copy_in_folder` is the pre-flight
+    /// `sources_install_adf` now runs before ever calling
+    /// `run_copy_in_folder` — this proves the refusal happens, carries the
+    /// real block numbers, and that skipping the write really does leave the
+    /// image untouched.
     #[test]
-    fn installing_a_package_that_does_not_fit_reports_what_landed() {
+    fn installing_a_package_that_does_not_fit_is_refused_without_touching_the_image() {
         use crate::core::jobs::NoProgress;
         use crate::core::lha::tests::make_lha_with;
         use crate::core::volume::fixture::ffs_volume;
@@ -1150,11 +1197,63 @@ mod tests {
         let image = dir.join("disk.adf");
         let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
         std::fs::write(&image, &bytes).unwrap();
+        let before = std::fs::read(&image).unwrap();
 
         let (scratch, _) =
             crate::core::sources::install::unpack_for_install(&archive, &NoProgress).unwrap();
         let folder = crate::core::volume::write::copy::HostFolder::new(scratch.path(), true);
-        let (report, _) = crate::commands::volume_write::run_copy_in_folder(
+
+        // The exact pre-flight `sources_install_adf` runs before it will ever
+        // call `run_copy_in_folder`.
+        let plan =
+            crate::commands::volume_write::plan_copy_in_folder(&image, 0, 0, &folder).unwrap();
+        assert!(!plan.fits(), "the batch is bigger than the floppy");
+
+        let message = plan.shortfall().unwrap();
+        assert!(message.contains("blocks"), "{message}");
+        assert!(message.contains("free"), "{message}");
+
+        // Never reaching `run_copy_in_folder` is what the refusal buys: the
+        // image is exactly what it was before the install was attempted.
+        assert_eq!(
+            std::fs::read(&image).unwrap(),
+            before,
+            "a refused install must leave the image byte-for-byte unchanged"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The refusal above must not be satisfiable by refusing everything: a
+    /// package that genuinely fits still has to install completely.
+    #[test]
+    fn installing_a_package_that_fits_installs_completely() {
+        use crate::core::jobs::NoProgress;
+        use crate::core::lha::tests::make_lha_with;
+        use crate::core::volume::fixture::ffs_volume;
+        use crate::core::volume::DosType;
+
+        let dir = temp_root("install-fits");
+        let archive = dir.join("Pack.lha");
+        std::fs::write(
+            &archive,
+            make_lha_with(&[("Small.txt", b"fits easily"), ("Readme", b"read me")]),
+        )
+        .unwrap();
+
+        let image = dir.join("disk.adf");
+        let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
+        std::fs::write(&image, &bytes).unwrap();
+
+        let (scratch, _) =
+            crate::core::sources::install::unpack_for_install(&archive, &NoProgress).unwrap();
+        let folder = crate::core::volume::write::copy::HostFolder::new(scratch.path(), true);
+
+        let plan =
+            crate::commands::volume_write::plan_copy_in_folder(&image, 0, 0, &folder).unwrap();
+        assert!(plan.fits(), "two tiny files must fit on a floppy");
+
+        let (report, backup) = crate::commands::volume_write::run_copy_in_folder(
             &image,
             0,
             0,
@@ -1164,12 +1263,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(report.files_copied, 1, "the file that fits still lands");
+        assert_eq!(report.files_copied, 2, "nothing was refused for no reason");
         assert_eq!(report.files_copied, report.files_verified);
-        assert!(
-            !report.skipped.is_empty(),
-            "the oversized file is reported, not silently dropped"
-        );
+        assert!(report.skipped.is_empty());
+        assert!(backup.is_some());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

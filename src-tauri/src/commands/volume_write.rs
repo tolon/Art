@@ -795,6 +795,51 @@ pub fn run_copy_in_folder(
     }
 }
 
+/// Refuse a copy into a volume before anything is written, when it will not
+/// fit — with the real block numbers, the way [`volume_plan_copy`] already
+/// explains a copy to the user before [`volume_copy_in`] runs it (§3.3, §92).
+///
+/// The install commands call this before [`run_copy_in_folder`] rather than
+/// discovering the disk is full mid-copy: an install that only half lands —
+/// a WHDLoad pack missing its `.slave`, say — is not a partial success, it is
+/// a broken result the user was never warned about. `run_copy_in_folder`
+/// itself stays as it is for the general-purpose F5 copy, which is allowed to
+/// land what fits and report the rest (already proven by
+/// `core::volume::write::copy`'s own tests); an install is not that — it
+/// promises "this works" or "this was refused", nothing in between.
+pub fn plan_copy_in_folder(
+    image: &Path,
+    volume_index: usize,
+    parent: u32,
+    folder: &HostFolder,
+) -> CoreResult<CopyPlan> {
+    let entry = pick(image, volume_index)?;
+    let (device, geometry) = mount(image, &entry)?;
+
+    let entries: Vec<SourceEntry> = {
+        use crate::core::volume::write::copy::CopySource;
+        folder.entries()?
+    };
+
+    // `0` means the root everywhere a `parent`/`dir_block` is taken
+    // (`VolumeWriter::resolve_directory`), but `entries_in` takes a raw block
+    // number and does not do that translation itself.
+    let dir = if parent == 0 {
+        geometry.root_block
+    } else {
+        parent
+    };
+    let existing: Vec<String> = {
+        let set = crate::core::volume::write::layout::BlockSet::new(geometry.block_size);
+        crate::core::volume::write::dir::entries_in(&device, &set, &geometry, dir)?
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect()
+    };
+
+    plan_copy(&device, &geometry, &entries, &existing)
+}
+
 /// F5 the other way — copy a folder out of a volume onto the user's disk.
 #[tauri::command]
 // A Tauri command's parameters are its wire protocol: the names here are the
