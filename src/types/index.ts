@@ -1,0 +1,96 @@
+// Shared types mirroring the Rust core's serde models.
+// Keep these in sync with src-tauri/src/core/**.
+
+export type FormatCategory =
+  | "floppy-image"
+  | "harddisk-image"
+  | "archive"
+  | "rom"
+  | "directory"
+  | "unknown";
+
+export interface Detection {
+  category: FormatCategory;
+  format_hint: string;
+  confidence: number;
+  size: number;
+  is_dir: boolean;
+}
+
+export type Safety =
+  | "read_only"
+  | "safe"
+  | "requires_backup"
+  | "destructive"
+  | "experimental";
+
+export type WorkflowCategory =
+  | "recommended"
+  | "standard"
+  | "advanced";
+
+export type Confidence = "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN";
+
+/**
+ * How an action is carried out once the user picks it.
+ *
+ * The engine decides this, not the UI — a component should switch on `kind`
+ * rather than pattern-matching workflow ids (spec §95: no engine knowledge in
+ * React).
+ */
+export type WorkflowKind =
+  | { kind: "navigate"; route: string }
+  | { kind: "execute" };
+
+export interface WorkflowInfo {
+  id: string;
+  name: string;
+  description: string;
+  category: WorkflowCategory;
+  safety: Safety;
+  priority: number;
+  /** False when the action is planned but not implemented — show "Coming Later". */
+  available: boolean;
+  kind: WorkflowKind;
+}
+
+export interface WorkflowOutcome {
+  workflow_id: string;
+  success: boolean;
+  message: string;
+  /** Present when the workflow verified its own result: true = PASS. */
+  verification: boolean | null;
+}
+
+export interface Recommendation {
+  info: WorkflowInfo;
+  confidence: Confidence;
+  reason: string;
+}
+
+export interface Plan {
+  detection: Detection;
+  recommendations: Recommendation[];
+  candidates: WorkflowInfo[];
+}
+
+export interface DroppedAnalysis {
+  path: string;
+  ok: boolean;
+  plan?: Plan;
+  error?: string;
+}
+
+export interface AppInfo {
+  name: string;
+  version: string;
+  platform: string;
+}
+
+export interface RecentFile {
+  id: number;
+  path: string;
+  name: string;
+  kind: string;
+  opened_at: number;
+}

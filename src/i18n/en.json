@@ -1,0 +1,66 @@
+{
+  "app": {
+    "name": "Amiga Retro Toolkit",
+    "tagline": "The Swiss Army Knife for Amiga Files"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "diskTools": "Disk Tools",
+    "archiveTools": "Archive Tools",
+    "hardDisk": "Hard Disk",
+    "gotek": "Gotek",
+    "rom": "ROM Manager",
+    "winuae": "WinUAE",
+    "pistorm": "PiStorm",
+    "collection": "Collection",
+    "tools": "Tools",
+    "settings": "Settings",
+    "aminet": "Aminet",
+    "files": "Files",
+    "whdload": "Install WHDLoad"
+  },
+  "dashboard": {
+    "dropHere": "DROP AMIGA FILES HERE",
+    "dropHint": "ADF • ADZ • DMS • HDF • LHA • ROM • FOLDER",
+    "dropSubhint": "ART will analyze them.",
+    "recent": "Recent",
+    "noRecent": "No recent files yet. Drop something to begin.",
+    "quickActions": "Quick Actions",
+    "statistics": "Collection Statistics",
+    "noStats": "Collection is empty."
+  },
+  "common": {
+    "comingLater": "Coming Later",
+    "cancel": "Cancel",
+    "continue": "Continue",
+    "ok": "OK",
+    "open": "Open",
+    "close": "Close",
+    "unknown": "Unknown"
+  },
+  "settings": {
+    "title": "Settings",
+    "general": "General",
+    "appearance": "Appearance",
+    "paths": "Paths",
+    "theme": "Theme",
+    "themeDark": "Dark",
+    "themeLight": "Light",
+    "uxMode": "Experience Mode",
+    "uxBeginner": "Beginner",
+    "uxPower": "Power User",
+    "language": "Language",
+    "winuaePath": "WinUAE Path",
+    "collectionDir": "Collection Directory"
+  },
+  "status": {
+    "healthy": "Healthy",
+    "warning": "Warning",
+    "problem": "Problem"
+  },
+  "phase0": {
+    "engineReady": "Workflow Engine: READY",
+    "dragDropReady": "Drag & Drop: READY",
+    "dbReady": "Database: READY"
+  }
+}

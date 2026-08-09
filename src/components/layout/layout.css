@@ -1,0 +1,239 @@
+/* App shell layout: fixed sidebar + topbar + scrolling content. */
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 224px 1fr;
+  height: 100vh;
+  overflow: hidden;
+}
+.app-shell-dragover {
+  outline: 3px dashed var(--accent);
+  outline-offset: -8px;
+}
+
+.app-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.app-content {
+  flex: 1;
+  overflow: auto;
+  padding: 24px 28px;
+}
+
+/* ---- Sidebar --------------------------------------------------------- */
+
+.sidebar {
+  background: var(--bg-elevated);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 16px 0;
+}
+.sidebar-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 18px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.sidebar-logo {
+  font-weight: 700;
+  font-size: 20px;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+}
+.sidebar-version {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  padding: 12px 8px;
+  gap: 2px;
+}
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 13.5px;
+  transition: background 0.1s, color 0.1s;
+}
+.sidebar-link:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.sidebar-link-active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text);
+}
+.sidebar-icon {
+  width: 18px;
+  text-align: center;
+}
+
+/* ---- TopBar ---------------------------------------------------------- */
+
+.topbar {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+.topbar-title {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---- Dashboard grid -------------------------------------------------- */
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20px;
+  max-width: 980px;
+}
+
+.quick-actions {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+.quick-action {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  text-align: left;
+  color: var(--text);
+  transition: background 0.1s, border-color 0.1s;
+}
+.quick-action:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+.quick-action-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+}
+.quick-action-hint {
+  display: block;
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 2px;
+}
+
+.recent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.recent-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+}
+.recent-item:hover {
+  background: var(--bg-hover);
+}
+.recent-name {
+  font-weight: 500;
+}
+.recent-path {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* ---- Coming Later placeholder --------------------------------------- */
+
+.coming-later {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 64px 24px;
+  gap: 12px;
+  color: var(--text-muted);
+}
+.coming-later-icon {
+  font-size: 48px;
+  opacity: 0.7;
+}
+
+/* ---- DropZone -------------------------------------------------------- */
+
+.dropzone {
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--radius);
+  padding: 40px 24px;
+  text-align: center;
+  background: var(--bg-panel);
+  transition: border-color 0.15s, background 0.15s;
+}
+.dropzone-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-panel));
+}
+.dropzone-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+.dropzone-hint {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 0 0 4px;
+}
+.dropzone-subhint {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+/* ---- Drop results --------------------------------------------------- */
+
+.drop-results {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.drop-result {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+}
+.drop-result-path {
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+.drop-result-recommendations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}

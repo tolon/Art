@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build & Test (Windows x64)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+
+      - name: Install Rust stable (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check frontend
+        run: pnpm lint
+
+      - name: Rust format check
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      - name: Rust clippy
+        working-directory: src-tauri
+        # Must stay blocking: clippy's `correctness` group catches real bugs
+        # (it once flagged a duplicated size check that disabled HD floppy
+        # geometry entirely, hidden for months behind continue-on-error).
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      # ART's own tests cannot catch a format mistake its reader and writer
+      # share — a wrong checksum, a field one longword out of place, a bitmap
+      # laid out backwards. All four of ART-032..035 round-tripped through ART
+      # perfectly and were rejected by every real Amiga tool. This step is the
+      # only thing that would have caught them, so it is blocking.
+      #
+      # It runs both directions: ART writes and amitools reads, amitools writes
+      # and ART reads. A reader and a writer that agree with each other and
+      # with nothing else is exactly what those four bugs were.
+      - name: Install the independent oracle
+        run: pip install amitools
+
+      - name: Cross-check ART's images against amitools
+        run: python scripts/oracle-check.py
+
+      # docs/licenses.md claims this runs; keep the claim true. deny.toml
+      # rejects incompatible licences and known advisories (spec §67).
+      - name: Dependency licences & advisories
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: src-tauri/Cargo.toml
+
+      - name: Build application
+        run: pnpm tauri build
+        env:
+          # Avoid bundling during CI on PRs to save time; comment out to enable.
+          TAURI_BUNDLE: "true"
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ART-windows-msi
+          path: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: warn

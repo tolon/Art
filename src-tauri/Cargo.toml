@@ -1,0 +1,61 @@
+[package]
+name = "amiga-retro-toolkit"
+version = "0.1.0"
+description = "ART — The Swiss Army Knife for Amiga Files"
+authors = ["ART Project"]
+edition = "2021"
+rust-version = "1.77"
+
+# Tauri 2 requires the lib to be a cdylib/staticlib for cross-binary use
+# (and an rlib so the binary target and tests can reuse it).
+[lib]
+name = "art_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-sql = { version = "2", features = ["sqlite"] }
+tauri-plugin-log = "2"
+tauri-plugin-store = "2"
+tauri-plugin-fs = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+sha2 = "0.10"
+log = "0.4"
+delharc = { version = "0.8", default-features = false, features = ["std", "lh1", "lz"] }
+
+# Repository mirrors (§41.5.3). Blocking on purpose: downloads already run on
+# their own job threads, so an async runtime would buy nothing.
+#
+# `gzip` is deliberately OFF. Transparent decompression would make the bytes
+# ART writes differ from the bytes the server counted, which breaks both the
+# resume offset and the size gate — the two things the download pipeline relies
+# on to know it received the right file.
+#
+# Pinned exactly: ureq 3.4 raised its own MSRV to 1.85, and this crate promises
+# 1.77 (see `rust-version` above). A caret requirement quietly resolves to 3.4
+# and breaks that promise on the next lockfile refresh. Raise the pin only
+# together with the MSRV.
+ureq = { version = "=3.2.1", default-features = false, features = [
+    "rustls",
+    "rustls-webpki-roots",
+] }
+# Dragging a file OUT of the window into Explorer. Windows has no way to do
+# that from a webview, so it needs a native plugin (see ART-kaynak-listesi §11).
+tauri-plugin-drag = "2.1.1"
+
+[profile.dev]
+incremental = true
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

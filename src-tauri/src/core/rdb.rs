@@ -1,0 +1,870 @@
+//! RDB (Rigid Disk Block) parser, partition manager, and creator (Phase 3 & Phase 4).
+//!
+//! Handles Amiga hard disk partitioning specifications (RDSK, PART, FSHD, LSEG)
+//! with full 32-bit block checksum validation and multi-filesystem DosType support
+//! (PDS3/PFS3, SFS0, DOS3/DOS1).
+
+use serde::{Deserialize, Serialize};
+
+use crate::core::adf::bcpl::{read_bcpl_string, write_bcpl_string};
+use crate::core::error::{CoreError, CoreResult};
+
+pub const BLOCK_SIZE: usize = 512;
+
+// Standard Amiga RDB Signatures (Big-Endian ASCII)
+pub const IDNAME_RDSK: u32 = 0x5244_534B; // 'RDSK'
+pub const IDNAME_PART: u32 = 0x5041_5254; // 'PART'
+pub const IDNAME_FSHD: u32 = 0x4653_4844; // 'FSHD'
+pub const IDNAME_LSEG: u32 = 0x4C53_4547; // 'LSEG'
+pub const IDNAME_BADB: u32 = 0x4241_4442; // 'BADB'
+
+// Amiga Partition Flag Masks
+pub const PART_FLAG_BOOTABLE: u32 = 0x0001; // Bit 0: Bootable partition
+
+/// The "no such block" sentinel used throughout the RDB (-1, not 0).
+pub const NO_BLOCK: u32 = 0xFFFF_FFFF;
+
+/// Supported Amiga Hard Disk Filesystem Types with descriptive properties.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AmigaHardDiskFs {
+    /// PFS3-AIO / DirectSCSI (PDS\3) - Fast, crash-proof, 64-bit DirectSCSI
+    Pfs3DirectScsi,
+    /// PFS3 Standard (PFS\3)
+    Pfs3Standard,
+    /// Smart File System (SFS\0) - Journaled, high performance
+    Sfs0,
+    /// Fast File System Directory Cache (DOS\3) - Classic standard (2.04+)
+    FfsDirCache,
+    /// Fast File System International (DOS\1) - Maximum Kickstart 1.3+ compatibility
+    FfsStandard,
+    /// Custom DosType
+    Custom(u32),
+}
+
+impl AmigaHardDiskFs {
+    pub fn to_dostype_u32(self) -> u32 {
+        match self {
+            Self::Pfs3DirectScsi => 0x5044_5303, // 'PDS\3'
+            Self::Pfs3Standard => 0x5046_5303,   // 'PFS\3'
+            Self::Sfs0 => 0x5346_5300,           // 'SFS\0'
+            Self::FfsDirCache => 0x444F_5303,    // 'DOS\3'
+            Self::FfsStandard => 0x444F_5301,    // 'DOS\1'
+            Self::Custom(val) => val,
+        }
+    }
+
+    pub fn from_dostype_u32(val: u32) -> Self {
+        match val {
+            0x5044_5303 => Self::Pfs3DirectScsi,
+            0x5046_5303 => Self::Pfs3Standard,
+            0x5346_5300 => Self::Sfs0,
+            0x444F_5303 | 0x444F_5305 => Self::FfsDirCache,
+            0x444F_5301 => Self::FfsStandard,
+            other => Self::Custom(other),
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Pfs3DirectScsi => "PFS3-AIO (DirectSCSI — PDS\\3)",
+            Self::Pfs3Standard => "PFS3 (Standard — PFS\\3)",
+            Self::Sfs0 => "Smart File System (SFS\\0)",
+            Self::FfsDirCache => "Fast File System DC (DOS\\3)",
+            Self::FfsStandard => "Fast File System (DOS\\1)",
+            Self::Custom(_) => "Custom Filesystem",
+        }
+    }
+}
+
+/// Specification for creating or adding a partition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartitionSpec {
+    pub drive_name: String,
+    pub fs_type: AmigaHardDiskFs,
+    pub size_mb: u32,
+    pub bootable: bool,
+    pub boot_priority: i8,
+    pub num_buffers: u32,
+}
+
+/// Parsed Partition Block (`PART`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParsedPartition {
+    pub drive_name: String,
+    pub dostype: u32,
+    pub dostype_str: String,
+    pub fs_type: AmigaHardDiskFs,
+    pub low_cyl: u32,
+    pub high_cyl: u32,
+    pub cylinder_count: u32,
+    pub size_bytes: u64,
+    pub bootable: bool,
+    pub boot_priority: i8,
+    pub num_buffers: u32,
+    pub block_location: u32,
+    pub next_part_block: u32,
+    pub checksum_valid: bool,
+
+    // ---- the partition's own DosEnvVec, needed to mount it ----
+    //
+    // Read from the PART block rather than inherited from the RDSK: they are
+    // usually the same, but the partition's own values are what AmigaOS uses,
+    // and a disk written by an unusual tool is exactly when that matters.
+    /// `SizeBlock` in **longwords** — 128 means 512-byte blocks.
+    pub size_block: u32,
+    /// `Surfaces` (heads) for this partition.
+    pub surfaces: u32,
+    pub blocks_per_track: u32,
+    /// `DosReserved` — boot blocks at the start of the volume. Typically 2.
+    pub reserved: u32,
+}
+
+impl ParsedPartition {
+    /// Block size in bytes. `SizeBlock` counts longwords.
+    pub fn block_bytes(&self) -> u64 {
+        (self.size_block as u64) * 4
+    }
+
+    /// Where this partition starts in the image file.
+    ///
+    /// Cylinders are the unit RDB speaks in: one cylinder is
+    /// `surfaces * blocks_per_track` blocks.
+    pub fn byte_offset(&self) -> Option<u64> {
+        let blocks_per_cylinder =
+            (self.surfaces as u64).checked_mul(self.blocks_per_track as u64)?;
+        (self.low_cyl as u64)
+            .checked_mul(blocks_per_cylinder)?
+            .checked_mul(self.block_bytes())
+    }
+
+    /// How many bytes it spans.
+    pub fn byte_length(&self) -> Option<u64> {
+        let blocks_per_cylinder =
+            (self.surfaces as u64).checked_mul(self.blocks_per_track as u64)?;
+        (self.cylinder_count as u64)
+            .checked_mul(blocks_per_cylinder)?
+            .checked_mul(self.block_bytes())
+    }
+}
+
+/// Parsed Rigid Disk Block (`RDSK`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParsedRdb {
+    pub rdb_block: u32,
+    pub cylinders: u32,
+    pub sectors: u32,
+    pub heads: u32,
+    pub block_size: u32,
+    pub total_capacity_bytes: u64,
+    pub partitions: Vec<ParsedPartition>,
+    pub free_cylinders: u32,
+    pub checksum_valid: bool,
+}
+
+/// How many longwords an RDB block's checksum covers.
+///
+/// The block's own `SummedLongs` field (LW 1) declares this — it is **not**
+/// fixed at 128. Real Amiga disks write 64 for RDSK and PART, and summing the
+/// whole 512-byte block instead would reject valid disks whose later longwords
+/// carry vendor strings or padding.
+fn summed_longs(block: &[u8]) -> usize {
+    let declared = u32::from_be_bytes([block[4], block[5], block[6], block[7]]) as usize;
+    // Guard against a malformed value: never read past the block, and treat a
+    // nonsensical count as the conventional 64.
+    if declared == 0 || declared > BLOCK_SIZE / 4 {
+        64
+    } else {
+        declared
+    }
+}
+
+/// Longword index of the checksum field (offset 8).
+const CHECKSUM_LW: usize = 2;
+
+/// Compute the RDB checksum for a block.
+///
+/// The sum of the first `SummedLongs` longwords, including the checksum slot,
+/// must come to zero; the checksum is therefore the two's complement of the
+/// sum of the others.
+pub fn compute_rdb_checksum(block: &[u8]) -> u32 {
+    let count = summed_longs(block);
+    let mut sum: u32 = 0;
+    for i in 0..count {
+        if i == CHECKSUM_LW {
+            continue;
+        }
+        let off = i * 4;
+        let lw = u32::from_be_bytes([block[off], block[off + 1], block[off + 2], block[off + 3]]);
+        sum = sum.wrapping_add(lw);
+    }
+    (!sum).wrapping_add(1)
+}
+
+/// Verify if an RDB block's checksum is valid.
+pub fn verify_rdb_block_checksum(block: &[u8]) -> bool {
+    if block.len() < BLOCK_SIZE {
+        return false;
+    }
+    let count = summed_longs(block);
+    let mut sum: u32 = 0;
+    for i in 0..count {
+        let off = i * 4;
+        let lw = u32::from_be_bytes([block[off], block[off + 1], block[off + 2], block[off + 3]]);
+        sum = sum.wrapping_add(lw);
+    }
+    sum == 0
+}
+
+/// Scan for `RDSK` signature within the first 16 blocks (8 KB).
+pub fn find_rdb_location(image: &[u8]) -> Option<usize> {
+    for b in 0..16 {
+        let off = b * BLOCK_SIZE;
+        if off + BLOCK_SIZE <= image.len() {
+            let sig =
+                u32::from_be_bytes([image[off], image[off + 1], image[off + 2], image[off + 3]]);
+            if sig == IDNAME_RDSK {
+                return Some(b);
+            }
+        }
+    }
+    None
+}
+
+/// Parse RDB structure and all linked partition blocks.
+pub fn parse_rdb(image: &[u8]) -> CoreResult<ParsedRdb> {
+    let rdb_block_idx = find_rdb_location(image).ok_or_else(|| CoreError::Malformed {
+        format: "rdb".into(),
+        detail: "No 'RDSK' signature found within the first 16 blocks".into(),
+    })?;
+
+    let rdb_off = rdb_block_idx * BLOCK_SIZE;
+    let rdb_slice = &image[rdb_off..rdb_off + BLOCK_SIZE];
+    let checksum_valid = verify_rdb_block_checksum(rdb_slice);
+
+    // Geometry offsets:
+    // Offset 64 (LW 16): Cylinders
+    // Offset 68 (LW 17): Sectors
+    // Offset 72 (LW 18): Heads
+    let cylinders =
+        u32::from_be_bytes([rdb_slice[64], rdb_slice[65], rdb_slice[66], rdb_slice[67]]);
+    let sectors = u32::from_be_bytes([rdb_slice[68], rdb_slice[69], rdb_slice[70], rdb_slice[71]]);
+    let heads = u32::from_be_bytes([rdb_slice[72], rdb_slice[73], rdb_slice[74], rdb_slice[75]]);
+    let block_size = 512u32;
+
+    let total_capacity_bytes = (cylinders as u64)
+        .checked_mul(heads as u64)
+        .and_then(|v| v.checked_mul(sectors as u64))
+        .and_then(|v| v.checked_mul(block_size as u64))
+        .unwrap_or(0);
+
+    // First partition pointer at offset 28 (LW 7)
+    let mut part_ptr =
+        u32::from_be_bytes([rdb_slice[28], rdb_slice[29], rdb_slice[30], rdb_slice[31]]);
+
+    let mut partitions = Vec::new();
+    let mut used_cylinders = 0u32;
+    let mut visited = std::collections::HashSet::new();
+
+    while part_ptr != 0 && part_ptr != 0xFFFF_FFFF {
+        if !visited.insert(part_ptr) || visited.len() > 64 {
+            break;
+        }
+
+        let p_off = (part_ptr as usize) * BLOCK_SIZE;
+        if p_off + BLOCK_SIZE > image.len() {
+            break;
+        }
+
+        let p_slice = &image[p_off..p_off + BLOCK_SIZE];
+        let p_sig = u32::from_be_bytes([p_slice[0], p_slice[1], p_slice[2], p_slice[3]]);
+        if p_sig != IDNAME_PART {
+            break;
+        }
+
+        let p_cks_valid = verify_rdb_block_checksum(p_slice);
+        let next_part = u32::from_be_bytes([p_slice[16], p_slice[17], p_slice[18], p_slice[19]]);
+        let flags = u32::from_be_bytes([p_slice[20], p_slice[21], p_slice[22], p_slice[23]]);
+
+        // Device name: BCPL string at offset 36
+        let drive_name = read_bcpl_string(p_slice, 36).unwrap_or_else(|| "DH?".to_string());
+
+        // Environment vector starts at offset 128 (LW 32)
+        // TableSize: offset 128 (LW 32)
+        // SizeBlock: offset 132 (LW 33)
+        // SecOrg: offset 136 (LW 34)
+        // Heads: offset 140 (LW 35)
+        // SectorsPerBlock: offset 144 (LW 36)
+        // BlocksPerTrack: offset 148 (LW 37)
+        // DosReserved: offset 152 (LW 38)
+        // PreAlloc: offset 156 (LW 39)
+        // Interleave: offset 160 (LW 40)
+        // LowCyl: offset 164 (LW 41)
+        // HighCyl: offset 168 (LW 42)
+        // NumBuffers: offset 172 (LW 43)
+        // ...
+        // MaxTransfer: offset 180 (LW 45)
+        // Mask: offset 184 (LW 46)
+        // BootPri: offset 188 (LW 47)
+        // DosType: offset 192 (LW 48)
+        //
+        // These last two were read one longword early until ART-032. The
+        // offsets are pinned by `dosenv_offsets_match_the_amiga_layout`.
+        let low_cyl = u32::from_be_bytes([p_slice[164], p_slice[165], p_slice[166], p_slice[167]]);
+        let high_cyl = u32::from_be_bytes([p_slice[168], p_slice[169], p_slice[170], p_slice[171]]);
+        let num_buffers =
+            u32::from_be_bytes([p_slice[172], p_slice[173], p_slice[174], p_slice[175]]);
+        let size_block =
+            u32::from_be_bytes([p_slice[132], p_slice[133], p_slice[134], p_slice[135]]);
+        let surfaces = u32::from_be_bytes([p_slice[140], p_slice[141], p_slice[142], p_slice[143]]);
+        let blocks_per_track =
+            u32::from_be_bytes([p_slice[148], p_slice[149], p_slice[150], p_slice[151]]);
+        let dos_reserved =
+            u32::from_be_bytes([p_slice[152], p_slice[153], p_slice[154], p_slice[155]]);
+        let boot_pri = p_slice[191] as i8;
+        let dostype = u32::from_be_bytes([p_slice[192], p_slice[193], p_slice[194], p_slice[195]]);
+
+        let cyl_count = if high_cyl >= low_cyl {
+            high_cyl - low_cyl + 1
+        } else {
+            0
+        };
+        used_cylinders += cyl_count;
+
+        let cyl_bytes = (heads as u64) * (sectors as u64) * (block_size as u64);
+        let part_size = (cyl_count as u64) * cyl_bytes;
+
+        let dostype_str = format!(
+            "{}{}{}{}",
+            ((dostype >> 24) & 0xFF) as u8 as char,
+            ((dostype >> 16) & 0xFF) as u8 as char,
+            ((dostype >> 8) & 0xFF) as u8 as char,
+            (dostype & 0xFF) as u8
+        );
+
+        partitions.push(ParsedPartition {
+            drive_name,
+            dostype,
+            dostype_str,
+            fs_type: AmigaHardDiskFs::from_dostype_u32(dostype),
+            low_cyl,
+            high_cyl,
+            cylinder_count: cyl_count,
+            size_bytes: part_size,
+            bootable: (flags & PART_FLAG_BOOTABLE) != 0,
+            boot_priority: boot_pri,
+            num_buffers,
+            block_location: part_ptr,
+            next_part_block: next_part,
+            checksum_valid: p_cks_valid,
+            size_block,
+            surfaces,
+            blocks_per_track,
+            reserved: dos_reserved,
+        });
+
+        part_ptr = next_part;
+    }
+
+    let free_cylinders = cylinders.saturating_sub(used_cylinders + 2); // 2 cylinders reserved for RDB
+
+    Ok(ParsedRdb {
+        rdb_block: rdb_block_idx as u32,
+        cylinders,
+        sectors,
+        heads,
+        block_size,
+        total_capacity_bytes,
+        partitions,
+        free_cylinders,
+        checksum_valid,
+    })
+}
+
+/// Maximum partitions ART will write into one RDB.
+///
+/// AmigaOS imposes no hard limit, but every partition costs a block inside the
+/// reserved area, and a runaway count would otherwise be used to index past it.
+pub const MAX_PARTITIONS: usize = 32;
+
+/// Cylinders reserved at the front of the disk for the RDB itself.
+const RESERVED_CYLINDERS: u32 = 2;
+
+/// The RDB area of a new image, plus the size the geometry implies.
+///
+/// Only the first few blocks of a hard disk image carry structure; the rest is
+/// zero. Returning just those blocks lets the caller create the file sparsely
+/// instead of materialising the whole image in memory — a 2 GB HDF used to mean
+/// a 2 GB allocation (spec §56: never allocate from an unchecked length).
+#[derive(Debug, Clone)]
+pub struct RdbLayout {
+    /// Bytes to write at offset 0 of the new image.
+    pub blocks: Vec<u8>,
+    /// Total size of the image the geometry describes.
+    pub total_size: u64,
+}
+
+/// Build the RDB and partition blocks for a new hard disk image.
+pub fn create_rdb_layout(total_bytes: u64, partitions: &[PartitionSpec]) -> CoreResult<RdbLayout> {
+    if total_bytes < 10 * 1024 * 1024 {
+        return Err(CoreError::InvalidInput(
+            "Hard disk image size must be at least 10 MB".into(),
+        ));
+    }
+    if partitions.len() > MAX_PARTITIONS {
+        return Err(CoreError::InvalidInput(format!(
+            "too many partitions ({}, maximum {MAX_PARTITIONS})",
+            partitions.len()
+        )));
+    }
+
+    // Disk geometry: Standard LBA geometry (16 heads, 63 sectors/track = 1008 sectors/cyl = 516,096 bytes/cyl)
+    let heads = 16u32;
+    let sectors = 63u32;
+    let cyl_blocks = heads * sectors;
+    let bytes_per_cyl = (cyl_blocks as u64) * (BLOCK_SIZE as u64);
+    let cylinders = u32::try_from(total_bytes.div_ceil(bytes_per_cyl)).map_err(|_| {
+        CoreError::InvalidInput("Hard disk image size is too large to describe in an RDB".into())
+    })?;
+
+    if cylinders < 4 {
+        return Err(CoreError::InvalidInput(
+            "Image size too small for cylinder layout".into(),
+        ));
+    }
+
+    // Refuse a layout that cannot hold what was asked for, rather than silently
+    // shrinking the last partition to fit (spec §89).
+    let usable_cylinders = cylinders - RESERVED_CYLINDERS;
+    let requested_cylinders: u64 = partitions
+        .iter()
+        .map(|p| {
+            ((p.size_mb as u64) * 1024 * 1024)
+                .div_ceil(bytes_per_cyl)
+                .max(1)
+        })
+        .sum();
+    if requested_cylinders > usable_cylinders as u64 {
+        let requested_mb = requested_cylinders * bytes_per_cyl / (1024 * 1024);
+        let available_mb = (usable_cylinders as u64) * bytes_per_cyl / (1024 * 1024);
+        return Err(CoreError::InvalidInput(format!(
+            "partitions need {requested_mb} MB but only {available_mb} MB is available on a \
+             {} MB disk",
+            total_bytes / (1024 * 1024)
+        )));
+    }
+
+    // Only the RDSK block plus one PART block per partition carry data.
+    let structured_blocks = 1 + partitions.len();
+    let mut image = vec![0u8; structured_blocks * BLOCK_SIZE];
+
+    // 1. Initialize RDSK Block at Block 0.
+    //
+    // Field offsets follow `struct RigidDiskBlock` (hardblocks.h). Longword
+    // indices: 4=BlockBytes, 6=BadBlockList, 7=PartitionList, 8=FileSysHeaderList,
+    // 9=DriveInit, 16..18=geometry, 32..38=logical drive.
+    let last_rdb_block = structured_blocks as u32 - 1;
+    {
+        let rdb_slice = &mut image[0..BLOCK_SIZE];
+        rdb_slice[0..4].copy_from_slice(&IDNAME_RDSK.to_be_bytes()); // 'RDSK'
+        rdb_slice[4..8].copy_from_slice(&64u32.to_be_bytes()); // SummedLongs
+        rdb_slice[12..16].copy_from_slice(&7u32.to_be_bytes()); // HostID
+        rdb_slice[16..20].copy_from_slice(&(BLOCK_SIZE as u32).to_be_bytes()); // BlockBytes
+
+        // These are block pointers. Zero is a *valid* block number, so "none"
+        // has to be written as -1 or AmigaOS will follow them into block 0.
+        rdb_slice[24..28].copy_from_slice(&NO_BLOCK.to_be_bytes()); // BadBlockList
+        let first_part_block = if partitions.is_empty() { NO_BLOCK } else { 1 };
+        rdb_slice[28..32].copy_from_slice(&first_part_block.to_be_bytes()); // PartitionList
+        rdb_slice[32..36].copy_from_slice(&NO_BLOCK.to_be_bytes()); // FileSysHeaderList
+        rdb_slice[36..40].copy_from_slice(&NO_BLOCK.to_be_bytes()); // DriveInit
+
+        // Physical geometry.
+        rdb_slice[64..68].copy_from_slice(&cylinders.to_be_bytes()); // Cylinders
+        rdb_slice[68..72].copy_from_slice(&sectors.to_be_bytes()); // Sectors
+        rdb_slice[72..76].copy_from_slice(&heads.to_be_bytes()); // Heads
+        rdb_slice[76..80].copy_from_slice(&1u32.to_be_bytes()); // Interleave
+        rdb_slice[80..84].copy_from_slice(&cylinders.to_be_bytes()); // Park
+
+        // Logical drive characteristics. HiCylinder and CylBlocks were never
+        // written before, leaving AmigaOS to read a zero-capacity disk.
+        rdb_slice[128..132].copy_from_slice(&0u32.to_be_bytes()); // RDBBlocksLo
+        rdb_slice[132..136].copy_from_slice(&last_rdb_block.to_be_bytes()); // RDBBlocksHi
+        rdb_slice[136..140].copy_from_slice(&RESERVED_CYLINDERS.to_be_bytes()); // LoCylinder
+        rdb_slice[140..144].copy_from_slice(&(cylinders - 1).to_be_bytes()); // HiCylinder
+        rdb_slice[144..148].copy_from_slice(&cyl_blocks.to_be_bytes()); // CylBlocks
+        rdb_slice[152..156].copy_from_slice(&last_rdb_block.to_be_bytes()); // HighRDSKBlock
+
+        // Compute RDSK checksum at offset 8
+        let rdb_cks = compute_rdb_checksum(rdb_slice);
+        rdb_slice[8..12].copy_from_slice(&rdb_cks.to_be_bytes());
+    }
+
+    // 2. Initialize Partition Blocks (PART)
+    //
+    // Sizes were validated against the disk above, so no partition can overrun
+    // the end or be silently truncated, and the chain never points at a block
+    // that was not written.
+    let mut current_cyl = RESERVED_CYLINDERS;
+
+    for (idx, spec) in partitions.iter().enumerate() {
+        let part_block_num = (1 + idx) as u32;
+        let next_part_num = if idx + 1 < partitions.len() {
+            (2 + idx) as u32
+        } else {
+            NO_BLOCK
+        };
+
+        let req_bytes = (spec.size_mb as u64) * 1024 * 1024;
+        let req_cyls = req_bytes.div_ceil(bytes_per_cyl).max(1) as u32;
+        let high_cyl = current_cyl + req_cyls - 1;
+
+        let p_off = (part_block_num as usize) * BLOCK_SIZE;
+        let p_slice = &mut image[p_off..p_off + BLOCK_SIZE];
+
+        p_slice[0..4].copy_from_slice(&IDNAME_PART.to_be_bytes()); // 'PART'
+        p_slice[4..8].copy_from_slice(&64u32.to_be_bytes()); // size in longwords
+        p_slice[16..20].copy_from_slice(&next_part_num.to_be_bytes());
+
+        let flags = if spec.bootable { PART_FLAG_BOOTABLE } else { 0 };
+        p_slice[20..24].copy_from_slice(&flags.to_be_bytes());
+
+        // Device name: BCPL string at offset 36
+        write_bcpl_string(p_slice, 36, &spec.drive_name, 32);
+
+        // Environment Vector (DosEnvec) starting at offset 128 (LW 32)
+        p_slice[128..132].copy_from_slice(&17u32.to_be_bytes()); // TableSize = 17
+        p_slice[132..136].copy_from_slice(&(BLOCK_SIZE as u32 / 4).to_be_bytes()); // SizeBlock in longwords (128)
+        p_slice[140..144].copy_from_slice(&heads.to_be_bytes());
+        p_slice[144..148].copy_from_slice(&1u32.to_be_bytes()); // SectorsPerBlock
+        p_slice[148..152].copy_from_slice(&sectors.to_be_bytes()); // BlocksPerTrack
+        p_slice[152..156].copy_from_slice(&2u32.to_be_bytes()); // Reserved blocks
+        p_slice[164..168].copy_from_slice(&current_cyl.to_be_bytes()); // LowCyl
+        p_slice[168..172].copy_from_slice(&high_cyl.to_be_bytes()); // HighCyl
+        let buffers = if spec.num_buffers > 0 {
+            spec.num_buffers
+        } else {
+            100
+        };
+        p_slice[172..176].copy_from_slice(&buffers.to_be_bytes());
+        // Mask (LW 46) stays zero; BootPri is LW 47 and DosType LW 48.
+        p_slice[188..192].copy_from_slice(&(spec.boot_priority as i32).to_be_bytes());
+
+        // DosType at offset 192 (LW 48)
+        let dt = spec.fs_type.to_dostype_u32();
+        p_slice[192..196].copy_from_slice(&dt.to_be_bytes());
+
+        // Compute PART checksum at offset 8
+        let p_cks = compute_rdb_checksum(p_slice);
+        p_slice[8..12].copy_from_slice(&p_cks.to_be_bytes());
+
+        current_cyl = high_cyl + 1;
+    }
+
+    Ok(RdbLayout {
+        blocks: image,
+        total_size: (cylinders as u64) * bytes_per_cyl,
+    })
+}
+
+#[cfg(test)]
+mod dosenv_layout {
+    use super::*;
+
+    /// ART-032. The DosEnvVec field order, pinned against the layout amitools
+    /// reads and writes (`fs/block/rdb/PartitionBlock.py`, verified 2026-08-09):
+    ///
+    /// | longword | field | byte offset |
+    /// |---|---|---|
+    /// | 45 | MaxTransfer | 180 |
+    /// | 46 | Mask | 184 |
+    /// | 47 | BootPri | 188 |
+    /// | 48 | DosType | 192 |
+    ///
+    /// ART used to write BootPri at 184 and DosType at 188 — one longword early
+    /// — and read them back from the same wrong places. Every ART test passed
+    /// because both halves agreed with each other; `rdbtool` reading an
+    /// ART-made image is what showed the disk said DosType 0 to the rest of the
+    /// world. This test is the reason that cannot come back.
+    #[test]
+    fn dosenv_offsets_match_the_amiga_layout() {
+        let layout = create_rdb_layout(
+            32 * 1024 * 1024,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::FfsStandard,
+                size_mb: 10,
+                bootable: true,
+                boot_priority: 3,
+                num_buffers: 100,
+            }],
+        )
+        .unwrap();
+
+        // The PART block follows the RDSK block.
+        let part = &layout.blocks[BLOCK_SIZE..BLOCK_SIZE * 2];
+        assert_eq!(
+            u32::from_be_bytes([part[0], part[1], part[2], part[3]]),
+            IDNAME_PART
+        );
+
+        let long_at = |offset: usize| {
+            u32::from_be_bytes([
+                part[offset],
+                part[offset + 1],
+                part[offset + 2],
+                part[offset + 3],
+            ])
+        };
+
+        // Mask is left alone; BootPri and DosType sit where AmigaOS looks.
+        assert_eq!(long_at(184), 0, "longword 46 is Mask, not BootPri");
+        assert_eq!(long_at(188), 3, "BootPri belongs at longword 47");
+        assert_eq!(
+            long_at(192),
+            AmigaHardDiskFs::FfsStandard.to_dostype_u32(),
+            "DosType belongs at longword 48"
+        );
+
+        // TableSize must cover DosType, or an Amiga would ignore it.
+        assert!(long_at(128) >= 17, "TableSize must include DosType");
+    }
+
+    /// The round trip has to agree with the layout, not merely with itself.
+    #[test]
+    fn a_partition_reads_back_the_filesystem_it_was_written_with() {
+        let layout = create_rdb_layout(
+            32 * 1024 * 1024,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::FfsStandard,
+                size_mb: 10,
+                bootable: true,
+                boot_priority: -2,
+                num_buffers: 100,
+            }],
+        )
+        .unwrap();
+
+        let parsed = parse_rdb(&layout.blocks).unwrap();
+        let partition = &parsed.partitions[0];
+
+        assert_eq!(
+            partition.dostype,
+            AmigaHardDiskFs::FfsStandard.to_dostype_u32()
+        );
+        assert_eq!(partition.fs_type, AmigaHardDiskFs::FfsStandard);
+        assert_eq!(partition.boot_priority, -2, "a negative priority survives");
+        assert_eq!(partition.size_block, 128, "SizeBlock counts longwords");
+        assert_eq!(partition.reserved, 2);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_and_parse_rdb_image_with_pfs3_and_ffs() {
+        let partitions = vec![
+            PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::Pfs3DirectScsi,
+                size_mb: 50,
+                bootable: true,
+                boot_priority: 5,
+                num_buffers: 150,
+            },
+            PartitionSpec {
+                drive_name: "DH1".into(),
+                fs_type: AmigaHardDiskFs::FfsDirCache,
+                size_mb: 100,
+                bootable: false,
+                boot_priority: 0,
+                num_buffers: 100,
+            },
+        ];
+
+        let layout = create_rdb_layout(200 * 1024 * 1024, &partitions).unwrap();
+        assert!(layout.total_size >= 200 * 1024 * 1024);
+        // Only the RDSK block plus one PART block per partition are materialised.
+        assert_eq!(layout.blocks.len(), 3 * BLOCK_SIZE);
+
+        let parsed = parse_rdb(&layout.blocks).unwrap();
+        assert!(parsed.checksum_valid);
+        assert_eq!(parsed.partitions.len(), 2);
+
+        // Verify DH0
+        assert_eq!(parsed.partitions[0].drive_name, "DH0");
+        assert_eq!(
+            parsed.partitions[0].fs_type,
+            AmigaHardDiskFs::Pfs3DirectScsi
+        );
+        assert!(parsed.partitions[0].bootable);
+        assert_eq!(parsed.partitions[0].boot_priority, 5);
+        assert!(parsed.partitions[0].checksum_valid);
+
+        // Verify DH1
+        assert_eq!(parsed.partitions[1].drive_name, "DH1");
+        assert_eq!(parsed.partitions[1].fs_type, AmigaHardDiskFs::FfsDirCache);
+        assert!(!parsed.partitions[1].bootable);
+        assert!(parsed.partitions[1].checksum_valid);
+    }
+
+    fn lw(block: &[u8], index: usize) -> u32 {
+        let off = index * 4;
+        u32::from_be_bytes([block[off], block[off + 1], block[off + 2], block[off + 3]])
+    }
+
+    /// The RDSK block's logical-drive fields decide what capacity AmigaOS sees.
+    /// HiCylinder and CylBlocks were previously never written, so a disk ART
+    /// created reported zero usable geometry.
+    #[test]
+    fn rdsk_logical_drive_fields_are_written() {
+        let specs = vec![PartitionSpec {
+            drive_name: "DH0".into(),
+            fs_type: AmigaHardDiskFs::FfsDirCache,
+            size_mb: 20,
+            bootable: true,
+            boot_priority: 0,
+            num_buffers: 100,
+        }];
+        let layout = create_rdb_layout(100 * 1024 * 1024, &specs).unwrap();
+        let rdsk = &layout.blocks[0..BLOCK_SIZE];
+
+        let cylinders = lw(rdsk, 16);
+        assert!(cylinders >= 4);
+
+        assert_eq!(lw(rdsk, 32), 0, "RDBBlocksLo");
+        assert_eq!(lw(rdsk, 33), 1, "RDBBlocksHi = last written RDB block");
+        assert_eq!(lw(rdsk, 34), RESERVED_CYLINDERS, "LoCylinder");
+        assert_eq!(lw(rdsk, 35), cylinders - 1, "HiCylinder");
+        assert_eq!(lw(rdsk, 36), 16 * 63, "CylBlocks = heads × sectors");
+    }
+
+    /// Zero is a valid block number, so "no such list" must be written as -1.
+    /// Leaving these at zero sends AmigaOS looking into block 0.
+    #[test]
+    fn rdsk_absent_lists_use_the_no_block_sentinel() {
+        let layout = create_rdb_layout(100 * 1024 * 1024, &[]).unwrap();
+        let rdsk = &layout.blocks[0..BLOCK_SIZE];
+
+        assert_eq!(lw(rdsk, 4), BLOCK_SIZE as u32, "BlockBytes must be 512");
+        assert_eq!(lw(rdsk, 6), NO_BLOCK, "BadBlockList");
+        assert_eq!(lw(rdsk, 7), NO_BLOCK, "PartitionList when there are none");
+        assert_eq!(lw(rdsk, 8), NO_BLOCK, "FileSysHeaderList");
+        assert_eq!(lw(rdsk, 9), NO_BLOCK, "DriveInit");
+    }
+
+    /// Partitions that do not fit used to be silently clipped to the end of the
+    /// disk, so the user got far less space than they asked for — and the
+    /// partition chain could point at a block that was never written.
+    #[test]
+    fn oversized_partitions_are_refused_not_truncated() {
+        let specs = vec![
+            PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::FfsDirCache,
+                size_mb: 500,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 100,
+            },
+            PartitionSpec {
+                drive_name: "DH1".into(),
+                fs_type: AmigaHardDiskFs::FfsDirCache,
+                size_mb: 500,
+                bootable: false,
+                boot_priority: 0,
+                num_buffers: 100,
+            },
+        ];
+
+        // 100 MB of disk cannot hold 1000 MB of partitions.
+        let err = create_rdb_layout(100 * 1024 * 1024, &specs).unwrap_err();
+        assert!(matches!(err, CoreError::InvalidInput(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn partitions_do_not_overlap_and_stay_inside_the_disk() {
+        let specs: Vec<PartitionSpec> = (0..4)
+            .map(|i| PartitionSpec {
+                drive_name: format!("DH{i}"),
+                fs_type: AmigaHardDiskFs::FfsDirCache,
+                size_mb: 30,
+                bootable: i == 0,
+                boot_priority: 0,
+                num_buffers: 100,
+            })
+            .collect();
+
+        let layout = create_rdb_layout(500 * 1024 * 1024, &specs).unwrap();
+        let parsed = parse_rdb(&layout.blocks).unwrap();
+        assert_eq!(parsed.partitions.len(), 4);
+
+        for pair in parsed.partitions.windows(2) {
+            assert!(
+                pair[0].high_cyl < pair[1].low_cyl,
+                "partitions {} and {} overlap",
+                pair[0].drive_name,
+                pair[1].drive_name
+            );
+        }
+        let last = parsed.partitions.last().unwrap();
+        assert!(
+            last.high_cyl < parsed.cylinders,
+            "last partition overruns the disk"
+        );
+    }
+
+    #[test]
+    fn too_many_partitions_are_refused() {
+        let specs: Vec<PartitionSpec> = (0..MAX_PARTITIONS + 1)
+            .map(|i| PartitionSpec {
+                drive_name: format!("DH{i}"),
+                fs_type: AmigaHardDiskFs::FfsDirCache,
+                size_mb: 1,
+                bootable: false,
+                boot_priority: 0,
+                num_buffers: 100,
+            })
+            .collect();
+
+        assert!(create_rdb_layout(4096 * 1024 * 1024u64, &specs).is_err());
+    }
+
+    /// The checksum covers `SummedLongs` longwords, not the whole block.
+    /// Summing all 128 would reject real Amiga disks whose later longwords
+    /// carry vendor strings.
+    #[test]
+    fn checksum_honours_summed_longs() {
+        let mut block = vec![0u8; BLOCK_SIZE];
+        block[0..4].copy_from_slice(&IDNAME_RDSK.to_be_bytes());
+        block[4..8].copy_from_slice(&64u32.to_be_bytes()); // SummedLongs = 64
+        block[64..68].copy_from_slice(&100u32.to_be_bytes());
+
+        let cks = compute_rdb_checksum(&block);
+        block[8..12].copy_from_slice(&cks.to_be_bytes());
+        assert!(verify_rdb_block_checksum(&block));
+
+        // Data beyond the summed region must not affect validity — this is
+        // where a real disk keeps its vendor and product strings.
+        block[300..304].copy_from_slice(&0xDEAD_BEEFu32.to_be_bytes());
+        assert!(
+            verify_rdb_block_checksum(&block),
+            "longwords past SummedLongs must be excluded"
+        );
+    }
+
+    #[test]
+    fn checksum_survives_a_nonsense_summed_longs_field() {
+        let mut block = vec![0u8; BLOCK_SIZE];
+        block[0..4].copy_from_slice(&IDNAME_RDSK.to_be_bytes());
+        // A hostile value that would otherwise index far past the block.
+        block[4..8].copy_from_slice(&0xFFFF_FFFFu32.to_be_bytes());
+
+        // Must fall back rather than panic.
+        let _ = compute_rdb_checksum(&block);
+        let _ = verify_rdb_block_checksum(&block);
+    }
+}
