@@ -17,6 +17,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import { onJobProgress } from "@/lib/jobs";
 import { formatBytes } from "@/lib/panel";
+import { Refusal } from "@/components/Refusal";
 import { usePowerMode } from "@/lib/uxmode";
 import {
   isMountable,
@@ -45,6 +46,7 @@ export function WhdloadInstall() {
   const [volumeIndex, setVolumeIndex] = useState<number | null>(null);
 
   const [plan, setPlan] = useState<WhdloadPlan | null>(null);
+  const [planRefusal, setPlanRefusal] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<WhdloadOutcome | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -99,11 +101,14 @@ export function WhdloadInstall() {
     }
     setBusy("Looking inside the package…");
     setError(null);
+    setPlanRefusal(null);
     try {
       setPlan(await whdloadPlan(archive, image, volumeIndex));
     } catch (e) {
+      // A plan that cannot even be built is still an answer about the archive,
+      // not a fault in ART. It is shown where the package was chosen.
       setPlan(null);
-      setError(String(e));
+      setPlanRefusal(String(e).replace(/^invalid input: /, ""));
     } finally {
       setBusy(null);
     }
@@ -211,6 +216,13 @@ export function WhdloadInstall() {
         )}
 
         {plan && <Detection plan={plan} powerMode={powerMode} />}
+        {planRefusal && (
+          <Refusal
+            title="This is not a package ART can install"
+            reason={planRefusal}
+            suggestion="Open it in Archive Tools to see what is inside."
+          />
+        )}
       </section>
 
       {/* ---- 2. the disk ---- */}
@@ -419,9 +431,11 @@ function WhatHappens({ plan, powerMode }: { plan: WhdloadPlan; powerMode: boolea
       )}
 
       {plan.refusal ? (
-        <div className="badge badge-err" style={{ display: "block", marginTop: 8 }}>
-          {plan.refusal}
-        </div>
+        <Refusal
+          title="ART will not install this package"
+          reason={plan.refusal}
+          suggestion="You can still copy it by hand from the Files screen."
+        />
       ) : (
         <div className="badge badge-ok" style={{ display: "block", marginTop: 8 }}>
           Everything fits, every name is one AmigaDOS can store, and nothing of
