@@ -1388,6 +1388,32 @@ mod tests {
         assert_eq!(image.bytes(), before);
     }
 
+    /// Moved from `core/adf/mod.rs`'s `mutation_backs_up_the_previous_version`
+    /// when `mutate_disk_file` was retired. The backup is only worth taking if
+    /// it holds the image as it was — not a re-serialisation of it, and not the
+    /// version that has just replaced it. §92: the user is told where the
+    /// previous version went, so the previous version has to be what is there.
+    #[test]
+    fn a_write_backs_up_the_previous_version_byte_for_byte() {
+        let image = Image::new("backup-contents", 1760);
+        let before = image.bytes();
+
+        let (_, _, backup) =
+            with_writer(&image.path, 0, |writer| writer.make_dir(0, "Tools")).unwrap();
+
+        let backup = backup.expect("the whole-file path must take a backup");
+        assert_eq!(
+            std::fs::read(&backup).unwrap(),
+            before,
+            "the backup must hold the pre-modification image, byte for byte"
+        );
+        assert_ne!(
+            image.bytes(),
+            before,
+            "…and the live file really did change"
+        );
+    }
+
     /// The rule the whole recovery design rests on: never write over a volume
     /// whose journal describes blocks that no longer hold what it recorded.
     #[test]

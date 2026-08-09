@@ -1035,6 +1035,182 @@ mod tests {
         );
     }
 
+    // ---- moved from `core/adf/mutate.rs` when that second writer was retired ----
+    //
+    // Each of these was the evidence for behaviour the old floppy-only writer
+    // was audited into. The audit's value is the assertion, not the file it
+    // lived in, so every one is restated here against the surviving path.
+
+    /// A file long enough to need an extension chain must give *every* one of
+    /// those blocks back, not just its data blocks. 100 × 512 bytes is 100
+    /// data blocks, past the 72 a header holds inline, so the file grows an
+    /// extension block the free-space accounting has to know about.
+    #[test]
+    fn deleting_frees_the_extension_blocks_too() {
+        let disk = floppy("delete-extensions");
+        let data = vec![9u8; 100 * 512];
+
+        let before = with_writer(&disk, |w| w.free_blocks()).unwrap();
+        let added =
+            with_writer(&disk, |w| w.add_file(0, "Big.bin", &data, FileMeta::default())).unwrap();
+        // More than the header plus its data: the extension block is in there.
+        assert!(
+            before - added.free_blocks > 1 + 100,
+            "a 100-block file must also cost an extension block"
+        );
+
+        with_writer(&disk, |w| w.delete(0, added.block.unwrap())).unwrap();
+        assert_eq!(
+            with_writer(&disk, |w| w.free_blocks()).unwrap(),
+            before,
+            "every block a deleted file held must come back, extensions included"
+        );
+    }
+
+    /// A rename touches the directory, never the payload.
+    #[test]
+    fn renaming_preserves_the_file_contents() {
+        let disk = floppy("rename-contents");
+        let payload = b"Original Content";
+
+        let added = with_writer(&disk, |w| {
+            w.add_file(0, "OldName.txt", payload, FileMeta::default())
+        })
+        .unwrap();
+        let block = added.block.unwrap();
+
+        with_writer(&disk, |w| w.rename(0, block, "NewName.txt")).unwrap();
+
+        let entries = listing(&disk);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "NewName.txt");
+        assert_eq!(contents(&disk, block), payload);
+    }
+
+    /// ART-012: AmigaDOS cannot hold two entries with the same name in one
+    /// directory, and it compares them without regard to case. A rename onto a
+    /// taken name has to be refused, and refused *before* the entry leaves its
+    /// bucket — a half-done rename loses the file.
+    #[test]
+    fn rename_onto_an_existing_name_is_rejected() {
+        let disk = floppy("rename-dupe");
+        with_writer(&disk, |w| {
+            w.add_file(0, "Taken.txt", b"a", FileMeta::default())
+        })
+        .unwrap();
+        let second = with_writer(&disk, |w| {
+            w.add_file(0, "Free.txt", b"b", FileMeta::default())
+        })
+        .unwrap()
+        .block
+        .unwrap();
+        let before = disk.bytes();
+
+        let err = with_writer(&disk, |w| w.rename(0, second, "Taken.txt")).unwrap_err();
+        assert!(err.to_string().contains("already exists"), "{err}");
+
+        // The failed rename left the directory exactly as it was.
+        let names: Vec<String> = listing(&disk).into_iter().map(|e| e.name).collect();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"Taken.txt".to_string()));
+        assert!(names.contains(&"Free.txt".to_string()));
+        assert_eq!(disk.bytes(), before, "a refused rename must change nothing");
+    }
+
+    /// The exception to the rule above: an entry may always be renamed to a
+    /// different casing of its own name. Checking availability first would find
+    /// the entry itself and refuse.
+    #[test]
+    fn rename_can_change_only_case() {
+        let disk = floppy("rename-case");
+        let block = with_writer(&disk, |w| {
+            w.add_file(0, "readme.txt", b"x", FileMeta::default())
+        })
+        .unwrap()
+        .block
+        .unwrap();
+
+        with_writer(&disk, |w| w.rename(0, block, "README.TXT")).unwrap();
+
+        let entries = listing(&disk);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "README.TXT");
+    }
+
+    /// ART-011: if the entry is not in the chain its name hashes to, the image
+    /// is already inconsistent. Linking it into the new bucket anyway would
+    /// leave it referenced from two places — the rename must refuse instead.
+    #[test]
+    fn rename_of_an_unlinked_entry_reports_an_error() {
+        let disk = floppy("rename-orphan");
+        let block = with_writer(&disk, |w| {
+            w.add_file(0, "Ghost.txt", b"x", FileMeta::default())
+        })
+        .unwrap()
+        .block
+        .unwrap();
+
+        // Simulate a corrupt image: clear every hash bucket, so the entry is no
+        // longer reachable from its parent while its header still says it is.
+        {
+            let mut device = disk.device();
+            let root_block = disk.geometry.root_block;
+            let mut root = crate::core::volume::read_block_vec(&device, root_block).unwrap();
+            for bucket in 0..layout::hash_table_size(disk.geometry.block_size) {
+                layout::set_u32(&mut root, layout::TABLE_OFFSET + bucket * 4, 0).unwrap();
+            }
+            // Keep the block otherwise legal, so the refusal cannot be an
+            // artefact of a checksum that no longer adds up.
+            layout::set_u32(&mut root, CHECKSUM_OFFSET, 0).unwrap();
+            let fixed = crate::core::adf::checksum::block_checksum(&root, CHECKSUM_OFFSET);
+            layout::set_u32(&mut root, CHECKSUM_OFFSET, fixed).unwrap();
+            device.write_block(root_block, &root).unwrap();
+            device.sync().unwrap();
+        }
+        let before = disk.bytes();
+
+        let err = with_writer(&disk, |w| w.rename(0, block, "Renamed.txt")).unwrap_err();
+        assert!(matches!(err, CoreError::Malformed { .. }), "got {err:?}");
+        assert_eq!(
+            disk.bytes(),
+            before,
+            "refusing an inconsistent rename must not write anything"
+        );
+    }
+
+    /// ART-012, the other half: a directory may not shadow a file's name any
+    /// more than a second file may.
+    #[test]
+    fn a_directory_cannot_shadow_an_existing_file_name() {
+        let disk = floppy("shadow");
+        with_writer(&disk, |w| {
+            w.add_file(0, "Same.txt", b"first", FileMeta::default())
+        })
+        .unwrap();
+        let before = disk.bytes();
+
+        let err = with_writer(&disk, |w| w.make_dir(0, "SAME.TXT")).unwrap_err();
+        assert!(err.to_string().contains("already exists"), "{err}");
+        assert_eq!(disk.bytes(), before);
+    }
+
+    /// A block number from the frontend or a corrupt image must become an
+    /// error, never a panic — the release profile aborts on one.
+    #[test]
+    fn out_of_range_directory_block_is_an_error() {
+        let disk = floppy("out-of-range");
+
+        // Far past the end of an 880 KB image…
+        let err = with_writer(&disk, |w| {
+            w.add_file(99_999, "X.txt", b"x", FileMeta::default())
+        })
+        .unwrap_err();
+        assert!(matches!(err, CoreError::Malformed { .. }), "got {err:?}");
+
+        // …and the extreme value that would overflow an offset calculation.
+        assert!(with_writer(&disk, |w| w.make_dir(u32::MAX, "Y")).is_err());
+    }
+
     /// The whole reason for the generalisation: the same code, a volume that
     /// is not floppy-shaped, and a root block that is not 880.
     #[test]
