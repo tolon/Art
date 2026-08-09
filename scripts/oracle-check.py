@@ -330,6 +330,79 @@ def check_read_back_the_other_way(work: Path) -> None:
     )
 
 
+def check_bootable_adf_opens(work: Path) -> None:
+    """A *bootable* floppy amitools wrote, opened by ART.
+
+    ART used to read bytes 8..11 of the boot block as a root-block pointer.
+    On a bootable disk those bytes are 68000 boot code, so every real bootable
+    ADF failed to open. ART's own fixtures never caught it: they are zeros
+    there. Only a disk ART did not write can prove the fix.
+
+    `xdftool ... format ... + boot install` is not quite enough by itself:
+    amitools' own `BootBlock.write()` unconditionally echoes the *correct*
+    root block number into bytes 8..11 (a legacy field of its own model, not
+    part of the real AmigaDOS format — real boot code starts right there).
+    For a standard DD floppy that value is 880, which is also the right
+    answer, so the pre-fix bug happened to compute the right root block by
+    coincidence on this exact fixture and the check would have passed against
+    the bug it exists to catch. Confirmed by running this check's assertions
+    against the pre-fix `AdfImage::from_bytes` (commit before d622412): it
+    also printed `root=880` here.
+
+    So after amitools installs real boot code (which lands at byte 12
+    onward), the real code is shifted 4 bytes earlier to overwrite that
+    coincidental echo — still genuine 68000 instructions amitools generated,
+    just where a real bootable disk's boot code actually starts. Against the
+    pre-fix reader this decodes as a block number far outside the image and
+    fails with "block ... out of range"; against the fix it is never read.
+    """
+    print("Bootable ADF written by amitools, opened by ART:")
+    image = work / "bootable.adf"
+
+    oracle(["xdftool", str(image), "create", "+", "format", "Boot", "ffs", "+", "boot", "install"])
+    if not image.exists():
+        print("  FAIL amitools could not create a bootable image")
+        failures.append("amitools could not create a bootable image")
+        return
+
+    # Prove the fixture is actually bootable — otherwise the test proves nothing.
+    data = bytearray(image.read_bytes())
+    if data[8:12] == b"\0\0\0\0":
+        print("  FAIL the fixture has no boot code, so it does not exercise the bug")
+        failures.append("the bootable fixture was not bootable")
+        return
+    print("  ok   the fixture really carries boot code")
+
+    # Overwrite amitools' root-block echo at 8..11 with the boot code that
+    # actually starts at byte 12 — see the docstring. Without this, bytes
+    # 8..11 hold 880 (the true root block) and the pre-fix bug would read the
+    # right answer by accident, proving nothing.
+    root_block_echo = data[8:12]
+    real_boot_code = data[12:16]
+    if real_boot_code == root_block_echo:
+        print("  FAIL boot code is indistinguishable from the root-block echo")
+        failures.append("the bootable fixture could not be made to exercise the bug")
+        return
+    data[8:12] = real_boot_code
+    image.write_bytes(bytes(data))
+    print("  ok   the root-block-shaped coincidence at 8..11 was replaced with real boot code")
+
+    out = run(
+        [
+            "cargo",
+            "test",
+            "--quiet",
+            "open_foreign_adf_for_oracle_when_asked",
+            "--",
+            "--nocapture",
+        ],
+        {"ART_ADF_READ_IN": str(image)},
+    )
+    expect("ART opens a bootable ADF", out, "volume=Boot")
+    expect("and puts its root block at 880", out, "root=880")
+    expect("and reports a DD capacity", out, "capacity=901120")
+
+
 def main() -> int:
     if shutil.which("xdftool") is None or shutil.which("rdbtool") is None:
         print("amitools is not installed. Run: pip install amitools")
@@ -345,6 +418,7 @@ def main() -> int:
         check_written_attributes(work)
         check_whdload_install(work)
         check_read_back_the_other_way(work)
+        check_bootable_adf_opens(work)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

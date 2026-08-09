@@ -438,4 +438,21 @@ mod mod_tests {
         );
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    /// Open an image some other tool wrote and print what ART made of it.
+    ///
+    /// `scripts/oracle-check.py` has `xdftool` build a *bootable* floppy — the
+    /// case ART used to fail on, because a bootable disk has 68000 code where
+    /// ART looked for a block number.
+    #[test]
+    fn open_foreign_adf_for_oracle_when_asked() {
+        let Ok(source) = std::env::var("ART_ADF_READ_IN") else {
+            return;
+        };
+        let image = AdfImage::open(std::path::Path::new(&source)).unwrap();
+        let info = image.info().unwrap();
+        println!("volume={}", info.volume_name);
+        println!("root={}", info.root_block);
+        println!("capacity={}", info.capacity_bytes);
+    }
 }
