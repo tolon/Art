@@ -77,7 +77,12 @@ impl AdfImage {
 
         // Parse bootblock (sectors 0 & 1 = 1024 bytes)
         let bootblock = BootBlock::parse(&image[..1024])?;
-        let root_block_num = bootblock.root_block;
+
+        // The root block is derived from the volume's size, not read from the
+        // boot block — a boot block has no such field. Verified against
+        // ADFlib (`adfVolCalcRootBlk`) and amitools (`calc_root_blk`).
+        let total_blocks = (image.len() / blocks::BLOCK_SIZE) as u32;
+        let root_block_num = crate::core::volume::VolumeGeometry::root_block_for(total_blocks);
 
         Ok(Self {
             image,
@@ -280,6 +285,42 @@ mod mod_tests {
             err,
             CoreError::UnsupportedFormat(..) | CoreError::Malformed { .. }
         ));
+    }
+
+    /// A bootable disk carries 68000 boot code from byte 8 onwards. ART used
+    /// to read those bytes as a root-block pointer, which is why every
+    /// bootable ADF failed to open with a nonsense block type.
+    #[test]
+    fn a_bootable_image_opens_because_the_root_block_is_computed() {
+        use crate::core::adf::create::create_blank_adf;
+
+        let mut image = create_blank_adf("Boot", FileSystemType::Ffs, false).unwrap();
+        // Real boot code, not zeros: `bra.s` plus arbitrary following bytes.
+        image[8..12].copy_from_slice(&[0x60, 0x0E, 0x75, 0x0B]);
+
+        let opened = AdfImage::from_bytes(image).expect("a bootable ADF must open");
+        assert_eq!(
+            opened.info().unwrap().root_block,
+            880,
+            "a DD image's root block is 1760/2, whatever the boot code says"
+        );
+    }
+
+    /// The same omission is why HD images never worked: the old path assumed
+    /// the DD block count as well as the DD root.
+    #[test]
+    fn an_hd_image_finds_its_root_at_1760() {
+        let mut image = vec![0u8; 3520 * blocks::BLOCK_SIZE];
+        image[0..4].copy_from_slice(b"DOS\x01");
+
+        let root = 1760 * blocks::BLOCK_SIZE;
+        // A minimal root block: type T_HEADER, subtype ST_ROOT, hash size.
+        image[root..root + 4].copy_from_slice(&2i32.to_be_bytes());
+        image[root + 12..root + 16].copy_from_slice(&72u32.to_be_bytes());
+        image[root + 508..root + 512].copy_from_slice(&1i32.to_be_bytes());
+
+        let opened = AdfImage::from_bytes(image).expect("an HD ADF must open");
+        assert_eq!(opened.info().unwrap().root_block, 1760);
     }
 
     // --- mutate_disk_file: the spec §57 data-safety pipeline ---

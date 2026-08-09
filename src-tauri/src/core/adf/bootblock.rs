@@ -1,10 +1,14 @@
 //! Bootblock parsing (blocks 0–1 of an ADF = 1024 bytes).
 //!
 //! Layout (1024 bytes across 2 standard 512-byte sectors):
-//! - offset 0..4:   signature `DOS\X` (4 bytes)
-//! - offset 4..8:   checksum (longword, big-endian)
-//! - offset 8..12:  root block pointer (big-endian; usually 880)
-//! - offset 12..1024: bootcode (68000 machine code, ignored or checked for bootable flag)
+//! - offset 0..4:   DOS type
+//! - offset 4..8:   checksum
+//! - offset 8..:    boot code
+//!
+//! There is **no root-block pointer in a boot block.** ART used to read bytes
+//! 8..11 as one, which meant reading 68000 boot code as a block number and
+//! failing on every bootable disk. The root block is computed from the
+//! volume's size — see `VolumeGeometry::root_block_for`.
 
 use serde::{Deserialize, Serialize};
 
@@ -13,7 +17,11 @@ use crate::core::error::{CoreError, CoreResult};
 /// Checksum longword offset within the bootblock.
 pub const CHECKSUM_OFFSET: usize = 4;
 
-/// Default root block for a standard DD ADF.
+/// Root block of a standard DD ADF (`DD_TOTAL_BLOCKS / 2`). Only valid for
+/// code that already knows it is working with a fixed-size DD floppy image —
+/// anything that has to work for other geometries (HD floppies, HDF
+/// partitions) must derive the root block from the volume's actual size via
+/// `crate::core::volume::VolumeGeometry::root_block_for` instead.
 pub const DEFAULT_ROOT_BLOCK: u32 = 880;
 
 /// Standard Amiga bootblock size in bytes (2 sectors).
@@ -53,8 +61,6 @@ pub struct BootBlock {
     pub international: bool,
     /// Directory cache mode (bit 2 of the type byte).
     pub dir_cache: bool,
-    /// Root block pointer (usually 880).
-    pub root_block: u32,
     /// Whether the bootblock checksum validates.
     pub checksum_valid: bool,
     /// Whether the image looks bootable (non-trivial bootcode present).
@@ -94,19 +100,6 @@ impl BootBlock {
             FileSystemType::Ofs
         };
 
-        let root_block = u32::from_be_bytes([
-            bootblock_bytes[8],
-            bootblock_bytes[9],
-            bootblock_bytes[10],
-            bootblock_bytes[11],
-        ]);
-        // Some images leave root at 0; default to 880.
-        let root_block = if root_block == 0 {
-            DEFAULT_ROOT_BLOCK
-        } else {
-            root_block
-        };
-
         let checksum_valid = Self::verify_checksum(bootblock_bytes);
 
         // Bootable heuristic: any non-zero byte beyond the header (offset 12+).
@@ -118,7 +111,6 @@ impl BootBlock {
             fs_type,
             international,
             dir_cache,
-            root_block,
             checksum_valid,
             bootable,
         })
@@ -183,7 +175,6 @@ mod tests {
         assert_eq!(bb.fs_type, FileSystemType::Ofs);
         assert!(!bb.international);
         assert!(!bb.dir_cache);
-        assert_eq!(bb.root_block, DEFAULT_ROOT_BLOCK);
         assert!(!bb.bootable);
     }
 
@@ -204,14 +195,6 @@ mod tests {
         block[100] = 0x4E; // some bootcode byte
         let bb = BootBlock::parse(&block).unwrap();
         assert!(bb.bootable);
-    }
-
-    #[test]
-    fn root_block_defaults_when_zero() {
-        let mut block = vec![0u8; 1024];
-        block[0..4].copy_from_slice(b"DOS\0");
-        let bb = BootBlock::parse(&block).unwrap();
-        assert_eq!(bb.root_block, DEFAULT_ROOT_BLOCK);
     }
 
     #[test]

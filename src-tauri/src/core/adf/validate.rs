@@ -209,10 +209,14 @@ pub fn validate_image(image: &[u8]) -> CoreResult<ValidationReport> {
     }
     let check_len = image.len().min(super::bootblock::BOOTBLOCK_SIZE);
     let bb = super::bootblock::BootBlock::parse(&image[..check_len])?;
+    // The root block is not a field of the boot block — it is derived from
+    // the volume's size (see `bootblock.rs`'s module doc for why).
+    let total_blocks = (image.len() / BLOCK_SIZE) as u32;
+    let root_block = crate::core::volume::VolumeGeometry::root_block_for(total_blocks);
     validate(
         image,
         bb.fs_type,
-        bb.root_block,
+        root_block,
         bb.checksum_valid,
         true, // signature already validated by parse()
     )

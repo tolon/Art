@@ -1,7 +1,9 @@
 //! Create new blank or formatted Amiga floppy disk images (880 KB DD).
 //!
 //! Generates a 901,120-byte standard AmigaDOS disk image with:
-//! - Blocks 0..1: Bootblock with DOS signature, root pointer (880), and 1024-byte checksum.
+//! - Blocks 0..1: Bootblock with DOS signature and 1024-byte checksum. The root
+//!   block is not stored here — a boot block has no such field — but it is
+//!   always block 880 for a DD image (`DEFAULT_ROOT_BLOCK`).
 //! - Block 880: Root block (T_HEADER, ST_ROOT, 72 empty hash buckets, volume name, dates, checksum).
 //! - Block 881: Bitmap block (tracks blocks 0, 1, 880, 881 as used, rest free, checksum at offset 0).
 
@@ -45,8 +47,9 @@ pub fn create_blank_adf(
         FileSystemType::Ffs => b"DOS\x01",
     };
     img[0..4].copy_from_slice(sig);
-    // Root block pointer at offset 8 (LW 2)
-    img[8..12].copy_from_slice(&DEFAULT_ROOT_BLOCK.to_be_bytes());
+    // Offset 8 onwards is boot code, not a root-block pointer — a boot block
+    // has no such field. Non-bootable images leave it zero, matching a real
+    // AmigaDOS disk with no boot code installed.
 
     if bootable {
         // Standard minimal AmigaDOS bootloader header bytes
