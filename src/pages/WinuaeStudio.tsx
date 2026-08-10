@@ -69,7 +69,7 @@ export function WinuaeStudio() {
     const sel = await open({
       multiple: false,
       filters: [{ name: "WinUAE Executable", extensions: ["exe"] }],
-      title: "Locate winuae64.exe or winuae.exe",
+      title: t("winuae.locateDialogTitle"),
     });
     if (typeof sel === "string") {
       setCustomExePath(sel);
@@ -82,7 +82,7 @@ export function WinuaeStudio() {
     const sel = await open({
       multiple: false,
       filters: [{ name: "Floppy Disk (ADF)", extensions: ["adf", "adz"] }],
-      title: "Select Floppy Disk for DF0:",
+      title: t("winuae.selectFloppyTitle"),
     });
     if (typeof sel === "string") {
       setDf0Path(sel);
@@ -93,7 +93,7 @@ export function WinuaeStudio() {
     const sel = await open({
       multiple: false,
       filters: [{ name: "Hard Disk File (HDF)", extensions: ["hdf", "img"] }],
-      title: "Select Hard Disk File (HDF)",
+      title: t("winuae.selectHdfTitle"),
     });
     if (typeof sel === "string") {
       setHdfPath(sel);
@@ -104,7 +104,7 @@ export function WinuaeStudio() {
     const sel = await open({
       multiple: false,
       filters: [{ name: "Kickstart ROM", extensions: ["rom", "bin", "a500", "a1200"] }],
-      title: "Select Kickstart ROM File",
+      title: t("winuae.selectRomTitle"),
     });
     if (typeof sel === "string") {
       setKickstartPath(sel);
@@ -122,7 +122,7 @@ export function WinuaeStudio() {
   async function doLaunch(forceAros = false) {
     if (!selectedProfile) return;
     if (!install || !install.found) {
-      setError("WinUAE executable was not found. Please specify its path.");
+      setError(t("winuae.err.notFound"));
       return;
     }
 
@@ -149,9 +149,9 @@ export function WinuaeStudio() {
         media,
         customExePath || install.executable_path || undefined
       );
-      setStatusMsg(`🚀 WinUAE launched successfully (PID: ${pid}) with ${selectedProfile.name}`);
+      setStatusMsg(t("winuae.msg.launched", { pid, name: selectedProfile.name }));
     } catch (e) {
-      setError(`Failed to launch WinUAE: ${String(e)}`);
+      setError(t("winuae.err.launchFailed", { error: String(e) }));
     } finally {
       setBusy(false);
     }
@@ -160,14 +160,18 @@ export function WinuaeStudio() {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1 style={{ fontSize: 20, margin: 0 }}>{t("nav.winuae")} — WinUAE Studio</h1>
+        <h1 style={{ fontSize: 20, margin: 0 }}>{t("nav.winuae")} — {t("winuae.title")}</h1>
         {install && (
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span className={`badge ${install.found ? "badge-ok" : "badge-warn"}`}>
-              {install.found ? `✓ ${install.version ?? "WinUAE Found"}` : "⚠️ WinUAE Not Found"}
+              {install.found
+                ? install.version
+                  ? t("winuae.status.foundVersion", { version: install.version })
+                  : t("winuae.status.foundGeneric")
+                : t("winuae.status.notFound")}
             </span>
             <button className="btn btn-sm" onClick={handleBrowseWinUae}>
-              ⚙️ Locate WinUAE…
+              ⚙️ {t("winuae.locateButton")}
             </button>
           </div>
         )}
@@ -180,9 +184,9 @@ export function WinuaeStudio() {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 16 }}>
         {/* Left: Amiga Machine Profiles Catalog */}
         <section className="card">
-          <h2 style={{ fontSize: 16 }}>🕹️ Amiga Hardware Profiles</h2>
+          <h2 style={{ fontSize: 16 }}>🕹️ {t("winuae.profilesHeading")}</h2>
           <p className="muted" style={{ fontSize: 12, margin: "4px 0 12px" }}>
-            Choose an accurate hardware configuration preset:
+            {t("winuae.profilesIntro")}
           </p>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -219,11 +223,11 @@ export function WinuaeStudio() {
 
         {/* Right: Media Attachments & 1-Click Launch */}
         <section className="card" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <h2 style={{ fontSize: 16 }}>🚀 Emulation Launcher</h2>
+          <h2 style={{ fontSize: 16 }}>🚀 {t("winuae.launcherHeading")}</h2>
 
           {selectedProfile && (
             <div style={{ background: "var(--bg)", padding: 10, borderRadius: "var(--radius-sm)" }}>
-              <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Target Profile:</div>
+              <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{t("winuae.targetProfileLabel")}</div>
               <strong style={{ fontSize: 14 }}>{selectedProfile.name}</strong>
             </div>
           )}
@@ -231,9 +235,9 @@ export function WinuaeStudio() {
           {/* Floppy DF0: */}
           <div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <label className="muted" style={{ fontSize: 12 }}>Floppy Drive DF0:</label>
+              <label className="muted" style={{ fontSize: 12 }}>{t("winuae.df0Label")}</label>
               <button className="btn btn-sm" onClick={handleBrowseDf0}>
-                {df0Path ? "Change ADF…" : "Insert ADF…"}
+                {df0Path ? t("winuae.changeAdf") : t("winuae.insertAdf")}
               </button>
             </div>
             <div
@@ -247,16 +251,16 @@ export function WinuaeStudio() {
                 wordBreak: "break-all",
               }}
             >
-              {df0Path ? `💾 ${df0Path}` : "(No disk inserted)"}
+              {df0Path ? `💾 ${df0Path}` : t("winuae.noDiskInserted")}
             </div>
           </div>
 
           {/* Hard Disk HDF */}
           <div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <label className="muted" style={{ fontSize: 12 }}>Hard Disk (HDF):</label>
+              <label className="muted" style={{ fontSize: 12 }}>{t("winuae.hdfLabel")}</label>
               <button className="btn btn-sm" onClick={handleBrowseHdf}>
-                {hdfPath ? "Change HDF…" : "Attach HDF…"}
+                {hdfPath ? t("winuae.changeHdf") : t("winuae.attachHdf")}
               </button>
             </div>
             <div
@@ -270,16 +274,16 @@ export function WinuaeStudio() {
                 wordBreak: "break-all",
               }}
             >
-              {hdfPath ? `💽 ${hdfPath}` : "(No hard disk attached)"}
+              {hdfPath ? `💽 ${hdfPath}` : t("winuae.noHdfAttached")}
             </div>
           </div>
 
           {/* Kickstart ROM */}
           <div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <label className="muted" style={{ fontSize: 12 }}>Kickstart ROM:</label>
+              <label className="muted" style={{ fontSize: 12 }}>{t("winuae.kickstartLabel")}</label>
               <button className="btn btn-sm" onClick={handleBrowseKickstart}>
-                {kickstartPath ? "Change ROM…" : "Select ROM…"}
+                {kickstartPath ? t("winuae.changeRom") : t("winuae.selectRom")}
               </button>
             </div>
             <div
@@ -293,13 +297,15 @@ export function WinuaeStudio() {
               }}
             >
               {useAros ? (
-                <span className="badge badge-ok">AROS Open-Source Replacement (Built-in)</span>
+                <span className="badge badge-ok">{t("winuae.arosBuiltin")}</span>
               ) : kickstartPath ? (
                 <span>
                   🔑 {kickstartInfo ? kickstartInfo.name : kickstartPath}
                 </span>
               ) : (
-                <span className="muted">Default: Kickstart {selectedProfile?.kickstart_version ?? "1.3"} (Will prompt if missing)</span>
+                <span className="muted">
+                  {t("winuae.defaultKickstart", { version: selectedProfile?.kickstart_version ?? "1.3" })}
+                </span>
               )}
             </div>
           </div>
@@ -308,7 +314,12 @@ export function WinuaeStudio() {
           {selectedProfile && (
             <div>
               <label className="muted" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
-                Floppy Emulation Speed: {selectedProfile.floppy.speed_percent === 100 ? "100% (Accurate)" : `${selectedProfile.floppy.speed_percent}% (Fast)`}
+                {t("winuae.floppySpeedLabel", {
+                  speed:
+                    selectedProfile.floppy.speed_percent === 100
+                      ? t("winuae.floppySpeed.accurate")
+                      : t("winuae.floppySpeed.fast", { n: selectedProfile.floppy.speed_percent }),
+                })}
               </label>
               <input
                 type="range"
@@ -334,7 +345,7 @@ export function WinuaeStudio() {
             onClick={() => doLaunch(false)}
             disabled={busy || !install?.found}
           >
-            🚀 Launch in WinUAE
+            🚀 {t("common.launchInWinuae")}
           </button>
         </section>
       </div>
@@ -353,10 +364,9 @@ export function WinuaeStudio() {
           }}
         >
           <div className="card" style={{ width: 440, maxWidth: "90vw" }}>
-            <h3 style={{ margin: "0 0 8px" }}>🔑 Kickstart ROM Required</h3>
+            <h3 style={{ margin: "0 0 8px" }}>🔑 {t("winuae.modal.title")}</h3>
             <p className="muted" style={{ fontSize: 13, lineHeight: 1.5, margin: "0 0 16px" }}>
-              To emulate <strong>{selectedProfile?.name}</strong>, a Kickstart ROM is needed.
-              Commercial Kickstarts are copyrighted and not distributed with ART.
+              {t("winuae.modal.body", { name: selectedProfile?.name ?? "" })}
             </p>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -365,7 +375,7 @@ export function WinuaeStudio() {
                 style={{ padding: "10px", justifyContent: "center" }}
                 onClick={handleBrowseKickstart}
               >
-                📁 Select Kickstart ROM File ({selectedProfile?.kickstart_version})…
+                📁 {t("winuae.modal.selectRom", { version: selectedProfile?.kickstart_version })}
               </button>
 
               <button
@@ -377,7 +387,7 @@ export function WinuaeStudio() {
                   void doLaunch(true);
                 }}
               >
-                🚀 Continue with Open-Source AROS ROM
+                🚀 {t("winuae.modal.continueAros")}
               </button>
 
               <button
@@ -385,7 +395,7 @@ export function WinuaeStudio() {
                 style={{ marginTop: 8 }}
                 onClick={() => setShowRomPromptModal(false)}
               >
-                Cancel
+                {t("common.cancel")}
               </button>
             </div>
           </div>

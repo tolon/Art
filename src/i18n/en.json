@@ -38,7 +38,8 @@
     "close": "Close",
     "unknown": "Unknown",
     "yes": "Yes",
-    "no": "No"
+    "no": "No",
+    "launchInWinuae": "Launch in WinUAE"
   },
   "settings": {
     "title": "Settings",
@@ -299,6 +300,265 @@
       "extracted": "Extracted {{bytes}} bytes for '{{name}}' to {{dest}}",
       "openDirFailed": "Failed to open directory '{{name}}': {{error}}",
       "withBackup": "{{message}}. Previous version backed up to {{backupPath}}"
+    }
+  },
+  "hardDisk": {
+    "title": "Hard Disk Studio",
+    "newWizard": "New HDF Wizard…",
+    "openHdf": "Open HDF…",
+    "openDialogTitle": "Open Amiga Hard Disk Image",
+    "saveDialogTitle": "Save New Hard Disk File",
+    "msgCreated": "Created new RDB Hard Disk Image '{{dest}}' ({{size}} MB) with {{count}} partition(s).",
+    "diskImageLabel": "Disk Image:",
+    "working": "Working on hard disk…",
+    "driveType": {
+      "rdb": "Rigid Disk Block (RDB) Partitioned Drive",
+      "raw": "Plain / Raw Single Partition Drive"
+    },
+    "checksum": {
+      "ok": "RDB Checksum: OK",
+      "invalid": "RDB Checksum: Invalid"
+    },
+    "capacity": "Capacity:",
+    "partitionsLabel": "Partitions:",
+    "cylinders": "Cylinders:",
+    "headsSectors": "Heads / Sectors:",
+    "visualLayout": "Visual Partition Layout",
+    "partitionsTable": "Partitions Table ({{count}})",
+    "bootablePri": "Bootable (Pri {{n}})",
+    "partitionProperties": "Partition Properties",
+    "deviceName": "Device Name:",
+    "dosTypeSignature": "DosType Signature:",
+    "filesystem": "Filesystem:",
+    "cylinderRange": "{{low}} → {{high}} ({{count}} cyls)",
+    "partitionSize": "Partition Size:",
+    "bootableLabel": "Bootable:",
+    "bootPriority": "Boot Priority:",
+    "buffers": "Buffers:",
+    "emptyState": "Open an existing .hdf image or click \"{{wizard}}\" to create an Amiga hard disk.",
+    "modal": {
+      "title": "Create New Amiga Hard Disk (HDF)",
+      "selectSize": "1. Select Disk Size:",
+      "selectTemplate": "2. Partitioning Template:",
+      "selectFs": "3. Choose Amiga Filesystem:",
+      "splitTitle": "Classic Split (Recommended)",
+      "splitDesc": "DH0: System (Bootable) + DH1: Work/Games",
+      "singleTitle": "Single Partition",
+      "singleDesc": "DH0: System (100% capacity)",
+      "createButton": "Create HDF File…",
+      "sizeHints": {
+        "compact": "Compact",
+        "classic": "Classic",
+        "whdload": "WHDLoad",
+        "standard": "Standard",
+        "largeDisk": "Large Disk"
+      }
+    },
+    "fs": {
+      "pfs3": {
+        "badge": "Recommended (Fast & Safe)",
+        "description": "Professional File System 3: High speed, crash-resilient without validation delays, 64-bit DirectSCSI safe (>4GB support).",
+        "feature1": "No 'Validating...' delay on crashes",
+        "feature2": "Ultra fast directory reads",
+        "feature3": "DirectSCSI 64-bit safe",
+        "feature4": "Low RAM usage"
+      },
+      "sfs0": {
+        "badge": "Advanced (Journaled)",
+        "description": "Journaled filesystem designed for Amiga hard disks with automatic integrity recovery.",
+        "feature1": "Journaling structure",
+        "feature2": "Defragmentation-free design",
+        "feature3": "Fast performance on large drives"
+      },
+      "ffsdircache": {
+        "badge": "Classic AmigaDOS",
+        "description": "Standard AmigaDOS Directory Cache filesystem native to Kickstart 2.04 and 3.x.",
+        "feature1": "Native AmigaDOS support",
+        "feature2": "Directory cache acceleration",
+        "feature3": "Compatible with WB 2.x/3.x"
+      },
+      "ffsstandard": {
+        "badge": "Kickstart 1.3 Compatible",
+        "description": "Original Fast File System with maximum backward compatibility for Kickstart 1.3 / A500 setups.",
+        "feature1": "Kickstart 1.3 compatible",
+        "feature2": "Universal legacy support",
+        "feature3": "Basic structure"
+      }
+    }
+  },
+  "pistorm": {
+    "title": "PiStorm & Emu68 Studio",
+    "selectSdTitle": "Select PiStorm / Emu68 MicroSD Card Root Folder",
+    "scan": {
+      "summary": "Scanned MicroSD: {{firmware}}, {{kickstart}}",
+      "firmwareFound": "✓ Emu68 Firmware Found",
+      "firmwareMissing": "⚠️ Emu68 kernel missing",
+      "kickstartFound": "✓ Kickstart ({{name}})",
+      "kickstartMissing": "⚠️ Kickstart ROM missing"
+    },
+    "msg": {
+      "saved": "✓ Successfully saved PiStorm config.txt and cmdline.txt to MicroSD card!",
+      "saveFailed": "Failed to save: {{error}}"
+    },
+    "sdCardLabel": "MicroSD Card:",
+    "working": "Working on PiStorm configuration…",
+    "profilesHeading": "Parametric Usage Profiles",
+    "profilesIntro": "PiStorm transforms your Amiga into a high-performance workstation while preserving custom chipset compatibility for games:",
+    "selectSd": "Select MicroSD Card…",
+    "saveSync": "Save & Sync PiStorm SD",
+    "hardwareHeading": "Hardware & RTG Display Setup",
+    "boardLabel": "PiStorm Hardware Board:",
+    "board": {
+      "a500a2000": "PiStorm A500 / A2000 (DIP-64 Socket)",
+      "a1200lite": "PiStorm32-Lite (Amiga 1200 Trapdoor)",
+      "a600": "PiStorm600 (Amiga 600 PLCC)"
+    },
+    "rtgLabel": "RTG Video Output (Picasso96 HDMI):",
+    "rtg": {
+      "res1080p": "1920x1080 @ 60Hz (Full HD TrueColor 32-bit)",
+      "res720p": "1280x720 @ 60Hz (HD Ready TrueColor 32-bit)",
+      "res1024": "1024x768 @ 60Hz (Classic 4:3 RTG)",
+      "res800": "800x600 @ 60Hz",
+      "disabled": "Disabled (Native Amiga Video Output Only)"
+    },
+    "kickstartLabel": "Kickstart ROM File on SD Card:",
+    "performanceHeading": "CPU Performance & Memory Map",
+    "fastRamLabel": "Fast RAM Allocation:",
+    "fastRamHint": "Fast RAM is mapped directly into Amiga 32-bit address space.",
+    "jitLabel": "Enable JIT Dynamic Recompiler (Emu68 JIT)",
+    "jitHint": "Translates 68k instructions to ARM64 on the fly for ~800+ MIPS.",
+    "mmuLabel": "Enable 68040 MMU Emulation",
+    "mmuHint": "Required for WHDLoad MuForce and advanced memory protections.",
+    "sdStorageLabel": "Enable High-Speed MicroSD Storage (`emu68-sd.device`)",
+    "sdStorageHint": "High speed hard drive access (20+ MB/s) directly from SD card partitions.",
+    "profile": {
+      "workstation": {
+        "title": "AmigaOS Ultra Workstation",
+        "badge": "Recommended for AmigaOS & Productivity",
+        "description": "Maximum JIT performance (~800+ MIPS) with 1080p TrueColor RTG desktop. Instant Workbench loading, web browsing, raytracing, and high productivity.",
+        "feature1": "~800+ MIPS CPU speed (faster than 68060)",
+        "feature2": "1080p 32-bit TrueColor RTG HDMI output",
+        "feature3": "1 GB to 2 GB Fast RAM for multitasking",
+        "feature4": "High-speed emu68-sd.device disk access (20+ MB/s)"
+      },
+      "balanced": {
+        "title": "Balanced Daily & WHDLoad Gaming",
+        "badge": "Optimal Daily Driver & Games",
+        "description": "High JIT performance with WHDLoad MMU and cache flush optimizations. RTG desktop with automatic native OCS/ECS/AGA switching for games.",
+        "feature1": "99% WHDLoad game compatibility",
+        "feature2": "Automatic screen-mode switching (RTG ↔ PAL/NTSC)",
+        "feature3": "512 MB Fast RAM allocation",
+        "feature4": "WHDLoad MMU-safe cache flushes"
+      },
+      "classic": {
+        "title": "Classic & Demoscene Compatibility",
+        "badge": "Cycle-Exact & Demos",
+        "description": "Conservative JIT execution for timing-sensitive demoscene productions and floppy-based legacy software.",
+        "feature1": "Strict timing preservation",
+        "feature2": "128 MB to 256 MB Fast RAM footprint",
+        "feature3": "Native 15 kHz Amiga video pass-through priority",
+        "feature4": "Maximum legacy software stability"
+      }
+    }
+  },
+  "gotek": {
+    "title": "Gotek & FlashFloppy Studio",
+    "selectUsbTitle": "Select Gotek USB Flash Drive Root Folder",
+    "msg": {
+      "scanned": "Scanned USB drive: Found {{images}} disk images, {{slots}} quickslots.",
+      "added": "Added {{count}} disk(s) to slot list.",
+      "saved": "✓ Successfully saved FF.CFG and IMAGE_A.CFG to USB drive!",
+      "saveFailed": "Failed to save: {{error}}"
+    },
+    "selectDisksTitle": "Select ADF files to assign into Gotek Slots",
+    "usbDriveLabel": "USB Drive:",
+    "scanning": "Scanning USB drive…",
+    "selectUsb": "Select USB Drive…",
+    "saveSync": "Save & Sync to USB",
+    "simulatorHeading": "Gotek Screen Simulator",
+    "simulatorIntro": "Live preview of how your display and selected disk will render on real hardware:",
+    "display": {
+      "insertMedia": "Insert USB Media",
+      "noDiskLoaded": "(No disk loaded)",
+      "infoLine": "Amiga 880 KB OFS/FFS · Track 0/80"
+    },
+    "navModeLabel": "Parametric Navigation Mode:",
+    "navMode": {
+      "native": {
+        "title": "Direct Folder Mode",
+        "hint": "Browse folders & long filenames directly on OLED"
+      },
+      "quickslot": {
+        "title": "Quickslot Mode",
+        "hint": "Numeric slots 000..999 via IMAGE_A.CFG"
+      }
+    },
+    "hardwareHeading": "FlashFloppy Hardware Setup (`FF.CFG`)",
+    "displayHardwareLabel": "Display Hardware:",
+    "displayType": {
+      "oled128x32": "OLED 0.91\" (128x32 Pixels)",
+      "oled128x64": "OLED 0.96\" / 1.3\" (128x64 Pixels)",
+      "lcd16x2": "LCD 16x2 Characters",
+      "sevenSeg": "Classic 3-Digit 7-Segment LED"
+    },
+    "stepVolumeLabel": "Floppy Step Sound Volume (Piezo Buzzer):",
+    "rotaryLabel": "Rotary Encoder Control:",
+    "rotary": {
+      "track": "Track Seek (Turn = Track / Slot)",
+      "quickslot": "Quickslot Select",
+      "buttons": "Buttons Emulation"
+    },
+    "writeProtectLabel": "Force Write Protect (Read-Only)",
+    "rackHeading": "Gotek Quickslot Rack ({{count}} Assigned)",
+    "addDisks": "Add Disks to Slots…",
+    "rackEmpty": "No disks assigned to slots yet. Click \"{{addDisks}}\" to map your games to slots 000..999."
+  },
+  "winuae": {
+    "title": "WinUAE Studio",
+    "status": {
+      "foundVersion": "✓ {{version}}",
+      "foundGeneric": "✓ WinUAE Found",
+      "notFound": "⚠️ WinUAE Not Found"
+    },
+    "locateButton": "Locate WinUAE…",
+    "locateDialogTitle": "Locate winuae64.exe or winuae.exe",
+    "err": {
+      "notFound": "WinUAE executable was not found. Please specify its path.",
+      "launchFailed": "Failed to launch WinUAE: {{error}}"
+    },
+    "selectFloppyTitle": "Select Floppy Disk for DF0:",
+    "selectHdfTitle": "Select Hard Disk File (HDF)",
+    "selectRomTitle": "Select Kickstart ROM File",
+    "msg": {
+      "launched": "🚀 WinUAE launched successfully (PID: {{pid}}) with {{name}}"
+    },
+    "profilesHeading": "Amiga Hardware Profiles",
+    "profilesIntro": "Choose an accurate hardware configuration preset:",
+    "launcherHeading": "Emulation Launcher",
+    "targetProfileLabel": "Target Profile:",
+    "df0Label": "Floppy Drive DF0:",
+    "changeAdf": "Change ADF…",
+    "insertAdf": "Insert ADF…",
+    "noDiskInserted": "(No disk inserted)",
+    "hdfLabel": "Hard Disk (HDF):",
+    "changeHdf": "Change HDF…",
+    "attachHdf": "Attach HDF…",
+    "noHdfAttached": "(No hard disk attached)",
+    "kickstartLabel": "Kickstart ROM:",
+    "changeRom": "Change ROM…",
+    "selectRom": "Select ROM…",
+    "arosBuiltin": "AROS Open-Source Replacement (Built-in)",
+    "defaultKickstart": "Default: Kickstart {{version}} (Will prompt if missing)",
+    "floppySpeedLabel": "Floppy Emulation Speed: {{speed}}",
+    "floppySpeed": {
+      "accurate": "100% (Accurate)",
+      "fast": "{{n}}% (Fast)"
+    },
+    "modal": {
+      "title": "Kickstart ROM Required",
+      "body": "To emulate {{name}}, a Kickstart ROM is needed. Commercial Kickstarts are copyrighted and not distributed with ART.",
+      "selectRom": "Select Kickstart ROM File ({{version}})…",
+      "continueAros": "Continue with Open-Source AROS ROM"
     }
   }
 }

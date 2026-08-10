@@ -38,7 +38,8 @@
     "close": "Kapat",
     "unknown": "Bilinmiyor",
     "yes": "Evet",
-    "no": "Hayır"
+    "no": "Hayır",
+    "launchInWinuae": "WinUAE'de Başlat"
   },
   "settings": {
     "title": "Ayarlar",
@@ -299,6 +300,265 @@
       "extracted": "'{{name}}' için {{bytes}} bayt {{dest}} konumuna ayıklandı",
       "openDirFailed": "'{{name}}' klasörü açılamadı: {{error}}",
       "withBackup": "{{message}}. Önceki sürüm {{backupPath}} konumuna yedeklendi"
+    }
+  },
+  "hardDisk": {
+    "title": "Sabit Disk Stüdyosu",
+    "newWizard": "Yeni HDF Sihirbazı…",
+    "openHdf": "HDF Aç…",
+    "openDialogTitle": "Amiga Sabit Disk İmajı Aç",
+    "saveDialogTitle": "Yeni Sabit Disk Dosyasını Kaydet",
+    "msgCreated": "Yeni RDB Sabit Disk İmajı oluşturuldu: '{{dest}}' ({{size}} MB), {{count}} bölümle.",
+    "diskImageLabel": "Disk İmajı:",
+    "working": "Sabit disk üzerinde çalışılıyor…",
+    "driveType": {
+      "rdb": "Rigid Disk Block (RDB) Bölümlenmiş Sürücü",
+      "raw": "Düz / Ham Tek Bölümlü Sürücü"
+    },
+    "checksum": {
+      "ok": "RDB Sağlaması: Tamam",
+      "invalid": "RDB Sağlaması: Geçersiz"
+    },
+    "capacity": "Kapasite:",
+    "partitionsLabel": "Bölümler:",
+    "cylinders": "Silindirler:",
+    "headsSectors": "Kafa / Sektör:",
+    "visualLayout": "Görsel Bölüm Yerleşimi",
+    "partitionsTable": "Bölüm Tablosu ({{count}})",
+    "bootablePri": "Önyüklenebilir (Öncelik {{n}})",
+    "partitionProperties": "Bölüm Özellikleri",
+    "deviceName": "Aygıt Adı:",
+    "dosTypeSignature": "DosType İmzası:",
+    "filesystem": "Dosya Sistemi:",
+    "cylinderRange": "{{low}} → {{high}} ({{count}} silindir)",
+    "partitionSize": "Bölüm Boyutu:",
+    "bootableLabel": "Önyüklenebilir:",
+    "bootPriority": "Önyükleme Önceliği:",
+    "buffers": "Tamponlar:",
+    "emptyState": "Var olan bir .hdf imajını açın ya da bir Amiga sabit diski oluşturmak için \"{{wizard}}\" düğmesine tıklayın.",
+    "modal": {
+      "title": "Yeni Amiga Sabit Diski Oluştur (HDF)",
+      "selectSize": "1. Disk Boyutu Seçin:",
+      "selectTemplate": "2. Bölümleme Şablonu:",
+      "selectFs": "3. Amiga Dosya Sistemi Seçin:",
+      "splitTitle": "Klasik Bölme (Önerilen)",
+      "splitDesc": "DH0: Sistem (Önyüklenebilir) + DH1: Çalışma/Oyunlar",
+      "singleTitle": "Tek Bölüm",
+      "singleDesc": "DH0: Sistem (%100 kapasite)",
+      "createButton": "HDF Dosyası Oluştur…",
+      "sizeHints": {
+        "compact": "Kompakt",
+        "classic": "Klasik",
+        "whdload": "WHDLoad",
+        "standard": "Standart",
+        "largeDisk": "Büyük Disk"
+      }
+    },
+    "fs": {
+      "pfs3": {
+        "badge": "Önerilen (Hızlı ve Güvenli)",
+        "description": "Professional File System 3: Doğrulama gecikmesi olmadan yüksek hız, çökmelere dayanıklılık, 64-bit DirectSCSI güvenliği (4GB üzeri destek).",
+        "feature1": "Çökmelerde 'Doğrulanıyor...' gecikmesi yok",
+        "feature2": "Aşırı hızlı klasör okuma",
+        "feature3": "DirectSCSI 64-bit güvenli",
+        "feature4": "Düşük RAM kullanımı"
+      },
+      "sfs0": {
+        "badge": "Gelişmiş (Günlüklü)",
+        "description": "Amiga sabit diskleri için tasarlanmış, kendiliğinden bütünlük onarımı yapan günlüklü dosya sistemi.",
+        "feature1": "Günlükleme yapısı",
+        "feature2": "Birleştirme gerektirmeyen tasarım",
+        "feature3": "Büyük sürücülerde hızlı performans"
+      },
+      "ffsdircache": {
+        "badge": "Klasik AmigaDOS",
+        "description": "Kickstart 2.04 ve 3.x'te yerleşik, standart AmigaDOS Dizin Önbellekli dosya sistemi.",
+        "feature1": "Yerel AmigaDOS desteği",
+        "feature2": "Klasör önbelleği hızlandırması",
+        "feature3": "WB 2.x/3.x ile uyumlu"
+      },
+      "ffsstandard": {
+        "badge": "Kickstart 1.3 Uyumlu",
+        "description": "Kickstart 1.3 / A500 kurulumlarıyla azami geriye dönük uyumluluğa sahip özgün Fast File System.",
+        "feature1": "Kickstart 1.3 uyumlu",
+        "feature2": "Evrensel eski sistem desteği",
+        "feature3": "Temel yapı"
+      }
+    }
+  },
+  "pistorm": {
+    "title": "PiStorm ve Emu68 Stüdyosu",
+    "selectSdTitle": "PiStorm / Emu68 MicroSD Kart Kök Klasörünü Seçin",
+    "scan": {
+      "summary": "MicroSD tarandı: {{firmware}}, {{kickstart}}",
+      "firmwareFound": "✓ Emu68 Ürün Yazılımı Bulundu",
+      "firmwareMissing": "⚠️ Emu68 çekirdeği eksik",
+      "kickstartFound": "✓ Kickstart ({{name}})",
+      "kickstartMissing": "⚠️ Kickstart ROM eksik"
+    },
+    "msg": {
+      "saved": "✓ PiStorm config.txt ve cmdline.txt dosyaları MicroSD karta başarıyla kaydedildi!",
+      "saveFailed": "Kaydedilemedi: {{error}}"
+    },
+    "sdCardLabel": "MicroSD Kart:",
+    "working": "PiStorm yapılandırması üzerinde çalışılıyor…",
+    "profilesHeading": "Parametrik Kullanım Profilleri",
+    "profilesIntro": "PiStorm, oyunlar için özel yonga seti uyumluluğunu korurken Amiga'nızı yüksek performanslı bir iş istasyonuna dönüştürür:",
+    "selectSd": "MicroSD Kart Seç…",
+    "saveSync": "PiStorm SD'yi Kaydet ve Eşitle",
+    "hardwareHeading": "Donanım ve RTG Görüntü Ayarları",
+    "boardLabel": "PiStorm Donanım Kartı:",
+    "board": {
+      "a500a2000": "PiStorm A500 / A2000 (DIP-64 Yuva)",
+      "a1200lite": "PiStorm32-Lite (Amiga 1200 Kapak Altı)",
+      "a600": "PiStorm600 (Amiga 600 PLCC)"
+    },
+    "rtgLabel": "RTG Video Çıkışı (Picasso96 HDMI):",
+    "rtg": {
+      "res1080p": "1920x1080 @ 60Hz (Tam HD TrueColor 32-bit)",
+      "res720p": "1280x720 @ 60Hz (HD Ready TrueColor 32-bit)",
+      "res1024": "1024x768 @ 60Hz (Klasik 4:3 RTG)",
+      "res800": "800x600 @ 60Hz",
+      "disabled": "Devre Dışı (Yalnızca Doğal Amiga Video Çıkışı)"
+    },
+    "kickstartLabel": "SD Karttaki Kickstart ROM Dosyası:",
+    "performanceHeading": "İşlemci Performansı ve Bellek Haritası",
+    "fastRamLabel": "Fast RAM Ayırımı:",
+    "fastRamHint": "Fast RAM, doğrudan Amiga'nın 32-bit adres alanına eşlenir.",
+    "jitLabel": "JIT Dinamik Derleyiciyi Etkinleştir (Emu68 JIT)",
+    "jitHint": "~800+ MIPS için 68k komutlarını anında ARM64'e çevirir.",
+    "mmuLabel": "68040 MMU Emülasyonunu Etkinleştir",
+    "mmuHint": "WHDLoad MuForce ve gelişmiş bellek korumaları için gereklidir.",
+    "sdStorageLabel": "Yüksek Hızlı MicroSD Depolamayı Etkinleştir (`emu68-sd.device`)",
+    "sdStorageHint": "SD kart bölümlerinden doğrudan yüksek hızlı sabit disk erişimi (20+ MB/s).",
+    "profile": {
+      "workstation": {
+        "title": "AmigaOS Ultra İş İstasyonu",
+        "badge": "AmigaOS ve Üretkenlik için Önerilen",
+        "description": "1080p TrueColor RTG masaüstüyle azami JIT performansı (~800+ MIPS). Anında Workbench açılışı, web gezintisi, ışın izleme ve yüksek üretkenlik.",
+        "feature1": "~800+ MIPS işlemci hızı (68060'tan hızlı)",
+        "feature2": "1080p 32-bit TrueColor RTG HDMI çıkışı",
+        "feature3": "Çoklu görev için 1 GB ile 2 GB arası Fast RAM",
+        "feature4": "Yüksek hızlı emu68-sd.device disk erişimi (20+ MB/s)"
+      },
+      "balanced": {
+        "title": "Dengeli Günlük Kullanım ve WHDLoad Oyunları",
+        "badge": "En İyi Günlük Kullanım ve Oyunlar",
+        "description": "WHDLoad MMU ve önbellek temizleme optimizasyonlarıyla yüksek JIT performansı. Oyunlar için otomatik doğal OCS/ECS/AGA geçişli RTG masaüstü.",
+        "feature1": "%99 WHDLoad oyun uyumluluğu",
+        "feature2": "Otomatik ekran modu geçişi (RTG ↔ PAL/NTSC)",
+        "feature3": "512 MB Fast RAM ayırımı",
+        "feature4": "WHDLoad MMU güvenli önbellek temizlemeleri"
+      },
+      "classic": {
+        "title": "Klasik ve Demoscene Uyumluluğu",
+        "badge": "Çevrim Hassasiyetli ve Demolar",
+        "description": "Zamanlamaya duyarlı demoscene yapımları ve disket tabanlı eski yazılımlar için temkinli JIT çalıştırma.",
+        "feature1": "Sıkı zamanlama koruması",
+        "feature2": "128 MB ile 256 MB arası Fast RAM kullanımı",
+        "feature3": "Doğal 15 kHz Amiga video geçiş önceliği",
+        "feature4": "Azami eski yazılım kararlılığı"
+      }
+    }
+  },
+  "gotek": {
+    "title": "Gotek ve FlashFloppy Stüdyosu",
+    "selectUsbTitle": "Gotek USB Bellek Kök Klasörünü Seçin",
+    "msg": {
+      "scanned": "USB sürücü tarandı: {{images}} disk imajı, {{slots}} hızlı yuva bulundu.",
+      "added": "Yuva listesine {{count}} disk eklendi.",
+      "saved": "✓ FF.CFG ve IMAGE_A.CFG dosyaları USB sürücüye başarıyla kaydedildi!",
+      "saveFailed": "Kaydedilemedi: {{error}}"
+    },
+    "selectDisksTitle": "Gotek Yuvalarına atanacak ADF dosyalarını seçin",
+    "usbDriveLabel": "USB Sürücü:",
+    "scanning": "USB sürücü taranıyor…",
+    "selectUsb": "USB Sürücü Seç…",
+    "saveSync": "USB'ye Kaydet ve Eşitle",
+    "simulatorHeading": "Gotek Ekran Simülatörü",
+    "simulatorIntro": "Ekranınızın ve seçili diskin gerçek donanımda nasıl görüneceğinin canlı önizlemesi:",
+    "display": {
+      "insertMedia": "USB Ortamı Takın",
+      "noDiskLoaded": "(Disk yüklenmedi)",
+      "infoLine": "Amiga 880 KB OFS/FFS · İz 0/80"
+    },
+    "navModeLabel": "Parametrik Gezinme Modu:",
+    "navMode": {
+      "native": {
+        "title": "Doğrudan Klasör Modu",
+        "hint": "OLED üzerinde doğrudan klasörlere ve uzun dosya adlarına göz atın"
+      },
+      "quickslot": {
+        "title": "Hızlı Yuva Modu",
+        "hint": "IMAGE_A.CFG ile 000..999 numaralı yuvalar"
+      }
+    },
+    "hardwareHeading": "FlashFloppy Donanım Ayarları (`FF.CFG`)",
+    "displayHardwareLabel": "Ekran Donanımı:",
+    "displayType": {
+      "oled128x32": "OLED 0.91\" (128x32 Piksel)",
+      "oled128x64": "OLED 0.96\" / 1.3\" (128x64 Piksel)",
+      "lcd16x2": "LCD 16x2 Karakter",
+      "sevenSeg": "Klasik 3 Haneli 7 Segment LED"
+    },
+    "stepVolumeLabel": "Disket Adım Sesi Seviyesi (Piezo Buzzer):",
+    "rotaryLabel": "Döner Kodlayıcı Kontrolü:",
+    "rotary": {
+      "track": "İz Arama (Çevirme = İz / Yuva)",
+      "quickslot": "Hızlı Yuva Seçimi",
+      "buttons": "Düğme Emülasyonu"
+    },
+    "writeProtectLabel": "Yazmayı Zorla Engelle (Salt Okunur)",
+    "rackHeading": "Gotek Hızlı Yuva Rafı ({{count}} Atanmış)",
+    "addDisks": "Yuvalara Disk Ekle…",
+    "rackEmpty": "Henüz yuvalara atanmış disk yok. Oyunlarınızı 000..999 numaralı yuvalara eşlemek için \"{{addDisks}}\" düğmesine tıklayın."
+  },
+  "winuae": {
+    "title": "WinUAE Stüdyosu",
+    "status": {
+      "foundVersion": "✓ {{version}}",
+      "foundGeneric": "✓ WinUAE Bulundu",
+      "notFound": "⚠️ WinUAE Bulunamadı"
+    },
+    "locateButton": "WinUAE'yi Bul…",
+    "locateDialogTitle": "winuae64.exe veya winuae.exe dosyasını bulun",
+    "err": {
+      "notFound": "WinUAE çalıştırılabilir dosyası bulunamadı. Lütfen yolunu belirtin.",
+      "launchFailed": "WinUAE başlatılamadı: {{error}}"
+    },
+    "selectFloppyTitle": "DF0: için Disket Seçin",
+    "selectHdfTitle": "Sabit Disk Dosyası Seçin (HDF)",
+    "selectRomTitle": "Kickstart ROM Dosyası Seçin",
+    "msg": {
+      "launched": "🚀 WinUAE, {{name}} ile başarıyla başlatıldı (PID: {{pid}})"
+    },
+    "profilesHeading": "Amiga Donanım Profilleri",
+    "profilesIntro": "Doğru bir donanım yapılandırma ön ayarı seçin:",
+    "launcherHeading": "Emülasyon Başlatıcı",
+    "targetProfileLabel": "Hedef Profil:",
+    "df0Label": "Disket Sürücü DF0:",
+    "changeAdf": "ADF Değiştir…",
+    "insertAdf": "ADF Tak…",
+    "noDiskInserted": "(Disk takılı değil)",
+    "hdfLabel": "Sabit Disk (HDF):",
+    "changeHdf": "HDF Değiştir…",
+    "attachHdf": "HDF Bağla…",
+    "noHdfAttached": "(Sabit disk bağlı değil)",
+    "kickstartLabel": "Kickstart ROM:",
+    "changeRom": "ROM Değiştir…",
+    "selectRom": "ROM Seç…",
+    "arosBuiltin": "AROS Açık Kaynak Yerine Kullanım (Yerleşik)",
+    "defaultKickstart": "Varsayılan: Kickstart {{version}} (Eksikse sorulur)",
+    "floppySpeedLabel": "Disket Emülasyon Hızı: {{speed}}",
+    "floppySpeed": {
+      "accurate": "%100 (Hassas)",
+      "fast": "%{{n}} (Hızlı)"
+    },
+    "modal": {
+      "title": "Kickstart ROM Gerekli",
+      "body": "{{name}} emülasyonu için bir Kickstart ROM gerekiyor. Ticari Kickstart ROM'ları telif hakkıyla korunur ve ART ile birlikte dağıtılmaz.",
+      "selectRom": "Kickstart ROM Dosyası Seçin ({{version}})…",
+      "continueAros": "Açık Kaynak AROS ROM ile Devam Et"
     }
   }
 }
