@@ -86,6 +86,17 @@
   display: flex;
   flex-direction: column;
   padding: 16px 0;
+  /* The same `min-height: auto` trap `.app-main` documents, and the half that
+     was missed. The sidebar is the other item in that implicit grid row, so
+     with fourteen nav entries its min-content height (~665px) sets the row
+     height on any shorter window — a 1366×768 laptop at 125% scaling is about
+     584 CSS px, which is the ordinary case, not an edge one. The row then
+     grows past `100vh`, `.app-main` stretches with it, and the bottom of
+     `.app-content` — including the bottom of its own scrollbar — is clipped by
+     the shell's `overflow: hidden`. `min-height: 0` lets the sidebar shrink,
+     and `overflow-y: auto` gives its own list somewhere to go when it does. */
+  min-height: 0;
+  overflow-y: auto;
 }
 .sidebar-brand {
   display: flex;
