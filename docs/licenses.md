@@ -59,6 +59,12 @@ them. Users must obtain them from official sources and respect their licenses.
 | LHA | Archive tool (optional) | official Amiga archives |
 | FlashFloppy utilities | Gotek firmware config | https://github.com/keirf/FlashFloppy |
 
+## Test-only dependency (never shipped)
+
+| Tool | Purpose | License | Notes |
+|------|---------|---------|-------|
+| `amitools` (Python) | External oracle for `scripts/oracle-check.py` — an independent implementation with no shared code, used to cross-check ART's own ADF/HDF reading and writing in both directions | GPL | Installed only in CI/dev (`pip install amitools`) and invoked as a separate process; never linked into or distributed with ART. Same arm's-length relationship as the ADFlib note below: read for verification, not for code. |
+
 ## Verification
 
 ```bash

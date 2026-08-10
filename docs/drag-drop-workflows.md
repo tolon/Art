@@ -86,11 +86,15 @@ least one starred action and that no workflow crosses formats.
 
 | Drop | Starred actions | Also offered |
 |------|-----------------|--------------|
-| ADF / ADZ / DMS | Open in ADF Studio · Launch in WinUAE · Add to Collection | Copy to Gotek (raw ADF only) · Check Disk Health · Install to HDF* · Hex Viewer† |
-| LHA | Open in LHA Studio · Extract Files · Add to Collection | Install to HDF* · Launch in WinUAE* |
+| ADF / ADZ / DMS | Open in ADF Studio · Launch in WinUAE · Add to Collection | Copy to Gotek (raw ADF only) · Check Disk Health (raw ADF only) · Copy into a hard disk image · Hex Viewer† |
+| LHA | Open in LHA Studio · Extract Files · Add to Collection · Install to a hard disk | Launch in WinUAE* |
 | HDF / HDZ | Open in Hard Disk Studio · Launch in WinUAE | Add to Collection · Hex Viewer† |
 | ROM | Identify in ROM Studio · Use in a Machine Profile | Hex Viewer† |
 | Folder | Scan into Collection · Build an HDF from this folder* | Prepare as Gotek drive |
+
+"Copy into a hard disk image" and "Install to a hard disk" both route to the
+two-pane file manager / WHDLoad install screen and copy between real volumes
+— there is no separate conversion step.
 
 \* Registered but not implemented yet — shown as "Coming Later" rather than
 hidden, so the user can see it is planned (§96).

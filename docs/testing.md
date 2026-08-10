@@ -23,7 +23,8 @@ Two categories are mandatory for any change that touches user data:
   integer overflow in size accounting.
 - **Data safety**: a failed or rejected operation must leave the original file
   byte-for-byte unchanged, and there must be a test that asserts exactly that.
-  See `mutation_that_corrupts_the_image_is_not_committed` for the pattern.
+  See `a_refused_operation_leaves_the_image_byte_for_byte_unchanged`
+  (`commands/volume_write.rs`) for the pattern.
 
 Regression tests for fixed defects are named in [ISSUES.md](ISSUES.md); a fix
 without a named test is not considered fixed.
@@ -68,14 +69,37 @@ Fixture plan (built up per phase):
 - synthetic Amiga executable (Hunk header only)
 - WHDLoad structure (slave + exe + data dir)
 
+## External oracle
+
+ART's own test suite cannot catch a format mistake that its reader and
+writer share — a wrong checksum algorithm, a field one longword out of
+place, a bitmap laid out backwards. Every one of those round-trips through
+ART perfectly and is rejected by real AmigaOS tools; four shipped
+(ART-032…035) before anyone checked against an outside implementation.
+
+`scripts/oracle-check.py` checks ART against `amitools` — a separate
+implementation with no shared code — in **both directions**:
+
+- ART writes an image → amitools reads it (proves ART's writer).
+- amitools writes an image → ART reads it (proves ART's reader).
+
+The fixtures are synthetic, built through `#[test]` hooks that do nothing
+unless their environment variable is set. `amitools` is a Python package
+(`pip install amitools`), invoked only as an external subprocess by this
+script — a dev/CI dependency, never linked into or shipped with ART (see
+[licenses.md](licenses.md)). This is a blocking CI step, not optional
+tooling.
+
 ## CI
 
 GitHub Actions runs on every push (Windows x64):
 
 ```bash
-pnpm lint          # TS type-check
-cargo fmt --check  # Rust formatting
-cargo clippy       # Rust lints
-cargo test         # all unit + integration tests
-pnpm tauri build   # full production build
+pnpm lint                        # TS type-check
+cargo fmt --check                # Rust formatting
+cargo clippy --all-targets       # Rust lints
+cargo test                       # all unit + integration tests
+python scripts/oracle-check.py   # amitools oracle, both directions
+cargo deny check                 # licence + advisory audit
+pnpm tauri build                 # full production build
 ```

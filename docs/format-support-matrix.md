@@ -48,7 +48,29 @@ phase, treat it as the original plan, not a status claim.
 - Detected by extension plus size; known sizes raise confidence.
 - ART never distributes ROMs — it manages user-provided files (spec §32).
 
+### Optical images — planned, not implemented
+
+No code for any of the following exists yet. There is no `optical-image`
+category, no ISO9660/Joliet/Rock Ridge reader, and no CD32/CDTV handling
+anywhere in `core/`. This is Phase 3.2 of
+[the roadmap](superpowers/specs/2026-08-09-art-roadmap-design.md):
+
+- ISO9660 for AmigaOS install CDs, including Rock Ridge/Joliet and the Amiga
+  `AS` System Use entry that carries protection bits and file comments.
+- CD32 and CDTV discs.
+- `.cue`+`.bin`, `.nrg`, `.ccd`/`.img`/`.sub`, `.mdf`/`.mds`; both 2048- and
+  2352-byte sectors.
+- Planned as read-only browsing and extraction first. Writing a bootable
+  Amiga CD is a separate, later problem.
+
 ## Detection confidence
+
+Detection today is entirely extension- and size-based (see `core/detect.rs`);
+there is no content-first resolution yet. A generic container like `.img`,
+`.dsk`, `.ima` or `.raw` is not resolved by looking at what is actually
+inside it — that is planned as Phase 3.1 of the roadmap above, and until it
+lands, an ambiguous extension is reported at low confidence rather than
+guessed.
 
 Detection reports a `confidence` value (0.0–1.0):
 

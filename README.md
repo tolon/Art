@@ -10,18 +10,23 @@ drag-and-drop-driven application.
 
 ## Status
 
-The application builds and runs on Windows 10/11 x64. Working today: ADF (read,
-write, create, validate), LHA (browse, safe extraction, WHDLoad detection),
-HDF/RDB, Kickstart ROM identification, Gotek/FlashFloppy, PiStorm/Emu68, WinUAE
-launching, collection scanning, and the drag-and-drop Workflow Engine behind
-"what can I do with this?".
+The application builds and runs on Windows 10/11 x64. Working today: DD/HD
+floppy images and hard-disk (RDB/HDF) partitions — read, write, create and
+validate through one volume driver, with a dual-pane commander (browse,
+copy in/out, rename, delete, mkdir, attributes) over FFS/OFS volumes; LHA
+(browse, safe extraction, WHDLoad detection); Kickstart ROM identification;
+Gotek/FlashFloppy; PiStorm/Emu68; WinUAE launching; collection scanning; a
+background job queue with progress/cancel; an operation log; Beginner/Power
+User modes; and the drag-and-drop Workflow Engine behind "what can I do with
+this?".
 
 Data safety is enforced in `core/safety`: every write is atomic, and files are
-backed up to `.art-backup/` before being replaced. Hand-tuned configuration
-files are edited in place, never regenerated.
+backed up to `.art-backup/` before being replaced (or, for images too large to
+hold in memory, journaled block-by-block). Hand-tuned configuration files are
+edited in place, never regenerated.
 
-Not yet built: background job queue, operation log, Beginner/Power User modes,
-PFS3/SFS, DMS/ADZ conversion, recovery tools.
+Not yet built: PFS3/SFS (partitions using them are listed but their contents
+are not readable), DMS/ADZ conversion, recovery tools.
 
 | | |
 |---|---|
@@ -97,7 +102,7 @@ Application Services / Commands
 Workflow Engine  ←  Detection
         ↓
 Amiga Core (Rust, platform-independent)
-├── adf / hdf / lha / rdb / rom / binary
+├── adf / volume (the filesystem driver + writer) / hdf / lha / rdb / rom / binary
 ├── analysis / recovery / compatibility
 ├── hashing / conversion / validation
         ↓

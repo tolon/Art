@@ -40,6 +40,18 @@ whole-file branch the partition's slice and write it back at its offset. Needs
 its own task and its own fixture (a small RDB image with a formatted
 partition) — no test covers it today, which is why it survived this long.
 
+**ART-051** 🟡 **`FEATURES.md` carries raw control bytes and git treats it as binary**
+`docs/FEATURES.md` (the DosType write-matrix table, ~line 140) · Eight bytes in
+the range `0x00`–`0x07` are embedded in the table as literal control
+characters where the escaped text `\x00` … `\x07` was intended — the same
+escaped style the rest of the file uses. They render as empty backticks, and
+git classifies the file as binary, so every change to it shows as
+`Bin N -> M bytes` with no reviewable diff. A status document whose diffs
+cannot be read is a status document nobody checks. The file is otherwise valid
+UTF-8 with CRLF endings, so this is a content fix, not an encoding conversion:
+replace the eight bytes with their escaped text and confirm `git diff --stat`
+reports a line count.
+
 **ART-050** 🟡 **The §92 pre-flight gate does not check bitmap consistency or hash-chain integrity**
 `core/adf/validate.rs::validate_image` · `commit_whole_file` (ART-042) refuses
 a write when `validate_image` finds a `Problem`, but `validate_image` only
