@@ -297,7 +297,7 @@ function Detection({ plan, powerMode }: { plan: WhdloadPlan; powerMode: boolean 
         className={confident ? "badge badge-ok" : "badge badge-warn"}
         style={{ display: "block", fontSize: 12 }}
       >
-        {describeVerdict(verdict)} — {verdict.notes}
+        {t(describeVerdict(verdict).key)} — {verdict.notes}
       </div>
 
       {found && (
@@ -467,13 +467,23 @@ function Report({ outcome, powerMode }: { outcome: WhdloadOutcome; powerMode: bo
   const { t } = useTranslation();
   const complete = outcome.verified === outcome.files && outcome.skipped.length === 0;
 
+  // `describeOutcome` cannot render the "N files" and "verified" clauses
+  // itself (see its doc comment) — this mirrors how `whdload.plan.writeFiles`
+  // is resolved above, in `WhatHappens`.
+  const outcomePhrase = describeOutcome(outcome);
+  const files = t("whdload.outcome.filesCount", { count: outcome.files });
+  const verified =
+    outcome.verified === outcome.files
+      ? t("whdload.outcome.allVerified")
+      : t("whdload.outcome.verifiedCount", { count: outcome.verified });
+
   return (
     <section className="card" style={{ marginTop: 12 }}>
       <div
         className={complete ? "badge badge-ok" : "badge badge-warn"}
         style={{ display: "block" }}
       >
-        {describeOutcome(outcome)}
+        {t(outcomePhrase.key, { ...outcomePhrase.params, files, verified })}
       </div>
 
       {outcome.skipped.length > 0 && (

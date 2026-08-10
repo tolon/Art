@@ -100,6 +100,32 @@ function activeFilterCount(filters: SearchFilters): number {
   );
 }
 
+type TranslateFn = (key: string, params?: Record<string, string | number>) => string;
+
+/** Render a `Phrase` — the shape `@/lib/sources`'s pure functions return. */
+function phraseText(phrase: { key: string; params?: Record<string, string | number> }, t: TranslateFn): string {
+  return t(phrase.key, phrase.params);
+}
+
+/**
+ * How to describe an update row, in the user's words.
+ *
+ * `describeUpdate` cannot render `size_changed`'s two formatted sizes itself
+ * (see its doc comment in `@/lib/sources`) — this resolves `formatSize(now)`
+ * and `formatSize(had)` here, where a translator is available, and supplies
+ * them as the missing params.
+ */
+function updateText(row: PackageUpdate, t: TranslateFn): string {
+  const phrase = describeUpdate(row);
+  if (row.state.state === "newer" && row.state.reason.kind === "size_changed") {
+    return t(phrase.key, {
+      now: phraseText(formatSize(row.state.reason.now), t),
+      had: phraseText(formatSize(row.state.reason.had), t),
+    });
+  }
+  return t(phrase.key, phrase.params);
+}
+
 /** The categories Aminet actually uses, for one-click browsing. */
 const CATEGORIES = [
   "util",
@@ -888,7 +914,8 @@ export function AminetStudio() {
                   <div>
                     <span className="recent-name">{pkg.name}</span>{" "}
                     <span className="faint" style={{ fontSize: 11 }}>
-                      {pkg.directory} · {formatSize(pkg.size_bytes)} · {formatAge(pkg)}
+                      {pkg.directory} · {phraseText(formatSize(pkg.size_bytes), t)} ·{" "}
+                      {phraseText(formatAge(pkg), t)}
                     </span>
                   </div>
                   <div className="muted" style={{ fontSize: 12 }}>
@@ -1022,7 +1049,8 @@ function PackagePanel({
       </div>
 
       <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-        {pkg.directory} · {formatSize(pkg.size_bytes)} · {formatAge(pkg)}
+        {pkg.directory} · {phraseText(formatSize(pkg.size_bytes), t)} ·{" "}
+        {phraseText(formatAge(pkg), t)}
         {ageIsCapped(pkg) && t("aminet.package.ageCapped")}
       </div>
 
@@ -1269,7 +1297,7 @@ function UpdateView({
                 }
                 style={{ fontSize: 11 }}
               >
-                {describeUpdate(row)}
+                {updateText(row, t)}
               </span>
               <span style={{ flex: 1 }} />
               {row.current && (
@@ -1527,12 +1555,11 @@ function ClaimLine({ label, claim }: { label: string; claim: Claim<string> | nul
     <div style={{ fontSize: 12 }}>
       <span className="muted">{label}:</span> {claim.value}{" "}
       <span className="faint" style={{ fontSize: 11 }}>
-        {/* claim.confidence and describeSource() both come from Rust / lib
-            code outside this task's file scope, so those two values stay in
-            English — only the surrounding words are translated. */}
+        {/* claim.confidence is a fixed HIGH/MEDIUM/LOW/UNKNOWN token from Rust
+            (§14, §34) and is not translated; describeSource()'s phrase is. */}
         {t("aminet.claim.confidence", {
           confidence: claim.confidence.toLowerCase(),
-          source: describeSource(claim.source),
+          source: phraseText(describeSource(claim.source), t),
         })}
       </span>
     </div>

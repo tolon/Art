@@ -103,7 +103,13 @@
       "putBackAsIs": "Put back as it is",
       "putBack": "Put back",
       "discard": "Discard",
-      "discardTitle": "Throw the working copy away. The image is not touched."
+      "discardTitle": "Throw the working copy away. The image is not touched.",
+      "status": {
+        "unchanged": "Not changed yet",
+        "missing": "The working copy is no longer there",
+        "edited": "Edited — {{bytes}} bytes",
+        "editedCrlf": "Edited — {{bytes}} bytes, now with Windows line endings"
+      }
     },
     "attributes": {
       "title": "Attributes",
@@ -135,7 +141,13 @@
     },
     "jobBar": {
       "dismiss": "Dismiss",
-      "stop": "Stop"
+      "stop": "Stop",
+      "status": {
+        "running": "Running",
+        "done": "Done",
+        "cancelled": "Cancelled",
+        "failed": "Failed ({{code}})"
+      }
     },
     "fileViewer": {
       "ariaLabel": "View {{name}}",
@@ -173,7 +185,13 @@
       "export": "Export…",
       "exportDialogTitle": "Export operation log",
       "exportFailed": "Export failed: {{error}}",
-      "textFileType": "Text"
+      "textFileType": "Text",
+      "status": {
+        "failed": "Failed",
+        "verified": "Verified",
+        "verificationFailed": "Verification failed",
+        "done": "Done"
+      }
     }
   },
   "status": {
@@ -233,7 +251,13 @@
       "month": "Last month",
       "sixMonths": "Last 6 months",
       "year": "Last year",
-      "fiveYears": "Last 5 years"
+      "fiveYears": "Last 5 years",
+      "dateUnknown": "date unknown",
+      "capped": "19 years or older",
+      "thisWeek": "this week",
+      "weeksAgo": "{{n}} weeks ago",
+      "monthsAgo": "{{n}} months ago",
+      "yearsAgo": "{{n}} years ago"
     },
     "size": {
       "any": "Any size",
@@ -314,7 +338,15 @@
       "hint": "Compared against your last catalogue sync — nothing was downloaded to work this out. ART never replaces a download on its own.",
       "allMatch": "Everything you have downloaded matches the catalogue.",
       "stopTracking": "Stop tracking",
-      "stopTrackingTooltip": "Stop tracking this download. The file is not touched."
+      "stopTrackingTooltip": "Stop tracking this download. The file is not touched.",
+      "desc": {
+        "current": "Matches the catalogue",
+        "withdrawn": "No longer on Aminet — your copy is unaffected",
+        "fileMissing": "The file is not where ART left it",
+        "version": "Version {{now}} is out, you have {{had}}",
+        "sizeChanged": "The file on Aminet is now {{now}}, yours is {{had}}",
+        "reuploaded": "Uploaded again since you downloaded it"
+      }
     },
     "mirrors": {
       "indexLabel": "Index: {{path}}",
@@ -340,7 +372,15 @@
       "saved": "Saved — used from the next sync or download on"
     },
     "claim": {
-      "confidence": "({{confidence}} confidence, from the {{source}})"
+      "confidence": "({{confidence}} confidence, from the {{source}})",
+      "indexColumn": "repository index",
+      "readmeField": "readme field",
+      "filename": "file name"
+    },
+    "units": {
+      "mb": "{{value}} MB",
+      "kb": "{{value}} KB",
+      "bytes": "{{value}} bytes"
     },
     "err": {
       "folderUnreachable": "Your download folder ({{path}}) is no longer reachable — choose it again.",
@@ -795,6 +835,14 @@
     "busy": {
       "suffix": "{{busy}} — progress is in the job bar, and you can stop it there."
     },
+    "copyPlan": {
+      "shortfall": "This needs {{needed}} blocks and {{free}} are free — {{short}} more than there is room for."
+    },
+    "imageLayout": {
+      "rdb": "partitioned disk",
+      "bareVolume": "single volume",
+      "unknown": "not recognised"
+    },
     "arrows": {
       "toRightTitle": "Copy the selected item to the right",
       "toLeftTitle": "Copy the selected item to the left"
@@ -919,7 +967,19 @@
       "removingJournal": "Removing the journal…",
       "undone_one": "Undone: {{description}} — {{count}} block put back",
       "undone_other": "Undone: {{description}} — {{count}} blocks put back",
-      "journalRemoved": "The journal was removed; the image was left exactly as it was."
+      "journalRemoved": "The journal was removed; the image was left exactly as it was.",
+      "copyResult": {
+        "filesCount_one": "{{count}} file",
+        "filesCount_other": "{{count}} files",
+        "andFoldersCount_one": " and {{count}} folder",
+        "andFoldersCount_other": " and {{count}} folders",
+        "foldersCount_one": "{{count}} folder",
+        "foldersCount_other": "{{count}} folders",
+        "nothing": "nothing",
+        "stopped": "Stopped after copying {{what}}",
+        "leftAlone": "Copied {{what}}; {{count}} left alone",
+        "allVerified": "Copied {{what}}, all verified"
+      }
     }
   },
   "collection": {
@@ -1017,6 +1077,20 @@
     "report": {
       "notWritten": "Not written:",
       "backupKept": "The previous image was kept at {{backup}}"
+    },
+    "verdict": {
+      "high": "This is a WHDLoad package",
+      "medium": "This looks like a WHDLoad package, but not conclusively",
+      "low": "Only a weak WHDLoad signal — this may be an ordinary archive",
+      "unknown": "No WHDLoad markers found"
+    },
+    "outcome": {
+      "filesCount_one": "{{count}} file",
+      "filesCount_other": "{{count}} files",
+      "allVerified": "all verified",
+      "verifiedCount": "{{count}} of them verified",
+      "installed": "Installed to {{drawer}}: {{files}}, {{verified}}",
+      "installedNoIcon": "Installed to {{drawer}}: {{files}}, {{verified}} — without an icon, so it will not show up on Workbench"
     }
   }
 }

@@ -70,6 +70,7 @@ import {
   volumeRename,
   volumeWriteCapability,
   type CopyPlan,
+  type CopyReport,
   type WriteCapability,
 } from "@/lib/volumeWrite";
 import { usePowerMode } from "@/lib/uxmode";
@@ -150,6 +151,32 @@ function writeRefusal(state: PaneState, t: (key: string) => string): string {
   if (state.kind === "local") return t("files.writeRefusal.local");
   if (state.volumeIndex === null) return t("files.writeRefusal.noPartition");
   return state.capability?.reason ?? t("files.writeRefusal.default");
+}
+
+type TranslateFn = (key: string, params?: Record<string, string | number>) => string;
+
+/**
+ * How to describe a copy's outcome, in one line.
+ *
+ * `describeCopy` (in `@/lib/volumeWrite`) has no translator to render or join
+ * the "N files and N folders" clause with, so it returns only the outer
+ * sentence key; this resolves `what` here, where a translator is available,
+ * and supplies it as the missing param.
+ */
+function copyResultText(report: CopyReport, t: TranslateFn): string {
+  const hasFiles = report.files_copied > 0;
+  const hasDirs = report.directories_created > 0;
+  const what = !hasFiles && !hasDirs
+    ? t("files.status.copyResult.nothing")
+    : hasFiles && hasDirs
+    ? t("files.status.copyResult.filesCount", { count: report.files_copied }) +
+      t("files.status.copyResult.andFoldersCount", { count: report.directories_created })
+    : hasFiles
+    ? t("files.status.copyResult.filesCount", { count: report.files_copied })
+    : t("files.status.copyResult.foldersCount", { count: report.directories_created });
+
+  const phrase = describeCopy(report);
+  return t(phrase.key, { ...phrase.params, what });
 }
 
 export function FileManager() {
@@ -438,7 +465,7 @@ export function FileManager() {
       setBusy(null);
 
       if (result.kind === "copy_in") {
-        setMessage(describeCopy(result.report));
+        setMessage(copyResultText(result.report, t));
         if (result.report.skipped.length > 0) {
           setError(result.report.skipped.slice(0, 3).join(" · "));
         }
@@ -1553,7 +1580,7 @@ function PartitionList({
   return (
     <div>
       <div className="faint" style={{ fontSize: 11, marginBottom: 6 }}>
-        {describeLayout(image.layout)}
+        {t(describeLayout(image.layout).key)}
         {image.volumes.length > 0 &&
           ` · ${t("files.partitions.volumeCount", { count: image.volumes.length })}`}
       </div>

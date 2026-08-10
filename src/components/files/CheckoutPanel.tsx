@@ -97,6 +97,7 @@ export function CheckoutPanel({
         const modified = row.state.state === "modified";
         const missing = row.state.state === "missing";
         const crlf = row.state.state === "modified" && row.state.gained_crlf;
+        const statusPhrase = describeCheckout(row);
 
         return (
           <div
@@ -119,7 +120,7 @@ export function CheckoutPanel({
               }
               style={{ fontSize: 11 }}
             >
-              {describeCheckout(row)}
+              {t(statusPhrase.key, statusPhrase.params)}
             </span>
             <span style={{ flex: 1 }} />
 

@@ -112,6 +112,7 @@ function JobRow({ job }: { job: JobProgress }) {
   const pct = fraction(job);
   const running = isRunning(job);
   const failed = job.state.state === "failed";
+  const status = jobStatusLabel(job);
 
   return (
     <div style={{ fontSize: 12 }}>
@@ -126,7 +127,7 @@ function JobRow({ job }: { job: JobProgress }) {
         <span>
           <strong>{job.title}</strong>
           <span className="faint" style={{ marginLeft: 6 }}>
-            {jobStatusLabel(job)}
+            {t(status.key, status.params)}
             {running && pct !== null && ` · ${Math.round(pct * 100)}%`}
             {running && pct === null && job.done > 0 && ` · ${job.done}`}
           </span>

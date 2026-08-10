@@ -103,7 +103,13 @@
       "putBackAsIs": "Olduğu gibi geri koy",
       "putBack": "Geri koy",
       "discard": "At",
-      "discardTitle": "Çalışma kopyasını at. İmaja dokunulmaz."
+      "discardTitle": "Çalışma kopyasını at. İmaja dokunulmaz.",
+      "status": {
+        "unchanged": "Henüz değişmedi",
+        "missing": "Çalışma kopyası artık yok",
+        "edited": "Düzenlendi — {{bytes}} bayt",
+        "editedCrlf": "Düzenlendi — {{bytes}} bayt, şimdi Windows satır sonlarıyla"
+      }
     },
     "attributes": {
       "title": "Nitelikler",
@@ -135,7 +141,13 @@
     },
     "jobBar": {
       "dismiss": "Temizle",
-      "stop": "Durdur"
+      "stop": "Durdur",
+      "status": {
+        "running": "Çalışıyor",
+        "done": "Tamamlandı",
+        "cancelled": "İptal edildi",
+        "failed": "Başarısız ({{code}})"
+      }
     },
     "fileViewer": {
       "ariaLabel": "{{name}} dosyasını görüntüle",
@@ -173,7 +185,13 @@
       "export": "Dışa Aktar…",
       "exportDialogTitle": "İşlem günlüğünü dışa aktar",
       "exportFailed": "Dışa aktarma başarısız: {{error}}",
-      "textFileType": "Metin"
+      "textFileType": "Metin",
+      "status": {
+        "failed": "Başarısız",
+        "verified": "Doğrulandı",
+        "verificationFailed": "Doğrulama başarısız",
+        "done": "Tamamlandı"
+      }
     }
   },
   "status": {
@@ -233,7 +251,13 @@
       "month": "Son ay",
       "sixMonths": "Son 6 ay",
       "year": "Son yıl",
-      "fiveYears": "Son 5 yıl"
+      "fiveYears": "Son 5 yıl",
+      "dateUnknown": "tarih bilinmiyor",
+      "capped": "19 yıl veya daha eski",
+      "thisWeek": "bu hafta",
+      "weeksAgo": "{{n}} hafta önce",
+      "monthsAgo": "{{n}} ay önce",
+      "yearsAgo": "{{n}} yıl önce"
     },
     "size": {
       "any": "Herhangi bir boyut",
@@ -314,7 +338,15 @@
       "hint": "Son katalog eşitlemenizle karşılaştırıldı — bunu anlamak için hiçbir şey indirilmedi. ART hiçbir indirmeyi kendiliğinden değiştirmez.",
       "allMatch": "İndirdiğiniz her şey katalogla eşleşiyor.",
       "stopTracking": "Takibi bırak",
-      "stopTrackingTooltip": "Bu indirmeyi takip etmeyi bırak. Dosyaya dokunulmaz."
+      "stopTrackingTooltip": "Bu indirmeyi takip etmeyi bırak. Dosyaya dokunulmaz.",
+      "desc": {
+        "current": "Katalogla eşleşiyor",
+        "withdrawn": "Artık Aminet'te yok — kopyanız etkilenmedi",
+        "fileMissing": "Dosya, ART'ın bıraktığı yerde değil",
+        "version": "{{now}} sürümü çıkmış, sizde {{had}} var",
+        "sizeChanged": "Aminet'teki dosya artık {{now}}, sizinki {{had}}",
+        "reuploaded": "Siz indirdikten sonra yeniden yüklenmiş"
+      }
     },
     "mirrors": {
       "indexLabel": "İndeks: {{path}}",
@@ -340,7 +372,15 @@
       "saved": "Kaydedildi — bir sonraki eşitleme veya indirmede kullanılır"
     },
     "claim": {
-      "confidence": "({{confidence}} güvenilirlik, {{source}} kaynağından)"
+      "confidence": "({{confidence}} güvenilirlik, {{source}} kaynağından)",
+      "indexColumn": "katalog sütunu",
+      "readmeField": "readme alanı",
+      "filename": "dosya adı"
+    },
+    "units": {
+      "mb": "{{value}} MB",
+      "kb": "{{value}} KB",
+      "bytes": "{{value}} bayt"
     },
     "err": {
       "folderUnreachable": "İndirme klasörünüze ({{path}}) artık ulaşılamıyor — yeniden seçin.",
@@ -795,6 +835,14 @@
     "busy": {
       "suffix": "{{busy}} — ilerleme iş çubuğunda; oradan durdurabilirsiniz."
     },
+    "copyPlan": {
+      "shortfall": "Bunun için {{needed}} blok gerekiyor ve {{free}} blok boş — sığması için {{short}} blok daha gerekiyor."
+    },
+    "imageLayout": {
+      "rdb": "bölümlenmiş disk",
+      "bareVolume": "tek birim",
+      "unknown": "tanınmıyor"
+    },
     "arrows": {
       "toRightTitle": "Seçili öğeyi sağa kopyala",
       "toLeftTitle": "Seçili öğeyi sola kopyala"
@@ -919,7 +967,19 @@
       "removingJournal": "Günlük kaldırılıyor…",
       "undone_one": "Geri alındı: {{description}} — {{count}} blok geri kondu",
       "undone_other": "Geri alındı: {{description}} — {{count}} blok geri kondu",
-      "journalRemoved": "Günlük kaldırıldı; imaj tam olarak olduğu gibi bırakıldı."
+      "journalRemoved": "Günlük kaldırıldı; imaj tam olarak olduğu gibi bırakıldı.",
+      "copyResult": {
+        "filesCount_one": "{{count}} dosya",
+        "filesCount_other": "{{count}} dosya",
+        "andFoldersCount_one": " ve {{count}} klasör",
+        "andFoldersCount_other": " ve {{count}} klasör",
+        "foldersCount_one": "{{count}} klasör",
+        "foldersCount_other": "{{count}} klasör",
+        "nothing": "hiçbir şey",
+        "stopped": "{{what}} kopyalandıktan sonra durdu",
+        "leftAlone": "{{what}} kopyalandı; {{count}} tanesine dokunulmadı",
+        "allVerified": "{{what}} kopyalandı, hepsi doğrulandı"
+      }
     }
   },
   "collection": {
@@ -1017,6 +1077,20 @@
     "report": {
       "notWritten": "Yazılmadı:",
       "backupKept": "Önceki imaj {{backup}} konumunda saklandı"
+    },
+    "verdict": {
+      "high": "Bu bir WHDLoad paketi",
+      "medium": "Bu bir WHDLoad paketine benziyor, ama kesin değil",
+      "low": "Yalnızca zayıf bir WHDLoad izi — bu sıradan bir arşiv olabilir",
+      "unknown": "WHDLoad izi bulunamadı"
+    },
+    "outcome": {
+      "filesCount_one": "{{count}} dosya",
+      "filesCount_other": "{{count}} dosya",
+      "allVerified": "hepsi doğrulandı",
+      "verifiedCount": "{{count}} tanesi doğrulandı",
+      "installed": "{{drawer}} konumuna kuruldu: {{files}}, {{verified}}",
+      "installedNoIcon": "{{drawer}} konumuna kuruldu: {{files}}, {{verified}} — simge olmadan, bu yüzden Workbench'te görünmeyecek"
     }
   }
 }

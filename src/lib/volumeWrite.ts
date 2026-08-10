@@ -12,6 +12,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+import type { Phrase } from "@/lib/phrase";
 import type { OverwritePolicy } from "@/lib/sources";
 
 /** Which write pipeline ran. Power User Mode shows it; Beginner does not. */
@@ -143,10 +144,17 @@ export function planIsClean(plan: CopyPlan): boolean {
 }
 
 /** One sentence for the user when a copy will not fit. */
-export function planShortfall(plan: CopyPlan): string | null {
+export function planShortfall(plan: CopyPlan): Phrase | null {
   if (plan.blocks_needed <= plan.blocks_free) return null;
   const short = plan.blocks_needed - plan.blocks_free;
-  return `This needs ${plan.blocks_needed.toLocaleString()} blocks and ${plan.blocks_free.toLocaleString()} are free — ${short.toLocaleString()} more than there is room for.`;
+  return {
+    key: "files.copyPlan.shortfall",
+    params: {
+      needed: plan.blocks_needed.toLocaleString(),
+      free: plan.blocks_free.toLocaleString(),
+      short: short.toLocaleString(),
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -386,26 +394,21 @@ export async function volumeCopyBetween(
   });
 }
 
-/** How to describe a copy's outcome in one line. */
-export function describeCopy(report: CopyReport): string {
-  const parts: string[] = [];
-  if (report.files_copied > 0) {
-    parts.push(
-      `${report.files_copied} file${report.files_copied === 1 ? "" : "s"}`
-    );
-  }
-  if (report.directories_created > 0) {
-    parts.push(
-      `${report.directories_created} folder${
-        report.directories_created === 1 ? "" : "s"
-      }`
-    );
-  }
-  const what = parts.length > 0 ? parts.join(" and ") : "nothing";
-
-  if (report.cancelled) return `Stopped after copying ${what}`;
+/**
+ * How to describe a copy's outcome in one line.
+ *
+ * The "N files and N folders" clause joins two independently pluralised
+ * fragments — this function has no translator to render or join them with,
+ * so it returns only the outer sentence key; the caller resolves `what` (see
+ * `FileManager.tsx`'s `copyResultText`) and supplies it as a param.
+ */
+export function describeCopy(report: CopyReport): Phrase {
+  if (report.cancelled) return { key: "files.status.copyResult.stopped" };
   if (report.skipped.length > 0) {
-    return `Copied ${what}; ${report.skipped.length} left alone`;
+    return {
+      key: "files.status.copyResult.leftAlone",
+      params: { count: report.skipped.length },
+    };
   }
-  return `Copied ${what}, all verified`;
+  return { key: "files.status.copyResult.allVerified" };
 }

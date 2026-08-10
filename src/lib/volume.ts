@@ -9,6 +9,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type { ExtractedTo, PanelEntry } from "@/lib/panel";
+import type { Phrase } from "@/lib/phrase";
 
 export type ImageLayout = "rdb" | "bare_volume" | "unknown";
 
@@ -88,13 +89,13 @@ export function isMountable(volume: VolumeEntry): boolean {
 }
 
 /** How to describe an image whose layout ART could not identify. */
-export function describeLayout(layout: ImageLayout): string {
+export function describeLayout(layout: ImageLayout): Phrase {
   switch (layout) {
     case "rdb":
-      return "partitioned disk";
+      return { key: "files.imageLayout.rdb" };
     case "bare_volume":
-      return "single volume";
+      return { key: "files.imageLayout.bareVolume" };
     case "unknown":
-      return "not recognised";
+      return { key: "files.imageLayout.unknown" };
   }
 }

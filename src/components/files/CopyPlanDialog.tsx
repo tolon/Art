@@ -38,7 +38,8 @@ export function CopyPlanDialog({
 }) {
   const { t } = useTranslation();
   const fits = plan.blocks_needed <= plan.blocks_free;
-  const shortfall = planShortfall(plan);
+  const shortfallPhrase = planShortfall(plan);
+  const shortfall = shortfallPhrase ? t(shortfallPhrase.key, shortfallPhrase.params) : null;
 
   return (
     <div

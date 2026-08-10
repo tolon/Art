@@ -179,7 +179,7 @@ function OperationLogSection() {
                 className={`badge ${succeeded(r) ? "badge-ok" : "badge-err"}`}
                 style={{ marginRight: 6 }}
               >
-                {statusLabel(r)}
+                {t(statusLabel(r).key)}
               </span>
               <strong>{r.operation}</strong>
               <span className="faint" style={{ marginLeft: 6 }}>

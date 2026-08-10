@@ -4,6 +4,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+import type { Phrase } from "@/lib/phrase";
+
 export type JobState =
   | { state: "running" }
   | { state: "finished" }
@@ -55,15 +57,15 @@ export function fraction(job: JobProgress): number | null {
 }
 
 /** A short status word for the UI. */
-export function jobStatusLabel(job: JobProgress): string {
+export function jobStatusLabel(job: JobProgress): Phrase {
   switch (job.state.state) {
     case "running":
-      return "Running";
+      return { key: "components.jobBar.status.running" };
     case "finished":
-      return "Done";
+      return { key: "components.jobBar.status.done" };
     case "cancelled":
-      return "Cancelled";
+      return { key: "components.jobBar.status.cancelled" };
     case "failed":
-      return `Failed (${job.state.error_code})`;
+      return { key: "components.jobBar.status.failed", params: { code: job.state.error_code } };
   }
 }

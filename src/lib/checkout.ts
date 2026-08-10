@@ -9,6 +9,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
+import type { Phrase } from "@/lib/phrase";
 import type { MutationResult } from "@/lib/volumeWrite";
 
 export type CheckoutState =
@@ -113,15 +114,21 @@ export async function volumeIconFor(
 }
 
 /** How to describe a checkout's state in one line. */
-export function describeCheckout(row: CheckoutRow): string {
+export function describeCheckout(row: CheckoutRow): Phrase {
   switch (row.state.state) {
     case "unchanged":
-      return "Not changed yet";
+      return { key: "components.checkout.status.unchanged" };
     case "missing":
-      return "The working copy is no longer there";
+      return { key: "components.checkout.status.missing" };
     case "modified":
       return row.state.gained_crlf
-        ? `Edited — ${row.state.bytes.toLocaleString()} bytes, now with Windows line endings`
-        : `Edited — ${row.state.bytes.toLocaleString()} bytes`;
+        ? {
+            key: "components.checkout.status.editedCrlf",
+            params: { bytes: row.state.bytes.toLocaleString() },
+          }
+        : {
+            key: "components.checkout.status.edited",
+            params: { bytes: row.state.bytes.toLocaleString() },
+          };
   }
 }
