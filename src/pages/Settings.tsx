@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { save } from "@tauri-apps/plugin-dialog";
 
 import { useSettingsStore } from "@/stores/settingsStore";
-import { SUPPORTED_LANGUAGES } from "@/i18n";
+import { LANGUAGE_NAMES, SUPPORTED_LANGUAGES } from "@/i18n";
 import type { Theme, UxMode } from "@/lib/settings";
 import {
   oplogExportTo,
@@ -62,7 +62,7 @@ export function SettingsPage() {
           >
             {SUPPORTED_LANGUAGES.map((lng) => (
               <option key={lng} value={lng}>
-                {lng.toUpperCase()}
+                {LANGUAGE_NAMES[lng]}
               </option>
             ))}
           </select>

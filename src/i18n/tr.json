@@ -1,0 +1,66 @@
+{
+  "app": {
+    "name": "Amiga Retro Toolkit",
+    "tagline": "Amiga Dosyaları İçin İsviçre Çakısı"
+  },
+  "nav": {
+    "dashboard": "Panel",
+    "diskTools": "Disket Araçları",
+    "archiveTools": "Arşiv Araçları",
+    "hardDisk": "Sabit Disk",
+    "gotek": "Gotek",
+    "rom": "ROM Yöneticisi",
+    "winuae": "WinUAE",
+    "pistorm": "PiStorm",
+    "collection": "Koleksiyon",
+    "tools": "Araçlar",
+    "settings": "Ayarlar",
+    "aminet": "Aminet",
+    "files": "Dosyalar",
+    "whdload": "WHDLoad Kur"
+  },
+  "dashboard": {
+    "dropHere": "AMIGA DOSYALARINI BURAYA BIRAKIN",
+    "dropHint": "ADF • ADZ • DMS • HDF • LHA • ROM • KLASÖR",
+    "dropSubhint": "ART bunları çözümleyecek.",
+    "recent": "Son Kullanılanlar",
+    "noRecent": "Henüz dosya yok. Başlamak için bir şey bırakın.",
+    "quickActions": "Hızlı İşlemler",
+    "statistics": "Koleksiyon İstatistikleri",
+    "noStats": "Koleksiyon boş."
+  },
+  "common": {
+    "comingLater": "Sonra Gelecek",
+    "cancel": "İptal",
+    "continue": "Devam",
+    "ok": "Tamam",
+    "open": "Aç",
+    "close": "Kapat",
+    "unknown": "Bilinmiyor"
+  },
+  "settings": {
+    "title": "Ayarlar",
+    "general": "Genel",
+    "appearance": "Görünüm",
+    "paths": "Yollar",
+    "theme": "Tema",
+    "themeDark": "Koyu",
+    "themeLight": "Açık",
+    "uxMode": "Deneyim Modu",
+    "uxBeginner": "Başlangıç",
+    "uxPower": "İleri Kullanıcı",
+    "language": "Dil",
+    "winuaePath": "WinUAE Yolu",
+    "collectionDir": "Koleksiyon Klasörü"
+  },
+  "status": {
+    "healthy": "Sağlıklı",
+    "warning": "Uyarı",
+    "problem": "Sorun"
+  },
+  "phase0": {
+    "engineReady": "İş Akışı Motoru: HAZIR",
+    "dragDropReady": "Sürükle & Bırak: HAZIR",
+    "dbReady": "Veritabanı: HAZIR"
+  }
+}

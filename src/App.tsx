@@ -17,7 +17,7 @@ import { AminetStudio } from "@/pages/AminetStudio";
 import { FileManager } from "@/pages/FileManager";
 import { WhdloadInstall } from "@/pages/WhdloadInstall";
 
-import { changeLanguage } from "@/i18n";
+import { changeLanguage, SUPPORTED_LANGUAGES, type Language } from "@/i18n";
 import { initLogging } from "@/lib/log";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useRecentFilesStore } from "@/stores/recentFilesStore";
@@ -35,7 +35,13 @@ export default function App() {
     void safe(initLogging(), "logging");
     void safe(loadSettings(), "settings");
     void safe(loadRecent(), "recent");
-    void safe(changeLanguage((settings.language ?? "en") as "en"), "language");
+    const stored = settings.language;
+    const lang: Language = (SUPPORTED_LANGUAGES as readonly string[]).includes(
+      stored ?? "",
+    )
+      ? (stored as Language)
+      : "en";
+    void safe(changeLanguage(lang), "language");
   }, [loadSettings, loadRecent, settings.language]);
 
   // Apply the theme class to <html> whenever it changes.
