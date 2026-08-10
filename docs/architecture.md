@@ -134,8 +134,9 @@ Frontend renders "What can I do?" panel
 ```
 
 The execute half of the pipeline is in place for operations that modify data:
-`core/safety` performs `BACKUP → APPLY` atomically and `mutate_disk_file`
-validates before committing. Copying into a volume also has the **preview**
+`core/safety` performs `BACKUP → APPLY` atomically and the volume writer's
+`commit_whole_file` (`commands/volume_write.rs`) validates the whole image
+before committing. Copying into a volume also has the **preview**
 step §92 asks for — `volume_plan_copy` reports the cost, the unstorable names
 and the collisions before anything is written. Delete and overwrite still tell
 the user what happened rather than what is about to.

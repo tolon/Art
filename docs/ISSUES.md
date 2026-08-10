@@ -40,6 +40,63 @@ whole-file branch the partition's slice and write it back at its offset. Needs
 its own task and its own fixture (a small RDB image with a formatted
 partition) — no test covers it today, which is why it survived this long.
 
+**ART-050** 🟡 **The §92 pre-flight gate does not check bitmap consistency or hash-chain integrity**
+`core/adf/validate.rs::validate_image` · `commit_whole_file` (ART-042) refuses
+a write when `validate_image` finds a `Problem`, but `validate_image` only
+covers the bootblock signature, its checksum, the block count and the root
+block's type. It does not walk the bitmap against what is actually allocated
+and does not walk a hash chain for consistency, so an operation that leaves
+two files owning the same block, or an entry linked into the wrong bucket,
+still passes the gate and commits. `CHANGELOG.md`'s entry for ART-042 was
+corrected in this pass to stop implying broader coverage than this. Deepening
+`validate_image` to catch these is real work, not a flag to flip.
+
+**ART-049** 🟡 **`create.rs`'s oracle hook and `VolumeWriter::open` agree by hand, not by a check**
+`core/adf/create.rs` (`oracle_export`), `core/volume/write/mod.rs`
+(`VolumeWriter::open`) · The oracle export hook hardcodes `DOS\x01` geometry
+while formatting with `FileSystemType::Ffs` — the two are only consistent
+because the hook's author chose them to match. `VolumeWriter::open` does not
+cross-check the geometry it is handed against the dostype the image's own
+bootblock declares, so a caller that passed a geometry for one filesystem
+against an image formatted as another would not be refused at the boundary
+that is supposed to catch exactly that. No test exercises the disagreement
+because nothing in the suite constructs one. Needs a guard in
+`VolumeWriter::open` and a fixture that deliberately mismatches geometry and
+bootblock.
+
+**ART-048** 🔵 **A source comment still describes a module that no longer exists**
+`commands/adf.rs:369` (a test's doc comment) · Written for task 8's routing
+tests, before `core/adf/mutate` was deleted in task 10 (`fbd35ef`): "a later
+task deleting `core/adf/mutate` would be unsafe" now describes something
+already done. `docs/architecture.md`'s reference to `mutate_disk_file` carried
+the same staleness and is corrected in this pass — the one exception to
+"intent docs are not rewritten" that CLAUDE.md names, because the module it
+points at is gone. The source comment is left for whoever next touches that
+test; this pass changes no production code.
+
+**ART-047** 🔵 **Dead code that clippy cannot see**
+`core/adf/blocks.rs:81-99` · `block_slice`, `block_slice_mut`, `read_u32_at`
+and `write_u32_at` have no callers left outside their own tests —
+`core/adf/mutate.rs` was the last production caller, and task 10 (`fbd35ef`)
+deleted it. `lib.rs`'s `#![allow(dead_code)]` (CLAUDE.md's one permitted
+blanket allow) means clippy does not flag them. Either give them a real
+caller or remove them; audited bounds-checking code that production no longer
+reaches is exactly the kind of gap ART-020 exists to stop CI from hiding.
+
+**ART-046** 🔵 **A doc comment claims a guarantee the public API does not give**
+`core/volume/write/mod.rs:684` · The comment above the test-only
+`commit_blocks` says "every public operation here deliberately cannot get
+into that state" — a volume whose touched blocks are each individually
+well-formed but whose structure is wrong. `add_file` on an image whose bitmap
+is flagged valid but marks the root block free reaches exactly that state
+through the public API: the allocator hands out the root block, `add_file`
+writes a well-formed file there, and every touched block's own checksum is
+fine. The gate that catches it (ART-042's whole-image `validate_image` in
+`commit_whole_file`) is stronger than its own documentation claims — and that
+comment is the argument someone will use to delete the gate as redundant.
+Needs either a narrower claim or a test proving the public API really cannot
+reach that state; today it can.
+
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 
@@ -59,10 +116,81 @@ re-audits them without reason:
 
 ## Fixed
 
-### Stage W
+### Phase 0a
 
-*(ART-037 … ART-040 are reserved for this phase's own docs pass; these two were
-found while restoring the write pipeline's validation step.)*
+**ART-037** 🔴 **ADF Studio could not open any bootable ADF**
+`core/adf/bootblock.rs`, `core/adf/mod.rs` · The parser read bytes 8..11 of the
+boot block as a "root block pointer". An AmigaDOS boot block has no such field:
+0..3 is the DOS type, 4..7 the checksum, and 8 onwards is boot code. ART
+therefore read 68000 machine code as a block number and refused every bootable
+disk with `root block has type <nonsense>`. Invisible to ART's own tests
+because every fixture ART builds has zeros where a real disk has boot code —
+and invisible in day-to-day use because the file manager, which runs on
+`core/volume`, opened the same disks perfectly.
+→ The root block is computed, `total_blocks / 2` via `root_block_of()`, the
+way `VolumeGeometry::root_block_for` already did. Pinned by
+`a_bootable_image_opens_because_the_root_block_is_computed` and by an oracle
+check that has `xdftool` write a bootable floppy — its own boot code,
+checksum-legal — for ART to open.
+
+**ART-038** 🟡 **HD ADFs reported half their capacity**
+`core/adf/mod.rs` · `info()` computed capacity and parsed the bitmap with
+`DD_TOTAL_BLOCKS`, so every number it reported for a 1.76 MB image was a
+floppy-shaped guess. Same root cause as ART-037: `core/adf` predated the
+Stage R geometry and never adopted it.
+→ Both come from the image's own length, via `total_blocks_of()`. Pinned by
+`an_hd_image_reports_its_real_capacity`.
+
+**ART-039** 🟡 **Disabled controls were indistinguishable from active ones**
+`src/styles/global.css` · The word `disabled` appeared in no stylesheet, so a
+disabled primary button kept its accent fill. On the WHDLoad screen a
+correctly-refused install showed a solid blue "Install to the disk" button
+that did nothing when clicked.
+→ `:disabled` and `:focus-visible` styles for buttons and form controls.
+
+**ART-040** 🟡 **Content was clipped instead of scrolled, and nothing scaled**
+`src/components/layout/layout.css` · `.app-main` is a grid item with the
+default `min-height: auto`, so it grew to fit its content and `.app-content`'s
+`overflow: auto` never engaged; the shell's `overflow: hidden` then clipped the
+excess. `min-height: 0` appeared nowhere in the codebase. Separately, the
+application had zero `@media` queries and eleven pages carried hand-written
+`maxWidth` values.
+→ The `min-height: 0` chain, breakpoints, and one central content width.
+
+**ART-044** 🟠 **WHDLoad and Aminet installs could land a package partially with no warning**
+`commands/sources.rs` · `sources_install_adf` and `sources_install_volume`
+both wrote through `run_copy_in_folder`, which lands what fits and reports the
+rest as `skipped` — the right contract for the general-purpose F5 copy, wrong
+for an install. Neither install command ran a pre-flight fit check before
+writing, so a package that did not fit was discovered mid-loop: a WHDLoad pack
+whose `.slave` ended up in `skipped` is a broken, non-bootable result the user
+was never warned about (§92: explain before modify).
+→ `plan_copy_in_folder` (`commands/volume_write.rs`) mirrors
+`volume_plan_copy`'s own pre-flight against an already-built `HostFolder` and
+refuses atomically, with the real block numbers, before either install command
+writes anything. Pinned by
+`installing_a_package_that_does_not_fit_is_refused_without_touching_the_image`
+and `installing_a_package_that_fits_installs_completely`.
+
+**ART-045** 🟠 **A transient re-read after a successful write could report it as failed**
+`commands/adf.rs` · `MutationOutcome::from_write` re-opened the image with
+`AdfImage::open()` after `with_volume` had already committed the write and
+closed its handle. That second, independent open could race an external lock
+(antivirus scan-on-close, a search indexer) taken the moment the first handle
+released, turning an already-durable, successful write into a reported
+failure — and losing the backup path along with it, contradicting the
+guarantee that the user is always told where the previous version went.
+→ `VolumeWriter::all_bytes()` (`core/volume/write/mod.rs`) reads the volume
+block by block through the session's own still-open device; `info_from_session`
+builds `AdfInfo` from that, called from *inside* every `with_volume` closure,
+so a failure there aborts before any byte reaches disk rather than after.
+`MutationOutcome::from_write` is deleted, not disarmed. Pinned by
+`a_failure_after_the_mutation_never_reaches_the_disk` plus per-command routing
+tests (`creating_a_directory_goes_through_the_volume_writer`,
+`deleting_an_entry_goes_through_the_volume_writer`,
+`renaming_an_entry_goes_through_the_volume_writer`).
+
+### Stage W
 
 **ART-042** 🔴 **A write that produced an invalid volume was committed anyway**
 `commands/volume_write.rs` · The retired `core/adf/mutate.rs::mutate_disk_file`
@@ -349,18 +477,27 @@ by the bomb guard, stayed on disk looking like a successful extraction.
 ### Crashes
 
 **ART-007** 🔴 **An invalid block number from the UI killed the whole application**
-`core/adf/mutate.rs` · Block numbers arrive from the frontend (`dirBlock`,
-`headerBlock`) and were used to index the image directly. Out of range meant a
-panic, and the release profile sets `panic = "abort"` — so the entire app died.
+`core/adf/blocks.rs`, `core/volume/write/mod.rs` · Block numbers arrive from
+the frontend (`dirBlock`, `headerBlock`) and were used to index the image
+directly. Out of range meant a panic, and the release profile sets
+`panic = "abort"` — so the entire app died.
 → All access goes through `blocks::block_slice`/`block_slice_mut`/`read_u32_at`/
-`write_u32_at`, which return a `CoreError`. Tests:
-`out_of_range_directory_block_is_an_error`,
-`block_access_rejects_out_of_range_numbers`.
+`write_u32_at`, which return a `CoreError`. *(Location updated: the fix and its
+tests originally lived in `core/adf/mutate.rs`, deleted when task 10 retired it
+in favour of the single volume writer — fixed, not reopened; see ART-047 for
+the primitives' now-orphaned callers.)* Tests:
+`block_access_rejects_out_of_range_numbers` (`core/adf/blocks.rs`),
+`out_of_range_directory_block_is_an_error` (`core/volume/write/mod.rs`).
 
 **ART-008** 🟠 **Malformed images could hang the UI forever**
-`core/adf/mutate.rs` · Hash-bucket and file-extension chain walks had no step
-limit; a chain pointing back at itself looped indefinitely.
-→ Both walks are bounded by `DD_TOTAL_BLOCKS` and report a malformed image.
+`core/volume/write/dir.rs`, `core/volume/write/file.rs` · Hash-bucket and
+file-extension chain walks had no step limit; a chain pointing back at itself
+looped indefinitely.
+→ Both walks are bounded and report a malformed image rather than looping.
+*(Location updated: originally `core/adf/mutate.rs`, deleted when task 10
+retired it — fixed, not reopened.)* Tests:
+`a_hash_chain_that_loops_is_an_error_not_a_hang` (`dir.rs`),
+`an_extension_chain_that_loops_is_an_error_not_a_hang` (`file.rs`).
 
 ### Filesystem correctness
 
@@ -381,23 +518,36 @@ Tests: `matches_the_amigados_reference_values`,
 Test: `international_folding_differs_for_accented_names`.
 
 **ART-011** 🔴 **`rename_entry` corrupted directories when the chain was inconsistent**
-`core/adf/mutate.rs` · If the entry was not found in its parent's hash chain the
-function carried on silently and linked it into the new bucket anyway, leaving
-it referenced from two places. `delete_entry` had the check; rename did not.
-→ Missing entries now error out.
-Test: `rename_of_an_unlinked_entry_reports_an_error`.
+`core/volume/write/dir.rs` · If the entry was not found in its parent's hash
+chain the function carried on silently and linked it into the new bucket
+anyway, leaving it referenced from two places. `delete_entry` had the check;
+rename did not.
+→ Missing entries now error out via `predecessor_of`, which ends its walk with
+`Malformed { "block N is not in the bucket its name hashes to" }` rather than
+returning "no predecessor". *(Location updated: originally `core/adf/mutate.rs`,
+deleted when task 10 retired it — fixed, not reopened; the moved test also now
+asserts the image is byte-for-byte unchanged after the refusal, which the
+in-memory original could not check.)*
+Test: `rename_of_an_unlinked_entry_reports_an_error` (`core/volume/write/mod.rs`).
 
 **ART-012** 🟠 **Duplicate names could be created in one directory**
-`core/adf/mutate.rs` · AmigaDOS compares names case-insensitively and cannot
-hold two entries with the same name; nothing checked.
-→ `ensure_name_available` rejects collisions, case-insensitively.
-Tests: `duplicate_names_are_rejected`, `rename_onto_an_existing_name_is_rejected`.
+`core/volume/write/dir.rs` · AmigaDOS compares names case-insensitively and
+cannot hold two entries with the same name; nothing checked.
+→ Name collisions are rejected, case-insensitively, including a directory
+shadowing an existing file's name. *(Location updated: originally
+`core/adf/mutate.rs`, deleted when task 10 retired it — fixed, not reopened.)*
+Tests: `a_name_that_differs_only_in_case_is_already_taken` (`dir.rs`),
+`a_name_already_taken_is_refused_and_nothing_is_written`,
+`a_directory_cannot_shadow_an_existing_file_name`,
+`rename_onto_an_existing_name_is_rejected` (`core/volume/write/mod.rs`).
 
 **ART-013** 🟠 **A file header could be used as a directory**
-`core/adf/mutate.rs` · Passing a file's header block as the insert target wrote
-hash-table entries into it, corrupting the file.
-→ `resolve_directory` verifies the block is `ST_ROOT` or `ST_USERDIR`.
-Test: `a_file_cannot_be_used_as_a_directory`.
+`core/volume/write/mod.rs` · Passing a file's header block as the insert
+target wrote hash-table entries into it, corrupting the file.
+→ `VolumeWriter::resolve_directory` verifies the block is `ST_ROOT` or
+`ST_USERDIR` via `dir::is_directory`. *(Location updated: originally
+`core/adf/mutate.rs`, deleted when task 10 retired it — fixed, not reopened.)*
+Test: `writing_into_a_file_header_instead_of_a_directory_is_refused`.
 
 ### Security
 

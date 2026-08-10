@@ -10,16 +10,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### A write that would break a disk image is refused (2026-08-10)
 
 #### Fixed
-- **The finished image is checked before it replaces your file.** ART checked
-  only the blocks an operation touched, so a change that left the disk as a
-  whole inconsistent was written out anyway. Now the whole result is checked
-  first, and if it does not hold up nothing is written — the file on disk is
-  left exactly as it was, and the message says so.
+- **The finished image is checked before it replaces your file** — its
+  bootblock, checksum, block count and root block. ART checked only the
+  blocks an operation touched, so a change that got those four things wrong
+  on the disk as a whole was written out anyway. Now they are checked on the
+  whole result first, and if it does not hold up nothing is written — the
+  file on disk is left exactly as it was, and the message says so. This does
+  not yet check the free-space bitmap or a directory's hash chains, so a
+  double allocation can still commit undetected.
 - **HD floppies and hard disk images are measured against themselves.** ART's
   health check compared every image with a standard 880 KB floppy and flagged
   anything else as suspect. It now reads each image's own geometry, so a 1.76 MB
   floppy or a hard disk image is no longer reported as odd — and is not refused
   by the check above.
+
+### The window scrolls, and ADF Studio opens real disks (2026-08-10)
+
+#### Fixed
+- **ADF Studio could not open a bootable disk.** It looked for the root block
+  in a place the Amiga does not keep one — in the boot code itself — so any
+  disk that could actually start a machine was refused as damaged. It now
+  works out where the root block is, the way every other Amiga tool does.
+- **1.76 MB disks now work**, and report their real size rather than half of
+  it.
+- **Long pages scroll.** The window was cutting content off at the bottom with
+  no scrollbar at all.
+- **The window scales.** Narrow it and the sidebar collapses to icons instead
+  of squeezing the panes; widen it and content stays centred instead of
+  clinging to the left.
+- **Buttons that cannot be used now look it.** A greyed button is a button you
+  know not to click, and a keyboard focus ring is visible again.
+- **"ART will not do this" no longer looks like a crash.** Being told an
+  archive is not a WHDLoad package is an answer, not a fault, and it no longer
+  arrives in red with an error code.
+- **Installing a WHDLoad game or an Aminet package now refuses up front if it
+  will not fit**, instead of discovering that partway through and leaving
+  whatever landed — a game missing its `.slave` because it did not fit used to
+  be a broken result with no warning.
+- **A write could very rarely be reported as failed right after it succeeded.**
+  Confirming a write by re-opening the file could race an external program
+  (an antivirus scan, a search indexer) briefly locking it the moment ART let
+  go. Confirmation now happens without releasing the file first, so that race
+  is gone.
+
+#### Changed
+- **The second AmigaDOS writer is retired.** ADF Studio and the two-pane file
+  manager now go through exactly one writer, so they can no longer disagree
+  about what is on a disk. Everything it did — five previously-fixed defects
+  among them — moved to the surviving writer with its tests; nothing was
+  quietly dropped.
 
 ### Put a WHDLoad game on a hard disk, in one step (2026-08-09)
 
