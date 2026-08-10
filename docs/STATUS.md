@@ -255,8 +255,8 @@ nothing were deleted: Rust commands `adf_extract_to`, `panel_plan_folder_copy`,
 .comingLater`'s key now feeds the "Coming Later" badge that Dashboard used to
 hardcode). The plan named six; three more (`write_bytes_into`, `sources_get`,
 the `comingLater` badge) turned out dead once their last callers were gone and
-were removed in the same pass. Rust test count dropped from 686 to 683 as the
-tests pinning the deleted paths went with them. `ART-047`, `ART-048` and
+were removed in the same pass. Rust test count dropped from 687 to 683 as the
+four tests pinning the deleted paths went with them. `ART-047`, `ART-048` and
 `ART-051` — hygiene issues left over from Phase 0a — were closed alongside.
 
 **Turkish.** `tr.json` ships beside `en.json`, both at 814 leaf keys. All
@@ -451,7 +451,7 @@ Newest first. One line per session that changed what works.
 | Date | Change | Tests |
 |---|---|---|
 | 2026-08-10 | Phase 0b: nine dead code paths removed (ART-047/048/051 closed); `tr.json` ships beside `en.json` at 814 keys each, every screen/component/`src/lib` helper translated, parity enforced by a new frontend test suite (vitest, 0 → 10 tests). Rust error strings and `formatAge`'s English pluralisation remain untranslated, and no language has been checked on screen — recorded as ART-060/061/062 | 683 Rust / 10 frontend |
-| 2026-08-10 | Phase 0a review fixes: a cancelled install no longer commits half a package or reports success (ART-052); `all_bytes()` refuses a volume too large to hold in memory (ART-053); the install pre-flight guard is now covered by a test that fails without it (ART-055); the WHDLoad refusal panel stopped contradicting itself and its remedy comes from Rust (ART-054); sidebar clipping (ART-056) and two more disabled-looking controls (ART-057) | 686 |
+| 2026-08-10 | Phase 0a review fixes: a cancelled install no longer commits half a package or reports success (ART-052); `all_bytes()` refuses a volume too large to hold in memory (ART-053); the install pre-flight guard is now covered by a test that fails without it (ART-055); the WHDLoad refusal panel stopped contradicting itself and its remedy comes from Rust (ART-054); sidebar clipping (ART-056) and two more disabled-looking controls (ART-057) | 687 |
 | 2026-08-10 | Phase 0a: ADF Studio's root-block bug (ART-037/038) and shell scroll/scale/disabled-controls (ART-039/040) fixed live; install pre-flight refusal restored (ART-044); a re-read race in `MutationOutcome` closed (ART-045); `core/adf/mutate.rs` retired onto `core/volume/write`; validation measures each image at its own geometry and gates every write (ART-041/042) | 684 |
 | 2026-08-09 | §82: one-click WHDLoad install to HDF — pack layout, plan, refusals, oracle-checked end to end | 675 |
 | 2026-08-09 | Stage W: writing into any volume — journal, F3–F9, checkout/checkin, `.uaem`, install to HDF; oracle now runs both ways | 642 |
