@@ -56,18 +56,6 @@ whole-file branch the partition's slice and write it back at its offset. Needs
 its own task and its own fixture (a small RDB image with a formatted
 partition) — no test covers it today, which is why it survived this long.
 
-**ART-051** 🟡 **`FEATURES.md` carries raw control bytes and git treats it as binary**
-`docs/FEATURES.md` (the DosType write-matrix table, ~line 140) · Eight bytes in
-the range `0x00`–`0x07` are embedded in the table as literal control
-characters where the escaped text `\x00` … `\x07` was intended — the same
-escaped style the rest of the file uses. They render as empty backticks, and
-git classifies the file as binary, so every change to it shows as
-`Bin N -> M bytes` with no reviewable diff. A status document whose diffs
-cannot be read is a status document nobody checks. The file is otherwise valid
-UTF-8 with CRLF endings, so this is a content fix, not an encoding conversion:
-replace the eight bytes with their escaped text and confirm `git diff --stat`
-reports a line count.
-
 **ART-050** 🟡 **The §92 pre-flight gate does not check bitmap consistency or hash-chain integrity**
 `core/adf/validate.rs::validate_image` · `commit_whole_file` (ART-042) refuses
 a write when `validate_image` finds a `Problem`, but `validate_image` only
@@ -92,25 +80,6 @@ because nothing in the suite constructs one. Needs a guard in
 `VolumeWriter::open` and a fixture that deliberately mismatches geometry and
 bootblock.
 
-**ART-048** 🔵 **A source comment still describes a module that no longer exists**
-`commands/adf.rs:369` (a test's doc comment) · Written for task 8's routing
-tests, before `core/adf/mutate` was deleted in task 10 (`fbd35ef`): "a later
-task deleting `core/adf/mutate` would be unsafe" now describes something
-already done. `docs/architecture.md`'s reference to `mutate_disk_file` carried
-the same staleness and is corrected in this pass — the one exception to
-"intent docs are not rewritten" that CLAUDE.md names, because the module it
-points at is gone. The source comment is left for whoever next touches that
-test; this pass changes no production code.
-
-**ART-047** 🔵 **Dead code that clippy cannot see**
-`core/adf/blocks.rs:81-99` · `block_slice`, `block_slice_mut`, `read_u32_at`
-and `write_u32_at` have no callers left outside their own tests —
-`core/adf/mutate.rs` was the last production caller, and task 10 (`fbd35ef`)
-deleted it. `lib.rs`'s `#![allow(dead_code)]` (CLAUDE.md's one permitted
-blanket allow) means clippy does not flag them. Either give them a real
-caller or remove them; audited bounds-checking code that production no longer
-reaches is exactly the kind of gap ART-020 exists to stop CI from hiding.
-
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 
@@ -129,6 +98,74 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+### Phase 0b
+
+**ART-047** 🔵 **Dead code that clippy cannot see**
+`core/adf/blocks.rs:81-99` · `block_slice`, `block_slice_mut`, `read_u32_at`
+and `write_u32_at` had no callers left outside their own tests —
+`core/adf/mutate.rs` was the last production caller, and task 10 (`fbd35ef`)
+deleted it. `lib.rs`'s `#![allow(dead_code)]` (CLAUDE.md's one permitted
+blanket allow) meant clippy did not flag them. Either give them a real caller
+or remove them; audited bounds-checking code that production no longer reaches
+is exactly the kind of gap ART-020 exists to stop CI from hiding.
+→ Split the decision by what each helper is for. `core/adf/validate.rs::validate`
+(~line 191) used to bounds-check `root_off` by hand and then index
+`image[root_off..]` directly — the exact pattern this module exists to
+replace — so it now calls `blocks::read_u32_at(image, root_block, 0)`, which
+bounds-checks through `block_slice` internally. That gives both a real,
+reachable production caller: `commands/volume_write.rs`'s §92 pre-flight gate
+calls `validate_image` → `validate` before every whole-file commit.
+`block_slice_mut` and `write_u32_at`, the write-side pair, are deleted rather
+than kept for a caller that does not exist: `core/adf/mutate.rs` was their
+only one, and the writer that replaced it, `core/volume/write`'s `BlockSet`
+(`layout.rs`), stages each touched block in a `BTreeMap<u32, Vec<u8>>` for the
+journal instead of slicing a whole-image buffer — a genuinely different
+shape, not an oversight, and no surviving write path indexes a whole image by
+block number. No bounds check was loosened to make anything fit; the deleted
+functions' own bounds-checking arithmetic (`checked_mul`, the containment
+check) is unchanged in the two that remain. `CLAUDE.md`'s bounds-checking
+paragraph still names `block_slice_mut` and `write_u32_at` and needs a reword
+to drop them. Pinned by `block_access_rejects_out_of_range_numbers` and
+`block_word_access_is_bounds_checked` (`core/adf/blocks.rs`, the latter now
+read-only), plus `validate.rs`'s existing `wrong_root_type_is_problem` and
+`tiny_image_is_problem`, which exercise the new call path.
+
+**ART-048** 🔵 **A source comment still described a module that no longer exists**
+`commands/adf.rs:369` (a test's doc comment) · Written for task 8's routing
+tests, before `core/adf/mutate` was deleted in task 10 (`fbd35ef`): "a later
+task deleting `core/adf/mutate` would be unsafe" described something already
+done. `docs/architecture.md`'s reference to `mutate_disk_file` carried the
+same staleness and was corrected in an earlier pass — the one exception to
+"intent docs are not rewritten" that CLAUDE.md names, because the module it
+pointed at is gone.
+→ Reworded to state what the test actually guards now: that all four
+commands land on `core/volume`, ART's only filesystem writer, now that
+`core/adf/mutate` is gone. A tree-wide search
+(`grep -rn "mutate_disk_file\|adf/mutate" src src-tauri/src`) turned up no
+other production code depending on the retired module — every remaining hit
+is a past-tense comment recalling what it replaced.
+
+**ART-051** 🟡 **`FEATURES.md` carries raw control bytes and git treats it as binary**
+`docs/FEATURES.md` (the DosType write-matrix table, ~line 140) · Eight bytes
+in the range `0x00`–`0x07` were embedded in the table as literal control
+characters where the escaped text `\x00` … `\x07` was intended — the same
+escaped style the rest of the file uses. They rendered as empty backticks, and
+git classified the file as binary, so every change to it showed as
+`Bin N -> M bytes` with no reviewable diff.
+→ Each of the eight raw bytes replaced with its escaped text
+(`python -c "d=open('docs/FEATURES.md','rb').read(); ..."` found the exact
+offsets). A byte-for-byte alignment of the old and new file confirms those
+eight positions are the *only* difference — everything else, including the
+CRLF line endings, is untouched. `git diff --stat` for *this* commit still
+prints `Bin 14510 -> 14261 bytes`: git classifies either side of a diff pair
+as binary if it contains one raw NUL byte, regardless of what the other side
+looks like, and the pre-fix blob has exactly one (the `DOS\x00` cell) —
+confirmed by reproducing the same `Bin` notation on a two-line synthetic
+before/after pair with `git diff --no-index`, including with `-a`/`--text`
+forced. That is a property of diffing *against the old, binary-flagged blob*,
+not of the fixed file: every diff of `docs/FEATURES.md` from this commit
+onward, once neither side has a raw NUL, renders as ordinary text.
 
 ### Phase 0a
 
@@ -618,8 +655,10 @@ directly. Out of range meant a panic, and the release profile sets
 → All access goes through `blocks::block_slice`/`block_slice_mut`/`read_u32_at`/
 `write_u32_at`, which return a `CoreError`. *(Location updated: the fix and its
 tests originally lived in `core/adf/mutate.rs`, deleted when task 10 retired it
-in favour of the single volume writer — fixed, not reopened; see ART-047 for
-the primitives' now-orphaned callers.)* Tests:
+in favour of the single volume writer — fixed, not reopened; see ART-047,
+where `block_slice_mut`/`write_u32_at` were later deleted for good — no write
+path indexes a whole image by block number any more — and `block_slice`/
+`read_u32_at` gained a new caller in `core/adf/validate.rs`.)* Tests:
 `block_access_rejects_out_of_range_numbers` (`core/adf/blocks.rs`),
 `out_of_range_directory_block_is_an_error` (`core/volume/write/mod.rs`).
 
