@@ -225,25 +225,6 @@ export async function volumePutFile(
   });
 }
 
-/** Write bytes the webview already holds — the checkin half of F4 (§6). */
-export async function volumeWriteBytes(
-  path: string,
-  volumeIndex: number,
-  dirBlock: number | null,
-  name: string,
-  contents: number[],
-  replace = false
-): Promise<MutationResult> {
-  return invoke<MutationResult>("volume_write_bytes", {
-    path,
-    volumeIndex,
-    dirBlock,
-    name,
-    contents,
-    replace,
-  });
-}
-
 // ---------------------------------------------------------------------------
 // Attributes and viewing
 // ---------------------------------------------------------------------------

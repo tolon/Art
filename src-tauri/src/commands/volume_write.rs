@@ -1221,50 +1221,6 @@ pub fn write_bytes_into(
     ))
 }
 
-/// Write a file the frontend supplied as bytes.
-///
-/// Used by the checkout/checkin round trip (§6) and the small-file drop path,
-/// where the bytes are already in the webview and a temp file would be a
-/// pointless round trip through the disk.
-#[tauri::command]
-pub fn volume_write_bytes(
-    path: String,
-    volume_index: usize,
-    dir_block: Option<u32>,
-    name: String,
-    contents: Vec<u8>,
-    replace: Option<bool>,
-    oplog: State<'_, JsonlOperationLog>,
-) -> AppResult<MutationResult> {
-    let image = PathBuf::from(path.trim());
-    let parent = dir_block.unwrap_or(0);
-    let chosen = name.trim().to_string();
-
-    let result = write_bytes_into(
-        &image,
-        volume_index,
-        parent,
-        &chosen,
-        &contents,
-        replace.unwrap_or(false),
-    )
-    .map_err(AppError::from);
-
-    write_result(
-        &oplog,
-        user_operation("Write file into volume").destination(format!("{path}:{chosen}")),
-        &result,
-        |record, made: &MutationResult| {
-            record
-                .detail("Bytes", contents.len().to_string())
-                .detail("Strategy", made.strategy.clone())
-                .outcome(OperationOutcome::verified(made.verified))
-        },
-    );
-
-    result
-}
-
 // ---------------------------------------------------------------------------
 // Attributes (§7.2)
 // ---------------------------------------------------------------------------

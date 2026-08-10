@@ -42,27 +42,6 @@ export async function panelLocalRoots(): Promise<string[]> {
   return invoke<string[]>("panel_local_roots");
 }
 
-/**
- * Copy one file out of an ADF into a local folder.
- *
- * The bytes go host-side to host-side; nothing passes through the webview.
- */
-export async function adfExtractTo(
-  path: string,
-  headerBlock: number,
-  name: string,
-  destDir: string,
-  overwrite = false
-): Promise<ExtractedTo> {
-  return invoke<ExtractedTo>("adf_extract_to", {
-    path,
-    headerBlock,
-    name,
-    destDir,
-    overwrite,
-  });
-}
-
 /** List an ADF directory as panel rows. */
 export async function panelListAdf(
   image: string,
@@ -77,33 +56,6 @@ export async function panelListAdf(
     header_block: entry.header_block,
     is_link: false,
   }));
-}
-
-/** One file inside a folder that is about to be copied. */
-export interface PlannedCopy {
-  source: string;
-  /** Path relative to the folder being copied, with forward slashes. */
-  relative: string;
-  bytes: number;
-}
-
-export interface CopyPlan {
-  files: PlannedCopy[];
-  total_bytes: number;
-  /** Folders to create first, parents before children. */
-  directories: string[];
-  /** What the walk refused, and why. */
-  skipped: string[];
-}
-
-/**
- * Work out what copying a local folder would move, without moving anything.
- *
- * The copy itself runs file by file so a failure part-way leaves a partial
- * copy the user can see, rather than an unexplained error.
- */
-export async function panelPlanFolderCopy(path: string): Promise<CopyPlan> {
-  return invoke<CopyPlan>("panel_plan_folder_copy", { path });
 }
 
 export function formatBytes(bytes: number): string {

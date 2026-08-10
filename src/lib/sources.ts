@@ -226,10 +226,6 @@ export async function sourcesSearch(
   return invoke<PackageMeta[]>("sources_search", { query, options });
 }
 
-export async function sourcesGet(path: string): Promise<PackageMeta | null> {
-  return invoke<PackageMeta | null>("sources_get", { path, provider: null });
-}
-
 export async function sourcesResolve(
   directory: string,
   stem: string
