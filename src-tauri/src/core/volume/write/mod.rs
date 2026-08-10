@@ -675,6 +675,22 @@ impl<'a> VolumeWriter<'a> {
         })
     }
 
+    /// Commit a hand-built set of blocks, for tests only.
+    ///
+    /// Exists so a test can produce a volume the *block-level* checks are
+    /// perfectly happy with — every touched block internally well-formed and
+    /// checksummed — and still structurally wrong. That is the only way to
+    /// prove what the layer above the writer catches; every public operation
+    /// here deliberately cannot get into that state.
+    #[cfg(test)]
+    pub(crate) fn commit_blocks(
+        &mut self,
+        description: &str,
+        set: BlockSet,
+    ) -> CoreResult<WriteOutcome> {
+        self.commit(description, set, |_, _, _| Ok(()))
+    }
+
     // ---- the shared machinery ----
 
     /// `0` means the root, as everywhere else in ART. Anything else has to be
