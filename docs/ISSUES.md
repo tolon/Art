@@ -23,6 +23,68 @@ what fixed it (with the test that proves it).
 
 ## Open
 
+**ART-062** 🔵 **No language has been checked on screen**
+`src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
+was verified by `pnpm test`'s key-parity check and by reading the JSON — never
+by opening the running application and looking at a screen. Several Turkish
+strings are substantially longer than their English originals and sit in tight
+controls, so the check that remains is visual, not automatable:
+
+| Key | English | Turkish | Growth |
+|---|---|---|---|
+| `pistorm.saveSync` | "Save & Sync PiStorm SD" | "PiStorm SD'yi Kaydet ve Eşitle" | +36% |
+| `hardDisk.bootablePri` | "Bootable (Pri {{n}})" | "Önyüklenebilir (Öncelik {{n}})" | +50% |
+| `pistorm.profile.classic.badge` | "Cycle-Exact & Demos" | "Çevrim Hassasiyetli ve Demolar" | +58% |
+| FileManager function-key label | "View" | "Görüntüle" | 4 → 9 characters |
+| FileManager function-key label | "Grid" | "Izgara" | +50% |
+| job status | "Done" | "Tamamlandı" | +150% |
+| job status | "Failed" | "Başarısız" | +50% |
+
+The function-key bar (`src/components/files/FunctionKeys.tsx`) was inspected
+in source rather than run: its container carries `flexWrap: "wrap"` and each
+button `flex: "1 1 90px"`, and `.btn` in `src/styles/global.css` carries no
+`text-overflow` rule (only `.file-row-name` does), so the bar should wrap
+rather than clip. That makes it the most likely of the rows above to look
+merely cramped rather than the most likely to break outright — but nobody has
+looked at it in Turkish. Needs an actual run of `pnpm tauri dev` with the
+language switched to Turkish, working through PiStorm, the hard disk screen,
+and the Files function-key bar at a few window widths.
+
+**ART-061** 🟡 **`formatAge` is always plural in English**
+`src/lib/sources.ts::formatAge` · Returns `{ key: "aminet.age.weeksAgo", params:
+{ n } }` (and the `monthsAgo` sibling) for any `n`, and `aminet.age.weeksAgo`'s
+English text is the fixed template `"{{n}} weeks ago"` — so a package uploaded
+exactly one week ago reads "1 weeks ago", and one month old reads "1 months
+ago". Predates Phase 0b: task 7b's job was to move this string to the `Phrase`
+layer faithfully, not to redesign it, and reproducing a known wart rather than
+quietly fixing it mid-refactor was the right call — but the wart is real and
+now has a name. The Turkish side is unaffected: `"{{n}} hafta önce"` is correct
+at any `n`, because Turkish does not inflect the noun after a number. Fixing it
+means either a plural-aware key pair (`weekAgo` / `weeksAgo`, chosen by `n
+=== 1`) or i18next's own plural key suffix (`_one` / `_other`), English-only —
+Turkish needs no equivalent change.
+
+**ART-060** 🔵 **Rust-side error sentences do not translate**
+`core/error.rs::CoreError`, `commands/whdload.rs::WhdloadRefusal` · Every
+`CoreError` variant's `Display` implementation, and `WhdloadRefusal { reason,
+suggestion }`'s two fields, are English sentences written in `core/` and
+`commands/`, reaching the UI verbatim regardless of the language chosen in
+Settings. `CoreError::user_message()` appends the stable `ART-*` id from
+`code()` to the English sentence for exactly this reason (§68) — the id was
+always meant to be the stable, quotable part — but nothing today keys off it
+to show a translated sentence instead. This is a design question worth
+recording, not answering here: `core/` may not depend on the frontend's
+`react-i18next` catalogue (CLAUDE.md's core-independence rule), so there are at
+least two ways forward — move the sentences into the frontend catalogue, keyed
+by `CoreError::code()` / a `WhdloadRefusal` reason code, and have the UI look
+them up instead of rendering the string Rust sent; or give `core/` its own
+minimal, dependency-free catalogue and have `Display` consult it. The first
+keeps `core/` exactly as independent as it is today but means every error path
+has to carry a stable key instead of (or alongside) a sentence, and duplicates
+some phrasing decisions between Rust and the JSON catalogues. The second keeps
+the sentence and its translation next to each other but adds a resource-lookup
+concept to a crate that currently has none. Neither is decided here.
+
 **ART-058** 🔵 **A cancelled block-journal copy doesn't tell the user files already landed**
 `commands/volume_write.rs::run_copy_in_folder_with` (`WriteStrategy::BlockJournal` branch,
 also reached through `run_install`'s `with_volume` closure in `commands/whdload.rs`) · Above

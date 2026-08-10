@@ -20,18 +20,20 @@ Update it at the end of any session that changes what works.
 |---|---|
 | **Last updated** | 2026-08-10 |
 | **Version** | 0.1.0 (unreleased) |
-| **Current stage** | Phase 0a — live bugs fixed, one filesystem writer |
+| **Current stage** | Phase 0b — dead code removed, interface speaks Turkish |
 | **Build** | PASS |
-| **Tests** | 686 passed, 0 failed |
+| **Tests** | 683 Rust passed, 0 failed; 10 frontend passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
 | **amitools oracle** | 48 checks, both directions |
+| **i18n** | `en.json` and `tr.json`, 814 leaf keys each, parity enforced by `pnpm test` |
 | **Release bundle** | built and verified in an earlier session; not rebuilt this pass |
 
 Reproduce the numbers above:
 
 ```bash
 pnpm lint                                              # TypeScript
+pnpm test                                              # frontend unit tests (i18n parity, phrase keys)
 cd src-tauri && cargo fmt --check                      # formatting
 cd src-tauri && cargo clippy --all-targets -- -D warnings
 cd src-tauri && cargo test                             # unit + integration
@@ -241,6 +243,46 @@ installs no boot code, only an RTS stub when the `bootable` flag is set — the
 claim under test is that a real Amiga mounts the volume and reads the file
 back, not that it boots.
 
+### ✅ Phase 0b — Dead code removed, interface speaks Turkish (complete, 2026-08-10)
+
+Two slices, eleven commits.
+
+**Dead code.** Nine code paths that were registered, typed and reached by
+nothing were deleted: Rust commands `adf_extract_to`, `panel_plan_folder_copy`,
+`volume_write_bytes`, `lha_extract_job`, `sources_get`, the helper
+`write_bytes_into`; TypeScript wrappers `adfExtractTo`, `panelPlanFolderCopy`,
+`volumeWriteBytes`, `sourcesGet`; and the `ComingLater` page (`common
+.comingLater`'s key now feeds the "Coming Later" badge that Dashboard used to
+hardcode). The plan named six; three more (`write_bytes_into`, `sources_get`,
+the `comingLater` badge) turned out dead once their last callers were gone and
+were removed in the same pass. Rust test count dropped from 686 to 683 as the
+tests pinning the deleted paths went with them. `ART-047`, `ART-048` and
+`ART-051` — hygiene issues left over from Phase 0a — were closed alongside.
+
+**Turkish.** `tr.json` ships beside `en.json`, both at 814 leaf keys. All
+fourteen screens, every shared component, and the eight `src/lib` modules that
+used to build English sentences by hand (`sources.ts`, `whdload.ts`, …) now
+return a `Phrase { key, params? }` that the caller renders through `t()`. The
+language switcher shows each language in its own name (`English` / `Türkçe`).
+A parity test (`src/i18n/parity.test.ts`) fails the build if the two
+catalogues' key sets diverge, a value is empty, or an interpolation variable is
+dropped — this is also where `pnpm test` and vitest entered the project;
+before this phase there were no frontend tests at all. 10 frontend tests now
+pass alongside the 683 Rust ones.
+
+**The boundary, recorded rather than fixed:** `CoreError` and
+`WhdloadRefusal { reason, suggestion }` are English sentences written in
+`core/` and `commands/`, and they reach the UI unchanged regardless of the
+chosen language ([ART-060](ISSUES.md#open)) — `core/`'s independence rule means
+this needs a real design decision, not a quick fix. `formatAge`
+(`src/lib/sources.ts`) still renders "1 weeks ago" in English, a pre-existing
+defect task 7b reproduced faithfully rather than fixing mid-refactor
+([ART-061](ISSUES.md#open)). And no language has been checked on a running
+screen — every string was verified by the parity test and by reading, never by
+opening the app ([ART-062](ISSUES.md#open)); several Turkish strings are
+substantially longer than their English originals and sit in tight controls,
+listed in that issue so the check is possible.
+
 ### ⏳ Stage 5 — Spec addenda (next)
 
 From `ART-SPEC-ADDENDA-COMPLETE.md` in the project root. **Stage 4 has landed, so
@@ -365,11 +407,14 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
    The oracle is part of it: it is the only check that can catch ART's reader
    and writer being wrong in the same way.
 2. Read this file, then [ISSUES.md](ISSUES.md#open) — open defects are
-   `ART-043` (the whole-file strategy ignores a partition's offset) and
-   `ART-046` … `ART-050` (recorded findings, none fixed yet); the next new
-   defect starts at `ART-051`.
-3. **The hardware verification rung is still outstanding.** See "Phase 0a"
-   above for what a pass looks like and where the test artifact is.
+   `ART-043` (the whole-file strategy ignores a partition's offset),
+   `ART-046` … `ART-050` (recorded findings, none fixed yet), and
+   `ART-060` … `ART-062` (Phase 0b's own: Rust error strings still English,
+   `formatAge`'s English pluralisation, no language checked on screen); the
+   next new defect starts at `ART-063`.
+3. **The hardware verification rung is still outstanding.** Nothing in Phase
+   0b touched it either — see "Phase 0a" above for what a pass looks like and
+   where the test artifact is.
 4. **Stage R and Stage W are both done.** Aminet Stage A is complete too,
    including the update view and install to HDF.
 5. The named work left in the briefs:
@@ -390,10 +435,12 @@ Things deliberately left undone, so they are not mistaken for oversights:
   what happened rather than what is about to.
 - **`pnpm tauri build`** succeeds; MSI and NSIS bundles were produced on
   2026-08-09. The bundles have not been installed and run from a clean machine.
-- **i18n** is English-only, and only Settings, Dashboard and the page headings
-  go through `t()`. The other twelve studios are hard-coded English throughout.
-  Worth doing as one pass over every page rather than screen by screen — a
-  half-translated app reads worse than an untranslated one.
+- **i18n covers the interface, not the core.** Every screen, shared component
+  and `src/lib` helper goes through `t()` in English and Turkish. `CoreError`
+  and `WhdloadRefusal` sentences, written in Rust, still reach the UI in
+  English only regardless of the chosen language ([ART-060](ISSUES.md#open)) —
+  not a gap left to fill screen by screen, a design question about whether
+  `core/` gets its own catalogue or the frontend keys off `CoreError::code()`.
 - `docs/roadmap.md` phase marks remain the original Phase 0 plan by design —
   this file is the live position.
 
@@ -403,6 +450,7 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-10 | Phase 0b: nine dead code paths removed (ART-047/048/051 closed); `tr.json` ships beside `en.json` at 814 keys each, every screen/component/`src/lib` helper translated, parity enforced by a new frontend test suite (vitest, 0 → 10 tests). Rust error strings and `formatAge`'s English pluralisation remain untranslated, and no language has been checked on screen — recorded as ART-060/061/062 | 683 Rust / 10 frontend |
 | 2026-08-10 | Phase 0a review fixes: a cancelled install no longer commits half a package or reports success (ART-052); `all_bytes()` refuses a volume too large to hold in memory (ART-053); the install pre-flight guard is now covered by a test that fails without it (ART-055); the WHDLoad refusal panel stopped contradicting itself and its remedy comes from Rust (ART-054); sidebar clipping (ART-056) and two more disabled-looking controls (ART-057) | 686 |
 | 2026-08-10 | Phase 0a: ADF Studio's root-block bug (ART-037/038) and shell scroll/scale/disabled-controls (ART-039/040) fixed live; install pre-flight refusal restored (ART-044); a re-read race in `MutationOutcome` closed (ART-045); `core/adf/mutate.rs` retired onto `core/volume/write`; validation measures each image at its own geometry and gates every write (ART-041/042) | 684 |
 | 2026-08-09 | §82: one-click WHDLoad install to HDF — pack layout, plan, refusals, oracle-checked end to end | 675 |

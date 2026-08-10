@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ART now speaks Turkish (2026-08-10)
+
+#### Added
+- **Turkish.** Every screen, every shared dialog, and every message ART
+  builds in the frontend now has a Turkish translation alongside the English
+  one. Switch languages in Settings — the choice is remembered across
+  restarts, and each language names itself in its own tongue in the switcher
+  (`English` / `Türkçe`).
+- A build-time check fails if the two language files ever drift apart: a
+  missing key, an empty translation, or a Turkish string that drops a
+  placeholder the English one uses all now stop the build rather than
+  shipping a half-translated screen.
+
+#### Changed
+- **Error messages coming from ART's Rust core — including the WHDLoad
+  install screen's refusal text — are still English**, regardless of which
+  language is selected. Translating those means either moving them into the
+  frontend's language files or giving the Rust core its own, and that
+  decision has not been made yet (tracked as ART-060).
+
+#### Removed
+- **Nine code paths nothing in the application could reach were deleted** —
+  an old ADF-extraction command, a folder-copy planner and a raw
+  block-writing command superseded by the current file-manager writer, a
+  background-extraction command with no caller, and a placeholder screen. No
+  user-visible behaviour changes; these were unreachable before this release.
+
 ### Stopping an install now really stops it (2026-08-10)
 
 #### Fixed

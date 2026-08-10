@@ -190,7 +190,7 @@ checks the image comes back byte for byte.
 | "What can I do?" panel | §46, §91 | ✅ | driven by the engine's plan |
 | Dashboard, recent files | §62 | ✅ | |
 | Settings (theme, paths, language) | §59 | ✅ | |
-| i18n architecture | — | 🟡 | English only; many strings still hard-coded |
+| i18n architecture | — | 🟡 | English and Turkish, 814 keys each, chosen in Settings and remembered; `CoreError` and `WhdloadRefusal` sentences from Rust still reach the UI in English regardless of the chosen language ([ART-060](ISSUES.md#open)) |
 | Dark / light theme | §61 | ✅ | |
 | Beginner / Power User mode | §47, §48 | ✅ | `lib/uxmode.ts`; hides advanced studios, actions and block detail |
 | Operation history + export | §53 | ✅ | Settings → Operation Log |

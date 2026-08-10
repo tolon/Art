@@ -45,6 +45,22 @@ pnpm, MSVC Build Tools).
   `SOURCE → ANALYZE → VALIDATE → PREVIEW → BACKUP → APPLY → VERIFY → REPORT`.
 - **Never distribute copyrighted ROMs or commercial software.**
 
+## Adding a translation
+
+ART ships English (`src/i18n/en.json`) and Turkish (`src/i18n/tr.json`).
+Adding or changing a UI string:
+
+- Add the key to **both** files in the same commit. `pnpm test` runs a parity
+  check that fails the build if the two catalogues' key sets differ, a value
+  is empty, or an interpolation variable (`{{n}}`, `{{code}}`, …) present in
+  one is missing from the other.
+- `src/lib` helpers that build a message return a `Phrase { key, params? }`,
+  not a rendered sentence — that keeps the helper itself free of the i18n
+  singleton, and lets the calling component decide when to call `t()`.
+- Rust-side strings (`CoreError` messages, `WhdloadRefusal.reason` /
+  `.suggestion`) are not part of this system yet and stay English regardless
+  of the chosen language — see [ISSUES.md](docs/ISSUES.md) (ART-060).
+
 ## Commit messages
 
 Use clear, imperative-mood commit messages (e.g. "Add ADF bootblock validation").
