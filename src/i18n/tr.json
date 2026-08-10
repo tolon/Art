@@ -27,7 +27,31 @@
     "noRecent": "Henüz dosya yok. Başlamak için bir şey bırakın.",
     "quickActions": "Hızlı İşlemler",
     "statistics": "Koleksiyon İstatistikleri",
-    "noStats": "Koleksiyon boş."
+    "noStats": "Koleksiyon boş.",
+    "plan": {
+      "title": "Ne yapabilirim? — Evrensel İş Akışı Motoru",
+      "objectsAnalyzed_one": "{{count}} Nesne İncelendi",
+      "objectsAnalyzed_other": "{{count}} Nesne İncelendi",
+      "subtitle": "ART, bıraktığınız nesneleri inceledi ve önerilen Amiga iş akışlarını sıraladı:",
+      "genericError": "Hata",
+      "noActions": "ART bu dosyayı henüz tanımıyor, bu yüzden sunabileceği bir işlem yok.",
+      "advanced": "Gelişmiş",
+      "comingLaterTitle": "{{description}} — sonraki bir aşamada gelecek",
+      "verificationPass": "Doğrulama: BAŞARILI",
+      "verificationFailed": "Doğrulama: BAŞARISIZ",
+      "done": "Tamamlandı",
+      "failed": "Başarısız",
+      "confidence": "Güven: %{{percent}}",
+      "size": "Boyut: {{size}}"
+    },
+    "quickActionHints": {
+      "library": "Kütüphane",
+      "emulator": "Emülatör",
+      "rawData": "Ham veri"
+    },
+    "footer": {
+      "theme": "tema: {{theme}}"
+    }
   },
   "common": {
     "comingLater": "Sonra Gelecek",
@@ -54,7 +78,20 @@
     "uxPower": "İleri Kullanıcı",
     "language": "Dil",
     "winuaePath": "WinUAE Yolu",
-    "collectionDir": "Koleksiyon Klasörü"
+    "collectionDir": "Koleksiyon Klasörü",
+    "uxModePowerHint": "Ham veri araçlarını, blok ve sektör ayrıntılarını ve gelişmiş işlemleri gösterir.",
+    "uxModeBeginnerHint": "Ham veri araçlarını ve blok düzeyindeki ayrıntıları gizler. Hiçbir şey devre dışı bırakılmaz — her şeyi görmek için Uzman Kullanıcı moduna geçin.",
+    "oplog": {
+      "title": "İşlem Günlüğü",
+      "description": "Bir dosyayı değiştiren her işlem, yedeğinin nereye gittiğiyle birlikte.",
+      "loading": "Yükleniyor…",
+      "empty": "Henüz kayıt yok.",
+      "backupLabel": "Yedek: {{path}}",
+      "export": "Dışa Aktar…",
+      "exportDialogTitle": "İşlem günlüğünü dışa aktar",
+      "exportFailed": "Dışa aktarma başarısız: {{error}}",
+      "textFileType": "Metin"
+    }
   },
   "status": {
     "healthy": "Sağlıklı",
@@ -559,6 +596,344 @@
       "body": "{{name}} emülasyonu için bir Kickstart ROM gerekiyor. Ticari Kickstart ROM'ları telif hakkıyla korunur ve ART ile birlikte dağıtılmaz.",
       "selectRom": "Kickstart ROM Dosyası Seçin ({{version}})…",
       "continueAros": "Açık Kaynak AROS ROM ile Devam Et"
+    }
+  },
+  "rom": {
+    "title": "Kickstart ROM Stüdyosu",
+    "actions": {
+      "identify": "ROM Dosyasını Tanımla…",
+      "scan": "ROM Klasörünü Tara…"
+    },
+    "dialogs": {
+      "selectFolderTitle": "Kickstart ROM'larını içeren klasörü seçin",
+      "selectFileTitle": "Kickstart ROM dosyasını seçin"
+    },
+    "filters": {
+      "romFile": "Kickstart ROM"
+    },
+    "status": {
+      "scanFound_one": "Klasörde {{count}} Kickstart ROM bulundu ve tanımlandı.",
+      "scanFound_other": "Klasörde {{count}} Kickstart ROM bulundu ve tanımlandı.",
+      "identified": "Tanımlandı: {{name}}",
+      "scanning": "ROM'lar taranıyor…"
+    },
+    "banner": {
+      "title": "Kickstart ROM ve Telif Hakkı Bildirimi",
+      "intro": "Commodore Amiga Kickstart ROM'ları özel mülkiyettir ve telif hakkı korumasındadır. ART, ROM ikili dosyalarını dağıtmaz.",
+      "prefix": "Yasal olarak sahip olduğunuz Kickstart koleksiyonunuzu tarayabilir veya yerleşik",
+      "arosLabel": "AROS Açık Kaynak Yedek ROM'unu",
+      "suffix": " kullanabilirsiniz."
+    },
+    "library": {
+      "title": "Tespit Edilen Kickstart Kitaplığı ({{count}})",
+      "empty": "Henüz ROM yüklenmedi. Kickstart dosyalarınızı bulmak için \"ROM Klasörünü Tara\" düğmesine tıklayın."
+    },
+    "badges": {
+      "crcErr": "CRC HATA"
+    },
+    "details": {
+      "title": "ROM Detayları",
+      "titleLabel": "Başlık:",
+      "versionLabel": "Sürüm / Rev:",
+      "sizeLabel": "Boyut:",
+      "sizeValue": "{{kb}} KB ({{bytes}} bayt)",
+      "crc32Label": "CRC32:",
+      "sha256Label": "SHA256:",
+      "modelsLabel": "Uyumlu Amiga Modelleri:",
+      "cloantoStripped": "Cloanto Şifreli Üstbilgisi Kaldırıldı"
+    }
+  },
+  "hex": {
+    "subtitle": "Adli Onaltılık ve Sektör İnceleyici",
+    "openFile": "Onaltılık İnceleme İçin Dosya Aç…",
+    "dialogTitle": "Adli onaltılık inceleme için bir Amiga diski, ROM veya arşiv seçin",
+    "inspecting": "İnceleniyor:",
+    "fields": {
+      "offset": "Ofset:",
+      "block": "Blok:",
+      "trackSector": "İz / Sektör:"
+    },
+    "jump": {
+      "bootblock": "Önyükleme Bloğu (0)",
+      "rootBlock": "Kök Blok (880)",
+      "bitmap": "Bit Eşlem (881)",
+      "placeholder": "Blok #",
+      "go": "Git"
+    },
+    "signature": {
+      "found": "İmza Bulundu:"
+    },
+    "columns": {
+      "offset": "OFSET",
+      "hexBytes": "HEX BAYTLAR (00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F)",
+      "ascii": "ASCII"
+    },
+    "paging": {
+      "previous": "◀ Önceki Blok (512B)",
+      "next": "Sonraki Blok (512B) ▶",
+      "viewing": "{{total}} bayttan {{start}} - {{end}} arası gösteriliyor"
+    },
+    "emptyState": "Sektör sektör onaltılık veriyi ve dosya başlıklarını incelemek için bir ADF disket, HDF sabit disk veya Kickstart ROM seçin."
+  },
+  "lha": {
+    "title": "LHA Tarayıcı",
+    "emptyState": "İçeriğine göz atmak ve ayıklamak için bir .lha arşivi açın.",
+    "toolbar": {
+      "open": "LHA Aç…",
+      "extractAll": "Tümünü ayıkla…",
+      "filterName": "LHA Arşivi"
+    },
+    "status": {
+      "working": "İşleniyor…"
+    },
+    "whdload": {
+      "detected": "WHDLoad Paketi Tespit Edildi",
+      "confidenceBadge": "{{level}} GÜVEN",
+      "confidenceLevel": {
+        "high": "YÜKSEK",
+        "medium": "ORTA",
+        "low": "DÜŞÜK"
+      },
+      "slave": "Slave: {{name}}",
+      "executable": "Çalıştırılabilir: {{name}}"
+    },
+    "info": {
+      "entries": "Girdi:",
+      "compressed": "Sıkıştırılmış:",
+      "uncompressed": "Sıkıştırılmamış:"
+    },
+    "outcome": {
+      "aborted": "Ayıklama: İPTAL EDİLDİ",
+      "success": "Ayıklama: {{count}} girdi"
+    }
+  },
+  "files": {
+    "intro": "İki bölme. Bir tarafa klasör, diğer tarafa disk imajı koyun, sonra aralarında sürükleyin — ya da fonksiyon tuşlarını kullanın.",
+    "busy": {
+      "suffix": "{{busy}} — ilerleme iş çubuğunda; oradan durdurabilirsiniz."
+    },
+    "arrows": {
+      "toRightTitle": "Seçili öğeyi sağa kopyala",
+      "toLeftTitle": "Seçili öğeyi sola kopyala"
+    },
+    "policy": {
+      "label": "Bir ad zaten kullanılıyorsa:",
+      "skip": "olduğu gibi bırak",
+      "overwrite": "üzerine yaz",
+      "rename": "ikisini de tut"
+    },
+    "recovery": {
+      "ariaLabel": "Tamamlanmamış işlem",
+      "title": "Bu imaj üzerindeki bir işlem tamamlanmadı",
+      "body": "“{{description}}” yarıda kesildi. ART, değiştirmek üzere olduğu her bloğun kaydını tuttu, böylece imaj tam olarak eski haline getirilebilir. Siz karar verene kadar yazma engellenir.",
+      "undo": "Geri al",
+      "leave": "İmajı olduğu gibi bırak",
+      "leaveTitle": "İmajı tam olarak şu anki haliyle bırakın ve kaydı unutun. Bunu yalnızca işlemin tamamlandığından eminseniz yapın."
+    },
+    "writeRefusal": {
+      "local": "Bu bölme bir disk imajı değil, bir klasör içeriyor",
+      "noPartition": "Önce bir bölüm açın",
+      "default": "ART bu birime yazamıyor"
+    },
+    "functionKeys": {
+      "view": "Görüntüle",
+      "viewReasonSelect": "Bakmak için bir dosya seçin",
+      "viewReasonNeedsImage": "Görüntüleme yalnızca bir imaj içindeki dosyalarda çalışır",
+      "edit": "Düzenle",
+      "editReasonSelect": "Düzenlemek için bir dosya seçin",
+      "copy": "Kopyala",
+      "copyReasonSelect": "Kopyalamak için bir şey seçin",
+      "rename": "Adlandır",
+      "renameReasonSelect": "Adlandırmak için bir şey seçin",
+      "newFolder": "Yeni Klasör",
+      "delete": "Sil",
+      "deleteReasonSelect": "Silmek için bir şey seçin",
+      "attributes": "Nitelikler",
+      "attributesReasonSelect": "Önce bir şey seçin",
+      "attributesReasonNeedsImage": "Nitelikler yalnızca bir imaj içindeki dosyalara aittir"
+    },
+    "toolbar": {
+      "folder": "Klasör...",
+      "adf": "ADF...",
+      "hdf": "HDF...",
+      "up": "Yukarı",
+      "refresh": "Yenile",
+      "newFolder": "Yeni Klasör"
+    },
+    "pane": {
+      "nothingOpen": "Hiçbir şey açık değil",
+      "truncated": "Bu klasör ART'ın listeleyeceğinden daha fazlasını içeriyor — yalnızca ilk girdiler gösteriliyor.",
+      "empty": "Burada hiçbir şey yok.",
+      "folderSuffix": "(klasör)",
+      "linkSuffix": "(bağlantı — izlenmedi)",
+      "copyTitle": "Diğer bölmeye kopyala",
+      "deleteTitle": "Diskten sil"
+    },
+    "footer": {
+      "unnamed": "(adsız)",
+      "free": "{{size}} boş",
+      "readOnly": "salt okunur",
+      "blocksStrategy": "{{blocks}} blok · {{strategy}}",
+      "strategyWhole": "bütün olarak yazıldı ve yedeklendi",
+      "strategyJournal": "geri alma günlüğü altında yerinde yazıldı"
+    },
+    "partitions": {
+      "volumeCount_one": "{{count}} birim",
+      "volumeCount_other": "{{count}} birim",
+      "bootable": "önyüklenebilir",
+      "atByte": "{{offset}}. bayt",
+      "open": "Aç",
+      "clamped": "Bu bölüm, dosyanın tuttuğundan daha fazla alan iddia ediyor — yalnızca gerçekten var olan kısım okunabilir.",
+      "none": "Bu dosyada birim bulunamadı."
+    },
+    "dialog": {
+      "newFolder": {
+        "prompt": "Diskteki klasör adı"
+      },
+      "rename": {
+        "prompt": "Yeni ad",
+        "confirmIcon": "{{name}} bir simgeye sahip ({{icon}}). {{newName}}.info olarak onu da yeniden adlandırmak ister misiniz? Yapılmazsa {{newName}} Workbench'te görünmeyecek."
+      },
+      "delete": {
+        "confirm1": "{{name}}, {{volume}} biriminden silinsin mi?",
+        "confirm2": "Bu, tamamlandıktan sonra ART içinden geri alınamaz. '{{name}}' silinsin mi?",
+        "confirmIcon": "Simgesi ({{icon}}) de silinsin mi?"
+      }
+    },
+    "err": {
+      "bothLocal": "Her iki bölme de yerel klasör — bunun için Explorer'ı kullanın.",
+      "openOtherSide": "Önce diğer taraftan bir bölüm açın.",
+      "sameImage": "Bu, her iki tarafta da aynı imaj. Bunun yerine Taşı veya Adlandır kullanın.",
+      "noLocalPath": "Bu öğenin diskinizde bir yolu yok.",
+      "openPartitionFirst": "Önce bir bölüm açın."
+    },
+    "status": {
+      "copyingBetween": "{{name}} imajlar arasında kopyalanıyor…",
+      "planning": "{{name}} için gerekenler hesaplanıyor…",
+      "copying": "{{name}} kopyalanıyor…",
+      "copyingOut": "{{name}} dışarı kopyalanıyor…",
+      "writtenTo": "{{name}}, {{volume}} birimine yazıldı",
+      "writtenToBackedUp": "{{name}}, {{volume}} birimine yazıldı — önceki imaj yedeklendi",
+      "alreadyThere": "{{name}} zaten orada — dokunulmadı",
+      "copiedOut": "{{name}}, {{volume}} biriminden dışarı kopyalandı ({{size}})",
+      "deleting": "{{name}} siliniyor…",
+      "deleted": "{{name}} silindi",
+      "deletedWithIcon": "{{name}} ve simgesi silindi",
+      "deletedBackedUp": "{{name}} silindi — önceki imaj yedeklendi",
+      "deletedWithIconBackedUp": "{{name}} ve simgesi silindi — önceki imaj yedeklendi",
+      "checkingOut": "{{name}} düzenlemek için çıkarılıyor…",
+      "checkedOut": "{{name}} düzenlemeye açık. İşiniz bitince aşağıdaki panelden geri koyun.",
+      "creatingFolder": "Klasör oluşturuluyor…",
+      "renaming": "{{name}} yeniden adlandırılıyor…",
+      "renamed": "{{name}} artık {{newName}}",
+      "renamedWithIcon": "{{name}} artık {{newName}}, simgesiyle birlikte",
+      "writtenBack": "{{name}} imajın içine geri yazıldı.",
+      "filesWrittenOut_one": "{{count}} dosya dışarı yazıldı",
+      "filesWrittenOut_other": "{{count}} dosya dışarı yazıldı",
+      "filesWrittenOutSidecars_one": "{{count}} dosya dışarı yazıldı, {{sidecars}} tanesi Amiga nitelikleriyle birlikte",
+      "filesWrittenOutSidecars_other": "{{count}} dosya dışarı yazıldı, {{sidecars}} tanesi Amiga nitelikleriyle birlikte",
+      "undoing": "Tamamlanmamış işlem geri alınıyor…",
+      "removingJournal": "Günlük kaldırılıyor…",
+      "undone_one": "Geri alındı: {{description}} — {{count}} blok geri kondu",
+      "undone_other": "Geri alındı: {{description}} — {{count}} blok geri kondu",
+      "journalRemoved": "Günlük kaldırıldı; imaj tam olarak olduğu gibi bırakıldı."
+    }
+  },
+  "collection": {
+    "subtitle": "Amiga Koleksiyon Stüdyosu",
+    "header": {
+      "library": "Kitaplık: {{dir}} ({{count}} başlık)"
+    },
+    "status": {
+      "indexed": "Koleksiyonda {{count}} oyun/yazılım başlığı dizinlendi.",
+      "scanning": "Taranıyor… tarama sürerken siz işinize devam edebilirsiniz.",
+      "scanningLong": "Oyunlar taranıyor ve koleksiyon dizinleniyor…"
+    },
+    "dialog": {
+      "selectFolderTitle": "Amiga oyun ve yazılımlarını içeren klasörü seçin"
+    },
+    "toolbar": {
+      "gridView": "Izgara",
+      "tableView": "Tablo",
+      "scanFolder": "Kitaplık Klasörünü Tara…"
+    },
+    "filters": {
+      "searchPlaceholder": "🔍 Başlık, yayıncı veya yıl arayın (örn. Monkey Island, 1992, Ocean)…",
+      "formatLabel": "Biçim:",
+      "all": "Tümü",
+      "floppy": "Disket",
+      "chipsetLabel": "Yonga Seti:"
+    },
+    "results": {
+      "summary": "{{total}} başlıktan {{shown}} tanesi gösteriliyor"
+    },
+    "item": {
+      "floppyDisks_one": "Disket ({{count}} disk)",
+      "floppyDisks_other": "Disket ({{count}} disk)",
+      "hardfile": "HDF Sabit Disk",
+      "publisher": "Yayıncı",
+      "openInAdfStudio": "ADF Stüdyosunda Aç",
+      "play": "Oynat",
+      "disksBadge_one": "{{count}} Disk",
+      "disksBadge_other": "{{count}} Disk"
+    },
+    "empty": {
+      "noCollection": "Henüz koleksiyon yüklenmedi. Amiga oyunlarınızı, WHDLoad arşivlerinizi ve disklerinizi kataloglamak için \"{{buttonLabel}}\" düğmesine tıklayın."
+    }
+  },
+  "whdload": {
+    "intro": "Bir WHDLoad paketini tek adımda sabit diske kurun. ART önce arşivin içine bakar, tam olarak neyi nereye yazacağını söyler ve ancak ondan sonra yazar — önce imajı yedekler, sonra yazdığı her dosyayı diskten geri okuyup doğrular.",
+    "busy": {
+      "planning": "Paketin içine bakılıyor…",
+      "readingDisk": "Disk okunuyor…",
+      "installing": "Kuruluyor…"
+    },
+    "busyNote": "{{busy}} — ilerleme iş çubuğunda; oradan durdurabilirsiniz.",
+    "dialog": {
+      "archiveFilter": "Amiga arşivi",
+      "imageFilter": "Amiga sabit disk imajı"
+    },
+    "error": {
+      "noVolumes": "ART bu imajda hiçbir bölüm bulamadı.",
+      "noWritablePartition": "ART bu imajdaki hiçbir bölüme yazamıyor — aşağıdaki listeye bakın."
+    },
+    "step": {
+      "package": "1. Paket",
+      "chooseArchive": ".lha seç…",
+      "disk": "2. Disk",
+      "chooseArchiveFirst": "Önce bir paket seçin",
+      "chooseImage": "İmaj seç…",
+      "whatArtWillDo": "3. ART ne yapacak"
+    },
+    "install": {
+      "titleReady": "{{drawer}} konumuna kur",
+      "chooseFirst": "Önce bir paket ve disk seçin",
+      "button": "Kur: {{volume}}",
+      "theDisk": "disk"
+    },
+    "detection": {
+      "noIcon": "simge yok — Workbench'te görünmeyecek",
+      "slaveLabel": "Slave: {{slave}}",
+      "iconLabel": "Simge: {{icon}}",
+      "noWrapper": "Arşivin sarmalayıcı bir klasörü yok.",
+      "notPartOfGame": "Oyunun parçası değil, bu yüzden kurulmadı:",
+      "andMore_one": "ve {{count}} tane daha",
+      "andMore_other": "ve {{count}} tane daha"
+    },
+    "plan": {
+      "createDrawer": "Klasörü oluşturacak:",
+      "writeFiles_one": "ve {{count}} dosya yazacak",
+      "writeFiles_other": "ve {{count}} dosya yazacak",
+      "inFolders_one": "{{count}} klasörde",
+      "inFolders_other": "{{count}} klasörde",
+      "blocks": "{{needed}} blok gerekiyor · {{free}} boş",
+      "backupNote": "Herhangi bir şey yazılmadan önce imaj yedeklenir (büyükse günlüklenir) ve yazılan her dosya işlem sonunda diskten geri okunarak doğrulanır.",
+      "refusalTitle": "ART bu paketi kurmayacak",
+      "allGood": "Her şey sığıyor, her ad AmigaDOS'un saklayabileceği türden ve bu adda hiçbir şey diskte zaten yok."
+    },
+    "report": {
+      "notWritten": "Yazılmadı:",
+      "backupKept": "Önceki imaj {{backup}} konumunda saklandı"
     }
   }
 }

@@ -42,7 +42,7 @@ export function CollectionStudio() {
         setScanDir(result.dir_path);
         setItems(result.items);
         setStatusMsg(
-          `Indexed ${result.items.length} game/software title(s) in collection.`
+          t("collection.status.indexed", { count: result.items.length })
         );
         setBusy(false);
       });
@@ -59,7 +59,7 @@ export function CollectionStudio() {
   async function startScan(dir: string) {
     setBusy(true);
     setError(null);
-    setStatusMsg("Scanning… you can carry on working while it runs.");
+    setStatusMsg(t("collection.status.scanning"));
     try {
       await collectionScan(dir);
     } catch (e) {
@@ -72,7 +72,7 @@ export function CollectionStudio() {
     const sel = await open({
       directory: true,
       multiple: false,
-      title: "Select folder containing Amiga games and software",
+      title: t("collection.dialog.selectFolderTitle"),
     });
     if (typeof sel !== "string") return;
     await startScan(sel);
@@ -126,10 +126,10 @@ export function CollectionStudio() {
       {/* Top Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
         <div>
-          <h1 style={{ fontSize: 20, margin: 0 }}>{t("nav.collection")} — Amiga Collection Studio</h1>
+          <h1 style={{ fontSize: 20, margin: 0 }}>{t("nav.collection")} — {t("collection.subtitle")}</h1>
           {scanDir && (
             <div className="muted" style={{ fontSize: 12, marginTop: 2, wordBreak: "break-all" }}>
-              Library: {scanDir} ({items.length} titles)
+              {t("collection.header.library", { dir: scanDir, count: items.length })}
             </div>
           )}
         </div>
@@ -142,26 +142,26 @@ export function CollectionStudio() {
               onClick={() => setViewMode("grid")}
               style={{ borderRadius: 0, padding: "4px 10px" }}
             >
-              🔲 Grid
+              🔲 {t("collection.toolbar.gridView")}
             </button>
             <button
               className={`btn btn-sm ${viewMode === "table" ? "btn-primary" : ""}`}
               onClick={() => setViewMode("table")}
               style={{ borderRadius: 0, padding: "4px 10px" }}
             >
-              📋 Table
+              📋 {t("collection.toolbar.tableView")}
             </button>
           </div>
 
           <button className="btn btn-sm btn-primary" onClick={handleScanFolder} disabled={busy}>
-            📂 Scan Library Folder…
+            📂 {t("collection.toolbar.scanFolder")}
           </button>
         </div>
       </div>
 
       {error && <div className="badge badge-err" style={{ margin: "12px 0", padding: "6px 12px" }}>{error}</div>}
       {statusMsg && <div className="badge badge-ok" style={{ margin: "12px 0", padding: "6px 12px" }}>{statusMsg}</div>}
-      {busy && <div className="muted" style={{ margin: "12px 0" }}>Scanning games and indexing collection…</div>}
+      {busy && <div className="muted" style={{ margin: "12px 0" }}>{t("collection.status.scanningLong")}</div>}
 
       {/* Filter Toolbar */}
       {items.length > 0 && (
@@ -173,7 +173,7 @@ export function CollectionStudio() {
                 type="text"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="🔍 Search titles, publishers, or years (e.g. Monkey Island, 1992, Ocean)…"
+                placeholder={t("collection.filters.searchPlaceholder")}
                 style={{
                   width: "100%",
                   padding: "6px 10px",
@@ -188,7 +188,7 @@ export function CollectionStudio() {
 
             {/* Media Format Filter Chips */}
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              <span className="muted" style={{ fontSize: 12, alignSelf: "center" }}>Format:</span>
+              <span className="muted" style={{ fontSize: 12, alignSelf: "center" }}>{t("collection.filters.formatLabel")}</span>
               {(["all", "lhawhdload", "adf", "hdf"] as const).map((fmt) => (
                 <button
                   key={fmt}
@@ -196,14 +196,14 @@ export function CollectionStudio() {
                   onClick={() => setFormatFilter(fmt)}
                   style={{ padding: "3px 8px", fontSize: 11 }}
                 >
-                  {fmt === "all" ? "All" : fmt === "lhawhdload" ? "🕹️ WHDLoad" : fmt === "adf" ? "💾 Floppy" : "💽 HDF"}
+                  {fmt === "all" ? t("collection.filters.all") : fmt === "lhawhdload" ? "🕹️ WHDLoad" : fmt === "adf" ? `💾 ${t("collection.filters.floppy")}` : "💽 HDF"}
                 </button>
               ))}
             </div>
 
             {/* Chipset Filter Chips */}
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              <span className="muted" style={{ fontSize: 12, alignSelf: "center" }}>Chipset:</span>
+              <span className="muted" style={{ fontSize: 12, alignSelf: "center" }}>{t("collection.filters.chipsetLabel")}</span>
               {(["all", "ocsecs", "aga"] as const).map((cs) => (
                 <button
                   key={cs}
@@ -211,7 +211,7 @@ export function CollectionStudio() {
                   onClick={() => setChipsetFilter(cs)}
                   style={{ padding: "3px 8px", fontSize: 11 }}
                 >
-                  {cs === "all" ? "All" : cs === "aga" ? "AGA (A1200/4000)" : "OCS/ECS (A500/600)"}
+                  {cs === "all" ? t("collection.filters.all") : cs === "aga" ? "AGA (A1200/4000)" : "OCS/ECS (A500/600)"}
                 </button>
               ))}
             </div>
@@ -222,7 +222,9 @@ export function CollectionStudio() {
       {/* Catalog Results Header */}
       {items.length > 0 && (
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, margin: "6px 2px 10px" }}>
-          <span className="muted">Showing <strong>{filteredItems.length}</strong> of {items.length} titles</span>
+          <span className="muted">
+            {t("collection.results.summary", { shown: filteredItems.length, total: items.length })}
+          </span>
         </div>
       )}
 
@@ -250,7 +252,7 @@ export function CollectionStudio() {
                       {isAga ? "AGA (1200/4000)" : "OCS / ECS (500)"}
                     </span>
                     <span className="badge badge-muted" style={{ fontSize: 10 }}>
-                      {item.media_kind === "lhawhdload" ? "WHDLoad LHA" : item.media_kind === "adf" ? `Floppy (${item.disk_count} Disk${item.disk_count > 1 ? "s" : ""})` : "Hardfile HDF"}
+                      {item.media_kind === "lhawhdload" ? "WHDLoad LHA" : item.media_kind === "adf" ? t("collection.item.floppyDisks", { count: item.disk_count }) : t("collection.item.hardfile")}
                     </span>
                   </div>
 
@@ -259,7 +261,7 @@ export function CollectionStudio() {
                     {item.clean_title}
                   </strong>
                   <div className="muted" style={{ fontSize: 12 }}>
-                    {item.publisher ?? "Unknown Publisher"} {item.year ? `(${item.year})` : ""}
+                    {item.publisher ?? `${t("common.unknown")} ${t("collection.item.publisher")}`} {item.year ? `(${item.year})` : ""}
                   </div>
                 </div>
 
@@ -270,12 +272,12 @@ export function CollectionStudio() {
                     style={{ flex: 1, justifyContent: "center" }}
                     onClick={() => handlePlay(item)}
                   >
-                    🚀 Play in WinUAE
+                    🚀 {t("common.launchInWinuae")}
                   </button>
                   {item.media_kind === "adf" && (
                     <button
                       className="btn btn-sm"
-                      title="Open in ADF Studio"
+                      title={t("collection.item.openInAdfStudio")}
                       onClick={() => navigate("/disk-tools", { state: { path: item.primary_path } })}
                     >
                       💾
@@ -305,7 +307,7 @@ export function CollectionStudio() {
                   <div>
                     <strong>{item.clean_title}</strong>
                     <div className="faint" style={{ fontSize: 11 }}>
-                      {item.publisher ?? "Unknown"} {item.year ? `· ${item.year}` : ""}
+                      {item.publisher ?? t("common.unknown")} {item.year ? `· ${item.year}` : ""}
                     </div>
                   </div>
                 </div>
@@ -315,14 +317,14 @@ export function CollectionStudio() {
                     {item.chipset === "aga" ? "AGA" : "OCS/ECS"}
                   </span>
                   <span className="badge badge-muted" style={{ fontSize: 10 }}>
-                    {item.disk_count} Disks
+                    {t("collection.item.disksBadge", { count: item.disk_count })}
                   </span>
                   <button
                     className="btn btn-sm btn-primary"
                     onClick={() => handlePlay(item)}
                     style={{ padding: "3px 8px", fontSize: 11 }}
                   >
-                    🚀 Play
+                    🚀 {t("collection.item.play")}
                   </button>
                 </div>
               </div>
@@ -333,7 +335,7 @@ export function CollectionStudio() {
 
       {items.length === 0 && !busy && (
         <p className="muted" style={{ textAlign: "center", marginTop: 36 }}>
-          No collection loaded. Click "Scan Library Folder" to catalog your Amiga games, WHDLoad archives, and disks.
+          {t("collection.empty.noCollection", { buttonLabel: t("collection.toolbar.scanFolder") })}
         </p>
       )}
     </div>

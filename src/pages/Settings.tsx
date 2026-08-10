@@ -46,8 +46,8 @@ export function SettingsPage() {
           </select>
           <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
             {settings.uxMode === "power"
-              ? "Showing raw data tools, block and sector detail, and advanced actions."
-              : "Hiding raw data tools and block-level detail. Nothing is disabled — switch to Power User to see everything."}
+              ? t("settings.uxModePowerHint")
+              : t("settings.uxModeBeginnerHint")}
           </p>
         </Field>
       </section>
@@ -106,6 +106,7 @@ export function SettingsPage() {
  * failure with its error ID into a bug report.
  */
 function OperationLogSection() {
+  const { t } = useTranslation();
   const [records, setRecords] = useState<OperationRecord[] | null>(null);
   const [logPath, setLogPath] = useState<string>("");
   const [busy, setBusy] = useState(false);
@@ -128,15 +129,15 @@ function OperationLogSection() {
     setError(null);
     try {
       const target = await save({
-        title: "Export operation log",
+        title: t("settings.oplog.exportDialogTitle"),
         defaultPath: "art-operation-log.txt",
-        filters: [{ name: "Text", extensions: ["txt"] }],
+        filters: [{ name: t("settings.oplog.textFileType"), extensions: ["txt"] }],
       });
       if (typeof target === "string") {
         await oplogExportTo(target);
       }
     } catch (e) {
-      setError(`Export failed: ${String(e)}`);
+      setError(t("settings.oplog.exportFailed", { error: String(e) }));
     } finally {
       setBusy(false);
     }
@@ -144,9 +145,9 @@ function OperationLogSection() {
 
   return (
     <section className="card">
-      <h2 style={{ fontSize: 15 }}>Operation Log</h2>
+      <h2 style={{ fontSize: 15 }}>{t("settings.oplog.title")}</h2>
       <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-        Every operation that changed a file, with where its backup went.
+        {t("settings.oplog.description")}
       </p>
 
       {error && (
@@ -157,11 +158,11 @@ function OperationLogSection() {
 
       {records === null ? (
         <p className="faint" style={{ fontSize: 12 }}>
-          Loading…
+          {t("settings.oplog.loading")}
         </p>
       ) : records.length === 0 ? (
         <p className="faint" style={{ fontSize: 12 }}>
-          Nothing recorded yet.
+          {t("settings.oplog.empty")}
         </p>
       ) : (
         <ul style={{ listStyle: "none", padding: 0, margin: "10px 0 0" }}>
@@ -191,7 +192,7 @@ function OperationLogSection() {
               )}
               {r.backup && (
                 <div className="faint" style={{ wordBreak: "break-all" }}>
-                  Backup: {r.backup}
+                  {t("settings.oplog.backupLabel", { path: r.backup })}
                 </div>
               )}
               {r.outcome.result === "failure" && (
@@ -206,7 +207,7 @@ function OperationLogSection() {
 
       <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center" }}>
         <button className="btn btn-sm" onClick={handleExport} disabled={busy}>
-          Export…
+          {t("settings.oplog.export")}
         </button>
         {logPath && (
           <span className="faint" style={{ fontSize: 11, wordBreak: "break-all" }}>

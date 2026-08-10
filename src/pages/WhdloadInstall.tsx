@@ -99,7 +99,7 @@ export function WhdloadInstall() {
       setPlan(null);
       return;
     }
-    setBusy("Looking inside the package…");
+    setBusy(t("whdload.busy.planning"));
     setError(null);
     try {
       setPlan(await whdloadPlan(archive, image, volumeIndex));
@@ -118,7 +118,7 @@ export function WhdloadInstall() {
   async function chooseArchive() {
     const picked = await open({
       multiple: false,
-      filters: [{ name: "Amiga archive", extensions: ["lha", "lzh"] }],
+      filters: [{ name: t("whdload.dialog.archiveFilter"), extensions: ["lha", "lzh"] }],
     });
     if (typeof picked !== "string") return;
     setArchive(picked);
@@ -128,7 +128,9 @@ export function WhdloadInstall() {
   async function chooseImage() {
     const picked = await open({
       multiple: false,
-      filters: [{ name: "Amiga hard disk image", extensions: ["hdf", "hda", "img", "adf"] }],
+      filters: [
+        { name: t("whdload.dialog.imageFilter"), extensions: ["hdf", "hda", "img", "adf"] },
+      ],
     });
     if (typeof picked !== "string") return;
 
@@ -136,7 +138,7 @@ export function WhdloadInstall() {
     setOutcome(null);
     setImage(picked);
     setVolumeIndex(null);
-    setBusy("Reading the disk…");
+    setBusy(t("whdload.busy.readingDisk"));
     try {
       const found = await volumeScan(picked);
       setVolumes(found);
@@ -150,8 +152,8 @@ export function WhdloadInstall() {
       else if (usable.length === 0) {
         setError(
           found.volumes.length === 0
-            ? "ART found no volumes in that image."
-            : "ART cannot write to any partition in that image — see the list below."
+            ? t("whdload.error.noVolumes")
+            : t("whdload.error.noWritablePartition")
         );
       }
     } catch (e) {
@@ -165,7 +167,7 @@ export function WhdloadInstall() {
   async function install() {
     if (!archive || !image || volumeIndex === null) return;
     setError(null);
-    setBusy("Installing…");
+    setBusy(t("whdload.busy.installing"));
     try {
       pending.current = await whdloadInstall(archive, image, volumeIndex);
     } catch (e) {
@@ -181,10 +183,7 @@ export function WhdloadInstall() {
     <div>
       <h1 style={{ fontSize: 20 }}>{t("nav.whdload")}</h1>
       <p className="muted" style={{ marginTop: 4 }}>
-        Put a WHDLoad package on a hard disk, in one step. ART checks what is in
-        the archive, tells you exactly what it will write and where, and only
-        then writes it — backing the image up first and reading every file back
-        afterwards.
+        {t("whdload.intro")}
       </p>
 
       {error && (
@@ -194,16 +193,16 @@ export function WhdloadInstall() {
       )}
       {busy && (
         <div className="muted" style={{ fontSize: 12, margin: "8px 0" }}>
-          {busy} — progress is in the job bar, and you can stop it there.
+          {t("whdload.busyNote", { busy })}
         </div>
       )}
 
       {/* ---- 1. the package ---- */}
       <section className="card" style={{ marginBottom: 10 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <strong style={{ fontSize: 14 }}>1. The package</strong>
+          <strong style={{ fontSize: 14 }}>{t("whdload.step.package")}</strong>
           <button className="btn" style={{ fontSize: 12 }} onClick={() => void chooseArchive()}>
-            Choose an .lha…
+            {t("whdload.step.chooseArchive")}
           </button>
         </div>
         {archive && (
@@ -218,15 +217,15 @@ export function WhdloadInstall() {
       {/* ---- 2. the disk ---- */}
       <section className="card" style={{ marginBottom: 10 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <strong style={{ fontSize: 14 }}>2. The disk</strong>
+          <strong style={{ fontSize: 14 }}>{t("whdload.step.disk")}</strong>
           <button
             className="btn"
             style={{ fontSize: 12 }}
             onClick={() => void chooseImage()}
             disabled={!archive}
-            title={archive ? undefined : "Choose a package first"}
+            title={archive ? undefined : t("whdload.step.chooseArchiveFirst")}
           >
-            Choose an image…
+            {t("whdload.step.chooseImage")}
           </button>
         </div>
         {image && (
@@ -247,7 +246,7 @@ export function WhdloadInstall() {
       {/* ---- 3. what will happen ---- */}
       {plan && (
         <section className="card" style={{ marginBottom: 10 }}>
-          <strong style={{ fontSize: 14 }}>3. What ART will do</strong>
+          <strong style={{ fontSize: 14 }}>{t("whdload.step.whatArtWillDo")}</strong>
           <WhatHappens plan={plan} powerMode={powerMode} />
         </section>
       )}
@@ -258,15 +257,17 @@ export function WhdloadInstall() {
         disabled={!ready}
         title={
           ready
-            ? `Install to ${plan?.drawer}`
-            : plan?.refusal?.reason ?? "Choose a package and a disk first"
+            ? t("whdload.install.titleReady", { drawer: plan?.drawer })
+            : plan?.refusal?.reason ?? t("whdload.install.chooseFirst")
         }
         style={{ fontSize: 14, padding: "8px 18px" }}
       >
         {/* `||`, not `??`: a refused plan carries an *empty* volume name, not a
             missing one, and "Install to " with nothing after it reads as a
             half-rendered screen. */}
-        Install to {plan?.volume_name || "the disk"}
+        {t("whdload.install.button", {
+          volume: plan?.volume_name || t("whdload.install.theDisk"),
+        })}
       </button>
 
       {outcome && <Report outcome={outcome} powerMode={powerMode} />}
@@ -281,6 +282,7 @@ export function WhdloadInstall() {
  * part of the sentence rather than a colour.
  */
 function Detection({ plan, powerMode }: { plan: WhdloadPlan; powerMode: boolean }) {
+  const { t } = useTranslation();
   const { verdict, layout } = plan;
   const confident = verdict.confidence === "HIGH" || verdict.confidence === "MEDIUM";
   // No pack means no name to print and no icon to be missing. Rendering them
@@ -303,7 +305,7 @@ function Detection({ plan, powerMode }: { plan: WhdloadPlan; powerMode: boolean 
           <strong>{layout.name}</strong>
           {layout.icon === null && (
             <span className="badge badge-warn" style={{ fontSize: 11, marginLeft: 6 }}>
-              no icon — it will not show up on Workbench
+              {t("whdload.detection.noIcon")}
             </span>
           )}
         </div>
@@ -311,9 +313,11 @@ function Detection({ plan, powerMode }: { plan: WhdloadPlan; powerMode: boolean 
 
       {found && powerMode && (
         <div className="faint" style={{ fontSize: 11, marginTop: 4 }}>
-          <div>Slave: {layout.slave}</div>
-          {layout.icon && <div>Icon: {layout.icon}</div>}
-          {layout.root === "" && <div>The archive has no wrapper drawer.</div>}
+          <div>{t("whdload.detection.slaveLabel", { slave: layout.slave })}</div>
+          {layout.icon && (
+            <div>{t("whdload.detection.iconLabel", { icon: layout.icon })}</div>
+          )}
+          {layout.root === "" && <div>{t("whdload.detection.noWrapper")}</div>}
         </div>
       )}
 
@@ -321,9 +325,10 @@ function Detection({ plan, powerMode }: { plan: WhdloadPlan; powerMode: boolean 
           disk should be able to see that ART left it out on purpose. */}
       {layout.outside.length > 0 && (
         <div className="faint" style={{ fontSize: 11, marginTop: 4 }}>
-          Not part of the game, so not installed:{" "}
+          {t("whdload.detection.notPartOfGame")}{" "}
           {layout.outside.slice(0, 4).join(", ")}
-          {layout.outside.length > 4 && ` and ${layout.outside.length - 4} more`}
+          {layout.outside.length > 4 &&
+            ` ${t("whdload.detection.andMore", { count: layout.outside.length - 4 })}`}
         </div>
       )}
     </div>
@@ -403,6 +408,7 @@ function PartitionRow({
 
 /** The plan, and the refusal when there is one. */
 function WhatHappens({ plan, powerMode }: { plan: WhdloadPlan; powerMode: boolean }) {
+  const { t } = useTranslation();
   // When no pack was found there is nothing to cost: the drawer name is empty,
   // every number is zero and the disk was never read. Printing the sentence
   // anyway asserts an action — "create the drawer  and write 0 files, 0 B" —
@@ -414,12 +420,10 @@ function WhatHappens({ plan, powerMode }: { plan: WhdloadPlan; powerMode: boolea
       {found && (
         <>
           <div style={{ fontSize: 13 }}>
-            Create the drawer <strong>{plan.drawer}</strong> and write{" "}
-            {plan.cost.files} file{plan.cost.files === 1 ? "" : "s"}
+            {t("whdload.plan.createDrawer")} <strong>{plan.drawer}</strong>{" "}
+            {t("whdload.plan.writeFiles", { count: plan.cost.files })}
             {plan.cost.directories > 0 &&
-              ` in ${plan.cost.directories} folder${
-                plan.cost.directories === 1 ? "" : "s"
-              }`}
+              ` ${t("whdload.plan.inFolders", { count: plan.cost.directories })}`}
             , {formatBytes(plan.cost.total_bytes)}.
           </div>
 
@@ -427,16 +431,17 @@ function WhatHappens({ plan, powerMode }: { plan: WhdloadPlan; powerMode: boolea
               each, and a report in bytes alone would be wrong about whether it
               fits. */}
           <div className="faint" style={{ fontSize: 11, marginTop: 2 }}>
-            {plan.cost.blocks_needed.toLocaleString()} blocks needed ·{" "}
-            {plan.cost.blocks_free.toLocaleString()} free
+            {t("whdload.plan.blocks", {
+              needed: plan.cost.blocks_needed.toLocaleString(),
+              free: plan.cost.blocks_free.toLocaleString(),
+            })}
           </div>
         </>
       )}
 
       {found && powerMode && (
         <div className="faint" style={{ fontSize: 11, marginTop: 4 }}>
-          The image is backed up (or journalled, if it is large) before anything
-          is written, and every file is read back out of the disk afterwards.
+          {t("whdload.plan.backupNote")}
         </div>
       )}
 
@@ -445,14 +450,13 @@ function WhatHappens({ plan, powerMode }: { plan: WhdloadPlan; powerMode: boolea
         // A refusal with nothing useful to add says nothing rather than
         // repeating advice that does not apply to it.
         <Refusal
-          title="ART will not install this package"
+          title={t("whdload.plan.refusalTitle")}
           reason={plan.refusal.reason}
           suggestion={plan.refusal.suggestion ?? undefined}
         />
       ) : (
         <div className="badge badge-ok" style={{ display: "block", marginTop: 8 }}>
-          Everything fits, every name is one AmigaDOS can store, and nothing of
-          that name is on the disk already.
+          {t("whdload.plan.allGood")}
         </div>
       )}
     </div>
@@ -460,6 +464,7 @@ function WhatHappens({ plan, powerMode }: { plan: WhdloadPlan; powerMode: boolea
 }
 
 function Report({ outcome, powerMode }: { outcome: WhdloadOutcome; powerMode: boolean }) {
+  const { t } = useTranslation();
   const complete = outcome.verified === outcome.files && outcome.skipped.length === 0;
 
   return (
@@ -473,13 +478,13 @@ function Report({ outcome, powerMode }: { outcome: WhdloadOutcome; powerMode: bo
 
       {outcome.skipped.length > 0 && (
         <div className="faint" style={{ fontSize: 11, marginTop: 6 }}>
-          Not written: {outcome.skipped.slice(0, 5).join(" · ")}
+          {t("whdload.report.notWritten")} {outcome.skipped.slice(0, 5).join(" · ")}
         </div>
       )}
 
       {powerMode && outcome.backup && (
         <div className="faint" style={{ fontSize: 11, marginTop: 4, wordBreak: "break-all" }}>
-          The previous image was kept at {outcome.backup}
+          {t("whdload.report.backupKept", { backup: outcome.backup })}
         </div>
       )}
     </section>

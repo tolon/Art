@@ -16,7 +16,7 @@ export function RomStudio() {
     const sel = await open({
       directory: true,
       multiple: false,
-      title: "Select folder containing Kickstart ROMs",
+      title: t("rom.dialogs.selectFolderTitle"),
     });
     if (typeof sel !== "string") return;
 
@@ -26,7 +26,7 @@ export function RomStudio() {
     try {
       const list = await romScanDir(sel);
       setRoms(list);
-      setStatusMsg(`Found and identified ${list.length} Kickstart ROM(s) in folder.`);
+      setStatusMsg(t("rom.status.scanFound", { count: list.length }));
       if (list.length > 0) setSelectedRom(list[0]);
     } catch (e) {
       setError(String(e));
@@ -38,8 +38,8 @@ export function RomStudio() {
   async function handleIdentifySingle() {
     const sel = await open({
       multiple: false,
-      filters: [{ name: "Kickstart ROM", extensions: ["rom", "bin", "a500", "a1200"] }],
-      title: "Select Kickstart ROM file",
+      filters: [{ name: t("rom.filters.romFile"), extensions: ["rom", "bin", "a500", "a1200"] }],
+      title: t("rom.dialogs.selectFileTitle"),
     });
     if (typeof sel !== "string") return;
 
@@ -53,7 +53,7 @@ export function RomStudio() {
         return [info, ...filtered];
       });
       setSelectedRom(info);
-      setStatusMsg(`Identified: ${info.name}`);
+      setStatusMsg(t("rom.status.identified", { name: info.name }));
     } catch (e) {
       setError(String(e));
     } finally {
@@ -64,27 +64,27 @@ export function RomStudio() {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1 style={{ fontSize: 20, margin: 0 }}>{t("nav.rom")} — Kickstart ROM Studio</h1>
+        <h1 style={{ fontSize: 20, margin: 0 }}>{t("nav.rom")} — {t("rom.title")}</h1>
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn btn-sm" onClick={handleIdentifySingle} disabled={busy}>
-            🔍 Identify ROM File…
+            🔍 {t("rom.actions.identify")}
           </button>
           <button className="btn btn-primary btn-sm" onClick={handleScanDir} disabled={busy}>
-            📂 Scan ROM Folder…
+            📂 {t("rom.actions.scan")}
           </button>
         </div>
       </div>
 
       {error && <div className="badge badge-err" style={{ margin: "12px 0", padding: "6px 12px" }}>{error}</div>}
       {statusMsg && <div className="badge badge-ok" style={{ margin: "12px 0", padding: "6px 12px" }}>{statusMsg}</div>}
-      {busy && <div className="muted" style={{ margin: "12px 0" }}>Scanning ROMs…</div>}
+      {busy && <div className="muted" style={{ margin: "12px 0" }}>{t("rom.status.scanning")}</div>}
 
       {/* Information Banner */}
       <div className="card" style={{ margin: "14px 0", background: "var(--bg-elevated)" }}>
-        <div style={{ fontWeight: 600, fontSize: 13 }}>💡 Kickstart ROM & Copyright Notice</div>
+        <div style={{ fontWeight: 600, fontSize: 13 }}>💡 {t("rom.banner.title")}</div>
         <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>
-          Commodore Amiga Kickstart ROMs are proprietary and copyrighted. ART does not distribute ROM binaries.
-          You can scan your legally owned Kickstart collection or use the built-in <strong>AROS Open-Source Replacement ROM</strong>.
+          {t("rom.banner.intro")}{" "}
+          {t("rom.banner.prefix")} <strong>{t("rom.banner.arosLabel")}</strong>{t("rom.banner.suffix")}
         </p>
       </div>
 
@@ -92,10 +92,10 @@ export function RomStudio() {
       <div style={{ display: "grid", gridTemplateColumns: roms.length > 0 ? "1fr 1fr" : "1fr", gap: 16 }}>
         {/* List of Detected ROMs */}
         <section className="card">
-          <h2 style={{ fontSize: 15 }}>📚 Detected Kickstart Library ({roms.length})</h2>
+          <h2 style={{ fontSize: 15 }}>📚 {t("rom.library.title", { count: roms.length })}</h2>
           {roms.length === 0 ? (
             <p className="muted" style={{ fontSize: 13, padding: "16px 0", textAlign: "center" }}>
-              No ROMs loaded yet. Click "Scan ROM Folder" to detect your Kickstart files.
+              {t("rom.library.empty")}
             </p>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
@@ -116,7 +116,7 @@ export function RomStudio() {
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <strong style={{ fontSize: 13 }}>{r.name}</strong>
                       <span className={`badge ${r.checksum_valid ? "badge-ok" : "badge-warn"}`}>
-                        {r.checksum_valid ? "OK" : "CRC ERR"}
+                        {r.checksum_valid ? t("common.ok") : t("rom.badges.crcErr")}
                       </span>
                     </div>
                     <div className="faint" style={{ fontSize: 11, marginTop: 4, wordBreak: "break-all" }}>
@@ -132,28 +132,29 @@ export function RomStudio() {
         {/* Selected ROM Deep Inspector */}
         {selectedRom && (
           <section className="card">
-            <h2 style={{ fontSize: 15 }}>🔬 ROM Details</h2>
+            <h2 style={{ fontSize: 15 }}>🔬 {t("rom.details.title")}</h2>
             <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 10, fontSize: 13 }}>
               <div>
-                <span className="muted">Title:</span> <strong>{selectedRom.name}</strong>
+                <span className="muted">{t("rom.details.titleLabel")}</span> <strong>{selectedRom.name}</strong>
               </div>
               <div>
-                <span className="muted">Version / Rev:</span> {selectedRom.version} ({selectedRom.revision})
+                <span className="muted">{t("rom.details.versionLabel")}</span> {selectedRom.version} ({selectedRom.revision})
               </div>
               <div>
-                <span className="muted">Size:</span> {selectedRom.size_bytes / 1024} KB ({selectedRom.size_bytes} bytes)
+                <span className="muted">{t("rom.details.sizeLabel")}</span>{" "}
+                {t("rom.details.sizeValue", { kb: selectedRom.size_bytes / 1024, bytes: selectedRom.size_bytes })}
               </div>
               <div>
-                <span className="muted">CRC32:</span> <code style={{ color: "var(--accent)" }}>{selectedRom.crc32}</code>
+                <span className="muted">{t("rom.details.crc32Label")}</span> <code style={{ color: "var(--accent)" }}>{selectedRom.crc32}</code>
               </div>
               <div>
-                <span className="muted">SHA256:</span>
+                <span className="muted">{t("rom.details.sha256Label")}</span>
                 <div style={{ fontSize: 11, wordBreak: "break-all", background: "var(--bg)", padding: 6, borderRadius: 4, marginTop: 2 }}>
                   {selectedRom.sha256}
                 </div>
               </div>
               <div>
-                <span className="muted">Compatible Amiga Models:</span>
+                <span className="muted">{t("rom.details.modelsLabel")}</span>
                 <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
                   {selectedRom.compatible_models.map((m) => (
                     <span key={m} className="badge badge-muted">
@@ -164,7 +165,7 @@ export function RomStudio() {
               </div>
               {selectedRom.is_cloanto && (
                 <div className="badge badge-ok">
-                  ✓ Cloanto Encrypted Header Stripped
+                  ✓ {t("rom.details.cloantoStripped")}
                 </div>
               )}
             </div>

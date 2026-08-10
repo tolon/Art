@@ -27,7 +27,31 @@
     "noRecent": "No recent files yet. Drop something to begin.",
     "quickActions": "Quick Actions",
     "statistics": "Collection Statistics",
-    "noStats": "Collection is empty."
+    "noStats": "Collection is empty.",
+    "plan": {
+      "title": "What can I do? — Universal Workflow Engine",
+      "objectsAnalyzed_one": "{{count}} Object Analyzed",
+      "objectsAnalyzed_other": "{{count}} Objects Analyzed",
+      "subtitle": "ART has analyzed the dropped objects and ranked the recommended Amiga workflows:",
+      "genericError": "Error",
+      "noActions": "ART does not recognise this file yet, so it has no actions to offer.",
+      "advanced": "Advanced",
+      "comingLaterTitle": "{{description}} — coming in a later phase",
+      "verificationPass": "Verification: PASS",
+      "verificationFailed": "Verification: FAILED",
+      "done": "Done",
+      "failed": "Failed",
+      "confidence": "Confidence: {{percent}}%",
+      "size": "Size: {{size}}"
+    },
+    "quickActionHints": {
+      "library": "Library",
+      "emulator": "Emulator",
+      "rawData": "Raw data"
+    },
+    "footer": {
+      "theme": "theme: {{theme}}"
+    }
   },
   "common": {
     "comingLater": "Coming Later",
@@ -54,7 +78,20 @@
     "uxPower": "Power User",
     "language": "Language",
     "winuaePath": "WinUAE Path",
-    "collectionDir": "Collection Directory"
+    "collectionDir": "Collection Directory",
+    "uxModePowerHint": "Showing raw data tools, block and sector detail, and advanced actions.",
+    "uxModeBeginnerHint": "Hiding raw data tools and block-level detail. Nothing is disabled — switch to Power User to see everything.",
+    "oplog": {
+      "title": "Operation Log",
+      "description": "Every operation that changed a file, with where its backup went.",
+      "loading": "Loading…",
+      "empty": "Nothing recorded yet.",
+      "backupLabel": "Backup: {{path}}",
+      "export": "Export…",
+      "exportDialogTitle": "Export operation log",
+      "exportFailed": "Export failed: {{error}}",
+      "textFileType": "Text"
+    }
   },
   "status": {
     "healthy": "Healthy",
@@ -559,6 +596,344 @@
       "body": "To emulate {{name}}, a Kickstart ROM is needed. Commercial Kickstarts are copyrighted and not distributed with ART.",
       "selectRom": "Select Kickstart ROM File ({{version}})…",
       "continueAros": "Continue with Open-Source AROS ROM"
+    }
+  },
+  "rom": {
+    "title": "Kickstart ROM Studio",
+    "actions": {
+      "identify": "Identify ROM File…",
+      "scan": "Scan ROM Folder…"
+    },
+    "dialogs": {
+      "selectFolderTitle": "Select folder containing Kickstart ROMs",
+      "selectFileTitle": "Select Kickstart ROM file"
+    },
+    "filters": {
+      "romFile": "Kickstart ROM"
+    },
+    "status": {
+      "scanFound_one": "Found and identified {{count}} Kickstart ROM in folder.",
+      "scanFound_other": "Found and identified {{count}} Kickstart ROMs in folder.",
+      "identified": "Identified: {{name}}",
+      "scanning": "Scanning ROMs…"
+    },
+    "banner": {
+      "title": "Kickstart ROM & Copyright Notice",
+      "intro": "Commodore Amiga Kickstart ROMs are proprietary and copyrighted. ART does not distribute ROM binaries.",
+      "prefix": "You can scan your legally owned Kickstart collection, or use the built-in",
+      "arosLabel": "AROS Open-Source Replacement ROM",
+      "suffix": "."
+    },
+    "library": {
+      "title": "Detected Kickstart Library ({{count}})",
+      "empty": "No ROMs loaded yet. Click \"Scan ROM Folder\" to detect your Kickstart files."
+    },
+    "badges": {
+      "crcErr": "CRC ERR"
+    },
+    "details": {
+      "title": "ROM Details",
+      "titleLabel": "Title:",
+      "versionLabel": "Version / Rev:",
+      "sizeLabel": "Size:",
+      "sizeValue": "{{kb}} KB ({{bytes}} bytes)",
+      "crc32Label": "CRC32:",
+      "sha256Label": "SHA256:",
+      "modelsLabel": "Compatible Amiga Models:",
+      "cloantoStripped": "Cloanto Encrypted Header Stripped"
+    }
+  },
+  "hex": {
+    "subtitle": "Forensic Hex & Sector Inspector",
+    "openFile": "Open File for Hex Inspection…",
+    "dialogTitle": "Select Amiga disk, ROM, or archive for Forensic Hex Inspection",
+    "inspecting": "Inspecting:",
+    "fields": {
+      "offset": "Offset:",
+      "block": "Block:",
+      "trackSector": "Track / Sec:"
+    },
+    "jump": {
+      "bootblock": "Bootblock (0)",
+      "rootBlock": "Root Block (880)",
+      "bitmap": "Bitmap (881)",
+      "placeholder": "Block #",
+      "go": "Go"
+    },
+    "signature": {
+      "found": "Found Signature:"
+    },
+    "columns": {
+      "offset": "OFFSET",
+      "hexBytes": "HEX BYTES (00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F)",
+      "ascii": "ASCII"
+    },
+    "paging": {
+      "previous": "◀ Previous Block (512B)",
+      "next": "Next Block (512B) ▶",
+      "viewing": "Viewing byte {{start}} to {{end}} of {{total}}"
+    },
+    "emptyState": "Select any ADF floppy disk, HDF hard drive, or Kickstart ROM to inspect sector-by-sector hexadecimal data and file headers."
+  },
+  "lha": {
+    "title": "LHA Browser",
+    "emptyState": "Open an .lha archive to browse and extract its contents.",
+    "toolbar": {
+      "open": "Open LHA…",
+      "extractAll": "Extract all…",
+      "filterName": "LHA Archive"
+    },
+    "status": {
+      "working": "Working…"
+    },
+    "whdload": {
+      "detected": "WHDLoad Package Detected",
+      "confidenceBadge": "{{level}} CONFIDENCE",
+      "confidenceLevel": {
+        "high": "HIGH",
+        "medium": "MEDIUM",
+        "low": "LOW"
+      },
+      "slave": "Slave: {{name}}",
+      "executable": "Executable: {{name}}"
+    },
+    "info": {
+      "entries": "Entries:",
+      "compressed": "Compressed:",
+      "uncompressed": "Uncompressed:"
+    },
+    "outcome": {
+      "aborted": "Extraction: ABORTED",
+      "success": "Extraction: {{count}} entries"
+    }
+  },
+  "files": {
+    "intro": "Two panes. Put a folder on one side and a disk image on the other, then drag between them — or use the function keys.",
+    "busy": {
+      "suffix": "{{busy}} — progress is in the job bar, and you can stop it there."
+    },
+    "arrows": {
+      "toRightTitle": "Copy the selected item to the right",
+      "toLeftTitle": "Copy the selected item to the left"
+    },
+    "policy": {
+      "label": "When a name is already taken:",
+      "skip": "leave it alone",
+      "overwrite": "replace it",
+      "rename": "keep both"
+    },
+    "recovery": {
+      "ariaLabel": "Unfinished operation",
+      "title": "An operation on this image did not finish",
+      "body": "“{{description}}” was interrupted. ART kept a record of every block it was about to change, so the image can be put back exactly as it was. Writing is refused until you decide.",
+      "undo": "Undo it",
+      "leave": "Leave the image alone",
+      "leaveTitle": "Leave the image exactly as it is and forget the record. Only do this if you know the operation completed."
+    },
+    "writeRefusal": {
+      "local": "This pane holds a folder, not a disk image",
+      "noPartition": "Open a partition first",
+      "default": "ART cannot write to this volume"
+    },
+    "functionKeys": {
+      "view": "View",
+      "viewReasonSelect": "Select a file to look at",
+      "viewReasonNeedsImage": "Viewing works on files inside an image",
+      "edit": "Edit",
+      "editReasonSelect": "Select a file to edit",
+      "copy": "Copy",
+      "copyReasonSelect": "Select something to copy",
+      "rename": "Rename",
+      "renameReasonSelect": "Select something to rename",
+      "newFolder": "New folder",
+      "delete": "Delete",
+      "deleteReasonSelect": "Select something to delete",
+      "attributes": "Attributes",
+      "attributesReasonSelect": "Select something first",
+      "attributesReasonNeedsImage": "Attributes belong to files inside an image"
+    },
+    "toolbar": {
+      "folder": "Folder...",
+      "adf": "ADF...",
+      "hdf": "HDF...",
+      "up": "Up",
+      "refresh": "Refresh",
+      "newFolder": "New folder"
+    },
+    "pane": {
+      "nothingOpen": "Nothing open",
+      "truncated": "This folder holds more than ART will list — only the first entries are shown.",
+      "empty": "Nothing here.",
+      "folderSuffix": "(folder)",
+      "linkSuffix": "(link — not followed)",
+      "copyTitle": "Copy to the other pane",
+      "deleteTitle": "Delete from the disk"
+    },
+    "footer": {
+      "unnamed": "(unnamed)",
+      "free": "{{size}} free",
+      "readOnly": "read-only",
+      "blocksStrategy": "{{blocks}} blocks · {{strategy}}",
+      "strategyWhole": "written whole and backed up",
+      "strategyJournal": "written in place under an undo journal"
+    },
+    "partitions": {
+      "volumeCount_one": "{{count}} volume",
+      "volumeCount_other": "{{count}} volumes",
+      "bootable": "bootable",
+      "atByte": "at byte {{offset}}",
+      "open": "Open",
+      "clamped": "This partition claims more space than the file holds — only what is really there can be read.",
+      "none": "No volumes found in this file."
+    },
+    "dialog": {
+      "newFolder": {
+        "prompt": "Folder name on the disk"
+      },
+      "rename": {
+        "prompt": "New name",
+        "confirmIcon": "{{name}} has an icon ({{icon}}). Rename it to {{newName}}.info as well? Without it, {{newName}} will not show up on Workbench."
+      },
+      "delete": {
+        "confirm1": "Delete {{name}} from {{volume}}?",
+        "confirm2": "This cannot be undone from inside ART once it has finished. Delete '{{name}}'?",
+        "confirmIcon": "Delete its icon ({{icon}}) too?"
+      }
+    },
+    "err": {
+      "bothLocal": "Both panes are local folders — use Explorer for that.",
+      "openOtherSide": "Open a partition on the other side first.",
+      "sameImage": "That is the same image on both sides. Use Move or Rename instead.",
+      "noLocalPath": "That item has no path on your disk.",
+      "openPartitionFirst": "Open a partition first."
+    },
+    "status": {
+      "copyingBetween": "Copying {{name}} between images…",
+      "planning": "Working out what {{name}} needs…",
+      "copying": "Copying {{name}}…",
+      "copyingOut": "Copying {{name}} out…",
+      "writtenTo": "{{name}} written to {{volume}}",
+      "writtenToBackedUp": "{{name}} written to {{volume}} — the previous image was backed up",
+      "alreadyThere": "{{name}} is already there — it was left alone",
+      "copiedOut": "{{name}} copied out of {{volume}} ({{size}})",
+      "deleting": "Deleting {{name}}…",
+      "deleted": "{{name}} deleted",
+      "deletedWithIcon": "{{name}} and its icon deleted",
+      "deletedBackedUp": "{{name}} deleted — the previous image was backed up",
+      "deletedWithIconBackedUp": "{{name}} and its icon deleted — the previous image was backed up",
+      "checkingOut": "Checking out {{name}}…",
+      "checkedOut": "{{name}} is open for editing. Put it back from the panel below when you are done.",
+      "creatingFolder": "Creating folder…",
+      "renaming": "Renaming {{name}}…",
+      "renamed": "{{name}} is now {{newName}}",
+      "renamedWithIcon": "{{name}} is now {{newName}}, and its icon with it",
+      "writtenBack": "{{name}} was written back into the image.",
+      "filesWrittenOut_one": "{{count}} file written out",
+      "filesWrittenOut_other": "{{count}} files written out",
+      "filesWrittenOutSidecars_one": "{{count}} file written out, {{sidecars}} with their Amiga attributes kept",
+      "filesWrittenOutSidecars_other": "{{count}} files written out, {{sidecars}} with their Amiga attributes kept",
+      "undoing": "Undoing the unfinished operation…",
+      "removingJournal": "Removing the journal…",
+      "undone_one": "Undone: {{description}} — {{count}} block put back",
+      "undone_other": "Undone: {{description}} — {{count}} blocks put back",
+      "journalRemoved": "The journal was removed; the image was left exactly as it was."
+    }
+  },
+  "collection": {
+    "subtitle": "Amiga Collection Studio",
+    "header": {
+      "library": "Library: {{dir}} ({{count}} titles)"
+    },
+    "status": {
+      "indexed": "Indexed {{count}} game/software title(s) in collection.",
+      "scanning": "Scanning… you can carry on working while it runs.",
+      "scanningLong": "Scanning games and indexing collection…"
+    },
+    "dialog": {
+      "selectFolderTitle": "Select folder containing Amiga games and software"
+    },
+    "toolbar": {
+      "gridView": "Grid",
+      "tableView": "Table",
+      "scanFolder": "Scan Library Folder…"
+    },
+    "filters": {
+      "searchPlaceholder": "🔍 Search titles, publishers, or years (e.g. Monkey Island, 1992, Ocean)…",
+      "formatLabel": "Format:",
+      "all": "All",
+      "floppy": "Floppy",
+      "chipsetLabel": "Chipset:"
+    },
+    "results": {
+      "summary": "Showing {{shown}} of {{total}} titles"
+    },
+    "item": {
+      "floppyDisks_one": "Floppy ({{count}} disk)",
+      "floppyDisks_other": "Floppy ({{count}} disks)",
+      "hardfile": "Hardfile HDF",
+      "publisher": "Publisher",
+      "openInAdfStudio": "Open in ADF Studio",
+      "play": "Play",
+      "disksBadge_one": "{{count}} Disk",
+      "disksBadge_other": "{{count}} Disks"
+    },
+    "empty": {
+      "noCollection": "No collection loaded. Click \"{{buttonLabel}}\" to catalog your Amiga games, WHDLoad archives, and disks."
+    }
+  },
+  "whdload": {
+    "intro": "Put a WHDLoad package on a hard disk, in one step. ART checks what is in the archive, tells you exactly what it will write and where, and only then writes it — backing the image up first and reading every file back afterwards.",
+    "busy": {
+      "planning": "Looking inside the package…",
+      "readingDisk": "Reading the disk…",
+      "installing": "Installing…"
+    },
+    "busyNote": "{{busy}} — progress is in the job bar; you can stop it from there.",
+    "dialog": {
+      "archiveFilter": "Amiga archive",
+      "imageFilter": "Amiga hard disk image"
+    },
+    "error": {
+      "noVolumes": "ART found no volumes in that image.",
+      "noWritablePartition": "ART cannot write to any partition in that image — see the list below."
+    },
+    "step": {
+      "package": "1. The package",
+      "chooseArchive": "Choose an .lha…",
+      "disk": "2. The disk",
+      "chooseArchiveFirst": "Choose a package first",
+      "chooseImage": "Choose an image…",
+      "whatArtWillDo": "3. What ART will do"
+    },
+    "install": {
+      "titleReady": "Install to {{drawer}}",
+      "chooseFirst": "Choose a package and a disk first",
+      "button": "Install to {{volume}}",
+      "theDisk": "the disk"
+    },
+    "detection": {
+      "noIcon": "no icon — it will not show up on Workbench",
+      "slaveLabel": "Slave: {{slave}}",
+      "iconLabel": "Icon: {{icon}}",
+      "noWrapper": "The archive has no wrapper drawer.",
+      "notPartOfGame": "Not part of the game, so not installed:",
+      "andMore_one": "and {{count}} more",
+      "andMore_other": "and {{count}} more"
+    },
+    "plan": {
+      "createDrawer": "Create the drawer",
+      "writeFiles_one": "and write {{count}} file",
+      "writeFiles_other": "and write {{count}} files",
+      "inFolders_one": "in {{count}} folder",
+      "inFolders_other": "in {{count}} folders",
+      "blocks": "{{needed}} blocks needed · {{free}} free",
+      "backupNote": "The image is backed up (or journalled, if it is large) before anything is written, and every file is read back out of the disk afterwards.",
+      "refusalTitle": "ART will not install this package",
+      "allGood": "Everything fits, every name is one AmigaDOS can store, and nothing of that name is on the disk already."
+    },
+    "report": {
+      "notWritten": "Not written:",
+      "backupKept": "The previous image was kept at {{backup}}"
     }
   }
 }

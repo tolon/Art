@@ -43,7 +43,7 @@ export function HexTools() {
   async function handleOpenFile() {
     const sel = await open({
       multiple: false,
-      title: "Select Amiga disk, ROM, or archive for Forensic Hex Inspection",
+      title: t("hex.dialogTitle"),
     });
     if (typeof sel === "string") {
       await loadHex(sel, 0);
@@ -71,15 +71,15 @@ export function HexTools() {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1 style={{ fontSize: 20, margin: 0 }}>{t("nav.tools")} — Forensic Hex & Sector Inspector</h1>
+        <h1 style={{ fontSize: 20, margin: 0 }}>{t("nav.tools")} — {t("hex.subtitle")}</h1>
         <button className="btn btn-sm btn-primary" onClick={handleOpenFile} disabled={busy}>
-          📂 Open File for Hex Inspection…
+          📂 {t("hex.openFile")}
         </button>
       </div>
 
       {path && (
         <div style={{ margin: "8px 0 12px", fontSize: 12 }}>
-          <span className="muted">Inspecting:</span>{" "}
+          <span className="muted">{t("hex.inspecting")}</span>{" "}
           <strong style={{ wordBreak: "break-all" }}>{path}</strong>
         </div>
       )}
@@ -92,21 +92,21 @@ export function HexTools() {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
             {/* Sector / Block Metadata */}
             <div style={{ display: "flex", gap: 12, fontSize: 13 }}>
-              <div><span className="muted">Offset:</span> <code>0x{offset.toString(16).toUpperCase().padStart(6, "0")}</code> ({offset} B)</div>
-              {chunk.block !== null && <div><span className="muted">Block:</span> <strong>{chunk.block}</strong></div>}
-              {chunk.track !== null && <div><span className="muted">Track / Sec:</span> <strong>{chunk.track} / {chunk.sector}</strong></div>}
+              <div><span className="muted">{t("hex.fields.offset")}</span> <code>0x{offset.toString(16).toUpperCase().padStart(6, "0")}</code> ({offset} B)</div>
+              {chunk.block !== null && <div><span className="muted">{t("hex.fields.block")}</span> <strong>{chunk.block}</strong></div>}
+              {chunk.track !== null && <div><span className="muted">{t("hex.fields.trackSector")}</span> <strong>{chunk.track} / {chunk.sector}</strong></div>}
             </div>
 
             {/* Jump Presets */}
             <div style={{ display: "flex", gap: 6 }}>
               <button className="btn btn-sm" onClick={() => handleJumpBlock(0)} disabled={busy}>
-                Bootblock (0)
+                {t("hex.jump.bootblock")}
               </button>
               <button className="btn btn-sm" onClick={() => handleJumpBlock(880)} disabled={busy}>
-                Root Block (880)
+                {t("hex.jump.rootBlock")}
               </button>
               <button className="btn btn-sm" onClick={() => handleJumpBlock(881)} disabled={busy}>
-                Bitmap (881)
+                {t("hex.jump.bitmap")}
               </button>
             </div>
 
@@ -116,7 +116,7 @@ export function HexTools() {
                 type="number"
                 value={jumpBlockInput}
                 onChange={(e) => setJumpBlockInput(e.target.value)}
-                placeholder="Block #"
+                placeholder={t("hex.jump.placeholder")}
                 style={{ width: 80, padding: "4px 6px", background: "var(--bg)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 4 }}
               />
               <button
@@ -124,7 +124,7 @@ export function HexTools() {
                 onClick={() => handleJumpBlock(Number(jumpBlockInput) || 0)}
                 disabled={busy}
               >
-                Go
+                {t("hex.jump.go")}
               </button>
             </div>
           </div>
@@ -136,7 +136,7 @@ export function HexTools() {
         <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
           {chunk.signatures.map((s, i) => (
             <span key={i} className="badge badge-ok" style={{ padding: "4px 8px" }}>
-              🔍 Found Signature: <strong>{s.signature}</strong> ({s.description})
+              🔍 {t("hex.signature.found")} <strong>{s.signature}</strong> ({s.description})
             </span>
           ))}
         </div>
@@ -156,9 +156,9 @@ export function HexTools() {
           }}
         >
           <div style={{ display: "flex", borderBottom: "1px solid #21262d", paddingBottom: 4, marginBottom: 6, color: "var(--text-muted)", fontWeight: "bold" }}>
-            <span style={{ width: 90 }}>OFFSET</span>
-            <span style={{ flex: 1 }}>HEX BYTES (00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F)</span>
-            <span style={{ width: 150 }}>ASCII</span>
+            <span style={{ width: 90 }}>{t("hex.columns.offset")}</span>
+            <span style={{ flex: 1 }}>{t("hex.columns.hexBytes")}</span>
+            <span style={{ width: 150 }}>{t("hex.columns.ascii")}</span>
           </div>
 
           {chunk.lines.map((l) => (
@@ -175,24 +175,24 @@ export function HexTools() {
       {chunk && (
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12 }}>
           <button className="btn btn-sm" onClick={handlePrevBlock} disabled={offset === 0 || busy}>
-            ◀ Previous Block (512B)
+            {t("hex.paging.previous")}
           </button>
           <span className="muted" style={{ fontSize: 12 }}>
-            Viewing byte {offset} to {offset + chunk.length} of {chunk.total_file_size}
+            {t("hex.paging.viewing", { start: offset, end: offset + chunk.length, total: chunk.total_file_size })}
           </span>
           <button
             className="btn btn-sm"
             onClick={handleNextBlock}
             disabled={offset + chunk.length >= chunk.total_file_size || busy}
           >
-            Next Block (512B) ▶
+            {t("hex.paging.next")}
           </button>
         </div>
       )}
 
       {!path && !busy && (
         <p className="muted" style={{ textAlign: "center", marginTop: 32 }}>
-          Select any ADF floppy disk, HDF hard drive, or Kickstart ROM to inspect sector-by-sector hexadecimal data and file headers.
+          {t("hex.emptyState")}
         </p>
       )}
     </div>
