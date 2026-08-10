@@ -187,10 +187,39 @@ impl<'a> VolumeWriter<'a> {
     /// race.
     ///
     /// Only sensible for a volume small enough to hold entirely in memory —
-    /// an ADF, not a multi-gigabyte hard disk partition.
+    /// an ADF, not a multi-gigabyte hard disk partition. That is not left to
+    /// the caller's good manners: a volume larger than
+    /// [`WHOLE_FILE_LIMIT_BYTES`] is **refused** rather than allocated. Every
+    /// ADF command reaches this through `with_volume`, and `path` there is a
+    /// string from the frontend — pointed at a 2 GB partition, an unguarded
+    /// `Vec::with_capacity` would be a two-gigabyte allocation in a build that
+    /// aborts on failure, and an `Err` after the write had already landed.
+    /// The threshold is the same constant [`WriteStrategy::for_image`] splits
+    /// on, so "small enough to read whole" means one thing in ART, not two.
+    ///
+    /// [`WHOLE_FILE_LIMIT_BYTES`]: crate::core::volume::WHOLE_FILE_LIMIT_BYTES
+    /// [`WriteStrategy::for_image`]: crate::core::volume::WriteStrategy::for_image
     pub fn all_bytes(&self) -> CoreResult<Vec<u8>> {
         let block_size = self.geometry.block_size;
-        let mut out = Vec::with_capacity(self.geometry.total_blocks as usize * block_size);
+        // Never allocate from an unchecked product: both factors come from the
+        // volume's own header, which a corrupt image is free to lie about.
+        let total = (self.geometry.total_blocks as u64)
+            .checked_mul(block_size as u64)
+            .ok_or_else(|| CoreError::Malformed {
+                format: "volume".into(),
+                detail: format!(
+                    "this volume claims {} blocks of {block_size} bytes, which is not a real size",
+                    self.geometry.total_blocks
+                ),
+            })?;
+        if total > crate::core::volume::WHOLE_FILE_LIMIT_BYTES {
+            return Err(CoreError::UnsupportedFormat(format!(
+                "this volume is {total} bytes, too large to read into memory in one piece; \
+                 ART only does that for images of {} bytes or less",
+                crate::core::volume::WHOLE_FILE_LIMIT_BYTES
+            )));
+        }
+        let mut out = Vec::with_capacity(total as usize);
         let mut buf = vec![0u8; block_size];
         for block in 0..self.geometry.total_blocks {
             self.device.read_block(block, &mut buf)?;
@@ -679,9 +708,21 @@ impl<'a> VolumeWriter<'a> {
     ///
     /// Exists so a test can produce a volume the *block-level* checks are
     /// perfectly happy with — every touched block internally well-formed and
-    /// checksummed — and still structurally wrong. That is the only way to
-    /// prove what the layer above the writer catches; every public operation
-    /// here deliberately cannot get into that state.
+    /// checksummed — and still structurally wrong. It is the most direct way
+    /// to prove what the layer above the writer catches.
+    ///
+    /// It is **not** the only way, and the whole-image gate in
+    /// `commands::volume_write::commit_whole_file` is not there merely for
+    /// this test hook. No public operation here can reach that state on a
+    /// *well-formed* volume, but the volume is not a given: the allocator
+    /// hands out anything the bitmap says is free from
+    /// `geometry.reserved..total_blocks`, and the root block is not inside
+    /// `reserved` (2, on a floppy). An image whose bitmap is flagged VALID
+    /// while marking the root block free will therefore have a plain
+    /// [`add_file`](Self::add_file) allocate the root and overwrite it — every
+    /// touched block internally well-formed, so `validate_touched` passes and
+    /// only the whole-image check sees it. Do not delete that gate on the
+    /// strength of this hook being `#[cfg(test)]`.
     #[cfg(test)]
     pub(crate) fn commit_blocks(
         &mut self,
@@ -916,6 +957,52 @@ mod tests {
 
     fn floppy(name: &str) -> Disk {
         Disk::new(name, 1760, *b"DOS\x01")
+    }
+
+    /// `all_bytes()` is only sound for a volume small enough to hold entirely
+    /// in memory, and every ADF command reaches it through `with_volume` with
+    /// a `path` string the frontend chose. Pointed at a hard disk partition it
+    /// has to refuse — a two-gigabyte `Vec::with_capacity` in a build that
+    /// aborts on allocation failure takes the whole application down, and the
+    /// write it was reporting on has already landed by then.
+    #[test]
+    fn all_bytes_refuses_a_volume_too_large_to_hold_in_memory() {
+        use crate::core::volume::{SECTOR_BYTES, WHOLE_FILE_LIMIT_BYTES};
+
+        let dir = scratch("all-bytes-huge");
+        let path = dir.join("big.hdf");
+
+        // One block past the whole-file threshold: the smallest volume that
+        // must be refused.
+        let total_blocks = (WHOLE_FILE_LIMIT_BYTES / SECTOR_BYTES as u64) as u32 + 1;
+        let total_bytes = total_blocks as u64 * SECTOR_BYTES as u64;
+        // Sized, not written: this test is about the refusal, and filling
+        // 16 MB of temp space to reach it would prove nothing extra.
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(total_bytes).unwrap();
+        drop(file);
+
+        let geometry =
+            VolumeGeometry::new(SECTOR_BYTES, total_blocks, 2, DosType::new(*b"DOS\x01")).unwrap();
+        let mut device = FileRegionMut::open(&path, 0, total_bytes, SECTOR_BYTES).unwrap();
+        let err = {
+            let writer = VolumeWriter::open(&mut device, geometry, &path, 0).unwrap();
+            writer
+                .all_bytes()
+                .expect_err("a volume this size must be refused, not allocated")
+        };
+        drop(device);
+
+        assert_eq!(err.code(), "ART-FORMAT-UNSUPPORTED");
+        assert!(err.to_string().contains("too large"), "{err}");
+
+        // And the floppy case it exists for still works.
+        let disk = floppy("all-bytes-small");
+        let mut device = disk.device();
+        let writer = VolumeWriter::open(&mut device, disk.geometry, &disk.path, 0).unwrap();
+        assert_eq!(writer.all_bytes().unwrap().len(), 1760 * SECTOR_BYTES);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// `VolumeWriter` holds a `&mut` device, so the Ok side is not `Debug` and
