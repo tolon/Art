@@ -513,9 +513,30 @@ mod tests {
         }
     }
 
+    /// Block until the server thread has finished recording `count` requests.
+    ///
+    /// `fetch` can return before that thread runs its `push`: the client only
+    /// needs the response bytes, which `handle` writes before it returns the
+    /// request text to be recorded. Reading `requests` straight after `fetch`
+    /// is therefore a race, and it lost about one run in five — indexing `[0]`
+    /// on a vector the server had not filled yet.
+    ///
+    /// `served` is the synchronisation point rather than `requests` itself:
+    /// the thread pushes first and stores the counter afterwards with
+    /// `SeqCst`, so a counter of `count` guarantees `count` recorded requests.
+    fn wait_served(served: &Arc<AtomicUsize>, count: usize) {
+        for _ in 0..2000 {
+            if served.load(Ordering::SeqCst) >= count {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("the test server never recorded {count} request(s)");
+    }
+
     #[test]
     fn a_plain_download_reports_what_it_wrote() {
-        let (base, _, requests) = serve(vec![ok(b"0123456789")]);
+        let (base, served, requests) = serve(vec![ok(b"0123456789")]);
 
         let mut out = Vec::new();
         let stats = HttpMirrorClient::new()
@@ -528,6 +549,7 @@ mod tests {
         assert_eq!(stats.declared_total, Some(10));
 
         // Header names go out lowercased, so match case-insensitively.
+        wait_served(&served, 1);
         let sent = requests.lock().unwrap()[0].to_lowercase();
         assert!(
             !sent.contains("range:"),
@@ -538,7 +560,7 @@ mod tests {
 
     #[test]
     fn a_206_is_a_resume_and_carries_the_whole_size() {
-        let (base, _, requests) = serve(vec![Scripted {
+        let (base, served, requests) = serve(vec![Scripted {
             status: "206 Partial Content",
             headers: vec!["Content-Range: bytes 4-9/10".into()],
             body: b"456789".to_vec(),
@@ -559,6 +581,7 @@ mod tests {
             "the total is the resource, not the slice"
         );
 
+        wait_served(&served, 1);
         let sent = requests.lock().unwrap()[0].to_lowercase();
         assert!(sent.contains("range: bytes=4-"), "sent:\n{sent}");
     }
@@ -597,6 +620,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(out, b"after the redirect");
+        wait_served(&served, 2);
         assert_eq!(served.load(Ordering::SeqCst), 2);
     }
 

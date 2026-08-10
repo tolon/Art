@@ -67,10 +67,10 @@ impl ValidationReport {
 
 /// Validate any mounted volume — floppy image or HDF partition.
 ///
-/// Only the checks that mean something at *any* geometry live here. The
-/// floppy-specific "is this exactly 1760 blocks?" question stays in
-/// [`validate`], because on a partition it is not a defect, it is the wrong
-/// question.
+/// Takes a mounted device and its geometry; [`validate`] does the same job
+/// from a whole image's bytes, deriving the geometry from its length. Neither
+/// measures a volume against a floppy's block count — on a partition that is
+/// not a defect, it is the wrong question.
 ///
 /// Read-only, so a bad bitmap flag is a **warning**: a volume AmigaOS would
 /// want to re-validate is still perfectly readable, and calling that a problem
@@ -124,7 +124,15 @@ pub fn validate_volume(
     Ok(report)
 }
 
-/// Validate an ADF image (full byte slice).
+/// Validate a whole volume image (full byte slice).
+///
+/// **Size is not geometry.** This used to demand exactly 1760 blocks and warn
+/// on anything else, which called every HD floppy and every hard-disk image
+/// damaged. The block count comes from the image's own length and the root
+/// block from that count ([`crate::core::volume::VolumeGeometry::root_block_for`],
+/// via [`super::root_block_of`]) — never from an assumed 880 or 1760. DD, HD
+/// and hard-disk images are all legitimate here; only an image that cannot
+/// hold a filesystem at all is a defect.
 pub fn validate(
     image: &[u8],
     fs_type: FileSystemType,
@@ -134,16 +142,29 @@ pub fn validate(
 ) -> CoreResult<ValidationReport> {
     let mut report = ValidationReport::empty();
 
-    // 1. Image size must be exactly a DD ADF (1760 blocks).
-    let total_blocks = image.len() / BLOCK_SIZE;
-    if image.len() != super::DD_TOTAL_BLOCKS * BLOCK_SIZE {
+    // 1. The image has to be a whole number of blocks, and hold at least a
+    //    boot block and a root block. How *many* blocks is not checked
+    //    against a floppy's count: see this function's doc.
+    let total_blocks = super::total_blocks_of(image);
+    let remainder = image.len() % BLOCK_SIZE;
+    if remainder != 0 {
         report.push(
             HealthStatus::Warning,
             "image.size",
             format!(
-                "Image is {} bytes; a standard DD ADF is {} bytes.",
+                "Image is {} bytes, which is not a whole number of {BLOCK_SIZE}-byte blocks; \
+                 the last {remainder} bytes are not part of any block.",
                 image.len(),
-                super::DD_TOTAL_BLOCKS * BLOCK_SIZE
+            ),
+        );
+    }
+    if total_blocks < 3 {
+        report.push(
+            HealthStatus::Problem,
+            "image.size",
+            format!(
+                "Image holds {total_blocks} blocks; a volume needs at least a boot block \
+                 and a root block."
             ),
         );
     }
@@ -191,7 +212,6 @@ pub fn validate(
     }
 
     let _ = fs_type; // filesystem-specific deep checks arrive in a later phase
-    let _ = total_blocks;
     Ok(report)
 }
 
@@ -209,10 +229,14 @@ pub fn validate_image(image: &[u8]) -> CoreResult<ValidationReport> {
     }
     let check_len = image.len().min(super::bootblock::BOOTBLOCK_SIZE);
     let bb = super::bootblock::BootBlock::parse(&image[..check_len])?;
+    // The root block is not a field of the boot block — it is derived from
+    // the volume's size, computed in the one place both callers share (see
+    // `super::root_block_of`'s doc for why that matters).
+    let root_block = super::root_block_of(image);
     validate(
         image,
         bb.fs_type,
-        bb.root_block,
+        root_block,
         bb.checksum_valid,
         true, // signature already validated by parse()
     )
@@ -224,16 +248,22 @@ mod tests {
     use crate::core::adf::bootblock::DEFAULT_ROOT_BLOCK;
     use crate::core::adf::bootblock::{BootBlock, FileSystemType as FST};
 
-    fn blank_ofs_adf() -> Vec<u8> {
-        let mut img = vec![0u8; super::BLOCK_SIZE * 1760];
+    /// A blank OFS volume of any size, with its root block wherever this
+    /// volume's own geometry puts it — not where a floppy's would be.
+    fn blank_ofs_volume(total_blocks: usize) -> Vec<u8> {
+        let mut img = vec![0u8; super::BLOCK_SIZE * total_blocks];
         // Bootblock: DOS\0 + valid checksum across 1024 bytes.
         img[0..4].copy_from_slice(b"DOS\0");
         let cks = BootBlock::compute_checksum(&img[..1024]);
         img[4..8].copy_from_slice(&cks.to_be_bytes());
         // Root block: type = HEADER.
-        let root_off = DEFAULT_ROOT_BLOCK as usize * BLOCK_SIZE;
+        let root_off = crate::core::adf::root_block_of(&img) as usize * BLOCK_SIZE;
         img[root_off..root_off + 4].copy_from_slice(&block_type::HEADER.to_be_bytes());
         img
+    }
+
+    fn blank_ofs_adf() -> Vec<u8> {
+        blank_ofs_volume(1760)
     }
 
     #[test]
@@ -241,6 +271,65 @@ mod tests {
         let img = blank_ofs_adf();
         let report = validate_image(&img).unwrap();
         assert_eq!(report.status, HealthStatus::Healthy);
+    }
+
+    /// A validator that measured every image against 1760 blocks called an HD
+    /// floppy damaged — and, wired into the write path, would have refused
+    /// every write to one. The root block moves with the size; the size itself
+    /// is not a finding.
+    #[test]
+    fn an_hd_floppy_image_is_healthy_at_its_own_geometry() {
+        let img = blank_ofs_volume(3520);
+        assert_eq!(crate::core::adf::root_block_of(&img), 1760);
+
+        let report = validate_image(&img).unwrap();
+        assert_eq!(
+            report.status,
+            HealthStatus::Healthy,
+            "{:?}",
+            report.findings
+        );
+        assert!(
+            !report.findings.iter().any(|f| f.code == "image.size"),
+            "an HD image's size is not a defect: {:?}",
+            report.findings
+        );
+    }
+
+    /// The same for a hard-disk-sized image, where nothing about a floppy's
+    /// geometry applies at all.
+    #[test]
+    fn a_hard_disk_sized_image_is_healthy_at_its_own_geometry() {
+        // 20 000 blocks = 10 MB — a small hardfile, well past any floppy.
+        let img = blank_ofs_volume(20_000);
+        assert_eq!(crate::core::adf::root_block_of(&img), 10_000);
+
+        let report = validate_image(&img).unwrap();
+        assert_eq!(
+            report.status,
+            HealthStatus::Healthy,
+            "{:?}",
+            report.findings
+        );
+        assert!(!report.findings.iter().any(|f| f.code == "image.size"));
+    }
+
+    /// What the size check is actually for: bytes that are not part of any
+    /// block. Said as a warning, because the volume in front of them still
+    /// reads.
+    #[test]
+    fn a_size_that_is_not_whole_blocks_is_a_warning() {
+        let mut img = blank_ofs_volume(1760);
+        img.extend_from_slice(&[0u8; 100]);
+
+        let report = validate_image(&img).unwrap();
+        assert_eq!(report.status, HealthStatus::Warning);
+        let finding = report
+            .findings
+            .iter()
+            .find(|f| f.code == "image.size")
+            .expect("the trailing bytes must be reported");
+        assert!(finding.message.contains("100 bytes"), "{}", finding.message);
     }
 
     #[test]

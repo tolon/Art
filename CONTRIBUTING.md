@@ -13,7 +13,7 @@ pnpm, MSVC Build Tools).
    the current stage covers.
 2. Pick an issue from [docs/ISSUES.md](docs/ISSUES.md), or open one to discuss
    a change.
-3. Branch from `main`.
+3. Branch from `master`.
 4. Follow the stage plan — **do not implement future-stage features** until the
    current one is stable. [docs/roadmap.md](docs/roadmap.md) defines what each
    phase contains; STATUS.md defines the order.
@@ -31,7 +31,9 @@ pnpm, MSVC Build Tools).
    [docs/FEATURES.md](docs/FEATURES.md) if you finished a feature, and an
    `ART-NNN` entry in [docs/ISSUES.md](docs/ISSUES.md) if you found or fixed a
    defect.
-8. Open a pull request with a clear description.
+8. This repository has no GitHub remote — there is nowhere to open a hosted pull request.
+   Merge your branch back to `master` locally (or hand it off for review) with a clear
+   description of what changed and why.
 
 ## Architecture rules
 

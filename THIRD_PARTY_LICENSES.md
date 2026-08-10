@@ -8,7 +8,12 @@ see [docs/licenses.md](docs/licenses.md) and run `cargo deny check`.
 
 ART is built on the following open-source projects:
 
-- **Tauri 2** — desktop application framework (MIT / Apache-2.0)
+- **Tauri 2** — desktop application framework (MIT / Apache-2.0), plus its
+  plugins used here: `tauri-plugin-dialog`, `tauri-plugin-sql`,
+  `tauri-plugin-log`, `tauri-plugin-store`, `tauri-plugin-fs` (all MIT /
+  Apache-2.0)
+- **tauri-plugin-drag** / `@crabnebula/tauri-plugin-drag` — native drag-out-of-
+  window support (MIT / Apache-2.0)
 - **React** — UI library (MIT)
 - **TypeScript** — typed JavaScript (Apache-2.0)
 - **Vite** — frontend build tool (MIT)
@@ -18,6 +23,7 @@ ART is built on the following open-source projects:
 - **sha2** — cryptographic hashing (MIT / Apache-2.0)
 - **thiserror** — error handling (MIT / Apache-2.0)
 - **delharc** — LHA/LZH decompression (MIT / Apache-2.0)
+- **ureq** — HTTP client used by the Aminet repository mirror (§41.5.3) (MIT / Apache-2.0)
 - **i18next / react-i18next** — internationalization (MIT)
 - **zustand** — state management (MIT)
 - **react-router-dom** — routing (MIT)

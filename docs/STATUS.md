@@ -18,15 +18,15 @@ Update it at the end of any session that changes what works.
 
 | | |
 |---|---|
-| **Last updated** | 2026-08-09 |
+| **Last updated** | 2026-08-10 |
 | **Version** | 0.1.0 (unreleased) |
-| **Current stage** | §82 — one-click WHDLoad install, on top of Stage W |
+| **Current stage** | Phase 0a — live bugs fixed, one filesystem writer |
 | **Build** | PASS |
-| **Tests** | 675 passed, 0 failed |
+| **Tests** | 686 passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
-| **amitools oracle** | 45 checks, both directions |
-| **Release bundle** | built and verified this session |
+| **amitools oracle** | 48 checks, both directions |
+| **Release bundle** | built and verified in an earlier session; not rebuilt this pass |
 
 Reproduce the numbers above:
 
@@ -184,6 +184,63 @@ Backup, journalling and per-file verification all come from Stage W — the whol
 install runs in **one** volume session, so a floppy-sized image is backed up
 once rather than three times.
 
+### ✅ Phase 0a — Live bugs fixed, one filesystem writer (complete, 2026-08-10)
+
+Found live in the running app, not by audit: ADF Studio could not open a
+single real bootable disk, the shell clipped instead of scrolling, and a
+disabled button looked exactly like a live one.
+
+- **The shell scrolls and scales.** `min-height: 0` on `.app-main` and
+  `.app-content` so `overflow` actually engages, `@media` breakpoints that
+  collapse the sidebar and drop quick actions to two columns below a width,
+  and one central content width instead of eleven hand-written `maxWidth`
+  values (ART-039, ART-040).
+- **`:disabled` and `:focus-visible` styles exist.** A disabled primary button
+  used to keep its solid accent fill (ART-039).
+- **ADF Studio opens bootable disks.** The root block was being read out of
+  68000 boot code instead of computed from the volume's size — `core/adf`
+  predated the geometry Stage R gave `core/volume` and never adopted it. The
+  same root cause gave HD ADFs half their reported capacity (ART-037,
+  ART-038).
+- **A refusal is not an error.** "This is not a WHDLoad package" used to throw
+  the same red, `ART-*`-coded banner as a real failure; it now renders as an
+  amber `Refusal`, and a review pass on the same work confirmed real failures
+  (a corrupt archive, a permission error) still throw.
+- **Both install commands refuse atomically when a package will not fit**,
+  instead of discovering it mid-copy and reporting the rest as `skipped` — a
+  WHDLoad pack missing its `.slave` used to be a broken game with no warning
+  (ART-044).
+- **`MutationOutcome` is built from the write session's own still-open
+  device**, not a second file open after the fact — closing a race where an
+  external lock (antivirus scan-on-close, a search indexer) could turn a
+  durable, successful write into a reported failure and lose the backup path
+  with it (ART-045).
+- **`core/adf/mutate.rs` — the second AmigaDOS writer — is retired.** 858
+  lines that hardcoded DD floppy geometry throughout and could never write a
+  hard disk. ADF Studio and the file manager now share exactly one writer
+  (`core/volume/write`). Its five previously-fixed defects (ART-007, ART-008,
+  ART-011 … ART-013) moved with their tests rather than disappearing — none
+  reopened, all still pinned.
+- **Validation now measures every image against its own geometry**, not a DD
+  floppy, and the whole in-memory result is checked before a write commits,
+  not only the blocks the operation touched (ART-041, ART-042).
+
+Defects fixed: ART-037 … ART-040, ART-044, ART-045 (this phase's own),
+ART-041, ART-042 (found restoring the write pipeline's validation step). Left
+open: ART-043 (a partition inside a small image), and five findings recorded
+but not fixed — ART-046 … ART-050.
+
+**Left undone on purpose: the hardware verification rung.** A boot-test ADF
+(`.superpowers/sdd/2026-08-09-phase-0a-live-bugs/artifacts/task-10-boot-test.adf`,
+gitignored) was built by the changed write path and cross-checked with
+`xdftool` — `xdftool … list` reports the volume and the file it holds. No
+human has mounted it in WinUAE or on a Gotek yet. A pass is `DIR DF0:` listing
+`Readme`, `TYPE DF0:Readme` printing `hello from ART`, and `INFO DF0:`
+reporting volume `Work` with no errors. This image is **not bootable** — ART
+installs no boot code, only an RTS stub when the `bootable` flag is set — the
+claim under test is that a real Amiga mounts the volume and reads the file
+back, not that it boots.
+
 ### ⏳ Stage 5 — Spec addenda (next)
 
 From `ART-SPEC-ADDENDA-COMPLETE.md` in the project root. **Stage 4 has landed, so
@@ -307,11 +364,15 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
 1. Run the verification block above and confirm the snapshot still holds.
    The oracle is part of it: it is the only check that can catch ART's reader
    and writer being wrong in the same way.
-2. Read this file, then [ISSUES.md](ISSUES.md#open) — nothing is open, so any
-   new defect starts at `ART-037`.
-3. **Stage R and Stage W are both done.** Aminet Stage A is complete too,
+2. Read this file, then [ISSUES.md](ISSUES.md#open) — open defects are
+   `ART-043` (the whole-file strategy ignores a partition's offset) and
+   `ART-046` … `ART-050` (recorded findings, none fixed yet); the next new
+   defect starts at `ART-051`.
+3. **The hardware verification rung is still outstanding.** See "Phase 0a"
+   above for what a pass looks like and where the test artifact is.
+4. **Stage R and Stage W are both done.** Aminet Stage A is complete too,
    including the update view and install to HDF.
-4. The named work left in the briefs:
+5. The named work left in the briefs:
    - **§45.5 AI Workflow Layer.** Designed
      ([design-ai-layer.md](design-ai-layer.md)), not built. Its prerequisites
      (operation log with `origin: ai-plan`, a tested workflow catalogue) are
@@ -342,6 +403,8 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-10 | Phase 0a review fixes: a cancelled install no longer commits half a package or reports success (ART-052); `all_bytes()` refuses a volume too large to hold in memory (ART-053); the install pre-flight guard is now covered by a test that fails without it (ART-055); the WHDLoad refusal panel stopped contradicting itself and its remedy comes from Rust (ART-054); sidebar clipping (ART-056) and two more disabled-looking controls (ART-057) | 686 |
+| 2026-08-10 | Phase 0a: ADF Studio's root-block bug (ART-037/038) and shell scroll/scale/disabled-controls (ART-039/040) fixed live; install pre-flight refusal restored (ART-044); a re-read race in `MutationOutcome` closed (ART-045); `core/adf/mutate.rs` retired onto `core/volume/write`; validation measures each image at its own geometry and gates every write (ART-041/042) | 684 |
 | 2026-08-09 | §82: one-click WHDLoad install to HDF — pack layout, plan, refusals, oracle-checked end to end | 675 |
 | 2026-08-09 | Stage W: writing into any volume — journal, F3–F9, checkout/checkin, `.uaem`, install to HDF; oracle now runs both ways | 642 |
 | 2026-08-09 | Aminet update view (§41.5.6); `check_name` counted UTF-8 bytes instead of characters | 617 |

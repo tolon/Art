@@ -62,7 +62,7 @@ export function RomStudio() {
   }
 
   return (
-    <div style={{ maxWidth: 980 }}>
+    <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h1 style={{ fontSize: 20, margin: 0 }}>{t("nav.rom")} — Kickstart ROM Studio</h1>
         <div style={{ display: "flex", gap: 8 }}>

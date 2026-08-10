@@ -148,7 +148,37 @@ Wizard · §26 conversion (ADZ/HDZ/DMS) · §57 raw device writes · §45.5 AI l
 
 ### Format and filesystem depth
 
-DMS/ADZ/HDZ decoding · dircache writing · PFS3 · SFS · long-filename FS
+DMS/ADZ/HDZ decoding · **ISO9660 (AmigaOS, CD32 and CDTV discs)** · dircache
+writing · PFS3 · SFS · long-filename FS
+
+ISO is a category ART does not have. `FormatCategory` knows floppy, hard disk,
+archive, ROM and directory; an `.iso` dropped on the window is `unknown`, so
+the drop pipeline offers nothing. Every AmigaOS install CD, every CD32 and CDTV
+title is currently invisible to ART.
+
+**And the wider problem underneath it: ART dispatches on the extension.** An
+`.img` is not a format — it is a raw sector dump of *something*. The same name
+covers a 901,120-byte floppy dump, a multi-gigabyte hard-disk dump with an RDB
+at block 0, and a raw CD image. `.dsk`, `.ima` and `.raw` are the same story.
+Deciding from the four letters after the dot is guessing.
+
+The fix is to decide from the **content**, with the extension demoted to a hint
+that only breaks ties:
+
+| Evidence | What it is |
+|---|---|
+| `DOS\0`…`DOS\7` at offset 0 | AmigaDOS floppy — geometry from the length |
+| `RDSK` at block 0 | hard disk with a Rigid Disk Block |
+| `CD001` at 0x8001 | ISO9660 — offset 0x8001 also proves the 2048-byte sector size |
+| `CD001` at 0x9311 | ISO9660 inside a 2352-byte raw/`MODE1/2352` track |
+| `PDS\3` / `PFS\3` at block 0 | PFS3 |
+| `SFS\0` | SFS |
+
+`Detection` already carries `confidence` and `format_hint` for exactly this;
+nothing in the struct has to change. What changes is that `detect()` reads the
+first blocks instead of reading the filename — which also settles `.adf` files
+that are really HD, and `.hdf` files that are really an unpartitioned single
+volume.
 
 The HD floppy path belongs to D1 rather than here: it fails for the same
 reason bootable DD images do, and 0.2 settles both.
@@ -196,8 +226,14 @@ After Phase 0 so it is born bilingual and scrolls correctly.
 
 | Slice | Contents | Size |
 |---|---|---|
-| **3.1 §26 DMS / ADZ / HDZ decoding** | *every studio gains these formats at once* | L |
-| **3.2 Filesystem depth** | dircache writing, PFS3, SFS, long-filename FS | XL |
+| **3.1 Content-first detection** | `detect()` reads the first blocks instead of the filename · `.img` / `.dsk` / `.ima` / `.raw` resolve to whatever they actually contain · the extension becomes a tie-breaker · an `.adf` that is really HD, and an `.hdf` that is really one unpartitioned volume, both stop being special cases · *everything below depends on this* | S |
+| **3.2 Optical images** | a new `optical-image` category · ISO9660 with Joliet and Rock Ridge, including the Amiga `AS` System Use entry that carries protection bits and file comments · `.cue`+`.bin`, `.nrg`, `.ccd`/`.img`/`.sub`, `.mdf`/`.mds`, both 2048- and 2352-byte sectors · a read-only browser and extraction, on the same two-pane manager · AmigaOS install CDs, CD32 and CDTV titles readable, and installable to an HDF through the §82 path | M |
+| **3.3 §26 DMS / ADZ / HDZ decoding** | *every studio gains these formats at once* | L |
+| **3.4 Filesystem depth** | dircache writing, PFS3, SFS, long-filename FS | XL |
+
+Optical images are read-only in this phase. Writing a bootable Amiga CD is a
+separate problem — El Torito plus the CD filesystem the target machine
+expects — and it does not belong in the slice that makes the discs readable.
 
 ### Phase 4 — Disk operations
 
@@ -242,14 +278,18 @@ rather than forming a phase of it.
   retrofitted.
 - **2.2 Snapshot unblocks three things** — Recovery Lab, Project Manager and
   the resize/clone family — which is the largest fan-out left.
-- **3.1 conversion unblocks a format everywhere at once**, in every studio,
+- **3.1 detection comes before every other format work.** Optical images and
+  the compressed formats both add cases to the same decision; making that
+  decision read the content first means each new format is one signature
+  rather than one more extension in a growing list.
+- **3.3 conversion unblocks a format everywhere at once**, in every studio,
   rather than one screen at a time.
 - **6.1 Compatibility is the Wizard's prerequisite**, and the Wizard is in
   turn what the AI layer has to describe.
 
 ## Risks
 
-- **3.2 is XL and may be its own sub-project.** Three separate filesystems,
+- **3.4 is XL and may be its own sub-project.** Three separate filesystems,
   each with its own undocumented format. It sits here by dependency; its real
   size may warrant splitting it out.
 - **6.1 Compatibility Engine is a rules base, not an algorithm.** Its value

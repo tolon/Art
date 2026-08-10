@@ -15,11 +15,67 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+  /* A grid item defaults to `min-height: auto`, which means "as tall as my
+     content". That makes the flex child below unable to shrink, so its
+     `overflow: auto` never engages and the shell clips the excess instead of
+     scrolling it. */
+  min-height: 0;
 }
 .app-content {
   flex: 1;
-  overflow: auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 24px 28px;
+}
+
+/* One place decides how wide content gets, so a page never has to. Pages that
+   genuinely want the full width (the two-pane manager) opt out with
+   `.app-content-wide` on their own root. */
+.app-content > * {
+  max-width: 1180px;
+  margin-inline: auto;
+}
+.app-content > .app-content-wide {
+  max-width: none;
+}
+
+/* The job bar is chrome, not page content: it belongs to the window rather
+   than to whatever screen is open, so it spans the full width even on pages
+   that centre their content. */
+.app-content > .job-bar {
+  max-width: none;
+}
+
+/* The page never scrolls sideways (see `.app-content`), so anything genuinely
+   wider than the window — a hex dump row, a block table — scrolls inside its
+   own box rather than dragging the whole layout with it. */
+.scroll-x {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+/* Below this the sidebar's labels cost more than they give. */
+@media (max-width: 1000px) {
+  .app-shell {
+    grid-template-columns: 60px 1fr;
+  }
+  .sidebar-brand,
+  .sidebar-link span:not(.sidebar-icon) {
+    display: none;
+  }
+  .sidebar-link {
+    justify-content: center;
+  }
+  .app-content {
+    padding: 16px 14px;
+  }
+}
+
+@media (max-width: 760px) {
+  .quick-actions {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 
 /* ---- Sidebar --------------------------------------------------------- */
@@ -30,6 +86,17 @@
   display: flex;
   flex-direction: column;
   padding: 16px 0;
+  /* The same `min-height: auto` trap `.app-main` documents, and the half that
+     was missed. The sidebar is the other item in that implicit grid row, so
+     with fourteen nav entries its min-content height (~665px) sets the row
+     height on any shorter window — a 1366×768 laptop at 125% scaling is about
+     584 CSS px, which is the ordinary case, not an edge one. The row then
+     grows past `100vh`, `.app-main` stretches with it, and the bottom of
+     `.app-content` — including the bottom of its own scrollbar — is clipped by
+     the shell's `overflow: hidden`. `min-height: 0` lets the sidebar shrink,
+     and `overflow-y: auto` gives its own list somewhere to go when it does. */
+  min-height: 0;
+  overflow-y: auto;
 }
 .sidebar-brand {
   display: flex;

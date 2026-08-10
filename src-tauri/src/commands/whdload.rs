@@ -68,7 +68,40 @@ pub struct WhdloadPlan {
     ///
     /// Never null when the install is refused, so the UI never has to invent a
     /// message.
-    pub refusal: Option<String>,
+    pub refusal: Option<WhdloadRefusal>,
+}
+
+/// Why ART will not run an install, and what the user can do about it.
+///
+/// The remedy travels with the reason rather than being a fixed sentence in
+/// the panel: only one of these refusals is fixed by copying the archive by
+/// hand, and telling someone whose disk is full — or whose archive needs an
+/// Amiga to install itself — to do that is advice that cannot work.
+#[derive(Debug, Clone, Serialize)]
+pub struct WhdloadRefusal {
+    /// Why not, in complete sentences. Carries no `ART-*` identifier: a
+    /// refusal is an answer, not a fault (§68).
+    pub reason: String,
+    /// What to do instead, when there is something else to do. `None` when the
+    /// reason already says it — repeating it would read as two suggestions.
+    pub suggestion: Option<String>,
+}
+
+impl WhdloadRefusal {
+    /// A reason whose own sentence already carries the remedy.
+    fn plain(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+            suggestion: None,
+        }
+    }
+
+    fn with(reason: impl Into<String>, suggestion: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+            suggestion: Some(suggestion.into()),
+        }
+    }
 }
 
 impl WhdloadPlan {
@@ -141,7 +174,55 @@ fn build_plan(
 
     let (scratch, unpack_skipped) = unpack_for_install(archive, &NoProgress)?;
     let entries = walk(scratch.path())?;
-    let layout = analyse(&entries)?;
+
+    // `analyse` failing here means the archive unpacked fine but holds no
+    // WHDLoad pack — that is an answer about the archive, not a fault in ART
+    // (§68's identifiers are for faults). There is no drawer to name and
+    // nothing to cost, so the plan reports the refusal with those fields at
+    // their honest empty/zero rather than guessing at a layout that was never
+    // found. `volume_name` is left blank too: reading it would mean mounting
+    // the disk for a refusal that has nothing to do with the disk.
+    let layout = match analyse(&entries) {
+        Ok(layout) => layout,
+        Err(CoreError::InvalidInput(reason)) => {
+            return Ok(WhdloadPlan {
+                verdict,
+                layout: PackLayout {
+                    root: String::new(),
+                    name: String::new(),
+                    slave: String::new(),
+                    icon: None,
+                    outside: Vec::new(),
+                    needs_installer: false,
+                },
+                drawer: String::new(),
+                volume_name: String::new(),
+                cost: CopyPlan {
+                    files: 0,
+                    directories: 0,
+                    total_bytes: 0,
+                    blocks_needed: 0,
+                    blocks_free: 0,
+                    block_size: 0,
+                    name_problems: Vec::new(),
+                    collisions: Vec::new(),
+                    split_icons: Vec::new(),
+                },
+                name_taken: false,
+                // The one refusal a hand copy actually answers: ART found no
+                // pack, but the archive still holds files the user may want.
+                refusal: Some(WhdloadRefusal::with(
+                    reason,
+                    "You can still copy it by hand from the Files screen.",
+                )),
+            });
+        }
+        // Any other error out of `analyse` (there is none today, but the
+        // match stays exhaustive on purpose) is a real fault, not an answer
+        // about the archive — it keeps its identifier and reaches the error
+        // banner.
+        Err(other) => return Err(other),
+    };
 
     let pack_root = if layout.root.is_empty() {
         scratch.path().to_path_buf()
@@ -225,56 +306,63 @@ fn refuse(
     cost: &CopyPlan,
     name_taken: bool,
     unpack_skipped: &[String],
-) -> Option<String> {
+) -> Option<WhdloadRefusal> {
     use crate::core::workflow::types::Confidence;
 
     if matches!(verdict.confidence, Confidence::Low | Confidence::Unknown) {
-        return Some(format!(
+        return Some(WhdloadRefusal::plain(format!(
             "ART is not confident this is a WHDLoad package ({}). {} \
              Install it by hand from the Files screen if you know it is one.",
             describe_confidence(verdict.confidence),
             verdict.notes
-        ));
+        )));
     }
 
     if layout.needs_installer {
-        return Some(
+        return Some(WhdloadRefusal::plain(
             "This archive holds an Install script, which means the game has not been \
              installed yet. Running it needs an Amiga — install it in WinUAE first, then \
-             bring the finished drawer back here."
-                .into(),
-        );
-    }
-
-    if name_taken {
-        return Some(format!(
-            "'{}' is already on that volume. Rename or remove it first — ART will not \
-             write a game over one that is already there.",
-            layout.name
+             bring the finished drawer back here.",
         ));
     }
 
+    if name_taken {
+        return Some(WhdloadRefusal::plain(format!(
+            "'{}' is already on that volume. Rename or remove it first — ART will not \
+             write a game over one that is already there.",
+            layout.name
+        )));
+    }
+
     if cost.blocks_needed > cost.blocks_free {
-        return Some(format!(
-            "This needs {} blocks and {} are free.",
-            cost.blocks_needed, cost.blocks_free
+        return Some(WhdloadRefusal::with(
+            format!(
+                "This needs {} blocks and {} are free.",
+                cost.blocks_needed, cost.blocks_free
+            ),
+            "Free some space on that volume, or choose another partition — copying it \
+             by hand would run out of room in the same place.",
         ));
     }
 
     if !cost.name_problems.is_empty() {
-        return Some(format!(
+        return Some(WhdloadRefusal::plain(format!(
             "{} name(s) in this package are ones AmigaDOS cannot store. Installing it \
              under different names would give you a game whose files no longer match \
              what its slave looks for.",
             cost.name_problems.len()
-        ));
+        )));
     }
 
     if !unpack_skipped.is_empty() {
-        return Some(format!(
-            "The archive did not unpack completely ({}). Installing part of a game \
-             produces one that does not start.",
-            unpack_skipped.first().cloned().unwrap_or_default()
+        return Some(WhdloadRefusal::with(
+            format!(
+                "The archive did not unpack completely ({}). Installing part of a game \
+                 produces one that does not start.",
+                unpack_skipped.first().cloned().unwrap_or_default()
+            ),
+            "Download the package again — an archive that unpacks short usually \
+             arrived damaged.",
         ));
     }
 
@@ -425,6 +513,7 @@ fn run_install(
     if !plan.can_install() {
         return Err(CoreError::SafetyRefused(
             plan.refusal
+                .map(|refusal| refusal.reason)
                 .unwrap_or_else(|| "ART will not install this".into()),
         ));
     }
@@ -470,6 +559,15 @@ fn run_install(
                 })?;
 
             let report = copy_into_volume(writer, drawer, &folder, OverwritePolicy::Skip, sink)?;
+            if report.cancelled {
+                // §54/§57: a WHDLoad pack missing files it never got to copy
+                // is not a partial success, it is a broken, non-bootable
+                // result. Returning here — before the icon is written and
+                // before this closure returns — is what keeps the whole-file
+                // strategy from ever reaching `commit_whole_file` for it, and
+                // what keeps `spawn_job` from logging this install verified.
+                return Err(CoreError::Cancelled);
+            }
 
             // The icon goes **beside** the drawer, not inside it. Inside, it
             // describes nothing and the game stays invisible on Workbench.
@@ -815,6 +913,93 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// §54/§57, for the flagship §82 installer this time, not its Aminet
+    /// siblings: cancelling one-click WHDLoad install must install *nothing*.
+    ///
+    /// `copy_into_volume` stops between files and reports how many landed,
+    /// which is right for a general-purpose copy — an install is not that.
+    /// Half a WHDLoad pack is a game that will not start, and reporting it as
+    /// a finished install would be worse than any error. The image's bytes
+    /// are captured before and compared after, because an `Err` on its own
+    /// would not prove the half-written package never reached the file — and
+    /// this drives `run_install` itself, not `copy_into_volume`, so deleting
+    /// the guard inside its `with_volume` closure makes this test fail rather
+    /// than leaving it trivially green.
+    #[test]
+    fn a_cancelled_run_install_writes_nothing_and_does_not_report_success() {
+        use crate::core::lha::tests::make_lha_with;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        /// Cancels once the copy into the volume is a couple of files in —
+        /// the user hitting Stop halfway through, not before it started.
+        ///
+        /// The two stages are told apart by their `total`: unpacking reports
+        /// a running count with no total, while `copy_into_volume` reports
+        /// "index of total". Keying on that rather than on a call count keeps
+        /// the test aimed at the stage it is about.
+        struct StopDuringCopy(AtomicBool);
+        impl ProgressSink for StopDuringCopy {
+            fn report(&self, done: u64, total: Option<u64>, _message: &str) {
+                if total.is_some() && done >= 2 {
+                    self.0.store(true, Ordering::SeqCst);
+                }
+            }
+            fn is_cancelled(&self) -> bool {
+                self.0.load(Ordering::SeqCst)
+            }
+        }
+
+        let dir = scratch("e2e-cancel");
+        let archive = dir.join("Turrican.lha");
+        // More filler than the plain fixture so the copy has room to be
+        // stopped partway through rather than finishing before the sink
+        // ever sees a second file.
+        let slave = b"WHDLOADSLAVE\x00\x00\x00\x0a";
+        let mut entries: Vec<(String, Vec<u8>)> = vec![
+            ("Turrican/Turrican.slave".into(), slave.to_vec()),
+            (
+                "Turrican/Turrican".into(),
+                b"host executable bytes".to_vec(),
+            ),
+            ("Turrican/data/level1.bin".into(), vec![7u8; 4000]),
+        ];
+        for index in 0..6 {
+            entries.push((
+                format!("Turrican/Extra{index}.dat"),
+                vec![b'a' + index as u8; 64],
+            ));
+        }
+        entries.push(("Turrican.info".into(), b"\xe3\x10\x00\x01icon".to_vec()));
+        let borrowed: Vec<(&str, &[u8])> = entries
+            .iter()
+            .map(|(name, data)| (name.as_str(), data.as_slice()))
+            .collect();
+        std::fs::write(&archive, make_lha_with(&borrowed)).unwrap();
+
+        let image = dir.join("Games.hdf");
+        let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
+        std::fs::write(&image, &bytes).unwrap();
+        let before = std::fs::read(&image).unwrap();
+
+        let sink = StopDuringCopy(AtomicBool::new(false));
+        let err = run_install(&archive, &image, 0, 0, &sink)
+            .expect_err("a cancelled install must not come back as a successful one");
+
+        assert_eq!(
+            err.code(),
+            "ART-CANCELLED",
+            "the job must end Cancelled, not Completed, so spawn_job reports it \
+             that way instead of logging a verified install: {err}"
+        );
+        assert_eq!(
+            std::fs::read(&image).unwrap(),
+            before,
+            "a cancelled install must leave the image byte-for-byte unchanged"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// An archive with no slave in it is not a WHDLoad package, and copying an
     /// arbitrary folder onto someone's hard disk is not what they clicked.
     #[test]
@@ -834,9 +1019,71 @@ mod tests {
         std::fs::write(&image, &bytes).unwrap();
         let before = std::fs::read(&image).unwrap();
 
-        assert!(build_plan(&archive, &image, 0, 0).is_err());
+        // Not a fault: the plan builds fine and reports why ART will not
+        // install it — a genuinely broken archive is the one that still
+        // throws, see `a_missing_pack_is_a_refusal_and_a_broken_archive_is_still_an_error`.
+        let plan = build_plan(&archive, &image, 0, 0).unwrap();
+        assert!(
+            plan.refusal.is_some(),
+            "an archive with no slave must be refused, not errored"
+        );
         assert!(run_install(&archive, &image, 0, 0, &NoProgress).is_err());
         assert_eq!(std::fs::read(&image).unwrap(), before);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The split this task exists for: a plan that cannot find a pack is a
+    /// refusal (data, `Ok` with `refusal` set, no `ART-*` identifier), while an
+    /// archive ART genuinely cannot read is a fault (`Err`, with one). Both
+    /// reach `build_plan` the same way — as a `.lha` path — so this is the
+    /// contract that must hold for every future caller, not just the UI.
+    #[test]
+    fn a_missing_pack_is_a_refusal_and_a_broken_archive_is_still_an_error() {
+        let dir = scratch("split");
+
+        // No `.slave` anywhere: a real archive, nothing wrong with it, it is
+        // simply not a WHDLoad package. `build_plan` must succeed and say so.
+        let ordinary = dir.join("Docs.lha");
+        std::fs::write(
+            &ordinary,
+            crate::core::lha::tests::make_lha_with(&[("Docs/readme.txt", b"just documents")]),
+        )
+        .unwrap();
+
+        let image = dir.join("Games.hdf");
+        let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
+        std::fs::write(&image, &bytes).unwrap();
+
+        let plan = build_plan(&ordinary, &image, 0, 0)
+            .expect("a plan without a pack is still a plan, not an error");
+        let refusal = plan
+            .refusal
+            .expect("no .slave in the archive must be reported as a refusal");
+        assert!(refusal.reason.contains("not a WHDLoad pack"), "{refusal:?}");
+        assert!(
+            !refusal.reason.contains("ART-"),
+            "a refusal carries no error identifier: {refusal:?}"
+        );
+        // This is the one refusal a hand copy answers, so it is the one that
+        // carries that suggestion — the panel no longer says it unconditionally.
+        assert_eq!(
+            refusal.suggestion.as_deref(),
+            Some("You can still copy it by hand from the Files screen.")
+        );
+
+        // A corrupt archive is a different question entirely: ART could not
+        // even read it, which is a fault and must keep throwing with its
+        // identifier so it reaches the red banner, not the amber one.
+        let broken = dir.join("Broken.lha");
+        std::fs::write(&broken, b"not an lha file at all").unwrap();
+
+        let err = build_plan(&broken, &image, 0, 0)
+            .expect_err("an unreadable archive must still be a real error");
+        assert!(
+            matches!(err, CoreError::Malformed { .. }),
+            "expected a malformed-archive error, got {err:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -869,8 +1116,8 @@ mod tests {
         let refusal = plan
             .refusal
             .expect("a pack that does not fit must be refused");
-        assert!(refusal.contains("blocks"), "{refusal}");
-        assert!(refusal.contains("are free"), "{refusal}");
+        assert!(refusal.reason.contains("blocks"), "{refusal:?}");
+        assert!(refusal.reason.contains("are free"), "{refusal:?}");
 
         assert!(run_install(&archive, &image, 0, 0, &NoProgress).is_err());
         assert_eq!(std::fs::read(&image).unwrap(), before);
@@ -957,7 +1204,8 @@ mod tests {
             false,
             &[],
         )
-        .expect("a low-confidence detection must be refused");
+        .expect("a low-confidence detection must be refused")
+        .reason;
 
         assert!(reason.contains("not confident"), "{reason}");
         assert!(reason.contains("by hand"), "and offers the alternative");
@@ -994,7 +1242,8 @@ mod tests {
             false,
             &[],
         )
-        .expect("a source pack must be refused");
+        .expect("a source pack must be refused")
+        .reason;
         assert!(reason.contains("Install script"), "{reason}");
         assert!(reason.contains("WinUAE"), "and says what to do instead");
     }
@@ -1012,7 +1261,8 @@ mod tests {
             true,
             &[],
         )
-        .expect("a taken name must be refused");
+        .expect("a taken name must be refused")
+        .reason;
         assert!(reason.contains("already on that volume"), "{reason}");
     }
 
@@ -1027,7 +1277,8 @@ mod tests {
             false,
             &[],
         )
-        .expect("a pack that does not fit must be refused");
+        .expect("a pack that does not fit must be refused")
+        .reason;
         assert!(reason.contains("5000 blocks"), "{reason}");
         assert!(reason.contains("100 are free"), "{reason}");
     }
@@ -1048,7 +1299,8 @@ mod tests {
         });
 
         let reason = refuse(&verdict(Confidence::High), &layout(), &costs, false, &[])
-            .expect("unstorable names must refuse the install");
+            .expect("unstorable names must refuse the install")
+            .reason;
         assert!(reason.contains("no longer match"), "{reason}");
     }
 
@@ -1064,7 +1316,8 @@ mod tests {
             false,
             &["Game/data/big.bin (too large)".into()],
         )
-        .expect("an incomplete unpack must be refused");
+        .expect("an incomplete unpack must be refused")
+        .reason;
         assert!(reason.contains("did not unpack completely"), "{reason}");
     }
 }

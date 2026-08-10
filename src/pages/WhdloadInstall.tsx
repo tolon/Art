@@ -17,6 +17,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import { onJobProgress } from "@/lib/jobs";
 import { formatBytes } from "@/lib/panel";
+import { Refusal } from "@/components/Refusal";
 import { usePowerMode } from "@/lib/uxmode";
 import {
   isMountable,
@@ -27,6 +28,7 @@ import {
 import {
   describeOutcome,
   describeVerdict,
+  hasPack,
   onWhdloadResult,
   whdloadInstall,
   whdloadPlan,
@@ -176,7 +178,7 @@ export function WhdloadInstall() {
   const ready = plan !== null && plan.refusal === null && busy === null;
 
   return (
-    <div style={{ maxWidth: 780 }}>
+    <div>
       <h1 style={{ fontSize: 20 }}>{t("nav.whdload")}</h1>
       <p className="muted" style={{ marginTop: 4 }}>
         Put a WHDLoad package on a hard disk, in one step. ART checks what is in
@@ -257,11 +259,14 @@ export function WhdloadInstall() {
         title={
           ready
             ? `Install to ${plan?.drawer}`
-            : plan?.refusal ?? "Choose a package and a disk first"
+            : plan?.refusal?.reason ?? "Choose a package and a disk first"
         }
         style={{ fontSize: 14, padding: "8px 18px" }}
       >
-        Install to {plan?.volume_name ?? "the disk"}
+        {/* `||`, not `??`: a refused plan carries an *empty* volume name, not a
+            missing one, and "Install to " with nothing after it reads as a
+            half-rendered screen. */}
+        Install to {plan?.volume_name || "the disk"}
       </button>
 
       {outcome && <Report outcome={outcome} powerMode={powerMode} />}
@@ -278,6 +283,11 @@ export function WhdloadInstall() {
 function Detection({ plan, powerMode }: { plan: WhdloadPlan; powerMode: boolean }) {
   const { verdict, layout } = plan;
   const confident = verdict.confidence === "HIGH" || verdict.confidence === "MEDIUM";
+  // No pack means no name to print and no icon to be missing. Rendering them
+  // anyway shows an empty name badged "no icon — it will not show up on
+  // Workbench", complaining about the icon of an archive ART has just said is
+  // not a WHDLoad package at all.
+  const found = hasPack(plan);
 
   return (
     <div style={{ marginTop: 8 }}>
@@ -288,16 +298,18 @@ function Detection({ plan, powerMode }: { plan: WhdloadPlan; powerMode: boolean 
         {describeVerdict(verdict)} — {verdict.notes}
       </div>
 
-      <div style={{ fontSize: 13, marginTop: 6 }}>
-        <strong>{layout.name}</strong>
-        {layout.icon === null && (
-          <span className="badge badge-warn" style={{ fontSize: 11, marginLeft: 6 }}>
-            no icon — it will not show up on Workbench
-          </span>
-        )}
-      </div>
+      {found && (
+        <div style={{ fontSize: 13, marginTop: 6 }}>
+          <strong>{layout.name}</strong>
+          {layout.icon === null && (
+            <span className="badge badge-warn" style={{ fontSize: 11, marginLeft: 6 }}>
+              no icon — it will not show up on Workbench
+            </span>
+          )}
+        </div>
+      )}
 
-      {powerMode && (
+      {found && powerMode && (
         <div className="faint" style={{ fontSize: 11, marginTop: 4 }}>
           <div>Slave: {layout.slave}</div>
           {layout.icon && <div>Icon: {layout.icon}</div>}
@@ -391,27 +403,37 @@ function PartitionRow({
 
 /** The plan, and the refusal when there is one. */
 function WhatHappens({ plan, powerMode }: { plan: WhdloadPlan; powerMode: boolean }) {
+  // When no pack was found there is nothing to cost: the drawer name is empty,
+  // every number is zero and the disk was never read. Printing the sentence
+  // anyway asserts an action — "create the drawer  and write 0 files, 0 B" —
+  // immediately above the panel saying ART will not do it.
+  const found = hasPack(plan);
+
   return (
     <div style={{ marginTop: 8 }}>
-      <div style={{ fontSize: 13 }}>
-        Create the drawer <strong>{plan.drawer}</strong> and write{" "}
-        {plan.cost.files} file{plan.cost.files === 1 ? "" : "s"}
-        {plan.cost.directories > 0 &&
-          ` in ${plan.cost.directories} folder${
-            plan.cost.directories === 1 ? "" : "s"
-          }`}
-        , {formatBytes(plan.cost.total_bytes)}.
-      </div>
+      {found && (
+        <>
+          <div style={{ fontSize: 13 }}>
+            Create the drawer <strong>{plan.drawer}</strong> and write{" "}
+            {plan.cost.files} file{plan.cost.files === 1 ? "" : "s"}
+            {plan.cost.directories > 0 &&
+              ` in ${plan.cost.directories} folder${
+                plan.cost.directories === 1 ? "" : "s"
+              }`}
+            , {formatBytes(plan.cost.total_bytes)}.
+          </div>
 
-      {/* Blocks, not just bytes: a game full of small files costs a block
-          each, and a report in bytes alone would be wrong about whether it
-          fits. */}
-      <div className="faint" style={{ fontSize: 11, marginTop: 2 }}>
-        {plan.cost.blocks_needed.toLocaleString()} blocks needed ·{" "}
-        {plan.cost.blocks_free.toLocaleString()} free
-      </div>
+          {/* Blocks, not just bytes: a game full of small files costs a block
+              each, and a report in bytes alone would be wrong about whether it
+              fits. */}
+          <div className="faint" style={{ fontSize: 11, marginTop: 2 }}>
+            {plan.cost.blocks_needed.toLocaleString()} blocks needed ·{" "}
+            {plan.cost.blocks_free.toLocaleString()} free
+          </div>
+        </>
+      )}
 
-      {powerMode && (
+      {found && powerMode && (
         <div className="faint" style={{ fontSize: 11, marginTop: 4 }}>
           The image is backed up (or journalled, if it is large) before anything
           is written, and every file is read back out of the disk afterwards.
@@ -419,9 +441,14 @@ function WhatHappens({ plan, powerMode }: { plan: WhdloadPlan; powerMode: boolea
       )}
 
       {plan.refusal ? (
-        <div className="badge badge-err" style={{ display: "block", marginTop: 8 }}>
-          {plan.refusal}
-        </div>
+        // The remedy comes from Rust with the reason (see `WhdloadRefusal`).
+        // A refusal with nothing useful to add says nothing rather than
+        // repeating advice that does not apply to it.
+        <Refusal
+          title="ART will not install this package"
+          reason={plan.refusal.reason}
+          suggestion={plan.refusal.suggestion ?? undefined}
+        />
       ) : (
         <div className="badge badge-ok" style={{ display: "block", marginTop: 8 }}>
           Everything fits, every name is one AmigaDOS can store, and nothing of

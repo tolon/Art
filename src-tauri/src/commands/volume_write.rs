@@ -106,7 +106,8 @@ where
 /// the user asked for once.
 ///
 /// Each operation inside is still individually journalled and validated — this
-/// only shares the device and the single write-back at the end.
+/// only shares the device and the single write-back at the end, which is also
+/// where the whole image is validated once, for all of them.
 pub fn with_volume<F, T>(
     image: &Path,
     volume_index: usize,
@@ -135,8 +136,9 @@ where
 
     match strategy {
         WriteStrategy::WholeFile => {
-            // Read whole, mutate in memory, then one atomic guarded write.
-            // Nothing reaches the user's file until the operation validated.
+            // Read whole, mutate in memory, validate the whole result, then
+            // one atomic guarded write. Nothing reaches the user's file until
+            // that validation passed — see [`commit_whole_file`].
             let original = std::fs::read(image)?;
             let mut device = VecDevice::new(original.clone(), geometry.block_size)?;
 
@@ -145,12 +147,8 @@ where
                 run(&mut writer)?
             };
 
-            let backup = guarded_write(image, device.bytes(), BackupPolicy::DISK_IMAGE)?;
-            Ok((
-                outcome,
-                strategy,
-                backup.map(|path| path.display().to_string()),
-            ))
+            let backup = commit_whole_file(image, device.bytes())?;
+            Ok((outcome, strategy, backup))
         }
         WriteStrategy::BlockJournal => {
             let mut device = FileRegionMut::open(
@@ -165,10 +163,75 @@ where
                 run(&mut writer)?
             };
             device.sync()?;
-            // No backup path: the journal is the way back, and it has already
-            // been deleted by a successful commit.
+            // No whole-image validation here, deliberately: this strategy
+            // exists for images too large to hold in memory, and reading a
+            // multi-gigabyte HDF back before every commit would defeat it.
+            // What protects the user here is per-operation: the journal holds
+            // the previous contents of every block until the operation is
+            // verified, and `core::volume::write::validate_touched` checks
+            // what was written before it commits. No backup path either — the
+            // journal is the way back, and a successful commit has already
+            // deleted it.
             Ok((outcome, strategy, None))
         }
+    }
+}
+
+/// Validate a whole in-memory image and only then let it reach the user's file.
+///
+/// The §57 pipeline's last two steps for the whole-file strategy:
+/// `VALIDATE → BACKUP → APPLY`. The writer's own per-operation check
+/// (`validate_touched`) sees only the blocks that operation touched, and only
+/// their checksums; a volume whose blocks are each well-formed can still be
+/// structurally wrong — a root block that is no longer a header block, an
+/// image that stopped being an AmigaDOS volume at all. That is caught here,
+/// with the image still only in memory, so a refusal leaves the file on disk
+/// byte-for-byte as it was.
+///
+/// Only `Problem` findings refuse. A warning — a bootblock checksum that does
+/// not match, trailing bytes past the last whole block — describes an image
+/// that was already like that before ART touched it, and refusing those would
+/// lock the user out of their own disk rather than protect it (§89).
+///
+/// The bytes are the whole file, which is what this strategy writes back, and
+/// the volume is assumed to start at byte 0 of it — the same assumption the
+/// branch above already makes when it opens the device.
+fn commit_whole_file(image: &Path, bytes: &[u8]) -> CoreResult<Option<String>> {
+    validate_whole_image(image, bytes)?;
+    let backup = guarded_write(image, bytes, BackupPolicy::DISK_IMAGE)?;
+    Ok(backup.map(|path| path.display().to_string()))
+}
+
+fn validate_whole_image(image: &Path, bytes: &[u8]) -> CoreResult<()> {
+    // An image that cannot even be parsed as a volume is refused with the same
+    // sentence as one that parses and is wrong: what the user needs to know
+    // first is that their file was not touched.
+    let report = match crate::core::adf::validate::validate_image(bytes) {
+        Ok(report) => report,
+        Err(err) => return Err(refused(image, &err.to_string())),
+    };
+
+    let problems: Vec<String> = report
+        .findings
+        .iter()
+        .filter(|finding| finding.severity == crate::core::adf::HealthStatus::Problem)
+        .map(|finding| format!("{} ({})", finding.message, finding.code))
+        .collect();
+
+    if problems.is_empty() {
+        return Ok(());
+    }
+    Err(refused(image, &problems.join(" ")))
+}
+
+fn refused(image: &Path, detail: &str) -> CoreError {
+    CoreError::Malformed {
+        format: "volume".into(),
+        detail: format!(
+            "the result of this operation is not a valid volume, so nothing was written \
+             and '{}' is exactly as it was: {detail}",
+            image.display(),
+        ),
     }
 }
 
@@ -707,7 +770,20 @@ pub fn volume_copy_in(
     let id = spawn_job(&app, registry, &title, move |job_id, progress| {
         let folder = HostFolder::new(&source_path, options.sidecars.unwrap_or(true));
 
-        let outcome = run_copy_in_folder(&image, volume_index, parent, &folder, policy, progress);
+        // F5 is a plain user-driven copy: a cancel keeps whatever already
+        // landed and the report says how much that was — spelled out here,
+        // rather than inherited from `run_copy_in_folder`'s default, so the
+        // choice is explicit at this call site and not just in its doc
+        // comment.
+        let outcome = run_copy_in_folder_with(
+            &image,
+            volume_index,
+            parent,
+            &folder,
+            policy,
+            OnCancel::KeepWhatLanded,
+            progress,
+        );
 
         let record = user_operation("Copy folder into volume")
             .source(source_path.display().to_string())
@@ -739,6 +815,22 @@ pub fn volume_copy_in(
     Ok(id)
 }
 
+/// What a cancelled batch means to the caller.
+///
+/// `copy_into_volume` stops between files and reports how many landed, which
+/// is the right answer for a general-purpose copy and the wrong one for an
+/// install: half a WHDLoad pack is not "four files copied", it is a broken
+/// game the user was told had installed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnCancel {
+    /// Keep what landed and let the caller read `report.cancelled` — F5.
+    KeepWhatLanded,
+    /// Abandon the batch with [`CoreError::Cancelled`] instead of committing
+    /// it, so a cancelled operation leaves nothing behind to be mistaken for
+    /// a finished one.
+    Abandon,
+}
+
 /// The copy itself, with the strategy chosen the same way single operations
 /// choose it.
 ///
@@ -752,6 +844,38 @@ pub fn run_copy_in_folder(
     parent: u32,
     folder: &HostFolder,
     policy: OverwritePolicy,
+    progress: &dyn ProgressSink,
+) -> CoreResult<(CopyReport, Option<String>)> {
+    run_copy_in_folder_with(
+        image,
+        volume_index,
+        parent,
+        folder,
+        policy,
+        OnCancel::KeepWhatLanded,
+        progress,
+    )
+}
+
+/// [`run_copy_in_folder`], with a say in what a cancellation means.
+///
+/// With [`OnCancel::Abandon`] the whole-file strategy returns before
+/// [`commit_whole_file`] is ever reached, so the user's file is byte-for-byte
+/// what it was — cancelling an install leaves no half-installed package at all.
+///
+/// The block-journal strategy cannot offer that: it exists for images too large
+/// to hold in memory, and each file it copied is its own committed, verified
+/// operation already durable in the file. What `Abandon` buys there is honesty
+/// — the job ends `Cancelled` rather than reporting a successful install of a
+/// package that is missing most of itself.
+#[allow(clippy::too_many_arguments)]
+pub fn run_copy_in_folder_with(
+    image: &Path,
+    volume_index: usize,
+    parent: u32,
+    folder: &HostFolder,
+    policy: OverwritePolicy,
+    on_cancel: OnCancel,
     progress: &dyn ProgressSink,
 ) -> CoreResult<(CopyReport, Option<String>)> {
     let entry = pick(image, volume_index)?;
@@ -774,8 +898,14 @@ pub fn run_copy_in_folder(
                 let mut writer = VolumeWriter::open(&mut device, geometry, image, 0)?;
                 copy_into_volume(&mut writer, parent, folder, policy, progress)?
             };
-            let backup = guarded_write(image, device.bytes(), BackupPolicy::DISK_IMAGE)?;
-            Ok((report, backup.map(|p| p.display().to_string())))
+            if report.cancelled && on_cancel == OnCancel::Abandon {
+                // Everything so far happened in `device`, which is a buffer.
+                // Returning here — before `commit_whole_file` — is what leaves
+                // the user's image exactly as it was (§57).
+                return Err(CoreError::Cancelled);
+            }
+            let backup = commit_whole_file(image, device.bytes())?;
+            Ok((report, backup))
         }
         WriteStrategy::BlockJournal => {
             let mut device = FileRegionMut::open(
@@ -790,9 +920,63 @@ pub fn run_copy_in_folder(
                 copy_into_volume(&mut writer, parent, folder, policy, progress)?
             };
             device.sync()?;
+            // No whole-image validation and no backup, for the reasons in
+            // [`with_volume`]: the journal and the per-operation check are what
+            // protect an image too large to hold in memory.
+            if report.cancelled && on_cancel == OnCancel::Abandon {
+                // Synced first, deliberately: the files that did land are
+                // complete, journalled operations and belong on disk. What is
+                // refused is calling this a success.
+                return Err(CoreError::Cancelled);
+            }
             Ok((report, None))
         }
     }
+}
+
+/// Refuse a copy into a volume before anything is written, when it will not
+/// fit — with the real block numbers, the way [`volume_plan_copy`] already
+/// explains a copy to the user before [`volume_copy_in`] runs it (§3.3, §92).
+///
+/// The install commands call this before [`run_copy_in_folder`] rather than
+/// discovering the disk is full mid-copy: an install that only half lands —
+/// a WHDLoad pack missing its `.slave`, say — is not a partial success, it is
+/// a broken result the user was never warned about. `run_copy_in_folder`
+/// itself stays as it is for the general-purpose F5 copy, which is allowed to
+/// land what fits and report the rest (already proven by
+/// `core::volume::write::copy`'s own tests); an install is not that — it
+/// promises "this works" or "this was refused", nothing in between.
+pub fn plan_copy_in_folder(
+    image: &Path,
+    volume_index: usize,
+    parent: u32,
+    folder: &HostFolder,
+) -> CoreResult<CopyPlan> {
+    let entry = pick(image, volume_index)?;
+    let (device, geometry) = mount(image, &entry)?;
+
+    let entries: Vec<SourceEntry> = {
+        use crate::core::volume::write::copy::CopySource;
+        folder.entries()?
+    };
+
+    // `0` means the root everywhere a `parent`/`dir_block` is taken
+    // (`VolumeWriter::resolve_directory`), but `entries_in` takes a raw block
+    // number and does not do that translation itself.
+    let dir = if parent == 0 {
+        geometry.root_block
+    } else {
+        parent
+    };
+    let existing: Vec<String> = {
+        let set = crate::core::volume::write::layout::BlockSet::new(geometry.block_size);
+        crate::core::volume::write::dir::entries_in(&device, &set, &geometry, dir)?
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect()
+    };
+
+    plan_copy(&device, &geometry, &entries, &existing)
 }
 
 /// F5 the other way — copy a folder out of a volume onto the user's disk.
@@ -981,8 +1165,8 @@ fn run_copy_in_staged(
                 let mut writer = VolumeWriter::open(&mut device, geometry, image, 0)?;
                 copy_into_volume(&mut writer, parent, staged.source(), policy, progress)?
             };
-            let backup = guarded_write(image, device.bytes(), BackupPolicy::DISK_IMAGE)?;
-            Ok((report, backup.map(|p| p.display().to_string())))
+            let backup = commit_whole_file(image, device.bytes())?;
+            Ok((report, backup))
         }
         WriteStrategy::BlockJournal => {
             let mut device = FileRegionMut::open(
@@ -997,9 +1181,44 @@ fn run_copy_in_staged(
                 copy_into_volume(&mut writer, parent, staged.source(), policy, progress)?
             };
             device.sync()?;
+            // As in [`with_volume`]: the journal, not a whole-image read, is
+            // what makes this safe at hard-disk sizes.
             Ok((report, None))
         }
     }
+}
+
+/// Write bytes into a volume, replacing an existing entry when asked.
+///
+/// Shared by the `volume_write_bytes` command and the ADF commands, so both
+/// take the same route through the writer rather than disagreeing about the
+/// same disk.
+pub fn write_bytes_into(
+    image: &Path,
+    volume_index: usize,
+    dir_block: u32,
+    name: &str,
+    contents: &[u8],
+    replace: bool,
+) -> CoreResult<MutationResult> {
+    let (outcome, strategy, backup) = with_writer(image, volume_index, |writer| {
+        if let Some(existing) = writer.find(dir_block, name)? {
+            if !replace {
+                return Err(CoreError::InvalidInput(format!(
+                    "'{name}' is already there"
+                )));
+            }
+            writer.delete(dir_block, existing.block)?;
+        }
+        writer.add_file(dir_block, name, contents, Default::default())
+    })?;
+
+    Ok(result_of(
+        outcome,
+        strategy,
+        backup,
+        outcome_block_size(image, volume_index),
+    ))
 }
 
 /// Write a file the frontend supplied as bytes.
@@ -1021,21 +1240,14 @@ pub fn volume_write_bytes(
     let parent = dir_block.unwrap_or(0);
     let chosen = name.trim().to_string();
 
-    let result = with_writer(&image, volume_index, |writer| {
-        if let Some(existing) = writer.find(parent, &chosen)? {
-            if !replace.unwrap_or(false) {
-                return Err(CoreError::InvalidInput(format!(
-                    "'{chosen}' is already there"
-                )));
-            }
-            writer.delete(parent, existing.block)?;
-        }
-        writer.add_file(parent, &chosen, &contents, Default::default())
-    })
-    .map(|(outcome, strategy, backup)| {
-        let block_size = outcome_block_size(&image, volume_index);
-        result_of(outcome, strategy, backup, block_size)
-    })
+    let result = write_bytes_into(
+        &image,
+        volume_index,
+        parent,
+        &chosen,
+        &contents,
+        replace.unwrap_or(false),
+    )
     .map_err(AppError::from);
 
     write_result(
@@ -1315,6 +1527,139 @@ mod tests {
         let err = with_writer(&image.path, 0, |writer| writer.make_dir(0, "TOOLS")).unwrap_err();
         assert!(err.to_string().contains("already exists"), "{err}");
         assert_eq!(image.bytes(), before);
+    }
+
+    /// The gate this whole path exists for: a write whose *blocks* are all
+    /// well-formed but whose *volume* is not must never reach the user's file.
+    ///
+    /// `validate_touched` cannot catch this — every block written here carries
+    /// a checksum that adds up, which is all it looks at. Only validating the
+    /// finished image sees that the root block stopped being a header block.
+    /// The assertion that matters is the second one: an `Err` alone would not
+    /// prove the file was left alone.
+    #[test]
+    fn a_write_that_would_not_validate_never_reaches_the_file() {
+        use crate::core::volume::write::layout;
+
+        let image = Image::new("invalid-result", 1760);
+        with_writer(&image.path, 0, |writer| writer.make_dir(0, "Tools")).unwrap();
+        let before = image.bytes();
+
+        let err = with_volume(&image.path, 0, |writer| {
+            // Turn the root block into a data block, checksum and all. Every
+            // block the operation touches is internally valid; the volume is
+            // not one any more.
+            let root = writer.geometry().root_block;
+            let block_size = writer.geometry().block_size;
+            let all = writer.all_bytes()?;
+            let start = root as usize * block_size;
+            let mut bytes = all[start..start + block_size].to_vec();
+            layout::set_i32(&mut bytes, layout::TYPE_OFFSET, 8)?;
+
+            let mut set = layout::BlockSet::new(block_size);
+            set.put(root, bytes)?;
+            set.checksum(root, layout::CHECKSUM_OFFSET)?;
+            writer.commit_blocks("Deliberately not a volume any more", set)
+        })
+        .unwrap_err();
+
+        let message = err.to_string();
+        assert_eq!(err.code(), "ART-FORMAT-MALFORMED");
+        assert!(message.contains("nothing was written"), "{message}");
+        assert!(message.contains("rootblock.type"), "{message}");
+
+        assert_eq!(
+            image.bytes(),
+            before,
+            "a result that does not validate must leave the file byte-for-byte unchanged"
+        );
+        assert_eq!(
+            image.listing().len(),
+            1,
+            "…and the volume that was there is still readable"
+        );
+    }
+
+    /// The other half of the gate: it must refuse *only* what is broken. A
+    /// gate that refused everything would satisfy the test above and destroy
+    /// the feature.
+    #[test]
+    fn a_valid_write_still_commits_through_the_gate() {
+        let image = Image::new("valid-commits", 1760);
+        let before = image.bytes();
+
+        let (outcome, _, backup) =
+            with_writer(&image.path, 0, |writer| writer.make_dir(0, "Tools")).unwrap();
+
+        assert!(outcome.verified);
+        assert!(backup.is_some());
+        assert_ne!(image.bytes(), before, "the change has to have landed");
+        let names: Vec<String> = image.listing().into_iter().map(|e| e.name).collect();
+        assert_eq!(names, vec!["Tools".to_string()]);
+    }
+
+    /// The gate reads the image's geometry from the image. Wired in against a
+    /// hardcoded 1760 blocks it would refuse every HD floppy instead — a
+    /// safety check that is really a wall.
+    #[test]
+    fn an_hd_floppy_is_written_through_the_gate() {
+        let image = Image::new("hd-floppy", 3520);
+
+        let (outcome, strategy, _) =
+            with_writer(&image.path, 0, |writer| writer.make_dir(0, "Tools")).unwrap();
+
+        assert_eq!(strategy, WriteStrategy::WholeFile);
+        assert!(outcome.verified);
+        let names: Vec<String> = image.listing().into_iter().map(|e| e.name).collect();
+        assert_eq!(names, vec!["Tools".to_string()]);
+    }
+
+    /// And the same for a hard-disk image, where nothing about a floppy's
+    /// geometry applies. 20 000 blocks is 10 MB — still under the whole-file
+    /// threshold, so it really does go through this gate.
+    #[test]
+    fn a_hard_disk_image_is_written_through_the_gate() {
+        let image = Image::new("hard-disk", 20_000);
+
+        let (outcome, strategy, _) = with_writer(&image.path, 0, |writer| {
+            writer.add_file(0, "Payload.bin", &[7u8; 4096], Default::default())
+        })
+        .unwrap();
+
+        assert_eq!(
+            strategy,
+            WriteStrategy::WholeFile,
+            "10 MB must still take the whole-file path"
+        );
+        assert!(outcome.verified);
+        let names: Vec<String> = image.listing().into_iter().map(|e| e.name).collect();
+        assert_eq!(names, vec!["Payload.bin".to_string()]);
+    }
+
+    /// Moved from `core/adf/mod.rs`'s `mutation_backs_up_the_previous_version`
+    /// when `mutate_disk_file` was retired. The backup is only worth taking if
+    /// it holds the image as it was — not a re-serialisation of it, and not the
+    /// version that has just replaced it. §92: the user is told where the
+    /// previous version went, so the previous version has to be what is there.
+    #[test]
+    fn a_write_backs_up_the_previous_version_byte_for_byte() {
+        let image = Image::new("backup-contents", 1760);
+        let before = image.bytes();
+
+        let (_, _, backup) =
+            with_writer(&image.path, 0, |writer| writer.make_dir(0, "Tools")).unwrap();
+
+        let backup = backup.expect("the whole-file path must take a backup");
+        assert_eq!(
+            std::fs::read(&backup).unwrap(),
+            before,
+            "the backup must hold the pre-modification image, byte for byte"
+        );
+        assert_ne!(
+            image.bytes(),
+            before,
+            "…and the live file really did change"
+        );
     }
 
     /// The rule the whole recovery design rests on: never write over a volume

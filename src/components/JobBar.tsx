@@ -77,7 +77,7 @@ export function JobBar() {
 
   return (
     <div
-      className="card"
+      className="card job-bar"
       style={{
         margin: "0 0 12px",
         background: "var(--bg-elevated)",

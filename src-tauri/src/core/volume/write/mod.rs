@@ -173,6 +173,61 @@ impl<'a> VolumeWriter<'a> {
         &self.geometry
     }
 
+    /// Every block of the volume, concatenated into one buffer — the shape
+    /// `core::adf::AdfImage` expects.
+    ///
+    /// Reads through the device this session already has open, block by
+    /// block, rather than a second independent file open. A caller that just
+    /// committed a write and wants a fresh in-memory snapshot must build it
+    /// from *this* session, not by reopening the file: the moment a handle to
+    /// a just-modified file is released, another process (an antivirus
+    /// scan-on-close, a search indexer) can briefly lock it, and a second
+    /// open racing that lock would report a durable, already-successful write
+    /// as a failure. Reading through the still-open handle cannot hit that
+    /// race.
+    ///
+    /// Only sensible for a volume small enough to hold entirely in memory —
+    /// an ADF, not a multi-gigabyte hard disk partition. That is not left to
+    /// the caller's good manners: a volume larger than
+    /// [`WHOLE_FILE_LIMIT_BYTES`] is **refused** rather than allocated. Every
+    /// ADF command reaches this through `with_volume`, and `path` there is a
+    /// string from the frontend — pointed at a 2 GB partition, an unguarded
+    /// `Vec::with_capacity` would be a two-gigabyte allocation in a build that
+    /// aborts on failure, and an `Err` after the write had already landed.
+    /// The threshold is the same constant [`WriteStrategy::for_image`] splits
+    /// on, so "small enough to read whole" means one thing in ART, not two.
+    ///
+    /// [`WHOLE_FILE_LIMIT_BYTES`]: crate::core::volume::WHOLE_FILE_LIMIT_BYTES
+    /// [`WriteStrategy::for_image`]: crate::core::volume::WriteStrategy::for_image
+    pub fn all_bytes(&self) -> CoreResult<Vec<u8>> {
+        let block_size = self.geometry.block_size;
+        // Never allocate from an unchecked product: both factors come from the
+        // volume's own header, which a corrupt image is free to lie about.
+        let total = (self.geometry.total_blocks as u64)
+            .checked_mul(block_size as u64)
+            .ok_or_else(|| CoreError::Malformed {
+                format: "volume".into(),
+                detail: format!(
+                    "this volume claims {} blocks of {block_size} bytes, which is not a real size",
+                    self.geometry.total_blocks
+                ),
+            })?;
+        if total > crate::core::volume::WHOLE_FILE_LIMIT_BYTES {
+            return Err(CoreError::UnsupportedFormat(format!(
+                "this volume is {total} bytes, too large to read into memory in one piece; \
+                 ART only does that for images of {} bytes or less",
+                crate::core::volume::WHOLE_FILE_LIMIT_BYTES
+            )));
+        }
+        let mut out = Vec::with_capacity(total as usize);
+        let mut buf = vec![0u8; block_size];
+        for block in 0..self.geometry.total_blocks {
+            self.device.read_block(block, &mut buf)?;
+            out.extend_from_slice(&buf);
+        }
+        Ok(out)
+    }
+
     /// Blocks the bitmap reports as free.
     pub fn free_blocks(&self) -> CoreResult<usize> {
         Ok(Allocator::load(self.device, &self.geometry)?.free_count())
@@ -649,6 +704,34 @@ impl<'a> VolumeWriter<'a> {
         })
     }
 
+    /// Commit a hand-built set of blocks, for tests only.
+    ///
+    /// Exists so a test can produce a volume the *block-level* checks are
+    /// perfectly happy with — every touched block internally well-formed and
+    /// checksummed — and still structurally wrong. It is the most direct way
+    /// to prove what the layer above the writer catches.
+    ///
+    /// It is **not** the only way, and the whole-image gate in
+    /// `commands::volume_write::commit_whole_file` is not there merely for
+    /// this test hook. No public operation here can reach that state on a
+    /// *well-formed* volume, but the volume is not a given: the allocator
+    /// hands out anything the bitmap says is free from
+    /// `geometry.reserved..total_blocks`, and the root block is not inside
+    /// `reserved` (2, on a floppy). An image whose bitmap is flagged VALID
+    /// while marking the root block free will therefore have a plain
+    /// [`add_file`](Self::add_file) allocate the root and overwrite it — every
+    /// touched block internally well-formed, so `validate_touched` passes and
+    /// only the whole-image check sees it. Do not delete that gate on the
+    /// strength of this hook being `#[cfg(test)]`.
+    #[cfg(test)]
+    pub(crate) fn commit_blocks(
+        &mut self,
+        description: &str,
+        set: BlockSet,
+    ) -> CoreResult<WriteOutcome> {
+        self.commit(description, set, |_, _, _| Ok(()))
+    }
+
     // ---- the shared machinery ----
 
     /// `0` means the root, as everywhere else in ART. Anything else has to be
@@ -876,6 +959,52 @@ mod tests {
         Disk::new(name, 1760, *b"DOS\x01")
     }
 
+    /// `all_bytes()` is only sound for a volume small enough to hold entirely
+    /// in memory, and every ADF command reaches it through `with_volume` with
+    /// a `path` string the frontend chose. Pointed at a hard disk partition it
+    /// has to refuse — a two-gigabyte `Vec::with_capacity` in a build that
+    /// aborts on allocation failure takes the whole application down, and the
+    /// write it was reporting on has already landed by then.
+    #[test]
+    fn all_bytes_refuses_a_volume_too_large_to_hold_in_memory() {
+        use crate::core::volume::{SECTOR_BYTES, WHOLE_FILE_LIMIT_BYTES};
+
+        let dir = scratch("all-bytes-huge");
+        let path = dir.join("big.hdf");
+
+        // One block past the whole-file threshold: the smallest volume that
+        // must be refused.
+        let total_blocks = (WHOLE_FILE_LIMIT_BYTES / SECTOR_BYTES as u64) as u32 + 1;
+        let total_bytes = total_blocks as u64 * SECTOR_BYTES as u64;
+        // Sized, not written: this test is about the refusal, and filling
+        // 16 MB of temp space to reach it would prove nothing extra.
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(total_bytes).unwrap();
+        drop(file);
+
+        let geometry =
+            VolumeGeometry::new(SECTOR_BYTES, total_blocks, 2, DosType::new(*b"DOS\x01")).unwrap();
+        let mut device = FileRegionMut::open(&path, 0, total_bytes, SECTOR_BYTES).unwrap();
+        let err = {
+            let writer = VolumeWriter::open(&mut device, geometry, &path, 0).unwrap();
+            writer
+                .all_bytes()
+                .expect_err("a volume this size must be refused, not allocated")
+        };
+        drop(device);
+
+        assert_eq!(err.code(), "ART-FORMAT-UNSUPPORTED");
+        assert!(err.to_string().contains("too large"), "{err}");
+
+        // And the floppy case it exists for still works.
+        let disk = floppy("all-bytes-small");
+        let mut device = disk.device();
+        let writer = VolumeWriter::open(&mut device, disk.geometry, &disk.path, 0).unwrap();
+        assert_eq!(writer.all_bytes().unwrap().len(), 1760 * SECTOR_BYTES);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// `VolumeWriter` holds a `&mut` device, so the Ok side is not `Debug` and
     /// `unwrap_err` cannot be used on an open.
     fn refusal(result: CoreResult<VolumeWriter<'_>>) -> CoreError {
@@ -1007,6 +1136,184 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    // ---- moved from `core/adf/mutate.rs` when that second writer was retired ----
+    //
+    // Each of these was the evidence for behaviour the old floppy-only writer
+    // was audited into. The audit's value is the assertion, not the file it
+    // lived in, so every one is restated here against the surviving path.
+
+    /// A file long enough to need an extension chain must give *every* one of
+    /// those blocks back, not just its data blocks. 100 × 512 bytes is 100
+    /// data blocks, past the 72 a header holds inline, so the file grows an
+    /// extension block the free-space accounting has to know about.
+    #[test]
+    fn deleting_frees_the_extension_blocks_too() {
+        let disk = floppy("delete-extensions");
+        let data = vec![9u8; 100 * 512];
+
+        let before = with_writer(&disk, |w| w.free_blocks()).unwrap();
+        let added = with_writer(&disk, |w| {
+            w.add_file(0, "Big.bin", &data, FileMeta::default())
+        })
+        .unwrap();
+        // More than the header plus its data: the extension block is in there.
+        assert!(
+            before - added.free_blocks > 1 + 100,
+            "a 100-block file must also cost an extension block"
+        );
+
+        with_writer(&disk, |w| w.delete(0, added.block.unwrap())).unwrap();
+        assert_eq!(
+            with_writer(&disk, |w| w.free_blocks()).unwrap(),
+            before,
+            "every block a deleted file held must come back, extensions included"
+        );
+    }
+
+    /// A rename touches the directory, never the payload.
+    #[test]
+    fn renaming_preserves_the_file_contents() {
+        let disk = floppy("rename-contents");
+        let payload = b"Original Content";
+
+        let added = with_writer(&disk, |w| {
+            w.add_file(0, "OldName.txt", payload, FileMeta::default())
+        })
+        .unwrap();
+        let block = added.block.unwrap();
+
+        with_writer(&disk, |w| w.rename(0, block, "NewName.txt")).unwrap();
+
+        let entries = listing(&disk);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "NewName.txt");
+        assert_eq!(contents(&disk, block), payload);
+    }
+
+    /// ART-012: AmigaDOS cannot hold two entries with the same name in one
+    /// directory, and it compares them without regard to case. A rename onto a
+    /// taken name has to be refused, and refused *before* the entry leaves its
+    /// bucket — a half-done rename loses the file.
+    #[test]
+    fn rename_onto_an_existing_name_is_rejected() {
+        let disk = floppy("rename-dupe");
+        with_writer(&disk, |w| {
+            w.add_file(0, "Taken.txt", b"a", FileMeta::default())
+        })
+        .unwrap();
+        let second = with_writer(&disk, |w| {
+            w.add_file(0, "Free.txt", b"b", FileMeta::default())
+        })
+        .unwrap()
+        .block
+        .unwrap();
+        let before = disk.bytes();
+
+        let err = with_writer(&disk, |w| w.rename(0, second, "Taken.txt")).unwrap_err();
+        assert!(err.to_string().contains("already exists"), "{err}");
+
+        // The failed rename left the directory exactly as it was.
+        let names: Vec<String> = listing(&disk).into_iter().map(|e| e.name).collect();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"Taken.txt".to_string()));
+        assert!(names.contains(&"Free.txt".to_string()));
+        assert_eq!(disk.bytes(), before, "a refused rename must change nothing");
+    }
+
+    /// The exception to the rule above: an entry may always be renamed to a
+    /// different casing of its own name. Checking availability first would find
+    /// the entry itself and refuse.
+    #[test]
+    fn rename_can_change_only_case() {
+        let disk = floppy("rename-case");
+        let block = with_writer(&disk, |w| {
+            w.add_file(0, "readme.txt", b"x", FileMeta::default())
+        })
+        .unwrap()
+        .block
+        .unwrap();
+
+        with_writer(&disk, |w| w.rename(0, block, "README.TXT")).unwrap();
+
+        let entries = listing(&disk);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "README.TXT");
+    }
+
+    /// ART-011: if the entry is not in the chain its name hashes to, the image
+    /// is already inconsistent. Linking it into the new bucket anyway would
+    /// leave it referenced from two places — the rename must refuse instead.
+    #[test]
+    fn rename_of_an_unlinked_entry_reports_an_error() {
+        let disk = floppy("rename-orphan");
+        let block = with_writer(&disk, |w| {
+            w.add_file(0, "Ghost.txt", b"x", FileMeta::default())
+        })
+        .unwrap()
+        .block
+        .unwrap();
+
+        // Simulate a corrupt image: clear every hash bucket, so the entry is no
+        // longer reachable from its parent while its header still says it is.
+        {
+            let mut device = disk.device();
+            let root_block = disk.geometry.root_block;
+            let mut root = crate::core::volume::read_block_vec(&device, root_block).unwrap();
+            for bucket in 0..layout::hash_table_size(disk.geometry.block_size) {
+                layout::set_u32(&mut root, layout::TABLE_OFFSET + bucket * 4, 0).unwrap();
+            }
+            // Keep the block otherwise legal, so the refusal cannot be an
+            // artefact of a checksum that no longer adds up.
+            layout::set_u32(&mut root, CHECKSUM_OFFSET, 0).unwrap();
+            let fixed = crate::core::adf::checksum::block_checksum(&root, CHECKSUM_OFFSET);
+            layout::set_u32(&mut root, CHECKSUM_OFFSET, fixed).unwrap();
+            device.write_block(root_block, &root).unwrap();
+            device.sync().unwrap();
+        }
+        let before = disk.bytes();
+
+        let err = with_writer(&disk, |w| w.rename(0, block, "Renamed.txt")).unwrap_err();
+        assert!(matches!(err, CoreError::Malformed { .. }), "got {err:?}");
+        assert_eq!(
+            disk.bytes(),
+            before,
+            "refusing an inconsistent rename must not write anything"
+        );
+    }
+
+    /// ART-012, the other half: a directory may not shadow a file's name any
+    /// more than a second file may.
+    #[test]
+    fn a_directory_cannot_shadow_an_existing_file_name() {
+        let disk = floppy("shadow");
+        with_writer(&disk, |w| {
+            w.add_file(0, "Same.txt", b"first", FileMeta::default())
+        })
+        .unwrap();
+        let before = disk.bytes();
+
+        let err = with_writer(&disk, |w| w.make_dir(0, "SAME.TXT")).unwrap_err();
+        assert!(err.to_string().contains("already exists"), "{err}");
+        assert_eq!(disk.bytes(), before);
+    }
+
+    /// A block number from the frontend or a corrupt image must become an
+    /// error, never a panic — the release profile aborts on one.
+    #[test]
+    fn out_of_range_directory_block_is_an_error() {
+        let disk = floppy("out-of-range");
+
+        // Far past the end of an 880 KB image…
+        let err = with_writer(&disk, |w| {
+            w.add_file(99_999, "X.txt", b"x", FileMeta::default())
+        })
+        .unwrap_err();
+        assert!(matches!(err, CoreError::Malformed { .. }), "got {err:?}");
+
+        // …and the extreme value that would overflow an offset calculation.
+        assert!(with_writer(&disk, |w| w.make_dir(u32::MAX, "Y")).is_err());
     }
 
     /// The whole reason for the generalisation: the same code, a volume that
