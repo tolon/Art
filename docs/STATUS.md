@@ -307,8 +307,9 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
 1. Run the verification block above and confirm the snapshot still holds.
    The oracle is part of it: it is the only check that can catch ART's reader
    and writer being wrong in the same way.
-2. Read this file, then [ISSUES.md](ISSUES.md#open) — nothing is open, so any
-   new defect starts at `ART-037`.
+2. Read this file, then [ISSUES.md](ISSUES.md#open) — `ART-043` is open (the
+   whole-file strategy ignores a partition's offset), and a new defect starts
+   at `ART-044`. `ART-037` … `ART-040` are reserved for this phase's docs pass.
 3. **Stage R and Stage W are both done.** Aminet Stage A is complete too,
    including the update view and install to HDF.
 4. The named work left in the briefs:

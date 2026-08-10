@@ -23,9 +23,25 @@ what fixed it (with the test that proves it).
 
 ## Open
 
-Nothing tracked as a defect right now. Missing features are not defects —
-see [FEATURES.md](FEATURES.md) for what is not built yet, and
-[STATUS.md](STATUS.md) for what is scheduled.
+**ART-043** 🟠 **A partition inside a small image is written at the wrong offset**
+`commands/volume_write.rs` · The whole-file strategy is chosen by the *file's*
+size, but it then builds its `VecDevice` from the whole file and opens the
+writer at offset `0`, while the geometry it was given describes a **partition**
+that may start megabytes into that file. For any RDB image of 16 MiB or less
+this reads and writes volume-relative block numbers as if they were
+file-absolute ones: the root block lands in the middle of the partition's data.
+In practice the first read then fails with something unhelpful ("block N is not
+a directory") rather than corrupting anything, and — since ART-042 — a result
+that did somehow get written is refused by the whole-image gate before it
+reaches the file. So the user's data is not at risk today; the strategy choice
+is simply wrong. The fix is to pick the block-journal strategy whenever the
+volume does not start at byte 0 and cover the whole file, or to give the
+whole-file branch the partition's slice and write it back at its offset. Needs
+its own task and its own fixture (a small RDB image with a formatted
+partition) — no test covers it today, which is why it survived this long.
+
+Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
+not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 
 Every module with working logic has now been audited. The remaining `core`
 modules are stubs that only return `NotImplemented` (`recovery.rs`,
@@ -44,6 +60,40 @@ re-audits them without reason:
 ## Fixed
 
 ### Stage W
+
+*(ART-037 … ART-040 are reserved for this phase's own docs pass; these two were
+found while restoring the write pipeline's validation step.)*
+
+**ART-042** 🔴 **A write that produced an invalid volume was committed anyway**
+`commands/volume_write.rs` · The retired `core/adf/mutate.rs::mutate_disk_file`
+validated the finished image in memory before writing it. `with_volume`, which
+replaced it, ran the operation and went straight to `guarded_write` — under a
+comment that said the opposite. The only surviving check was
+`core/volume/write::validate_touched`, which sees just the blocks the operation
+touched and, of those, only their checksums. A write that left every touched
+block well-formed and the volume structurally wrong — a root block that is no
+longer a header block, an image that stopped being an AmigaDOS volume —
+replaced the user's file silently, and the backup it took was of the last good
+version, so the damage was recoverable only if the user noticed.
+→ `commit_whole_file` validates the whole in-memory image at all three
+whole-file commit points and refuses before `guarded_write` is reached. Only
+`Problem` findings refuse; a warning describes an image that was already like
+that. Pinned by `a_write_that_would_not_validate_never_reaches_the_file`
+(refused, and the file byte-for-byte unchanged) and
+`a_valid_write_still_commits_through_the_gate`.
+
+**ART-041** 🟠 **Validation measured every image against a DD floppy**
+`core/adf/validate.rs` · `validate` compared `image.len()` against
+`DD_TOTAL_BLOCKS * BLOCK_SIZE` and warned on anything else, so every HD floppy
+and every hard-disk image was reported as suspect. Harmless while validation
+was only a report; a wall the moment it became the gate in front of every write
+(ART-042), which would have refused writes to every image that is not a DD ADF.
+→ The block count comes from the image's own length and the root block from
+that count (`VolumeGeometry::root_block_for`). Pinned by
+`an_hd_floppy_image_is_healthy_at_its_own_geometry`,
+`a_hard_disk_sized_image_is_healthy_at_its_own_geometry` and, end to end,
+`an_hd_floppy_is_written_through_the_gate` /
+`a_hard_disk_image_is_written_through_the_gate`.
 
 **ART-036** 🟡 **Names with accented characters were refused as too long**
 `core/volume/write/dir.rs` · `check_name` compared `str::len()` against the

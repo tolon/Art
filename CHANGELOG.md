@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### A write that would break a disk image is refused (2026-08-10)
+
+#### Fixed
+- **The finished image is checked before it replaces your file.** ART checked
+  only the blocks an operation touched, so a change that left the disk as a
+  whole inconsistent was written out anyway. Now the whole result is checked
+  first, and if it does not hold up nothing is written — the file on disk is
+  left exactly as it was, and the message says so.
+- **HD floppies and hard disk images are measured against themselves.** ART's
+  health check compared every image with a standard 880 KB floppy and flagged
+  anything else as suspect. It now reads each image's own geometry, so a 1.76 MB
+  floppy or a hard disk image is no longer reported as odd — and is not refused
+  by the check above.
+
 ### Put a WHDLoad game on a hard disk, in one step (2026-08-09)
 
 #### Added
