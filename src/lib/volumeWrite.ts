@@ -12,7 +12,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-import type { Phrase } from "@/lib/phrase";
+import type { Phrase, PartialPhrase } from "@/lib/phrase";
 import type { OverwritePolicy } from "@/lib/sources";
 
 /** Which write pipeline ran. Power User Mode shows it; Beginner does not. */
@@ -397,18 +397,21 @@ export async function volumeCopyBetween(
 /**
  * How to describe a copy's outcome in one line.
  *
- * The "N files and N folders" clause joins two independently pluralised
- * fragments — this function has no translator to render or join them with,
- * so it returns only the outer sentence key; the caller resolves `what` (see
+ * Every branch needs `what` — the "N files and N folders" clause, which
+ * joins two independently pluralised fragments this function has no
+ * translator to render or join with — so every branch returns a
+ * `PartialPhrase` naming it as missing. The caller resolves it (see
  * `FileManager.tsx`'s `copyResultText`) and supplies it as a param.
  */
-export function describeCopy(report: CopyReport): Phrase {
-  if (report.cancelled) return { key: "files.status.copyResult.stopped" };
+export function describeCopy(report: CopyReport): PartialPhrase<"what"> {
+  if (report.cancelled) {
+    return { key: "files.status.copyResult.stopped" } as PartialPhrase<"what">;
+  }
   if (report.skipped.length > 0) {
     return {
       key: "files.status.copyResult.leftAlone",
       params: { count: report.skipped.length },
-    };
+    } as unknown as PartialPhrase<"what">;
   }
-  return { key: "files.status.copyResult.allVerified" };
+  return { key: "files.status.copyResult.allVerified" } as PartialPhrase<"what">;
 }

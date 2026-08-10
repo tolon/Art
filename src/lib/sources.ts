@@ -7,7 +7,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-import type { Phrase } from "@/lib/phrase";
+import type { Phrase, PartialPhrase } from "@/lib/phrase";
 
 /** How strongly ART believes something, and on what grounds (§14, §34). */
 export type Confidence = "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN";
@@ -297,13 +297,14 @@ export async function sourcesForgetDownload(path: string): Promise<void> {
 /**
  * How to describe an update row, in the user's words.
  *
- * `size_changed` embeds two formatted sizes, and this function has no
- * translator to render {@link formatSize}'s own phrase with — so it returns
- * the sentence key alone; the caller resolves `formatSize(now)` and
- * `formatSize(had)` to text and supplies them as the `now`/`had` params (see
+ * Every branch is a complete `Phrase` except `size_changed`: it embeds two
+ * formatted sizes, and this function has no translator to render
+ * {@link formatSize}'s own phrase with — so it returns a `PartialPhrase`
+ * naming `now`/`had` as still missing. The caller resolves `formatSize(now)`
+ * and `formatSize(had)` to text and supplies them as those params (see
  * `AminetStudio.tsx`'s `updateText`).
  */
-export function describeUpdate(row: PackageUpdate): Phrase {
+export function describeUpdate(row: PackageUpdate): Phrase | PartialPhrase<"now" | "had"> {
   switch (row.state.state) {
     case "current":
       return { key: "aminet.updates.desc.current" };
@@ -319,7 +320,8 @@ export function describeUpdate(row: PackageUpdate): Phrase {
             params: { now: row.state.reason.now, had: row.state.reason.had },
           };
         case "size_changed":
-          return { key: "aminet.updates.desc.sizeChanged" };
+          // No formatted sizes to give it here — see the doc comment above.
+          return { key: "aminet.updates.desc.sizeChanged" } as PartialPhrase<"now" | "had">;
         case "reuploaded":
           return { key: "aminet.updates.desc.reuploaded" };
       }

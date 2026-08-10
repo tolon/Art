@@ -54,6 +54,7 @@ import {
   type SortOrder,
   type SyncOutcome,
 } from "@/lib/sources";
+import type { PartialPhrase } from "@/lib/phrase";
 import { volumeScan } from "@/lib/volume";
 import { usePowerMode } from "@/lib/uxmode";
 
@@ -108,6 +109,21 @@ function phraseText(phrase: { key: string; params?: Record<string, string | numb
 }
 
 /**
+ * Whether `describeUpdate` left `now`/`had` for us to fill in.
+ *
+ * `describeUpdate`'s return type already tells the compiler this (`Phrase |
+ * PartialPhrase<"now" | "had">`), but a plain `if` on `row.state` narrows
+ * `row`, not `phrase` — TypeScript cannot see that the two are correlated.
+ * This predicate narrows `phrase` itself, on the same key `describeUpdate`
+ * used to decide, so the `else` branch below is provably a complete `Phrase`.
+ */
+function isSizeChangedPhrase(
+  phrase: ReturnType<typeof describeUpdate>
+): phrase is PartialPhrase<"now" | "had"> {
+  return phrase.key === "aminet.updates.desc.sizeChanged";
+}
+
+/**
  * How to describe an update row, in the user's words.
  *
  * `describeUpdate` cannot render `size_changed`'s two formatted sizes itself
@@ -117,11 +133,16 @@ function phraseText(phrase: { key: string; params?: Record<string, string | numb
  */
 function updateText(row: PackageUpdate, t: TranslateFn): string {
   const phrase = describeUpdate(row);
-  if (row.state.state === "newer" && row.state.reason.kind === "size_changed") {
-    return t(phrase.key, {
-      now: phraseText(formatSize(row.state.reason.now), t),
-      had: phraseText(formatSize(row.state.reason.had), t),
-    });
+  if (isSizeChangedPhrase(phrase)) {
+    if (row.state.state === "newer" && row.state.reason.kind === "size_changed") {
+      return t(phrase.key, {
+        now: phraseText(formatSize(row.state.reason.now), t),
+        had: phraseText(formatSize(row.state.reason.had), t),
+      });
+    }
+    // describeUpdate only ever returns this key from that branch of `row`;
+    // if this throws, describeUpdate and this call site have drifted apart.
+    throw new Error("describeUpdate returned size_changed for a non-size_changed row");
   }
   return t(phrase.key, phrase.params);
 }

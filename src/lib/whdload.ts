@@ -10,7 +10,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-import type { Phrase } from "@/lib/phrase";
+import type { Phrase, PartialPhrase } from "@/lib/phrase";
 import type { Confidence } from "@/lib/sources";
 import type { CopyPlan } from "@/lib/volumeWrite";
 
@@ -162,13 +162,14 @@ export function describeVerdict(verdict: WhdloadVerdict): Phrase {
  * The file count and the "verified" clause are pluralised fragments of their
  * own (mirroring `whdload.plan.writeFiles`, already rendered this way for the
  * pre-flight report) — this function has no translator to render them with,
- * so it returns only the outer sentence key plus `drawer` (never translated —
- * it is an Amiga path). The caller resolves `files` and `verified` and
- * supplies them as params; see `WhdloadInstall.tsx`'s `Report` component.
+ * so it returns a `PartialPhrase` naming `files` and `verified` as missing,
+ * plus `drawer` (never translated — it is an Amiga path), which is already
+ * supplied. The caller resolves `files` and `verified` and supplies them as
+ * params; see `WhdloadInstall.tsx`'s `Report` component.
  */
-export function describeOutcome(outcome: WhdloadOutcome): Phrase {
+export function describeOutcome(outcome: WhdloadOutcome): PartialPhrase<"files" | "verified"> {
   return {
     key: outcome.icon_installed ? "whdload.outcome.installed" : "whdload.outcome.installedNoIcon",
     params: { drawer: outcome.drawer },
-  };
+  } as unknown as PartialPhrase<"files" | "verified">;
 }
