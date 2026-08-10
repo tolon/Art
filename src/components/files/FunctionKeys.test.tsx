@@ -18,7 +18,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 
-import { usePaneTab } from "./FunctionKeys";
+import { useInsertToggle, usePaneTab, useSelectAll } from "./FunctionKeys";
 
 // This project's Vitest config does not set `test.globals`, so
 // @testing-library/react's usual auto-cleanup (which hooks a global
@@ -79,5 +79,94 @@ describe("usePaneTab", () => {
     expect(screen.getByTestId("focused").textContent).toBe("left");
     await user.keyboard("{Tab}");
     expect(screen.getByTestId("focused").textContent).toBe("left");
+  });
+});
+
+// A tiny harness for each of the two multi-select shortcuts, exercising the
+// same `isShortcutBlocked` guard `usePaneTab` above already proves — these
+// tests are about the one thing that differs: Ctrl+A *wants* Ctrl held,
+// where every other shortcut in this file treats it as "not for me".
+
+function InsertHarness({ active = true }: { active?: boolean }) {
+  const [count, setCount] = useState(0);
+  useInsertToggle(() => setCount((n) => n + 1), active);
+  return (
+    <div>
+      <div data-testid="count">{count}</div>
+      <input aria-label="filter box" />
+    </div>
+  );
+}
+
+describe("useInsertToggle", () => {
+  it("fires on Insert, and not while typing in a text field", async () => {
+    const user = userEvent.setup();
+    render(<InsertHarness />);
+
+    await user.keyboard("{Insert}");
+    expect(screen.getByTestId("count").textContent).toBe("1");
+
+    const input = screen.getByRole("textbox", { name: "filter box" });
+    await user.click(input);
+    await user.keyboard("{Insert}");
+    expect(screen.getByTestId("count").textContent).toBe("1");
+  });
+
+  it("does nothing while inactive", async () => {
+    const user = userEvent.setup();
+    render(<InsertHarness active={false} />);
+
+    await user.keyboard("{Insert}");
+    expect(screen.getByTestId("count").textContent).toBe("0");
+  });
+});
+
+function SelectAllHarness({ active = true }: { active?: boolean }) {
+  const [count, setCount] = useState(0);
+  useSelectAll(() => setCount((n) => n + 1), active);
+  return (
+    <div>
+      <div data-testid="count">{count}</div>
+      <input aria-label="filter box" />
+    </div>
+  );
+}
+
+describe("useSelectAll", () => {
+  it("fires on Ctrl+A", async () => {
+    const user = userEvent.setup();
+    render(<SelectAllHarness />);
+
+    await user.keyboard("{Control>}a{/Control}");
+    expect(screen.getByTestId("count").textContent).toBe("1");
+  });
+
+  it("ignores plain A (no Ctrl) and Ctrl+A combined with another modifier", async () => {
+    const user = userEvent.setup();
+    render(<SelectAllHarness />);
+
+    await user.keyboard("a");
+    expect(screen.getByTestId("count").textContent).toBe("0");
+
+    await user.keyboard("{Control>}{Alt>}a{/Alt}{/Control}");
+    expect(screen.getByTestId("count").textContent).toBe("0");
+  });
+
+  it("does not fire while typing in a text field", async () => {
+    const user = userEvent.setup();
+    render(<SelectAllHarness />);
+
+    const input = screen.getByRole("textbox", { name: "filter box" });
+    await user.click(input);
+    await user.keyboard("{Control>}a{/Control}");
+    expect(screen.getByTestId("count").textContent).toBe("0");
+  });
+
+  it("does nothing while inactive", async () => {
+    const user = userEvent.setup();
+    render(<SelectAllHarness active={false} />);
+
+    await user.keyboard("{Control>}a{/Control}");
+    expect(screen.getByTestId("count").textContent).toBe("0");
   });
 });

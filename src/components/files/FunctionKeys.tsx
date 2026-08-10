@@ -27,22 +27,27 @@ export interface FunctionAction {
 }
 
 /**
- * Whether `event` belongs to a text field (or carries a modifier) rather
- * than to one of this bar's own shortcuts.
+ * Whether `event` belongs to a text field (or carries a modifier this
+ * shortcut did not ask for) rather than to one of this bar's own shortcuts.
  *
  * Shared by every keyboard hook in this file so the guard can only drift in
- * one place: F6 in a rename box must type nothing and rename nothing, and
- * the same holds for Tab moving pane focus (`usePaneTab` below).
+ * one place: F6 in a rename box must type nothing and rename nothing, Tab
+ * moving pane focus (`usePaneTab`) needs the same check, and so does
+ * Ctrl+A selecting everything in a pane (`useSelectAll`) — the one shortcut
+ * in this file that *wants* a modifier held, which is why `expectCtrl`
+ * exists rather than a second, near-identical guard living next to it.
  */
-function isShortcutBlocked(event: KeyboardEvent): boolean {
+function isShortcutBlocked(event: KeyboardEvent, expectCtrl = false): boolean {
   const target = event.target as HTMLElement | null;
   const tag = target?.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) {
     return true;
   }
   // A modifier means the user is asking the OS or the browser for
-  // something, not this pane.
-  return event.ctrlKey || event.altKey || event.metaKey;
+  // something, not this pane — except Ctrl, exactly when the shortcut
+  // itself is a Ctrl+ combination.
+  if (event.altKey || event.metaKey) return true;
+  return event.ctrlKey && !expectCtrl;
 }
 
 /**
@@ -94,6 +99,53 @@ export function usePaneTab(onTab: () => void, active: boolean) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onTab, active]);
+}
+
+/**
+ * Bind Insert to Norton Commander's mark key: toggle the entry the pane's
+ * selection anchor sits on and move the anchor down one. Owns no selection
+ * state itself — `onInsert` is left to the caller (`FileManager.tsx`, via
+ * `insertToggle` in `@/lib/selection`) the same way `usePaneTab`'s `onTab`
+ * is.
+ */
+export function useInsertToggle(onInsert: () => void, active: boolean) {
+  useEffect(() => {
+    if (!active) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Insert") return;
+      if (isShortcutBlocked(event)) return;
+
+      event.preventDefault();
+      onInsert();
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onInsert, active]);
+}
+
+/**
+ * Bind Ctrl+A to select everything in the focused pane (and, pressed again,
+ * to clear it) — the one shortcut here that needs `isShortcutBlocked`'s
+ * `expectCtrl` escape hatch, since Ctrl is exactly the modifier this key
+ * requires rather than one that should block it.
+ */
+export function useSelectAll(onToggleAll: () => void, active: boolean) {
+  useEffect(() => {
+    if (!active) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (!event.ctrlKey || event.key.toLowerCase() !== "a") return;
+      if (isShortcutBlocked(event, true)) return;
+
+      event.preventDefault();
+      onToggleAll();
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onToggleAll, active]);
 }
 
 export function FunctionKeyBar({ actions }: { actions: FunctionAction[] }) {
