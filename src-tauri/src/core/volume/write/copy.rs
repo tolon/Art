@@ -1168,6 +1168,135 @@ mod tests {
         }
     }
 
+    // ---- HostSelection: several roots as one copy ----
+
+    #[test]
+    fn a_selection_of_files_and_folders_copies_each_at_the_top_level() {
+        let fixture = Fixture::new("selection-flat");
+        let staging = fixture.dir.join("picks");
+        std::fs::create_dir_all(&staging).unwrap();
+
+        let game = staging.join("Game");
+        std::fs::create_dir_all(game.join("Sub")).unwrap();
+        std::fs::write(game.join("Loader"), b"loader bytes").unwrap();
+        std::fs::write(game.join("Sub").join("File.txt"), b"nested").unwrap();
+
+        let readme = staging.join("Readme.txt");
+        std::fs::write(&readme, b"top level readme").unwrap();
+
+        let selection = HostSelection::new(vec![game, readme]);
+
+        let mut device = fixture.device();
+        let mut writer =
+            VolumeWriter::open(&mut device, fixture.geometry, &fixture.image, 0).unwrap();
+        let report =
+            copy_into_volume(&mut writer, 0, &selection, OverwritePolicy::Skip, &NoProgress)
+                .unwrap();
+        drop(writer);
+        drop(device);
+
+        assert!(report.is_complete(), "{report:?}");
+        assert_eq!(report.files_copied, 3, "Loader, File.txt and Readme.txt");
+        assert_eq!(report.directories_created, 2, "Game and Sub");
+
+        let root = fixture.listing(0);
+        assert_eq!(root.len(), 2, "Game and Readme.txt land side by side");
+
+        let game_entry = root.iter().find(|e| e.name == "Game").unwrap();
+        assert!(game_entry.is_dir);
+        let readme_entry = root.iter().find(|e| e.name == "Readme.txt").unwrap();
+        assert!(!readme_entry.is_dir);
+        assert_eq!(
+            fixture.contents(readme_entry.block),
+            b"top level readme"
+        );
+
+        let inside_game = fixture.listing(game_entry.block);
+        assert_eq!(inside_game.len(), 2, "Loader and Sub");
+        let loader = inside_game.iter().find(|e| e.name == "Loader").unwrap();
+        assert_eq!(fixture.contents(loader.block), b"loader bytes");
+        let sub = inside_game.iter().find(|e| e.name == "Sub").unwrap();
+        assert!(sub.is_dir);
+        let inside_sub = fixture.listing(sub.block);
+        assert_eq!(inside_sub.len(), 1);
+        assert_eq!(fixture.contents(inside_sub[0].block), b"nested");
+    }
+
+    /// If the cap reset per root, two roots with ten files each and a shared
+    /// cap of six would leave the second root free to add its own six —
+    /// twelve entries out of a cap of six. It must not.
+    #[test]
+    fn a_selection_obeys_the_entry_cap_across_all_roots_not_per_root() {
+        let dir = scratch("selection-cap");
+        let root_a = dir.join("A");
+        let root_b = dir.join("B");
+        std::fs::create_dir_all(&root_a).unwrap();
+        std::fs::create_dir_all(&root_b).unwrap();
+        for index in 0..10 {
+            std::fs::write(root_a.join(format!("f{index}.txt")), b"x").unwrap();
+            std::fs::write(root_b.join(format!("f{index}.txt")), b"x").unwrap();
+        }
+
+        let selection = HostSelection::new(vec![root_a, root_b]);
+        let capped = selection.entries_capped(6).unwrap();
+
+        assert!(
+            capped.len() <= 6,
+            "the cap must hold across the whole selection, not double per root: {}",
+            capped.len()
+        );
+        assert!(
+            !capped
+                .iter()
+                .any(|e| e.relative == "B" || e.relative.starts_with("B/")),
+            "root B must not be touched once the shared cap is spent on root A: {capped:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_roots_with_the_same_base_name_are_refused_rather_than_silently_merged() {
+        let dir = scratch("selection-collision");
+        let a = dir.join("a").join("Docs");
+        let b = dir.join("b").join("Docs");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(a.join("A.txt"), b"from a").unwrap();
+        std::fs::write(b.join("B.txt"), b"from b").unwrap();
+
+        let selection = HostSelection::new(vec![a.clone(), b.clone()]);
+        let err = selection.entries().unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains(&a.display().to_string()),
+            "names root a: {message}"
+        );
+        assert!(
+            message.contains(&b.display().to_string()),
+            "names root b: {message}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_empty_selection_copies_nothing_without_error() {
+        let selection = HostSelection::new(vec![]);
+        assert_eq!(selection.entries().unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn a_root_that_does_not_exist_is_reported_rather_than_silently_skipped() {
+        let dir = scratch("selection-missing");
+        let missing = dir.join("Nope");
+
+        let selection = HostSelection::new(vec![missing]);
+        assert!(selection.entries().is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // ---- Amiga → Windows, end to end ----
 
     #[test]
