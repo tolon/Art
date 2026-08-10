@@ -23,6 +23,22 @@ what fixed it (with the test that proves it).
 
 ## Open
 
+**ART-058** 🔵 **A cancelled block-journal copy doesn't tell the user files already landed**
+`commands/volume_write.rs::run_copy_in_folder_with` (`WriteStrategy::BlockJournal` branch,
+also reached through `run_install`'s `with_volume` closure in `commands/whdload.rs`) · Above
+the whole-file limit (16 MiB) each file a copy or install writes is its own committed,
+journalled operation, already durable on disk before the next one starts. Cancelling there is
+honest about that on purpose — `device.sync()?` runs before the cancellation check, and the
+files that landed are correctly left in place rather than rolled back, unlike the whole-file
+strategy where cancelling leaves nothing at all. What the user is told is only
+`CoreError::Cancelled`'s message, `"operation cancelled"` (`core::error::CoreError`,
+`ART-CANCELLED`) — nothing distinguishes that from the whole-file case, so someone who cancels
+a large HDF install partway through has no way to learn from the UI that some files are already
+on the volume. Not a data-safety defect — nothing here is wrong or at risk — just a message
+that undersells what happened. Needs the block-journal branch to carry how much landed (files
+copied so far) into a distinct message or a `Cancelled` variant that names it, and a UI string
+for that case.
+
 **ART-043** 🟠 **A partition inside a small image is written at the wrong offset**
 `commands/volume_write.rs` · The whole-file strategy is chosen by the *file's*
 size, but it then builds its `VecDevice` from the whole file and opens the

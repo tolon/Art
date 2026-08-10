@@ -559,6 +559,15 @@ fn run_install(
                 })?;
 
             let report = copy_into_volume(writer, drawer, &folder, OverwritePolicy::Skip, sink)?;
+            if report.cancelled {
+                // §54/§57: a WHDLoad pack missing files it never got to copy
+                // is not a partial success, it is a broken, non-bootable
+                // result. Returning here — before the icon is written and
+                // before this closure returns — is what keeps the whole-file
+                // strategy from ever reaching `commit_whole_file` for it, and
+                // what keeps `spawn_job` from logging this install verified.
+                return Err(CoreError::Cancelled);
+            }
 
             // The icon goes **beside** the drawer, not inside it. Inside, it
             // describes nothing and the game stays invisible on Workbench.
@@ -899,6 +908,93 @@ mod tests {
             std::fs::read(&image).unwrap(),
             after_first,
             "a refused install must leave the image byte-for-byte unchanged"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// §54/§57, for the flagship §82 installer this time, not its Aminet
+    /// siblings: cancelling one-click WHDLoad install must install *nothing*.
+    ///
+    /// `copy_into_volume` stops between files and reports how many landed,
+    /// which is right for a general-purpose copy — an install is not that.
+    /// Half a WHDLoad pack is a game that will not start, and reporting it as
+    /// a finished install would be worse than any error. The image's bytes
+    /// are captured before and compared after, because an `Err` on its own
+    /// would not prove the half-written package never reached the file — and
+    /// this drives `run_install` itself, not `copy_into_volume`, so deleting
+    /// the guard inside its `with_volume` closure makes this test fail rather
+    /// than leaving it trivially green.
+    #[test]
+    fn a_cancelled_run_install_writes_nothing_and_does_not_report_success() {
+        use crate::core::lha::tests::make_lha_with;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        /// Cancels once the copy into the volume is a couple of files in —
+        /// the user hitting Stop halfway through, not before it started.
+        ///
+        /// The two stages are told apart by their `total`: unpacking reports
+        /// a running count with no total, while `copy_into_volume` reports
+        /// "index of total". Keying on that rather than on a call count keeps
+        /// the test aimed at the stage it is about.
+        struct StopDuringCopy(AtomicBool);
+        impl ProgressSink for StopDuringCopy {
+            fn report(&self, done: u64, total: Option<u64>, _message: &str) {
+                if total.is_some() && done >= 2 {
+                    self.0.store(true, Ordering::SeqCst);
+                }
+            }
+            fn is_cancelled(&self) -> bool {
+                self.0.load(Ordering::SeqCst)
+            }
+        }
+
+        let dir = scratch("e2e-cancel");
+        let archive = dir.join("Turrican.lha");
+        // More filler than the plain fixture so the copy has room to be
+        // stopped partway through rather than finishing before the sink
+        // ever sees a second file.
+        let slave = b"WHDLOADSLAVE\x00\x00\x00\x0a";
+        let mut entries: Vec<(String, Vec<u8>)> = vec![
+            ("Turrican/Turrican.slave".into(), slave.to_vec()),
+            (
+                "Turrican/Turrican".into(),
+                b"host executable bytes".to_vec(),
+            ),
+            ("Turrican/data/level1.bin".into(), vec![7u8; 4000]),
+        ];
+        for index in 0..6 {
+            entries.push((
+                format!("Turrican/Extra{index}.dat"),
+                vec![b'a' + index as u8; 64],
+            ));
+        }
+        entries.push(("Turrican.info".into(), b"\xe3\x10\x00\x01icon".to_vec()));
+        let borrowed: Vec<(&str, &[u8])> = entries
+            .iter()
+            .map(|(name, data)| (name.as_str(), data.as_slice()))
+            .collect();
+        std::fs::write(&archive, make_lha_with(&borrowed)).unwrap();
+
+        let image = dir.join("Games.hdf");
+        let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
+        std::fs::write(&image, &bytes).unwrap();
+        let before = std::fs::read(&image).unwrap();
+
+        let sink = StopDuringCopy(AtomicBool::new(false));
+        let err = run_install(&archive, &image, 0, 0, &sink)
+            .expect_err("a cancelled install must not come back as a successful one");
+
+        assert_eq!(
+            err.code(),
+            "ART-CANCELLED",
+            "the job must end Cancelled, not Completed, so spawn_job reports it \
+             that way instead of logging a verified install: {err}"
+        );
+        assert_eq!(
+            std::fs::read(&image).unwrap(),
+            before,
+            "a cancelled install must leave the image byte-for-byte unchanged"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

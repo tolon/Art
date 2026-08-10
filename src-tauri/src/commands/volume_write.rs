@@ -770,7 +770,20 @@ pub fn volume_copy_in(
     let id = spawn_job(&app, registry, &title, move |job_id, progress| {
         let folder = HostFolder::new(&source_path, options.sidecars.unwrap_or(true));
 
-        let outcome = run_copy_in_folder(&image, volume_index, parent, &folder, policy, progress);
+        // F5 is a plain user-driven copy: a cancel keeps whatever already
+        // landed and the report says how much that was — spelled out here,
+        // rather than inherited from `run_copy_in_folder`'s default, so the
+        // choice is explicit at this call site and not just in its doc
+        // comment.
+        let outcome = run_copy_in_folder_with(
+            &image,
+            volume_index,
+            parent,
+            &folder,
+            policy,
+            OnCancel::KeepWhatLanded,
+            progress,
+        );
 
         let record = user_operation("Copy folder into volume")
             .source(source_path.display().to_string())
