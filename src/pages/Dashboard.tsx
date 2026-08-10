@@ -123,6 +123,7 @@ export function Dashboard() {
 }
 
 function InteractiveDropResultCard({ analysis }: { analysis: DroppedAnalysis }) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const powerMode = usePowerMode();
   const [outcome, setOutcome] = useState<WorkflowOutcome | null>(null);
@@ -183,7 +184,7 @@ function InteractiveDropResultCard({ analysis }: { analysis: DroppedAnalysis }) 
       >
         {primary ? "⭐ " : ""}
         {action.name}
-        {!action.available && " (Coming Later)"}
+        {!action.available && ` (${t("common.comingLater")})`}
       </button>
     );
   }

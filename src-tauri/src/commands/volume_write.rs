@@ -1188,39 +1188,6 @@ fn run_copy_in_staged(
     }
 }
 
-/// Write bytes into a volume, replacing an existing entry when asked.
-///
-/// Shared by the `volume_write_bytes` command and the ADF commands, so both
-/// take the same route through the writer rather than disagreeing about the
-/// same disk.
-pub fn write_bytes_into(
-    image: &Path,
-    volume_index: usize,
-    dir_block: u32,
-    name: &str,
-    contents: &[u8],
-    replace: bool,
-) -> CoreResult<MutationResult> {
-    let (outcome, strategy, backup) = with_writer(image, volume_index, |writer| {
-        if let Some(existing) = writer.find(dir_block, name)? {
-            if !replace {
-                return Err(CoreError::InvalidInput(format!(
-                    "'{name}' is already there"
-                )));
-            }
-            writer.delete(dir_block, existing.block)?;
-        }
-        writer.add_file(dir_block, name, contents, Default::default())
-    })?;
-
-    Ok(result_of(
-        outcome,
-        strategy,
-        backup,
-        outcome_block_size(image, volume_index),
-    ))
-}
-
 // ---------------------------------------------------------------------------
 // Attributes (§7.2)
 // ---------------------------------------------------------------------------

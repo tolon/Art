@@ -179,18 +179,6 @@ pub fn sources_search(
     Ok(state.catalog.search(&search)?)
 }
 
-/// One package by its repository path.
-#[tauri::command]
-pub fn sources_get(
-    provider: Option<String>,
-    path: String,
-    state: State<'_, SourcesState>,
-) -> AppResult<Option<PackageMeta>> {
-    let provider = provider.unwrap_or_else(|| state.provider().id);
-    let reference = crate::core::sources::PackageRef::new(provider, path);
-    Ok(state.catalog.get(&reference)?)
-}
-
 /// Which release of a package to offer, with any version disagreement intact.
 #[tauri::command]
 pub fn sources_resolve(

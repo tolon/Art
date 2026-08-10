@@ -150,7 +150,6 @@ pub fn run() {
             commands::jobs::job_clear_finished,
             commands::sources::sources_stats,
             commands::sources::sources_search,
-            commands::sources::sources_get,
             commands::sources::sources_resolve,
             commands::sources::sources_provider,
             commands::sources::sources_set_mirrors,
