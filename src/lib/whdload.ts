@@ -41,16 +41,48 @@ export interface PackLayout {
   needs_installer: boolean;
 }
 
+/**
+ * Why ART will not install, and what to do about it.
+ *
+ * The remedy comes from Rust with the reason rather than being a fixed
+ * sentence in the panel: "copy it by hand from the Files screen" answers
+ * exactly one of these refusals and is wrong for the rest — a full disk, an
+ * archive that needs an Amiga to install itself, a name already taken and
+ * names AmigaDOS cannot store all fail the same way by hand.
+ */
+export interface WhdloadRefusal {
+  /** Why not. Complete sentences, and never an `ART-*` id: this is an answer,
+   *  not a fault. */
+  reason: string;
+  /** What to do instead, or null when the reason already says. */
+  suggestion: string | null;
+}
+
 export interface WhdloadPlan {
   verdict: WhdloadVerdict;
   layout: PackLayout;
-  /** Where it lands, as an Amiga path: `Games:Turrican`. */
+  /** Where it lands, as an Amiga path: `Games:Turrican`. Empty when no pack
+   *  was found — there is nothing to name. */
   drawer: string;
+  /** Empty when no pack was found; the disk is never even read in that case. */
   volume_name: string;
   cost: CopyPlan;
   name_taken: boolean;
   /** Why ART will not install this. Never null when it refuses. */
-  refusal: string | null;
+  refusal: WhdloadRefusal | null;
+}
+
+/**
+ * Whether the archive turned out to hold a WHDLoad pack at all.
+ *
+ * When it does not, Rust returns a plan whose layout, drawer, volume name and
+ * cost are all deliberately empty or zero — there was nothing to measure and
+ * the disk was never read. Anything that renders those numbers has to ask
+ * this first, or the screen states an action ("create the drawer … and write
+ * 0 files") directly above the panel saying it will not happen.
+ */
+export function hasPack(plan: WhdloadPlan): boolean {
+  return plan.layout.name !== "";
 }
 
 export interface WhdloadOutcome {
