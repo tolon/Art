@@ -27,6 +27,25 @@ export interface FunctionAction {
 }
 
 /**
+ * Whether `event` belongs to a text field (or carries a modifier) rather
+ * than to one of this bar's own shortcuts.
+ *
+ * Shared by every keyboard hook in this file so the guard can only drift in
+ * one place: F6 in a rename box must type nothing and rename nothing, and
+ * the same holds for Tab moving pane focus (`usePaneTab` below).
+ */
+function isShortcutBlocked(event: KeyboardEvent): boolean {
+  const target = event.target as HTMLElement | null;
+  const tag = target?.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) {
+    return true;
+  }
+  // A modifier means the user is asking the OS or the browser for
+  // something, not this pane.
+  return event.ctrlKey || event.altKey || event.metaKey;
+}
+
+/**
  * Wire the function keys to `actions`.
  *
  * Deliberately ignores keystrokes while focus is in a text field: F6 in a
@@ -37,19 +56,7 @@ export function useFunctionKeys(actions: FunctionAction[], active: boolean) {
     if (!active) return;
 
     function onKeyDown(event: KeyboardEvent) {
-      const target = event.target as HTMLElement | null;
-      const tag = target?.tagName;
-      if (
-        tag === "INPUT" ||
-        tag === "TEXTAREA" ||
-        tag === "SELECT" ||
-        target?.isContentEditable
-      ) {
-        return;
-      }
-      // A modifier means the user is asking the OS or the browser for
-      // something, not this pane.
-      if (event.ctrlKey || event.altKey || event.metaKey) return;
+      if (isShortcutBlocked(event)) return;
 
       const action = actions.find((candidate) => candidate.key === event.key);
       if (!action) return;
@@ -61,6 +68,32 @@ export function useFunctionKeys(actions: FunctionAction[], active: boolean) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [actions, active]);
+}
+
+/**
+ * Bind Tab to move keyboard focus to the other pane.
+ *
+ * A sibling of `useFunctionKeys` rather than a case inside it: Tab is not a
+ * `FunctionAction` (it has no label, no enabled/disabled state, nothing to
+ * show on the key bar), just a second shortcut that happens to want the same
+ * guard. `onTab` is left to the caller to decide what "the other pane" means
+ * — this hook only owns the keyboard wiring, not pane state.
+ */
+export function usePaneTab(onTab: () => void, active: boolean) {
+  useEffect(() => {
+    if (!active) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Tab") return;
+      if (isShortcutBlocked(event)) return;
+
+      event.preventDefault();
+      onTab();
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onTab, active]);
 }
 
 export function FunctionKeyBar({ actions }: { actions: FunctionAction[] }) {

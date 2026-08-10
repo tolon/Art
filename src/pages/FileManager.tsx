@@ -35,6 +35,7 @@ import { FileViewer } from "@/components/files/FileViewer";
 import {
   FunctionKeyBar,
   useFunctionKeys,
+  usePaneTab,
   type FunctionAction,
 } from "@/components/files/FunctionKeys";
 import { adfOpen, type AdfInfo } from "@/lib/adf";
@@ -189,6 +190,15 @@ export function FileManager() {
     left: null,
     right: null,
   });
+  /**
+   * Which pane the keyboard is talking to.
+   *
+   * Tracked directly rather than derived from `selection`: a pane can hold
+   * many selections or none (multi-select) and still be the one F-keys and
+   * Tab act on. Every F-key action reads this, never `selection` — see the
+   * function-key table below.
+   */
+  const [focused, setFocused] = useState<Side>("left");
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -267,6 +277,7 @@ export function FileManager() {
           truncated: listing.truncated,
         });
         setSelection((current) => ({ ...current, [side]: null }));
+        setFocused(side);
       } catch (e) {
         setPane(side, { ...emptyPane(), location: path, error: String(e) });
       }
@@ -298,6 +309,7 @@ export function FileManager() {
           capability,
         });
         setSelection((current) => ({ ...current, [side]: null }));
+        setFocused(side);
       } catch (e) {
         setPane(side, { ...emptyPane(), kind: "adf", location: path, error: String(e) });
       }
@@ -312,6 +324,7 @@ export function FileManager() {
         const image = await volumeScan(path);
         setPane(side, { ...emptyPane(), kind: "hdf", location: path, image });
         setSelection((current) => ({ ...current, [side]: null }));
+        setFocused(side);
       } catch (e) {
         setPane(side, { ...emptyPane(), kind: "hdf", location: path, error: String(e) });
       }
@@ -348,6 +361,7 @@ export function FileManager() {
           entries: listing.entries,
         });
         setSelection((current) => ({ ...current, [side]: null }));
+        setFocused(side);
       } catch (e) {
         setPane(side, {
           ...emptyPane(),
@@ -926,7 +940,9 @@ export function FileManager() {
       state,
       roots,
       selected: selection[side],
+      focused: focused === side,
       powerMode,
+      onFocus: () => setFocused(side),
       onSelect: (name: string) => setSelection((s) => ({ ...s, [side]: name })),
       onActivate: (entry: PanelEntry) => void activate(side, entry),
       onUp: () => void goUp(side),
@@ -949,18 +965,12 @@ export function FileManager() {
 
   // ---- the function keys ----
 
-  /**
-   * The pane the keys act on.
-   *
-   * Whichever side has a selection. A commander normally tracks focus; this
-   * uses the selection instead, which is the same thing said in a way that
-   * survives a click on a button between the panes.
-   */
-  const active: Side = selection.left !== null ? "left" : "right";
-  const activePane = pane(active);
-  const selected = activePane.entries.find((e) => e.name === selection[active]) ?? null;
-  const canWrite = writableVolume(activePane) !== null;
-  const inVolume = activePane.kind !== "local" && activePane.volumeIndex !== null;
+  // The pane the keys act on: `focused`, tracked above — never derived from
+  // `selection`. Every action below reads `focused` and `focusedPane`.
+  const focusedPane = pane(focused);
+  const selected = focusedPane.entries.find((e) => e.name === selection[focused]) ?? null;
+  const canWrite = writableVolume(focusedPane) !== null;
+  const inVolume = focusedPane.kind !== "local" && focusedPane.volumeIndex !== null;
 
   const actions: FunctionAction[] = [
     {
@@ -971,12 +981,12 @@ export function FileManager() {
         ? t("files.functionKeys.viewReasonSelect")
         : t("files.functionKeys.viewReasonNeedsImage"),
       run: () => {
-        if (!selected || selected.header_block === null || activePane.volumeIndex === null) {
+        if (!selected || selected.header_block === null || focusedPane.volumeIndex === null) {
           return;
         }
         setViewing({
-          path: activePane.location,
-          volumeIndex: activePane.volumeIndex,
+          path: focusedPane.location,
+          volumeIndex: focusedPane.volumeIndex,
           entryBlock: selected.header_block,
           name: selected.name,
         });
@@ -986,9 +996,9 @@ export function FileManager() {
       key: "F4",
       label: t("files.functionKeys.edit"),
       enabled: Boolean(selected && !selected.is_dir && canWrite) && busy === null,
-      reason: canWrite ? t("files.functionKeys.editReasonSelect") : writeRefusal(activePane, t),
+      reason: canWrite ? t("files.functionKeys.editReasonSelect") : writeRefusal(focusedPane, t),
       run: () => {
-        if (selected) void editEntry(active, selected);
+        if (selected) void editEntry(focused, selected);
       },
     },
     {
@@ -997,33 +1007,33 @@ export function FileManager() {
       enabled: Boolean(selected) && busy === null,
       reason: t("files.functionKeys.copyReasonSelect"),
       run: () => {
-        if (selected) void copyTo(active, selected);
+        if (selected) void copyTo(focused, selected);
       },
     },
     {
       key: "F6",
       label: t("files.functionKeys.rename"),
       enabled: Boolean(selected) && canWrite && busy === null,
-      reason: canWrite ? t("files.functionKeys.renameReasonSelect") : writeRefusal(activePane, t),
+      reason: canWrite ? t("files.functionKeys.renameReasonSelect") : writeRefusal(focusedPane, t),
       run: () => {
-        if (selected) void renameEntry(active, selected);
+        if (selected) void renameEntry(focused, selected);
       },
     },
     {
       key: "F7",
       label: t("files.functionKeys.newFolder"),
       enabled: canWrite && busy === null,
-      reason: writeRefusal(activePane, t),
-      run: () => void newFolder(active),
+      reason: writeRefusal(focusedPane, t),
+      run: () => void newFolder(focused),
     },
     {
       key: "F8",
       label: t("files.functionKeys.delete"),
       enabled: Boolean(selected) && canWrite && busy === null,
-      reason: canWrite ? t("files.functionKeys.deleteReasonSelect") : writeRefusal(activePane, t),
+      reason: canWrite ? t("files.functionKeys.deleteReasonSelect") : writeRefusal(focusedPane, t),
       danger: true,
       run: () => {
-        if (selected) void deleteEntry(active, selected);
+        if (selected) void deleteEntry(focused, selected);
       },
     },
     {
@@ -1034,12 +1044,12 @@ export function FileManager() {
         ? t("files.functionKeys.attributesReasonSelect")
         : t("files.functionKeys.attributesReasonNeedsImage"),
       run: () => {
-        if (!selected || selected.header_block === null || activePane.volumeIndex === null) {
+        if (!selected || selected.header_block === null || focusedPane.volumeIndex === null) {
           return;
         }
         setAttributes({
-          path: activePane.location,
-          volumeIndex: activePane.volumeIndex,
+          path: focusedPane.location,
+          volumeIndex: focusedPane.volumeIndex,
           entryBlock: selected.header_block,
         });
       },
@@ -1048,10 +1058,14 @@ export function FileManager() {
 
   // Off while a dialog is open: F8 behind a modal would delete something the
   // user cannot see.
-  useFunctionKeys(
-    actions,
-    plan === null && viewing === null && attributes === null && recovery === null
-  );
+  const keysActive = plan === null && viewing === null && attributes === null && recovery === null;
+  useFunctionKeys(actions, keysActive);
+
+  // Tab swaps which pane is focused. Same gate as the function keys — Tab
+  // underneath a modal should not silently change which pane a background
+  // F-key would land on — and the same input/textarea/modifier guard, shared
+  // via `usePaneTab` itself.
+  usePaneTab(() => setFocused((side) => (side === "left" ? "right" : "left")), keysActive);
 
   // An unfinished operation is offered as soon as a pane shows an image that
   // has one — before the user tries to write and is refused.
@@ -1245,7 +1259,7 @@ export function FileManager() {
           entryBlock={attributes.entryBlock}
           canEdit={powerMode}
           onClose={() => setAttributes(null)}
-          onChanged={() => void refresh(active)}
+          onChanged={() => void refresh(focused)}
         />
       )}
     </div>
@@ -1322,7 +1336,9 @@ function Pane({
   state,
   roots,
   selected,
+  focused,
   powerMode,
+  onFocus,
   onSelect,
   onActivate,
   onUp,
@@ -1341,7 +1357,10 @@ function Pane({
   state: PaneState;
   roots: string[];
   selected: string | null;
+  /** Whether this is the pane the keyboard (F-keys, Tab) is talking to. */
+  focused: boolean;
   powerMode: boolean;
+  onFocus: () => void;
   onSelect: (name: string) => void;
   onActivate: (entry: PanelEntry) => void;
   onUp: () => void;
@@ -1371,10 +1390,19 @@ function Pane({
   return (
     <section
       className="card"
+      // §64-style focus visibility, but for the pane rather than a control:
+      // a commander where you cannot see which side the keyboard is talking
+      // to is worse than one with no keyboard at all. `--accent` is the same
+      // token every other focus/active affordance in the app already uses,
+      // so this reads correctly in both themes without a colour of its own.
       style={{
         minHeight: 420,
         outline: dragOver ? "2px solid var(--accent)" : "none",
+        borderColor: focused ? "var(--accent)" : "var(--border)",
+        boxShadow: focused ? "0 0 0 1px var(--accent)" : undefined,
       }}
+      aria-current={focused ? "true" : undefined}
+      onClick={onFocus}
       onDragOver={(event) => {
         if (!acceptsDrops) return;
         event.preventDefault();
