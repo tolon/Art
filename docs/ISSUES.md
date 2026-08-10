@@ -132,6 +132,21 @@ re-audits them without reason:
 
 ### Phase 0a
 
+**ART-059** 🔵 **A flaky test could fail CI at random**
+`net/http_mirror.rs` (test helpers) · `a_plain_download_reports_what_it_wrote`
+and `a_206_is_a_resume_and_carries_the_whole_size` read
+`requests.lock().unwrap()[0]` immediately after `fetch` returned, but the test
+server thread records the request *after* `handle` has written the response.
+The client only needs those bytes, so it can return first, leaving the vector
+empty and the index panicking. It lost roughly one full-suite run in five —
+found by running the suite five times before merging Phase 0a rather than
+once. A test that fails at random in a blocking CI trains people to re-run
+until green, which is how a real failure gets waved through.
+→ `wait_served(&served, n)` blocks on the `served` counter, which the thread
+stores with `SeqCst` *after* the push, so it is a real happens-before edge
+rather than a sleep. Applied at all three sites that read the recorded
+requests. Verified by five consecutive clean full-suite runs.
+
 **ART-037** 🔴 **ADF Studio could not open any bootable ADF**
 `core/adf/bootblock.rs`, `core/adf/mod.rs` · The parser read bytes 8..11 of the
 boot block as a "root block pointer". An AmigaDOS boot block has no such field:
