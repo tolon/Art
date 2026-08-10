@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Stopping an install now really stops it (2026-08-10)
+
+#### Fixed
+- **Cancelling a WHDLoad or Aminet install leaves the disk untouched.** It used
+  to write whatever had been copied so far, then report the install as
+  finished — so a game could end up on the disk without the one file that
+  starts it, with nothing saying anything was missing. Cancelling now ends as
+  "cancelled", and the image is exactly as it was.
+- **"ART will not install this" no longer contradicts itself.** When an archive
+  turns out not to be a WHDLoad package, the screen no longer offers to create
+  a drawer with no name and write nothing into it, or complain that the package
+  has no icon. And the advice under the refusal now fits the reason: copying it
+  by hand is suggested only when that would actually help, rather than to
+  someone whose disk is full.
+- **The sidebar no longer cuts the page off on a short window.** With the
+  window shorter than the full list of tools, the bottom of every page — and
+  the bottom of its scrollbar — was clipped. The tool list now scrolls on its
+  own instead of stretching the window.
+
 ### A write that would break a disk image is refused (2026-08-10)
 
 #### Fixed
@@ -39,7 +58,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of squeezing the panes; widen it and content stays centred instead of
   clinging to the left.
 - **Buttons that cannot be used now look it.** A greyed button is a button you
-  know not to click, and a keyboard focus ring is visible again.
+  know not to click. The folder names and the path bar in ADF Studio follow the
+  same rule: while an operation is running they no longer look clickable.
 - **"ART will not do this" no longer looks like a crash.** Being told an
   archive is not a WHDLoad package is an answer, not a fault, and it no longer
   arrives in red with an error code.

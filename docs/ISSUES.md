@@ -95,20 +95,6 @@ blanket allow) means clippy does not flag them. Either give them a real
 caller or remove them; audited bounds-checking code that production no longer
 reaches is exactly the kind of gap ART-020 exists to stop CI from hiding.
 
-**ART-046** 🔵 **A doc comment claims a guarantee the public API does not give**
-`core/volume/write/mod.rs:684` · The comment above the test-only
-`commit_blocks` says "every public operation here deliberately cannot get
-into that state" — a volume whose touched blocks are each individually
-well-formed but whose structure is wrong. `add_file` on an image whose bitmap
-is flagged valid but marks the root block free reaches exactly that state
-through the public API: the allocator hands out the root block, `add_file`
-writes a well-formed file there, and every touched block's own checksum is
-fine. The gate that catches it (ART-042's whole-image `validate_image` in
-`commit_whole_file`) is stronger than its own documentation claims — and that
-comment is the argument someone will use to delete the gate as redundant.
-Needs either a narrower claim or a test proving the public API really cannot
-reach that state; today it can.
-
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 
@@ -201,6 +187,111 @@ so a failure there aborts before any byte reaches disk rather than after.
 tests (`creating_a_directory_goes_through_the_volume_writer`,
 `deleting_an_entry_goes_through_the_volume_writer`,
 `renaming_an_entry_goes_through_the_volume_writer`).
+
+**ART-052** 🟠 **A cancelled install committed half a package and reported success**
+`commands/sources.rs`, `commands/volume_write.rs` · `copy_into_volume` stops
+between files and returns `Ok(report)` with `cancelled: true` — the right
+contract for the general-purpose F5 copy. `run_copy_in_folder` then went
+straight on to `commit_whole_file`, and neither install command ever read
+`report.cancelled`: they read `files_copied`, `bytes_copied` and `skipped`, and
+the files that were never reached appear in none of those, because the loop
+`break`s. Cancelling an install therefore wrote half the package to the disk,
+finished the job as **Completed**, and recorded a successful install in the
+operation log — with the `.slave` quite possibly among the files that never
+landed. The retired `install_archive_into_adf` had checked `is_cancelled()`
+inside its `mutate_disk_file` closure and returned `CoreError::Cancelled`, so
+nothing was written at all; that guarantee was lost in the move to the volume
+writer.
+→ `run_copy_in_folder_with(.., OnCancel::Abandon, ..)` returns
+`CoreError::Cancelled` *before* `commit_whole_file` is reached, so the user's
+image never leaves the state it was in. F5 keeps `OnCancel::KeepWhatLanded`
+deliberately. Pinned by
+`a_cancelled_install_writes_nothing_and_does_not_report_success`, which
+compares the image's bytes before and after.
+
+**ART-053** 🟠 **`VolumeWriter::all_bytes()` allocated from an unchecked block count**
+`core/volume/write/mod.rs` · Introduced with ART-045's fix and documented as
+"only sensible for a volume small enough to hold in memory", with nothing
+enforcing it — while `commands/adf.rs::info_from_session` calls it inside
+every `with_volume` closure and every ADF command takes an arbitrary image
+path from the frontend. Pointed at an image over 16 MiB, `with_volume` takes
+the block-journal branch: the write lands *in the file*, the journal is
+deleted, and only then does `all_bytes()` try to read `total_blocks ×
+block_size` into memory — a multi-gigabyte allocation in a profile that sets
+`panic = "abort"`, or an `Err` returned after the write is already durable and
+its journal gone.
+→ `all_bytes()` computes the size with `checked_mul` and refuses anything over
+`WHOLE_FILE_LIMIT_BYTES` — the same constant `WriteStrategy::for_image` splits
+on, so "small enough to read whole" means one thing in ART. Pinned by
+`all_bytes_refuses_a_volume_too_large_to_hold_in_memory`.
+
+**ART-046** 🔵 **A doc comment claims a guarantee the public API does not give**
+`core/volume/write/mod.rs` · The comment above the test-only `commit_blocks`
+said "every public operation here deliberately cannot get into that state" — a
+volume whose touched blocks are each well-formed but whose structure is wrong.
+`add_file` on an image whose bitmap is flagged valid but marks the root block
+free reaches exactly that state through the public API: `bitmap.rs`'s allocator
+hands out anything free in `reserved..total_blocks` and the root block is not
+inside `reserved` (2, on a floppy), so a plain `add_file` allocates block 880
+and overwrites the root, with every touched block internally well-formed. The
+claim was the argument for deleting ART-042's whole-image gate as redundant.
+→ The comment now says what is true — no public operation can reach that state
+on a *well-formed* volume, the flagged-valid-but-wrong bitmap can, and that is
+what the gate above catches. Narrowed rather than "proved", because the public
+API really can reach it.
+
+**ART-054** 🟡 **The WHDLoad refusal panel contradicted itself**
+`src/pages/WhdloadInstall.tsx`, `commands/whdload.rs` · On the "not a WHDLoad
+pack" path Rust deliberately blanks the layout and zeroes the cost, and the UI
+rendered them anyway: "Create the drawer `[blank]` and write 0 files, 0 B ·
+0 blocks needed · 0 free" printed directly above the amber refusal, an empty
+pack name badged *"no icon — it will not show up on Workbench"*, and an install
+button reading "Install to " because `?? "the disk"` catches `null` but not the
+empty string Rust sends. The panel's suggestion was a hardcoded "You can still
+copy it by hand from the Files screen", which is wrong or duplicated for five
+of the six refusals — a full disk, a name already taken and unsupported names
+all fail the same way by hand, `needs_installer` needs WinUAE, and the
+low-confidence reason already ends with that same sentence.
+→ `hasPack()` (`src/lib/whdload.ts`) gates the cost paragraph and the
+pack-name/icon block; the button falls back with `||`. The remedy is now data:
+`WhdloadRefusal { reason, suggestion }` carries it from `refuse()`, so the hand
+copy is suggested for exactly the one refusal it answers. Refusals still arrive
+as `plan.refusal` inside an `Ok` and exceptions still reach the red banner —
+`a_missing_pack_is_a_refusal_and_a_broken_archive_is_still_an_error` pins both,
+and now also pins which suggestion travels with which reason.
+
+**ART-055** 🔵 **The install pre-flight guard had no test that would fail if it were deleted**
+`commands/sources.rs` · ART-044's fix put `if !plan.fits() { return
+Err(SafetyRefused) }` inline inside `sources_install_adf`'s and
+`sources_install_volume`'s `spawn_job` closures, which no test can call. The
+test named after it called `plan_copy_in_folder` directly and asserted the
+image was unchanged — trivially true, since only a read-only planner had run.
+Deleting either guard left the suite green.
+→ Both command bodies are factored into `install_archive_into_volume`, the way
+task 8 factored the ADF commands, and the test drives that. Verified by
+mutation: reverting the guard fails the test.
+
+**ART-056** 🟡 **The sidebar clipped the page on any window shorter than its own nav list**
+`src/components/layout/layout.css` · ART-040 applied `min-height: 0` to
+`.app-main` and not to `.sidebar`, the other item in the same implicit grid
+row. With fourteen nav entries the sidebar's min-content height is about
+665px, so on a shorter viewport the auto row grew past `100vh`, `.app-main`
+stretched with it and the shell's `overflow: hidden` clipped the bottom of
+`.app-content` — including the bottom of its own scrollbar. A 1366×768 laptop
+at 125% scaling is about 584 CSS px, so this was the ordinary case.
+→ `.sidebar { min-height: 0; overflow-y: auto; }`.
+
+**ART-057** 🟡 **Two more controls looked enabled while disabled**
+`src/styles/global.css` · ART-039's fix keyed on `.btn`, and
+`.breadcrumb-item` and `.file-row-dir-btn` (both `disabled` while an operation
+runs, `src/pages/AdfBrowser.tsx`) carry neither — so both kept `cursor:
+pointer` and their live colour. Also found in the same file: the
+`:focus-visible` block ART-039 added was byte-identical to a universal
+`:focus-visible` rule already 60 lines below it, and `CHANGELOG.md` claimed a
+focus ring was "visible again" when it had never been missing.
+→ The `.btn:disabled` treatment applied to both controls (the last breadcrumb
+keeps full contrast — it is disabled because it is where you already are), the
+duplicate rule removed, and the CHANGELOG line corrected.
 
 ### Stage W
 
