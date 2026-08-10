@@ -9,6 +9,7 @@
 // decoder was.
 
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { volumeReadHead } from "@/lib/volumeWrite";
 
@@ -55,6 +56,7 @@ export function FileViewer({
   name: string;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   const [bytes, setBytes] = useState<Uint8Array | null>(null);
   const [mode, setMode] = useState<Mode>("text");
   const [error, setError] = useState<string | null>(null);
@@ -88,7 +90,7 @@ export function FileViewer({
   return (
     <div
       role="dialog"
-      aria-label={`View ${name}`}
+      aria-label={t("components.fileViewer.ariaLabel", { name })}
       className="card"
       style={{
         position: "fixed",
@@ -120,26 +122,28 @@ export function FileViewer({
             style={{ fontSize: 12 }}
             onClick={() => setMode("text")}
           >
-            Text
+            {t("components.fileViewer.text")}
           </button>
           <button
             className={`btn${mode === "hex" ? " btn-primary" : ""}`}
             style={{ fontSize: 12 }}
             onClick={() => setMode("hex")}
           >
-            Hex
+            {t("components.fileViewer.hex")}
           </button>
           <button className="btn" style={{ fontSize: 12 }} onClick={onClose}>
-            Close
+            {t("common.close")}
           </button>
         </div>
       </div>
 
       <div className="faint" style={{ fontSize: 11, marginTop: 4 }}>
-        {bytes ? `${bytes.length.toLocaleString()} bytes shown` : "Reading…"}
-        {truncated && " — the rest is not loaded"}
-        {mode === "text" && " · decoded as Latin-1, the Amiga's character set"}
-        {" · read-only"}
+        {bytes
+          ? t("components.fileViewer.bytesShown", { amount: bytes.length.toLocaleString() })
+          : t("components.fileViewer.reading")}
+        {truncated && t("components.fileViewer.restNotLoaded")}
+        {mode === "text" && t("components.fileViewer.decodedLatin1")}
+        {t("components.fileViewer.readOnly")}
       </div>
 
       {error && (

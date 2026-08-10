@@ -13,6 +13,7 @@
 // is `Destructive` and gets a red key and a double confirmation upstream (§63).
 
 import { useEffect } from "react";
+import { useTranslation } from "react-i18next";
 
 export interface FunctionAction {
   key: string;
@@ -63,6 +64,7 @@ export function useFunctionKeys(actions: FunctionAction[], active: boolean) {
 }
 
 export function FunctionKeyBar({ actions }: { actions: FunctionAction[] }) {
+  const { t } = useTranslation();
   return (
     <div
       style={{
@@ -72,7 +74,7 @@ export function FunctionKeyBar({ actions }: { actions: FunctionAction[] }) {
         flexWrap: "wrap",
       }}
       role="toolbar"
-      aria-label="File operations"
+      aria-label={t("components.fnKeys.ariaLabel")}
     >
       {actions.map((action) => (
         <button
@@ -83,7 +85,7 @@ export function FunctionKeyBar({ actions }: { actions: FunctionAction[] }) {
           title={
             action.enabled
               ? `${action.key} — ${action.label}`
-              : action.reason ?? `${action.label} is not available here`
+              : action.reason ?? t("components.fnKeys.notAvailable", { label: action.label })
           }
           style={{
             flex: "1 1 90px",

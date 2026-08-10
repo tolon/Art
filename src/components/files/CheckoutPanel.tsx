@@ -10,6 +10,7 @@
 // prompt for a feature that does not need either.
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   checkoutCheckin,
@@ -34,6 +35,7 @@ export function CheckoutPanel({
   onChanged: (row: CheckoutRow) => void;
   onError: (message: string) => void;
 }) {
+  const { t } = useTranslation();
   const [rows, setRows] = useState<CheckoutRow[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -67,9 +69,7 @@ export function CheckoutPanel({
   async function discard(row: CheckoutRow) {
     if (
       row.state.state === "modified" &&
-      !window.confirm(
-        `Throw away your changes to ${row.name}? The working copy will be deleted.`
-      )
+      !window.confirm(t("components.checkout.discardConfirm", { name: row.name }))
     ) {
       return;
     }
@@ -87,11 +87,10 @@ export function CheckoutPanel({
   return (
     <section className="card" style={{ marginTop: 12 }}>
       <strong style={{ fontSize: 14 }}>
-        Being edited ({rows.length})
+        {t("components.checkout.beingEdited", { count: rows.length })}
       </strong>
       <div className="faint" style={{ fontSize: 11, marginTop: 2 }}>
-        Each of these is a copy on your disk. Nothing goes back into the image
-        until you put it back, and only if it actually changed.
+        {t("components.checkout.intro")}
       </div>
 
       {rows.map((row) => {
@@ -132,7 +131,7 @@ export function CheckoutPanel({
                 checkoutEdit(row.id, editor).catch((e) => onError(String(e)));
               }}
             >
-              Open in editor
+              {t("components.checkout.openInEditor")}
             </button>
 
             {/* §6: a size change is normal, and CRLF is offered rather than
@@ -143,10 +142,10 @@ export function CheckoutPanel({
                 className="btn btn-primary"
                 style={{ fontSize: 11 }}
                 disabled={busy !== null}
-                title="Windows line endings behave differently on a real Amiga"
+                title={t("components.checkout.crlfTitle")}
                 onClick={() => void checkin(row, true)}
               >
-                Put back, Amiga line endings
+                {t("components.checkout.putBackAmigaLineEndings")}
               </button>
             )}
             <button
@@ -155,12 +154,12 @@ export function CheckoutPanel({
               disabled={busy !== null || !modified}
               title={
                 modified
-                  ? "Write it back into the image"
-                  : "Nothing has changed, so there is nothing to write back"
+                  ? t("components.checkout.putBackTitleModified")
+                  : t("components.checkout.putBackTitleUnmodified")
               }
               onClick={() => void checkin(row, false)}
             >
-              {crlf ? "Put back as it is" : "Put back"}
+              {crlf ? t("components.checkout.putBackAsIs") : t("components.checkout.putBack")}
             </button>
 
             <button
@@ -168,9 +167,9 @@ export function CheckoutPanel({
               style={{ fontSize: 11 }}
               disabled={busy !== null}
               onClick={() => void discard(row)}
-              title="Throw the working copy away. The image is not touched."
+              title={t("components.checkout.discardTitle")}
             >
-              Discard
+              {t("components.checkout.discard")}
             </button>
 
             <div

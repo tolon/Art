@@ -65,6 +65,89 @@
     "no": "Hayır",
     "launchInWinuae": "WinUAE'de Başlat"
   },
+  "components": {
+    "copyPlan": {
+      "ariaLabel": "Kopyalama planı",
+      "title": "Kopyalamadan önce",
+      "intoDestination": "{{destination}} içine",
+      "filesCount_one": "{{count}} dosya",
+      "filesCount_other": "{{count}} dosya",
+      "andFoldersCount_one": " ve {{count}} klasör",
+      "andFoldersCount_other": " ve {{count}} klasör",
+      "blocksNeededFree": "{{needed}} blok gerekli · {{free}} boş",
+      "nameProblemsCount_one": "AmigaDOS'un saklayamadığı {{count}} isim var.",
+      "nameProblemsCount_other": "AmigaDOS'un saklayamadığı {{count}} isim var.",
+      "nameProblemsWillUse": "ART sağdaki isimleri kullanacak.",
+      "nameProblemsLeftBehind": "Bazılarının kullanılabilir bir alternatifi yok ve geride bırakılacak.",
+      "noUsableName": "— kullanılabilir isim kalmadı",
+      "collisionsCount_one": "{{count}} isim zaten orada:",
+      "collisionsCount_other": "{{count}} isim zaten orada:",
+      "policyLeaveAlone": "Dokunma",
+      "policyReplace": "Değiştir",
+      "policyKeepBoth": "İkisini de tut",
+      "splitIconsWithoutIcons": "Bazı klasörler .info simgeleri olmadan kopyalanıyor, bu yüzden Workbench'te görünmeyecekler: {{list}}.",
+      "splitIconsOrphaned": "Bu kopyada bazı .info simgelerinin tanımlayacağı bir şey yok.",
+      "clean": "Her şey sığıyor ve her isim AmigaDOS'un saklayabileceği türden.",
+      "notEnoughRoom": "Diskte yeterli yer yok",
+      "copy": "Kopyala"
+    },
+    "checkout": {
+      "discardConfirm": "{{name}} üzerindeki değişiklikleriniz atılsın mı? Çalışma kopyası silinecek.",
+      "beingEdited": "Düzenleniyor ({{count}})",
+      "intro": "Bunların her biri diskinizdeki bir kopyadır. Siz geri koymadıkça, ve yalnızca gerçekten değiştiyse, hiçbiri imaja geri yazılmaz.",
+      "openInEditor": "Düzenleyicide aç",
+      "crlfTitle": "Windows satır sonları gerçek bir Amiga'da farklı davranır",
+      "putBackAmigaLineEndings": "Geri koy, Amiga satır sonlarıyla",
+      "putBackTitleModified": "İmaja geri yaz",
+      "putBackTitleUnmodified": "Hiçbir şey değişmedi, geri yazacak bir şey yok",
+      "putBackAsIs": "Olduğu gibi geri koy",
+      "putBack": "Geri koy",
+      "discard": "At",
+      "discardTitle": "Çalışma kopyasını at. İmaja dokunulmaz."
+    },
+    "attributes": {
+      "title": "Nitelikler",
+      "folder": "Klasör",
+      "file": "Dosya",
+      "bitsLabel": "bit",
+      "comment": "Açıklama",
+      "commentPlaceholder": "AmigaDOS en fazla 79 karakter tutar",
+      "readOnlyHint": "Yalnızca bilgi amaçlı gösterilir. Değiştirmek için Ayarlar'dan İleri Kullanıcı moduna geçin.",
+      "apply": "Uygula",
+      "reset": "Sıfırla",
+      "bits": {
+        "hold": { "name": "Tut", "explanation": "Çalıştıktan sonra bellekte tutulur. Nadiren kullanılır." },
+        "script": { "name": "Betik", "explanation": "Bir kabuk betiği olarak çalışır. WHDLoad kurulumcuları buna dayanır." },
+        "pure": { "name": "Saf", "explanation": "Yeniden girilebilir, bu yüzden bellekte tutulabilir. Slave dosyaları bunu kullanır." },
+        "archived": { "name": "Arşivlendi", "explanation": "Son yedeklemeden bu yana değişmedi." },
+        "read": { "name": "Okuma", "explanation": "Dosya okunabilir." },
+        "write": { "name": "Yazma", "explanation": "Dosya değiştirilebilir." },
+        "execute": { "name": "Çalıştırma", "explanation": "Dosya çalıştırılabilir." },
+        "delete": { "name": "Silme", "explanation": "Dosya silinebilir." }
+      }
+    },
+    "fnKeys": {
+      "ariaLabel": "Dosya işlemleri",
+      "notAvailable": "{{label}} burada kullanılamıyor"
+    },
+    "errorBoundary": {
+      "title": "ART arayüzü oluşturulamadı"
+    },
+    "jobBar": {
+      "dismiss": "Temizle",
+      "stop": "Durdur"
+    },
+    "fileViewer": {
+      "ariaLabel": "{{name}} dosyasını görüntüle",
+      "text": "Metin",
+      "hex": "Hex",
+      "reading": "Okunuyor…",
+      "bytesShown": "{{amount}} bayt gösteriliyor",
+      "restNotLoaded": " — geri kalanı yüklenmedi",
+      "decodedLatin1": " · Amiga'nın karakter kümesi olan Latin-1 olarak çözüldü",
+      "readOnly": " · salt okunur"
+    }
+  },
   "settings": {
     "title": "Ayarlar",
     "general": "Genel",

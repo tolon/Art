@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   fraction,
@@ -21,6 +22,7 @@ import {
  * Renders nothing when there is nothing to say.
  */
 export function JobBar() {
+  const { t } = useTranslation();
   const [jobs, setJobs] = useState<JobProgress[]>([]);
 
   useEffect(() => {
@@ -97,7 +99,7 @@ export function JobBar() {
       {notable.length > 0 && (
         <div>
           <button className="btn btn-sm" onClick={() => void dismiss()}>
-            Dismiss
+            {t("components.jobBar.dismiss")}
           </button>
         </div>
       )}
@@ -106,6 +108,7 @@ export function JobBar() {
 }
 
 function JobRow({ job }: { job: JobProgress }) {
+  const { t } = useTranslation();
   const pct = fraction(job);
   const running = isRunning(job);
   const failed = job.state.state === "failed";
@@ -130,7 +133,7 @@ function JobRow({ job }: { job: JobProgress }) {
         </span>
         {running && (
           <button className="btn btn-sm" onClick={() => void jobCancel(job.id)}>
-            Stop
+            {t("components.jobBar.stop")}
           </button>
         )}
       </div>

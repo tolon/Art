@@ -65,6 +65,89 @@
     "no": "No",
     "launchInWinuae": "Launch in WinUAE"
   },
+  "components": {
+    "copyPlan": {
+      "ariaLabel": "Copy plan",
+      "title": "Before copying",
+      "intoDestination": "into {{destination}}",
+      "filesCount_one": "{{count}} file",
+      "filesCount_other": "{{count}} files",
+      "andFoldersCount_one": " and {{count}} folder",
+      "andFoldersCount_other": " and {{count}} folders",
+      "blocksNeededFree": "{{needed}} blocks needed · {{free}} free",
+      "nameProblemsCount_one": "{{count}} name AmigaDOS cannot store.",
+      "nameProblemsCount_other": "{{count}} names AmigaDOS cannot store.",
+      "nameProblemsWillUse": "ART will use the names on the right.",
+      "nameProblemsLeftBehind": "Some have no usable alternative and will be left behind.",
+      "noUsableName": "— no usable name left",
+      "collisionsCount_one": "{{count}} name is already there:",
+      "collisionsCount_other": "{{count}} names are already there:",
+      "policyLeaveAlone": "Leave them alone",
+      "policyReplace": "Replace them",
+      "policyKeepBoth": "Keep both",
+      "splitIconsWithoutIcons": "Some folders are being copied without their .info icons, so they will not show up on Workbench: {{list}}.",
+      "splitIconsOrphaned": "Some .info icons have nothing to describe in this copy.",
+      "clean": "Everything fits and every name is one AmigaDOS can store.",
+      "notEnoughRoom": "There is not enough room on the disk",
+      "copy": "Copy"
+    },
+    "checkout": {
+      "discardConfirm": "Throw away your changes to {{name}}? The working copy will be deleted.",
+      "beingEdited": "Being edited ({{count}})",
+      "intro": "Each of these is a copy on your disk. Nothing goes back into the image until you put it back, and only if it actually changed.",
+      "openInEditor": "Open in editor",
+      "crlfTitle": "Windows line endings behave differently on a real Amiga",
+      "putBackAmigaLineEndings": "Put back, Amiga line endings",
+      "putBackTitleModified": "Write it back into the image",
+      "putBackTitleUnmodified": "Nothing has changed, so there is nothing to write back",
+      "putBackAsIs": "Put back as it is",
+      "putBack": "Put back",
+      "discard": "Discard",
+      "discardTitle": "Throw the working copy away. The image is not touched."
+    },
+    "attributes": {
+      "title": "Attributes",
+      "folder": "Folder",
+      "file": "File",
+      "bitsLabel": "bits",
+      "comment": "Comment",
+      "commentPlaceholder": "AmigaDOS keeps up to 79 characters",
+      "readOnlyHint": "Shown for reference. Switch to Power User Mode in Settings to change them.",
+      "apply": "Apply",
+      "reset": "Reset",
+      "bits": {
+        "hold": { "name": "Hold", "explanation": "Keep resident after running. Rarely used." },
+        "script": { "name": "Script", "explanation": "Run as a shell script. WHDLoad installers rely on this." },
+        "pure": { "name": "Pure", "explanation": "Re-entrant, so it can be made resident. Slaves use it." },
+        "archived": { "name": "Archived", "explanation": "Unchanged since the last backup." },
+        "read": { "name": "Read", "explanation": "The file can be read." },
+        "write": { "name": "Write", "explanation": "The file can be changed." },
+        "execute": { "name": "Execute", "explanation": "The file can be run." },
+        "delete": { "name": "Delete", "explanation": "The file can be deleted." }
+      }
+    },
+    "fnKeys": {
+      "ariaLabel": "File operations",
+      "notAvailable": "{{label}} is not available here"
+    },
+    "errorBoundary": {
+      "title": "ART failed to render"
+    },
+    "jobBar": {
+      "dismiss": "Dismiss",
+      "stop": "Stop"
+    },
+    "fileViewer": {
+      "ariaLabel": "View {{name}}",
+      "text": "Text",
+      "hex": "Hex",
+      "reading": "Reading…",
+      "bytesShown": "{{amount}} bytes shown",
+      "restNotLoaded": " — the rest is not loaded",
+      "decodedLatin1": " · decoded as Latin-1, the Amiga's character set",
+      "readOnly": " · read-only"
+    }
+  },
   "settings": {
     "title": "Settings",
     "general": "General",
