@@ -327,37 +327,46 @@ impl CopySource for HostFolder {
 
     fn metadata(&self, relative: &str) -> CoreResult<Option<Sidecar>> {
         let path = self.resolve(relative)?;
+        host_metadata(&path, self.read_sidecars)
+    }
+}
 
-        // A sidecar written by ART or WinUAE is the better source: it holds
-        // the bits and comment the host filesystem threw away.
-        if self.read_sidecars {
-            let sidecar = uaem::sidecar_path(&path);
-            if sidecar.exists() {
-                let size = std::fs::metadata(&sidecar)?.len();
-                if size <= uaem::MAX_UAEM_BYTES {
-                    // A damaged sidecar falls through to the mtime rather than
-                    // failing the copy: losing the bits is better than losing
-                    // the file, and the caller is told nothing was applied.
-                    if let Ok(parsed) = uaem::parse(&std::fs::read_to_string(&sidecar)?) {
-                        return Ok(Some(parsed));
-                    }
+/// Protection bits, date and comment for a file already resolved to a real
+/// path on disk.
+///
+/// Shared by every `CopySource` that reads the host filesystem — `HostFolder`
+/// and `HostSelection` alike — so a `.uaem` sidecar means the same thing
+/// regardless of which one found it.
+fn host_metadata(path: &Path, read_sidecars: bool) -> CoreResult<Option<Sidecar>> {
+    // A sidecar written by ART or WinUAE is the better source: it holds the
+    // bits and comment the host filesystem threw away.
+    if read_sidecars {
+        let sidecar = uaem::sidecar_path(path);
+        if sidecar.exists() {
+            let size = std::fs::metadata(&sidecar)?.len();
+            if size <= uaem::MAX_UAEM_BYTES {
+                // A damaged sidecar falls through to the mtime rather than
+                // failing the copy: losing the bits is better than losing the
+                // file, and the caller is told nothing was applied.
+                if let Ok(parsed) = uaem::parse(&std::fs::read_to_string(&sidecar)?) {
+                    return Ok(Some(parsed));
                 }
             }
         }
-
-        // Otherwise the file's own modification time, and default bits.
-        let modified = std::fs::metadata(&path)?
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64);
-
-        Ok(modified.map(|unix| Sidecar {
-            protection: super::file::default_protection(),
-            date: amiga_from_unix(unix),
-            comment: String::new(),
-        }))
     }
+
+    // Otherwise the file's own modification time, and default bits.
+    let modified = std::fs::metadata(path)?
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64);
+
+    Ok(modified.map(|unix| Sidecar {
+        protection: super::file::default_protection(),
+        date: amiga_from_unix(unix),
+        comment: String::new(),
+    }))
 }
 
 fn walk(
@@ -429,6 +438,181 @@ fn walk(
     }
 
     Ok(())
+}
+
+/// Several picked entries — files, folders, or a mix — copied as one operation.
+///
+/// Each root keeps its own base name at the destination, so picking
+/// `Game/` and `Readme.txt` produces `Game/` and `Readme.txt` side by side.
+///
+/// This is the only new copy source the batch commander needs: every entry
+/// still flows through the one tested [`copy_into_volume`], the same as a
+/// single [`HostFolder`] does — `HostSelection` just widens `entries()` to
+/// span several roots instead of one.
+#[derive(Debug, Clone)]
+pub struct HostSelection {
+    roots: Vec<PathBuf>,
+}
+
+impl HostSelection {
+    pub fn new(roots: Vec<PathBuf>) -> Self {
+        Self { roots }
+    }
+
+    /// The name a root will be called at the destination — the last
+    /// component of its path.
+    fn base_name(root: &Path) -> CoreResult<String> {
+        root.file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                CoreError::InvalidInput(format!(
+                    "'{}' has no name ART can give it at the destination",
+                    root.display()
+                ))
+            })
+    }
+
+    /// Refuse a selection where two roots would land under the same name.
+    ///
+    /// `C:\a\Docs` and `D:\b\Docs` both want to be called `Docs`. Copying
+    /// both in would silently interleave two unrelated trees into one
+    /// directory — the user would have no way to know it happened — so this
+    /// is refused up front, naming both paths, rather than merged.
+    fn check_for_name_collisions(&self) -> CoreResult<()> {
+        let mut seen: std::collections::BTreeMap<String, &Path> = std::collections::BTreeMap::new();
+        for root in &self.roots {
+            let name = Self::base_name(root)?;
+            if let Some(other) = seen.get(name.as_str()) {
+                return Err(CoreError::InvalidInput(format!(
+                    "'{}' and '{}' would both be called '{name}' at the destination — \
+                     rename one before copying",
+                    other.display(),
+                    root.display()
+                )));
+            }
+            seen.insert(name, root);
+        }
+        Ok(())
+    }
+
+    /// Everything to copy, with the entry cap taken as a parameter so tests
+    /// can prove it applies to the whole selection without materialising
+    /// [`MAX_COPY_ENTRIES`] real files. Production always calls this with
+    /// that constant, through [`CopySource::entries`].
+    fn entries_capped(&self, max_entries: usize) -> CoreResult<Vec<SourceEntry>> {
+        self.check_for_name_collisions()?;
+
+        let mut out = Vec::new();
+        for root in &self.roots {
+            // The cap is shared across every root: once it is spent, later
+            // roots contribute nothing rather than getting a fresh budget of
+            // their own (a selection of 200 folders must not multiply the
+            // cap by 200).
+            if out.len() >= max_entries {
+                break;
+            }
+
+            let prefix = Self::base_name(root)?;
+            let metadata = std::fs::symlink_metadata(root)?;
+            let kind = metadata.file_type();
+
+            if kind.is_symlink() {
+                // Not followed, for the same reason `walk` does not follow
+                // one found mid-tree: a link out of the pick would copy in
+                // something the user did not select.
+                continue;
+            }
+
+            if kind.is_dir() {
+                out.push(SourceEntry {
+                    relative: prefix.clone(),
+                    is_dir: true,
+                    bytes: 0,
+                });
+                if out.len() >= max_entries {
+                    continue;
+                }
+
+                // `walk` is given the *remaining* budget, not the whole cap,
+                // so what it adds on top of everything already collected
+                // still respects the shared total.
+                let remaining = max_entries - out.len();
+                let mut local = Vec::new();
+                walk(root, "", 0, MAX_COPY_DEPTH, remaining, &mut local)?;
+                for mut entry in local {
+                    entry.relative = format!("{prefix}/{}", entry.relative);
+                    out.push(entry);
+                }
+            } else if kind.is_file() {
+                out.push(SourceEntry {
+                    relative: prefix,
+                    is_dir: false,
+                    bytes: metadata.len(),
+                });
+            }
+        }
+
+        Ok(out)
+    }
+
+    /// A selection-relative path (`"Game/Sub/File.txt"` or `"Readme.txt"`)
+    /// back to the root it came from and the path inside that root.
+    fn locate(&self, relative: &str) -> CoreResult<(PathBuf, String)> {
+        let (prefix, rest) = match relative.split_once('/') {
+            Some((p, r)) => (p, r.to_string()),
+            None => (relative, String::new()),
+        };
+
+        for root in &self.roots {
+            if Self::base_name(root)? == prefix {
+                return Ok((root.clone(), rest));
+            }
+        }
+
+        Err(CoreError::InvalidInput(format!(
+            "'{relative}' is not part of this selection"
+        )))
+    }
+
+    /// Turn a selection-relative path back into one on disk, through
+    /// `safe_join` for the part inside the root — the same round-trip
+    /// [`HostFolder::resolve`] makes, and for the same reason: by the time a
+    /// plan comes back from the frontend it is untrusted input again.
+    fn resolve(&self, relative: &str) -> CoreResult<PathBuf> {
+        let (root, rest) = self.locate(relative)?;
+        if rest.is_empty() {
+            Ok(root)
+        } else {
+            safe_join(&root, &rest).map_err(|err| {
+                CoreError::InvalidInput(format!(
+                    "'{relative}' is not a path inside the copy: {err}"
+                ))
+            })
+        }
+    }
+}
+
+impl CopySource for HostSelection {
+    fn entries(&self) -> CoreResult<Vec<SourceEntry>> {
+        self.entries_capped(MAX_COPY_ENTRIES)
+    }
+
+    fn read(&self, relative: &str) -> CoreResult<Vec<u8>> {
+        let path = self.resolve(relative)?;
+        let size = std::fs::metadata(&path)?.len();
+        if size > MAX_COPY_FILE_BYTES {
+            return Err(CoreError::InvalidInput(format!(
+                "{relative} is {size} bytes, more than ART copies in one go"
+            )));
+        }
+        Ok(std::fs::read(path)?)
+    }
+
+    fn metadata(&self, relative: &str) -> CoreResult<Option<Sidecar>> {
+        let path = self.resolve(relative)?;
+        host_metadata(&path, true)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1189,9 +1373,14 @@ mod tests {
         let mut device = fixture.device();
         let mut writer =
             VolumeWriter::open(&mut device, fixture.geometry, &fixture.image, 0).unwrap();
-        let report =
-            copy_into_volume(&mut writer, 0, &selection, OverwritePolicy::Skip, &NoProgress)
-                .unwrap();
+        let report = copy_into_volume(
+            &mut writer,
+            0,
+            &selection,
+            OverwritePolicy::Skip,
+            &NoProgress,
+        )
+        .unwrap();
         drop(writer);
         drop(device);
 
@@ -1206,10 +1395,7 @@ mod tests {
         assert!(game_entry.is_dir);
         let readme_entry = root.iter().find(|e| e.name == "Readme.txt").unwrap();
         assert!(!readme_entry.is_dir);
-        assert_eq!(
-            fixture.contents(readme_entry.block),
-            b"top level readme"
-        );
+        assert_eq!(fixture.contents(readme_entry.block), b"top level readme");
 
         let inside_game = fixture.listing(game_entry.block);
         assert_eq!(inside_game.len(), 2, "Loader and Sub");
