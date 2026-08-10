@@ -881,7 +881,12 @@
       "deleteReasonSelect": "Select something to delete",
       "attributes": "Attributes",
       "attributesReasonSelect": "Select something first",
-      "attributesReasonNeedsImage": "Attributes belong to files inside an image"
+      "attributesReasonNeedsImage": "Attributes belong to files inside an image",
+      "reasonMultiple": "Works on one entry — select only that one"
+    },
+    "selection": {
+      "summary_one": "{{count}} item selected ({{size}})",
+      "summary_other": "{{count}} items selected ({{size}})"
     },
     "toolbar": {
       "folder": "Folder...",

@@ -35,9 +35,12 @@ import { FileViewer } from "@/components/files/FileViewer";
 import {
   FunctionKeyBar,
   useFunctionKeys,
+  useInsertToggle,
   usePaneTab,
+  useSelectAll,
   type FunctionAction,
 } from "@/components/files/FunctionKeys";
+import { SelectionBar } from "@/components/files/SelectionBar";
 import { adfOpen, type AdfInfo } from "@/lib/adf";
 import { checkoutEdit, checkoutOpen, volumeIconFor } from "@/lib/checkout";
 import { onJobProgress } from "@/lib/jobs";
@@ -48,6 +51,16 @@ import {
   panelLocalRoots,
   type PanelEntry,
 } from "@/lib/panel";
+import {
+  entriesIn,
+  insertToggle,
+  selectOnly,
+  selectRange,
+  singleSelected,
+  toggleOne,
+  toggleSelectAll,
+  type SelectionUpdate,
+} from "@/lib/selection";
 import type { OverwritePolicy } from "@/lib/sources";
 import {
   describeLayout,
@@ -186,7 +199,20 @@ export function FileManager() {
   const [left, setLeft] = useState<PaneState>(emptyPane());
   const [right, setRight] = useState<PaneState>(emptyPane());
   const [roots, setRoots] = useState<string[]>([]);
-  const [selection, setSelection] = useState<Record<Side, string | null>>({
+  /** Which entries (by name) are marked in each pane. See `@/lib/selection`. */
+  const [selection, setSelection] = useState<Record<Side, Set<string>>>({
+    left: new Set(),
+    right: new Set(),
+  });
+  /**
+   * The entry each pane's mouse or keyboard last landed on.
+   *
+   * Not the same thing as being selected: a row can anchor a future
+   * Shift+click range, or be where Insert's "cursor" sits, without itself
+   * being marked. Kept separate so the two can be shown with different
+   * highlights — see `Pane` below.
+   */
+  const [anchor, setAnchor] = useState<Record<Side, string | null>>({
     left: null,
     right: null,
   });
@@ -242,6 +268,25 @@ export function FileManager() {
   );
   const pane = useCallback((side: Side) => (side === "left" ? left : right), [left, right]);
 
+  /** The entries `selection[side]` actually names, in pane order. */
+  const selectedEntries = useCallback(
+    (side: Side): PanelEntry[] => entriesIn(pane(side).entries, selection[side]),
+    [pane, selection]
+  );
+
+  /** Apply a `SelectionUpdate` (from `@/lib/selection`) to one side. */
+  const applySelection = useCallback((side: Side, update: SelectionUpdate) => {
+    setSelection((s) => ({ ...s, [side]: update.selected }));
+    setAnchor((a) => ({ ...a, [side]: update.anchor }));
+  }, []);
+
+  /** Selection resets on navigation: a Set that survived a directory change
+   * would let an action reach an entry the user has since left behind. */
+  const resetSelection = useCallback((side: Side) => {
+    setSelection((s) => ({ ...s, [side]: new Set() }));
+    setAnchor((a) => ({ ...a, [side]: null }));
+  }, []);
+
   useEffect(() => {
     panelLocalRoots()
       .then(async (found) => {
@@ -276,13 +321,13 @@ export function FileManager() {
           parent: listing.parent,
           truncated: listing.truncated,
         });
-        setSelection((current) => ({ ...current, [side]: null }));
+        resetSelection(side);
         setFocused(side);
       } catch (e) {
         setPane(side, { ...emptyPane(), location: path, error: String(e) });
       }
     },
-    [setPane]
+    [setPane, resetSelection]
   );
 
   const openAdf = useCallback(
@@ -308,13 +353,13 @@ export function FileManager() {
           volumeName: capability?.volume_name ?? info.volume_name ?? "",
           capability,
         });
-        setSelection((current) => ({ ...current, [side]: null }));
+        resetSelection(side);
         setFocused(side);
       } catch (e) {
         setPane(side, { ...emptyPane(), kind: "adf", location: path, error: String(e) });
       }
     },
-    [setPane]
+    [setPane, resetSelection]
   );
 
   /** Open an HDF on its partition list. */
@@ -323,13 +368,13 @@ export function FileManager() {
       try {
         const image = await volumeScan(path);
         setPane(side, { ...emptyPane(), kind: "hdf", location: path, image });
-        setSelection((current) => ({ ...current, [side]: null }));
+        resetSelection(side);
         setFocused(side);
       } catch (e) {
         setPane(side, { ...emptyPane(), kind: "hdf", location: path, error: String(e) });
       }
     },
-    [setPane]
+    [setPane, resetSelection]
   );
 
   /** Browse inside one partition of an already-scanned image. */
@@ -360,7 +405,7 @@ export function FileManager() {
           trail,
           entries: listing.entries,
         });
-        setSelection((current) => ({ ...current, [side]: null }));
+        resetSelection(side);
         setFocused(side);
       } catch (e) {
         setPane(side, {
@@ -372,7 +417,7 @@ export function FileManager() {
         });
       }
     },
-    [setPane]
+    [setPane, resetSelection]
   );
 
   async function chooseImage(side: Side, kind: "adf" | "hdf") {
@@ -939,11 +984,26 @@ export function FileManager() {
       side,
       state,
       roots,
-      selected: selection[side],
+      selectedNames: selection[side],
+      cursorName: anchor[side],
       focused: focused === side,
       powerMode,
       onFocus: () => setFocused(side),
-      onSelect: (name: string) => setSelection((s) => ({ ...s, [side]: name })),
+      // Plain click selects only this entry; Ctrl/Cmd+click toggles it and
+      // keeps the rest; Shift+click extends the range from the anchor. A
+      // click always focuses this pane too — the row's own onClick does not
+      // stopPropagation, so it bubbles to the pane's onClick={onFocus} — but
+      // the per-row Copy/Delete buttons below do stopPropagation and must
+      // focus explicitly instead.
+      onSelect: (entry: PanelEntry, event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => {
+        const entries = state.entries;
+        const update = event.shiftKey
+          ? selectRange(entries, selection[side], anchor[side], entry.name)
+          : event.ctrlKey || event.metaKey
+            ? toggleOne(selection[side], entry.name)
+            : selectOnly(entry.name);
+        applySelection(side, update);
+      },
       onActivate: (entry: PanelEntry) => void activate(side, entry),
       onUp: () => void goUp(side),
       onOpenFolder: () => void chooseFolder(side),
@@ -968,7 +1028,13 @@ export function FileManager() {
   // The pane the keys act on: `focused`, tracked above — never derived from
   // `selection`. Every action below reads `focused` and `focusedPane`.
   const focusedPane = pane(focused);
-  const selected = focusedPane.entries.find((e) => e.name === selection[focused]) ?? null;
+  // `single` is the one entry a single-entry action may act on — null both
+  // when nothing is selected and when more than one entry is, so those two
+  // cases have to be told apart below rather than folded together the way
+  // `Boolean(single)` alone would. Picking "the first of several" here would
+  // be the kind of guess that destroys the wrong file.
+  const single = singleSelected(focusedPane.entries, selection[focused]);
+  const multipleSelected = selection[focused].size > 1;
   const canWrite = writableVolume(focusedPane) !== null;
   const inVolume = focusedPane.kind !== "local" && focusedPane.volumeIndex !== null;
 
@@ -976,47 +1042,59 @@ export function FileManager() {
     {
       key: "F3",
       label: t("files.functionKeys.view"),
-      enabled: Boolean(selected && !selected.is_dir && inVolume),
-      reason: inVolume
-        ? t("files.functionKeys.viewReasonSelect")
-        : t("files.functionKeys.viewReasonNeedsImage"),
+      enabled: Boolean(single && !single.is_dir && inVolume),
+      reason: multipleSelected
+        ? t("files.functionKeys.reasonMultiple")
+        : inVolume
+          ? t("files.functionKeys.viewReasonSelect")
+          : t("files.functionKeys.viewReasonNeedsImage"),
       run: () => {
-        if (!selected || selected.header_block === null || focusedPane.volumeIndex === null) {
+        if (!single || single.header_block === null || focusedPane.volumeIndex === null) {
           return;
         }
         setViewing({
           path: focusedPane.location,
           volumeIndex: focusedPane.volumeIndex,
-          entryBlock: selected.header_block,
-          name: selected.name,
+          entryBlock: single.header_block,
+          name: single.name,
         });
       },
     },
     {
       key: "F4",
       label: t("files.functionKeys.edit"),
-      enabled: Boolean(selected && !selected.is_dir && canWrite) && busy === null,
-      reason: canWrite ? t("files.functionKeys.editReasonSelect") : writeRefusal(focusedPane, t),
+      enabled: Boolean(single && !single.is_dir && canWrite) && busy === null,
+      reason: multipleSelected
+        ? t("files.functionKeys.reasonMultiple")
+        : canWrite
+          ? t("files.functionKeys.editReasonSelect")
+          : writeRefusal(focusedPane, t),
       run: () => {
-        if (selected) void editEntry(focused, selected);
+        if (single) void editEntry(focused, single);
       },
     },
     {
       key: "F5",
       label: t("files.functionKeys.copy"),
-      enabled: Boolean(selected) && busy === null,
-      reason: t("files.functionKeys.copyReasonSelect"),
+      enabled: Boolean(single) && busy === null,
+      reason: multipleSelected
+        ? t("files.functionKeys.reasonMultiple")
+        : t("files.functionKeys.copyReasonSelect"),
       run: () => {
-        if (selected) void copyTo(focused, selected);
+        if (single) void copyTo(focused, single);
       },
     },
     {
       key: "F6",
       label: t("files.functionKeys.rename"),
-      enabled: Boolean(selected) && canWrite && busy === null,
-      reason: canWrite ? t("files.functionKeys.renameReasonSelect") : writeRefusal(focusedPane, t),
+      enabled: Boolean(single) && canWrite && busy === null,
+      reason: multipleSelected
+        ? t("files.functionKeys.reasonMultiple")
+        : canWrite
+          ? t("files.functionKeys.renameReasonSelect")
+          : writeRefusal(focusedPane, t),
       run: () => {
-        if (selected) void renameEntry(focused, selected);
+        if (single) void renameEntry(focused, single);
       },
     },
     {
@@ -1029,28 +1107,34 @@ export function FileManager() {
     {
       key: "F8",
       label: t("files.functionKeys.delete"),
-      enabled: Boolean(selected) && canWrite && busy === null,
-      reason: canWrite ? t("files.functionKeys.deleteReasonSelect") : writeRefusal(focusedPane, t),
+      enabled: Boolean(single) && canWrite && busy === null,
+      reason: multipleSelected
+        ? t("files.functionKeys.reasonMultiple")
+        : canWrite
+          ? t("files.functionKeys.deleteReasonSelect")
+          : writeRefusal(focusedPane, t),
       danger: true,
       run: () => {
-        if (selected) void deleteEntry(focused, selected);
+        if (single) void deleteEntry(focused, single);
       },
     },
     {
       key: "F9",
       label: t("files.functionKeys.attributes"),
-      enabled: Boolean(selected) && inVolume,
-      reason: inVolume
-        ? t("files.functionKeys.attributesReasonSelect")
-        : t("files.functionKeys.attributesReasonNeedsImage"),
+      enabled: Boolean(single) && inVolume,
+      reason: multipleSelected
+        ? t("files.functionKeys.reasonMultiple")
+        : inVolume
+          ? t("files.functionKeys.attributesReasonSelect")
+          : t("files.functionKeys.attributesReasonNeedsImage"),
       run: () => {
-        if (!selected || selected.header_block === null || focusedPane.volumeIndex === null) {
+        if (!single || single.header_block === null || focusedPane.volumeIndex === null) {
           return;
         }
         setAttributes({
           path: focusedPane.location,
           volumeIndex: focusedPane.volumeIndex,
-          entryBlock: selected.header_block,
+          entryBlock: single.header_block,
         });
       },
     },
@@ -1066,6 +1150,18 @@ export function FileManager() {
   // F-key would land on — and the same input/textarea/modifier guard, shared
   // via `usePaneTab` itself.
   usePaneTab(() => setFocused((side) => (side === "left" ? "right" : "left")), keysActive);
+
+  // Insert marks the entry under the pane's selection anchor and steps the
+  // anchor down one (Norton Commander's mark key); Ctrl+A marks everything
+  // in the focused pane, and clears it again on a second press. Both act on
+  // `focused`, same as every F-key above, and share the F-keys' gate so a
+  // modal on top cannot be marked through.
+  useInsertToggle(() => {
+    applySelection(focused, insertToggle(focusedPane.entries, selection[focused], anchor[focused]));
+  }, keysActive);
+  useSelectAll(() => {
+    applySelection(focused, toggleSelectAll(focusedPane.entries, selection[focused]));
+  }, keysActive);
 
   // An unfinished operation is offered as soon as a pane shows an image that
   // has one — before the user tries to write and is refused.
@@ -1171,9 +1267,9 @@ export function FileManager() {
           <button
             className="btn"
             title={t("files.arrows.toRightTitle")}
-            disabled={!selection.left || busy !== null}
+            disabled={selection.left.size !== 1 || busy !== null}
             onClick={() => {
-              const entry = left.entries.find((e) => e.name === selection.left);
+              const entry = singleSelected(left.entries, selection.left);
               if (entry) void copyTo("left", entry);
             }}
           >
@@ -1182,9 +1278,9 @@ export function FileManager() {
           <button
             className="btn"
             title={t("files.arrows.toLeftTitle")}
-            disabled={!selection.right || busy !== null}
+            disabled={selection.right.size !== 1 || busy !== null}
             onClick={() => {
-              const entry = right.entries.find((e) => e.name === selection.right);
+              const entry = singleSelected(right.entries, selection.right);
               if (entry) void copyTo("right", entry);
             }}
           >
@@ -1194,6 +1290,11 @@ export function FileManager() {
 
         <Pane {...paneProps("right")} />
       </div>
+
+      <SelectionBar
+        count={selection[focused].size}
+        bytes={selectedEntries(focused).reduce((sum, entry) => sum + entry.bytes, 0)}
+      />
 
       <FunctionKeyBar actions={actions} />
 
@@ -1335,7 +1436,8 @@ function Pane({
   side,
   state,
   roots,
-  selected,
+  selectedNames,
+  cursorName,
   focused,
   powerMode,
   onFocus,
@@ -1356,12 +1458,20 @@ function Pane({
   side: Side;
   state: PaneState;
   roots: string[];
-  selected: string | null;
+  /** Every marked entry's name in this pane — see `@/lib/selection`. */
+  selectedNames: Set<string>;
+  /** The entry the mouse/keyboard last landed on: a future Shift+click's
+   * range start, or Insert's "cursor". Highlighted distinctly from a
+   * selected row so a user can tell the two apart at a glance. */
+  cursorName: string | null;
   /** Whether this is the pane the keyboard (F-keys, Tab) is talking to. */
   focused: boolean;
   powerMode: boolean;
   onFocus: () => void;
-  onSelect: (name: string) => void;
+  onSelect: (
+    entry: PanelEntry,
+    event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }
+  ) => void;
   onActivate: (entry: PanelEntry) => void;
   onUp: () => void;
   onOpenFolder: () => void;
@@ -1500,82 +1610,98 @@ function Pane({
 
       {showingFiles && (
         <ul style={{ listStyle: "none", padding: 0, margin: 0, maxHeight: 420, overflow: "auto" }}>
-          {state.entries.map((entry) => (
-            <li
-              key={`${entry.name}-${entry.header_block ?? entry.path}`}
-              className="recent-item"
-              draggable={!entry.is_dir}
-              onDragStart={(event) => {
-                event.dataTransfer.setData(
-                  "application/art-entry",
-                  JSON.stringify({ entry, side })
-                );
-                event.dataTransfer.effectAllowed = "copy";
-                // A local file can also leave the window entirely; the native
-                // drag starts from the same gesture.
-                if (entry.path) onDragOut(entry);
-              }}
-              onClick={() => onSelect(entry.name)}
-              onDoubleClick={() => onActivate(entry)}
-              style={{
-                cursor: entry.is_dir ? "pointer" : "grab",
-                background:
-                  selected === entry.name ? "var(--surface-2, rgba(255,255,255,0.06))" : undefined,
-                display: "flex",
-                justifyContent: "space-between",
-                gap: 8,
-              }}
-            >
-              <span style={{ minWidth: 0 }}>
-                <span className="recent-name">{entry.name}</span>
-                {entry.is_dir && (
-                  <span className="faint" style={{ fontSize: 10 }}>
-                    {" "}
-                    {t("files.pane.folderSuffix")}
-                  </span>
-                )}
-                {entry.is_link && (
-                  <span className="faint" style={{ fontSize: 10 }}>
-                    {" "}
-                    {t("files.pane.linkSuffix")}
-                  </span>
-                )}
-              </span>
-              <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                {!entry.is_dir && (
-                  <span className="faint" style={{ fontSize: 11 }}>
-                    {formatBytes(entry.bytes)}
-                  </span>
-                )}
-                {!entry.is_dir && (
-                  <button
-                    className="btn"
-                    style={{ fontSize: 10 }}
-                    title={t("files.pane.copyTitle")}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onCopy(entry);
-                    }}
-                  >
-                    {side === "left" ? "→" : "←"}
-                  </button>
-                )}
-                {writableVolume(state) !== null && (
-                  <button
-                    className="btn"
-                    style={{ fontSize: 10 }}
-                    title={t("files.pane.deleteTitle")}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onDelete(entry);
-                    }}
-                  >
-                    X
-                  </button>
-                )}
-              </span>
-            </li>
-          ))}
+          {state.entries.map((entry) => {
+            const isSelected = selectedNames.has(entry.name);
+            const isCursor = cursorName === entry.name;
+            return (
+              <li
+                key={`${entry.name}-${entry.header_block ?? entry.path}`}
+                className="recent-item"
+                draggable={!entry.is_dir}
+                onDragStart={(event) => {
+                  event.dataTransfer.setData(
+                    "application/art-entry",
+                    JSON.stringify({ entry, side })
+                  );
+                  event.dataTransfer.effectAllowed = "copy";
+                  // A local file can also leave the window entirely; the native
+                  // drag starts from the same gesture.
+                  if (entry.path) onDragOut(entry);
+                }}
+                onClick={(event) => onSelect(entry, event)}
+                onDoubleClick={() => onActivate(entry)}
+                style={{
+                  cursor: entry.is_dir ? "pointer" : "grab",
+                  // Selected and "under the cursor" are shown differently on
+                  // purpose (brief: a user must be able to tell them apart):
+                  // a selected row gets an accent-tinted fill, the cursor row
+                  // an accent ring — both, together, when a row is both.
+                  background: isSelected
+                    ? "color-mix(in srgb, var(--accent) 22%, transparent)"
+                    : undefined,
+                  boxShadow: isCursor ? "inset 0 0 0 1px var(--accent)" : undefined,
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 8,
+                }}
+              >
+                <span style={{ minWidth: 0 }}>
+                  <span className="recent-name">{entry.name}</span>
+                  {entry.is_dir && (
+                    <span className="faint" style={{ fontSize: 10 }}>
+                      {" "}
+                      {t("files.pane.folderSuffix")}
+                    </span>
+                  )}
+                  {entry.is_link && (
+                    <span className="faint" style={{ fontSize: 10 }}>
+                      {" "}
+                      {t("files.pane.linkSuffix")}
+                    </span>
+                  )}
+                </span>
+                <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  {!entry.is_dir && (
+                    <span className="faint" style={{ fontSize: 11 }}>
+                      {formatBytes(entry.bytes)}
+                    </span>
+                  )}
+                  {!entry.is_dir && (
+                    <button
+                      className="btn"
+                      style={{ fontSize: 10 }}
+                      title={t("files.pane.copyTitle")}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        // stopPropagation above means this click never bubbles
+                        // to the pane's own onClick={onFocus} — without this,
+                        // clicking Copy on an unfocused pane would act on the
+                        // wrong side's F-key state.
+                        onFocus();
+                        onCopy(entry);
+                      }}
+                    >
+                      {side === "left" ? "→" : "←"}
+                    </button>
+                  )}
+                  {writableVolume(state) !== null && (
+                    <button
+                      className="btn"
+                      style={{ fontSize: 10 }}
+                      title={t("files.pane.deleteTitle")}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onFocus();
+                        onDelete(entry);
+                      }}
+                    >
+                      X
+                    </button>
+                  )}
+                </span>
+              </li>
+            );
+          })}
 
           {state.entries.length === 0 && !state.error && (
             <li className="muted" style={{ fontSize: 12, padding: "8px 0" }}>

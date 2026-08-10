@@ -147,6 +147,15 @@ textarea:disabled {
   color: var(--text-faint);
 }
 
+/* The file manager's multi-select summary, between the panes and the
+   function-key bar — the tightest strip in the app, so this stays a single
+   line with no padding of its own. */
+.selection-bar {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 6px 0;
+}
+
 /* Focus visibility for keyboard users (spec §64). Universal on purpose:
    `:focus-visible` rather than `:focus`, so a mouse click leaves no ring
    behind, and one rule rather than a list of selectors that would have to be

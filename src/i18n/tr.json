@@ -881,7 +881,12 @@
       "deleteReasonSelect": "Silmek için bir şey seçin",
       "attributes": "Nitelikler",
       "attributesReasonSelect": "Önce bir şey seçin",
-      "attributesReasonNeedsImage": "Nitelikler yalnızca bir imaj içindeki dosyalara aittir"
+      "attributesReasonNeedsImage": "Nitelikler yalnızca bir imaj içindeki dosyalara aittir",
+      "reasonMultiple": "Yalnızca tek bir öğede çalışır"
+    },
+    "selection": {
+      "summary_one": "{{count}} öğe seçili ({{size}})",
+      "summary_other": "{{count}} öğe seçili ({{size}})"
     },
     "toolbar": {
       "folder": "Klasör...",
