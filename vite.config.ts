@@ -1,4 +1,9 @@
-import { defineConfig } from "vite";
+// `defineConfig` comes from "vitest/config" rather than "vite" so this file
+// stays the single source of truth for both the dev server and the test
+// runner (Vitest merges its own `test` field in, and otherwise behaves like
+// Vite's own `defineConfig`) — no separate vitest.config.ts to drift out of
+// sync with the `@/*` alias below.
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
 
@@ -37,5 +42,14 @@ export default defineConfig({
       process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari13",
     minify: !process.env.TAURI_ENV_DEBUG ? "esbuild" : false,
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
+  },
+  test: {
+    // Plain Node by default: `src/i18n/parity.test.ts` and friends read the
+    // source tree from disk and must not pay for (or accidentally depend on)
+    // a DOM. Only React component tests (`*.test.tsx`) get jsdom — scoped by
+    // glob rather than globally, so the two kinds of test never share an
+    // environment by accident.
+    environment: "node",
+    environmentMatchGlobs: [["src/**/*.test.tsx", "jsdom"]],
   },
 });

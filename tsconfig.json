@@ -37,5 +37,5 @@
   },
   "include": ["src"],
   /* The tests live in their own program — see tsconfig.test.json. */
-  "exclude": ["src/**/*.test.ts"]
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }
