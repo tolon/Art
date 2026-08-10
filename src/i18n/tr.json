@@ -36,7 +36,9 @@
     "ok": "Tamam",
     "open": "Aç",
     "close": "Kapat",
-    "unknown": "Bilinmiyor"
+    "unknown": "Bilinmiyor",
+    "yes": "Evet",
+    "no": "Hayır"
   },
   "settings": {
     "title": "Ayarlar",
@@ -62,5 +64,241 @@
     "engineReady": "İş Akışı Motoru: HAZIR",
     "dragDropReady": "Sürükle & Bırak: HAZIR",
     "dbReady": "Veritabanı: HAZIR"
+  },
+  "aminet": {
+    "intro": "Aminet, mağazadır. ART ise kargocu ve gümrük memurudur — her indirme saklanmadan önce denetlenir ve siz istemeden hiçbir şey kurulmaz.",
+    "catalogue": {
+      "download": "Kataloğu İndir",
+      "update": "Kataloğu Güncelle",
+      "checking": "Kontrol ediliyor…",
+      "empty": "Henüz katalog yok. Bir kez eşitleyin, arama çevrimdışı da çalışır.",
+      "count": "{{total}} paket, çevrimdışı aranabilir"
+    },
+    "busy": {
+      "hint": "{{busy}} — ilerleme iş çubuğunda görünür, oradan durdurabilirsiniz.",
+      "syncing": "Katalog eşitleniyor…",
+      "downloading": "{{name}} indiriliyor…",
+      "installing": "{{name}} kuruluyor…",
+      "lookingAt": "{{image}} inceleniyor…"
+    },
+    "search": {
+      "placeholder": "Katalogda ara — örn. AmiSSL",
+      "sortLabel": "Sonuçları sırala",
+      "submit": "Ara"
+    },
+    "sort": {
+      "relevance": "En iyi eşleşme",
+      "newest": "Önce en yeni",
+      "oldest": "Önce en eski",
+      "largest": "Önce en büyük",
+      "smallest": "Önce en küçük",
+      "name": "İsme göre"
+    },
+    "categories": {
+      "all": "Tümü"
+    },
+    "filters": {
+      "more": "Daha fazla filtre",
+      "hide": "Filtreleri gizle",
+      "nameOnly": "Yalnızca isimlerde ara",
+      "uploaded": "Yüklenme",
+      "atLeast": "En az",
+      "atMost": "En çok",
+      "fileType": "Dosya türü",
+      "clear": "Filtreleri temizle"
+    },
+    "age": {
+      "any": "Herhangi bir zaman",
+      "month": "Son ay",
+      "sixMonths": "Son 6 ay",
+      "year": "Son yıl",
+      "fiveYears": "Son 5 yıl"
+    },
+    "size": {
+      "any": "Herhangi bir boyut",
+      "kb100": "100 KB",
+      "mb1": "1 MB",
+      "mb10": "10 MB",
+      "mb100": "100 MB"
+    },
+    "library": {
+      "downloadsGoTo": "İndirilenlerin gideceği yer",
+      "change": "Değiştir…",
+      "subfolder": "Alt klasör (isteğe bağlı)",
+      "subfolderPlaceholder": "örn. browser — klasörün kendisi için boş bırakın",
+      "ifExists": "Dosya zaten oradaysa",
+      "theDownloadFolder": "indirme klasörü"
+    },
+    "overwrite": {
+      "skip": "Orada duranı koru",
+      "rename": "İkisini de tut",
+      "overwrite": "Üzerine yaz"
+    },
+    "results": {
+      "noCatalogue": "Aramaya başlamak için kataloğu indirin.",
+      "prompt": "Arayın veya bir kategori seçin.",
+      "none": "Hiçbir şey eşleşmedi. Her kelime eşleşmeli, daha azını deneyin.",
+      "savedTo": "{{location}} içine kaydedildi"
+    },
+    "package": {
+      "ageCapped": " (Aminet tam olarak ne kadar daha eski olduğunu kaydetmez)",
+      "version": "Sürüm",
+      "author": "Yazar",
+      "distribution": "Dağıtım",
+      "requires": "Readme'ye göre şunlar gerekiyor: {{list}}. ART sizin yerinize bağımlılık kurmaz — bu, ART'ın denetlediği değil, readme'nin iddia ettiği bilgidir.",
+      "download": "İndir",
+      "downloadAgain": "Yeniden indir",
+      "installAdf": "ADF'ye Kur…",
+      "installAdfReady": "Bunu bir disket imajının içine aç",
+      "installHdf": "HDF'ye Kur…",
+      "installHdfReady": "Bunu bir sabit disk imajının bir bölümüne aç",
+      "installNotReady": "Önce indirin — kurulum diskinizdeki dosyadan çalışır",
+      "showInCollection": "Koleksiyonda Göster",
+      "showInCollectionReady": "İndirme klasörünüzü Koleksiyon ekranında dizinleyin",
+      "showInCollectionNotReady": "Önce indirin — Koleksiyon diskinizdeki dosyaları dizinler",
+      "installedSummary_one": "{{into}} konumuna {{count}} dosya yazıldı",
+      "installedSummary_other": "{{into}} konumuna {{count}} dosya yazıldı",
+      "diskRoot": "diskin kök dizini",
+      "backedUpNote": " · önceki imaj yedeklendi",
+      "notWritten": "Yazılmadı: {{list}}",
+      "alreadyExists": "Bu isimde bir dosya zaten {{location}} içindeydi — dokunulmadı. Bunu değiştirmek için \"{{rename}}\" veya \"{{replace}}\" seçin.",
+      "fromCache": "Daha önce indirilmiş — önbellekten kopyalandı",
+      "fresh": "{{mirror}} adresinden indirildi, boyutu ve arşivi denetlendi",
+      "renamedNote": " · ikisini de tutmak için yeni bir adla kaydedildi",
+      "bytesLabel": "{{bytes}} bayt",
+      "sha256Label": "SHA-256 {{hash}}"
+    },
+    "cacheLabel": "Önbellek: {{path}}",
+    "sync": {
+      "unreadable": "{{mirror}} yanıt verdi, ancak gönderdiği katalog düzgün okunamadı ({{parsed}} okunabilir girdi, {{skipped}} okunamayan satır). Mevcut kataloğunuz korundu. Başka bir yansı deneyin.",
+      "success": "{{mirror}} adresinden {{total}} paket",
+      "indexStats": "{{bytes}} bayt indeks · {{skipped}} okunamayan satır",
+      "truncated": " · indeks ART'ın okuyacağından daha uzundu",
+      "lineExample": "satır {{number}}: {{reason}} — {{excerpt}}"
+    },
+    "readme": {
+      "title": "Readme",
+      "loading": "Alınıyor…",
+      "none": "Bu paket için readme bulunamadı."
+    },
+    "updates": {
+      "download_one": "paket",
+      "download_other": "paket",
+      "allCurrent": "İndirdiğiniz {{count}} {{downloadWord}} — hepsi güncel",
+      "someChanged_one": "{{total}} {{downloadWord}}ten {{count}} tanesi Aminet'te değişmiş",
+      "someChanged_other": "{{total}} {{downloadWord}}ten {{count}} tanesi Aminet'te değişmiş",
+      "onlyAttention": "Yalnızca dikkat gerekenler",
+      "showAll": "Tümünü göster",
+      "recheck": "Yenile",
+      "hint": "Son katalog eşitlemenizle karşılaştırıldı — bunu anlamak için hiçbir şey indirilmedi. ART hiçbir indirmeyi kendiliğinden değiştirmez.",
+      "allMatch": "İndirdiğiniz her şey katalogla eşleşiyor.",
+      "stopTracking": "Takibi bırak",
+      "stopTrackingTooltip": "Bu indirmeyi takip etmeyi bırak. Dosyaya dokunulmaz."
+    },
+    "mirrors": {
+      "indexLabel": "İndeks: {{path}}",
+      "hide": "Yansıları gizle",
+      "editCount": "Yansılar ({{count}}) — düzenle",
+      "inOrder": "Sıra: {{list}}",
+      "hint": "Yukarıdan aşağıya denenir. Size en yakın olanı en üste koyun.",
+      "namePlaceholder": "Ad",
+      "nameAriaLabel": "{{n}}. yansının adı",
+      "addressAriaLabel": "{{n}}. yansının adresi",
+      "moveUp": "Yukarı taşı",
+      "moveUpAriaLabel": "{{name}} öğesini yukarı taşı",
+      "moveDown": "Aşağı taşı",
+      "moveDownAriaLabel": "{{name}} öğesini aşağı taşı",
+      "removeTitle": "Bu yansıyı kaldır",
+      "removeAriaLabel": "{{name}} öğesini kaldır",
+      "mirrorFallback": "yansı",
+      "needOne": "En az bir yansı gerekli — bir tane ekleyin ya da \"{{backToDefaults}}\" seçeneğini kullanın.",
+      "add": "Yansı ekle",
+      "apply": "Uygula",
+      "backToDefaults": "Varsayılanlara dön",
+      "backToDefaultsTitle": "ART'ın geldiği yansıları geri yükle",
+      "saved": "Kaydedildi — bir sonraki eşitleme veya indirmede kullanılır"
+    },
+    "claim": {
+      "confidence": "({{confidence}} güvenilirlik, {{source}} kaynağından)"
+    },
+    "err": {
+      "folderUnreachable": "İndirme klasörünüze ({{path}}) artık ulaşılamıyor — yeniden seçin.",
+      "noLongerInCatalogue": "{{name}} artık katalogda yok, açılacak bir şey kalmadı.",
+      "downloadFirst": "Önce indirin — ancak o zaman kurulabilir.",
+      "noVolumes": "ART o imajda hiçbir bölüm bulamadı.",
+      "noWritablePartitions": "ART o imajdaki hiçbir bölüme yazamıyor: {{list}}",
+      "whichPartition": "Hangi bölüm?",
+      "invalidPartition": "{{answer}}, ART'ın yazabildiği bölümlerden biri değil."
+    }
+  },
+  "adf": {
+    "title": "ADF Stüdyosu",
+    "runInWinuae": "WinUAE'de Çalıştır",
+    "newBlank": "Yeni Boş ADF…",
+    "openAdf": "ADF Aç…",
+    "currentDisk": "Geçerli Disk:",
+    "working": "Çalışıyor…",
+    "unnamed": "(adsız)",
+    "rootBlock": "Kök Blok: {{n}}",
+    "filesystem": "Dosya Sistemi:",
+    "bootable": "Önyüklenebilir:",
+    "capacity": "Kapasite:",
+    "used": "Kullanılan:",
+    "free": "Boş:",
+    "filesCount": "Dosyalar:",
+    "dirsCount": "Klasörler:",
+    "checksum": "Sağlama:",
+    "checksumMismatch": "UYUŞMUYOR / ÖZEL",
+    "warning": {
+      "title": "Non-DOS, Özel Önyükleyici veya Başlık Anomalisi Bulundu",
+      "description": "Bu disk imajı standart olmayan yapılar içeriyor. Nasıl incelemek istersiniz?",
+      "hideHex": "Güvenli Hex Görünümünü Gizle",
+      "option1": "Seçenek 1: Güvenli Ham Blok ve Hex Görünümü",
+      "option2": "Seçenek 2: Adli Analiz / Disk Analizörü"
+    },
+    "hex": {
+      "blockLabel": "BLOK 0000 (BOOTBLOCK) VE BLOK {{n}} (ROOT BLOCK)"
+    },
+    "selectFileTitle": "ADF'ye aktarılacak dosyayı seçin",
+    "dirContents": "Klasör İçeriği",
+    "newFolder": "Yeni Klasör",
+    "addFile": "Dosya Ekle…",
+    "upOneLevel": "Bir Üst Düzey",
+    "emptyDir": "(Boş klasör — içerik eklemek için \"{{addFile}}\" veya \"{{newFolder}}\" düğmesine tıklayın)",
+    "folderBadge": "Klasör",
+    "extract": "Ayıkla",
+    "renameTitle": "Yeniden Adlandır",
+    "deleteTitle": "Sil",
+    "noDiskOpen": "Amiga dosyalarını yönetmeye başlamak için mevcut bir .adf imajı açın veya yeni bir boş ADF oluşturun.",
+    "modal": {
+      "newAdfTitle": "Yeni ADF Disket Oluştur",
+      "volumeName": "Birim Adı (en fazla 30 karakter):",
+      "fsType": "Dosya Sistemi Türü:",
+      "ffsOption": "Fast File System (FFS) — Önerilen",
+      "ofsOption": "Old File System (OFS) — Kickstart 1.x",
+      "bootableLabel": "Diski önyüklenebilir yap (Standart Bootblock)",
+      "createSave": "Oluştur ve Kaydet…",
+      "newFolderTitle": "Yeni Klasör Oluştur",
+      "folderNamePlaceholder": "Klasör Adı (örn. S, C, Devs)",
+      "createFolder": "Klasör Oluştur",
+      "renameEntryTitle": "Girdiyi Yeniden Adlandır",
+      "deleteTitle": "Silmeyi Onayla",
+      "deleteConfirm": "'{{name}}' kalıcı olarak silinsin mi? Kullanılan bloklar disk bitmap'ine geri bırakılacak.",
+      "deleteButton": "Girdiyi Sil"
+    },
+    "msg": {
+      "createdImage": "Yeni disk imajı oluşturuldu: '{{name}}.adf'",
+      "fileImported": "Dosya diske başarıyla aktarıldı",
+      "addFileFailed": "Dosya eklenemedi: {{error}}",
+      "dirCreated": "'{{name}}' klasörü oluşturuldu",
+      "createDirFailed": "Klasör oluşturulamadı: {{error}}",
+      "deleted": "'{{name}}' silindi",
+      "deleteFailed": "'{{name}}' silinemedi: {{error}}",
+      "renamed": "'{{from}}' → '{{to}}' olarak yeniden adlandırıldı",
+      "renameFailed": "'{{name}}' yeniden adlandırılamadı: {{error}}",
+      "extracted": "'{{name}}' için {{bytes}} bayt {{dest}} konumuna ayıklandı",
+      "openDirFailed": "'{{name}}' klasörü açılamadı: {{error}}",
+      "withBackup": "{{message}}. Önceki sürüm {{backupPath}} konumuna yedeklendi"
+    }
   }
 }

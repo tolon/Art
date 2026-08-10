@@ -36,7 +36,9 @@
     "ok": "OK",
     "open": "Open",
     "close": "Close",
-    "unknown": "Unknown"
+    "unknown": "Unknown",
+    "yes": "Yes",
+    "no": "No"
   },
   "settings": {
     "title": "Settings",
@@ -62,5 +64,241 @@
     "engineReady": "Workflow Engine: READY",
     "dragDropReady": "Drag & Drop: READY",
     "dbReady": "Database: READY"
+  },
+  "aminet": {
+    "intro": "Aminet is the store. ART is the courier and the customs officer — every download is checked before it is kept, and nothing is installed until you ask.",
+    "catalogue": {
+      "download": "Download the catalogue",
+      "update": "Update the catalogue",
+      "checking": "Checking…",
+      "empty": "No catalogue yet. One sync and search works offline.",
+      "count": "{{total}} packages, searchable offline"
+    },
+    "busy": {
+      "hint": "{{busy}} — progress is in the job bar, and you can stop it there.",
+      "syncing": "Syncing the catalogue…",
+      "downloading": "Downloading {{name}}…",
+      "installing": "Installing {{name}}…",
+      "lookingAt": "Looking at {{image}}…"
+    },
+    "search": {
+      "placeholder": "Search the catalogue — e.g. AmiSSL",
+      "sortLabel": "Sort results",
+      "submit": "Search"
+    },
+    "sort": {
+      "relevance": "Best match",
+      "newest": "Newest first",
+      "oldest": "Oldest first",
+      "largest": "Largest first",
+      "smallest": "Smallest first",
+      "name": "By name"
+    },
+    "categories": {
+      "all": "All"
+    },
+    "filters": {
+      "more": "More filters",
+      "hide": "Hide filters",
+      "nameOnly": "Search names only",
+      "uploaded": "Uploaded",
+      "atLeast": "At least",
+      "atMost": "At most",
+      "fileType": "File type",
+      "clear": "Clear filters"
+    },
+    "age": {
+      "any": "Any age",
+      "month": "Last month",
+      "sixMonths": "Last 6 months",
+      "year": "Last year",
+      "fiveYears": "Last 5 years"
+    },
+    "size": {
+      "any": "Any size",
+      "kb100": "100 KB",
+      "mb1": "1 MB",
+      "mb10": "10 MB",
+      "mb100": "100 MB"
+    },
+    "library": {
+      "downloadsGoTo": "Downloads go to",
+      "change": "Change…",
+      "subfolder": "Subfolder (optional)",
+      "subfolderPlaceholder": "e.g. browser — leave empty for the folder itself",
+      "ifExists": "If the file is already there",
+      "theDownloadFolder": "the download folder"
+    },
+    "overwrite": {
+      "skip": "Keep what is there",
+      "rename": "Keep both",
+      "overwrite": "Replace it"
+    },
+    "results": {
+      "noCatalogue": "Download the catalogue to start searching.",
+      "prompt": "Search, or pick a category.",
+      "none": "Nothing matched. Every word has to match, so try fewer of them.",
+      "savedTo": "Saved to {{location}}"
+    },
+    "package": {
+      "ageCapped": " (Aminet does not record exactly how much older)",
+      "version": "Version",
+      "author": "Author",
+      "distribution": "Distribution",
+      "requires": "The readme says this needs: {{list}}. ART does not install dependencies for you — this is what the readme claims, not something ART has checked.",
+      "download": "Download",
+      "downloadAgain": "Download again",
+      "installAdf": "Install to ADF…",
+      "installAdfReady": "Unpack this into a floppy image",
+      "installHdf": "Install to HDF…",
+      "installHdfReady": "Unpack this into a partition of a hard disk image",
+      "installNotReady": "Download it first — installing works from the file on your disk",
+      "showInCollection": "Show in Collection",
+      "showInCollectionReady": "Index your download folder in the Collection screen",
+      "showInCollectionNotReady": "Download it first — the Collection indexes files on your disk",
+      "installedSummary_one": "{{count}} file written to {{into}}",
+      "installedSummary_other": "{{count}} files written to {{into}}",
+      "diskRoot": "the root of the disk",
+      "backedUpNote": " · the previous image was backed up",
+      "notWritten": "Not written: {{list}}",
+      "alreadyExists": "A file of that name was already in {{location}} — it was left alone. Choose \"{{rename}}\" or \"{{replace}}\" to change that.",
+      "fromCache": "Already downloaded before — copied from the cache",
+      "fresh": "Downloaded from {{mirror}}, size and archive checked",
+      "renamedNote": " · saved under a new name to keep both",
+      "bytesLabel": "{{bytes}} bytes",
+      "sha256Label": "SHA-256 {{hash}}"
+    },
+    "cacheLabel": "Cache: {{path}}",
+    "sync": {
+      "unreadable": "{{mirror}} answered, but the catalogue it sent could not be read properly ({{parsed}} readable entries, {{skipped}} unreadable lines). Your existing catalogue has been kept. Try another mirror.",
+      "success": "{{total}} packages from {{mirror}}",
+      "indexStats": "{{bytes}} bytes of index · {{skipped}} unreadable lines",
+      "truncated": " · index was longer than ART will read",
+      "lineExample": "line {{number}}: {{reason}} — {{excerpt}}"
+    },
+    "readme": {
+      "title": "Readme",
+      "loading": "Fetching…",
+      "none": "No readme was available for this package."
+    },
+    "updates": {
+      "download_one": "download",
+      "download_other": "downloads",
+      "allCurrent": "Your {{count}} {{downloadWord}} — all current",
+      "someChanged_one": "{{count}} of your {{total}} {{downloadWord}} has changed on Aminet",
+      "someChanged_other": "{{count}} of your {{total}} {{downloadWord}} have changed on Aminet",
+      "onlyAttention": "Only what needs attention",
+      "showAll": "Show all",
+      "recheck": "Re-check",
+      "hint": "Compared against your last catalogue sync — nothing was downloaded to work this out. ART never replaces a download on its own.",
+      "allMatch": "Everything you have downloaded matches the catalogue.",
+      "stopTracking": "Stop tracking",
+      "stopTrackingTooltip": "Stop tracking this download. The file is not touched."
+    },
+    "mirrors": {
+      "indexLabel": "Index: {{path}}",
+      "hide": "Hide mirrors",
+      "editCount": "Mirrors ({{count}}) — edit",
+      "inOrder": "In order: {{list}}",
+      "hint": "Tried top to bottom. Put the one nearest you first.",
+      "namePlaceholder": "Name",
+      "nameAriaLabel": "Mirror {{n}} name",
+      "addressAriaLabel": "Mirror {{n}} address",
+      "moveUp": "Move up",
+      "moveUpAriaLabel": "Move {{name}} up",
+      "moveDown": "Move down",
+      "moveDownAriaLabel": "Move {{name}} down",
+      "removeTitle": "Remove this mirror",
+      "removeAriaLabel": "Remove {{name}}",
+      "mirrorFallback": "mirror",
+      "needOne": "At least one mirror is needed — add one, or use \"{{backToDefaults}}\".",
+      "add": "Add a mirror",
+      "apply": "Apply",
+      "backToDefaults": "Back to defaults",
+      "backToDefaultsTitle": "Restore the mirrors ART ships with",
+      "saved": "Saved — used from the next sync or download on"
+    },
+    "claim": {
+      "confidence": "({{confidence}} confidence, from the {{source}})"
+    },
+    "err": {
+      "folderUnreachable": "Your download folder ({{path}}) is no longer reachable — choose it again.",
+      "noLongerInCatalogue": "{{name}} is no longer in the catalogue, so there is nothing to open.",
+      "downloadFirst": "Download it first — then it can be installed.",
+      "noVolumes": "ART found no volumes in that image.",
+      "noWritablePartitions": "ART cannot write to any partition in that image: {{list}}",
+      "whichPartition": "Which partition?",
+      "invalidPartition": "{{answer}} is not one of the partitions ART can write to."
+    }
+  },
+  "adf": {
+    "title": "ADF Studio",
+    "runInWinuae": "Run in WinUAE",
+    "newBlank": "New Blank ADF…",
+    "openAdf": "Open ADF…",
+    "currentDisk": "Current Disk:",
+    "working": "Working…",
+    "unnamed": "(unnamed)",
+    "rootBlock": "Root Block: {{n}}",
+    "filesystem": "Filesystem:",
+    "bootable": "Bootable:",
+    "capacity": "Capacity:",
+    "used": "Used:",
+    "free": "Free:",
+    "filesCount": "Files:",
+    "dirsCount": "Dirs:",
+    "checksum": "Checksum:",
+    "checksumMismatch": "MISMATCH / CUSTOM",
+    "warning": {
+      "title": "Non-DOS, Custom Bootloader or Header Anomaly Detected",
+      "description": "This disk image contains non-standard structures. How would you like to inspect it?",
+      "hideHex": "Hide Safe Hex View",
+      "option1": "Option 1: Safe Raw Block & Hex View",
+      "option2": "Option 2: Forensics / Disk Analyzer"
+    },
+    "hex": {
+      "blockLabel": "BLOCK 0000 (BOOTBLOCK) & BLOCK {{n}} (ROOT BLOCK)"
+    },
+    "selectFileTitle": "Select file to import into ADF",
+    "dirContents": "Directory Contents",
+    "newFolder": "New Folder",
+    "addFile": "Add File…",
+    "upOneLevel": "Up One Level",
+    "emptyDir": "(Empty directory — click \"{{addFile}}\" or \"{{newFolder}}\" to add contents)",
+    "folderBadge": "Folder",
+    "extract": "Extract",
+    "renameTitle": "Rename",
+    "deleteTitle": "Delete",
+    "noDiskOpen": "Open an existing .adf image or create a new blank ADF to start managing Amiga files.",
+    "modal": {
+      "newAdfTitle": "Create New ADF Floppy Disk",
+      "volumeName": "Volume Name (Max 30 chars):",
+      "fsType": "Filesystem Type:",
+      "ffsOption": "Fast File System (FFS) — Recommended",
+      "ofsOption": "Old File System (OFS) — Kickstart 1.x",
+      "bootableLabel": "Make disk bootable (Standard Bootblock)",
+      "createSave": "Create & Save…",
+      "newFolderTitle": "Create New Folder",
+      "folderNamePlaceholder": "Folder Name (e.g. S, C, Devs)",
+      "createFolder": "Create Folder",
+      "renameEntryTitle": "Rename Entry",
+      "deleteTitle": "Confirm Deletion",
+      "deleteConfirm": "Are you sure you want to permanently delete '{{name}}'? Used blocks will be freed back to the disk bitmap.",
+      "deleteButton": "Delete Entry"
+    },
+    "msg": {
+      "createdImage": "Created new disk image '{{name}}.adf'",
+      "fileImported": "Successfully imported file into disk",
+      "addFileFailed": "Failed to add file: {{error}}",
+      "dirCreated": "Created directory '{{name}}'",
+      "createDirFailed": "Failed to create directory: {{error}}",
+      "deleted": "Deleted '{{name}}'",
+      "deleteFailed": "Failed to delete '{{name}}': {{error}}",
+      "renamed": "Renamed '{{from}}' to '{{to}}'",
+      "renameFailed": "Failed to rename '{{name}}': {{error}}",
+      "extracted": "Extracted {{bytes}} bytes for '{{name}}' to {{dest}}",
+      "openDirFailed": "Failed to open directory '{{name}}': {{error}}",
+      "withBackup": "{{message}}. Previous version backed up to {{backupPath}}"
+    }
   }
 }

@@ -57,14 +57,15 @@ import {
 import { volumeScan } from "@/lib/volume";
 import { usePowerMode } from "@/lib/uxmode";
 
-/** Ordering choices, in the words a user would use. */
-const SORTS: Array<{ value: SortOrder; label: string }> = [
-  { value: "relevance", label: "Best match" },
-  { value: "newest", label: "Newest first" },
-  { value: "oldest", label: "Oldest first" },
-  { value: "largest", label: "Largest first" },
-  { value: "smallest", label: "Smallest first" },
-  { value: "name", label: "By name" },
+/** Ordering choices, in the words a user would use. Labels resolve through
+ * `t()` at render time so switching language updates them without a reload. */
+const SORTS: Array<{ value: SortOrder; key: string }> = [
+  { value: "relevance", key: "aminet.sort.relevance" },
+  { value: "newest", key: "aminet.sort.newest" },
+  { value: "oldest", key: "aminet.sort.oldest" },
+  { value: "largest", key: "aminet.sort.largest" },
+  { value: "smallest", key: "aminet.sort.smallest" },
+  { value: "name", key: "aminet.sort.name" },
 ];
 
 /**
@@ -72,20 +73,20 @@ const SORTS: Array<{ value: SortOrder; label: string }> = [
  * these are the honest granularity — offering "since March" would be inventing
  * precision the data does not have.
  */
-const AGE_CHOICES: Array<{ weeks: number | null; label: string }> = [
-  { weeks: null, label: "Any age" },
-  { weeks: 4, label: "Last month" },
-  { weeks: 26, label: "Last 6 months" },
-  { weeks: 52, label: "Last year" },
-  { weeks: 260, label: "Last 5 years" },
+const AGE_CHOICES: Array<{ weeks: number | null; key: string }> = [
+  { weeks: null, key: "aminet.age.any" },
+  { weeks: 4, key: "aminet.age.month" },
+  { weeks: 26, key: "aminet.age.sixMonths" },
+  { weeks: 52, key: "aminet.age.year" },
+  { weeks: 260, key: "aminet.age.fiveYears" },
 ];
 
-const SIZE_CHOICES: Array<{ bytes: number | null; label: string }> = [
-  { bytes: null, label: "Any size" },
-  { bytes: 100 * 1024, label: "100 KB" },
-  { bytes: 1024 * 1024, label: "1 MB" },
-  { bytes: 10 * 1024 * 1024, label: "10 MB" },
-  { bytes: 100 * 1024 * 1024, label: "100 MB" },
+const SIZE_CHOICES: Array<{ bytes: number | null; key: string }> = [
+  { bytes: null, key: "aminet.size.any" },
+  { bytes: 100 * 1024, key: "aminet.size.kb100" },
+  { bytes: 1024 * 1024, key: "aminet.size.mb1" },
+  { bytes: 10 * 1024 * 1024, key: "aminet.size.mb10" },
+  { bytes: 100 * 1024 * 1024, key: "aminet.size.mb100" },
 ];
 
 /** How many filters are narrowing the search, for the "More filters" badge. */
@@ -175,9 +176,7 @@ export function AminetStudio() {
         try {
           setLibrary(await sourcesSetLibraryRoot(saved.aminetRoot));
         } catch {
-          setError(
-            `Your download folder (${saved.aminetRoot}) is no longer reachable — choose it again.`
-          );
+          setError(t("aminet.err.folderUnreachable", { path: saved.aminetRoot }));
           refreshLibrary();
         }
       } else {
@@ -364,7 +363,7 @@ export function AminetStudio() {
   async function startSync() {
     setError(null);
     setSync(null);
-    setBusy("Syncing the catalogue…");
+    setBusy(t("aminet.busy.syncing"));
     try {
       pending.current.action = await sourcesSync();
     } catch (e) {
@@ -389,7 +388,7 @@ export function AminetStudio() {
 
   async function download(pkg: PackageMeta) {
     setError(null);
-    setBusy(`Downloading ${pkg.name}…`);
+    setBusy(t("aminet.busy.downloading", { name: pkg.name }));
     try {
       pending.current.action = await sourcesFetch(pkg.reference.path, {
         subfolder,
@@ -410,7 +409,7 @@ export function AminetStudio() {
     setError(null);
     const meta = row.current;
     if (!meta) {
-      setError(`${row.name} is no longer in the catalogue, so there is nothing to open.`);
+      setError(t("aminet.err.noLongerInCatalogue", { name: row.name }));
       return;
     }
     setInstalled(null);
@@ -437,7 +436,7 @@ export function AminetStudio() {
   async function installToHdf(pkg: PackageMeta) {
     const download = downloads[pkg.reference.path];
     if (!download) {
-      setError("Download it first — then it can be installed.");
+      setError(t("aminet.err.downloadFirst"));
       return;
     }
 
@@ -449,7 +448,7 @@ export function AminetStudio() {
 
     setError(null);
     setInstalled(null);
-    setBusy(`Looking at ${image}…`);
+    setBusy(t("aminet.busy.lookingAt", { image }));
 
     let choice = 0;
     try {
@@ -461,10 +460,12 @@ export function AminetStudio() {
       if (usable.length === 0) {
         setError(
           found.volumes.length === 0
-            ? "ART found no volumes in that image."
-            : `ART cannot write to any partition in that image: ${found.volumes
-                .map((volume) => `${volume.name} (${volume.unsupported})`)
-                .join(", ")}`
+            ? t("aminet.err.noVolumes")
+            : t("aminet.err.noWritablePartitions", {
+                list: found.volumes
+                  .map((volume) => `${volume.name} (${volume.unsupported})`)
+                  .join(", "),
+              })
         );
         setBusy(null);
         return;
@@ -475,7 +476,7 @@ export function AminetStudio() {
           ({ volume, index }) => `${index}: ${volume.name} — ${volume.filesystem}`
         );
         const answer = window.prompt(
-          ["Which partition?", ...lines].join("\n"),
+          [t("aminet.err.whichPartition"), ...lines].join("\n"),
           String(usable[0].index)
         );
         if (answer === null) {
@@ -484,7 +485,7 @@ export function AminetStudio() {
         }
         const parsed = Number(answer);
         if (!usable.some(({ index }) => index === parsed)) {
-          setError(`${answer} is not one of the partitions ART can write to.`);
+          setError(t("aminet.err.invalidPartition", { answer }));
           setBusy(null);
           return;
         }
@@ -498,7 +499,7 @@ export function AminetStudio() {
       return;
     }
 
-    setBusy(`Installing ${pkg.name}…`);
+    setBusy(t("aminet.busy.installing", { name: pkg.name }));
     try {
       pending.current.action = await sourcesInstallVolume(
         download.placement.path,
@@ -534,7 +535,7 @@ export function AminetStudio() {
   async function installToAdf(pkg: PackageMeta) {
     const download = downloads[pkg.reference.path];
     if (!download) {
-      setError("Download it first — then it can be installed.");
+      setError(t("aminet.err.downloadFirst"));
       return;
     }
 
@@ -546,7 +547,7 @@ export function AminetStudio() {
 
     setError(null);
     setInstalled(null);
-    setBusy(`Installing ${pkg.name}…`);
+    setBusy(t("aminet.busy.installing", { name: pkg.name }));
     try {
       pending.current.action = await sourcesInstallAdf(download.placement.path, adf);
     } catch (e) {
@@ -562,28 +563,26 @@ export function AminetStudio() {
     <div>
       <h1 style={{ fontSize: 20 }}>{t("nav.aminet")}</h1>
       <p className="muted" style={{ marginTop: 4 }}>
-        Aminet is the store. ART is the courier and the customs officer — every
-        download is checked before it is kept, and nothing is installed until
-        you ask.
+        {t("aminet.intro")}
       </p>
 
       <section className="card" style={{ margin: "12px 0" }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <button className="btn btn-primary" onClick={startSync} disabled={busy !== null}>
-            {empty ? "Download the catalogue" : "Update the catalogue"}
+            {empty ? t("aminet.catalogue.download") : t("aminet.catalogue.update")}
           </button>
           <span className="muted" style={{ fontSize: 13 }}>
             {stats === null
-              ? "Checking…"
+              ? t("aminet.catalogue.checking")
               : empty
-              ? "No catalogue yet. One sync and search works offline."
-              : `${stats.total.toLocaleString()} packages, searchable offline`}
+              ? t("aminet.catalogue.empty")
+              : t("aminet.catalogue.count", { total: stats.total.toLocaleString() })}
           </span>
         </div>
 
         {busy && (
           <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-            {busy} — progress is in the job bar, and you can stop it there.
+            {t("aminet.busy.hint", { busy })}
           </div>
         )}
 
@@ -612,7 +611,7 @@ export function AminetStudio() {
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search the catalogue — e.g. AmiSSL"
+            placeholder={t("aminet.search.placeholder")}
             style={{ flex: 1, minWidth: 220 }}
             disabled={empty}
           />
@@ -620,16 +619,16 @@ export function AminetStudio() {
             value={sort}
             onChange={(event) => rerun({ order: event.target.value as SortOrder })}
             disabled={empty}
-            aria-label="Sort results"
+            aria-label={t("aminet.search.sortLabel")}
           >
             {SORTS.map((option) => (
               <option key={option.value} value={option.value}>
-                {option.label}
+                {t(option.key)}
               </option>
             ))}
           </select>
           <button className="btn" type="submit" disabled={empty}>
-            Search
+            {t("aminet.search.submit")}
           </button>
         </form>
 
@@ -640,7 +639,7 @@ export function AminetStudio() {
             onClick={() => rerun({ dir: null })}
             disabled={empty}
           >
-            All
+            {t("aminet.categories.all")}
           </button>
           {CATEGORIES.map((category) => (
             <button
@@ -659,7 +658,7 @@ export function AminetStudio() {
             onClick={() => setAdvanced((shown) => !shown)}
             disabled={empty}
           >
-            {advanced ? "Hide filters" : "More filters"}
+            {advanced ? t("aminet.filters.hide") : t("aminet.filters.more")}
             {activeFilterCount(filters) > 0 && ` (${activeFilterCount(filters)})`}
           </button>
         </div>
@@ -682,11 +681,11 @@ export function AminetStudio() {
                   rerun({ narrow: { ...filters, name_only: event.target.checked } })
                 }
               />
-              Search names only
+              {t("aminet.filters.nameOnly")}
             </label>
 
             <label>
-              <div className="muted">Uploaded</div>
+              <div className="muted">{t("aminet.filters.uploaded")}</div>
               <select
                 value={String(filters.max_age_weeks ?? "")}
                 onChange={(event) =>
@@ -702,15 +701,15 @@ export function AminetStudio() {
                 style={{ width: "100%" }}
               >
                 {AGE_CHOICES.map((choice) => (
-                  <option key={choice.label} value={choice.weeks ?? ""}>
-                    {choice.label}
+                  <option key={choice.key} value={choice.weeks ?? ""}>
+                    {t(choice.key)}
                   </option>
                 ))}
               </select>
             </label>
 
             <label>
-              <div className="muted">At least</div>
+              <div className="muted">{t("aminet.filters.atLeast")}</div>
               <select
                 value={String(filters.min_size_bytes ?? "")}
                 onChange={(event) =>
@@ -726,15 +725,15 @@ export function AminetStudio() {
                 style={{ width: "100%" }}
               >
                 {SIZE_CHOICES.map((choice) => (
-                  <option key={`min-${choice.label}`} value={choice.bytes ?? ""}>
-                    {choice.label}
+                  <option key={`min-${choice.key}`} value={choice.bytes ?? ""}>
+                    {t(choice.key)}
                   </option>
                 ))}
               </select>
             </label>
 
             <label>
-              <div className="muted">At most</div>
+              <div className="muted">{t("aminet.filters.atMost")}</div>
               <select
                 value={String(filters.max_size_bytes ?? "")}
                 onChange={(event) =>
@@ -750,15 +749,15 @@ export function AminetStudio() {
                 style={{ width: "100%" }}
               >
                 {SIZE_CHOICES.map((choice) => (
-                  <option key={`max-${choice.label}`} value={choice.bytes ?? ""}>
-                    {choice.label}
+                  <option key={`max-${choice.key}`} value={choice.bytes ?? ""}>
+                    {t(choice.key)}
                   </option>
                 ))}
               </select>
             </label>
 
             <label>
-              <div className="muted">File type</div>
+              <div className="muted">{t("aminet.filters.fileType")}</div>
               <input
                 value={filters.extensions.join(", ")}
                 placeholder="lha, lzh, adf"
@@ -782,7 +781,7 @@ export function AminetStudio() {
                 style={{ fontSize: 12 }}
                 onClick={() => rerun({ narrow: emptyFilters() })}
               >
-                Clear filters
+                {t("aminet.filters.clear")}
               </button>
             </div>
           </div>
@@ -791,12 +790,12 @@ export function AminetStudio() {
 
       <section className="card" style={{ marginBottom: 12 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <strong style={{ fontSize: 13 }}>Downloads go to</strong>
+          <strong style={{ fontSize: 13 }}>{t("aminet.library.downloadsGoTo")}</strong>
           <code style={{ fontSize: 12, wordBreak: "break-all" }}>
             {library?.root ?? "…"}
           </code>
           <button className="btn" style={{ fontSize: 12 }} onClick={chooseDownloadFolder}>
-            Change…
+            {t("aminet.library.change")}
           </button>
         </div>
 
@@ -810,11 +809,11 @@ export function AminetStudio() {
           }}
         >
           <label style={{ fontSize: 12, flex: 1, minWidth: 200 }}>
-            <div className="muted">Subfolder (optional)</div>
+            <div className="muted">{t("aminet.library.subfolder")}</div>
             <input
               value={subfolder}
               onChange={(event) => setSubfolder(event.target.value)}
-              placeholder="e.g. browser — leave empty for the folder itself"
+              placeholder={t("aminet.library.subfolderPlaceholder")}
               list="aminet-subfolders"
               style={{ width: "100%" }}
             />
@@ -826,14 +825,14 @@ export function AminetStudio() {
           </label>
 
           <label style={{ fontSize: 12 }}>
-            <div className="muted">If the file is already there</div>
+            <div className="muted">{t("aminet.library.ifExists")}</div>
             <select
               value={overwrite}
               onChange={(event) => setOverwrite(event.target.value as OverwritePolicy)}
             >
-              <option value="skip">Keep what is there</option>
-              <option value="rename">Keep both</option>
-              <option value="overwrite">Replace it</option>
+              <option value="skip">{t("aminet.overwrite.skip")}</option>
+              <option value="rename">{t("aminet.overwrite.rename")}</option>
+              <option value="overwrite">{t("aminet.overwrite.overwrite")}</option>
             </select>
           </label>
         </div>
@@ -864,13 +863,11 @@ export function AminetStudio() {
         <section className="card">
           {results === null ? (
             <p className="muted" style={{ margin: 0 }}>
-              {empty
-                ? "Download the catalogue to start searching."
-                : "Search, or pick a category."}
+              {empty ? t("aminet.results.noCatalogue") : t("aminet.results.prompt")}
             </p>
           ) : results.length === 0 ? (
             <p className="muted" style={{ margin: 0 }}>
-              Nothing matched. Every word has to match, so try fewer of them.
+              {t("aminet.results.none")}
             </p>
           ) : (
             <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
@@ -899,9 +896,11 @@ export function AminetStudio() {
                   </div>
                   {downloads[pkg.reference.path] && (
                     <div className="badge badge-ok" style={{ fontSize: 11 }}>
-                      Saved to{" "}
-                      {downloads[pkg.reference.path].placement.subfolder ||
-                        "the download folder"}
+                      {t("aminet.results.savedTo", {
+                        location:
+                          downloads[pkg.reference.path].placement.subfolder ||
+                          t("aminet.library.theDownloadFolder"),
+                      })}
                     </div>
                   )}
                 </li>
@@ -938,15 +937,17 @@ function SyncSummary({
   outcome: SyncOutcome;
   powerMode: boolean;
 }) {
+  const { t } = useTranslation();
   // A sync that was not applied is a success that deliberately changed
   // nothing. Saying "done" here would be a lie the user acts on.
   if (!outcome.applied) {
     return (
       <div className="badge badge-warn" style={{ marginTop: 8, display: "block" }}>
-        {outcome.mirror} answered, but the catalogue it sent could not be read
-        properly ({outcome.report.parsed} readable entries,{" "}
-        {outcome.report.skipped} unreadable lines). Your existing catalogue has
-        been kept. Try another mirror.
+        {t("aminet.sync.unreadable", {
+          mirror: outcome.mirror,
+          parsed: outcome.report.parsed,
+          skipped: outcome.report.skipped,
+        })}
       </div>
     );
   }
@@ -954,18 +955,27 @@ function SyncSummary({
   return (
     <div style={{ marginTop: 8 }}>
       <span className="badge badge-ok">
-        {outcome.report.parsed.toLocaleString()} packages from {outcome.mirror}
+        {t("aminet.sync.success", {
+          total: outcome.report.parsed.toLocaleString(),
+          mirror: outcome.mirror,
+        })}
       </span>
       {powerMode && (
         <div className="faint" style={{ fontSize: 11, marginTop: 6 }}>
           <div>
-            {outcome.index_bytes.toLocaleString()} bytes of index ·{" "}
-            {outcome.report.skipped} unreadable lines
-            {outcome.report.truncated && " · index was longer than ART will read"}
+            {t("aminet.sync.indexStats", {
+              bytes: outcome.index_bytes.toLocaleString(),
+              skipped: outcome.report.skipped,
+            })}
+            {outcome.report.truncated && t("aminet.sync.truncated")}
           </div>
           {outcome.report.examples.slice(0, 5).map((example) => (
             <div key={example.line_number} style={{ wordBreak: "break-all" }}>
-              line {example.line_number}: {example.reason} — {example.excerpt}
+              {t("aminet.sync.lineExample", {
+                number: example.line_number,
+                reason: example.reason,
+                excerpt: example.excerpt,
+              })}
             </div>
           ))}
         </div>
@@ -1001,38 +1011,38 @@ function PackagePanel({
   onClose: () => void;
   busy: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <section className="card">
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
         <strong style={{ wordBreak: "break-all" }}>{pkg.name}</strong>
         <button className="btn" style={{ fontSize: 12 }} onClick={onClose}>
-          Close
+          {t("common.close")}
         </button>
       </div>
 
       <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
         {pkg.directory} · {formatSize(pkg.size_bytes)} · {formatAge(pkg)}
-        {ageIsCapped(pkg) && " (Aminet does not record exactly how much older)"}
+        {ageIsCapped(pkg) && t("aminet.package.ageCapped")}
       </div>
 
       <p style={{ fontSize: 13 }}>{pkg.short}</p>
 
-      <ClaimLine label="Version" claim={pkg.version} />
-      <ClaimLine label="Author" claim={pkg.author} />
-      <ClaimLine label="Distribution" claim={pkg.distribution} />
+      <ClaimLine label={t("aminet.package.version")} claim={pkg.version} />
+      <ClaimLine label={t("aminet.package.author")} claim={pkg.author} />
+      <ClaimLine label={t("aminet.package.distribution")} claim={pkg.distribution} />
 
       {pkg.requires.length > 0 && (
         <div className="badge badge-warn" style={{ display: "block", fontSize: 12 }}>
-          The readme says this needs:{" "}
-          {pkg.requires.map((claim) => claim.value).join(", ")}. ART does not
-          install dependencies for you — this is what the readme claims, not
-          something ART has checked.
+          {t("aminet.package.requires", {
+            list: pkg.requires.map((claim) => claim.value).join(", "),
+          })}
         </div>
       )}
 
       <div style={{ display: "flex", gap: 8, margin: "12px 0", flexWrap: "wrap" }}>
         <button className="btn btn-primary" onClick={onDownload} disabled={busy}>
-          {download ? "Download again" : "Download"}
+          {download ? t("aminet.package.downloadAgain") : t("aminet.package.download")}
         </button>
         <button
           className="btn"
@@ -1040,11 +1050,11 @@ function PackagePanel({
           disabled={busy || !download}
           title={
             download
-              ? "Unpack this into a floppy image"
-              : "Download it first — installing works from the file on your disk"
+              ? t("aminet.package.installAdfReady")
+              : t("aminet.package.installNotReady")
           }
         >
-          Install to ADF…
+          {t("aminet.package.installAdf")}
         </button>
         <button
           className="btn"
@@ -1052,11 +1062,11 @@ function PackagePanel({
           disabled={busy || !download}
           title={
             download
-              ? "Unpack this into a partition of a hard disk image"
-              : "Download it first — installing works from the file on your disk"
+              ? t("aminet.package.installHdfReady")
+              : t("aminet.package.installNotReady")
           }
         >
-          Install to HDF…
+          {t("aminet.package.installHdf")}
         </button>
         {/* §41.5.6. ART's Collection is an index of a folder, not a database
             you add rows to, so this indexes the download folder rather than
@@ -1067,24 +1077,26 @@ function PackagePanel({
           disabled={busy || !download}
           title={
             download
-              ? "Index your download folder in the Collection screen"
-              : "Download it first — the Collection indexes files on your disk"
+              ? t("aminet.package.showInCollectionReady")
+              : t("aminet.package.showInCollectionNotReady")
           }
         >
-          Show in Collection
+          {t("aminet.package.showInCollection")}
         </button>
       </div>
 
       {installed && (
         <div style={{ fontSize: 12 }}>
           <div className="badge badge-ok" style={{ display: "block" }}>
-            {installed.files} file{installed.files === 1 ? "" : "s"} written to{" "}
-            {installed.into || "the root of the disk"}
-            {installed.backup && " · the previous image was backed up"}
+            {t("aminet.package.installedSummary", {
+              count: installed.files,
+              into: installed.into || t("aminet.package.diskRoot"),
+            })}
+            {installed.backup && t("aminet.package.backedUpNote")}
           </div>
           {installed.skipped.length > 0 && (
             <div className="faint" style={{ fontSize: 11, marginTop: 4 }}>
-              Not written: {installed.skipped.join("; ")}
+              {t("aminet.package.notWritten", { list: installed.skipped.join("; ") })}
             </div>
           )}
         </div>
@@ -1096,16 +1108,18 @@ function PackagePanel({
             // Not a failure: the verified file is in the cache, and a file the
             // user already had was left exactly as it was.
             <div className="badge badge-warn" style={{ display: "block" }}>
-              A file of that name was already in{" "}
-              {download.placement.subfolder || "the download folder"} — it was
-              left alone. Choose "Keep both" or "Replace it" to change that.
+              {t("aminet.package.alreadyExists", {
+                location: download.placement.subfolder || t("aminet.library.theDownloadFolder"),
+                rename: t("aminet.overwrite.rename"),
+                replace: t("aminet.overwrite.overwrite"),
+              })}
             </div>
           ) : (
             <div className="badge badge-ok" style={{ display: "block" }}>
               {download.outcome.from_cache
-                ? "Already downloaded before — copied from the cache"
-                : `Downloaded from ${download.outcome.mirror}, size and archive checked`}
-              {download.placement.renamed && " · saved under a new name to keep both"}
+                ? t("aminet.package.fromCache")
+                : t("aminet.package.fresh", { mirror: download.outcome.mirror })}
+              {download.placement.renamed && t("aminet.package.renamedNote")}
             </div>
           )}
 
@@ -1115,22 +1129,22 @@ function PackagePanel({
 
           {powerMode && (
             <div className="faint" style={{ fontSize: 11, wordBreak: "break-all" }}>
-              <div>{download.outcome.bytes.toLocaleString()} bytes</div>
-              <div>SHA-256 {download.outcome.sha256}</div>
-              <div>Cache: {download.outcome.path}</div>
+              <div>{t("aminet.package.bytesLabel", { bytes: download.outcome.bytes.toLocaleString() })}</div>
+              <div>{t("aminet.package.sha256Label", { hash: download.outcome.sha256 })}</div>
+              <div>{t("aminet.cacheLabel", { path: download.outcome.path })}</div>
             </div>
           )}
         </div>
       )}
 
-      <h2 style={{ fontSize: 14, marginTop: 16 }}>Readme</h2>
+      <h2 style={{ fontSize: 14, marginTop: 16 }}>{t("aminet.readme.title")}</h2>
       {readmeLoading ? (
         <p className="muted" style={{ fontSize: 12 }}>
-          Fetching…
+          {t("aminet.readme.loading")}
         </p>
       ) : readme === null ? (
         <p className="muted" style={{ fontSize: 12 }}>
-          No readme was available for this package.
+          {t("aminet.readme.none")}
         </p>
       ) : (
         <pre
@@ -1170,6 +1184,7 @@ function UpdateView({
   onOpen: (row: PackageUpdate) => void;
   onForget: (row: PackageUpdate) => void;
 }) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
 
   // Nothing downloaded yet: an empty panel would be one more thing to read
@@ -1195,10 +1210,15 @@ function UpdateView({
       >
         <strong style={{ fontSize: 14 }}>
           {actionable.length === 0
-            ? `Your ${updates.length} download${updates.length === 1 ? "" : "s"} — all current`
-            : `${actionable.length} of your ${updates.length} download${
-                updates.length === 1 ? "" : "s"
-              } ${actionable.length === 1 ? "has" : "have"} changed on Aminet`}
+            ? t("aminet.updates.allCurrent", {
+                count: updates.length,
+                downloadWord: t("aminet.updates.download", { count: updates.length }),
+              })
+            : t("aminet.updates.someChanged", {
+                count: actionable.length,
+                total: updates.length,
+                downloadWord: t("aminet.updates.download", { count: updates.length }),
+              })}
         </strong>
         <div style={{ display: "flex", gap: 6 }}>
           <button
@@ -1206,22 +1226,21 @@ function UpdateView({
             style={{ fontSize: 12 }}
             onClick={() => setExpanded(!expanded)}
           >
-            {expanded ? "Only what needs attention" : "Show all"}
+            {expanded ? t("aminet.updates.onlyAttention") : t("aminet.updates.showAll")}
           </button>
           <button className="btn" style={{ fontSize: 12 }} onClick={onRefresh}>
-            Re-check
+            {t("aminet.updates.recheck")}
           </button>
         </div>
       </div>
 
       <div className="faint" style={{ fontSize: 11, marginTop: 4 }}>
-        Compared against your last catalogue sync — nothing was downloaded to
-        work this out. ART never replaces a download on its own.
+        {t("aminet.updates.hint")}
       </div>
 
       {shown.length === 0 ? (
         <div className="badge badge-ok" style={{ display: "block", fontSize: 12, marginTop: 8 }}>
-          Everything you have downloaded matches the catalogue.
+          {t("aminet.updates.allMatch")}
         </div>
       ) : (
         <div style={{ marginTop: 8 }}>
@@ -1259,16 +1278,16 @@ function UpdateView({
                   style={{ fontSize: 11 }}
                   onClick={() => onOpen(row)}
                 >
-                  Open
+                  {t("common.open")}
                 </button>
               )}
               <button
                 className="btn"
                 style={{ fontSize: 11 }}
                 onClick={() => onForget(row)}
-                title="Stop tracking this download. The file is not touched."
+                title={t("aminet.updates.stopTrackingTooltip")}
               >
-                Stop tracking
+                {t("aminet.updates.stopTracking")}
               </button>
             </div>
           ))}
@@ -1294,6 +1313,7 @@ function MirrorEditor({
   provider: ProviderInfo;
   onApply: (mirrors: MirrorInfo[]) => Promise<void>;
 }) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const [draft, setDraft] = useState<MirrorInfo[]>(provider.mirrors);
   const [saving, setSaving] = useState(false);
@@ -1348,8 +1368,10 @@ function MirrorEditor({
   return (
     <div style={{ marginTop: 8 }}>
       <div className="faint" style={{ fontSize: 11 }}>
-        <div>Index: {provider.index_path}</div>
-        <div style={{ wordBreak: "break-all" }}>Cache: {provider.cache_path}</div>
+        <div>{t("aminet.mirrors.indexLabel", { path: provider.index_path })}</div>
+        <div style={{ wordBreak: "break-all" }}>
+          {t("aminet.cacheLabel", { path: provider.cache_path })}
+        </div>
       </div>
 
       <button
@@ -1358,19 +1380,23 @@ function MirrorEditor({
         onClick={toggle}
         aria-expanded={expanded}
       >
-        {expanded ? "Hide mirrors" : `Mirrors (${provider.mirrors.length}) — edit`}
+        {expanded
+          ? t("aminet.mirrors.hide")
+          : t("aminet.mirrors.editCount", { count: provider.mirrors.length })}
       </button>
 
       {!expanded && (
         <div className="faint" style={{ fontSize: 11, marginTop: 4 }}>
-          In order: {provider.mirrors.map((m) => m.name).join(" → ")}
+          {t("aminet.mirrors.inOrder", {
+            list: provider.mirrors.map((m) => m.name).join(" → "),
+          })}
         </div>
       )}
 
       {expanded && (
         <div style={{ marginTop: 8 }}>
           <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>
-            Tried top to bottom. Put the one nearest you first.
+            {t("aminet.mirrors.hint")}
           </div>
 
           {draft.map((mirror, index) => (
@@ -1390,15 +1416,15 @@ function MirrorEditor({
               <input
                 value={mirror.name}
                 onChange={(event) => edit(index, { name: event.target.value })}
-                placeholder="Name"
-                aria-label={`Mirror ${index + 1} name`}
+                placeholder={t("aminet.mirrors.namePlaceholder")}
+                aria-label={t("aminet.mirrors.nameAriaLabel", { n: index + 1 })}
                 style={{ width: 140, fontSize: 12 }}
               />
               <input
                 value={mirror.base_url}
                 onChange={(event) => edit(index, { base_url: event.target.value })}
                 placeholder="https://…"
-                aria-label={`Mirror ${index + 1} address`}
+                aria-label={t("aminet.mirrors.addressAriaLabel", { n: index + 1 })}
                 style={{ flex: 1, minWidth: 220, fontSize: 12 }}
               />
               <button
@@ -1406,8 +1432,10 @@ function MirrorEditor({
                 style={{ fontSize: 11 }}
                 onClick={() => move(index, -1)}
                 disabled={index === 0}
-                title="Move up"
-                aria-label={`Move ${mirror.name || "mirror"} up`}
+                title={t("aminet.mirrors.moveUp")}
+                aria-label={t("aminet.mirrors.moveUpAriaLabel", {
+                  name: mirror.name || t("aminet.mirrors.mirrorFallback"),
+                })}
               >
                 ↑
               </button>
@@ -1416,8 +1444,10 @@ function MirrorEditor({
                 style={{ fontSize: 11 }}
                 onClick={() => move(index, 1)}
                 disabled={index === draft.length - 1}
-                title="Move down"
-                aria-label={`Move ${mirror.name || "mirror"} down`}
+                title={t("aminet.mirrors.moveDown")}
+                aria-label={t("aminet.mirrors.moveDownAriaLabel", {
+                  name: mirror.name || t("aminet.mirrors.mirrorFallback"),
+                })}
               >
                 ↓
               </button>
@@ -1428,8 +1458,10 @@ function MirrorEditor({
                   setDraft((rows) => rows.filter((_, i) => i !== index));
                   setSaved(false);
                 }}
-                title="Remove this mirror"
-                aria-label={`Remove ${mirror.name || "mirror"}`}
+                title={t("aminet.mirrors.removeTitle")}
+                aria-label={t("aminet.mirrors.removeAriaLabel", {
+                  name: mirror.name || t("aminet.mirrors.mirrorFallback"),
+                })}
               >
                 ✕
               </button>
@@ -1438,7 +1470,9 @@ function MirrorEditor({
 
           {draft.length === 0 && (
             <div className="badge badge-warn" style={{ display: "block", fontSize: 11 }}>
-              At least one mirror is needed — add one, or use "Back to defaults".
+              {t("aminet.mirrors.needOne", {
+                backToDefaults: t("aminet.mirrors.backToDefaults"),
+              })}
             </div>
           )}
 
@@ -1451,7 +1485,7 @@ function MirrorEditor({
                 setSaved(false);
               }}
             >
-              Add a mirror
+              {t("aminet.mirrors.add")}
             </button>
             <button
               className="btn btn-primary"
@@ -1459,20 +1493,20 @@ function MirrorEditor({
               onClick={() => void apply(draft)}
               disabled={saving || draft.length === 0 || !dirty}
             >
-              Apply
+              {t("aminet.mirrors.apply")}
             </button>
             <button
               className="btn"
               style={{ fontSize: 12 }}
               onClick={() => void apply([])}
               disabled={saving}
-              title="Restore the mirrors ART ships with"
+              title={t("aminet.mirrors.backToDefaultsTitle")}
             >
-              Back to defaults
+              {t("aminet.mirrors.backToDefaults")}
             </button>
             {saved && !dirty && (
               <span className="badge badge-ok" style={{ fontSize: 11 }}>
-                Saved — used from the next sync or download on
+                {t("aminet.mirrors.saved")}
               </span>
             )}
           </div>
@@ -1487,13 +1521,19 @@ function MirrorEditor({
  * presented at the same strength as a machine-generated index column.
  */
 function ClaimLine({ label, claim }: { label: string; claim: Claim<string> | null }) {
+  const { t } = useTranslation();
   if (!claim) return null;
   return (
     <div style={{ fontSize: 12 }}>
       <span className="muted">{label}:</span> {claim.value}{" "}
       <span className="faint" style={{ fontSize: 11 }}>
-        ({claim.confidence.toLowerCase()} confidence, from the{" "}
-        {describeSource(claim.source)})
+        {/* claim.confidence and describeSource() both come from Rust / lib
+            code outside this task's file scope, so those two values stay in
+            English — only the surrounding words are translated. */}
+        {t("aminet.claim.confidence", {
+          confidence: claim.confidence.toLowerCase(),
+          source: describeSource(claim.source),
+        })}
       </span>
     </div>
   );

@@ -121,7 +121,7 @@ export function AdfBrowser() {
   async function applyMutation(outcome: MutationOutcome, message: string) {
     setSuccessMsg(
       outcome.backup_path
-        ? `${message}. Previous version backed up to ${outcome.backup_path}`
+        ? t("adf.msg.withBackup", { message, backupPath: outcome.backup_path })
         : message
     );
     await refreshCurrentDir(outcome.info);
@@ -152,7 +152,7 @@ export function AdfBrowser() {
         }
       }
     } catch (e) {
-      setError(`Failed to open directory '${dirName}': ${String(e)}`);
+      setError(t("adf.msg.openDirFailed", { name: dirName, error: String(e) }));
     } finally {
       setBusy(false);
     }
@@ -181,7 +181,7 @@ export function AdfBrowser() {
     setSuccessMsg(null);
     try {
       await adfCreateBlank(dest, newVolumeName, newFsType, newBootable);
-      setSuccessMsg(`Created new disk image '${newVolumeName}.adf'`);
+      setSuccessMsg(t("adf.msg.createdImage", { name: newVolumeName }));
       await loadDisk(dest);
     } catch (e) {
       setError(String(e));
@@ -194,7 +194,7 @@ export function AdfBrowser() {
     if (!path) return;
     const sel = await open({
       multiple: false,
-      title: "Select file to import into ADF",
+      title: t("adf.selectFileTitle"),
     });
     if (typeof sel !== "string") return;
 
@@ -203,9 +203,9 @@ export function AdfBrowser() {
     setSuccessMsg(null);
     try {
       const updated = await adfAddFile(path, currentDirBlock, sel);
-      await applyMutation(updated, "Successfully imported file into disk");
+      await applyMutation(updated, t("adf.msg.fileImported"));
     } catch (e) {
-      setError(`Failed to add file: ${String(e)}`);
+      setError(t("adf.msg.addFileFailed", { error: String(e) }));
     } finally {
       setBusy(false);
     }
@@ -221,9 +221,9 @@ export function AdfBrowser() {
       const updated = await adfCreateDirectory(path, currentDirBlock, newFolderName.trim());
       const created = newFolderName.trim();
       setNewFolderName("");
-      await applyMutation(updated, `Created directory '${created}'`);
+      await applyMutation(updated, t("adf.msg.dirCreated", { name: created }));
     } catch (e) {
-      setError(`Failed to create directory: ${String(e)}`);
+      setError(t("adf.msg.createDirFailed", { error: String(e) }));
     } finally {
       setBusy(false);
     }
@@ -238,9 +238,9 @@ export function AdfBrowser() {
     setSuccessMsg(null);
     try {
       const updated = await adfDeleteEntry(path, currentDirBlock, target.header_block);
-      await applyMutation(updated, `Deleted '${target.name}'`);
+      await applyMutation(updated, t("adf.msg.deleted", { name: target.name }));
     } catch (e) {
-      setError(`Failed to delete '${target.name}': ${String(e)}`);
+      setError(t("adf.msg.deleteFailed", { name: target.name, error: String(e) }));
     } finally {
       setBusy(false);
     }
@@ -262,10 +262,10 @@ export function AdfBrowser() {
       );
       await applyMutation(
         updated,
-        `Renamed '${target.name}' to '${renameValue.trim()}'`
+        t("adf.msg.renamed", { from: target.name, to: renameValue.trim() })
       );
     } catch (e) {
-      setError(`Failed to rename '${target.name}': ${String(e)}`);
+      setError(t("adf.msg.renameFailed", { name: target.name, error: String(e) }));
     } finally {
       setBusy(false);
     }
@@ -280,7 +280,9 @@ export function AdfBrowser() {
     setSuccessMsg(null);
     try {
       const bytes = await adfExtractFile(path, entry.header_block);
-      setSuccessMsg(`Extracted ${bytes.length} bytes for '${entry.name}' to ${dest}`);
+      setSuccessMsg(
+        t("adf.msg.extracted", { bytes: bytes.length, name: entry.name, dest })
+      );
     } catch (e) {
       setError(String(e));
     } finally {
@@ -294,7 +296,7 @@ export function AdfBrowser() {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1 style={{ fontSize: 20, margin: 0 }}>{t("nav.diskTools")} — ADF Studio</h1>
+        <h1 style={{ fontSize: 20, margin: 0 }}>{t("nav.diskTools")} — {t("adf.title")}</h1>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {path && (
             <button
@@ -302,7 +304,7 @@ export function AdfBrowser() {
               onClick={() => navigate("/winuae", { state: { path } })}
               disabled={busy}
             >
-              🚀 Run in WinUAE
+              🚀 {t("adf.runInWinuae")}
             </button>
           )}
           <button
@@ -310,38 +312,38 @@ export function AdfBrowser() {
             onClick={() => setShowNewAdfModal(true)}
             disabled={busy}
           >
-            ➕ New Blank ADF…
+            ➕ {t("adf.newBlank")}
           </button>
           <button
             className="btn btn-sm"
             onClick={chooseFile}
             disabled={busy}
           >
-            {t("common.open")} ADF…
+            {t("adf.openAdf")}
           </button>
         </div>
       </div>
 
       {path && (
         <div style={{ margin: "8px 0 12px", fontSize: 12 }}>
-          <span className="muted">Current Disk:</span>{" "}
+          <span className="muted">{t("adf.currentDisk")}</span>{" "}
           <strong style={{ wordBreak: "break-all" }}>{path}</strong>
         </div>
       )}
 
       {error && <div className="badge badge-err" style={{ marginBottom: 12, padding: "6px 12px" }}>{error}</div>}
       {successMsg && <div className="badge badge-ok" style={{ marginBottom: 12, padding: "6px 12px" }}>{successMsg}</div>}
-      {busy && <div className="muted" style={{ marginBottom: 12 }}>Working…</div>}
+      {busy && <div className="muted" style={{ marginBottom: 12 }}>{t("adf.working")}</div>}
 
       {/* Disk Overview Card */}
       {info && (
         <section className="card" style={{ marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
             <h2 style={{ fontSize: 16 }}>
-              {info.volume_name || "(unnamed)"}
+              {info.volume_name || t("adf.unnamed")}
             </h2>
             <span className="badge badge-muted">
-              Root Block: {info.root_block}
+              {t("adf.rootBlock", { n: info.root_block })}
             </span>
           </div>
 
@@ -355,34 +357,34 @@ export function AdfBrowser() {
             }}
           >
             <div>
-              <span className="muted">Filesystem:</span>{" "}
+              <span className="muted">{t("adf.filesystem")}</span>{" "}
               <strong>{info.fs_type.toUpperCase()}</strong>{" "}
               {info.international && <span className="badge badge-muted">INTL</span>}{" "}
               {info.dir_cache && <span className="badge badge-muted">DC</span>}
             </div>
             <div>
-              <span className="muted">Bootable:</span>{" "}
-              <strong>{info.bootable ? "Yes" : "No"}</strong>
+              <span className="muted">{t("adf.bootable")}</span>{" "}
+              <strong>{info.bootable ? t("common.yes") : t("common.no")}</strong>
             </div>
             <div>
-              <span className="muted">Capacity:</span> {fmt(info.capacity_bytes)}
+              <span className="muted">{t("adf.capacity")}</span> {fmt(info.capacity_bytes)}
             </div>
             <div>
-              <span className="muted">Used:</span> {fmt(info.used_bytes)}
+              <span className="muted">{t("adf.used")}</span> {fmt(info.used_bytes)}
             </div>
             <div>
-              <span className="muted">Free:</span> {fmt(info.free_bytes)}
+              <span className="muted">{t("adf.free")}</span> {fmt(info.free_bytes)}
             </div>
             <div>
-              <span className="muted">Files:</span> {info.file_count}
+              <span className="muted">{t("adf.filesCount")}</span> {info.file_count}
             </div>
             <div>
-              <span className="muted">Dirs:</span> {info.directory_count}
+              <span className="muted">{t("adf.dirsCount")}</span> {info.directory_count}
             </div>
             <div>
-              <span className="muted">Checksum:</span>{" "}
+              <span className="muted">{t("adf.checksum")}</span>{" "}
               <span className={`badge ${info.checksum_valid ? "badge-ok" : "badge-warn"}`}>
-                {info.checksum_valid ? "OK" : "MISMATCH / CUSTOM"}
+                {info.checksum_valid ? t("common.ok") : t("adf.checksumMismatch")}
               </span>
             </div>
           </div>
@@ -398,7 +400,7 @@ export function AdfBrowser() {
                     : "badge-err"
                 }`}
               >
-                {report.status.toUpperCase()}
+                {t(`status.${report.status}`)}
               </span>
               <ul style={{ margin: "8px 0 0", paddingLeft: 20, fontSize: 12 }}>
                 {report.findings.map((f, i) => (
@@ -416,30 +418,30 @@ export function AdfBrowser() {
       {hasWarningOrProblem && info && (
         <div className="dual-choice-banner">
           <div style={{ fontWeight: 600, fontSize: 14 }}>
-            ⚠️ Non-DOS, Custom Bootloader or Header Anomaly Detected
+            ⚠️ {t("adf.warning.title")}
           </div>
           <p className="muted" style={{ margin: "6px 0 0", fontSize: 13 }}>
-            This disk image contains non-standard structures. How would you like to inspect it?
+            {t("adf.warning.description")}
           </p>
           <div className="dual-choice-actions">
             <button
               className={`btn btn-sm ${showHexMode ? "btn-primary" : ""}`}
               onClick={() => setShowHexMode(!showHexMode)}
             >
-              🔍 {showHexMode ? "Hide Safe Hex View" : "Option 1: Safe Raw Block & Hex View"}
+              🔍 {showHexMode ? t("adf.warning.hideHex") : t("adf.warning.option1")}
             </button>
             <button
               className="btn btn-sm"
               onClick={() => navigate("/tools")}
             >
-              🔬 Option 2: Forensics / Disk Analyzer
+              🔬 {t("adf.warning.option2")}
             </button>
           </div>
 
           {showHexMode && (
             <div className="hex-view">
               <div style={{ color: "#79c0ff", marginBottom: 6 }}>
-                BLOCK 0000 (BOOTBLOCK) & BLOCK {info.root_block.toString().padStart(4, "0")} (ROOT BLOCK)
+                {t("adf.hex.blockLabel", { n: info.root_block.toString().padStart(4, "0") })}
               </div>
               <div className="hex-line">
                 <span className="hex-offset">00000000</span>
@@ -462,7 +464,7 @@ export function AdfBrowser() {
           {/* Action Bar (Add File / New Folder) */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
             <div style={{ fontWeight: 600, fontSize: 14 }}>
-              📁 Directory Contents
+              📁 {t("adf.dirContents")}
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button
@@ -470,14 +472,14 @@ export function AdfBrowser() {
                 onClick={() => setShowMkdirModal(true)}
                 disabled={busy}
               >
-                📁 New Folder
+                📁 {t("adf.newFolder")}
               </button>
               <button
                 className="btn btn-primary btn-sm"
                 onClick={handleAddFile}
                 disabled={busy}
               >
-                📥 Add File…
+                📥 {t("adf.addFile")}
               </button>
             </div>
           </div>
@@ -512,7 +514,7 @@ export function AdfBrowser() {
                 }}
                 disabled={busy}
               >
-                ⬆ Up One Level
+                ⬆ {t("adf.upOneLevel")}
               </button>
             )}
           </div>
@@ -520,7 +522,7 @@ export function AdfBrowser() {
           {/* Entries Table */}
           {entries.length === 0 ? (
             <p className="muted" style={{ padding: "16px 0", margin: 0, textAlign: "center" }}>
-              (Empty directory — click "Add File" or "New Folder" to add contents)
+              {t("adf.emptyDir", { addFile: t("adf.addFile"), newFolder: t("adf.newFolder") })}
             </p>
           ) : (
             <div className="file-list-container">
@@ -537,7 +539,7 @@ export function AdfBrowser() {
                           disabled={busy}
                         >
                           <span className="file-row-name">{e.name}</span>
-                          <span className="badge badge-muted">Folder</span>
+                          <span className="badge badge-muted">{t("adf.folderBadge")}</span>
                         </button>
                       ) : (
                         <span className="file-row-name">{e.name}</span>
@@ -559,7 +561,7 @@ export function AdfBrowser() {
                           onClick={() => navigateToDir(e.header_block, e.name)}
                           disabled={busy}
                         >
-                          Open
+                          {t("common.open")}
                         </button>
                       ) : (
                         <button
@@ -567,12 +569,12 @@ export function AdfBrowser() {
                           onClick={() => extract(e)}
                           disabled={busy}
                         >
-                          Extract
+                          {t("adf.extract")}
                         </button>
                       )}
                       <button
                         className="btn btn-sm"
-                        title="Rename"
+                        title={t("adf.renameTitle")}
                         onClick={() => {
                           setRenameTarget(e);
                           setRenameValue(e.name);
@@ -583,7 +585,7 @@ export function AdfBrowser() {
                       </button>
                       <button
                         className="btn btn-sm btn-warn"
-                        title="Delete"
+                        title={t("adf.deleteTitle")}
                         onClick={() => setDeleteTarget(e)}
                         disabled={busy}
                       >
@@ -600,7 +602,7 @@ export function AdfBrowser() {
 
       {!path && !busy && (
         <p className="muted" style={{ marginTop: 24, textAlign: "center" }}>
-          Open an existing .adf image or create a new blank ADF to start managing Amiga files.
+          {t("adf.noDiskOpen")}
         </p>
       )}
 
@@ -618,11 +620,11 @@ export function AdfBrowser() {
           }}
         >
           <div className="card" style={{ width: 420, maxWidth: "90vw" }}>
-            <h3>➕ Create New ADF Floppy Disk</h3>
+            <h3>➕ {t("adf.modal.newAdfTitle")}</h3>
             <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 12 }}>
               <div>
                 <label className="muted" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
-                  Volume Name (Max 30 chars):
+                  {t("adf.modal.volumeName")}
                 </label>
                 <input
                   type="text"
@@ -641,7 +643,7 @@ export function AdfBrowser() {
 
               <div>
                 <label className="muted" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
-                  Filesystem Type:
+                  {t("adf.modal.fsType")}
                 </label>
                 <select
                   value={newFsType}
@@ -655,8 +657,8 @@ export function AdfBrowser() {
                     borderRadius: 4,
                   }}
                 >
-                  <option value="ffs">Fast File System (FFS) — Recommended</option>
-                  <option value="ofs">Old File System (OFS) — Kickstart 1.x</option>
+                  <option value="ffs">{t("adf.modal.ffsOption")}</option>
+                  <option value="ofs">{t("adf.modal.ofsOption")}</option>
                 </select>
               </div>
 
@@ -668,20 +670,20 @@ export function AdfBrowser() {
                   onChange={(e) => setNewBootable(e.target.checked)}
                 />
                 <label htmlFor="bootable-chk" style={{ cursor: "pointer", fontSize: 13 }}>
-                  Make disk bootable (Standard Bootblock)
+                  {t("adf.modal.bootableLabel")}
                 </label>
               </div>
 
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
                 <button className="btn" onClick={() => setShowNewAdfModal(false)}>
-                  Cancel
+                  {t("common.cancel")}
                 </button>
                 <button
                   className="btn btn-primary"
                   onClick={handleCreateNewAdf}
                   disabled={!newVolumeName.trim()}
                 >
-                  Create & Save…
+                  {t("adf.modal.createSave")}
                 </button>
               </div>
             </div>
@@ -703,11 +705,11 @@ export function AdfBrowser() {
           }}
         >
           <div className="card" style={{ width: 380, maxWidth: "90vw" }}>
-            <h3>📁 Create New Folder</h3>
+            <h3>📁 {t("adf.modal.newFolderTitle")}</h3>
             <div style={{ marginTop: 12 }}>
               <input
                 type="text"
-                placeholder="Folder Name (e.g. S, C, Devs)"
+                placeholder={t("adf.modal.folderNamePlaceholder")}
                 value={newFolderName}
                 onChange={(e) => setNewFolderName(e.target.value)}
                 autoFocus
@@ -723,14 +725,14 @@ export function AdfBrowser() {
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
               <button className="btn" onClick={() => setShowMkdirModal(false)}>
-                Cancel
+                {t("common.cancel")}
               </button>
               <button
                 className="btn btn-primary"
                 onClick={handleCreateFolder}
                 disabled={!newFolderName.trim()}
               >
-                Create Folder
+                {t("adf.modal.createFolder")}
               </button>
             </div>
           </div>
@@ -751,7 +753,7 @@ export function AdfBrowser() {
           }}
         >
           <div className="card" style={{ width: 380, maxWidth: "90vw" }}>
-            <h3>✏️ Rename Entry</h3>
+            <h3>✏️ {t("adf.modal.renameEntryTitle")}</h3>
             <div style={{ marginTop: 12 }}>
               <input
                 type="text"
@@ -770,14 +772,14 @@ export function AdfBrowser() {
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
               <button className="btn" onClick={() => setRenameTarget(null)}>
-                Cancel
+                {t("common.cancel")}
               </button>
               <button
                 className="btn btn-primary"
                 onClick={handleRenameConfirm}
                 disabled={!renameValue.trim() || renameValue.trim() === renameTarget.name}
               >
-                Rename
+                {t("adf.renameTitle")}
               </button>
             </div>
           </div>
@@ -798,17 +800,16 @@ export function AdfBrowser() {
           }}
         >
           <div className="card" style={{ width: 400, maxWidth: "90vw" }}>
-            <h3 style={{ color: "var(--err)" }}>🗑️ Confirm Deletion</h3>
+            <h3 style={{ color: "var(--err)" }}>🗑️ {t("adf.modal.deleteTitle")}</h3>
             <p className="muted" style={{ margin: "8px 0 16px", fontSize: 13 }}>
-              Are you sure you want to permanently delete <strong>'{deleteTarget.name}'</strong>?
-              Used blocks will be freed back to the disk bitmap.
+              {t("adf.modal.deleteConfirm", { name: deleteTarget.name })}
             </p>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
               <button className="btn" onClick={() => setDeleteTarget(null)}>
-                Cancel
+                {t("common.cancel")}
               </button>
               <button className="btn btn-warn" onClick={handleDeleteConfirm}>
-                Delete Entry
+                {t("adf.modal.deleteButton")}
               </button>
             </div>
           </div>
