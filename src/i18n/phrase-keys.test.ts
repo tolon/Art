@@ -11,8 +11,23 @@ import en from "./en.json";
 import { describeCheckout, type CheckoutRow } from "@/lib/checkout";
 import { jobStatusLabel, type JobProgress } from "@/lib/jobs";
 import { statusLabel, type OperationRecord } from "@/lib/oplog";
-import { describeUpdate, type PackageUpdate } from "@/lib/sources";
+import {
+  AGE_CAP_WEEKS,
+  describeSource,
+  describeUpdate,
+  formatAge,
+  formatSize,
+  type ClaimSource,
+  type PackageMeta,
+  type PackageUpdate,
+} from "@/lib/sources";
 import { describeLayout, type ImageLayout } from "@/lib/volume";
+import {
+  describeCopy,
+  planShortfall,
+  type CopyPlan,
+  type CopyReport,
+} from "@/lib/volumeWrite";
 import { describeVerdict, describeOutcome, type WhdloadOutcome, type WhdloadVerdict } from "@/lib/whdload";
 
 /** Whether `dotted` (e.g. "whdload.outcome.installed") names a string leaf. */
@@ -175,5 +190,93 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       const phrase = jobStatusLabel(job);
       expect(isLeafKey(phrase.key), phrase.key).toBe(true);
     }
+  });
+
+  // The switch-based mappers above are partly protected by TypeScript: a new
+  // union variant left unhandled is a compile error. `formatSize`,
+  // `formatAge`, `describeCopy` and `planShortfall` are if-chains over
+  // numbers and booleans instead, so a new branch with a typo'd key is
+  // caught by nothing at all — these four, plus `describeSource` (untested
+  // only because it was missed alongside the seven above), close that gap.
+
+  it("describeSource: every ClaimSource variant resolves", () => {
+    const sources: ClaimSource[] = ["index_column", "readme_field", "filename"];
+    for (const source of sources) {
+      const phrase = describeSource(source);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("formatSize: the bytes, KB and MB branches all resolve", () => {
+    for (const bytes of [512, 2048, 5 * 1024 * 1024]) {
+      const phrase = formatSize(bytes);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("formatAge: every branch resolves", () => {
+    const base: Omit<PackageMeta, "age_weeks"> = {
+      reference: { provider: "aminet", path: "util/libs/AmiSSL.lha" },
+      name: "AmiSSL",
+      directory: "util/libs",
+      size_bytes: 1024,
+      short: "AmiSSL",
+      version: null,
+      requires: [],
+      author: null,
+      distribution: null,
+    };
+    const ageWeeks = [
+      null, // date unknown
+      0, // this week
+      3, // weeks ago (< 8)
+      20, // months ago (< 1 year)
+      104, // years ago (>= 1 year)
+      AGE_CAP_WEEKS, // capped
+    ];
+    for (const age_weeks of ageWeeks) {
+      const phrase = formatAge({ ...base, age_weeks });
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("describeCopy: every CopyReport branch resolves", () => {
+    const base: CopyReport = {
+      files_copied: 3,
+      directories_created: 1,
+      bytes_copied: 4096,
+      files_verified: 3,
+      skipped: [],
+      renamed: [],
+      cancelled: false,
+    };
+    const reports: CopyReport[] = [
+      { ...base, cancelled: true }, // stopped
+      { ...base, skipped: ["Foo"] }, // left alone
+      base, // all verified
+    ];
+    for (const report of reports) {
+      const phrase = describeCopy(report);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("planShortfall: the shortfall branch resolves; the fitting branch is null", () => {
+    const base: CopyPlan = {
+      files: 1,
+      directories: 0,
+      total_bytes: 1024,
+      blocks_needed: 10,
+      blocks_free: 20,
+      block_size: 512,
+      name_problems: [],
+      collisions: [],
+      split_icons: [],
+    };
+    expect(planShortfall(base)).toBeNull();
+
+    const short = planShortfall({ ...base, blocks_needed: 30 });
+    expect(short).not.toBeNull();
+    expect(isLeafKey(short!.key), short!.key).toBe(true);
   });
 });
