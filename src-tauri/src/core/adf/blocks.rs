@@ -57,8 +57,22 @@ fn read_u32_be(buf: &[u8], offset: usize) -> CoreResult<u32> {
 // `headerBlock`), and corrupt images can point anywhere. Indexing the image
 // directly (`img[off..off + BLOCK_SIZE]`) turns a bad number into a panic —
 // and because the release profile sets `panic = "abort"`, that panic takes the
-// whole application down. Everything that touches a block by number goes
-// through these helpers instead, so a bad block number becomes a normal error.
+// whole application down. Everything that reads a block by number from a
+// whole image goes through these helpers instead, so a bad block number
+// becomes a normal error. `core/adf/validate.rs::validate` is the caller
+// (ART-047): it used to bounds-check `root_off` by hand and then index
+// `image[root_off..]` directly, which is exactly the pattern this module
+// exists to replace.
+//
+// Read-only. `block_slice_mut` and `write_u32_at` were the write-side
+// counterparts of these two, but `core/adf/mutate.rs` was their only caller
+// and Phase 0a deleted it (ART-047). `core/volume/write`'s `BlockSet`
+// (`core/volume/write/layout.rs`) is the writer that replaced it, and it
+// does not slice a whole-image buffer at all — it stages each touched block
+// in a `BTreeMap<u32, Vec<u8>>` so a journal can be told the complete set of
+// changes before any of them reach disk. That is a different shape, not an
+// oversight, so the two write helpers were removed rather than kept for a
+// caller that does not exist.
 
 /// Byte offset of `block` within a whole image, checked against the image size.
 fn block_offset(img_len: usize, block: u32) -> CoreResult<usize> {
@@ -83,29 +97,10 @@ pub fn block_slice(img: &[u8], block: u32) -> CoreResult<&[u8]> {
     Ok(&img[off..off + BLOCK_SIZE])
 }
 
-/// Mutably borrow one 512-byte block of a whole image.
-pub fn block_slice_mut(img: &mut [u8], block: u32) -> CoreResult<&mut [u8]> {
-    let off = block_offset(img.len(), block)?;
-    Ok(&mut img[off..off + BLOCK_SIZE])
-}
-
 /// Read a big-endian u32 at `offset` inside `block`.
 pub fn read_u32_at(img: &[u8], block: u32, offset: usize) -> CoreResult<u32> {
     let b = block_slice(img, block)?;
     read_u32_be(b, offset)
-}
-
-/// Write a big-endian u32 at `offset` inside `block`.
-pub fn write_u32_at(img: &mut [u8], block: u32, offset: usize, value: u32) -> CoreResult<()> {
-    let b = block_slice_mut(img, block)?;
-    let slot = b
-        .get_mut(offset..offset + 4)
-        .ok_or_else(|| CoreError::Malformed {
-            format: "adf".into(),
-            detail: format!("write past end of block {block} at offset {offset}"),
-        })?;
-    slot.copy_from_slice(&value.to_be_bytes());
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -632,13 +627,11 @@ mod tests {
     #[test]
     fn block_word_access_is_bounds_checked() {
         let mut img = vec![0u8; BLOCK_SIZE * 2];
-
-        write_u32_at(&mut img, 1, 16, 0xDEAD_BEEF).unwrap();
+        img[BLOCK_SIZE + 16..BLOCK_SIZE + 20].copy_from_slice(&0xDEAD_BEEFu32.to_be_bytes());
         assert_eq!(read_u32_at(&img, 1, 16).unwrap(), 0xDEAD_BEEF);
 
         // Straddling the end of a block is a read past its end.
         assert!(read_u32_at(&img, 1, BLOCK_SIZE - 2).is_err());
-        assert!(write_u32_at(&mut img, 1, BLOCK_SIZE - 2, 1).is_err());
         // ...and so is any access to a block that isn't there.
         assert!(read_u32_at(&img, 7, 0).is_err());
     }

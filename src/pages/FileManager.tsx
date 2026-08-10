@@ -70,6 +70,7 @@ import {
   volumeRename,
   volumeWriteCapability,
   type CopyPlan,
+  type CopyReport,
   type WriteCapability,
 } from "@/lib/volumeWrite";
 import { usePowerMode } from "@/lib/uxmode";
@@ -146,10 +147,36 @@ function writableVolume(
 }
 
 /** Why writing is unavailable in this pane, for a disabled key's tooltip. */
-function writeRefusal(state: PaneState): string {
-  if (state.kind === "local") return "This pane holds a folder, not a disk image";
-  if (state.volumeIndex === null) return "Open a partition first";
-  return state.capability?.reason ?? "ART cannot write to this volume";
+function writeRefusal(state: PaneState, t: (key: string) => string): string {
+  if (state.kind === "local") return t("files.writeRefusal.local");
+  if (state.volumeIndex === null) return t("files.writeRefusal.noPartition");
+  return state.capability?.reason ?? t("files.writeRefusal.default");
+}
+
+type TranslateFn = (key: string, params?: Record<string, string | number>) => string;
+
+/**
+ * How to describe a copy's outcome, in one line.
+ *
+ * `describeCopy` (in `@/lib/volumeWrite`) has no translator to render or join
+ * the "N files and N folders" clause with, so it returns only the outer
+ * sentence key; this resolves `what` here, where a translator is available,
+ * and supplies it as the missing param.
+ */
+function copyResultText(report: CopyReport, t: TranslateFn): string {
+  const hasFiles = report.files_copied > 0;
+  const hasDirs = report.directories_created > 0;
+  const what = !hasFiles && !hasDirs
+    ? t("files.status.copyResult.nothing")
+    : hasFiles && hasDirs
+    ? t("files.status.copyResult.filesCount", { count: report.files_copied }) +
+      t("files.status.copyResult.andFoldersCount", { count: report.directories_created })
+    : hasFiles
+    ? t("files.status.copyResult.filesCount", { count: report.files_copied })
+    : t("files.status.copyResult.foldersCount", { count: report.directories_created });
+
+  const phrase = describeCopy(report);
+  return t(phrase.key, { ...phrase.params, what });
 }
 
 export function FileManager() {
@@ -438,20 +465,19 @@ export function FileManager() {
       setBusy(null);
 
       if (result.kind === "copy_in") {
-        setMessage(describeCopy(result.report));
+        setMessage(copyResultText(result.report, t));
         if (result.report.skipped.length > 0) {
           setError(result.report.skipped.slice(0, 3).join(" · "));
         }
       } else {
         const { report } = result;
         setMessage(
-          `${report.files_written} file${
-            report.files_written === 1 ? "" : "s"
-          } written out${
-            report.sidecars_written > 0
-              ? `, ${report.sidecars_written} with their Amiga attributes kept`
-              : ""
-          }`
+          report.sidecars_written > 0
+            ? t("files.status.filesWrittenOutSidecars", {
+                count: report.files_written,
+                sidecars: report.sidecars_written,
+              })
+            : t("files.status.filesWrittenOut", { count: report.files_written })
         );
         if (report.skipped.length > 0) {
           setError(report.skipped.slice(0, 3).join(" · "));
@@ -466,7 +492,7 @@ export function FileManager() {
     return () => {
       void unlisten.then((off) => off());
     };
-  }, [refresh]);
+  }, [refresh, t]);
 
   // A job that fails or is cancelled emits no result, so the listener above
   // alone would leave this screen waiting forever. The job's own terminal
@@ -516,7 +542,7 @@ export function FileManager() {
       setMessage(null);
 
       if (source.kind === "local" && target.kind === "local") {
-        setError("Both panes are local folders — use Explorer for that.");
+        setError(t("files.err.bothLocal"));
         return;
       }
 
@@ -524,7 +550,7 @@ export function FileManager() {
       if (target.kind !== "local") {
         const destination = writableVolume(target);
         if (!destination) {
-          setError(writeRefusal(target));
+          setError(writeRefusal(target, t));
           return;
         }
 
@@ -532,14 +558,14 @@ export function FileManager() {
         // are the paths already tested on their own (§4.3).
         if (source.kind !== "local") {
           if (source.volumeIndex === null) {
-            setError("Open a partition on the other side first.");
+            setError(t("files.err.openOtherSide"));
             return;
           }
           if (source.location === destination.path) {
-            setError("That is the same image on both sides. Use Move or Rename instead.");
+            setError(t("files.err.sameImage"));
             return;
           }
-          setBusy(`Copying ${entry.name} between images…`);
+          setBusy(t("files.status.copyingBetween", { name: entry.name }));
           try {
             pendingCopy.current = await volumeCopyBetween(
               source.location,
@@ -561,12 +587,12 @@ export function FileManager() {
         // From the user's disk. A folder is planned and confirmed first; a
         // single file goes straight in.
         if (!entry.path) {
-          setError("That item has no path on your disk.");
+          setError(t("files.err.noLocalPath"));
           return;
         }
 
         if (entry.is_dir) {
-          setBusy(`Working out what ${entry.name} needs…`);
+          setBusy(t("files.status.planning", { name: entry.name }));
           try {
             const found = await volumePlanCopy(
               destination.path,
@@ -583,7 +609,7 @@ export function FileManager() {
           return;
         }
 
-        setBusy(`Copying ${entry.name}…`);
+        setBusy(t("files.status.copying", { name: entry.name }));
         try {
           const outcome = await volumePutFile(
             destination.path,
@@ -594,9 +620,9 @@ export function FileManager() {
             policy
           );
           setMessage(
-            `${entry.name} written to ${target.volumeName}${
-              outcome.backup ? " — the previous image was backed up" : ""
-            }`
+            outcome.backup
+              ? t("files.status.writtenToBackedUp", { name: entry.name, volume: target.volumeName })
+              : t("files.status.writtenTo", { name: entry.name, volume: target.volumeName })
           );
           await refresh(to);
         } catch (e) {
@@ -609,13 +635,13 @@ export function FileManager() {
 
       // ---- out of a volume ----
       if (source.volumeIndex === null) {
-        setError("Open a partition first.");
+        setError(t("files.err.openPartitionFirst"));
         return;
       }
 
       if (entry.is_dir) {
         if (entry.header_block === null) return;
-        setBusy(`Copying ${entry.name} out…`);
+        setBusy(t("files.status.copyingOut", { name: entry.name }));
         try {
           pendingCopy.current = await volumeCopyOut(
             source.location,
@@ -633,7 +659,7 @@ export function FileManager() {
       }
 
       if (entry.header_block === null) return;
-      setBusy(`Copying ${entry.name}…`);
+      setBusy(t("files.status.copying", { name: entry.name }));
       try {
         const outcome = await volumeExtractTo(
           source.location,
@@ -643,8 +669,12 @@ export function FileManager() {
         );
         setMessage(
           outcome.skipped_existing
-            ? `${entry.name} is already there — it was left alone`
-            : `${entry.name} copied out of ${source.volumeName} (${formatBytes(outcome.bytes)})`
+            ? t("files.status.alreadyThere", { name: entry.name })
+            : t("files.status.copiedOut", {
+                name: entry.name,
+                volume: source.volumeName,
+                size: formatBytes(outcome.bytes),
+              })
         );
         await refresh(to);
       } catch (e) {
@@ -653,7 +683,7 @@ export function FileManager() {
         setBusy(null);
       }
     },
-    [pane, refresh, policy, powerMode]
+    [pane, refresh, policy, powerMode, t]
   );
 
   /** Run the copy the plan dialog just had confirmed. */
@@ -664,11 +694,11 @@ export function FileManager() {
     const target = writableVolume(pane(pending.side));
     setPlan(null);
     if (!target) {
-      setError(writeRefusal(pane(pending.side)));
+      setError(writeRefusal(pane(pending.side), t));
       return;
     }
 
-    setBusy(`Copying ${pending.name}…`);
+    setBusy(t("files.status.copying", { name: pending.name }));
     try {
       pendingCopy.current = await volumeCopyIn(
         target.path,
@@ -697,17 +727,15 @@ export function FileManager() {
     const target = writableVolume(state);
     if (!target || entry.header_block === null) return;
 
-    if (!window.confirm(`Delete ${entry.name} from ${state.volumeName}?`)) return;
-    if (
-      !window.confirm(
-        `This cannot be undone from inside ART once it has finished. Delete '${entry.name}'?`
-      )
-    ) {
+    if (!window.confirm(t("files.dialog.delete.confirm1", { name: entry.name, volume: state.volumeName }))) {
+      return;
+    }
+    if (!window.confirm(t("files.dialog.delete.confirm2", { name: entry.name }))) {
       return;
     }
 
     setError(null);
-    setBusy(`Deleting ${entry.name}…`);
+    setBusy(t("files.status.deleting", { name: entry.name }));
     try {
       // Its icon, if it has one: an orphan `.info` left behind clutters
       // Workbench with an icon that opens nothing (§7.1).
@@ -726,10 +754,7 @@ export function FileManager() {
       );
 
       let alsoIcon = false;
-      if (
-        icon &&
-        window.confirm(`Delete its icon (${icon.icon_name}) too?`)
-      ) {
+      if (icon && window.confirm(t("files.dialog.delete.confirmIcon", { icon: icon.icon_name }))) {
         await volumeDelete(
           target.path,
           target.volumeIndex,
@@ -740,9 +765,13 @@ export function FileManager() {
       }
 
       setMessage(
-        `${entry.name}${alsoIcon ? " and its icon" : ""} deleted${
-          outcome.backup ? " — the previous image was backed up" : ""
-        }`
+        alsoIcon
+          ? outcome.backup
+            ? t("files.status.deletedWithIconBackedUp", { name: entry.name })
+            : t("files.status.deletedWithIcon", { name: entry.name })
+          : outcome.backup
+            ? t("files.status.deletedBackedUp", { name: entry.name })
+            : t("files.status.deleted", { name: entry.name })
       );
       await refresh(side);
     } catch (e) {
@@ -764,12 +793,12 @@ export function FileManager() {
     const state = pane(side);
     const target = writableVolume(state);
     if (!target || entry.header_block === null || entry.is_dir) {
-      setError(writeRefusal(state));
+      setError(writeRefusal(state, t));
       return;
     }
 
     setError(null);
-    setBusy(`Checking out ${entry.name}…`);
+    setBusy(t("files.status.checkingOut", { name: entry.name }));
     try {
       const row = await checkoutOpen(
         target.path,
@@ -777,9 +806,7 @@ export function FileManager() {
         target.dirBlock,
         entry.header_block
       );
-      setMessage(
-        `${row.name} is open for editing. Put it back from the panel below when you are done.`
-      );
+      setMessage(t("files.status.checkedOut", { name: row.name }));
       // Best-effort: an editor that will not start is worth saying, but the
       // checkout itself succeeded and its path is on screen either way.
       await checkoutEdit(row.id).catch((e) => setError(String(e)));
@@ -795,15 +822,15 @@ export function FileManager() {
     const state = pane(side);
     const target = writableVolume(state);
     if (!target) {
-      setError(writeRefusal(state));
+      setError(writeRefusal(state, t));
       return;
     }
 
-    const name = window.prompt("Folder name on the disk");
+    const name = window.prompt(t("files.dialog.newFolder.prompt"));
     if (!name) return;
 
     setError(null);
-    setBusy("Creating folder…");
+    setBusy(t("files.status.creatingFolder"));
     try {
       await volumeMakeDir(target.path, target.volumeIndex, target.dirBlock, name);
       await refresh(side);
@@ -819,15 +846,15 @@ export function FileManager() {
     const state = pane(side);
     const target = writableVolume(state);
     if (!target || entry.header_block === null) {
-      setError(writeRefusal(state));
+      setError(writeRefusal(state, t));
       return;
     }
 
-    const name = window.prompt("New name", entry.name);
+    const name = window.prompt(t("files.dialog.rename.prompt"), entry.name);
     if (!name || name === entry.name) return;
 
     setError(null);
-    setBusy(`Renaming ${entry.name}…`);
+    setBusy(t("files.status.renaming", { name: entry.name }));
     try {
       // §7.1: Workbench shows an object only when its `.info` is next to it,
       // so renaming `Game` without renaming `Game.info` makes the game
@@ -852,8 +879,11 @@ export function FileManager() {
       if (
         icon &&
         window.confirm(
-          `${entry.name} has an icon (${icon.icon_name}). Rename it to ${name}.info as well? ` +
-            `Without it, ${name} will not show up on Workbench.`
+          t("files.dialog.rename.confirmIcon", {
+            name: entry.name,
+            icon: icon.icon_name,
+            newName: name,
+          })
         )
       ) {
         await volumeRename(
@@ -867,7 +897,9 @@ export function FileManager() {
       }
 
       setMessage(
-        `${entry.name} is now ${name}${alsoIcon ? ", and its icon with it" : ""}`
+        alsoIcon
+          ? t("files.status.renamedWithIcon", { name: entry.name, newName: name })
+          : t("files.status.renamed", { name: entry.name, newName: name })
       );
       await refresh(side);
     } catch (e) {
@@ -933,11 +965,11 @@ export function FileManager() {
   const actions: FunctionAction[] = [
     {
       key: "F3",
-      label: "View",
+      label: t("files.functionKeys.view"),
       enabled: Boolean(selected && !selected.is_dir && inVolume),
       reason: inVolume
-        ? "Select a file to look at"
-        : "Viewing works on files inside an image",
+        ? t("files.functionKeys.viewReasonSelect")
+        : t("files.functionKeys.viewReasonNeedsImage"),
       run: () => {
         if (!selected || selected.header_block === null || activePane.volumeIndex === null) {
           return;
@@ -952,43 +984,43 @@ export function FileManager() {
     },
     {
       key: "F4",
-      label: "Edit",
+      label: t("files.functionKeys.edit"),
       enabled: Boolean(selected && !selected.is_dir && canWrite) && busy === null,
-      reason: canWrite ? "Select a file to edit" : writeRefusal(activePane),
+      reason: canWrite ? t("files.functionKeys.editReasonSelect") : writeRefusal(activePane, t),
       run: () => {
         if (selected) void editEntry(active, selected);
       },
     },
     {
       key: "F5",
-      label: "Copy",
+      label: t("files.functionKeys.copy"),
       enabled: Boolean(selected) && busy === null,
-      reason: "Select something to copy",
+      reason: t("files.functionKeys.copyReasonSelect"),
       run: () => {
         if (selected) void copyTo(active, selected);
       },
     },
     {
       key: "F6",
-      label: "Rename",
+      label: t("files.functionKeys.rename"),
       enabled: Boolean(selected) && canWrite && busy === null,
-      reason: canWrite ? "Select something to rename" : writeRefusal(activePane),
+      reason: canWrite ? t("files.functionKeys.renameReasonSelect") : writeRefusal(activePane, t),
       run: () => {
         if (selected) void renameEntry(active, selected);
       },
     },
     {
       key: "F7",
-      label: "New folder",
+      label: t("files.functionKeys.newFolder"),
       enabled: canWrite && busy === null,
-      reason: writeRefusal(activePane),
+      reason: writeRefusal(activePane, t),
       run: () => void newFolder(active),
     },
     {
       key: "F8",
-      label: "Delete",
+      label: t("files.functionKeys.delete"),
       enabled: Boolean(selected) && canWrite && busy === null,
-      reason: canWrite ? "Select something to delete" : writeRefusal(activePane),
+      reason: canWrite ? t("files.functionKeys.deleteReasonSelect") : writeRefusal(activePane, t),
       danger: true,
       run: () => {
         if (selected) void deleteEntry(active, selected);
@@ -996,11 +1028,11 @@ export function FileManager() {
     },
     {
       key: "F9",
-      label: "Attributes",
+      label: t("files.functionKeys.attributes"),
       enabled: Boolean(selected) && inVolume,
       reason: inVolume
-        ? "Select something first"
-        : "Attributes belong to files inside an image",
+        ? t("files.functionKeys.attributesReasonSelect")
+        : t("files.functionKeys.attributesReasonNeedsImage"),
       run: () => {
         if (!selected || selected.header_block === null || activePane.volumeIndex === null) {
           return;
@@ -1038,15 +1070,16 @@ export function FileManager() {
     const pending = recovery;
     if (!pending) return;
     setRecovery(null);
-    setBusy(apply ? "Undoing the unfinished operation…" : "Removing the journal…");
+    setBusy(apply ? t("files.status.undoing") : t("files.status.removingJournal"));
     try {
       const report = await volumeRecover(pending.path, apply);
       setMessage(
         report
-          ? `Undone: ${report.description} — ${report.blocks_restored} block${
-              report.blocks_restored === 1 ? "" : "s"
-            } put back`
-          : "The journal was removed; the image was left exactly as it was."
+          ? t("files.status.undone", {
+              description: report.description,
+              count: report.blocks_restored,
+            })
+          : t("files.status.journalRemoved")
       );
       await refresh(pending.side);
     } catch (e) {
@@ -1060,8 +1093,7 @@ export function FileManager() {
     <div className="app-content-wide">
       <h1 style={{ fontSize: 20 }}>{t("nav.files")}</h1>
       <p className="muted" style={{ marginTop: 4 }}>
-        Two panes. Put a folder on one side and a disk image on the other, then
-        drag between them — or use the function keys.
+        {t("files.intro")}
       </p>
 
       {/* §2: an unfinished operation blocks every write until it is decided
@@ -1071,27 +1103,25 @@ export function FileManager() {
           className="card"
           style={{ margin: "10px 0", borderColor: "var(--warn)" }}
           role="alertdialog"
-          aria-label="Unfinished operation"
+          aria-label={t("files.recovery.ariaLabel")}
         >
-          <strong>An operation on this image did not finish</strong>
+          <strong>{t("files.recovery.title")}</strong>
           <div style={{ fontSize: 13, marginTop: 4 }}>
-            “{recovery.description}” was interrupted. ART kept a record of every
-            block it was about to change, so the image can be put back exactly
-            as it was. Writing is refused until you decide.
+            {t("files.recovery.body", { description: recovery.description })}
           </div>
           <div className="faint" style={{ fontSize: 11, marginTop: 4, wordBreak: "break-all" }}>
             {recovery.path}
           </div>
           <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
             <button className="btn btn-primary" onClick={() => void resolveRecovery(true)}>
-              Undo it
+              {t("files.recovery.undo")}
             </button>
             <button
               className="btn"
               onClick={() => void resolveRecovery(false)}
-              title="Leave the image exactly as it is and forget the record. Only do this if you know the operation completed."
+              title={t("files.recovery.leaveTitle")}
             >
-              Leave the image alone
+              {t("files.recovery.leave")}
             </button>
           </div>
         </div>
@@ -1109,7 +1139,7 @@ export function FileManager() {
       )}
       {busy && (
         <div className="muted" style={{ fontSize: 12, margin: "8px 0" }}>
-          {busy} — progress is in the job bar, and you can stop it there.
+          {t("files.busy.suffix", { busy })}
         </div>
       )}
 
@@ -1126,7 +1156,7 @@ export function FileManager() {
         <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 90 }}>
           <button
             className="btn"
-            title="Copy the selected item to the right"
+            title={t("files.arrows.toRightTitle")}
             disabled={!selection.left || busy !== null}
             onClick={() => {
               const entry = left.entries.find((e) => e.name === selection.left);
@@ -1137,7 +1167,7 @@ export function FileManager() {
           </button>
           <button
             className="btn"
-            title="Copy the selected item to the left"
+            title={t("files.arrows.toLeftTitle")}
             disabled={!selection.right || busy !== null}
             onClick={() => {
               const entry = right.entries.find((e) => e.name === selection.right);
@@ -1155,7 +1185,7 @@ export function FileManager() {
 
       <CheckoutPanel
         onChanged={(row) => {
-          setMessage(`${row.name} was written back into the image.`);
+          setMessage(t("files.status.writtenBack", { name: row.name }));
           // Whichever pane holds that image needs re-listing: an edit that
           // changed a file's size moved its blocks.
           for (const side of ["left", "right"] as Side[]) {
@@ -1168,21 +1198,21 @@ export function FileManager() {
       {/* What a copy will do to names already taken, kept where the user can
           see it rather than buried in the plan dialog they may not see. */}
       <div className="faint" style={{ fontSize: 11, marginTop: 6 }}>
-        When a name is already taken:{" "}
+        {t("files.policy.label")}{" "}
         {(
           [
-            ["skip", "leave it alone"],
-            ["overwrite", "replace it"],
-            ["rename", "keep both"],
+            ["skip", "files.policy.skip"],
+            ["overwrite", "files.policy.overwrite"],
+            ["rename", "files.policy.rename"],
           ] as Array<[OverwritePolicy, string]>
-        ).map(([value, label]) => (
+        ).map(([value, labelKey]) => (
           <button
             key={value}
             className={`btn${policy === value ? " btn-primary" : ""}`}
             style={{ fontSize: 11, marginLeft: 4 }}
             onClick={() => setPolicy(value)}
           >
-            {label}
+            {t(labelKey)}
           </button>
         ))}
       </div>
@@ -1236,6 +1266,7 @@ function VolumeFooter({
   state: PaneState;
   powerMode: boolean;
 }) {
+  const { t } = useTranslation();
   const capability = state.capability;
   const filesystem =
     capability?.filesystem ??
@@ -1257,26 +1288,29 @@ function VolumeFooter({
         flexWrap: "wrap",
       }}
     >
-      <strong>{capability?.volume_name || state.volumeName || "(unnamed)"}</strong>
+      <strong>{capability?.volume_name || state.volumeName || t("files.footer.unnamed")}</strong>
       <span>{filesystem}</span>
-      {capability && <span>{formatBytes(capability.free_bytes)} free</span>}
+      {capability && <span>{t("files.footer.free", { size: formatBytes(capability.free_bytes) })}</span>}
 
       {capability && !capability.writable && (
         <span
           className="badge badge-warn"
           style={{ fontSize: 10 }}
-          title={capability.reason ?? "ART cannot write to this volume"}
+          title={capability.reason ?? t("files.writeRefusal.default")}
         >
-          read-only
+          {t("files.footer.readOnly")}
         </span>
       )}
 
       {powerMode && capability && (
         <span className="faint">
-          {capability.free_blocks.toLocaleString()} blocks &middot;{" "}
-          {capability.strategy === "whole-file"
-            ? "written whole and backed up"
-            : "written in place under an undo journal"}
+          {t("files.footer.blocksStrategy", {
+            blocks: capability.free_blocks.toLocaleString(),
+            strategy:
+              capability.strategy === "whole-file"
+                ? t("files.footer.strategyWhole")
+                : t("files.footer.strategyJournal"),
+          })}
         </span>
       )}
     </div>
@@ -1322,6 +1356,7 @@ function Pane({
   onDragOut: (entry: PanelEntry) => void;
   onDropped: (entry: PanelEntry, from: Side) => void;
 }) {
+  const { t } = useTranslation();
   const [dragOver, setDragOver] = useState(false);
 
   const showingFiles = state.kind !== "hdf" || state.volumeIndex !== null;
@@ -1360,23 +1395,23 @@ function Pane({
     >
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
         <button className="btn" style={{ fontSize: 12 }} onClick={onOpenFolder}>
-          Folder...
+          {t("files.toolbar.folder")}
         </button>
         <button className="btn" style={{ fontSize: 12 }} onClick={() => onOpenImage("adf")}>
-          ADF...
+          {t("files.toolbar.adf")}
         </button>
         <button className="btn" style={{ fontSize: 12 }} onClick={() => onOpenImage("hdf")}>
-          HDF...
+          {t("files.toolbar.hdf")}
         </button>
         <button className="btn" style={{ fontSize: 12 }} onClick={onUp} disabled={!canGoUp}>
-          Up
+          {t("files.toolbar.up")}
         </button>
         <button className="btn" style={{ fontSize: 12 }} onClick={onRefresh}>
-          Refresh
+          {t("files.toolbar.refresh")}
         </button>
         {writableVolume(state) !== null && (
           <button className="btn" style={{ fontSize: 12 }} onClick={onNewFolder}>
-            New folder
+            {t("files.toolbar.newFolder")}
           </button>
         )}
       </div>
@@ -1397,9 +1432,9 @@ function Pane({
       )}
 
       <div className="faint" style={{ fontSize: 11, marginBottom: 6, wordBreak: "break-all" }}>
-        {state.location || "Nothing open"}
+        {state.location || t("files.pane.nothingOpen")}
         {state.kind === "hdf" && state.volumeName && ` > ${state.volumeName}:`}
-        {state.trail.length > 0 && ` > ${state.trail.map((t) => t.name).join(" > ")}`}
+        {state.trail.length > 0 && ` > ${state.trail.map((crumb) => crumb.name).join(" > ")}`}
       </div>
 
       {state.error && (
@@ -1431,8 +1466,7 @@ function Pane({
 
       {state.truncated && (
         <div className="badge badge-warn" style={{ display: "block", fontSize: 11 }}>
-          This folder holds more than ART will list &mdash; only the first
-          entries are shown.
+          {t("files.pane.truncated")}
         </div>
       )}
 
@@ -1466,11 +1500,16 @@ function Pane({
             >
               <span style={{ minWidth: 0 }}>
                 <span className="recent-name">{entry.name}</span>
-                {entry.is_dir && <span className="faint" style={{ fontSize: 10 }}> (folder)</span>}
+                {entry.is_dir && (
+                  <span className="faint" style={{ fontSize: 10 }}>
+                    {" "}
+                    {t("files.pane.folderSuffix")}
+                  </span>
+                )}
                 {entry.is_link && (
                   <span className="faint" style={{ fontSize: 10 }}>
                     {" "}
-                    (link &mdash; not followed)
+                    {t("files.pane.linkSuffix")}
                   </span>
                 )}
               </span>
@@ -1484,7 +1523,7 @@ function Pane({
                   <button
                     className="btn"
                     style={{ fontSize: 10 }}
-                    title="Copy to the other pane"
+                    title={t("files.pane.copyTitle")}
                     onClick={(event) => {
                       event.stopPropagation();
                       onCopy(entry);
@@ -1497,7 +1536,7 @@ function Pane({
                   <button
                     className="btn"
                     style={{ fontSize: 10 }}
-                    title="Delete from the disk"
+                    title={t("files.pane.deleteTitle")}
                     onClick={(event) => {
                       event.stopPropagation();
                       onDelete(entry);
@@ -1512,7 +1551,7 @@ function Pane({
 
           {state.entries.length === 0 && !state.error && (
             <li className="muted" style={{ fontSize: 12, padding: "8px 0" }}>
-              Nothing here.
+              {t("files.pane.empty")}
             </li>
           )}
         </ul>
@@ -1537,11 +1576,14 @@ function PartitionList({
   powerMode: boolean;
   onOpen: (index: number) => void;
 }) {
+  const { t } = useTranslation();
+  const layoutPhrase = describeLayout(image.layout);
   return (
     <div>
       <div className="faint" style={{ fontSize: 11, marginBottom: 6 }}>
-        {describeLayout(image.layout)}
-        {image.volumes.length > 0 && ` · ${image.volumes.length} volume(s)`}
+        {t(layoutPhrase.key, layoutPhrase.params)}
+        {image.volumes.length > 0 &&
+          ` · ${t("files.partitions.volumeCount", { count: image.volumes.length })}`}
       </div>
 
       {image.note && (
@@ -1562,8 +1604,9 @@ function PartitionList({
               <span className="recent-name">{volume.name}</span>{" "}
               <span className="faint" style={{ fontSize: 11 }}>
                 {formatBytes(volume.byte_length)} &middot; {volume.filesystem}
-                {volume.bootable && " · bootable"}
-                {powerMode && ` · at byte ${volume.byte_offset.toLocaleString()}`}
+                {volume.bootable && ` · ${t("files.partitions.bootable")}`}
+                {powerMode &&
+                  ` · ${t("files.partitions.atByte", { offset: volume.byte_offset.toLocaleString() })}`}
               </span>
             </div>
 
@@ -1577,14 +1620,13 @@ function PartitionList({
                 style={{ fontSize: 11, marginTop: 4 }}
                 onClick={() => onOpen(index)}
               >
-                Open
+                {t("files.partitions.open")}
               </button>
             )}
 
             {volume.clamped && (
               <div className="badge badge-warn" style={{ display: "block", fontSize: 11 }}>
-                This partition claims more space than the file holds &mdash; only
-                what is really there can be read.
+                {t("files.partitions.clamped")}
               </div>
             )}
           </li>
@@ -1592,7 +1634,7 @@ function PartitionList({
 
         {image.volumes.length === 0 && (
           <li className="muted" style={{ fontSize: 12 }}>
-            No volumes found in this file.
+            {t("files.partitions.none")}
           </li>
         )}
       </ul>

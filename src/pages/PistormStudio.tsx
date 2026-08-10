@@ -13,51 +13,55 @@ import {
 
 interface ProfileChoice {
   id: PistormProfileMode;
-  title: string;
-  badge: string;
+  emoji: string;
+  titleKey: string;
+  badgeKey: string;
   badgeType: "ok" | "muted" | "warn";
-  description: string;
-  features: string[];
+  descriptionKey: string;
+  featureKeys: string[];
 }
 
 const PROFILE_CHOICES: ProfileChoice[] = [
   {
     id: "workstation",
-    title: "⚡ AmigaOS Ultra Workstation",
-    badge: "⭐ Recommended for AmigaOS & Productivity",
+    emoji: "⚡",
+    titleKey: "pistorm.profile.workstation.title",
+    badgeKey: "pistorm.profile.workstation.badge",
     badgeType: "ok",
-    description: "Maximum JIT performance (~800+ MIPS) with 1080p TrueColor RTG desktop. Instant Workbench loading, web browsing, raytracing, and high productivity.",
-    features: [
-      "~800+ MIPS CPU speed (faster than 68060)",
-      "1080p 32-bit TrueColor RTG HDMI output",
-      "1 GB to 2 GB Fast RAM for multitasking",
-      "High-speed emu68-sd.device disk access (20+ MB/s)",
+    descriptionKey: "pistorm.profile.workstation.description",
+    featureKeys: [
+      "pistorm.profile.workstation.feature1",
+      "pistorm.profile.workstation.feature2",
+      "pistorm.profile.workstation.feature3",
+      "pistorm.profile.workstation.feature4",
     ],
   },
   {
     id: "balancedwhdload",
-    title: "🕹️ Balanced Daily & WHDLoad Gaming",
-    badge: "Optimal Daily Driver & Games",
+    emoji: "🕹️",
+    titleKey: "pistorm.profile.balanced.title",
+    badgeKey: "pistorm.profile.balanced.badge",
     badgeType: "muted",
-    description: "High JIT performance with WHDLoad MMU and cache flush optimizations. RTG desktop with automatic native OCS/ECS/AGA switching for games.",
-    features: [
-      "99% WHDLoad game compatibility",
-      "Automatic screen-mode switching (RTG ↔ PAL/NTSC)",
-      "512 MB Fast RAM allocation",
-      "WHDLoad MMU-safe cache flushes",
+    descriptionKey: "pistorm.profile.balanced.description",
+    featureKeys: [
+      "pistorm.profile.balanced.feature1",
+      "pistorm.profile.balanced.feature2",
+      "pistorm.profile.balanced.feature3",
+      "pistorm.profile.balanced.feature4",
     ],
   },
   {
     id: "classiccompat",
-    title: "🎯 Classic & Demoscene Compatibility",
-    badge: "Cycle-Exact & Demos",
+    emoji: "🎯",
+    titleKey: "pistorm.profile.classic.title",
+    badgeKey: "pistorm.profile.classic.badge",
     badgeType: "warn",
-    description: "Conservative JIT execution for timing-sensitive demoscene productions and floppy-based legacy software.",
-    features: [
-      "Strict timing preservation",
-      "128 MB to 256 MB Fast RAM footprint",
-      "Native 15 kHz Amiga video pass-through priority",
-      "Maximum legacy software stability",
+    descriptionKey: "pistorm.profile.classic.description",
+    featureKeys: [
+      "pistorm.profile.classic.feature1",
+      "pistorm.profile.classic.feature2",
+      "pistorm.profile.classic.feature3",
+      "pistorm.profile.classic.feature4",
     ],
   },
 ];
@@ -86,7 +90,7 @@ export function PistormStudio() {
     const sel = await open({
       directory: true,
       multiple: false,
-      title: "Select PiStorm / Emu68 MicroSD Card Root Folder",
+      title: t("pistorm.selectSdTitle"),
     });
     if (typeof sel !== "string") return;
 
@@ -97,11 +101,13 @@ export function PistormStudio() {
       const scanned = await pistormScan(sel);
       setSdPath(sel);
       setConfig(scanned.detected_config);
-      setStatusMsg(
-        `Scanned MicroSD: ${scanned.has_emu68_img ? "✓ Emu68 Firmware Found" : "⚠️ Emu68 kernel missing"}, ${
-          scanned.has_kickstart ? `✓ Kickstart (${scanned.kickstart_name})` : "⚠️ Kickstart ROM missing"
-        }`
-      );
+      const firmware = scanned.has_emu68_img
+        ? t("pistorm.scan.firmwareFound")
+        : t("pistorm.scan.firmwareMissing");
+      const kickstart = scanned.has_kickstart
+        ? t("pistorm.scan.kickstartFound", { name: scanned.kickstart_name })
+        : t("pistorm.scan.kickstartMissing");
+      setStatusMsg(t("pistorm.scan.summary", { firmware, kickstart }));
     } catch (e) {
       setError(String(e));
     } finally {
@@ -147,9 +153,9 @@ export function PistormStudio() {
     setStatusMsg(null);
     try {
       await pistormSave(sdPath, config);
-      setStatusMsg("✓ Successfully saved PiStorm config.txt and cmdline.txt to MicroSD card!");
+      setStatusMsg(t("pistorm.msg.saved"));
     } catch (e) {
-      setError(`Failed to save: ${String(e)}`);
+      setError(t("pistorm.msg.saveFailed", { error: String(e) }));
     } finally {
       setBusy(false);
     }
@@ -158,14 +164,14 @@ export function PistormStudio() {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1 style={{ fontSize: 20, margin: 0 }}>{t("nav.pistorm")} — PiStorm & Emu68 Studio</h1>
+        <h1 style={{ fontSize: 20, margin: 0 }}>{t("nav.pistorm")} — {t("pistorm.title")}</h1>
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn btn-sm" onClick={handleSelectSd} disabled={busy}>
-            📂 Select MicroSD Card…
+            📂 {t("pistorm.selectSd")}
           </button>
           {sdPath && (
             <button className="btn btn-sm btn-primary" onClick={handleSave} disabled={busy}>
-              💾 Save & Sync PiStorm SD
+              💾 {t("pistorm.saveSync")}
             </button>
           )}
         </div>
@@ -173,20 +179,20 @@ export function PistormStudio() {
 
       {sdPath && (
         <div style={{ margin: "8px 0 12px", fontSize: 12 }}>
-          <span className="muted">MicroSD Card:</span>{" "}
+          <span className="muted">{t("pistorm.sdCardLabel")}</span>{" "}
           <strong style={{ wordBreak: "break-all" }}>{sdPath}</strong>
         </div>
       )}
 
       {error && <div className="badge badge-err" style={{ marginBottom: 12, padding: "6px 12px" }}>{error}</div>}
       {statusMsg && <div className="badge badge-ok" style={{ marginBottom: 12, padding: "6px 12px" }}>{statusMsg}</div>}
-      {busy && <div className="muted" style={{ marginBottom: 12 }}>Working on PiStorm configuration…</div>}
+      {busy && <div className="muted" style={{ marginBottom: 12 }}>{t("pistorm.working")}</div>}
 
       {/* Profile Modes: Parametric Workstation vs Gaming Explanations */}
       <section className="card" style={{ marginTop: 12 }}>
-        <h2 style={{ fontSize: 15 }}>🎯 Parametric Usage Profiles</h2>
+        <h2 style={{ fontSize: 15 }}>🎯 {t("pistorm.profilesHeading")}</h2>
         <p className="muted" style={{ fontSize: 12, margin: "2px 0 12px" }}>
-          PiStorm transforms your Amiga into a high-performance workstation while preserving custom chipset compatibility for games:
+          {t("pistorm.profilesIntro")}
         </p>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 10 }}>
@@ -209,18 +215,19 @@ export function PistormStudio() {
               >
                 <div>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 6 }}>
-                    <strong style={{ fontSize: 14 }}>{p.title}</strong>
+                    <strong style={{ fontSize: 14 }}>{p.emoji} {t(p.titleKey)}</strong>
                     <span className={`badge badge-${p.badgeType}`} style={{ fontSize: 10 }}>
-                      {p.badge}
+                      {p.badgeType === "ok" ? "⭐ " : ""}
+                      {t(p.badgeKey)}
                     </span>
                   </div>
                   <p className="muted" style={{ fontSize: 12, margin: "6px 0 10px" }}>
-                    {p.description}
+                    {t(p.descriptionKey)}
                   </p>
                 </div>
                 <ul style={{ margin: 0, paddingLeft: 18, fontSize: 11, color: "var(--text-muted)" }}>
-                  {p.features.map((f, i) => (
-                    <li key={i}>{f}</li>
+                  {p.featureKeys.map((key) => (
+                    <li key={key}>{t(key)}</li>
                   ))}
                 </ul>
               </div>
@@ -233,46 +240,46 @@ export function PistormStudio() {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 16 }}>
         {/* Left: Hardware & RTG Settings */}
         <section className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <h2 style={{ fontSize: 15 }}>🖥️ Hardware & RTG Display Setup</h2>
+          <h2 style={{ fontSize: 15 }}>🖥️ {t("pistorm.hardwareHeading")}</h2>
 
           {/* PiStorm Board Model */}
           <div>
             <label className="muted" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
-              PiStorm Hardware Board:
+              {t("pistorm.boardLabel")}
             </label>
             <select
               value={config.board}
               onChange={(e) => setConfig({ ...config, board: e.target.value as PistormBoard })}
               style={{ width: "100%", padding: "6px 8px", background: "var(--bg)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 4 }}
             >
-              <option value="a500a2000">PiStorm A500 / A2000 (DIP-64 Socket)</option>
-              <option value="a1200lite">PiStorm32-Lite (Amiga 1200 Trapdoor)</option>
-              <option value="a600">PiStorm600 (Amiga 600 PLCC)</option>
+              <option value="a500a2000">{t("pistorm.board.a500a2000")}</option>
+              <option value="a1200lite">{t("pistorm.board.a1200lite")}</option>
+              <option value="a600">{t("pistorm.board.a600")}</option>
             </select>
           </div>
 
           {/* RTG HDMI Video Output */}
           <div>
             <label className="muted" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
-              RTG Video Output (Picasso96 HDMI):
+              {t("pistorm.rtgLabel")}
             </label>
             <select
               value={config.rtg_resolution}
               onChange={(e) => setConfig({ ...config, rtg_resolution: e.target.value as RtgResolution })}
               style={{ width: "100%", padding: "6px 8px", background: "var(--bg)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 4 }}
             >
-              <option value="res1080p">1920x1080 @ 60Hz (Full HD TrueColor 32-bit)</option>
-              <option value="res720p">1280x720 @ 60Hz (HD Ready TrueColor 32-bit)</option>
-              <option value="res1024x768">1024x768 @ 60Hz (Classic 4:3 RTG)</option>
-              <option value="res800x600">800x600 @ 60Hz</option>
-              <option value="disabled">Disabled (Native Amiga Video Output Only)</option>
+              <option value="res1080p">{t("pistorm.rtg.res1080p")}</option>
+              <option value="res720p">{t("pistorm.rtg.res720p")}</option>
+              <option value="res1024x768">{t("pistorm.rtg.res1024")}</option>
+              <option value="res800x600">{t("pistorm.rtg.res800")}</option>
+              <option value="disabled">{t("pistorm.rtg.disabled")}</option>
             </select>
           </div>
 
           {/* Kickstart ROM */}
           <div>
             <label className="muted" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
-              Kickstart ROM File on SD Card:
+              {t("pistorm.kickstartLabel")}
             </label>
             <input
               type="text"
@@ -286,12 +293,12 @@ export function PistormStudio() {
 
         {/* Right: CPU JIT & Fast RAM Parameters */}
         <section className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <h2 style={{ fontSize: 15 }}>⚡ CPU Performance & Memory Map</h2>
+          <h2 style={{ fontSize: 15 }}>⚡ {t("pistorm.performanceHeading")}</h2>
 
           {/* Fast RAM Slider */}
           <div>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-              <span className="muted">Fast RAM Allocation:</span>
+              <span className="muted">{t("pistorm.fastRamLabel")}</span>
               <strong>{config.fast_ram_mb >= 1024 ? `${config.fast_ram_mb / 1024} GB` : `${config.fast_ram_mb} MB`}</strong>
             </div>
             <input
@@ -304,7 +311,7 @@ export function PistormStudio() {
               style={{ width: "100%", marginTop: 4 }}
             />
             <div className="faint" style={{ fontSize: 10, marginTop: 2 }}>
-              Fast RAM is mapped directly into Amiga 32-bit address space.
+              {t("pistorm.fastRamHint")}
             </div>
           </div>
 
@@ -316,9 +323,9 @@ export function PistormStudio() {
               onChange={(e) => setConfig({ ...config, enable_jit: e.target.checked })}
             />
             <div>
-              <strong>Enable JIT Dynamic Recompiler (Emu68 JIT)</strong>
+              <strong>{t("pistorm.jitLabel")}</strong>
               <div className="muted" style={{ fontSize: 11 }}>
-                Translates 68k instructions to ARM64 on the fly for ~800+ MIPS.
+                {t("pistorm.jitHint")}
               </div>
             </div>
           </label>
@@ -331,9 +338,9 @@ export function PistormStudio() {
               onChange={(e) => setConfig({ ...config, enable_mmu: e.target.checked })}
             />
             <div>
-              <strong>Enable 68040 MMU Emulation</strong>
+              <strong>{t("pistorm.mmuLabel")}</strong>
               <div className="muted" style={{ fontSize: 11 }}>
-                Required for WHDLoad MuForce and advanced memory protections.
+                {t("pistorm.mmuHint")}
               </div>
             </div>
           </label>
@@ -346,9 +353,9 @@ export function PistormStudio() {
               onChange={(e) => setConfig({ ...config, enable_sd_storage: e.target.checked })}
             />
             <div>
-              <strong>Enable High-Speed MicroSD Storage (`emu68-sd.device`)</strong>
+              <strong>{t("pistorm.sdStorageLabel")}</strong>
               <div className="muted" style={{ fontSize: 11 }}>
-                High speed hard drive access (20+ MB/s) directly from SD card partitions.
+                {t("pistorm.sdStorageHint")}
               </div>
             </div>
           </label>

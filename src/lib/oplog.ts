@@ -3,6 +3,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
+import type { Phrase } from "@/lib/phrase";
+
 export type OperationOrigin =
   | { origin: "user_interface" }
   | { origin: "workflow"; workflow_id: string }
@@ -52,9 +54,11 @@ export function succeeded(record: OperationRecord): boolean {
 }
 
 /** A short status word for the UI: PASS / FAILED / Done / Failed. */
-export function statusLabel(record: OperationRecord): string {
-  if (record.outcome.result === "failure") return "Failed";
-  if (record.outcome.verification === true) return "Verified";
-  if (record.outcome.verification === false) return "Verification failed";
-  return "Done";
+export function statusLabel(record: OperationRecord): Phrase {
+  if (record.outcome.result === "failure") return { key: "settings.oplog.status.failed" };
+  if (record.outcome.verification === true) return { key: "settings.oplog.status.verified" };
+  if (record.outcome.verification === false) {
+    return { key: "settings.oplog.status.verificationFailed" };
+  }
+  return { key: "settings.oplog.status.done" };
 }

@@ -10,6 +10,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+import type { Phrase, PartialPhrase } from "@/lib/phrase";
 import type { Confidence } from "@/lib/sources";
 import type { CopyPlan } from "@/lib/volumeWrite";
 
@@ -142,29 +143,33 @@ export function onWhdloadResult(
 }
 
 /** How to describe the detection in one line. */
-export function describeVerdict(verdict: WhdloadVerdict): string {
+export function describeVerdict(verdict: WhdloadVerdict): Phrase {
   switch (verdict.confidence) {
     case "HIGH":
-      return "This is a WHDLoad package";
+      return { key: "whdload.verdict.high" };
     case "MEDIUM":
-      return "This looks like a WHDLoad package, but not conclusively";
+      return { key: "whdload.verdict.medium" };
     case "LOW":
-      return "Only a weak WHDLoad signal — this may be an ordinary archive";
+      return { key: "whdload.verdict.low" };
     case "UNKNOWN":
-      return "No WHDLoad markers found";
+      return { key: "whdload.verdict.unknown" };
   }
 }
 
-/** What the install produced, in one line. */
-export function describeOutcome(outcome: WhdloadOutcome): string {
-  const files = `${outcome.files} file${outcome.files === 1 ? "" : "s"}`;
-  const verified =
-    outcome.verified === outcome.files
-      ? "all verified"
-      : `${outcome.verified} of them verified`;
-  const icon = outcome.icon_installed
-    ? ""
-    : " — without an icon, so it will not show up on Workbench";
-
-  return `Installed to ${outcome.drawer}: ${files}, ${verified}${icon}`;
+/**
+ * What the install produced, in one line.
+ *
+ * The file count and the "verified" clause are pluralised fragments of their
+ * own (mirroring `whdload.plan.writeFiles`, already rendered this way for the
+ * pre-flight report) — this function has no translator to render them with,
+ * so it returns a `PartialPhrase` naming `files` and `verified` as missing,
+ * plus `drawer` (never translated — it is an Amiga path), which is already
+ * supplied. The caller resolves `files` and `verified` and supplies them as
+ * params; see `WhdloadInstall.tsx`'s `Report` component.
+ */
+export function describeOutcome(outcome: WhdloadOutcome): PartialPhrase<"files" | "verified"> {
+  return {
+    key: outcome.icon_installed ? "whdload.outcome.installed" : "whdload.outcome.installedNoIcon",
+    params: { drawer: outcome.drawer },
+  } as unknown as PartialPhrase<"files" | "verified">;
 }

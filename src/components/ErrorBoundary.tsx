@@ -1,5 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
+import i18n from "@/i18n";
+
 interface Props {
   children: ReactNode;
 }
@@ -7,6 +9,25 @@ interface State {
   hasError: boolean;
   error?: Error;
   info?: string;
+}
+
+// This screen is what a user sees when something else in ART has already
+// broken — and i18n itself is one of the things that can break before it
+// gets this far. A bare t() call here could produce a blank screen at
+// exactly the moment an explanation matters most, so the title falls back to
+// hardcoded English whenever i18next is not ready or throws. This is the one
+// place in ART where untranslated text beats no text.
+const FALLBACK_TITLE = "ART failed to render";
+
+function titleText(): string {
+  try {
+    if (!i18n.isInitialized) return FALLBACK_TITLE;
+    const key = "components.errorBoundary.title";
+    const translated = i18n.t(key);
+    return translated && translated !== key ? translated : FALLBACK_TITLE;
+  } catch {
+    return FALLBACK_TITLE;
+  }
 }
 
 /**
@@ -30,7 +51,7 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.hasError) {
       return (
         <div style={{ padding: 24, color: "#d65a5a", fontFamily: "monospace", whiteSpace: "pre-wrap" }}>
-          <h2 style={{ color: "#d65a5a" }}>ART failed to render</h2>
+          <h2 style={{ color: "#d65a5a" }}>{titleText()}</h2>
           <pre>{this.state.error?.toString()}</pre>
           {this.state.info && (
             <pre style={{ marginTop: 12, color: "#9aa3b2" }}>{this.state.info}</pre>

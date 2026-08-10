@@ -11,6 +11,7 @@
 // the way it does.
 
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   volumeAttributes,
@@ -21,68 +22,68 @@ import {
 /** `HSPARWED`, most significant first, with what each one actually does. */
 const BITS: Array<{
   letter: string;
-  name: string;
+  nameKey: string;
   /** Bit value in the stored field. */
   value: number;
   /** True when the stored bit is inverted — a clear bit grants the right. */
   inverted: boolean;
-  explanation: string;
+  explanationKey: string;
 }> = [
   {
     letter: "H",
-    name: "Hold",
+    nameKey: "components.attributes.bits.hold.name",
     value: 1 << 7,
     inverted: false,
-    explanation: "Keep resident after running. Rarely used.",
+    explanationKey: "components.attributes.bits.hold.explanation",
   },
   {
     letter: "S",
-    name: "Script",
+    nameKey: "components.attributes.bits.script.name",
     value: 1 << 6,
     inverted: false,
-    explanation: "Run as a shell script. WHDLoad installers rely on this.",
+    explanationKey: "components.attributes.bits.script.explanation",
   },
   {
     letter: "P",
-    name: "Pure",
+    nameKey: "components.attributes.bits.pure.name",
     value: 1 << 5,
     inverted: false,
-    explanation: "Re-entrant, so it can be made resident. Slaves use it.",
+    explanationKey: "components.attributes.bits.pure.explanation",
   },
   {
     letter: "A",
-    name: "Archived",
+    nameKey: "components.attributes.bits.archived.name",
     value: 1 << 4,
     inverted: false,
-    explanation: "Unchanged since the last backup.",
+    explanationKey: "components.attributes.bits.archived.explanation",
   },
   {
     letter: "R",
-    name: "Read",
+    nameKey: "components.attributes.bits.read.name",
     value: 1 << 3,
     inverted: true,
-    explanation: "The file can be read.",
+    explanationKey: "components.attributes.bits.read.explanation",
   },
   {
     letter: "W",
-    name: "Write",
+    nameKey: "components.attributes.bits.write.name",
     value: 1 << 2,
     inverted: true,
-    explanation: "The file can be changed.",
+    explanationKey: "components.attributes.bits.write.explanation",
   },
   {
     letter: "E",
-    name: "Execute",
+    nameKey: "components.attributes.bits.execute.name",
     value: 1 << 1,
     inverted: true,
-    explanation: "The file can be run.",
+    explanationKey: "components.attributes.bits.execute.explanation",
   },
   {
     letter: "D",
-    name: "Delete",
+    nameKey: "components.attributes.bits.delete.name",
     value: 1,
     inverted: true,
-    explanation: "The file can be deleted.",
+    explanationKey: "components.attributes.bits.delete.explanation",
   },
 ];
 
@@ -117,6 +118,7 @@ export function AttributesDialog({
   onClose: () => void;
   onChanged: () => void;
 }) {
+  const { t } = useTranslation();
   const [view, setView] = useState<AttributesView | null>(null);
   const [protection, setProtection] = useState(0);
   const [comment, setComment] = useState("");
@@ -167,7 +169,7 @@ export function AttributesDialog({
   return (
     <div
       role="dialog"
-      aria-label="Attributes"
+      aria-label={t("components.attributes.title")}
       className="card"
       style={{
         position: "fixed",
@@ -184,10 +186,10 @@ export function AttributesDialog({
     >
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
         <strong style={{ wordBreak: "break-all" }}>
-          {view?.name ?? "Attributes"}
+          {view?.name ?? t("components.attributes.title")}
         </strong>
         <button className="btn" style={{ fontSize: 12 }} onClick={onClose}>
-          Close
+          {t("common.close")}
         </button>
       </div>
 
@@ -200,7 +202,8 @@ export function AttributesDialog({
       {view && (
         <>
           <div className="faint" style={{ fontSize: 11, marginTop: 4 }}>
-            {view.is_dir ? "Folder" : "File"} · {view.date_text} · bits{" "}
+            {view.is_dir ? t("components.attributes.folder") : t("components.attributes.file")} ·{" "}
+            {view.date_text} · {t("components.attributes.bitsLabel")}{" "}
             <code>{view.bits}</code>
           </div>
 
@@ -221,34 +224,33 @@ export function AttributesDialog({
                   checked={isOn(protection, bit)}
                   disabled={!canEdit || busy}
                   onChange={() => setProtection(toggle(protection, bit))}
-                  aria-label={bit.name}
+                  aria-label={t(bit.nameKey)}
                 />
                 <span style={{ width: 76, fontSize: 12 }}>
-                  <strong>{bit.letter}</strong> {bit.name}
+                  <strong>{bit.letter}</strong> {t(bit.nameKey)}
                 </span>
                 <span className="faint" style={{ fontSize: 11, flex: 1 }}>
-                  {bit.explanation}
+                  {t(bit.explanationKey)}
                 </span>
               </label>
             ))}
           </div>
 
           <label style={{ display: "block", marginTop: 10, fontSize: 12 }}>
-            Comment
+            {t("components.attributes.comment")}
             <input
               value={comment}
               onChange={(event) => setComment(event.target.value)}
               disabled={!canEdit || busy}
               maxLength={79}
-              placeholder="AmigaDOS keeps up to 79 characters"
+              placeholder={t("components.attributes.commentPlaceholder")}
               style={{ width: "100%", marginTop: 4 }}
             />
           </label>
 
           {!canEdit && (
             <div className="faint" style={{ fontSize: 11, marginTop: 8 }}>
-              Shown for reference. Switch to Power User Mode in Settings to
-              change them.
+              {t("components.attributes.readOnlyHint")}
             </div>
           )}
 
@@ -260,7 +262,7 @@ export function AttributesDialog({
                 disabled={busy || !dirty}
                 style={{ fontSize: 12 }}
               >
-                Apply
+                {t("components.attributes.apply")}
               </button>
               <button
                 className="btn"
@@ -271,7 +273,7 @@ export function AttributesDialog({
                   setComment(view.comment);
                 }}
               >
-                Reset
+                {t("components.attributes.reset")}
               </button>
             </div>
           )}

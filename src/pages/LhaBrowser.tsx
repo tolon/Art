@@ -12,6 +12,27 @@ import {
   type WhdloadResult,
 } from "@/lib/lha";
 
+/**
+ * The catalogue key for a confidence badge — for everything except
+ * "UNKNOWN", which the caller never renders a badge for at all (see the
+ * `whdload.confidence !== "UNKNOWN"` guard around the section below).
+ *
+ * The catalogue only holds `high`/`medium`/`low`; mapping through this
+ * `switch` rather than lower-casing `confidence` into a template literal
+ * means a fourth `Confidence` variant is a compile error here (no `default`
+ * case, `noFallthroughCasesInSwitch`), instead of a silent missing key.
+ */
+function confidenceLevelKey(confidence: "HIGH" | "MEDIUM" | "LOW"): string {
+  switch (confidence) {
+    case "HIGH":
+      return "lha.whdload.confidenceLevel.high";
+    case "MEDIUM":
+      return "lha.whdload.confidenceLevel.medium";
+    case "LOW":
+      return "lha.whdload.confidenceLevel.low";
+  }
+}
+
 export function LhaBrowser() {
   const { t } = useTranslation();
   const location = useLocation();
@@ -51,7 +72,7 @@ export function LhaBrowser() {
   async function chooseArchive() {
     const sel = await open({
       multiple: false,
-      filters: [{ name: "LHA Archive", extensions: ["lha", "lzh"] }],
+      filters: [{ name: t("lha.toolbar.filterName"), extensions: ["lha", "lzh"] }],
     });
     if (typeof sel === "string") await load(sel);
   }
@@ -74,26 +95,26 @@ export function LhaBrowser() {
 
   return (
     <div>
-      <h1 style={{ fontSize: 20 }}>{t("nav.archiveTools")} — LHA Browser</h1>
+      <h1 style={{ fontSize: 20 }}>{t("nav.archiveTools")} — {t("lha.title")}</h1>
       <div style={{ display: "flex", gap: 8, margin: "12px 0", flexWrap: "wrap" }}>
         <button className="btn btn-primary" onClick={chooseArchive} disabled={busy}>
-          {t("common.open")} LHA…
+          {t("lha.toolbar.open")}
         </button>
         {path && info && (
           <button className="btn" onClick={doExtract} disabled={busy}>
-            Extract all…
+            {t("lha.toolbar.extractAll")}
           </button>
         )}
         {path && <span className="muted" style={{ alignSelf: "center", wordBreak: "break-all" }}>{path}</span>}
       </div>
 
       {error && <div className="badge badge-err" style={{ marginBottom: 12 }}>{error}</div>}
-      {busy && <div className="muted" style={{ marginBottom: 12 }}>Working…</div>}
+      {busy && <div className="muted" style={{ marginBottom: 12 }}>{t("lha.status.working")}</div>}
 
       {whdload && whdload.confidence !== "UNKNOWN" && (
         <section className="card" style={{ marginBottom: 16, borderColor: "var(--accent)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <strong>WHDLoad Package Detected</strong>
+            <strong>{t("lha.whdload.detected")}</strong>
             <span
               className={`badge ${
                 whdload.confidence === "HIGH"
@@ -103,21 +124,23 @@ export function LhaBrowser() {
                   : "badge-muted"
               }`}
             >
-              {whdload.confidence} CONFIDENCE
+              {t("lha.whdload.confidenceBadge", {
+                level: t(confidenceLevelKey(whdload.confidence)),
+              })}
             </span>
           </div>
           <p className="muted" style={{ fontSize: 12, margin: "6px 0 0" }}>{whdload.notes}</p>
-          {whdload.slave && <div className="faint" style={{ fontSize: 12, marginTop: 4 }}>Slave: {whdload.slave}</div>}
-          {whdload.executable && <div className="faint" style={{ fontSize: 12 }}>Executable: {whdload.executable}</div>}
+          {whdload.slave && <div className="faint" style={{ fontSize: 12, marginTop: 4 }}>{t("lha.whdload.slave", { name: whdload.slave })}</div>}
+          {whdload.executable && <div className="faint" style={{ fontSize: 12 }}>{t("lha.whdload.executable", { name: whdload.executable })}</div>}
         </section>
       )}
 
       {info && (
         <section className="card" style={{ marginBottom: 16 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8, fontSize: 13 }}>
-            <div><span className="muted">Entries:</span> {info.entry_count}</div>
-            <div><span className="muted">Compressed:</span> {fmt(info.total_compressed)}</div>
-            <div><span className="muted">Uncompressed:</span> {fmt(info.total_uncompressed)}</div>
+            <div><span className="muted">{t("lha.info.entries")}</span> {info.entry_count}</div>
+            <div><span className="muted">{t("lha.info.compressed")}</span> {fmt(info.total_compressed)}</div>
+            <div><span className="muted">{t("lha.info.uncompressed")}</span> {fmt(info.total_uncompressed)}</div>
           </div>
         </section>
       )}
@@ -125,7 +148,9 @@ export function LhaBrowser() {
       {outcome && (
         <section className="card" style={{ marginBottom: 16 }}>
           <h2 style={{ fontSize: 15 }}>
-            Extraction: {outcome.aborted ? "ABORTED" : `${outcome.extracted.length} entries`}
+            {outcome.aborted
+              ? t("lha.outcome.aborted")
+              : t("lha.outcome.success", { count: outcome.extracted.length })}
           </h2>
           {outcome.abort_reason && <div className="badge badge-err">{outcome.abort_reason}</div>}
           {outcome.errors.length > 0 && (
@@ -155,7 +180,7 @@ export function LhaBrowser() {
       )}
 
       {!path && !busy && (
-        <p className="muted">Open an .lha archive to browse and extract its contents.</p>
+        <p className="muted">{t("lha.emptyState")}</p>
       )}
     </div>
   );

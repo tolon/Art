@@ -564,16 +564,61 @@ Leaves the WHDLoad refusal reasons alone: they are data from Rust, and
 translating them belongs with the Rust error strings, not here."
 ```
 
-### Task 7: Translate the shared components and close the slice
+### Task 7: Translate the shared components and the `src/lib` phrase helpers
 
 **Files:**
 - Modify: `src/components/files/CopyPlanDialog.tsx`, `src/components/files/CheckoutPanel.tsx`, `src/components/files/AttributesDialog.tsx`, `src/components/files/FunctionKeys.tsx`, `src/components/layout/Sidebar.tsx`, `src/components/ErrorBoundary.tsx`
+- Modify: `src/lib/sources.ts`, `src/pages/AminetStudio.tsx`
 - Modify: `src/i18n/en.json`, `src/i18n/tr.json`
-- Modify: `docs/FEATURES.md`, `docs/STATUS.md`, `docs/ISSUES.md`, `CHANGELOG.md`, `README.md`
 
 **Interfaces:**
 - Consumes: the namespace convention from Task 4.
-- Produces: the finished slice.
+- Produces: `export type Phrase = { key: string; params?: Record<string, string | number> }` in `src/lib/sources.ts`, and the four helpers returning it.
+
+**The `src/lib` problem, and the decision.** `src/lib/sources.ts` has four pure
+functions that return English sentences and surface on the Aminet screen:
+`describeUpdate`, `describeSource`, `formatAge`, `formatSize`. Task 4 found
+them and correctly did not touch them, because translating a non-component
+module needs a decision about how it reaches the translator.
+
+Two options, and this plan takes the second:
+
+- **(a)** Import the i18n singleton into `src/lib` and call `i18n.t()` there.
+- **(b)** Return a descriptor and let the component translate it.
+
+**(b)**, because it keeps `src/lib` free of a global singleton, keeps the
+functions pure and unit-testable without booting i18next, and matches ART's
+existing layering — logic returns data, the view renders it.
+
+```ts
+export type Phrase = { key: string; params?: Record<string, string | number> };
+
+export function describeSource(source: ClaimSource): Phrase {
+  switch (source) {
+    case "index_column":
+      return { key: "aminet.claim.indexColumn" };
+    case "readme_field":
+      return { key: "aminet.claim.readmeField" };
+    case "filename":
+      return { key: "aminet.claim.filename" };
+  }
+}
+```
+
+and at the call site: `{t(phrase.key, phrase.params)}`.
+
+**The one part that is not mechanical:** `describeUpdate` calls `formatSize`
+internally and embeds the result in its own sentence. Once `formatSize`
+returns a `Phrase`, that nesting cannot stay — the inner phrase has to be
+rendered by the component and passed back in, or the outer phrase has to take
+the raw number and let the translation format it. Pick one, and say in the
+report which and why. Do not pre-render the inner phrase inside `src/lib` by
+reaching for the translator; that reintroduces option (a) through the back
+door.
+
+`formatSize` and `formatAge` carry words as well as numbers — `bytes`,
+`this week`, `19 years or older` — so they return a `Phrase` too. `MB` and
+`KB` stay as they are; `bytes` becomes `bayt`.
 
 - [ ] **Step 1: Translate the components**
 
@@ -598,23 +643,57 @@ python scripts/oracle-check.py
 ```
 Expected: all PASS. Run `cargo test` twice.
 
-- [ ] **Step 4: Check both languages end to end**
-
-Run `pnpm tauri dev`. Walk every screen in Turkish, then switch to English and walk them again. Confirm the language survives a restart of the app (it is stored in `settings.json`). Report any string that did not change, anything that overflows, and any screen where switching the language left stale text.
-
-- [ ] **Step 5: Update the documents**
-
-- `docs/FEATURES.md` — flip the i18n row, but only for what is really done. The Rust-side error strings and the WHDLoad refusal reasons are still English; say so rather than claiming a fully bilingual application (spec §10, §89).
-- `docs/STATUS.md` — snapshot numbers and a session-log line.
-- `docs/ISSUES.md` — open an `ART-NNN` for the Rust-side strings that remain English, so the gap is recorded rather than forgotten.
-- `CHANGELOG.md` — a user-visible entry.
-- `README.md` — mention that ART ships in English and Turkish.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add -A
-git commit -m "Translate the shared components and record what is still English
+git commit -m "Translate the shared components and the src/lib phrase helpers
+
+The four helpers in sources.ts now return a { key, params } descriptor
+instead of an English sentence, so src/lib stays free of the i18n
+singleton and the functions stay unit-testable without a translator."
+```
+
+### Task 8: Close the slice
+
+**Files:**
+- Modify: `docs/FEATURES.md`, `docs/STATUS.md`, `docs/ISSUES.md`, `CHANGELOG.md`, `README.md`
+
+**Interfaces:**
+- Consumes: the finished translation from Tasks 4–7.
+- Produces: the finished slice.
+
+- [ ] **Step 1: Produce the evidence that the slice is finished**
+
+Run: `grep -rnE '>[A-Za-z][^<>{}]{6,}<' src/components src/pages`
+
+Every remaining hit must be one of: a `t()` call, a number, an Amiga term of
+art, a filename or path, or a string that came from Rust. **List every hit in
+the report with which category it falls into.** That list is the evidence, and
+it is what the documents in Step 3 are allowed to claim.
+
+- [ ] **Step 2: Count the catalogues**
+
+```bash
+node -e "const en=require('./src/i18n/en.json');const f=(o,p='')=>Object.entries(o).flatMap(([k,v])=>typeof v==='object'?f(v,p+k+'.'):[p+k]);console.log(f(en).length+' keys')"
+```
+
+Report the number. `pnpm test` must pass, which proves `tr.json` has the same
+set with no empty values and matching interpolation variables.
+
+- [ ] **Step 3: Update the documents — claim only what Step 1 proved**
+
+- `docs/FEATURES.md` — flip the i18n row. The Rust-side error sentences and the WHDLoad refusal reasons are still English; say so rather than claiming a fully bilingual application (spec §10, §89).
+- `docs/STATUS.md` — snapshot numbers and a session-log line.
+- `docs/ISSUES.md` — open an `ART-NNN` for the Rust-side strings that remain English, so the gap is recorded rather than forgotten. Include the design question it raises: `core/` may not depend on the frontend's catalogue, so translating `CoreError` means either moving the sentences to the frontend keyed by `ART-*` id, or giving the core its own catalogue. Do not decide it here — record it.
+- `CHANGELOG.md` — a user-visible entry.
+- `README.md` — mention that ART ships in English and Turkish.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add -A
+git commit -m "Record what is translated and what is still English
 
 The Rust-side error sentences and the WHDLoad refusal reasons are data
 from the core and stay English for now; recorded rather than claimed as
@@ -625,7 +704,12 @@ done."
 
 ## Self-Review
 
-**Spec coverage.** The roadmap's slice 0.3 lists `adf_extract_to`, `panel_plan_folder_copy`, `volume_write_bytes`, `lha_extract_job`, `sourcesGet`, the `ComingLater` page, and stale `FEATURES.md` rows — Task 1 covers the six code paths, Task 2 covers `FEATURES.md`'s corruption, and the stale rows were already corrected in Phase 0a's Task 11. ART-047 and ART-048, which the roadmap could not know about because Phase 0a created them, are folded into Task 2. Slice 0.4 lists "twelve screens moved onto `t()`, `tr.json`, a language switcher, both languages shipped" — Tasks 3–7 cover all four, and Task 3 adds the parity guard the roadmap did not ask for but which is what stops the slice half-landing.
+**Spec coverage.** The roadmap's slice 0.3 lists `adf_extract_to`, `panel_plan_folder_copy`, `volume_write_bytes`, `lha_extract_job`, `sourcesGet`, the `ComingLater` page, and stale `FEATURES.md` rows — Task 1 covers the six code paths, Task 2 covers `FEATURES.md`'s corruption, and the stale rows were already corrected in Phase 0a's Task 11. ART-047 and ART-048, which the roadmap could not know about because Phase 0a created them, are folded into Task 2. Slice 0.4 lists "twelve screens moved onto `t()`, `tr.json`, a language switcher, both languages shipped" — Tasks 3–8 cover all four, and Task 3 adds the parity guard the roadmap did not ask for but which is what stops the slice half-landing.
+
+**Two amendments made during execution**, recorded here rather than silently:
+
+- **Task 7 was split into 7 and 8.** Task 4 discovered that `src/lib/sources.ts` returns English sentences that reach the screen, which the plan had not anticipated. Translating a non-component module needed a design decision, so it became real work in Task 7 and the documentation moved to Task 8.
+- **Sizing was wrong by roughly 4.5×.** The plan estimated the translation surface from a crude JSX grep: ~44 strings for Task 4's two screens, ~43 for Task 5's four. The real numbers were 190 and 194. The grep counts only text nodes between tags and misses labels, placeholders, titles, `aria-label`s and strings built in expressions. **Do not size a translation slice that way.** The task boundaries still held, because they were drawn by screen rather than by string count.
 
 **Placeholders.** None: every step names its files, its command and its expected result, and the translation task carries the full `tr.json` for the existing catalogue rather than describing it.
 

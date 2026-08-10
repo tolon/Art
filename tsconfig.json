@@ -21,11 +21,21 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
 
+    /* `pnpm lint` is this project's only static gate, so it must not quietly
+       widen. @types/node is a dev dependency for one test that reads the
+       source tree; without this, its ambient globals (`process`, `Buffer`,
+       `require`) become visible to every file under src/ — including the
+       application code, which runs in a webview and has none of them. The
+       test that needs them declares so itself with a triple-slash reference. */
+    "types": [],
+
     /* Paths */
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"]
     }
   },
-  "include": ["src"]
+  "include": ["src"],
+  /* The tests live in their own program — see tsconfig.test.json. */
+  "exclude": ["src/**/*.test.ts"]
 }

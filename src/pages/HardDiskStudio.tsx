@@ -15,44 +15,44 @@ import {
 interface FsChoice {
   id: AmigaHardDiskFs;
   name: string;
-  badge: string;
   badgeType: "ok" | "muted" | "warn";
-  description: string;
-  features: string[];
+  badgeKey: string;
+  descriptionKey: string;
+  featureKeys: string[];
 }
 
 const FILESYSTEM_CHOICES: FsChoice[] = [
   {
     id: "pfs3directscsi",
     name: "PFS3-AIO (DirectSCSI — PDS\\3)",
-    badge: "⭐ Recommended (Fast & Safe)",
     badgeType: "ok",
-    description: "Professional File System 3: High speed, crash-resilient without validation delays, 64-bit DirectSCSI safe (>4GB support).",
-    features: ["No 'Validating...' delay on crashes", "Ultra fast directory reads", "DirectSCSI 64-bit safe", "Low RAM usage"],
+    badgeKey: "hardDisk.fs.pfs3.badge",
+    descriptionKey: "hardDisk.fs.pfs3.description",
+    featureKeys: ["hardDisk.fs.pfs3.feature1", "hardDisk.fs.pfs3.feature2", "hardDisk.fs.pfs3.feature3", "hardDisk.fs.pfs3.feature4"],
   },
   {
     id: "sfs0",
     name: "Smart File System (SFS\\0)",
-    badge: "Advanced (Journaled)",
     badgeType: "muted",
-    description: "Journaled filesystem designed for Amiga hard disks with automatic integrity recovery.",
-    features: ["Journaling structure", "Defragmentation-free design", "Fast performance on large drives"],
+    badgeKey: "hardDisk.fs.sfs0.badge",
+    descriptionKey: "hardDisk.fs.sfs0.description",
+    featureKeys: ["hardDisk.fs.sfs0.feature1", "hardDisk.fs.sfs0.feature2", "hardDisk.fs.sfs0.feature3"],
   },
   {
     id: "ffsdircache",
     name: "Fast File System DC (DOS\\3)",
-    badge: "Classic AmigaDOS",
     badgeType: "muted",
-    description: "Standard AmigaDOS Directory Cache filesystem native to Kickstart 2.04 and 3.x.",
-    features: ["Native AmigaDOS support", "Directory cache acceleration", "Compatible with WB 2.x/3.x"],
+    badgeKey: "hardDisk.fs.ffsdircache.badge",
+    descriptionKey: "hardDisk.fs.ffsdircache.description",
+    featureKeys: ["hardDisk.fs.ffsdircache.feature1", "hardDisk.fs.ffsdircache.feature2", "hardDisk.fs.ffsdircache.feature3"],
   },
   {
     id: "ffsstandard",
     name: "Fast File System (DOS\\1)",
-    badge: "Kickstart 1.3 Compatible",
     badgeType: "warn",
-    description: "Original Fast File System with maximum backward compatibility for Kickstart 1.3 / A500 setups.",
-    features: ["Kickstart 1.3 compatible", "Universal legacy support", "Basic structure"],
+    badgeKey: "hardDisk.fs.ffsstandard.badge",
+    descriptionKey: "hardDisk.fs.ffsstandard.description",
+    featureKeys: ["hardDisk.fs.ffsstandard.feature1", "hardDisk.fs.ffsstandard.feature2", "hardDisk.fs.ffsstandard.feature3"],
   },
 ];
 
@@ -105,7 +105,7 @@ export function HardDiskStudio() {
     const sel = await open({
       multiple: false,
       filters: [{ name: "Hard Disk File (HDF / IMG)", extensions: ["hdf", "img"] }],
-      title: "Open Amiga Hard Disk Image",
+      title: t("hardDisk.openDialogTitle"),
     });
     if (typeof sel === "string") {
       await loadHdf(sel);
@@ -118,7 +118,7 @@ export function HardDiskStudio() {
     const dest = await save({
       defaultPath: defaultName,
       filters: [{ name: "Hard Disk File (HDF)", extensions: ["hdf"] }],
-      title: "Save New Hard Disk File",
+      title: t("hardDisk.saveDialogTitle"),
     });
     if (!dest) return;
 
@@ -163,7 +163,9 @@ export function HardDiskStudio() {
       const created = await hdfCreate(dest, totalBytes, true, partitions);
       setInfo(created);
       setPath(dest);
-      setStatusMsg(`Created new RDB Hard Disk Image '${dest}' (${createPresetSizeMb} MB) with ${partitions.length} partition(s).`);
+      setStatusMsg(
+        t("hardDisk.msgCreated", { dest, size: createPresetSizeMb, count: partitions.length })
+      );
       if (created.partitions.length > 0) {
         setSelectedPart(created.partitions[0]);
       }
@@ -179,7 +181,7 @@ export function HardDiskStudio() {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1 style={{ fontSize: 20, margin: 0 }}>{t("nav.hardDisk")} — Hard Disk Studio</h1>
+        <h1 style={{ fontSize: 20, margin: 0 }}>{t("nav.hardDisk")} — {t("hardDisk.title")}</h1>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {path && (
             <button
@@ -187,7 +189,7 @@ export function HardDiskStudio() {
               onClick={() => navigate("/winuae", { state: { path } })}
               disabled={busy}
             >
-              🚀 Launch in WinUAE
+              🚀 {t("common.launchInWinuae")}
             </button>
           )}
           <button
@@ -195,34 +197,34 @@ export function HardDiskStudio() {
             onClick={() => setShowCreateModal(true)}
             disabled={busy}
           >
-            ➕ New HDF Wizard…
+            ➕ {t("hardDisk.newWizard")}
           </button>
           <button className="btn btn-sm" onClick={handleOpen} disabled={busy}>
-            {t("common.open")} HDF…
+            {t("hardDisk.openHdf")}
           </button>
         </div>
       </div>
 
       {path && (
         <div style={{ margin: "8px 0 12px", fontSize: 12 }}>
-          <span className="muted">Disk Image:</span>{" "}
+          <span className="muted">{t("hardDisk.diskImageLabel")}</span>{" "}
           <strong style={{ wordBreak: "break-all" }}>{path}</strong>
         </div>
       )}
 
       {error && <div className="badge badge-err" style={{ marginBottom: 12, padding: "6px 12px" }}>{error}</div>}
       {statusMsg && <div className="badge badge-ok" style={{ marginBottom: 12, padding: "6px 12px" }}>{statusMsg}</div>}
-      {busy && <div className="muted" style={{ marginBottom: 12 }}>Working on hard disk…</div>}
+      {busy && <div className="muted" style={{ marginBottom: 12 }}>{t("hardDisk.working")}</div>}
 
       {/* Disk Overview & Visual Partition Bar */}
       {info && (
         <section className="card" style={{ marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
             <h2 style={{ fontSize: 16 }}>
-              {info.hdf_type === "rdb" ? "Rigid Disk Block (RDB) Partitioned Drive" : "Plain / Raw Single Partition Drive"}
+              {info.hdf_type === "rdb" ? t("hardDisk.driveType.rdb") : t("hardDisk.driveType.raw")}
             </h2>
             <span className={`badge ${info.rdb_checksum_valid ? "badge-ok" : "badge-warn"}`}>
-              {info.rdb_checksum_valid ? "RDB Checksum: OK" : "RDB Checksum: Invalid"}
+              {info.rdb_checksum_valid ? t("hardDisk.checksum.ok") : t("hardDisk.checksum.invalid")}
             </span>
           </div>
 
@@ -235,16 +237,16 @@ export function HardDiskStudio() {
               marginTop: 10,
             }}
           >
-            <div><span className="muted">Capacity:</span> <strong>{fmtBytes(info.total_bytes)}</strong></div>
-            <div><span className="muted">Partitions:</span> {info.partitions.length}</div>
-            <div><span className="muted">Cylinders:</span> {info.cylinders}</div>
-            <div><span className="muted">Heads / Sectors:</span> {info.heads} / {info.sectors}</div>
+            <div><span className="muted">{t("hardDisk.capacity")}</span> <strong>{fmtBytes(info.total_bytes)}</strong></div>
+            <div><span className="muted">{t("hardDisk.partitionsLabel")}</span> {info.partitions.length}</div>
+            <div><span className="muted">{t("hardDisk.cylinders")}</span> {info.cylinders}</div>
+            <div><span className="muted">{t("hardDisk.headsSectors")}</span> {info.heads} / {info.sectors}</div>
           </div>
 
           {/* Visual Disk Map Bar */}
           <div style={{ marginTop: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
-              <span className="muted">Visual Partition Layout</span>
+              <span className="muted">{t("hardDisk.visualLayout")}</span>
               <span className="faint">{fmtBytes(info.total_bytes)}</span>
             </div>
             <div
@@ -298,7 +300,7 @@ export function HardDiskStudio() {
         <div style={{ display: "grid", gridTemplateColumns: selectedPart ? "1.2fr 0.8fr" : "1fr", gap: 16 }}>
           {/* Partitions List */}
           <section className="card">
-            <h2 style={{ fontSize: 15 }}>🗄️ Partitions Table ({info.partitions.length})</h2>
+            <h2 style={{ fontSize: 15 }}>🗄️ {t("hardDisk.partitionsTable", { count: info.partitions.length })}</h2>
             <div className="file-list-container" style={{ marginTop: 10 }}>
               {info.partitions.map((p) => {
                 const isSel = selectedPart?.drive_name === p.drive_name;
@@ -321,7 +323,7 @@ export function HardDiskStudio() {
                         </span>
                         {p.bootable && (
                           <span className="badge badge-ok" style={{ marginLeft: 4 }}>
-                            Bootable (Pri {p.boot_priority})
+                            {t("hardDisk.bootablePri", { n: p.boot_priority })}
                           </span>
                         )}
                       </div>
@@ -340,16 +342,16 @@ export function HardDiskStudio() {
           {/* Selected Partition Deep Inspector */}
           {selectedPart && (
             <section className="card">
-              <h2 style={{ fontSize: 15 }}>🔬 Partition Properties</h2>
+              <h2 style={{ fontSize: 15 }}>🔬 {t("hardDisk.partitionProperties")}</h2>
               <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 10, fontSize: 13 }}>
-                <div><span className="muted">Device Name:</span> <strong>{selectedPart.drive_name}:</strong></div>
-                <div><span className="muted">DosType Signature:</span> <code>{selectedPart.dostype_str} (0x{selectedPart.dostype.toString(16).toUpperCase()})</code></div>
-                <div><span className="muted">Filesystem:</span> {selectedPart.fs_type.toUpperCase()}</div>
-                <div><span className="muted">Cylinders:</span> {selectedPart.low_cyl} → {selectedPart.high_cyl} ({selectedPart.cylinder_count} cyls)</div>
-                <div><span className="muted">Partition Size:</span> {fmtBytes(selectedPart.size_bytes)}</div>
-                <div><span className="muted">Bootable:</span> <strong>{selectedPart.bootable ? "Yes" : "No"}</strong></div>
-                <div><span className="muted">Boot Priority:</span> {selectedPart.boot_priority}</div>
-                <div><span className="muted">Buffers:</span> {selectedPart.num_buffers}</div>
+                <div><span className="muted">{t("hardDisk.deviceName")}</span> <strong>{selectedPart.drive_name}:</strong></div>
+                <div><span className="muted">{t("hardDisk.dosTypeSignature")}</span> <code>{selectedPart.dostype_str} (0x{selectedPart.dostype.toString(16).toUpperCase()})</code></div>
+                <div><span className="muted">{t("hardDisk.filesystem")}</span> {selectedPart.fs_type.toUpperCase()}</div>
+                <div><span className="muted">{t("hardDisk.cylinders")}</span> {t("hardDisk.cylinderRange", { low: selectedPart.low_cyl, high: selectedPart.high_cyl, count: selectedPart.cylinder_count })}</div>
+                <div><span className="muted">{t("hardDisk.partitionSize")}</span> {fmtBytes(selectedPart.size_bytes)}</div>
+                <div><span className="muted">{t("hardDisk.bootableLabel")}</span> <strong>{selectedPart.bootable ? t("common.yes") : t("common.no")}</strong></div>
+                <div><span className="muted">{t("hardDisk.bootPriority")}</span> {selectedPart.boot_priority}</div>
+                <div><span className="muted">{t("hardDisk.buffers")}</span> {selectedPart.num_buffers}</div>
               </div>
             </section>
           )}
@@ -358,7 +360,7 @@ export function HardDiskStudio() {
 
       {!path && !busy && (
         <p className="muted" style={{ textAlign: "center", marginTop: 24 }}>
-          Open an existing .hdf image or click "New HDF Wizard" to create an Amiga hard disk.
+          {t("hardDisk.emptyState", { wizard: t("hardDisk.newWizard") })}
         </p>
       )}
 
@@ -376,20 +378,20 @@ export function HardDiskStudio() {
           }}
         >
           <div className="card" style={{ width: 560, maxWidth: "92vw", maxHeight: "90vh", overflowY: "auto" }}>
-            <h3 style={{ margin: "0 0 12px" }}>➕ Create New Amiga Hard Disk (HDF)</h3>
+            <h3 style={{ margin: "0 0 12px" }}>➕ {t("hardDisk.modal.title")}</h3>
 
             {/* Step 1: Disk Capacity Presets */}
             <div style={{ marginBottom: 14 }}>
               <label className="muted" style={{ fontSize: 12, display: "block", marginBottom: 6 }}>
-                1. Select Disk Size:
+                {t("hardDisk.modal.selectSize")}
               </label>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: 6 }}>
                 {[
-                  { size: 500, label: "500 MB", hint: "Compact" },
-                  { size: 1024, label: "1 GB", hint: "Classic" },
-                  { size: 2048, label: "2 GB", hint: "WHDLoad" },
-                  { size: 4096, label: "4 GB", hint: "Standard" },
-                  { size: 8192, label: "8 GB", hint: "Large Disk" },
+                  { size: 500, label: "500 MB", hintKey: "hardDisk.modal.sizeHints.compact" },
+                  { size: 1024, label: "1 GB", hintKey: "hardDisk.modal.sizeHints.classic" },
+                  { size: 2048, label: "2 GB", hintKey: "hardDisk.modal.sizeHints.whdload" },
+                  { size: 4096, label: "4 GB", hintKey: "hardDisk.modal.sizeHints.standard" },
+                  { size: 8192, label: "8 GB", hintKey: "hardDisk.modal.sizeHints.largeDisk" },
                 ].map((s) => (
                   <button
                     key={s.size}
@@ -398,7 +400,7 @@ export function HardDiskStudio() {
                     style={{ flexDirection: "column", padding: "6px" }}
                   >
                     <strong>{s.label}</strong>
-                    <span className="faint" style={{ fontSize: 10 }}>{s.hint}</span>
+                    <span className="faint" style={{ fontSize: 10 }}>{t(s.hintKey)}</span>
                   </button>
                 ))}
               </div>
@@ -407,7 +409,7 @@ export function HardDiskStudio() {
             {/* Step 2: Partitioning Layout Template */}
             <div style={{ marginBottom: 14 }}>
               <label className="muted" style={{ fontSize: 12, display: "block", marginBottom: 6 }}>
-                2. Partitioning Template:
+                {t("hardDisk.modal.selectTemplate")}
               </label>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 <div
@@ -420,9 +422,9 @@ export function HardDiskStudio() {
                     cursor: "pointer",
                   }}
                 >
-                  <strong>⭐ Classic Split (Recommended)</strong>
+                  <strong>⭐ {t("hardDisk.modal.splitTitle")}</strong>
                   <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
-                    DH0: System (Bootable) + DH1: Work/Games
+                    {t("hardDisk.modal.splitDesc")}
                   </div>
                 </div>
 
@@ -436,9 +438,9 @@ export function HardDiskStudio() {
                     cursor: "pointer",
                   }}
                 >
-                  <strong>Single Partition</strong>
+                  <strong>{t("hardDisk.modal.singleTitle")}</strong>
                   <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
-                    DH0: System (100% capacity)
+                    {t("hardDisk.modal.singleDesc")}
                   </div>
                 </div>
               </div>
@@ -447,7 +449,7 @@ export function HardDiskStudio() {
             {/* Step 3: Parametric Filesystem Choice with Explanations */}
             <div style={{ marginBottom: 16 }}>
               <label className="muted" style={{ fontSize: 12, display: "block", marginBottom: 6 }}>
-                3. Choose Amiga Filesystem:
+                {t("hardDisk.modal.selectFs")}
               </label>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {FILESYSTEM_CHOICES.map((fs) => {
@@ -467,11 +469,12 @@ export function HardDiskStudio() {
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <strong style={{ fontSize: 13 }}>{fs.name}</strong>
                         <span className={`badge badge-${fs.badgeType}`} style={{ fontSize: 10 }}>
-                          {fs.badge}
+                          {fs.badgeType === "ok" ? "⭐ " : ""}
+                          {t(fs.badgeKey)}
                         </span>
                       </div>
                       <p className="muted" style={{ margin: "3px 0 0", fontSize: 11 }}>
-                        {fs.description}
+                        {t(fs.descriptionKey)}
                       </p>
                     </div>
                   );
@@ -482,10 +485,10 @@ export function HardDiskStudio() {
             {/* Actions */}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
               <button className="btn" onClick={() => setShowCreateModal(false)}>
-                Cancel
+                {t("common.cancel")}
               </button>
               <button className="btn btn-primary" onClick={handleCreateConfirm}>
-                Create HDF File…
+                {t("hardDisk.modal.createButton")}
               </button>
             </div>
           </div>

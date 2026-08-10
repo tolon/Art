@@ -37,15 +37,15 @@ export function Dashboard() {
         <section className="card" style={{ border: "1px solid var(--accent)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <h2 style={{ fontSize: 16, margin: 0 }}>
-              🎯 What can I do? — Universal Workflow Engine
+              🎯 {t("dashboard.plan.title")}
             </h2>
             <span className="badge badge-ok">
-              {analyses.length} {analyses.length === 1 ? "Object Analyzed" : "Objects Analyzed"}
+              {t("dashboard.plan.objectsAnalyzed", { count: analyses.length })}
             </span>
           </div>
 
           <p className="muted" style={{ fontSize: 13, margin: "6px 0 16px" }}>
-            ART has analyzed the dropped objects and ranked the recommended Amiga workflows:
+            {t("dashboard.plan.subtitle")}
           </p>
 
           <div className="drop-results" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -93,13 +93,13 @@ export function Dashboard() {
             { key: "nav.diskTools", hint: "ADF", to: "/disk-tools" },
             { key: "nav.archiveTools", hint: "LHA", to: "/archive-tools" },
             { key: "nav.hardDisk", hint: "HDF", to: "/hard-disk" },
-            { key: "nav.collection", hint: "Library", to: "/collection" },
+            { key: "nav.collection", hint: t("dashboard.quickActionHints.library"), to: "/collection" },
             { key: "nav.gotek", hint: "USB", to: "/gotek" },
             { key: "nav.rom", hint: "Kickstart", to: "/rom" },
-            { key: "nav.winuae", hint: "Emulator", to: "/winuae" },
+            { key: "nav.winuae", hint: t("dashboard.quickActionHints.emulator"), to: "/winuae" },
             // Hex Tools is Power User territory (§47); hidden, not disabled.
             ...(powerMode
-              ? [{ key: "nav.tools", hint: "Raw data", to: "/tools" }]
+              ? [{ key: "nav.tools", hint: t("dashboard.quickActionHints.rawData"), to: "/tools" }]
               : []),
           ].map((qa) => (
             <button
@@ -116,13 +116,14 @@ export function Dashboard() {
 
       <p className="faint" style={{ fontSize: 11 }}>
         {t("phase0.engineReady")} · {t("phase0.dragDropReady")} ·{" "}
-        {t("phase0.dbReady")} · theme: {theme}
+        {t("phase0.dbReady")} · {t("dashboard.footer.theme", { theme })}
       </p>
     </div>
   );
 }
 
 function InteractiveDropResultCard({ analysis }: { analysis: DroppedAnalysis }) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const powerMode = usePowerMode();
   const [outcome, setOutcome] = useState<WorkflowOutcome | null>(null);
@@ -131,7 +132,7 @@ function InteractiveDropResultCard({ analysis }: { analysis: DroppedAnalysis }) 
   if (!analysis.ok || !analysis.plan) {
     return (
       <div className="card" style={{ background: "var(--bg-elevated)" }}>
-        <span className="badge badge-err">{analysis.error ?? "error"}</span>
+        <span className="badge badge-err">{analysis.error ?? t("dashboard.plan.genericError")}</span>
         <span className="drop-result-path" style={{ marginLeft: 8 }}>{analysis.path}</span>
       </div>
     );
@@ -178,12 +179,12 @@ function InteractiveDropResultCard({ analysis }: { analysis: DroppedAnalysis }) 
         title={
           action.available
             ? action.description
-            : `${action.description} — coming in a later phase`
+            : t("dashboard.plan.comingLaterTitle", { description: action.description })
         }
       >
         {primary ? "⭐ " : ""}
         {action.name}
-        {!action.available && " (Coming Later)"}
+        {!action.available && ` (${t("common.comingLater")})`}
       </button>
     );
   }
@@ -208,8 +209,9 @@ function InteractiveDropResultCard({ analysis }: { analysis: DroppedAnalysis }) 
           </span>
           {!detection.is_dir && (
             <span className="faint" style={{ fontSize: 12 }}>
-              {powerMode && `Confidence: ${Math.round(detection.confidence * 100)}% · `}
-              Size: {formatBytes(detection.size)}
+              {powerMode &&
+                `${t("dashboard.plan.confidence", { percent: Math.round(detection.confidence * 100) })} · `}
+              {t("dashboard.plan.size", { size: formatBytes(detection.size) })}
             </span>
           )}
         </div>
@@ -221,7 +223,7 @@ function InteractiveDropResultCard({ analysis }: { analysis: DroppedAnalysis }) 
       {/* "What can I do?" — driven entirely by the engine's plan (spec §46) */}
       {candidates.length === 0 ? (
         <p className="muted" style={{ fontSize: 12, margin: 0 }}>
-          ART does not recognise this file yet, so it has no actions to offer.
+          {t("dashboard.plan.noActions")}
         </p>
       ) : (
         <>
@@ -237,7 +239,7 @@ function InteractiveDropResultCard({ analysis }: { analysis: DroppedAnalysis }) 
           {powerMode && advanced.length > 0 && (
             <details>
               <summary className="faint" style={{ fontSize: 12, cursor: "pointer" }}>
-                Advanced
+                {t("dashboard.plan.advanced")}
               </summary>
               <div className="drop-workflow-bar" style={{ marginTop: 6 }}>
                 {advanced.map((a) => (
@@ -261,12 +263,12 @@ function InteractiveDropResultCard({ analysis }: { analysis: DroppedAnalysis }) 
             }`}
           >
             {outcome.verification === true
-              ? "Verification: PASS"
+              ? t("dashboard.plan.verificationPass")
               : outcome.verification === false
-              ? "Verification: FAILED"
+              ? t("dashboard.plan.verificationFailed")
               : outcome.success
-              ? "Done"
-              : "Failed"}
+              ? t("dashboard.plan.done")
+              : t("dashboard.plan.failed")}
           </span>
           <p
             className="muted"

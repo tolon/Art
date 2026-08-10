@@ -187,27 +187,25 @@ pub fn validate(
         );
     }
 
-    // 4. Root block.
-    let root_off = (root_block as usize) * BLOCK_SIZE;
-    if root_off + BLOCK_SIZE > image.len() {
-        report.push(
+    // 4. Root block. `read_u32_at` bounds-checks `root_block` against the
+    //    image before indexing it (ART-047) — this used to compute
+    //    `root_off` by hand and then index `image[root_off..]` directly,
+    //    which is exactly the pattern `core/adf/blocks.rs` exists to replace.
+    match super::blocks::read_u32_at(image, root_block, 0) {
+        Err(_) => report.push(
             HealthStatus::Problem,
             "rootblock.range",
             format!("Root block {root_block} is outside the image."),
-        );
-    } else {
-        let typ = i32::from_be_bytes([
-            image[root_off],
-            image[root_off + 1],
-            image[root_off + 2],
-            image[root_off + 3],
-        ]);
-        if typ != block_type::HEADER {
-            report.push(
-                HealthStatus::Problem,
-                "rootblock.type",
-                format!("Root block has type {typ}; expected a header block (2)."),
-            );
+        ),
+        Ok(typ_raw) => {
+            let typ = typ_raw as i32;
+            if typ != block_type::HEADER {
+                report.push(
+                    HealthStatus::Problem,
+                    "rootblock.type",
+                    format!("Root block has type {typ}; expected a header block (2)."),
+                );
+            }
         }
     }
 

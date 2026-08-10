@@ -25,6 +25,10 @@ backed up to `.art-backup/` before being replaced (or, for images too large to
 hold in memory, journaled block-by-block). Hand-tuned configuration files are
 edited in place, never regenerated.
 
+The interface ships in English and Turkish. The language is chosen in
+Settings and remembered across restarts. Error messages coming from the Rust
+core are still English regardless of the chosen language.
+
 Not yet built: PFS3/SFS (partitions using them are listed but their contents
 are not readable), DMS/ADZ conversion, recovery tools.
 

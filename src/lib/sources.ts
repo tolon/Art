@@ -7,6 +7,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+import type { Phrase, PartialPhrase } from "@/lib/phrase";
+
 /** How strongly ART believes something, and on what grounds (§14, §34). */
 export type Confidence = "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN";
 
@@ -226,10 +228,6 @@ export async function sourcesSearch(
   return invoke<PackageMeta[]>("sources_search", { query, options });
 }
 
-export async function sourcesGet(path: string): Promise<PackageMeta | null> {
-  return invoke<PackageMeta | null>("sources_get", { path, provider: null });
-}
-
 export async function sourcesResolve(
   directory: string,
   stem: string
@@ -296,25 +294,36 @@ export async function sourcesForgetDownload(path: string): Promise<void> {
   return invoke<void>("sources_forget_download", { path });
 }
 
-/** How to describe an update row, in the user's words. */
-export function describeUpdate(row: PackageUpdate): string {
+/**
+ * How to describe an update row, in the user's words.
+ *
+ * Every branch is a complete `Phrase` except `size_changed`: it embeds two
+ * formatted sizes, and this function has no translator to render
+ * {@link formatSize}'s own phrase with — so it returns a `PartialPhrase`
+ * naming `now`/`had` as still missing. The caller resolves `formatSize(now)`
+ * and `formatSize(had)` to text and supplies them as those params (see
+ * `AminetStudio.tsx`'s `updateText`).
+ */
+export function describeUpdate(row: PackageUpdate): Phrase | PartialPhrase<"now" | "had"> {
   switch (row.state.state) {
     case "current":
-      return "Matches the catalogue";
+      return { key: "aminet.updates.desc.current" };
     case "withdrawn":
-      return "No longer on Aminet — your copy is unaffected";
+      return { key: "aminet.updates.desc.withdrawn" };
     case "file_missing":
-      return "The file is not where ART left it";
+      return { key: "aminet.updates.desc.fileMissing" };
     case "newer":
       switch (row.state.reason.kind) {
         case "version":
-          return `Version ${row.state.reason.now} is out, you have ${row.state.reason.had}`;
+          return {
+            key: "aminet.updates.desc.version",
+            params: { now: row.state.reason.now, had: row.state.reason.had },
+          };
         case "size_changed":
-          return `The file on Aminet is now ${formatSize(
-            row.state.reason.now
-          )}, yours is ${formatSize(row.state.reason.had)}`;
+          // No formatted sizes to give it here — see the doc comment above.
+          return { key: "aminet.updates.desc.sizeChanged" } as PartialPhrase<"now" | "had">;
         case "reuploaded":
-          return "Uploaded again since you downloaded it";
+          return { key: "aminet.updates.desc.reuploaded" };
       }
   }
 }
@@ -432,34 +441,38 @@ export async function onSourcesResult(
 // ---------------------------------------------------------------------------
 
 /** The size the catalog claims, in the units the index uses. */
-export function formatSize(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${bytes} bytes`;
+export function formatSize(bytes: number): Phrase {
+  if (bytes >= 1024 * 1024) {
+    return { key: "aminet.units.mb", params: { value: (bytes / (1024 * 1024)).toFixed(1) } };
+  }
+  if (bytes >= 1024) return { key: "aminet.units.kb", params: { value: Math.round(bytes / 1024) } };
+  return { key: "aminet.units.bytes", params: { value: bytes } };
 }
 
 /**
  * Aminet's age in words. The cap has to read as an approximation, because
  * that is what it is.
  */
-export function formatAge(pkg: PackageMeta): string {
-  if (pkg.age_weeks === null) return "date unknown";
-  if (pkg.age_weeks === AGE_CAP_WEEKS) return "19 years or older";
-  if (pkg.age_weeks === 0) return "this week";
-  if (pkg.age_weeks < 8) return `${pkg.age_weeks} weeks ago`;
+export function formatAge(pkg: PackageMeta): Phrase {
+  if (pkg.age_weeks === null) return { key: "aminet.age.dateUnknown" };
+  if (pkg.age_weeks === AGE_CAP_WEEKS) return { key: "aminet.age.capped" };
+  if (pkg.age_weeks === 0) return { key: "aminet.age.thisWeek" };
+  if (pkg.age_weeks < 8) return { key: "aminet.age.weeksAgo", params: { n: pkg.age_weeks } };
   const years = pkg.age_weeks / 52;
-  if (years < 1) return `${Math.round(pkg.age_weeks / 4)} months ago`;
-  return `${years.toFixed(years < 10 ? 1 : 0)} years ago`;
+  if (years < 1) {
+    return { key: "aminet.age.monthsAgo", params: { n: Math.round(pkg.age_weeks / 4) } };
+  }
+  return { key: "aminet.age.yearsAgo", params: { n: years.toFixed(years < 10 ? 1 : 0) } };
 }
 
 /** How to describe where a claim came from. */
-export function describeSource(source: ClaimSource): string {
+export function describeSource(source: ClaimSource): Phrase {
   switch (source) {
     case "index_column":
-      return "repository index";
+      return { key: "aminet.claim.indexColumn" };
     case "readme_field":
-      return "readme field";
+      return { key: "aminet.claim.readmeField" };
     case "filename":
-      return "file name";
+      return { key: "aminet.claim.filename" };
   }
 }

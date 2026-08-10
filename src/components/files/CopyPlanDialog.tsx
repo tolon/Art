@@ -6,6 +6,8 @@
 // file 37 for a long name, on 52 because the disk filled, on 61 for a
 // collision. One report, real numbers, one decision.
 
+import { useTranslation } from "react-i18next";
+
 import {
   planIsClean,
   planShortfall,
@@ -34,13 +36,15 @@ export function CopyPlanDialog({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const { t } = useTranslation();
   const fits = plan.blocks_needed <= plan.blocks_free;
-  const shortfall = planShortfall(plan);
+  const shortfallPhrase = planShortfall(plan);
+  const shortfall = shortfallPhrase ? t(shortfallPhrase.key, shortfallPhrase.params) : null;
 
   return (
     <div
       role="dialog"
-      aria-label="Copy plan"
+      aria-label={t("components.copyPlan.ariaLabel")}
       className="card"
       style={{
         position: "fixed",
@@ -55,15 +59,15 @@ export function CopyPlanDialog({
         boxShadow: "0 8px 32px rgba(0,0,0,.5)",
       }}
     >
-      <strong>Before copying</strong>
+      <strong>{t("components.copyPlan.title")}</strong>
       <div className="faint" style={{ fontSize: 11, marginTop: 2, wordBreak: "break-all" }}>
-        into {destination}
+        {t("components.copyPlan.intoDestination", { destination })}
       </div>
 
       <div style={{ fontSize: 13, marginTop: 10 }}>
-        {plan.files} file{plan.files === 1 ? "" : "s"}
+        {t("components.copyPlan.filesCount", { count: plan.files })}
         {plan.directories > 0 &&
-          ` and ${plan.directories} folder${plan.directories === 1 ? "" : "s"}`}
+          t("components.copyPlan.andFoldersCount", { count: plan.directories })}
         , {formatBytes(plan.total_bytes)}
       </div>
 
@@ -71,8 +75,10 @@ export function CopyPlanDialog({
           blocks, and a report in bytes alone would say "1 KB" and be wrong
           about whether it fits. */}
       <div className="faint" style={{ fontSize: 11, marginTop: 2 }}>
-        {plan.blocks_needed.toLocaleString()} blocks needed ·{" "}
-        {plan.blocks_free.toLocaleString()} free
+        {t("components.copyPlan.blocksNeededFree", {
+          needed: plan.blocks_needed.toLocaleString(),
+          free: plan.blocks_free.toLocaleString(),
+        })}
       </div>
 
       {shortfall && (
@@ -84,11 +90,10 @@ export function CopyPlanDialog({
       {plan.name_problems.length > 0 && (
         <div style={{ marginTop: 10 }}>
           <div className="badge badge-warn" style={{ display: "block" }}>
-            {plan.name_problems.length} name
-            {plan.name_problems.length === 1 ? "" : "s"} AmigaDOS cannot store.
+            {t("components.copyPlan.nameProblemsCount", { count: plan.name_problems.length })}{" "}
             {plan.name_problems.every((problem) => problem.suggestion)
-              ? " ART will use the names on the right."
-              : " Some have no usable alternative and will be left behind."}
+              ? t("components.copyPlan.nameProblemsWillUse")
+              : t("components.copyPlan.nameProblemsLeftBehind")}
           </div>
           <div style={{ maxHeight: 160, overflow: "auto", marginTop: 6 }}>
             {plan.name_problems.map((problem) => (
@@ -104,7 +109,7 @@ export function CopyPlanDialog({
                     <code>{problem.suggestion}</code>
                   </>
                 ) : (
-                  " — no usable name left"
+                  ` ${t("components.copyPlan.noUsableName")}`
                 )}
                 <div style={{ opacity: 0.75 }}>{problem.reason}</div>
               </div>
@@ -116,8 +121,7 @@ export function CopyPlanDialog({
       {plan.collisions.length > 0 && (
         <div style={{ marginTop: 10 }}>
           <div className="badge badge-warn" style={{ display: "block" }}>
-            {plan.collisions.length} name
-            {plan.collisions.length === 1 ? " is" : "s are"} already there:{" "}
+            {t("components.copyPlan.collisionsCount", { count: plan.collisions.length })}{" "}
             {plan.collisions.slice(0, 8).join(", ")}
             {plan.collisions.length > 8 && " …"}
           </div>
@@ -125,18 +129,18 @@ export function CopyPlanDialog({
           <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
             {(
               [
-                ["skip", "Leave them alone"],
-                ["overwrite", "Replace them"],
-                ["rename", "Keep both"],
+                ["skip", "components.copyPlan.policyLeaveAlone"],
+                ["overwrite", "components.copyPlan.policyReplace"],
+                ["rename", "components.copyPlan.policyKeepBoth"],
               ] as Array<[OverwritePolicy, string]>
-            ).map(([value, label]) => (
+            ).map(([value, labelKey]) => (
               <button
                 key={value}
                 className={`btn${policy === value ? " btn-primary" : ""}`}
                 style={{ fontSize: 12 }}
                 onClick={() => onPolicyChange(value)}
               >
-                {label}
+                {t(labelKey)}
               </button>
             ))}
           </div>
@@ -148,29 +152,25 @@ export function CopyPlanDialog({
       {plan.split_icons.length > 0 && (
         <div className="badge badge-warn" style={{ display: "block", marginTop: 10 }}>
           {plan.split_icons.filter((pair) => !pair.icon_without_object).length > 0 && (
-            <>
-              Some folders are being copied without their <code>.info</code>{" "}
-              icons, so they will not show up on Workbench:{" "}
-              {plan.split_icons
-                .filter((pair) => !pair.icon_without_object)
-                .slice(0, 5)
-                .map((pair) => pair.relative)
-                .join(", ")}
-              .{" "}
-            </>
+            <div>
+              {t("components.copyPlan.splitIconsWithoutIcons", {
+                list: plan.split_icons
+                  .filter((pair) => !pair.icon_without_object)
+                  .slice(0, 5)
+                  .map((pair) => pair.relative)
+                  .join(", "),
+              })}
+            </div>
           )}
           {plan.split_icons.filter((pair) => pair.icon_without_object).length > 0 && (
-            <>
-              Some <code>.info</code> icons have nothing to describe in this
-              copy.
-            </>
+            <div>{t("components.copyPlan.splitIconsOrphaned")}</div>
           )}
         </div>
       )}
 
       {planIsClean(plan) && (
         <div className="badge badge-ok" style={{ display: "block", marginTop: 10 }}>
-          Everything fits and every name is one AmigaDOS can store.
+          {t("components.copyPlan.clean")}
         </div>
       )}
 
@@ -179,12 +179,12 @@ export function CopyPlanDialog({
           className="btn btn-primary"
           onClick={onConfirm}
           disabled={!fits}
-          title={fits ? undefined : "There is not enough room on the disk"}
+          title={fits ? undefined : t("components.copyPlan.notEnoughRoom")}
         >
-          Copy
+          {t("components.copyPlan.copy")}
         </button>
         <button className="btn" onClick={onCancel}>
-          Cancel
+          {t("common.cancel")}
         </button>
       </div>
     </div>

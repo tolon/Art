@@ -366,8 +366,8 @@ mod tests {
     }
 
     /// Same proof as the add-file test, for the other three commands: each
-    /// must land on `core/volume`, or a later task deleting `core/adf/mutate`
-    /// would be unsafe.
+    /// must land on `core/volume`, which is now ART's only filesystem writer
+    /// (`core/adf/mutate` was deleted once this held for all four).
     #[test]
     fn creating_a_directory_goes_through_the_volume_writer() {
         let dir = scratch("mkdir");
