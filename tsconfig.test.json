@@ -1,0 +1,24 @@
+// Type-checks the test files, and only them.
+//
+// The tests read the source tree from disk, so they need @types/node. Node's
+// declarations are *global* — `process`, `Buffer`, `require` — and TypeScript
+// scopes ambient globals to the whole program, not the file that pulled them
+// in. Keeping the tests in the same program as the application would therefore
+// make those globals visible to application code, which runs in a webview and
+// has none of them: `process.env.FOO` would type-check and then be undefined
+// at runtime.
+//
+// A triple-slash reference does not help — it widens the same program. Two
+// programs is the only thing that actually separates them, which is why
+// `pnpm lint` runs tsc twice.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "noEmit": true
+  },
+  // `exclude` is inherited through `extends`, and the base excludes exactly
+  // these files. Clear it, or this program has no inputs at all.
+  "exclude": [],
+  "include": ["src/**/*.test.ts"]
+}
