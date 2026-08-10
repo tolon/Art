@@ -69,6 +69,8 @@
     "copyPlan": {
       "ariaLabel": "Copy plan",
       "title": "Before copying",
+      "source_one": "{{name}}",
+      "source_other": "{{count}} items",
       "intoDestination": "into {{destination}}",
       "filesCount_one": "{{count}} file",
       "filesCount_other": "{{count}} files",
@@ -934,6 +936,12 @@
         "confirm1": "Delete {{name}} from {{volume}}?",
         "confirm2": "This cannot be undone from inside ART once it has finished. Delete '{{name}}'?",
         "confirmIcon": "Delete its icon ({{icon}}) too?"
+      },
+      "deleteMany": {
+        "confirm1_one": "Delete {{count}} item ({{size}}) from {{volume}}?",
+        "confirm1_other": "Delete {{count}} items ({{size}}) from {{volume}}?",
+        "confirm2_one": "This cannot be undone from inside ART once it has finished. Delete this item?",
+        "confirm2_other": "This cannot be undone from inside ART once it has finished. Delete these {{count}} items?"
       }
     },
     "err": {
@@ -941,19 +949,34 @@
       "openOtherSide": "Open a partition on the other side first.",
       "sameImage": "That is the same image on both sides. Use Move or Rename instead.",
       "noLocalPath": "That item has no path on your disk.",
-      "openPartitionFirst": "Open a partition first."
+      "openPartitionFirst": "Open a partition first.",
+      "batchBetweenVolumes": "Copying several entries between two images at once is not supported yet — copy them one at a time."
     },
     "status": {
       "copyingBetween": "Copying {{name}} between images…",
       "planning": "Working out what {{name}} needs…",
+      "planningSelection_one": "Working out what {{count}} item needs…",
+      "planningSelection_other": "Working out what {{count}} items need…",
       "copying": "Copying {{name}}…",
+      "copyingSelection_one": "Copying {{count}} item…",
+      "copyingSelection_other": "Copying {{count}} items…",
       "copyingOut": "Copying {{name}} out…",
+      "copyingSelectionOut_one": "Copying {{count}} item out…",
+      "copyingSelectionOut_other": "Copying {{count}} items out…",
+      "selectionCopiedOut_one": "{{count}} item copied out",
+      "selectionCopiedOut_other": "{{count}} items copied out",
       "writtenTo": "{{name}} written to {{volume}}",
       "writtenToBackedUp": "{{name}} written to {{volume}} — the previous image was backed up",
       "alreadyThere": "{{name}} is already there — it was left alone",
       "copiedOut": "{{name}} copied out of {{volume}} ({{size}})",
       "deleting": "Deleting {{name}}…",
+      "deletingMany_one": "Deleting {{count}} item…",
+      "deletingMany_other": "Deleting {{count}} items…",
       "deleted": "{{name}} deleted",
+      "deletedMany_one": "{{count}} item deleted",
+      "deletedMany_other": "{{count}} items deleted",
+      "deletedManyBackedUp_one": "{{count}} item deleted — the previous image was backed up",
+      "deletedManyBackedUp_other": "{{count}} items deleted — the previous image was backed up",
       "deletedWithIcon": "{{name}} and its icon deleted",
       "deletedBackedUp": "{{name}} deleted — the previous image was backed up",
       "deletedWithIconBackedUp": "{{name}} and its icon deleted — the previous image was backed up",

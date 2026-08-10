@@ -23,6 +23,7 @@ function formatBytes(bytes: number): string {
 
 export function CopyPlanDialog({
   plan,
+  names,
   destination,
   policy,
   onPolicyChange,
@@ -30,6 +31,12 @@ export function CopyPlanDialog({
   onCancel,
 }: {
   plan: CopyPlan;
+  /**
+   * What is being copied — one name for a single root, several for a batch.
+   * Rendered as that one name when there is only one, never as "1 items":
+   * a one-entry batch has to read exactly like the single-root copy it is.
+   */
+  names: string[];
   destination: string;
   policy: OverwritePolicy;
   onPolicyChange: (policy: OverwritePolicy) => void;
@@ -60,6 +67,11 @@ export function CopyPlanDialog({
       }}
     >
       <strong>{t("components.copyPlan.title")}</strong>
+      {/* A one-entry batch names that entry, exactly as a single-root copy
+          always has; only two or more fall back to a count. */}
+      <div className="faint" style={{ fontSize: 11, marginTop: 6, wordBreak: "break-all" }}>
+        {t("components.copyPlan.source", { count: names.length, name: names[0] ?? "" })}
+      </div>
       <div className="faint" style={{ fontSize: 11, marginTop: 2, wordBreak: "break-all" }}>
         {t("components.copyPlan.intoDestination", { destination })}
       </div>

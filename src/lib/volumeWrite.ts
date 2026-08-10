@@ -134,6 +134,27 @@ export async function volumePlanCopy(
   });
 }
 
+/**
+ * What copying a whole selection — several files and folders picked at
+ * once, each keeping its own name at the destination — would cost. Writes
+ * nothing. A one-entry selection reads exactly as `volumePlanCopy` reads for
+ * a single file, but a folder root is copied *as itself*, not flattened the
+ * way `volumePlanCopy` treats a folder — see `CopyPlanDialog`.
+ */
+export async function volumePlanCopyMany(
+  path: string,
+  volumeIndex: number,
+  dirBlock: number | null,
+  sources: string[]
+): Promise<CopyPlan> {
+  return invoke<CopyPlan>("volume_plan_copy_many", {
+    path,
+    volumeIndex,
+    dirBlock,
+    sources,
+  });
+}
+
 /** Whether the plan can run with nothing left for the user to decide. */
 export function planIsClean(plan: CopyPlan): boolean {
   return (
@@ -211,6 +232,38 @@ export async function volumeDelete(
     volumeIndex,
     dirBlock,
     entryBlock,
+  });
+}
+
+/** What a batch delete did. */
+export interface DeleteManyResult {
+  deleted: number;
+  blocks_touched: number;
+  free_blocks: number;
+  free_bytes: number;
+  verified: boolean;
+  strategy: WriteStrategy;
+  /** Where the previous image went, taken once for the whole batch. */
+  backup: string | null;
+}
+
+/**
+ * F8 on a multi-selection — delete every named entry from `dirBlock` as one
+ * operation. All-or-nothing (§92): refuses the whole batch, before deleting
+ * anything, the moment one entry cannot be removed. Destructive: confirm
+ * twice before calling, the same as `volumeDelete` (§63).
+ */
+export async function volumeDeleteMany(
+  path: string,
+  volumeIndex: number,
+  dirBlock: number | null,
+  names: string[]
+): Promise<DeleteManyResult> {
+  return invoke<DeleteManyResult>("volume_delete_many", {
+    path,
+    volumeIndex,
+    dirBlock,
+    names,
   });
 }
 
@@ -352,6 +405,31 @@ export async function volumeCopyIn(
     volumeIndex,
     dirBlock,
     source,
+    options: options ?? null,
+  });
+}
+
+/**
+ * F5 on a multi-selection — copy everything the user picked, from the user's
+ * disk, into a volume, as one job. Each root keeps its own name at the
+ * destination (see `volumePlanCopyMany`). Returns a job id.
+ *
+ * Unlike `volumeCopyIn`, a cancelled batch commits nothing: the job either
+ * lands everything or leaves the image exactly as it was, so a selection the
+ * user picked by hand and then stopped is never mistaken for a finished one.
+ */
+export async function volumeCopyInMany(
+  path: string,
+  volumeIndex: number,
+  dirBlock: number | null,
+  sources: string[],
+  options?: CopyOptions
+): Promise<number> {
+  return invoke<number>("volume_copy_in_many", {
+    path,
+    volumeIndex,
+    dirBlock,
+    sources,
     options: options ?? null,
   });
 }

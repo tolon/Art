@@ -75,10 +75,13 @@ import {
   onVolumeWriteResult,
   volumeCopyBetween,
   volumeCopyIn,
+  volumeCopyInMany,
   volumeCopyOut,
   volumeDelete,
+  volumeDeleteMany,
   volumeMakeDir,
   volumePlanCopy,
+  volumePlanCopyMany,
   volumePutFile,
   volumeRecover,
   volumeRename,
@@ -193,6 +196,58 @@ function copyResultText(report: CopyReport, t: TranslateFn): string {
   return t(phrase.key, { ...phrase.params, what });
 }
 
+/**
+ * Wait for one background job (§54) to reach a terminal state.
+ *
+ * A multi-selection copied out of a volume runs one job per selected folder
+ * (`volumeCopyOut` is job-based; a plain file goes straight through
+ * `volumeExtractTo` and needs no waiting at all). Those jobs are otherwise
+ * tracked through the screen-wide `pendingCopy` ref, which assumes exactly
+ * one job in flight — the wrong shape for "several, run together" — so this
+ * gives the batch path its own, independent wait per job instead of
+ * reusing that ref.
+ */
+function awaitJob(jobId: number): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let offResult: (() => void) | undefined;
+    let offProgress: (() => void) | undefined;
+
+    const finish = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      offResult?.();
+      offProgress?.();
+      action();
+    };
+
+    void onVolumeWriteResult((result) => {
+      if (result.job_id === jobId) finish(resolve);
+    }).then((off) => {
+      offResult = off;
+      if (settled) off();
+    });
+
+    void onJobProgress((job) => {
+      if (job.id !== jobId || job.state.state === "running") return;
+      if (job.state.state === "failed") {
+        // Captured in a local so the narrowing survives into the closure
+        // `finish` calls later — TS does not carry it through `job.state`
+        // itself across the function boundary.
+        const failure = job.state;
+        finish(() => reject(new Error(`${failure.message} (${failure.error_code})`)));
+      } else {
+        // "finished" or "cancelled": either way the job is done, and a
+        // cancel with no volume-write-result still has to stop the wait.
+        finish(resolve);
+      }
+    }).then((off) => {
+      offProgress = off;
+      if (settled) off();
+    });
+  });
+}
+
 export function FileManager() {
   const { t } = useTranslation();
   const powerMode = usePowerMode();
@@ -231,12 +286,19 @@ export function FileManager() {
 
   /** What to do about names already taken. Sticky across operations. */
   const [policy, setPolicy] = useState<OverwritePolicy>("skip");
-  /** The pre-flight report, while the user is deciding about it. */
+  /**
+   * The pre-flight report, while the user is deciding about it.
+   *
+   * `sources`/`names` hold one entry for a single-folder copy and several for
+   * a batch — the same shape either way, so `CopyPlanDialog` reads one path
+   * regardless of how many roots are in it (a one-entry batch must still
+   * read naturally, not as "1 items").
+   */
   const [plan, setPlan] = useState<{
     plan: CopyPlan;
-    source: string;
+    sources: string[];
+    names: string[];
     side: Side;
-    name: string;
   } | null>(null);
   const [viewing, setViewing] = useState<{
     path: string;
@@ -659,7 +721,7 @@ export function FileManager() {
               destination.dirBlock,
               entry.path
             );
-            setPlan({ plan: found, source: entry.path, side: to, name: entry.name });
+            setPlan({ plan: found, sources: [entry.path], names: [entry.name], side: to });
           } catch (e) {
             setError(String(e));
           } finally {
@@ -745,7 +807,14 @@ export function FileManager() {
     [pane, refresh, policy, powerMode, t]
   );
 
-  /** Run the copy the plan dialog just had confirmed. */
+  /**
+   * Run the copy the plan dialog just had confirmed.
+   *
+   * One source keeps the exact call `volumeCopyIn` has always made — a
+   * folder's *contents* land flat, the tested behaviour nothing here may
+   * change. More than one goes through `volumeCopyInMany`, where each root
+   * keeps its own name at the destination instead (`HostSelection`).
+   */
   async function runPlannedCopy() {
     const pending = plan;
     if (!pending) return;
@@ -757,20 +826,140 @@ export function FileManager() {
       return;
     }
 
-    setBusy(t("files.status.copying", { name: pending.name }));
+    setBusy(
+      pending.names.length === 1
+        ? t("files.status.copying", { name: pending.names[0] })
+        : t("files.status.copyingSelection", { count: pending.names.length })
+    );
     try {
-      pendingCopy.current = await volumeCopyIn(
-        target.path,
-        target.volumeIndex,
-        target.dirBlock,
-        pending.source,
-        { overwrite: policy, sidecars: powerMode }
-      );
+      pendingCopy.current =
+        pending.sources.length === 1
+          ? await volumeCopyIn(
+              target.path,
+              target.volumeIndex,
+              target.dirBlock,
+              pending.sources[0],
+              { overwrite: policy, sidecars: powerMode }
+            )
+          : await volumeCopyInMany(
+              target.path,
+              target.volumeIndex,
+              target.dirBlock,
+              pending.sources,
+              { overwrite: policy, sidecars: powerMode }
+            );
       copyDestination.current = pending.side;
     } catch (e) {
       setError(String(e));
       setBusy(null);
     }
+  }
+
+  /**
+   * F5 on a multi-selection — copy every selected entry from `from` at once.
+   *
+   * One entry is exactly `copyTo` (called with an array of one), so the
+   * tested single-entry path never changes. More than one:
+   *
+   * ```text
+   * local pick → volume    one atomic operation: plan-many, then copy-in-many
+   * volume pick → local    each entry its own extract, run together
+   * volume pick → volume   not supported yet — a runtime refusal, the same
+   *                        shape as "both panes are local" below, rather
+   *                        than a disabled key (§96: F5 still *runs*)
+   * ```
+   */
+  async function copySelectionTo(from: Side, entries: PanelEntry[]) {
+    if (entries.length === 0) return;
+    if (entries.length === 1) {
+      await copyTo(from, entries[0]);
+      return;
+    }
+
+    const to: Side = from === "left" ? "right" : "left";
+    const source = pane(from);
+    const target = pane(to);
+
+    setError(null);
+    setMessage(null);
+
+    if (source.kind === "local" && target.kind === "local") {
+      setError(t("files.err.bothLocal"));
+      return;
+    }
+
+    // ---- a local pick, into a volume: one atomic operation ----
+    if (source.kind === "local" && target.kind !== "local") {
+      const destination = writableVolume(target);
+      if (!destination) {
+        setError(writeRefusal(target, t));
+        return;
+      }
+
+      const paths = entries.map((entry) => entry.path).filter((p): p is string => Boolean(p));
+      if (paths.length !== entries.length) {
+        setError(t("files.err.noLocalPath"));
+        return;
+      }
+
+      setBusy(t("files.status.planningSelection", { count: entries.length }));
+      try {
+        const found = await volumePlanCopyMany(
+          destination.path,
+          destination.volumeIndex,
+          destination.dirBlock,
+          paths
+        );
+        setPlan({
+          plan: found,
+          sources: paths,
+          names: entries.map((entry) => entry.name),
+          side: to,
+        });
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setBusy(null);
+      }
+      return;
+    }
+
+    // ---- a volume pick, out to the user's disk: each entry its own extract ----
+    if (source.kind !== "local" && target.kind === "local" && source.volumeIndex !== null) {
+      const volumeIndex = source.volumeIndex;
+      setBusy(t("files.status.copyingSelectionOut", { count: entries.length }));
+      try {
+        await Promise.all(
+          entries
+            .filter((entry) => entry.header_block !== null)
+            .map(async (entry) => {
+              const headerBlock = entry.header_block as number;
+              if (entry.is_dir) {
+                const jobId = await volumeCopyOut(
+                  source.location,
+                  volumeIndex,
+                  headerBlock,
+                  `${target.location}/${entry.name}`,
+                  { overwrite: policy, sidecars: powerMode }
+                );
+                await awaitJob(jobId);
+              } else {
+                await volumeExtractTo(source.location, volumeIndex, headerBlock, target.location);
+              }
+            })
+        );
+        setMessage(t("files.status.selectionCopiedOut", { count: entries.length }));
+        await refresh(to);
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setBusy(null);
+      }
+      return;
+    }
+
+    // Two volumes and more than one entry: not supported yet.
+    setError(t("files.err.batchBetweenVolumes"));
   }
 
   /**
@@ -831,6 +1020,69 @@ export function FileManager() {
           : outcome.backup
             ? t("files.status.deletedBackedUp", { name: entry.name })
             : t("files.status.deleted", { name: entry.name })
+      );
+      await refresh(side);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /**
+   * F8 on a multi-selection — delete every selected entry from a volume as
+   * one operation.
+   *
+   * One entry is exactly `deleteEntry` (called with an array of one). More
+   * than one goes through `volumeDeleteMany`: all-or-nothing (§92), so a
+   * batch that cannot fully succeed removes nothing rather than leaving the
+   * user unsure which half of their selection is still there. The two
+   * confirmations mirror `deleteEntry`'s, naming the count and total size
+   * instead of one file — no per-entry icon offer, since that prompt does
+   * not scale to a batch and the icon stays selectable on its own.
+   */
+  async function deleteSelection(side: Side, entries: PanelEntry[]) {
+    if (entries.length === 0) return;
+    if (entries.length === 1) {
+      await deleteEntry(side, entries[0]);
+      return;
+    }
+
+    const state = pane(side);
+    const target = writableVolume(state);
+    if (!target) return;
+
+    const names = entries.map((entry) => entry.name);
+    const totalBytes = entries.reduce((sum, entry) => sum + entry.bytes, 0);
+
+    if (
+      !window.confirm(
+        t("files.dialog.deleteMany.confirm1", {
+          count: names.length,
+          volume: state.volumeName,
+          size: formatBytes(totalBytes),
+        })
+      )
+    ) {
+      return;
+    }
+    if (!window.confirm(t("files.dialog.deleteMany.confirm2", { count: names.length }))) {
+      return;
+    }
+
+    setError(null);
+    setBusy(t("files.status.deletingMany", { count: names.length }));
+    try {
+      const outcome = await volumeDeleteMany(
+        target.path,
+        target.volumeIndex,
+        target.dirBlock,
+        names
+      );
+      setMessage(
+        outcome.backup
+          ? t("files.status.deletedManyBackedUp", { count: outcome.deleted })
+          : t("files.status.deletedMany", { count: outcome.deleted })
       );
       await refresh(side);
     } catch (e) {
@@ -1035,6 +1287,10 @@ export function FileManager() {
   // be the kind of guess that destroys the wrong file.
   const single = singleSelected(focusedPane.entries, selection[focused]);
   const multipleSelected = selection[focused].size > 1;
+  // F5 and F8 act on the whole selection, one or many — `reasonMultiple`
+  // does not apply to them, only to the genuinely single-entry actions
+  // below (F3, F4, F6, F9).
+  const hasSelection = selection[focused].size > 0;
   const canWrite = writableVolume(focusedPane) !== null;
   const inVolume = focusedPane.kind !== "local" && focusedPane.volumeIndex !== null;
 
@@ -1076,12 +1332,11 @@ export function FileManager() {
     {
       key: "F5",
       label: t("files.functionKeys.copy"),
-      enabled: Boolean(single) && busy === null,
-      reason: multipleSelected
-        ? t("files.functionKeys.reasonMultiple")
-        : t("files.functionKeys.copyReasonSelect"),
+      enabled: hasSelection && busy === null,
+      reason: t("files.functionKeys.copyReasonSelect"),
       run: () => {
-        if (single) void copyTo(focused, single);
+        const entries = selectedEntries(focused);
+        if (entries.length > 0) void copySelectionTo(focused, entries);
       },
     },
     {
@@ -1107,15 +1362,12 @@ export function FileManager() {
     {
       key: "F8",
       label: t("files.functionKeys.delete"),
-      enabled: Boolean(single) && canWrite && busy === null,
-      reason: multipleSelected
-        ? t("files.functionKeys.reasonMultiple")
-        : canWrite
-          ? t("files.functionKeys.deleteReasonSelect")
-          : writeRefusal(focusedPane, t),
+      enabled: hasSelection && canWrite && busy === null,
+      reason: canWrite ? t("files.functionKeys.deleteReasonSelect") : writeRefusal(focusedPane, t),
       danger: true,
       run: () => {
-        if (single) void deleteEntry(focused, single);
+        const entries = selectedEntries(focused);
+        if (entries.length > 0) void deleteSelection(focused, entries);
       },
     },
     {
@@ -1267,22 +1519,16 @@ export function FileManager() {
           <button
             className="btn"
             title={t("files.arrows.toRightTitle")}
-            disabled={selection.left.size !== 1 || busy !== null}
-            onClick={() => {
-              const entry = singleSelected(left.entries, selection.left);
-              if (entry) void copyTo("left", entry);
-            }}
+            disabled={selection.left.size === 0 || busy !== null}
+            onClick={() => void copySelectionTo("left", selectedEntries("left"))}
           >
             &rarr;
           </button>
           <button
             className="btn"
             title={t("files.arrows.toLeftTitle")}
-            disabled={selection.right.size !== 1 || busy !== null}
-            onClick={() => {
-              const entry = singleSelected(right.entries, selection.right);
-              if (entry) void copyTo("right", entry);
-            }}
+            disabled={selection.right.size === 0 || busy !== null}
+            onClick={() => void copySelectionTo("right", selectedEntries("right"))}
           >
             &larr;
           </button>
@@ -1335,6 +1581,7 @@ export function FileManager() {
       {plan && (
         <CopyPlanDialog
           plan={plan.plan}
+          names={plan.names}
           destination={`${pane(plan.side).volumeName || pane(plan.side).location}`}
           policy={policy}
           onPolicyChange={setPolicy}
