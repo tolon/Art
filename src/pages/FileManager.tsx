@@ -1577,10 +1577,11 @@ function PartitionList({
   onOpen: (index: number) => void;
 }) {
   const { t } = useTranslation();
+  const layoutPhrase = describeLayout(image.layout);
   return (
     <div>
       <div className="faint" style={{ fontSize: 11, marginBottom: 6 }}>
-        {t(describeLayout(image.layout).key)}
+        {t(layoutPhrase.key, layoutPhrase.params)}
         {image.volumes.length > 0 &&
           ` · ${t("files.partitions.volumeCount", { count: image.volumes.length })}`}
       </div>

@@ -166,42 +166,45 @@ function OperationLogSection() {
         </p>
       ) : (
         <ul style={{ listStyle: "none", padding: 0, margin: "10px 0 0" }}>
-          {records.map((r, i) => (
-            <li
-              key={`${r.timestamp}-${i}`}
-              style={{
-                padding: "6px 0",
-                borderTop: i === 0 ? "none" : "1px solid var(--border)",
-                fontSize: 12,
-              }}
-            >
-              <span
-                className={`badge ${succeeded(r) ? "badge-ok" : "badge-err"}`}
-                style={{ marginRight: 6 }}
+          {records.map((r, i) => {
+            const label = statusLabel(r);
+            return (
+              <li
+                key={`${r.timestamp}-${i}`}
+                style={{
+                  padding: "6px 0",
+                  borderTop: i === 0 ? "none" : "1px solid var(--border)",
+                  fontSize: 12,
+                }}
               >
-                {t(statusLabel(r).key)}
-              </span>
-              <strong>{r.operation}</strong>
-              <span className="faint" style={{ marginLeft: 6 }}>
-                {new Date(r.timestamp * 1000).toLocaleString()}
-              </span>
-              {r.destination && (
-                <div className="muted" style={{ wordBreak: "break-all" }}>
-                  {r.destination}
-                </div>
-              )}
-              {r.backup && (
-                <div className="faint" style={{ wordBreak: "break-all" }}>
-                  {t("settings.oplog.backupLabel", { path: r.backup })}
-                </div>
-              )}
-              {r.outcome.result === "failure" && (
-                <div className="muted">
-                  {r.outcome.message} ({r.outcome.error_code})
-                </div>
-              )}
-            </li>
-          ))}
+                <span
+                  className={`badge ${succeeded(r) ? "badge-ok" : "badge-err"}`}
+                  style={{ marginRight: 6 }}
+                >
+                  {t(label.key, label.params)}
+                </span>
+                <strong>{r.operation}</strong>
+                <span className="faint" style={{ marginLeft: 6 }}>
+                  {new Date(r.timestamp * 1000).toLocaleString()}
+                </span>
+                {r.destination && (
+                  <div className="muted" style={{ wordBreak: "break-all" }}>
+                    {r.destination}
+                  </div>
+                )}
+                {r.backup && (
+                  <div className="faint" style={{ wordBreak: "break-all" }}>
+                    {t("settings.oplog.backupLabel", { path: r.backup })}
+                  </div>
+                )}
+                {r.outcome.result === "failure" && (
+                  <div className="muted">
+                    {r.outcome.message} ({r.outcome.error_code})
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
 

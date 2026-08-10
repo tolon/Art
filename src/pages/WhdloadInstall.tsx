@@ -290,6 +290,7 @@ function Detection({ plan, powerMode }: { plan: WhdloadPlan; powerMode: boolean 
   // Workbench", complaining about the icon of an archive ART has just said is
   // not a WHDLoad package at all.
   const found = hasPack(plan);
+  const verdictPhrase = describeVerdict(verdict);
 
   return (
     <div style={{ marginTop: 8 }}>
@@ -297,7 +298,7 @@ function Detection({ plan, powerMode }: { plan: WhdloadPlan; powerMode: boolean 
         className={confident ? "badge badge-ok" : "badge badge-warn"}
         style={{ display: "block", fontSize: 12 }}
       >
-        {t(describeVerdict(verdict).key)} — {verdict.notes}
+        {t(verdictPhrase.key, verdictPhrase.params)} — {verdict.notes}
       </div>
 
       {found && (
