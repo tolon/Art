@@ -604,6 +604,69 @@ pub fn sources_fetch(
     Ok(id)
 }
 
+/// The body of both install commands, factored out so it is callable — and
+/// therefore testable — without a live Tauri `State` or a job runner. Same
+/// shape task 8 gave the ADF commands (`add_file_at`, `create_directory_at`).
+///
+/// Everything that makes an install different from the general-purpose F5 copy
+/// lives here, and both of those differences are guarantees a test has to be
+/// able to reach:
+///
+/// - **It fits, or nothing happens.** `plan_copy_in_folder` is a read-only
+///   pre-flight; an install that will not fit is refused atomically with real
+///   block numbers, before a single block is written (§92). `run_copy_in_folder`
+///   on its own lands what fits and reports the rest, which is right for a copy
+///   and wrong for an install — a WHDLoad pack missing its `.slave` because it
+///   did not fit is not a partial success, it is a broken result nobody was
+///   warned about.
+/// - **Cancelling installs nothing.** [`OnCancel::Abandon`] means a cancelled
+///   batch never reaches the user's file and never reports success (§54, §57).
+fn install_archive_into_volume(
+    archive: &std::path::Path,
+    image: &std::path::Path,
+    volume_index: usize,
+    parent: u32,
+    policy: OverwritePolicy,
+    progress: &dyn crate::core::jobs::ProgressSink,
+) -> CoreResult<InstallOutcome> {
+    let (scratch, skipped) = crate::core::sources::install::unpack_for_install(archive, progress)?;
+
+    // Sidecars on: an archive may carry `.uaem` files, and a WHDLoad slave's
+    // S and P bits are the difference between a game that starts and one that
+    // does not (§7.2).
+    let folder = crate::core::volume::write::copy::HostFolder::new(scratch.path(), true);
+
+    let plan =
+        crate::commands::volume_write::plan_copy_in_folder(image, volume_index, parent, &folder)?;
+    if !plan.fits() {
+        return Err(CoreError::SafetyRefused(plan.shortfall().unwrap_or_else(
+            || "this will not fit; nothing was changed".into(),
+        )));
+    }
+
+    let (report, backup) = crate::commands::volume_write::run_copy_in_folder_with(
+        image,
+        volume_index,
+        parent,
+        &folder,
+        policy,
+        crate::commands::volume_write::OnCancel::Abandon,
+        progress,
+    )?;
+
+    let mut left_behind = skipped;
+    left_behind.extend(report.skipped.iter().cloned());
+
+    Ok(InstallOutcome {
+        files: report.files_copied,
+        directories: report.directories_created,
+        bytes: report.bytes_copied,
+        into: String::new(),
+        backup,
+        skipped: left_behind,
+    })
+}
+
 /// Install a downloaded package into a floppy image.
 ///
 /// The archive has to be a file already on disk — normally the one a download
@@ -655,49 +718,16 @@ pub fn sources_install_adf(
     );
 
     let id = spawn_job(&app, registry, &title, move |job_id, progress| {
-        let result = (|| -> CoreResult<InstallOutcome> {
-            let (scratch, skipped) =
-                crate::core::sources::install::unpack_for_install(&archive_path, progress)?;
-
-            let folder = crate::core::volume::write::copy::HostFolder::new(scratch.path(), true);
-            // An ADF is a bare volume at index 0 — the same install, a
-            // different destination (§41.5.3).
-            //
-            // Explain before modify (§92): refuse atomically, with real
-            // numbers, before a single block is written. `run_copy_in_folder`
-            // itself lands what fits and reports the rest, which is right for
-            // a general-purpose copy but wrong for an install — a WHDLoad
-            // pack missing its `.slave` because it did not fit is not a
-            // partial success, it is a broken result nobody was warned about.
-            let plan =
-                crate::commands::volume_write::plan_copy_in_folder(&adf_path, 0, 0, &folder)?;
-            if !plan.fits() {
-                return Err(CoreError::SafetyRefused(plan.shortfall().unwrap_or_else(
-                    || "this will not fit; nothing was changed".into(),
-                )));
-            }
-
-            let (report, backup) = crate::commands::volume_write::run_copy_in_folder(
-                &adf_path,
-                0,
-                0,
-                &folder,
-                OverwritePolicy::default(),
-                progress,
-            )?;
-
-            let mut left_behind = skipped;
-            left_behind.extend(report.skipped.iter().cloned());
-
-            Ok(InstallOutcome {
-                files: report.files_copied,
-                directories: report.directories_created,
-                bytes: report.bytes_copied,
-                into: String::new(),
-                backup,
-                skipped: left_behind,
-            })
-        })();
+        // An ADF is a bare volume at index 0 — the same install, a different
+        // destination (§41.5.3).
+        let result = install_archive_into_volume(
+            &archive_path,
+            &adf_path,
+            0,
+            0,
+            OverwritePolicy::default(),
+            progress,
+        );
 
         let record = user_operation("Install package to disk")
             .source(&archive)
@@ -920,55 +950,14 @@ pub fn sources_install_volume(
     );
 
     let id = spawn_job(&app, registry, &title, move |job_id, progress| {
-        let outcome = (|| -> CoreResult<InstallOutcome> {
-            let (scratch, skipped) =
-                crate::core::sources::install::unpack_for_install(&archive_path, progress)?;
-
-            // Sidecars on: an archive may carry `.uaem` files, and a WHDLoad
-            // slave's S and P bits are the difference between a game that
-            // starts and one that does not (§7.2).
-            let folder = crate::core::volume::write::copy::HostFolder::new(scratch.path(), true);
-
-            // Explain before modify (§92): refuse atomically, with real
-            // numbers, before a single block is written — the same guarantee
-            // the ADF destination gets. `run_copy_in_folder` lands what fits
-            // and reports the rest, which is right for the general-purpose F5
-            // copy but wrong for an install: a game half-copied onto a hard
-            // disk partition because it did not fit is a broken result, not a
-            // partial one, and the user was never asked about it.
-            let plan = crate::commands::volume_write::plan_copy_in_folder(
-                &image_path,
-                volume_index,
-                parent,
-                &folder,
-            )?;
-            if !plan.fits() {
-                return Err(CoreError::SafetyRefused(plan.shortfall().unwrap_or_else(
-                    || "this will not fit; nothing was changed".into(),
-                )));
-            }
-
-            let (report, _) = crate::commands::volume_write::run_copy_in_folder(
-                &image_path,
-                volume_index,
-                parent,
-                &folder,
-                policy,
-                progress,
-            )?;
-
-            let mut left_behind = skipped;
-            left_behind.extend(report.skipped.iter().cloned());
-
-            Ok(InstallOutcome {
-                files: report.files_copied,
-                directories: report.directories_created,
-                bytes: report.bytes_copied,
-                into: String::new(),
-                backup: None,
-                skipped: left_behind,
-            })
-        })();
+        let outcome = install_archive_into_volume(
+            &archive_path,
+            &image_path,
+            volume_index,
+            parent,
+            policy,
+            progress,
+        );
 
         let record = user_operation("Install package into volume")
             .source(archive_path.display().to_string())
@@ -978,6 +967,9 @@ pub fn sources_install_volume(
                 .detail("Files", installed.files.to_string())
                 .detail("Folders", installed.directories.to_string())
                 .detail("Skipped", installed.skipped.len().to_string())
+                // Whole-file destinations are backed up before replacement;
+                // the log has to be able to say where the previous image went.
+                .backup(installed.backup.clone())
                 .outcome(OperationOutcome::verified(installed.files > 0)),
             Err(err) => record.failed(err),
         };
@@ -1172,11 +1164,12 @@ mod tests {
     /// numbers, before a single block is written — never landed partially. A
     /// WHDLoad pack missing its `.slave` because it did not fit is not a
     /// partial success; it is a broken, non-bootable result the user was
-    /// never warned about. `plan_copy_in_folder` is the pre-flight
-    /// `sources_install_adf` now runs before ever calling
-    /// `run_copy_in_folder` — this proves the refusal happens, carries the
-    /// real block numbers, and that skipping the write really does leave the
-    /// image untouched.
+    /// never warned about.
+    ///
+    /// This drives [`install_archive_into_volume`] — the real body of both
+    /// install commands — rather than calling the read-only planner itself, so
+    /// deleting the `plan.fits()` guard makes this test fail rather than
+    /// leaving it trivially green.
     #[test]
     fn installing_a_package_that_does_not_fit_is_refused_without_touching_the_image() {
         use crate::core::jobs::NoProgress;
@@ -1199,26 +1192,104 @@ mod tests {
         std::fs::write(&image, &bytes).unwrap();
         let before = std::fs::read(&image).unwrap();
 
-        let (scratch, _) =
-            crate::core::sources::install::unpack_for_install(&archive, &NoProgress).unwrap();
-        let folder = crate::core::volume::write::copy::HostFolder::new(scratch.path(), true);
+        let err = install_archive_into_volume(
+            &archive,
+            &image,
+            0,
+            0,
+            crate::core::lha::OverwritePolicy::Skip,
+            &NoProgress,
+        )
+        .expect_err("a package larger than the floppy must be refused");
 
-        // The exact pre-flight `sources_install_adf` runs before it will ever
-        // call `run_copy_in_folder`.
-        let plan =
-            crate::commands::volume_write::plan_copy_in_folder(&image, 0, 0, &folder).unwrap();
-        assert!(!plan.fits(), "the batch is bigger than the floppy");
-
-        let message = plan.shortfall().unwrap();
+        assert_eq!(err.code(), "ART-SAFETY-REFUSED");
+        let message = err.to_string();
         assert!(message.contains("blocks"), "{message}");
         assert!(message.contains("free"), "{message}");
 
-        // Never reaching `run_copy_in_folder` is what the refusal buys: the
-        // image is exactly what it was before the install was attempted.
+        // Never reaching the writer is what the refusal buys: the image is
+        // exactly what it was before the install was attempted.
         assert_eq!(
             std::fs::read(&image).unwrap(),
             before,
             "a refused install must leave the image byte-for-byte unchanged"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// §54 and §57: cancelling an install must install *nothing*.
+    ///
+    /// `copy_into_volume` stops between files and reports how many landed,
+    /// which is right for a general-purpose copy. An install is not that: half
+    /// a WHDLoad pack is a game that will not start, and reporting it as a
+    /// finished install — with an operation-log line saying so — is worse than
+    /// any error. The bytes are captured before and compared after, because an
+    /// `Err` on its own would not prove the half-written package never reached
+    /// the file.
+    #[test]
+    fn a_cancelled_install_writes_nothing_and_does_not_report_success() {
+        use crate::core::jobs::ProgressSink;
+        use crate::core::lha::tests::make_lha_with;
+        use crate::core::volume::fixture::ffs_volume;
+        use crate::core::volume::DosType;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        /// Cancels once the copy into the volume is a couple of files in —
+        /// the user hitting Stop halfway through, not before it started.
+        ///
+        /// The two stages are told apart by their `total`: unpacking reports a
+        /// running count with no total, while `copy_into_volume` reports
+        /// "index of total". Keying on that rather than on a call count keeps
+        /// the test aimed at the stage it is about.
+        struct StopDuringCopy(AtomicBool);
+        impl ProgressSink for StopDuringCopy {
+            fn report(&self, done: u64, total: Option<u64>, _message: &str) {
+                if total.is_some() && done >= 2 {
+                    self.0.store(true, Ordering::SeqCst);
+                }
+            }
+            fn is_cancelled(&self) -> bool {
+                self.0.load(Ordering::SeqCst)
+            }
+        }
+
+        let dir = temp_root("install-cancel");
+        let archive = dir.join("Pack.lha");
+        let files: Vec<(String, Vec<u8>)> = (0..10)
+            .map(|index| (format!("File{index}.txt"), vec![b'a' + index as u8; 64]))
+            .collect();
+        let borrowed: Vec<(&str, &[u8])> = files
+            .iter()
+            .map(|(name, data)| (name.as_str(), data.as_slice()))
+            .collect();
+        std::fs::write(&archive, make_lha_with(&borrowed)).unwrap();
+
+        let image = dir.join("disk.adf");
+        let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
+        std::fs::write(&image, &bytes).unwrap();
+        let before = std::fs::read(&image).unwrap();
+
+        let sink = StopDuringCopy(AtomicBool::new(false));
+        let err = install_archive_into_volume(
+            &archive,
+            &image,
+            0,
+            0,
+            crate::core::lha::OverwritePolicy::Skip,
+            &sink,
+        )
+        .expect_err("a cancelled install must not come back as a successful one");
+
+        assert_eq!(
+            err.code(),
+            "ART-CANCELLED",
+            "the job must end Cancelled, not Completed: {err}"
+        );
+        assert_eq!(
+            std::fs::read(&image).unwrap(),
+            before,
+            "a cancelled install must leave the image byte-for-byte unchanged"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

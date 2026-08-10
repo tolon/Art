@@ -802,6 +802,22 @@ pub fn volume_copy_in(
     Ok(id)
 }
 
+/// What a cancelled batch means to the caller.
+///
+/// `copy_into_volume` stops between files and reports how many landed, which
+/// is the right answer for a general-purpose copy and the wrong one for an
+/// install: half a WHDLoad pack is not "four files copied", it is a broken
+/// game the user was told had installed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnCancel {
+    /// Keep what landed and let the caller read `report.cancelled` — F5.
+    KeepWhatLanded,
+    /// Abandon the batch with [`CoreError::Cancelled`] instead of committing
+    /// it, so a cancelled operation leaves nothing behind to be mistaken for
+    /// a finished one.
+    Abandon,
+}
+
 /// The copy itself, with the strategy chosen the same way single operations
 /// choose it.
 ///
@@ -815,6 +831,38 @@ pub fn run_copy_in_folder(
     parent: u32,
     folder: &HostFolder,
     policy: OverwritePolicy,
+    progress: &dyn ProgressSink,
+) -> CoreResult<(CopyReport, Option<String>)> {
+    run_copy_in_folder_with(
+        image,
+        volume_index,
+        parent,
+        folder,
+        policy,
+        OnCancel::KeepWhatLanded,
+        progress,
+    )
+}
+
+/// [`run_copy_in_folder`], with a say in what a cancellation means.
+///
+/// With [`OnCancel::Abandon`] the whole-file strategy returns before
+/// [`commit_whole_file`] is ever reached, so the user's file is byte-for-byte
+/// what it was — cancelling an install leaves no half-installed package at all.
+///
+/// The block-journal strategy cannot offer that: it exists for images too large
+/// to hold in memory, and each file it copied is its own committed, verified
+/// operation already durable in the file. What `Abandon` buys there is honesty
+/// — the job ends `Cancelled` rather than reporting a successful install of a
+/// package that is missing most of itself.
+#[allow(clippy::too_many_arguments)]
+pub fn run_copy_in_folder_with(
+    image: &Path,
+    volume_index: usize,
+    parent: u32,
+    folder: &HostFolder,
+    policy: OverwritePolicy,
+    on_cancel: OnCancel,
     progress: &dyn ProgressSink,
 ) -> CoreResult<(CopyReport, Option<String>)> {
     let entry = pick(image, volume_index)?;
@@ -837,6 +885,12 @@ pub fn run_copy_in_folder(
                 let mut writer = VolumeWriter::open(&mut device, geometry, image, 0)?;
                 copy_into_volume(&mut writer, parent, folder, policy, progress)?
             };
+            if report.cancelled && on_cancel == OnCancel::Abandon {
+                // Everything so far happened in `device`, which is a buffer.
+                // Returning here — before `commit_whole_file` — is what leaves
+                // the user's image exactly as it was (§57).
+                return Err(CoreError::Cancelled);
+            }
             let backup = commit_whole_file(image, device.bytes())?;
             Ok((report, backup))
         }
@@ -856,6 +910,12 @@ pub fn run_copy_in_folder(
             // No whole-image validation and no backup, for the reasons in
             // [`with_volume`]: the journal and the per-operation check are what
             // protect an image too large to hold in memory.
+            if report.cancelled && on_cancel == OnCancel::Abandon {
+                // Synced first, deliberately: the files that did land are
+                // complete, journalled operations and belong on disk. What is
+                // refused is calling this a success.
+                return Err(CoreError::Cancelled);
+            }
             Ok((report, None))
         }
     }
