@@ -36,7 +36,8 @@ use crate::core::volume::device::{FileRegionMut, VecDevice};
 use crate::core::volume::journal::find_journal;
 use crate::core::volume::mount::{mount, scan_image, VolumeEntry};
 use crate::core::volume::write::copy::{
-    copy_into_volume, extract_from_volume, CopyReport, ExtractReport, HostFolder, StagedTree,
+    copy_into_volume, extract_from_volume, CopyReport, CopySource, ExtractReport, HostFolder,
+    HostSelection, StagedTree,
 };
 use crate::core::volume::write::plan::{plan_copy, CopyPlan, SourceEntry};
 use crate::core::volume::write::{VolumeWriter, WriteOutcome};
@@ -413,6 +414,145 @@ pub fn volume_delete(
     result
 }
 
+/// What a batch delete did.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeleteManyResult {
+    pub deleted: usize,
+    pub blocks_touched: usize,
+    pub free_blocks: usize,
+    pub free_bytes: u64,
+    pub verified: bool,
+    pub strategy: String,
+    /// Where the previous image went, taken **once** for the whole batch.
+    pub backup: Option<String>,
+}
+
+/// Look up every name in `dir`, refusing the whole batch — before anything
+/// is deleted — the moment one entry cannot be. A name that is not there any
+/// more or a directory that still has something in it costs the entire
+/// selection, not just itself: §92 says explain before modify, and a delete
+/// that silently removed nine of a ten-entry pick because the tenth turned
+/// out to have something in it would leave the user unable to tell which
+/// nine.
+fn check_batch_deletable<D: crate::core::volume::BlockDevice + ?Sized>(
+    device: &D,
+    geometry: &VolumeGeometry,
+    dir: u32,
+    names: &[String],
+) -> CoreResult<()> {
+    let set = crate::core::volume::write::layout::BlockSet::new(geometry.block_size);
+    let existing = crate::core::volume::write::dir::entries_in(device, &set, geometry, dir)?;
+
+    for name in names {
+        let Some(found) = existing.iter().find(|e| e.name.eq_ignore_ascii_case(name)) else {
+            return Err(CoreError::InvalidInput(format!(
+                "'{name}' is not in this directory any more — nothing in this batch was deleted"
+            )));
+        };
+        if found.is_dir {
+            let inside =
+                crate::core::volume::write::dir::entries_in(device, &set, geometry, found.block)?;
+            if !inside.is_empty() {
+                return Err(CoreError::InvalidInput(format!(
+                    "'{name}' still has things in it. Empty it first — nothing in this batch \
+                     was deleted."
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The batch-delete pipeline, without the Tauri `State` the command wrapper
+/// needs: pre-check every name, then delete everything inside one writer
+/// session so the whole-file strategy takes exactly one backup for the batch.
+///
+/// All-or-nothing (§92): every name is resolved and checked *before* the
+/// writer session opens, so a batch that cannot fully succeed deletes
+/// nothing rather than stopping partway and leaving the user unsure which
+/// half of their selection is still there.
+fn delete_many(
+    image: &Path,
+    volume_index: usize,
+    dir_block: Option<u32>,
+    names: &[String],
+) -> CoreResult<DeleteManyResult> {
+    let parent = dir_block.unwrap_or(0);
+
+    {
+        let entry = pick(image, volume_index)?;
+        let (device, geometry) = mount(image, &entry)?;
+        let dir = if parent == 0 {
+            geometry.root_block
+        } else {
+            parent
+        };
+        check_batch_deletable(&device, &geometry, dir, names)?;
+    }
+
+    let (outcomes, strategy, backup) = with_volume(image, volume_index, |writer| {
+        let mut outcomes = Vec::with_capacity(names.len());
+        for name in names {
+            let Some(found) = writer.find(parent, name)? else {
+                return Err(CoreError::InvalidInput(format!(
+                    "'{name}' is not in this directory any more"
+                )));
+            };
+            outcomes.push(writer.delete(parent, found.block)?);
+        }
+        Ok(outcomes)
+    })?;
+
+    let block_size = outcome_block_size(image, volume_index);
+    let deleted = outcomes.len();
+    let blocks_touched = outcomes.iter().map(|o| o.blocks_touched).sum();
+    let verified = outcomes.iter().all(|o| o.verified);
+    let free_blocks = outcomes.last().map(|o| o.free_blocks).unwrap_or(0);
+
+    Ok(DeleteManyResult {
+        deleted,
+        blocks_touched,
+        free_blocks,
+        free_bytes: free_blocks as u64 * block_size as u64,
+        verified,
+        strategy: describe(strategy).into(),
+        backup,
+    })
+}
+
+/// F8 on a multi-selection — delete every named entry from `dir_block` as
+/// one operation. See [`delete_many`] for the all-or-nothing pipeline; this
+/// is the thin Tauri wrapper that logs the result.
+#[tauri::command]
+pub fn volume_delete_many(
+    path: String,
+    volume_index: usize,
+    dir_block: Option<u32>,
+    names: Vec<String>,
+    oplog: State<'_, JsonlOperationLog>,
+) -> AppResult<DeleteManyResult> {
+    let image = PathBuf::from(path.trim());
+
+    let result = delete_many(&image, volume_index, dir_block, &names).map_err(AppError::from);
+
+    write_result(
+        &oplog,
+        user_operation("Delete a selection from volume")
+            .source(format!("{path}:{}", names.join(", ")))
+            .detail("Count", names.len().to_string()),
+        &result,
+        |record, made: &DeleteManyResult| {
+            record
+                .detail("Deleted", made.deleted.to_string())
+                .detail("Blocks touched", made.blocks_touched.to_string())
+                .detail("Strategy", made.strategy.clone())
+                .outcome(OperationOutcome::verified(made.verified))
+        },
+    );
+
+    result
+}
+
 /// Write one file into a volume — the single-file fast path of F5.
 #[tauri::command]
 pub fn volume_put_file(
@@ -550,10 +690,45 @@ pub fn volume_plan_copy(
     let (device, geometry) = mount(&image, &entry)?;
 
     let folder = HostFolder::new(PathBuf::from(source.trim()), true);
-    let entries: Vec<SourceEntry> = {
-        use crate::core::volume::write::copy::CopySource;
-        folder.entries()?
+    let entries: Vec<SourceEntry> = folder.entries()?;
+
+    let dir = dir_block.unwrap_or(geometry.root_block);
+    let existing: Vec<String> = {
+        let set = crate::core::volume::write::layout::BlockSet::new(geometry.block_size);
+        crate::core::volume::write::dir::entries_in(&device, &set, &geometry, dir)?
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect()
     };
+
+    Ok(plan_copy(&device, &geometry, &entries, &existing)?)
+}
+
+/// What copying a whole selection — several files and folders picked at
+/// once, each keeping its own name at the destination — would cost.
+///
+/// Read-only, same promise as [`volume_plan_copy`]: nothing is written. The
+/// only difference is the source, [`HostSelection`] instead of a single
+/// [`HostFolder`], so a one-entry selection goes through exactly the same
+/// `plan_copy` a single-root copy does and reads the same either way.
+#[tauri::command]
+pub fn volume_plan_copy_many(
+    path: String,
+    volume_index: usize,
+    dir_block: Option<u32>,
+    sources: Vec<String>,
+) -> AppResult<CopyPlan> {
+    let image = PathBuf::from(path.trim());
+    let entry = pick(&image, volume_index)?;
+    let (device, geometry) = mount(&image, &entry)?;
+
+    let selection = HostSelection::new(
+        sources
+            .iter()
+            .map(|s| PathBuf::from(s.trim()))
+            .collect::<Vec<_>>(),
+    );
+    let entries: Vec<SourceEntry> = selection.entries()?;
 
     let dir = dir_block.unwrap_or(geometry.root_block);
     let existing: Vec<String> = {
@@ -815,6 +990,86 @@ pub fn volume_copy_in(
     Ok(id)
 }
 
+/// F5 on a multi-selection — copy everything the user picked, from either
+/// side, into a volume as one job.
+///
+/// Each root keeps its own name at the destination
+/// ([`HostSelection`](crate::core::volume::write::copy::HostSelection)), so a
+/// selection of `Game/` and `Readme.txt` lands as `Game/` and `Readme.txt`
+/// side by side — the same shape [`volume_copy_in`] gives a single folder.
+///
+/// The one deliberate difference from [`volume_copy_in`] is
+/// [`OnCancel::Abandon`]: a batch the user picked by hand and then cancelled
+/// must not commit a random prefix of it and call that a success. ART has
+/// shipped that mistake twice already in other code paths — see
+/// `a_cancelled_batch_leaves_the_image_byte_for_byte_unchanged` for the test
+/// that proves it does not happen here.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn volume_copy_in_many(
+    path: String,
+    volume_index: usize,
+    dir_block: Option<u32>,
+    sources: Vec<String>,
+    options: Option<CopyOptions>,
+    app: AppHandle,
+    registry: State<'_, Arc<JobRegistry>>,
+    oplog: State<'_, JsonlOperationLog>,
+) -> AppResult<JobId> {
+    let image = PathBuf::from(path.trim());
+    let roots: Vec<PathBuf> = sources.iter().map(|s| PathBuf::from(s.trim())).collect();
+    let options = options.unwrap_or_default();
+    let policy = options.overwrite.unwrap_or_default();
+    let parent = dir_block.unwrap_or(0);
+
+    let log_path = oplog.path().to_path_buf();
+    let registry = Arc::clone(&registry);
+    let emit_app = app.clone();
+    let title = format!("Copying a selection into {}", image.display());
+
+    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+        let selection = HostSelection::new(roots);
+
+        // Abandon, not KeepWhatLanded: see the doc comment above.
+        let outcome = run_copy_in_folder_with(
+            &image,
+            volume_index,
+            parent,
+            &selection,
+            policy,
+            OnCancel::Abandon,
+            progress,
+        );
+
+        let record = user_operation("Copy a selection into volume")
+            .destination(format!("{}:{volume_index}", image.display()));
+        let record = match &outcome {
+            Ok((report, _)) => record
+                .detail("Files", report.files_copied.to_string())
+                .detail("Folders", report.directories_created.to_string())
+                .detail("Skipped", report.skipped.len().to_string())
+                .outcome(OperationOutcome::verified(
+                    report.files_verified == report.files_copied,
+                )),
+            Err(err) => record.failed(err),
+        };
+        super::oplog::write_to_path(&log_path, &record);
+
+        let (report, backup) = outcome?;
+        let _ = emit_app.emit(
+            VOLUME_WRITE_EVENT,
+            VolumeWriteResult::CopyIn {
+                job_id,
+                report,
+                backup,
+            },
+        );
+        Ok(())
+    });
+
+    Ok(id)
+}
+
 /// What a cancelled batch means to the caller.
 ///
 /// `copy_into_volume` stops between files and reports how many landed, which
@@ -842,7 +1097,7 @@ pub fn run_copy_in_folder(
     image: &Path,
     volume_index: usize,
     parent: u32,
-    folder: &HostFolder,
+    source: &dyn CopySource,
     policy: OverwritePolicy,
     progress: &dyn ProgressSink,
 ) -> CoreResult<(CopyReport, Option<String>)> {
@@ -850,7 +1105,7 @@ pub fn run_copy_in_folder(
         image,
         volume_index,
         parent,
-        folder,
+        source,
         policy,
         OnCancel::KeepWhatLanded,
         progress,
@@ -873,7 +1128,7 @@ pub fn run_copy_in_folder_with(
     image: &Path,
     volume_index: usize,
     parent: u32,
-    folder: &HostFolder,
+    source: &dyn CopySource,
     policy: OverwritePolicy,
     on_cancel: OnCancel,
     progress: &dyn ProgressSink,
@@ -896,7 +1151,7 @@ pub fn run_copy_in_folder_with(
             let mut device = VecDevice::new(original, geometry.block_size)?;
             let report = {
                 let mut writer = VolumeWriter::open(&mut device, geometry, image, 0)?;
-                copy_into_volume(&mut writer, parent, folder, policy, progress)?
+                copy_into_volume(&mut writer, parent, source, policy, progress)?
             };
             if report.cancelled && on_cancel == OnCancel::Abandon {
                 // Everything so far happened in `device`, which is a buffer.
@@ -917,7 +1172,7 @@ pub fn run_copy_in_folder_with(
             let report = {
                 let mut writer =
                     VolumeWriter::open(&mut device, geometry, image, entry.byte_offset)?;
-                copy_into_volume(&mut writer, parent, folder, policy, progress)?
+                copy_into_volume(&mut writer, parent, source, policy, progress)?
             };
             device.sync()?;
             // No whole-image validation and no backup, for the reasons in
@@ -955,10 +1210,7 @@ pub fn plan_copy_in_folder(
     let entry = pick(image, volume_index)?;
     let (device, geometry) = mount(image, &entry)?;
 
-    let entries: Vec<SourceEntry> = {
-        use crate::core::volume::write::copy::CopySource;
-        folder.entries()?
-    };
+    let entries: Vec<SourceEntry> = folder.entries()?;
 
     // `0` means the root everywhere a `parent`/`dir_block` is taken
     // (`VolumeWriter::resolve_directory`), but `entries_in` takes a raw block
@@ -1797,6 +2049,242 @@ mod tests {
             "twenty files should not produce a backup each; found {backups} files"
         );
         assert_eq!(image.listing().len(), 20);
+    }
+
+    // ---- Batch commands (Task 4): a selection acts as one operation ----
+
+    /// The batch equivalent of `a_copy_plan_reports_the_cost_without_touching_the_image`:
+    /// several picked roots, one plan, nothing written.
+    #[test]
+    fn a_batch_plan_reports_the_cost_without_touching_the_image() {
+        let image = Image::new("batch-plan", 1760);
+        let before = image.bytes();
+
+        let picks = image.dir.join("picks");
+        let game = picks.join("Game");
+        std::fs::create_dir_all(&game).unwrap();
+        std::fs::write(game.join("Loader"), vec![1u8; 2000]).unwrap();
+        let readme = picks.join("Readme.txt");
+        std::fs::write(&readme, vec![2u8; 100]).unwrap();
+
+        let plan = volume_plan_copy_many(
+            image.text(),
+            0,
+            None,
+            vec![game.display().to_string(), readme.display().to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(plan.files, 2, "Loader and Readme.txt");
+        assert_eq!(plan.directories, 1, "Game");
+        assert!(plan.fits());
+        assert!(plan.is_clean());
+        assert_eq!(image.bytes(), before, "planning must not write");
+    }
+
+    /// A one-entry batch is still a batch, and it keeps its own semantics: a
+    /// single *file* picked and planned through the batch command reads
+    /// exactly as it would through a selection of one, with the file's own
+    /// name at the top level — not "1 items", and not the contents of a
+    /// folder spilled flat the way `volume_plan_copy` treats a folder root.
+    #[test]
+    fn a_one_entry_batch_plan_names_the_single_file() {
+        let image = Image::new("batch-plan-one", 1760);
+        let picks = image.dir.join("picks");
+        std::fs::create_dir_all(&picks).unwrap();
+        let file = picks.join("A.txt");
+        std::fs::write(&file, vec![1u8; 3000]).unwrap();
+
+        let plan =
+            volume_plan_copy_many(image.text(), 0, None, vec![file.display().to_string()]).unwrap();
+
+        assert_eq!(plan.files, 1);
+        assert_eq!(plan.directories, 0);
+        assert_eq!(plan.total_bytes, 3000);
+        assert!(plan.fits());
+        assert!(plan.is_clean());
+    }
+
+    /// Every root keeps its own name at the destination, side by side — the
+    /// same shape `HostSelection`'s own tests already prove, exercised here
+    /// through the command path a batch copy job actually runs.
+    #[test]
+    fn a_batch_copy_lands_everything_from_every_root() {
+        let image = Image::new("batch-copy", 1760);
+        let picks = image.dir.join("picks");
+        let game = picks.join("Game");
+        std::fs::create_dir_all(&game).unwrap();
+        std::fs::write(game.join("Loader"), b"loader").unwrap();
+        let readme = picks.join("Readme.txt");
+        std::fs::write(&readme, b"readme").unwrap();
+
+        let selection = HostSelection::new(vec![game.clone(), readme.clone()]);
+        let (report, backup) = run_copy_in_folder_with(
+            &image.path,
+            0,
+            0,
+            &selection,
+            OverwritePolicy::Skip,
+            OnCancel::Abandon,
+            &NoProgress,
+        )
+        .unwrap();
+
+        assert!(report.is_complete(), "{report:?}");
+        assert_eq!(report.files_copied, 2);
+        assert!(backup.is_some());
+
+        let entries = image.listing();
+        assert_eq!(entries.len(), 2, "Game and Readme.txt land side by side");
+        assert!(entries.iter().any(|e| e.name == "Game" && e.is_dir));
+        assert!(entries.iter().any(|e| e.name == "Readme.txt" && !e.is_dir));
+    }
+
+    /// §54, and the rule ART has been bitten by twice already: a cancelled
+    /// batch commits nothing, not a random prefix of it. `OnCancel::Abandon`
+    /// is what this proves — an `Err` alone would not be enough, so the
+    /// assertion that matters is the image bytes matching exactly.
+    #[test]
+    fn a_cancelled_batch_leaves_the_image_byte_for_byte_unchanged() {
+        struct StopAfter(std::sync::atomic::AtomicU64, u64);
+        impl ProgressSink for StopAfter {
+            fn report(&self, done: u64, _total: Option<u64>, _message: &str) {
+                self.0.store(done, std::sync::atomic::Ordering::SeqCst);
+            }
+            fn is_cancelled(&self) -> bool {
+                self.0.load(std::sync::atomic::Ordering::SeqCst) >= self.1
+            }
+        }
+
+        let image = Image::new("batch-cancel", 1760);
+        let before = image.bytes();
+
+        let picks = image.dir.join("picks");
+        let a = picks.join("A");
+        std::fs::create_dir_all(&a).unwrap();
+        for index in 0..5 {
+            std::fs::write(a.join(format!("F{index}.txt")), b"x").unwrap();
+        }
+        let b = picks.join("B");
+        std::fs::create_dir_all(&b).unwrap();
+        for index in 0..5 {
+            std::fs::write(b.join(format!("F{index}.txt")), b"x").unwrap();
+        }
+
+        let selection = HostSelection::new(vec![a, b]);
+        let sink = StopAfter(std::sync::atomic::AtomicU64::new(0), 3);
+
+        let err = run_copy_in_folder_with(
+            &image.path,
+            0,
+            0,
+            &selection,
+            OverwritePolicy::Skip,
+            OnCancel::Abandon,
+            &sink,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, CoreError::Cancelled), "{err}");
+        assert_eq!(
+            image.bytes(),
+            before,
+            "a cancelled batch must commit nothing, not a partial prefix of it"
+        );
+        assert!(image.listing().is_empty(), "…and nothing landed either");
+    }
+
+    /// The delete-side precedent to `a_batch_copy_backs_the_image_up_once_not_once_per_file`:
+    /// five deletes inside one batch must cost one backup, not five.
+    #[test]
+    fn a_batch_delete_removes_everything_it_named_and_backs_up_once() {
+        let image = Image::new("batch-delete-ok", 1760);
+        for index in 0..5 {
+            with_writer(&image.path, 0, |writer| {
+                writer.add_file(0, &format!("F{index}.txt"), b"x", Default::default())
+            })
+            .unwrap();
+        }
+        assert_eq!(image.listing().len(), 5);
+
+        let names: Vec<String> = (0..5).map(|i| format!("F{i}.txt")).collect();
+        let result = delete_many(&image.path, 0, None, &names).unwrap();
+
+        assert_eq!(result.deleted, 5);
+        assert!(result.verified);
+        assert!(result.backup.is_some());
+        assert!(image.listing().is_empty());
+
+        let backups = std::fs::read_dir(&image.dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().contains("disk.adf"))
+            .count();
+        assert!(
+            backups <= 4,
+            "five deletes should not produce a backup each; found {backups} files"
+        );
+    }
+
+    /// §92, atomically: one entry in the batch cannot be deleted (it still
+    /// has something in it) and that refuses the whole batch before anything
+    /// is touched — not "delete the other two and report the third failed".
+    #[test]
+    fn a_batch_delete_that_cannot_complete_deletes_nothing() {
+        let image = Image::new("batch-delete-refuse", 1760);
+        with_writer(&image.path, 0, |writer| writer.make_dir(0, "Empty")).unwrap();
+        with_writer(&image.path, 0, |writer| writer.make_dir(0, "NotEmpty")).unwrap();
+        let not_empty = image
+            .listing()
+            .into_iter()
+            .find(|e| e.name == "NotEmpty")
+            .unwrap();
+        with_writer(&image.path, 0, |writer| {
+            writer.make_dir(not_empty.block, "Inside")
+        })
+        .unwrap();
+        with_writer(&image.path, 0, |writer| {
+            writer.add_file(0, "Readme.txt", b"hi", Default::default())
+        })
+        .unwrap();
+
+        let before = image.bytes();
+
+        let names = vec![
+            "Empty".to_string(),
+            "NotEmpty".to_string(),
+            "Readme.txt".to_string(),
+        ];
+        let err = delete_many(&image.path, 0, None, &names).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("NotEmpty"), "{message}");
+
+        assert_eq!(image.bytes(), before, "nothing in the batch was deleted");
+        assert_eq!(
+            image.listing().len(),
+            3,
+            "Empty, NotEmpty and Readme.txt are all still there"
+        );
+    }
+
+    /// The same atomic refusal, but for a name that is simply not there any
+    /// more (picked, then removed by something else before the batch ran) —
+    /// a different reason to refuse, held to the same all-or-nothing rule.
+    #[test]
+    fn a_batch_delete_refuses_a_missing_name_without_touching_the_rest() {
+        let image = Image::new("batch-delete-missing", 1760);
+        with_writer(&image.path, 0, |writer| {
+            writer.add_file(0, "Real.txt", b"x", Default::default())
+        })
+        .unwrap();
+        let before = image.bytes();
+
+        let names = vec!["Real.txt".to_string(), "Ghost.txt".to_string()];
+        let err = delete_many(&image.path, 0, None, &names).unwrap_err();
+        assert!(err.to_string().contains("Ghost.txt"), "{err}");
+
+        assert_eq!(image.bytes(), before);
+        assert_eq!(image.listing().len(), 1, "Real.txt is still there");
     }
 
     #[test]
