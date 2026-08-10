@@ -12,6 +12,27 @@ import {
   type WhdloadResult,
 } from "@/lib/lha";
 
+/**
+ * The catalogue key for a confidence badge — for everything except
+ * "UNKNOWN", which the caller never renders a badge for at all (see the
+ * `whdload.confidence !== "UNKNOWN"` guard around the section below).
+ *
+ * The catalogue only holds `high`/`medium`/`low`; mapping through this
+ * `switch` rather than lower-casing `confidence` into a template literal
+ * means a fourth `Confidence` variant is a compile error here (no `default`
+ * case, `noFallthroughCasesInSwitch`), instead of a silent missing key.
+ */
+function confidenceLevelKey(confidence: "HIGH" | "MEDIUM" | "LOW"): string {
+  switch (confidence) {
+    case "HIGH":
+      return "lha.whdload.confidenceLevel.high";
+    case "MEDIUM":
+      return "lha.whdload.confidenceLevel.medium";
+    case "LOW":
+      return "lha.whdload.confidenceLevel.low";
+  }
+}
+
 export function LhaBrowser() {
   const { t } = useTranslation();
   const location = useLocation();
@@ -104,9 +125,7 @@ export function LhaBrowser() {
               }`}
             >
               {t("lha.whdload.confidenceBadge", {
-                level: t(
-                  `lha.whdload.confidenceLevel.${whdload.confidence.toLowerCase()}`
-                ),
+                level: t(confidenceLevelKey(whdload.confidence)),
               })}
             </span>
           </div>
