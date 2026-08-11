@@ -23,6 +23,25 @@ what fixed it (with the test that proves it).
 
 ## Open
 
+**ART-063** 🟠 **ART cannot write a disk an Amiga will boot from**
+`core/adf/create.rs:54-58` · The `bootable` flag writes `0x4E 0x75` — a bare
+`RTS` — at offset 12 and nothing else. The Kickstart ROM validates the boot
+block's `DOS` signature and checksum, jumps to offset 12, and expects the code
+there to return a pointer to the DOS resident structure in `d0`. An `RTS`
+returns immediately with whatever `d0` held, so nothing is loaded and the
+machine sits at the insert-disk hand. Confirmed on real hardware on
+2026-08-11: an Amiga 1200 and an Amiga 500+ both refused to boot
+`test/task-10-boot-test.adf`, while both **mounted the volume and listed it
+correctly** — so this is a boot-code gap, not a filesystem defect.
+
+The fix is roughly twenty bytes of 68000: open `dos.library` through
+`expansion.library`, return its base in `d0`. **Write our own**; the stock
+Commodore boot block is copyrighted code and ART ships no Amiga content, ever.
+An A500+ (Kickstart 2.04) and an A1200 (3.0/3.1) accept the same sequence, so
+one implementation covers both. `info.bootable` currently reports `true` for a
+disk that cannot boot, which is a claim ART should not be making (§10, §89) —
+until this is fixed, that flag means "has a valid boot block", not "boots".
+
 **ART-062** 🔵 **No language has been checked on screen**
 `src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
 was verified by `pnpm test`'s key-parity check and by reading the JSON — never
