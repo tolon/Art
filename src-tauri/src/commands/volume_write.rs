@@ -1339,6 +1339,23 @@ pub fn volume_copy_out(
     Ok(id)
 }
 
+/// The one refusal `volume_copy_between` makes before anything is staged:
+/// both sides naming the same image file.
+///
+/// Its own function so the guard has a direct test. The `#[tauri::command]`
+/// wrapper itself needs a live `AppHandle`, which needs a real Wry runtime —
+/// nothing in this codebase constructs one in a test, for this command or any
+/// other `spawn_job` command — so this is what "confirm the command still
+/// refuses same-image-both-sides" can actually exercise.
+fn refuse_same_image(from: &Path, to: &Path) -> CoreResult<()> {
+    if from == to {
+        return Err(CoreError::InvalidInput(
+            "that is the same image on both sides. Use Move or Rename instead.".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Copy a folder from one image into another (§4.3).
 ///
 /// Staged through a temp folder rather than streamed: the images can be
@@ -1362,12 +1379,7 @@ pub fn volume_copy_between(
     let target_image = PathBuf::from(to_path.trim());
     let policy = options.unwrap_or_default().overwrite.unwrap_or_default();
 
-    if source_image == target_image {
-        return Err(CoreError::InvalidInput(
-            "that is the same image on both sides. Use Move or Rename instead.".into(),
-        )
-        .into());
-    }
+    refuse_same_image(&source_image, &target_image)?;
 
     // Staged trees live in the app cache directory, so a copy that is
     // interrupted leaves its temp folder somewhere the OS and the user both
@@ -1687,6 +1699,24 @@ mod tests {
                 geometry.root_block,
             )
             .unwrap()
+        }
+
+        fn listing_of(&self, dir_block: u32) -> Vec<crate::core::volume::write::dir::DirEntry> {
+            let entry = pick(&self.path, 0).unwrap();
+            let (device, geometry) = mount(&self.path, &entry).unwrap();
+            let set = BlockSet::new(geometry.block_size);
+            crate::core::volume::write::dir::entries_in(&device, &set, &geometry, dir_block)
+                .unwrap()
+        }
+
+        /// A file's bytes read back out of the volume — what proves a copy
+        /// landed, rather than trusting the report that says it did.
+        fn contents(&self, header_block: u32) -> Vec<u8> {
+            let entry = pick(&self.path, 0).unwrap();
+            let (device, geometry) = mount(&self.path, &entry).unwrap();
+            let set = BlockSet::new(geometry.block_size);
+            crate::core::volume::write::file::read_file(&device, &set, &geometry, header_block)
+                .unwrap()
         }
     }
 
@@ -2441,5 +2471,97 @@ mod tests {
         let image = Image::new("no-volume", 1760);
         assert!(volume_write_capability(image.text(), 7).is_err());
         assert!(with_writer(&image.path, 7, |writer| writer.make_dir(0, "X")).is_err());
+    }
+
+    // ---- Task 8: `volume_copy_between`'s own pipeline, not just staging ----
+
+    /// The gap the survey found: `a_tree_copies_from_one_image_to_another`
+    /// (in `core::volume::write::copy`) already proves the bare staging
+    /// primitives — `StagedTree::stage` and `copy_into_volume` against a raw
+    /// device — work. Nothing exercised the pipeline `volume_copy_between`'s
+    /// job closure actually runs on the insert side: `pick`/`mount` to find
+    /// the destination volume, then [`run_copy_in_staged`], which is the same
+    /// journal-check, whole-image-validate, guarded-backup path every other
+    /// write in this module goes through.
+    ///
+    /// Two writers are never open at once — staging the source into a temp
+    /// folder first is what lets the insert half be an ordinary `with_writer`
+    /// session, rather than holding both images' mutable borrows open across
+    /// a verification step in between. The test mirrors that shape rather
+    /// than reaching for a single shared writer.
+    #[test]
+    fn a_tree_copies_between_two_images_through_the_command_pipeline() {
+        let from = Image::new("between-from", 1760);
+        let to = Image::new("between-to", 1760);
+
+        // Build the tree directly on the source volume — this is the
+        // volume-to-volume path, not F5's host-to-volume one, which already
+        // has its own coverage above.
+        with_writer(&from.path, 0, |writer| writer.make_dir(0, "Tools")).unwrap();
+        let tools = from
+            .listing()
+            .into_iter()
+            .find(|e| e.name == "Tools")
+            .unwrap();
+        with_writer(&from.path, 0, |writer| {
+            writer.add_file(tools.block, "Editor", b"editor bytes", Default::default())
+        })
+        .unwrap();
+        with_writer(&from.path, 0, |writer| {
+            writer.add_file(0, "Readme", b"read me", Default::default())
+        })
+        .unwrap();
+        let before_source = from.bytes();
+
+        let cache = scratch("between-cache");
+        let (report, backup) = {
+            let entry = pick(&from.path, 0).unwrap();
+            let (device, geometry) = mount(&from.path, &entry).unwrap();
+            let staged = StagedTree::stage(&device, &geometry, 0, &cache, &NoProgress).unwrap();
+
+            // The insert half `volume_copy_between` actually calls — not a
+            // second direct call into `copy_into_volume`, which is what
+            // `copy.rs`'s own test already covers.
+            run_copy_in_staged(&to.path, 0, 0, &staged, OverwritePolicy::Skip, &NoProgress).unwrap()
+        };
+
+        assert_eq!(report.files_copied, 2);
+        assert_eq!(report.files_verified, 2);
+        assert_eq!(report.directories_created, 1);
+        assert!(
+            backup.is_some(),
+            "the destination is a floppy, so it takes the whole-file path and is backed up \
+             before being replaced"
+        );
+
+        let dest_root = to.listing();
+        let readme = dest_root.iter().find(|e| e.name == "Readme").unwrap();
+        assert_eq!(to.contents(readme.block), b"read me");
+
+        let dest_tools = dest_root.iter().find(|e| e.name == "Tools").unwrap();
+        assert!(dest_tools.is_dir);
+        let inside = to.listing_of(dest_tools.block);
+        assert_eq!(inside.len(), 1);
+        assert_eq!(inside[0].name, "Editor");
+        assert_eq!(to.contents(inside[0].block), b"editor bytes");
+
+        assert_eq!(
+            from.bytes(),
+            before_source,
+            "the source image must be byte-for-byte unchanged — the copy out of it is \
+             read-only staging into a temp folder, never a write back to the source"
+        );
+
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    /// [`refuse_same_image`] is the guard `volume_copy_between` calls before
+    /// staging anything. See its doc comment for why this is what stands in
+    /// for calling the `#[tauri::command]` wrapper directly.
+    #[test]
+    fn a_copy_between_the_same_image_on_both_sides_is_refused() {
+        let image = Image::new("between-same-image", 1760);
+        let err = refuse_same_image(&image.path, &image.path).unwrap_err();
+        assert!(err.to_string().contains("same image"), "{err}");
     }
 }
