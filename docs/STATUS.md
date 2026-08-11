@@ -18,16 +18,17 @@ Update it at the end of any session that changes what works.
 
 | | |
 |---|---|
-| **Last updated** | 2026-08-10 |
+| **Last updated** | 2026-08-11 |
 | **Version** | 0.1.0 (unreleased) |
-| **Current stage** | Phase 0b — dead code removed, interface speaks Turkish |
+| **Current stage** | Phase 1a — the Commander (complete) |
 | **Build** | PASS |
-| **Tests** | 683 Rust passed, 0 failed; 10 frontend passed, 0 failed |
+| **Tests** | 731 Rust passed, 0 failed; 107 frontend passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
 | **amitools oracle** | 48 checks, both directions |
-| **i18n** | `en.json` and `tr.json`, 814 leaf keys each, parity enforced by `pnpm test` |
+| **i18n** | `en.json` and `tr.json`, 863 leaf keys each, parity enforced by `pnpm test` |
 | **Release bundle** | built and verified in an earlier session; not rebuilt this pass |
+| **Real hardware** | Reached for the first time this phase — see Phase 1a below. No screen has been: ART-062 (language) is still open, and the Total Commander restyle this phase shipped has never been seen running by anyone. |
 
 Reproduce the numbers above:
 
@@ -283,6 +284,103 @@ opening the app ([ART-062](ISSUES.md#open)); several Turkish strings are
 substantially longer than their English originals and sit in tight controls,
 listed in that issue so the check is possible.
 
+### ✅ Phase 1a — The Commander (complete, 2026-08-11)
+
+Planned as eight tasks, ran to 35 commits. The Files screen stopped being a
+plain two-pane copier and became the Norton/Total Commander the spec always
+called it: real selection, batch operations, sorting, a filter, and — outside
+the plan entirely — the first fix ART has ever needed to make a disk actually
+*boot*.
+
+**Selection and focus (Tasks 1–2).** Pane focus is now a real value
+(`focused: Side`), not derived from which pane happens to hold a selection,
+and Tab moves it. Selection became `Set<string>` per pane — Shift-click a
+range, Ctrl-click to toggle, Insert to mark-and-advance, Ctrl+A to select
+all — behind a pure, tested reducer (`src/lib/selection.ts`). This is also
+where frontend testing entered the project for real: Task 1 wrote the first
+`.test.tsx` (Vitest + jsdom, scoped to that extension) *before* touching a
+1600-line component with no prior coverage, specifically because focus and
+selection together touch nearly every handler in it.
+
+**Batch operations (Tasks 3–5).** `HostSelection` — a `CopySource` spanning
+several host roots, each keeping its own name at the destination — let batch
+copy and delete reuse the existing tested copy engine rather than growing a
+second one. `volume_plan_copy_many` / `volume_copy_in_many` /
+`volume_delete_many` give local→volume and delete their all-or-nothing
+guarantee: a cancelled batch copy commits nothing, a batch delete that can't
+fully succeed (a name that's gone, a directory that isn't empty) deletes
+nothing. Several `.lha` archives dropped on a disk at once each get their own
+drawer, staged into one write, so a cancelled multi-archive install can't
+leave two games half-installed. **Volume→volume multi-select and
+volume→local multi-select did not get the same treatment** — see ART-064 and
+ART-065 below; the roadmap named only local→volume and single-file
+volume→volume as in scope, and Task 8 confirmed no primitive exists to build
+the other two batched directions on top of.
+
+**One listing order, sorting, the filter, the restyle (Tasks 6–7, plus 6b and
+Attr, added).** There had been three different listing orders — local
+folders-first, ADF name-only, HDF not sorted at all — now one floor
+(folders first, case-insensitive name) everywhere, with a client-side
+per-pane column sort on top and `PanelEntry.date` carried end to end so date
+is sortable at all. A Total Commander-style filename mask (`*`/`?`, whole-name,
+case-insensitive) narrows what a pane shows and clears the pane's selection
+when it changes, so a selection never silently keeps entries the mask just
+hid. Outside the original eight tasks: the Files screen was restyled as
+Total Commander from two reference screenshots, with row icons, file-type
+colour and an Attr column backed by the protection-bit reader that already
+existed for the attributes dialog.
+
+**ART-063, out of plan: ART could not write a disk an Amiga would boot.**
+Found while building the hardware-verification artifact this phase set out
+to produce anyway. The `bootable` flag wrote a bare `RTS` at offset 12 —
+every test, and the amitools oracle, only ever asked whether the boot block
+was *well-formed*, and an `RTS` is. Only Kickstart can answer whether the
+code runs. `core/adf/bootcode.rs` now assembles real boot code from the
+documented contract (read `ExecBase`, `FindResident("dos.library")`, return
+`rt_Init` in `A0` with `D0 = 0`) — ART's own implementation from the published
+LVO table, not Commodore's copyrighted boot block. **Fixed and verified by
+actually booting `test/art-bootable-test.adf`** — see below.
+
+**The headline: real hardware, reached for the first time.** Two rungs
+existed before this phase — `cargo test` (ART agrees with itself) and the
+amitools oracle (ART agrees with an independent implementation) — and both
+can be wrong together, which is exactly how ART-032 … ART-035 shipped behind
+a green suite. This phase reached the third: `test/task-10-boot-test.adf` was
+mounted, its volume `Work` listed, and `Readme` inside it read back
+`hello from ART`; `test/art-bootable-test.adf` — the same disk with real boot
+code — booted to a CLI prompt. Both under **licensed Kickstart and Workbench,
+Amiga Forever under WinUAE, in A1200 and A500+ configurations — not bare
+metal**, and `test/README.md` says so plainly rather than letting the A1200/
+A500+ machine names imply real hardware. A `DIR DF0:` on the non-bootable
+image also read AmigaDOS's own free-space count off ART's bitmap for the
+first time (878 KB free of 880 for a 14-byte file, correct) — nothing set out
+to test that; it came free with the screenshot.
+
+**Debt opened this phase, not fixed:** ART-064 (volume→volume multi-select
+refuses), ART-065 (volume→local multi-select is concurrent per-entry jobs,
+not one operation), ART-066 (`archives_plan_install` unpacks synchronously on
+the command thread instead of a job), ART-067 (a batch archive install can't
+be stopped mid-archive), ART-068 (the filter's empty-vs-no-match message is
+inferred from two counts rather than carried as a flag). None are data-unsafe;
+all are named in [ISSUES.md](ISSUES.md#open) with what fixing each would take.
+
+**What Task 8 added: the one test the phase owed.** Volume-to-volume copy
+(`volume_copy_between`) shipped in Stage W and was wired to F5, but no test
+ever exercised the command's own pipeline — only the bare staging primitives
+in `core/volume/write/copy.rs`. `commands/volume_write.rs` now has
+`a_tree_copies_between_two_images_through_the_command_pipeline`, which stages
+a source volume's tree into a temp folder and runs it through
+`run_copy_in_staged` — the same journal-check, whole-image-validate,
+guarded-backup pipeline every write command in that file goes through — and
+asserts the destination has the tree while the source is byte-for-byte
+unchanged. Rust tests: 729 → 731.
+
+**Nothing in this phase has been checked on a running screen.** Not the
+restyle, not the Attr column, not the filter box, not multi-select — all of
+it was written and tested (Rust + Vitest), never opened in `pnpm tauri dev`.
+ART-062 (no language checked on screen) predates this phase and is still
+open; it now also covers a phase's worth of new UI nobody has looked at.
+
 ### ⏳ Stage 5 — Spec addenda (next)
 
 From `ART-SPEC-ADDENDA-COMPLETE.md` in the project root. **Stage 4 has landed, so
@@ -408,15 +506,27 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
    and writer being wrong in the same way.
 2. Read this file, then [ISSUES.md](ISSUES.md#open) — open defects are
    `ART-043` (the whole-file strategy ignores a partition's offset),
-   `ART-046` … `ART-050` (recorded findings, none fixed yet), and
-   `ART-060` … `ART-062` (Phase 0b's own: Rust error strings still English,
-   `formatAge`'s English pluralisation, no language checked on screen); the
-   next new defect starts at `ART-063`.
-3. **The hardware verification rung is still outstanding.** Nothing in Phase
-   0b touched it either — see "Phase 0a" above for what a pass looks like and
-   where the test artifact is.
+   `ART-046` … `ART-050` (recorded findings, none fixed yet), `ART-060` …
+   `ART-062` (Phase 0b's own: Rust error strings still English, `formatAge`'s
+   English pluralisation, no language checked on screen), and `ART-064` …
+   `ART-068` (Phase 1a's own: volume→volume and volume→local multi-select
+   don't share the other two directions' atomicity, `archives_plan_install`
+   blocks the command thread, a batch install's Stop is unresponsive
+   mid-archive, the filter's empty-vs-no-match message is inferred rather
+   than carried); the next new defect starts at `ART-069`.
+3. **The hardware verification rung has been reached, for the two artifacts
+   built to test it.** `test/task-10-boot-test.adf` mounted, listed and read
+   back correctly, and `test/art-bootable-test.adf` booted — both under
+   licensed Kickstart/Workbench (Amiga Forever / WinUAE), not bare metal. That
+   is a different claim from "the running app has been looked at": no screen
+   ART shipped this phase or last has actually been opened by a person —
+   still `ART-062`, now covering Phase 1a's UI too (the Total Commander
+   restyle, the Attr column, the filter box, multi-select).
 4. **Stage R and Stage W are both done.** Aminet Stage A is complete too,
-   including the update view and install to HDF.
+   including the update view and install to HDF. **Phase 1a is done too** —
+   the two-pane manager has real focus, multi-select, batch copy/delete,
+   sorting, a filename mask, and now boot code that works; see "Phase 1a"
+   above for what is not (volume→volume batching, ART-064/065).
 5. The named work left in the briefs:
    - **§45.5 AI Workflow Layer.** Designed
      ([design-ai-layer.md](design-ai-layer.md)), not built. Its prerequisites
@@ -450,6 +560,8 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-11 | Task 8 closes Phase 1a: `volume_copy_between` covered end to end through its own command pipeline, not just the staging primitives beneath it (source proved byte-for-byte unchanged). Docs updated for the whole phase; five debt items opened (ART-064 … ART-068), none data-unsafe | 731 Rust / 107 frontend |
+| 2026-08-11 | Phase 1a: real pane focus + Tab, `Set<string>` multi-select (Shift/Ctrl/Insert/Ctrl+A), batch copy-in/delete/multi-archive-install as one job each, one listing order + per-pane sort + filename mask, Files restyled as Total Commander with an Attr column. Outside the plan: ART-063 fixed — ART writes real boot code, verified by booting a real image; first real-hardware verification of any kind, under WinUAE/Amiga Forever (A1200, A500+), not bare metal. First frontend test infrastructure (Vitest+jsdom) landed in Task 1 | 729 Rust / 107 frontend |
 | 2026-08-10 | Phase 0b: nine dead code paths removed (ART-047/048/051 closed); `tr.json` ships beside `en.json` at 814 keys each, every screen/component/`src/lib` helper translated, parity enforced by a new frontend test suite (vitest, 0 → 10 tests). Rust error strings and `formatAge`'s English pluralisation remain untranslated, and no language has been checked on screen — recorded as ART-060/061/062 | 683 Rust / 10 frontend |
 | 2026-08-10 | Phase 0a review fixes: a cancelled install no longer commits half a package or reports success (ART-052); `all_bytes()` refuses a volume too large to hold in memory (ART-053); the install pre-flight guard is now covered by a test that fails without it (ART-055); the WHDLoad refusal panel stopped contradicting itself and its remedy comes from Rust (ART-054); sidebar clipping (ART-056) and two more disabled-looking controls (ART-057) | 687 |
 | 2026-08-10 | Phase 0a: ADF Studio's root-block bug (ART-037/038) and shell scroll/scale/disabled-controls (ART-039/040) fixed live; install pre-flight refusal restored (ART-044); a re-read race in `MutationOutcome` closed (ART-045); `core/adf/mutate.rs` retired onto `core/volume/write`; validation measures each image at its own geometry and gates every write (ART-041/042) | 684 |

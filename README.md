@@ -12,13 +12,23 @@ drag-and-drop-driven application.
 
 The application builds and runs on Windows 10/11 x64. Working today: DD/HD
 floppy images and hard-disk (RDB/HDF) partitions — read, write, create and
-validate through one volume driver, with a dual-pane commander (browse,
-copy in/out, rename, delete, mkdir, attributes) over FFS/OFS volumes; LHA
-(browse, safe extraction, WHDLoad detection); Kickstart ROM identification;
-Gotek/FlashFloppy; PiStorm/Emu68; WinUAE launching; collection scanning; a
-background job queue with progress/cancel; an operation log; Beginner/Power
-User modes; and the drag-and-drop Workflow Engine behind "what can I do with
-this?".
+validate through one volume driver, including boot code that starts a real
+Amiga (verified by booting a disk under a licensed Kickstart/Workbench, not
+bare metal) — with a Total Commander-style dual pane (browse, multi-select,
+batch copy in/out/delete, sort, filter by filename mask, rename, mkdir,
+attributes) over FFS/OFS volumes; LHA (browse, safe extraction, WHDLoad
+detection, several archives installed to a disk at once); Kickstart ROM
+identification; Gotek/FlashFloppy; PiStorm/Emu68; WinUAE launching;
+collection scanning; a background job queue with progress/cancel; an
+operation log; Beginner/Power User modes; and the drag-and-drop Workflow
+Engine behind "what can I do with this?".
+
+Two directions a multi-selection cannot yet move in: image-to-image (copy
+one at a time instead) and, when copying a selection out of an image, as one
+atomic operation rather than several running together — see
+[docs/ISSUES.md](docs/ISSUES.md) (ART-064, ART-065). The restyled Files
+screen is covered by automated tests only; nobody has opened it in a running
+window yet.
 
 Data safety is enforced in `core/safety`: every write is atomic, and files are
 backed up to `.art-backup/` before being replaced (or, for images too large to
