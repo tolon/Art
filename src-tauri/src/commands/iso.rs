@@ -27,12 +27,14 @@ use super::jobs::{spawn_job, JobRegistry};
 use super::oplog::{user_operation, write_result};
 use super::panel::PanelEntry;
 use super::volume_write::{
-    run_copy_in_folder_with, CopyOptions, OnCancel, VolumeWriteResult, VOLUME_WRITE_EVENT,
+    folder_destination, run_copy_in_folder_with, CopyOptions, OnCancel, VolumeWriteResult,
+    VOLUME_WRITE_EVENT,
 };
 use crate::core::error::CoreResult;
 use crate::core::iso::{IsoImage, IsoSource, SectorLayout};
-use crate::core::jobs::JobId;
+use crate::core::jobs::{JobId, ProgressSink};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
+use crate::core::volume::write::copy::{ExtractReport, OverwritePolicy};
 use crate::error::AppResult;
 
 /// Open a disc, working out its sector layout from where `CD001` sits when
@@ -187,28 +189,62 @@ pub fn iso_extract_file(
     result
 }
 
+/// The whole of what [`iso_extract`]'s job runs: resolve the destination
+/// folder from `dest_dir` + `name`, then extract the disc's subtree into it.
+///
+/// Its own function, called from the job closure rather than reimplemented in
+/// a test — the same shape [`super::volume_write::copy_out_folder`] has, and
+/// for the same reason: a test that rebuilt this sequence for itself could not
+/// catch the destination being resolved the wrong way, and the way it is
+/// resolved is a security boundary ([`folder_destination`]).
+fn copy_out_tree(
+    iso_path: &std::path::Path,
+    extent: u32,
+    length: u32,
+    dest_dir: &std::path::Path,
+    name: &str,
+    policy: OverwritePolicy,
+    progress: &dyn ProgressSink,
+) -> CoreResult<ExtractReport> {
+    // Before the disc is even opened: a name that cannot be written is a
+    // refusal, not work done and then thrown away.
+    let destination = folder_destination(dest_dir, name)?;
+
+    let image = IsoImage::open(iso_path)?;
+    image.extract_tree(extent, length, &destination, policy, progress)
+}
+
 /// F5 out of a disc, to a local folder — a job because a disc's directory
 /// tree can be thousands of files (§54, §55).
 ///
-/// `extent`/`bytes` name a directory the same way [`iso_list`] does; its
-/// *contents* land inside `dest`, not a folder named after it, the same
-/// shape `volume_copy_out` gives for an Amiga volume's `dir_block`. Reuses
-/// [`VolumeWriteResult::CopyOut`] and [`VOLUME_WRITE_EVENT`] rather than
-/// inventing a second event: the frontend's one `onVolumeWriteResult`
-/// listener already knows how to read an `ExtractReport`.
+/// `extent`/`bytes` name a directory the same way [`iso_list`] does, and
+/// `dest_dir` + `name` are joined *here*, by [`folder_destination`], never by
+/// the caller — `name` came off a disc ART only reads, and a frontend that
+/// concatenated it into the destination string first could hand this command a
+/// traversal as one opaque path. Reuses [`VolumeWriteResult::CopyOut`] and
+/// [`VOLUME_WRITE_EVENT`] rather than inventing a second event: the frontend's
+/// one `onVolumeWriteResult` listener already knows how to read an
+/// `ExtractReport`.
+///
+/// `options.overwrite` is the same collision setting an ADF copied out obeys;
+/// a disc used to ignore it and always skip.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn iso_extract(
     path: String,
     extent: u32,
     bytes: u64,
-    dest: String,
+    dest_dir: String,
+    name: String,
+    options: Option<CopyOptions>,
     app: AppHandle,
     registry: State<'_, Arc<JobRegistry>>,
     oplog: State<'_, JsonlOperationLog>,
 ) -> AppResult<JobId> {
     let iso_path = PathBuf::from(path.trim());
-    let destination = PathBuf::from(dest.trim());
+    let destination = PathBuf::from(dest_dir.trim());
     let length = bytes.min(u32::MAX as u64) as u32;
+    let policy = options.unwrap_or_default().overwrite.unwrap_or_default();
 
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
@@ -216,14 +252,19 @@ pub fn iso_extract(
     let title = format!("Copying out of {}", iso_path.display());
 
     let id = spawn_job(&app, registry, &title, move |job_id, progress| {
-        let outcome = (|| -> CoreResult<_> {
-            let image = IsoImage::open(&iso_path)?;
-            image.extract_tree(extent, length, &destination, progress)
-        })();
+        let outcome = copy_out_tree(
+            &iso_path,
+            extent,
+            length,
+            &destination,
+            &name,
+            policy,
+            progress,
+        );
 
         let record = user_operation("Copy folder out of a disc")
             .source(iso_path.display().to_string())
-            .destination(destination.display().to_string());
+            .destination(format!("{}/{name}", destination.display()));
         let record = match &outcome {
             Ok(report) => record
                 .detail("Files", report.files_written.to_string())
@@ -244,19 +285,53 @@ pub fn iso_extract(
     Ok(id)
 }
 
+/// The [`IsoSource`] one F5 out of a disc copies: the subtree at `extent`
+/// when the user picked a directory, and *exactly that file* when they picked
+/// a file.
+///
+/// The second case is why this is a function rather than one call. A file has
+/// no subtree, so the only source that could be built for it used to be the
+/// directory it happened to be sitting in — on an install CD, the whole disc
+/// copied across while the status line named one file.
+fn disc_source(
+    image: IsoImage,
+    extent: u32,
+    bytes: u64,
+    name: &str,
+    is_dir: bool,
+    date: Option<i64>,
+) -> CoreResult<IsoSource> {
+    if is_dir {
+        // A directory's length is a u32 on disc; one claiming more than
+        // u32::MAX cannot exist, the same clamp `walk_subtree` uses.
+        IsoSource::new(image, extent, bytes.min(u32::MAX as u64) as u32)
+    } else {
+        Ok(IsoSource::single_file(image, name, extent, bytes, date))
+    }
+}
+
 /// F5 out of a disc, the other way — into an Amiga volume.
 ///
 /// This is the whole point of the feature (Task 3 brief): an AmigaOS install
 /// CD is only useful once its contents reach an HDF. [`IsoSource`] answers
-/// `CopySource`'s three questions for the subtree at `extent`/`bytes`, and
-/// [`run_copy_in_folder_with`] — the exact function `volume_copy_in` calls —
-/// does the rest. No second copy engine; a disc is just another source.
+/// `CopySource`'s three questions for what [`disc_source`] picked out of the
+/// disc, and [`run_copy_in_folder_with`] — the exact function `volume_copy_in`
+/// calls — does the rest. No second copy engine; a disc is just another
+/// source.
+///
+/// `name`/`is_dir`/`date` come from the listing row the user picked
+/// ([`iso_list`]), the same three fields `iso_extract_file` takes for the
+/// local-folder direction: without them a single selected file could only be
+/// copied as the directory around it.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub fn iso_copy_to_volume(
     iso_path: String,
     extent: u32,
     bytes: u64,
+    name: String,
+    is_dir: bool,
+    date: Option<i64>,
     path: String,
     volume_index: usize,
     dir_block: Option<u32>,
@@ -267,7 +342,6 @@ pub fn iso_copy_to_volume(
 ) -> AppResult<JobId> {
     let source_iso = PathBuf::from(iso_path.trim());
     let image = PathBuf::from(path.trim());
-    let length = bytes.min(u32::MAX as u64) as u32;
     let options = options.unwrap_or_default();
     let policy = options.overwrite.unwrap_or_default();
     let parent = dir_block.unwrap_or(0);
@@ -280,7 +354,7 @@ pub fn iso_copy_to_volume(
     let id = spawn_job(&app, registry, &title, move |job_id, progress| {
         let outcome = (|| -> CoreResult<_> {
             let disc = IsoImage::open(&source_iso)?;
-            let source = IsoSource::new(disc, extent, length)?;
+            let source = disc_source(disc, extent, bytes, &name, is_dir, date)?;
             // Same choice `volume_copy_in` makes for a plain host folder: a
             // cancel keeps whatever already landed rather than abandoning it.
             run_copy_in_folder_with(
@@ -295,7 +369,7 @@ pub fn iso_copy_to_volume(
         })();
 
         let record = user_operation("Copy a disc into volume")
-            .source(source_iso.display().to_string())
+            .source(format!("{}:{name}", source_iso.display()))
             .destination(format!("{}:{volume_index}", image.display()));
         let record = match &outcome {
             Ok((report, _)) => record
@@ -467,6 +541,131 @@ mod tests {
 
         let err = extract_file(&p, u32::MAX, 2048, "x.txt", &out, None).unwrap_err();
         assert_eq!(err.code(), "ART-FORMAT-MALFORMED");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// The destination a copy-out lands in is built here, from the folder the
+    /// user picked and the entry's own name — never handed in pre-joined. The
+    /// frontend used to concatenate the two into one string, so a name off a
+    /// disc could carry the whole path somewhere else with it.
+    #[test]
+    fn copying_a_directory_out_refuses_a_name_that_leaves_the_chosen_folder() {
+        use crate::core::jobs::NoProgress;
+
+        let d = tmp("escape");
+        let p = d.join("disc.iso");
+        std::fs::write(&p, sample_disc()).unwrap();
+        let out = d.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+
+        let info = iso_open(p.to_string_lossy().to_string(), None).unwrap();
+        let err = copy_out_tree(
+            &p,
+            info.root_extent,
+            info.root_length,
+            &out,
+            r"..\..\Startup",
+            OverwritePolicy::Skip,
+            &NoProgress,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code(), "ART-SAFETY-REFUSED", "{err}");
+        assert!(
+            !d.join("Startup").exists() && !out.join("Startup").exists(),
+            "the refusal must happen before anything is created"
+        );
+
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// And the ordinary case: the directory's contents land in a folder of its
+    /// own name inside the folder the user picked.
+    #[test]
+    fn copying_a_directory_out_lands_it_under_the_chosen_folder() {
+        use crate::core::jobs::NoProgress;
+
+        let d = tmp("copy-out");
+        let p = d.join("disc.iso");
+        std::fs::write(&p, sample_disc()).unwrap();
+        let out = d.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+
+        let info = iso_open(p.to_string_lossy().to_string(), None).unwrap();
+        let entries = iso_list(
+            p.to_string_lossy().to_string(),
+            info.root_extent,
+            info.root_length,
+        )
+        .unwrap();
+        let tools = entries.iter().find(|e| e.name == "TOOLS").unwrap();
+
+        let report = copy_out_tree(
+            &p,
+            tools.iso_extent.unwrap(),
+            tools.bytes.min(u32::MAX as u64) as u32,
+            &out,
+            &tools.name,
+            OverwritePolicy::Skip,
+            &NoProgress,
+        )
+        .unwrap();
+
+        assert_eq!(report.files_written, 1, "{report:?}");
+        assert_eq!(
+            std::fs::read(out.join("TOOLS").join("A.LHA")).unwrap(),
+            b"x"
+        );
+
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// One selected *file* copied into a volume carries that file, not the
+    /// directory it was sitting in — an install CD's root is hundreds of
+    /// megabytes, and the status line would have named a single file while all
+    /// of it went across.
+    #[test]
+    fn a_single_selected_file_is_copied_into_a_volume_on_its_own() {
+        let d = tmp("disc-source");
+        let p = d.join("disc.iso");
+        std::fs::write(&p, sample_disc()).unwrap();
+
+        let info = iso_open(p.to_string_lossy().to_string(), None).unwrap();
+        let entries = iso_list(
+            p.to_string_lossy().to_string(),
+            info.root_extent,
+            info.root_length,
+        )
+        .unwrap();
+        let readme = entries.iter().find(|e| e.name == "README.TXT").unwrap();
+
+        let file_source = disc_source(
+            IsoImage::open(&p).unwrap(),
+            readme.iso_extent.unwrap(),
+            readme.bytes,
+            &readme.name,
+            false,
+            readme.date,
+        )
+        .unwrap();
+        let picked = crate::core::volume::write::copy::CopySource::entries(&file_source).unwrap();
+        assert_eq!(picked.len(), 1, "{picked:?}");
+        assert_eq!(picked[0].relative, "README.TXT");
+
+        // The directory case still carries the whole subtree, so the choice is
+        // the entry's kind and nothing else.
+        let whole = disc_source(
+            IsoImage::open(&p).unwrap(),
+            info.root_extent,
+            info.root_length as u64,
+            "",
+            true,
+            None,
+        )
+        .unwrap();
+        let all = crate::core::volume::write::copy::CopySource::entries(&whole).unwrap();
+        assert!(all.len() > 1, "{all:?}");
+
         std::fs::remove_dir_all(&d).ok();
     }
 

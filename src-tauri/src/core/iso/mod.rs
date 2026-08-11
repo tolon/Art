@@ -30,8 +30,9 @@ use std::path::{Path, PathBuf};
 
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
-use crate::core::security::safe_join;
-use crate::core::volume::write::copy::{windows_safe_name, CopySource, ExtractReport};
+use crate::core::volume::write::copy::{
+    host_target, CopySource, ExtractReport, HostTarget, OverwritePolicy,
+};
 use crate::core::volume::write::file::default_protection;
 use crate::core::volume::write::layout::amiga_from_unix;
 use crate::core::volume::write::plan::SourceEntry;
@@ -277,26 +278,50 @@ impl IsoImage {
     /// direction goes through [`IsoSource`] and the existing copy engine
     /// instead, deliberately, rather than a second one here.
     ///
+    /// `policy` is the user's collision setting, the same one an ADF copied
+    /// out obeys — this used to be hardcoded to "skip" here, so the setting
+    /// meant one thing for a floppy and nothing at all for a disc.
+    ///
     /// [`list`]: IsoImage::list
     pub fn extract_tree(
         &self,
         extent: u32,
         length: u32,
         dest: &Path,
+        policy: OverwritePolicy,
         sink: &dyn ProgressSink,
     ) -> CoreResult<ExtractReport> {
         let mut report = ExtractReport::default();
         std::fs::create_dir_all(dest)?;
-        self.extract_dir(extent, length, dest, 0, sink, &mut report)?;
+        // The same set `walk_subtree` keeps, and for the same reason: a
+        // directory record pointing back at an ancestor is legal-looking and
+        // describes a tree with no bottom. `MAX_WALK_DEPTH` alone does not
+        // save this path — a root holding eight directories that all point at
+        // the root is 8^16 `create_dir_all` calls before the depth cap bites.
+        let mut visited: HashSet<u32> = HashSet::new();
+        visited.insert(extent);
+        self.extract_dir(
+            extent,
+            length,
+            dest,
+            0,
+            policy,
+            &mut visited,
+            sink,
+            &mut report,
+        )?;
         Ok(report)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn extract_dir(
         &self,
         extent: u32,
         length: u32,
         dest: &Path,
         depth: usize,
+        policy: OverwritePolicy,
+        visited: &mut HashSet<u32>,
         sink: &dyn ProgressSink,
         report: &mut ExtractReport,
     ) -> CoreResult<()> {
@@ -315,43 +340,41 @@ impl IsoImage {
             }
             sink.report(report.files_written as u64, None, &entry.name);
 
-            let safe = windows_safe_name(&entry.name);
-            if safe != entry.name {
-                report.renamed.push(format!("{} → {safe}", entry.name));
-            }
-
-            // Through `safe_join` even though the name has just been made
-            // NTFS-safe: escaping is about what the host filesystem will
-            // accept, containment is a separate question with a separate
-            // answer (the same split `extract_from_volume` makes).
-            let target = match safe_join(dest, &safe) {
-                Ok(path) => path,
-                Err(err) => {
-                    report.skipped.push(format!("{} — {err}", entry.name));
-                    continue;
-                }
-            };
-
-            if entry.is_dir {
-                std::fs::create_dir_all(&target)?;
-                report.directories_created += 1;
-                // A directory's length is a u32 on disc; one claiming more
-                // than u32::MAX cannot exist, same clamp `walk_subtree` uses.
-                let sub_length = entry.bytes.min(u32::MAX as u64) as u32;
-                self.extract_dir(entry.extent, sub_length, &target, depth + 1, sink, report)?;
-                continue;
-            }
-
-            // A disc never changes, so a name already at the destination
-            // means a previous run put it there — SAFE_CREATE, not a silent
-            // overwrite of something the user may not want replaced.
-            if target.exists() {
+            // Before anything is created for it: a directory already written
+            // once on this run is a cycle, not a second copy of the tree.
+            if entry.is_dir && visited.contains(&entry.extent) {
                 report.skipped.push(format!(
-                    "{} — already in the destination folder",
+                    "{} — this directory points back at one ART has already written",
                     entry.name
                 ));
                 continue;
             }
+
+            // The NTFS-safe name, the containment check and the collision
+            // policy, decided in the one place `extract_from_volume` decides
+            // them too — this was a second copy of that logic, and it had
+            // already drifted.
+            let target = match host_target(dest, &entry.name, entry.is_dir, policy, report)? {
+                HostTarget::Skip => continue,
+                HostTarget::Descend(target) => {
+                    visited.insert(entry.extent);
+                    // A directory's length is a u32 on disc; one claiming more
+                    // than u32::MAX cannot exist, same clamp `walk_subtree` uses.
+                    let sub_length = entry.bytes.min(u32::MAX as u64) as u32;
+                    self.extract_dir(
+                        entry.extent,
+                        sub_length,
+                        &target,
+                        depth + 1,
+                        policy,
+                        visited,
+                        sink,
+                        report,
+                    )?;
+                    continue;
+                }
+                HostTarget::Write(target) => target,
+            };
 
             let data = match self.read_file(entry.extent, entry.bytes) {
                 Ok(data) => data,
@@ -484,6 +507,43 @@ impl IsoSource {
             image,
             entries: walk.entries,
         })
+    }
+
+    /// One file of a disc, as a copy source of exactly one entry.
+    ///
+    /// The scope F5 on a single selected file has to have. [`new`] walks a
+    /// *subtree*, so a caller with only a file to copy used to hand it the
+    /// whole directory the file sat in — on an install CD that is hundreds of
+    /// megabytes copied while the status line names one file. `CopySource`
+    /// needs nothing more than this to answer for a single entry:
+    /// `relative` is the file's own name, so it lands directly in the
+    /// destination directory.
+    ///
+    /// `name`, `extent` and `bytes` come from the listing that found it
+    /// ([`IsoImage::list`]), the same three fields
+    /// `commands::iso::iso_extract_file` takes for the local-folder direction.
+    ///
+    /// [`new`]: IsoSource::new
+    pub fn single_file(
+        image: IsoImage,
+        name: &str,
+        extent: u32,
+        bytes: u64,
+        date: Option<i64>,
+    ) -> Self {
+        Self {
+            image,
+            entries: vec![IsoWalkEntry {
+                path: name.to_string(),
+                entry: IsoEntry {
+                    name: name.to_string(),
+                    is_dir: false,
+                    bytes,
+                    extent,
+                    date,
+                },
+            }],
+        }
     }
 }
 
@@ -1470,7 +1530,7 @@ mod tests {
         let (extent, length) = iso.root();
 
         let report = iso
-            .extract_tree(extent, length, &dest, &NoProgress)
+            .extract_tree(extent, length, &dest, OverwritePolicy::Skip, &NoProgress)
             .unwrap();
         assert_eq!(report.files_written, 3, "{report:?}");
         assert_eq!(report.directories_created, 1, "TOOLS");
@@ -1497,11 +1557,167 @@ mod tests {
         let dest = tmp();
 
         let err = iso
-            .extract_tree(900_000, LOGICAL_SECTOR_SIZE as u32, &dest, &NoProgress)
+            .extract_tree(
+                900_000,
+                LOGICAL_SECTOR_SIZE as u32,
+                &dest,
+                OverwritePolicy::Skip,
+                &NoProgress,
+            )
             .unwrap_err();
         assert_eq!(err.code(), "ART-FORMAT-MALFORMED");
         fs::remove_dir_all(&d).ok();
         fs::remove_dir_all(&dest).ok();
+    }
+
+    /// The divergence finding 3 of the Task 3 review names: copying out of an
+    /// ADF honoured the user's collision policy and copying out of a disc did
+    /// not, because the disc had a second copy of the same loop with `Skip`
+    /// written into it. Both now go through `host_target`, so this is the
+    /// same assertion `extract_from_volume`'s overwrite test makes.
+    #[test]
+    fn extract_tree_honours_the_users_overwrite_policy() {
+        use crate::core::jobs::NoProgress;
+
+        let (d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
+        let iso = IsoImage::open(&p).unwrap();
+        let dest = tmp();
+        let (extent, length) = iso.root();
+
+        // Something already standing where README.TXT wants to go.
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(dest.join("README.TXT"), b"an older copy").unwrap();
+
+        let skipped = iso
+            .extract_tree(extent, length, &dest, OverwritePolicy::Skip, &NoProgress)
+            .unwrap();
+        assert_eq!(
+            fs::read(dest.join("README.TXT")).unwrap(),
+            b"an older copy",
+            "Skip must leave what is already there"
+        );
+        assert!(
+            skipped.skipped.iter().any(|s| s.contains("README.TXT")),
+            "{:?}",
+            skipped.skipped
+        );
+
+        let overwritten = iso
+            .extract_tree(
+                extent,
+                length,
+                &dest,
+                OverwritePolicy::Overwrite,
+                &NoProgress,
+            )
+            .unwrap();
+        assert_eq!(
+            fs::read(dest.join("README.TXT")).unwrap(),
+            b"Hello from the disc.\n",
+            "Overwrite must replace it — the setting a disc used to ignore"
+        );
+        assert!(
+            !overwritten.skipped.iter().any(|s| s.contains("README.TXT")),
+            "{:?}",
+            overwritten.skipped
+        );
+
+        fs::remove_dir_all(&d).ok();
+        fs::remove_dir_all(&dest).ok();
+    }
+
+    /// `walk_subtree` has kept a `visited` set since it was written, because a
+    /// record pointing at an ancestor is "a legal-looking record and an
+    /// endless tree". `extract_tree` had only `MAX_WALK_DEPTH`, which does not
+    /// bound anything: a root whose directories point back at it branches at
+    /// every level, so sixteen levels is exponential, not linear. This is the
+    /// same fixture `a_directory_that_points_back_at_its_parent_does_not_walk_forever`
+    /// uses, pointed at the extraction path instead of the walk.
+    #[test]
+    fn extract_tree_does_not_follow_a_directory_that_points_back_at_the_root() {
+        use crate::core::jobs::NoProgress;
+
+        let builder = IsoBuilder {
+            children: vec![dir("SUB", "Sub", vec![file("A.TXT", "a.txt", b"x")])],
+            ..Default::default()
+        };
+        let mut bytes = builder.build();
+
+        let pvd = 16 * LOGICAL_SECTOR_SIZE;
+        let root_lba = u32::from_le_bytes([
+            bytes[pvd + 158],
+            bytes[pvd + 159],
+            bytes[pvd + 160],
+            bytes[pvd + 161],
+        ]);
+        let root_at = root_lba as usize * LOGICAL_SECTOR_SIZE;
+        let sub = find_record(&bytes[root_at..root_at + LOGICAL_SECTOR_SIZE], b"SUB")
+            .expect("the fixture should contain a SUB record");
+        bytes[root_at + sub + 2..root_at + sub + 6].copy_from_slice(&root_lba.to_le_bytes());
+
+        let (d, p) = write_image(&bytes);
+        let iso = IsoImage::open(&p).unwrap();
+        let dest = tmp();
+        let (extent, length) = iso.root();
+
+        let report = iso
+            .extract_tree(extent, length, &dest, OverwritePolicy::Skip, &NoProgress)
+            .unwrap();
+
+        // SUB is created once and not descended into: without the guard the
+        // same directory is re-listed at every level down to the depth cap.
+        assert!(
+            report.directories_created <= 1,
+            "the cycle was followed: {report:?}"
+        );
+        assert!(
+            report
+                .skipped
+                .iter()
+                .any(|s| s.contains("points back at one ART has already written")),
+            "the user is told why, not left with a silently short copy: {:?}",
+            report.skipped
+        );
+        assert!(
+            !dest.join("SUB").join("SUB").exists(),
+            "a second level of the cycle reached the disk"
+        );
+
+        fs::remove_dir_all(&d).ok();
+        fs::remove_dir_all(&dest).ok();
+    }
+
+    /// One selected *file* copied disc → volume must copy that file, not the
+    /// directory it happened to be sitting in (finding 2 of the Task 3
+    /// review: an install CD's root is hundreds of megabytes, and the status
+    /// line named a single file while all of it went across).
+    #[test]
+    fn a_single_file_source_carries_exactly_that_one_file() {
+        let (d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
+        let iso = IsoImage::open(&p).unwrap();
+        let (extent, length) = iso.root();
+        let readme = iso
+            .list(extent, length)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.name == "README.TXT")
+            .unwrap();
+
+        let source =
+            IsoSource::single_file(iso, &readme.name, readme.extent, readme.bytes, readme.date);
+        let entries = source.entries().unwrap();
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(entries[0].relative, "README.TXT");
+        assert!(!entries[0].is_dir);
+        assert_eq!(entries[0].bytes, readme.bytes);
+        assert_eq!(
+            source.read("README.TXT").unwrap(),
+            b"Hello from the disc.\n"
+        );
+        // And the recording date still reaches the volume.
+        assert!(source.metadata("README.TXT").unwrap().is_some());
+
+        fs::remove_dir_all(&d).ok();
     }
 
     /// The claim Task 3 exists to prove: an `IsoSource` needs no copy engine

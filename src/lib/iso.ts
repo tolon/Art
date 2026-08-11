@@ -74,18 +74,33 @@ export async function isoExtractFile(
 
 /**
  * F5 out of a disc, to a local folder. `extent`/`bytes` name a directory the
- * same way `isoList` does; its contents land inside `dest`, not a folder
- * named after it. Returns a job id — the result arrives on
- * `onVolumeWriteResult` (`@/lib/volumeWrite`) as a `copy_out` result, the
- * same event an HDF/ADF extraction reports on.
+ * same way `isoList` does; its contents land in a folder called `name` inside
+ * `destDir`. The two are passed separately and joined in Rust, by
+ * `folder_destination` — a name off a disc is a name ART did not write, and a
+ * caller that concatenated it into the destination first would be handing a
+ * security boundary a path it can no longer check.
+ *
+ * `options.overwrite` is the same collision setting an ADF copied out obeys.
+ * Returns a job id — the result arrives on `onVolumeWriteResult`
+ * (`@/lib/volumeWrite`) as a `copy_out` result, the same event an HDF/ADF
+ * extraction reports on.
  */
 export async function isoExtract(
   path: string,
   extent: number,
   bytes: number,
-  dest: string
+  destDir: string,
+  name: string,
+  options?: CopyOptions
 ): Promise<number> {
-  return invoke<number>("iso_extract", { path, extent, bytes, dest });
+  return invoke<number>("iso_extract", {
+    path,
+    extent,
+    bytes,
+    destDir,
+    name,
+    options: options ?? null,
+  });
 }
 
 /**
@@ -93,11 +108,19 @@ export async function isoExtract(
  * point of the feature: an AmigaOS install CD is only useful once its
  * contents reach an HDF. Returns a job id, reporting on `onVolumeWriteResult`
  * as a `copy_in` result, the same as `volumeCopyIn`.
+ *
+ * `name`/`isDir`/`date` are the picked row's own fields (`PanelEntry`). They
+ * decide what is copied: a directory carries its whole subtree, a file
+ * carries exactly itself — without them a single selected file could only be
+ * copied as the directory around it, which on an install CD is the disc.
  */
 export async function isoCopyToVolume(
   isoPath: string,
   extent: number,
   bytes: number,
+  name: string,
+  isDir: boolean,
+  date: number | null,
   path: string,
   volumeIndex: number,
   dirBlock: number | null,
@@ -107,6 +130,9 @@ export async function isoCopyToVolume(
     isoPath,
     extent,
     bytes,
+    name,
+    isDir,
+    date,
     path,
     volumeIndex,
     dirBlock,

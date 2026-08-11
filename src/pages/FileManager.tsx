@@ -961,23 +961,23 @@ export function FileManager() {
           setError(writeRefusal(target, t));
           return;
         }
-        if (source.isoExtent === null || source.isoLength === null || entry.iso_extent === null) {
-          return;
-        }
-        // A selected subfolder copies just itself; a selected file copies
-        // the whole open folder around it — the same simplification
-        // `volumeCopyBetween` above already makes for a single file picked
-        // between two Amiga volumes (`entry.is_dir ? entry.header_block :
-        // source.dirBlock`), because `IsoSource` walks a subtree, not an
-        // arbitrary single entry.
-        const extent = entry.is_dir ? entry.iso_extent : source.isoExtent;
-        const length = entry.is_dir ? entry.bytes : source.isoLength;
+        // The picked row carries its own address now, so the pane's open
+        // directory is no longer part of what gets copied.
+        if (entry.iso_extent === null) return;
+        // A subfolder copies its subtree, a file copies exactly itself:
+        // Rust decides which from `is_dir`, so a single picked file no
+        // longer drags the whole open folder across with it — on an install
+        // CD that was hundreds of megabytes while the status line named one
+        // file.
         setBusy(t("files.status.copying", { name: entry.name }));
         try {
           pendingCopy.current = await isoCopyToVolume(
             source.location,
-            extent,
-            length,
+            entry.iso_extent,
+            entry.bytes,
+            entry.name,
+            entry.is_dir,
+            entry.date,
             destination.path,
             destination.volumeIndex,
             destination.dirBlock,
@@ -1002,7 +1002,9 @@ export function FileManager() {
               source.location,
               entry.iso_extent,
               entry.bytes,
-              `${target.location}/${entry.name}`
+              target.location,
+              entry.name,
+              { overwrite: policy }
             );
             copyDestination.current = to;
           } catch (e) {
@@ -1140,7 +1142,8 @@ export function FileManager() {
             source.location,
             source.volumeIndex,
             entry.header_block,
-            `${target.location}/${entry.name}`,
+            target.location,
+            entry.name,
             { overwrite: policy, sidecars: powerMode }
           );
           copyDestination.current = to;
@@ -1360,7 +1363,8 @@ export function FileManager() {
                     source.location,
                     volumeIndex,
                     headerBlock,
-                    `${target.location}/${entry.name}`,
+                    target.location,
+                    entry.name,
                     { overwrite: policy, sidecars: powerMode }
                   )
                 );
