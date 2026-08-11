@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** ART opens `.adf`, `.hdf`, `.img`, `.iso`, `.dsk`, `.raw` and `.bin` in the commander, deciding what each one *is* from its contents rather than its filename.
+**Goal:** ART opens `.adf`, `.hdf`, `.img`, `.iso`, `.dsk`, `.raw`, `.zip`, `.7z`, `.rar` and `.lha` in the commander, deciding what each one *is* from its contents rather than its filename, and browsing every one of them as a pane.
+
+**The unifying idea:** a floppy image, a hard-disk partition, a CD and an archive are all the same thing to a commander — **a container you can walk into, list, and copy out of**. ART already has that model for ADF and HDF (`PaneState`, where an ADF is simply volume 0). This phase adds three more container kinds behind it rather than three more screens.
 
 **Architecture:** Two halves that must land in this order. First `detect()` stops dispatching on the extension and reads the first blocks instead — that single change makes `.img` and `.dsk` resolve to whatever they actually contain, and turns every later format into one signature rather than one more branch in a growing match. Then an ISO9660 reader, exposed through the same `CopySource`-shaped read path the commander already uses for ADF and HDF volumes, so browsing a CD is the same code as browsing a floppy.
 
@@ -221,7 +223,62 @@ Copying **from** an ISO to a local folder or to an Amiga volume must work, becau
 
 ---
 
-## Task 4: Close the phase
+## Task 4: One security gate, several archive engines
+
+**Files:**
+- Modify: `src-tauri/src/core/lha/safe_extract.rs` → generalise
+- Create: `src-tauri/src/core/archive/mod.rs`, `src-tauri/src/core/archive/zip.rs`
+- Modify: `src-tauri/Cargo.toml`
+
+**Interfaces:**
+- Consumes: `safe_join`, the existing extraction limits.
+- Produces: `trait ArchiveReader { fn entries(&self) -> CoreResult<Vec<ArchiveEntry>>; fn read(&self, index: usize) -> CoreResult<Vec<u8>>; }` and `open_archive(path) -> CoreResult<Box<dyn ArchiveReader>>`, dispatching on the signature Task 1 found.
+
+**The architectural point, and the reason this is one task rather than three.**
+Everything today goes through `core/lha/safe_extract.rs`, which is where the
+traversal, archive-bomb and unusable-name defences live — **one choke point**.
+Adding ZIP, 7z and RAR as three parallel readers would mean three copies of
+those defences, and the third copy is where the hole is. Generalise the gate
+first: `safe_extract` keeps `safe_join`, `MAX_TOTAL_OUTPUT`, the entry cap and
+the skipped-entry reporting, and calls a **backend** for the bytes.
+
+Prove it with a test that runs the *same* hostile archive through every
+backend — an entry named `../../outside.txt`, an absolute path, and one whose
+declared size is a lie — and asserts each is refused identically. A defence
+that only one backend has is the defect this task exists to prevent.
+
+**On the dependency list.** `core/` is `std` + `serde` + `sha2` + `thiserror` +
+`delharc`. `delharc` is already a decompression crate, so the precedent is set,
+but each addition is a real decision: it is code that parses hostile input
+inside the process. Add `zip` (or `flate2` directly) for ZIP, and `sevenz-rust`
+for 7z — both MIT/Apache. Update CLAUDE.md's core-independence list and
+`THIRD_PARTY_LICENSES.md` in the same commit; a dependency that is in
+`Cargo.toml` and not in the licence file is a licensing defect.
+
+**RAR is different, and the difference is legal, not technical.** RAR is a
+proprietary format. The UnRAR source licence is **not** an open-source licence
+and explicitly forbids using it to reverse-engineer the compression algorithm.
+ART's stance has been scrupulous — ADFlib is GPL so it is read for
+understanding and never copied; amitools is an external oracle and never
+linked — and bundling an encumbered decoder is a different kind of decision.
+
+**So do not bundle one.** Do what Total Commander itself does: handle ZIP (and
+7z) natively, and for RAR **call an external tool if the user has one** —
+`unrar` or `7z` on `PATH`, or a path set in Settings. Launch it with
+**structured argv, never a shell string** (an archive entry name reaching a
+shell is a command injection), from **outside `core/`** — spawning a process is
+platform-specific, so `core` declares the trait and the implementation lives in
+`commands/`. With no tool installed, ART says exactly that and refuses; it does
+not pretend the archive is corrupt.
+
+- [ ] **Step 1: Generalise the gate, with the shared hostile-archive test**
+- [ ] **Step 2: ZIP backend, tests built at runtime**
+- [ ] **Step 3: 7z backend, tests built at runtime**
+- [ ] **Step 4: External-tool backend for RAR, behind the trait, with a clear refusal when absent**
+- [ ] **Step 5: Open an archive as a pane, reusing Task 3's container model**
+- [ ] **Step 6: Gates and commit**
+
+## Task 5: Close the phase
 
 **Files:**
 - Modify: `docs/FEATURES.md`, `docs/STATUS.md`, `docs/ISSUES.md`, `CHANGELOG.md`, `docs/format-support-matrix.md`
