@@ -89,6 +89,7 @@ pub fn volume_list(
                 header_block: Some(file.header_block),
                 is_link: false,
                 date: Some(file.unix_date),
+                attrs: Some(file.attrs),
             })
             .collect(),
         warnings,
@@ -314,6 +315,50 @@ mod tests {
 
         let err = volume_list(path.to_string_lossy().to_string(), 7, None).unwrap_err();
         assert!(err.to_string().contains("no volume 7"), "{err}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The Attr column and the attributes dialog format the exact same
+    /// protection field, through the exact same function
+    /// (`uaem::format_bits`), so they can never read differently for the
+    /// same entry. This proves it end to end rather than trusting that two
+    /// call sites of one function must agree — a future refactor that gives
+    /// the listing path its own formatting is exactly the drift this guards
+    /// against.
+    #[test]
+    fn a_listing_entry_s_attrs_matches_the_attributes_dialog_s_bits() {
+        let dir = scratch("attrs-drift");
+        let path = dir.join("disk.hdf");
+        image_with_partition(&path);
+
+        let header_block = volume_list(path.to_string_lossy().to_string(), 0, None)
+            .unwrap()
+            .entries[0]
+            .header_block
+            .unwrap();
+
+        // A non-default value distinctive enough that the two sides agreeing
+        // could not be a coincidence: H and A set, RWED left at "granted".
+        let custom_protection = (1u32 << 7) | (1u32 << 4);
+        crate::commands::volume_write::with_volume(&path, 0, |writer| {
+            writer.set_attributes(header_block, Some(custom_protection), None, None)
+        })
+        .unwrap();
+
+        let listing = volume_list(path.to_string_lossy().to_string(), 0, None).unwrap();
+        let attributes = crate::commands::volume_write::volume_attributes(
+            path.to_string_lossy().to_string(),
+            0,
+            header_block,
+        )
+        .unwrap();
+
+        assert_eq!(attributes.bits, "h--arwed", "sanity: not the default bits");
+        assert_eq!(
+            listing.entries[0].attrs.as_deref(),
+            Some(attributes.bits.as_str())
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

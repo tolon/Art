@@ -201,6 +201,9 @@ pub struct HeaderBlock {
     pub first_data_block: u32,
     /// The list of data-block pointers held in *this* header block.
     pub data_blocks: Vec<u32>,
+    /// Protection bits (offset 320), `HSPARWED` with `RWED` inverted —
+    /// see `core::volume::write::uaem::format_bits`.
+    pub protection: u32,
     pub comment: String,
     pub date: AmigaDate,
     /// Next header block in the same hash bucket (sibling chain, offset 496).
@@ -270,7 +273,12 @@ impl HeaderBlock {
             0
         };
 
-        // LW 82. Offset 320 is the protection bits, not the comment.
+        // LW 80, offset 320. `HSPARWED` with `RWED` inverted (a set bit denies
+        // the permission) — never format this by hand, see
+        // `core::volume::write::uaem::format_bits`.
+        let protection = read_u32_be(block, 320).unwrap_or(0);
+
+        // LW 82. Offset 328 is the comment, not the protection bits.
         let comment = read_bcpl_string(block, 328).unwrap_or_default();
 
         // Date is at offset 420 (days), 424 (mins), 428 (ticks).
@@ -297,6 +305,7 @@ impl HeaderBlock {
             byte_size,
             first_data_block,
             data_blocks,
+            protection,
             comment,
             date: AmigaDate { days, mins, ticks },
             next_hash,
@@ -601,6 +610,20 @@ mod tests {
         assert_eq!(hdr.header_key, 1000);
         assert_eq!(hdr.byte_size, 500);
         assert_eq!(hdr.data_blocks, vec![1001]);
+    }
+
+    /// Offset 320 is the protection bits, not the comment — see the note this
+    /// field's doc comment carries. Parsed as a raw `u32` here; formatting it
+    /// as `hsparwed` is `core::volume::write::uaem::format_bits`'s job, not
+    /// this parser's.
+    #[test]
+    fn header_block_parses_protection_bits_at_offset_320() {
+        let mut block = vec![0u8; BLOCK_SIZE];
+        block[0..4].copy_from_slice(&2i32.to_be_bytes());
+        // H (1<<7) and A (1<<4) set: 0x90.
+        block[320..324].copy_from_slice(&0x90u32.to_be_bytes());
+        let hdr = HeaderBlock::parse(&block).unwrap();
+        assert_eq!(hdr.protection, 0x90);
     }
 
     #[test]

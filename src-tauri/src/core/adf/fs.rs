@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::blocks::{EntryKind, HeaderBlock};
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::volume::device::SliceDevice;
+use crate::core::volume::write::uaem;
 use crate::core::volume::{read_block_vec, BlockDevice};
 
 /// A single filesystem entry (file or directory).
@@ -25,6 +26,10 @@ pub struct FileEntry {
     pub header_block: u32,
     /// Block number of the parent directory (root = the root block).
     pub parent: u32,
+    /// `hsparwed`, already formatted by `uaem::format_bits` — the same
+    /// function `AttributesDialog` uses, so a panel listing and the
+    /// attributes dialog can never disagree about what a bit means.
+    pub attrs: String,
 }
 
 /// Statistics from walking a disk filesystem tree.
@@ -82,6 +87,7 @@ pub fn list_directory_on(device: &dyn BlockDevice, dir_block: u32) -> CoreResult
                 unix_date: hdr.date.to_unix(),
                 header_block: hdr.header_key,
                 parent: hdr.parent,
+                attrs: uaem::format_bits(hdr.protection),
             });
             current = hdr.next_hash;
         }
