@@ -381,7 +381,70 @@ it was written and tested (Rust + Vitest), never opened in `pnpm tauri dev`.
 ART-062 (no language checked on screen) predates this phase and is still
 open; it now also covers a phase's worth of new UI nobody has looked at.
 
-### ⏳ Stage 5 — Spec addenda (next)
+### ⏳ Phase 2a — Content-first detection and optical images (in progress)
+
+Plan: [2026-08-11-phase-2a-content-detection-and-optical.md](superpowers/plans/2026-08-11-phase-2a-content-detection-and-optical.md),
+amended 2026-08-11 (A1–A7 in that file's Amendments section).
+
+The commander stops asking what a file is *called* and starts asking what it
+*is*, and grows container kinds behind the pane model it already has: a CD, two
+archive formats, and Commodore 64 disk and tape images.
+
+Done: content-first `detect()`; an ISO9660 + Joliet reader; a disc pane with F5
+out of it in both directions; **an independent 7-Zip oracle** for the disc
+reader, raw layouts included; Mode 2/XA Form 1 (which closed ART-075); and one
+shared archive security gate with the format behind a backend trait.
+
+Left: ZIP and 7z behind that gate (Task 4), D64/D71/D81/T64 (Task 5), and
+closing the phase (Task 6).
+
+**The real-Amiga-CD verification step was cancelled** (amendment A1) — it
+assumed licensed AmigaOS media reliably to hand. `scripts/iso-oracle-check.py`
+covers the risk it existed for, with an implementation that shares no code with
+ART's.
+
+### ⏳ SD Card Appliance Builder — SD-0 … SD-5 (planned, not started)
+
+Gap analysis: [sd-appliance-gap-analysis.md](sd-appliance-gap-analysis.md)
+(2026-08-11, from the PiStorm multiboot architecture). It lists **only** what
+ART lacks; everything ART already has — WHDLoad install, ADF/LHA import, RDB
+creation, Gotek prep, config round-trip, journalled writes, Aminet, oplog, the
+job queue — the SD work consumes rather than reimplements.
+
+The story: build a complete PiStorm/Emu68 SD card from Windows, verified,
+that boots a real A500.
+
+| Phase | Contents |
+|---|---|
+| **SD-0** | Prior-art teardown: Emu68-Imager, emu68hatcher, hdf2emu68 (G0) |
+| **SD-1** | Image-first foundations: MBR + FAT32 boot partition (G2), RDB filesystem embedding FSHD/LSEG (G4), build manifest (G7) |
+| **SD-2** | The card exists: raw device flash + verify (G1), boot priority and a recovery volume (G6), whole-card validation (G8) |
+| **SD-3** | Content, preloaded: PFS3 via a scripted WinUAE session (G3 route D), OS install engine (G5), launcher metadata export (G10), layout policy (G11) |
+| **SD-4** | The flagship: native PFS3 write in ART (G3 route B) — its own brief; route D's harness becomes its oracle |
+| **SD-5** | Comfort: card backup/restore (G12), capacity planner (G13) |
+
+Three decisions in it are worth knowing before reading the code they will
+produce:
+
+- **Never build on the device.** Everything is built into a sparse image file
+  through the existing tested paths; a separate, dumb, heavily guarded step
+  flashes and verifies. §56 already forbids the alternative.
+- **v1 targets Emu68 only.** The classic Linux/Musashi route is a different
+  build and is out of scope in writing, not by omission.
+- **PFS3 preload starts borrowed and ends native.** Route D has the real
+  `pfs3aio` do the writing inside a scripted WinUAE session — correct by
+  construction, zero reimplementation risk — while route B (a native PFS3
+  writer, the thing no other imager has) stays the flagship. Once B exists, D
+  is its oracle.
+
+The milestone that matters first is not a preloaded 128 GB card: it is **one
+card, built entirely from Windows, that boots a real A500 into AmigaOS 3.2
+with a recovery volume beside it.**
+
+Sequenced after Phase 2a. Whether it goes before or after Stage 5's AI layer
+is open.
+
+### ⏳ Stage 5 — Spec addenda
 
 From `ART-SPEC-ADDENDA-COMPLETE.md` in the project root. **Stage 4 has landed, so
 both are now unblocked** — every prerequisite they name by hand exists:
@@ -527,7 +590,15 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
    the two-pane manager has real focus, multi-select, batch copy/delete,
    sorting, a filename mask, and now boot code that works; see "Phase 1a"
    above for what is not (volume→volume batching, ART-064/065).
-5. The named work left in the briefs:
+5. **Phase 2a is in progress** on branch `phase-2a` — see its section above for
+   what is done and what is left, and its plan file's Amendments section for
+   what changed after the plan was written (the real-Amiga-CD step is
+   cancelled; a 7-Zip oracle replaced it).
+6. **The SD Card Appliance Builder is planned but not started** —
+   [sd-appliance-gap-analysis.md](sd-appliance-gap-analysis.md), phases
+   SD-0 … SD-5. It is sequenced after Phase 2a; its order relative to the AI
+   layer is still open.
+7. The named work left in the briefs:
    - **§45.5 AI Workflow Layer.** Designed
      ([design-ai-layer.md](design-ai-layer.md)), not built. Its prerequisites
      (operation log with `origin: ai-plan`, a tested workflow catalogue) are
