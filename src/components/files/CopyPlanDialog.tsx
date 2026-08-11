@@ -8,6 +8,7 @@
 
 import { useTranslation } from "react-i18next";
 
+import type { ArchiveDrawer } from "@/lib/archives";
 import {
   planIsClean,
   planShortfall,
@@ -29,6 +30,7 @@ export function CopyPlanDialog({
   onPolicyChange,
   onConfirm,
   onCancel,
+  drawers,
 }: {
   plan: CopyPlan;
   /**
@@ -42,6 +44,13 @@ export function CopyPlanDialog({
   onPolicyChange: (policy: OverwritePolicy) => void;
   onConfirm: () => void;
   onCancel: () => void;
+  /**
+   * Set only for a batch of `.lha` archives — the drawer each one will
+   * create. This is what resolves the naming ambiguity for the user (§92):
+   * without it, "3 archives, 40 files" says nothing about whether that is
+   * three drawers or one merged directory.
+   */
+  drawers?: ArchiveDrawer[];
 }) {
   const { t } = useTranslation();
   const fits = plan.blocks_needed <= plan.blocks_free;
@@ -75,6 +84,35 @@ export function CopyPlanDialog({
       <div className="faint" style={{ fontSize: 11, marginTop: 2, wordBreak: "break-all" }}>
         {t("components.copyPlan.intoDestination", { destination })}
       </div>
+
+      {/* §92: the drawer name is what resolves the ambiguity for a batch of
+          archives — the user sees every one before anything is written and
+          can cancel if a name is wrong or two collide. */}
+      {drawers && drawers.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 12 }}>
+            {t("components.copyPlan.archivesTitle", { count: drawers.length })}
+          </div>
+          <div style={{ maxHeight: 160, overflow: "auto", marginTop: 4 }}>
+            {drawers.map((row) => (
+              <div
+                key={row.archive}
+                className="faint"
+                style={{ fontSize: 11, padding: "2px 0", wordBreak: "break-all" }}
+              >
+                <code>{row.name}</code>
+                {" → "}
+                <code>{row.drawer}</code>
+                {" "}
+                {t("components.copyPlan.archiveRowCounts", {
+                  count: row.files,
+                  bytes: formatBytes(row.bytes),
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={{ fontSize: 13, marginTop: 10 }}>
         {t("components.copyPlan.filesCount", { count: plan.files })}

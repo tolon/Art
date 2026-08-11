@@ -91,7 +91,11 @@
       "splitIconsOrphaned": "Some .info icons have nothing to describe in this copy.",
       "clean": "Everything fits and every name is one AmigaDOS can store.",
       "notEnoughRoom": "There is not enough room on the disk",
-      "copy": "Copy"
+      "copy": "Copy",
+      "archivesTitle_one": "This will create {{count}} drawer:",
+      "archivesTitle_other": "This will create {{count}} drawers:",
+      "archiveRowCounts_one": "{{count}} file, {{bytes}}",
+      "archiveRowCounts_other": "{{count}} files, {{bytes}}"
     },
     "checkout": {
       "discardConfirm": "Throw away your changes to {{name}}? The working copy will be deleted.",
@@ -950,16 +954,21 @@
       "sameImage": "That is the same image on both sides. Use Move or Rename instead.",
       "noLocalPath": "That item has no path on your disk.",
       "openPartitionFirst": "Open a partition first.",
-      "batchBetweenVolumes": "Copying several entries between two images at once is not supported yet — copy them one at a time."
+      "batchBetweenVolumes": "Copying several entries between two images at once is not supported yet — copy them one at a time.",
+      "mixedArchiveSelection": "Select only .lha archives, or none, when copying into a volume — not a mix of the two."
     },
     "status": {
       "copyingBetween": "Copying {{name}} between images…",
       "planning": "Working out what {{name}} needs…",
       "planningSelection_one": "Working out what {{count}} item needs…",
       "planningSelection_other": "Working out what {{count}} items need…",
+      "planningArchives_one": "Working out what {{count}} archive needs…",
+      "planningArchives_other": "Working out what {{count}} archives need…",
       "copying": "Copying {{name}}…",
       "copyingSelection_one": "Copying {{count}} item…",
       "copyingSelection_other": "Copying {{count}} items…",
+      "copyingArchives_one": "Installing {{count}} archive…",
+      "copyingArchives_other": "Installing {{count}} archives…",
       "copyingOut": "Copying {{name}} out…",
       "copyingSelectionOut_one": "Copying {{count}} item out…",
       "copyingSelectionOut_other": "Copying {{count}} items out…",

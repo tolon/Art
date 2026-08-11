@@ -42,6 +42,12 @@ import {
 } from "@/components/files/FunctionKeys";
 import { SelectionBar } from "@/components/files/SelectionBar";
 import { adfOpen, type AdfInfo } from "@/lib/adf";
+import {
+  archivesInstall,
+  archivesPlanInstall,
+  isArchivePath,
+  type ArchiveDrawer,
+} from "@/lib/archives";
 import { checkoutEdit, checkoutOpen, volumeIconFor } from "@/lib/checkout";
 import { onJobProgress } from "@/lib/jobs";
 import {
@@ -299,6 +305,13 @@ export function FileManager() {
     sources: string[];
     names: string[];
     side: Side;
+    /**
+     * Set only for a batch of `.lha` archives — the drawer each one will
+     * create. Its presence is what tells `runPlannedCopy` to confirm through
+     * `archivesInstall` instead of `volumeCopyIn`/`volumeCopyInMany`, and what
+     * tells `CopyPlanDialog` to show the drawer names (§92).
+     */
+    drawers?: ArchiveDrawer[];
   } | null>(null);
   const [viewing, setViewing] = useState<{
     path: string;
@@ -813,7 +826,10 @@ export function FileManager() {
    * One source keeps the exact call `volumeCopyIn` has always made — a
    * folder's *contents* land flat, the tested behaviour nothing here may
    * change. More than one goes through `volumeCopyInMany`, where each root
-   * keeps its own name at the destination instead (`HostSelection`).
+   * keeps its own name at the destination instead (`HostSelection`). A batch
+   * of `.lha` archives — `pending.drawers` set — goes through
+   * `archivesInstall` instead of either: it is not a file copy, it is
+   * several archives each unpacked into its own drawer.
    */
   async function runPlannedCopy() {
     const pending = plan;
@@ -827,13 +843,22 @@ export function FileManager() {
     }
 
     setBusy(
-      pending.names.length === 1
-        ? t("files.status.copying", { name: pending.names[0] })
-        : t("files.status.copyingSelection", { count: pending.names.length })
+      pending.drawers
+        ? t("files.status.copyingArchives", { count: pending.drawers.length })
+        : pending.names.length === 1
+          ? t("files.status.copying", { name: pending.names[0] })
+          : t("files.status.copyingSelection", { count: pending.names.length })
     );
     try {
-      pendingCopy.current =
-        pending.sources.length === 1
+      pendingCopy.current = pending.drawers
+        ? await archivesInstall(
+            pending.sources,
+            target.path,
+            target.volumeIndex,
+            target.dirBlock,
+            policy
+          )
+        : pending.sources.length === 1
           ? await volumeCopyIn(
               target.path,
               target.volumeIndex,
@@ -902,20 +927,51 @@ export function FileManager() {
         return;
       }
 
-      setBusy(t("files.status.planningSelection", { count: entries.length }));
+      // A selection of `.lha` archives is not a file copy: each one is
+      // unpacked and given its own drawer, not merged into the destination
+      // flat. A mix of archives and ordinary files is refused rather than
+      // guessed at — silently treating the archives as plain files would
+      // copy their raw `.lha` bytes onto the disk instead of installing them.
+      const archiveCount = paths.filter(isArchivePath).length;
+      if (archiveCount > 0 && archiveCount !== paths.length) {
+        setError(t("files.err.mixedArchiveSelection"));
+        return;
+      }
+
+      setBusy(
+        archiveCount > 0
+          ? t("files.status.planningArchives", { count: entries.length })
+          : t("files.status.planningSelection", { count: entries.length })
+      );
       try {
-        const found = await volumePlanCopyMany(
-          destination.path,
-          destination.volumeIndex,
-          destination.dirBlock,
-          paths
-        );
-        setPlan({
-          plan: found,
-          sources: paths,
-          names: entries.map((entry) => entry.name),
-          side: to,
-        });
+        if (archiveCount > 0) {
+          const found = await archivesPlanInstall(
+            paths,
+            destination.path,
+            destination.volumeIndex,
+            destination.dirBlock
+          );
+          setPlan({
+            plan: found.cost,
+            sources: paths,
+            names: entries.map((entry) => entry.name),
+            side: to,
+            drawers: found.drawers,
+          });
+        } else {
+          const found = await volumePlanCopyMany(
+            destination.path,
+            destination.volumeIndex,
+            destination.dirBlock,
+            paths
+          );
+          setPlan({
+            plan: found,
+            sources: paths,
+            names: entries.map((entry) => entry.name),
+            side: to,
+          });
+        }
       } catch (e) {
         setError(String(e));
       } finally {
@@ -1587,6 +1643,7 @@ export function FileManager() {
           onPolicyChange={setPolicy}
           onConfirm={() => void runPlannedCopy()}
           onCancel={() => setPlan(null)}
+          drawers={plan.drawers}
         />
       )}
 
