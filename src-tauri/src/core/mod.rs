@@ -17,6 +17,7 @@ pub mod error;
 pub mod gotek;
 pub mod hashing;
 pub mod hdf;
+pub mod iso;
 pub mod jobs;
 pub mod lha;
 pub mod oplog;
