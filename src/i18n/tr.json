@@ -872,7 +872,8 @@
     "writeRefusal": {
       "local": "Bu bölme bir disk imajı değil, bir klasör içeriyor",
       "noPartition": "Önce bir bölüm açın",
-      "default": "ART bu birime yazamıyor"
+      "default": "ART bu birime yazamıyor",
+      "iso": "Bu bölme bir disk (CD/DVD) içeriyor — diskler salt okunurdur"
     },
     "functionKeys": {
       "view": "Görüntüle",
@@ -900,6 +901,7 @@
       "folder": "Klasör...",
       "adf": "ADF...",
       "hdf": "HDF...",
+      "disc": "Disk...",
       "up": "Yukarı",
       "refresh": "Yenile",
       "newFolder": "Yeni Klasör"

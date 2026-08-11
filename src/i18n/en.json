@@ -872,7 +872,8 @@
     "writeRefusal": {
       "local": "This pane holds a folder, not a disk image",
       "noPartition": "Open a partition first",
-      "default": "ART cannot write to this volume"
+      "default": "ART cannot write to this volume",
+      "iso": "This pane holds a disc — discs are read-only"
     },
     "functionKeys": {
       "view": "View",
@@ -900,6 +901,7 @@
       "folder": "Folder...",
       "adf": "ADF...",
       "hdf": "HDF...",
+      "disc": "Disc...",
       "up": "Up",
       "refresh": "Refresh",
       "newFolder": "New folder"

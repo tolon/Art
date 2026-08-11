@@ -9,7 +9,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
-import type { PanelEntry } from "@/lib/panel";
+import type { ExtractedTo, PanelEntry } from "@/lib/panel";
 import type { CopyOptions } from "@/lib/volumeWrite";
 
 /** What opening a disc reports: enough to show the pane and start walking it. */
@@ -45,6 +45,31 @@ export async function isoOpen(path: string, formatHint?: string | null): Promise
  */
 export async function isoList(path: string, extent: number, length: number): Promise<PanelEntry[]> {
   return invoke<PanelEntry[]>("iso_list", { path, extent, length });
+}
+
+/**
+ * Copy one file out of a disc to a local folder — the single-entry fast path
+ * of F5, the same asymmetry `volumeExtractTo`/`volumeCopyOut` give an ADF or
+ * HDF: a lone file copies straight through, synchronously, and only a whole
+ * directory (`isoExtract`, below) needs a job. `name` is the entry's own
+ * name from the listing that found it (`PanelEntry.name`).
+ */
+export async function isoExtractFile(
+  path: string,
+  extent: number,
+  bytes: number,
+  name: string,
+  destDir: string,
+  overwrite?: boolean
+): Promise<ExtractedTo> {
+  return invoke<ExtractedTo>("iso_extract_file", {
+    path,
+    extent,
+    bytes,
+    name,
+    destDir,
+    overwrite: overwrite ?? null,
+  });
 }
 
 /**
