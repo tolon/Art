@@ -24,6 +24,7 @@
 
 pub mod extract;
 pub mod lha;
+pub mod zip;
 
 use std::path::Path;
 
@@ -80,6 +81,13 @@ pub fn open(path: &Path) -> CoreResult<Box<dyn ArchiveBackend>> {
         return Ok(Box::new(lha::LhaBackend::open(path)?));
     }
 
+    // ZIP: `PK\x03\x04` for an ordinary archive, `PK\x05\x06` for an empty
+    // one and `PK\x07\x08` for a spanned first volume. All three are ZIPs and
+    // all three are the reader's problem, not the dispatcher's.
+    if head.len() >= 4 && head[0] == b'P' && head[1] == b'K' && matches!(head[2], 3 | 5 | 7) {
+        return Ok(Box::new(zip::ZipBackend::open(path)?));
+    }
+
     Err(CoreError::UnsupportedFormat(format!(
         "'{}' is not an archive ART can open",
         path.display()
@@ -129,11 +137,18 @@ mod tests {
     /// point of the list existing before there is more than one thing in it.
     #[allow(clippy::type_complexity)]
     fn backends() -> Vec<(&'static str, &'static str, fn(&[(&str, &[u8])]) -> Vec<u8>)> {
-        vec![(
-            "lha",
-            "hostile.lha",
-            crate::core::lha::tests::make_lha_with as fn(&[(&str, &[u8])]) -> Vec<u8>,
-        )]
+        vec![
+            (
+                "lha",
+                "hostile.lha",
+                crate::core::lha::tests::make_lha_with as fn(&[(&str, &[u8])]) -> Vec<u8>,
+            ),
+            (
+                "zip",
+                "hostile.zip",
+                zip::tests::make_zip_with as fn(&[(&str, &[u8])]) -> Vec<u8>,
+            ),
+        ]
     }
 
     #[test]

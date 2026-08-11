@@ -23,6 +23,11 @@ ART is built on the following open-source projects:
 - **sha2** — cryptographic hashing (MIT / Apache-2.0)
 - **thiserror** — error handling (MIT / Apache-2.0)
 - **delharc** — LHA/LZH decompression (MIT / Apache-2.0)
+- **zip** — ZIP reading, deflate only (MIT), with `flate2` (MIT / Apache-2.0),
+  `zlib-rs` (Zlib), `crc32fast` (MIT / Apache-2.0), `indexmap` (MIT /
+  Apache-2.0) and `memchr` (MIT / Unlicense) beneath it. Compression,
+  encryption and the other decompressors are switched off — ART only reads,
+  and every feature left on is more code parsing a hostile file
 - **ureq** — HTTP client used by the Aminet repository mirror (§41.5.3) (MIT / Apache-2.0)
 - **i18next / react-i18next** — internationalization (MIT)
 - **zustand** — state management (MIT)

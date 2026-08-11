@@ -49,6 +49,24 @@ ureq = { version = "=3.2.1", default-features = false, features = [
 # Dragging a file OUT of the window into Explorer. Windows has no way to do
 # that from a webview, so it needs a native plugin (see ART-kaynak-listesi §11).
 tauri-plugin-drag = "2.1.1"
+# ZIP, read-only, behind `core/archive`'s one security gate.
+#
+# `default-features = false` on purpose, and the feature list is the whole
+# decision: ART only ever *reads* an archive, and every enabled feature is more
+# code parsing a hostile file inside this process. Off, deliberately: `aes-crypto`
+# and `pbkdf2` (ART does not open encrypted archives — it says so instead),
+# `bzip2`/`zstd`/`lzma`/`xz`/`deflate64` (not what Amiga-era ZIPs use, and each
+# is another decompressor), `deflate-zopfli` (a *compressor*), and the date
+# crates. Deflate through `flate2` + `zlib-rs` keeps it pure Rust with no C
+# toolchain in the build.
+#
+# MSRV: cargo resolves this to 4.6.x because 8.x requires rustc 1.88 and this
+# crate promises 1.77. Raise it only together with the MSRV, the same rule
+# `ureq`'s pin above is written against.
+zip = { version = "4.2.0", default-features = false, features = [
+    "deflate-flate2",
+    "deflate-flate2-zlib-rs",
+] }
 
 [profile.dev]
 incremental = true
