@@ -29,11 +29,19 @@
   --tc-cursor-bg: #ffe000;
   --tc-cursor-text: #000000;
 
-  /* A selected file's name is drawn in red text — never a background fill,
-     so a row that is both selected and under the cursor stays legible as
-     red-on-yellow rather than the two affordances fighting for the same
-     pixels (see `Pane`'s `rowTextColor` in `FileManager.tsx`). */
+  /* A selected file's name is drawn in red text on the pane's normal dark
+     background — no background fill of its own — so a row that is both
+     selected and under the cursor stays legible as red-on-yellow rather
+     than the two affordances fighting for the same pixels (see `Pane`'s
+     `rowTextColor` in `FileManager.tsx`). */
   --tc-selected-text: #ff4d4d;
+
+  /* File-type colour, second reference: plain files stay `--tc-text`
+     (white); text files (`.txt`/`.md`/`.readme`/`.nfo`/`.doc`) are light
+     blue/cyan; hidden/system files are dimmed. See `TcIcon.tsx`'s
+     `classifyEntry`/`fileTextColorVar` — same classification the icon uses. */
+  --tc-text-file: #7fd7ff;
+  --tc-text-hidden: #7d8494;
 
   /* Column headers, drive row, path row, status line and the function-key
      bar: classic light grey with black text — the Windows-95 chrome look. */

@@ -41,7 +41,7 @@ import {
   type FunctionAction,
 } from "@/components/files/FunctionKeys";
 import { SelectionBar } from "@/components/files/SelectionBar";
-import { TcRowIcon } from "@/components/files/TcIcon";
+import { fileTextColorVar, TcRowIcon, UpDirIcon } from "@/components/files/TcIcon";
 import "@/pages/FileManager.css";
 import { adfOpen, type AdfInfo } from "@/lib/adf";
 import {
@@ -2043,7 +2043,7 @@ function Pane({
           {canGoUp && (
             <li className="tc-row tc-row-updir" onClick={onUp} onDoubleClick={onUp}>
               <span className="tc-cell tc-cell-name">
-                <TcRowIcon entry={{ name: "..", is_dir: true }} />
+                <UpDirIcon />
                 <span className="tc-name-text">[..]</span>
               </span>
               <span className="tc-cell tc-cell-ext" />
@@ -2059,16 +2059,20 @@ function Pane({
             const { ext } = splitName(entry.name, entry.is_dir);
             const formattedDate = formatDateTC(entry.date);
             // The cursor and the selection are shown two different ways on
-            // purpose (brief: a user must be able to tell them apart even
-            // when a row is both): the cursor is a full-row yellow fill
-            // (`tc-row-cursor`, in CSS), selection is red text — so a row
-            // that is both stays legible as red-on-yellow rather than the
-            // two affordances competing for the same pixels.
+            // purpose (second reference: selection is red text on the
+            // normal dark background; the cursor is a full-row yellow fill,
+            // black text — `tc-row-cursor`, in CSS). Selection wins over the
+            // cursor's black when a row is both, so it still reads as both:
+            // red text on the yellow bar, rather than the two affordances
+            // fighting for the same pixels. Only the *un-selected,
+            // non-cursor* case falls through to the row's own file-type
+            // colour (`fileTextColorVar` — white/light-blue/dimmed, the same
+            // classification `TcRowIcon` uses for its glyph).
             const rowTextColor = isSelected
               ? "var(--tc-selected-text)"
               : isCursor
                 ? "var(--tc-cursor-text)"
-                : "var(--tc-text)";
+                : fileTextColorVar(entry);
 
             return (
               <li
