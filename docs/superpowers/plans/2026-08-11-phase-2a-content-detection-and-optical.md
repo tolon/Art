@@ -34,8 +34,9 @@ python scripts/oracle-check.py
 
 **Baseline at the start of this plan: 731 Rust tests, 107 frontend tests, oracle 48 checks** — Phase 1a's closing numbers (STATUS.md snapshot, 2026-08-11). An earlier draft of this line said 721/76; the gate arithmetic in the task reports is against the real baseline. **Run `cargo test` twice** — ART-059 was a race that failed about one run in five.
 
-**Where this plan stands (2026-08-11):** Tasks 1, 2, 3, 3a and 3b are
-complete and on `phase-2a` — Task 3's review fixes landed after a mid-session
+**Where this plan stands (2026-08-12):** Tasks 1, 2, 3, 3a and 3b are
+complete and on `phase-2a`, and Task 4 is three steps in — the shared gate,
+ZIP and 7z all land; only its pane (Step 4) is left — Task 3's review fixes landed after a mid-session
 reboot (`80e1d40`), the 7-Zip oracle in `5be5529`, and Mode 2/XA with it in
 `787fe15`, which closed ART-075. **Task 4 (ZIP and 7z) is the next work.** See the Amendments
 section at the foot of this file for what changed after the plan was written.
@@ -362,9 +363,9 @@ string**, since an archive entry name reaching a shell is a command injection �
 implemented in `commands/` rather than `core/`, because spawning a process is
 platform-specific.
 
-- [ ] **Step 1: Generalise the gate, with the shared hostile-archive test**
-- [ ] **Step 2: ZIP backend, tests built at runtime**
-- [ ] **Step 3: 7z backend, tests built at runtime**
+- [x] **Step 1: Generalise the gate, with the shared hostile-archive test**
+- [x] **Step 2: ZIP backend, tests built at runtime**
+- [x] **Step 3: 7z backend, tests built at runtime**
 - [ ] **Step 4: Open an archive as a pane, reusing Task 3's container model**
 - [ ] **Step 5: Gates and commit**
 
