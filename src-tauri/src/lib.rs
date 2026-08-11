@@ -193,6 +193,8 @@ pub fn run() {
             commands::checkout::volume_icon_for,
             commands::whdload::whdload_plan,
             commands::whdload::whdload_install,
+            commands::archives::archives_plan_install,
+            commands::archives::archives_install,
         ])
         .run(tauri::generate_context!())
         .map_err(|e| {

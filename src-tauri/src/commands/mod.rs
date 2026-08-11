@@ -5,6 +5,7 @@
 //! logic lives here.
 
 pub mod adf;
+pub mod archives;
 pub mod checkout;
 pub mod collection;
 pub mod dragdrop;
