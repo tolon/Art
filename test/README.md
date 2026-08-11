@@ -52,6 +52,10 @@ four real bugs shipped behind a green suite because ART's reader and writer
 shared the same mistake. An independent implementation (amitools) closed part
 of that gap. AmigaDOS closes the rest.
 
+Not bootable, deliberately — it was written before ART could produce boot
+code, and leaving it that way is what makes `art-bootable-test.adf` below a
+controlled comparison rather than two variables changing at once.
+
 ---
 
 ## `art-bootable-test.adf`
@@ -87,17 +91,18 @@ cd src-tauri
 ART_BOOT_ADF_OUT=../test/art-bootable-test.adf cargo test export_bootable_adf_when_asked
 ```
 
-**A note for whoever tries this next.** Workbench does not display a file that
-has no `.info` icon beside it, so `Readme` is invisible in a Workbench window
-even though it is on the disk. Use **Window → Show → All Files** (Kickstart 2.0
-and later), or read the disk from Shell with `DIR DF0:`, which walks the
-directory rather than looking for icons. This cost us a round trip.
+901,120 bytes, `DOS\x01` (FFS), DD floppy geometry — identical to the image
+above in every byte except the boot block.
 
-**It does not boot, and that is not a defect in this image.** ART writes no
-boot code at all — the `bootable` flag lays down an `RTS` stub and nothing
-more, so the ROM jumps into it and returns immediately. Both machines refused
-to boot it and both read it fine, which is exactly the expected split. Tracked
-as **ART-063**; until that is fixed, `info.bootable` means "has a valid boot
-block", not "boots".
+---
 
-901,120 bytes, `DOS\x01` (FFS), DD floppy geometry.
+## If a disk looks empty on the Amiga
+
+It probably is not. Workbench does not display a file that has no `.info` icon
+beside it, so a `Readme` written by ART is invisible in a Workbench window even
+though it is on the disk. Use **Window → Show → All Files** (Kickstart 2.0 and
+later), or read the disk from Shell with `DIR DF0:`, which walks the directory
+rather than looking for icons.
+
+This cost a round trip the first time, and it will look exactly like a
+filesystem bug when it happens.
