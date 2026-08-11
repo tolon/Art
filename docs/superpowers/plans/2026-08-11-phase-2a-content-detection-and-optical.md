@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** ART opens `.adf`, `.hdf`, `.img`, `.iso`, `.dsk`, `.raw`, `.zip`, `.7z` and `.lha` in the commander, deciding what each one *is* from its contents rather than its filename, and browsing every one of them as a pane.
+**Goal:** ART opens `.adf`, `.hdf`, `.img`, `.iso`, `.dsk`, `.raw`, `.zip`, `.7z`, `.lha`, `.d64`, `.d71`, `.d81` and `.t64` in the commander, deciding what each one *is* from its contents rather than its filename, and browsing every one of them as a pane. `.tap`, `.prg` and `.crt` are identified but not browsable — a TAP holds a raw tape signal, not a directory.
 
-**The unifying idea:** a floppy image, a hard-disk partition, a CD and an archive are all the same thing to a commander — **a container you can walk into, list, and copy out of**. ART already has that model for ADF and HDF (`PaneState`, where an ADF is simply volume 0). This phase adds three more container kinds behind it rather than three more screens.
+**The unifying idea:** a floppy image, a hard-disk partition, a CD and an archive are all the same thing to a commander — **a container you can walk into, list, and copy out of**. ART already has that model for ADF and HDF (`PaneState`, where an ADF is simply volume 0). This phase adds five more container kinds behind it — a CD, two archive formats, and Commodore 64 disk and tape archives — rather than five more screens.
 
 **Architecture:** Two halves that must land in this order. First `detect()` stops dispatching on the extension and reads the first blocks instead — that single change makes `.img` and `.dsk` resolve to whatever they actually contain, and turns every later format into one signature rather than one more branch in a growing match. Then an ISO9660 reader, exposed through the same `CopySource`-shaped read path the commander already uses for ADF and HDF volumes, so browsing a CD is the same code as browsing a floppy.
 
@@ -274,7 +274,82 @@ platform-specific.
 - [ ] **Step 4: Open an archive as a pane, reusing Task 3's container model**
 - [ ] **Step 5: Gates and commit**
 
-## Task 5: Close the phase
+## Task 5: Commodore 64 disk and tape images
+
+**Files:**
+- Create: `src-tauri/src/core/cbm/mod.rs`, `src-tauri/src/core/cbm/d64.rs`, `src-tauri/src/core/cbm/t64.rs`
+- Modify: `src-tauri/src/core/detect.rs`, `src-tauri/src/commands/`, `src/pages/FileManager.tsx`
+
+**Interfaces:**
+- Consumes: the container model from Task 3 and the `ArchiveReader`-shaped read path from Task 4.
+- Produces: `D64Image` and `T64Archive`, both exposing the same list-and-read shape as `IsoImage`.
+
+**Scope, and the one thing that must not be over-promised.**
+
+| Format | What it is | This task |
+|---|---|---|
+| **D64** | 1541 disk image, 35 tracks, 683 × 256-byte blocks = 174,848 bytes (175,531 with error bytes) | browsable |
+| **D71** | 1571, double-sided, 349,696 bytes | browsable |
+| **D81** | 1581, 3.5″, 819,200 bytes, 80 tracks × 40 sectors | browsable |
+| **T64** | tape *archive* — a real header and directory, despite the name | browsable |
+| **TAP** | a raw recording of the tape signal as pulse widths | **identify only** |
+| **PRG** | one program; the first two bytes are the load address | identify only |
+| **CRT** | cartridge image | identify only |
+
+**TAP cannot be browsed, and the reason is not effort.** A TAP file holds no
+directory and no file table — it is the analogue tape signal sampled as pulse
+lengths. Listing its contents means demodulating the Commodore ROM tape format,
+and most commercial titles shipped their own turbo loader, so a standard
+decoder finds nothing in them. **Detect it, report what it is and its length,
+and stop there.** Do not add a TAP row to `FEATURES.md` that implies more
+(§10, §89). A standard-loader decoder is a legitimate future slice; it is not
+this one.
+
+**D64 layout, only what the reader needs.**
+- No header: the file *is* the sectors, track 1 sector 0 first. Tracks are
+  numbered from 1; sectors per track vary by zone — 21 for tracks 1–17, 19 for
+  18–24, 18 for 25–30, 17 for 31–35. **A track/sector pair converts to a byte
+  offset only through that table**, so build it once and test it at every zone
+  boundary.
+- **BAM** at track 18, sector 0. Disk name at offset 0x90 (16 bytes, PETSCII,
+  padded with 0xA0), disk ID at 0xA2.
+- **Directory** starts at track 18, sector 1. Each sector holds 8 entries of 32
+  bytes: file type at offset 2 (low nibble 0=DEL 1=SEQ 2=PRG 3=USR 4=REL, bit 7
+  set = closed), first track/sector at 3–4, name at 5–20 (PETSCII, 0xA0
+  padded), size in blocks as a little-endian u16 at 30.
+- The first two bytes of every sector are the **next track and sector** in the
+  chain; a next-track of 0 means this is the last, and then the second byte is
+  how many bytes of this sector are used.
+
+**Bounds, and why.** Every one of these comes from an untrusted file:
+- A track/sector pair outside the geometry is an error, never an index.
+- **Sector chains must have a step limit and a visited set.** A crafted D64 can
+  point a sector at itself; without both, the reader loops forever.
+- Cap directory entries and total entries.
+- `panic = "abort"` — no direct indexing anywhere.
+
+**PETSCII is not ASCII.** Names need a PETSCII→Unicode mapping, and 0xA0 is
+padding to strip, not a character. Get the shifted/unshifted case right: in
+PETSCII's default upper-case set, 0x41–0x5A are uppercase letters. A name that
+comes out as mojibake is a bug even though nothing crashes — pin a few real
+names in tests.
+
+- [ ] **Step 1: The track/sector geometry, tested at every zone boundary**
+- [ ] **Step 2: BAM and disk name, with PETSCII decoding**
+- [ ] **Step 3: The directory walk, with the loop guard proved by a self-referencing fixture**
+- [ ] **Step 4: Reading a file's sector chain back byte for byte**
+- [ ] **Step 5: T64 — simpler; a header, a record count, and per-entry load/end addresses**
+- [ ] **Step 6: Detection signatures, and identify-only for TAP, PRG and CRT**
+- [ ] **Step 7: Open a D64 and a T64 as panes, read-only**
+- [ ] **Step 8: Gates and commit**
+
+**A note on scope, recorded rather than argued.** This is a Commodore 64
+format in a toolkit named for the Amiga. It fits architecturally — the
+container model generalises to it exactly — and it was asked for deliberately.
+Worth deciding at some point whether the product's name and `README` should
+widen to match; not a reason to delay the work.
+
+## Task 6: Close the phase
 
 **Files:**
 - Modify: `docs/FEATURES.md`, `docs/STATUS.md`, `docs/ISSUES.md`, `CHANGELOG.md`, `docs/format-support-matrix.md`
