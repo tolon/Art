@@ -917,9 +917,15 @@
       "name": "Name",
       "size": "Size",
       "date": "Date",
+      "ext": "Ext",
       "ascending": "ascending",
       "descending": "descending",
       "title": "Sorted by {{column}}, {{direction}} — click to change"
+    },
+    "tc": {
+      "dirSize": "<DIR>",
+      "freeOfTotal": "{{free}} k of {{total}} k free",
+      "statusLine": "{{selectedBytes}} k / {{totalBytes}} k in {{selectedFiles}} / {{totalFiles}} file(s), {{selectedDirs}} / {{totalDirs}} dir(s)"
     },
     "footer": {
       "unnamed": "(unnamed)",

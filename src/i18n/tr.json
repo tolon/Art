@@ -917,9 +917,15 @@
       "name": "Ad",
       "size": "Boyut",
       "date": "Tarih",
+      "ext": "Uzantı",
       "ascending": "artan",
       "descending": "azalan",
       "title": "{{column}} sırasına göre, {{direction}} — değiştirmek için tıklayın"
+    },
+    "tc": {
+      "dirSize": "<DIR>",
+      "freeOfTotal": "{{total}} k içinden {{free}} k boş",
+      "statusLine": "{{selectedBytes}} k / {{totalBytes}} k — {{selectedFiles}} / {{totalFiles}} dosya, {{selectedDirs}} / {{totalDirs}} dizin"
     },
     "footer": {
       "unnamed": "(adsız)",

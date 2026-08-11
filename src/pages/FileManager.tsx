@@ -41,6 +41,8 @@ import {
   type FunctionAction,
 } from "@/components/files/FunctionKeys";
 import { SelectionBar } from "@/components/files/SelectionBar";
+import { TcRowIcon } from "@/components/files/TcIcon";
+import "@/pages/FileManager.css";
 import { adfOpen, type AdfInfo } from "@/lib/adf";
 import {
   archivesInstall,
@@ -57,6 +59,9 @@ import {
   panelLocalRoots,
   type PanelEntry,
 } from "@/lib/panel";
+import { splitName } from "@/lib/panelName";
+import { paneStatusCounts } from "@/lib/panelStatus";
+import { formatDateTC, formatGroupedSize } from "@/lib/tcFormat";
 import {
   entriesIn,
   insertToggle,
@@ -135,6 +140,16 @@ interface PaneState {
   warnings: string[];
   /** Whether ART can write here, and what the footer shows (§8). */
   capability: WriteCapability | null;
+  /**
+   * The volume's total capacity in bytes, for the Total Commander-styled
+   * drive row's "free of total" (task 6b) — `null` for a local folder (ART
+   * has no free/total-space command for a Windows drive) and for an HDF
+   * still showing its partition list (no single volume open yet). Read
+   * straight out of data `openAdf`/`openVolume` already fetch — `AdfInfo`'s
+   * `capacity_bytes`, `VolumeListing`'s `total_blocks * block_size` — never
+   * a new call of its own.
+   */
+  totalBytes: number | null;
   error: string | null;
 }
 
@@ -153,6 +168,7 @@ function emptyPane(): PaneState {
     volumeName: "",
     warnings: [],
     capability: null,
+    totalBytes: null,
     error: null,
   };
 }
@@ -462,6 +478,7 @@ export function FileManager() {
           volumeIndex: 0,
           volumeName: capability?.volume_name ?? info.volume_name ?? "",
           capability,
+          totalBytes: info.capacity_bytes,
         });
         resetSelection(side);
         setFocused(side);
@@ -511,6 +528,7 @@ export function FileManager() {
           volumeName: listing.volume_name,
           warnings: listing.warnings,
           capability,
+          totalBytes: listing.total_blocks * listing.block_size,
           dirBlock: dirBlock ?? listing.root_block,
           trail,
           entries: listing.entries,
@@ -1600,44 +1618,70 @@ export function FileManager() {
         </div>
       )}
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr auto 1fr",
-          gap: 10,
-          alignItems: "start",
-        }}
-      >
-        <Pane {...paneProps("left")} />
+      {/*
+       * The Total Commander presentation (task 6b) lives entirely inside
+       * `.tc-commander` — see `src/pages/FileManager.css`'s header for how
+       * that scoping works and why the rest of the app never sees it. Only
+       * this wrapper and its descendants read the `--tc-*` custom
+       * properties; nothing outside it, and nothing above this point in the
+       * page (the title, the intro line, the recovery/error/busy banners),
+       * does either — they stay in the app's own light/dark theme.
+       */}
+      <div className="tc-commander">
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr auto 1fr",
+            gap: 10,
+            alignItems: "start",
+          }}
+        >
+          <Pane {...paneProps("left")} />
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 90 }}>
-          <button
-            className="btn"
-            title={t("files.arrows.toRightTitle")}
-            disabled={selection.left.size === 0 || busy !== null}
-            onClick={() => void copySelectionTo("left", selectedEntries("left"))}
-          >
-            &rarr;
-          </button>
-          <button
-            className="btn"
-            title={t("files.arrows.toLeftTitle")}
-            disabled={selection.right.size === 0 || busy !== null}
-            onClick={() => void copySelectionTo("right", selectedEntries("right"))}
-          >
-            &larr;
-          </button>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 90 }}>
+            <button
+              className="btn"
+              title={t("files.arrows.toRightTitle")}
+              disabled={selection.left.size === 0 || busy !== null}
+              onClick={() => void copySelectionTo("left", selectedEntries("left"))}
+            >
+              &rarr;
+            </button>
+            <button
+              className="btn"
+              title={t("files.arrows.toLeftTitle")}
+              disabled={selection.right.size === 0 || busy !== null}
+              onClick={() => void copySelectionTo("right", selectedEntries("right"))}
+            >
+              &larr;
+            </button>
+          </div>
+
+          <Pane {...paneProps("right")} />
         </div>
 
-        <Pane {...paneProps("right")} />
+        <SelectionBar
+          count={selection[focused].size}
+          bytes={selectedEntries(focused).reduce((sum, entry) => sum + entry.bytes, 0)}
+        />
+
+        {/*
+         * Decorative only — the reference's command line, reproduced as
+         * chrome, not as a feature. ART has no shell to run a typed command
+         * against (and adding one is well outside a frontend/CSS task), so
+         * this is a disabled-looking, non-interactive prompt line rather
+         * than a text box that would imply typing into it does something.
+         * It reflects whichever pane is focused, the same source `focused`
+         * everywhere else in this screen already reads.
+         */}
+        <div className="tc-chrome-row tc-command-line" aria-hidden="true">
+          {`${pane(focused).location}>`}
+        </div>
+
+        <div className="tc-chrome-row tc-fnkey-row">
+          <FunctionKeyBar actions={actions} />
+        </div>
       </div>
-
-      <SelectionBar
-        count={selection[focused].size}
-        bytes={selectedEntries(focused).reduce((sum, entry) => sum + entry.bytes, 0)}
-      />
-
-      <FunctionKeyBar actions={actions} />
 
       <CheckoutPanel
         onChanged={(row) => {
@@ -1837,7 +1881,7 @@ function Pane({
   onDragOut: (entry: PanelEntry) => void;
   onDropped: (entry: PanelEntry, from: Side) => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [dragOver, setDragOver] = useState(false);
 
   const showingFiles = state.kind !== "hdf" || state.volumeIndex !== null;
@@ -1849,19 +1893,40 @@ function Pane({
   // An HDF is never a destination: writing into a partition is not implemented.
   const acceptsDrops = state.kind !== "hdf";
 
+  // Total Commander's drive row shows "free of total", in kilobytes grouped
+  // by the active locale (`@/lib/tcFormat`, not the dots the reference
+  // screenshot happens to show — see that file's comment). ART has that pair
+  // only for a volume it has actually opened: an ADF or an HDF partition,
+  // via `state.capability.free_bytes` and `state.totalBytes` (see that
+  // field's own comment on `PaneState`). A local folder has none — ART has
+  // no free-space command for a Windows drive — so this renders nothing for
+  // one rather than a fabricated number.
+  const freeSpace =
+    state.capability && state.totalBytes !== null
+      ? t("files.tc.freeOfTotal", {
+          free: formatGroupedSize(Math.round(state.capability.free_bytes / 1024), i18n.language),
+          total: formatGroupedSize(Math.round(state.totalBytes / 1024), i18n.language),
+        })
+      : null;
+
+  // The per-pane status line (row 5 of the reference): selected/total bytes,
+  // then selected/total files, then selected/total directories. Reads
+  // `sortedEntries`/`selectedNames` through the same pure `paneStatusCounts`
+  // a unit test covers on its own (`@/lib/panelStatus`) — `[..]` is never
+  // part of the count, since it is not a real entry.
+  const status = paneStatusCounts(sortedEntries, selectedNames);
+
   return (
     <section
-      className="card"
-      // §64-style focus visibility, but for the pane rather than a control:
-      // a commander where you cannot see which side the keyboard is talking
-      // to is worse than one with no keyboard at all. `--accent` is the same
-      // token every other focus/active affordance in the app already uses,
-      // so this reads correctly in both themes without a colour of its own.
+      className="tc-pane"
+      // §64-style focus visibility, but for the pane rather than a control,
+      // and in the TC palette's own tokens rather than `--accent` — this
+      // pane deliberately does not follow the app theme, so its focus ring
+      // should not either. A commander where you cannot see which side the
+      // keyboard is talking to is worse than one with no keyboard at all.
       style={{
-        minHeight: 420,
-        outline: dragOver ? "2px solid var(--accent)" : "none",
-        borderColor: focused ? "var(--accent)" : "var(--border)",
-        boxShadow: focused ? "0 0 0 1px var(--accent)" : undefined,
+        outline: dragOver ? "2px solid var(--tc-focus-ring)" : "none",
+        boxShadow: focused ? "inset 0 0 0 2px var(--tc-focus-ring)" : undefined,
       }}
       aria-current={focused ? "true" : undefined}
       onClick={onFocus}
@@ -1883,45 +1948,50 @@ function Pane({
         }
       }}
     >
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-        <button className="btn" style={{ fontSize: 12 }} onClick={onOpenFolder}>
+      {/* Row 1 of the reference: TC's "drive row". ART's pane is not a
+          Windows drive — it can hold a local folder, an ADF or an HDF
+          partition — so this is every control that opens or navigates the
+          pane, in a button strip, plus the open volume's name and free
+          space when there is one; not a literal drive-letter dropdown (see
+          the task report for why). */}
+      <div className="tc-chrome-row tc-drive-row">
+        <button className="btn btn-sm" onClick={onOpenFolder}>
           {t("files.toolbar.folder")}
         </button>
-        <button className="btn" style={{ fontSize: 12 }} onClick={() => onOpenImage("adf")}>
+        <button className="btn btn-sm" onClick={() => onOpenImage("adf")}>
           {t("files.toolbar.adf")}
         </button>
-        <button className="btn" style={{ fontSize: 12 }} onClick={() => onOpenImage("hdf")}>
+        <button className="btn btn-sm" onClick={() => onOpenImage("hdf")}>
           {t("files.toolbar.hdf")}
         </button>
-        <button className="btn" style={{ fontSize: 12 }} onClick={onUp} disabled={!canGoUp}>
-          {t("files.toolbar.up")}
-        </button>
-        <button className="btn" style={{ fontSize: 12 }} onClick={onRefresh}>
-          {t("files.toolbar.refresh")}
-        </button>
-        {writableVolume(state) !== null && (
-          <button className="btn" style={{ fontSize: 12 }} onClick={onNewFolder}>
-            {t("files.toolbar.newFolder")}
-          </button>
-        )}
-      </div>
-
-      {state.kind === "local" && roots.length > 0 && (
-        <div style={{ display: "flex", gap: 4, marginBottom: 8, flexWrap: "wrap" }}>
-          {roots.map((root) => (
-            <button
-              key={root}
-              className="btn"
-              style={{ fontSize: 11 }}
-              onClick={() => onOpenRoot(root)}
-            >
+        {state.kind === "local" &&
+          roots.map((root) => (
+            <button key={root} className="btn btn-sm" onClick={() => onOpenRoot(root)}>
               {root}
             </button>
           ))}
-        </div>
-      )}
+        {state.kind !== "local" && state.volumeIndex !== null && (
+          <span className="tc-drive-volume">
+            [{state.capability?.volume_name || state.volumeName || t("files.footer.unnamed")}]
+          </span>
+        )}
+        {freeSpace && <span className="tc-drive-free">{freeSpace}</span>}
+        <span className="tc-drive-spacer" />
+        {writableVolume(state) !== null && (
+          <button className="btn btn-sm" onClick={onNewFolder}>
+            {t("files.toolbar.newFolder")}
+          </button>
+        )}
+        <button className="btn btn-sm" onClick={onRefresh}>
+          {t("files.toolbar.refresh")}
+        </button>
+        <button className="btn btn-sm" onClick={onUp} disabled={!canGoUp}>
+          {t("files.toolbar.up")}
+        </button>
+      </div>
 
-      <div className="faint" style={{ fontSize: 11, marginBottom: 6, wordBreak: "break-all" }}>
+      {/* Row 2: the path row. */}
+      <div className="tc-chrome-row tc-path-row">
         {state.location || t("files.pane.nothingOpen")}
         {state.kind === "hdf" && state.volumeName && ` > ${state.volumeName}:`}
         {state.trail.length > 0 && ` > ${state.trail.map((crumb) => crumb.name).join(" > ")}`}
@@ -1960,19 +2030,50 @@ function Pane({
         </div>
       )}
 
-      {showingFiles && sortedEntries.length > 0 && (
-        <SortHeaderRow sort={sort} onSortChange={onSortChange} />
+      {showingFiles && (sortedEntries.length > 0 || canGoUp) && (
+        <TcHeaderRow sort={sort} onSortChange={onSortChange} />
       )}
 
       {showingFiles && (
-        <ul style={{ listStyle: "none", padding: 0, margin: 0, maxHeight: 420, overflow: "auto" }}>
+        <ul className="tc-row-list">
+          {/* `[..]` — Total Commander's "go up" row, always first when there
+              is somewhere to go. It is chrome, not a `PanelEntry`: it has no
+              place in the selection Set or the sort order, so it is rendered
+              once here rather than being synthesised into `sortedEntries`. */}
+          {canGoUp && (
+            <li className="tc-row tc-row-updir" onClick={onUp} onDoubleClick={onUp}>
+              <span className="tc-cell tc-cell-name">
+                <TcRowIcon entry={{ name: "..", is_dir: true }} />
+                <span className="tc-name-text">[..]</span>
+              </span>
+              <span className="tc-cell tc-cell-ext" />
+              <span className="tc-cell tc-cell-size" />
+              <span className="tc-cell tc-cell-date" />
+              <span className="tc-cell tc-cell-actions" />
+            </li>
+          )}
+
           {sortedEntries.map((entry) => {
             const isSelected = selectedNames.has(entry.name);
             const isCursor = cursorName === entry.name;
+            const { ext } = splitName(entry.name, entry.is_dir);
+            const formattedDate = formatDateTC(entry.date);
+            // The cursor and the selection are shown two different ways on
+            // purpose (brief: a user must be able to tell them apart even
+            // when a row is both): the cursor is a full-row yellow fill
+            // (`tc-row-cursor`, in CSS), selection is red text — so a row
+            // that is both stays legible as red-on-yellow rather than the
+            // two affordances competing for the same pixels.
+            const rowTextColor = isSelected
+              ? "var(--tc-selected-text)"
+              : isCursor
+                ? "var(--tc-cursor-text)"
+                : "var(--tc-text)";
+
             return (
               <li
                 key={`${entry.name}-${entry.header_block ?? entry.path}`}
-                className="recent-item"
+                className={`tc-row${isCursor ? " tc-row-cursor" : ""}`}
                 draggable={!entry.is_dir}
                 onDragStart={(event) => {
                   event.dataTransfer.setData(
@@ -1986,29 +2087,13 @@ function Pane({
                 }}
                 onClick={(event) => onSelect(entry, event)}
                 onDoubleClick={() => onActivate(entry)}
-                style={{
-                  cursor: entry.is_dir ? "pointer" : "grab",
-                  // Selected and "under the cursor" are shown differently on
-                  // purpose (brief: a user must be able to tell them apart):
-                  // a selected row gets an accent-tinted fill, the cursor row
-                  // an accent ring — both, together, when a row is both.
-                  background: isSelected
-                    ? "color-mix(in srgb, var(--accent) 22%, transparent)"
-                    : undefined,
-                  boxShadow: isCursor ? "inset 0 0 0 1px var(--accent)" : undefined,
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: 8,
-                }}
+                style={{ color: rowTextColor, cursor: entry.is_dir ? "pointer" : "grab" }}
               >
-                <span style={{ minWidth: 0 }}>
-                  <span className="recent-name">{entry.name}</span>
-                  {entry.is_dir && (
-                    <span className="faint" style={{ fontSize: 10 }}>
-                      {" "}
-                      {t("files.pane.folderSuffix")}
-                    </span>
-                  )}
+                <span className="tc-cell tc-cell-name">
+                  <TcRowIcon entry={entry} />
+                  <span className="tc-name-text">
+                    {entry.is_dir ? `[${entry.name}]` : entry.name}
+                  </span>
                   {entry.is_link && (
                     <span className="faint" style={{ fontSize: 10 }}>
                       {" "}
@@ -2016,16 +2101,16 @@ function Pane({
                     </span>
                   )}
                 </span>
-                <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  {!entry.is_dir && (
-                    <span className="faint" style={{ fontSize: 11 }}>
-                      {formatBytes(entry.bytes)}
-                    </span>
-                  )}
+                <span className="tc-cell tc-cell-ext">{ext}</span>
+                <span className="tc-cell tc-cell-size">
+                  {entry.is_dir ? t("files.tc.dirSize") : formatGroupedSize(entry.bytes, i18n.language)}
+                </span>
+                <span className="tc-cell tc-cell-date">{formattedDate ?? "—"}</span>
+                <span className="tc-cell tc-cell-actions">
                   {!entry.is_dir && (
                     <button
                       className="btn"
-                      style={{ fontSize: 10 }}
+                      style={{ fontSize: 10, padding: "0 5px" }}
                       title={t("files.pane.copyTitle")}
                       onClick={(event) => {
                         event.stopPropagation();
@@ -2043,7 +2128,7 @@ function Pane({
                   {writableVolume(state) !== null && (
                     <button
                       className="btn"
-                      style={{ fontSize: 10 }}
+                      style={{ fontSize: 10, padding: "0 5px" }}
                       title={t("files.pane.deleteTitle")}
                       onClick={(event) => {
                         event.stopPropagation();
@@ -2060,49 +2145,69 @@ function Pane({
           })}
 
           {sortedEntries.length === 0 && !state.error && (
-            <li className="muted" style={{ fontSize: 12, padding: "8px 0" }}>
+            <li className="muted" style={{ fontSize: 12, padding: "8px 0 8px 8px" }}>
               {t("files.pane.empty")}
             </li>
           )}
         </ul>
+      )}
+
+      {/* Row 5 of the reference: the status line. */}
+      {showingFiles && (
+        <div className="tc-chrome-row tc-status-row">
+          {t("files.tc.statusLine", {
+            selectedBytes: formatGroupedSize(Math.round(status.selectedBytes / 1024), i18n.language),
+            totalBytes: formatGroupedSize(Math.round(status.totalBytes / 1024), i18n.language),
+            selectedFiles: status.selectedFiles,
+            totalFiles: status.totalFiles,
+            selectedDirs: status.selectedDirs,
+            totalDirs: status.totalDirs,
+          })}
+        </div>
       )}
     </section>
   );
 }
 
 /**
- * The clickable Name / Date / Size headers above a pane's entry list.
+ * The clickable Name / Ext / Size / Date headers above a pane's entry list —
+ * Total Commander's column row (task 6b), the sorted column carrying an
+ * arrow immediately before its label rather than after (`↓Date`, not
+ * `Date↓`).
  *
  * Clicking a header sorts by it; clicking the active one again reverses —
  * `onSortChange` (`clickColumn` in `@/lib/sort`) already knows which. Folders
  * stay first regardless of which header is active or which direction is
  * chosen; that rule lives in the comparator itself (`compareEntries`), not
  * here, so this component only has to reflect `sort`, never enforce it.
+ *
+ * Ext has no column of its own in `@/lib/sort`'s `SortColumn` — the reference
+ * screenshot never sorts by it either — so it renders as a plain, unclickable
+ * label rather than growing a second sort mechanism alongside the existing
+ * one. The trailing cell lines up with each row's copy/delete buttons and
+ * carries no label.
  */
-function SortHeaderRow({
+function TcHeaderRow({
   sort,
   onSortChange,
 }: {
   sort: SortState;
   onSortChange: (column: SortColumn) => void;
 }) {
+  const { t } = useTranslation();
   return (
-    <div
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        gap: 8,
-        fontSize: 11,
-        padding: "0 4px 4px",
-        borderBottom: "1px solid var(--border)",
-        marginBottom: 4,
-      }}
-    >
-      <SortHeaderButton column="name" sort={sort} onSortChange={onSortChange} />
-      <span style={{ display: "flex", gap: 10 }}>
-        <SortHeaderButton column="date" sort={sort} onSortChange={onSortChange} />
+    <div className="tc-row tc-header-row">
+      <span className="tc-cell tc-cell-name">
+        <SortHeaderButton column="name" sort={sort} onSortChange={onSortChange} />
+      </span>
+      <span className="tc-cell tc-cell-ext">{t("files.sort.ext")}</span>
+      <span className="tc-cell tc-cell-size">
         <SortHeaderButton column="size" sort={sort} onSortChange={onSortChange} />
       </span>
+      <span className="tc-cell tc-cell-date">
+        <SortHeaderButton column="date" sort={sort} onSortChange={onSortChange} />
+      </span>
+      <span className="tc-cell tc-cell-actions" aria-hidden="true" />
     </div>
   );
 }
@@ -2134,15 +2239,8 @@ function SortHeaderButton({
   return (
     <button
       type="button"
-      className="btn"
-      style={{
-        fontSize: 11,
-        padding: "1px 6px",
-        background: "transparent",
-        border: "none",
-        color: active ? "var(--accent)" : "var(--text-muted)",
-        fontWeight: active ? 600 : 400,
-      }}
+      className="tc-header-btn"
+      style={{ fontWeight: active ? 700 : 400 }}
       title={t("files.sort.title", {
         column: label,
         direction: sort.direction === "asc" ? t("files.sort.ascending") : t("files.sort.descending"),
@@ -2155,8 +2253,11 @@ function SortHeaderButton({
         onSortChange(column);
       }}
     >
+      {/* The arrow sits immediately before the label — TC's own convention
+          (`↓Date`, not `Date↓`) — rather than the trailing arrow this
+          button used before the palette redesign. */}
+      {active && <span aria-hidden="true">{sort.direction === "asc" ? "▲" : "▼"} </span>}
       {label}
-      {active && <span aria-hidden="true">{sort.direction === "asc" ? " ▲" : " ▼"}</span>}
     </button>
   );
 }

@@ -1,0 +1,281 @@
+/*
+ * The Files screen, in Total Commander's own colours (task 6b).
+ *
+ * Scoping: every custom property here is a new `--tc-*` name, defined only
+ * on `.tc-commander` (the wrapper `FileManager.tsx` puts around the pane
+ * grid, the per-pane status lines, the decorative command line and the
+ * function-key bar — see that file's comment at the wrapper). Every
+ * selector below is qualified under `.tc-commander` or a `.tc-*` class that
+ * only exists inside it. Nothing here redefines an app theme token
+ * (`--bg`, `--text`, `--accent`, …) and nothing here is unqualified, so this
+ * stylesheet cannot change how any other screen looks even though Vite
+ * bundles it into the same global stylesheet as everything else — the
+ * *selectors*, not the file boundary, are what keeps it contained.
+ *
+ * The palette is deliberate and does not follow the app's light/dark theme
+ * (`src/styles/theme.css`'s `.theme-dark`/`.theme-light`): Total Commander
+ * looks like Total Commander regardless of the desktop theme, which is
+ * exactly what was asked for. There is no `prefers-color-scheme` block
+ * below on purpose.
+ */
+
+.tc-commander {
+  /* Pane background: very dark navy, near-black with a blue cast. */
+  --tc-bg: #06081c;
+  --tc-text: #ffffff;
+
+  /* The row under the keyboard cursor: solid bright yellow, black text —
+     spans the full row width (`.tc-row-cursor`, below). */
+  --tc-cursor-bg: #ffe000;
+  --tc-cursor-text: #000000;
+
+  /* A selected file's name is drawn in red text — never a background fill,
+     so a row that is both selected and under the cursor stays legible as
+     red-on-yellow rather than the two affordances fighting for the same
+     pixels (see `Pane`'s `rowTextColor` in `FileManager.tsx`). */
+  --tc-selected-text: #ff4d4d;
+
+  /* Column headers, drive row, path row, status line and the function-key
+     bar: classic light grey with black text — the Windows-95 chrome look. */
+  --tc-chrome-bg: #c0c0c0;
+  --tc-chrome-text: #101010;
+  --tc-chrome-border: #7a7a7a;
+
+  /* The focused pane needs to stay visibly distinct even inside this fixed
+     palette (brief: focus and selection are not the app's theme accent
+     here), so this is its own token rather than reusing `--accent`. */
+  --tc-focus-ring: #4fd1ff;
+
+  font-size: 12px;
+}
+
+/* ---- Panes ------------------------------------------------------------ */
+
+.tc-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 420px;
+  background: var(--tc-bg);
+  color: var(--tc-text);
+  border: 1px solid var(--tc-chrome-border);
+  border-radius: 0;
+  overflow: hidden;
+}
+
+/* ---- Chrome rows: drive row, path row, status line, command line, ----- */
+/* ---- and (wrapping FunctionKeyBar) the function-key bar.               */
+
+.tc-chrome-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 3px 6px;
+  background: var(--tc-chrome-bg);
+  color: var(--tc-chrome-text);
+  border-bottom: 1px solid var(--tc-chrome-border);
+  font-size: 11px;
+  min-height: 22px;
+}
+
+.tc-drive-volume {
+  font-weight: 700;
+}
+.tc-drive-free {
+  white-space: nowrap;
+}
+/* Pushes the New folder/Refresh/Up controls to the row's right edge, the
+   way the reference's `\` and `..` sit apart from the drive selector. */
+.tc-drive-spacer {
+  flex: 1 1 auto;
+}
+
+.tc-path-row {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tc-command-line {
+  font-family: ui-monospace, "Cascadia Code", Consolas, "Liberation Mono", monospace;
+  color: var(--tc-chrome-text);
+  opacity: 0.85;
+}
+
+/* The function-key bar sits in its own chrome strip below the panes,
+   spanning the full width — `FunctionKeyBar` itself is unchanged (it is
+   shared, tested, and still just renders a row of `.btn`s); this wrapper
+   only supplies the chrome background around it. */
+.tc-fnkey-row {
+  padding: 4px 6px;
+}
+
+/* Every ordinary button inside the Total Commander presentation reads as
+   chrome too, not as the app's own dark/light `.btn` — drive-row actions,
+   the New folder/Refresh/Up controls, the inter-pane copy arrows, and the
+   function keys all pick this up simply by living inside `.tc-commander`. */
+.tc-commander .btn {
+  background: var(--tc-chrome-bg);
+  color: var(--tc-chrome-text);
+  border: 1px solid var(--tc-chrome-border);
+  border-radius: 2px;
+}
+.tc-commander .btn:hover {
+  background: color-mix(in srgb, var(--tc-chrome-bg) 82%, black);
+}
+.tc-commander .btn-sm {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+/* The selection-bar text (between the panes and the command line) is
+   read-only status, not the pane fill — it keeps its own muted styling
+   rather than inheriting pane colours it was never designed against. */
+.tc-commander .selection-bar {
+  padding: 2px 6px;
+}
+
+/* ---- The column header row and the row list ---------------------------- */
+
+/* Shared by the header row and every data row so their columns line up:
+   Name (flexible) · Ext · Size · Date · a trailing slot for the per-row
+   copy/delete buttons. Attr has no column here — see the task report for
+   why (`PanelEntry` carries no attribute string to render). */
+.tc-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 52px 128px 118px 58px;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.tc-header-row {
+  background: var(--tc-chrome-bg);
+  color: var(--tc-chrome-text);
+  border-bottom: 1px solid var(--tc-chrome-border);
+  font-weight: 700;
+}
+
+.tc-header-btn {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  font-weight: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+.tc-header-btn:hover {
+  text-decoration: underline;
+}
+
+.tc-row-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 420px;
+  /* The pane's own scroll box (spec: a pane's list scrolls inside the pane,
+     never the page) — `overflow-x: hidden` because every column already has
+     a fixed or flexible width that fits the row, so nothing needs to pan
+     sideways in here the way a hex dump or block table might elsewhere. */
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--tc-bg);
+}
+
+.tc-row:not(.tc-header-row):hover:not(.tc-row-cursor) {
+  background: color-mix(in srgb, var(--tc-text) 12%, transparent);
+}
+
+/* The cursor row: solid bright yellow, spanning the full row width. Text
+   colour is decided per-row in `FileManager.tsx` (`rowTextColor`), not here,
+   because a selected *and* cursored row needs red text instead of the plain
+   cursor black — see `--tc-selected-text`'s comment above. */
+.tc-row-cursor {
+  background: var(--tc-cursor-bg);
+}
+
+.tc-row-updir {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.tc-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tc-cell-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.tc-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tc-cell-ext {
+  text-align: left;
+}
+.tc-cell-size,
+.tc-cell-date {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.tc-cell-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.tc-status-row {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Carried-over content inside a pane — the error badge, HDF warnings, the
+   truncated-listing notice, the partition list, `VolumeFooter`'s read-only
+   lock — keeps its existing components and behaviour untouched (see the
+   task report), but those components' classes (`.badge-err`, `.badge-warn`,
+   `.muted`, `.faint`) are app-theme tokens tuned for `--bg-panel`, not for
+   this pane's permanently-dark background. Without this, a light-themed app
+   would render them at low contrast here. This does not touch `.badge-*`
+   anywhere else in the app — only inside `.tc-pane`. */
+.tc-pane .badge-err {
+  background: color-mix(in srgb, #ff6b6b 25%, transparent);
+  color: #ff9a9a;
+}
+.tc-pane .badge-warn {
+  background: color-mix(in srgb, #ffd23f 22%, transparent);
+  color: #ffdb70;
+}
+.tc-pane .muted,
+.tc-pane .faint {
+  color: color-mix(in srgb, var(--tc-text) 60%, transparent);
+}
+.tc-pane .recent-name {
+  color: var(--tc-text);
+}
+/* `PartitionList`'s hover (`.recent-item:hover` in layout.css) is tuned for
+   `--bg-panel`; under a light app theme that would flash near-white over
+   this pane's fixed dark background. */
+.tc-pane .recent-item:hover {
+  background: color-mix(in srgb, var(--tc-text) 12%, transparent);
+}
+
+/* Below the width this app already treats as its floor (App layout collapses
+   the sidebar at 1000px), the Date column is the first thing that can go
+   without losing anything Name/Ext/Size/the row actions need — the row
+   still degrades to a scrollable list rather than clipping. */
+@media (max-width: 1000px) {
+  .tc-row {
+    grid-template-columns: minmax(0, 1fr) 40px 96px 58px;
+  }
+  .tc-cell-date {
+    display: none;
+  }
+}
