@@ -87,6 +87,7 @@ pub fn volume_list(
                 bytes: file.byte_size,
                 path: None,
                 header_block: Some(file.header_block),
+                iso_extent: None,
                 is_link: false,
                 date: Some(file.unix_date),
                 attrs: Some(file.attrs),

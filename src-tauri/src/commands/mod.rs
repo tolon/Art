@@ -11,6 +11,7 @@ pub mod collection;
 pub mod dragdrop;
 pub mod gotek;
 pub mod hdf;
+pub mod iso;
 pub mod jobs;
 pub mod lha;
 pub mod oplog;

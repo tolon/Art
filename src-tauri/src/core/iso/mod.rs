@@ -29,6 +29,13 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use crate::core::error::{CoreError, CoreResult};
+use crate::core::jobs::ProgressSink;
+use crate::core::security::safe_join;
+use crate::core::volume::write::copy::{windows_safe_name, CopySource, ExtractReport};
+use crate::core::volume::write::file::default_protection;
+use crate::core::volume::write::layout::amiga_from_unix;
+use crate::core::volume::write::plan::SourceEntry;
+use crate::core::volume::write::uaem::Sidecar;
 
 pub use descriptor::{SectorLayout, LOGICAL_SECTOR_SIZE};
 pub use directory::IsoEntry;
@@ -201,16 +208,29 @@ impl IsoImage {
     /// caller can say "this disc is deeper than ART walks" instead of
     /// presenting a truncated listing as if it were complete (§10, §89).
     pub fn walk(&self) -> CoreResult<IsoWalk> {
+        self.walk_subtree(self.root_extent, self.root_length)
+    }
+
+    /// Walk one subtree, depth first, bounded — the same walk [`walk`] does,
+    /// starting anywhere rather than at the disc's root.
+    ///
+    /// `extent`/`length` name a directory the same way [`list`] does. Paths
+    /// in the result are relative to *this* directory, with no leading
+    /// component for it — the same shape a [`CopySource`] gives for a picked
+    /// folder, which is what [`IsoSource`] builds this from.
+    ///
+    /// [`walk`]: IsoImage::walk
+    /// [`list`]: IsoImage::list
+    pub fn walk_subtree(&self, extent: u32, length: u32) -> CoreResult<IsoWalk> {
         let mut result = IsoWalk::default();
         // Extents already descended into. A directory record that points at
         // an ancestor is a legal-looking record and an endless tree; without
         // this, only the depth cap stands between ART and 16 levels of the
         // same directory.
         let mut visited: HashSet<u32> = HashSet::new();
-        visited.insert(self.root_extent);
+        visited.insert(extent);
 
-        let mut stack: Vec<(u32, u32, usize, String)> =
-            vec![(self.root_extent, self.root_length, 0, String::new())];
+        let mut stack: Vec<(u32, u32, usize, String)> = vec![(extent, length, 0, String::new())];
 
         while let Some((extent, length, depth, prefix)) = stack.pop() {
             for entry in self.list(extent, length)? {
@@ -244,6 +264,111 @@ impl IsoImage {
         }
 
         Ok(result)
+    }
+
+    /// Copy a subtree of this disc out to a folder on the host.
+    ///
+    /// `extent`/`length` name a directory the same way [`list`] does; the
+    /// directory's *contents* land inside `dest`, not a folder named after
+    /// the directory itself — the same shape
+    /// `core::volume::write::copy::extract_from_volume` gives for an Amiga
+    /// volume's `dir_block`. A disc is read-only, so this is the whole of
+    /// "F5 out of a disc" for a local destination; the Amiga-volume
+    /// direction goes through [`IsoSource`] and the existing copy engine
+    /// instead, deliberately, rather than a second one here.
+    ///
+    /// [`list`]: IsoImage::list
+    pub fn extract_tree(
+        &self,
+        extent: u32,
+        length: u32,
+        dest: &Path,
+        sink: &dyn ProgressSink,
+    ) -> CoreResult<ExtractReport> {
+        let mut report = ExtractReport::default();
+        std::fs::create_dir_all(dest)?;
+        self.extract_dir(extent, length, dest, 0, sink, &mut report)?;
+        Ok(report)
+    }
+
+    fn extract_dir(
+        &self,
+        extent: u32,
+        length: u32,
+        dest: &Path,
+        depth: usize,
+        sink: &dyn ProgressSink,
+        report: &mut ExtractReport,
+    ) -> CoreResult<()> {
+        if depth >= MAX_WALK_DEPTH {
+            report.skipped.push(format!(
+                "{} — nested deeper than ART follows",
+                dest.display()
+            ));
+            return Ok(());
+        }
+
+        for entry in self.list(extent, length)? {
+            if sink.is_cancelled() {
+                report.cancelled = true;
+                return Ok(());
+            }
+            sink.report(report.files_written as u64, None, &entry.name);
+
+            let safe = windows_safe_name(&entry.name);
+            if safe != entry.name {
+                report.renamed.push(format!("{} → {safe}", entry.name));
+            }
+
+            // Through `safe_join` even though the name has just been made
+            // NTFS-safe: escaping is about what the host filesystem will
+            // accept, containment is a separate question with a separate
+            // answer (the same split `extract_from_volume` makes).
+            let target = match safe_join(dest, &safe) {
+                Ok(path) => path,
+                Err(err) => {
+                    report.skipped.push(format!("{} — {err}", entry.name));
+                    continue;
+                }
+            };
+
+            if entry.is_dir {
+                std::fs::create_dir_all(&target)?;
+                report.directories_created += 1;
+                // A directory's length is a u32 on disc; one claiming more
+                // than u32::MAX cannot exist, same clamp `walk_subtree` uses.
+                let sub_length = entry.bytes.min(u32::MAX as u64) as u32;
+                self.extract_dir(entry.extent, sub_length, &target, depth + 1, sink, report)?;
+                continue;
+            }
+
+            // A disc never changes, so a name already at the destination
+            // means a previous run put it there — SAFE_CREATE, not a silent
+            // overwrite of something the user may not want replaced.
+            if target.exists() {
+                report.skipped.push(format!(
+                    "{} — already in the destination folder",
+                    entry.name
+                ));
+                continue;
+            }
+
+            let data = match self.read_file(entry.extent, entry.bytes) {
+                Ok(data) => data,
+                Err(err) => {
+                    report.skipped.push(format!("{} — {err}", entry.name));
+                    continue;
+                }
+            };
+
+            // Through `core/safety`: a truncated file on the way out is
+            // still a file the user will believe is a good copy.
+            crate::core::safety::atomic::atomic_write(&target, &data)?;
+            report.files_written += 1;
+            report.bytes_written += data.len() as u64;
+        }
+
+        Ok(())
     }
 
     /// Read `bytes` of user data starting at logical block `extent`.
@@ -330,6 +455,73 @@ pub struct IsoWalk {
     pub depth_limited: bool,
     /// The walk stopped early at [`MAX_WALK_ENTRIES`].
     pub truncated: bool,
+}
+
+/// A subtree of an optical disc, as a [`CopySource`] for
+/// `core::volume::write::copy::copy_into_volume`.
+///
+/// The same shape [`HostSelection`](crate::core::volume::write::copy::HostSelection)
+/// gives a picked set of Windows folders: a disc has no copy engine of its
+/// own, it only has to answer the three questions [`CopySource`] asks. This
+/// is what makes "F5 out of a disc, into an Amiga volume" reuse the one
+/// tested copy engine rather than needing a second.
+///
+/// The subtree is walked once, eagerly, at construction — every later
+/// `read`/`metadata` call is a lookup into that snapshot, not a fresh walk of
+/// the disc, and a disc's directory tree never changes under ART's feet the
+/// way a live host folder theoretically could.
+pub struct IsoSource {
+    image: IsoImage,
+    entries: Vec<IsoWalkEntry>,
+}
+
+impl IsoSource {
+    /// `extent`/`length` name a directory the same way [`IsoImage::list`]
+    /// does.
+    pub fn new(image: IsoImage, extent: u32, length: u32) -> CoreResult<Self> {
+        let walk = image.walk_subtree(extent, length)?;
+        Ok(Self {
+            image,
+            entries: walk.entries,
+        })
+    }
+}
+
+impl CopySource for IsoSource {
+    fn entries(&self) -> CoreResult<Vec<SourceEntry>> {
+        Ok(self
+            .entries
+            .iter()
+            .map(|e| SourceEntry {
+                relative: e.path.clone(),
+                is_dir: e.entry.is_dir,
+                bytes: e.entry.bytes,
+            })
+            .collect())
+    }
+
+    fn read(&self, relative: &str) -> CoreResult<Vec<u8>> {
+        let found = self
+            .entries
+            .iter()
+            .find(|e| e.path == relative && !e.entry.is_dir)
+            .ok_or_else(|| {
+                CoreError::InvalidInput(format!("'{relative}' is not part of this disc"))
+            })?;
+        self.image.read_file(found.entry.extent, found.entry.bytes)
+    }
+
+    fn metadata(&self, relative: &str) -> CoreResult<Option<Sidecar>> {
+        // A disc carries a recording date and nothing else AmigaDOS would
+        // call protection bits or a comment — every file gets the AmigaDOS
+        // default bits, the same as a host file with no `.uaem` beside it.
+        let found = self.entries.iter().find(|e| e.path == relative);
+        Ok(found.and_then(|e| e.entry.date).map(|unix| Sidecar {
+            protection: default_protection(),
+            date: amiga_from_unix(unix),
+            comment: String::new(),
+        }))
+    }
 }
 
 /// Sectors needed to hold `bytes` of user data.
@@ -1266,6 +1458,90 @@ mod tests {
         paths.sort_unstable();
         assert_eq!(paths, ["README.TXT", "STARTUP", "TOOLS", "TOOLS/SHELL.LHA"]);
         fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn extract_tree_writes_the_disc_out_to_a_host_folder() {
+        use crate::core::jobs::NoProgress;
+
+        let (d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
+        let iso = IsoImage::open(&p).unwrap();
+        let dest = tmp();
+        let (extent, length) = iso.root();
+
+        let report = iso
+            .extract_tree(extent, length, &dest, &NoProgress)
+            .unwrap();
+        assert_eq!(report.files_written, 3, "{report:?}");
+        assert_eq!(report.directories_created, 1, "TOOLS");
+        assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+
+        assert_eq!(
+            fs::read(dest.join("README.TXT")).unwrap(),
+            b"Hello from the disc.\n"
+        );
+        assert_eq!(
+            fs::read(dest.join("TOOLS").join("SHELL.LHA")).unwrap(),
+            b"not really an archive"
+        );
+        fs::remove_dir_all(&d).ok();
+        fs::remove_dir_all(&dest).ok();
+    }
+
+    #[test]
+    fn extract_tree_reports_a_bad_extent_instead_of_panicking() {
+        use crate::core::jobs::NoProgress;
+
+        let (d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
+        let iso = IsoImage::open(&p).unwrap();
+        let dest = tmp();
+
+        let err = iso
+            .extract_tree(900_000, LOGICAL_SECTOR_SIZE as u32, &dest, &NoProgress)
+            .unwrap_err();
+        assert_eq!(err.code(), "ART-FORMAT-MALFORMED");
+        fs::remove_dir_all(&d).ok();
+        fs::remove_dir_all(&dest).ok();
+    }
+
+    /// The claim Task 3 exists to prove: an `IsoSource` needs no copy engine
+    /// of its own. It answers `CopySource`'s three questions and the disc's
+    /// contents land on an Amiga volume through the one tested
+    /// `copy_into_volume`, unchanged.
+    #[test]
+    fn iso_source_copies_a_disc_into_an_amiga_volume_through_the_shared_copy_engine() {
+        use crate::core::jobs::NoProgress;
+        use crate::core::lha::OverwritePolicy;
+        use crate::core::volume::device::FileRegionMut;
+        use crate::core::volume::fixture::ffs_volume;
+        use crate::core::volume::write::copy::copy_into_volume;
+        use crate::core::volume::write::VolumeWriter;
+        use crate::core::volume::DosType;
+
+        let (d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
+        let iso = IsoImage::open(&p).unwrap();
+        let (extent, length) = iso.root();
+        let source = IsoSource::new(iso, extent, length).unwrap();
+
+        let vol_dir = tmp();
+        let image_path = vol_dir.join("disk.adf");
+        let (bytes, geometry) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
+        fs::write(&image_path, &bytes).unwrap();
+
+        let mut device = FileRegionMut::open(&image_path, 0, geometry.total_bytes(), 512).unwrap();
+        let report = {
+            let mut writer = VolumeWriter::open(&mut device, geometry, &image_path, 0).unwrap();
+            copy_into_volume(&mut writer, 0, &source, OverwritePolicy::Skip, &NoProgress).unwrap()
+        };
+        drop(device);
+
+        assert!(report.is_complete(), "{report:?}");
+        assert_eq!(report.files_copied, 3, "README.TXT, STARTUP, SHELL.LHA");
+        assert_eq!(report.files_verified, 3);
+        assert_eq!(report.directories_created, 1, "TOOLS");
+
+        fs::remove_dir_all(&d).ok();
+        fs::remove_dir_all(&vol_dir).ok();
     }
 
     #[test]

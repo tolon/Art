@@ -42,6 +42,14 @@ pub struct PanelEntry {
     pub path: Option<String>,
     /// Header block, for an ADF entry.
     pub header_block: Option<u32>,
+    /// Starting logical block, for an ISO entry. Deliberately its own field
+    /// rather than reusing `header_block`: a number that means two different
+    /// things depending on the pane kind is how the wrong block gets read.
+    /// Unlike `header_block`, this alone does not address a *directory* — a
+    /// listing needs the entry's own `bytes` alongside it for that (an
+    /// ISO9660 directory's length), which the field already carries for
+    /// every other purpose.
+    pub iso_extent: Option<u32>,
     /// True when the entry is a symlink or junction. Reported, never followed —
     /// that is the ART-028 lesson.
     pub is_link: bool,
@@ -110,6 +118,7 @@ fn list_local(dir: &Path) -> CoreResult<LocalListing> {
             bytes: if is_dir { 0 } else { meta.len() },
             path: Some(entry.path().to_string_lossy().to_string()),
             header_block: None,
+            iso_extent: None,
             is_link,
             date: mtime_unix(&meta),
             attrs: windows_attrs(&meta),

@@ -58,17 +58,21 @@ fn is_rom(d: &Detection) -> bool {
 fn is_directory(d: &Detection) -> bool {
     d.category == FormatCategory::Directory
 }
+fn is_optical(d: &Detection) -> bool {
+    d.category == FormatCategory::OpticalImage
+}
 /// Any recognised file (not a directory, not unknown).
 fn is_known_file(d: &Detection) -> bool {
     !d.is_dir && d.category != FormatCategory::Unknown
 }
 /// Anything ART can hold in its collection.
 ///
-/// `FormatCategory::OpticalImage` is deliberately absent: detection can now
-/// name an ISO by content (see `core::detect`), but ART does not yet read
-/// one, and cataloguing a format it cannot open would overclaim support
-/// (spec §10, §89). It still isn't a dead end — `any.hex` below accepts any
-/// known-but-not-collectable file, so "Inspect in Hex Viewer" is offered.
+/// `FormatCategory::OpticalImage` is deliberately absent: ART can open a disc
+/// now (`core::iso`) and browse it in the file manager, but nothing hashes or
+/// catalogues one yet — the Collection Studio has no ISO code path, and
+/// claiming otherwise would overclaim support (spec §10, §89). It still
+/// isn't a dead end — `iso.browse` offers the file manager, and `any.hex`
+/// below accepts any known-but-not-collectable file too.
 fn is_collectable(d: &Detection) -> bool {
     matches!(
         d.category,
@@ -444,6 +448,17 @@ fn navigation_workflows() -> Vec<NavWorkflow> {
             true,
             is_directory,
         ),
+        // --- Optical discs (ISO9660 / Joliet) ---
+        nav(
+            "iso.browse",
+            "Open in the File Manager",
+            "Browse the disc's filesystem and copy files out — a disc is read-only.",
+            route::FILES,
+            Recommended,
+            10,
+            true,
+            is_optical,
+        ),
         // --- Anything collectable ---
         nav(
             "any.hex",
@@ -497,11 +512,8 @@ mod tests {
 
     /// Spec §91: no recognised object may be a dead end.
     ///
-    /// Includes `OpticalImage`: detection can name an ISO by content now,
-    /// but ART has no ISO studio yet, so it falls to the generic `any.hex`
-    /// candidate rather than a dedicated one. That still satisfies §91 — see
-    /// `every_recognised_format_has_a_recommendation` below for why it is
-    /// deliberately *not* also asserted to have a starred action yet.
+    /// Includes `OpticalImage`: `iso.browse` (below) gives it a dedicated,
+    /// starred action now that the file manager can open one.
     #[test]
     fn every_recognised_format_offers_actions() {
         let cases = [
@@ -524,19 +536,6 @@ mod tests {
     }
 
     /// Spec §46: every object needs at least one starred (Recommended) action.
-    ///
-    /// `OpticalImage` is intentionally excluded from this test. Every entry
-    /// in `navigation_workflows()` must point at a route that already exists
-    /// in `src/App.tsx` (`every_workflow_route_is_a_real_app_route` enforces
-    /// it), and there is no ISO studio route yet — adding one is frontend
-    /// work outside this detection-only change. Registering a Recommended
-    /// `available: false` placeholder against an existing, unrelated route
-    /// (e.g. the Hex Viewer) would be more misleading than honest: it would
-    /// claim a dedicated ISO action is merely "Coming Later" when no such
-    /// action has been designed yet. `every_recognised_format_offers_actions`
-    /// above already proves an optical image is not a dead end (`any.hex`
-    /// picks it up); a Recommended-specific action arrives with the ISO
-    /// studio itself.
     #[test]
     fn every_recognised_format_has_a_recommendation() {
         let dir = std::env::temp_dir().join(format!(
@@ -569,6 +568,27 @@ mod tests {
             .any(|r| r.info.id == "dir.scan_collection"));
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The candidate list, not the whole `plan()` pipeline (which needs a
+    /// real optical-disc file on disk to detect): an optical image must get
+    /// its own starred action now that the file manager opens one, not just
+    /// fall through to `any.hex`.
+    #[test]
+    fn an_optical_image_recommends_the_file_manager() {
+        let d = detection(FormatCategory::OpticalImage, "iso9660", false);
+        let ids = ids_for(&d);
+        assert!(ids.contains(&"iso.browse"), "got {ids:?}");
+
+        let mut reg = WorkflowRegistry::new();
+        register_all(&mut reg);
+        let recommended: Vec<&str> = reg
+            .candidates_for(&d)
+            .into_iter()
+            .filter(|w| w.info().category == Recommended)
+            .map(|w| w.info().id)
+            .collect();
+        assert!(recommended.contains(&"iso.browse"), "got {recommended:?}");
     }
 
     #[test]
