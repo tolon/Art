@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** ART opens `.adf`, `.hdf`, `.img`, `.iso`, `.dsk`, `.raw`, `.zip`, `.7z`, `.rar` and `.lha` in the commander, deciding what each one *is* from its contents rather than its filename, and browsing every one of them as a pane.
+**Goal:** ART opens `.adf`, `.hdf`, `.img`, `.iso`, `.dsk`, `.raw`, `.zip`, `.7z` and `.lha` in the commander, deciding what each one *is* from its contents rather than its filename, and browsing every one of them as a pane.
 
 **The unifying idea:** a floppy image, a hard-disk partition, a CD and an archive are all the same thing to a commander — **a container you can walk into, list, and copy out of**. ART already has that model for ADF and HDF (`PaneState`, where an ADF is simply volume 0). This phase adds three more container kinds behind it rather than three more screens.
 
@@ -223,7 +223,7 @@ Copying **from** an ISO to a local folder or to an Amiga volume must work, becau
 
 ---
 
-## Task 4: One security gate, several archive engines
+## Task 4: One security gate, several archive engines (ZIP and 7z)
 
 **Files:**
 - Modify: `src-tauri/src/core/lha/safe_extract.rs` → generalise
@@ -237,7 +237,7 @@ Copying **from** an ISO to a local folder or to an Amiga volume must work, becau
 **The architectural point, and the reason this is one task rather than three.**
 Everything today goes through `core/lha/safe_extract.rs`, which is where the
 traversal, archive-bomb and unusable-name defences live — **one choke point**.
-Adding ZIP, 7z and RAR as three parallel readers would mean three copies of
+Adding ZIP and 7z as parallel readers beside LHA would mean three copies of
 those defences, and the third copy is where the hole is. Generalise the gate
 first: `safe_extract` keeps `safe_join`, `MAX_TOTAL_OUTPUT`, the entry cap and
 the skipped-entry reporting, and calls a **backend** for the bytes.
@@ -255,28 +255,24 @@ for 7z — both MIT/Apache. Update CLAUDE.md's core-independence list and
 `THIRD_PARTY_LICENSES.md` in the same commit; a dependency that is in
 `Cargo.toml` and not in the licence file is a licensing defect.
 
-**RAR is different, and the difference is legal, not technical.** RAR is a
-proprietary format. The UnRAR source licence is **not** an open-source licence
-and explicitly forbids using it to reverse-engineer the compression algorithm.
-ART's stance has been scrupulous — ADFlib is GPL so it is read for
-understanding and never copied; amitools is an external oracle and never
-linked — and bundling an encumbered decoder is a different kind of decision.
-
-**So do not bundle one.** Do what Total Commander itself does: handle ZIP (and
-7z) natively, and for RAR **call an external tool if the user has one** —
-`unrar` or `7z` on `PATH`, or a path set in Settings. Launch it with
-**structured argv, never a shell string** (an archive entry name reaching a
-shell is a command injection), from **outside `core/`** — spawning a process is
-platform-specific, so `core` declares the trait and the implementation lives in
-`commands/`. With no tool installed, ART says exactly that and refuses; it does
-not pretend the archive is corrupt.
+**RAR is deliberately out of scope**, at the user's decision (2026-08-11).
+Worth recording *why*, so nobody adds it later without knowing: RAR is
+proprietary, and the UnRAR source licence is **not** an open-source licence —
+it forbids using the code to reverse-engineer the compression algorithm.
+Bundling an encumbered decoder would sit badly beside this project's existing
+care (ADFlib is GPL, so it is read for understanding and never copied; amitools
+is an external oracle and never linked). The `ArchiveReader` trait leaves the
+door open: if it is ever wanted, the clean route is an **external** `unrar` or
+`7z` the user already has — launched with **structured argv, never a shell
+string**, since an archive entry name reaching a shell is a command injection —
+implemented in `commands/` rather than `core/`, because spawning a process is
+platform-specific.
 
 - [ ] **Step 1: Generalise the gate, with the shared hostile-archive test**
 - [ ] **Step 2: ZIP backend, tests built at runtime**
 - [ ] **Step 3: 7z backend, tests built at runtime**
-- [ ] **Step 4: External-tool backend for RAR, behind the trait, with a clear refusal when absent**
-- [ ] **Step 5: Open an archive as a pane, reusing Task 3's container model**
-- [ ] **Step 6: Gates and commit**
+- [ ] **Step 4: Open an archive as a pane, reusing Task 3's container model**
+- [ ] **Step 5: Gates and commit**
 
 ## Task 5: Close the phase
 
