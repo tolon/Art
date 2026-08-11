@@ -63,6 +63,12 @@ fn is_known_file(d: &Detection) -> bool {
     !d.is_dir && d.category != FormatCategory::Unknown
 }
 /// Anything ART can hold in its collection.
+///
+/// `FormatCategory::OpticalImage` is deliberately absent: detection can now
+/// name an ISO by content (see `core::detect`), but ART does not yet read
+/// one, and cataloguing a format it cannot open would overclaim support
+/// (spec §10, §89). It still isn't a dead end — `any.hex` below accepts any
+/// known-but-not-collectable file, so "Inspect in Hex Viewer" is offered.
 fn is_collectable(d: &Detection) -> bool {
     matches!(
         d.category,
@@ -490,6 +496,12 @@ mod tests {
     }
 
     /// Spec §91: no recognised object may be a dead end.
+    ///
+    /// Includes `OpticalImage`: detection can name an ISO by content now,
+    /// but ART has no ISO studio yet, so it falls to the generic `any.hex`
+    /// candidate rather than a dedicated one. That still satisfies §91 — see
+    /// `every_recognised_format_has_a_recommendation` below for why it is
+    /// deliberately *not* also asserted to have a starred action yet.
     #[test]
     fn every_recognised_format_offers_actions() {
         let cases = [
@@ -498,6 +510,7 @@ mod tests {
             (FormatCategory::Archive, "lha", false),
             (FormatCategory::Rom, "rom", false),
             (FormatCategory::Directory, "directory", true),
+            (FormatCategory::OpticalImage, "iso9660", false),
         ];
 
         for (category, hint, is_dir) in cases {
@@ -511,6 +524,19 @@ mod tests {
     }
 
     /// Spec §46: every object needs at least one starred (Recommended) action.
+    ///
+    /// `OpticalImage` is intentionally excluded from this test. Every entry
+    /// in `navigation_workflows()` must point at a route that already exists
+    /// in `src/App.tsx` (`every_workflow_route_is_a_real_app_route` enforces
+    /// it), and there is no ISO studio route yet — adding one is frontend
+    /// work outside this detection-only change. Registering a Recommended
+    /// `available: false` placeholder against an existing, unrelated route
+    /// (e.g. the Hex Viewer) would be more misleading than honest: it would
+    /// claim a dedicated ISO action is merely "Coming Later" when no such
+    /// action has been designed yet. `every_recognised_format_offers_actions`
+    /// above already proves an optical image is not a dead end (`any.hex`
+    /// picks it up); a Recommended-specific action arrives with the ISO
+    /// studio itself.
     #[test]
     fn every_recognised_format_has_a_recommendation() {
         let dir = std::env::temp_dir().join(format!(

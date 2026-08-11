@@ -29,6 +29,9 @@ pub enum FormatCategory {
     FloppyImage,
     /// Hard disk image (HDF, HDZ).
     HardDiskImage,
+    /// Optical disc image (ISO9660, raw CD track). Detection only — ART does
+    /// not yet read the filesystem inside one (spec §10, §89).
+    OpticalImage,
     /// Archive, typically LHA on Amiga.
     Archive,
     /// Kickstart ROM.
@@ -44,6 +47,7 @@ impl FormatCategory {
         match self {
             Self::FloppyImage => "floppy-image",
             Self::HardDiskImage => "harddisk-image",
+            Self::OpticalImage => "optical-image",
             Self::Archive => "archive",
             Self::Rom => "rom",
             Self::Directory => "directory",
@@ -102,10 +106,25 @@ pub mod sizes {
 /// The Amiga LHA variant begins with the same 2-byte magic `-l`.
 const LHA_MAGIC: &[u8] = b"-l";
 
+/// ISO9660 volume descriptor magic, "CD001", as it appears at the start of
+/// the Primary Volume Descriptor (sector 16 of a 2048-byte-sector image).
+const ISO_MAGIC: &[u8] = b"CD001";
+
+/// Offset of "CD001" in a standard 2048-byte-sector ISO image: sector 16 is
+/// 16 × 2048 = 0x8000, and the signature sits at offset 1 within that sector.
+const ISO_PVD_OFFSET_2048: u64 = 0x8001;
+
+/// Offset of "CD001" in a raw 2352-byte-sector CD track. Sector 16 begins at
+/// 16 × 2352 = 0x9300; its 2048 bytes of user data start at offset 16 within
+/// the sector (0x9310), and the signature sits one byte into that (0x9311).
+/// Finding it here also proves the sector size for later readers.
+const ISO_PVD_OFFSET_2352: u64 = 0x9311;
+
 /// Detect the logical format of a filesystem path.
 ///
 /// Reads at most a few bytes of the file for signature checks; never loads
-/// the whole image into memory.
+/// the whole image into memory, and never reads past a probe offset that
+/// falls beyond the file's own length.
 pub fn detect(path: &Path) -> CoreResult<Detection> {
     let meta = std::fs::metadata(path).map_err(|e| {
         // Surface a clearer error if the path doesn't exist at all.
@@ -134,9 +153,74 @@ pub fn detect(path: &Path) -> CoreResult<Detection> {
         .unwrap_or_default();
 
     // --- Signature-backed checks first (highest confidence) ---------------
-    if let Ok(sig) = read_head(path, 4) {
+    //
+    // Content decides the category; the extension below is only a fallback
+    // hint for when no signature matches (a corrupted header, or a format
+    // ART does not yet recognise by content). First match wins.
+    if let Ok(head) = read_head(path, 4) {
+        // AmigaDOS boot signature: "DOS" + a filesystem flags byte 0x00-0x07
+        // (OFS/FFS × international × dircache/long-filenames). Floppy-sized
+        // images are floppies; anything else with this signature is a
+        // single-volume hard disk image.
+        if head.len() == 4 && &head[0..3] == b"DOS" && head[3] <= 0x07 {
+            return Ok(dos_signature_detection(size));
+        }
+        if head.as_slice() == b"RDSK" {
+            return Ok(Detection {
+                category: FormatCategory::HardDiskImage,
+                format_hint: "rdb".to_string(),
+                confidence: 0.95,
+                size,
+                is_dir: false,
+            });
+        }
+    }
+
+    // ISO9660 checks need to probe deep into the file — not the 4-byte head.
+    if let Ok(sig) = probe_at(path, ISO_PVD_OFFSET_2048, ISO_MAGIC.len()) {
+        if sig == ISO_MAGIC {
+            return Ok(Detection {
+                category: FormatCategory::OpticalImage,
+                format_hint: "iso9660".to_string(),
+                confidence: 0.95,
+                size,
+                is_dir: false,
+            });
+        }
+    }
+    if let Ok(sig) = probe_at(path, ISO_PVD_OFFSET_2352, ISO_MAGIC.len()) {
+        if sig == ISO_MAGIC {
+            return Ok(Detection {
+                category: FormatCategory::OpticalImage,
+                format_hint: "iso9660-raw".to_string(),
+                confidence: 0.9,
+                size,
+                is_dir: false,
+            });
+        }
+    }
+
+    if let Ok(head) = read_head(path, 4) {
+        if head.as_slice() == b"PFS\x03" || head.as_slice() == b"PDS\x03" {
+            return Ok(Detection {
+                category: FormatCategory::HardDiskImage,
+                format_hint: "pfs3".to_string(),
+                confidence: 0.9,
+                size,
+                is_dir: false,
+            });
+        }
+        if head.as_slice() == b"SFS\x00" {
+            return Ok(Detection {
+                category: FormatCategory::HardDiskImage,
+                format_hint: "sfs".to_string(),
+                confidence: 0.9,
+                size,
+                is_dir: false,
+            });
+        }
         // LHA archive: starts with "-l" followed by compression method.
-        if sig.starts_with(LHA_MAGIC) {
+        if head.starts_with(LHA_MAGIC) {
             return Ok(Detection {
                 category: FormatCategory::Archive,
                 format_hint: "lha".to_string(),
@@ -147,7 +231,7 @@ pub fn detect(path: &Path) -> CoreResult<Detection> {
         }
     }
 
-    // --- Size + extension hints ------------------------------------------
+    // --- Size + extension hints (fallback only; weaker than a signature) --
     match ext.as_str() {
         "adf" => Ok(floppy_by_size("adf", size)),
         "adz" => Ok(floppy_by_size("adz", size)),
@@ -158,7 +242,7 @@ pub fn detect(path: &Path) -> CoreResult<Detection> {
         "lha" | "lzh" => Ok(Detection {
             category: FormatCategory::Archive,
             format_hint: "lha".to_string(),
-            confidence: 0.5,
+            confidence: 0.35,
             size,
             is_dir: false,
         }),
@@ -166,12 +250,44 @@ pub fn detect(path: &Path) -> CoreResult<Detection> {
     }
 }
 
-/// Build a floppy-image detection from size, validating against known ADF sizes.
+/// A `DOS\0`..`DOS\7` boot signature at offset 0, categorised by size: the
+/// two known floppy sizes are floppies, anything else is a single-volume
+/// hard disk image (spec §41 leaves multi-partition RDB disks to the `RDSK`
+/// check above, which runs first).
+fn dos_signature_detection(size: u64) -> Detection {
+    match size {
+        sizes::ADF_DD => Detection {
+            category: FormatCategory::FloppyImage,
+            format_hint: "adf".to_string(),
+            confidence: 0.97,
+            size,
+            is_dir: false,
+        },
+        sizes::ADF_HD => Detection {
+            category: FormatCategory::FloppyImage,
+            format_hint: "adf".to_string(),
+            confidence: 0.95,
+            size,
+            is_dir: false,
+        },
+        _ => Detection {
+            category: FormatCategory::HardDiskImage,
+            format_hint: "hdf".to_string(),
+            confidence: 0.9,
+            size,
+            is_dir: false,
+        },
+    }
+}
+
+/// Build a floppy-image detection from size, validating against known ADF
+/// sizes. Extension-only fallback: no `DOS` signature was found at offset 0,
+/// so this is weaker evidence than [`dos_signature_detection`].
 fn floppy_by_size(format: &str, size: u64) -> Detection {
     let (ok, confidence) = match size {
-        sizes::ADF_DD => (true, 0.9),
-        sizes::ADF_HD => (true, 0.8),
-        _ => (false, 0.4), // unusual size — still probably an ADF, but flag it
+        sizes::ADF_DD => (true, 0.6),
+        sizes::ADF_HD => (true, 0.5),
+        _ => (false, 0.3), // unusual size — still probably an ADF, but flag it
     };
     let _ = ok; // surfaced to the caller via confidence in Phase 1+ reporting
     Detection {
@@ -183,13 +299,15 @@ fn floppy_by_size(format: &str, size: u64) -> Detection {
     }
 }
 
-/// HDF detection is extension-only for Phase 0: real RDB/header inspection
-/// arrives in Phase 4.
+/// HDF detection by extension alone: no recognised signature (`DOS`, `RDSK`,
+/// `PFS\3`, `PDS\3`, `SFS\0`) was found at offset 0, so this is only ever
+/// reached as the weaker fallback — real RDB/header inspection is the
+/// signature-backed path above.
 fn hdf_by_extension(size: u64) -> Detection {
     Detection {
         category: FormatCategory::HardDiskImage,
         format_hint: "hdf".to_string(),
-        confidence: 0.5,
+        confidence: 0.35,
         size,
         is_dir: false,
     }
@@ -214,6 +332,32 @@ fn read_head(path: &Path, n: usize) -> CoreResult<Vec<u8>> {
     use std::io::Read;
     let mut f = std::fs::File::open(path)?;
     let mut buf = vec![0u8; n];
+    let read = f.read(&mut buf)?;
+    buf.truncate(read);
+    Ok(buf)
+}
+
+/// Read up to `len` bytes starting at `offset` in a file, seeking there
+/// first rather than reading through it — a signature offset can be well
+/// past 0x8000 and the file itself can be gigabytes.
+///
+/// A short read (offset lands past end of file, or the file has fewer than
+/// `len` bytes left) is not an error: it returns whatever bytes exist,
+/// possibly empty, so the caller's equality check against a known magic
+/// simply fails to match rather than panicking or misreporting. `len` is
+/// always a small caller-supplied constant (a signature length), never a
+/// value read from the file itself.
+fn probe_at(path: &Path, offset: u64, len: usize) -> CoreResult<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut f = std::fs::File::open(path)?;
+    let file_len = f.metadata()?.len();
+    if offset >= file_len {
+        return Ok(Vec::new());
+    }
+
+    f.seek(SeekFrom::Start(offset))?;
+    let mut buf = vec![0u8; len];
     let read = f.read(&mut buf)?;
     buf.truncate(read);
     Ok(buf)
@@ -253,7 +397,8 @@ mod tests {
         let d = tmp();
         let p = d.join("disk.adf");
         let mut f = fs::File::create(&p).unwrap();
-        // Write exactly ADF_DD zero bytes.
+        // Write exactly ADF_DD zero bytes — no DOS signature, so this
+        // exercises the extension-only fallback, not the signature path.
         let chunk = vec![0u8; 8192];
         let mut remaining = sizes::ADF_DD;
         while remaining > 0 {
@@ -264,7 +409,12 @@ mod tests {
         let det = detect(&p).unwrap();
         assert_eq!(det.category, FormatCategory::FloppyImage);
         assert_eq!(det.format_hint, "adf");
-        assert!(det.confidence >= 0.9);
+        // Extension-only evidence is weaker than a content signature (see
+        // `an_img_holding_a_floppy_is_a_floppy_not_an_unknown`, which hits
+        // the signature path and expects >= 0.9), but still confident given
+        // the exact known ADF size.
+        assert!(det.confidence >= 0.5, "got {}", det.confidence);
+        assert!(det.confidence < 0.9, "got {}", det.confidence);
         fs::remove_dir_all(&d).ok();
     }
 
