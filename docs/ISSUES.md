@@ -337,6 +337,22 @@ re-audits them without reason:
 
 ### Phase 2a
 
+**ART-077** 🟠 **The file manager ignored the object a workflow sent it, so "Open in the file manager" opened nothing**
+`src/pages/FileManager.tsx` · Every `Navigate` workflow hands its object over
+the same way — a route plus `{ state: { path } }` — and every other studio
+reads it on mount (`AdfBrowser`, `CollectionStudio`, `HardDiskStudio`, …).
+This screen never did. `iso.browse` (Task 3) pointed at `/files` precisely
+because the commander is where a disc belongs, and choosing it left the user
+on the file manager with whatever panes they already had and the disc they
+dropped nowhere in sight. Nothing failed and nothing said so, which is why it
+survived Task 3's review: the route existed, the test asserting
+`every_workflow_route_is_a_real_app_route` passed, and the action did nothing.
+
+→ The screen now reads `location.state.path` and opens it in the left pane,
+choosing the pane kind from `analyze_paths` — the same detection that offered
+the action — rather than from the extension. Found while adding
+`archive.browse`, the second workflow to depend on it.
+
 **ART-076** 🟠 **Content-first detection never actually recognised an LHA, and its test could not tell**
 `core/detect.rs` · An LHA header carries its compression-method field
 (`-lh5-`, `-lhd-`, …) at **offset 2**, after the header length and its

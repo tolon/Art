@@ -41,8 +41,8 @@ python scripts/oracle-check.py
 | Tasks 1, 2, 3 | complete — content-first detection, the ISO9660 reader, the disc pane. Task 3's review fixes landed after a mid-session reboot (`80e1d40`) |
 | Task 3a | complete (`5be5529`) — the 7-Zip oracle, added by amendment A1 |
 | Task 3b | complete (`787fe15`) — Mode 2/XA Form 1, which closed ART-075 |
-| Task 4 | steps 1–3 complete — the shared gate (`efaaf00`), ZIP (`bf5e577`), 7z + the MSRV bump (`b07ad1c`). **Step 4, the archive pane, is the next work** |
-| Tasks 5, 6 | not started |
+| Task 4 | complete — the shared gate (`efaaf00`), ZIP (`bf5e577`), 7z + the MSRV bump (`b07ad1c`), the archive pane with its virtual tree (`9c4e578`) |
+| Tasks 5, 6 | not started — **Task 5 (D64/D71/D81/T64) is the next work** |
 
 See the Amendments section at the foot of this file for what changed after the
 plan was written.
@@ -372,8 +372,8 @@ platform-specific.
 - [x] **Step 1: Generalise the gate, with the shared hostile-archive test**
 - [x] **Step 2: ZIP backend, tests built at runtime**
 - [x] **Step 3: 7z backend, tests built at runtime**
-- [ ] **Step 4: Open an archive as a pane, reusing Task 3's container model**
-- [ ] **Step 5: Gates and commit**
+- [x] **Step 4: Open an archive as a pane, reusing Task 3's container model**
+- [x] **Step 5: Gates and commit**
 
 ## Task 5: Commodore 64 disk and tape images
 
