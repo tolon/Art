@@ -23,39 +23,6 @@ what fixed it (with the test that proves it).
 
 ## Open
 
-**ART-074** 🟠 **An accented filename came back corrupted**
-`core/adf/bcpl.rs` · AmigaDOS stores strings as Latin-1, one byte per
-character. `core/volume/write/dir.rs::put_name` knew that and encoded
-correctly — its doc comment even said `write_bcpl_string` "would store `ü` as
-two characters and the name would come back wrong on a real Amiga" — but it
-fixed the problem locally instead of at the source, and left the read path
-alone. `read_bcpl_string` used `String::from_utf8_lossy`, so `Grüße` (bytes
-`47 72 FC DF 65`) read back with two replacement characters: `FC` and `DF` are
-not valid UTF-8 lead bytes. `dir.rs::name_of` sits three lines from
-`put_name` and disagreed with it about the encoding.
-
-Two more callers were wrong in the other direction: `create.rs`'s volume name
-and `rdb.rs`'s drive name went through `write_bcpl_string`, which used
-`s.as_bytes()` — UTF-8 — so a non-ASCII volume name was written as byte pairs
-a real Amiga renders as mojibake. Those two were *self*-consistent with the
-old reader, which is why nothing failed: the same shape as ART-032 through
-ART-035, where the reader and the writer share a mistake and the suite stays
-green. Every name in every test was ASCII. ART-041 had already established
-that Latin-1 names are supported, with `Grüße vom Süden` as its own example.
-
-→ Both directions of `bcpl.rs` are now Latin-1, a plain cast each way because
-Latin-1 is exactly the first 256 Unicode code points. A character above
-`U+00FF` has no byte and becomes `?` rather than a pair an Amiga would show as
-two wrong characters. `write_bcpl_string` also encodes before truncating, so a
-field limit can no longer cut a character in half. Pinned by
-`an_accented_name_survives_a_round_trip`,
-`a_name_written_as_latin1_elsewhere_reads_back_intact` and
-`truncation_counts_characters_and_never_splits_one`. One existing test,
-`bcpl_string_lossy_on_non_utf8`, asserted only `chars().count() == 3` and so
-passed under either encoding while claiming to prove replacement characters —
-it now asserts the actual string. Found by the whole-branch reviewer chasing a
-case-folding question in `delete_many`.
-
 **ART-073** 🟡 **`delete_many`'s all-or-nothing guarantee only holds for the whole-file strategy**
 `src-tauri/src/commands/volume_write.rs::delete_many` (line ~505) · The
 pre-check (`check_batch_deletable`) runs once, against a read-only listing,
@@ -366,6 +333,42 @@ re-audits them without reason:
 
 ## Fixed
 
+### Phase 1a
+
+**ART-074** 🟠 **An accented filename came back corrupted**
+`core/adf/bcpl.rs` · AmigaDOS stores strings as Latin-1, one byte per
+character. `core/volume/write/dir.rs::put_name` knew that and encoded
+correctly — its doc comment even said `write_bcpl_string` "would store `ü` as
+two characters and the name would come back wrong on a real Amiga" — but it
+fixed the problem locally instead of at the source, and left the read path
+alone. `read_bcpl_string` used `String::from_utf8_lossy`, so `Grüße` (bytes
+`47 72 FC DF 65`) read back with two replacement characters: `FC` and `DF` are
+not valid UTF-8 lead bytes. `dir.rs::name_of` sits three lines from
+`put_name` and disagreed with it about the encoding.
+
+Two more callers were wrong in the other direction: `create.rs`'s volume name
+and `rdb.rs`'s drive name went through `write_bcpl_string`, which used
+`s.as_bytes()` — UTF-8 — so a non-ASCII volume name was written as byte pairs
+a real Amiga renders as mojibake. Those two were *self*-consistent with the
+old reader, which is why nothing failed: the same shape as ART-032 through
+ART-035, where the reader and the writer share a mistake and the suite stays
+green. Every name in every test was ASCII. ART-041 had already established
+that Latin-1 names are supported, with `Grüße vom Süden` as its own example.
+
+→ Both directions of `bcpl.rs` are now Latin-1, a plain cast each way because
+Latin-1 is exactly the first 256 Unicode code points. A character above
+`U+00FF` has no byte and becomes `?` rather than a pair an Amiga would show as
+two wrong characters. `write_bcpl_string` also encodes before truncating, so a
+field limit can no longer cut a character in half. Pinned by
+`an_accented_name_survives_a_round_trip`,
+`a_name_written_as_latin1_elsewhere_reads_back_intact` and
+`truncation_counts_characters_and_never_splits_one`. One existing test,
+`bcpl_string_lossy_on_non_utf8`, asserted only `chars().count() == 3` and so
+passed under either encoding while claiming to prove replacement characters —
+it now asserts the actual string. Found by the whole-branch reviewer chasing a
+case-folding question in `delete_many`.
+
+
 ### Phase 0b
 
 **ART-047** 🔵 **Dead code that clippy cannot see**
@@ -433,8 +436,6 @@ before/after pair with `git diff --no-index`, including with `-a`/`--text`
 forced. That is a property of diffing *against the old, binary-flagged blob*,
 not of the fixed file: every diff of `docs/FEATURES.md` from this commit
 onward, once neither side has a raw NUL, renders as ordinary text.
-
-### Phase 1a
 
 **ART-063** 🟠 **ART could not write a disk an Amiga would boot from**
 `core/adf/create.rs`, `core/adf/bootcode.rs` · The `bootable` flag wrote
