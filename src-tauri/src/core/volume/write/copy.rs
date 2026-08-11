@@ -327,37 +327,46 @@ impl CopySource for HostFolder {
 
     fn metadata(&self, relative: &str) -> CoreResult<Option<Sidecar>> {
         let path = self.resolve(relative)?;
+        host_metadata(&path, self.read_sidecars)
+    }
+}
 
-        // A sidecar written by ART or WinUAE is the better source: it holds
-        // the bits and comment the host filesystem threw away.
-        if self.read_sidecars {
-            let sidecar = uaem::sidecar_path(&path);
-            if sidecar.exists() {
-                let size = std::fs::metadata(&sidecar)?.len();
-                if size <= uaem::MAX_UAEM_BYTES {
-                    // A damaged sidecar falls through to the mtime rather than
-                    // failing the copy: losing the bits is better than losing
-                    // the file, and the caller is told nothing was applied.
-                    if let Ok(parsed) = uaem::parse(&std::fs::read_to_string(&sidecar)?) {
-                        return Ok(Some(parsed));
-                    }
+/// Protection bits, date and comment for a file already resolved to a real
+/// path on disk.
+///
+/// Shared by every `CopySource` that reads the host filesystem — `HostFolder`
+/// and `HostSelection` alike — so a `.uaem` sidecar means the same thing
+/// regardless of which one found it.
+fn host_metadata(path: &Path, read_sidecars: bool) -> CoreResult<Option<Sidecar>> {
+    // A sidecar written by ART or WinUAE is the better source: it holds the
+    // bits and comment the host filesystem threw away.
+    if read_sidecars {
+        let sidecar = uaem::sidecar_path(path);
+        if sidecar.exists() {
+            let size = std::fs::metadata(&sidecar)?.len();
+            if size <= uaem::MAX_UAEM_BYTES {
+                // A damaged sidecar falls through to the mtime rather than
+                // failing the copy: losing the bits is better than losing the
+                // file, and the caller is told nothing was applied.
+                if let Ok(parsed) = uaem::parse(&std::fs::read_to_string(&sidecar)?) {
+                    return Ok(Some(parsed));
                 }
             }
         }
-
-        // Otherwise the file's own modification time, and default bits.
-        let modified = std::fs::metadata(&path)?
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64);
-
-        Ok(modified.map(|unix| Sidecar {
-            protection: super::file::default_protection(),
-            date: amiga_from_unix(unix),
-            comment: String::new(),
-        }))
     }
+
+    // Otherwise the file's own modification time, and default bits.
+    let modified = std::fs::metadata(path)?
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64);
+
+    Ok(modified.map(|unix| Sidecar {
+        protection: super::file::default_protection(),
+        date: amiga_from_unix(unix),
+        comment: String::new(),
+    }))
 }
 
 fn walk(
@@ -429,6 +438,188 @@ fn walk(
     }
 
     Ok(())
+}
+
+/// Several picked entries — files, folders, or a mix — copied as one operation.
+///
+/// Each root keeps its own base name at the destination, so picking
+/// `Game/` and `Readme.txt` produces `Game/` and `Readme.txt` side by side.
+///
+/// This is the only new copy source the batch commander needs: every entry
+/// still flows through the one tested [`copy_into_volume`], the same as a
+/// single [`HostFolder`] does — `HostSelection` just widens `entries()` to
+/// span several roots instead of one.
+#[derive(Debug, Clone)]
+pub struct HostSelection {
+    roots: Vec<PathBuf>,
+    /// Whether to look for `.uaem` sidecars next to each file — the same flag
+    /// [`HostFolder`] takes, plumbed through so a batch selection honours the
+    /// same option a single-folder copy does (§4.2).
+    read_sidecars: bool,
+}
+
+impl HostSelection {
+    pub fn new(roots: Vec<PathBuf>, read_sidecars: bool) -> Self {
+        Self {
+            roots,
+            read_sidecars,
+        }
+    }
+
+    /// The name a root will be called at the destination — the last
+    /// component of its path.
+    fn base_name(root: &Path) -> CoreResult<String> {
+        root.file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                CoreError::InvalidInput(format!(
+                    "'{}' has no name ART can give it at the destination",
+                    root.display()
+                ))
+            })
+    }
+
+    /// Refuse a selection where two roots would land under the same name.
+    ///
+    /// `C:\a\Docs` and `D:\b\Docs` both want to be called `Docs`. Copying
+    /// both in would silently interleave two unrelated trees into one
+    /// directory — the user would have no way to know it happened — so this
+    /// is refused up front, naming both paths, rather than merged.
+    fn check_for_name_collisions(&self) -> CoreResult<()> {
+        let mut seen: std::collections::BTreeMap<String, &Path> = std::collections::BTreeMap::new();
+        for root in &self.roots {
+            let name = Self::base_name(root)?;
+            if let Some(other) = seen.get(name.as_str()) {
+                return Err(CoreError::InvalidInput(format!(
+                    "'{}' and '{}' would both be called '{name}' at the destination — \
+                     rename one before copying",
+                    other.display(),
+                    root.display()
+                )));
+            }
+            seen.insert(name, root);
+        }
+        Ok(())
+    }
+
+    /// Everything to copy, with the entry cap taken as a parameter so tests
+    /// can prove it applies to the whole selection without materialising
+    /// [`MAX_COPY_ENTRIES`] real files. Production always calls this with
+    /// that constant, through [`CopySource::entries`].
+    fn entries_capped(&self, max_entries: usize) -> CoreResult<Vec<SourceEntry>> {
+        self.check_for_name_collisions()?;
+
+        let mut out = Vec::new();
+        for root in &self.roots {
+            // The cap is shared across every root: once it is spent, later
+            // roots contribute nothing rather than getting a fresh budget of
+            // their own (a selection of 200 folders must not multiply the
+            // cap by 200).
+            if out.len() >= max_entries {
+                break;
+            }
+
+            let prefix = Self::base_name(root)?;
+            let metadata = std::fs::symlink_metadata(root)?;
+            let kind = metadata.file_type();
+
+            if kind.is_symlink() {
+                // Not followed, for the same reason `walk` does not follow
+                // one found mid-tree: a link out of the pick would copy in
+                // something the user did not select.
+                continue;
+            }
+
+            if kind.is_dir() {
+                out.push(SourceEntry {
+                    relative: prefix.clone(),
+                    is_dir: true,
+                    bytes: 0,
+                });
+                if out.len() >= max_entries {
+                    continue;
+                }
+
+                // `walk` is given the *remaining* budget, not the whole cap,
+                // so what it adds on top of everything already collected
+                // still respects the shared total.
+                let remaining = max_entries - out.len();
+                let mut local = Vec::new();
+                walk(root, "", 0, MAX_COPY_DEPTH, remaining, &mut local)?;
+                for mut entry in local {
+                    entry.relative = format!("{prefix}/{}", entry.relative);
+                    out.push(entry);
+                }
+            } else if kind.is_file() {
+                out.push(SourceEntry {
+                    relative: prefix,
+                    is_dir: false,
+                    bytes: metadata.len(),
+                });
+            }
+        }
+
+        Ok(out)
+    }
+
+    /// A selection-relative path (`"Game/Sub/File.txt"` or `"Readme.txt"`)
+    /// back to the root it came from and the path inside that root.
+    fn locate(&self, relative: &str) -> CoreResult<(PathBuf, String)> {
+        let (prefix, rest) = match relative.split_once('/') {
+            Some((p, r)) => (p, r.to_string()),
+            None => (relative, String::new()),
+        };
+
+        for root in &self.roots {
+            if Self::base_name(root)? == prefix {
+                return Ok((root.clone(), rest));
+            }
+        }
+
+        Err(CoreError::InvalidInput(format!(
+            "'{relative}' is not part of this selection"
+        )))
+    }
+
+    /// Turn a selection-relative path back into one on disk, through
+    /// `safe_join` for the part inside the root — the same round-trip
+    /// [`HostFolder::resolve`] makes, and for the same reason: by the time a
+    /// plan comes back from the frontend it is untrusted input again.
+    fn resolve(&self, relative: &str) -> CoreResult<PathBuf> {
+        let (root, rest) = self.locate(relative)?;
+        if rest.is_empty() {
+            Ok(root)
+        } else {
+            safe_join(&root, &rest).map_err(|err| {
+                CoreError::InvalidInput(format!(
+                    "'{relative}' is not a path inside the copy: {err}"
+                ))
+            })
+        }
+    }
+}
+
+impl CopySource for HostSelection {
+    fn entries(&self) -> CoreResult<Vec<SourceEntry>> {
+        self.entries_capped(MAX_COPY_ENTRIES)
+    }
+
+    fn read(&self, relative: &str) -> CoreResult<Vec<u8>> {
+        let path = self.resolve(relative)?;
+        let size = std::fs::metadata(&path)?.len();
+        if size > MAX_COPY_FILE_BYTES {
+            return Err(CoreError::InvalidInput(format!(
+                "{relative} is {size} bytes, more than ART copies in one go"
+            )));
+        }
+        Ok(std::fs::read(path)?)
+    }
+
+    fn metadata(&self, relative: &str) -> CoreResult<Option<Sidecar>> {
+        let path = self.resolve(relative)?;
+        host_metadata(&path, self.read_sidecars)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1166,6 +1357,222 @@ mod tests {
             assert_eq!(report.files_copied, 1, "only the real file");
             assert!(fixture.listing(0).iter().all(|e| e.name != "Link.txt"));
         }
+    }
+
+    // ---- HostSelection: several roots as one copy ----
+
+    #[test]
+    fn a_selection_of_files_and_folders_copies_each_at_the_top_level() {
+        let fixture = Fixture::new("selection-flat");
+        let staging = fixture.dir.join("picks");
+        std::fs::create_dir_all(&staging).unwrap();
+
+        let game = staging.join("Game");
+        std::fs::create_dir_all(game.join("Sub")).unwrap();
+        std::fs::write(game.join("Loader"), b"loader bytes").unwrap();
+        std::fs::write(game.join("Sub").join("File.txt"), b"nested").unwrap();
+
+        let readme = staging.join("Readme.txt");
+        std::fs::write(&readme, b"top level readme").unwrap();
+
+        let selection = HostSelection::new(vec![game, readme], true);
+
+        let mut device = fixture.device();
+        let mut writer =
+            VolumeWriter::open(&mut device, fixture.geometry, &fixture.image, 0).unwrap();
+        let report = copy_into_volume(
+            &mut writer,
+            0,
+            &selection,
+            OverwritePolicy::Skip,
+            &NoProgress,
+        )
+        .unwrap();
+        drop(writer);
+        drop(device);
+
+        assert!(report.is_complete(), "{report:?}");
+        assert_eq!(report.files_copied, 3, "Loader, File.txt and Readme.txt");
+        assert_eq!(report.directories_created, 2, "Game and Sub");
+
+        let root = fixture.listing(0);
+        assert_eq!(root.len(), 2, "Game and Readme.txt land side by side");
+
+        let game_entry = root.iter().find(|e| e.name == "Game").unwrap();
+        assert!(game_entry.is_dir);
+        let readme_entry = root.iter().find(|e| e.name == "Readme.txt").unwrap();
+        assert!(!readme_entry.is_dir);
+        assert_eq!(fixture.contents(readme_entry.block), b"top level readme");
+
+        let inside_game = fixture.listing(game_entry.block);
+        assert_eq!(inside_game.len(), 2, "Loader and Sub");
+        let loader = inside_game.iter().find(|e| e.name == "Loader").unwrap();
+        assert_eq!(fixture.contents(loader.block), b"loader bytes");
+        let sub = inside_game.iter().find(|e| e.name == "Sub").unwrap();
+        assert!(sub.is_dir);
+        let inside_sub = fixture.listing(sub.block);
+        assert_eq!(inside_sub.len(), 1);
+        assert_eq!(fixture.contents(inside_sub[0].block), b"nested");
+    }
+
+    /// The option a single-folder copy (`HostFolder`) already honours must do
+    /// the same thing through a batch selection: the same user action —
+    /// "copy this in, without sidecars" — must not behave differently
+    /// depending on whether the user picked one thing or several (finding 2
+    /// of the phase-1a whole-branch review). `read_sidecars: false` must
+    /// leave the file with AmigaDOS default bits even though a `.uaem`
+    /// sidecar sits right next to it; `true` must apply it — proving the
+    /// flag is actually read, not just accepted and ignored either way.
+    #[test]
+    fn a_selection_honours_its_own_sidecar_flag_in_both_positions() {
+        let with_sidecars = Fixture::new("selection-sidecars-on");
+        let staging_on = with_sidecars.dir.join("picks");
+        std::fs::create_dir_all(&staging_on).unwrap();
+        std::fs::write(staging_on.join("Game.slave"), b"slave bytes").unwrap();
+        std::fs::write(
+            staging_on.join("Game.slave.uaem"),
+            b"-sp-rwed 2020-05-04 10:20:30.00 a comment\n",
+        )
+        .unwrap();
+
+        let selection_on = HostSelection::new(vec![staging_on.join("Game.slave")], true);
+        let mut device = with_sidecars.device();
+        let mut writer =
+            VolumeWriter::open(&mut device, with_sidecars.geometry, &with_sidecars.image, 0)
+                .unwrap();
+        copy_into_volume(
+            &mut writer,
+            0,
+            &selection_on,
+            OverwritePolicy::Skip,
+            &NoProgress,
+        )
+        .unwrap();
+        drop(writer);
+        drop(device);
+
+        let entry = with_sidecars.listing(0)[0].clone();
+        let device = with_sidecars.device();
+        let protection = protection_of(&device, &with_sidecars.geometry, entry.block).unwrap();
+        assert_eq!(
+            uaem::format_bits(protection),
+            "-sp-rwed",
+            "read_sidecars: true must apply the bits the .uaem carried"
+        );
+
+        let without_sidecars = Fixture::new("selection-sidecars-off");
+        let staging_off = without_sidecars.dir.join("picks");
+        std::fs::create_dir_all(&staging_off).unwrap();
+        std::fs::write(staging_off.join("Game.slave"), b"slave bytes").unwrap();
+        std::fs::write(
+            staging_off.join("Game.slave.uaem"),
+            b"-sp-rwed 2020-05-04 10:20:30.00 a comment\n",
+        )
+        .unwrap();
+
+        let selection_off = HostSelection::new(vec![staging_off.join("Game.slave")], false);
+        let mut device = without_sidecars.device();
+        let mut writer = VolumeWriter::open(
+            &mut device,
+            without_sidecars.geometry,
+            &without_sidecars.image,
+            0,
+        )
+        .unwrap();
+        copy_into_volume(
+            &mut writer,
+            0,
+            &selection_off,
+            OverwritePolicy::Skip,
+            &NoProgress,
+        )
+        .unwrap();
+        drop(writer);
+        drop(device);
+
+        let entry = without_sidecars.listing(0)[0].clone();
+        let device = without_sidecars.device();
+        let protection = protection_of(&device, &without_sidecars.geometry, entry.block).unwrap();
+        assert_eq!(
+            uaem::format_bits(protection),
+            "----rwed",
+            "read_sidecars: false must ignore the .uaem sitting right next to the file"
+        );
+    }
+
+    /// If the cap reset per root, two roots with ten files each and a shared
+    /// cap of six would leave the second root free to add its own six —
+    /// twelve entries out of a cap of six. It must not.
+    #[test]
+    fn a_selection_obeys_the_entry_cap_across_all_roots_not_per_root() {
+        let dir = scratch("selection-cap");
+        let root_a = dir.join("A");
+        let root_b = dir.join("B");
+        std::fs::create_dir_all(&root_a).unwrap();
+        std::fs::create_dir_all(&root_b).unwrap();
+        for index in 0..10 {
+            std::fs::write(root_a.join(format!("f{index}.txt")), b"x").unwrap();
+            std::fs::write(root_b.join(format!("f{index}.txt")), b"x").unwrap();
+        }
+
+        let selection = HostSelection::new(vec![root_a, root_b], true);
+        let capped = selection.entries_capped(6).unwrap();
+
+        assert!(
+            capped.len() <= 6,
+            "the cap must hold across the whole selection, not double per root: {}",
+            capped.len()
+        );
+        assert!(
+            !capped
+                .iter()
+                .any(|e| e.relative == "B" || e.relative.starts_with("B/")),
+            "root B must not be touched once the shared cap is spent on root A: {capped:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_roots_with_the_same_base_name_are_refused_rather_than_silently_merged() {
+        let dir = scratch("selection-collision");
+        let a = dir.join("a").join("Docs");
+        let b = dir.join("b").join("Docs");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(a.join("A.txt"), b"from a").unwrap();
+        std::fs::write(b.join("B.txt"), b"from b").unwrap();
+
+        let selection = HostSelection::new(vec![a.clone(), b.clone()], true);
+        let err = selection.entries().unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains(&a.display().to_string()),
+            "names root a: {message}"
+        );
+        assert!(
+            message.contains(&b.display().to_string()),
+            "names root b: {message}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_empty_selection_copies_nothing_without_error() {
+        let selection = HostSelection::new(vec![], true);
+        assert_eq!(selection.entries().unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn a_root_that_does_not_exist_is_reported_rather_than_silently_skipped() {
+        let dir = scratch("selection-missing");
+        let missing = dir.join("Nope");
+
+        let selection = HostSelection::new(vec![missing], true);
+        assert!(selection.entries().is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ---- Amiga → Windows, end to end ----

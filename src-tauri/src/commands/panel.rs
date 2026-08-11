@@ -45,6 +45,16 @@ pub struct PanelEntry {
     /// True when the entry is a symlink or junction. Reported, never followed —
     /// that is the ART-028 lesson.
     pub is_link: bool,
+    /// Last-modified time, Unix seconds. `None` when the source could not
+    /// report one — a sort by date must know the difference between "no
+    /// date" and "epoch", so this stays optional rather than defaulting to 0.
+    pub date: Option<i64>,
+    /// The Attr column: `rahs`-shape for a local file (Windows attributes),
+    /// `hsparwed`-shape for an ADF/HDF entry (Amiga protection bits, already
+    /// formatted by `core::volume::write::uaem::format_bits` — never a second
+    /// formatter). `None` only when the source has nothing to report, which
+    /// today is just a non-Windows build listing a local folder.
+    pub attrs: Option<String>,
 }
 
 /// A local folder's contents plus where it sits.
@@ -101,6 +111,8 @@ fn list_local(dir: &Path) -> CoreResult<LocalListing> {
             path: Some(entry.path().to_string_lossy().to_string()),
             header_block: None,
             is_link,
+            date: mtime_unix(&meta),
+            attrs: windows_attrs(&meta),
         });
     }
 
@@ -118,6 +130,59 @@ fn list_local(dir: &Path) -> CoreResult<LocalListing> {
         entries,
         truncated,
     })
+}
+
+/// A file's last-modified time as Unix seconds, or `None` when the platform
+/// could not report one (some filesystems have no modified time at all).
+fn mtime_unix(meta: &std::fs::Metadata) -> Option<i64> {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+}
+
+// The four Windows file-attribute bits the Attr column shows, in the order
+// Total Commander shows them: Read-only, Archive, Hidden, System. Values from
+// winnt.h (`FILE_ATTRIBUTE_*`); hardcoded rather than pulled from a `windows`
+// crate dependency, which `core/` (and this module stays close to) has no
+// reason to add for four constants that never change.
+const FILE_ATTRIBUTE_READONLY: u32 = 0x1;
+const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+const FILE_ATTRIBUTE_SYSTEM: u32 = 0x4;
+const FILE_ATTRIBUTE_ARCHIVE: u32 = 0x20;
+
+/// Format a raw Windows attribute bitmask as the Attr column's `rahs` shape:
+/// a letter when the bit is set, `-` when it is not, always four characters.
+///
+/// Pure and platform-independent on purpose — this is the part that gets
+/// tested without a real Windows file — even though only [`windows_attrs`]
+/// ever calls it with a real value.
+fn format_windows_attrs(attrs: u32) -> String {
+    let bit = |mask: u32, letter: char| if attrs & mask != 0 { letter } else { '-' };
+    [
+        bit(FILE_ATTRIBUTE_READONLY, 'r'),
+        bit(FILE_ATTRIBUTE_ARCHIVE, 'a'),
+        bit(FILE_ATTRIBUTE_HIDDEN, 'h'),
+        bit(FILE_ATTRIBUTE_SYSTEM, 's'),
+    ]
+    .iter()
+    .collect()
+}
+
+/// A local entry's Attr column, or `None` on a platform with no such thing.
+///
+/// This is the one platform-specific read in this module: `core/` must never
+/// call a Windows API, so it lives here in `commands/`, behind `cfg(windows)`
+/// with a `None`-returning fallback rather than failing to build elsewhere.
+#[cfg(windows)]
+fn windows_attrs(meta: &std::fs::Metadata) -> Option<String> {
+    use std::os::windows::fs::MetadataExt;
+    Some(format_windows_attrs(meta.file_attributes()))
+}
+
+#[cfg(not(windows))]
+fn windows_attrs(_meta: &std::fs::Metadata) -> Option<String> {
+    None
 }
 
 /// The places a pane can start from: drives, and the usual folders.
@@ -154,6 +219,49 @@ pub struct ExtractedTo {
 mod tests {
     use super::*;
 
+    #[test]
+    fn no_attributes_set_is_four_dashes() {
+        assert_eq!(format_windows_attrs(0), "----");
+    }
+
+    #[test]
+    fn archive_only() {
+        assert_eq!(format_windows_attrs(FILE_ATTRIBUTE_ARCHIVE), "-a--");
+    }
+
+    #[test]
+    fn hidden_and_system() {
+        assert_eq!(
+            format_windows_attrs(FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM),
+            "--hs"
+        );
+    }
+
+    #[test]
+    fn read_only() {
+        assert_eq!(format_windows_attrs(FILE_ATTRIBUTE_READONLY), "r---");
+    }
+
+    #[test]
+    fn all_four_at_once() {
+        let all = FILE_ATTRIBUTE_READONLY
+            | FILE_ATTRIBUTE_ARCHIVE
+            | FILE_ATTRIBUTE_HIDDEN
+            | FILE_ATTRIBUTE_SYSTEM;
+        assert_eq!(format_windows_attrs(all), "rahs");
+    }
+
+    /// Bits this module does not know about (e.g. `FILE_ATTRIBUTE_NORMAL`,
+    /// `FILE_ATTRIBUTE_DIRECTORY`) must not corrupt the four it does.
+    #[test]
+    fn unrelated_bits_are_ignored() {
+        let known = FILE_ATTRIBUTE_READONLY
+            | FILE_ATTRIBUTE_ARCHIVE
+            | FILE_ATTRIBUTE_HIDDEN
+            | FILE_ATTRIBUTE_SYSTEM;
+        assert_eq!(format_windows_attrs(!known), "----");
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("art-panel-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -187,6 +295,36 @@ mod tests {
 
         let listing = list_local(&child).unwrap();
         assert_eq!(listing.parent.as_deref(), Some(dir.to_str().unwrap()));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A sort by date has to know a real date from a missing one — see the
+    /// `Option<i64>` comment on `PanelEntry::date` — so this proves the local
+    /// source actually reports one rather than always coming back `None`.
+    #[test]
+    fn a_freshly_written_file_has_a_recent_date() {
+        let dir = scratch("date");
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        std::fs::write(dir.join("new.txt"), b"x").unwrap();
+
+        let listing = list_local(&dir).unwrap();
+        let file = listing
+            .entries
+            .iter()
+            .find(|e| e.name == "new.txt")
+            .unwrap();
+        let date = file
+            .date
+            .expect("a freshly written file has a modified time");
+
+        assert!(
+            date >= before - 2,
+            "date {date} looks stale next to {before}"
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

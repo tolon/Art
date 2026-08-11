@@ -600,16 +600,28 @@ pub fn sources_fetch(
 /// lives here, and both of those differences are guarantees a test has to be
 /// able to reach:
 ///
-/// - **It fits, or nothing happens.** `plan_copy_in_folder` is a read-only
-///   pre-flight; an install that will not fit is refused atomically with real
-///   block numbers, before a single block is written (§92). `run_copy_in_folder`
-///   on its own lands what fits and reports the rest, which is right for a copy
-///   and wrong for an install — a WHDLoad pack missing its `.slave` because it
-///   did not fit is not a partial success, it is a broken result nobody was
+/// - **It fits, or nothing happens.** An install that will not fit is refused
+///   atomically with real block numbers, before a single block is written
+///   (§92) — landing what fits and reporting the rest is right for a copy and
+///   wrong for an install: a WHDLoad pack missing its `.slave` because it did
+///   not fit is not a partial success, it is a broken result nobody was
 ///   warned about.
-/// - **Cancelling installs nothing.** [`OnCancel::Abandon`] means a cancelled
-///   batch never reaches the user's file and never reports success (§54, §57).
-fn install_archive_into_volume(
+/// - **Cancelling installs nothing.** A cancelled batch never reaches the
+///   user's file and never reports success (§54, §57).
+///
+/// Both guarantees come from
+/// [`volume_write::install_into_folder`](crate::commands::volume_write::install_into_folder),
+/// which this only wraps with the one thing specific to a single archive:
+/// unpacking it and handing the result over as a [`HostFolder`](crate::core::volume::write::copy::HostFolder).
+/// Task 5's batch install (`commands::archives`) is the other caller — several
+/// archives, each renamed to its own drawer, staged into one
+/// [`HostSelection`](crate::core::volume::write::copy::HostSelection) and
+/// handed to the same primitive, so a cancelled batch is exactly as atomic as
+/// a cancelled single install.
+///
+/// `pub(crate)` rather than private so `commands::archives` (and any future
+/// caller in this crate) can reach it without a second copy of this wrapper.
+pub(crate) fn install_archive_into_volume(
     archive: &std::path::Path,
     image: &std::path::Path,
     volume_index: usize,
@@ -624,21 +636,12 @@ fn install_archive_into_volume(
     // does not (§7.2).
     let folder = crate::core::volume::write::copy::HostFolder::new(scratch.path(), true);
 
-    let plan =
-        crate::commands::volume_write::plan_copy_in_folder(image, volume_index, parent, &folder)?;
-    if !plan.fits() {
-        return Err(CoreError::SafetyRefused(plan.shortfall().unwrap_or_else(
-            || "this will not fit; nothing was changed".into(),
-        )));
-    }
-
-    let (report, backup) = crate::commands::volume_write::run_copy_in_folder_with(
+    let (report, backup) = crate::commands::volume_write::install_into_folder(
         image,
         volume_index,
         parent,
         &folder,
         policy,
-        crate::commands::volume_write::OnCancel::Abandon,
         progress,
     )?;
 

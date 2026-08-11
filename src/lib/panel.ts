@@ -17,6 +17,16 @@ export interface PanelEntry {
   header_block: number | null;
   /** Reported, never followed. */
   is_link: boolean;
+  /** Last-modified time, Unix seconds. `null` when the source has none. */
+  date: number | null;
+  /**
+   * The Attr column: `rahs`-shape (Windows attributes) for a local file,
+   * `hsparwed`-shape (Amiga protection bits) for an ADF/HDF entry — already
+   * formatted on the Rust side by `core::volume::write::uaem::format_bits`,
+   * the same function `AttributesDialog` uses. `null` only on a non-Windows
+   * build listing a local folder.
+   */
+  attrs: string | null;
 }
 
 export interface LocalListing {
@@ -55,6 +65,8 @@ export async function panelListAdf(
     path: null,
     header_block: entry.header_block,
     is_link: false,
+    date: entry.unix_date,
+    attrs: entry.attrs,
   }));
 }
 

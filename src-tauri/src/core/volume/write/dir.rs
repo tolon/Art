@@ -183,6 +183,18 @@ pub fn entries_in<D: BlockDevice + ?Sized>(
         }
     }
 
+    // The loop above walks buckets in table order, which has nothing to do
+    // with the entries' names or kind — it is an implementation detail of the
+    // hash table, not a listing order. Folders first, then case-insensitive
+    // name: the same order `core/adf/fs.rs::list_directory_on` and
+    // `commands/panel.rs` impose on their own listings, so a pane looks the
+    // same whichever of the three feeds it.
+    out.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
     Ok(out)
 }
 
@@ -457,6 +469,27 @@ mod tests {
         (VecDevice::new(bytes, 512).unwrap(), geometry)
     }
 
+    /// A bare file header, blank and unlinked — [`write_dir_header`]'s
+    /// counterpart for tests that need a real file entry rather than a
+    /// directory. `entries_in` has to tell the two apart to put folders
+    /// first, so the folders-first test below needs at least one of each.
+    fn write_file_header(set: &mut BlockSet, block: u32, parent: u32, name: &str) {
+        let dir = set.blank(block);
+        set_i32(dir, TYPE_OFFSET, block_type::HEADER).unwrap();
+        set_u32(
+            dir,
+            crate::core::volume::write::layout::HEADER_KEY_OFFSET,
+            block,
+        )
+        .unwrap();
+        set_u32(dir, PROTECT_OFFSET, DEFAULT_PROTECTION).unwrap();
+        set_date(dir, amiga_now()).unwrap();
+        put_name(dir, name).unwrap();
+        set_u32(dir, PARENT_OFFSET, parent).unwrap();
+        set_i32(dir, SUBTYPE_OFFSET, subtype::FILE).unwrap();
+        set.checksum(block, CHECKSUM_OFFSET).unwrap();
+    }
+
     #[test]
     fn a_name_that_fits_is_accepted_unchanged() {
         assert_eq!(check_name("Readme").unwrap(), "Readme");
@@ -560,6 +593,58 @@ mod tests {
         assert_eq!(entries[0].name, "Tools");
         assert!(entries[0].is_dir);
         assert_eq!(entries[0].block, 900);
+    }
+
+    /// `entries_in` used to hand back whatever order the hash buckets walked
+    /// in — an implementation detail with no relationship to name or kind,
+    /// and the one HDF-partition listing path that had no order at all before
+    /// this task. Files are linked in first here, and named so a bucket-order
+    /// or name-only sort would still get this wrong; only folders-first,
+    /// case-insensitive-name gets it right.
+    #[test]
+    fn folders_come_first_then_names_case_insensitively() {
+        let (device, geometry) = volume(*b"DOS\x01");
+        let mut set = BlockSet::new(512);
+
+        write_file_header(&mut set, 900, geometry.root_block, "zebra.txt");
+        link_into(
+            &device,
+            &mut set,
+            &geometry,
+            geometry.root_block,
+            900,
+            "zebra.txt",
+        )
+        .unwrap();
+
+        write_file_header(&mut set, 901, geometry.root_block, "Apple.txt");
+        link_into(
+            &device,
+            &mut set,
+            &geometry,
+            geometry.root_block,
+            901,
+            "Apple.txt",
+        )
+        .unwrap();
+
+        write_dir_header(&mut set, 902, geometry.root_block, "Tools").unwrap();
+        link_into(
+            &device,
+            &mut set,
+            &geometry,
+            geometry.root_block,
+            902,
+            "Tools",
+        )
+        .unwrap();
+
+        let entries = entries_in(&device, &set, &geometry, geometry.root_block).unwrap();
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+
+        assert_eq!(names, vec!["Tools", "Apple.txt", "zebra.txt"]);
+        assert!(entries[0].is_dir);
+        assert!(entries.iter().skip(1).all(|e| !e.is_dir));
     }
 
     #[test]

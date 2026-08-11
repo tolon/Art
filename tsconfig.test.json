@@ -20,5 +20,5 @@
   // `exclude` is inherited through `extends`, and the base excludes exactly
   // these files. Clear it, or this program has no inputs at all.
   "exclude": [],
-  "include": ["src/**/*.test.ts"]
+  "include": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }

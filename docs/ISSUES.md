@@ -23,6 +23,178 @@ what fixed it (with the test that proves it).
 
 ## Open
 
+**ART-073** 🟡 **`delete_many`'s all-or-nothing guarantee only holds for the whole-file strategy**
+`src-tauri/src/commands/volume_write.rs::delete_many` (line ~505) · The
+pre-check (`check_batch_deletable`) runs once, against a read-only listing,
+before the writer session opens — for a floppy-sized image (the whole-file
+strategy) that is enough: nothing is written until the whole in-memory
+result validates, so a batch that cannot fully succeed leaves the file
+untouched, and every test in this module exercises that path. On a
+block-journal image (a large HDF) each `writer.delete(...)` inside the
+session's loop is its own committed, journalled operation, already durable
+in the file the instant it returns — there is no whole-image commit step to
+refuse at. An error partway through the loop after the pre-check passed
+(a name resolving differently a moment later, say) leaves the earlier
+deletes in the batch standing rather than none of them, breaking the
+all-or-nothing promise the doc comment now qualifies. Reachable in
+principle whenever a batch delete runs against an HDF rather than an ADF.
+Not reachable through the case-different-name path any more —
+`dedupe_case_insensitive` (added in the same pass that found this) closes
+that specific trigger — but the underlying strategy gap is still open. Fix
+would need the block-journal strategy to buffer its own generation of
+deletes behind one commit point the way the whole-file strategy already
+does, which is a real design change, not a one-line fix.
+
+**ART-072** 🟡 **Selection collision checks compare names case-sensitively, so `Docs` and `docs` are not caught**
+`src-tauri/src/core/volume/write/copy.rs::HostSelection::check_for_name_collisions`
+(line ~489) and `src-tauri/src/commands/archives.rs::prepare_archives`
+(line ~350) both keep a `BTreeMap<String, _>` keyed on the name exactly as
+given, so two roots (or two archives) that would land under the same drawer
+name only collide when they are byte-for-byte identical. AmigaDOS is
+case-preserving but case-*insensitive* (the same rule `hash::name_hash`
+respects, ART-009/ART-010), so `Docs` and `docs` are two different keys
+here but the one directory entry there. In `copy.rs` this means the clean,
+named refusal `check_for_name_collisions` exists to give never fires for a
+case-different pair; the second root is instead silently skipped later,
+along with its whole subtree, replacing one clear "rename one of these"
+message with a pile of unexplained "skipped" lines. In `archives.rs` the
+same gap means two archives that both unpack to a `Docs`/`docs` drawer are
+not refused up front either — `std::fs::rename(&item.content_root,
+&destination)` is what fails instead, surfacing a raw OS rename error
+rather than the friendly named-collision sentence the exact-match case
+already gets. Fix is to key both maps on `name.to_lowercase()` instead of
+the name itself, the same change `dedupe_case_insensitive`
+(`commands/volume_write.rs`) just made for batch deletes.
+
+**ART-071** 🟡 **A selection of only symlinks copies nothing and reports success**
+`src-tauri/src/core/volume/write/copy.rs::HostSelection::entries_capped`
+(line ~527) · A root that is a symlink is skipped with a bare `continue` —
+correct on its own (a link out of the pick would copy in something the user
+did not select, the same rule `HostFolder`'s own `walk` applies mid-tree at
+line ~414), but nothing records that it happened. If every root in a
+selection is a symlink, `entries()` returns an empty `Vec` with no entry in
+`CopyReport.skipped`, so `copy_into_volume` runs its loop zero times and
+returns a report where `cancelled` is false and `skipped` is empty —
+`CopyReport::is_complete()` reads that as a clean success. The user picked
+one or more things, ART copied none of them, and every signal available to
+the UI says the copy worked. Fix is for `entries_capped` to push a skipped
+entry (as `walk`'s sibling check already could, but currently does not
+either) rather than silently dropping the root.
+
+**ART-070** 🔵 **`refresh(side)` moves keyboard focus to the pane it refreshed**
+`src/pages/FileManager.tsx` — `openLocal`, `openAdf`, `openHdf` and
+`openVolume` (lines 552, 585, 600, 638) each end with `resetSelection(side);
+setFocused(side);`, and `refresh(side)` (line ~723) calls whichever of them
+matches the pane's kind. F5's copy-in path calls `refresh(to)` on the
+*destination* pane once the job result arrives, so after a copy, keyboard
+focus silently jumps from the source pane (where the user was working) to
+the destination — Total Commander leaves focus on the source. Cosmetic, not
+a safety issue: nothing is acted on incorrectly, the next F-key press just
+lands on the pane the user was not looking at. Fix would need `refresh` to
+take an explicit "keep focus here" flag, or for its callers to restore
+`focused` afterward rather than trusting the open-pane functions' own
+default.
+
+**ART-069** 🔵 **No frontend test renders `FileManager.tsx`**
+`src/pages/FileManager.tsx` · It calls Tauri commands (`onVolumeWriteResult`,
+`onJobProgress`, panel listing, …) on mount, which is why every phase-1a
+frontend test extracts a pure function or hook instead of rendering the
+page — `@/lib/selection`, `@/lib/functionKeyPlan` (added closing finding 4
+of the phase-1a whole-branch review), `usePaneTab`/`isShortcutBlocked` in
+`FunctionKeys.tsx`, and so on. Each extraction is real, tested logic, but
+none of them proves the page actually *wires* the extracted piece
+correctly — that an F-key's `run` reads the same `target` its `enabled`
+was computed from, that a click handler calls the selection function it
+looks like it calls, that the two `useEffect` result listeners registered
+at mount really are registered before any button can start a job. Closing
+this needs either a mock of the Tauri IPC surface (`@tauri-apps/api/core`'s
+`invoke`, `@tauri-apps/api/event`'s `listen`) sufficient to render the page
+in a test, or splitting `FileManager.tsx` into smaller components each
+small enough to mock individually — a real task, not a quick fix.
+
+**ART-068** 🔵 **The filter box tells "empty" from "no match" by comparing entry counts, not a dedicated flag**
+`src/pages/FileManager.tsx` (~line 2260) · The "a mask matching nothing says so"
+message picks between `files.pane.filterNoMatch` and `files.pane.empty` with
+`filter.trim() !== "" && state.entries.length > 0` — a mask is active *and*
+the pane's unfiltered listing was non-empty. That reads correctly today
+because `filterEntries` (`src/lib/mask.ts`) never changes the unfiltered
+count and the mask resets on navigation, but the distinction the UI actually
+wants — "did the mask remove everything?" — is being inferred from two
+numbers matching a shape, not read off a value that says so directly. A
+future change to either side (a mask that also hid something for a different
+reason, a pane whose unfiltered count is not `state.entries` any more) could
+silently start showing "this folder is empty" for a folder that only looks
+empty because of the filter, which reads as ART having failed to open the
+disk. No test exercises the two counts diverging from what the boolean they
+stand in for would say. Fix is mechanical: have `filterEntries` (or a sibling)
+return whether it removed anything, and key the message off that instead of
+re-deriving it at the call site.
+
+**ART-067** 🔵 **A batch archive install can't be stopped mid-archive**
+`commands/archives.rs::prepare_archives` (line ~316) · `unpack_for_install(archive, &NoProgress)`
+is called with `&NoProgress` regardless of which caller is running — including
+`install_archives`, which is on a real job with a real `ProgressSink` one
+call up the stack. `is_cancelled()` is checked once per archive, at the top
+of the loop (line ~310), so Stop is honoured *between* archives but not
+during one — a batch of five archives where the third is large leaves Stop
+unresponsive for however long that one extraction takes. Not a data-safety
+issue (§54's "never mid-write" is still honoured: nothing is written to the
+volume until every archive is unpacked and staged), just a slower response
+to Stop than the rest of the job queue gives. Fix is to thread the real
+`progress` sink into `unpack_for_install` instead of a fixed `NoProgress`.
+
+**ART-066** 🟡 **`archives_plan_install` unpacks the whole batch on the Tauri command thread**
+`commands/archives.rs::archives_plan_install` (line ~104) · Every other
+multi-step operation in this module runs through [`spawn_job`](../src-tauri/src/commands/jobs.rs)
+so it can report progress and be cancelled (§54, §55) — `archives_install`
+does. `archives_plan_install` is a plain `#[tauri::command]`: it calls
+`build_plan` → `prepare_archives(archives, staging.path(), &NoProgress)`
+straight in the command handler, which extracts every archive in the
+selection before returning. A plan over several large archives blocks the
+Tauri command thread for the whole unpack, with no progress and no way to
+stop it, where the read-only plan step for every other batched operation in
+this file manager returns as soon as the (much cheaper) cost is computed.
+Not data-unsafe — nothing is written — just unresponsive. Needs the same
+`spawn_job` treatment `archives_install` already has, returning a job id the
+UI awaits the way it awaits every other plan today would be a larger change
+than this note; recorded here rather than fixed under Task 8's scope.
+
+**ART-065** 🟡 **Volume→local multi-select is several concurrent operations, not one**
+`src/pages/FileManager.tsx::copySelectionTo` (line ~1090) · When the source
+pane is a volume and more than one entry is selected for extraction to a
+local folder, each entry becomes its own concurrent operation inside a
+single `Promise.all` — a subdirectory goes through its own `volumeCopyOut`
+job (awaited individually inside the map callback), a plain file through its
+own direct `volumeExtractTo` call — rather than the one atomic, one-job
+operation `volumeCopyInMany` (local→volume) and `volumeCopyBetween`
+(volume→volume, staged) both give their directions. Each individual
+extraction is still safe on its own — every write is the same
+backup-and-validate pipeline as ever — but the *batch* has none of the
+all-or-nothing guarantee the other two directions do: a selection of ten
+entries where the seventh fails to extract leaves the first six on disk and
+the last three silently never attempted, with no report tying the partial
+result back to "this was one selection." Needs a batched extract primitive
+(`volume_extract_many`, mirroring `volume_copy_in_many`'s shape) rather than
+fixing the concurrency at the call site.
+
+**ART-064** 🟡 **Volume→volume multi-select refuses rather than batching**
+`src/pages/FileManager.tsx::copySelectionTo` (line ~1124) · "Two volumes and
+more than one entry: not supported yet" — `setError(t("files.err.batchBetweenVolumes"))`
+("Copying several entries between two images at once is not supported yet —
+copy them one at a time."). Not a defect in the sense of wrong behaviour: the
+refusal is explicit, immediate, and names the reason, which is exactly what
+§89 asks for when a case is not handled. It is recorded here because it is
+the one direction of the four (local→volume, volume→local, volume→volume
+single-entry, volume→volume batch) Task 8's roadmap self-review calls out by
+name as deliberately not built: there is no `volume_copy_between_many`
+primitive to build a batch on top of — `volume_copy_between` (the command
+`e3035cf` added end-to-end coverage for) stages exactly one directory tree
+through a temp folder per call, and doing several would mean either several
+separate stage-and-insert round trips (no shared atomicity, the same
+weakness as ART-065) or a `HostSelection`-shaped staging step that does not
+exist yet on the extract side. Needs its own task, not a quick fix — see
+`ART-065` for the sibling gap it would need to close at the same time.
+
 **ART-062** 🔵 **No language has been checked on screen**
 `src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
 was verified by `pnpm test`'s key-parity check and by reading the JSON — never
@@ -161,6 +333,42 @@ re-audits them without reason:
 
 ## Fixed
 
+### Phase 1a
+
+**ART-074** 🟠 **An accented filename came back corrupted**
+`core/adf/bcpl.rs` · AmigaDOS stores strings as Latin-1, one byte per
+character. `core/volume/write/dir.rs::put_name` knew that and encoded
+correctly — its doc comment even said `write_bcpl_string` "would store `ü` as
+two characters and the name would come back wrong on a real Amiga" — but it
+fixed the problem locally instead of at the source, and left the read path
+alone. `read_bcpl_string` used `String::from_utf8_lossy`, so `Grüße` (bytes
+`47 72 FC DF 65`) read back with two replacement characters: `FC` and `DF` are
+not valid UTF-8 lead bytes. `dir.rs::name_of` sits three lines from
+`put_name` and disagreed with it about the encoding.
+
+Two more callers were wrong in the other direction: `create.rs`'s volume name
+and `rdb.rs`'s drive name went through `write_bcpl_string`, which used
+`s.as_bytes()` — UTF-8 — so a non-ASCII volume name was written as byte pairs
+a real Amiga renders as mojibake. Those two were *self*-consistent with the
+old reader, which is why nothing failed: the same shape as ART-032 through
+ART-035, where the reader and the writer share a mistake and the suite stays
+green. Every name in every test was ASCII. ART-041 had already established
+that Latin-1 names are supported, with `Grüße vom Süden` as its own example.
+
+→ Both directions of `bcpl.rs` are now Latin-1, a plain cast each way because
+Latin-1 is exactly the first 256 Unicode code points. A character above
+`U+00FF` has no byte and becomes `?` rather than a pair an Amiga would show as
+two wrong characters. `write_bcpl_string` also encodes before truncating, so a
+field limit can no longer cut a character in half. Pinned by
+`an_accented_name_survives_a_round_trip`,
+`a_name_written_as_latin1_elsewhere_reads_back_intact` and
+`truncation_counts_characters_and_never_splits_one`. One existing test,
+`bcpl_string_lossy_on_non_utf8`, asserted only `chars().count() == 3` and so
+passed under either encoding while claiming to prove replacement characters —
+it now asserts the actual string. Found by the whole-branch reviewer chasing a
+case-folding question in `delete_many`.
+
+
 ### Phase 0b
 
 **ART-047** 🔵 **Dead code that clippy cannot see**
@@ -228,6 +436,32 @@ before/after pair with `git diff --no-index`, including with `-a`/`--text`
 forced. That is a property of diffing *against the old, binary-flagged blob*,
 not of the fixed file: every diff of `docs/FEATURES.md` from this commit
 onward, once neither side has a raw NUL, renders as ordinary text.
+
+**ART-063** 🟠 **ART could not write a disk an Amiga would boot from**
+`core/adf/create.rs`, `core/adf/bootcode.rs` · The `bootable` flag wrote
+`0x4E 0x75` — a bare `RTS` — at offset 12 and nothing else. Kickstart's `strap`
+validates the boot block's `DOS` signature and checksum, jumps to offset 12,
+and requires the code there to return `D0 = 0` with `A0` holding an address to
+jump to; **a non-zero `D0` raises a system alert and reboots**. An `RTS`
+returned with whatever `D0` already held, so nothing was ever loaded. Invisible
+to every test ART had, and to the amitools oracle, because both only ask
+whether the boot block is *well-formed* — `xdftool` reported `bootable: True`
+for the RTS stub too. Only Kickstart can answer whether the code runs.
+→ `core/adf/bootcode.rs` assembles what the contract asks for: read `ExecBase`
+from absolute address 4 (guaranteed, unlike `A6` on entry, which is convention),
+`FindResident("dos.library")` at exec LVO −96, take `rt_Init` at offset 22 of
+the returned `struct Resident`, return `D0 = 0` with `A0` pointing at it. ART's
+own implementation, written from the documented contract and the published LVO
+table — Commodore's boot block is copyrighted and ART ships no Amiga content,
+ever. The two relative displacements are computed from the layout rather than
+hand-counted, because miscounting either produces a disk that hangs a real
+machine while every test still passes; seven tests in `bootcode::tests` pin
+each landmark and both displacements independently. **Verified by booting
+`test/art-bootable-test.adf` on 2026-08-11.** Note the scope: a disk that
+boots is not a disk that boots to Workbench — DOS then wants
+`S/Startup-Sequence` and the `c/`, `libs/` and `l/` contents behind it, which
+are AmigaOS content ART cannot supply. Reaching a CLI prompt is the whole
+claim, and `info.bootable` now means what it says.
 
 ### Phase 0a
 

@@ -69,6 +69,8 @@
     "copyPlan": {
       "ariaLabel": "Copy plan",
       "title": "Before copying",
+      "source_one": "{{name}}",
+      "source_other": "{{count}} items",
       "intoDestination": "into {{destination}}",
       "filesCount_one": "{{count}} file",
       "filesCount_other": "{{count}} files",
@@ -89,7 +91,13 @@
       "splitIconsOrphaned": "Some .info icons have nothing to describe in this copy.",
       "clean": "Everything fits and every name is one AmigaDOS can store.",
       "notEnoughRoom": "There is not enough room on the disk",
-      "copy": "Copy"
+      "copy": "Copy",
+      "archivesTitle_one": "This will create {{count}} drawer:",
+      "archivesTitle_other": "This will create {{count}} drawers:",
+      "archiveRowCounts_one": "{{count}} file, {{bytes}}",
+      "archiveRowCounts_other": "{{count}} files, {{bytes}}",
+      "archiveSkippedCount_one": "{{count}} entry left out, not part of the drawer:",
+      "archiveSkippedCount_other": "{{count}} entries left out, not part of the drawer:"
     },
     "checkout": {
       "discardConfirm": "Throw away your changes to {{name}}? The working copy will be deleted.",
@@ -881,7 +889,12 @@
       "deleteReasonSelect": "Select something to delete",
       "attributes": "Attributes",
       "attributesReasonSelect": "Select something first",
-      "attributesReasonNeedsImage": "Attributes belong to files inside an image"
+      "attributesReasonNeedsImage": "Attributes belong to files inside an image",
+      "reasonMultiple": "Works on one entry — select only that one"
+    },
+    "selection": {
+      "summary_one": "{{count}} item selected ({{size}})",
+      "summary_other": "{{count}} items selected ({{size}})"
     },
     "toolbar": {
       "folder": "Folder...",
@@ -895,10 +908,28 @@
       "nothingOpen": "Nothing open",
       "truncated": "This folder holds more than ART will list — only the first entries are shown.",
       "empty": "Nothing here.",
+      "filterNoMatch": "No files match “{{mask}}”.",
       "folderSuffix": "(folder)",
       "linkSuffix": "(link — not followed)",
       "copyTitle": "Copy to the other pane",
       "deleteTitle": "Delete from the disk"
+    },
+    "sort": {
+      "name": "Name",
+      "size": "Size",
+      "date": "Date",
+      "ext": "Ext",
+      "attrs": "Attr",
+      "ascending": "ascending",
+      "descending": "descending",
+      "title": "Sorted by {{column}}, {{direction}} — click to change"
+    },
+    "tc": {
+      "dirSize": "<DIR>",
+      "freeOfTotal": "{{free}} k of {{total}} k free",
+      "statusLine": "{{selectedBytes}} k / {{totalBytes}} k in {{selectedFiles}} / {{totalFiles}} file(s), {{selectedDirs}} / {{totalDirs}} dir(s)",
+      "maskPlaceholder": "*.*",
+      "maskAriaLabel": "Filter files by name"
     },
     "footer": {
       "unnamed": "(unnamed)",
@@ -929,6 +960,12 @@
         "confirm1": "Delete {{name}} from {{volume}}?",
         "confirm2": "This cannot be undone from inside ART once it has finished. Delete '{{name}}'?",
         "confirmIcon": "Delete its icon ({{icon}}) too?"
+      },
+      "deleteMany": {
+        "confirm1_one": "Delete {{count}} item ({{size}}) from {{volume}}?",
+        "confirm1_other": "Delete {{count}} items ({{size}}) from {{volume}}?",
+        "confirm2_one": "This cannot be undone from inside ART once it has finished. Delete this item?",
+        "confirm2_other": "This cannot be undone from inside ART once it has finished. Delete these {{count}} items?"
       }
     },
     "err": {
@@ -936,19 +973,40 @@
       "openOtherSide": "Open a partition on the other side first.",
       "sameImage": "That is the same image on both sides. Use Move or Rename instead.",
       "noLocalPath": "That item has no path on your disk.",
-      "openPartitionFirst": "Open a partition first."
+      "openPartitionFirst": "Open a partition first.",
+      "batchBetweenVolumes": "Copying several entries between two images at once is not supported yet — copy them one at a time.",
+      "mixedArchiveSelection": "Select only .lha archives, or none, when copying into a volume — not a mix of the two."
     },
     "status": {
       "copyingBetween": "Copying {{name}} between images…",
       "planning": "Working out what {{name}} needs…",
+      "planningSelection_one": "Working out what {{count}} item needs…",
+      "planningSelection_other": "Working out what {{count}} items need…",
+      "planningArchives_one": "Working out what {{count}} archive needs…",
+      "planningArchives_other": "Working out what {{count}} archives need…",
       "copying": "Copying {{name}}…",
+      "copyingSelection_one": "Copying {{count}} item…",
+      "copyingSelection_other": "Copying {{count}} items…",
+      "copyingArchives_one": "Installing {{count}} archive…",
+      "copyingArchives_other": "Installing {{count}} archives…",
       "copyingOut": "Copying {{name}} out…",
+      "copyingSelectionOut_one": "Copying {{count}} item out…",
+      "copyingSelectionOut_other": "Copying {{count}} items out…",
+      "selectionCopiedOut_one": "{{count}} item copied out",
+      "selectionCopiedOut_other": "{{count}} items copied out",
+      "selectionCopyOutCancelled": "Stopped — {{done}} of {{total}} copied out",
       "writtenTo": "{{name}} written to {{volume}}",
       "writtenToBackedUp": "{{name}} written to {{volume}} — the previous image was backed up",
       "alreadyThere": "{{name}} is already there — it was left alone",
       "copiedOut": "{{name}} copied out of {{volume}} ({{size}})",
       "deleting": "Deleting {{name}}…",
+      "deletingMany_one": "Deleting {{count}} item…",
+      "deletingMany_other": "Deleting {{count}} items…",
       "deleted": "{{name}} deleted",
+      "deletedMany_one": "{{count}} item deleted",
+      "deletedMany_other": "{{count}} items deleted",
+      "deletedManyBackedUp_one": "{{count}} item deleted — the previous image was backed up",
+      "deletedManyBackedUp_other": "{{count}} items deleted — the previous image was backed up",
       "deletedWithIcon": "{{name}} and its icon deleted",
       "deletedBackedUp": "{{name}} deleted — the previous image was backed up",
       "deletedWithIconBackedUp": "{{name}} and its icon deleted — the previous image was backed up",

@@ -35,11 +35,25 @@ import { FileViewer } from "@/components/files/FileViewer";
 import {
   FunctionKeyBar,
   useFunctionKeys,
+  useInsertToggle,
+  usePaneTab,
+  useSelectAll,
   type FunctionAction,
 } from "@/components/files/FunctionKeys";
+import { SelectionBar } from "@/components/files/SelectionBar";
+import { fileTextColorVar, TcRowIcon, UpDirIcon } from "@/components/files/TcIcon";
+import "@/pages/FileManager.css";
 import { adfOpen, type AdfInfo } from "@/lib/adf";
+import {
+  archivesInstall,
+  archivesPlanInstall,
+  isArchivePath,
+  type ArchiveDrawer,
+} from "@/lib/archives";
 import { checkoutEdit, checkoutOpen, volumeIconFor } from "@/lib/checkout";
-import { onJobProgress } from "@/lib/jobs";
+import { planFunctionKeys } from "@/lib/functionKeyPlan";
+import { onJobProgress, type JobProgress } from "@/lib/jobs";
+import { filterEntries } from "@/lib/mask";
 import {
   formatBytes,
   panelListAdf,
@@ -47,6 +61,26 @@ import {
   panelLocalRoots,
   type PanelEntry,
 } from "@/lib/panel";
+import { splitName } from "@/lib/panelName";
+import { paneStatusCounts } from "@/lib/panelStatus";
+import { formatDateTC, formatGroupedSize } from "@/lib/tcFormat";
+import {
+  emptySelectionUpdate,
+  entriesIn,
+  insertToggle,
+  selectOnly,
+  selectRange,
+  toggleOne,
+  toggleSelectAll,
+  type SelectionUpdate,
+} from "@/lib/selection";
+import {
+  clickColumn,
+  defaultSortState,
+  sortEntries,
+  type SortColumn,
+  type SortState,
+} from "@/lib/sort";
 import type { OverwritePolicy } from "@/lib/sources";
 import {
   describeLayout,
@@ -61,10 +95,13 @@ import {
   onVolumeWriteResult,
   volumeCopyBetween,
   volumeCopyIn,
+  volumeCopyInMany,
   volumeCopyOut,
   volumeDelete,
+  volumeDeleteMany,
   volumeMakeDir,
   volumePlanCopy,
+  volumePlanCopyMany,
   volumePutFile,
   volumeRecover,
   volumeRename,
@@ -105,6 +142,16 @@ interface PaneState {
   warnings: string[];
   /** Whether ART can write here, and what the footer shows (§8). */
   capability: WriteCapability | null;
+  /**
+   * The volume's total capacity in bytes, for the Total Commander-styled
+   * drive row's "free of total" (task 6b) — `null` for a local folder (ART
+   * has no free/total-space command for a Windows drive) and for an HDF
+   * still showing its partition list (no single volume open yet). Read
+   * straight out of data `openAdf`/`openVolume` already fetch — `AdfInfo`'s
+   * `capacity_bytes`, `VolumeListing`'s `total_blocks * block_size` — never
+   * a new call of its own.
+   */
+  totalBytes: number | null;
   error: string | null;
 }
 
@@ -123,6 +170,7 @@ function emptyPane(): PaneState {
     volumeName: "",
     warnings: [],
     capability: null,
+    totalBytes: null,
     error: null,
   };
 }
@@ -179,28 +227,185 @@ function copyResultText(report: CopyReport, t: TranslateFn): string {
   return t(phrase.key, { ...phrase.params, what });
 }
 
+/** How [`runJob`] settled: `"finished"` alone must never be read as success —
+ * callers still need to check the job's own report for what actually
+ * landed — but `"cancelled"` must never be read as `"finished"` either. */
+type JobOutcome = "finished" | "cancelled";
+
+/**
+ * Start a background job (§54) and wait for it to reach a terminal state.
+ *
+ * A multi-selection copied out of a volume runs one job per selected folder
+ * (`volumeCopyOut` is job-based; a plain file goes straight through
+ * `volumeExtractTo` and needs no waiting at all). Those jobs are otherwise
+ * tracked through the screen-wide `pendingCopy` ref, which assumes exactly
+ * one job in flight — the wrong shape for "several, run together" — so this
+ * gives the batch path its own, independent wait per job instead of
+ * reusing that ref.
+ *
+ * Takes the job's *starter* rather than an already-known id, and subscribes
+ * to both event streams before calling it — a small folder can finish
+ * inside the two async round-trips `start` itself takes (invoke, then the
+ * id coming back), and a Tauri event emitted before anything is listening is
+ * lost for good. Events that arrive before the id is known are buffered and
+ * replayed once it is, rather than the old shape (subscribe *after* the
+ * caller already has the id), which could leave this promise waiting
+ * forever with no error and no way for the screen to recover (finding 3 of
+ * the phase-1a whole-branch review).
+ */
+function runJob(start: () => Promise<number>): Promise<JobOutcome> {
+  return new Promise<JobOutcome>((resolve, reject) => {
+    let jobId: number | null = null;
+    let settled = false;
+    let offResult: (() => void) | undefined;
+    let offProgress: (() => void) | undefined;
+    const pendingProgress: JobProgress[] = [];
+
+    const finish = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      offResult?.();
+      offProgress?.();
+      action();
+    };
+
+    const handleProgress = (job: JobProgress) => {
+      if (jobId === null || job.id !== jobId || job.state.state === "running") return;
+      if (job.state.state === "failed") {
+        // Captured in a local so the narrowing survives into the closure
+        // `finish` calls later — TS does not carry it through `job.state`
+        // itself across the function boundary.
+        const failure = job.state;
+        finish(() => reject(new Error(`${failure.message} (${failure.error_code})`)));
+      } else if (job.state.state === "cancelled") {
+        // A cancelled batch must be reported as cancelled, never folded into
+        // "finished" — a caller that cannot tell the two apart reports a
+        // stopped copy as a full success.
+        finish(() => resolve("cancelled"));
+      } else {
+        finish(() => resolve("finished"));
+      }
+    };
+
+    Promise.all([
+      onVolumeWriteResult((result) => {
+        if (jobId !== null && result.job_id === jobId) finish(() => resolve("finished"));
+      }),
+      onJobProgress((job) => {
+        if (jobId === null) {
+          pendingProgress.push(job);
+          return;
+        }
+        handleProgress(job);
+      }),
+    ]).then(([offR, offP]) => {
+      offResult = offR;
+      offProgress = offP;
+      if (settled) {
+        offR();
+        offP();
+        return;
+      }
+
+      start()
+        .then((id) => {
+          if (settled) return;
+          jobId = id;
+          // Replay whatever arrived in the window between subscribing and
+          // learning the id — including a terminal state reached before
+          // `start()` even resolved.
+          for (const job of pendingProgress) {
+            if (settled) break;
+            handleProgress(job);
+          }
+        })
+        .catch((err) => {
+          finish(() => reject(err instanceof Error ? err : new Error(String(err))));
+        });
+    });
+  });
+}
+
 export function FileManager() {
   const { t } = useTranslation();
   const powerMode = usePowerMode();
   const [left, setLeft] = useState<PaneState>(emptyPane());
   const [right, setRight] = useState<PaneState>(emptyPane());
   const [roots, setRoots] = useState<string[]>([]);
-  const [selection, setSelection] = useState<Record<Side, string | null>>({
+  /** Which entries (by name) are marked in each pane. See `@/lib/selection`. */
+  const [selection, setSelection] = useState<Record<Side, Set<string>>>({
+    left: new Set(),
+    right: new Set(),
+  });
+  /**
+   * The entry each pane's mouse or keyboard last landed on.
+   *
+   * Not the same thing as being selected: a row can anchor a future
+   * Shift+click range, or be where Insert's "cursor" sits, without itself
+   * being marked. Kept separate so the two can be shown with different
+   * highlights — see `Pane` below.
+   */
+  const [anchor, setAnchor] = useState<Record<Side, string | null>>({
     left: null,
     right: null,
   });
+  /**
+   * Which column each pane is sorted by, and which direction.
+   *
+   * Per pane, like `selection` and `anchor` above, and reset alongside them
+   * on navigation — see `resetSelection` — so a sort chosen in one folder
+   * does not silently carry into the next one shown.
+   */
+  const [sort, setSort] = useState<Record<Side, SortState>>({
+    left: defaultSortState(),
+    right: defaultSortState(),
+  });
+  /**
+   * Each pane's filename mask — the `*.*` in the reference's path row
+   * (`@/lib/mask`). Per pane, like `sort` above, and reset alongside it on
+   * navigation: a mask typed in one folder that silently kept hiding files
+   * in the next one shown would read as a broken listing, not a filter the
+   * user forgot was on.
+   */
+  const [filter, setFilter] = useState<Record<Side, string>>({
+    left: "",
+    right: "",
+  });
+  /**
+   * Which pane the keyboard is talking to.
+   *
+   * Tracked directly rather than derived from `selection`: a pane can hold
+   * many selections or none (multi-select) and still be the one F-keys and
+   * Tab act on. Every F-key action reads this, never `selection` — see the
+   * function-key table below.
+   */
+  const [focused, setFocused] = useState<Side>("left");
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   /** What to do about names already taken. Sticky across operations. */
   const [policy, setPolicy] = useState<OverwritePolicy>("skip");
-  /** The pre-flight report, while the user is deciding about it. */
+  /**
+   * The pre-flight report, while the user is deciding about it.
+   *
+   * `sources`/`names` hold one entry for a single-folder copy and several for
+   * a batch — the same shape either way, so `CopyPlanDialog` reads one path
+   * regardless of how many roots are in it (a one-entry batch must still
+   * read naturally, not as "1 items").
+   */
   const [plan, setPlan] = useState<{
     plan: CopyPlan;
-    source: string;
+    sources: string[];
+    names: string[];
     side: Side;
-    name: string;
+    /**
+     * Set only for a batch of `.lha` archives — the drawer each one will
+     * create. Its presence is what tells `runPlannedCopy` to confirm through
+     * `archivesInstall` instead of `volumeCopyIn`/`volumeCopyInMany`, and what
+     * tells `CopyPlanDialog` to show the drawer names (§92).
+     */
+    drawers?: ArchiveDrawer[];
   } | null>(null);
   const [viewing, setViewing] = useState<{
     path: string;
@@ -231,6 +436,83 @@ export function FileManager() {
     []
   );
   const pane = useCallback((side: Side) => (side === "left" ? left : right), [left, right]);
+
+  /**
+   * This pane's entries in the order actually shown on screen: the server's
+   * listing (already folders-first, case-insensitive name — see
+   * `commands/panel.rs` and its ADF/HDF equivalents) narrowed by the pane's
+   * filename mask (`@/lib/mask`) and *then* run through the column sort the
+   * user picked — filter first, sort second, so the visible list is always
+   * sorted, through the one comparator `@/lib/sort.ts` owns rather than a
+   * second one grown here. Every order-sensitive action — rendering,
+   * Shift+click ranges, Insert, Ctrl+A, "in pane order" — reads through this
+   * rather than `pane(side).entries` directly, so none of them can disagree
+   * with what is drawn. It is also what makes the per-pane status line
+   * (`paneStatusCounts` in `Pane`, below) count the *filtered* view rather
+   * than the whole directory — Total Commander's own convention, and what
+   * keeps the totals on screen matching what is actually listed.
+   */
+  const paneEntries = useCallback(
+    (side: Side): PanelEntry[] => sortEntries(filterEntries(pane(side).entries, filter[side]), sort[side]),
+    [pane, sort, filter]
+  );
+
+  /**
+   * The entries `selection[side]` actually names, in pane order.
+   *
+   * Because this intersects `selection[side]` with `paneEntries(side)` —
+   * the *filtered* list — an entry the mask currently hides can never come
+   * back out of this, even if the raw `Set` still names it. That is what
+   * makes F5/F8 safe against a stale selection on its own; `setPaneFilter`
+   * below additionally clears the selection outright on every filter
+   * change, so the "N selected" count on screen never lies about a
+   * selection the user can no longer see (see its own comment).
+   */
+  const selectedEntries = useCallback(
+    (side: Side): PanelEntry[] => entriesIn(paneEntries(side), selection[side]),
+    [paneEntries, selection]
+  );
+
+  /** Apply a `SelectionUpdate` (from `@/lib/selection`) to one side. */
+  const applySelection = useCallback((side: Side, update: SelectionUpdate) => {
+    setSelection((s) => ({ ...s, [side]: update.selected }));
+    setAnchor((a) => ({ ...a, [side]: update.anchor }));
+  }, []);
+
+  /**
+   * Change one pane's filename mask.
+   *
+   * Filtering is display-only and must never change what an action
+   * operates on — `selectedEntries` above already guarantees that on its
+   * own, since it can only ever resolve to entries the filtered view still
+   * shows. But a selection made before the mask narrowed the list would
+   * still sit in `selection[side]` invisibly: the status line and
+   * `SelectionBar` would keep reporting "20 selected" over a pane now
+   * showing three, which is a surprise the user has no way to see through.
+   * Clearing the selection on every keystroke here — rather than keeping
+   * the hidden names and merely showing their count — is the simpler rule
+   * and the one Total Commander users expect: a filter change starts the
+   * selection over, the same way navigating to a new folder does.
+   */
+  const setPaneFilter = useCallback(
+    (side: Side, mask: string) => {
+      setFilter((f) => ({ ...f, [side]: mask }));
+      applySelection(side, emptySelectionUpdate());
+    },
+    [applySelection]
+  );
+
+  /** Selection, sort and the filter mask all reset on navigation: a Set, a
+   * sort order, or a mask that survived a directory change would let an
+   * action reach an entry the user has since left behind, show an order
+   * that quietly stopped matching what the user actually clicked, or hide
+   * files in a folder the user never typed a mask for. */
+  const resetSelection = useCallback((side: Side) => {
+    setSelection((s) => ({ ...s, [side]: new Set() }));
+    setAnchor((a) => ({ ...a, [side]: null }));
+    setSort((s) => ({ ...s, [side]: defaultSortState() }));
+    setFilter((f) => ({ ...f, [side]: "" }));
+  }, []);
 
   useEffect(() => {
     panelLocalRoots()
@@ -266,12 +548,13 @@ export function FileManager() {
           parent: listing.parent,
           truncated: listing.truncated,
         });
-        setSelection((current) => ({ ...current, [side]: null }));
+        resetSelection(side);
+        setFocused(side);
       } catch (e) {
         setPane(side, { ...emptyPane(), location: path, error: String(e) });
       }
     },
-    [setPane]
+    [setPane, resetSelection]
   );
 
   const openAdf = useCallback(
@@ -296,13 +579,15 @@ export function FileManager() {
           volumeIndex: 0,
           volumeName: capability?.volume_name ?? info.volume_name ?? "",
           capability,
+          totalBytes: info.capacity_bytes,
         });
-        setSelection((current) => ({ ...current, [side]: null }));
+        resetSelection(side);
+        setFocused(side);
       } catch (e) {
         setPane(side, { ...emptyPane(), kind: "adf", location: path, error: String(e) });
       }
     },
-    [setPane]
+    [setPane, resetSelection]
   );
 
   /** Open an HDF on its partition list. */
@@ -311,12 +596,13 @@ export function FileManager() {
       try {
         const image = await volumeScan(path);
         setPane(side, { ...emptyPane(), kind: "hdf", location: path, image });
-        setSelection((current) => ({ ...current, [side]: null }));
+        resetSelection(side);
+        setFocused(side);
       } catch (e) {
         setPane(side, { ...emptyPane(), kind: "hdf", location: path, error: String(e) });
       }
     },
-    [setPane]
+    [setPane, resetSelection]
   );
 
   /** Browse inside one partition of an already-scanned image. */
@@ -343,11 +629,13 @@ export function FileManager() {
           volumeName: listing.volume_name,
           warnings: listing.warnings,
           capability,
+          totalBytes: listing.total_blocks * listing.block_size,
           dirBlock: dirBlock ?? listing.root_block,
           trail,
           entries: listing.entries,
         });
-        setSelection((current) => ({ ...current, [side]: null }));
+        resetSelection(side);
+        setFocused(side);
       } catch (e) {
         setPane(side, {
           ...emptyPane(),
@@ -358,7 +646,7 @@ export function FileManager() {
         });
       }
     },
-    [setPane]
+    [setPane, resetSelection]
   );
 
   async function chooseImage(side: Side, kind: "adf" | "hdf") {
@@ -600,7 +888,7 @@ export function FileManager() {
               destination.dirBlock,
               entry.path
             );
-            setPlan({ plan: found, source: entry.path, side: to, name: entry.name });
+            setPlan({ plan: found, sources: [entry.path], names: [entry.name], side: to });
           } catch (e) {
             setError(String(e));
           } finally {
@@ -686,7 +974,17 @@ export function FileManager() {
     [pane, refresh, policy, powerMode, t]
   );
 
-  /** Run the copy the plan dialog just had confirmed. */
+  /**
+   * Run the copy the plan dialog just had confirmed.
+   *
+   * One source keeps the exact call `volumeCopyIn` has always made — a
+   * folder's *contents* land flat, the tested behaviour nothing here may
+   * change. More than one goes through `volumeCopyInMany`, where each root
+   * keeps its own name at the destination instead (`HostSelection`). A batch
+   * of `.lha` archives — `pending.drawers` set — goes through
+   * `archivesInstall` instead of either: it is not a file copy, it is
+   * several archives each unpacked into its own drawer.
+   */
   async function runPlannedCopy() {
     const pending = plan;
     if (!pending) return;
@@ -698,20 +996,196 @@ export function FileManager() {
       return;
     }
 
-    setBusy(t("files.status.copying", { name: pending.name }));
+    setBusy(
+      pending.drawers
+        ? t("files.status.copyingArchives", { count: pending.drawers.length })
+        : pending.names.length === 1
+          ? t("files.status.copying", { name: pending.names[0] })
+          : t("files.status.copyingSelection", { count: pending.names.length })
+    );
     try {
-      pendingCopy.current = await volumeCopyIn(
-        target.path,
-        target.volumeIndex,
-        target.dirBlock,
-        pending.source,
-        { overwrite: policy, sidecars: powerMode }
-      );
+      pendingCopy.current = pending.drawers
+        ? await archivesInstall(
+            pending.sources,
+            target.path,
+            target.volumeIndex,
+            target.dirBlock,
+            policy
+          )
+        : pending.sources.length === 1
+          ? await volumeCopyIn(
+              target.path,
+              target.volumeIndex,
+              target.dirBlock,
+              pending.sources[0],
+              { overwrite: policy, sidecars: powerMode }
+            )
+          : await volumeCopyInMany(
+              target.path,
+              target.volumeIndex,
+              target.dirBlock,
+              pending.sources,
+              { overwrite: policy, sidecars: powerMode }
+            );
       copyDestination.current = pending.side;
     } catch (e) {
       setError(String(e));
       setBusy(null);
     }
+  }
+
+  /**
+   * F5 on a multi-selection — copy every selected entry from `from` at once.
+   *
+   * One entry is exactly `copyTo` (called with an array of one), so the
+   * tested single-entry path never changes. More than one:
+   *
+   * ```text
+   * local pick → volume    one atomic operation: plan-many, then copy-in-many
+   * volume pick → local    each entry its own extract, run together
+   * volume pick → volume   not supported yet — a runtime refusal, the same
+   *                        shape as "both panes are local" below, rather
+   *                        than a disabled key (§96: F5 still *runs*)
+   * ```
+   */
+  async function copySelectionTo(from: Side, entries: PanelEntry[]) {
+    if (entries.length === 0) return;
+    if (entries.length === 1) {
+      await copyTo(from, entries[0]);
+      return;
+    }
+
+    const to: Side = from === "left" ? "right" : "left";
+    const source = pane(from);
+    const target = pane(to);
+
+    setError(null);
+    setMessage(null);
+
+    if (source.kind === "local" && target.kind === "local") {
+      setError(t("files.err.bothLocal"));
+      return;
+    }
+
+    // ---- a local pick, into a volume: one atomic operation ----
+    if (source.kind === "local" && target.kind !== "local") {
+      const destination = writableVolume(target);
+      if (!destination) {
+        setError(writeRefusal(target, t));
+        return;
+      }
+
+      const paths = entries.map((entry) => entry.path).filter((p): p is string => Boolean(p));
+      if (paths.length !== entries.length) {
+        setError(t("files.err.noLocalPath"));
+        return;
+      }
+
+      // A selection of `.lha` archives is not a file copy: each one is
+      // unpacked and given its own drawer, not merged into the destination
+      // flat. A mix of archives and ordinary files is refused rather than
+      // guessed at — silently treating the archives as plain files would
+      // copy their raw `.lha` bytes onto the disk instead of installing them.
+      const archiveCount = paths.filter(isArchivePath).length;
+      if (archiveCount > 0 && archiveCount !== paths.length) {
+        setError(t("files.err.mixedArchiveSelection"));
+        return;
+      }
+
+      setBusy(
+        archiveCount > 0
+          ? t("files.status.planningArchives", { count: entries.length })
+          : t("files.status.planningSelection", { count: entries.length })
+      );
+      try {
+        if (archiveCount > 0) {
+          const found = await archivesPlanInstall(
+            paths,
+            destination.path,
+            destination.volumeIndex,
+            destination.dirBlock
+          );
+          setPlan({
+            plan: found.cost,
+            sources: paths,
+            names: entries.map((entry) => entry.name),
+            side: to,
+            drawers: found.drawers,
+          });
+        } else {
+          const found = await volumePlanCopyMany(
+            destination.path,
+            destination.volumeIndex,
+            destination.dirBlock,
+            paths
+          );
+          setPlan({
+            plan: found,
+            sources: paths,
+            names: entries.map((entry) => entry.name),
+            side: to,
+          });
+        }
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setBusy(null);
+      }
+      return;
+    }
+
+    // ---- a volume pick, out to the user's disk: each entry its own extract ----
+    if (source.kind !== "local" && target.kind === "local" && source.volumeIndex !== null) {
+      const volumeIndex = source.volumeIndex;
+      setBusy(t("files.status.copyingSelectionOut", { count: entries.length }));
+      try {
+        // Each outcome is tracked, not just awaited: a job the user cancelled
+        // partway through must not be folded into the same success message
+        // as one that actually finished (finding 3 of the phase-1a
+        // whole-branch review — `runJob` resolving "cancelled" as success was
+        // half the defect; reporting it honestly here is the other half).
+        const outcomes = await Promise.all(
+          entries
+            .filter((entry) => entry.header_block !== null)
+            .map(async (entry): Promise<JobOutcome> => {
+              const headerBlock = entry.header_block as number;
+              if (entry.is_dir) {
+                return runJob(() =>
+                  volumeCopyOut(
+                    source.location,
+                    volumeIndex,
+                    headerBlock,
+                    `${target.location}/${entry.name}`,
+                    { overwrite: policy, sidecars: powerMode }
+                  )
+                );
+              }
+              await volumeExtractTo(source.location, volumeIndex, headerBlock, target.location);
+              return "finished";
+            })
+        );
+        const cancelled = outcomes.filter((outcome) => outcome === "cancelled").length;
+        if (cancelled > 0) {
+          setMessage(
+            t("files.status.selectionCopyOutCancelled", {
+              done: outcomes.length - cancelled,
+              total: outcomes.length,
+            })
+          );
+        } else {
+          setMessage(t("files.status.selectionCopiedOut", { count: entries.length }));
+        }
+        await refresh(to);
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setBusy(null);
+      }
+      return;
+    }
+
+    // Two volumes and more than one entry: not supported yet.
+    setError(t("files.err.batchBetweenVolumes"));
   }
 
   /**
@@ -772,6 +1246,69 @@ export function FileManager() {
           : outcome.backup
             ? t("files.status.deletedBackedUp", { name: entry.name })
             : t("files.status.deleted", { name: entry.name })
+      );
+      await refresh(side);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /**
+   * F8 on a multi-selection — delete every selected entry from a volume as
+   * one operation.
+   *
+   * One entry is exactly `deleteEntry` (called with an array of one). More
+   * than one goes through `volumeDeleteMany`: all-or-nothing (§92), so a
+   * batch that cannot fully succeed removes nothing rather than leaving the
+   * user unsure which half of their selection is still there. The two
+   * confirmations mirror `deleteEntry`'s, naming the count and total size
+   * instead of one file — no per-entry icon offer, since that prompt does
+   * not scale to a batch and the icon stays selectable on its own.
+   */
+  async function deleteSelection(side: Side, entries: PanelEntry[]) {
+    if (entries.length === 0) return;
+    if (entries.length === 1) {
+      await deleteEntry(side, entries[0]);
+      return;
+    }
+
+    const state = pane(side);
+    const target = writableVolume(state);
+    if (!target) return;
+
+    const names = entries.map((entry) => entry.name);
+    const totalBytes = entries.reduce((sum, entry) => sum + entry.bytes, 0);
+
+    if (
+      !window.confirm(
+        t("files.dialog.deleteMany.confirm1", {
+          count: names.length,
+          volume: state.volumeName,
+          size: formatBytes(totalBytes),
+        })
+      )
+    ) {
+      return;
+    }
+    if (!window.confirm(t("files.dialog.deleteMany.confirm2", { count: names.length }))) {
+      return;
+    }
+
+    setError(null);
+    setBusy(t("files.status.deletingMany", { count: names.length }));
+    try {
+      const outcome = await volumeDeleteMany(
+        target.path,
+        target.volumeIndex,
+        target.dirBlock,
+        names
+      );
+      setMessage(
+        outcome.backup
+          ? t("files.status.deletedManyBackedUp", { count: outcome.deleted })
+          : t("files.status.deletedMany", { count: outcome.deleted })
       );
       await refresh(side);
     } catch (e) {
@@ -924,10 +1461,33 @@ export function FileManager() {
     return {
       side,
       state,
+      sortedEntries: paneEntries(side),
+      sort: sort[side],
+      onSortChange: (column: SortColumn) =>
+        setSort((s) => ({ ...s, [side]: clickColumn(s[side], column) })),
+      filter: filter[side],
+      onFilterChange: (mask: string) => setPaneFilter(side, mask),
       roots,
-      selected: selection[side],
+      selectedNames: selection[side],
+      cursorName: anchor[side],
+      focused: focused === side,
       powerMode,
-      onSelect: (name: string) => setSelection((s) => ({ ...s, [side]: name })),
+      onFocus: () => setFocused(side),
+      // Plain click selects only this entry; Ctrl/Cmd+click toggles it and
+      // keeps the rest; Shift+click extends the range from the anchor. A
+      // click always focuses this pane too — the row's own onClick does not
+      // stopPropagation, so it bubbles to the pane's onClick={onFocus} — but
+      // the per-row Copy/Delete buttons below do stopPropagation and must
+      // focus explicitly instead.
+      onSelect: (entry: PanelEntry, event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => {
+        const entries = paneEntries(side);
+        const update = event.shiftKey
+          ? selectRange(entries, selection[side], anchor[side], entry.name)
+          : event.ctrlKey || event.metaKey
+            ? toggleOne(selection[side], entry.name)
+            : selectOnly(entry.name);
+        applySelection(side, update);
+      },
       onActivate: (entry: PanelEntry) => void activate(side, entry),
       onUp: () => void goUp(side),
       onOpenFolder: () => void chooseFolder(side),
@@ -949,98 +1509,122 @@ export function FileManager() {
 
   // ---- the function keys ----
 
-  /**
-   * The pane the keys act on.
-   *
-   * Whichever side has a selection. A commander normally tracks focus; this
-   * uses the selection instead, which is the same thing said in a way that
-   * survives a click on a button between the panes.
-   */
-  const active: Side = selection.left !== null ? "left" : "right";
-  const activePane = pane(active);
-  const selected = activePane.entries.find((e) => e.name === selection[active]) ?? null;
-  const canWrite = writableVolume(activePane) !== null;
-  const inVolume = activePane.kind !== "local" && activePane.volumeIndex !== null;
+  // The pane the keys act on: `focused`, tracked above — never derived from
+  // `selection`. Every action below reads `focused` and `focusedPane`.
+  const focusedPane = pane(focused);
+  const canWrite = writableVolume(focusedPane) !== null;
+  const inVolume = focusedPane.kind !== "local" && focusedPane.volumeIndex !== null;
+
+  // The single-entry keys' availability and target come from `planFunctionKeys`
+  // (`@/lib/functionKeyPlan`), not derived here, so the same "null when
+  // anything but exactly one entry is selected" answer — never "the first of
+  // several", which would be the kind of guess that destroys the wrong file —
+  // is what both `enabled` and `run` below read, and is what
+  // `functionKeyPlan.test.ts` exercises without rendering this page.
+  const keyPlan = planFunctionKeys({
+    entries: paneEntries(focused),
+    selected: selection[focused],
+    inVolume,
+    canWrite,
+    busy: busy !== null,
+  });
+  const { multipleSelected, hasSelection } = keyPlan;
 
   const actions: FunctionAction[] = [
     {
       key: "F3",
       label: t("files.functionKeys.view"),
-      enabled: Boolean(selected && !selected.is_dir && inVolume),
-      reason: inVolume
-        ? t("files.functionKeys.viewReasonSelect")
-        : t("files.functionKeys.viewReasonNeedsImage"),
+      enabled: keyPlan.f3.enabled,
+      reason: multipleSelected
+        ? t("files.functionKeys.reasonMultiple")
+        : inVolume
+          ? t("files.functionKeys.viewReasonSelect")
+          : t("files.functionKeys.viewReasonNeedsImage"),
       run: () => {
-        if (!selected || selected.header_block === null || activePane.volumeIndex === null) {
+        const target = keyPlan.f3.target;
+        if (!target || target.header_block === null || focusedPane.volumeIndex === null) {
           return;
         }
         setViewing({
-          path: activePane.location,
-          volumeIndex: activePane.volumeIndex,
-          entryBlock: selected.header_block,
-          name: selected.name,
+          path: focusedPane.location,
+          volumeIndex: focusedPane.volumeIndex,
+          entryBlock: target.header_block,
+          name: target.name,
         });
       },
     },
     {
       key: "F4",
       label: t("files.functionKeys.edit"),
-      enabled: Boolean(selected && !selected.is_dir && canWrite) && busy === null,
-      reason: canWrite ? t("files.functionKeys.editReasonSelect") : writeRefusal(activePane, t),
+      enabled: keyPlan.f4.enabled,
+      reason: multipleSelected
+        ? t("files.functionKeys.reasonMultiple")
+        : canWrite
+          ? t("files.functionKeys.editReasonSelect")
+          : writeRefusal(focusedPane, t),
       run: () => {
-        if (selected) void editEntry(active, selected);
+        if (keyPlan.f4.target) void editEntry(focused, keyPlan.f4.target);
       },
     },
     {
       key: "F5",
       label: t("files.functionKeys.copy"),
-      enabled: Boolean(selected) && busy === null,
+      enabled: hasSelection && busy === null,
       reason: t("files.functionKeys.copyReasonSelect"),
       run: () => {
-        if (selected) void copyTo(active, selected);
+        const entries = selectedEntries(focused);
+        if (entries.length > 0) void copySelectionTo(focused, entries);
       },
     },
     {
       key: "F6",
       label: t("files.functionKeys.rename"),
-      enabled: Boolean(selected) && canWrite && busy === null,
-      reason: canWrite ? t("files.functionKeys.renameReasonSelect") : writeRefusal(activePane, t),
+      enabled: keyPlan.f6.enabled,
+      reason: multipleSelected
+        ? t("files.functionKeys.reasonMultiple")
+        : canWrite
+          ? t("files.functionKeys.renameReasonSelect")
+          : writeRefusal(focusedPane, t),
       run: () => {
-        if (selected) void renameEntry(active, selected);
+        if (keyPlan.f6.target) void renameEntry(focused, keyPlan.f6.target);
       },
     },
     {
       key: "F7",
       label: t("files.functionKeys.newFolder"),
       enabled: canWrite && busy === null,
-      reason: writeRefusal(activePane, t),
-      run: () => void newFolder(active),
+      reason: writeRefusal(focusedPane, t),
+      run: () => void newFolder(focused),
     },
     {
       key: "F8",
       label: t("files.functionKeys.delete"),
-      enabled: Boolean(selected) && canWrite && busy === null,
-      reason: canWrite ? t("files.functionKeys.deleteReasonSelect") : writeRefusal(activePane, t),
+      enabled: hasSelection && canWrite && busy === null,
+      reason: canWrite ? t("files.functionKeys.deleteReasonSelect") : writeRefusal(focusedPane, t),
       danger: true,
       run: () => {
-        if (selected) void deleteEntry(active, selected);
+        const entries = selectedEntries(focused);
+        if (entries.length > 0) void deleteSelection(focused, entries);
       },
     },
     {
       key: "F9",
       label: t("files.functionKeys.attributes"),
-      enabled: Boolean(selected) && inVolume,
-      reason: inVolume
-        ? t("files.functionKeys.attributesReasonSelect")
-        : t("files.functionKeys.attributesReasonNeedsImage"),
+      enabled: keyPlan.f9.enabled,
+      reason: multipleSelected
+        ? t("files.functionKeys.reasonMultiple")
+        : inVolume
+          ? t("files.functionKeys.attributesReasonSelect")
+          : t("files.functionKeys.attributesReasonNeedsImage"),
       run: () => {
-        if (!selected || selected.header_block === null || activePane.volumeIndex === null) {
+        const target = keyPlan.f9.target;
+        if (!target || target.header_block === null || focusedPane.volumeIndex === null) {
           return;
         }
         setAttributes({
-          path: activePane.location,
-          volumeIndex: activePane.volumeIndex,
-          entryBlock: selected.header_block,
+          path: focusedPane.location,
+          volumeIndex: focusedPane.volumeIndex,
+          entryBlock: target.header_block,
         });
       },
     },
@@ -1048,10 +1632,26 @@ export function FileManager() {
 
   // Off while a dialog is open: F8 behind a modal would delete something the
   // user cannot see.
-  useFunctionKeys(
-    actions,
-    plan === null && viewing === null && attributes === null && recovery === null
-  );
+  const keysActive = plan === null && viewing === null && attributes === null && recovery === null;
+  useFunctionKeys(actions, keysActive);
+
+  // Tab swaps which pane is focused. Same gate as the function keys — Tab
+  // underneath a modal should not silently change which pane a background
+  // F-key would land on — and the same input/textarea/modifier guard, shared
+  // via `usePaneTab` itself.
+  usePaneTab(() => setFocused((side) => (side === "left" ? "right" : "left")), keysActive);
+
+  // Insert marks the entry under the pane's selection anchor and steps the
+  // anchor down one (Norton Commander's mark key); Ctrl+A marks everything
+  // in the focused pane, and clears it again on a second press. Both act on
+  // `focused`, same as every F-key above, and share the F-keys' gate so a
+  // modal on top cannot be marked through.
+  useInsertToggle(() => {
+    applySelection(focused, insertToggle(paneEntries(focused), selection[focused], anchor[focused]));
+  }, keysActive);
+  useSelectAll(() => {
+    applySelection(focused, toggleSelectAll(paneEntries(focused), selection[focused]));
+  }, keysActive);
 
   // An unfinished operation is offered as soon as a pane shows an image that
   // has one — before the user tries to write and is refused.
@@ -1143,45 +1743,70 @@ export function FileManager() {
         </div>
       )}
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr auto 1fr",
-          gap: 10,
-          alignItems: "start",
-        }}
-      >
-        <Pane {...paneProps("left")} />
+      {/*
+       * The Total Commander presentation (task 6b) lives entirely inside
+       * `.tc-commander` — see `src/pages/FileManager.css`'s header for how
+       * that scoping works and why the rest of the app never sees it. Only
+       * this wrapper and its descendants read the `--tc-*` custom
+       * properties; nothing outside it, and nothing above this point in the
+       * page (the title, the intro line, the recovery/error/busy banners),
+       * does either — they stay in the app's own light/dark theme.
+       */}
+      <div className="tc-commander">
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr auto 1fr",
+            gap: 10,
+            alignItems: "start",
+          }}
+        >
+          <Pane {...paneProps("left")} />
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 90 }}>
-          <button
-            className="btn"
-            title={t("files.arrows.toRightTitle")}
-            disabled={!selection.left || busy !== null}
-            onClick={() => {
-              const entry = left.entries.find((e) => e.name === selection.left);
-              if (entry) void copyTo("left", entry);
-            }}
-          >
-            &rarr;
-          </button>
-          <button
-            className="btn"
-            title={t("files.arrows.toLeftTitle")}
-            disabled={!selection.right || busy !== null}
-            onClick={() => {
-              const entry = right.entries.find((e) => e.name === selection.right);
-              if (entry) void copyTo("right", entry);
-            }}
-          >
-            &larr;
-          </button>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 90 }}>
+            <button
+              className="btn"
+              title={t("files.arrows.toRightTitle")}
+              disabled={selection.left.size === 0 || busy !== null}
+              onClick={() => void copySelectionTo("left", selectedEntries("left"))}
+            >
+              &rarr;
+            </button>
+            <button
+              className="btn"
+              title={t("files.arrows.toLeftTitle")}
+              disabled={selection.right.size === 0 || busy !== null}
+              onClick={() => void copySelectionTo("right", selectedEntries("right"))}
+            >
+              &larr;
+            </button>
+          </div>
+
+          <Pane {...paneProps("right")} />
         </div>
 
-        <Pane {...paneProps("right")} />
-      </div>
+        <SelectionBar
+          count={selection[focused].size}
+          bytes={selectedEntries(focused).reduce((sum, entry) => sum + entry.bytes, 0)}
+        />
 
-      <FunctionKeyBar actions={actions} />
+        {/*
+         * Decorative only — the reference's command line, reproduced as
+         * chrome, not as a feature. ART has no shell to run a typed command
+         * against (and adding one is well outside a frontend/CSS task), so
+         * this is a disabled-looking, non-interactive prompt line rather
+         * than a text box that would imply typing into it does something.
+         * It reflects whichever pane is focused, the same source `focused`
+         * everywhere else in this screen already reads.
+         */}
+        <div className="tc-chrome-row tc-command-line" aria-hidden="true">
+          {`${pane(focused).location}>`}
+        </div>
+
+        <div className="tc-chrome-row tc-fnkey-row">
+          <FunctionKeyBar actions={actions} />
+        </div>
+      </div>
 
       <CheckoutPanel
         onChanged={(row) => {
@@ -1220,11 +1845,13 @@ export function FileManager() {
       {plan && (
         <CopyPlanDialog
           plan={plan.plan}
+          names={plan.names}
           destination={`${pane(plan.side).volumeName || pane(plan.side).location}`}
           policy={policy}
           onPolicyChange={setPolicy}
           onConfirm={() => void runPlannedCopy()}
           onCancel={() => setPlan(null)}
+          drawers={plan.drawers}
         />
       )}
 
@@ -1245,7 +1872,7 @@ export function FileManager() {
           entryBlock={attributes.entryBlock}
           canEdit={powerMode}
           onClose={() => setAttributes(null)}
-          onChanged={() => void refresh(active)}
+          onChanged={() => void refresh(focused)}
         />
       )}
     </div>
@@ -1320,9 +1947,17 @@ function VolumeFooter({
 function Pane({
   side,
   state,
+  sortedEntries,
+  sort,
+  onSortChange,
+  filter,
+  onFilterChange,
   roots,
-  selected,
+  selectedNames,
+  cursorName,
+  focused,
   powerMode,
+  onFocus,
   onSelect,
   onActivate,
   onUp,
@@ -1339,10 +1974,32 @@ function Pane({
 }: {
   side: Side;
   state: PaneState;
+  /** `state.entries`, sorted for display — see `paneEntries` in
+   * `FileManager` for why this and not `state.entries` is what the row list
+   * below renders. */
+  sortedEntries: PanelEntry[];
+  sort: SortState;
+  onSortChange: (column: SortColumn) => void;
+  /** This pane's filename mask (`@/lib/mask`) — the `*.*` in the reference's
+   * path row. Display-only: see `setPaneFilter` in `FileManager` for what a
+   * change to it does to the selection. */
+  filter: string;
+  onFilterChange: (mask: string) => void;
   roots: string[];
-  selected: string | null;
+  /** Every marked entry's name in this pane — see `@/lib/selection`. */
+  selectedNames: Set<string>;
+  /** The entry the mouse/keyboard last landed on: a future Shift+click's
+   * range start, or Insert's "cursor". Highlighted distinctly from a
+   * selected row so a user can tell the two apart at a glance. */
+  cursorName: string | null;
+  /** Whether this is the pane the keyboard (F-keys, Tab) is talking to. */
+  focused: boolean;
   powerMode: boolean;
-  onSelect: (name: string) => void;
+  onFocus: () => void;
+  onSelect: (
+    entry: PanelEntry,
+    event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }
+  ) => void;
   onActivate: (entry: PanelEntry) => void;
   onUp: () => void;
   onOpenFolder: () => void;
@@ -1356,7 +2013,7 @@ function Pane({
   onDragOut: (entry: PanelEntry) => void;
   onDropped: (entry: PanelEntry, from: Side) => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [dragOver, setDragOver] = useState(false);
 
   const showingFiles = state.kind !== "hdf" || state.volumeIndex !== null;
@@ -1368,13 +2025,51 @@ function Pane({
   // An HDF is never a destination: writing into a partition is not implemented.
   const acceptsDrops = state.kind !== "hdf";
 
+  // Total Commander's drive row shows "free of total", in kilobytes grouped
+  // by the active locale (`@/lib/tcFormat`, not the dots the reference
+  // screenshot happens to show — see that file's comment). ART has that pair
+  // only for a volume it has actually opened: an ADF or an HDF partition,
+  // via `state.capability.free_bytes` and `state.totalBytes` (see that
+  // field's own comment on `PaneState`). A local folder has none — ART has
+  // no free-space command for a Windows drive — so this renders nothing for
+  // one rather than a fabricated number.
+  const freeSpace =
+    state.capability && state.totalBytes !== null
+      ? t("files.tc.freeOfTotal", {
+          free: formatGroupedSize(Math.round(state.capability.free_bytes / 1024), i18n.language),
+          total: formatGroupedSize(Math.round(state.totalBytes / 1024), i18n.language),
+        })
+      : null;
+
+  // The per-pane status line (row 5 of the reference): selected/total bytes,
+  // then selected/total files, then selected/total directories. Reads
+  // `sortedEntries`/`selectedNames` through the same pure `paneStatusCounts`
+  // a unit test covers on its own (`@/lib/panelStatus`) — `[..]` is never
+  // part of the count, since it is not a real entry.
+  //
+  // `sortedEntries` is `FileManager`'s `paneEntries(side)` — filtered by the
+  // mask, then sorted — so this line counts the *filtered* view, not the
+  // whole directory: Total Commander's own convention, and the only choice
+  // that keeps the totals shown here matching what is actually listed above
+  // them. A mask that hides seventeen of twenty files and a status line
+  // still reading "20" would be the exact kind of mismatch task 7 exists to
+  // avoid.
+  const status = paneStatusCounts(sortedEntries, selectedNames);
+
   return (
     <section
-      className="card"
+      className="tc-pane"
+      // §64-style focus visibility, but for the pane rather than a control,
+      // and in the TC palette's own tokens rather than `--accent` — this
+      // pane deliberately does not follow the app theme, so its focus ring
+      // should not either. A commander where you cannot see which side the
+      // keyboard is talking to is worse than one with no keyboard at all.
       style={{
-        minHeight: 420,
-        outline: dragOver ? "2px solid var(--accent)" : "none",
+        outline: dragOver ? "2px solid var(--tc-focus-ring)" : "none",
+        boxShadow: focused ? "inset 0 0 0 2px var(--tc-focus-ring)" : undefined,
       }}
+      aria-current={focused ? "true" : undefined}
+      onClick={onFocus}
       onDragOver={(event) => {
         if (!acceptsDrops) return;
         event.preventDefault();
@@ -1393,48 +2088,83 @@ function Pane({
         }
       }}
     >
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-        <button className="btn" style={{ fontSize: 12 }} onClick={onOpenFolder}>
+      {/* Row 1 of the reference: TC's "drive row". ART's pane is not a
+          Windows drive — it can hold a local folder, an ADF or an HDF
+          partition — so this is every control that opens or navigates the
+          pane, in a button strip, plus the open volume's name and free
+          space when there is one; not a literal drive-letter dropdown (see
+          the task report for why). */}
+      <div className="tc-chrome-row tc-drive-row">
+        <button className="btn btn-sm" onClick={onOpenFolder}>
           {t("files.toolbar.folder")}
         </button>
-        <button className="btn" style={{ fontSize: 12 }} onClick={() => onOpenImage("adf")}>
+        <button className="btn btn-sm" onClick={() => onOpenImage("adf")}>
           {t("files.toolbar.adf")}
         </button>
-        <button className="btn" style={{ fontSize: 12 }} onClick={() => onOpenImage("hdf")}>
+        <button className="btn btn-sm" onClick={() => onOpenImage("hdf")}>
           {t("files.toolbar.hdf")}
         </button>
-        <button className="btn" style={{ fontSize: 12 }} onClick={onUp} disabled={!canGoUp}>
-          {t("files.toolbar.up")}
-        </button>
-        <button className="btn" style={{ fontSize: 12 }} onClick={onRefresh}>
-          {t("files.toolbar.refresh")}
-        </button>
-        {writableVolume(state) !== null && (
-          <button className="btn" style={{ fontSize: 12 }} onClick={onNewFolder}>
-            {t("files.toolbar.newFolder")}
-          </button>
-        )}
-      </div>
-
-      {state.kind === "local" && roots.length > 0 && (
-        <div style={{ display: "flex", gap: 4, marginBottom: 8, flexWrap: "wrap" }}>
-          {roots.map((root) => (
-            <button
-              key={root}
-              className="btn"
-              style={{ fontSize: 11 }}
-              onClick={() => onOpenRoot(root)}
-            >
+        {state.kind === "local" &&
+          roots.map((root) => (
+            <button key={root} className="btn btn-sm" onClick={() => onOpenRoot(root)}>
               {root}
             </button>
           ))}
-        </div>
-      )}
+        {state.kind !== "local" && state.volumeIndex !== null && (
+          <span className="tc-drive-volume">
+            [{state.capability?.volume_name || state.volumeName || t("files.footer.unnamed")}]
+          </span>
+        )}
+        {freeSpace && <span className="tc-drive-free">{freeSpace}</span>}
+        <span className="tc-drive-spacer" />
+        {writableVolume(state) !== null && (
+          <button className="btn btn-sm" onClick={onNewFolder}>
+            {t("files.toolbar.newFolder")}
+          </button>
+        )}
+        <button className="btn btn-sm" onClick={onRefresh}>
+          {t("files.toolbar.refresh")}
+        </button>
+        <button className="btn btn-sm" onClick={onUp} disabled={!canGoUp}>
+          {t("files.toolbar.up")}
+        </button>
+      </div>
 
-      <div className="faint" style={{ fontSize: 11, marginBottom: 6, wordBreak: "break-all" }}>
-        {state.location || t("files.pane.nothingOpen")}
-        {state.kind === "hdf" && state.volumeName && ` > ${state.volumeName}:`}
-        {state.trail.length > 0 && ` > ${state.trail.map((crumb) => crumb.name).join(" > ")}`}
+      {/* Row 2: the path row, plus the filename mask (task 7) — the `*.*`
+          the reference puts at the right of this same row. `*` and `?`
+          wildcards, case-insensitive, matched against the whole name
+          including its extension; see `@/lib/mask` for the matcher and
+          `setPaneFilter` in `FileManager` for what changing it does to the
+          selection. */}
+      <div className="tc-chrome-row tc-path-row">
+        <span className="tc-path-text">
+          {state.location || t("files.pane.nothingOpen")}
+          {state.kind === "hdf" && state.volumeName && ` > ${state.volumeName}:`}
+          {state.trail.length > 0 && ` > ${state.trail.map((crumb) => crumb.name).join(" > ")}`}
+        </span>
+        <input
+          type="text"
+          className="tc-mask-input"
+          value={filter}
+          placeholder={t("files.tc.maskPlaceholder")}
+          aria-label={t("files.tc.maskAriaLabel")}
+          onChange={(event) => onFilterChange(event.target.value)}
+          onKeyDown={(event) => {
+            // Escape clears the mask and hands keyboard focus back to the
+            // pane — the F-key guard (`isShortcutBlocked` in
+            // `FunctionKeys.tsx`) already ignores every shortcut while this
+            // `<input>` has DOM focus, so leaving it focused after Escape
+            // would leave F5/F8/etc. silently dead until the user clicked
+            // away. `stopPropagation` keeps this Escape from also reaching
+            // any other Escape handler (a dialog, say) further up the tree.
+            if (event.key !== "Escape") return;
+            event.preventDefault();
+            event.stopPropagation();
+            onFilterChange("");
+            event.currentTarget.blur();
+            onFocus();
+          }}
+        />
       </div>
 
       {state.error && (
@@ -1470,93 +2200,251 @@ function Pane({
         </div>
       )}
 
-      {showingFiles && (
-        <ul style={{ listStyle: "none", padding: 0, margin: 0, maxHeight: 420, overflow: "auto" }}>
-          {state.entries.map((entry) => (
-            <li
-              key={`${entry.name}-${entry.header_block ?? entry.path}`}
-              className="recent-item"
-              draggable={!entry.is_dir}
-              onDragStart={(event) => {
-                event.dataTransfer.setData(
-                  "application/art-entry",
-                  JSON.stringify({ entry, side })
-                );
-                event.dataTransfer.effectAllowed = "copy";
-                // A local file can also leave the window entirely; the native
-                // drag starts from the same gesture.
-                if (entry.path) onDragOut(entry);
-              }}
-              onClick={() => onSelect(entry.name)}
-              onDoubleClick={() => onActivate(entry)}
-              style={{
-                cursor: entry.is_dir ? "pointer" : "grab",
-                background:
-                  selected === entry.name ? "var(--surface-2, rgba(255,255,255,0.06))" : undefined,
-                display: "flex",
-                justifyContent: "space-between",
-                gap: 8,
-              }}
-            >
-              <span style={{ minWidth: 0 }}>
-                <span className="recent-name">{entry.name}</span>
-                {entry.is_dir && (
-                  <span className="faint" style={{ fontSize: 10 }}>
-                    {" "}
-                    {t("files.pane.folderSuffix")}
-                  </span>
-                )}
-                {entry.is_link && (
-                  <span className="faint" style={{ fontSize: 10 }}>
-                    {" "}
-                    {t("files.pane.linkSuffix")}
-                  </span>
-                )}
-              </span>
-              <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                {!entry.is_dir && (
-                  <span className="faint" style={{ fontSize: 11 }}>
-                    {formatBytes(entry.bytes)}
-                  </span>
-                )}
-                {!entry.is_dir && (
-                  <button
-                    className="btn"
-                    style={{ fontSize: 10 }}
-                    title={t("files.pane.copyTitle")}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onCopy(entry);
-                    }}
-                  >
-                    {side === "left" ? "→" : "←"}
-                  </button>
-                )}
-                {writableVolume(state) !== null && (
-                  <button
-                    className="btn"
-                    style={{ fontSize: 10 }}
-                    title={t("files.pane.deleteTitle")}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onDelete(entry);
-                    }}
-                  >
-                    X
-                  </button>
-                )}
-              </span>
-            </li>
-          ))}
+      {showingFiles && (sortedEntries.length > 0 || canGoUp) && (
+        <TcHeaderRow sort={sort} onSortChange={onSortChange} />
+      )}
 
-          {state.entries.length === 0 && !state.error && (
-            <li className="muted" style={{ fontSize: 12, padding: "8px 0" }}>
-              {t("files.pane.empty")}
+      {showingFiles && (
+        <ul className="tc-row-list">
+          {/* `[..]` — Total Commander's "go up" row, always first when there
+              is somewhere to go. It is chrome, not a `PanelEntry`: it has no
+              place in the selection Set or the sort order, so it is rendered
+              once here rather than being synthesised into `sortedEntries`. */}
+          {canGoUp && (
+            <li className="tc-row tc-row-updir" onClick={onUp} onDoubleClick={onUp}>
+              <span className="tc-cell tc-cell-name">
+                <UpDirIcon />
+                <span className="tc-name-text">[..]</span>
+              </span>
+              <span className="tc-cell tc-cell-ext" />
+              <span className="tc-cell tc-cell-size" />
+              <span className="tc-cell tc-cell-date" />
+              <span className="tc-cell tc-cell-attr" />
+              <span className="tc-cell tc-cell-actions" />
+            </li>
+          )}
+
+          {sortedEntries.map((entry) => {
+            const isSelected = selectedNames.has(entry.name);
+            const isCursor = cursorName === entry.name;
+            const { ext } = splitName(entry.name, entry.is_dir);
+            const formattedDate = formatDateTC(entry.date);
+            // The cursor and the selection are shown two different ways on
+            // purpose (second reference: selection is red text on the
+            // normal dark background; the cursor is a full-row yellow fill,
+            // black text — `tc-row-cursor`, in CSS). Selection wins over the
+            // cursor's black when a row is both, so it still reads as both:
+            // red text on the yellow bar, rather than the two affordances
+            // fighting for the same pixels. Only the *un-selected,
+            // non-cursor* case falls through to the row's own file-type
+            // colour (`fileTextColorVar` — white/light-blue/dimmed, the same
+            // classification `TcRowIcon` uses for its glyph).
+            const rowTextColor = isSelected
+              ? "var(--tc-selected-text)"
+              : isCursor
+                ? "var(--tc-cursor-text)"
+                : fileTextColorVar(entry);
+
+            return (
+              <li
+                key={`${entry.name}-${entry.header_block ?? entry.path}`}
+                className={`tc-row${isCursor ? " tc-row-cursor" : ""}`}
+                draggable={!entry.is_dir}
+                onDragStart={(event) => {
+                  event.dataTransfer.setData(
+                    "application/art-entry",
+                    JSON.stringify({ entry, side })
+                  );
+                  event.dataTransfer.effectAllowed = "copy";
+                  // A local file can also leave the window entirely; the native
+                  // drag starts from the same gesture.
+                  if (entry.path) onDragOut(entry);
+                }}
+                onClick={(event) => onSelect(entry, event)}
+                onDoubleClick={() => onActivate(entry)}
+                style={{ color: rowTextColor, cursor: entry.is_dir ? "pointer" : "grab" }}
+              >
+                <span className="tc-cell tc-cell-name">
+                  <TcRowIcon entry={entry} />
+                  <span className="tc-name-text">
+                    {entry.is_dir ? `[${entry.name}]` : entry.name}
+                  </span>
+                  {entry.is_link && (
+                    <span className="faint" style={{ fontSize: 10 }}>
+                      {" "}
+                      {t("files.pane.linkSuffix")}
+                    </span>
+                  )}
+                </span>
+                <span className="tc-cell tc-cell-ext">{ext}</span>
+                <span className="tc-cell tc-cell-size">
+                  {entry.is_dir ? t("files.tc.dirSize") : formatGroupedSize(entry.bytes, i18n.language)}
+                </span>
+                <span className="tc-cell tc-cell-date">{formattedDate ?? "—"}</span>
+                <span className="tc-cell tc-cell-attr">{entry.attrs ?? "—"}</span>
+                <span className="tc-cell tc-cell-actions">
+                  {!entry.is_dir && (
+                    <button
+                      className="btn"
+                      style={{ fontSize: 10, padding: "0 5px" }}
+                      title={t("files.pane.copyTitle")}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        // stopPropagation above means this click never bubbles
+                        // to the pane's own onClick={onFocus} — without this,
+                        // clicking Copy on an unfocused pane would act on the
+                        // wrong side's F-key state.
+                        onFocus();
+                        onCopy(entry);
+                      }}
+                    >
+                      {side === "left" ? "→" : "←"}
+                    </button>
+                  )}
+                  {writableVolume(state) !== null && (
+                    <button
+                      className="btn"
+                      style={{ fontSize: 10, padding: "0 5px" }}
+                      title={t("files.pane.deleteTitle")}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onFocus();
+                        onDelete(entry);
+                      }}
+                    >
+                      X
+                    </button>
+                  )}
+                </span>
+              </li>
+            );
+          })}
+
+          {/* A mask matching nothing says so, rather than showing the same
+              blank pane a genuinely empty directory would — that would read
+              as ART having failed to open the disk, not as a filter doing
+              its job. Told apart by whether the *unfiltered* directory
+              (`state.entries`, not `sortedEntries`) actually had anything
+              in it. */}
+          {sortedEntries.length === 0 && !state.error && (
+            <li className="muted" style={{ fontSize: 12, padding: "8px 0 8px 8px" }}>
+              {filter.trim() !== "" && state.entries.length > 0
+                ? t("files.pane.filterNoMatch", { mask: filter })
+                : t("files.pane.empty")}
             </li>
           )}
         </ul>
       )}
+
+      {/* Row 5 of the reference: the status line. */}
+      {showingFiles && (
+        <div className="tc-chrome-row tc-status-row">
+          {t("files.tc.statusLine", {
+            selectedBytes: formatGroupedSize(Math.round(status.selectedBytes / 1024), i18n.language),
+            totalBytes: formatGroupedSize(Math.round(status.totalBytes / 1024), i18n.language),
+            selectedFiles: status.selectedFiles,
+            totalFiles: status.totalFiles,
+            selectedDirs: status.selectedDirs,
+            totalDirs: status.totalDirs,
+          })}
+        </div>
+      )}
     </section>
+  );
+}
+
+/**
+ * The clickable Name / Ext / Size / Date headers above a pane's entry list —
+ * Total Commander's column row (task 6b), the sorted column carrying an
+ * arrow immediately before its label rather than after (`↓Date`, not
+ * `Date↓`).
+ *
+ * Clicking a header sorts by it; clicking the active one again reverses —
+ * `onSortChange` (`clickColumn` in `@/lib/sort`) already knows which. Folders
+ * stay first regardless of which header is active or which direction is
+ * chosen; that rule lives in the comparator itself (`compareEntries`), not
+ * here, so this component only has to reflect `sort`, never enforce it.
+ *
+ * Ext and Attr have no column of their own in `@/lib/sort`'s `SortColumn` —
+ * the reference screenshot never sorts by either — so both render as a
+ * plain, unclickable label rather than growing a second sort mechanism
+ * alongside the existing one. The trailing cell lines up with each row's
+ * copy/delete buttons — an ART addition with no reference equivalent — and
+ * carries no label.
+ */
+function TcHeaderRow({
+  sort,
+  onSortChange,
+}: {
+  sort: SortState;
+  onSortChange: (column: SortColumn) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="tc-row tc-header-row">
+      <span className="tc-cell tc-cell-name">
+        <SortHeaderButton column="name" sort={sort} onSortChange={onSortChange} />
+      </span>
+      <span className="tc-cell tc-cell-ext">{t("files.sort.ext")}</span>
+      <span className="tc-cell tc-cell-size">
+        <SortHeaderButton column="size" sort={sort} onSortChange={onSortChange} />
+      </span>
+      <span className="tc-cell tc-cell-date">
+        <SortHeaderButton column="date" sort={sort} onSortChange={onSortChange} />
+      </span>
+      <span className="tc-cell tc-cell-attr">{t("files.sort.attrs")}</span>
+      <span className="tc-cell tc-cell-actions" aria-hidden="true" />
+    </div>
+  );
+}
+
+function SortHeaderButton({
+  column,
+  sort,
+  onSortChange,
+}: {
+  column: SortColumn;
+  sort: SortState;
+  onSortChange: (column: SortColumn) => void;
+}) {
+  const { t } = useTranslation();
+  const active = sort.column === column;
+  // A compiler-checked mapping rather than building the key from `column`
+  // with a template literal: `src/i18n/literal-keys.test.ts` scans for
+  // literal, quoted translator calls and cannot see a key assembled at
+  // runtime, so this keeps every key the header can render a plain literal
+  // the scan actually checks — the same reasoning as `confidenceLevelKey` in
+  // `LhaBrowser.tsx`.
+  const label =
+    column === "name"
+      ? t("files.sort.name")
+      : column === "size"
+        ? t("files.sort.size")
+        : t("files.sort.date");
+
+  return (
+    <button
+      type="button"
+      className="tc-header-btn"
+      style={{ fontWeight: active ? 700 : 400 }}
+      title={t("files.sort.title", {
+        column: label,
+        direction: sort.direction === "asc" ? t("files.sort.ascending") : t("files.sort.descending"),
+      })}
+      onClick={(event) => {
+        // Sorting is display-only and must not steal the pane's focus away
+        // from whatever F-keys are currently talking to — unlike a row click,
+        // this never calls `onFocus`.
+        event.stopPropagation();
+        onSortChange(column);
+      }}
+    >
+      {/* The arrow sits immediately before the label — TC's own convention
+          (`↓Date`, not `Date↓`) — rather than the trailing arrow this
+          button used before the palette redesign. */}
+      {active && <span aria-hidden="true">{sort.direction === "asc" ? "▲" : "▼"} </span>}
+      {label}
+    </button>
   );
 }
 

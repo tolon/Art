@@ -87,7 +87,7 @@ Notes:
 | Open, browse, volume info | §11 | ✅ | `core/adf/{mod,fs,blocks}.rs` |
 | Extract file | §11 | ✅ | `core/adf/extract.rs` |
 | Add / delete / rename / mkdir | §11 | ✅ | `commands/adf.rs` → `core/volume/write/` |
-| Create blank / formatted / bootable | §11 | ✅ | `core/adf/create.rs` |
+| Create blank / formatted / bootable | §11 | ✅ | `core/adf/create.rs`, `core/adf/bootcode.rs`. Until [ART-063](ISSUES.md#fixed) was fixed and verified by booting `test/art-bootable-test.adf`, `bootable` wrote a valid-looking but non-functional boot block (a bare `RTS`) — the boot block now reaches a CLI prompt on a real Kickstart/Workbench (not Workbench itself: `S/Startup-Sequence` and AmigaOS's own commands are content ART cannot supply) |
 | Validate (boot block, checksums, bitmap) | §11, §12 | ✅ | `core/adf/validate.rs` |
 | Optimisation analysis | §13 | ⏳ | — |
 | Drag files in / out of the image | §11, §90 | ✅ | `/files` two-pane manager |
@@ -190,12 +190,18 @@ checks the image comes back byte for byte.
 | "What can I do?" panel | §46, §91 | ✅ | driven by the engine's plan |
 | Dashboard, recent files | §62 | ✅ | |
 | Settings (theme, paths, language) | §59 | ✅ | |
-| i18n architecture | — | 🟡 | English and Turkish, 814 keys each, chosen in Settings and remembered; `CoreError` and `WhdloadRefusal` sentences from Rust still reach the UI in English regardless of the chosen language ([ART-060](ISSUES.md#open)) |
+| i18n architecture | — | 🟡 | English and Turkish, 863 keys each, chosen in Settings and remembered; `CoreError` and `WhdloadRefusal` sentences from Rust still reach the UI in English regardless of the chosen language ([ART-060](ISSUES.md#open)) |
 | Dark / light theme | §61 | ✅ | |
 | Beginner / Power User mode | §47, §48 | ✅ | `lib/uxmode.ts`; hides advanced studios, actions and block detail |
 | Operation history + export | §53 | ✅ | Settings → Operation Log |
 | Workflow Wizard | §45 | ⏳ | — |
-| Two-pane file manager | §11, §17 | ✅ | `/files`; F3 view · F4 edit · F5 copy · F6 rename/move · F7 mkdir · F8 delete · F9 attributes. Any volume to any volume |
+| Two-pane file manager | §11, §17 | ✅ | `/files`, Total Commander-styled (row icons, file-type colour, Attr column); F3 view · F4 edit · F5 copy · F6 rename/move · F7 mkdir · F8 delete · F9 attributes. Any volume to any volume for a single entry; see Multi-select below for what a selection can and cannot do |
+| Multi-select (Shift/Ctrl-click, Insert, Ctrl+A) | Roadmap 1.1 | ✅ | `src/lib/selection.ts` (pure reducer) + `SelectionBar.tsx`; real pane focus (`focused: Side`) and Tab between panes |
+| Batch copy: local ↔ volume | Roadmap 1.1 | ✅ | `volume_plan_copy_many` / `volume_copy_in_many` (host→volume, one job, cancel commits nothing) — `commands/volume_write.rs`. Volume→local multi-select works but is several concurrent per-entry operations, not one atomic job ([ART-065](ISSUES.md#open)); volume→volume multi-select refuses outright, with no primitive to batch on ([ART-064](ISSUES.md#open)) |
+| Batch delete | Roadmap 1.1 | ✅ | `volume_delete_many`; a batch that can't fully succeed (missing name, non-empty directory) deletes nothing |
+| Several archives installed to a disk at once | Roadmap 1.1 | ✅ | `archives_plan_install` / `archives_install` (`commands/archives.rs`); each archive gets its own drawer, staged into one write so a cancelled batch can't leave two games half-installed. The plan step runs synchronously on the command thread rather than as a job ([ART-066](ISSUES.md#open)), and Stop is unresponsive during one archive's own extraction ([ART-067](ISSUES.md#open)) |
+| One listing order + per-pane column sort | Roadmap 1.2 | ✅ | `commands/panel.rs`, `core/adf/fs.rs`, `core/volume/write/dir.rs::entries_in` now share one folders-first, case-insensitive floor; `src/lib/sort.ts` sorts on top of it by name/size/date, click-to-reverse |
+| Filename mask filter | Roadmap 1.2 | ✅ | `src/lib/mask.ts` — Total Commander `*`/`?` wildcards, whole-name, case-insensitive; narrows what a pane shows and clears its selection on change. The empty-vs-no-match message is inferred from two entry counts rather than carried as a flag from the matcher ([ART-068](ISSUES.md#open)) |
 | Checkout / checkin (F4) | Stage W §6 | ✅ | `core/volume/checkout.rs`; SHA-256 gated, CRLF offered never applied |
 | `.uaem` sidecars | Stage W §4.2 | ✅ | `core/volume/write/uaem.rs`, WinUAE's format; round-trip test pins `HSPARWED` |
 | `.info` pairing | Stage W §7.1 | ✅ | Rename and delete offer the icon; the copy plan warns when a pair is split |

@@ -171,11 +171,14 @@ pub fn run() {
             commands::volume::volume_extract_to,
             commands::volume_write::volume_write_capability,
             commands::volume_write::volume_plan_copy,
+            commands::volume_write::volume_plan_copy_many,
             commands::volume_write::volume_make_dir,
             commands::volume_write::volume_rename,
             commands::volume_write::volume_delete,
+            commands::volume_write::volume_delete_many,
             commands::volume_write::volume_put_file,
             commands::volume_write::volume_copy_in,
+            commands::volume_write::volume_copy_in_many,
             commands::volume_write::volume_copy_out,
             commands::volume_write::volume_copy_between,
             commands::volume_write::volume_recover,
@@ -190,6 +193,8 @@ pub fn run() {
             commands::checkout::volume_icon_for,
             commands::whdload::whdload_plan,
             commands::whdload::whdload_install,
+            commands::archives::archives_plan_install,
+            commands::archives::archives_install,
         ])
         .run(tauri::generate_context!())
         .map_err(|e| {

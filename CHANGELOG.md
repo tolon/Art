@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### The Files screen became a real commander, and ART writes a disk an Amiga boots (2026-08-11)
+
+#### Added
+- **Select several things at once.** Shift-click a range, Ctrl-click to add or
+  remove one entry, Insert to mark it and move on, Ctrl+A for everything in
+  the pane. Tab moves keyboard focus between the two panes, and focus is now a
+  real, visible thing rather than wherever a selection happened to be.
+- **Copy or delete a whole selection in one step.** Copying several files and
+  folders from your disk into an image, or from an image onto your disk, and
+  deleting several entries from an image, are each one operation: a cancelled
+  batch copy commits nothing, and a batch delete that cannot fully go through
+  — a name that is not there any more, a folder that still has something in
+  it — deletes nothing rather than half the selection.
+- **Drop several `.lha` archives on a disk at once.** Each gets its own
+  drawer, the way installing one archive already worked, staged into a single
+  write so a cancelled multi-archive install cannot leave two games
+  half-installed.
+- **One sort order everywhere, and you can change it.** Local folders, ADF
+  volumes and HDF partitions used to list their contents three different
+  ways — one of them not sorted at all. All three now share one floor
+  (folders first, name otherwise) and clicking a column header in the Files
+  screen sorts by name, size or date, on top of that floor, per pane.
+- **A filename filter**, Total Commander-style: type `*.info` or `Read?e.txt`
+  in the path row and the pane narrows to what matches. Changing the filter
+  clears the pane's selection, so a selection never quietly keeps an entry
+  the filter just hid.
+- **The Files screen looks like a file manager now** — restyled after two
+  Total Commander reference screenshots, with file-type icons and colour and
+  an Attr column showing each entry's protection bits at a glance.
+- **ART writes a disk a real Amiga boots from.** The "bootable" option used
+  to write a boot block that looked valid to every check ART or an
+  independent tool (`xdftool`) could run, and did nothing when a real machine
+  tried to use it — it returned immediately instead of handing control to
+  AmigaDOS. ART now assembles real 68000 boot code from the documented
+  Kickstart contract, and a disk made with the option checked boots to a
+  command line. (It boots the disk, not Workbench — `Startup-Sequence` and
+  the commands behind it are AmigaOS content ART does not ship.)
+
+#### Verified
+- **For the first time, on hardware rather than only in tests.** Under a
+  licensed Kickstart and Workbench (Amiga Forever, WinUAE — not bare metal),
+  in both an Amiga 1200 and an Amiga 500+ configuration: a disk ART wrote
+  mounted, its one file listed and read back correctly, and a second disk —
+  identical except for its boot code — booted. Two earlier checks already
+  existed (ART agreeing with itself, and with an independent implementation,
+  amitools); this is the first time an actual Amiga has been asked.
+
+#### Known gaps, recorded rather than hidden
+- **Volume-to-volume multi-select refuses** rather than batching — copy one
+  at a time between two images for now (ART-064).
+- **Volume-to-local multi-select works, but as several operations running
+  together**, not the one atomic operation the other three copy directions
+  give (ART-065).
+- Installing several archives plans the whole batch before showing you
+  anything, and Stop cannot interrupt one archive's own extraction — only
+  between archives (ART-066, ART-067).
+- **Nothing in this release has been looked at on a running screen.** Every
+  change above is covered by an automated test and nothing more — including
+  the restyled Files screen, which nobody has opened yet — and no language
+  has been checked visually either (carried over from the previous release,
+  ART-062).
+
 ### ART now speaks Turkish (2026-08-10)
 
 #### Added

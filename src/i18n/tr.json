@@ -69,6 +69,8 @@
     "copyPlan": {
       "ariaLabel": "Kopyalama planı",
       "title": "Kopyalamadan önce",
+      "source_one": "{{name}}",
+      "source_other": "{{count}} öğe",
       "intoDestination": "{{destination}} içine",
       "filesCount_one": "{{count}} dosya",
       "filesCount_other": "{{count}} dosya",
@@ -89,7 +91,13 @@
       "splitIconsOrphaned": "Bu kopyada bazı .info simgelerinin tanımlayacağı bir şey yok.",
       "clean": "Her şey sığıyor ve her isim AmigaDOS'un saklayabileceği türden.",
       "notEnoughRoom": "Diskte yeterli yer yok",
-      "copy": "Kopyala"
+      "copy": "Kopyala",
+      "archivesTitle_one": "{{count}} çekmece oluşturulacak:",
+      "archivesTitle_other": "{{count}} çekmece oluşturulacak:",
+      "archiveRowCounts_one": "{{count}} dosya, {{bytes}}",
+      "archiveRowCounts_other": "{{count}} dosya, {{bytes}}",
+      "archiveSkippedCount_one": "{{count}} öğe dışarıda bırakıldı, çekmecenin parçası değil:",
+      "archiveSkippedCount_other": "{{count}} öğe dışarıda bırakıldı, çekmecenin parçası değil:"
     },
     "checkout": {
       "discardConfirm": "{{name}} üzerindeki değişiklikleriniz atılsın mı? Çalışma kopyası silinecek.",
@@ -881,7 +889,12 @@
       "deleteReasonSelect": "Silmek için bir şey seçin",
       "attributes": "Nitelikler",
       "attributesReasonSelect": "Önce bir şey seçin",
-      "attributesReasonNeedsImage": "Nitelikler yalnızca bir imaj içindeki dosyalara aittir"
+      "attributesReasonNeedsImage": "Nitelikler yalnızca bir imaj içindeki dosyalara aittir",
+      "reasonMultiple": "Yalnızca tek bir öğede çalışır"
+    },
+    "selection": {
+      "summary_one": "{{count}} öğe seçili ({{size}})",
+      "summary_other": "{{count}} öğe seçili ({{size}})"
     },
     "toolbar": {
       "folder": "Klasör...",
@@ -895,10 +908,28 @@
       "nothingOpen": "Hiçbir şey açık değil",
       "truncated": "Bu klasör ART'ın listeleyeceğinden daha fazlasını içeriyor — yalnızca ilk girdiler gösteriliyor.",
       "empty": "Burada hiçbir şey yok.",
+      "filterNoMatch": "“{{mask}}” ile eşleşen dosya yok.",
       "folderSuffix": "(klasör)",
       "linkSuffix": "(bağlantı — izlenmedi)",
       "copyTitle": "Diğer bölmeye kopyala",
       "deleteTitle": "Diskten sil"
+    },
+    "sort": {
+      "name": "Ad",
+      "size": "Boyut",
+      "date": "Tarih",
+      "ext": "Uzantı",
+      "attrs": "Öznt",
+      "ascending": "artan",
+      "descending": "azalan",
+      "title": "{{column}} sırasına göre, {{direction}} — değiştirmek için tıklayın"
+    },
+    "tc": {
+      "dirSize": "<DIR>",
+      "freeOfTotal": "{{total}} k içinden {{free}} k boş",
+      "statusLine": "{{selectedBytes}} k / {{totalBytes}} k — {{selectedFiles}} / {{totalFiles}} dosya, {{selectedDirs}} / {{totalDirs}} dizin",
+      "maskPlaceholder": "*.*",
+      "maskAriaLabel": "Dosyaları ada göre filtrele"
     },
     "footer": {
       "unnamed": "(adsız)",
@@ -929,6 +960,12 @@
         "confirm1": "{{name}}, {{volume}} biriminden silinsin mi?",
         "confirm2": "Bu, tamamlandıktan sonra ART içinden geri alınamaz. '{{name}}' silinsin mi?",
         "confirmIcon": "Simgesi ({{icon}}) de silinsin mi?"
+      },
+      "deleteMany": {
+        "confirm1_one": "{{count}} öğe ({{size}}), {{volume}} biriminden silinsin mi?",
+        "confirm1_other": "{{count}} öğe ({{size}}), {{volume}} biriminden silinsin mi?",
+        "confirm2_one": "Bu, tamamlandıktan sonra ART içinden geri alınamaz. Bu öğe silinsin mi?",
+        "confirm2_other": "Bu, tamamlandıktan sonra ART içinden geri alınamaz. Bu {{count}} öğe silinsin mi?"
       }
     },
     "err": {
@@ -936,19 +973,40 @@
       "openOtherSide": "Önce diğer taraftan bir bölüm açın.",
       "sameImage": "Bu, her iki tarafta da aynı imaj. Bunun yerine Taşı veya Adlandır kullanın.",
       "noLocalPath": "Bu öğenin diskinizde bir yolu yok.",
-      "openPartitionFirst": "Önce bir bölüm açın."
+      "openPartitionFirst": "Önce bir bölüm açın.",
+      "batchBetweenVolumes": "Birden çok öğeyi iki imaj arasında tek seferde kopyalamak henüz desteklenmiyor — bunları teker teker kopyalayın.",
+      "mixedArchiveSelection": "Bir imaja kopyalarken yalnızca .lha arşivleri seçin, ya da hiçbirini — ikisinin karışımını değil."
     },
     "status": {
       "copyingBetween": "{{name}} imajlar arasında kopyalanıyor…",
       "planning": "{{name}} için gerekenler hesaplanıyor…",
+      "planningSelection_one": "{{count}} öğe için gerekenler hesaplanıyor…",
+      "planningSelection_other": "{{count}} öğe için gerekenler hesaplanıyor…",
+      "planningArchives_one": "{{count}} arşiv için gerekenler hesaplanıyor…",
+      "planningArchives_other": "{{count}} arşiv için gerekenler hesaplanıyor…",
       "copying": "{{name}} kopyalanıyor…",
+      "copyingSelection_one": "{{count}} öğe kopyalanıyor…",
+      "copyingSelection_other": "{{count}} öğe kopyalanıyor…",
+      "copyingArchives_one": "{{count}} arşiv kuruluyor…",
+      "copyingArchives_other": "{{count}} arşiv kuruluyor…",
       "copyingOut": "{{name}} dışarı kopyalanıyor…",
+      "copyingSelectionOut_one": "{{count}} öğe dışarı kopyalanıyor…",
+      "copyingSelectionOut_other": "{{count}} öğe dışarı kopyalanıyor…",
+      "selectionCopiedOut_one": "{{count}} öğe dışarı kopyalandı",
+      "selectionCopiedOut_other": "{{count}} öğe dışarı kopyalandı",
+      "selectionCopyOutCancelled": "Durduruldu — {{total}} öğeden {{done}} tanesi dışarı kopyalandı",
       "writtenTo": "{{name}}, {{volume}} birimine yazıldı",
       "writtenToBackedUp": "{{name}}, {{volume}} birimine yazıldı — önceki imaj yedeklendi",
       "alreadyThere": "{{name}} zaten orada — dokunulmadı",
       "copiedOut": "{{name}}, {{volume}} biriminden dışarı kopyalandı ({{size}})",
       "deleting": "{{name}} siliniyor…",
+      "deletingMany_one": "{{count}} öğe siliniyor…",
+      "deletingMany_other": "{{count}} öğe siliniyor…",
       "deleted": "{{name}} silindi",
+      "deletedMany_one": "{{count}} öğe silindi",
+      "deletedMany_other": "{{count}} öğe silindi",
+      "deletedManyBackedUp_one": "{{count}} öğe silindi — önceki imaj yedeklendi",
+      "deletedManyBackedUp_other": "{{count}} öğe silindi — önceki imaj yedeklendi",
       "deletedWithIcon": "{{name}} ve simgesi silindi",
       "deletedBackedUp": "{{name}} silindi — önceki imaj yedeklendi",
       "deletedWithIconBackedUp": "{{name}} ve simgesi silindi — önceki imaj yedeklendi",
