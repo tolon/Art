@@ -1266,7 +1266,7 @@ pub(crate) fn install_into_folder(
         parent,
         source,
         policy,
-        OnCancel::KeepWhatLanded,
+        OnCancel::Abandon,
         progress,
     )
 }

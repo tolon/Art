@@ -108,6 +108,15 @@ export function CopyPlanDialog({
                   count: row.files,
                   bytes: formatBytes(row.bytes),
                 })}
+                {row.skipped.length > 0 && (
+                  <div style={{ opacity: 0.85 }}>
+                    {t("components.copyPlan.archiveSkippedCount", {
+                      count: row.skipped.length,
+                    })}{" "}
+                    {row.skipped.slice(0, 3).join(" · ")}
+                    {row.skipped.length > 3 && " …"}
+                  </div>
+                )}
               </div>
             ))}
           </div>

@@ -25,17 +25,27 @@ export interface ArchiveDrawer {
   files: number;
   directories: number;
   bytes: number;
+  /** Entries the extractor itself refused — a traversal entry, one over the
+   *  decompression-bomb cap, a name it could not write — with the reason.
+   *  Never silent: these never reach the copy phase, so nothing else would
+   *  mention them. Shown in the plan, before the user confirms anything. */
+  skipped: string[];
 }
 
-/** What installing every archive in the batch would do. Writes nothing. */
+/**
+ * What installing every archive in the batch would do. Writes nothing.
+ *
+ * Whether the batch is refused lives entirely in `cost` (`planIsClean`/
+ * `planShortfall` from `@/lib/volumeWrite`, the same way a plain multi-file
+ * plan is read) — there is no separate refusal field here to fall out of
+ * sync with it.
+ */
 export interface ArchivesPlan {
   /** One row per archive, in the order given. */
   drawers: ArchiveDrawer[];
   /** The cost of the whole batch, over the union of every drawer — the same
    *  shape a plain multi-file copy plan already renders. */
   cost: CopyPlan;
-  /** Present, as data and never an error, when the batch will not fit. */
-  refusal: string | null;
 }
 
 /**

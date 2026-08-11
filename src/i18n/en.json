@@ -95,7 +95,9 @@
       "archivesTitle_one": "This will create {{count}} drawer:",
       "archivesTitle_other": "This will create {{count}} drawers:",
       "archiveRowCounts_one": "{{count}} file, {{bytes}}",
-      "archiveRowCounts_other": "{{count}} files, {{bytes}}"
+      "archiveRowCounts_other": "{{count}} files, {{bytes}}",
+      "archiveSkippedCount_one": "{{count}} entry left out, not part of the drawer:",
+      "archiveSkippedCount_other": "{{count}} entries left out, not part of the drawer:"
     },
     "checkout": {
       "discardConfirm": "Throw away your changes to {{name}}? The working copy will be deleted.",

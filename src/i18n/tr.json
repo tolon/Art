@@ -95,7 +95,9 @@
       "archivesTitle_one": "{{count}} çekmece oluşturulacak:",
       "archivesTitle_other": "{{count}} çekmece oluşturulacak:",
       "archiveRowCounts_one": "{{count}} dosya, {{bytes}}",
-      "archiveRowCounts_other": "{{count}} dosya, {{bytes}}"
+      "archiveRowCounts_other": "{{count}} dosya, {{bytes}}",
+      "archiveSkippedCount_one": "{{count}} öğe dışarıda bırakıldı, çekmecenin parçası değil:",
+      "archiveSkippedCount_other": "{{count}} öğe dışarıda bırakıldı, çekmecenin parçası değil:"
     },
     "checkout": {
       "discardConfirm": "{{name}} üzerindeki değişiklikleriniz atılsın mı? Çalışma kopyası silinecek.",
