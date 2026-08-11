@@ -32,7 +32,12 @@ cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings &
 python scripts/oracle-check.py
 ```
 
-**Baseline at the start of this plan: 721 Rust tests, 76 frontend tests, oracle 48 checks.** **Run `cargo test` twice** — ART-059 was a race that failed about one run in five.
+**Baseline at the start of this plan: 731 Rust tests, 107 frontend tests, oracle 48 checks** — Phase 1a's closing numbers (STATUS.md snapshot, 2026-08-11). An earlier draft of this line said 721/76; the gate arithmetic in the task reports is against the real baseline. **Run `cargo test` twice** — ART-059 was a race that failed about one run in five.
+
+**Where this plan stands (2026-08-11):** Tasks 1, 2 and 3 are complete and on
+`phase-2a`, and Task 3's review fixes landed after a mid-session reboot
+(`80e1d40`). Task 3a onwards is the remaining work. See the Amendments
+section at the foot of this file for what changed after the plan was written.
 
 ---
 
@@ -67,7 +72,8 @@ python scripts/oracle-check.py
 | `DOS` + a byte `0x00`–`0x07` at offset 0 | `FloppyImage` or `HarddiskImage`, by size |
 | `RDSK` at offset 0 | `HarddiskImage`, `format_hint: "rdb"` |
 | `CD001` at offset **0x8001** | `OpticalImage`, `format_hint: "iso9660"` |
-| `CD001` at offset **0x9311** | `OpticalImage`, `format_hint: "iso9660-raw"` — a 2352-byte raw track |
+| `CD001` at offset **0x9311** | `OpticalImage`, `format_hint: "iso9660-raw"` — a 2352-byte raw track, Mode 1 |
+| `CD001` at offset **0x9319** | `OpticalImage`, `format_hint: "iso9660-raw-xa"` — a 2352-byte raw track, Mode 2/XA Form 1 (**added by amendment A2**; built in Task 3b, not here) |
 | `PFS\x03` or `PDS\x03` at offset 0 | `HarddiskImage`, `format_hint: "pfs3"` |
 | `SFS\x00` at offset 0 | `HarddiskImage`, `format_hint: "sfs"` |
 | `-l` + method (existing) | `Archive` |
@@ -76,7 +82,7 @@ The `DOS` case needs a size decision: 901,120 → DD floppy; 1,802,240 → HD fl
 
 **Why 0x9311.** A raw CD track stores 2352 bytes per sector, of which 2048 are data at offset 16 within the sector. Sector 16 therefore begins at `16 × 2352 = 0x9300`, its data at `0x9310`, and the `CD001` at data offset 1 lands at `0x9311`. Finding it there also proves the sector size, which Task 2 needs.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 One per signature, each building a synthetic file at runtime with the bytes at the right offset and nothing else meaningful. Plus these, which are what make it a *content-first* detector rather than a longer extension list:
 
@@ -93,15 +99,15 @@ fn a_file_shorter_than_the_signature_offset_is_not_a_panic() { /* 100 bytes, .is
 
 That last one matters more than it looks: probing at 0x8001 in a 100-byte file is exactly the shape of bug `panic = "abort"` turns into a dead application.
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add `probe_at`, and put the signature checks **before** the extension `match`. Leave the extension match in place as the fallback it now genuinely is — a `.adf` full of zeros is still most likely an ADF, and that is a hint, not a lie. Lower the extension-only confidences to reflect that they are now the weaker evidence.
 
-- [ ] **Step 4: Run them and watch them pass, then the whole suite twice**
+- [x] **Step 4: Run them and watch them pass, then the whole suite twice**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ---
 
@@ -151,11 +157,11 @@ impl IsoImage {
 - `read_file` must refuse a length that would allocate more than a sane ceiling, and must not trust `bytes` past the end of the file.
 - A record length of zero must advance to the next sector, **not** loop.
 
-- [ ] **Step 1: Write a synthetic ISO builder in the test module**
+- [x] **Step 1: Write a synthetic ISO builder in the test module**
 
 This is the task's real foundation. A function that assembles a valid minimal ISO in memory — PVD, terminator, a root directory with a couple of entries, and file data — so every test builds its own disc. **No ISO file is ever committed.** Build it for both 2048-byte and 2352-byte sector layouts.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 ```rust
 #[test]
@@ -185,9 +191,9 @@ fn a_deeply_nested_disc_stops_at_the_depth_limit() { }
 
 The last three are the security cases and are **not optional**.
 
-- [ ] **Step 3: Run them, watch them fail, implement, watch them pass**
+- [x] **Step 3: Run them, watch them fail, implement, watch them pass**
 
-- [ ] **Step 4: Whole suite twice, then commit**
+- [x] **Step 4: Whole suite twice, then commit**
 
 ---
 
@@ -207,21 +213,104 @@ The last three are the security cases and are **not optional**.
 
 **Navigation.** An ISO directory is addressed by `(extent, length)`, not by a block number, so `PaneState`'s `dirBlock`/`trail` need an ISO-shaped equivalent. Keep the two clearly separate rather than overloading `dirBlock` with a meaning it does not have.
 
-- [ ] **Step 1: The commands, with tests**
+- [x] **Step 1: The commands, with tests**
 
 Each command is a thin adapter: deserialize, call core, serialize back. The tests belong to Task 2's core module; these need only the routing cases — a path that is not an ISO is an error, and a bad extent is an error rather than a panic.
 
-- [ ] **Step 2: The typed wrappers and the pane**
+- [x] **Step 2: The typed wrappers and the pane**
 
-- [ ] **Step 3: F5 out of a disc**
+- [x] **Step 3: F5 out of a disc**
 
 Copying **from** an ISO to a local folder or to an Amiga volume must work, because that is the whole point of opening one — an AmigaOS install CD is useful when its contents reach an HDF. Reuse `copy_into_volume` by giving it a `CopySource` backed by `IsoImage`, the same way `HostSelection` spans several roots. **Do not write a second copy engine.**
 
-- [ ] **Step 4: Refuse writing into a disc, visibly**
+- [x] **Step 4: Refuse writing into a disc, visibly**
+
+- [x] **Step 5: Gates and commit**
+
+---
+
+## Task 3a: An independent oracle for the disc reader (amendment A1)
+
+**Files:**
+- Create: `scripts/iso-oracle-check.py`
+- Modify: `docs/testing.md` (how to run it, and what it does *not* prove)
+
+**Why this task exists.** Task 2's synthetic ISO builder and the reader were
+written from the same offsets, so they can agree and both be wrong — the exact
+failure mode that let ART-032 … ART-035 ship behind a green suite. The plan's
+original third rung was a real AmigaOS CD in front of the reader; that is
+**cancelled** (see A1), because assuming the developer or a user reliably owns
+licensed AmigaOS media was unrealistic. This replaces it with a rung that
+needs no Amiga and no OS driver.
+
+**7-Zip is the oracle.** `7z l` reads ISO9660 and Joliet with its own
+implementation, in user space. The script builds the synthetic fixtures to a
+temp path and diffs what `IsoImage` reports against what 7-Zip lists.
+
+- [ ] **Step 1: Build the fixtures from Rust, read them from Python**
+
+The fixture builder lives in `core::iso::fixture` and is already the one the
+tests use. Expose a tiny debug entry point (a `#[cfg(test)]`-free helper, or a
+hidden command, whichever keeps `core/` clean) that writes the sample discs to
+a path the script names — so the script never reimplements the builder, which
+would give it a third thing to be wrong in the same way.
+
+- [ ] **Step 2: Diff the listing**
+
+Names (including Joliet names), sizes, and directory structure. Then extract
+one file with `7z e` and byte-compare it with `IsoImage::read_file`.
+
+- [ ] **Step 3: Raw layouts get the oracle too**
+
+7-Zip cannot read a 2352-byte track dump, and no host mounts one, so the raw
+paths would otherwise rest on ART agreeing with itself — which is what
+[ART-075](../../ISSUES.md) records. In the script, strip each raw fixture down
+to a plain 2048-byte image first (sync/header, and for XA the subheader, off
+every sector — about fifteen lines of Python) and run the same diff against
+the stripped image. **The stripping uses the layout's documented offsets, not
+ART's code**, or it is not independent. Applies to `iso9660-raw`, and to
+`iso9660-raw-xa` once Task 3b lands.
+
+- [ ] **Step 4: Fail loudly when `7z` is missing**
+
+An oracle that silently skips is not an oracle. No `7z` on `PATH` → a clear
+message and a non-zero exit. It runs **outside `cargo test`**, like the
+amitools oracle, and is not part of core CI.
+
+**Only well-formed fixtures ever reach 7-Zip.** The malformed and hostile ISOs
+(looping records, lengths past EOF, depth bombs) stay inside `cargo test`
+against ART's own reader; handing them to an external tool proves nothing about
+ART and risks proving something about 7-Zip.
 
 - [ ] **Step 5: Gates and commit**
 
----
+## Task 3b: Mode 2/XA Form 1 raw sectors — closes ART-075 (amendment A2)
+
+**Files:**
+- Modify: `src-tauri/src/core/detect.rs`, `src-tauri/src/core/iso/mod.rs`,
+  `scripts/iso-oracle-check.py`, `docs/ISSUES.md`
+
+**The defect.** The raw path assumes Mode 1: 2352-byte sectors with data at
+offset 16, so `CD001` at `16 × 2352 + 16 + 1 = 0x9311`. A Mode 2/XA Form 1
+disc carries an 8-byte subheader, so its data begins at offset 24 and the
+signature lands at `16 × 2352 + 24 + 1 = 0x9319`. Today **both** detection and
+the reader would be wrong together on such a disc — CD32 and mixed-mode discs
+are exactly where that appears.
+
+- [ ] **Step 1: A failing detection test at 0x9319**
+- [ ] **Step 2: Carry the data offset (16 vs 24) in `SectorLayout`**
+
+The same way 2048 vs 2352 is already carried — one value, decided once at open,
+not a branch at every read.
+
+- [ ] **Step 3: Mode 2 Form 2 is refused, not misread**
+
+2324-byte user data, no ISO filesystem semantics. If the submode byte says
+Form 2, report honestly that it is unsupported (§10, §89).
+
+- [ ] **Step 4: Extend the 7-Zip oracle to the XA fixture** (Task 3a Step 3)
+- [ ] **Step 5: Close ART-075 in `ISSUES.md`, naming the tests**
+- [ ] **Step 6: Gates and commit**
 
 ## Task 4: One security gate, several archive engines (ZIP and 7z)
 
@@ -288,8 +377,8 @@ platform-specific.
 
 | Format | What it is | This task |
 |---|---|---|
-| **D64** | 1541 disk image, 35 tracks, 683 × 256-byte blocks = 174,848 bytes (175,531 with error bytes) | browsable |
-| **D71** | 1571, double-sided, 349,696 bytes | browsable |
+| **D64** | 1541 disk image, 256-byte blocks. 35 tracks = 174,848 bytes (175,531 with error bytes); **40 tracks = 196,608 (197,376 with error bytes)** | browsable |
+| **D71** | 1571, double-sided, 349,696 bytes (**351,062 with error bytes**) | browsable |
 | **D81** | 1581, 3.5″, 819,200 bytes, 80 tracks × 40 sectors | browsable |
 | **T64** | tape *archive* — a real header and directory, despite the name | browsable |
 | **TAP** | a raw recording of the tape signal as pulse widths | **identify only** |
@@ -308,9 +397,17 @@ this one.
 **D64 layout, only what the reader needs.**
 - No header: the file *is* the sectors, track 1 sector 0 first. Tracks are
   numbered from 1; sectors per track vary by zone — 21 for tracks 1–17, 19 for
-  18–24, 18 for 25–30, 17 for 31–35. **A track/sector pair converts to a byte
-  offset only through that table**, so build it once and test it at every zone
-  boundary.
+  18–24, 18 for 25–30, 17 for 31–35, **and 17 again for 36–40 on a 40-track
+  image**. **A track/sector pair converts to a byte offset only through that
+  table**, so build it once and test it at every zone boundary — including the
+  35/36 one (amendment A3).
+- **The size decides the track count**, and only these four are accepted:
+  174,848 (35 tracks) · 175,531 (35 + error bytes) · 196,608 (40 tracks) ·
+  197,376 (40 + error bytes). 40-track images are SpeedDOS/DolphinDOS-era and
+  common in the wild. Any other size is an honest refusal **carrying the size
+  in the message** — never a guess at what it might have been. Same for D71
+  with error bytes (349,696 / 351,062). The directory is at track 18 either
+  way.
 - **BAM** at track 18, sector 0. Disk name at offset 0x90 (16 bytes, PETSCII,
   padded with 0xA0), disk ID at 0xA2.
 - **Directory** starts at track 18, sector 1. Each sector holds 8 entries of 32
@@ -338,7 +435,22 @@ names in tests.
 - [ ] **Step 2: BAM and disk name, with PETSCII decoding**
 - [ ] **Step 3: The directory walk, with the loop guard proved by a self-referencing fixture**
 - [ ] **Step 4: Reading a file's sector chain back byte for byte**
-- [ ] **Step 5: T64 — simpler; a header, a record count, and per-entry load/end addresses**
+- [ ] **Step 5: T64 — never trust the header, and prove it (amendment A4)**
+
+A T64 has a header, a record count and per-entry load/end addresses, and
+real-world files written by buggy tools get all three wrong: `used entries` is
+frequently 0 while records exist, `max entries` lies, and **end addresses are
+often wrong**, so a declared size is not a size.
+
+- Derive the entry table by **scanning records** — a plausible file-type byte,
+  offsets that land inside the file — not by trusting the header counts. If
+  `used == 0` and valid records exist, use the records and note the quirk in
+  the listing: a warning, not an error.
+- Clamp every entry's data range to the actual file length. An end address
+  *before* the start address means "compute the length from the container",
+  not an error, and never a negative length.
+- Fixtures, all of which must list and extract (clamped) without a panic:
+  `used = 0` with one real record; end < start; a declared range past EOF.
 - [ ] **Step 6: Detection signatures, and identify-only for TAP, PRG and CRT**
 - [ ] **Step 7: Open a D64 and a T64 as panes, read-only**
 - [ ] **Step 8: Gates and commit**
@@ -358,13 +470,28 @@ widen to match; not a reason to delay the work.
 
 `format-support-matrix.md` currently lists optical images as planned. Move only what a test now covers. **ISO9660 with Joliet, read-only** is the claim; Rock Ridge, the Amiga `AS` System Use entry, `.cue`/`.bin`, `.nrg`, `.mdf` and writing a disc are **not** in this phase and must stay listed as unbuilt (§10, §89).
 
+`FEATURES.md`'s wording adds **"verified against 7-Zip's independent listing
+(including raw layouts via sector-stripping)"** — and claims no real Amiga CD
+and no host mount, because neither was done (amendment A1).
+
 - [ ] **Step 2: Record what is owed**
 
 Open an `ART-*` for Rock Ridge and the Amiga `AS` entry — without them, an AmigaOS CD's protection bits and file comments are lost on extraction, which matters for a WHDLoad-era disc.
 
-- [ ] **Step 3: Produce a disc for the hardware loop**
+- [ ] ~~**Step 3: Produce a disc for the hardware loop**~~ — **cancelled by
+  amendment A1 (user's decision, 2026-08-11).** The original step asked for a
+  synthetic ISO in `test/` to be listed by a real Amiga's CD filesystem, on
+  the assumption of licensed AmigaOS CDs being to hand. They are not, reliably,
+  and the phase must not block on media nobody can promise. The risk that step
+  covered is covered instead by Task 3a's 7-Zip oracle.
 
-The user has a working verification loop and licensed AmigaOS CDs. Write a **synthetic** ISO into `test/`, and say in `test/README.md` what to check: that ART lists it identically to what the Amiga's CD filesystem lists. ART's own tests and an independent implementation both only prove ART is self-consistent; a real CD filesystem is the third rung, and this project has twice now learned something that way that no test could tell it.
+- [ ] **Step 3 (replacement): Say what the oracle does and does not prove**
+
+`test/README.md` states that the disc reader is verified against **7-Zip's
+independent implementation**, not against a real Amiga CD filesystem, and that
+a volunteer with a real CD32 or AmigaOS disc is a welcome extra rung — the
+community beta is where that arrives. Do not block the phase on it, and do not
+let the wording imply it happened.
 
 - [ ] **Step 4: Gates and commit**
 
@@ -378,4 +505,42 @@ The user has a working verification loop and licensed AmigaOS CDs. Write a **syn
 
 **Type consistency.** `IsoImage`, `IsoEntry`, `FormatCategory::OpticalImage` and `probe_at` are each introduced in one task's Produces and consumed by name in the next.
 
-**The risk this plan is most likely to be wrong about.** Task 2 asserts byte offsets in a format nobody here can check against a real disc until Task 4 puts one in front of the user's Amiga. The synthetic ISO builder in Task 2 Step 1 is written from the same offsets as the reader, so **the reader and its fixtures can agree and both be wrong** — exactly the failure mode that let ART-032 through ART-035 ship behind a green suite. Two mitigations, and the plan is not sound without them: mount the synthetic ISO with the host OS in Task 2 if it will, and get a real AmigaOS CD in front of the reader in Task 4.
+**The risk this plan is most likely to be wrong about.** Task 2 asserts byte offsets in a format nobody here can check against a real disc. The synthetic ISO builder in Task 2 Step 1 is written from the same offsets as the reader, so **the reader and its fixtures can agree and both be wrong** — exactly the failure mode that let ART-032 through ART-035 ship behind a green suite. The plan is not sound without a mitigation, and the mitigation is now **Task 3a's 7-Zip oracle** (amendment A1), which needs no Amiga and no OS driver.
+
+*Superseded, kept so the change of mind is legible:* the original two mitigations were to mount the synthetic ISO with the host OS in Task 2, and to get a real AmigaOS CD in front of the reader in Task 4. The first was done once — Task 2 mounted both 2048-byte fixtures with `Mount-DiskImage` and read them through Windows' own CDFS, which is how the Joliet `ë` and the big-endian UCS-2 were confirmed — and is **not** maintained going forward. The second is cancelled.
+
+---
+
+## Amendments
+
+### 2026-08-11 — A1 … A7, from `ART-prompt-phase-2a-amendments.md`
+
+Applied after an external review of this plan and a post-reboot inspection of
+the repository. Recorded here so a cancelled step is never mistaken for an
+omission.
+
+| # | What changed | Where it lands |
+|---|---|---|
+| **A1** | The real-Amiga-CD verification is **cancelled**; a mandatory 7-Zip oracle replaces it, raw layouts included via sector-stripping | new Task 3a; Task 6 Step 3 struck through; Self-Review rewritten |
+| **A2** | Mode 2/XA Form 1 raw sectors (`CD001` at `0x9319`, data at offset 24) — the fix for ART-075 | new Task 3b; the signature table gained its row |
+| **A3** | D64 accepts the 40-track variants (196,608 / 197,376) and D71's error-byte size; any other size is a refusal carrying the size | Task 5 table, layout section, Step 1 |
+| **A4** | T64 headers are not trusted: records are scanned, ranges clamped, three quirk fixtures | Task 5 Step 5 |
+| **A5** | Baseline corrected to 731 Rust / 107 frontend (was 721 / 76) | the Gates block |
+| **A6** | Line endings pinned by a `.gitattributes` in **one standalone commit**, never mixed with feature work | done: `42ab426` |
+| **A7** | Recovery from the reboot: finish the interrupted Task 3 review fixes, gates first, its own commit | done: `80e1d40` |
+
+**On A6, for the record:** the amendment described ~134 modified files and
+~50k changed lines of CRLF↔LF churn. By the time the working tree was
+inspected only the three real files were modified, and `git add --renormalize`
+changed nothing — everything stored was already LF. The `.gitattributes` still
+landed, because what was missing was the *pin*, and without it the same churn
+can return on any checkout.
+
+**On A7, for the record:** the amendment read the uncommitted work as "Task 3
+Step 3, F5 out of a disc, in progress". It was not — Task 3 was complete and
+committed (`7264e82`); what was half-written were the **fixes from that task's
+own code review**, and the tree did not compile (`commands/iso.rs` called
+`extract_tree` with the old arity). Finished, tested and committed as
+`80e1d40`. The review's findings list itself did not survive the reboot; the
+three fixes named in the code were recovered from the work in progress, and
+anything else that review said is gone.

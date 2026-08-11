@@ -42,6 +42,13 @@ The fix is to stop assuming: read the sector's mode byte (offset 15 of the
 sync header) and take the data offset from it, rather than hardcoding 16.
 Needs a Mode 2 Form 1 fixture, and ideally a real disc image to check against.
 
+**Scheduled:** Phase 2a Task 3b (amendment A2) — add the `0x9319` signature
+row (`iso9660-raw-xa`), carry the data offset in `SectorLayout`, refuse Mode 2
+Form 2 honestly rather than misreading it, and extend the 7-Zip oracle
+(Task 3a) to the raw layouts by stripping sectors down to 2048 bytes from the
+*layout's* documented offsets rather than ART's. That oracle is what actually
+closes "two layers wrong together" for a raw dump no host will mount.
+
 **ART-073** 🟡 **`delete_many`'s all-or-nothing guarantee only holds for the whole-file strategy**
 `src-tauri/src/commands/volume_write.rs::delete_many` (line ~505) · The
 pre-check (`check_batch_deletable`) runs once, against a read-only listing,
