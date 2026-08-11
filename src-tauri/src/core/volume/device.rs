@@ -94,7 +94,7 @@ impl FileRegion {
     /// a partition claiming more than the file holds is a truncated download,
     /// not a reason to hand the filesystem random bytes.
     pub fn open(path: &Path, offset: u64, length: u64, block_size: usize) -> CoreResult<Self> {
-        if block_size == 0 || block_size % super::SECTOR_BYTES != 0 {
+        if block_size == 0 || !block_size.is_multiple_of(super::SECTOR_BYTES) {
             return Err(CoreError::Malformed {
                 format: "volume".into(),
                 detail: format!("block size {block_size} is not a multiple of 512"),
@@ -190,7 +190,7 @@ pub struct VecDevice {
 
 impl VecDevice {
     pub fn new(bytes: Vec<u8>, block_size: usize) -> CoreResult<Self> {
-        if block_size == 0 || block_size % super::SECTOR_BYTES != 0 {
+        if block_size == 0 || !block_size.is_multiple_of(super::SECTOR_BYTES) {
             return Err(CoreError::InvalidInput(format!(
                 "block size {block_size} is not a multiple of {}",
                 super::SECTOR_BYTES
@@ -282,7 +282,7 @@ impl FileRegionMut {
     /// that outlived its image would let a write land wherever the arithmetic
     /// happened to point.
     pub fn open(path: &Path, offset: u64, length: u64, block_size: usize) -> CoreResult<Self> {
-        if block_size == 0 || block_size % super::SECTOR_BYTES != 0 {
+        if block_size == 0 || !block_size.is_multiple_of(super::SECTOR_BYTES) {
             return Err(CoreError::Malformed {
                 format: "volume".into(),
                 detail: format!("block size {block_size} is not a multiple of 512"),

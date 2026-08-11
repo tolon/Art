@@ -143,6 +143,21 @@ pub fn next_free_path(target: &Path) -> CoreResult<PathBuf> {
 
 /// Extract everything `backend` holds into `dest`, safely.
 ///
+/// Two phases, and the split is not cosmetic:
+///
+/// 1. **Decide.** Every entry is judged on its name and its claim alone —
+///    traversal, the caps, the overwrite policy — producing a target path for
+///    the ones that may be written and a reported refusal for the ones that
+///    may not. Nothing is decompressed to reach any of those answers.
+/// 2. **Read what survived**, through [`ArchiveBackend::read_selected`], and
+///    write it.
+///
+/// The alternative — decide and read one entry at a time — reads perfectly
+/// well for ZIP and LHA and is quadratic for 7z, whose entries share one
+/// compressed block, so reading entry *n* decodes everything before it. This
+/// shape lets a solid archive be read in one pass without moving a single
+/// decision out of this file.
+///
 /// Cancellation is checked between entries, never mid-file, so stopping leaves
 /// completed files intact and no partial one behind.
 pub fn extract_with_backend(
@@ -157,7 +172,6 @@ pub fn extract_with_backend(
     fs::create_dir_all(dest)?;
 
     let mut outcome = ExtractOutcome::new();
-    let mut total_written: u64 = 0;
 
     if entries.len() > MAX_ENTRIES {
         outcome.aborted = true;
@@ -168,19 +182,21 @@ pub fn extract_with_backend(
         return Ok(outcome);
     }
 
+    // ---- phase 1: decide, on names and claims only ------------------------
+
+    let mut wanted = vec![false; entries.len()];
+    let mut targets: Vec<Option<PathBuf>> = vec![None; entries.len()];
+    let mut budget: u64 = 0;
+
     for (index, entry) in entries.iter().enumerate() {
-        // Between entries nothing is half-written, so this is where stopping is
-        // safe. The count is known here, unlike the streaming reader this
-        // replaced, so progress carries a total.
         if progress.is_cancelled() {
             return Err(crate::core::jobs::cancelled_error());
         }
-        progress.report(index as u64, Some(entries.len() as u64), &entry.name);
 
         // Bomb guard, on the claim: a hostile archive can declare a size that
         // overflows the running total, so the addition itself is checked.
-        let projected = total_written.checked_add(entry.declared_bytes);
-        if projected.map_or(true, |p| p > MAX_TOTAL_OUTPUT) {
+        let projected = budget.checked_add(entry.declared_bytes);
+        if projected.is_none_or(|p| p > MAX_TOTAL_OUTPUT) {
             outcome.aborted = true;
             outcome.abort_reason = Some(format!(
                 "extraction would exceed the {MAX_TOTAL_OUTPUT} byte safety limit"
@@ -230,7 +246,7 @@ pub fn extract_with_backend(
             continue;
         }
 
-        // Decide where — or whether — this entry may be written.
+        // Where — or whether — this entry may be written.
         let write_to = if target.exists() {
             match overwrite {
                 OverwritePolicy::Skip => {
@@ -245,26 +261,42 @@ pub fn extract_with_backend(
                     });
                     continue;
                 }
-                OverwritePolicy::Overwrite => target.clone(),
+                OverwritePolicy::Overwrite => target,
                 OverwritePolicy::Rename => next_free_path(&target)?,
             }
         } else {
-            target.clone()
+            target
         };
 
-        // The bytes, bounded twice over: by what is left of the total budget
-        // and by the per-entry cap. A backend that comes back with more than
-        // it was allowed has already been stopped by its own loop; a backend
-        // that returns more than it *declared* is caught here.
-        let remaining = MAX_TOTAL_OUTPUT - total_written;
-        let limit = remaining.min(MAX_ENTRY_OUTPUT);
-        let data = match backend.read(index, limit) {
+        budget += entry.declared_bytes;
+        wanted[index] = true;
+        targets[index] = Some(write_to);
+    }
+
+    // ---- phase 2: read what survived, and write it ------------------------
+
+    // Every surviving claim fits inside the total budget together, so the
+    // per-entry allowance is simply the per-entry cap. A backend returning
+    // more than that has been stopped inside its own decompression loop; one
+    // returning more than it *declared* is caught below.
+    let mut written: Vec<(usize, u64, PathBuf)> = Vec::new();
+    let mut failures: Vec<(usize, String)> = Vec::new();
+
+    backend.read_selected(&wanted, MAX_ENTRY_OUTPUT, &mut |index, data| {
+        let entry = &entries[index];
+        if progress.is_cancelled() {
+            return Err(crate::core::jobs::cancelled_error());
+        }
+        progress.report(index as u64, Some(entries.len() as u64), &entry.name);
+
+        let data = match data {
             Ok(data) => data,
             Err(e) => {
-                let reason = format!("reading '{}' from this {format} failed: {e}", entry.name);
-                outcome.errors.push(reason.clone());
-                outcome.refuse(&entry.name, false, reason);
-                continue;
+                failures.push((
+                    index,
+                    format!("reading '{}' from this {format} failed: {e}", entry.name),
+                ));
+                return Ok(());
             }
         };
 
@@ -272,39 +304,46 @@ pub fn extract_with_backend(
         if produced > entry.declared_bytes {
             // The classic bomb: declare four bytes, decompress to gigabytes.
             // Nothing is written, and the archive is called out by name.
-            let reason = format!(
-                "'{}' declared {} bytes and produced {produced}",
-                entry.name, entry.declared_bytes
-            );
-            outcome.errors.push(reason.clone());
-            outcome.refuse(&entry.name, false, reason);
-            continue;
+            failures.push((
+                index,
+                format!(
+                    "'{}' declared {} bytes and produced {produced}",
+                    entry.name, entry.declared_bytes
+                ),
+            ));
+            return Ok(());
         }
 
+        let write_to = targets[index]
+            .clone()
+            .expect("phase 1 gives every wanted entry a target");
         if let Some(parent) = write_to.parent() {
             fs::create_dir_all(parent)?;
         }
         // Written whole or not at all — never a truncated file standing in for
-        // the entry (`core/safety`'s rule, and the same reason the streaming
-        // version removed its partial output on failure).
-        if let Err(e) = crate::core::safety::atomic::atomic_write(&write_to, &data) {
-            let reason = format!("writing '{}' failed: {e}", entry.name);
-            outcome.errors.push(reason.clone());
-            outcome.refuse(&entry.name, false, reason);
-            continue;
+        // the entry (`core/safety`'s rule).
+        match crate::core::safety::atomic::atomic_write(&write_to, &data) {
+            Ok(()) => written.push((index, produced, write_to)),
+            Err(e) => failures.push((index, format!("writing '{}' failed: {e}", entry.name))),
         }
+        Ok(())
+    })?;
 
-        total_written += produced;
-        outcome.total_bytes += produced;
+    for (index, bytes, path) in written {
+        outcome.total_bytes += bytes;
         outcome.total_files += 1;
         outcome.extracted.push(ExtractedEntry {
-            source_path: entry.name.clone(),
-            destination: write_to.to_string_lossy().into_owned(),
-            bytes: produced,
+            source_path: entries[index].name.clone(),
+            destination: path.to_string_lossy().into_owned(),
+            bytes,
             is_dir: false,
             skipped: false,
             reason: None,
         });
+    }
+    for (index, reason) in failures {
+        outcome.errors.push(reason.clone());
+        outcome.refuse(&entries[index].name, false, reason);
     }
 
     Ok(outcome)

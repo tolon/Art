@@ -117,9 +117,27 @@ pub mod sizes {
     pub const ADF_HD: u64 = 1_802_240;
 }
 
-/// LHA (-lh5-) level 1 header magic: `−lz−` archive header byte layout.
-/// The Amiga LHA variant begins with the same 2-byte magic `-l`.
-const LHA_MAGIC: &[u8] = b"-l";
+/// An LHA header's compression-method field, `-lh5-` and friends, sits at
+/// **offset 2**: the header length and its checksum come first. It is five
+/// bytes — a dash, two letters naming the family, a level digit, a dash.
+///
+/// ART-076: this used to be matched at offset 0, which no LHA tool has ever
+/// written, so a real archive was recognised only by its extension and one
+/// renamed to `.dat` was not recognised at all.
+const LHA_METHOD_OFFSET: usize = 2;
+
+/// The families that appear in that field: `-lh?-` (the LZSS/Huffman
+/// generations plus `-lhd-` for a directory), `-lz?-` (the older LArc
+/// methods) and `-pm?-` (PMarc, occasionally seen on Amiga disks).
+const LHA_FAMILIES: [&[u8; 2]; 3] = [b"lh", b"lz", b"pm"];
+
+/// ZIP's local-file header, `PK\x03\x04`. An empty archive starts with the
+/// end-of-central-directory record (`PK\x05\x06`) and a spanned one with
+/// `PK\x07\x08`; all three are ZIPs.
+const ZIP_MAGIC_PREFIX: &[u8; 2] = b"PK";
+
+/// 7z: `7z` then `BC AF 27 1C`.
+const SEVENZ_MAGIC: &[u8; 6] = b"7z\xBC\xAF\x27\x1C";
 
 /// ISO9660 volume descriptor magic, "CD001", as it appears at the start of
 /// the Primary Volume Descriptor (sector 16 of a 2048-byte-sector image).
@@ -256,11 +274,33 @@ pub fn detect(path: &Path) -> CoreResult<Detection> {
                 is_dir: false,
             });
         }
-        // LHA archive: starts with "-l" followed by compression method.
-        if head.starts_with(LHA_MAGIC) {
+    }
+
+    // Archives, all three by signature. A longer head than the four bytes
+    // above, because LHA's evidence starts two bytes in and 7z's runs to six.
+    if let Ok(head) = read_head(path, 8) {
+        if is_lha_header(&head) {
             return Ok(Detection {
                 category: FormatCategory::Archive,
                 format_hint: "lha".to_string(),
+                confidence: 0.95,
+                size,
+                is_dir: false,
+            });
+        }
+        if head.len() >= 4 && &head[0..2] == ZIP_MAGIC_PREFIX && matches!(head[2], 3 | 5 | 7) {
+            return Ok(Detection {
+                category: FormatCategory::Archive,
+                format_hint: "zip".to_string(),
+                confidence: 0.95,
+                size,
+                is_dir: false,
+            });
+        }
+        if head.len() >= 6 && &head[0..6] == SEVENZ_MAGIC {
+            return Ok(Detection {
+                category: FormatCategory::Archive,
+                format_hint: "7z".to_string(),
                 confidence: 0.95,
                 size,
                 is_dir: false,
@@ -362,6 +402,23 @@ fn rom_by_size(size: u64) -> Detection {
         size,
         is_dir: false,
     }
+}
+
+/// True when `head` carries an LHA compression-method field where one belongs.
+///
+/// `-lh5-` at offset 2: dash, family, level digit, dash. Checking the closing
+/// dash as well as the opening one is what keeps this from matching arbitrary
+/// bytes that happen to start `-l`.
+fn is_lha_header(head: &[u8]) -> bool {
+    const FIELD_LEN: usize = 5;
+    if head.len() < LHA_METHOD_OFFSET + FIELD_LEN {
+        return false;
+    }
+    let field = &head[LHA_METHOD_OFFSET..LHA_METHOD_OFFSET + FIELD_LEN];
+    field[0] == b'-'
+        && field[4] == b'-'
+        && LHA_FAMILIES.iter().any(|f| &field[1..3] == f.as_slice())
+        && field[3].is_ascii_alphanumeric()
 }
 
 /// Read up to `n` bytes from the start of a file.
@@ -491,14 +548,68 @@ mod tests {
         fs::remove_dir_all(&d).ok();
     }
 
+    /// ART-076. A real LHA carries its `-lh5-` method field at offset **2**,
+    /// after the header length and its checksum — never at offset 0. This
+    /// test used to write `-lh5-` at the start of the file, which is not a
+    /// thing any LHA tool produces, so it passed while content-first
+    /// detection of the format ART was built for did not work at all: a
+    /// genuine `.lha` was recognised only by its extension, and one renamed to
+    /// `.dat` was `unknown`. The fixture is now a real archive, from the same
+    /// builder the LHA tests use.
     #[test]
     fn detects_lha_by_signature() {
         let d = tmp();
-        let p = d.join("game.lha");
-        fs::write(&p, b"-lh5-").unwrap();
+        let p = d.join("game.dat"); // the extension deliberately says nothing
+        fs::write(
+            &p,
+            crate::core::lha::tests::make_lha_with(&[("hi.txt", b"hi")]),
+        )
+        .unwrap();
         let det = detect(&p).unwrap();
         assert_eq!(det.category, FormatCategory::Archive);
         assert_eq!(det.format_hint, "lha");
+        assert!(det.confidence >= 0.9);
+        fs::remove_dir_all(&d).ok();
+    }
+
+    /// And the shape that used to pass is not an archive at all.
+    #[test]
+    fn a_method_field_at_offset_zero_is_not_an_lha() {
+        let d = tmp();
+        let p = d.join("bogus.dat");
+        fs::write(&p, b"-lh5-not-an-archive").unwrap();
+        assert_ne!(detect(&p).unwrap().category, FormatCategory::Archive);
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn detects_zip_by_signature() {
+        let d = tmp();
+        let p = d.join("pack.dat");
+        fs::write(
+            &p,
+            crate::core::archive::zip::tests::make_zip_with(&[("readme.txt", b"hi")]),
+        )
+        .unwrap();
+        let det = detect(&p).unwrap();
+        assert_eq!(det.category, FormatCategory::Archive);
+        assert_eq!(det.format_hint, "zip");
+        assert!(det.confidence >= 0.9);
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn detects_7z_by_signature() {
+        let d = tmp();
+        let p = d.join("pack.dat");
+        fs::write(
+            &p,
+            crate::core::archive::sevenz::tests::make_7z_with(&[("readme.txt", b"hi")]),
+        )
+        .unwrap();
+        let det = detect(&p).unwrap();
+        assert_eq!(det.category, FormatCategory::Archive);
+        assert_eq!(det.format_hint, "7z");
         assert!(det.confidence >= 0.9);
         fs::remove_dir_all(&d).ok();
     }

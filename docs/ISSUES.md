@@ -337,6 +337,29 @@ re-audits them without reason:
 
 ### Phase 2a
 
+**ART-076** 🟠 **Content-first detection never actually recognised an LHA, and its test could not tell**
+`core/detect.rs` · An LHA header carries its compression-method field
+(`-lh5-`, `-lhd-`, …) at **offset 2**, after the header length and its
+checksum. Detection matched `-l` at offset **0**, which no LHA tool has ever
+written — so a real archive fell through to the extension fallback, and one
+renamed to `.dat` came back `Unknown`. The whole point of Phase 2a Task 1 was
+that a file's name stops deciding what it is; for the format ART was built
+around, it still did.
+
+The test that was supposed to cover this, `detects_lha_by_signature`, wrote
+five bytes — `-lh5-` — into a file and asserted they were detected. That is
+not an archive; it is the method field with nothing around it. Fixture and
+code agreed with each other and with no LHA in the world, which is
+ART-032…035's shape once again, and the reason the fix is filed rather than
+quietly applied.
+
+→ `is_lha_header` checks the field where it belongs: dash, family (`lh`,
+`lz`, `pm`), level, dash. The test now builds a real archive with the same
+`make_lha_with` the LHA tests use and gives it a `.dat` extension, so it can
+only pass on the strength of the signature. `a_method_field_at_offset_zero_is_not_an_lha`
+pins the old fixture as *not* an archive. Found while adding ZIP and 7z
+signatures next to it (Task 4).
+
 **ART-075** 🟡 **A raw CD image in Mode 2 Form 1 would be misread, and two layers would be wrong together**
 `core/detect.rs`, `core/iso/` · ART found a raw 2352-byte-sector track by
 probing `CD001` at `0x9311`, which assumes **Mode 1**: 12 bytes of sync, a

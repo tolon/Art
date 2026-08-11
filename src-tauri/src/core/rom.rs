@@ -285,7 +285,7 @@ pub fn strip_cloanto_header(bytes: &[u8]) -> Vec<u8> {
 
 /// Verify standard Kickstart 32-bit checksum (sum of all 32-bit big-endian words with carry).
 pub fn verify_kickstart_checksum(bytes: &[u8]) -> bool {
-    if bytes.len() < 4 || bytes.len() % 4 != 0 {
+    if bytes.len() < 4 || !bytes.len().is_multiple_of(4) {
         return false;
     }
 

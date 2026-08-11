@@ -24,6 +24,7 @@
 
 pub mod extract;
 pub mod lha;
+pub mod sevenz;
 pub mod zip;
 
 use std::path::Path;
@@ -65,33 +66,57 @@ pub trait ArchiveBackend {
     /// Entry `index`'s decompressed bytes, stopping with an error rather than
     /// returning more than `limit`.
     fn read(&mut self, index: usize, limit: u64) -> CoreResult<Vec<u8>>;
+
+    /// Deliver the bytes of every entry `wanted` says yes to, in listing
+    /// order, each bounded by `limit`.
+    ///
+    /// The default pulls them one at a time through [`read`](Self::read),
+    /// which is what a format with a directory (ZIP) or a rewindable stream
+    /// (LHA) wants. **7z overrides it**, and the reason is worth stating: a
+    /// 7z archive is solid by default, meaning its entries share one
+    /// compressed block, so reading entry *n* on its own decodes everything
+    /// before it. Pulling each index in turn is quadratic on exactly the
+    /// archives people actually have. Its reader offers one forward pass, and
+    /// this is the shape that lets it use it.
+    ///
+    /// The gate decides *before* calling this what it is willing to write, so
+    /// a backend never has to ask what a name means — `wanted[i] == false`
+    /// for anything refused or skipped.
+    fn read_selected(
+        &mut self,
+        wanted: &[bool],
+        limit: u64,
+        sink: &mut dyn FnMut(usize, CoreResult<Vec<u8>>) -> CoreResult<()>,
+    ) -> CoreResult<()> {
+        for (index, take) in wanted.iter().enumerate() {
+            if *take {
+                let data = self.read(index, limit);
+                sink(index, data)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Open an archive as whatever it actually is.
 ///
-/// Decided from the file's own bytes, like every other format ART opens
-/// (`core::detect`), never from the extension: a `.lha` that is really a ZIP
-/// is a ZIP.
+/// The format comes from [`core::detect`](crate::core::detect), which decides
+/// it from the file's own bytes: a `.lha` that is really a ZIP is a ZIP. This
+/// deliberately does **not** carry its own copy of the signatures — two
+/// modules matching the same magic separately is two things to keep in step,
+/// and the one that drifts is the one nobody is looking at.
 pub fn open(path: &Path) -> CoreResult<Box<dyn ArchiveBackend>> {
-    let head = crate::core::detect::read_head(path, 8).unwrap_or_default();
+    let detection = crate::core::detect::detect(path)?;
 
-    // LHA: the two bytes at offset 2 begin the `-lh?-` method field, which is
-    // what `core::detect` keys on too.
-    if head.len() >= 4 && &head[2..4] == b"-l" {
-        return Ok(Box::new(lha::LhaBackend::open(path)?));
+    match detection.format_hint.as_str() {
+        "lha" => Ok(Box::new(lha::LhaBackend::open(path)?)),
+        "zip" => Ok(Box::new(zip::ZipBackend::open(path)?)),
+        "7z" => Ok(Box::new(sevenz::SevenZBackend::open(path)?)),
+        _ => Err(CoreError::UnsupportedFormat(format!(
+            "'{}' is not an archive ART can open",
+            path.display()
+        ))),
     }
-
-    // ZIP: `PK\x03\x04` for an ordinary archive, `PK\x05\x06` for an empty
-    // one and `PK\x07\x08` for a spanned first volume. All three are ZIPs and
-    // all three are the reader's problem, not the dispatcher's.
-    if head.len() >= 4 && head[0] == b'P' && head[1] == b'K' && matches!(head[2], 3 | 5 | 7) {
-        return Ok(Box::new(zip::ZipBackend::open(path)?));
-    }
-
-    Err(CoreError::UnsupportedFormat(format!(
-        "'{}' is not an archive ART can open",
-        path.display()
-    )))
 }
 
 #[cfg(test)]
@@ -147,6 +172,11 @@ mod tests {
                 "zip",
                 "hostile.zip",
                 zip::tests::make_zip_with as fn(&[(&str, &[u8])]) -> Vec<u8>,
+            ),
+            (
+                "7z",
+                "hostile.7z",
+                sevenz::tests::make_7z_with as fn(&[(&str, &[u8])]) -> Vec<u8>,
             ),
         ]
     }

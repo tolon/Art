@@ -54,7 +54,7 @@ are not readable), DMS/ADZ conversion, recovery tools.
 
 | Tool | Version | Notes |
 |------|---------|-------|
-| **Rust** | 1.77+ (stable) | MSVC toolchain (`x86_64-pc-windows-msvc`) |
+| **Rust** | 1.93+ (stable) | MSVC toolchain (`x86_64-pc-windows-msvc`) |
 | **MSVC Build Tools** | VS 2022 | "Desktop development with C++" workload |
 | **Node.js** | 20+ | for the frontend |
 | **pnpm** | 9+ | package manager |

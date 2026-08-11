@@ -28,6 +28,9 @@ ART is built on the following open-source projects:
   Apache-2.0) and `memchr` (MIT / Unlicense) beneath it. Compression,
   encryption and the other decompressors are switched off — ART only reads,
   and every feature left on is more code parsing a hostile file
+- **sevenz-rust2** — 7z reading (MIT / Apache-2.0), with `lzma-rust2`
+  (MIT / Apache-2.0) beneath it. Same rule: the encoder is a dev-dependency
+  used to build test fixtures and is not compiled into the application
 - **ureq** — HTTP client used by the Aminet repository mirror (§41.5.3) (MIT / Apache-2.0)
 - **i18next / react-i18next** — internationalization (MIT)
 - **zustand** — state management (MIT)

@@ -468,7 +468,7 @@ fn read_journal(path: &Path) -> CoreResult<ParsedJournal> {
     }
 
     let block_size = take_u32(&bytes, &mut cursor)?;
-    if block_size == 0 || block_size as usize % super::SECTOR_BYTES != 0 {
+    if block_size == 0 || !(block_size as usize).is_multiple_of(super::SECTOR_BYTES) {
         return Err(CoreError::Malformed {
             format: "journal".into(),
             detail: format!("the journal claims a {block_size}-byte block"),
