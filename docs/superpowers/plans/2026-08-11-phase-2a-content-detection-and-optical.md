@@ -34,9 +34,10 @@ python scripts/oracle-check.py
 
 **Baseline at the start of this plan: 731 Rust tests, 107 frontend tests, oracle 48 checks** — Phase 1a's closing numbers (STATUS.md snapshot, 2026-08-11). An earlier draft of this line said 721/76; the gate arithmetic in the task reports is against the real baseline. **Run `cargo test` twice** — ART-059 was a race that failed about one run in five.
 
-**Where this plan stands (2026-08-11):** Tasks 1, 2 and 3 are complete and on
-`phase-2a`, and Task 3's review fixes landed after a mid-session reboot
-(`80e1d40`). Task 3a onwards is the remaining work. See the Amendments
+**Where this plan stands (2026-08-11):** Tasks 1, 2, 3, 3a and 3b are
+complete and on `phase-2a` — Task 3's review fixes landed after a mid-session
+reboot (`80e1d40`), the 7-Zip oracle in `5be5529`, and Mode 2/XA with it in
+`787fe15`, which closed ART-075. **Task 4 (ZIP and 7z) is the next work.** See the Amendments
 section at the foot of this file for what changed after the plan was written.
 
 ---
@@ -247,20 +248,24 @@ needs no Amiga and no OS driver.
 implementation, in user space. The script builds the synthetic fixtures to a
 temp path and diffs what `IsoImage` reports against what 7-Zip lists.
 
-- [ ] **Step 1: Build the fixtures from Rust, read them from Python**
+- [x] **Step 1: Build the fixtures from Rust, read them from Python**
 
 The fixture builder lives in `core::iso::fixture` and is already the one the
-tests use. Expose a tiny debug entry point (a `#[cfg(test)]`-free helper, or a
-hidden command, whichever keeps `core/` clean) that writes the sample discs to
-a path the script names — so the script never reimplements the builder, which
-would give it a third thing to be wrong in the same way.
+tests use. *As built:* no new entry point was needed — the amitools oracle's
+existing shape fits exactly. `export_iso_for_oracle_when_asked` writes the
+sample discs when `ART_ISO_*_OUT` is set, and a new
+`read_iso_for_oracle_when_asked` prints ART's own listing when
+`ART_ISO_READ_IN` is. Both are `#[test]`s that do nothing unless their
+variable is set, so `core/` stays clean and the script never reimplements the
+builder — which would give it a third thing to be wrong in the same way.
 
-- [ ] **Step 2: Diff the listing**
+- [x] **Step 2: Diff the listing**
 
 Names (including Joliet names), sizes, and directory structure. Then extract
-one file with `7z e` and byte-compare it with `IsoImage::read_file`.
+one file with `7z e` and byte-compare it with `IsoImage::read_file`. *As
+built:* every file is compared, by SHA-256, not just one.
 
-- [ ] **Step 3: Raw layouts get the oracle too**
+- [x] **Step 3: Raw layouts get the oracle too**
 
 7-Zip cannot read a 2352-byte track dump, and no host mounts one, so the raw
 paths would otherwise rest on ART agreeing with itself — which is what
@@ -271,7 +276,7 @@ the stripped image. **The stripping uses the layout's documented offsets, not
 ART's code**, or it is not independent. Applies to `iso9660-raw`, and to
 `iso9660-raw-xa` once Task 3b lands.
 
-- [ ] **Step 4: Fail loudly when `7z` is missing**
+- [x] **Step 4: Fail loudly when `7z` is missing**
 
 An oracle that silently skips is not an oracle. No `7z` on `PATH` → a clear
 message and a non-zero exit. It runs **outside `cargo test`**, like the
@@ -282,7 +287,7 @@ amitools oracle, and is not part of core CI.
 against ART's own reader; handing them to an external tool proves nothing about
 ART and risks proving something about 7-Zip.
 
-- [ ] **Step 5: Gates and commit**
+- [x] **Step 5: Gates and commit**
 
 ## Task 3b: Mode 2/XA Form 1 raw sectors — closes ART-075 (amendment A2)
 
@@ -297,20 +302,20 @@ signature lands at `16 × 2352 + 24 + 1 = 0x9319`. Today **both** detection and
 the reader would be wrong together on such a disc — CD32 and mixed-mode discs
 are exactly where that appears.
 
-- [ ] **Step 1: A failing detection test at 0x9319**
-- [ ] **Step 2: Carry the data offset (16 vs 24) in `SectorLayout`**
+- [x] **Step 1: A failing detection test at 0x9319**
+- [x] **Step 2: Carry the data offset (16 vs 24) in `SectorLayout`**
 
 The same way 2048 vs 2352 is already carried — one value, decided once at open,
 not a branch at every read.
 
-- [ ] **Step 3: Mode 2 Form 2 is refused, not misread**
+- [x] **Step 3: Mode 2 Form 2 is refused, not misread**
 
 2324-byte user data, no ISO filesystem semantics. If the submode byte says
 Form 2, report honestly that it is unsupported (§10, §89).
 
-- [ ] **Step 4: Extend the 7-Zip oracle to the XA fixture** (Task 3a Step 3)
-- [ ] **Step 5: Close ART-075 in `ISSUES.md`, naming the tests**
-- [ ] **Step 6: Gates and commit**
+- [x] **Step 4: Extend the 7-Zip oracle to the XA fixture** (Task 3a Step 3)
+- [x] **Step 5: Close ART-075 in `ISSUES.md`, naming the tests**
+- [x] **Step 6: Gates and commit**
 
 ## Task 4: One security gate, several archive engines (ZIP and 7z)
 
