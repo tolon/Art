@@ -99,10 +99,38 @@
 }
 
 .tc-path-row {
-  display: block;
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+
+.tc-path-text {
+  flex: 1 1 auto;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* The filename mask (task 7) — the `*.*` the reference puts at the right of
+   this row. Deliberately reuses the pane's own dark-navy tokens rather than
+   the light chrome this row otherwise sits in: it reads as "a box you type
+   into", the same distinction Total Commander itself draws. */
+.tc-mask-input {
+  flex: 0 0 auto;
+  width: 110px;
+  min-width: 70px;
+  font: inherit;
+  background: var(--tc-bg);
+  color: var(--tc-text);
+  border: 1px solid var(--tc-chrome-border);
+  border-radius: 2px;
+  padding: 1px 4px;
+}
+.tc-mask-input:focus {
+  outline: 2px solid var(--tc-focus-ring);
+  outline-offset: -1px;
 }
 
 .tc-command-line {

@@ -52,6 +52,7 @@ import {
 } from "@/lib/archives";
 import { checkoutEdit, checkoutOpen, volumeIconFor } from "@/lib/checkout";
 import { onJobProgress } from "@/lib/jobs";
+import { filterEntries } from "@/lib/mask";
 import {
   formatBytes,
   panelListAdf,
@@ -63,6 +64,7 @@ import { splitName } from "@/lib/panelName";
 import { paneStatusCounts } from "@/lib/panelStatus";
 import { formatDateTC, formatGroupedSize } from "@/lib/tcFormat";
 import {
+  emptySelectionUpdate,
   entriesIn,
   insertToggle,
   selectOnly,
@@ -312,6 +314,17 @@ export function FileManager() {
     right: defaultSortState(),
   });
   /**
+   * Each pane's filename mask — the `*.*` in the reference's path row
+   * (`@/lib/mask`). Per pane, like `sort` above, and reset alongside it on
+   * navigation: a mask typed in one folder that silently kept hiding files
+   * in the next one shown would read as a broken listing, not a filter the
+   * user forgot was on.
+   */
+  const [filter, setFilter] = useState<Record<Side, string>>({
+    left: "",
+    right: "",
+  });
+  /**
    * Which pane the keyboard is talking to.
    *
    * Tracked directly rather than derived from `selection`: a pane can hold
@@ -380,18 +393,34 @@ export function FileManager() {
   /**
    * This pane's entries in the order actually shown on screen: the server's
    * listing (already folders-first, case-insensitive name — see
-   * `commands/panel.rs` and its ADF/HDF equivalents) run through the
-   * column sort the user picked. Every order-sensitive action — rendering,
+   * `commands/panel.rs` and its ADF/HDF equivalents) narrowed by the pane's
+   * filename mask (`@/lib/mask`) and *then* run through the column sort the
+   * user picked — filter first, sort second, so the visible list is always
+   * sorted, through the one comparator `@/lib/sort.ts` owns rather than a
+   * second one grown here. Every order-sensitive action — rendering,
    * Shift+click ranges, Insert, Ctrl+A, "in pane order" — reads through this
    * rather than `pane(side).entries` directly, so none of them can disagree
-   * with what is drawn.
+   * with what is drawn. It is also what makes the per-pane status line
+   * (`paneStatusCounts` in `Pane`, below) count the *filtered* view rather
+   * than the whole directory — Total Commander's own convention, and what
+   * keeps the totals on screen matching what is actually listed.
    */
   const paneEntries = useCallback(
-    (side: Side): PanelEntry[] => sortEntries(pane(side).entries, sort[side]),
-    [pane, sort]
+    (side: Side): PanelEntry[] => sortEntries(filterEntries(pane(side).entries, filter[side]), sort[side]),
+    [pane, sort, filter]
   );
 
-  /** The entries `selection[side]` actually names, in pane order. */
+  /**
+   * The entries `selection[side]` actually names, in pane order.
+   *
+   * Because this intersects `selection[side]` with `paneEntries(side)` —
+   * the *filtered* list — an entry the mask currently hides can never come
+   * back out of this, even if the raw `Set` still names it. That is what
+   * makes F5/F8 safe against a stale selection on its own; `setPaneFilter`
+   * below additionally clears the selection outright on every filter
+   * change, so the "N selected" count on screen never lies about a
+   * selection the user can no longer see (see its own comment).
+   */
   const selectedEntries = useCallback(
     (side: Side): PanelEntry[] => entriesIn(paneEntries(side), selection[side]),
     [paneEntries, selection]
@@ -403,14 +432,39 @@ export function FileManager() {
     setAnchor((a) => ({ ...a, [side]: update.anchor }));
   }, []);
 
-  /** Selection and sort both reset on navigation: a Set — or a sort order —
-   * that survived a directory change would let an action reach an entry the
-   * user has since left behind, or show an order that quietly stopped
-   * matching what the user actually clicked. */
+  /**
+   * Change one pane's filename mask.
+   *
+   * Filtering is display-only and must never change what an action
+   * operates on — `selectedEntries` above already guarantees that on its
+   * own, since it can only ever resolve to entries the filtered view still
+   * shows. But a selection made before the mask narrowed the list would
+   * still sit in `selection[side]` invisibly: the status line and
+   * `SelectionBar` would keep reporting "20 selected" over a pane now
+   * showing three, which is a surprise the user has no way to see through.
+   * Clearing the selection on every keystroke here — rather than keeping
+   * the hidden names and merely showing their count — is the simpler rule
+   * and the one Total Commander users expect: a filter change starts the
+   * selection over, the same way navigating to a new folder does.
+   */
+  const setPaneFilter = useCallback(
+    (side: Side, mask: string) => {
+      setFilter((f) => ({ ...f, [side]: mask }));
+      applySelection(side, emptySelectionUpdate());
+    },
+    [applySelection]
+  );
+
+  /** Selection, sort and the filter mask all reset on navigation: a Set, a
+   * sort order, or a mask that survived a directory change would let an
+   * action reach an entry the user has since left behind, show an order
+   * that quietly stopped matching what the user actually clicked, or hide
+   * files in a folder the user never typed a mask for. */
   const resetSelection = useCallback((side: Side) => {
     setSelection((s) => ({ ...s, [side]: new Set() }));
     setAnchor((a) => ({ ...a, [side]: null }));
     setSort((s) => ({ ...s, [side]: defaultSortState() }));
+    setFilter((f) => ({ ...f, [side]: "" }));
   }, []);
 
   useEffect(() => {
@@ -1348,6 +1402,8 @@ export function FileManager() {
       sort: sort[side],
       onSortChange: (column: SortColumn) =>
         setSort((s) => ({ ...s, [side]: clickColumn(s[side], column) })),
+      filter: filter[side],
+      onFilterChange: (mask: string) => setPaneFilter(side, mask),
       roots,
       selectedNames: selection[side],
       cursorName: anchor[side],
@@ -1825,6 +1881,8 @@ function Pane({
   sortedEntries,
   sort,
   onSortChange,
+  filter,
+  onFilterChange,
   roots,
   selectedNames,
   cursorName,
@@ -1853,6 +1911,11 @@ function Pane({
   sortedEntries: PanelEntry[];
   sort: SortState;
   onSortChange: (column: SortColumn) => void;
+  /** This pane's filename mask (`@/lib/mask`) — the `*.*` in the reference's
+   * path row. Display-only: see `setPaneFilter` in `FileManager` for what a
+   * change to it does to the selection. */
+  filter: string;
+  onFilterChange: (mask: string) => void;
   roots: string[];
   /** Every marked entry's name in this pane — see `@/lib/selection`. */
   selectedNames: Set<string>;
@@ -1914,6 +1977,14 @@ function Pane({
   // `sortedEntries`/`selectedNames` through the same pure `paneStatusCounts`
   // a unit test covers on its own (`@/lib/panelStatus`) — `[..]` is never
   // part of the count, since it is not a real entry.
+  //
+  // `sortedEntries` is `FileManager`'s `paneEntries(side)` — filtered by the
+  // mask, then sorted — so this line counts the *filtered* view, not the
+  // whole directory: Total Commander's own convention, and the only choice
+  // that keeps the totals shown here matching what is actually listed above
+  // them. A mask that hides seventeen of twenty files and a status line
+  // still reading "20" would be the exact kind of mismatch task 7 exists to
+  // avoid.
   const status = paneStatusCounts(sortedEntries, selectedNames);
 
   return (
@@ -1990,11 +2061,41 @@ function Pane({
         </button>
       </div>
 
-      {/* Row 2: the path row. */}
+      {/* Row 2: the path row, plus the filename mask (task 7) — the `*.*`
+          the reference puts at the right of this same row. `*` and `?`
+          wildcards, case-insensitive, matched against the whole name
+          including its extension; see `@/lib/mask` for the matcher and
+          `setPaneFilter` in `FileManager` for what changing it does to the
+          selection. */}
       <div className="tc-chrome-row tc-path-row">
-        {state.location || t("files.pane.nothingOpen")}
-        {state.kind === "hdf" && state.volumeName && ` > ${state.volumeName}:`}
-        {state.trail.length > 0 && ` > ${state.trail.map((crumb) => crumb.name).join(" > ")}`}
+        <span className="tc-path-text">
+          {state.location || t("files.pane.nothingOpen")}
+          {state.kind === "hdf" && state.volumeName && ` > ${state.volumeName}:`}
+          {state.trail.length > 0 && ` > ${state.trail.map((crumb) => crumb.name).join(" > ")}`}
+        </span>
+        <input
+          type="text"
+          className="tc-mask-input"
+          value={filter}
+          placeholder={t("files.tc.maskPlaceholder")}
+          aria-label={t("files.tc.maskAriaLabel")}
+          onChange={(event) => onFilterChange(event.target.value)}
+          onKeyDown={(event) => {
+            // Escape clears the mask and hands keyboard focus back to the
+            // pane — the F-key guard (`isShortcutBlocked` in
+            // `FunctionKeys.tsx`) already ignores every shortcut while this
+            // `<input>` has DOM focus, so leaving it focused after Escape
+            // would leave F5/F8/etc. silently dead until the user clicked
+            // away. `stopPropagation` keeps this Escape from also reaching
+            // any other Escape handler (a dialog, say) further up the tree.
+            if (event.key !== "Escape") return;
+            event.preventDefault();
+            event.stopPropagation();
+            onFilterChange("");
+            event.currentTarget.blur();
+            onFocus();
+          }}
+        />
       </div>
 
       {state.error && (
@@ -2150,9 +2251,17 @@ function Pane({
             );
           })}
 
+          {/* A mask matching nothing says so, rather than showing the same
+              blank pane a genuinely empty directory would — that would read
+              as ART having failed to open the disk, not as a filter doing
+              its job. Told apart by whether the *unfiltered* directory
+              (`state.entries`, not `sortedEntries`) actually had anything
+              in it. */}
           {sortedEntries.length === 0 && !state.error && (
             <li className="muted" style={{ fontSize: 12, padding: "8px 0 8px 8px" }}>
-              {t("files.pane.empty")}
+              {filter.trim() !== "" && state.entries.length > 0
+                ? t("files.pane.filterNoMatch", { mask: filter })
+                : t("files.pane.empty")}
             </li>
           )}
         </ul>

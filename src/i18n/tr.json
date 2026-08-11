@@ -908,6 +908,7 @@
       "nothingOpen": "Hiçbir şey açık değil",
       "truncated": "Bu klasör ART'ın listeleyeceğinden daha fazlasını içeriyor — yalnızca ilk girdiler gösteriliyor.",
       "empty": "Burada hiçbir şey yok.",
+      "filterNoMatch": "“{{mask}}” ile eşleşen dosya yok.",
       "folderSuffix": "(klasör)",
       "linkSuffix": "(bağlantı — izlenmedi)",
       "copyTitle": "Diğer bölmeye kopyala",
@@ -926,7 +927,9 @@
     "tc": {
       "dirSize": "<DIR>",
       "freeOfTotal": "{{total}} k içinden {{free}} k boş",
-      "statusLine": "{{selectedBytes}} k / {{totalBytes}} k — {{selectedFiles}} / {{totalFiles}} dosya, {{selectedDirs}} / {{totalDirs}} dizin"
+      "statusLine": "{{selectedBytes}} k / {{totalBytes}} k — {{selectedFiles}} / {{totalFiles}} dosya, {{selectedDirs}} / {{totalDirs}} dizin",
+      "maskPlaceholder": "*.*",
+      "maskAriaLabel": "Dosyaları ada göre filtrele"
     },
     "footer": {
       "unnamed": "(adsız)",

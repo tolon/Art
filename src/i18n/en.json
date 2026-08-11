@@ -908,6 +908,7 @@
       "nothingOpen": "Nothing open",
       "truncated": "This folder holds more than ART will list — only the first entries are shown.",
       "empty": "Nothing here.",
+      "filterNoMatch": "No files match “{{mask}}”.",
       "folderSuffix": "(folder)",
       "linkSuffix": "(link — not followed)",
       "copyTitle": "Copy to the other pane",
@@ -926,7 +927,9 @@
     "tc": {
       "dirSize": "<DIR>",
       "freeOfTotal": "{{free}} k of {{total}} k free",
-      "statusLine": "{{selectedBytes}} k / {{totalBytes}} k in {{selectedFiles}} / {{totalFiles}} file(s), {{selectedDirs}} / {{totalDirs}} dir(s)"
+      "statusLine": "{{selectedBytes}} k / {{totalBytes}} k in {{selectedFiles}} / {{totalFiles}} file(s), {{selectedDirs}} / {{totalDirs}} dir(s)",
+      "maskPlaceholder": "*.*",
+      "maskAriaLabel": "Filter files by name"
     },
     "footer": {
       "unnamed": "(unnamed)",
