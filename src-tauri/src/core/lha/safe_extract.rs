@@ -1,96 +1,22 @@
-//! Safe archive extraction with path-traversal, bomb and overwrite defence.
+//! LHA extraction — the format's entry point into the shared gate.
 //!
-//! Enforces three guarantees (spec §56, §57, §89):
-//! 1. **Path-traversal defence**: every archive entry is checked against
-//!    `safe_join`. Entries that escape `dest` (e.g. `../../Windows/...`) are
-//!    rejected with an error and **never written**.
-//! 2. **Zip-bomb defence**: extraction caps total output at 2 GB and refuses
-//!    entries whose declared size would overflow the running total.
-//! 3. **No silent overwrites**: an entry that would replace an existing file is
-//!    skipped by default. The caller has to ask for `Overwrite` explicitly.
+//! The guarantees this module used to implement (path traversal, bombs,
+//! no silent overwrites, §56/§57/§89) now live in
+//! [`core::archive::extract`](crate::core::archive::extract), so ZIP and 7z
+//! obey exactly the same ones rather than each growing a copy. This is the
+//! LHA-shaped door to them, kept because half the codebase calls
+//! `extract_archive` by name and because the tests below are worth keeping
+//! pointed at a real archive rather than at a test double.
 //!
 //! Originals are untouched.
 
-use std::fs;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use serde::{Deserialize, Serialize};
-
-use crate::core::error::{CoreError, CoreResult};
+use crate::core::archive::lha::LhaBackend;
+use crate::core::error::CoreResult;
 use crate::core::jobs::{NoProgress, ProgressSink};
-use crate::core::security::{safe_join, PathTraversalError};
 
-/// Maximum total extracted size per operation (2 GB). Protects against
-/// decompression bombs while easily accommodating any historical Amiga archive.
-pub const MAX_TOTAL_OUTPUT: u64 = 2 * 1024 * 1024 * 1024;
-
-/// What to do when an entry's destination already exists on disk.
-///
-/// Defaults to [`OverwritePolicy::Skip`]: extracting an archive over a folder
-/// the user has already worked in must not destroy their files without asking.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OverwritePolicy {
-    /// Keep the file that is already there and report the entry as skipped.
-    #[default]
-    Skip,
-    /// Replace the existing file.
-    Overwrite,
-    /// Keep both, writing the new one as `name (1).ext`.
-    Rename,
-}
-
-/// Result of extracting a single archive entry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExtractedEntry {
-    pub source_path: String,
-    pub destination: String,
-    pub bytes: u64,
-    pub is_dir: bool,
-    pub skipped: bool,
-    pub reason: Option<String>,
-}
-
-/// Overall outcome of an extraction operation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExtractOutcome {
-    pub total_files: usize,
-    pub total_bytes: u64,
-    pub extracted: Vec<ExtractedEntry>,
-    pub errors: Vec<String>,
-    pub aborted: bool,
-    pub abort_reason: Option<String>,
-    /// Entries left in place because a file already existed there.
-    pub skipped_existing: usize,
-}
-
-/// Pick a free path next to `target` (`Game.exe` → `Game (1).exe`).
-pub(crate) fn next_free_path(target: &Path) -> CoreResult<PathBuf> {
-    if !target.exists() {
-        return Ok(target.to_path_buf());
-    }
-    let parent = target.parent().unwrap_or_else(|| Path::new("."));
-    let stem = target
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "file".into());
-    let ext = target
-        .extension()
-        .map(|e| format!(".{}", e.to_string_lossy()))
-        .unwrap_or_default();
-
-    for n in 1..10_000 {
-        let candidate = parent.join(format!("{stem} ({n}){ext}"));
-        if !candidate.exists() {
-            return Ok(candidate);
-        }
-    }
-    Err(CoreError::InvalidInput(format!(
-        "could not find a free name next to '{}'",
-        target.display()
-    )))
-}
+pub use crate::core::archive::extract::{next_free_path, ExtractOutcome, OverwritePolicy};
 
 /// Extract an entire LHA archive to `dest` safely.
 pub fn extract_archive(
@@ -111,208 +37,15 @@ pub fn extract_archive_with(
     overwrite: OverwritePolicy,
     progress: &dyn ProgressSink,
 ) -> CoreResult<ExtractOutcome> {
-    let file = fs::File::open(archive_path)?;
-    let mut reader = delharc::LhaDecodeReader::new(file).map_err(|e| CoreError::Malformed {
-        format: "lha".into(),
-        detail: format!("failed to read LHA header: {e}"),
-    })?;
-
-    fs::create_dir_all(dest)?;
-
-    let mut outcome = ExtractOutcome {
-        total_files: 0,
-        total_bytes: 0,
-        extracted: Vec::new(),
-        errors: Vec::new(),
-        aborted: false,
-        abort_reason: None,
-        skipped_existing: 0,
-    };
-    let mut total_written: u64 = 0;
-
-    loop {
-        let header = reader.header().clone();
-        let method = String::from_utf8_lossy(&header.compression).to_string();
-        let is_dir = method == "-lhd-";
-        let entry_name = super::entry_path(&header);
-
-        // Between entries nothing is half-written, so this is where stopping is
-        // safe. An archive's entry count is not known up front, so progress is
-        // reported as a count without a total.
-        if progress.is_cancelled() {
-            return Err(crate::core::jobs::cancelled_error());
-        }
-        progress.report(outcome.total_files as u64, None, &entry_name);
-
-        // Bomb guard: a hostile archive can declare a size that overflows the
-        // running total, so the addition itself has to be checked.
-        let projected = total_written.checked_add(header.original_size);
-        if projected.map_or(true, |p| p > MAX_TOTAL_OUTPUT) {
-            outcome.aborted = true;
-            outcome.abort_reason = Some(format!(
-                "extraction would exceed the {MAX_TOTAL_OUTPUT} byte safety limit"
-            ));
-            break;
-        }
-
-        // Path traversal defence.
-        let target = match safe_join(dest, &entry_name) {
-            Ok(p) => Some(p),
-            Err(PathTraversalError::Empty) => {
-                outcome.extracted.push(ExtractedEntry {
-                    source_path: entry_name.clone(),
-                    destination: String::new(),
-                    bytes: 0,
-                    is_dir,
-                    skipped: true,
-                    reason: Some("empty entry name".into()),
-                });
-                None
-            }
-            Err(e) => {
-                let reason = e.to_string();
-                outcome
-                    .errors
-                    .push(format!("rejected entry '{entry_name}': {reason}"));
-                outcome.extracted.push(ExtractedEntry {
-                    source_path: entry_name.clone(),
-                    destination: String::new(),
-                    bytes: 0,
-                    is_dir,
-                    skipped: true,
-                    reason: Some(reason),
-                });
-                None
-            }
-        };
-
-        if let Some(target) = target {
-            if is_dir {
-                fs::create_dir_all(&target)?;
-                outcome.extracted.push(ExtractedEntry {
-                    source_path: entry_name.clone(),
-                    destination: target.to_string_lossy().into_owned(),
-                    bytes: 0,
-                    is_dir: true,
-                    skipped: false,
-                    reason: None,
-                });
-            } else {
-                // Decide where — or whether — this entry may be written.
-                let resolved = if target.exists() {
-                    match overwrite {
-                        OverwritePolicy::Skip => None,
-                        OverwritePolicy::Overwrite => Some(target.clone()),
-                        OverwritePolicy::Rename => Some(next_free_path(&target)?),
-                    }
-                } else {
-                    Some(target.clone())
-                };
-
-                match resolved {
-                    None => {
-                        outcome.skipped_existing += 1;
-                        outcome.extracted.push(ExtractedEntry {
-                            source_path: entry_name.clone(),
-                            destination: target.to_string_lossy().into_owned(),
-                            bytes: 0,
-                            is_dir: false,
-                            skipped: true,
-                            reason: Some("a file already exists at this path".into()),
-                        });
-                    }
-                    Some(write_to) => {
-                        if let Some(parent) = write_to.parent() {
-                            fs::create_dir_all(parent)?;
-                        }
-                        let mut out = fs::File::create(&write_to)?;
-                        let mut written: u64 = 0;
-                        let mut buf = [0u8; 8192];
-                        let mut failed: Option<String> = None;
-                        use std::io::Read as _;
-                        loop {
-                            let n = match reader.read(&mut buf) {
-                                Ok(0) => break,
-                                Ok(n) => n,
-                                Err(e) => {
-                                    failed = Some(format!("decompress '{entry_name}' failed: {e}"));
-                                    break;
-                                }
-                            };
-                            total_written += n as u64;
-                            written += n as u64;
-                            if total_written > MAX_TOTAL_OUTPUT {
-                                outcome.aborted = true;
-                                outcome.abort_reason = Some(format!(
-                                    "extraction exceeded the {MAX_TOTAL_OUTPUT} byte safety limit while writing '{entry_name}'"
-                                ));
-                                break;
-                            }
-                            if let Err(e) = out.write_all(&buf[..n]) {
-                                failed = Some(format!("writing '{entry_name}' failed: {e}"));
-                                break;
-                            }
-                        }
-                        out.flush().ok();
-                        drop(out);
-
-                        if failed.is_some() || outcome.aborted {
-                            // Never leave a truncated file behind claiming to be
-                            // the extracted entry.
-                            let _ = fs::remove_file(&write_to);
-                            if let Some(reason) = failed {
-                                outcome.errors.push(reason.clone());
-                                outcome.extracted.push(ExtractedEntry {
-                                    source_path: entry_name.clone(),
-                                    destination: String::new(),
-                                    bytes: 0,
-                                    is_dir: false,
-                                    skipped: true,
-                                    reason: Some(reason),
-                                });
-                            }
-                        } else {
-                            outcome.total_bytes += written;
-                            outcome.total_files += 1;
-                            outcome.extracted.push(ExtractedEntry {
-                                source_path: entry_name.clone(),
-                                destination: write_to.to_string_lossy().into_owned(),
-                                bytes: written,
-                                is_dir: false,
-                                skipped: false,
-                                reason: None,
-                            });
-                        }
-                    }
-                }
-            }
-        }
-
-        if outcome.aborted {
-            break;
-        }
-
-        let has_more = match reader.next_file() {
-            Ok(b) => b,
-            Err(e) => {
-                outcome
-                    .errors
-                    .push(format!("reading next entry failed: {e}"));
-                break;
-            }
-        };
-        if !has_more {
-            break;
-        }
-    }
-
-    Ok(outcome)
+    let mut backend = LhaBackend::open(archive_path)?;
+    crate::core::archive::extract::extract_with_backend(&mut backend, dest, overwrite, progress)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::lha::tests::make_minimal_lha;
+    use std::path::PathBuf;
 
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

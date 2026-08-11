@@ -8,6 +8,7 @@
 
 pub mod adf;
 pub mod analysis;
+pub mod archive;
 pub mod binary;
 pub mod collection;
 pub mod compatibility;

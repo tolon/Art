@@ -365,7 +365,11 @@ fn rom_by_size(size: u64) -> Detection {
 }
 
 /// Read up to `n` bytes from the start of a file.
-fn read_head(path: &Path, n: usize) -> CoreResult<Vec<u8>> {
+///
+/// Public so `core::archive` can decide which backend opens a file from the
+/// same bytes detection reads, rather than growing a second head-reader that
+/// could drift from this one.
+pub fn read_head(path: &Path, n: usize) -> CoreResult<Vec<u8>> {
     use std::io::Read;
     let mut f = std::fs::File::open(path)?;
     let mut buf = vec![0u8; n];
