@@ -90,6 +90,45 @@ script — a dev/CI dependency, never linked into or shipped with ART (see
 [licenses.md](licenses.md)). This is a blocking CI step, not optional
 tooling.
 
+### The disc reader has its own oracle
+
+`scripts/iso-oracle-check.py` does the same job for ISO9660 that
+`oracle-check.py` does for AmigaDOS, against **7-Zip**. The reason is the same
+and so is the risk: `core/iso`'s reader and the synthetic ISO builder its
+tests run on were written from the same offsets, so they can agree and both be
+wrong.
+
+```bash
+python scripts/iso-oracle-check.py
+```
+
+It builds ART's own fixtures (through the `ART_ISO_*_OUT` hooks), has 7-Zip
+list and extract them, and compares names, sizes and the SHA-256 of every
+file's bytes.
+
+Two things about it are deliberate:
+
+- **Raw 2352-byte images are checked too**, and that is the half that matters
+  most. No host mounts a track dump and 7-Zip will not open one, so the script
+  strips the image back to 2048-byte sectors itself, from the layout's
+  documented offsets — never from `core::iso`, or it would inherit exactly
+  what it is meant to catch ([ART-075](ISSUES.md)).
+- **A missing `7z` fails the script.** An oracle that quietly skips is a green
+  tick nobody earned.
+
+Only well-formed fixtures reach 7-Zip. The malformed ones — records that loop,
+lengths past the end of the file, depth bombs — stay inside `cargo test`
+against ART's own reader, where the assertion is about ART refusing them.
+
+This one runs **outside CI**, unlike the amitools oracle: 7-Zip is not on the
+runner, and installing it there is a change to make deliberately rather than
+in passing. Run it locally when anything under `core/iso` moves.
+
+An earlier plan had a third rung — a real AmigaOS CD read by a real Amiga.
+It was cancelled (2026-08-11) because it assumed licensed media reliably to
+hand. A volunteer with a real CD32 or AmigaOS disc is still welcome; nothing
+claims it has happened.
+
 ## CI
 
 GitHub Actions runs on every push (Windows x64):

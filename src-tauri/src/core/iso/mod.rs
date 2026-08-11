@@ -1970,5 +1970,51 @@ mod tests {
             fs::write(&dest, disc(false)).unwrap();
             println!("wrote synthetic ISO9660-only disc to {dest}");
         }
+        // The raw layout, for `scripts/iso-oracle-check.py`: no host mounts a
+        // 2352-byte track dump and 7-Zip will not read one either, so the
+        // script strips it back to 2048-byte sectors itself — from the
+        // layout's documented offsets, never from ART's code — and checks the
+        // stripped image. Without this fixture the raw path has no
+        // independent check at all, which is what ART-075 records.
+        if let Ok(dest) = std::env::var("ART_ISO_RAW_OUT") {
+            fs::write(&dest, sample_builder(SectorLayout::Raw2352, true).build()).unwrap();
+            println!("wrote synthetic raw 2352-byte Joliet disc to {dest}");
+        }
+    }
+
+    /// Read a disc and print what ART made of it, for
+    /// `scripts/iso-oracle-check.py` to diff against 7-Zip's own listing.
+    ///
+    /// The same shape as `read_foreign_volume_for_oracle_when_asked` for a
+    /// volume: one line per entry, so a mismatch names the entry rather than
+    /// dumping two blobs. Sizes and a SHA-256 per file, because a listing that
+    /// agrees on names and disagrees on bytes is the interesting failure —
+    /// and the one a reader and its own fixtures can share.
+    ///
+    /// ```text
+    /// ART_ISO_READ_IN=C:/temp/art.iso cargo test read_iso_for_oracle_when_asked -- --nocapture
+    /// ```
+    #[test]
+    fn read_iso_for_oracle_when_asked() {
+        let Ok(source) = std::env::var("ART_ISO_READ_IN") else {
+            return;
+        };
+        let iso = IsoImage::open(std::path::Path::new(&source)).unwrap();
+        println!("volume={}", iso.volume_name());
+        println!("joliet={}", iso.is_joliet());
+        println!("layout={:?}", iso.layout());
+
+        let walk = iso.walk().unwrap();
+        assert!(!walk.truncated, "the oracle fixtures are small");
+        assert!(!walk.depth_limited, "the oracle fixtures are shallow");
+        for item in &walk.entries {
+            if item.entry.is_dir {
+                println!("dir={}", item.path);
+            } else {
+                let data = iso.read_file(item.entry.extent, item.entry.bytes).unwrap();
+                let digest = crate::core::hashing::sha256_bytes(&data);
+                println!("file={}|{}|{digest}", item.path, item.entry.bytes);
+            }
+        }
     }
 }
