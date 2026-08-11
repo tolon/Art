@@ -147,12 +147,13 @@
 /* ---- The column header row and the row list ---------------------------- */
 
 /* Shared by the header row and every data row so their columns line up:
-   Name (flexible) · Ext · Size · Date · a trailing slot for the per-row
-   copy/delete buttons. Attr has no column here — see the task report for
-   why (`PanelEntry` carries no attribute string to render). */
+   Name (flexible) · Ext · Size · Date · Attr · a trailing slot for the
+   per-row copy/delete buttons (ART's own addition — the reference has no
+   equivalent, which is why it sits after Attr rather than being part of the
+   reference's column order). */
 .tc-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 52px 128px 118px 58px;
+  grid-template-columns: minmax(0, 1fr) 52px 128px 118px 64px 58px;
   align-items: center;
   gap: 4px;
   padding: 2px 6px;
@@ -231,7 +232,8 @@
   text-align: left;
 }
 .tc-cell-size,
-.tc-cell-date {
+.tc-cell-date,
+.tc-cell-attr {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -276,14 +278,15 @@
 }
 
 /* Below the width this app already treats as its floor (App layout collapses
-   the sidebar at 1000px), the Date column is the first thing that can go
+   the sidebar at 1000px), Date and Attr are the first things that can go
    without losing anything Name/Ext/Size/the row actions need — the row
    still degrades to a scrollable list rather than clipping. */
 @media (max-width: 1000px) {
   .tc-row {
     grid-template-columns: minmax(0, 1fr) 40px 96px 58px;
   }
-  .tc-cell-date {
+  .tc-cell-date,
+  .tc-cell-attr {
     display: none;
   }
 }

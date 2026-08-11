@@ -16,6 +16,7 @@ function entry(name: string, overrides: Partial<PanelEntry> = {}): PanelEntry {
     header_block: null,
     is_link: false,
     date: null,
+    attrs: null,
     ...overrides,
   };
 }

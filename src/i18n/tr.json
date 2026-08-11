@@ -918,6 +918,7 @@
       "size": "Boyut",
       "date": "Tarih",
       "ext": "Uzantı",
+      "attrs": "Öznt",
       "ascending": "artan",
       "descending": "azalan",
       "title": "{{column}} sırasına göre, {{direction}} — değiştirmek için tıklayın"

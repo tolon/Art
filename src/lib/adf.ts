@@ -25,6 +25,8 @@ export interface AdfEntry {
   unix_date: number;
   header_block: number;
   parent: number;
+  /** `hsparwed`, already formatted Rust-side — see `PanelEntry.attrs`. */
+  attrs: string;
 }
 
 export type HealthStatus = "healthy" | "warning" | "problem";

@@ -2049,6 +2049,7 @@ function Pane({
               <span className="tc-cell tc-cell-ext" />
               <span className="tc-cell tc-cell-size" />
               <span className="tc-cell tc-cell-date" />
+              <span className="tc-cell tc-cell-attr" />
               <span className="tc-cell tc-cell-actions" />
             </li>
           )}
@@ -2110,6 +2111,7 @@ function Pane({
                   {entry.is_dir ? t("files.tc.dirSize") : formatGroupedSize(entry.bytes, i18n.language)}
                 </span>
                 <span className="tc-cell tc-cell-date">{formattedDate ?? "—"}</span>
+                <span className="tc-cell tc-cell-attr">{entry.attrs ?? "—"}</span>
                 <span className="tc-cell tc-cell-actions">
                   {!entry.is_dir && (
                     <button
@@ -2185,10 +2187,11 @@ function Pane({
  * chosen; that rule lives in the comparator itself (`compareEntries`), not
  * here, so this component only has to reflect `sort`, never enforce it.
  *
- * Ext has no column of its own in `@/lib/sort`'s `SortColumn` — the reference
- * screenshot never sorts by it either — so it renders as a plain, unclickable
- * label rather than growing a second sort mechanism alongside the existing
- * one. The trailing cell lines up with each row's copy/delete buttons and
+ * Ext and Attr have no column of their own in `@/lib/sort`'s `SortColumn` —
+ * the reference screenshot never sorts by either — so both render as a
+ * plain, unclickable label rather than growing a second sort mechanism
+ * alongside the existing one. The trailing cell lines up with each row's
+ * copy/delete buttons — an ART addition with no reference equivalent — and
  * carries no label.
  */
 function TcHeaderRow({
@@ -2211,6 +2214,7 @@ function TcHeaderRow({
       <span className="tc-cell tc-cell-date">
         <SortHeaderButton column="date" sort={sort} onSortChange={onSortChange} />
       </span>
+      <span className="tc-cell tc-cell-attr">{t("files.sort.attrs")}</span>
       <span className="tc-cell tc-cell-actions" aria-hidden="true" />
     </div>
   );

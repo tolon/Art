@@ -918,6 +918,7 @@
       "size": "Size",
       "date": "Date",
       "ext": "Ext",
+      "attrs": "Attr",
       "ascending": "ascending",
       "descending": "descending",
       "title": "Sorted by {{column}}, {{direction}} — click to change"
