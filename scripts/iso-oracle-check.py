@@ -59,12 +59,13 @@ REPO = Path(__file__).resolve().parent.parent
 CARGO_DIR = REPO / "src-tauri"
 
 #: A raw CD sector is 2352 bytes: 12 of sync, a 4-byte header, then user data.
-#: Mode 1 puts 2048 bytes of data at offset 16. (Mode 2/XA Form 1 adds an
-#: 8-byte subheader, so its data starts at 24 — that layout arrives with
-#: Task 3b and gets its own fixture here.)
+#: Mode 1 puts 2048 bytes of data at offset 16; Mode 2/XA Form 1 adds an
+#: 8-byte subheader, so its data starts at 24. These two numbers are the whole
+#: of ART-075, and they are written here from the layout, not from ART.
 RAW_SECTOR_SIZE = 2352
 COOKED_SECTOR_SIZE = 2048
 MODE1_DATA_OFFSET = 16
+XA_FORM1_DATA_OFFSET = 24
 
 failures: list[str] = []
 
@@ -304,6 +305,7 @@ def main() -> int:
         joliet = work / "joliet.iso"
         plain = work / "plain.iso"
         raw = work / "raw.iso"
+        raw_xa = work / "raw-xa.iso"
 
         # One invocation writes them all: the fixtures come from ART's own
         # builder, so the script never reimplements the format it is checking.
@@ -313,9 +315,10 @@ def main() -> int:
                 "ART_ISO_OUT": str(joliet),
                 "ART_ISO_PLAIN_OUT": str(plain),
                 "ART_ISO_RAW_OUT": str(raw),
+                "ART_ISO_RAW_XA_OUT": str(raw_xa),
             },
         )
-        for built in (joliet, plain, raw):
+        for built in (joliet, plain, raw, raw_xa):
             if not built.exists():
                 print(f"  FAIL ART did not write {built.name}")
                 failures.append(f"missing fixture {built.name}")
@@ -324,6 +327,8 @@ def main() -> int:
 
         raw_stripped = work / "raw-stripped.iso"
         strip_raw_sectors(raw, raw_stripped, MODE1_DATA_OFFSET)
+        xa_stripped = work / "raw-xa-stripped.iso"
+        strip_raw_sectors(raw_xa, xa_stripped, XA_FORM1_DATA_OFFSET)
 
         check(seven, "A Joliet disc, 2048-byte sectors", joliet, None)
         check(seven, "An ISO9660-only disc, 2048-byte sectors", plain, None)
@@ -332,6 +337,12 @@ def main() -> int:
             "A raw 2352-byte track dump (Mode 1), stripped to 2048 by this script",
             raw,
             raw_stripped,
+        )
+        check(
+            seven,
+            "A raw Mode 2/XA Form 1 track, stripped from offset 24 by this script",
+            raw_xa,
+            xa_stripped,
         )
 
     if failures:

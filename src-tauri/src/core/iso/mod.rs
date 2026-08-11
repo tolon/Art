@@ -117,6 +117,7 @@ impl IsoImage {
         file_len: u64,
         layout: SectorLayout,
     ) -> CoreResult<Self> {
+        refuse_form2(&mut file, file_len, layout)?;
         let volume = scan_descriptors(&mut file, file_len, layout)?;
 
         // The root has to be somewhere inside the image. Checking it here
@@ -444,9 +445,11 @@ impl IsoImage {
                 file.seek(SeekFrom::Start(self.layout.data_offset_of(extent)?))?;
                 file.read_exact(&mut out)?;
             }
-            // Raw sectors interleave 304 bytes of sync, header and ECC that
-            // are not part of the file, so each has to be lifted separately.
-            SectorLayout::Raw2352 => {
+            // Raw sectors interleave sync, header, (for XA) a subheader and
+            // ECC that are not part of the file, so each has to be lifted
+            // separately. `data_offset_of` carries where the data starts, so
+            // Mode 1 and Mode 2 Form 1 differ only in that one number.
+            SectorLayout::Raw2352 | SectorLayout::Raw2352Xa => {
                 for i in 0..sectors {
                     let lba = extent as u64 + i;
                     let start = (i * LOGICAL_SECTOR_SIZE as u64) as usize;
@@ -598,7 +601,11 @@ fn sectors_for(bytes: u64) -> CoreResult<u64> {
 /// Both offsets are exactly the ones `core::detect` probes, so an image
 /// detection called `iso9660` opens as [`SectorLayout::Cooked`] here.
 fn probe_layout(file: &mut File, file_len: u64) -> CoreResult<SectorLayout> {
-    for layout in [SectorLayout::Cooked, SectorLayout::Raw2352] {
+    for layout in [
+        SectorLayout::Cooked,
+        SectorLayout::Raw2352,
+        SectorLayout::Raw2352Xa,
+    ] {
         let at = layout.data_offset_of(FIRST_DESCRIPTOR_LBA)? + 1;
         if at + descriptor::ISO_MAGIC.len() as u64 > file_len {
             continue;
@@ -612,6 +619,47 @@ fn probe_layout(file: &mut File, file_len: u64) -> CoreResult<SectorLayout> {
     Err(CoreError::UnsupportedFormat(
         "this file does not carry an ISO9660 volume descriptor at sector 16".to_string(),
     ))
+}
+
+/// Refuse a Mode 2 **Form 2** track rather than reading it as Form 1.
+///
+/// A Form 2 sector carries 2324 bytes of user data and no error correction —
+/// it is how audio and video are stored, and it holds no ISO9660 filesystem.
+/// Reading 2048 bytes out of one and calling the result a directory would
+/// produce confident nonsense, which is the failure mode this whole module is
+/// written against. The submode byte says which form the sector is, so ART
+/// asks rather than assumes.
+///
+/// Only raw layouts have a subheader to read; a cooked image is user data
+/// alone and passes straight through. A file too short to hold the header is
+/// not judged here — [`scan_descriptors`] reports what is actually wrong with
+/// it a moment later.
+fn refuse_form2(file: &mut File, file_len: u64, layout: SectorLayout) -> CoreResult<()> {
+    if !layout.is_raw() {
+        return Ok(());
+    }
+    let sector_start = (FIRST_DESCRIPTOR_LBA as u64)
+        .checked_mul(layout.sector_size())
+        .ok_or_else(|| malformed("this image's sector arithmetic overflows".to_string()))?;
+    let header_len = descriptor::XA_DATA_OFFSET as usize;
+    if sector_start + header_len as u64 > file_len {
+        return Ok(());
+    }
+
+    file.seek(SeekFrom::Start(sector_start))?;
+    let mut header = vec![0u8; header_len];
+    file.read_exact(&mut header)?;
+
+    let mode2 = header[descriptor::RAW_MODE_OFFSET] == 2;
+    let form2 = header[descriptor::XA_SUBMODE_OFFSET] & descriptor::XA_SUBMODE_FORM2 != 0;
+    if mode2 && form2 {
+        return Err(CoreError::UnsupportedFormat(
+            "this track's sectors are Mode 2 Form 2, which carries audio or video rather than a \
+             filesystem. ART reads Mode 1 and Mode 2 Form 1 data tracks."
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Walk the volume descriptor set and pick the tree to read.
@@ -917,7 +965,7 @@ pub(crate) mod fixture {
 
             match self.layout {
                 SectorLayout::Cooked => image,
-                SectorLayout::Raw2352 => to_raw(&image),
+                SectorLayout::Raw2352 | SectorLayout::Raw2352Xa => to_raw(&image, self.layout),
             }
         }
 
@@ -1211,12 +1259,26 @@ pub(crate) mod fixture {
         s
     }
 
-    /// Wrap 2048-byte sectors in Mode-1 raw sectors: 12 bytes of sync, a
-    /// 4-byte header, the data, then 288 bytes where EDC/ECC would be.
+    /// Wrap 2048-byte sectors in raw 2352-byte ones: 12 bytes of sync, a
+    /// 4-byte header, the data, then the rest where EDC/ECC would be.
+    ///
+    /// `layout` decides which raw shape:
+    ///
+    /// - [`SectorLayout::Raw2352`] — Mode 1, data at offset 16.
+    /// - [`SectorLayout::Raw2352Xa`] — Mode 2 Form 1: an 8-byte subheader
+    ///   (file, channel, submode, coding, written twice) after the header, so
+    ///   the data starts at 24. The submode says "data, Form 1"; a fixture
+    ///   that wants Form 2 flips [`XA_SUBMODE_FORM2`] into the byte at
+    ///   [`XA_SUBMODE_OFFSET`] itself, since ART must refuse such a track.
     ///
     /// The parity bytes are left zero. Nothing ART reads looks at them, and a
     /// raw image is a track dump rather than something a host mounts.
-    fn to_raw(cooked: &[u8]) -> Vec<u8> {
+    ///
+    /// [`XA_SUBMODE_FORM2`]: super::descriptor::XA_SUBMODE_FORM2
+    /// [`XA_SUBMODE_OFFSET`]: super::descriptor::XA_SUBMODE_OFFSET
+    fn to_raw(cooked: &[u8], layout: SectorLayout) -> Vec<u8> {
+        let xa = layout == SectorLayout::Raw2352Xa;
+        let data_at = if xa { 24 } else { 16 };
         let sectors = cooked.len() / LOGICAL_SECTOR_SIZE;
         let mut out = vec![0u8; sectors * RAW_SECTOR_SIZE];
         for i in 0..sectors {
@@ -1232,8 +1294,13 @@ pub(crate) mod fixture {
             out[base + 12] = bcd(abs / (60 * 75));
             out[base + 13] = bcd((abs / 75) % 60);
             out[base + 14] = bcd(abs % 75);
-            out[base + 15] = 0x01; // Mode 1
-            out[base + 16..base + 16 + LOGICAL_SECTOR_SIZE]
+            out[base + 15] = if xa { 0x02 } else { 0x01 };
+            if xa {
+                // file, channel, submode (0x08 = data), coding — twice.
+                out[base + 18] = 0x08;
+                out[base + 22] = 0x08;
+            }
+            out[base + data_at..base + data_at + LOGICAL_SECTOR_SIZE]
                 .copy_from_slice(&cooked[i * LOGICAL_SECTOR_SIZE..(i + 1) * LOGICAL_SECTOR_SIZE]);
         }
         out
@@ -1892,9 +1959,73 @@ mod tests {
         fs::remove_dir_all(&d).ok();
     }
 
+    /// ART-075. A Mode 2/XA Form 1 disc puts its user data eight bytes later
+    /// than a Mode 1 one, and the reader takes that offset from the layout —
+    /// so before this existed, detection and the reader were wrong *together*
+    /// on such a disc, which is the one failure a green test suite cannot
+    /// show you. CD32 and mixed-mode discs are written this way.
+    #[test]
+    fn an_xa_form1_disc_reads_exactly_as_a_mode1_one_does() {
+        let (d1, mode1) = write_image(&sample_builder(SectorLayout::Raw2352, true).build());
+        let (d2, xa) = write_image(&sample_builder(SectorLayout::Raw2352Xa, true).build());
+
+        let a = IsoImage::open(&mode1).unwrap();
+        let b = IsoImage::open(&xa).unwrap();
+        assert_eq!(a.layout(), SectorLayout::Raw2352);
+        assert_eq!(b.layout(), SectorLayout::Raw2352Xa, "the subheader is read");
+        assert_eq!(a.volume_name(), b.volume_name());
+        assert_eq!(a.root(), b.root());
+
+        let walked_a = a.walk().unwrap().entries;
+        let walked_b = b.walk().unwrap().entries;
+        assert_eq!(walked_a, walked_b, "the same tree, eight bytes further in");
+
+        // And the bytes, not just the listing: an eight-byte slip reads a
+        // file that is almost right, which is worse than one that fails.
+        for item in &walked_b {
+            if !item.entry.is_dir {
+                assert_eq!(
+                    b.read_file(item.entry.extent, item.entry.bytes).unwrap(),
+                    a.read_file(item.entry.extent, item.entry.bytes).unwrap(),
+                    "{}",
+                    item.path
+                );
+            }
+        }
+
+        fs::remove_dir_all(&d1).ok();
+        fs::remove_dir_all(&d2).ok();
+    }
+
+    /// Mode 2 **Form 2** holds 2324 bytes of audio or video and no filesystem
+    /// at all. Reading 2048 of them as a volume descriptor would produce
+    /// confident nonsense, so the submode byte is asked rather than assumed.
+    #[test]
+    fn a_mode2_form2_track_is_refused_rather_than_misread() {
+        let mut bytes = sample_builder(SectorLayout::Raw2352Xa, true).build();
+        let submode = 16 * 2352 + descriptor::XA_SUBMODE_OFFSET;
+        bytes[submode] |= descriptor::XA_SUBMODE_FORM2;
+
+        let (d, p) = write_image(&bytes);
+        let err = IsoImage::open(&p).unwrap_err();
+        assert_eq!(err.code(), "ART-FORMAT-UNSUPPORTED", "{err}");
+        assert!(err.to_string().contains("Form 2"), "{err}");
+
+        // Told the layout directly rather than probing for it: the same
+        // refusal, because the check belongs to opening, not to detection.
+        let told = IsoImage::open_with_layout(&p, SectorLayout::Raw2352Xa).unwrap_err();
+        assert_eq!(told.code(), "ART-FORMAT-UNSUPPORTED", "{told}");
+
+        fs::remove_dir_all(&d).ok();
+    }
+
     #[test]
     fn opening_with_a_layout_from_detection_matches_probing_for_one() {
-        for layout in [SectorLayout::Cooked, SectorLayout::Raw2352] {
+        for layout in [
+            SectorLayout::Cooked,
+            SectorLayout::Raw2352,
+            SectorLayout::Raw2352Xa,
+        ] {
             let (d, p) = write_image(&sample_builder(layout, false).build());
             let probed = IsoImage::open(&p).unwrap();
             let told = IsoImage::open_with_layout(&p, layout).unwrap();
@@ -1912,6 +2043,7 @@ mod tests {
         for (layout, hint) in [
             (SectorLayout::Cooked, "iso9660"),
             (SectorLayout::Raw2352, "iso9660-raw"),
+            (SectorLayout::Raw2352Xa, "iso9660-raw-xa"),
         ] {
             let (d, p) = write_image(&sample_builder(layout, false).build());
             let detection = crate::core::detect::detect(&p).unwrap();
@@ -1979,6 +2111,13 @@ mod tests {
         if let Ok(dest) = std::env::var("ART_ISO_RAW_OUT") {
             fs::write(&dest, sample_builder(SectorLayout::Raw2352, true).build()).unwrap();
             println!("wrote synthetic raw 2352-byte Joliet disc to {dest}");
+        }
+        // Mode 2/XA Form 1 — the layout ART-075 was about. Its data sits at
+        // offset 24 rather than 16, so the script strips it with a different
+        // constant and the same code path is checked against 7-Zip twice.
+        if let Ok(dest) = std::env::var("ART_ISO_RAW_XA_OUT") {
+            fs::write(&dest, sample_builder(SectorLayout::Raw2352Xa, true).build()).unwrap();
+            println!("wrote synthetic raw Mode 2/XA Form 1 disc to {dest}");
         }
     }
 

@@ -23,31 +23,7 @@ what fixed it (with the test that proves it).
 
 ## Open
 
-**ART-075** 🟡 **A raw CD image in Mode 2 Form 1 would be misread, and two layers would be wrong together**
-`core/detect.rs` (`ISO_PVD_OFFSET_2352`), `core/iso/` · ART finds a raw
-2352-byte-sector track by probing `CD001` at `0x9311`, which assumes **Mode 1**:
-16 bytes of sync and header, then 2048 bytes of user data. A **Mode 2 Form 1**
-sector puts its user data at offset 24, not 16, so the signature would sit at
-`0x9319` and ART would not recognise the image at all. Worse, if it ever were
-recognised, the reader takes its data offset from the same assumption, so
-detection and the reader would be wrong *together* — the shape behind
-ART-032…035.
-
-Task 2's synthetic ISOs were independently checked by mounting them with the
-host OS, which is what closed that risk for the 2048-byte layout. **No host
-mounts a raw track dump**, so the 2352 path rests entirely on ART agreeing
-with itself. Mixed-mode and CD32 discs are exactly where Mode 2 appears.
-
-The fix is to stop assuming: read the sector's mode byte (offset 15 of the
-sync header) and take the data offset from it, rather than hardcoding 16.
-Needs a Mode 2 Form 1 fixture, and ideally a real disc image to check against.
-
-**Scheduled:** Phase 2a Task 3b (amendment A2) — add the `0x9319` signature
-row (`iso9660-raw-xa`), carry the data offset in `SectorLayout`, refuse Mode 2
-Form 2 honestly rather than misreading it, and extend the 7-Zip oracle
-(Task 3a) to the raw layouts by stripping sectors down to 2048 bytes from the
-*layout's* documented offsets rather than ART's. That oracle is what actually
-closes "two layers wrong together" for a raw dump no host will mount.
+_(ART-075 was open here; it is fixed — see [Phase 2a](#phase-2a) below.)_
 
 **ART-073** 🟡 **`delete_many`'s all-or-nothing guarantee only holds for the whole-file strategy**
 `src-tauri/src/commands/volume_write.rs::delete_many` (line ~505) · The
@@ -358,6 +334,43 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+### Phase 2a
+
+**ART-075** 🟡 **A raw CD image in Mode 2 Form 1 would be misread, and two layers would be wrong together**
+`core/detect.rs`, `core/iso/` · ART found a raw 2352-byte-sector track by
+probing `CD001` at `0x9311`, which assumes **Mode 1**: 12 bytes of sync, a
+4-byte header, then 2048 bytes of user data. A **Mode 2/XA Form 1** sector
+carries an 8-byte subheader as well, so its user data starts at 24 and the
+signature sits at `0x9319`. ART did not recognise such an image at all — and
+worse, the reader took its data offset from the same assumption detection
+made, so had one ever been recognised, both layers would have been wrong
+*together*. That is the shape behind ART-032…035, and it is the one thing a
+green test suite cannot show you. CD32 and mixed-mode discs are written this
+way.
+
+→ `SectorLayout::Raw2352Xa` carries the data offset (24) the way the existing
+variants carry 0 and 16, so Mode 1 and Mode 2 Form 1 differ in one number
+rather than in a branch at every read. Detection probes `0x9319` and reports
+`iso9660-raw-xa`; `from_format_hint` turns it back into the layout, pinned by
+`detections_format_hints_open_the_right_layout`. **Mode 2 Form 2** — 2324
+bytes of audio or video and no filesystem — is refused by reading the submode
+byte rather than misread as Form 1 (`refuse_form2`).
+
+Pinned by `a_raw_mode2_xa_track_is_detected_at_0x9319`,
+`a_mode1_raw_track_is_not_reported_as_xa`,
+`an_xa_form1_disc_reads_exactly_as_a_mode1_one_does` (listing *and* bytes: an
+eight-byte slip gives a file that is almost right, which is worse than one
+that fails) and `a_mode2_form2_track_is_refused_rather_than_misread`.
+
+The issue also recorded *why* ART's own tests could not close this: no host
+mounts a raw track dump, so the 2352 path rested entirely on ART agreeing with
+itself. That half is closed too, and separately —
+`scripts/iso-oracle-check.py` strips both raw layouts down to 2048-byte
+sectors from the *layout's* documented offsets (16 and 24, written in the
+script, never read from `core::iso`) and diffs ART's listing and every file's
+SHA-256 against 7-Zip's. Both raw fixtures now have an independent
+implementation agreeing with them.
 
 ### Phase 1a
 

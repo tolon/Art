@@ -135,6 +135,17 @@ const ISO_PVD_OFFSET_2048: u64 = 0x8001;
 /// Finding it here also proves the sector size for later readers.
 const ISO_PVD_OFFSET_2352: u64 = 0x9311;
 
+/// Offset of "CD001" in a raw 2352-byte track whose sectors are **Mode 2/XA
+/// Form 1**. Those carry an 8-byte subheader after the header, so their user
+/// data begins at offset 24 rather than 16: 0x9300 + 24 + 1 = 0x9319.
+///
+/// Probing this separately is what stops ART being wrong twice over. The
+/// reader takes its data offset from the layout detection reports, so a disc
+/// recognised as Mode 1 when it is really Mode 2 would be misread by
+/// detection and reader together — the shape of ART-032…035, recorded as
+/// ART-075. CD32 and mixed-mode discs are written this way.
+const ISO_PVD_OFFSET_2352_XA: u64 = 0x9319;
+
 /// Detect the logical format of a filesystem path.
 ///
 /// Reads at most a few bytes of the file for signature checks; never loads
@@ -208,6 +219,17 @@ pub fn detect(path: &Path) -> CoreResult<Detection> {
             return Ok(Detection {
                 category: FormatCategory::OpticalImage,
                 format_hint: "iso9660-raw".to_string(),
+                confidence: 0.9,
+                size,
+                is_dir: false,
+            });
+        }
+    }
+    if let Ok(sig) = probe_at(path, ISO_PVD_OFFSET_2352_XA, ISO_MAGIC.len()) {
+        if sig == ISO_MAGIC {
+            return Ok(Detection {
+                category: FormatCategory::OpticalImage,
+                format_hint: "iso9660-raw-xa".to_string(),
                 confidence: 0.9,
                 size,
                 is_dir: false,
@@ -555,6 +577,36 @@ mod tests {
         let det = detect(&p).unwrap();
         assert_eq!(det.category, FormatCategory::OpticalImage);
         assert_eq!(det.format_hint, "iso9660-raw");
+        fs::remove_dir_all(&d).ok();
+    }
+
+    /// ART-075: a Mode 2/XA Form 1 disc carries an 8-byte subheader, so its
+    /// user data starts at 24 rather than 16 and `CD001` lands eight bytes
+    /// further on. Probing only 0x9311 does not merely miss it — detection and
+    /// the reader take the data offset from the *same* assumption, so a disc
+    /// that did somehow get through would be misread by both together. CD32
+    /// and mixed-mode discs are where this appears.
+    #[test]
+    fn a_raw_mode2_xa_track_is_detected_at_0x9319() {
+        let d = tmp();
+        let p = d.join("cd32.iso");
+        write_at(&p, 0x9319, b"CD001");
+
+        let det = detect(&p).unwrap();
+        assert_eq!(det.category, FormatCategory::OpticalImage);
+        assert_eq!(det.format_hint, "iso9660-raw-xa");
+        fs::remove_dir_all(&d).ok();
+    }
+
+    /// And the two raw offsets do not collide: a Mode 1 disc is still Mode 1,
+    /// not an XA disc that happens to have a byte there.
+    #[test]
+    fn a_mode1_raw_track_is_not_reported_as_xa() {
+        let d = tmp();
+        let p = d.join("mode1.iso");
+        write_at(&p, 0x9311, b"CD001");
+
+        assert_eq!(detect(&p).unwrap().format_hint, "iso9660-raw");
         fs::remove_dir_all(&d).ok();
     }
 

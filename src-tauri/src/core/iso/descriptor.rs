@@ -27,8 +27,27 @@ pub const LOGICAL_SECTOR_SIZE: usize = 2048;
 /// 16-byte sync + header and 288 bytes of EDC/ECC.
 pub const RAW_SECTOR_SIZE: usize = 2352;
 
-/// Offset of the user data inside a raw 2352-byte sector.
+/// Offset of the user data inside a raw 2352-byte Mode 1 sector: 12 bytes of
+/// sync, then a 4-byte header (minute, second, frame, mode).
 pub const RAW_DATA_OFFSET: u64 = 16;
+
+/// Offset of the user data inside a raw Mode 2/XA sector: the same 16, plus
+/// an 8-byte subheader (file, channel, submode, coding — written twice).
+pub const XA_DATA_OFFSET: u64 = 24;
+
+/// Offset of the sector's mode byte, the last of the 4-byte header. `1` is
+/// Mode 1, `2` is Mode 2 (which is where the subheader appears).
+pub const RAW_MODE_OFFSET: usize = 15;
+
+/// Offset of the submode byte inside a Mode 2 sector — the third byte of the
+/// subheader, and the one that says which *form* this sector is.
+pub const XA_SUBMODE_OFFSET: usize = 18;
+
+/// Submode bit meaning "Form 2": 2324 bytes of user data with no error
+/// correction, used for audio and video, and carrying no ISO9660 filesystem.
+/// ART refuses such a disc rather than reading 2048 bytes out of a sector
+/// that is not laid out that way.
+pub const XA_SUBMODE_FORM2: u8 = 0x20;
 
 /// The volume descriptor set starts here, on every disc.
 pub const FIRST_DESCRIPTOR_LBA: u32 = 16;
@@ -71,6 +90,16 @@ pub enum SectorLayout {
     /// 2352 bytes per sector with the 2048 bytes of user data at offset 16.
     /// A raw Mode-1 track dump, as `.bin` and some `.img` files are.
     Raw2352,
+    /// 2352 bytes per sector, **Mode 2/XA Form 1**: sync and header as Mode 1,
+    /// then an 8-byte subheader, so the 2048 bytes of user data start at 24.
+    ///
+    /// Its own variant rather than a field, because the whole point is that
+    /// the data offset is decided once at open and carried — assuming 16
+    /// everywhere is [ART-075], where detection and the reader were wrong
+    /// together. CD32 and mixed-mode discs are written this way.
+    ///
+    /// [ART-075]: ../../../docs/ISSUES.md
+    Raw2352Xa,
 }
 
 impl SectorLayout {
@@ -82,6 +111,7 @@ impl SectorLayout {
         match hint {
             "iso9660" => Some(Self::Cooked),
             "iso9660-raw" => Some(Self::Raw2352),
+            "iso9660-raw-xa" => Some(Self::Raw2352Xa),
             _ => None,
         }
     }
@@ -90,7 +120,7 @@ impl SectorLayout {
     pub fn sector_size(self) -> u64 {
         match self {
             Self::Cooked => LOGICAL_SECTOR_SIZE as u64,
-            Self::Raw2352 => RAW_SECTOR_SIZE as u64,
+            Self::Raw2352 | Self::Raw2352Xa => RAW_SECTOR_SIZE as u64,
         }
     }
 
@@ -99,7 +129,15 @@ impl SectorLayout {
         match self {
             Self::Cooked => 0,
             Self::Raw2352 => RAW_DATA_OFFSET,
+            Self::Raw2352Xa => XA_DATA_OFFSET,
         }
+    }
+
+    /// True for the layouts that are a track dump rather than user data
+    /// alone — the ones carrying a sync pattern, a header and, for XA, a
+    /// subheader that says which form the sector is.
+    pub fn is_raw(self) -> bool {
+        matches!(self, Self::Raw2352 | Self::Raw2352Xa)
     }
 
     /// Byte offset of the user data of logical block `lba`.
