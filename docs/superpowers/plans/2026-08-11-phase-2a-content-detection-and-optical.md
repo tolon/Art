@@ -8,11 +8,11 @@
 
 **Architecture:** Two halves that must land in this order. First `detect()` stops dispatching on the extension and reads the first blocks instead — that single change makes `.img` and `.dsk` resolve to whatever they actually contain, and turns every later format into one signature rather than one more branch in a growing match. Then an ISO9660 reader, exposed through the same `CopySource`-shaped read path the commander already uses for ADF and HDF volumes, so browsing a CD is the same code as browsing a floppy.
 
-**Tech Stack:** Rust (`core/`, no new dependencies), React 18 + TypeScript.
+**Tech Stack:** Rust (`core/`), React 18 + TypeScript. Two new crates, both in Task 4 and both MIT/Apache: `zip` (or `flate2`) and `sevenz-rust`. Tasks 1–3 add none — ISO9660 is simple enough that a crate would cost more in audit than it saves.
 
 ## Global Constraints
 
-- `src-tauri/src/core/` is platform-independent: `std` + `serde` + `sha2` + `thiserror` + `delharc` only. Never `use tauri`, never call Windows APIs, never touch the network. **This phase adds no dependency** — ISO9660 is a simple enough format that pulling in a crate would cost more in audit than it saves.
+- `src-tauri/src/core/` is platform-independent: `std` + `serde` + `sha2` + `thiserror` + `delharc` only. Never `use tauri`, never call Windows APIs, never touch the network. **Tasks 1–3 add no dependency.** Task 4 adds two decompressors and must update CLAUDE.md's list and `THIRD_PARTY_LICENSES.md` in the same commit — a crate in `Cargo.toml` and not in the licence file is a licensing defect. Each one parses hostile input inside the process, so it is a real decision, not a convenience.
 - **MSRV is 1.77.** `Option::is_none_or` (1.82) and trait-object upcasting (1.86) compile locally and fail CI.
 - Release profile is `panic = "abort"`. **Every byte in this phase comes from an untrusted file**, so: never index directly, never allocate from a length field a file supplied (`checked_add` / `checked_mul` on running totals, and a hard cap), and bound every walk with a step limit. A malformed ISO must produce a `CoreError`, never a panic and never an infinite loop.
 - **Never read a whole image into memory.** An ISO is routinely 700 MB and a DVD image 4.7 GB. Read the descriptors and the directory extents you need, the way `open_hdf` reads a 1 MB window rather than the file.
