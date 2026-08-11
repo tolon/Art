@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- `src-tauri/src/core/` is platform-independent: `std` + `serde` + `sha2` + `thiserror` + `delharc` only. Never `use tauri`, never call Windows APIs, never touch the network. **Tasks 1–3 add no dependency.** Task 4 adds two decompressors and must update CLAUDE.md's list and `THIRD_PARTY_LICENSES.md` in the same commit — a crate in `Cargo.toml` and not in the licence file is a licensing defect. Each one parses hostile input inside the process, so it is a real decision, not a convenience.
+- `src-tauri/src/core/` is platform-independent: `std` + `serde` + `sha2` + `thiserror` + `delharc` — and, from Task 4, `zip` and `sevenz-rust2`. Never `use tauri`, never call Windows APIs, never touch the network. **Tasks 1–3 add no dependency.** Task 4 adds two decompressors and must update CLAUDE.md's list and `THIRD_PARTY_LICENSES.md` in the same commit — a crate in `Cargo.toml` and not in the licence file is a licensing defect. Each one parses hostile input inside the process, so it is a real decision, not a convenience.
 - ~~**MSRV is 1.77.**~~ **MSRV is 1.93 from 2026-08-12** (Task 4 Step 3, at the user's decision): the maintained `sevenz-rust2` requires it, and the newest release that still built on 1.77 was fourteen minor versions behind — an old LZMA decoder is the wrong thing to point at untrusted files. CI builds on `stable`, so nothing pinned an older compiler. Clippy's suggestions follow the MSRV, so the bump switched on lints that had been suppressed.
 - Release profile is `panic = "abort"`. **Every byte in this phase comes from an untrusted file**, so: never index directly, never allocate from a length field a file supplied (`checked_add` / `checked_mul` on running totals, and a hard cap), and bound every walk with a step limit. A malformed ISO must produce a `CoreError`, never a panic and never an infinite loop.
 - **Never read a whole image into memory.** An ISO is routinely 700 MB and a DVD image 4.7 GB. Read the descriptors and the directory extents you need, the way `open_hdf` reads a 1 MB window rather than the file.
@@ -34,12 +34,18 @@ python scripts/oracle-check.py
 
 **Baseline at the start of this plan: 731 Rust tests, 107 frontend tests, oracle 48 checks** — Phase 1a's closing numbers (STATUS.md snapshot, 2026-08-11). An earlier draft of this line said 721/76; the gate arithmetic in the task reports is against the real baseline. **Run `cargo test` twice** — ART-059 was a race that failed about one run in five.
 
-**Where this plan stands (2026-08-12):** Tasks 1, 2, 3, 3a and 3b are
-complete and on `phase-2a`, and Task 4 is three steps in — the shared gate,
-ZIP and 7z all land; only its pane (Step 4) is left — Task 3's review fixes landed after a mid-session
-reboot (`80e1d40`), the 7-Zip oracle in `5be5529`, and Mode 2/XA with it in
-`787fe15`, which closed ART-075. **Task 4 (ZIP and 7z) is the next work.** See the Amendments
-section at the foot of this file for what changed after the plan was written.
+**Where this plan stands (2026-08-12):**
+
+| | |
+|---|---|
+| Tasks 1, 2, 3 | complete — content-first detection, the ISO9660 reader, the disc pane. Task 3's review fixes landed after a mid-session reboot (`80e1d40`) |
+| Task 3a | complete (`5be5529`) — the 7-Zip oracle, added by amendment A1 |
+| Task 3b | complete (`787fe15`) — Mode 2/XA Form 1, which closed ART-075 |
+| Task 4 | steps 1–3 complete — the shared gate (`efaaf00`), ZIP (`bf5e577`), 7z + the MSRV bump (`b07ad1c`). **Step 4, the archive pane, is the next work** |
+| Tasks 5, 6 | not started |
+
+See the Amendments section at the foot of this file for what changed after the
+plan was written.
 
 ---
 
