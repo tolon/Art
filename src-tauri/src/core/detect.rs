@@ -298,6 +298,168 @@ mod tests {
         assert!(matches!(err, CoreError::InvalidInput(_)), "got: {err}");
     }
 
+    // --- Content-first signature detection ---------------------------------
+    //
+    // These are what make this a content-first detector rather than a longer
+    // extension list: the extension lies (or is absent — Gotek/PiStorm often
+    // hand ART bare `.img`) and detection must still get it right by reading
+    // the bytes.
+
+    /// Write `bytes` at `offset` in a fresh file, backfilling the gap with
+    /// zeros. Used to build synthetic fixtures without materialising huge
+    /// buffers in memory (a raw ISO fixture needs 0x9311+ bytes).
+    fn write_at(path: &std::path::Path, offset: u64, bytes: &[u8]) {
+        use std::io::{Seek, SeekFrom};
+        let mut f = fs::File::create(path).unwrap();
+        f.seek(SeekFrom::Start(offset)).unwrap();
+        f.write_all(bytes).unwrap();
+    }
+
+    #[test]
+    fn an_img_holding_a_floppy_is_a_floppy_not_an_unknown() {
+        let d = tmp();
+        let p = d.join("disk.img");
+        let mut f = fs::File::create(&p).unwrap();
+        f.write_all(b"DOS\0").unwrap();
+        let chunk = vec![0u8; 8192];
+        let mut remaining = sizes::ADF_DD - 4;
+        while remaining > 0 {
+            let n = chunk.len().min(remaining as usize);
+            f.write_all(&chunk[..n]).unwrap();
+            remaining -= n as u64;
+        }
+        drop(f);
+
+        let det = detect(&p).unwrap();
+        assert_eq!(det.category, FormatCategory::FloppyImage);
+        assert!(det.confidence >= 0.9, "got {}", det.confidence);
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn an_adf_that_is_really_an_iso_is_reported_as_an_iso() {
+        let d = tmp();
+        let p = d.join("disk.adf");
+        write_at(&p, 0x8001, b"CD001");
+
+        let det = detect(&p).unwrap();
+        assert_eq!(det.category, FormatCategory::OpticalImage);
+        assert_eq!(det.format_hint, "iso9660");
+        assert!(det.confidence >= 0.9, "got {}", det.confidence);
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_raw_track_iso_is_detected_at_0x9311() {
+        let d = tmp();
+        let p = d.join("disk.iso");
+        write_at(&p, 0x9311, b"CD001");
+
+        let det = detect(&p).unwrap();
+        assert_eq!(det.category, FormatCategory::OpticalImage);
+        assert_eq!(det.format_hint, "iso9660-raw");
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_file_shorter_than_the_signature_offset_is_not_a_panic() {
+        let d = tmp();
+        let p = d.join("tiny.iso");
+        fs::write(&p, vec![0u8; 100]).unwrap();
+
+        // Must not panic and must not misreport — a 100-byte file cannot
+        // possibly contain a signature at offset 0x8001.
+        let det = detect(&p).unwrap();
+        assert_ne!(det.category, FormatCategory::OpticalImage);
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn an_empty_file_is_not_a_panic() {
+        let d = tmp();
+        let p = d.join("empty.iso");
+        fs::write(&p, []).unwrap();
+
+        let det = detect(&p).unwrap();
+        assert_eq!(det.category, FormatCategory::Unknown);
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn detects_rdb_hard_disk_by_signature() {
+        let d = tmp();
+        let p = d.join("disk.hdf");
+        fs::write(&p, b"RDSK").unwrap();
+
+        let det = detect(&p).unwrap();
+        assert_eq!(det.category, FormatCategory::HardDiskImage);
+        assert_eq!(det.format_hint, "rdb");
+        assert!(det.confidence >= 0.9, "got {}", det.confidence);
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn detects_pfs3_hard_disk_by_signature() {
+        let d = tmp();
+        let p = d.join("disk.hdf");
+        fs::write(&p, b"PFS\x03").unwrap();
+
+        let det = detect(&p).unwrap();
+        assert_eq!(det.category, FormatCategory::HardDiskImage);
+        assert_eq!(det.format_hint, "pfs3");
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn detects_sfs_hard_disk_by_signature() {
+        let d = tmp();
+        let p = d.join("disk.hdf");
+        fs::write(&p, b"SFS\x00").unwrap();
+
+        let det = detect(&p).unwrap();
+        assert_eq!(det.category, FormatCategory::HardDiskImage);
+        assert_eq!(det.format_hint, "sfs");
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_dos_signature_at_harddisk_size_is_a_harddisk_not_a_floppy() {
+        let d = tmp();
+        let p = d.join("disk.img");
+        let mut f = fs::File::create(&p).unwrap();
+        f.write_all(b"DOS\x01").unwrap();
+        let chunk = vec![0u8; 8192];
+        // Larger than either known floppy size.
+        let mut remaining = sizes::ADF_HD + chunk.len() as u64 - 4;
+        while remaining > 0 {
+            let n = chunk.len().min(remaining as usize);
+            f.write_all(&chunk[..n]).unwrap();
+            remaining -= n as u64;
+        }
+        drop(f);
+
+        let det = detect(&p).unwrap();
+        assert_eq!(det.category, FormatCategory::HardDiskImage);
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn probe_at_returns_empty_past_end_of_file_without_panicking() {
+        let d = tmp();
+        let p = d.join("tiny.bin");
+        fs::write(&p, vec![0u8; 10]).unwrap();
+
+        let result = probe_at(&p, 0x9311, 5).unwrap();
+        assert!(result.is_empty());
+
+        let empty = d.join("empty.bin");
+        fs::write(&empty, []).unwrap();
+        let result = probe_at(&empty, 0, 5).unwrap();
+        assert!(result.is_empty());
+
+        fs::remove_dir_all(&d).ok();
+    }
+
     #[test]
     fn rom_known_size_has_higher_confidence() {
         let d = tmp();
