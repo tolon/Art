@@ -20,15 +20,24 @@ allow = [
   "Zlib",
   "CC0-1.0",
   "MPL-2.0",
+  # `webpki-roots` — Mozilla's CA trust list, reached through `ureq`'s
+  # rustls-webpki-roots feature. CDLA-Permissive-2.0 is a permissive *data*
+  # licence (it is a list of certificates, not code) with no copyleft and no
+  # attribution requirement beyond the notice. Added when a lockfile refresh
+  # brought webpki-roots 1.0.x in and this check started failing on it.
+  "CDLA-Permissive-2.0",
 ]
 # Confidence threshold for license detection.
 confidence-threshold = 0.8
 
-[[licenses.exceptions]]
-# Allow specific crates with uncommon-but-permissive licenses here if needed.
-# Example (uncomment if a dependency requires it):
-# name = "ring"
-# version = "*"
+# Per-crate exceptions go here when a dependency carries an
+# uncommon-but-permissive licence. There are none today, and the table is left
+# out rather than left empty: current cargo-deny requires a `crate` field in
+# every `[[licenses.exceptions]]` entry, so an empty placeholder is a config
+# error that fails the whole check before it reads a single licence.
+#
+# [[licenses.exceptions]]
+# crate = "ring"
 # allow = ["LicenseRef-ring"]
 
 [advisories]

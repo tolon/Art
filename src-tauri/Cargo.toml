@@ -5,6 +5,11 @@ description = "ART — The Swiss Army Knife for Amiga Files"
 authors = ["ART Project"]
 edition = "2021"
 rust-version = "1.77"
+# The repository has said MIT in `LICENSE` since the first commit; the manifest
+# had not, and current cargo-deny rejects the crate as unlicensed for it —
+# `cargo deny check licenses` failed on ART itself before it got as far as any
+# dependency.
+license = "MIT"
 
 # Tauri 2 requires the lib to be a cdylib/staticlib for cross-binary use
 # (and an rlib so the binary target and tests can reuse it).
