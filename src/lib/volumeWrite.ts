@@ -379,9 +379,25 @@ export async function volumeRecover(
 
 export const VOLUME_WRITE_EVENT = "volume-write-result";
 
+/**
+ * What an archive's extraction reports — the archive gate's own outcome
+ * (`core::archive::extract::ExtractOutcome`), not a volume's `ExtractReport`.
+ * It counts entries refused by name and entries whose declared size was a
+ * lie, which a volume has no equivalent for.
+ */
+export interface ArchiveExtractOutcome {
+  total_files: number;
+  total_bytes: number;
+  errors: string[];
+  aborted: boolean;
+  abort_reason: string | null;
+  skipped_existing: number;
+}
+
 export type VolumeWriteResult =
   | { kind: "copy_in"; job_id: number; report: CopyReport; backup: string | null }
-  | { kind: "copy_out"; job_id: number; report: ExtractReport };
+  | { kind: "copy_out"; job_id: number; report: ExtractReport }
+  | { kind: "archive_out"; job_id: number; report: ArchiveExtractOutcome };
 
 /** One listener for every background write result (§54). */
 export function onVolumeWriteResult(

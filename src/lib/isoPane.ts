@@ -17,7 +17,14 @@
 
 import type { Phrase } from "@/lib/phrase";
 
-export type PaneKind = "local" | "adf" | "hdf" | "iso";
+export type PaneKind = "local" | "adf" | "hdf" | "iso" | "archive";
+
+/** The pane kinds that are containers ART only ever reads — a disc and an
+ * archive. Both refuse every write with their own sentence, and both are
+ * sources for the same two copy directions. */
+export function isReadOnlyContainer(kind: PaneKind): boolean {
+  return kind === "iso" || kind === "archive";
+}
 
 /** ADF and HDF panes share every write/copy command, indexed by
  * `volumeIndex` — a disc and a local folder do not. */
@@ -31,6 +38,12 @@ export function isVolumeKind(kind: PaneKind): boolean {
  * two copies of the same string drifting apart. */
 export const ISO_WRITE_REFUSAL: Phrase = { key: "files.writeRefusal.iso" };
 
+/** The same, for an archive. Its own sentence rather than the disc's: "a disc
+ * is read-only" and "ART reads archives but does not write them" are
+ * different facts, and a user told the wrong one will go looking for the
+ * setting that turns it off. */
+export const ARCHIVE_WRITE_REFUSAL: Phrase = { key: "files.writeRefusal.archive" };
+
 export type CopyDirection =
   | { kind: "local-to-local" }
   | { kind: "local-to-volume" }
@@ -38,6 +51,8 @@ export type CopyDirection =
   | { kind: "volume-to-volume" }
   | { kind: "iso-to-local" }
   | { kind: "iso-to-volume" }
+  | { kind: "archive-to-local" }
+  | { kind: "archive-to-volume" }
   /** Refused before anything runs — the pane shows `reason` instead. */
   | { kind: "refused"; reason: Phrase };
 
@@ -57,8 +72,14 @@ export function copyDirection(source: PaneKind, target: PaneKind): CopyDirection
   if (target === "iso") {
     return { kind: "refused", reason: ISO_WRITE_REFUSAL };
   }
+  if (target === "archive") {
+    return { kind: "refused", reason: ARCHIVE_WRITE_REFUSAL };
+  }
   if (source === "iso") {
     return { kind: target === "local" ? "iso-to-local" : "iso-to-volume" };
+  }
+  if (source === "archive") {
+    return { kind: target === "local" ? "archive-to-local" : "archive-to-volume" };
   }
   if (source === "local" && target === "local") {
     return { kind: "local-to-local" };
@@ -104,4 +125,26 @@ export function leaveIsoTrail(
   const rest = trail.slice(0, -1);
   const previous = trail[trail.length - 1];
   return { extent: previous.extent, length: previous.length, trail: rest };
+}
+
+// ---- an archive pane's location -----------------------------------------
+//
+// An archive needs no trail at all, and that is worth saying rather than
+// copying the disc's. A disc directory is addressed by `(extent, length)` —
+// two numbers with no relationship to the ones above them — so getting back
+// out means remembering where you came from. An archive's folders come from
+// the *names* (`Tools/Sub/Deep.txt`), so the path is the address and "up" is
+// arithmetic on a string. Keeping a parallel trail here would be a second
+// source of truth for something the location already knows.
+
+/** Walk into `name` from the folder `dir` (`""` is the archive's root). */
+export function archiveEnter(dir: string, name: string): string {
+  return dir === "" ? name : `${dir}/${name}`;
+}
+
+/** The folder above `dir`, or `null` when already at the root. */
+export function archiveLeave(dir: string): string | null {
+  if (dir === "") return null;
+  const cut = dir.lastIndexOf("/");
+  return cut === -1 ? "" : dir.slice(0, cut);
 }

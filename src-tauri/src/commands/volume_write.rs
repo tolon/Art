@@ -937,6 +937,15 @@ pub enum VolumeWriteResult {
         job_id: JobId,
         report: ExtractReport,
     },
+    /// A folder copied out of an *archive*. Its own variant rather than a
+    /// borrowed `CopyOut`: an archive's report is the extraction gate's
+    /// (`core::archive::extract::ExtractOutcome`), which counts entries
+    /// refused by name and entries whose declared size was a lie — things a
+    /// volume's `ExtractReport` has no field for and no reason to grow one.
+    ArchiveOut {
+        job_id: JobId,
+        report: crate::core::archive::extract::ExtractOutcome,
+    },
 }
 
 /// Options a copy carries from the UI.

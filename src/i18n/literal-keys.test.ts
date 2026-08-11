@@ -109,6 +109,9 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // a `Phrase`'s `.key` — `ISO_WRITE_REFUSAL` (`@/lib/isoPane`) and
     // `copyDirection`'s `"refused"` reason — the same reason
     // `describeCopy`'s callers already do, not a new pattern.
-    expect(dynamicCalls).toBe(39);
+    // 39 → 41 (Task 4): the archive pane reads `ARCHIVE_WRITE_REFUSAL.key`
+    // in the same two places the disc reads its own — `writeRefusal` and the
+    // footer's read-only badge. Same pattern, one more read-only container.
+    expect(dynamicCalls).toBe(41);
   });
 });

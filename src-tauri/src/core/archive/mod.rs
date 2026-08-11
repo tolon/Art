@@ -25,6 +25,7 @@
 pub mod extract;
 pub mod lha;
 pub mod sevenz;
+pub mod tree;
 pub mod zip;
 
 use std::path::Path;
@@ -229,6 +230,64 @@ mod tests {
                 outcome.errors.len() >= 3,
                 "{format}: and the user is told: {:?}",
                 outcome.errors
+            );
+
+            std::fs::remove_dir_all(&dir).ok();
+        }
+    }
+
+    /// What the commander's F5 does with a folder inside an archive, for
+    /// every format: the subtree lands under the destination keeping its own
+    /// shape, and nothing outside it comes along.
+    #[test]
+    fn every_backend_copies_one_folder_out_keeping_its_shape() {
+        for (format, filename, build) in backends() {
+            let dir = scratch(&format!("{format}-subtree"));
+            let archive = dir.join(filename);
+            std::fs::write(
+                &archive,
+                build(&[
+                    ("Tools/Shell.lha", b"shell" as &[u8]),
+                    ("Tools/Sub/Deep.txt", b"deep"),
+                    ("Elsewhere.txt", b"not this one"),
+                ]),
+            )
+            .unwrap();
+            let dest = dir.join("out");
+
+            let mut backend = open(&archive).unwrap();
+            let entries = backend.entries().unwrap();
+            let tree = tree::ArchiveTree::build(&entries);
+            let selection: Vec<extract::Wanted> = tree
+                .subtree("Tools")
+                .into_iter()
+                .map(|(index, name)| extract::Wanted { index, name })
+                .collect();
+
+            let outcome = extract::extract_selection(
+                &mut *backend,
+                &entries,
+                &selection,
+                &dest,
+                OverwritePolicy::Skip,
+                &NoProgress,
+            )
+            .unwrap();
+
+            assert_eq!(outcome.total_files, 2, "{format}: {:?}", outcome.extracted);
+            assert_eq!(std::fs::read(dest.join("Shell.lha")).unwrap(), b"shell");
+            assert_eq!(
+                std::fs::read(dest.join("Sub").join("Deep.txt")).unwrap(),
+                b"deep"
+            );
+            assert!(
+                !dest.join("Elsewhere.txt").exists(),
+                "{format}: only the chosen folder is copied"
+            );
+            assert!(
+                !dest.join("Tools").exists(),
+                "{format}: the folder's *contents* land in the destination, \
+                 the same shape a volume's copy-out gives"
             );
 
             std::fs::remove_dir_all(&dir).ok();

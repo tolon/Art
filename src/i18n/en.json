@@ -873,7 +873,11 @@
       "local": "This pane holds a folder, not a disk image",
       "noPartition": "Open a partition first",
       "default": "ART cannot write to this volume",
-      "iso": "This pane holds a disc — discs are read-only"
+      "iso": "This pane holds a disc — discs are read-only",
+      "archive": "This pane holds an archive — ART reads archives, it does not write them"
+    },
+    "archive": {
+      "unusableNames": "{{count}} entries are not shown: their names are not paths ART can place inside a folder"
     },
     "functionKeys": {
       "view": "View",
@@ -902,6 +906,7 @@
       "adf": "ADF...",
       "hdf": "HDF...",
       "disc": "Disc...",
+      "archive": "Archive...",
       "up": "Up",
       "refresh": "Refresh",
       "newFolder": "New folder"

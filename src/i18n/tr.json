@@ -873,7 +873,11 @@
       "local": "Bu bölme bir disk imajı değil, bir klasör içeriyor",
       "noPartition": "Önce bir bölüm açın",
       "default": "ART bu birime yazamıyor",
-      "iso": "Bu bölme bir disk (CD/DVD) içeriyor — diskler salt okunurdur"
+      "iso": "Bu bölme bir disk (CD/DVD) içeriyor — diskler salt okunurdur",
+      "archive": "Bu bölme bir arşiv içeriyor — ART arşivleri okur, onlara yazmaz"
+    },
+    "archive": {
+      "unusableNames": "{{count}} girdi gösterilmiyor: adları, ART'ın bir klasörün içine yerleştirebileceği yollar değil"
     },
     "functionKeys": {
       "view": "Görüntüle",
@@ -902,6 +906,7 @@
       "adf": "ADF...",
       "hdf": "HDF...",
       "disc": "Disk...",
+      "archive": "Arşiv...",
       "up": "Yukarı",
       "refresh": "Yenile",
       "newFolder": "Yeni Klasör"

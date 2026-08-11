@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::ArchiveBackend;
+use super::{ArchiveBackend, ArchiveEntry};
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
 use crate::core::security::{safe_join, PathTraversalError};
@@ -141,14 +141,50 @@ pub fn next_free_path(target: &Path) -> CoreResult<PathBuf> {
     )))
 }
 
+/// One thing to write: which entry it is, and what to call it under `dest`.
+///
+/// The name is separate from the entry because the two callers mean different
+/// things by it. Extracting a whole archive writes each entry under the name
+/// the archive gave it; copying one folder out of a pane writes the subtree
+/// *relative to that folder*, so `Tools/Sub/Deep.txt` lands as `Sub/Deep.txt`
+/// under a `Tools` the caller picked. Neither name is trusted: both go through
+/// `safe_join` below like everything else.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Wanted {
+    pub index: usize,
+    pub name: String,
+}
+
 /// Extract everything `backend` holds into `dest`, safely.
+///
+/// Each entry keeps the name the archive gave it. For part of an archive, or
+/// for names arranged some other way, see [`extract_selection`].
+pub fn extract_with_backend(
+    backend: &mut dyn ArchiveBackend,
+    dest: &Path,
+    overwrite: OverwritePolicy,
+    progress: &dyn ProgressSink,
+) -> CoreResult<ExtractOutcome> {
+    let entries = backend.entries()?;
+    let selection: Vec<Wanted> = entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| Wanted {
+            index,
+            name: entry.name.clone(),
+        })
+        .collect();
+    extract_selection(backend, &entries, &selection, dest, overwrite, progress)
+}
+
+/// Extract the entries `selection` names, under the names it gives them.
 ///
 /// Two phases, and the split is not cosmetic:
 ///
-/// 1. **Decide.** Every entry is judged on its name and its claim alone —
-///    traversal, the caps, the overwrite policy — producing a target path for
-///    the ones that may be written and a reported refusal for the ones that
-///    may not. Nothing is decompressed to reach any of those answers.
+/// 1. **Decide.** Every wanted entry is judged on its name and its claim alone
+///    — traversal, the caps, the overwrite policy — producing a target path
+///    for the ones that may be written and a reported refusal for the ones
+///    that may not. Nothing is decompressed to reach any of those answers.
 /// 2. **Read what survived**, through [`ArchiveBackend::read_selected`], and
 ///    write it.
 ///
@@ -160,14 +196,15 @@ pub fn next_free_path(target: &Path) -> CoreResult<PathBuf> {
 ///
 /// Cancellation is checked between entries, never mid-file, so stopping leaves
 /// completed files intact and no partial one behind.
-pub fn extract_with_backend(
+pub fn extract_selection(
     backend: &mut dyn ArchiveBackend,
+    entries: &[ArchiveEntry],
+    selection: &[Wanted],
     dest: &Path,
     overwrite: OverwritePolicy,
     progress: &dyn ProgressSink,
 ) -> CoreResult<ExtractOutcome> {
     let format = backend.format();
-    let entries = backend.entries()?;
 
     fs::create_dir_all(dest)?;
 
@@ -188,10 +225,21 @@ pub fn extract_with_backend(
     let mut targets: Vec<Option<PathBuf>> = vec![None; entries.len()];
     let mut budget: u64 = 0;
 
-    for (index, entry) in entries.iter().enumerate() {
+    for item in selection {
         if progress.is_cancelled() {
             return Err(crate::core::jobs::cancelled_error());
         }
+        let Some(entry) = entries.get(item.index) else {
+            // A selection pointing outside the archive is a bug in the caller,
+            // not something to write blindly.
+            outcome.errors.push(format!(
+                "'{}' refers to entry {} of an archive that holds {}",
+                item.name,
+                item.index,
+                entries.len()
+            ));
+            continue;
+        };
 
         // Bomb guard, on the claim: a hostile archive can declare a size that
         // overflows the running total, so the addition itself is checked.
@@ -206,10 +254,10 @@ pub fn extract_with_backend(
         if entry.declared_bytes > MAX_ENTRY_OUTPUT {
             outcome.errors.push(format!(
                 "'{}' declares {} bytes, past the {MAX_ENTRY_OUTPUT} byte per-entry limit",
-                entry.name, entry.declared_bytes
+                item.name, entry.declared_bytes
             ));
             outcome.refuse(
-                &entry.name,
+                &item.name,
                 entry.is_dir,
                 format!("larger than the {MAX_ENTRY_OUTPUT} byte per-entry limit"),
             );
@@ -217,18 +265,18 @@ pub fn extract_with_backend(
         }
 
         // Path traversal defence.
-        let target = match safe_join(dest, &entry.name) {
+        let target = match safe_join(dest, &item.name) {
             Ok(p) => p,
             Err(PathTraversalError::Empty) => {
-                outcome.refuse(&entry.name, entry.is_dir, "empty entry name".into());
+                outcome.refuse(&item.name, entry.is_dir, "empty entry name".into());
                 continue;
             }
             Err(e) => {
                 let reason = e.to_string();
                 outcome
                     .errors
-                    .push(format!("rejected entry '{}': {reason}", entry.name));
-                outcome.refuse(&entry.name, entry.is_dir, reason);
+                    .push(format!("rejected entry '{}': {reason}", item.name));
+                outcome.refuse(&item.name, entry.is_dir, reason);
                 continue;
             }
         };
@@ -236,7 +284,7 @@ pub fn extract_with_backend(
         if entry.is_dir {
             fs::create_dir_all(&target)?;
             outcome.extracted.push(ExtractedEntry {
-                source_path: entry.name.clone(),
+                source_path: item.name.clone(),
                 destination: target.to_string_lossy().into_owned(),
                 bytes: 0,
                 is_dir: true,
@@ -252,7 +300,7 @@ pub fn extract_with_backend(
                 OverwritePolicy::Skip => {
                     outcome.skipped_existing += 1;
                     outcome.extracted.push(ExtractedEntry {
-                        source_path: entry.name.clone(),
+                        source_path: item.name.clone(),
                         destination: target.to_string_lossy().into_owned(),
                         bytes: 0,
                         is_dir: false,
@@ -269,8 +317,8 @@ pub fn extract_with_backend(
         };
 
         budget += entry.declared_bytes;
-        wanted[index] = true;
-        targets[index] = Some(write_to);
+        wanted[item.index] = true;
+        targets[item.index] = Some(write_to);
     }
 
     // ---- phase 2: read what survived, and write it ------------------------

@@ -49,6 +49,16 @@ fn is_floppy(d: &Detection) -> bool {
 fn is_archive(d: &Detection) -> bool {
     d.category == FormatCategory::Archive
 }
+/// LHA specifically, not "any archive".
+///
+/// The distinction earns its keep from Phase 2a Task 4: `Archive` used to mean
+/// LHA and nothing else, so every LHA action was written against the category.
+/// Detection recognises ZIP and 7z now, and LHA Studio cannot open either —
+/// offering "Open in LHA Studio" for a ZIP would be an action that exists to
+/// fail (§46, §89).
+fn is_lha(d: &Detection) -> bool {
+    is_archive(d) && d.format_hint == "lha"
+}
 fn is_harddisk(d: &Detection) -> bool {
     d.category == FormatCategory::HardDiskImage
 }
@@ -290,7 +300,23 @@ fn navigation_workflows() -> Vec<NavWorkflow> {
             true,
             is_floppy,
         ),
-        // --- Archives (LHA) ---
+        // --- Archives ---
+        //
+        // Every archive ART reads — LHA, ZIP, 7z — opens in the commander as
+        // a pane you can walk into and copy out of (Task 4). The LHA-only
+        // actions below it stay LHA-only: LHA Studio, WHDLoad detection and
+        // install-to-hard-disk are all written against `core::lha` and would
+        // fail on a ZIP.
+        nav(
+            "archive.browse",
+            "Open in the file manager",
+            "Walk the archive's folders and copy files out of it, to a folder or into an Amiga volume.",
+            route::FILES,
+            Recommended,
+            5,
+            true,
+            is_archive,
+        ),
         nav(
             "lha.browse",
             "Open in LHA Studio",
@@ -299,7 +325,7 @@ fn navigation_workflows() -> Vec<NavWorkflow> {
             Recommended,
             10,
             true,
-            is_archive,
+            is_lha,
         ),
         nav(
             "lha.extract",
@@ -309,7 +335,7 @@ fn navigation_workflows() -> Vec<NavWorkflow> {
             Recommended,
             20,
             true,
-            is_archive,
+            is_lha,
         ),
         nav(
             "lha.add_collection",
@@ -319,7 +345,7 @@ fn navigation_workflows() -> Vec<NavWorkflow> {
             Recommended,
             30,
             true,
-            is_archive,
+            is_lha,
         ),
         // §82's success scenario, end to end: drop a package, ART detects
         // WHDLoad, and one click puts it on a hard disk with a backup and a
@@ -333,7 +359,7 @@ fn navigation_workflows() -> Vec<NavWorkflow> {
             Recommended,
             25,
             true,
-            is_archive,
+            is_lha,
         ),
         nav(
             "lha.launch_winuae",
@@ -343,7 +369,7 @@ fn navigation_workflows() -> Vec<NavWorkflow> {
             Standard,
             50,
             false,
-            is_archive,
+            is_lha,
         ),
         // --- Hard disk images (HDF / HDZ) ---
         nav(
@@ -520,6 +546,11 @@ mod tests {
             (FormatCategory::FloppyImage, "adf", false),
             (FormatCategory::HardDiskImage, "hdf", false),
             (FormatCategory::Archive, "lha", false),
+            // ZIP and 7z are archives ART reads but LHA Studio cannot open.
+            // They would have been dead ends the moment detection learned to
+            // recognise them, if `archive.browse` did not exist (§91).
+            (FormatCategory::Archive, "zip", false),
+            (FormatCategory::Archive, "7z", false),
             (FormatCategory::Rom, "rom", false),
             (FormatCategory::Directory, "directory", true),
             (FormatCategory::OpticalImage, "iso9660", false),
@@ -566,6 +597,32 @@ mod tests {
             .recommendations
             .iter()
             .any(|r| r.info.id == "dir.scan_collection"));
+
+        // And a real ZIP, dropped: it is an `Archive` like an LHA, but LHA
+        // Studio cannot open one, so the LHA actions must *not* be offered
+        // and the commander must be — otherwise recognising ZIP at all would
+        // have turned it into a dead end with three broken buttons.
+        let zip = dir.join("pack.zip");
+        std::fs::write(
+            &zip,
+            crate::core::archive::zip::tests::make_zip_with(&[("readme.txt", b"hi")]),
+        )
+        .unwrap();
+
+        let plan = engine().plan(&zip).unwrap();
+        let ids: Vec<&str> = plan.candidates.iter().map(|c| c.id).collect();
+        assert!(
+            ids.contains(&"archive.browse"),
+            "a ZIP must open in the commander: {ids:?}"
+        );
+        assert!(
+            !ids.iter().any(|id| id.starts_with("lha.")),
+            "no LHA-only action may be offered for a ZIP: {ids:?}"
+        );
+        assert!(plan
+            .recommendations
+            .iter()
+            .any(|r| r.info.id == "archive.browse"));
 
         std::fs::remove_dir_all(&dir).ok();
     }

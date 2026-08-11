@@ -5,19 +5,33 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  archiveEnter,
+  archiveLeave,
   copyDirection,
   enterIsoTrail,
+  isReadOnlyContainer,
   isVolumeKind,
   leaveIsoTrail,
   type PaneKind,
 } from "./isoPane";
 
 describe("isVolumeKind", () => {
-  it("is true for adf and hdf, false for local and iso", () => {
+  it("is true for adf and hdf, false for local, iso and archive", () => {
     expect(isVolumeKind("adf")).toBe(true);
     expect(isVolumeKind("hdf")).toBe(true);
     expect(isVolumeKind("local")).toBe(false);
     expect(isVolumeKind("iso")).toBe(false);
+    expect(isVolumeKind("archive")).toBe(false);
+  });
+});
+
+describe("isReadOnlyContainer", () => {
+  it("is true for the two kinds ART only ever reads", () => {
+    expect(isReadOnlyContainer("iso")).toBe(true);
+    expect(isReadOnlyContainer("archive")).toBe(true);
+    expect(isReadOnlyContainer("local")).toBe(false);
+    expect(isReadOnlyContainer("adf")).toBe(false);
+    expect(isReadOnlyContainer("hdf")).toBe(false);
   });
 });
 
@@ -52,12 +66,34 @@ describe("copyDirection", () => {
   });
 
   it("refuses every direction that would write into a disc", () => {
-    const sources: PaneKind[] = ["local", "adf", "hdf", "iso"];
+    const sources: PaneKind[] = ["local", "adf", "hdf", "iso", "archive"];
     for (const source of sources) {
       const result = copyDirection(source, "iso");
       expect(result.kind).toBe("refused");
       if (result.kind === "refused") {
         expect(result.reason.key).toBe("files.writeRefusal.iso");
+      }
+    }
+  });
+
+  it("routes an archive to local as the archive extraction command", () => {
+    expect(copyDirection("archive", "local")).toEqual({ kind: "archive-to-local" });
+  });
+
+  it("routes an archive to a volume as the unpack-and-copy-in path", () => {
+    expect(copyDirection("archive", "adf")).toEqual({ kind: "archive-to-volume" });
+    expect(copyDirection("archive", "hdf")).toEqual({ kind: "archive-to-volume" });
+  });
+
+  it("refuses every direction that would write into an archive, with its own reason", () => {
+    const sources: PaneKind[] = ["local", "adf", "hdf", "iso", "archive"];
+    for (const source of sources) {
+      const result = copyDirection(source, "archive");
+      expect(result.kind).toBe("refused");
+      if (result.kind === "refused") {
+        // Not the disc's sentence: "a disc is read-only" and "ART does not
+        // write archives" are different facts.
+        expect(result.reason.key).toBe("files.writeRefusal.archive");
       }
     }
   });
@@ -100,6 +136,19 @@ describe("enterIsoTrail / leaveIsoTrail", () => {
 
   it("returns null at the root, where there is nothing to go up to", () => {
     expect(leaveIsoTrail([])).toBeNull();
+  });
+
+  it("an archive needs no trail: the path is the address", () => {
+    // Entering and leaving are inverses at every level, which is what makes
+    // a parallel breadcrumb array unnecessary rather than merely unused.
+    let dir = archiveEnter("", "Tools");
+    expect(dir).toBe("Tools");
+    dir = archiveEnter(dir, "Sub");
+    expect(dir).toBe("Tools/Sub");
+
+    expect(archiveLeave(dir)).toBe("Tools");
+    expect(archiveLeave("Tools")).toBe("");
+    expect(archiveLeave("")).toBeNull();
   });
 
   it("leaveIsoTrail never mutates the trail it was given", () => {
