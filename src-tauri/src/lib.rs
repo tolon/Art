@@ -171,6 +171,7 @@ pub fn run() {
             commands::volume::volume_extract_to,
             commands::iso::iso_open,
             commands::iso::iso_list,
+            commands::iso::iso_extract_file,
             commands::iso::iso_extract,
             commands::iso::iso_copy_to_volume,
             commands::volume_write::volume_write_capability,

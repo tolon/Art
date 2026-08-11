@@ -34,6 +34,7 @@ function entry(name: string): PanelEntry {
     bytes: 10,
     path: null,
     header_block: null,
+    iso_extent: null,
     is_link: false,
     date: null,
     attrs: null,

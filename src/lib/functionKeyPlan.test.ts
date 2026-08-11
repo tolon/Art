@@ -22,6 +22,7 @@ function entry(name: string, overrides: Partial<PanelEntry> = {}): PanelEntry {
     bytes: 100,
     path: null,
     header_block: 42,
+    iso_extent: null,
     is_link: false,
     date: null,
     attrs: null,

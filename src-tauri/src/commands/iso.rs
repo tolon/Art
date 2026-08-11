@@ -24,7 +24,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use super::jobs::{spawn_job, JobRegistry};
-use super::oplog::user_operation;
+use super::oplog::{user_operation, write_result};
 use super::panel::PanelEntry;
 use super::volume_write::{
     run_copy_in_folder_with, CopyOptions, OnCancel, VolumeWriteResult, VOLUME_WRITE_EVENT,
@@ -105,6 +105,86 @@ pub fn iso_list(path: String, extent: u32, length: u32) -> AppResult<Vec<PanelEn
             attrs: None,
         })
         .collect())
+}
+
+/// The body of [`iso_extract_file`], without the `State` a Tauri command
+/// needs — so a test can call it directly rather than standing up a real
+/// app just to reach a plain file read and write.
+fn extract_file(
+    file: &std::path::Path,
+    extent: u32,
+    bytes: u64,
+    name: &str,
+    destination: &std::path::Path,
+    overwrite: Option<bool>,
+) -> CoreResult<super::panel::ExtractedTo> {
+    // Untrusted the moment it left the disc's own directory record and
+    // crossed into a Tauri argument — the same round trip
+    // `HostFolder::resolve` makes for a plan the frontend has seen.
+    let target = crate::core::security::safe_join(destination, name).map_err(|err| {
+        crate::core::error::CoreError::SafetyRefused(format!(
+            "'{name}' cannot be written here: {err}"
+        ))
+    })?;
+
+    if target.exists() && !overwrite.unwrap_or(false) {
+        return Ok(super::panel::ExtractedTo {
+            bytes: std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0),
+            path: target.to_string_lossy().to_string(),
+            skipped_existing: true,
+        });
+    }
+
+    let image = IsoImage::open(file)?;
+    let data = image.read_file(extent, bytes)?;
+    crate::core::safety::atomic::atomic_write(&target, &data)?;
+    Ok(super::panel::ExtractedTo {
+        path: target.to_string_lossy().to_string(),
+        bytes: data.len() as u64,
+        skipped_existing: false,
+    })
+}
+
+/// Copy one file out of a disc to a local folder — the single-entry fast
+/// path of F5, the same asymmetry `volume_extract_to`/`volume_copy_out` give
+/// an ADF or HDF: a lone file copies straight through, synchronously, and
+/// only a whole directory needs a job.
+///
+/// `name` comes from the listing (`iso_list`'s `PanelEntry.name`) rather
+/// than being re-read here: unlike an Amiga volume's header block, a disc's
+/// directory *record* — which is what would carry the name back — is not
+/// addressable by `extent` alone once split from the listing that produced
+/// it, so the caller passes the one it already has.
+#[tauri::command]
+pub fn iso_extract_file(
+    path: String,
+    extent: u32,
+    bytes: u64,
+    name: String,
+    dest_dir: String,
+    overwrite: Option<bool>,
+    oplog: State<'_, JsonlOperationLog>,
+) -> AppResult<super::panel::ExtractedTo> {
+    let file = PathBuf::from(path.trim());
+    let destination = PathBuf::from(dest_dir.trim());
+
+    let result = extract_file(&file, extent, bytes, &name, &destination, overwrite)
+        .map_err(crate::error::AppError::from);
+
+    write_result(
+        &oplog,
+        user_operation("Copy file out of a disc")
+            .source(format!("{path}:{name}"))
+            .destination(destination.display().to_string()),
+        &result,
+        |record, extracted: &super::panel::ExtractedTo| {
+            record
+                .detail("Bytes", extracted.bytes.to_string())
+                .outcome(OperationOutcome::verified(true))
+        },
+    );
+
+    result
 }
 
 /// F5 out of a disc, to a local folder — a job because a disc's directory
@@ -328,6 +408,65 @@ mod tests {
             "header_block stays ADF/HDF-only"
         );
 
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// The single-file fast path reads a file's bytes out and writes them
+    /// byte-for-byte, and a second run leaves the first copy alone rather
+    /// than silently replacing it (`SAFE_CREATE`).
+    #[test]
+    fn extract_file_writes_one_file_and_refuses_to_overwrite_it_by_default() {
+        let d = tmp("extract-file");
+        let p = d.join("disc.iso");
+        std::fs::write(&p, sample_disc()).unwrap();
+        let out = d.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+
+        let path = p.to_string_lossy().to_string();
+        let info = iso_open(path.clone(), None).unwrap();
+        let entries = iso_list(path, info.root_extent, info.root_length).unwrap();
+        let readme = entries.iter().find(|e| e.name == "README.TXT").unwrap();
+
+        let extracted = extract_file(
+            &p,
+            readme.iso_extent.unwrap(),
+            readme.bytes,
+            &readme.name,
+            &out,
+            None,
+        )
+        .unwrap();
+        assert!(!extracted.skipped_existing);
+        assert_eq!(std::fs::read(&extracted.path).unwrap(), b"hello");
+
+        // A second run without `overwrite` leaves the first copy standing.
+        let second = extract_file(
+            &p,
+            readme.iso_extent.unwrap(),
+            readme.bytes,
+            &readme.name,
+            &out,
+            None,
+        )
+        .unwrap();
+        assert!(second.skipped_existing);
+        assert_eq!(std::fs::read(&extracted.path).unwrap(), b"hello");
+
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A bad extent is an error rather than a panic, for the single-file
+    /// path too.
+    #[test]
+    fn extract_file_reports_a_bad_extent_instead_of_panicking() {
+        let d = tmp("extract-file-bad");
+        let p = d.join("disc.iso");
+        std::fs::write(&p, sample_disc()).unwrap();
+        let out = d.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+
+        let err = extract_file(&p, u32::MAX, 2048, "x.txt", &out, None).unwrap_err();
+        assert_eq!(err.code(), "ART-FORMAT-MALFORMED");
         std::fs::remove_dir_all(&d).ok();
     }
 
