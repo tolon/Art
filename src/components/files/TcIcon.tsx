@@ -24,11 +24,11 @@ const ARCHIVE_EXTENSIONS = new Set(["lha", "zip", "7z", "adf", "hdf"]);
  * a colour per extension). */
 const TEXT_EXTENSIONS = new Set(["txt", "md", "readme", "nfo", "doc"]);
 
-/** Names the reference dims as hidden/system (`Desktop.ini`). `PanelEntry`
- * carries no actual attribute bit — see the task report for what the
- * backend would need to add — so this is a name-based stand-in: a leading
- * dot (the Unix/most-editors convention for "hidden") or one of a short
- * list of well-known Windows system files. */
+/** Names the reference dims as hidden/system (`Desktop.ini`). `PanelEntry.attrs`
+ * now carries real attribute bits (task attr), but the hidden/system
+ * classification here is still name-based rather than reading them: a
+ * leading dot (the Unix/most-editors convention for "hidden") or one of a
+ * short list of well-known Windows system files. */
 const HIDDEN_SYSTEM_NAMES = new Set(["desktop.ini", "thumbs.db", "ntuser.dat"]);
 
 function isHiddenByName(name: string): boolean {

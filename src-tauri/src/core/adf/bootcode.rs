@@ -76,9 +76,13 @@ const DOS_NAME: &[u8] = b"dos.library\0";
 /// ART's boot code, ready to be copied to [`BB_ENTRY`].
 ///
 /// Assembled by [`boot_code`] rather than written as a byte literal so the two
-/// relative displacements are computed from the layout instead of being
-/// hand-counted — the two things in this sequence that a human gets wrong, and
-/// that produce a disk which hangs a real machine rather than failing a test.
+/// relative displacements are *derived* from the hand-counted landmark
+/// offsets below (`LEA_AT`/`BEQ_AT`/`FAIL_AT`/`NAME_AT`) instead of being
+/// hand-counted themselves — those four offsets are still hand-counted, but a
+/// displacement computed from them cannot drift out of step the way a second,
+/// independently hand-counted number could. Miscounting a landmark is what
+/// produces a disk which hangs a real machine rather than failing a test; the
+/// landmark test and the `debug_assert` below are the real protection.
 pub fn boot_code() -> Vec<u8> {
     // Offsets below are relative to the start of this fragment, which lands at
     // BB_ENTRY in the block. Sizes are fixed, so both displacements can be
