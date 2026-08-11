@@ -23,6 +23,25 @@ what fixed it (with the test that proves it).
 
 ## Open
 
+**ART-075** 🟡 **A raw CD image in Mode 2 Form 1 would be misread, and two layers would be wrong together**
+`core/detect.rs` (`ISO_PVD_OFFSET_2352`), `core/iso/` · ART finds a raw
+2352-byte-sector track by probing `CD001` at `0x9311`, which assumes **Mode 1**:
+16 bytes of sync and header, then 2048 bytes of user data. A **Mode 2 Form 1**
+sector puts its user data at offset 24, not 16, so the signature would sit at
+`0x9319` and ART would not recognise the image at all. Worse, if it ever were
+recognised, the reader takes its data offset from the same assumption, so
+detection and the reader would be wrong *together* — the shape behind
+ART-032…035.
+
+Task 2's synthetic ISOs were independently checked by mounting them with the
+host OS, which is what closed that risk for the 2048-byte layout. **No host
+mounts a raw track dump**, so the 2352 path rests entirely on ART agreeing
+with itself. Mixed-mode and CD32 discs are exactly where Mode 2 appears.
+
+The fix is to stop assuming: read the sector's mode byte (offset 15 of the
+sync header) and take the data offset from it, rather than hardcoding 16.
+Needs a Mode 2 Form 1 fixture, and ideally a real disc image to check against.
+
 **ART-073** 🟡 **`delete_many`'s all-or-nothing guarantee only holds for the whole-file strategy**
 `src-tauri/src/commands/volume_write.rs::delete_many` (line ~505) · The
 pre-check (`check_batch_deletable`) runs once, against a read-only listing,
