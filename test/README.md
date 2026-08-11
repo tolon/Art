@@ -61,17 +61,19 @@ file `Readme` containing `hello from ART` — so the only difference between
 this image and the one above is the 42 bytes at offset 12. That makes it a
 clean test of ART-063 and nothing else.
 
-**What it should do:** boot. Not boot *to Workbench* — see below — but get
-past the insert-disk hand and reach a CLI prompt, or an error about
-`S/Startup-Sequence` being missing. Either of those is a pass. Sitting at the
-hand, or a red/yellow guru alert, is a fail.
+**It boots — verified 2026-08-11.** That closes ART-063, and it is the only
+way that question could have been closed. Every automated check ART has, and
+the amitools oracle too, only ask whether the boot block is *well-formed*:
+`xdftool` reported `bootable: True` for the old `RTS` stub that did nothing at
+all. Whether the code inside it runs is a question only Kickstart answers.
 
-**What is already verified:** the boot block's checksum is valid computed the
-way Kickstart computes it (additive carry-wraparound sum to `0xFFFFFFFF`),
-`xdftool` reports `bootable: True`, and `core::adf::bootcode`'s tests pin the
-instruction layout and both relative displacements. **None of that proves
-Kickstart will accept it.** A boot block can satisfy every one of those checks
-and still hang a real machine, which is exactly why this file exists.
+What booting proves, link by link: `strap` accepted the `DOS` signature and the
+checksum, jumped to offset 12, our `move.l 4.w,a6` found `ExecBase`, the
+PC-relative `lea` resolved to `"dos.library"`, `FindResident` at LVO −96
+returned a resident tag, `rt_Init` at offset 22 was the right field, and
+returning `D0 = 0` with `A0` pointing there was the contract `strap` wanted —
+it freed the boot sector and jumped. A wrong displacement or a wrong offset
+anywhere in that chain gives an alert and a reboot, not a boot.
 
 **Why it will not reach Workbench.** Once DOS is running it looks for
 `S/Startup-Sequence`, and what that script needs — `c/` commands, `libs/`,

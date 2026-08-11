@@ -23,26 +23,6 @@ what fixed it (with the test that proves it).
 
 ## Open
 
-**ART-063** 🟠 **ART cannot write a disk an Amiga will boot from**
-`core/adf/create.rs:54-58` · The `bootable` flag writes `0x4E 0x75` — a bare
-`RTS` — at offset 12 and nothing else. The Kickstart ROM validates the boot
-block's `DOS` signature and checksum, jumps to offset 12, and expects the code
-there to return a pointer to the DOS resident structure in `d0`. An `RTS`
-returns immediately with whatever `d0` held, so nothing is loaded and the
-machine sits at the insert-disk hand. Confirmed on 2026-08-11 under
-licensed Kickstart/Workbench (Amiga Forever / WinUAE), A1200 and A500+
-configurations: `test/task-10-boot-test.adf` would not boot, while the same
-disk **mounted, listed its file, and read its contents back correctly** — so
-this is a boot-code gap, not a filesystem defect.
-
-The fix is roughly twenty bytes of 68000: open `dos.library` through
-`expansion.library`, return its base in `d0`. **Write our own**; the stock
-Commodore boot block is copyrighted code and ART ships no Amiga content, ever.
-An A500+ (Kickstart 2.04) and an A1200 (3.0/3.1) accept the same sequence, so
-one implementation covers both. `info.bootable` currently reports `true` for a
-disk that cannot boot, which is a claim ART should not be making (§10, §89) —
-until this is fixed, that flag means "has a valid boot block", not "boots".
-
 **ART-062** 🔵 **No language has been checked on screen**
 `src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
 was verified by `pnpm test`'s key-parity check and by reading the JSON — never
@@ -248,6 +228,34 @@ before/after pair with `git diff --no-index`, including with `-a`/`--text`
 forced. That is a property of diffing *against the old, binary-flagged blob*,
 not of the fixed file: every diff of `docs/FEATURES.md` from this commit
 onward, once neither side has a raw NUL, renders as ordinary text.
+
+### Phase 1a
+
+**ART-063** 🟠 **ART could not write a disk an Amiga would boot from**
+`core/adf/create.rs`, `core/adf/bootcode.rs` · The `bootable` flag wrote
+`0x4E 0x75` — a bare `RTS` — at offset 12 and nothing else. Kickstart's `strap`
+validates the boot block's `DOS` signature and checksum, jumps to offset 12,
+and requires the code there to return `D0 = 0` with `A0` holding an address to
+jump to; **a non-zero `D0` raises a system alert and reboots**. An `RTS`
+returned with whatever `D0` already held, so nothing was ever loaded. Invisible
+to every test ART had, and to the amitools oracle, because both only ask
+whether the boot block is *well-formed* — `xdftool` reported `bootable: True`
+for the RTS stub too. Only Kickstart can answer whether the code runs.
+→ `core/adf/bootcode.rs` assembles what the contract asks for: read `ExecBase`
+from absolute address 4 (guaranteed, unlike `A6` on entry, which is convention),
+`FindResident("dos.library")` at exec LVO −96, take `rt_Init` at offset 22 of
+the returned `struct Resident`, return `D0 = 0` with `A0` pointing at it. ART's
+own implementation, written from the documented contract and the published LVO
+table — Commodore's boot block is copyrighted and ART ships no Amiga content,
+ever. The two relative displacements are computed from the layout rather than
+hand-counted, because miscounting either produces a disk that hangs a real
+machine while every test still passes; seven tests in `bootcode::tests` pin
+each landmark and both displacements independently. **Verified by booting
+`test/art-bootable-test.adf` on 2026-08-11.** Note the scope: a disk that
+boots is not a disk that boots to Workbench — DOS then wants
+`S/Startup-Sequence` and the `c/`, `libs/` and `l/` contents behind it, which
+are AmigaOS content ART cannot supply. Reaching a CLI prompt is the whole
+claim, and `info.bootable` now means what it says.
 
 ### Phase 0a
 
