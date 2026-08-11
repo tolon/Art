@@ -463,14 +463,45 @@ fn check_batch_deletable<D: crate::core::volume::BlockDevice + ?Sized>(
     Ok(())
 }
 
+/// Drop later duplicates of a name already seen, comparing the way AmigaDOS
+/// does (case-insensitively) rather than byte-for-byte.
+///
+/// `["A.txt", "a.txt"]` names the same directory entry twice. Without this,
+/// the case-insensitive pre-check in [`check_batch_deletable`] passes (both
+/// spellings resolve to the one entry that is there), the writer session
+/// deletes it for the first name, and the *second* name's `find` then comes
+/// back empty — the exact "checked, then vanished mid-batch" shape §92 exists
+/// to prevent, self-inflicted by the caller's own list rather than by
+/// anything changing underneath it. Deduping first makes the batch see one
+/// name once, the same as a selection that only ever named it once would.
+fn dedupe_case_insensitive(names: &[String]) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::with_capacity(names.len());
+    for name in names {
+        if seen.insert(name.to_lowercase()) {
+            out.push(name.clone());
+        }
+    }
+    out
+}
+
 /// The batch-delete pipeline, without the Tauri `State` the command wrapper
 /// needs: pre-check every name, then delete everything inside one writer
 /// session so the whole-file strategy takes exactly one backup for the batch.
 ///
-/// All-or-nothing (§92): every name is resolved and checked *before* the
-/// writer session opens, so a batch that cannot fully succeed deletes
-/// nothing rather than stopping partway and leaving the user unsure which
-/// half of their selection is still there.
+/// All-or-nothing *for the whole-file strategy* (§92): every name is
+/// resolved and checked *before* the writer session opens, so a batch that
+/// cannot fully succeed deletes nothing rather than stopping partway and
+/// leaving the user unsure which half of their selection is still there —
+/// proven here because every test in this module runs a floppy-sized image.
+///
+/// The block-journal strategy (large HDFs) cannot make the same promise:
+/// each delete inside the session below is its own committed, journalled
+/// operation, already durable in the file the moment `writer.delete` returns.
+/// An error partway through the loop after the pre-check passed — a name
+/// resolving differently than it did a moment ago, say — still leaves the
+/// earlier deletes standing. Tracked as an open defect rather than fixed
+/// here; see `docs/ISSUES.md`.
 fn delete_many(
     image: &Path,
     volume_index: usize,
@@ -478,6 +509,8 @@ fn delete_many(
     names: &[String],
 ) -> CoreResult<DeleteManyResult> {
     let parent = dir_block.unwrap_or(0);
+    let names = dedupe_case_insensitive(names);
+    let names = names.as_slice();
 
     {
         let entry = pick(image, volume_index)?;
@@ -2492,6 +2525,28 @@ mod tests {
 
         assert_eq!(image.bytes(), before);
         assert_eq!(image.listing().len(), 1, "Real.txt is still there");
+    }
+
+    /// The cheap half of the review's `delete_many` finding: `["A.txt",
+    /// "a.txt"]` names the one entry that is there twice. Before deduping,
+    /// the case-insensitive pre-check passed (both spellings resolve), the
+    /// writer session deleted it on the first name, and the second name's
+    /// `find` then failed — a batch refusing itself over its own duplicate
+    /// input, not over anything external. Deduping first means the batch
+    /// sees the name once and deletes it once.
+    #[test]
+    fn a_batch_delete_dedupes_case_different_spellings_of_the_same_name() {
+        let image = Image::new("batch-delete-dedupe", 1760);
+        with_writer(&image.path, 0, |writer| {
+            writer.add_file(0, "A.txt", b"x", Default::default())
+        })
+        .unwrap();
+
+        let names = vec!["A.txt".to_string(), "a.txt".to_string()];
+        let result = delete_many(&image.path, 0, None, &names).unwrap();
+
+        assert_eq!(result.deleted, 1, "one entry, named twice, deletes once");
+        assert!(image.listing().is_empty());
     }
 
     #[test]

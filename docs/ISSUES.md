@@ -23,6 +23,95 @@ what fixed it (with the test that proves it).
 
 ## Open
 
+**ART-073** 🟡 **`delete_many`'s all-or-nothing guarantee only holds for the whole-file strategy**
+`src-tauri/src/commands/volume_write.rs::delete_many` (line ~505) · The
+pre-check (`check_batch_deletable`) runs once, against a read-only listing,
+before the writer session opens — for a floppy-sized image (the whole-file
+strategy) that is enough: nothing is written until the whole in-memory
+result validates, so a batch that cannot fully succeed leaves the file
+untouched, and every test in this module exercises that path. On a
+block-journal image (a large HDF) each `writer.delete(...)` inside the
+session's loop is its own committed, journalled operation, already durable
+in the file the instant it returns — there is no whole-image commit step to
+refuse at. An error partway through the loop after the pre-check passed
+(a name resolving differently a moment later, say) leaves the earlier
+deletes in the batch standing rather than none of them, breaking the
+all-or-nothing promise the doc comment now qualifies. Reachable in
+principle whenever a batch delete runs against an HDF rather than an ADF.
+Not reachable through the case-different-name path any more —
+`dedupe_case_insensitive` (added in the same pass that found this) closes
+that specific trigger — but the underlying strategy gap is still open. Fix
+would need the block-journal strategy to buffer its own generation of
+deletes behind one commit point the way the whole-file strategy already
+does, which is a real design change, not a one-line fix.
+
+**ART-072** 🟡 **Selection collision checks compare names case-sensitively, so `Docs` and `docs` are not caught**
+`src-tauri/src/core/volume/write/copy.rs::HostSelection::check_for_name_collisions`
+(line ~489) and `src-tauri/src/commands/archives.rs::prepare_archives`
+(line ~350) both keep a `BTreeMap<String, _>` keyed on the name exactly as
+given, so two roots (or two archives) that would land under the same drawer
+name only collide when they are byte-for-byte identical. AmigaDOS is
+case-preserving but case-*insensitive* (the same rule `hash::name_hash`
+respects, ART-009/ART-010), so `Docs` and `docs` are two different keys
+here but the one directory entry there. In `copy.rs` this means the clean,
+named refusal `check_for_name_collisions` exists to give never fires for a
+case-different pair; the second root is instead silently skipped later,
+along with its whole subtree, replacing one clear "rename one of these"
+message with a pile of unexplained "skipped" lines. In `archives.rs` the
+same gap means two archives that both unpack to a `Docs`/`docs` drawer are
+not refused up front either — `std::fs::rename(&item.content_root,
+&destination)` is what fails instead, surfacing a raw OS rename error
+rather than the friendly named-collision sentence the exact-match case
+already gets. Fix is to key both maps on `name.to_lowercase()` instead of
+the name itself, the same change `dedupe_case_insensitive`
+(`commands/volume_write.rs`) just made for batch deletes.
+
+**ART-071** 🟡 **A selection of only symlinks copies nothing and reports success**
+`src-tauri/src/core/volume/write/copy.rs::HostSelection::entries_capped`
+(line ~527) · A root that is a symlink is skipped with a bare `continue` —
+correct on its own (a link out of the pick would copy in something the user
+did not select, the same rule `HostFolder`'s own `walk` applies mid-tree at
+line ~414), but nothing records that it happened. If every root in a
+selection is a symlink, `entries()` returns an empty `Vec` with no entry in
+`CopyReport.skipped`, so `copy_into_volume` runs its loop zero times and
+returns a report where `cancelled` is false and `skipped` is empty —
+`CopyReport::is_complete()` reads that as a clean success. The user picked
+one or more things, ART copied none of them, and every signal available to
+the UI says the copy worked. Fix is for `entries_capped` to push a skipped
+entry (as `walk`'s sibling check already could, but currently does not
+either) rather than silently dropping the root.
+
+**ART-070** 🔵 **`refresh(side)` moves keyboard focus to the pane it refreshed**
+`src/pages/FileManager.tsx` — `openLocal`, `openAdf`, `openHdf` and
+`openVolume` (lines 552, 585, 600, 638) each end with `resetSelection(side);
+setFocused(side);`, and `refresh(side)` (line ~723) calls whichever of them
+matches the pane's kind. F5's copy-in path calls `refresh(to)` on the
+*destination* pane once the job result arrives, so after a copy, keyboard
+focus silently jumps from the source pane (where the user was working) to
+the destination — Total Commander leaves focus on the source. Cosmetic, not
+a safety issue: nothing is acted on incorrectly, the next F-key press just
+lands on the pane the user was not looking at. Fix would need `refresh` to
+take an explicit "keep focus here" flag, or for its callers to restore
+`focused` afterward rather than trusting the open-pane functions' own
+default.
+
+**ART-069** 🔵 **No frontend test renders `FileManager.tsx`**
+`src/pages/FileManager.tsx` · It calls Tauri commands (`onVolumeWriteResult`,
+`onJobProgress`, panel listing, …) on mount, which is why every phase-1a
+frontend test extracts a pure function or hook instead of rendering the
+page — `@/lib/selection`, `@/lib/functionKeyPlan` (added closing finding 4
+of the phase-1a whole-branch review), `usePaneTab`/`isShortcutBlocked` in
+`FunctionKeys.tsx`, and so on. Each extraction is real, tested logic, but
+none of them proves the page actually *wires* the extracted piece
+correctly — that an F-key's `run` reads the same `target` its `enabled`
+was computed from, that a click handler calls the selection function it
+looks like it calls, that the two `useEffect` result listeners registered
+at mount really are registered before any button can start a job. Closing
+this needs either a mock of the Tauri IPC surface (`@tauri-apps/api/core`'s
+`invoke`, `@tauri-apps/api/event`'s `listen`) sufficient to render the page
+in a test, or splitting `FileManager.tsx` into smaller components each
+small enough to mock individually — a real task, not a quick fix.
+
 **ART-068** 🔵 **The filter box tells "empty" from "no match" by comparing entry counts, not a dedicated flag**
 `src/pages/FileManager.tsx` (~line 2260) · The "a mask matching nothing says so"
 message picks between `files.pane.filterNoMatch` and `files.pane.empty` with
