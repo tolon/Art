@@ -15,6 +15,7 @@
 pub mod bcpl;
 pub mod blocks;
 pub mod bootblock;
+pub mod bootcode;
 pub mod checksum;
 pub mod create;
 pub mod extract;

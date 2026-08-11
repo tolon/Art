@@ -12,6 +12,7 @@ use std::path::Path;
 use super::bcpl::{write_bcpl_string, AmigaDate};
 use super::blocks::{block_subtype, block_type, BLOCK_SIZE, HASH_TABLE_SIZE};
 use super::bootblock::{BootBlock, FileSystemType, DEFAULT_ROOT_BLOCK};
+use super::bootcode;
 use super::checksum::block_checksum;
 
 /// Boot blocks at the front of a floppy, excluded from the bitmap.
@@ -52,9 +53,12 @@ pub fn create_blank_adf(
     // AmigaDOS disk with no boot code installed.
 
     if bootable {
-        // Standard minimal AmigaDOS bootloader header bytes
-        // (opcode to set up register and call DOS)
-        img[12..16].copy_from_slice(&[0x4E, 0x75, 0x00, 0x00]); // RTS stub
+        // Kickstart jumps to offset 12 and requires the code there to return
+        // D0 = 0 with A0 holding an address to jump to; a non-zero D0 raises
+        // an alert and reboots. The bare RTS this used to write returned with
+        // whatever was already in D0, so the machine did nothing (ART-063).
+        let code = bootcode::boot_code();
+        img[bootcode::BB_ENTRY..bootcode::BB_ENTRY + code.len()].copy_from_slice(&code);
     }
 
     // Compute and embed 1024-byte bootblock checksum at offset 4..8
@@ -319,6 +323,40 @@ mod oracle_export {
 
         // Add a file the way the application does: through the one filesystem
         // writer ART has, so the oracle sees what a user's disk would contain.
+        let geometry = VolumeGeometry::floppy_dd(DosType::new(*b"DOS\x01"));
+        let mut device =
+            FileRegionMut::open(&dest, 0, geometry.total_bytes(), geometry.block_size).unwrap();
+        let mut writer = VolumeWriter::open(&mut device, geometry, &dest, 0).unwrap();
+        writer
+            .add_file(0, "Readme", b"hello from ART", Default::default())
+            .unwrap();
+    }
+
+    /// Write a **bootable** disk for a human to try on a real Amiga.
+    ///
+    /// ART-063's fix cannot be proved by any test here. Whether Kickstart
+    /// accepts our boot code is a question only Kickstart answers: the tests
+    /// in `core::adf::bootcode` pin the instruction layout and the two
+    /// relative displacements, which is the part a human gets wrong, but a
+    /// disk can satisfy every one of them and still hang a real machine.
+    ///
+    /// Set `ART_BOOT_ADF_OUT` to a path and run the suite. Contents match the
+    /// non-bootable disk in `test/` deliberately, so the only difference
+    /// between the two is the boot block.
+    #[test]
+    fn export_bootable_adf_when_asked() {
+        use crate::core::volume::device::FileRegionMut;
+        use crate::core::volume::write::VolumeWriter;
+        use crate::core::volume::{DosType, VolumeGeometry};
+
+        let Ok(dest) = std::env::var("ART_BOOT_ADF_OUT") else {
+            return;
+        };
+        let dest = std::path::PathBuf::from(dest);
+        let image =
+            super::create_blank_adf("Work", crate::core::adf::FileSystemType::Ffs, true).unwrap();
+        std::fs::write(&dest, image).unwrap();
+
         let geometry = VolumeGeometry::floppy_dd(DosType::new(*b"DOS\x01"));
         let mut device =
             FileRegionMut::open(&dest, 0, geometry.total_bytes(), geometry.block_size).unwrap();

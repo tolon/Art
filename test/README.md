@@ -52,6 +52,39 @@ four real bugs shipped behind a green suite because ART's reader and writer
 shared the same mistake. An independent implementation (amitools) closed part
 of that gap. AmigaDOS closes the rest.
 
+---
+
+## `art-bootable-test.adf`
+
+**The same disk, with boot code.** Identical contents — volume `Work`, one
+file `Readme` containing `hello from ART` — so the only difference between
+this image and the one above is the 42 bytes at offset 12. That makes it a
+clean test of ART-063 and nothing else.
+
+**What it should do:** boot. Not boot *to Workbench* — see below — but get
+past the insert-disk hand and reach a CLI prompt, or an error about
+`S/Startup-Sequence` being missing. Either of those is a pass. Sitting at the
+hand, or a red/yellow guru alert, is a fail.
+
+**What is already verified:** the boot block's checksum is valid computed the
+way Kickstart computes it (additive carry-wraparound sum to `0xFFFFFFFF`),
+`xdftool` reports `bootable: True`, and `core::adf::bootcode`'s tests pin the
+instruction layout and both relative displacements. **None of that proves
+Kickstart will accept it.** A boot block can satisfy every one of those checks
+and still hang a real machine, which is exactly why this file exists.
+
+**Why it will not reach Workbench.** Once DOS is running it looks for
+`S/Startup-Sequence`, and what that script needs — `c/` commands, `libs/`,
+`l/` handlers — is AmigaOS content ART cannot supply and will never ship. A
+disk that boots to a CLI prompt is the whole of what ART-063 claims.
+
+Regenerate it with:
+
+```
+cd src-tauri
+ART_BOOT_ADF_OUT=../test/art-bootable-test.adf cargo test export_bootable_adf_when_asked
+```
+
 **A note for whoever tries this next.** Workbench does not display a file that
 has no `.info` icon beside it, so `Readme` is invisible in a Workbench window
 even though it is on the disk. Use **Window → Show → All Files** (Kickstart 2.0
