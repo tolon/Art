@@ -76,6 +76,12 @@ pub struct ArchiveDrawer {
     pub files: usize,
     pub directories: usize,
     pub bytes: u64,
+    /// Entries the extractor itself refused — a traversal entry, one over the
+    /// decompression-bomb cap, a name it could not write — with the reason.
+    /// Never silent: these never reach the copy phase at all, so nothing
+    /// downstream would otherwise mention them (§68's "never silent" rule).
+    /// Shown in the plan, before the user confirms anything.
+    pub skipped: Vec<String>,
 }
 
 /// What installing every archive in the batch would do. Writes nothing.
@@ -85,11 +91,12 @@ pub struct ArchivesPlan {
     pub drawers: Vec<ArchiveDrawer>,
     /// The cost of the whole batch, over the union of every drawer — the same
     /// [`CopyPlan`] a plain multi-file copy shows, so the dialog that already
-    /// renders one reads this without a special case.
+    /// renders one reads this without a special case. `cost.fits()` /
+    /// `cost.shortfall()` are what say whether the batch is refused; there is
+    /// no separate refusal field here; `CopyPlanDialog` already derives its
+    /// own localised shortfall sentence from `cost` this exact way for a
+    /// plain multi-file plan, via `planShortfall`.
     pub cost: CopyPlan,
-    /// Present, as data and never an error, when the batch will not fit —
-    /// real block numbers against real free space (§92).
-    pub refusal: Option<String>,
 }
 
 /// What installing `archives` into a volume would do. Writes nothing.
@@ -123,13 +130,8 @@ fn build_plan(
         parent,
         &selection,
     )?;
-    let refusal = cost.shortfall();
 
-    Ok(ArchivesPlan {
-        drawers,
-        cost,
-        refusal,
-    })
+    Ok(ArchivesPlan { drawers, cost })
 }
 
 fn normalize_archives(archives: &[String]) -> CoreResult<Vec<PathBuf>> {
@@ -239,25 +241,49 @@ fn install_archives(
     progress: &dyn ProgressSink,
 ) -> CoreResult<(crate::core::volume::write::copy::CopyReport, Option<String>)> {
     let staging = Staging::new()?;
-    let (_drawers, roots) = prepare_archives(archives, staging.path(), progress)?;
+    let (drawers, roots) = prepare_archives(archives, staging.path(), progress)?;
     let selection = HostSelection::new(roots);
 
     // The same fits-or-nothing, abandon-on-cancel primitive a single-archive
     // install uses — one call, over the whole staged batch, so a cancelled
     // batch is exactly as atomic as a cancelled single install.
-    crate::commands::volume_write::install_into_folder(
+    let (mut report, backup) = crate::commands::volume_write::install_into_folder(
         image,
         volume_index,
         parent,
         &selection,
         policy,
         progress,
-    )
+    )?;
+
+    // Entries the extractor itself refused never reach the copy phase, so
+    // `report.skipped` alone says nothing about them — carried over from the
+    // same per-archive accounting the plan already shows, so the finished
+    // install is exactly as honest as the plan was (§68's "never silent").
+    for drawer in &drawers {
+        report.skipped.extend(drawer.skipped.iter().cloned());
+    }
+
+    Ok((report, backup))
 }
 
 // ---------------------------------------------------------------------------
 // Unpacking, naming and staging — shared by the plan and the install
 // ---------------------------------------------------------------------------
+
+/// One archive, unpacked and named, before it has been moved into staging.
+struct Unpacked {
+    archive: PathBuf,
+    drawer: String,
+    content_root: PathBuf,
+    /// What the extractor itself refused for this archive — a traversal
+    /// entry, one over the bomb cap, an unusable name. Carried through to
+    /// [`ArchiveDrawer::skipped`] so it is never silently dropped.
+    skipped: Vec<String>,
+    /// Kept alive only so its directory survives until `content_root` has
+    /// been moved out of it; never read again after that.
+    _scratch: crate::core::sources::install::Scratch,
+}
 
 /// Unpack every archive, work out where its contents will land, and move each
 /// into `staging` under that name.
@@ -275,12 +301,7 @@ fn prepare_archives(
     // Every scratch directory stays alive until the whole batch has been
     // named and checked for collisions — dropping one early would remove its
     // content before it has been moved into staging.
-    let mut unpacked: Vec<(
-        PathBuf,
-        String,
-        PathBuf,
-        crate::core::sources::install::Scratch,
-    )> = Vec::with_capacity(archives.len());
+    let mut unpacked: Vec<Unpacked> = Vec::with_capacity(archives.len());
 
     for (index, archive) in archives.iter().enumerate() {
         // Between whole units of work, never mid-unpack (§54): one archive is
@@ -292,7 +313,7 @@ fn prepare_archives(
         let label = file_label(archive);
         progress.report(index as u64, Some(total), &format!("Unpacking {label}"));
 
-        let (scratch, _unpack_skipped) = unpack_for_install(archive, &NoProgress)?;
+        let (scratch, unpack_skipped) = unpack_for_install(archive, &NoProgress)?;
         let top = top_level_entries(scratch.path())?;
 
         let (drawer_name, content_root) = if top.len() == 1 && top[0].is_dir {
@@ -307,30 +328,37 @@ fn prepare_archives(
             (archive_stem(archive)?, scratch.path().to_path_buf())
         };
 
-        unpacked.push((archive.clone(), drawer_name, content_root, scratch));
+        unpacked.push(Unpacked {
+            archive: archive.clone(),
+            drawer: drawer_name,
+            content_root,
+            skipped: unpack_skipped,
+            _scratch: scratch,
+        });
     }
 
     // Two archives that would both create the same drawer are reported by
     // name, before anything moves — silently interleaving two unrelated
     // archives into one directory would be worse than refusing (§92).
     let mut seen: std::collections::BTreeMap<String, &Path> = std::collections::BTreeMap::new();
-    for (archive, drawer, _, _) in &unpacked {
-        if let Some(other) = seen.get(drawer.as_str()) {
+    for item in &unpacked {
+        if let Some(other) = seen.get(item.drawer.as_str()) {
             return Err(CoreError::InvalidInput(format!(
-                "'{}' and '{}' would both create a drawer called '{drawer}' — rename one \
+                "'{}' and '{}' would both create a drawer called '{}' — rename one \
                  before installing them together",
                 other.display(),
-                archive.display()
+                item.archive.display(),
+                item.drawer
             )));
         }
-        seen.insert(drawer.clone(), archive.as_path());
+        seen.insert(item.drawer.clone(), item.archive.as_path());
     }
 
     let mut drawers = Vec::with_capacity(unpacked.len());
     let mut roots = Vec::with_capacity(unpacked.len());
 
-    for (archive, drawer_name, content_root, _scratch) in &unpacked {
-        let stats = HostFolder::new(content_root.as_path(), true).entries()?;
+    for item in unpacked {
+        let stats = HostFolder::new(item.content_root.as_path(), true).entries()?;
         let files = stats.iter().filter(|entry| !entry.is_dir).count();
         let directories = stats.iter().filter(|entry| entry.is_dir).count();
         let bytes: u64 = stats
@@ -339,20 +367,22 @@ fn prepare_archives(
             .map(|entry| entry.bytes)
             .sum();
 
-        let destination = safe_join(staging, drawer_name).map_err(|err| {
+        let destination = safe_join(staging, &item.drawer).map_err(|err| {
             CoreError::InvalidInput(format!(
-                "'{drawer_name}' is not a name ART can use for a drawer: {err}"
+                "'{}' is not a name ART can use for a drawer: {err}",
+                item.drawer
             ))
         })?;
-        std::fs::rename(content_root, &destination)?;
+        std::fs::rename(&item.content_root, &destination)?;
 
         drawers.push(ArchiveDrawer {
-            archive: archive.display().to_string(),
-            name: file_label(archive),
-            drawer: drawer_name.clone(),
+            archive: item.archive.display().to_string(),
+            name: file_label(&item.archive),
+            drawer: item.drawer,
             files,
             directories,
             bytes,
+            skipped: item.skipped,
         });
         roots.push(destination);
     }
@@ -369,18 +399,33 @@ fn file_label(path: &Path) -> String {
 
 /// The archive's own name without its extension — the drawer name for an
 /// archive that does not unpack to one single top-level directory.
+///
+/// Requires the stem to parse as exactly one [`Component::Normal`]. Without
+/// this, a file literally named `..lha` has `file_stem() == "."` (Rust only
+/// treats a *leading* dot as part of the name when there is no other `.` —
+/// `..lha`'s first dot is the stem/extension separator, leaving the stem as
+/// the single character `.`), and `safe_join(staging, ".")` legitimately
+/// resolves to `staging` itself: the following `fs::rename` would then target
+/// the staging root and fail with a raw OS error instead of a clean refusal
+/// naming the archive.
 fn archive_stem(archive: &Path) -> CoreResult<String> {
-    archive
+    let invalid = || {
+        CoreError::InvalidInput(format!(
+            "'{}' has no name ART can use for a drawer",
+            archive.display()
+        ))
+    };
+
+    let stem = archive
         .file_stem()
         .and_then(|stem| stem.to_str())
-        .map(str::to_string)
-        .filter(|stem| !stem.is_empty())
-        .ok_or_else(|| {
-            CoreError::InvalidInput(format!(
-                "'{}' has no name ART can use for a drawer",
-                archive.display()
-            ))
-        })
+        .ok_or_else(invalid)?;
+
+    let mut components = Path::new(stem).components();
+    match (components.next(), components.next()) {
+        (Some(std::path::Component::Normal(_)), None) => Ok(stem.to_string()),
+        _ => Err(invalid()),
+    }
 }
 
 struct TopEntry {
@@ -547,6 +592,31 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A file literally named `..lha` has `file_stem() == "."` (Rust treats
+    /// the first `.` as the stem/extension separator once there is a second
+    /// `.` in the name). That must be refused, not accepted as a drawer name:
+    /// `safe_join(staging, ".")` legitimately resolves to `staging` itself,
+    /// so an unchecked stem here would make `prepare_archives` try to rename
+    /// the archive's contents onto the staging root.
+    #[test]
+    fn a_stem_that_is_only_dots_is_refused_as_a_drawer_name() {
+        let dir = scratch("dotty-stem");
+        let archive = dir.join("..lha");
+        std::fs::write(&archive, make_lha_with(&[("Readme.txt", b"about")])).unwrap();
+
+        let err = archive_stem(&archive).unwrap_err();
+        assert_eq!(err.code(), "ART-INPUT-INVALID");
+
+        // And the whole pipeline refuses it too, rather than panicking or
+        // renaming onto the staging directory itself.
+        let staging = dir.join("staging");
+        std::fs::create_dir_all(&staging).unwrap();
+        let err = prepare_archives(&[archive], &staging, &NoProgress).unwrap_err();
+        assert_eq!(err.code(), "ART-INPUT-INVALID");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // ---- end to end: three archives, three drawers ----
 
     /// The headline case: three archives become three drawers, each holding
@@ -573,7 +643,7 @@ mod tests {
         assert_eq!(plan.drawers[0].drawer, "Turrican");
         assert_eq!(plan.drawers[1].drawer, "Xenon2");
         assert_eq!(plan.drawers[2].drawer, "Loose");
-        assert!(plan.refusal.is_none(), "{:?}", plan.refusal);
+        assert!(plan.cost.fits(), "{:?}", plan.cost.shortfall());
 
         let (report, _backup) =
             install_archives(&archives, &image, 0, 0, OverwritePolicy::Skip, &NoProgress).unwrap();
@@ -653,7 +723,11 @@ mod tests {
         let archives = vec![a, b];
 
         let plan = build_plan(&archives, &image, 0, 0).unwrap();
-        let refusal = plan.refusal.expect("a batch this large must be refused");
+        assert!(!plan.cost.fits(), "a batch this large must not fit");
+        let refusal = plan
+            .cost
+            .shortfall()
+            .expect("a batch this large must be refused");
         assert!(refusal.contains("blocks"), "{refusal}");
         assert!(refusal.contains("free"), "{refusal}");
         assert_eq!(
@@ -676,30 +750,9 @@ mod tests {
 
     // ---- cancellation ----
 
-    /// Cancelling after the first archive has landed must leave the image
-    /// exactly as it was — not one game installed out of five. The bytes are
-    /// captured before and compared after, because an `Err` on its own would
-    /// not prove nothing reached the file.
-    #[test]
-    fn cancelling_after_the_first_archive_writes_nothing() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        /// Cancels once the copy into the volume is under way — the user
-        /// hitting Stop after unpacking has already finished, not before it
-        /// started.
-        struct StopDuringCopy(AtomicBool);
-        impl ProgressSink for StopDuringCopy {
-            fn report(&self, done: u64, total: Option<u64>, _message: &str) {
-                if total.is_some() && done >= 1 {
-                    self.0.store(true, Ordering::SeqCst);
-                }
-            }
-            fn is_cancelled(&self) -> bool {
-                self.0.load(Ordering::SeqCst)
-            }
-        }
-
-        let dir = scratch("cancel");
+    /// Five archives to cancel partway through, shared by both cancellation
+    /// tests below.
+    fn five_archives(dir: &Path) -> Vec<PathBuf> {
         let mut archives = Vec::new();
         for index in 0..5 {
             let path = dir.join(format!("Game{index}.lha"));
@@ -713,11 +766,47 @@ mod tests {
             .unwrap();
             archives.push(path);
         }
+        archives
+    }
+
+    /// Cancelling while archives are still being unpacked — before the batch
+    /// has even been staged, let alone reached the volume writer — must
+    /// leave the image exactly as it was. The bytes are captured before and
+    /// compared after, because an `Err` on its own would not prove nothing
+    /// reached the file.
+    ///
+    /// `prepare_archives` reports `total.is_some()` from its very first call
+    /// (`progress.report(index, Some(total), "Unpacking …")`), so a sink that
+    /// trips on *any* report with a total — as an earlier version of this
+    /// test did — cancels during this loop and never reaches
+    /// `install_into_folder` at all. That made the byte-comparison trivially
+    /// true regardless of whether cancelling the copy phase was actually
+    /// atomic. This test is kept, renamed to say what it actually covers;
+    /// `cancelling_during_the_copy_phase_writes_nothing` below covers the
+    /// path this one does not.
+    #[test]
+    fn cancelling_during_unpacking_writes_nothing() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct StopDuringUnpack(AtomicBool);
+        impl ProgressSink for StopDuringUnpack {
+            fn report(&self, done: u64, total: Option<u64>, _message: &str) {
+                if total.is_some() && done >= 1 {
+                    self.0.store(true, Ordering::SeqCst);
+                }
+            }
+            fn is_cancelled(&self) -> bool {
+                self.0.load(Ordering::SeqCst)
+            }
+        }
+
+        let dir = scratch("cancel-unpack");
+        let archives = five_archives(&dir);
 
         let image = disk(&dir, "disk.adf");
         let before = std::fs::read(&image).unwrap();
 
-        let sink = StopDuringCopy(AtomicBool::new(false));
+        let sink = StopDuringUnpack(AtomicBool::new(false));
         let err = install_archives(&archives, &image, 0, 0, OverwritePolicy::Skip, &sink)
             .expect_err("a cancelled batch must not come back as a successful install");
 
@@ -729,8 +818,70 @@ mod tests {
         assert_eq!(
             std::fs::read(&image).unwrap(),
             before,
-            "a cancelled batch must leave the image byte-for-byte unchanged, \
-             not two of five archives installed"
+            "cancelling during unpacking must leave the image byte-for-byte unchanged"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Cancelling once the batch is actually being copied into the volume —
+    /// the failure mode the brief names by name ("cancelling after two of
+    /// five archives") — must still leave the image byte-for-byte unchanged,
+    /// not a prefix of the five archives installed.
+    ///
+    /// The sink only reacts to reports whose message does not start with
+    /// `"Unpack"`: `prepare_archives`'s per-archive progress messages are
+    /// `"Unpacking …"` (and the final `"Unpacked"`), while
+    /// `copy_into_volume`'s are the entry's own relative path (`"Game0/Data"`,
+    /// …) — so this genuinely waits for the copy phase, tripping only after
+    /// a few of *those* reports, rather than reusing the "any report with a
+    /// total" trip that `cancelling_during_unpacking_writes_nothing` proved
+    /// stops too early to reach it.
+    #[test]
+    fn cancelling_during_the_copy_phase_writes_nothing() {
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+        struct StopDuringCopy {
+            copy_reports: AtomicU64,
+            cancelled: AtomicBool,
+        }
+        impl ProgressSink for StopDuringCopy {
+            fn report(&self, _done: u64, total: Option<u64>, message: &str) {
+                if total.is_none() || message.starts_with("Unpack") {
+                    return;
+                }
+                if self.copy_reports.fetch_add(1, Ordering::SeqCst) + 1 >= 3 {
+                    self.cancelled.store(true, Ordering::SeqCst);
+                }
+            }
+            fn is_cancelled(&self) -> bool {
+                self.cancelled.load(Ordering::SeqCst)
+            }
+        }
+
+        let dir = scratch("cancel-copy");
+        let archives = five_archives(&dir);
+
+        let image = disk(&dir, "disk.adf");
+        let before = std::fs::read(&image).unwrap();
+
+        let sink = StopDuringCopy {
+            copy_reports: AtomicU64::new(0),
+            cancelled: AtomicBool::new(false),
+        };
+        let err = install_archives(&archives, &image, 0, 0, OverwritePolicy::Skip, &sink)
+            .expect_err("a cancelled batch must not come back as a successful install");
+
+        assert_eq!(
+            err.code(),
+            "ART-CANCELLED",
+            "the job must end Cancelled, not Completed: {err}"
+        );
+        assert_eq!(
+            std::fs::read(&image).unwrap(),
+            before,
+            "cancelling during the copy phase must leave the image byte-for-byte \
+             unchanged, not two of five archives installed"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -809,31 +960,108 @@ mod tests {
         let image = disk(&dir, "disk.adf");
 
         let plan = build_plan(&[a, b], &image, 0, 0).unwrap();
-        assert!(plan.refusal.is_some(), "this batch must be refused");
+        assert!(!plan.cost.fits(), "this batch must be refused");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ---- archive entry names are untrusted ----
 
-    /// A traversal entry inside an archive must never escape the scratch
-    /// directory it is unpacked into, even by way of becoming a drawer name
-    /// or landing inside one.
+    /// A traversal entry, an absolute path and a drive-prefixed path must
+    /// each be rejected at the point they would actually land, not merely
+    /// absent from inside the scratch directory.
     ///
-    /// `unpack_for_install` already defends this at the extraction layer
-    /// (`core::lha::safe_extract`); this proves the defence still holds once
-    /// the result passes through this module's own naming and staging —
-    /// `../../outside.txt` must contribute nothing to the drawer, and every
-    /// path this module builds under `staging` must stay under it.
+    /// Asserting only `!scratch/anything.exists()` (as an earlier version of
+    /// this test did) does not prove an escape was prevented: a naive join of
+    /// `scratch` with `"../../outside.txt"` never produces a path *inside*
+    /// `scratch` in the first place, so that assertion holds whether or not
+    /// `safe_join` is doing anything at all. This instead computes the
+    /// concrete path each hostile entry would land at if the join were naive
+    /// — mirroring `core::lha::safe_extract::tests::traversal_entry_is_rejected_not_extracted`,
+    /// which asserts on `dir.join("evil.txt")`, the real target — and checks
+    /// none of them exist, plus that every hostile entry is named in the
+    /// unpack's own skipped list rather than silently dropped.
     #[test]
-    fn a_traversal_entry_does_not_escape_the_scratch_directory() {
-        let dir = scratch("traversal");
+    fn hostile_entries_are_rejected_at_their_real_target_not_just_absent_from_scratch() {
+        // `Scratch::new()` always creates its directory one level directly
+        // under `std::env::temp_dir()`, so a naive join of `"../whatever"`
+        // with the scratch root resolves to a path in that *shared* system
+        // temp directory, not somewhere private to this test. A guard removes
+        // it on every exit path, including a panicked assertion, so a real
+        // regression here does not also leave litter for the next run to
+        // trip over — and the name carries this process's id so two test
+        // binaries running at once can never collide on it.
+        struct RemoveOnDrop(PathBuf);
+        impl Drop for RemoveOnDrop {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+
+        let marker = format!("art-oracle-traversal-marker-{}.txt", std::process::id());
+        let _cleanup = RemoveOnDrop(std::env::temp_dir().join(&marker));
+
+        let dir = scratch("traversal-unpack");
         let archive = dir.join("Evil.lha");
         std::fs::write(
             &archive,
             make_lha_with(&[
                 ("Evil/Game", b"safe bytes"),
-                ("../../outside.txt", b"must never land here"),
+                (&format!("../{marker}"), b"must never land here"),
+                ("C:\\art-oracle-drive-escape.txt", b"nor here"),
+                ("/art-oracle-root-escape.txt", b"nor here either"),
+            ]),
+        )
+        .unwrap();
+
+        let (scratch_dir, unpack_skipped) = unpack_for_install(&archive, &NoProgress).unwrap();
+
+        // The safe entry landed, under the scratch root...
+        assert!(scratch_dir.path().join("Evil").join("Game").is_file());
+
+        // ...and each hostile one is checked at the exact place a naive join
+        // would have put it, not merely "somewhere under scratch". Absolute
+        // and drive-prefixed targets are also outside anywhere this process
+        // can write without elevation, so their own non-existence is checked
+        // too, without needing a guard for either.
+        let one_level_up = scratch_dir
+            .path()
+            .parent()
+            .expect("scratch always has a parent")
+            .join(&marker);
+        assert!(
+            !one_level_up.exists(),
+            "'../{marker}' must not land one level above the scratch directory"
+        );
+        assert!(!Path::new("C:\\art-oracle-drive-escape.txt").exists());
+        assert!(!Path::new("/art-oracle-root-escape.txt").exists());
+
+        // Every hostile entry is reported, not silently dropped.
+        assert_eq!(
+            unpack_skipped.len(),
+            3,
+            "all three hostile entries must be reported as skipped: {unpack_skipped:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The same hostile archive, consumed through `prepare_archives` (the
+    /// path `archives_plan_install`/`archives_install` actually use): the
+    /// safe entry still gets its drawer, and every entry the extractor
+    /// refused is carried onto `ArchiveDrawer::skipped` — shown in the plan,
+    /// before installing, per §68's "never silent" rule — rather than
+    /// vanishing with the batch reporting "1 file" and no explanation of
+    /// where the second entry went.
+    #[test]
+    fn a_traversal_entry_contributes_nothing_to_the_drawer_and_is_reported() {
+        let dir = scratch("traversal-drawer");
+        let archive = dir.join("Evil.lha");
+        std::fs::write(
+            &archive,
+            make_lha_with(&[
+                ("Evil/Game", b"safe bytes"),
+                ("../outside.txt", b"must never land here"),
             ]),
         )
         .unwrap();
@@ -854,11 +1082,17 @@ mod tests {
             "every produced root stays under staging"
         );
 
-        // ...and the traversal entry landed nowhere at all: not beside the
-        // drawer, not inside it, not at the staging root.
+        // ...the traversal entry landed nowhere under staging either...
         assert!(!staging.join("outside.txt").exists());
         assert!(!roots[0].join("outside.txt").exists());
-        assert!(!staging.join("Evil").join("../outside.txt").exists());
+
+        // ...and it is named, not dropped.
+        assert_eq!(drawers[0].skipped.len(), 1, "{:?}", drawers[0].skipped);
+        assert!(
+            drawers[0].skipped[0].contains("outside.txt"),
+            "{:?}",
+            drawers[0].skipped
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

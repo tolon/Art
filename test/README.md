@@ -27,26 +27,30 @@ is the evidence that the surviving writer produces disks AmigaDOS accepts.
 **Already verified:** `xdftool` (amitools, an independent implementation) reads
 it back correctly. That is rung two.
 
-**Rung three — passed, 2026-08-11, on an Amiga 1200 and an Amiga 500+.**
-Both machines mounted the volume `Work` and listed `Readme` inside it. That is
-the question neither of the first two rungs can answer, and it is now answered:
-a disk ART's volume writer produced is a disk a real Amiga reads.
+**Rung three — passed, 2026-08-11.** Verified under Kickstart and Workbench
+with licensed ROMs (Amiga Forever / WinUAE), in A1200 and A500+ configurations.
+The volume `Work` mounted, `Readme` listed inside it, and opening the file
+printed `hello from ART`.
 
-What that proves, concretely: the boot block's signature and checksum pass
-Kickstart's validation, the root block is where AmigaDOS computes it to be
-(`total_blocks / 2`, the ART-037 fix), the hash bucket the entry was linked
-into is the one AmigaDOS looks in, and the directory entry itself is
-well-formed. Those four are exactly what ART's own tests cannot prove, because
-its reader and its writer would share any mistake between them — the failure
-mode behind ART-032 through ART-035.
+Five things that proves, none of which ART's own tests can:
 
-Not yet confirmed on hardware: reading the file's **contents** back. Worth one
-more command when the machine is next out:
+1. The boot block's signature and checksum satisfy Kickstart's validation.
+2. The root block is where AmigaDOS computes it to be — `total_blocks / 2`,
+   the ART-037 fix. A disk with the old bug would not have mounted at all.
+3. The hash bucket the entry was linked into is the one AmigaDOS looks in.
+   This is `name_hash`'s `& 0x7ff` mask, pinned in tests against
+   `adfGetHashValue` but never before confirmed by AmigaDOS itself.
+4. The file's data blocks and its header's block list are correct — the
+   contents read back byte-perfect.
+5. **The bitmap is right.** The window reported `0% full, 878KB free, 2KB`,
+   and AmigaDOS computed that from ART's allocation bitmap, not from anything
+   ART told it. 878 KB free of 880 for a 14-byte file is correct. Nothing in
+   the plan set out to test this; it came free with the screenshot.
 
-| Command | Expected |
-|---|---|
-| `TYPE DF0:Readme` | prints `hello from ART` |
-| `INFO DF0:` | volume `Work`, no errors |
+Points 2, 3 and 5 are the failure mode behind ART-032 through ART-035, where
+four real bugs shipped behind a green suite because ART's reader and writer
+shared the same mistake. An independent implementation (amitools) closed part
+of that gap. AmigaDOS closes the rest.
 
 **A note for whoever tries this next.** Workbench does not display a file that
 has no `.info` icon beside it, so `Readme` is invisible in a Workbench window

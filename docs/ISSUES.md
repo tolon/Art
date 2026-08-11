@@ -29,10 +29,11 @@ what fixed it (with the test that proves it).
 block's `DOS` signature and checksum, jumps to offset 12, and expects the code
 there to return a pointer to the DOS resident structure in `d0`. An `RTS`
 returns immediately with whatever `d0` held, so nothing is loaded and the
-machine sits at the insert-disk hand. Confirmed on real hardware on
-2026-08-11: an Amiga 1200 and an Amiga 500+ both refused to boot
-`test/task-10-boot-test.adf`, while both **mounted the volume and listed it
-correctly** — so this is a boot-code gap, not a filesystem defect.
+machine sits at the insert-disk hand. Confirmed on 2026-08-11 under
+licensed Kickstart/Workbench (Amiga Forever / WinUAE), A1200 and A500+
+configurations: `test/task-10-boot-test.adf` would not boot, while the same
+disk **mounted, listed its file, and read its contents back correctly** — so
+this is a boot-code gap, not a filesystem defect.
 
 The fix is roughly twenty bytes of 68000: open `dos.library` through
 `expansion.library`, return its base in `d0`. **Write our own**; the stock
