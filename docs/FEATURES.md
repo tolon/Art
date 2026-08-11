@@ -18,6 +18,19 @@ Scheduling lives in [STATUS.md](STATUS.md); defects live in [ISSUES.md](ISSUES.m
 
 ---
 
+## Which machines
+
+ART is not an A500 tool that tolerates other Amigas. Most of what it does is
+machine-independent — a format does not know which machine wrote it — and
+where the machine matters it is carried as a **machine profile**, not a code
+path. Built-in presets: **A1000, A500, A500+, A600, A2000, A3000, A1200,
+A4000, CDTV, CD32** (`core/profile.rs`, read by the WinUAE launcher and the
+compatibility check).
+
+Commodore's 8-bit files are in scope as well, as of 2026-08-12 — see the C64
+rows below for how far that has actually got, which today is "decided, not
+built".
+
 ## Format support
 
 Mirrors the spec §10 table. "Detect" means ART can identify the format;
@@ -32,7 +45,13 @@ the other columns mean it can act on it.
 | **HDF** | ✅ | ✅ | ✅ | ✅ | 🟡 | ⏳ |
 | **HDZ** | 🟡 | ⏳ | ⏳ | — | ⏳ | ⏳ |
 | **LHA** | ✅ | ✅ | ⏳ | ⏳ | 🟡 | — |
+| **ZIP** | ✅ | ✅ | — | — | 🟡 | — |
+| **7z** | ✅ | ✅ | — | — | 🟡 | — |
+| **ISO9660 / Joliet** | ✅ | ✅ | — | — | 🟡 | — |
 | **ROM** | ✅ | ✅ | — | — | ✅ | — |
+| **D64 / D71 / D81** (C64 disk) | ⏳ | ⏳ | — | — | ⏳ | — |
+| **T64** (C64 tape archive) | ⏳ | ⏳ | — | — | ⏳ | — |
+| **TAP / PRG / CRT** (C64) | ⏳ | — | — | — | — | — |
 
 Notes:
 
@@ -45,6 +64,29 @@ Notes:
   images.
 - 🟡 **LHA validate** — structure and path safety are enforced; per-entry CRC
   checking is not implemented.
+- **ZIP / 7z / ISO9660 — read-only, and permanently so.** ART reads archives
+  and discs; it writes neither, in any direction, and the panes refuse it by
+  saying so rather than by doing nothing. All three go through the one
+  extraction gate (`core/archive/extract.rs` for archives), so the traversal
+  check, the output caps and the "declared size is a claim" check are the same
+  code for each — proved by one hostile-archive test every backend is run
+  through.
+  - 🟡 **validate** = the gate refuses malformed and hostile input, and
+    reports what it refused; there is no per-entry checksum verification.
+  - ZIP is deflate only; encrypted entries are refused by name. 7z is LZMA.
+  - ISO9660 covers Joliet and both raw sector layouts (Mode 1 and Mode 2/XA
+    Form 1); Mode 2 Form 2 is refused rather than misread. Rock Ridge and the
+    Amiga `AS` entry are **not** read — a Unix-mastered Amiga CD with no
+    Joliet descriptor falls back to uppercase 8.3 names.
+  - Verified against **7-Zip's independent implementation**
+    (`scripts/iso-oracle-check.py`), raw layouts included via
+    sector-stripping. Not against a real Amiga CD filesystem; nothing claims
+    otherwise.
+- ⏳ **C64 formats** — the scope decision is made (2026-08-12: ART covers
+  Commodore's 8-bit files too) and the work is the next task of the current
+  phase, but **no code reads one today**. `.tap`, `.prg` and `.crt` are
+  identify-only by design, not by schedule: a TAP is a sampled tape signal
+  with no directory in it at all.
 - **ADZ / HDZ / DMS** decompression is Stage 5 work; `xdms-rs` is the candidate
   for DMS (see `ART-kaynak-listesi.md`).
 
@@ -159,7 +201,7 @@ checks the image comes back byte for byte.
 | WinUAE detection | §35 | ✅ | `core/winuae.rs` |
 | `.uae` config generation | §35 | ✅ | `core/winuae.rs` |
 | Launch session | §35 | ✅ | `core/winuae.rs` |
-| Machine profiles (presets) | §33 | 🟡 | `core/profile.rs` — presets only, no user-defined profiles |
+| Machine profiles (presets) | §33 | 🟡 | `core/profile.rs` — the classic line, end to end: A1000, A500, A500+, A600, A2000, A3000, A1200, A4000, CDTV, CD32. Presets only; user-defined profiles are not built yet. A preset pins a Kickstart hash only where there is one to pin — an A1000 loads its Kickstart from floppy, and an A2000 or A3000 may run 1.3, 2.04 or 3.1, so those pin none rather than a guess |
 | Kickstart ROM identification | §32 | ✅ | `core/rom.rs` |
 | Gotek scan + FlashFloppy config | §37, §39 | ✅ | `core/gotek.rs` |
 | Gotek bulk workflow | §38 | ⏳ | — |

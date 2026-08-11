@@ -8,6 +8,21 @@ drag-and-drop-driven application.
 
 > **DROP IT INTO ART.**
 
+## Which machines
+
+**The whole classic line, not one model.** ART's file work is machine-
+independent to begin with — an ADF is an ADF whether it came off an A500 or an
+A4000, and FFS/OFS, RDB/HDF, LHA and ISO9660 are formats rather than machines.
+Where the machine *does* matter, it is data ART carries rather than a code path
+it hard-codes: built-in machine profiles ship for **A1000, A500, A500+, A600,
+A2000, A3000, A1200, A4000, CDTV and CD32**, and users add their own (spec
+§33). Kickstart identification, WinUAE configuration and the compatibility
+check all read those profiles.
+
+Commodore's 8-bit side is in scope too: **C64 disk and tape images** (`.d64`,
+`.d71`, `.d81`, `.t64`, with `.tap`/`.prg`/`.crt` identified but not browsable)
+are being built now — see the status below for exactly how far that has got.
+
 ## Status
 
 The application builds and runs on Windows 10/11 x64. Working today: DD/HD
@@ -16,12 +31,19 @@ validate through one volume driver, including boot code that starts a real
 Amiga (verified by booting a disk under a licensed Kickstart/Workbench, not
 bare metal) — with a Total Commander-style dual pane (browse, multi-select,
 batch copy in/out/delete, sort, filter by filename mask, rename, mkdir,
-attributes) over FFS/OFS volumes; LHA (browse, safe extraction, WHDLoad
-detection, several archives installed to a disk at once); Kickstart ROM
-identification; Gotek/FlashFloppy; PiStorm/Emu68; WinUAE launching;
-collection scanning; a background job queue with progress/cancel; an
-operation log; Beginner/Power User modes; and the drag-and-drop Workflow
+attributes) over FFS/OFS volumes; **CD images (ISO9660 with Joliet, including
+raw 2352-byte tracks in Mode 1 and Mode 2/XA)** and **archives (LHA, ZIP, 7z)**
+opened as panes of the same manager, walked into and copied out of — to a
+folder or straight into an Amiga volume; LHA WHDLoad detection with several
+archives installed to a disk at once; Kickstart ROM identification; machine
+profiles for the whole classic line; Gotek/FlashFloppy; PiStorm/Emu68; WinUAE
+launching; collection scanning; a background job queue with progress/cancel;
+an operation log; Beginner/Power User modes; and the drag-and-drop Workflow
 Engine behind "what can I do with this?".
+
+**Content-first detection**: what a file *is* comes from its bytes, not its
+name, so an `.img` holding a floppy is a floppy and a `.dat` holding an LHA
+still opens.
 
 Two directions a multi-selection cannot yet move in: image-to-image (copy
 one at a time instead) and, when copying a selection out of an image, as one
@@ -39,8 +61,11 @@ The interface ships in English and Turkish. The language is chosen in
 Settings and remembered across restarts. Error messages coming from the Rust
 core are still English regardless of the chosen language.
 
-Not yet built: PFS3/SFS (partitions using them are listed but their contents
-are not readable), DMS/ADZ conversion, recovery tools.
+Not yet built: **C64 disk and tape images** (`.d64`/`.d71`/`.d81`/`.t64` — the
+next task in the current phase; nothing reads them today), PFS3/SFS
+(partitions using them are listed but their contents are not readable),
+DMS/ADZ conversion, recovery tools, and writing *into* a CD or an archive
+(both are read-only, deliberately and permanently).
 
 | | |
 |---|---|

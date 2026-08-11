@@ -1,7 +1,14 @@
 //! Amiga Machine Profile Studio (Phase 2 & Phase 17).
 //!
-//! Defines hardware machine profiles (A500, A1200, A4000, CD32, Custom),
-//! including CPU architecture, chipset, memory layout, and expansion parameters.
+//! Hardware machine profiles — CPU, chipset, memory layout, floppy drives,
+//! display and which Kickstart the machine runs.
+//!
+//! The built-in set covers the **classic line end to end**: A1000, A500,
+//! A500+, A600, A2000, A3000, A1200, A4000, CDTV and CD32. ART is not an A500
+//! tool that tolerates other Amigas, and the presets are what make that true
+//! rather than a claim — `AmigaProfile::all_presets` is what the WinUAE
+//! launcher and the compatibility check read. Users add their own on top
+//! (spec §33); a profile is data, not a code path.
 
 use serde::{Deserialize, Serialize};
 
@@ -273,15 +280,238 @@ impl AmigaProfile {
         }
     }
 
-    /// Return list of all default presets.
+    /// A1000 — the first Amiga.
+    ///
+    /// Its Kickstart is loaded from floppy into the Writable Control Store
+    /// rather than living in ROM, which is why this profile pins no ROM hash:
+    /// which Kickstart an A1000 runs is the user's disk, not the machine's.
+    pub fn a1000() -> Self {
+        Self {
+            id: "a1000".into(),
+            name: "Amiga 1000 (OCS 1.3)".into(),
+            description:
+                "The original Amiga: 68000 @ 7.09 MHz, OCS, 512KB Chip RAM, Kickstart loaded from \
+                 floppy into the WCS"
+                    .into(),
+            cpu: CpuModel::M68000,
+            cpu_speed_mhz: 7.09,
+            chipset: ChipsetModel::Ocs,
+            memory: MemoryConfig {
+                chip_kb: 512,
+                slow_kb: 0,
+                fast_mb: 0,
+                z3_fast_mb: 0,
+            },
+            floppy: FloppyConfig {
+                drive_count: 1,
+                speed_percent: 100,
+            },
+            display: DisplayConfig {
+                width: 1280,
+                height: 960,
+                fullscreen: false,
+                scanlines: false,
+            },
+            kickstart_version: "1.3".into(),
+            preferred_rom_sha256: None,
+            custom_rom_path: None,
+            is_builtin: true,
+        }
+    }
+
+    /// A2000 — the desktop OCS machine, with Zorro II slots.
+    pub fn a2000() -> Self {
+        Self {
+            id: "a2000".into(),
+            name: "Amiga 2000 (OCS 1.3)".into(),
+            description: "Desktop Amiga with Zorro II expansion: 68000 @ 7.09 MHz, OCS, 1MB Chip \
+                          RAM and a Fast RAM card"
+                .into(),
+            cpu: CpuModel::M68000,
+            cpu_speed_mhz: 7.09,
+            chipset: ChipsetModel::Ocs,
+            memory: MemoryConfig {
+                chip_kb: 1024,
+                slow_kb: 0,
+                fast_mb: 2,
+                z3_fast_mb: 0,
+            },
+            floppy: FloppyConfig {
+                drive_count: 2,
+                speed_percent: 100,
+            },
+            display: DisplayConfig {
+                width: 1280,
+                height: 960,
+                fullscreen: false,
+                scanlines: false,
+            },
+            kickstart_version: "1.3".into(),
+            preferred_rom_sha256: None,
+            custom_rom_path: None,
+            is_builtin: true,
+        }
+    }
+
+    /// A3000 — 68030 and Zorro III, the ECS workstation.
+    pub fn a3000() -> Self {
+        Self {
+            id: "a3000".into(),
+            name: "Amiga 3000 (ECS 2.04)".into(),
+            description:
+                "ECS workstation: 68030 @ 25 MHz, 2MB Chip RAM, Zorro III Fast RAM, Kickstart 2.04"
+                    .into(),
+            cpu: CpuModel::M68030,
+            cpu_speed_mhz: 25.0,
+            chipset: ChipsetModel::Ecs,
+            memory: MemoryConfig {
+                chip_kb: 2048,
+                slow_kb: 0,
+                fast_mb: 0,
+                z3_fast_mb: 16,
+            },
+            floppy: FloppyConfig {
+                drive_count: 1,
+                speed_percent: 100,
+            },
+            display: DisplayConfig {
+                width: 1280,
+                height: 960,
+                fullscreen: false,
+                scanlines: false,
+            },
+            kickstart_version: "2.04".into(),
+            preferred_rom_sha256: None,
+            custom_rom_path: None,
+            is_builtin: true,
+        }
+    }
+
+    /// CDTV — the OCS machine with a CD drive and no floppy of its own.
+    pub fn cdtv() -> Self {
+        Self {
+            id: "cdtv".into(),
+            name: "Commodore CDTV (OCS 1.3)".into(),
+            description: "CD-based OCS Amiga: 68000 @ 7.09 MHz, 1MB Chip RAM, Kickstart 1.3 plus \
+                          the CDTV extended ROM"
+                .into(),
+            cpu: CpuModel::M68000,
+            cpu_speed_mhz: 7.09,
+            chipset: ChipsetModel::Ocs,
+            memory: MemoryConfig {
+                chip_kb: 1024,
+                slow_kb: 0,
+                fast_mb: 0,
+                z3_fast_mb: 0,
+            },
+            // No internal floppy — the same shape the CD32 profile uses.
+            floppy: FloppyConfig {
+                drive_count: 0,
+                speed_percent: 100,
+            },
+            display: DisplayConfig {
+                width: 1280,
+                height: 960,
+                fullscreen: false,
+                scanlines: false,
+            },
+            kickstart_version: "1.3".into(),
+            preferred_rom_sha256: None,
+            custom_rom_path: None,
+            is_builtin: true,
+        }
+    }
+
+    /// Every built-in preset, roughly in the order the machines appeared.
+    ///
+    /// The classic line, end to end — ART is not an A500 tool that tolerates
+    /// other Amigas. Where a machine's Kickstart is not a single known file
+    /// (the A1000 loads it from disk; an A2000 or A3000 may run 1.3, 2.04 or
+    /// 3.1), `preferred_rom_sha256` is `None` rather than a guess: a wrong
+    /// hash would make ART reject the user's correct ROM (§10, §89).
     pub fn all_presets() -> Vec<Self> {
         vec![
+            Self::a1000(),
             Self::a500_ocs(),
-            Self::a1200_aga(),
             Self::a500_plus(),
             Self::a600_ecs(),
+            Self::a2000(),
+            Self::a3000(),
+            Self::a1200_aga(),
             Self::a4000_040(),
+            Self::cdtv(),
             Self::cd32(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The whole classic line, and no two presets claiming the same id — the
+    /// id is what a saved profile and a WinUAE config are keyed on.
+    #[test]
+    fn the_presets_cover_the_classic_line_with_unique_ids() {
+        let presets = AmigaProfile::all_presets();
+        let ids: Vec<&str> = presets.iter().map(|p| p.id.as_str()).collect();
+
+        for expected in [
+            "a1000",
+            "a500-ocs",
+            "a500-plus",
+            "a600-ecs",
+            "a2000",
+            "a3000",
+            "a1200-aga",
+            "a4000-040",
+            "cdtv",
+            "cd32",
+        ] {
+            assert!(ids.contains(&expected), "{expected} missing from {ids:?}");
+        }
+
+        let mut unique = ids.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), ids.len(), "duplicate preset id in {ids:?}");
+    }
+
+    /// A preset either pins a Kickstart it is sure of or pins none at all. A
+    /// wrong hash is worse than no hash: it rejects the ROM the user actually
+    /// has.
+    #[test]
+    fn every_preset_is_internally_consistent() {
+        for profile in AmigaProfile::all_presets() {
+            assert!(profile.is_builtin, "{} is not marked builtin", profile.id);
+            assert!(!profile.name.is_empty());
+            assert!(!profile.kickstart_version.is_empty(), "{}", profile.id);
+            assert!(profile.memory.chip_kb >= 512, "{}", profile.id);
+            if let Some(hash) = &profile.preferred_rom_sha256 {
+                assert_eq!(hash.len(), 64, "{} pins a non-SHA-256 value", profile.id);
+                assert!(
+                    hash.chars().all(|c| c.is_ascii_hexdigit()),
+                    "{} pins a non-hex value",
+                    profile.id
+                );
+            }
+        }
+    }
+
+    /// The two CD machines have no floppy drive, and every other machine has
+    /// at least one — a profile that says otherwise would generate a WinUAE
+    /// config that cannot boot the media it was made for.
+    #[test]
+    fn only_the_cd_machines_have_no_floppy_drive() {
+        for profile in AmigaProfile::all_presets() {
+            let expected_none = profile.id == "cd32" || profile.id == "cdtv";
+            assert_eq!(
+                profile.floppy.drive_count == 0,
+                expected_none,
+                "{} has {} drives",
+                profile.id,
+                profile.floppy.drive_count
+            );
+        }
     }
 }

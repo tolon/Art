@@ -412,7 +412,17 @@ creation, Gotek prep, config round-trip, journalled writes, Aminet, oplog, the
 job queue — the SD work consumes rather than reimplements.
 
 The story: build a complete PiStorm/Emu68 SD card from Windows, verified,
-that boots a real A500.
+that boots a real Amiga.
+
+**Which Amiga is a parameter, not an assumption** (decision, 2026-08-12). The
+gap analysis was written around "the A500"; that is one of the machines
+PiStorm goes into. What varies by machine is data the build already carries —
+which Kickstart ROM lands on the FAT32 partition, what the Emu68 config says
+about the board, which OS release is installed, what partition geometry suits
+the card — not a code path. Two things are still the user's to settle before
+SD-1 designs a layout: which PiStorm board(s) to target first, and which
+machine the first card gets verified on (recorded with the result, not
+generalised from it).
 
 | Phase | Contents |
 |---|---|
@@ -438,8 +448,9 @@ produce:
   is its oracle.
 
 The milestone that matters first is not a preloaded 128 GB card: it is **one
-card, built entirely from Windows, that boots a real A500 into AmigaOS 3.2
-with a recovery volume beside it.**
+card, built entirely from Windows, that boots a real Amiga into AmigaOS 3.2
+with a recovery volume beside it** — with the machine and the board it was
+proved on written down beside the claim.
 
 Sequenced after Phase 2a. Whether it goes before or after Stage 5's AI layer
 is open.

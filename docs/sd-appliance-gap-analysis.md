@@ -14,8 +14,30 @@ The target user story:
 
 > Insert a 128 GB SD card into the Windows PC. ART builds the complete
 > PiStorm multiboot environment on it — AmigaOS 3.2.x + 3.9, WHDLoad games,
-> demos, ADF/HDF archives, launcher, recovery — verified. Insert into the
-> A500. It boots.
+> demos, ADF/HDF archives, launcher, recovery — verified. Insert it into the
+> Amiga. It boots.
+
+**The machine is a parameter, not an assumption** (decision, 2026-08-12). The
+original wording said "the A500", and that is one of the machines PiStorm goes
+into, not the only one — ART's machine profiles already span A1000 through
+A4000, CDTV and CD32, and this build must not quietly narrow that. What
+actually varies by machine is **data the build already has to carry**: which
+Kickstart ROM goes on the FAT32 partition (G9's ROM profiles), what the Emu68
+config says about the board, which OS release is installed (G5), and what
+partition geometry is sensible for the card. None of that is a code path, and
+none of it should be hard-coded to one model.
+
+Two things follow, and both are for the user to settle before SD-1 designs a
+layout:
+
+- **Which PiStorm variant(s) to target first.** They are different boards for
+  different sockets, and the FAT32 boot payload is per-board. ART should read
+  the target from a hardware profile rather than assume one; which board the
+  developer can actually test on decides what SD-2's milestone is *verified*
+  against.
+- **Which machine the first card is verified on.** The milestone below names
+  "an Amiga" deliberately: the proof is one real machine booting, and which
+  one it is gets recorded rather than generalised.
 
 This document lists ONLY what is missing on the ART side. What ART already
 covers (WHDLoad install, ADF/LHA import + validation, RDB creation, Gotek
@@ -220,7 +242,8 @@ SD-0  Prior art study         : G0 — Emu68-Imager + emu68hatcher teardown;
                                 PFS3 provisioning before designing ours
 SD-1  Image-first foundations : G2 (MBR+FAT32) + G4 (FSHD/LSEG) + G7 (manifest)
 SD-2  The card exists         : G1 (flash+verify) + G6 (bootpri/recovery) + G8 (validate)
-      → milestone: card built from an image boots the real A500 into 3.2
+      → milestone: card built from an image boots a real Amiga into 3.2
+                      (which machine and which PiStorm board: recorded, not assumed)
 SD-3  Content, preloaded      : G3 Route D (WinUAE-assisted PFS3 format+fill)
                                 + G5 (OS install) + G10 (launcher export)
                                 + G11 (layout policy)
@@ -236,5 +259,8 @@ work; it never duplicates it.
 
 The one sentence that keeps this honest: the first milestone is not
 "128 GB of preloaded everything" — it is **one SD card, built entirely from
-Windows, that boots a real A500 into AmigaOS 3.2 with a recovery volume
-beside it.** Everything else stacks on top of that proof.
+Windows, that boots a real Amiga into AmigaOS 3.2 with a recovery volume
+beside it.** Everything else stacks on top of that proof. Which machine and
+which PiStorm board that card was proved on is written down with the result,
+because "it boots" is a claim about the hardware it was tried on and nothing
+else.
