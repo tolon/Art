@@ -1201,16 +1201,20 @@ pub fn run_copy_in_folder_with(
 /// land what fits and report the rest (already proven by
 /// `core::volume::write::copy`'s own tests); an install is not that — it
 /// promises "this works" or "this was refused", nothing in between.
+///
+/// Takes `&dyn CopySource` rather than `&HostFolder` specifically, so a batch
+/// install over several roots ([`HostSelection`]) reads and refuses exactly
+/// the way a single-archive install does — one pre-flight, not two.
 pub fn plan_copy_in_folder(
     image: &Path,
     volume_index: usize,
     parent: u32,
-    folder: &HostFolder,
+    source: &dyn CopySource,
 ) -> CoreResult<CopyPlan> {
     let entry = pick(image, volume_index)?;
     let (device, geometry) = mount(image, &entry)?;
 
-    let entries: Vec<SourceEntry> = folder.entries()?;
+    let entries: Vec<SourceEntry> = source.entries()?;
 
     // `0` means the root everywhere a `parent`/`dir_block` is taken
     // (`VolumeWriter::resolve_directory`), but `entries_in` takes a raw block
@@ -1229,6 +1233,42 @@ pub fn plan_copy_in_folder(
     };
 
     plan_copy(&device, &geometry, &entries, &existing)
+}
+
+/// Copy `source` into a volume as one all-or-nothing operation (§92, §54, §57):
+/// refuse atomically, with real block numbers, before a single block is
+/// written, when it will not fit; abandon it — leaving the volume untouched —
+/// if it is cancelled partway through. An install promises "this works" or
+/// "this was refused", never a landed prefix.
+///
+/// The one primitive both `sources::install_archive_into_volume` (one archive,
+/// flattened at `parent`) and `archives::install_archives` (several archives,
+/// each its own drawer, one batch) build on — the difference between them is
+/// only which [`CopySource`] they hand it.
+pub(crate) fn install_into_folder(
+    image: &Path,
+    volume_index: usize,
+    parent: u32,
+    source: &dyn CopySource,
+    policy: OverwritePolicy,
+    progress: &dyn ProgressSink,
+) -> CoreResult<(CopyReport, Option<String>)> {
+    let plan = plan_copy_in_folder(image, volume_index, parent, source)?;
+    if !plan.fits() {
+        return Err(CoreError::SafetyRefused(plan.shortfall().unwrap_or_else(
+            || "this will not fit; nothing was changed".into(),
+        )));
+    }
+
+    run_copy_in_folder_with(
+        image,
+        volume_index,
+        parent,
+        source,
+        policy,
+        OnCancel::Abandon,
+        progress,
+    )
 }
 
 /// F5 the other way — copy a folder out of a volume onto the user's disk.
