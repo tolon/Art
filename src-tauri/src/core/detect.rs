@@ -22,23 +22,38 @@ use crate::core::error::{CoreError, CoreResult};
 /// which workflows are candidates.
 ///
 /// Keep discriminants stable — they may be persisted/logged.
+/// # The wire strings are spelled out, not derived
+///
+/// These names cross to the frontend, so they are a contract with
+/// `src/types/index.ts`. `rename_all` cannot express them: `"lowercase"` gives
+/// `floppyimage`, and `"kebab-case"` gives `hard-disk-image` where the
+/// contract says `harddisk-image`. Both silently disagree with
+/// [`FormatCategory::as_str`], which is what the Rust side uses — a `===`
+/// against `"floppy-image"` in TypeScript would type-check and never match at
+/// runtime. `serde_name_matches_as_str` pins the two together.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
 pub enum FormatCategory {
     /// Floppy disk image (ADF, ADZ, DMS).
+    #[serde(rename = "floppy-image")]
     FloppyImage,
     /// Hard disk image (HDF, HDZ).
+    #[serde(rename = "harddisk-image")]
     HardDiskImage,
     /// Optical disc image (ISO9660, raw CD track). Detection only — ART does
     /// not yet read the filesystem inside one (spec §10, §89).
+    #[serde(rename = "optical-image")]
     OpticalImage,
     /// Archive, typically LHA on Amiga.
+    #[serde(rename = "archive")]
     Archive,
     /// Kickstart ROM.
+    #[serde(rename = "rom")]
     Rom,
     /// A plain directory (dropped folder).
+    #[serde(rename = "directory")]
     Directory,
     /// Unknown / unsupported file.
+    #[serde(rename = "unknown")]
     Unknown,
 }
 
@@ -368,6 +383,38 @@ mod tests {
     use super::*;
     use std::fs;
     use std::io::Write;
+
+    /// The wire strings and `as_str` must never drift: the frontend's
+    /// `FormatCategory` union in `src/types/index.ts` is written from
+    /// `as_str`, but what actually arrives is what serde produced. They
+    /// disagreed for every variant until this was pinned — serde said
+    /// `floppyimage` while everything else said `floppy-image`. Nothing
+    /// compared them at runtime yet, so nothing failed; the first `===` in
+    /// TypeScript would have type-checked and never matched.
+    #[test]
+    fn serde_name_matches_as_str() {
+        for category in [
+            FormatCategory::FloppyImage,
+            FormatCategory::HardDiskImage,
+            FormatCategory::OpticalImage,
+            FormatCategory::Archive,
+            FormatCategory::Rom,
+            FormatCategory::Directory,
+            FormatCategory::Unknown,
+        ] {
+            let json = serde_json::to_string(&category).unwrap();
+            let wire = json.trim_matches('"');
+            assert_eq!(
+                wire,
+                category.as_str(),
+                "{category:?} goes over the wire as {wire:?}, but as_str says {:?}",
+                category.as_str()
+            );
+            // And it round-trips, so a persisted or logged value still reads.
+            let back: FormatCategory = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, category);
+        }
+    }
 
     fn tmp() -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!(
