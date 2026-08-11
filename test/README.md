@@ -27,17 +27,32 @@ is the evidence that the surviving writer produces disks AmigaDOS accepts.
 **Already verified:** `xdftool` (amitools, an independent implementation) reads
 it back correctly. That is rung two.
 
-**Rung three — reached, 2026-08-11.** An Amiga 1200 and an Amiga 500+ both
-mounted the disk and showed the volume `Work`. That is the question neither of
-the first two rungs can answer: a disk ART wrote is a disk a real Amiga uses.
+**Rung three — passed, 2026-08-11, on an Amiga 1200 and an Amiga 500+.**
+Both machines mounted the volume `Work` and listed `Readme` inside it. That is
+the question neither of the first two rungs can answer, and it is now answered:
+a disk ART's volume writer produced is a disk a real Amiga reads.
 
-Remaining confirmation, from Workbench or Shell:
+What that proves, concretely: the boot block's signature and checksum pass
+Kickstart's validation, the root block is where AmigaDOS computes it to be
+(`total_blocks / 2`, the ART-037 fix), the hash bucket the entry was linked
+into is the one AmigaDOS looks in, and the directory entry itself is
+well-formed. Those four are exactly what ART's own tests cannot prove, because
+its reader and its writer would share any mistake between them — the failure
+mode behind ART-032 through ART-035.
+
+Not yet confirmed on hardware: reading the file's **contents** back. Worth one
+more command when the machine is next out:
 
 | Command | Expected |
 |---|---|
-| `DIR DF0:` | lists `Readme` |
 | `TYPE DF0:Readme` | prints `hello from ART` |
 | `INFO DF0:` | volume `Work`, no errors |
+
+**A note for whoever tries this next.** Workbench does not display a file that
+has no `.info` icon beside it, so `Readme` is invisible in a Workbench window
+even though it is on the disk. Use **Window → Show → All Files** (Kickstart 2.0
+and later), or read the disk from Shell with `DIR DF0:`, which walks the
+directory rather than looking for icons. This cost us a round trip.
 
 **It does not boot, and that is not a defect in this image.** ART writes no
 boot code at all — the `bootable` flag lays down an `RTS` stub and nothing
