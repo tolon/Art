@@ -913,6 +913,14 @@
       "copyTitle": "Diğer bölmeye kopyala",
       "deleteTitle": "Diskten sil"
     },
+    "sort": {
+      "name": "Ad",
+      "size": "Boyut",
+      "date": "Tarih",
+      "ascending": "artan",
+      "descending": "azalan",
+      "title": "{{column}} sırasına göre, {{direction}} — değiştirmek için tıklayın"
+    },
     "footer": {
       "unnamed": "(adsız)",
       "free": "{{size}} boş",

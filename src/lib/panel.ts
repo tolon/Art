@@ -17,6 +17,8 @@ export interface PanelEntry {
   header_block: number | null;
   /** Reported, never followed. */
   is_link: boolean;
+  /** Last-modified time, Unix seconds. `null` when the source has none. */
+  date: number | null;
 }
 
 export interface LocalListing {
@@ -55,6 +57,7 @@ export async function panelListAdf(
     path: null,
     header_block: entry.header_block,
     is_link: false,
+    date: entry.unix_date,
   }));
 }
 

@@ -67,6 +67,13 @@ import {
   toggleSelectAll,
   type SelectionUpdate,
 } from "@/lib/selection";
+import {
+  clickColumn,
+  defaultSortState,
+  sortEntries,
+  type SortColumn,
+  type SortState,
+} from "@/lib/sort";
 import type { OverwritePolicy } from "@/lib/sources";
 import {
   describeLayout,
@@ -278,6 +285,17 @@ export function FileManager() {
     right: null,
   });
   /**
+   * Which column each pane is sorted by, and which direction.
+   *
+   * Per pane, like `selection` and `anchor` above, and reset alongside them
+   * on navigation — see `resetSelection` — so a sort chosen in one folder
+   * does not silently carry into the next one shown.
+   */
+  const [sort, setSort] = useState<Record<Side, SortState>>({
+    left: defaultSortState(),
+    right: defaultSortState(),
+  });
+  /**
    * Which pane the keyboard is talking to.
    *
    * Tracked directly rather than derived from `selection`: a pane can hold
@@ -343,10 +361,24 @@ export function FileManager() {
   );
   const pane = useCallback((side: Side) => (side === "left" ? left : right), [left, right]);
 
+  /**
+   * This pane's entries in the order actually shown on screen: the server's
+   * listing (already folders-first, case-insensitive name — see
+   * `commands/panel.rs` and its ADF/HDF equivalents) run through the
+   * column sort the user picked. Every order-sensitive action — rendering,
+   * Shift+click ranges, Insert, Ctrl+A, "in pane order" — reads through this
+   * rather than `pane(side).entries` directly, so none of them can disagree
+   * with what is drawn.
+   */
+  const paneEntries = useCallback(
+    (side: Side): PanelEntry[] => sortEntries(pane(side).entries, sort[side]),
+    [pane, sort]
+  );
+
   /** The entries `selection[side]` actually names, in pane order. */
   const selectedEntries = useCallback(
-    (side: Side): PanelEntry[] => entriesIn(pane(side).entries, selection[side]),
-    [pane, selection]
+    (side: Side): PanelEntry[] => entriesIn(paneEntries(side), selection[side]),
+    [paneEntries, selection]
   );
 
   /** Apply a `SelectionUpdate` (from `@/lib/selection`) to one side. */
@@ -355,11 +387,14 @@ export function FileManager() {
     setAnchor((a) => ({ ...a, [side]: update.anchor }));
   }, []);
 
-  /** Selection resets on navigation: a Set that survived a directory change
-   * would let an action reach an entry the user has since left behind. */
+  /** Selection and sort both reset on navigation: a Set — or a sort order —
+   * that survived a directory change would let an action reach an entry the
+   * user has since left behind, or show an order that quietly stopped
+   * matching what the user actually clicked. */
   const resetSelection = useCallback((side: Side) => {
     setSelection((s) => ({ ...s, [side]: new Set() }));
     setAnchor((a) => ({ ...a, [side]: null }));
+    setSort((s) => ({ ...s, [side]: defaultSortState() }));
   }, []);
 
   useEffect(() => {
@@ -1291,6 +1326,10 @@ export function FileManager() {
     return {
       side,
       state,
+      sortedEntries: paneEntries(side),
+      sort: sort[side],
+      onSortChange: (column: SortColumn) =>
+        setSort((s) => ({ ...s, [side]: clickColumn(s[side], column) })),
       roots,
       selectedNames: selection[side],
       cursorName: anchor[side],
@@ -1304,7 +1343,7 @@ export function FileManager() {
       // the per-row Copy/Delete buttons below do stopPropagation and must
       // focus explicitly instead.
       onSelect: (entry: PanelEntry, event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => {
-        const entries = state.entries;
+        const entries = paneEntries(side);
         const update = event.shiftKey
           ? selectRange(entries, selection[side], anchor[side], entry.name)
           : event.ctrlKey || event.metaKey
@@ -1341,7 +1380,7 @@ export function FileManager() {
   // cases have to be told apart below rather than folded together the way
   // `Boolean(single)` alone would. Picking "the first of several" here would
   // be the kind of guess that destroys the wrong file.
-  const single = singleSelected(focusedPane.entries, selection[focused]);
+  const single = singleSelected(paneEntries(focused), selection[focused]);
   const multipleSelected = selection[focused].size > 1;
   // F5 and F8 act on the whole selection, one or many — `reasonMultiple`
   // does not apply to them, only to the genuinely single-entry actions
@@ -1465,10 +1504,10 @@ export function FileManager() {
   // `focused`, same as every F-key above, and share the F-keys' gate so a
   // modal on top cannot be marked through.
   useInsertToggle(() => {
-    applySelection(focused, insertToggle(focusedPane.entries, selection[focused], anchor[focused]));
+    applySelection(focused, insertToggle(paneEntries(focused), selection[focused], anchor[focused]));
   }, keysActive);
   useSelectAll(() => {
-    applySelection(focused, toggleSelectAll(focusedPane.entries, selection[focused]));
+    applySelection(focused, toggleSelectAll(paneEntries(focused), selection[focused]));
   }, keysActive);
 
   // An unfinished operation is offered as soon as a pane shows an image that
@@ -1739,6 +1778,9 @@ function VolumeFooter({
 function Pane({
   side,
   state,
+  sortedEntries,
+  sort,
+  onSortChange,
   roots,
   selectedNames,
   cursorName,
@@ -1761,6 +1803,12 @@ function Pane({
 }: {
   side: Side;
   state: PaneState;
+  /** `state.entries`, sorted for display — see `paneEntries` in
+   * `FileManager` for why this and not `state.entries` is what the row list
+   * below renders. */
+  sortedEntries: PanelEntry[];
+  sort: SortState;
+  onSortChange: (column: SortColumn) => void;
   roots: string[];
   /** Every marked entry's name in this pane — see `@/lib/selection`. */
   selectedNames: Set<string>;
@@ -1912,9 +1960,13 @@ function Pane({
         </div>
       )}
 
+      {showingFiles && sortedEntries.length > 0 && (
+        <SortHeaderRow sort={sort} onSortChange={onSortChange} />
+      )}
+
       {showingFiles && (
         <ul style={{ listStyle: "none", padding: 0, margin: 0, maxHeight: 420, overflow: "auto" }}>
-          {state.entries.map((entry) => {
+          {sortedEntries.map((entry) => {
             const isSelected = selectedNames.has(entry.name);
             const isCursor = cursorName === entry.name;
             return (
@@ -2007,7 +2059,7 @@ function Pane({
             );
           })}
 
-          {state.entries.length === 0 && !state.error && (
+          {sortedEntries.length === 0 && !state.error && (
             <li className="muted" style={{ fontSize: 12, padding: "8px 0" }}>
               {t("files.pane.empty")}
             </li>
@@ -2015,6 +2067,97 @@ function Pane({
         </ul>
       )}
     </section>
+  );
+}
+
+/**
+ * The clickable Name / Date / Size headers above a pane's entry list.
+ *
+ * Clicking a header sorts by it; clicking the active one again reverses —
+ * `onSortChange` (`clickColumn` in `@/lib/sort`) already knows which. Folders
+ * stay first regardless of which header is active or which direction is
+ * chosen; that rule lives in the comparator itself (`compareEntries`), not
+ * here, so this component only has to reflect `sort`, never enforce it.
+ */
+function SortHeaderRow({
+  sort,
+  onSortChange,
+}: {
+  sort: SortState;
+  onSortChange: (column: SortColumn) => void;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        gap: 8,
+        fontSize: 11,
+        padding: "0 4px 4px",
+        borderBottom: "1px solid var(--border)",
+        marginBottom: 4,
+      }}
+    >
+      <SortHeaderButton column="name" sort={sort} onSortChange={onSortChange} />
+      <span style={{ display: "flex", gap: 10 }}>
+        <SortHeaderButton column="date" sort={sort} onSortChange={onSortChange} />
+        <SortHeaderButton column="size" sort={sort} onSortChange={onSortChange} />
+      </span>
+    </div>
+  );
+}
+
+function SortHeaderButton({
+  column,
+  sort,
+  onSortChange,
+}: {
+  column: SortColumn;
+  sort: SortState;
+  onSortChange: (column: SortColumn) => void;
+}) {
+  const { t } = useTranslation();
+  const active = sort.column === column;
+  // A compiler-checked mapping rather than building the key from `column`
+  // with a template literal: `src/i18n/literal-keys.test.ts` scans for
+  // literal, quoted translator calls and cannot see a key assembled at
+  // runtime, so this keeps every key the header can render a plain literal
+  // the scan actually checks — the same reasoning as `confidenceLevelKey` in
+  // `LhaBrowser.tsx`.
+  const label =
+    column === "name"
+      ? t("files.sort.name")
+      : column === "size"
+        ? t("files.sort.size")
+        : t("files.sort.date");
+
+  return (
+    <button
+      type="button"
+      className="btn"
+      style={{
+        fontSize: 11,
+        padding: "1px 6px",
+        background: "transparent",
+        border: "none",
+        color: active ? "var(--accent)" : "var(--text-muted)",
+        fontWeight: active ? 600 : 400,
+      }}
+      title={t("files.sort.title", {
+        column: label,
+        direction: sort.direction === "asc" ? t("files.sort.ascending") : t("files.sort.descending"),
+      })}
+      onClick={(event) => {
+        // Sorting is display-only and must not steal the pane's focus away
+        // from whatever F-keys are currently talking to — unlike a row click,
+        // this never calls `onFocus`.
+        event.stopPropagation();
+        onSortChange(column);
+      }}
+    >
+      {label}
+      {active && <span aria-hidden="true">{sort.direction === "asc" ? " ▲" : " ▼"}</span>}
+    </button>
   );
 }
 
