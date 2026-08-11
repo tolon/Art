@@ -51,7 +51,8 @@ import {
   type ArchiveDrawer,
 } from "@/lib/archives";
 import { checkoutEdit, checkoutOpen, volumeIconFor } from "@/lib/checkout";
-import { onJobProgress } from "@/lib/jobs";
+import { planFunctionKeys } from "@/lib/functionKeyPlan";
+import { onJobProgress, type JobProgress } from "@/lib/jobs";
 import { filterEntries } from "@/lib/mask";
 import {
   formatBytes,
@@ -69,7 +70,6 @@ import {
   insertToggle,
   selectOnly,
   selectRange,
-  singleSelected,
   toggleOne,
   toggleSelectAll,
   type SelectionUpdate,
@@ -227,8 +227,13 @@ function copyResultText(report: CopyReport, t: TranslateFn): string {
   return t(phrase.key, { ...phrase.params, what });
 }
 
+/** How [`runJob`] settled: `"finished"` alone must never be read as success —
+ * callers still need to check the job's own report for what actually
+ * landed — but `"cancelled"` must never be read as `"finished"` either. */
+type JobOutcome = "finished" | "cancelled";
+
 /**
- * Wait for one background job (§54) to reach a terminal state.
+ * Start a background job (§54) and wait for it to reach a terminal state.
  *
  * A multi-selection copied out of a volume runs one job per selected folder
  * (`volumeCopyOut` is job-based; a plain file goes straight through
@@ -237,12 +242,24 @@ function copyResultText(report: CopyReport, t: TranslateFn): string {
  * one job in flight — the wrong shape for "several, run together" — so this
  * gives the batch path its own, independent wait per job instead of
  * reusing that ref.
+ *
+ * Takes the job's *starter* rather than an already-known id, and subscribes
+ * to both event streams before calling it — a small folder can finish
+ * inside the two async round-trips `start` itself takes (invoke, then the
+ * id coming back), and a Tauri event emitted before anything is listening is
+ * lost for good. Events that arrive before the id is known are buffered and
+ * replayed once it is, rather than the old shape (subscribe *after* the
+ * caller already has the id), which could leave this promise waiting
+ * forever with no error and no way for the screen to recover (finding 3 of
+ * the phase-1a whole-branch review).
  */
-function awaitJob(jobId: number): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
+function runJob(start: () => Promise<number>): Promise<JobOutcome> {
+  return new Promise<JobOutcome>((resolve, reject) => {
+    let jobId: number | null = null;
     let settled = false;
     let offResult: (() => void) | undefined;
     let offProgress: (() => void) | undefined;
+    const pendingProgress: JobProgress[] = [];
 
     const finish = (action: () => void) => {
       if (settled) return;
@@ -252,29 +269,59 @@ function awaitJob(jobId: number): Promise<void> {
       action();
     };
 
-    void onVolumeWriteResult((result) => {
-      if (result.job_id === jobId) finish(resolve);
-    }).then((off) => {
-      offResult = off;
-      if (settled) off();
-    });
-
-    void onJobProgress((job) => {
-      if (job.id !== jobId || job.state.state === "running") return;
+    const handleProgress = (job: JobProgress) => {
+      if (jobId === null || job.id !== jobId || job.state.state === "running") return;
       if (job.state.state === "failed") {
         // Captured in a local so the narrowing survives into the closure
         // `finish` calls later — TS does not carry it through `job.state`
         // itself across the function boundary.
         const failure = job.state;
         finish(() => reject(new Error(`${failure.message} (${failure.error_code})`)));
+      } else if (job.state.state === "cancelled") {
+        // A cancelled batch must be reported as cancelled, never folded into
+        // "finished" — a caller that cannot tell the two apart reports a
+        // stopped copy as a full success.
+        finish(() => resolve("cancelled"));
       } else {
-        // "finished" or "cancelled": either way the job is done, and a
-        // cancel with no volume-write-result still has to stop the wait.
-        finish(resolve);
+        finish(() => resolve("finished"));
       }
-    }).then((off) => {
-      offProgress = off;
-      if (settled) off();
+    };
+
+    Promise.all([
+      onVolumeWriteResult((result) => {
+        if (jobId !== null && result.job_id === jobId) finish(() => resolve("finished"));
+      }),
+      onJobProgress((job) => {
+        if (jobId === null) {
+          pendingProgress.push(job);
+          return;
+        }
+        handleProgress(job);
+      }),
+    ]).then(([offR, offP]) => {
+      offResult = offR;
+      offProgress = offP;
+      if (settled) {
+        offR();
+        offP();
+        return;
+      }
+
+      start()
+        .then((id) => {
+          if (settled) return;
+          jobId = id;
+          // Replay whatever arrived in the window between subscribing and
+          // learning the id — including a terminal state reached before
+          // `start()` even resolved.
+          for (const job of pendingProgress) {
+            if (settled) break;
+            handleProgress(job);
+          }
+        })
+        .catch((err) => {
+          finish(() => reject(err instanceof Error ? err : new Error(String(err))));
+        });
     });
   });
 }
@@ -1092,26 +1139,42 @@ export function FileManager() {
       const volumeIndex = source.volumeIndex;
       setBusy(t("files.status.copyingSelectionOut", { count: entries.length }));
       try {
-        await Promise.all(
+        // Each outcome is tracked, not just awaited: a job the user cancelled
+        // partway through must not be folded into the same success message
+        // as one that actually finished (finding 3 of the phase-1a
+        // whole-branch review — `runJob` resolving "cancelled" as success was
+        // half the defect; reporting it honestly here is the other half).
+        const outcomes = await Promise.all(
           entries
             .filter((entry) => entry.header_block !== null)
-            .map(async (entry) => {
+            .map(async (entry): Promise<JobOutcome> => {
               const headerBlock = entry.header_block as number;
               if (entry.is_dir) {
-                const jobId = await volumeCopyOut(
-                  source.location,
-                  volumeIndex,
-                  headerBlock,
-                  `${target.location}/${entry.name}`,
-                  { overwrite: policy, sidecars: powerMode }
+                return runJob(() =>
+                  volumeCopyOut(
+                    source.location,
+                    volumeIndex,
+                    headerBlock,
+                    `${target.location}/${entry.name}`,
+                    { overwrite: policy, sidecars: powerMode }
+                  )
                 );
-                await awaitJob(jobId);
-              } else {
-                await volumeExtractTo(source.location, volumeIndex, headerBlock, target.location);
               }
+              await volumeExtractTo(source.location, volumeIndex, headerBlock, target.location);
+              return "finished";
             })
         );
-        setMessage(t("files.status.selectionCopiedOut", { count: entries.length }));
+        const cancelled = outcomes.filter((outcome) => outcome === "cancelled").length;
+        if (cancelled > 0) {
+          setMessage(
+            t("files.status.selectionCopyOutCancelled", {
+              done: outcomes.length - cancelled,
+              total: outcomes.length,
+            })
+          );
+        } else {
+          setMessage(t("files.status.selectionCopiedOut", { count: entries.length }));
+        }
         await refresh(to);
       } catch (e) {
         setError(String(e));
@@ -1449,53 +1512,58 @@ export function FileManager() {
   // The pane the keys act on: `focused`, tracked above — never derived from
   // `selection`. Every action below reads `focused` and `focusedPane`.
   const focusedPane = pane(focused);
-  // `single` is the one entry a single-entry action may act on — null both
-  // when nothing is selected and when more than one entry is, so those two
-  // cases have to be told apart below rather than folded together the way
-  // `Boolean(single)` alone would. Picking "the first of several" here would
-  // be the kind of guess that destroys the wrong file.
-  const single = singleSelected(paneEntries(focused), selection[focused]);
-  const multipleSelected = selection[focused].size > 1;
-  // F5 and F8 act on the whole selection, one or many — `reasonMultiple`
-  // does not apply to them, only to the genuinely single-entry actions
-  // below (F3, F4, F6, F9).
-  const hasSelection = selection[focused].size > 0;
   const canWrite = writableVolume(focusedPane) !== null;
   const inVolume = focusedPane.kind !== "local" && focusedPane.volumeIndex !== null;
+
+  // The single-entry keys' availability and target come from `planFunctionKeys`
+  // (`@/lib/functionKeyPlan`), not derived here, so the same "null when
+  // anything but exactly one entry is selected" answer — never "the first of
+  // several", which would be the kind of guess that destroys the wrong file —
+  // is what both `enabled` and `run` below read, and is what
+  // `functionKeyPlan.test.ts` exercises without rendering this page.
+  const keyPlan = planFunctionKeys({
+    entries: paneEntries(focused),
+    selected: selection[focused],
+    inVolume,
+    canWrite,
+    busy: busy !== null,
+  });
+  const { multipleSelected, hasSelection } = keyPlan;
 
   const actions: FunctionAction[] = [
     {
       key: "F3",
       label: t("files.functionKeys.view"),
-      enabled: Boolean(single && !single.is_dir && inVolume),
+      enabled: keyPlan.f3.enabled,
       reason: multipleSelected
         ? t("files.functionKeys.reasonMultiple")
         : inVolume
           ? t("files.functionKeys.viewReasonSelect")
           : t("files.functionKeys.viewReasonNeedsImage"),
       run: () => {
-        if (!single || single.header_block === null || focusedPane.volumeIndex === null) {
+        const target = keyPlan.f3.target;
+        if (!target || target.header_block === null || focusedPane.volumeIndex === null) {
           return;
         }
         setViewing({
           path: focusedPane.location,
           volumeIndex: focusedPane.volumeIndex,
-          entryBlock: single.header_block,
-          name: single.name,
+          entryBlock: target.header_block,
+          name: target.name,
         });
       },
     },
     {
       key: "F4",
       label: t("files.functionKeys.edit"),
-      enabled: Boolean(single && !single.is_dir && canWrite) && busy === null,
+      enabled: keyPlan.f4.enabled,
       reason: multipleSelected
         ? t("files.functionKeys.reasonMultiple")
         : canWrite
           ? t("files.functionKeys.editReasonSelect")
           : writeRefusal(focusedPane, t),
       run: () => {
-        if (single) void editEntry(focused, single);
+        if (keyPlan.f4.target) void editEntry(focused, keyPlan.f4.target);
       },
     },
     {
@@ -1511,14 +1579,14 @@ export function FileManager() {
     {
       key: "F6",
       label: t("files.functionKeys.rename"),
-      enabled: Boolean(single) && canWrite && busy === null,
+      enabled: keyPlan.f6.enabled,
       reason: multipleSelected
         ? t("files.functionKeys.reasonMultiple")
         : canWrite
           ? t("files.functionKeys.renameReasonSelect")
           : writeRefusal(focusedPane, t),
       run: () => {
-        if (single) void renameEntry(focused, single);
+        if (keyPlan.f6.target) void renameEntry(focused, keyPlan.f6.target);
       },
     },
     {
@@ -1542,20 +1610,21 @@ export function FileManager() {
     {
       key: "F9",
       label: t("files.functionKeys.attributes"),
-      enabled: Boolean(single) && inVolume,
+      enabled: keyPlan.f9.enabled,
       reason: multipleSelected
         ? t("files.functionKeys.reasonMultiple")
         : inVolume
           ? t("files.functionKeys.attributesReasonSelect")
           : t("files.functionKeys.attributesReasonNeedsImage"),
       run: () => {
-        if (!single || single.header_block === null || focusedPane.volumeIndex === null) {
+        const target = keyPlan.f9.target;
+        if (!target || target.header_block === null || focusedPane.volumeIndex === null) {
           return;
         }
         setAttributes({
           path: focusedPane.location,
           volumeIndex: focusedPane.volumeIndex,
-          entryBlock: single.header_block,
+          entryBlock: target.header_block,
         });
       },
     },

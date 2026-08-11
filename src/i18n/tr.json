@@ -994,6 +994,7 @@
       "copyingSelectionOut_other": "{{count}} öğe dışarı kopyalanıyor…",
       "selectionCopiedOut_one": "{{count}} öğe dışarı kopyalandı",
       "selectionCopiedOut_other": "{{count}} öğe dışarı kopyalandı",
+      "selectionCopyOutCancelled": "Durduruldu — {{total}} öğeden {{done}} tanesi dışarı kopyalandı",
       "writtenTo": "{{name}}, {{volume}} birimine yazıldı",
       "writtenToBackedUp": "{{name}}, {{volume}} birimine yazıldı — önceki imaj yedeklendi",
       "alreadyThere": "{{name}} zaten orada — dokunulmadı",

@@ -994,6 +994,7 @@
       "copyingSelectionOut_other": "Copying {{count}} items out…",
       "selectionCopiedOut_one": "{{count}} item copied out",
       "selectionCopiedOut_other": "{{count}} items copied out",
+      "selectionCopyOutCancelled": "Stopped — {{done}} of {{total}} copied out",
       "writtenTo": "{{name}} written to {{volume}}",
       "writtenToBackedUp": "{{name}} written to {{volume}} — the previous image was backed up",
       "alreadyThere": "{{name}} is already there — it was left alone",
