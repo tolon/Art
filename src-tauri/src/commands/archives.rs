@@ -123,7 +123,10 @@ fn build_plan(
     let staging = Staging::new()?;
     let (drawers, roots) = prepare_archives(archives, staging.path(), &NoProgress)?;
 
-    let selection = HostSelection::new(roots);
+    // These roots are ART's own unpacked staging tree, not a folder the user
+    // picked — the sidecar option (§4.2) is about copies from a real host
+    // folder, so it never applies here.
+    let selection = HostSelection::new(roots, true);
     let cost = crate::commands::volume_write::plan_copy_in_folder(
         image,
         volume_index,
@@ -242,7 +245,9 @@ fn install_archives(
 ) -> CoreResult<(crate::core::volume::write::copy::CopyReport, Option<String>)> {
     let staging = Staging::new()?;
     let (drawers, roots) = prepare_archives(archives, staging.path(), progress)?;
-    let selection = HostSelection::new(roots);
+    // Same as `build_plan` above: ART's own staging tree, so the sidecar
+    // option does not apply.
+    let selection = HostSelection::new(roots, true);
 
     // The same fits-or-nothing, abandon-on-cancel primitive a single-archive
     // install uses — one call, over the whole staged batch, so a cancelled

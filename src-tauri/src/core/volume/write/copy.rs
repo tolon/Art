@@ -452,11 +452,18 @@ fn walk(
 #[derive(Debug, Clone)]
 pub struct HostSelection {
     roots: Vec<PathBuf>,
+    /// Whether to look for `.uaem` sidecars next to each file — the same flag
+    /// [`HostFolder`] takes, plumbed through so a batch selection honours the
+    /// same option a single-folder copy does (§4.2).
+    read_sidecars: bool,
 }
 
 impl HostSelection {
-    pub fn new(roots: Vec<PathBuf>) -> Self {
-        Self { roots }
+    pub fn new(roots: Vec<PathBuf>, read_sidecars: bool) -> Self {
+        Self {
+            roots,
+            read_sidecars,
+        }
     }
 
     /// The name a root will be called at the destination — the last
@@ -611,7 +618,7 @@ impl CopySource for HostSelection {
 
     fn metadata(&self, relative: &str) -> CoreResult<Option<Sidecar>> {
         let path = self.resolve(relative)?;
-        host_metadata(&path, true)
+        host_metadata(&path, self.read_sidecars)
     }
 }
 
@@ -1368,7 +1375,7 @@ mod tests {
         let readme = staging.join("Readme.txt");
         std::fs::write(&readme, b"top level readme").unwrap();
 
-        let selection = HostSelection::new(vec![game, readme]);
+        let selection = HostSelection::new(vec![game, readme], true);
 
         let mut device = fixture.device();
         let mut writer =
@@ -1408,6 +1415,91 @@ mod tests {
         assert_eq!(fixture.contents(inside_sub[0].block), b"nested");
     }
 
+    /// The option a single-folder copy (`HostFolder`) already honours must do
+    /// the same thing through a batch selection: the same user action —
+    /// "copy this in, without sidecars" — must not behave differently
+    /// depending on whether the user picked one thing or several (finding 2
+    /// of the phase-1a whole-branch review). `read_sidecars: false` must
+    /// leave the file with AmigaDOS default bits even though a `.uaem`
+    /// sidecar sits right next to it; `true` must apply it — proving the
+    /// flag is actually read, not just accepted and ignored either way.
+    #[test]
+    fn a_selection_honours_its_own_sidecar_flag_in_both_positions() {
+        let with_sidecars = Fixture::new("selection-sidecars-on");
+        let staging_on = with_sidecars.dir.join("picks");
+        std::fs::create_dir_all(&staging_on).unwrap();
+        std::fs::write(staging_on.join("Game.slave"), b"slave bytes").unwrap();
+        std::fs::write(
+            staging_on.join("Game.slave.uaem"),
+            b"-sp-rwed 2020-05-04 10:20:30.00 a comment\n",
+        )
+        .unwrap();
+
+        let selection_on = HostSelection::new(vec![staging_on.join("Game.slave")], true);
+        let mut device = with_sidecars.device();
+        let mut writer =
+            VolumeWriter::open(&mut device, with_sidecars.geometry, &with_sidecars.image, 0)
+                .unwrap();
+        copy_into_volume(
+            &mut writer,
+            0,
+            &selection_on,
+            OverwritePolicy::Skip,
+            &NoProgress,
+        )
+        .unwrap();
+        drop(writer);
+        drop(device);
+
+        let entry = with_sidecars.listing(0)[0].clone();
+        let device = with_sidecars.device();
+        let protection = protection_of(&device, &with_sidecars.geometry, entry.block).unwrap();
+        assert_eq!(
+            uaem::format_bits(protection),
+            "-sp-rwed",
+            "read_sidecars: true must apply the bits the .uaem carried"
+        );
+
+        let without_sidecars = Fixture::new("selection-sidecars-off");
+        let staging_off = without_sidecars.dir.join("picks");
+        std::fs::create_dir_all(&staging_off).unwrap();
+        std::fs::write(staging_off.join("Game.slave"), b"slave bytes").unwrap();
+        std::fs::write(
+            staging_off.join("Game.slave.uaem"),
+            b"-sp-rwed 2020-05-04 10:20:30.00 a comment\n",
+        )
+        .unwrap();
+
+        let selection_off = HostSelection::new(vec![staging_off.join("Game.slave")], false);
+        let mut device = without_sidecars.device();
+        let mut writer = VolumeWriter::open(
+            &mut device,
+            without_sidecars.geometry,
+            &without_sidecars.image,
+            0,
+        )
+        .unwrap();
+        copy_into_volume(
+            &mut writer,
+            0,
+            &selection_off,
+            OverwritePolicy::Skip,
+            &NoProgress,
+        )
+        .unwrap();
+        drop(writer);
+        drop(device);
+
+        let entry = without_sidecars.listing(0)[0].clone();
+        let device = without_sidecars.device();
+        let protection = protection_of(&device, &without_sidecars.geometry, entry.block).unwrap();
+        assert_eq!(
+            uaem::format_bits(protection),
+            "----rwed",
+            "read_sidecars: false must ignore the .uaem sitting right next to the file"
+        );
+    }
+
     /// If the cap reset per root, two roots with ten files each and a shared
     /// cap of six would leave the second root free to add its own six —
     /// twelve entries out of a cap of six. It must not.
@@ -1423,7 +1515,7 @@ mod tests {
             std::fs::write(root_b.join(format!("f{index}.txt")), b"x").unwrap();
         }
 
-        let selection = HostSelection::new(vec![root_a, root_b]);
+        let selection = HostSelection::new(vec![root_a, root_b], true);
         let capped = selection.entries_capped(6).unwrap();
 
         assert!(
@@ -1451,7 +1543,7 @@ mod tests {
         std::fs::write(a.join("A.txt"), b"from a").unwrap();
         std::fs::write(b.join("B.txt"), b"from b").unwrap();
 
-        let selection = HostSelection::new(vec![a.clone(), b.clone()]);
+        let selection = HostSelection::new(vec![a.clone(), b.clone()], true);
         let err = selection.entries().unwrap_err();
         let message = err.to_string();
         assert!(
@@ -1468,7 +1560,7 @@ mod tests {
 
     #[test]
     fn an_empty_selection_copies_nothing_without_error() {
-        let selection = HostSelection::new(vec![]);
+        let selection = HostSelection::new(vec![], true);
         assert_eq!(selection.entries().unwrap(), Vec::new());
     }
 
@@ -1477,7 +1569,7 @@ mod tests {
         let dir = scratch("selection-missing");
         let missing = dir.join("Nope");
 
-        let selection = HostSelection::new(vec![missing]);
+        let selection = HostSelection::new(vec![missing], true);
         assert!(selection.entries().is_err());
 
         let _ = std::fs::remove_dir_all(&dir);
