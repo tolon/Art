@@ -88,6 +88,7 @@ pub fn volume_list(
                 path: None,
                 header_block: Some(file.header_block),
                 is_link: false,
+                date: Some(file.unix_date),
             })
             .collect(),
         warnings,

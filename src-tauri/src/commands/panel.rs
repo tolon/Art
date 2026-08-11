@@ -45,6 +45,10 @@ pub struct PanelEntry {
     /// True when the entry is a symlink or junction. Reported, never followed —
     /// that is the ART-028 lesson.
     pub is_link: bool,
+    /// Last-modified time, Unix seconds. `None` when the source could not
+    /// report one — a sort by date must know the difference between "no
+    /// date" and "epoch", so this stays optional rather than defaulting to 0.
+    pub date: Option<i64>,
 }
 
 /// A local folder's contents plus where it sits.
@@ -101,6 +105,7 @@ fn list_local(dir: &Path) -> CoreResult<LocalListing> {
             path: Some(entry.path().to_string_lossy().to_string()),
             header_block: None,
             is_link,
+            date: mtime_unix(&meta),
         });
     }
 
@@ -118,6 +123,15 @@ fn list_local(dir: &Path) -> CoreResult<LocalListing> {
         entries,
         truncated,
     })
+}
+
+/// A file's last-modified time as Unix seconds, or `None` when the platform
+/// could not report one (some filesystems have no modified time at all).
+fn mtime_unix(meta: &std::fs::Metadata) -> Option<i64> {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
 }
 
 /// The places a pane can start from: drives, and the usual folders.
@@ -187,6 +201,36 @@ mod tests {
 
         let listing = list_local(&child).unwrap();
         assert_eq!(listing.parent.as_deref(), Some(dir.to_str().unwrap()));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A sort by date has to know a real date from a missing one — see the
+    /// `Option<i64>` comment on `PanelEntry::date` — so this proves the local
+    /// source actually reports one rather than always coming back `None`.
+    #[test]
+    fn a_freshly_written_file_has_a_recent_date() {
+        let dir = scratch("date");
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        std::fs::write(dir.join("new.txt"), b"x").unwrap();
+
+        let listing = list_local(&dir).unwrap();
+        let file = listing
+            .entries
+            .iter()
+            .find(|e| e.name == "new.txt")
+            .unwrap();
+        let date = file
+            .date
+            .expect("a freshly written file has a modified time");
+
+        assert!(
+            date >= before - 2,
+            "date {date} looks stale next to {before}"
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

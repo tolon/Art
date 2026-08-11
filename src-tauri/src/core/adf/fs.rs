@@ -87,8 +87,20 @@ pub fn list_directory_on(device: &dyn BlockDevice, dir_block: u32) -> CoreResult
         }
     }
 
-    // Amiga directories are not sorted; present a stable order to the UI.
-    entries.sort_by_key(|a| a.name.to_lowercase());
+    // Amiga directories have no intrinsic order at all — the hash table groups
+    // entries by name hash, not by kind or alphabet. That is exactly why the
+    // UI needs one imposed here rather than none: folders first, then
+    // case-insensitive name, the same order `commands/panel.rs` uses for a
+    // local folder and `core/volume/write/dir.rs::entries_in` uses for the
+    // write path's own listing. This only reorders the `Vec` handed back; the
+    // on-disk hash chains are untouched.
+    entries.sort_by(|a, b| {
+        let a_is_dir = a.kind == EntryKind::Directory;
+        let b_is_dir = b.kind == EntryKind::Directory;
+        b_is_dir
+            .cmp(&a_is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
     Ok(entries)
 }
 
@@ -174,4 +186,45 @@ pub fn read_header(image: &[u8], block: u32) -> CoreResult<HeaderBlock> {
 /// Convenience: list the root directory.
 pub fn list_root(image: &[u8], root_block: u32) -> CoreResult<Vec<FileEntry>> {
     list_directory(image, root_block)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::volume::fixture::{add_directory, make_ffs_volume, FixtureFile};
+
+    /// Amiga directories have no on-disk order at all (see the comment above
+    /// `list_directory_on`) — the hash table groups by name hash, not by kind
+    /// or alphabet. `zebra.txt` and `Apple.txt` are inserted in an order that
+    /// would already look wrong if the listing were left unsorted, and
+    /// `Tools` is added last so a name-only sort (the bug this replaces)
+    /// would land it between the two files rather than in front of them.
+    #[test]
+    fn folders_come_first_then_names_case_insensitively() {
+        let mut image = make_ffs_volume(
+            1760,
+            "Work",
+            &[
+                FixtureFile {
+                    name: "zebra.txt",
+                    content: b"z",
+                },
+                FixtureFile {
+                    name: "Apple.txt",
+                    content: b"a",
+                },
+            ],
+        );
+        let root_block = 1760u32 / 2;
+        // Well clear of the handful of blocks `make_ffs_volume` used for the
+        // two files and their data.
+        add_directory(&mut image, root_block, "Tools", root_block + 100);
+
+        let entries = list_directory(&image, root_block).unwrap();
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+
+        assert_eq!(names, vec!["Tools", "Apple.txt", "zebra.txt"]);
+        assert_eq!(entries[0].kind, EntryKind::Directory);
+        assert!(entries.iter().skip(1).all(|e| e.kind == EntryKind::File));
+    }
 }
