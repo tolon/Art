@@ -25,6 +25,31 @@ what fixed it (with the test that proves it).
 
 _(ART-075 was open here; it is fixed — see [Phase 2a](#phase-2a) below.)_
 
+**ART-088** 🟡 **The volume writer deletes a delete-protected entry without noticing the bit**
+`src-tauri/src/core/volume/write/mod.rs::delete` · AmigaDOS refuses to delete a
+file whose `d` protection bit is clear — that is what the bit is *for*, and
+WHDLoad slaves and system files routinely have it set that way. ART's `delete`
+checks that a directory is empty and nothing else; the protection field is read
+for the attributes dialog and for `.uaem` sidecars, and ignored here.
+
+So a `Delete` in the file manager removes an entry that the Amiga itself would
+have protected, and the user's own `[Confirmation]` settings — which keep
+"overwrite read-only" on — have nothing to attach to.
+
+**Half-fixed 2026-08-12** (phase 2b task 7): the file manager now reads the bit
+off `PanelEntry.attrs` and asks a third time before deleting a protected entry,
+naming it (`isDeleteProtected` in `@/lib/protection`, 6 tests). That is a
+confirmation, not a guard — anything that calls `delete` without going through
+that screen still deletes silently.
+
+The real fix belongs in the writer: refuse unless an explicit override is
+passed, the same shape `SAFE_CREATE` already has for "creating never replaces".
+Worth doing alongside the same question for **overwrite** — `volume_put_file`
+does not check the `w` bit either.
+
+Found while auditing the brief's §3.4 confirmations against what ART actually
+does.
+
 **ART-087** 🔵 **Space marks a row but does not compute a directory's size**
 `src/pages/FileManager.tsx` · `src/lib/selection.ts::spaceToggle` · The brief
 (§3.2) asks for Total Commander's `CountSpace=1`: Space on a **directory**

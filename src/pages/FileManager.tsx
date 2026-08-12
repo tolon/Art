@@ -78,6 +78,13 @@ import { planFunctionKeys } from "@/lib/functionKeyPlan";
 import { onJobProgress, type JobProgress } from "@/lib/jobs";
 import { filterEntries } from "@/lib/mask";
 import { planMove } from "@/lib/movePlan";
+import { deleteProtectedNames, isDeleteProtected } from "@/lib/protection";
+import {
+  colourFor,
+  DEFAULT_COLOUR_RULES,
+  isUsableRuleList,
+  type ColourRule,
+} from "@/lib/colourRules";
 import { extendSearch, shortenSearch } from "@/lib/quickSearch";
 import { parseCommandLine } from "@/lib/commandLine";
 import {
@@ -522,6 +529,15 @@ export function FileManager() {
    * the whole screen, acting on whichever pane is focused — Total Commander
    * has one too, for the same reason. */
   const [commandLine, setCommandLine] = useState("");
+  /**
+   * The command line's own history (brief §3.4 — his path row, command line
+   * and New Folder dialog all keep one).
+   *
+   * Newest first, deduplicated, capped: a history is only useful while it is
+   * short enough to scan, and the twentieth entry back is a path the user
+   * would type again faster than they would find it.
+   */
+  const [commandHistory, setCommandHistory] = useState<string[]>([]);
   /** What has been typed into type-to-search, and the timer that ends it. */
   const [search, setSearch] = useState("");
   const searchTimer = useRef<number | null>(null);
@@ -591,6 +607,16 @@ export function FileManager() {
   /** What the last session left behind, as read from the settings store —
    *  validated, not trusted (`isUsableTabSet`). */
   const savedSession = useSettingsStore((s) => s.settings.filesSession);
+  /** The user's colour rules, or the shipped defaults when the stored list is
+   *  absent or malformed — see `isUsableRuleList` for why falling back beats
+   *  colouring nothing. */
+  const storedColourRules = useSettingsStore((s) => s.settings.fileColourRules);
+  /** Norton Commander's right-button marking (`UseRightButton=1`), off unless
+   *  asked for — right-click is the gesture a context menu will want. */
+  const rightButtonSelects = useSettingsStore((s) => s.settings.rightButtonSelects);
+  const colourRules: ColourRule[] = isUsableRuleList(storedColourRules)
+    ? storedColourRules
+    : DEFAULT_COLOUR_RULES;
   const setPolicy = useCallback(
     (next: OverwritePolicy) => void updateSettings({ overwritePolicy: next }),
     [updateSettings]
@@ -822,6 +848,12 @@ export function FileManager() {
       await openLocation(side, tab.location);
     }
     if (record.focused === "left" || record.focused === "right") setFocused(record.focused);
+    // The command history is a nice-to-have, so it is restored on its own
+    // terms: a malformed one is dropped rather than costing the whole session.
+    const history = (saved as { commandHistory?: unknown }).commandHistory;
+    if (Array.isArray(history) && history.every((e) => typeof e === "string")) {
+      setCommandHistory(history.slice(0, 20));
+    }
     return true;
   }
 
@@ -1475,8 +1507,10 @@ export function FileManager() {
   // been read.
   useEffect(() => {
     if (!sessionRestored.current || !tabs.left || !tabs.right) return;
-    void updateSettings({ filesSession: { left: tabs.left, right: tabs.right, focused } });
-  }, [tabs, focused, updateSettings]);
+    void updateSettings({
+      filesSession: { left: tabs.left, right: tabs.right, focused, commandHistory },
+    });
+  }, [tabs, focused, commandHistory, updateSettings]);
 
   // Record every move. Watching the panes rather than trusting seven `openX`
   // functions to each remember is what makes a new one impossible to forget.
@@ -2323,6 +2357,17 @@ export function FileManager() {
     if (!window.confirm(t("files.dialog.delete.confirm2", { name: entry.name }))) {
       return;
     }
+    // §3.4: the user's `[Confirmation]` keeps "overwrite read-only" on, and
+    // the Amiga's nearest equivalent is the `d` bit — a file with it clear is
+    // one AmigaDOS itself refuses to delete. ART's writer does not check it
+    // (ART-088), so asking here is the difference between a deliberate
+    // override and a surprise.
+    if (
+      isDeleteProtected(entry.attrs) &&
+      !window.confirm(t("files.dialog.delete.confirmProtected", { name: entry.name }))
+    ) {
+      return;
+    }
 
     setError(null);
     setHint(null);
@@ -2410,6 +2455,18 @@ export function FileManager() {
       return;
     }
     if (!window.confirm(t("files.dialog.deleteMany.confirm2", { count: names.length }))) {
+      return;
+    }
+    const protectedNames = deleteProtectedNames(entries);
+    if (
+      protectedNames.length > 0 &&
+      !window.confirm(
+        t("files.dialog.deleteMany.confirmProtected", {
+          count: protectedNames.length,
+          names: protectedNames.slice(0, 3).join(", "),
+        })
+      )
+    ) {
       return;
     }
 
@@ -2798,6 +2855,14 @@ export function FileManager() {
    * happened; a refusal leaves the text where the user can see, and fix,
    * what they typed.
    */
+  /** Put a line that actually did something at the top of the history. Only
+   *  the ones that worked: a refused line is not something to offer back. */
+  function rememberCommand(line: string) {
+    const text = line.trim();
+    if (text === "") return;
+    setCommandHistory((current) => [text, ...current.filter((e) => e !== text)].slice(0, 20));
+  }
+
   async function runCommandLine() {
     const action = parseCommandLine(commandLine);
     setError(null);
@@ -2810,14 +2875,17 @@ export function FileManager() {
         setError(t(action.reason.key, action.reason.params));
         return;
       case "filter":
+        rememberCommand(commandLine);
         setPaneFilter(focused, action.mask);
         setCommandLine("");
         return;
       case "up":
+        rememberCommand(commandLine);
         setCommandLine("");
         await goUp(focused);
         return;
       case "open":
+        rememberCommand(commandLine);
         setCommandLine("");
         await openLocal(focused, action.path);
         return;
@@ -2880,6 +2948,8 @@ export function FileManager() {
       tabSet: tabs[side],
       onSelectTab: (index: number) => void goToTab(side, index),
       onCloseTab: (index: number) => void dropTab(side, index),
+      colourRules,
+      rightButtonSelects,
       selectedNames: selection[side],
       cursorName: anchor[side],
       focused: focused === side,
@@ -3401,6 +3471,7 @@ export function FileManager() {
             type="text"
             className="tc-command-input"
             value={commandLine}
+            list="tc-command-history"
             aria-label={t("files.commandLine.ariaLabel")}
             placeholder={t("files.commandLine.placeholder")}
             onChange={(event) => setCommandLine(event.target.value)}
@@ -3417,6 +3488,14 @@ export function FileManager() {
               void runCommandLine();
             }}
           />
+          {/* A native dropdown history, which is the whole of what §3.4 asks
+              for here and costs no dialog: the browser gives filtering,
+              keyboard selection and dismissal for free. */}
+          <datalist id="tc-command-history">
+            {commandHistory.map((entry) => (
+              <option key={entry} value={entry} />
+            ))}
+          </datalist>
         </div>
 
         <div className="tc-chrome-row tc-fnkey-row">
@@ -3575,6 +3654,8 @@ function Pane({
   tabSet,
   onSelectTab,
   onCloseTab,
+  colourRules,
+  rightButtonSelects,
   selectedNames,
   cursorName,
   focused,
@@ -3621,6 +3702,10 @@ function Pane({
   tabSet: TabSet | null;
   onSelectTab: (index: number) => void;
   onCloseTab: (index: number) => void;
+  /** The colour rules a row is matched against (`@/lib/colourRules`). */
+  colourRules: ColourRule[];
+  /** Whether a right-click marks a row rather than doing nothing. */
+  rightButtonSelects: boolean;
   /** Every marked entry's name in this pane — see `@/lib/selection`. */
   selectedNames: Set<string>;
   /** The entry the mouse/keyboard last landed on: a future Shift+click's
@@ -3950,11 +4035,15 @@ function Pane({
             // non-cursor* case falls through to the row's own file-type
             // colour (`fileTextColorVar` — white/light-blue/dimmed, the same
             // classification `TcRowIcon` uses for its glyph).
+            // The user's own colour rules sit *in front* of that
+            // classification, not instead of it: a row no rule claims keeps
+            // the colour it already had, so an empty rule list changes
+            // nothing (`@/lib/colourRules`).
             const rowTextColor = isSelected
               ? "var(--tc-selected-text)"
               : isCursor
                 ? "var(--tc-cursor-text)"
-                : fileTextColorVar(entry);
+                : (colourFor(entry.name, entry.is_dir, colourRules) ?? fileTextColorVar(entry));
 
             return (
               <li
@@ -3973,6 +4062,15 @@ function Pane({
                 }}
                 onClick={(event) => onSelect(entry, event)}
                 onDoubleClick={() => onActivate(entry)}
+                // Norton Commander's right-button marking, when it is asked
+                // for. `preventDefault` only in that case, so with the setting
+                // off the browser's own context menu still belongs to whatever
+                // ART puts there later.
+                onContextMenu={(event) => {
+                  if (!rightButtonSelects) return;
+                  event.preventDefault();
+                  onSelect(entry, { shiftKey: false, ctrlKey: true, metaKey: false });
+                }}
                 style={{ color: rowTextColor, cursor: entry.is_dir ? "pointer" : "grab" }}
               >
                 <span className="tc-cell tc-cell-name">

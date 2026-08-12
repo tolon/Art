@@ -180,6 +180,9 @@
     "showSourceButtonsLabel": "Her bölmenin üstündeki düğme satırını göster",
     "showSourceButtonsHint": "Öntanımlı olarak kapalı: her bölmenin başlığındaki kaynak kutusu aynı sürücüleri ve imajları açar, ayrıca Total Commander da düğme çubuğu olmadan çalışır.",
     "overwritePolicy": "Bir ad zaten kullanılıyorsa",
+    "rightButtonSelects": "Sağ fare düğmesi",
+    "rightButtonSelectsLabel": "Sağ tık bir dosyayı işaretler (Norton Commander usulü)",
+    "rightButtonSelectsHint": "Öntanımlı olarak kapalı: sağ tık, ileride bir bağlam menüsünün isteyeceği harekettir.",
     "overwritePolicyHint": "Bir kopyalamanın başlangıç davranışı. Kopyalama penceresi, gerçekten önünde bir ad bulduğunda yeniden sorar ve oradaki yanıtınız buraya işlenir.",
     "theme": "Tema",
     "themeDark": "Koyu",
@@ -192,6 +195,19 @@
     "collectionDir": "Koleksiyon Klasörü",
     "uxModePowerHint": "Ham veri araçlarını, blok ve sektör ayrıntılarını ve gelişmiş işlemleri gösterir.",
     "uxModeBeginnerHint": "Ham veri araçlarını ve blok düzeyindeki ayrıntıları gizler. Hiçbir şey devre dışı bırakılmaz — her şeyi görmek için Uzman Kullanıcı moduna geçin.",
+    "colourRules": {
+      "title": "Dosya renkleri",
+      "description": "Solda bir dosya adı kalıbı, sağda bir renk. Eşleşen ilk kural kazanır, dolayısıyla sıra sizin elinizde — konteyner kuralının üstündeki bir kural, bir dosyayı diğerlerinden ayırır. Birden çok kalıp tek kurala noktalı virgülle yazılır. Hiçbir kuralın tutmadığı satır ART'ın kendi renklendirmesini korur.",
+      "labelAria": "Bu kural ne için",
+      "patternsAria": "Noktalı virgülle ayrılmış dosya adı kalıpları",
+      "colourAria": "Renk",
+      "moveUp": "Yukarı taşı",
+      "moveDown": "Aşağı taşı",
+      "remove": "Bu kuralı kaldır",
+      "add": "Kural ekle",
+      "reset": "ART öntanımlılarına dön",
+      "newLabel": "Yeni kural"
+    },
     "oplog": {
       "title": "İşlem Günlüğü",
       "description": "Bir dosyayı değiştiren her işlem, yedeğinin nereye gittiğiyle birlikte.",
@@ -995,13 +1011,16 @@
       "delete": {
         "confirm1": "{{name}}, {{volume}} biriminden silinsin mi?",
         "confirm2": "Bu, tamamlandıktan sonra ART içinden geri alınamaz. '{{name}}' silinsin mi?",
-        "confirmIcon": "Simgesi ({{icon}}) de silinsin mi?"
+        "confirmIcon": "Simgesi ({{icon}}) de silinsin mi?",
+        "confirmProtected": "{{name}} silinmeye karşı korumalı — AmigaDOS bile reddederdi. Yine de silinsin mi?"
       },
       "deleteMany": {
         "confirm1_one": "{{count}} öğe ({{size}}), {{volume}} biriminden silinsin mi?",
         "confirm1_other": "{{count}} öğe ({{size}}), {{volume}} biriminden silinsin mi?",
         "confirm2_one": "Bu, tamamlandıktan sonra ART içinden geri alınamaz. Bu öğe silinsin mi?",
-        "confirm2_other": "Bu, tamamlandıktan sonra ART içinden geri alınamaz. Bu {{count}} öğe silinsin mi?"
+        "confirm2_other": "Bu, tamamlandıktan sonra ART içinden geri alınamaz. Bu {{count}} öğe silinsin mi?",
+        "confirmProtected_one": "{{names}} silinmeye karşı korumalı — AmigaDOS bile reddederdi. Yine de silinsin mi?",
+        "confirmProtected_other": "Bunlardan {{count}} tanesi silinmeye karşı korumalı ({{names}}) — AmigaDOS bile reddederdi. Yine de silinsinler mi?"
       },
       "move": {
         "confirm_one": "{{count}} öğe {{source}} biriminden {{destination}} hedefine taşınsın mı? Önce kopyalanır, ancak kopya denetlendikten sonra kaldırılır.",

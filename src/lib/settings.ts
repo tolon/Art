@@ -88,6 +88,26 @@ export interface AppSettings {
    * that forgot your tabs.
    */
   filesSession: unknown;
+  /**
+   * Per-filetype colour rules for the Files screen (brief Part 2).
+   *
+   * `unknown` for the same reason `filesSession` is: the shape belongs to
+   * `@/lib/colourRules`, which validates it with `isUsableRuleList` on the way
+   * in. `null` means "use the ones ART ships with" — which is *not* the same
+   * as an empty list, and the difference matters: an empty list is a user who
+   * has deliberately turned every rule off.
+   */
+  fileColourRules: unknown;
+  /**
+   * Right-click marks a row instead of doing nothing (`UseRightButton=1`).
+   *
+   * Off by default, and that is the honest default rather than a timid one:
+   * right-click is the gesture every other Windows application uses for a
+   * context menu, and ART will grow one. A user who has run Norton Commander's
+   * right-button marking for thirty years turns it on and never thinks about
+   * it again.
+   */
+  rightButtonSelects: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -102,6 +122,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showSourceButtons: false,
   overwritePolicy: "skip",
   filesSession: null,
+  fileColourRules: null,
+  rightButtonSelects: false,
 };
 
 export async function getSettings(): Promise<AppSettings> {
@@ -119,6 +141,10 @@ export async function getSettings(): Promise<AppSettings> {
         (await s.get<StoredOverwritePolicy>("overwritePolicy")) ??
         DEFAULT_SETTINGS.overwritePolicy,
       filesSession: (await s.get<unknown>("filesSession")) ?? DEFAULT_SETTINGS.filesSession,
+      fileColourRules:
+        (await s.get<unknown>("fileColourRules")) ?? DEFAULT_SETTINGS.fileColourRules,
+      rightButtonSelects:
+        (await s.get<boolean>("rightButtonSelects")) ?? DEFAULT_SETTINGS.rightButtonSelects,
       lastCollectionDir:
         (await s.get<string>("lastCollectionDir")) ?? DEFAULT_SETTINGS.lastCollectionDir,
       winuaePath: (await s.get<string>("winuaePath")) ?? DEFAULT_SETTINGS.winuaePath,

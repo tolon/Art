@@ -180,6 +180,9 @@
     "showSourceButtonsLabel": "Show the button row above each pane",
     "showSourceButtonsHint": "Off by default: the source box in each pane's header opens the same drives and images, and Total Commander runs without a button bar.",
     "overwritePolicy": "When a name is already taken",
+    "rightButtonSelects": "Right mouse button",
+    "rightButtonSelectsLabel": "Right-click marks a file, Norton Commander style",
+    "rightButtonSelectsHint": "Off by default: right-click is the gesture a context menu will want.",
     "overwritePolicyHint": "Where a copy starts from. The copy dialog asks again whenever it actually finds a name in the way, and your answer there becomes this.",
     "theme": "Theme",
     "themeDark": "Dark",
@@ -192,6 +195,19 @@
     "collectionDir": "Collection Directory",
     "uxModePowerHint": "Showing raw data tools, block and sector detail, and advanced actions.",
     "uxModeBeginnerHint": "Hiding raw data tools and block-level detail. Nothing is disabled — switch to Power User to see everything.",
+    "colourRules": {
+      "title": "File colours",
+      "description": "A filename mask on the left, a colour on the right. The first rule that matches wins, so the order is yours to set — a rule above the container rule picks one file out of the rest. Several masks go in one rule, separated by ;. Anything no rule matches keeps ART's own colouring.",
+      "labelAria": "What this rule is for",
+      "patternsAria": "Filename masks, separated by semicolons",
+      "colourAria": "Colour",
+      "moveUp": "Move up",
+      "moveDown": "Move down",
+      "remove": "Remove this rule",
+      "add": "Add a rule",
+      "reset": "Back to ART's defaults",
+      "newLabel": "New rule"
+    },
     "oplog": {
       "title": "Operation Log",
       "description": "Every operation that changed a file, with where its backup went.",
@@ -995,13 +1011,16 @@
       "delete": {
         "confirm1": "Delete {{name}} from {{volume}}?",
         "confirm2": "This cannot be undone from inside ART once it has finished. Delete '{{name}}'?",
-        "confirmIcon": "Delete its icon ({{icon}}) too?"
+        "confirmIcon": "Delete its icon ({{icon}}) too?",
+        "confirmProtected": "{{name}} is delete-protected — AmigaDOS itself would refuse. Delete it anyway?"
       },
       "deleteMany": {
         "confirm1_one": "Delete {{count}} item ({{size}}) from {{volume}}?",
         "confirm1_other": "Delete {{count}} items ({{size}}) from {{volume}}?",
         "confirm2_one": "This cannot be undone from inside ART once it has finished. Delete this item?",
-        "confirm2_other": "This cannot be undone from inside ART once it has finished. Delete these {{count}} items?"
+        "confirm2_other": "This cannot be undone from inside ART once it has finished. Delete these {{count}} items?",
+        "confirmProtected_one": "{{names}} is delete-protected — AmigaDOS itself would refuse. Delete it anyway?",
+        "confirmProtected_other": "{{count}} of these are delete-protected ({{names}}) — AmigaDOS itself would refuse. Delete them anyway?"
       },
       "move": {
         "confirm_one": "Move {{count}} item from {{source}} to {{destination}}? It is copied first and only removed once the copy has been checked.",

@@ -6,6 +6,11 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { LANGUAGE_NAMES, SUPPORTED_LANGUAGES } from "@/i18n";
 import type { StoredOverwritePolicy, Theme, UxMode } from "@/lib/settings";
 import {
+  DEFAULT_COLOUR_RULES,
+  isUsableRuleList,
+  type ColourRule,
+} from "@/lib/colourRules";
+import {
   oplogExportTo,
   oplogPath,
   oplogRecent,
@@ -89,7 +94,22 @@ export function SettingsPage() {
             {t("settings.overwritePolicyHint")}
           </p>
         </Field>
+        <Field label={t("settings.rightButtonSelects")}>
+          <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13 }}>
+            <input
+              type="checkbox"
+              checked={settings.rightButtonSelects}
+              onChange={(e) => void update({ rightButtonSelects: e.target.checked })}
+            />
+            {t("settings.rightButtonSelectsLabel")}
+          </label>
+          <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+            {t("settings.rightButtonSelectsHint")}
+          </p>
+        </Field>
       </section>
+
+      <ColourRulesSection />
 
       <section className="card">
         <h2 style={{ fontSize: 15 }}>{t("settings.general")}</h2>
@@ -134,6 +154,128 @@ export function SettingsPage() {
 
       <OperationLogSection />
     </div>
+  );
+}
+
+/**
+ * Per-filetype colour rules for the Files screen (brief Part 2).
+ *
+ * Total Commander-shaped and deliberately so: a filename mask on the left, a
+ * colour on the right, **first match wins**, so the order is the user's
+ * instrument — a rule above the container rule picks one `.adf` out of the
+ * rest. The masks are the same `*`/`?` the filter box takes, and several go in
+ * one rule separated by `;`, because "every container" is a list rather than
+ * ten rules to keep in order.
+ *
+ * A row no rule claims keeps the colour ART's own classification gave it, so
+ * emptying this list is not the same as breaking it.
+ */
+function ColourRulesSection() {
+  const { t } = useTranslation();
+  const stored = useSettingsStore((s) => s.settings.fileColourRules);
+  const update = useSettingsStore((s) => s.update);
+  const rules: ColourRule[] = isUsableRuleList(stored) ? stored : DEFAULT_COLOUR_RULES;
+
+  function save(next: ColourRule[]) {
+    void update({ fileColourRules: next });
+  }
+
+  function patch(index: number, change: Partial<ColourRule>) {
+    save(rules.map((rule, i) => (i === index ? { ...rule, ...change } : rule)));
+  }
+
+  function move(index: number, by: number) {
+    const to = index + by;
+    if (to < 0 || to >= rules.length) return;
+    const next = [...rules];
+    [next[index], next[to]] = [next[to], next[index]];
+    save(next);
+  }
+
+  return (
+    <section className="card">
+      <h2 style={{ fontSize: 15 }}>{t("settings.colourRules.title")}</h2>
+      <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+        {t("settings.colourRules.description")}
+      </p>
+
+      <ul style={{ listStyle: "none", padding: 0, margin: "10px 0 0" }}>
+        {rules.map((rule, index) => (
+          <li
+            key={index}
+            style={{
+              display: "flex",
+              gap: 6,
+              alignItems: "center",
+              padding: "4px 0",
+              flexWrap: "wrap",
+            }}
+          >
+            <input
+              className="btn"
+              style={{ flex: "0 1 120px", minWidth: 0 }}
+              value={rule.label}
+              aria-label={t("settings.colourRules.labelAria")}
+              onChange={(e) => patch(index, { label: e.target.value })}
+            />
+            <input
+              className="btn"
+              style={{ flex: "1 1 200px", minWidth: 0, fontFamily: "ui-monospace, monospace" }}
+              value={rule.patterns}
+              placeholder="*.adf;*.hdf"
+              aria-label={t("settings.colourRules.patternsAria")}
+              onChange={(e) => patch(index, { patterns: e.target.value })}
+            />
+            <input
+              type="color"
+              className="btn"
+              style={{ flex: "0 0 44px", padding: 2 }}
+              value={/^#[0-9a-fA-F]{6}$/.test(rule.colour) ? rule.colour : "#ffffff"}
+              aria-label={t("settings.colourRules.colourAria")}
+              onChange={(e) => patch(index, { colour: e.target.value })}
+            />
+            {/* Order is meaning here, so it has to be changeable. */}
+            <button
+              className="btn btn-sm"
+              onClick={() => move(index, -1)}
+              disabled={index === 0}
+              title={t("settings.colourRules.moveUp")}
+            >
+              ↑
+            </button>
+            <button
+              className="btn btn-sm"
+              onClick={() => move(index, 1)}
+              disabled={index === rules.length - 1}
+              title={t("settings.colourRules.moveDown")}
+            >
+              ↓
+            </button>
+            <button
+              className="btn btn-sm"
+              onClick={() => save(rules.filter((_, i) => i !== index))}
+              title={t("settings.colourRules.remove")}
+            >
+              ✕
+            </button>
+          </li>
+        ))}
+      </ul>
+
+      <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+        <button
+          className="btn btn-sm"
+          onClick={() =>
+            save([...rules, { label: t("settings.colourRules.newLabel"), patterns: "", colour: "#ffffff" }])
+          }
+        >
+          {t("settings.colourRules.add")}
+        </button>
+        <button className="btn btn-sm" onClick={() => save(DEFAULT_COLOUR_RULES)}>
+          {t("settings.colourRules.reset")}
+        </button>
+      </div>
+    </section>
   );
 }
 
