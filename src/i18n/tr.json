@@ -17,7 +17,9 @@
     "settings": "Ayarlar",
     "aminet": "Aminet",
     "files": "Dosyalar",
-    "whdload": "WHDLoad Kur"
+    "whdload": "WHDLoad Kur",
+    "showSidebar": "Kenar çubuğunu göster",
+    "hideSidebar": "Kenar çubuğunu gizle"
   },
   "dashboard": {
     "dropHere": "AMIGA DOSYALARINI BURAYA BIRAKIN",
@@ -172,7 +174,16 @@
     "title": "Ayarlar",
     "general": "Genel",
     "appearance": "Görünüm",
+    "files": "Dosyalar",
     "paths": "Yollar",
+    "showSourceButtons": "Sürücü ve kaynak düğmeleri",
+    "showSourceButtonsLabel": "Her bölmenin üstündeki düğme satırını göster",
+    "showSourceButtonsHint": "Öntanımlı olarak kapalı: her bölmenin başlığındaki kaynak kutusu aynı sürücüleri ve imajları açar, ayrıca Total Commander da düğme çubuğu olmadan çalışır.",
+    "overwritePolicy": "Bir ad zaten kullanılıyorsa",
+    "rightButtonSelects": "Sağ fare düğmesi",
+    "rightButtonSelectsLabel": "Sağ tık bir dosyayı işaretler (Norton Commander usulü)",
+    "rightButtonSelectsHint": "Öntanımlı olarak kapalı: sağ tık, ileride bir bağlam menüsünün isteyeceği harekettir.",
+    "overwritePolicyHint": "Bir kopyalamanın başlangıç davranışı. Kopyalama penceresi, gerçekten önünde bir ad bulduğunda yeniden sorar ve oradaki yanıtınız buraya işlenir.",
     "theme": "Tema",
     "themeDark": "Koyu",
     "themeLight": "Açık",
@@ -184,6 +195,19 @@
     "collectionDir": "Koleksiyon Klasörü",
     "uxModePowerHint": "Ham veri araçlarını, blok ve sektör ayrıntılarını ve gelişmiş işlemleri gösterir.",
     "uxModeBeginnerHint": "Ham veri araçlarını ve blok düzeyindeki ayrıntıları gizler. Hiçbir şey devre dışı bırakılmaz — her şeyi görmek için Uzman Kullanıcı moduna geçin.",
+    "colourRules": {
+      "title": "Dosya renkleri",
+      "description": "Solda bir dosya adı kalıbı, sağda bir renk. Eşleşen ilk kural kazanır, dolayısıyla sıra sizin elinizde — konteyner kuralının üstündeki bir kural, bir dosyayı diğerlerinden ayırır. Birden çok kalıp tek kurala noktalı virgülle yazılır. Hiçbir kuralın tutmadığı satır ART'ın kendi renklendirmesini korur.",
+      "labelAria": "Bu kural ne için",
+      "patternsAria": "Noktalı virgülle ayrılmış dosya adı kalıpları",
+      "colourAria": "Renk",
+      "moveUp": "Yukarı taşı",
+      "moveDown": "Aşağı taşı",
+      "remove": "Bu kuralı kaldır",
+      "add": "Kural ekle",
+      "reset": "ART öntanımlılarına dön",
+      "newLabel": "Yeni kural"
+    },
     "oplog": {
       "title": "İşlem Günlüğü",
       "description": "Bir dosyayı değiştiren her işlem, yedeğinin nereye gittiğiyle birlikte.",
@@ -514,6 +538,20 @@
       "singleTitle": "Tek Bölüm",
       "singleDesc": "DH0: Sistem (%100 kapasite)",
       "createButton": "HDF Dosyası Oluştur…",
+      "warnNoDriver": "ART bölüm tablosunu ve bu dosya sisteminin DosType'ını yazar, ancak dosya sisteminin kendisini yazmaz: RDB'ye PFS3 ya da SFS sürücüsü yerleştirilmez, dolayısıyla başka bir araçla oraya bir sürücü konulana kadar Amiga bu bölümü göremez. Fast File System bölümleri, gerçek bir diskte olduğu gibi Amiga tarafında Format ile biçimlendirilir.",
+      "warnOver4Gb": "Tek parça {{size}} GB'lık bir bölüm, standart AmigaDOS'un adresleyebildiği 4 GB sınırının ötesinde; hem denetleyicide hem dosya sisteminde TD64 ya da NSD desteği gerektirir. Emülatör için ve bu desteğe sahip bir makine için sorun değil — değilse diski bölün.",
+      "custom": {
+        "button": "Özel…",
+        "hint": "Boyutu yazın",
+        "placeholder": "örn. 16",
+        "ariaLabel": "Disk boyutu",
+        "unitAriaLabel": "Boyut birimi",
+        "empty": "Bir boyut yazın.",
+        "notANumber": "Bu bir boyut değil. Sıfırdan büyük bir sayı yazın.",
+        "notWholeMegabytes": "Boyutlar tam megabayttır — 0,5 GB olur, 12,5 MB olmaz.",
+        "tooSmall": "ART'ın oluşturacağı en küçük sabit disk imajı {{min}} MB'tır.",
+        "needsSize": "Önce geçerli bir boyut yazın"
+      },
       "sizeHints": {
         "compact": "Kompakt",
         "classic": "Klasik",
@@ -839,7 +877,6 @@
     }
   },
   "files": {
-    "intro": "İki bölme. Bir tarafa klasör, diğer tarafa disk imajı koyun, sonra aralarında sürükleyin — ya da fonksiyon tuşlarını kullanın.",
     "busy": {
       "suffix": "{{busy}} — ilerleme iş çubuğunda; oradan durdurabilirsiniz."
     },
@@ -856,7 +893,6 @@
       "toLeftTitle": "Seçili öğeyi sola kopyala"
     },
     "policy": {
-      "label": "Bir ad zaten kullanılıyorsa:",
       "skip": "olduğu gibi bırak",
       "overwrite": "üzerine yaz",
       "rename": "ikisini de tut"
@@ -890,6 +926,9 @@
       "editReasonSelect": "Düzenlemek için bir dosya seçin",
       "copy": "Kopyala",
       "copyReasonSelect": "Kopyalamak için bir şey seçin",
+      "move": "Taşı",
+      "moveHintRename": "Shift+F6 — yerinde adlandır",
+      "moveReasonBusy": "Çalışan işlemin bitmesini bekleyin",
       "rename": "Adlandır",
       "renameReasonSelect": "Adlandırmak için bir şey seçin",
       "newFolder": "Yeni Klasör",
@@ -899,10 +938,6 @@
       "attributesReasonSelect": "Önce bir şey seçin",
       "attributesReasonNeedsImage": "Nitelikler yalnızca bir imaj içindeki dosyalara aittir",
       "reasonMultiple": "Yalnızca tek bir öğede çalışır"
-    },
-    "selection": {
-      "summary_one": "{{count}} öğe seçili ({{size}})",
-      "summary_other": "{{count}} öğe seçili ({{size}})"
     },
     "toolbar": {
       "folder": "Klasör...",
@@ -940,7 +975,9 @@
       "freeOfTotal": "{{total}} k içinden {{free}} k boş",
       "statusLine": "{{selectedBytes}} k / {{totalBytes}} k — {{selectedFiles}} / {{totalFiles}} dosya, {{selectedDirs}} / {{totalDirs}} dizin",
       "maskPlaceholder": "*.*",
-      "maskAriaLabel": "Dosyaları ada göre filtrele"
+      "maskAriaLabel": "Dosyaları ada göre filtrele",
+      "sourceAriaLabel": "Bu bölmede gösterilen kaynak",
+      "sourceUnlisted": "(listelenen bir sürücüde değil)"
     },
     "footer": {
       "unnamed": "(adsız)",
@@ -963,6 +1000,10 @@
       "newFolder": {
         "prompt": "Diskteki klasör adı"
       },
+      "markMask": {
+        "mark": "Şu kalıba uyanları işaretle (* ve ? kullanın)",
+        "unmark": "Şu kalıba uyanların işaretini kaldır (* ve ? kullanın)"
+      },
       "rename": {
         "prompt": "Yeni ad",
         "confirmIcon": "{{name}} bir simgeye sahip ({{icon}}). {{newName}}.info olarak onu da yeniden adlandırmak ister misiniz? Yapılmazsa {{newName}} Workbench'te görünmeyecek."
@@ -970,14 +1011,40 @@
       "delete": {
         "confirm1": "{{name}}, {{volume}} biriminden silinsin mi?",
         "confirm2": "Bu, tamamlandıktan sonra ART içinden geri alınamaz. '{{name}}' silinsin mi?",
-        "confirmIcon": "Simgesi ({{icon}}) de silinsin mi?"
+        "confirmIcon": "Simgesi ({{icon}}) de silinsin mi?",
+        "confirmProtected": "{{name}} silinmeye karşı korumalı — AmigaDOS bile reddederdi. Yine de silinsin mi?"
       },
       "deleteMany": {
         "confirm1_one": "{{count}} öğe ({{size}}), {{volume}} biriminden silinsin mi?",
         "confirm1_other": "{{count}} öğe ({{size}}), {{volume}} biriminden silinsin mi?",
         "confirm2_one": "Bu, tamamlandıktan sonra ART içinden geri alınamaz. Bu öğe silinsin mi?",
-        "confirm2_other": "Bu, tamamlandıktan sonra ART içinden geri alınamaz. Bu {{count}} öğe silinsin mi?"
+        "confirm2_other": "Bu, tamamlandıktan sonra ART içinden geri alınamaz. Bu {{count}} öğe silinsin mi?",
+        "confirmProtected_one": "{{names}} silinmeye karşı korumalı — AmigaDOS bile reddederdi. Yine de silinsin mi?",
+        "confirmProtected_other": "Bunlardan {{count}} tanesi silinmeye karşı korumalı ({{names}}) — AmigaDOS bile reddederdi. Yine de silinsinler mi?"
+      },
+      "move": {
+        "confirm_one": "{{count}} öğe {{source}} biriminden {{destination}} hedefine taşınsın mı? Önce kopyalanır, ancak kopya denetlendikten sonra kaldırılır.",
+        "confirm_other": "{{count}} öğe {{source}} biriminden {{destination}} hedefine taşınsın mı? Önce kopyalanır, ancak kopyalar denetlendikten sonra kaldırılır.",
+        "confirmIcons_one": "{{names}} bir simgeye sahip. O da taşınsın mı? Taşınmazsa nesne Workbench'te görünmeyecek.",
+        "confirmIcons_other": "Bunlardan {{count}} tanesinin simgesi var ({{names}}). Onlar da taşınsın mı? Taşınmazlarsa nesneler Workbench'te görünmeyecek."
       }
+    },
+    "move": {
+      "refuseNothing": "Taşımak için bir şey seçin.",
+      "refuseLocalSource": "ART kendi diskinizdeki dosyaları silmez, bu yüzden onları oradan taşıyamaz. F5 ile kopyalayıp kendiniz kaldırın.",
+      "refuseReadOnlySource": "Bir diskten, arşivden ya da Commodore imajından hiçbir şey taşınamaz — ART onları yalnızca okur. Bunun yerine F5 ile kopyalayın.",
+      "refuseSourceNotWritable": "Bu birim yazma kabul etmiyor, dolayısıyla öğeler ondan kaldırılamaz. Bunun yerine F5 ile kopyalayın.",
+      "refuseReadOnlyTarget": "Diğer bölme salt okunur, oraya hiçbir şey taşınamaz.",
+      "refuseTargetNotWritable": "Önce diğer tarafta yazma kabul eden bir birim açın.",
+      "refuseFileBetweenImages": "Tek bir dosyayı iki imaj arasında taşımak henüz desteklenmiyor — bir klasör taşınabilir, bir dosya ise F5 ile kopyalanabilir.",
+      "refuseCollision_one": "{{names}} zaten orada. Taşıma hiçbir zaman üzerine yazmaz ve sessizce atlamaz — önce birinin adını değiştirin.",
+      "refuseCollision_other": "Bu adlardan {{count}} tanesi zaten orada ({{names}}). Taşıma hiçbir zaman üzerine yazmaz ve sessizce atlamaz — önce adlarını değiştirin."
+    },
+    "commandLine": {
+      "ariaLabel": "Komut satırı",
+      "placeholder": "cd D:\\Amiga · *.adf",
+      "refuseRelative": "Tam bir yol yazın — bölme bir imajın içinde olabilir, orada tek başına bir ad yol değildir.",
+      "refuseNotAShell": "Bu satır bir klasöre gider ya da bir filtre uygular. ART buradan program çalıştırmaz."
     },
     "err": {
       "bothLocal": "Her iki bölme de yerel klasör — bunun için Explorer'ı kullanın.",
@@ -1024,9 +1091,19 @@
       "checkingOut": "{{name}} düzenlemek için çıkarılıyor…",
       "checkedOut": "{{name}} düzenlemeye açık. İşiniz bitince aşağıdaki panelden geri koyun.",
       "creatingFolder": "Klasör oluşturuluyor…",
+      "opening": "{{name}} açılıyor…",
       "renaming": "{{name}} yeniden adlandırılıyor…",
       "renamed": "{{name}} artık {{newName}}",
       "renamedWithIcon": "{{name}} artık {{newName}}, simgesiyle birlikte",
+      "moving_one": "{{count}} öğe taşınıyor…",
+      "moving_other": "{{count}} öğe taşınıyor…",
+      "moved_one": "{{count}} öğe taşındı",
+      "moved_other": "{{count}} öğe taşındı",
+      "movedBackedUp_one": "{{count}} öğe taşındı — önceki imajın yedeği alındı",
+      "movedBackedUp_other": "{{count}} öğe taşındı — önceki imajın yedeği alındı",
+      "moveCancelled": "Durduruldu. Kopyalanmış olan her şey yerinde duruyor — hiçbir şey kaldırılmadı.",
+      "moveNotVerified_one": "Kopyalandı, ancak {{names}} sonrasında hedefte bulunamadı, bu yüzden hiçbir şey kaldırılmadı.",
+      "moveNotVerified_other": "Kopyalandı, ancak bunlardan {{count}} tanesi ({{names}}) sonrasında hedefte bulunamadı, bu yüzden hiçbir şey kaldırılmadı.",
       "writtenBack": "{{name}} imajın içine geri yazıldı.",
       "filesWrittenOut_one": "{{count}} dosya dışarı yazıldı",
       "filesWrittenOut_other": "{{count}} dosya dışarı yazıldı",

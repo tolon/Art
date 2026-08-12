@@ -25,6 +25,192 @@ what fixed it (with the test that proves it).
 
 _(ART-075 was open here; it is fixed — see [Phase 2a](#phase-2a) below.)_
 
+**ART-088** 🟡 **The volume writer deletes a delete-protected entry without noticing the bit**
+`src-tauri/src/core/volume/write/mod.rs::delete` · AmigaDOS refuses to delete a
+file whose `d` protection bit is clear — that is what the bit is *for*, and
+WHDLoad slaves and system files routinely have it set that way. ART's `delete`
+checks that a directory is empty and nothing else; the protection field is read
+for the attributes dialog and for `.uaem` sidecars, and ignored here.
+
+So a `Delete` in the file manager removes an entry that the Amiga itself would
+have protected, and the user's own `[Confirmation]` settings — which keep
+"overwrite read-only" on — have nothing to attach to.
+
+**Half-fixed 2026-08-12** (phase 2b task 7): the file manager now reads the bit
+off `PanelEntry.attrs` and asks a third time before deleting a protected entry,
+naming it (`isDeleteProtected` in `@/lib/protection`, 6 tests). That is a
+confirmation, not a guard — anything that calls `delete` without going through
+that screen still deletes silently.
+
+The real fix belongs in the writer: refuse unless an explicit override is
+passed, the same shape `SAFE_CREATE` already has for "creating never replaces".
+Worth doing alongside the same question for **overwrite** — `volume_put_file`
+does not check the `w` bit either.
+
+Found while auditing the brief's §3.4 confirmations against what ART actually
+does.
+
+**ART-087** 🔵 **Space marks a row but does not compute a directory's size**
+`src/pages/FileManager.tsx` · `src/lib/selection.ts::spaceToggle` · The brief
+(§3.2) asks for Total Commander's `CountSpace=1`: Space on a **directory**
+marks it *and* walks it, replacing the `<DIR>` in the Size column with the real
+total. ART marks; it does not count.
+
+The reason is the phase's own rule. There is no primitive to count with:
+`panel_list_local` lists one level, `scan_collection_directory` looks for Amiga
+files rather than totalling bytes, and `volume_plan_copy` computes a size only
+against a destination volume. A recursive walk is new engine capability — small
+and read-only, but new — and phase 2b's plan says a gap found on the way is
+filed rather than smuggled in.
+
+Fixing it means one command per side of the fence: a depth-limited local walk
+(the same guards `scan_collection_directory` already has — bounded depth, no
+symlink following) and a volume-side directory total, both as jobs, because a
+directory of forty thousand files must not block the command thread and must
+be stoppable. The Size column then needs a third state — not just a number or
+`<DIR>`, but "counting…".
+
+Found while building phase 2b task 5.
+
+**ART-086** 🔵 **Every path in Settings has to be typed by hand**
+`src/pages/Settings.tsx` · "WinUAE Path" and "Collection Directory" are plain
+`<input>`s with a placeholder. ART already opens native pickers everywhere else
+(`@tauri-apps/plugin-dialog`'s `open`, used by the Files screen, both studios
+and the WHDLoad installer), so the fix is a Browse button beside each field
+that fills it in — not new capability, just the capability wired to the two
+fields that were left out.
+
+Found by the user in the running application, 2026-08-12.
+
+**ART-085** 🟡 **A studio forgets the image it had open the moment you leave the screen**
+`src/pages/AdfBrowser.tsx`, `HardDiskStudio.tsx`, and every other studio ·
+Each holds its open file in a local `useState`. Navigating away unmounts the
+component and the state goes with it, so coming back gives the empty
+"open an .adf to begin" page again — while the Dashboard's Recent list, which
+*is* persisted (SQLite `recent_files`), still shows the file that was open a
+second ago. That contrast is what makes it read as a fault rather than as a
+design.
+
+What is missing is a notion of **the object ART currently has open**, shared
+across screens: the Files panes, the studios and the workflow engine all
+address the same kinds of thing and none of them can tell the others what it
+is looking at. Phase 2b task 6 already has to persist per-pane paths for
+session restore, and this is the same question asked once for the whole
+application rather than once per screen — worth designing together rather than
+bolting a `useRef` onto each studio.
+
+Found by the user in the running application, 2026-08-12.
+
+**ART-084** 🟠 **An HDF created as PFS3 or SFS is a DosType with no filesystem behind it, and an Amiga cannot mount it**
+`core/hdf.rs::create_hdf` · `core/rdb.rs::create_rdb_layout` ·
+`src/pages/HardDiskStudio.tsx` · The New HDF wizard's third step is "Choose
+Amiga Filesystem", and it offers **PFS3-AIO as the default, badged
+"⭐ Recommended (Fast & Safe)"**. What `create_hdf` actually writes is the RDSK
+block, the PART blocks, and nothing else:
+
+- **No filesystem is created**, for any choice. The partition has no root
+  block and no bitmap. For DOS\1 / DOS\3 that is correct and normal — a real
+  disk is partitioned on one machine and `Format`ted on the Amiga — but the
+  wizard's wording does not say so.
+- **No driver is embedded in the RDB.** PFS3 and SFS are not in Kickstart;
+  they are loaded from FSHD + LSEG blocks inside the RDB, which ART
+  deliberately does not write ([ART-025](#fixed), and G4 of the
+  [SD gap analysis](sd-appliance-gap-analysis.md)). `IDNAME_FSHD` and
+  `IDNAME_LSEG` exist in `core/rdb.rs` as constants and are referenced by
+  nothing.
+
+So the recommended, default option produces an image whose partition an Amiga
+does not see at all. That is exactly the "don't claim support that isn't
+implemented" rule (spec §10, §89) broken in the one place a user is most
+likely to trust ART.
+
+**Half-fixed 2026-08-12:** the wizard now shows the limitation in the dialog,
+in both languages, before the image is made
+(`hardDisk.modal.warnNoDriver`, `hdfSizeWarning` in `@/lib/hdfSize`, tested).
+That turns a false claim into a stated one; it is not the fix. The fix is G4 —
+segment-splitting a user-supplied `pfs3aio` binary into an LSEG chain,
+checksumming it and wiring `DosType → SegListBlocks` — which is scheduled as
+SD-1 and verifiable against `rdbtool`, an oracle that already exists.
+
+Found by the user in the running application, 2026-08-12.
+
+**ART-083** 🟡 **The New HDF wizard capped disk size at 8 GB, and nothing in the engine asked it to** — *fixed 2026-08-12*
+`src/pages/HardDiskStudio.tsx` · The five size buttons (500 MB … 8 GB) were
+the whole of what could be chosen. `create_rdb_layout` refuses below 10 MB and
+then only when the cylinder count will not fit a `u32` — at 516,096 bytes per
+cylinder, a limit measured in petabytes. The 8 GB ceiling was a list of five
+numbers in a component.
+
+Fixed by a "Custom…" size that is typed, parsed and validated in
+`@/lib/hdfSize` (13 tests): a comma decimal separator (the user's own locale),
+the engine's own 10 MB floor as the only lower bound, no upper bound, and a
+fraction of a megabyte **refused rather than rounded away** — this is the one
+number in the dialog that cannot be changed after the image exists. A
+partition past 4 GB now carries a warning about TD64/NSD rather than a
+refusal: the image may be for an emulator, or for a machine that has both.
+
+Found by the user in the running application, 2026-08-12.
+
+**ART-082** 🟠 **The Files panes filled the window; their listings did not** — *fixed 2026-08-12*
+`src/pages/FileManager.css` · Phase 2b task 1 made the panes fill the window
+by construction and was checked by tests, which cannot see a pane. A
+`max-height: 420px` on `.tc-row-list` — left from when the commander was a
+widget on a page — survived it, so the *pane* grew to the window and the
+*listing inside it* stayed 420 CSS pixels tall. On a maximized 4K window that
+is twenty rows above six hundred pixels of dead pane, with the status line
+stranded in the middle of it: acceptance point 1 of the phase brief
+("panes always filling; no dead space") failing in the most visible way
+possible.
+
+Fixed by deleting the `max-height`; the flex rule further down the file was
+always the thing that should have decided the height.
+
+**Worth more than the fix:** this is the first defect [ART-062](#open) has
+actually cost. Two tasks' worth of layout work went in green on 178 frontend
+tests, and the first human look at the running screen found this in seconds.
+Nothing in a jsdom test has a viewport height.
+
+**ART-081** 🟡 **A single file cannot be moved between two images, because the primitive underneath addresses a directory**
+`src-tauri/src/commands/volume_write.rs::volume_copy_between` ·
+`src/lib/movePlan.ts` · The command takes a *directory* block at both ends and
+copies that directory's tree. F5 on a lone file between two images already
+passes the pane's own `dirBlock` and therefore copies the whole folder the file
+happens to be in — noisy, but harmless, because F5 deletes nothing. F6 (Move)
+cannot use that: it would copy twenty files, delete the one that was marked, and
+report a move.
+
+So `planMove` refuses it by name (`files.move.refuseFileBetweenImages`), and
+the test `refuses a lone file between two images` pins the refusal. Folders
+move between images; files move out to a host folder; a file between two images
+is copied with F5 for now.
+
+Fixing it means a command that stages one *entry* — extract to a scratch path,
+then `put_file` into the destination volume, inside one write session at each
+end so the backup and journal guarantees hold — which is the same missing
+primitive ART-064 needs for batching, and it should be built once for both.
+The F5 whole-folder surprise above is worth fixing in the same pass.
+
+Found while building F6 in phase 2b task 3; recorded rather than smuggled into
+a UI task, which is what that task's plan requires.
+
+**ART-080** 🔵 **ART cannot delete a file on the user's own disk, so nothing can be moved *off* a host folder**
+`src/lib/movePlan.ts` · `src-tauri/src/commands/panel.rs` · Every delete ART
+owns goes *into* a disk image through `core/volume/write`; there is no command
+that removes a file from the user's own filesystem, and that is deliberate —
+Explorer does that job and a two-pane commander that can silently delete host
+files is a much larger safety surface than one that cannot.
+
+The consequence, once F6 became Move: the most obvious move of all — drag a
+game off `D:\downloads` and onto a floppy image — is a copy, and the original
+stays. F6 says so (`files.move.refuseLocalSource`) instead of being disabled
+with no explanation, and points at F5.
+
+Fixing it is not a line of code but a decision: a host-side delete needs its own
+`Safety` class, its own confirmation, its own oplog entry, and a policy on
+recycle bin versus unlink. Worth doing deliberately, if at all.
+
+Found while building F6 in phase 2b task 3.
+
 **ART-078** 🟡 **An AmigaOS CD's protection bits and file comments are lost, because Rock Ridge and the Amiga `AS` entry are not read**
 `core/iso/` · ART reads ISO9660 and prefers Joliet when a disc carries it.
 Neither carries what an Amiga CD actually says about its files: protection bits

@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Outlet } from "react-router-dom";
 
 import { JobBar } from "@/components/JobBar";
@@ -6,6 +7,7 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import { setupDragDrop, type DropHandler } from "@/lib/dnd";
 import { useRecentFilesStore } from "@/stores/recentFilesStore";
+import { useSettingsStore } from "@/stores/settingsStore";
 import type { DroppedAnalysis } from "@/types";
 
 /**
@@ -20,6 +22,33 @@ export function Layout() {
   const [analyses, setAnalyses] = useState<DroppedAnalysis[]>([]);
   const record = useRecentFilesStore((s) => s.record);
   const reloadRecent = useRecentFilesStore((s) => s.load);
+  const { t } = useTranslation();
+
+  // The sidebar is collapsible (Ctrl+B), and the state is a *preference*: it
+  // survives a restart, because someone who works with the panes full-width
+  // expects them full-width when they come back.
+  const collapsed = useSettingsStore((s) => s.settings.sidebarCollapsed);
+  const updateSettings = useSettingsStore((s) => s.update);
+  const toggleSidebar = useCallback(
+    () => updateSettings({ sidebarCollapsed: !collapsed }),
+    [collapsed, updateSettings]
+  );
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || event.altKey || event.metaKey) return;
+      if (event.key.toLowerCase() !== "b") return;
+      // Not while typing into something: Ctrl+B is a text shortcut in an
+      // input as far as the user's fingers are concerned.
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
+      event.preventDefault();
+      void toggleSidebar();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [toggleSidebar]);
 
   useEffect(() => {
     const handler: DropHandler = {
@@ -50,7 +79,11 @@ export function Layout() {
   }, [record, reloadRecent]);
 
   return (
-    <div className={`app-shell ${dragOver ? "app-shell-dragover" : ""}`}>
+    <div
+      className={`app-shell${dragOver ? " app-shell-dragover" : ""}${
+        collapsed ? " app-shell-collapsed" : ""
+      }`}
+    >
       <Sidebar />
       <div className="app-main">
         <TopBar />
@@ -59,6 +92,18 @@ export function Layout() {
           <Outlet context={{ analyses, dragOver }} />
         </main>
       </div>
+      {/* The way back when the sidebar is hidden. Placed on the shell rather
+          than inside the sidebar for the obvious reason: a control that lives
+          in the thing it un-hides is unreachable once it works. */}
+      <button
+        type="button"
+        className="app-sidebar-toggle"
+        aria-label={t(collapsed ? "nav.showSidebar" : "nav.hideSidebar")}
+        title={`${t(collapsed ? "nav.showSidebar" : "nav.hideSidebar")} (Ctrl+B)`}
+        onClick={() => void toggleSidebar()}
+      >
+        {collapsed ? "›" : "‹"}
+      </button>
     </div>
   );
 }

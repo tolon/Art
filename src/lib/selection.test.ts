@@ -10,9 +10,12 @@ import {
   emptySelectionUpdate,
   entriesIn,
   insertToggle,
+  invertSelection,
+  markByMask,
   selectOnly,
   selectRange,
   singleSelected,
+  spaceToggle,
   toggleOne,
   toggleSelectAll,
 } from "./selection";
@@ -158,5 +161,74 @@ describe("entriesIn / singleSelected", () => {
 
   it("singleSelected returns the entry when exactly one is selected", () => {
     expect(singleSelected(ENTRIES, new Set(["Gamma"]))?.name).toBe("Gamma");
+  });
+});
+
+describe("markByMask (Num + / Num −)", () => {
+  const FILES = ["Lotus.adf", "Lotus.hdf", "Turrican.adf", "Readme"].map((n) => entry(n));
+
+  it("marks everything matching, and adds to what is already marked", () => {
+    // Total Commander's Num+ is how a selection gets built out of several
+    // patterns; replacing the selection each time would make "*.adf then
+    // *.hdf" impossible.
+    const first = markByMask(FILES, new Set(), "*.adf", true);
+    expect([...first.selected].sort()).toEqual(["Lotus.adf", "Turrican.adf"]);
+
+    const second = markByMask(FILES, first.selected, "*.hdf", true);
+    expect([...second.selected].sort()).toEqual(["Lotus.adf", "Lotus.hdf", "Turrican.adf"]);
+  });
+
+  it("unmarks by mask without touching anything else", () => {
+    const all = new Set(FILES.map((f) => f.name));
+    const left = markByMask(FILES, all, "*.adf", false);
+    expect([...left.selected].sort()).toEqual(["Lotus.hdf", "Readme"]);
+  });
+
+  it("does nothing for a mask that matches nothing", () => {
+    const update = markByMask(FILES, new Set(["Readme"]), "*.zip", true);
+    expect([...update.selected]).toEqual(["Readme"]);
+  });
+});
+
+describe("invertSelection (Num *)", () => {
+  it("inverts over what the pane is showing", () => {
+    const update = invertSelection(ENTRIES, new Set(["Alpha", "Gamma"]));
+    expect([...update.selected].sort()).toEqual(["Beta", "Delta", "Epsilon"]);
+  });
+
+  it("composes with the filter box — it inverts the visible list, not the disk", () => {
+    // Mask the pane, invert, and you have every *visible* entry that was not
+    // already marked.
+    const visible = ENTRIES.slice(0, 2);
+    const update = invertSelection(visible, new Set(["Alpha"]));
+    expect([...update.selected]).toEqual(["Beta"]);
+  });
+
+  it("selects everything when nothing was selected, and clears when all were", () => {
+    expect(invertSelection(ENTRIES, new Set()).selected.size).toBe(5);
+    expect(invertSelection(ENTRIES, new Set(ENTRIES.map((e) => e.name))).selected.size).toBe(0);
+  });
+});
+
+describe("spaceToggle", () => {
+  it("marks the cursor row and stays there", () => {
+    // The difference from Insert is the whole reason both exist: Insert marks
+    // and steps down, Space marks without losing your place.
+    const update = spaceToggle(new Set(), "Gamma");
+    expect([...update.selected]).toEqual(["Gamma"]);
+    expect(update.anchor).toBe("Gamma");
+  });
+
+  it("unmarks a row that was already marked", () => {
+    const update = spaceToggle(new Set(["Gamma"]), "Gamma");
+    expect(update.selected.size).toBe(0);
+    expect(update.anchor).toBe("Gamma");
+  });
+
+  it("does nothing when the pane has no cursor", () => {
+    const selected = new Set(["Alpha"]);
+    const update = spaceToggle(selected, null);
+    expect(update.selected).toBe(selected);
+    expect(update.anchor).toBeNull();
   });
 });

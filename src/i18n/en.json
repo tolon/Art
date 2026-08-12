@@ -17,7 +17,9 @@
     "settings": "Settings",
     "aminet": "Aminet",
     "files": "Files",
-    "whdload": "Install WHDLoad"
+    "whdload": "Install WHDLoad",
+    "showSidebar": "Show sidebar",
+    "hideSidebar": "Hide sidebar"
   },
   "dashboard": {
     "dropHere": "DROP AMIGA FILES HERE",
@@ -172,7 +174,16 @@
     "title": "Settings",
     "general": "General",
     "appearance": "Appearance",
+    "files": "Files",
     "paths": "Paths",
+    "showSourceButtons": "Drive and source buttons",
+    "showSourceButtonsLabel": "Show the button row above each pane",
+    "showSourceButtonsHint": "Off by default: the source box in each pane's header opens the same drives and images, and Total Commander runs without a button bar.",
+    "overwritePolicy": "When a name is already taken",
+    "rightButtonSelects": "Right mouse button",
+    "rightButtonSelectsLabel": "Right-click marks a file, Norton Commander style",
+    "rightButtonSelectsHint": "Off by default: right-click is the gesture a context menu will want.",
+    "overwritePolicyHint": "Where a copy starts from. The copy dialog asks again whenever it actually finds a name in the way, and your answer there becomes this.",
     "theme": "Theme",
     "themeDark": "Dark",
     "themeLight": "Light",
@@ -184,6 +195,19 @@
     "collectionDir": "Collection Directory",
     "uxModePowerHint": "Showing raw data tools, block and sector detail, and advanced actions.",
     "uxModeBeginnerHint": "Hiding raw data tools and block-level detail. Nothing is disabled — switch to Power User to see everything.",
+    "colourRules": {
+      "title": "File colours",
+      "description": "A filename mask on the left, a colour on the right. The first rule that matches wins, so the order is yours to set — a rule above the container rule picks one file out of the rest. Several masks go in one rule, separated by ;. Anything no rule matches keeps ART's own colouring.",
+      "labelAria": "What this rule is for",
+      "patternsAria": "Filename masks, separated by semicolons",
+      "colourAria": "Colour",
+      "moveUp": "Move up",
+      "moveDown": "Move down",
+      "remove": "Remove this rule",
+      "add": "Add a rule",
+      "reset": "Back to ART's defaults",
+      "newLabel": "New rule"
+    },
     "oplog": {
       "title": "Operation Log",
       "description": "Every operation that changed a file, with where its backup went.",
@@ -514,6 +538,20 @@
       "singleTitle": "Single Partition",
       "singleDesc": "DH0: System (100% capacity)",
       "createButton": "Create HDF File…",
+      "warnNoDriver": "ART writes the partition table and this filesystem's DosType, but not the filesystem itself: no PFS3 or SFS driver is placed in the RDB, so an Amiga will not see this partition until one is put there with another tool. Fast File System partitions are formatted on the Amiga with Format, as on a real disk.",
+      "warnOver4Gb": "A single {{size}} GB partition is past the 4 GB that standard AmigaDOS can address; it needs TD64 or NSD support in both the controller and the filesystem. Fine for an emulator, and for a machine that has them — split the disk if it does not.",
+      "custom": {
+        "button": "Custom…",
+        "hint": "Type a size",
+        "placeholder": "e.g. 16",
+        "ariaLabel": "Disk size",
+        "unitAriaLabel": "Size unit",
+        "empty": "Type a size.",
+        "notANumber": "That is not a size. Type a number greater than zero.",
+        "notWholeMegabytes": "Sizes are whole megabytes — 0.5 GB is fine, 12.5 MB is not.",
+        "tooSmall": "The smallest hard disk image ART will build is {{min}} MB.",
+        "needsSize": "Type a valid size first"
+      },
       "sizeHints": {
         "compact": "Compact",
         "classic": "Classic",
@@ -839,7 +877,6 @@
     }
   },
   "files": {
-    "intro": "Two panes. Put a folder on one side and a disk image on the other, then drag between them — or use the function keys.",
     "busy": {
       "suffix": "{{busy}} — progress is in the job bar, and you can stop it there."
     },
@@ -856,7 +893,6 @@
       "toLeftTitle": "Copy the selected item to the left"
     },
     "policy": {
-      "label": "When a name is already taken:",
       "skip": "leave it alone",
       "overwrite": "replace it",
       "rename": "keep both"
@@ -890,6 +926,9 @@
       "editReasonSelect": "Select a file to edit",
       "copy": "Copy",
       "copyReasonSelect": "Select something to copy",
+      "move": "Move",
+      "moveHintRename": "Shift+F6 — rename in place",
+      "moveReasonBusy": "Wait for the operation that is running",
       "rename": "Rename",
       "renameReasonSelect": "Select something to rename",
       "newFolder": "New folder",
@@ -899,10 +938,6 @@
       "attributesReasonSelect": "Select something first",
       "attributesReasonNeedsImage": "Attributes belong to files inside an image",
       "reasonMultiple": "Works on one entry — select only that one"
-    },
-    "selection": {
-      "summary_one": "{{count}} item selected ({{size}})",
-      "summary_other": "{{count}} items selected ({{size}})"
     },
     "toolbar": {
       "folder": "Folder...",
@@ -940,7 +975,9 @@
       "freeOfTotal": "{{free}} k of {{total}} k free",
       "statusLine": "{{selectedBytes}} k / {{totalBytes}} k in {{selectedFiles}} / {{totalFiles}} file(s), {{selectedDirs}} / {{totalDirs}} dir(s)",
       "maskPlaceholder": "*.*",
-      "maskAriaLabel": "Filter files by name"
+      "maskAriaLabel": "Filter files by name",
+      "sourceAriaLabel": "Source shown in this pane",
+      "sourceUnlisted": "(not on a listed drive)"
     },
     "footer": {
       "unnamed": "(unnamed)",
@@ -963,6 +1000,10 @@
       "newFolder": {
         "prompt": "Folder name on the disk"
       },
+      "markMask": {
+        "mark": "Mark files matching (use * and ?)",
+        "unmark": "Unmark files matching (use * and ?)"
+      },
       "rename": {
         "prompt": "New name",
         "confirmIcon": "{{name}} has an icon ({{icon}}). Rename it to {{newName}}.info as well? Without it, {{newName}} will not show up on Workbench."
@@ -970,14 +1011,40 @@
       "delete": {
         "confirm1": "Delete {{name}} from {{volume}}?",
         "confirm2": "This cannot be undone from inside ART once it has finished. Delete '{{name}}'?",
-        "confirmIcon": "Delete its icon ({{icon}}) too?"
+        "confirmIcon": "Delete its icon ({{icon}}) too?",
+        "confirmProtected": "{{name}} is delete-protected — AmigaDOS itself would refuse. Delete it anyway?"
       },
       "deleteMany": {
         "confirm1_one": "Delete {{count}} item ({{size}}) from {{volume}}?",
         "confirm1_other": "Delete {{count}} items ({{size}}) from {{volume}}?",
         "confirm2_one": "This cannot be undone from inside ART once it has finished. Delete this item?",
-        "confirm2_other": "This cannot be undone from inside ART once it has finished. Delete these {{count}} items?"
+        "confirm2_other": "This cannot be undone from inside ART once it has finished. Delete these {{count}} items?",
+        "confirmProtected_one": "{{names}} is delete-protected — AmigaDOS itself would refuse. Delete it anyway?",
+        "confirmProtected_other": "{{count}} of these are delete-protected ({{names}}) — AmigaDOS itself would refuse. Delete them anyway?"
+      },
+      "move": {
+        "confirm_one": "Move {{count}} item from {{source}} to {{destination}}? It is copied first and only removed once the copy has been checked.",
+        "confirm_other": "Move {{count}} items from {{source}} to {{destination}}? They are copied first and only removed once the copies have been checked.",
+        "confirmIcons_one": "{{names}} has an icon. Move it too? Without it, the object will not show up on Workbench.",
+        "confirmIcons_other": "{{count}} of these have icons ({{names}}). Move them too? Without them, the objects will not show up on Workbench."
       }
+    },
+    "move": {
+      "refuseNothing": "Select something to move.",
+      "refuseLocalSource": "ART does not delete files on your own disk, so it cannot move them off it. Copy them with F5 and remove them yourself.",
+      "refuseReadOnlySource": "Nothing can be moved out of a disc, an archive or a Commodore image — ART only ever reads them. Copy with F5 instead.",
+      "refuseSourceNotWritable": "This volume does not take writes, so the entries cannot be removed from it. Copy with F5 instead.",
+      "refuseReadOnlyTarget": "The other pane is read-only, so nothing can be moved into it.",
+      "refuseTargetNotWritable": "Open a volume that takes writes on the other side first.",
+      "refuseFileBetweenImages": "Moving a single file between two images is not supported yet — a folder can be moved, and a file can be copied with F5.",
+      "refuseCollision_one": "{{names}} is already there. A move never overwrites and never silently skips — rename one of them first.",
+      "refuseCollision_other": "{{count}} of these names are already there ({{names}}). A move never overwrites and never silently skips — rename them first."
+    },
+    "commandLine": {
+      "ariaLabel": "Command line",
+      "placeholder": "cd D:\\Amiga · *.adf",
+      "refuseRelative": "Type a full path — the pane may be inside an image, where a name on its own is not one.",
+      "refuseNotAShell": "This line goes to a folder or sets a filter. ART does not run programs from it."
     },
     "err": {
       "bothLocal": "Both panes are local folders — use Explorer for that.",
@@ -1024,9 +1091,19 @@
       "checkingOut": "Checking out {{name}}…",
       "checkedOut": "{{name}} is open for editing. Put it back from the panel below when you are done.",
       "creatingFolder": "Creating folder…",
+      "opening": "Opening {{name}}…",
       "renaming": "Renaming {{name}}…",
       "renamed": "{{name}} is now {{newName}}",
       "renamedWithIcon": "{{name}} is now {{newName}}, and its icon with it",
+      "moving_one": "Moving {{count}} item…",
+      "moving_other": "Moving {{count}} items…",
+      "moved_one": "Moved {{count}} item",
+      "moved_other": "Moved {{count}} items",
+      "movedBackedUp_one": "Moved {{count}} item — the previous image was backed up",
+      "movedBackedUp_other": "Moved {{count}} items — the previous image was backed up",
+      "moveCancelled": "Stopped. Whatever had been copied is still where it was — nothing has been removed.",
+      "moveNotVerified_one": "Copied, but {{names}} could not be found at the destination afterwards, so nothing was removed.",
+      "moveNotVerified_other": "Copied, but {{count}} of them ({{names}}) could not be found at the destination afterwards, so nothing was removed.",
       "writtenBack": "{{name}} was written back into the image.",
       "filesWrittenOut_one": "{{count}} file written out",
       "filesWrittenOut_other": "{{count}} files written out",

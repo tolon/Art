@@ -11,6 +11,7 @@ import {
   type PartitionSpec,
   type AmigaHardDiskFs,
 } from "@/lib/hdf";
+import { hdfSizeWarning, parseCustomSize, type HdfFsId } from "@/lib/hdfSize";
 
 interface FsChoice {
   id: AmigaHardDiskFs;
@@ -73,6 +74,25 @@ export function HardDiskStudio() {
   const [createPresetSizeMb, setCreatePresetSizeMb] = useState<number>(1024); // 1 GB
   const [createTemplate, setCreateTemplate] = useState<"single" | "split">("split");
   const [selectedFs, setSelectedFs] = useState<AmigaHardDiskFs>("pfs3directscsi");
+  /** Whether the size is being typed rather than picked from the five
+   *  presets. The presets are common answers, not the range (ART-083). */
+  const [customSize, setCustomSize] = useState(false);
+  const [customText, setCustomText] = useState("");
+  const [customUnit, setCustomUnit] = useState<"mb" | "gb">("gb");
+
+  // Parsing and warning both live in `@/lib/hdfSize`, with their own tests —
+  // the rule that a fraction of a megabyte is refused rather than rounded
+  // away matters more than a component can prove about itself.
+  const parsedCustom = parseCustomSize(customText, customUnit);
+  const effectiveSizeMb = customSize
+    ? parsedCustom.ok
+      ? parsedCustom.mb
+      : null
+    : createPresetSizeMb;
+  const sizeWarning =
+    effectiveSizeMb === null
+      ? null
+      : hdfSizeWarning(effectiveSizeMb, createTemplate, selectedFs as HdfFsId);
 
   useEffect(() => {
     const navState = location.state as { path?: string } | undefined;
@@ -113,8 +133,14 @@ export function HardDiskStudio() {
   }
 
   async function handleCreateConfirm() {
+    // `effectiveSizeMb` is null exactly when a typed size has not parsed, and
+    // the confirm button is disabled then — this is the belt to that braces,
+    // so a stray call can never reach `hdfCreate` with a guessed number.
+    const sizeMb = effectiveSizeMb;
+    if (sizeMb === null) return;
+
     setShowCreateModal(false);
-    const defaultName = `Amiga_${createPresetSizeMb >= 1024 ? `${createPresetSizeMb / 1024}GB` : `${createPresetSizeMb}MB`}.hdf`;
+    const defaultName = `Amiga_${sizeMb >= 1024 ? `${Math.round((sizeMb / 1024) * 10) / 10}GB` : `${sizeMb}MB`}.hdf`;
     const dest = await save({
       defaultPath: defaultName,
       filters: [{ name: "Hard Disk File (HDF)", extensions: ["hdf"] }],
@@ -132,15 +158,15 @@ export function HardDiskStudio() {
         partitions.push({
           drive_name: "DH0",
           fs_type: selectedFs,
-          size_mb: createPresetSizeMb,
+          size_mb: sizeMb,
           bootable: true,
           boot_priority: 0,
           num_buffers: 100,
         });
       } else {
         // Split: 500 MB (or 25%) System + Rest Work
-        const sysMb = Math.min(500, Math.floor(createPresetSizeMb / 3));
-        const workMb = createPresetSizeMb - sysMb;
+        const sysMb = Math.min(500, Math.floor(sizeMb / 3));
+        const workMb = sizeMb - sysMb;
         partitions.push({
           drive_name: "DH0",
           fs_type: selectedFs,
@@ -159,12 +185,12 @@ export function HardDiskStudio() {
         });
       }
 
-      const totalBytes = (createPresetSizeMb as number) * 1024 * 1024;
+      const totalBytes = (sizeMb as number) * 1024 * 1024;
       const created = await hdfCreate(dest, totalBytes, true, partitions);
       setInfo(created);
       setPath(dest);
       setStatusMsg(
-        t("hardDisk.msgCreated", { dest, size: createPresetSizeMb, count: partitions.length })
+        t("hardDisk.msgCreated", { dest, size: sizeMb, count: partitions.length })
       );
       if (created.partitions.length > 0) {
         setSelectedPart(created.partitions[0]);
@@ -395,15 +421,72 @@ export function HardDiskStudio() {
                 ].map((s) => (
                   <button
                     key={s.size}
-                    className={`btn btn-sm ${createPresetSizeMb === s.size ? "btn-primary" : ""}`}
-                    onClick={() => setCreatePresetSizeMb(s.size)}
+                    className={`btn btn-sm ${!customSize && createPresetSizeMb === s.size ? "btn-primary" : ""}`}
+                    onClick={() => {
+                      setCustomSize(false);
+                      setCreatePresetSizeMb(s.size);
+                    }}
                     style={{ flexDirection: "column", padding: "6px" }}
                   >
                     <strong>{s.label}</strong>
                     <span className="faint" style={{ fontSize: 10 }}>{t(s.hintKey)}</span>
                   </button>
                 ))}
+                {/* The presets are five common answers, not the range. There
+                    was never an 8 GB limit in the engine — `create_rdb_layout`
+                    refuses below 10 MB and then only when the cylinder count
+                    will not fit a u32 (ART-083). */}
+                <button
+                  className={`btn btn-sm ${customSize ? "btn-primary" : ""}`}
+                  onClick={() => setCustomSize(true)}
+                  style={{ flexDirection: "column", padding: "6px" }}
+                >
+                  <strong>{t("hardDisk.modal.custom.button")}</strong>
+                  <span className="faint" style={{ fontSize: 10 }}>
+                    {t("hardDisk.modal.custom.hint")}
+                  </span>
+                </button>
               </div>
+
+              {customSize && (
+                <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 8 }}>
+                  <input
+                    className="btn"
+                    style={{ flex: "1 1 auto", minWidth: 0 }}
+                    inputMode="decimal"
+                    autoFocus
+                    value={customText}
+                    placeholder={t("hardDisk.modal.custom.placeholder")}
+                    aria-label={t("hardDisk.modal.custom.ariaLabel")}
+                    onChange={(e) => setCustomText(e.target.value)}
+                  />
+                  <select
+                    className="btn"
+                    value={customUnit}
+                    aria-label={t("hardDisk.modal.custom.unitAriaLabel")}
+                    onChange={(e) => setCustomUnit(e.target.value as "mb" | "gb")}
+                  >
+                    <option value="mb">MB</option>
+                    <option value="gb">GB</option>
+                  </select>
+                </div>
+              )}
+
+              {/* A refusal names what is wrong instead of clamping the number
+                  to something the user did not type. */}
+              {customSize && !parsedCustom.ok && customText.trim() !== "" && (
+                <p className="badge badge-err" style={{ display: "block", marginTop: 6, fontSize: 11 }}>
+                  {t(parsedCustom.reason.key, parsedCustom.reason.params)}
+                </p>
+              )}
+
+              {/* And a warning is a warning, not a block: the image may be for
+                  an emulator, or for a machine that has what it needs. */}
+              {sizeWarning && (
+                <p className="badge badge-warn" style={{ display: "block", marginTop: 6, fontSize: 11 }}>
+                  {t(sizeWarning.key, sizeWarning.params)}
+                </p>
+              )}
             </div>
 
             {/* Step 2: Partitioning Layout Template */}
@@ -487,7 +570,14 @@ export function HardDiskStudio() {
               <button className="btn" onClick={() => setShowCreateModal(false)}>
                 {t("common.cancel")}
               </button>
-              <button className="btn btn-primary" onClick={handleCreateConfirm}>
+              <button
+                className="btn btn-primary"
+                onClick={handleCreateConfirm}
+                disabled={effectiveSizeMb === null}
+                title={
+                  effectiveSizeMb === null ? t("hardDisk.modal.custom.needsSize") : undefined
+                }
+              >
                 {t("hardDisk.modal.createButton")}
               </button>
             </div>

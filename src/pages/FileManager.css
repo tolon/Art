@@ -12,21 +12,31 @@
  * bundles it into the same global stylesheet as everything else — the
  * *selectors*, not the file boundary, are what keeps it contained.
  *
- * The palette is deliberate and does not follow the app's light/dark theme
- * (`src/styles/theme.css`'s `.theme-dark`/`.theme-light`): Total Commander
- * looks like Total Commander regardless of the desktop theme, which is
- * exactly what was asked for. There is no `prefers-color-scheme` block
- * below on purpose.
+ * The palette is **the user's own**, decoded from the `[Colors]` section of
+ * his `wincmd.ini` (COLORREF is BGR, hence the conversions below). Phase 2b
+ * corrected two things about the first attempt: the chrome is no longer
+ * Windows-95 grey sitting around dark panes — half web app, half terminal —
+ * and the whole screen now follows the app's theme, one coherent world per
+ * theme rather than per element (brief §1.2).
+ *
+ * Dark is the "tolon" theme and is what he actually runs. Light derives from
+ * it sanely rather than being a second hand-tuned palette: the same roles,
+ * inverted, so a light-theme user gets a readable commander rather than a
+ * dark block in a bright window.
  */
 
 .tc-commander {
-  /* Pane background: very dark navy, near-black with a blue cast. */
-  --tc-bg: #06081c;
+  /* Pane background: `2367260` = BGR 0x24 1F 1C. */
+  --tc-bg: #1c1f24;
+  /* Text: `16777215` = white. */
   --tc-text: #ffffff;
 
-  /* The row under the keyboard cursor: solid bright yellow, black text —
-     spans the full row width (`.tc-row-cursor`, below). */
-  --tc-cursor-bg: #ffe000;
+  /* The row under the keyboard cursor: `65535` with `CursorText 0`, and
+     `InverseCursor=1` — a **solid bar** of pure yellow with black text,
+     spanning the full row width (`.tc-row-cursor`, below). The first attempt
+     guessed at a thin outline; his own config says otherwise, and the build's
+     yellow bar was right. */
+  --tc-cursor-bg: #ffff00;
   --tc-cursor-text: #000000;
 
   /* A selected file's name is drawn in red text on the pane's normal dark
@@ -34,7 +44,7 @@
      selected and under the cursor stays legible as red-on-yellow rather
      than the two affordances fighting for the same pixels (see `Pane`'s
      `rowTextColor` in `FileManager.tsx`). */
-  --tc-selected-text: #ff4d4d;
+  --tc-selected-text: #ff3c3c;
 
   /* File-type colour, second reference: plain files stay `--tc-text`
      (white); text files (`.txt`/`.md`/`.readme`/`.nfo`/`.doc`) are light
@@ -43,11 +53,19 @@
   --tc-text-file: #7fd7ff;
   --tc-text-hidden: #7d8494;
 
-  /* Column headers, drive row, path row, status line and the function-key
-     bar: classic light grey with black text — the Windows-95 chrome look. */
-  --tc-chrome-bg: #c0c0c0;
-  --tc-chrome-text: #101010;
-  --tc-chrome-border: #7a7a7a;
+  /* Column headers, path row, status line, command line and the function-key
+     bar. **One step lighter than the rows**, not a different world: TC's own
+     chrome sits inside the same palette its panes do, and the light-grey
+     Windows-95 bars of the first attempt were the single biggest reason the
+     screenshot read as "web app with a terminal in it". */
+  --tc-chrome-bg: #262a31;
+  --tc-chrome-text: #e6e8ec;
+  --tc-chrome-border: #3a3f47;
+  /* The chrome of the *focused* pane, so which side has the keyboard is
+     legible without hunting for the cursor bar (brief §2: the path row is
+     what shows focus). */
+  --tc-chrome-active-bg: #2f3644;
+  --tc-chrome-active-text: #ffffff;
 
   /* The focused pane needs to stay visibly distinct even inside this fixed
      palette (brief: focus and selection are not the app's theme accent
@@ -98,11 +116,82 @@
   flex: 1 1 auto;
 }
 
+/* The pane header (phase 2b task 3): `[source ▾] [path] [filter]`, one row,
+   never wrapping. Total Commander's own header, and the user's `[Layout]`
+   (`DriveCombo=1, ButtonBar=0, DriveBar1=0`) says it is all he keeps. */
 .tc-path-row {
   display: flex;
   align-items: center;
   flex-wrap: nowrap;
   gap: 6px;
+}
+
+/* The tab bar (task 6). Above the header, scrolling sideways rather than
+   wrapping: `DirTabLimit=32` means a pane can hold thirty-two of these, and a
+   bar that grew to four rows would eat the listing it exists to serve. */
+.tc-tab-row {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  gap: 2px;
+  padding: 2px 4px;
+  scrollbar-width: thin;
+}
+
+.tc-tab {
+  flex: 0 0 auto;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px solid var(--tc-chrome-border);
+  border-bottom: none;
+  border-radius: 2px 2px 0 0;
+  background: var(--tc-chrome-bg);
+  color: var(--tc-chrome-text);
+  cursor: pointer;
+}
+.tc-tab:hover {
+  background: color-mix(in srgb, var(--tc-chrome-bg) 82%, black);
+}
+
+/* The active tab reads as part of the pane below it — the same fill as the
+   rows, so the bar looks attached to what it is showing rather than floating
+   above it. */
+.tc-tab-active {
+  background: var(--tc-bg);
+  color: var(--tc-text);
+  font-weight: 700;
+}
+
+/* The source combo. Flat, chrome-coloured and narrow: it is a selector, not a
+   control the eye should land on before the path beside it. `max-width` keeps
+   a long "(not on a listed drive)" placeholder from eating the path's room. */
+.tc-source-combo {
+  flex: 0 0 auto;
+  max-width: 34%;
+  font: inherit;
+  background: var(--tc-chrome-bg);
+  color: var(--tc-chrome-text);
+  border: 1px solid var(--tc-chrome-border);
+  border-radius: 2px;
+  padding: 1px 4px;
+}
+.tc-source-combo:focus-visible {
+  outline: 2px solid var(--tc-focus-ring);
+  outline-offset: -1px;
+}
+
+/* The volume identity band, directly under the header: name, filesystem,
+   "free of total", and the lock with its reason when ART will not write.
+   It was a floating muted line before this task; now it is a chrome row like
+   every other, since the drive row it used to sit beneath is gone by
+   default. */
+.tc-volume-row {
+  gap: 8px;
 }
 
 .tc-path-text {
@@ -133,18 +222,74 @@
   outline-offset: -1px;
 }
 
+/* The command line (task 3): a prompt showing the focused pane's path and a
+   box that navigates and filters. Monospace because it is a path, not prose,
+   and full width because Total Commander's is. */
 .tc-command-line {
   font-family: ui-monospace, "Cascadia Code", Consolas, "Liberation Mono", monospace;
   color: var(--tc-chrome-text);
+  flex-wrap: nowrap;
+}
+
+.tc-command-prompt {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   opacity: 0.85;
 }
 
-/* The function-key bar sits in its own chrome strip below the panes,
-   spanning the full width — `FunctionKeyBar` itself is unchanged (it is
-   shared, tested, and still just renders a row of `.btn`s); this wrapper
-   only supplies the chrome background around it. */
+.tc-command-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  background: var(--tc-bg);
+  color: var(--tc-text);
+  border: 1px solid var(--tc-chrome-border);
+  border-radius: 2px;
+  padding: 1px 4px;
+}
+.tc-command-input:focus {
+  outline: 2px solid var(--tc-focus-ring);
+  outline-offset: -1px;
+}
+
+/* The function-key bar: one row docked to the bottom, spanning the full
+   width, never wrapping (brief §1.4 — a strip that wraps onto a second line
+   is not a strip). */
 .tc-fnkey-row {
   padding: 4px 6px;
+}
+
+.tc-fnkeys {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  width: 100%;
+}
+
+/* `1 1 0` rather than `1 1 90px`: the keys share the width equally and shrink
+   together, so seven of them still fit at any width instead of the last two
+   dropping to a second line. */
+.tc-fnkey {
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.tc-fnkey-danger:not(:disabled) {
+  border-color: var(--err);
+  color: var(--err);
+}
+.tc-fnkey-cap {
+  margin-right: 5px;
+}
+.tc-fnkey-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Every ordinary button inside the Total Commander presentation reads as
@@ -165,11 +310,32 @@
   font-size: 11px;
 }
 
-/* The selection-bar text (between the panes and the command line) is
-   read-only status, not the pane fill — it keeps its own muted styling
-   rather than inheriting pane colours it was never designed against. */
-.tc-commander .selection-bar {
-  padding: 2px 6px;
+/* The one status strip (task 3), between the panes and the command line.
+   Everything that used to stack above the panes and push them down — a red
+   error banner, a green message banner, a "busy…" line — is this one row now,
+   docked with the rest of the chrome.
+
+   Three levels, and the colours are what tell them apart at a glance: what is
+   happening (plain chrome), something broke (the error colour), and ART
+   declining something that broke nothing (the warning colour — see
+   `Refusal.tsx` for the same distinction drawn full-size). */
+.tc-message-row {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+  padding: 3px 6px;
+}
+.tc-message-error {
+  color: #ff9a9a;
+  background: color-mix(in srgb, #ff6b6b 18%, var(--tc-chrome-bg));
+}
+.tc-message-hint {
+  color: #ffdb70;
+  background: color-mix(in srgb, #ffd23f 16%, var(--tc-chrome-bg));
+}
+.tc-message-ok {
+  color: var(--tc-chrome-text);
 }
 
 /* ---- The column header row and the row list ---------------------------- */
@@ -214,7 +380,14 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 420px;
+  /* No `max-height` here on purpose. There was one — 420px, from the days
+     when the commander was a widget on a page — and it survived task 1's
+     "the panes fill the window" work invisibly: the *pane* grew to the window
+     and the *listing inside it* stayed capped, so on a maximized 4K window
+     twenty rows sat above six hundred pixels of dead pane. The first human
+     look at the running screen found it in about four seconds (ART-082).
+     The height now comes from the flex rule further down this file, which is
+     the only thing that should decide it. */
   /* The pane's own scroll box (spec: a pane's list scrolls inside the pane,
      never the page) — `overflow-x: hidden` because every column already has
      a fixed or flexible width that fits the row, so nothing needs to pan
@@ -317,4 +490,116 @@
   .tc-cell-attr {
     display: none;
   }
+
+  /* And the F-key strip drops to keycaps alone rather than wrapping or
+     clipping its labels mid-word. Every key stays clickable and every one of
+     them still names itself on hover. */
+  .tc-fnkey-label {
+    display: none;
+  }
+  .tc-fnkey-cap {
+    margin-right: 0;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   The commander fills the window (phase 2b, brief §1.1)
+   ---------------------------------------------------------------------------
+
+   Total Commander is not a widget on a page; it is the window. So the
+   commander is a grid of three rows — the panes, the command line, the F-key
+   bar — and the panes row takes everything left over.
+
+   The height contract is `minmax(0, 1fr)` in both directions, and it is worth
+   being explicit about why: a flex row sizes its children to their *content*,
+   so a pane with four rows in it comes up shorter than one with forty. That is
+   exactly what the first screenshot showed. A grid track sized `1fr` with
+   `align-items: stretch` makes the two equal by construction — there is no
+   arrangement of contents that can make them differ. */
+
+.tc-commander {
+  display: grid;
+  /* Panes, then the dock: the checkout panel (usually absent), the status
+     strip (usually absent), the command line, the F-key bar. Only the first
+     track is sized; everything below it takes what it needs, and an absent
+     row is simply a zero-high one — the panes never move because a message
+     appeared. */
+  grid-template-rows: minmax(0, 1fr) auto auto auto auto;
+  min-height: 0;
+  flex: 1;
+}
+
+.tc-pane-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: stretch;
+  gap: 6px;
+  min-height: 0;
+}
+
+/* Each pane is a column: chrome at the top, the listing taking the rest and
+   scrolling inside itself. `min-height: 0` on both is what lets the listing
+   scroll instead of pushing the pane taller than its track. */
+.tc-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.tc-pane .tc-row-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* An empty listing still paints to the bottom of the pane — a half-painted
+     pane reads as a rendering fault rather than as an empty folder. */
+  background: var(--tc-bg);
+}
+
+.tc-transfer-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-self: center;
+}
+
+/* ---------------------------------------------------------------------------
+   Light theme: the same roles, inverted (phase 2b, brief §1.2)
+   ---------------------------------------------------------------------------
+
+   Not a second hand-tuned palette — the same four roles with light values, so
+   a light-theme user gets a commander that belongs in their window instead of
+   a dark block sitting in it. The cursor bar stays the loudest thing on the
+   screen either way; in light it is a dark bar with light text, because a
+   yellow bar on white is unreadable and "make it yellow" was never the point.
+   The point was "you can see where the cursor is from across the room". */
+
+.theme-light .tc-commander {
+  --tc-bg: #ffffff;
+  --tc-text: #16181d;
+  --tc-cursor-bg: #1d4ed8;
+  --tc-cursor-text: #ffffff;
+  --tc-selected-text: #c11414;
+  --tc-text-file: #0b5f86;
+  --tc-text-hidden: #767b86;
+  --tc-chrome-bg: #eceef2;
+  --tc-chrome-text: #16181d;
+  --tc-chrome-border: #c3c7cf;
+  --tc-chrome-active-bg: #dfe4ee;
+  --tc-chrome-active-text: #0b0d11;
+  --tc-focus-ring: #1d4ed8;
+}
+
+/* The path row carries focus: the pane with the keyboard says so along its
+   whole width, rather than making the user find a one-row cursor bar to know
+   which side an F-key will act on. */
+.tc-pane-focused .tc-path-row {
+  background: var(--tc-chrome-active-bg);
+  color: var(--tc-chrome-active-text);
+  box-shadow: inset 2px 0 0 var(--tc-focus-ring);
+}
+
+/* And the cursor bar only ever appears in the focused pane — two yellow bars
+   on screen at once is two answers to "where am I". */
+.tc-pane:not(.tc-pane-focused) .tc-row-cursor {
+  background: transparent;
+  color: inherit;
 }

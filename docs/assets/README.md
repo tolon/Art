@@ -17,21 +17,26 @@ untouched — no compositing, nothing painted over.
 A full-window shot is welcome whenever one is taken with a Recent list that can
 be published.
 
-## What is *not* here yet: a photograph of ART's output on real hardware
+## The photograph of ART's output on real hardware
 
-The README has room for one and does not have one, deliberately. What ART has
-actually verified, and what it says everywhere it says anything (`STATUS.md`,
-`test/README.md`), is:
+**It was taken on 2026-08-12.** `test/art-bootable-test.adf`, served from a
+**Gotek** as `DF0:`, cold-booted a real **A500 / A500+** running **Kickstart
+3.9** (the screen's copyright line reads `1985-2002`) to an AmigaDOS `1>`
+prompt.
 
-> two ADFs written by ART — one mounted and read back, one booted to a CLI
-> prompt — under **licensed Kickstart and Workbench in WinUAE / Amiga Forever**,
-> in A1200 and A500+ configurations. **Not bare metal.**
+`STATUS.md`'s "Real hardware" row, `README.md`'s "Verified how, exactly"
+section and `test/README.md`'s rung list all changed in the same commit,
+because a picture in a README is not a verification record — the record is.
 
-A photograph of a real A500 booting a disk ART wrote would be a stronger claim
-than that, and it is not one this project can make yet. When someone takes that
-photograph, it goes here and the README caption says which machine, which
-Kickstart and which image — and `STATUS.md`'s "Real hardware" row changes at
-the same time, because a picture in a README is not a verification record.
+**The image file itself is not committed yet.** The photograph as taken is a
+picture of the author's room, not of a screen, and what belongs in a public
+repository is the screen: a crop showing the monitor and the machine, with
+nothing else identifiable in frame. Whoever crops it puts it here as
+`real-amiga-boot.jpg` and captions it with the machine, the Kickstart and the
+image name — the three facts above and nothing softer.
+
+Until then the claim stands on the written record, which is where it belongs
+anyway.
 
 Screenshots of ART's own window are a different thing and are welcome here
 without any of the above ceremony.

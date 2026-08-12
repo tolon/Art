@@ -20,20 +20,20 @@ Update it at the end of any session that changes what works.
 |---|---|
 | **Last updated** | 2026-08-12 |
 | **Version** | 0.1.0 (unreleased) |
-| **Current stage** | Phase 2b — the Files screen, done right (tasks 1–2 of 8, on branch `phase-2b`) |
+| **Current stage** | **Phase 2b complete** (8 of 8 tasks); next is the PiStorm image builder, SD-1 |
 | **Build** | PASS |
-| **Tests** | 908 Rust passed, 0 failed; 137 frontend passed, 0 failed |
+| **Tests** | 912 Rust passed, 0 failed; 279 frontend passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
 | **amitools oracle** | 48 checks, both directions |
 | **7-Zip disc oracle** | 4 fixtures — Joliet, ISO9660-only, raw Mode 1, raw Mode 2/XA — names, sizes and every file's SHA-256 |
 | **cargo-deny** | advisories, bans, licences, sources — all ok |
 | **MSRV** | 1.93 (raised from 1.77 on 2026-08-12, for a maintained 7z decoder) |
-| **i18n** | `en.json` and `tr.json`, 872 leaf keys each, parity enforced by `pnpm test` |
+| **i18n** | `en.json` and `tr.json`, 939 leaf keys each, parity enforced by `pnpm test` |
 | **Release bundle** | rebuilt 2026-08-12 — MSI and NSIS, and the application was launched and answered |
 | **Published** | <https://github.com/tolon/Art> — public, `main`, **GPL-3.0-or-later** (was MIT until 2026-08-12) |
-| **Real hardware** | Two ADFs booted/mounted under licensed Kickstart in WinUAE (Phase 1a); still not bare metal |
-| **Seen on a screen** | The Dashboard, at last — a human looked at the running window on 2026-08-12 and the screenshot is in the README. **The Files screen still has not been looked at since phase 2a's panes were added** (ART-062) |
+| **Real hardware** | **Bare metal, reached 2026-08-12** — `test/art-bootable-test.adf` booted a real **A500/A500+** (Kickstart 3.9) from a **Gotek**, to an AmigaDOS CLI. Photographed. Two ADFs had already mounted/booted under licensed Kickstart in WinUAE (Phase 1a). Still untouched: physical magnetic media — a Gotek is not a mechanical drive |
+| **Seen on a screen** | **The Files screen, at last** — opened, driven and screenshotted on 2026-08-12, along with the ADF, hard-disk, PiStorm, WHDLoad and Settings screens. It cost immediately: [ART-082](ISSUES.md#open) (the listings were capped at 420 px inside panes that filled the window) had shipped green behind 178 tests. Four more findings came out of the same session — ART-083 … ART-086. `ART-062` narrows to the screens still unopened (Aminet, Collection, Gotek, ROM, WinUAE, Tools) |
 
 Reproduce the numbers above:
 
@@ -357,8 +357,10 @@ mounted, its volume `Work` listed, and `Readme` inside it read back
 `hello from ART`; `test/art-bootable-test.adf` — the same disk with real boot
 code — booted to a CLI prompt. Both under **licensed Kickstart and Workbench,
 Amiga Forever under WinUAE, in A1200 and A500+ configurations — not bare
-metal**, and `test/README.md` says so plainly rather than letting the A1200/
-A500+ machine names imply real hardware. A `DIR DF0:` on the non-bootable
+metal at the time**, and `test/README.md` said so plainly rather than letting
+the A1200/A500+ machine names imply real hardware. (**That caveat has since
+been lifted** — the bootable image booted a real A500/A500+ on 2026-08-12; see
+the entry under Phase 2b below.) A `DIR DF0:` on the non-bootable
 image also read AmigaDOS's own free-space count off ART's bitmap for the
 first time (878 KB free of 880 for a 14-byte file, correct) — nothing set out
 to test that; it came free with the screenshot.
@@ -453,7 +455,7 @@ assumed licensed AmigaOS media reliably to hand. `scripts/iso-oracle-check.py`
 covers the risk it existed for, with an implementation that shares no code with
 ART's.
 
-### ⏳ Phase 2b — The Files screen, done right (in progress, branch `phase-2b`)
+### ✅ Phase 2b — The Files screen, done right (complete, 2026-08-12)
 
 Plan: [2026-08-12-phase-2b-commander-ui.md](superpowers/plans/2026-08-12-phase-2b-commander-ui.md).
 Brief: [brief-files-commander-ui.md](brief-files-commander-ui.md) — written from
@@ -463,7 +465,7 @@ Total Commander `wincmd.ini`, and it supersedes the earlier restyle briefs.
 The verdict it starts from: the first restyle got Total Commander's *components*
 right and its *gestalt* wrong. TC is not a widget on a page; it is the window.
 
-Done (2 of 8 tasks):
+Done (3 of 8 tasks):
 
 - **Task 1 — the panes fill the window.** Page title and intro gone, full-bleed
   grid, and panes that are equal **by construction** (`minmax(0, 1fr)`, not a
@@ -475,25 +477,164 @@ Done (2 of 8 tasks):
   (`InverseCursor=1` settles the question the first restyle guessed wrong),
   selected names `#FF3C3C`. Chrome is one step lighter than the rows instead of
   Windows-95 grey, in dark and light alike, and focus moved to the path row.
+- **Task 3 — minimal chrome, and F6 means Move.** The pane header is
+  `[source ▾] [path] [filter]`; the button strip behind it is a Settings
+  toggle, off by default, because his `[Layout]` is `ButtonBar=0, DriveBar1=0,
+  DriveCombo=1`. The combo lists **enumerated** mounts plus the six things ART
+  opens — no hardcoded letters — and a folder under no listed mount says so
+  rather than claiming one. The command line stops being decoration: it
+  navigates and filters, and refuses anything else *by name* (§56 — it is not
+  a shell, and a prompt-shaped box that swallows a keystroke is worse than
+  none). The F-key row is one row that cannot become two, with labels giving
+  way to keycaps below 1000px. Everything that used to push the panes down
+  from the top of the page — error, message, busy — is one status strip inside
+  the dock, and the permanent collision footer moved into the copy dialog,
+  where Total Commander asks that question, with its default now a Setting.
 
-Left: the pane header and source combo, the bottom dock and **F6 = Move**
-(Task 3); **Enter opens the container in the same pane** (Task 4, the headline);
-full keyboard coverage (5); tabs and session restore (6); colour rules and the
-confirmations his config keeps on (7); closing the phase (8).
+  **F6 is Move** (Shift+F6 renames), and it is the one function key that can
+  destroy the original, so it runs §92's pipeline in full: validate → offer
+  the icons (§7.1) → confirm → copy → **re-list the destination and look for
+  every moved name** → delete. Nothing is deleted unless the destination's own
+  listing has it, so the worst a stopped move can leave is a duplicate. A
+  collision is refused up front rather than handed to the overwrite policy —
+  "leave it alone" would skip the copy and then delete the source. Three
+  directions have no primitive underneath and are refused by name rather than
+  half-built: out of a host folder ([ART-080](ISSUES.md#open) — ART owns no
+  host-side delete), several entries between two images (ART-064), and a
+  single *file* between two images ([ART-081](ISSUES.md#open) —
+  `volume_copy_between` addresses a directory). Task 5's `F2`/`Ctrl+R` refresh
+  came forward into this task, because hiding the button strip left Refresh
+  with no other way to be reached.
 
-**Nothing in this phase has been looked at running either.** Both tasks are
-green on tests and neither has been seen.
+**Out of plan, and the bigger news of the day: a real Amiga booted a disk ART
+wrote.** `test/art-bootable-test.adf` was put on a **Gotek** and cold-booted a
+real **A500 / A500+** running **Kickstart 3.9** (the screen's copyright line
+reads `1985-2002`) straight to an AmigaDOS `1>` prompt. Photographed.
 
-### ⏳ SD Card Appliance Builder — SD-0 … SD-5 (planned, not started)
+This is the rung the project has been careful not to claim since Phase 1a. The
+boot code is ART's own, assembled from the published LVO table, and until this
+photograph "it runs on a real 68000" was an assumption: the emulated passes
+were an A1200 (68020) and an A500+ *configuration*, both under WinUAE with
+licensed ROMs. A Gotek also presents the image the way FlashFloppy reads an
+ADF — sector by sector — rather than as a file an emulator maps into memory,
+so the disk had to behave like a disk.
+
+**One caveat survives and is not being quietly dropped:** a Gotek is not a
+mechanical drive. Nothing ART has written has been through a real floppy head
+on physical magnetic media. `test/README.md` carries that as its own rung.
+
+- **Task 4 — Enter opens the container, in the same pane.** The phase's
+  headline, and the one thing here that was *seen working on a real disk*:
+  Enter on `art-bootable-test.adf` turned the pane into the floppy — breadcrumb
+  `…	estrt-bootable-test.adf`, volume row `Work FFS 877 k of 880 k free` —
+  and Backspace came back out with the cursor sitting on the ADF it had
+  entered. What a row opens into comes from `analyze_paths`, never the
+  extension. `PaneState.host` is the mechanism, threaded through all seven
+  `openX` functions as a *required* parameter so the compiler names every call
+  site. Per-pane history (Alt+Left/Right) treats a container as a place.
+- **Task 5 — the keyboard covers everything.** Space marks where you stand,
+  Insert marks and advances, the numpad marks by mask and inverts,
+  type-to-search moves the cursor (and only the cursor — a search must never
+  throw away a selection), Alt+F1/F2 open the source combos.
+- **Task 6 — tabs and session restore.** A tab is a place plus how you were
+  looking at it, built on task 4's `PaneLocation`, so a tab can live inside an
+  image. Persistence falls out because the tab is *derived* from the pane
+  rather than remembered alongside it.
+- **Task 7 — colour rules, histories, confirmations.** Three shipped colour
+  rules that answer the question a directory of Amiga files poses — walk into
+  it, unpack it, identify it — sitting in front of the built-in classification
+  rather than replacing it. A dropdown history on the command line. Right-button
+  marking as a setting.
+
+**Filed rather than built** (the phase's own rule): [ART-080](ISSUES.md#open),
+[ART-081](ISSUES.md#open) (move's missing primitives),
+[ART-087](ISSUES.md#open) (`Space` does not count a directory) and
+[ART-088](ISSUES.md#open) (the writer ignores the `d` protection bit; the file
+manager asks, the engine does not refuse).
+
+**What was and was not seen.** The acceptance walk is in the plan file, point
+by point: six of the twelve were verified on the running screen, four on tests
+alone, and two were not looked at. The two that matter:
+
+- **The light theme was never opened.** Its tokens derive from the dark ones by
+  role; nobody has looked at it.
+- **Session restore is not verified at all** — it is the only claim on that
+  list that cannot be true by construction, since it needs the application
+  closed and reopened. Nineteen tests cover the tab model; the store round-trip
+  has none.
+
+### ⏳ PiStorm Image Builder — SD-0 … SD-5 (planned, not started)
+
+**This is the project's largest unbuilt feature and, per the user, its point.**
 
 Gap analysis: [sd-appliance-gap-analysis.md](sd-appliance-gap-analysis.md)
-(2026-08-11, from the PiStorm multiboot architecture). It lists **only** what
-ART lacks; everything ART already has — WHDLoad install, ADF/LHA import, RDB
-creation, Gotek prep, config round-trip, journalled writes, Aminet, oplog, the
-job queue — the SD work consumes rather than reimplements.
+(2026-08-11, from the PiStorm multiboot architecture; rescoped 2026-08-12). It
+lists **only** what ART lacks; everything ART already has — WHDLoad install,
+ADF/LHA import, RDB creation, Gotek prep, config round-trip, journalled
+writes, Aminet, oplog, the job queue — the build consumes rather than
+reimplements.
 
-The story: build a complete PiStorm/Emu68 SD card from Windows, verified,
-that boots a real Amiga.
+The story: build a complete PiStorm/Emu68 **image file** on Windows, verified,
+that boots a real Amiga once the user has flashed it.
+
+**Scope decision, 2026-08-12: ART builds the image; it never touches physical
+media.** The user flashes the `.img` with whichever imager they already have.
+This deletes **G1** — raw `\\.\PhysicalDriveN` access, device enumeration and
+identification, dismount/lock, verify-back and the typed-confirmation UI
+around all of it — which was blocker number one and ART's single largest
+safety surface. G8 becomes image validation rather than card validation (and
+moves up, since it is now the last thing before the file is handed over), and
+G12 (card backup) goes with G1: the build manifest already describes how to
+*rebuild* an image, which is better than a 32 GB blob. Everything that makes
+the image an Amiga — partitioning, filesystems, the OS, the content, the
+multiboot layout — is untouched by the decision and is all file work.
+
+**SD-0 is complete** ([sd0-prior-art.md](sd0-prior-art.md), from the user's own
+research). Three of its findings change what gets built, not merely how:
+
+- **The card's shape is exact now**: MBR, a FAT32 primary, then 1–3 `0x76`
+  primaries, each of which the m68k side sees as a separate hard drive — and
+  **the RDB sits at a byte offset inside one of those**, not at offset 0. So G4
+  is bigger than "write FSHD/LSEG": ART's RDB writer has to work at an offset,
+  which is the same shape as [ART-043](ISSUES.md#open). One coherent fix, with
+  tests at both offsets.
+- **PC-side PFS3 write is already solved and MIT-licensed.** `hst-amiga` /
+  `hst-imager` read, write *and format* PFS3 and FFS with no emulator, and both
+  existing imagers stand on them. G3 gains a Route E that is proven rather than
+  speculative, and Route B (native PFS3 in ART, the flagship) gains a PC-side
+  oracle — which likely pulls SD-2 in by weeks.
+- **Multiboot mechanism B ships in the field today** on stock Emu68: one
+  `config_{distro}.txt` per distribution on FAT32, and an Amiga-side selector
+  that rewrites `CONFIG.TXT` and reboots. ART can generate the entire static
+  side at build time; the selector itself is later work and must be ART's own
+  code — the pattern is free, the implementation is not.
+
+Also settled: install media is identified **by content checksum, not by
+filename** (ART's own content-first rule, applied to OS media); Kickstarts are
+A1200-only against a checksum DB; and the community-standard package set is
+full of demo and conditionally-redistributable software, so SD-2's manifest
+needs a **licence column** and anything not clearly redistributable ships as a
+fetch task through the Aminet engine instead of as bundled bytes.
+
+One blocker-grade unknown is carried into SD-1: SD-0's own exit test — drive
+`hst-imager` on a scratch image end to end (init RDB, add a PFS3 partition,
+format, copy a tree in) and verify the result with ART's readers and WinUAE.
+
+**Three gaps the analysis did not name, added 2026-08-12 from the user:**
+
+- **G14** — the build inputs that make a distribution *theirs*: wallpaper,
+  WiFi credentials, prefs, Startup-Sequence additions. Every one is a config
+  file, so §39/§40's "edit in place, never regenerate" rule applies to all of
+  them, and the WiFi key is secret material that must stay out of the oplog,
+  the manifest and any AI prompt. **Wallpaper is new scope** — it is in no
+  existing document. WiFi is not: §45.5 designed `write_pistorm_wifi` with
+  `@form.wifi_psk`, reachable only through an AI layer that is not built.
+- **G15** — a **build** as a drag & drop target. ART already has exactly one
+  drop pipeline (`analyze_paths` → `WorkflowEngine::plan`); what is missing is
+  not the pipeline but the question "what does this file become in *this*
+  image", as against today's "what can I do with this file".
+- **G16** — multiboot as several complete AmigaOS environments and a boot
+  menu, not a boot-priority field.
 
 **Which Amiga is a parameter, not an assumption** (decision, 2026-08-12). The
 gap analysis was written around "the A500"; that is one of the machines
@@ -507,19 +648,25 @@ generalised from it).
 
 | Phase | Contents |
 |---|---|
-| **SD-0** | Prior-art teardown: Emu68-Imager, emu68hatcher, hdf2emu68 (G0) |
-| **SD-1** | Image-first foundations: MBR + FAT32 boot partition (G2), RDB filesystem embedding FSHD/LSEG (G4), build manifest (G7) |
-| **SD-2** | The card exists: raw device flash + verify (G1), boot priority and a recovery volume (G6), whole-card validation (G8) |
-| **SD-3** | Content, preloaded: PFS3 via a scripted WinUAE session (G3 route D), OS install engine (G5), launcher metadata export (G10), layout policy (G11) |
+| **SD-0** | ✅ **Done 2026-08-12** — prior-art teardown, written up as [sd0-prior-art.md](sd0-prior-art.md). One exit test still owed (drive `hst-imager` end to end on a scratch image) |
+| **SD-1** | The image has a shape: MBR + FAT32 boot partition (G2), RDB filesystem embedding FSHD/LSEG (G4 — also closes ART-084), build manifest (G7), a build as a drop target (G15), image validation (G8) |
+| **SD-2** | Content, preloaded: PFS3 via a scripted WinUAE session (G3 route D), OS install engine (G5), ROM pairing (G9), launcher metadata export (G10), layout policy (G11) |
+| **SD-3** | It is *mine*: wallpaper, WiFi, prefs and Startup-Sequence, each edited in place (G14); multiboot as several complete environments and a boot menu (G16) |
 | **SD-4** | The flagship: native PFS3 write in ART (G3 route B) — its own brief; route D's harness becomes its oracle |
-| **SD-5** | Comfort: card backup/restore (G12), capacity planner (G13) |
+| **SD-5** | Comfort: capacity planner and build profiles (G13) |
 
-Three decisions in it are worth knowing before reading the code they will
+*The old SD-2 ("the card exists") is gone with G1, and everything after it
+moved up a number; validation came forward into SD-1, where it is now the last
+thing that happens before the file is handed over.*
+
+Four decisions in it are worth knowing before reading the code they will
 produce:
 
-- **Never build on the device.** Everything is built into a sparse image file
-  through the existing tested paths; a separate, dumb, heavily guarded step
-  flashes and verifies. §56 already forbids the alternative.
+- **ART never touches physical media.** Everything is built into a sparse
+  image file through the existing tested paths, and there the job ends: the
+  user flashes it with the imager they already have. §56's raw-device guard
+  stays in the spec as the reason ART does not do this, rather than as a
+  problem ART has to solve.
 - **v1 targets Emu68 only.** The classic Linux/Musashi route is a different
   build and is out of scope in writing, not by omission.
 - **PFS3 preload starts borrowed and ends native.** Route D has the real
@@ -527,11 +674,17 @@ produce:
   construction, zero reimplementation risk — while route B (a native PFS3
   writer, the thing no other imager has) stays the flagship. Once B exists, D
   is its oracle.
+- **A distribution is configured in ART, not afterwards on the Amiga.**
+  Wallpaper, WiFi, prefs and Startup-Sequence are build inputs (G14), and
+  every one of them is edited in place rather than regenerated — the same rule
+  §39/§40 already impose on `FF.CFG` and `cmdline.txt`, applied to AmigaOS.
 
-The milestone that matters first is not a preloaded 128 GB card: it is **one
-card, built entirely from Windows, that boots a real Amiga into AmigaOS 3.2
+The milestone that matters first is not a preloaded 128 GB image: it is **one
+image, built entirely from Windows, that boots a real Amiga into AmigaOS 3.2
 with a recovery volume beside it** — with the machine and the board it was
-proved on written down beside the claim.
+proved on written down beside the claim. The bootable-ADF pass on a real
+A500/A500+ (2026-08-12) is what that proof looks like, and what its honesty
+standard is.
 
 Sequenced after Phase 2a. Whether it goes before or after Stage 5's AI layer
 is open.
@@ -668,26 +821,37 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
    don't share the other two directions' atomicity, `archives_plan_install`
    blocks the command thread, a batch install's Stop is unresponsive
    mid-archive, the filter's empty-vs-no-match message is inferred rather
-   than carried); the next new defect starts at `ART-069`.
-3. **The hardware verification rung has been reached, for the two artifacts
-   built to test it.** `test/task-10-boot-test.adf` mounted, listed and read
-   back correctly, and `test/art-bootable-test.adf` booted — both under
-   licensed Kickstart/Workbench (Amiga Forever / WinUAE), not bare metal. That
-   is a different claim from "the running app has been looked at": no screen
-   ART shipped this phase or last has actually been opened by a person —
-   still `ART-062`, now covering Phase 1a's UI too (the Total Commander
-   restyle, the Attr column, the filter box, multi-select).
+   than carried), and `ART-080`/`ART-081` (Phase 2b task 3's own: there is no
+   host-side delete, so nothing can be moved *off* a folder, and no primitive
+   that moves a single file between two images); the next new defect starts at
+   `ART-082`.
+3. **The hardware rung is climbed to the bottom, and it is a photograph now.**
+   `test/art-bootable-test.adf` booted a real **A500/A500+** (Kickstart 3.9)
+   off a **Gotek** to an AmigaDOS `1>` prompt on 2026-08-12 — real silicon, not
+   an emulator. `test/task-10-boot-test.adf` mounted, listed and read back
+   correctly under licensed Kickstart/Workbench (Amiga Forever / WinUAE) in
+   Phase 1a. What is left: **physical magnetic media** — a Gotek is not a
+   mechanical drive, and nothing ART wrote has been through a real floppy head.
+   All of that is a different claim from "the running app has been looked at":
+   apart from the Dashboard, no screen ART shipped in phases 1a, 2a or 2b has
+   actually been opened by a person — still `ART-062`.
 4. **Stage R and Stage W are both done.** Aminet Stage A is complete too,
    including the update view and install to HDF. **Phase 1a is done too** —
    the two-pane manager has real focus, multi-select, batch copy/delete,
    sorting, a filename mask, and now boot code that works; see "Phase 1a"
    above for what is not (volume→volume batching, ART-064/065).
-5. **Start here tomorrow: Phase 2b Task 3**, on branch `phase-2b` — the pane
-   header becomes `[source ▾] [path] [filter]`, the drive/source button row
-   moves behind a Settings toggle (default off), the command line docks
-   directly above the F-key bar, and **F6 becomes Move** (Shift+F6 = rename),
-   labels in both catalogues. Then Task 4, which is the headline: Enter on a
-   container opens it *in the same pane*.
+5. **Start here tomorrow: SD-1**, the PiStorm image builder's first slice —
+   MBR + FAT32 in an image file (G2), the RDB at a byte offset with FSHD/LSEG
+   embedded (G4, which also closes ART-084), the build manifest (G7), a build
+   as a drag & drop target (G15) and image validation (G8). SD-0 is done and
+   its findings are in [sd0-prior-art.md](sd0-prior-art.md) — read the
+   supersession table at its end before designing, and settle its one exit
+   test (drive `hst-imager` end to end on a scratch image) first.
+
+   **Phase 2b is complete and merged.** Two of its twelve acceptance points
+   were not verified — the light theme was never opened, and session restore
+   has never been seen working — and both are worth ten minutes with the
+   application before they are forgotten.
 6. **Phase 2a is complete** and merged to `main`
    — see its section above for what it changed and what it left owed, and its
    plan file's Amendments section for what changed after the plan was written
@@ -729,6 +893,10 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-12 | **Phase 2b complete.** Enter opens a container in the same pane and Backspace comes back out with the cursor on it — verified on a real disk. Full keyboard coverage, tabs with session restore, per-filetype colour rules, and the confirmations his config keeps on. Four gaps filed rather than smuggled in (ART-080/081/087/088). Two acceptance points unverified and said so: the light theme and session restore | 912 Rust / 279 frontend |
+| 2026-08-12 | **First human session with the running application.** ART-082 found and fixed in seconds — the Files panes filled the window and their listings did not, capped at 420 px, behind 178 green tests. ART-083 fixed (the HDF wizard's 8 GB ceiling was five numbers in a component, not an engine limit; there is a Custom size now). ART-084 recorded and labelled in the dialog: a PFS3/SFS HDF is a DosType with no filesystem and no RDB driver, so an Amiga cannot mount it. ART-085/086 recorded. **Scope decision: ART builds the PiStorm `.img`, never the card** — G1 deleted, and G14/G15/G16 (wallpaper + WiFi + prefs, a build as a drop target, real multiboot) added from the user | 912 Rust / 191 frontend |
+| 2026-08-12 | **Bare metal.** `test/art-bootable-test.adf` cold-booted a real A500/A500+ (Kickstart 3.9) from a Gotek to an AmigaDOS `1>` prompt — ART's own boot code running on a real 68000, photographed. Every earlier pass was WinUAE with licensed ROMs. Left standing: physical magnetic media, which a Gotek is not | — |
+| 2026-08-12 | Phase 2b task 3: the pane header is a source combo, a path and a filter, with the button strip behind a Settings toggle; the command line navigates and filters and refuses everything else by name; one non-wrapping F-key row; one status strip inside the dock instead of three banners above the panes; the collision question moved into the copy dialog. **F6 is Move** — verified against the destination's own listing before anything is deleted — with three directions refused by name for want of a primitive (ART-080, ART-081) | 912 Rust / 178 frontend |
 | 2026-08-12 | **Published at github.com/tolon/Art** (public). Licence changed MIT → GPL-3.0-or-later to match the repository, in all seven places that claimed one. Phase 2a merged to `main`; phase 2b started on its own branch so half-finished UI did not travel with it | 912 Rust / 137 frontend |
 | 2026-08-12 | Phase 2b tasks 1–2: the commander fills the window with panes equal by construction, rows lost their buttons, `Ctrl+B` collapses the sidebar; the palette is now the user's own and the chrome follows the theme | 912 Rust / 137 frontend |
 | 2026-08-12 | Phase 2a closed. Also this session: the built-in machine profiles now cover the classic line end to end (A1000 … CD32), and Commodore 8-bit files became scope in writing (spec addendum §10.5) | 908 Rust / 137 frontend |
