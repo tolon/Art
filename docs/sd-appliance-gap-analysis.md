@@ -91,16 +91,27 @@ Legend: 🟥 blocker (the build story does not exist without it) ·
 
 ## G0 — Prior art: existing PiStorm imagers (study before building)
 
-ART is NOT the first mover here. Two active projects already build Emu68 SD
-cards, and both must be studied before any SD work starts — for lessons, for
-format decisions, and to define what ART does *better* rather than *again*:
+ART is NOT the first mover here. Several active projects already build Emu68
+SD cards or ship a finished multiboot distribution, and every one must be
+studied before any SD work starts — for lessons, for format decisions, and to
+define what ART does *better* rather than *again*:
 
 | Project | What it is | Learn from it |
 |---|---|---|
+| **MultibootOS** (multibootos.com) | **The closest thing that exists to what ART is being asked to build.** A multi-boot *distribution* for PiStorm Amigas: several complete Amiga environments on one microSD, chosen at boot, so no card swapping and no extender. v2.2 (April 2026). Targets A500 / A600 / A1200 / A2000 with PiStorm, PiStorm16 or PiStorm32-lite, and also runs under WinUAE / FS-UAE. Free to use; **v2.2 requires a free, manually assigned UserID per installation**, which is what unlocks its integrated online update service | What a finished multiboot layout actually looks like, and what its boot menu offers — this is G16's reference implementation. **Also the sharpest positioning question in this document**: MultibootOS is a distribution somebody else assembles and you install; ART is a *builder* that makes the user's own. Those are complements, not competitors, and ART must never repackage or redistribute it |
 | **Emu68-Imager** (mja65) | PowerShell/WPF, Windows-only, MIT. Preconfigured AmigaOS 3.1 / 3.2 / 3.2.2.1 / 3.9 installs from user media, writes physical SD, mature docs, admin-rights model | OS-media handling (which ADFs/files it expects and how it validates them), Kickstart requirements per OS, its FAT32/RDB layout choices |
 | **emu68hatcher** (rootrootde) | Python, cross-platform, early-stage. Builds **sparse .img first, flashes after** (same architecture G1 recommends), custom partition layouts with **PFS3 + FFS**, Workbench install from original ADFs, optional packages (MUI, WHDLoad, networking, RTG), JSON build configs | Its package model ≈ G7's manifest; its PFS3 provisioning method (contains ARexx scripts — inspect how it drives filesystem creation); its layout JSON ≈ G13 profiles |
 | **hdf2emu68** (PiStorm org) | Converts an existing HDF into an Emu68 SD | The minimal FAT32+Emu68 boot layout, distilled |
 | **Emu68 official SD docs** (michalsc) | The authoritative reference for what the boot partition must contain | G2's ground truth |
+
+> **Teardown still owed.** `multibootos.com` returns HTTP 403 to an automated
+> fetch, so the notes above come from the project's own summaries and from
+> amiga-news.de / GenerationAmiga coverage, not from reading the thing. SD-0
+> means opening it properly — layout, boot menu mechanics, which OS releases,
+> which filesystems, and above all **its terms**: a UserID-gated update service
+> is a licensing shape ART has to understand before going anywhere near it.
+> The user is assembling a reading list for SD-0; this is the first entry.
+
 
 **Positioning:** these tools prove the demand and the feasibility. ART's
 differentiators are (a) the safety pipeline — journal, backup, verify, oplog —
