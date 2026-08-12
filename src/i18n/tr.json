@@ -628,78 +628,159 @@
     }
   },
   "pistorm": {
-    "title": "PiStorm ve Emu68 Stüdyosu",
-    "selectSdTitle": "PiStorm / Emu68 MicroSD Kart Kök Klasörünü Seçin",
+    "title": "PiStorm & Emu68 Kartı",
+    "intro": "Buradaki her denetim, belgelenmiş bir Emu68 seçeneği ya da Raspberry Pi firmware ayarı yazar — ve hangisi olduğunu size gösterir. İki dosya da kartta zaten olanla birleştirilir, asla yeniden yazılmaz.",
+    "chooseCardTitle": "Kartın açılış klasörünü seçin",
+    "hardware": {
+      "heading": "1. Donanım",
+      "intro": "Üç cevap, çünkü bir kurulumun neler yapabileceği üçüne birden bağlı: çekirdek karta, depolama sürücüsünün adı Pi'ye, hangi seçeneklerin anlamı olduğu ise Amiga'ya göre değişir.",
+      "amiga": "Amiga",
+      "variant": "PiStorm kartı",
+      "pi": "Raspberry Pi"
+    },
+    "derived": {
+      "kernel": "Emu68 sürümü",
+      "storageDevice": "Depolama sürücüsü",
+      "piRam": "Pi belleği",
+      "ramFixed": "{{mb}} MB",
+      "ramRange": "Modele göre {{min}}–{{max}} MB"
+    },
+    "note": {
+      "pi-not-guaranteed": "Bu Pi'nin bu kartta çalıştığı kullanıcılar tarafından bildiriliyor, ancak proje bunu garanti etmiyor.",
+      "cm4-needs-lite-for-sd-card": "Dahili eMMC'li bir Compute Module 4, microSD yuvasını aynı anda kullanamaz. Genel tavsiye, eMMC'siz bir CM4 Lite kullanmaktır.",
+      "pi-physical-fit": "3B ya da 3B+ bu karta sığmak için portlarının sökülmesini ya da yüksek bir bağlantı başlığı gerektirir. Zero 2 W ya da 3A+ olduğu gibi sığar.",
+      "no-activity-led": "3B'de etkinlik LED'i desteği yok.",
+      "needs-cpu-adapter": "Bu makine, kartı takabilmek için bir CPU adaptörü gerektirir.",
+      "power-supply-quality": "İyi bir güç kaynağı kullanın. 5 V hattı düşerse Pi kendini sessizce yavaşlatır; bu tam olarak \"PiStorm yavaş\" gibi görünür ve en sık rastlanan sebebidir.",
+      "ram-beyond-what-amiga-os-uses": "AmigaOS 2 GB'tan fazla Fast RAM kullanmaz; daha fazlası Amiga tarafına bir şey kazandırmaz."
+    },
+    "card": {
+      "heading": "2. Kart",
+      "choose": "Klasör seç…",
+      "none": "Klasör seçilmedi",
+      "kernelFound": "Kartta Emu68.img var.",
+      "kernelMissing": "Emu68.img yok — çekirdek karta konulana kadar kart açılmaz.",
+      "kickstartsFound": "Bulunan Kickstart dosyaları: {{list}}",
+      "kickstartsMissing": "Kartta Kickstart dosyası bulunamadı.",
+      "configSets": "Adlandırılmış firmware setleri: {{list}}"
+    },
     "scan": {
-      "summary": "MicroSD tarandı: {{firmware}}, {{kickstart}}",
-      "firmwareFound": "✓ Emu68 Ürün Yazılımı Bulundu",
-      "firmwareMissing": "⚠️ Emu68 çekirdeği eksik",
-      "kickstartFound": "✓ Kickstart ({{name}})",
-      "kickstartMissing": "⚠️ Kickstart ROM eksik"
+      "found": "{{path}} okundu.",
+      "notACard": "{{path}} içinde Emu68 çekirdeği ve config.txt yok; henüz bir PiStorm kartına benzemiyor."
     },
-    "msg": {
-      "saved": "✓ PiStorm config.txt ve cmdline.txt dosyaları MicroSD karta başarıyla kaydedildi!",
-      "saveFailed": "Kaydedilemedi: {{error}}"
+    "kickstart": {
+      "label": "3. Kickstart",
+      "hint": "config.txt içine initramfs satırı olarak yazılır. Dosyanın kendisi kartta durur; ART hiçbir Kickstart dağıtmaz."
     },
-    "sdCardLabel": "MicroSD Kart:",
-    "working": "PiStorm yapılandırması üzerinde çalışılıyor…",
-    "profilesHeading": "Parametrik Kullanım Profilleri",
-    "profilesIntro": "PiStorm, oyunlar için özel yonga seti uyumluluğunu korurken Amiga'nızı yüksek performanslı bir iş istasyonuna dönüştürür:",
-    "selectSd": "MicroSD Kart Seç…",
-    "saveSync": "PiStorm SD'yi Kaydet ve Eşitle",
-    "hardwareHeading": "Donanım ve RTG Görüntü Ayarları",
-    "boardLabel": "PiStorm Donanım Kartı:",
-    "board": {
-      "a500a2000": "PiStorm A500 / A2000 (DIP-64 Yuva)",
-      "a1200lite": "PiStorm32-Lite (Amiga 1200 Kapak Altı)",
-      "a600": "PiStorm600 (Amiga 600 PLCC)"
+    "profiles": {
+      "heading": "4. Hazır ayarlar",
+      "intro": "Her biri bir Emu68 seçenek kümesidir; altında listelenir. Bir profili uygulamak seçenekleri değiştirir; siz kaydedene kadar kartta hiçbir şey değişmez."
     },
-    "rtgLabel": "RTG Video Çıkışı (Picasso96 HDMI):",
-    "rtg": {
-      "res1080p": "1920x1080 @ 60Hz (Tam HD TrueColor 32-bit)",
-      "res720p": "1280x720 @ 60Hz (HD Ready TrueColor 32-bit)",
-      "res1024": "1024x768 @ 60Hz (Klasik 4:3 RTG)",
-      "res800": "800x600 @ 60Hz",
-      "disabled": "Devre Dışı (Yalnızca Doğal Amiga Video Çıkışı)"
-    },
-    "kickstartLabel": "SD Karttaki Kickstart ROM Dosyası:",
-    "performanceHeading": "İşlemci Performansı ve Bellek Haritası",
-    "fastRamLabel": "Fast RAM Ayırımı:",
-    "fastRamHint": "Fast RAM, doğrudan Amiga'nın 32-bit adres alanına eşlenir.",
-    "jitLabel": "JIT Dinamik Derleyiciyi Etkinleştir (Emu68 JIT)",
-    "jitHint": "~800+ MIPS için 68k komutlarını anında ARM64'e çevirir.",
-    "mmuLabel": "68040 MMU Emülasyonunu Etkinleştir",
-    "mmuHint": "WHDLoad MuForce ve gelişmiş bellek korumaları için gereklidir.",
-    "sdStorageLabel": "Yüksek Hızlı MicroSD Depolamayı Etkinleştir (`emu68-sd.device`)",
-    "sdStorageHint": "SD kart bölümlerinden doğrudan yüksek hızlı sabit disk erişimi (20+ MB/s).",
     "profile": {
-      "workstation": {
-        "title": "AmigaOS Ultra İş İstasyonu",
-        "badge": "AmigaOS ve Üretkenlik için Önerilen",
-        "description": "1080p TrueColor RTG masaüstüyle azami JIT performansı (~800+ MIPS). Anında Workbench açılışı, web gezintisi, ışın izleme ve yüksek üretkenlik.",
-        "feature1": "~800+ MIPS işlemci hızı (68060'tan hızlı)",
-        "feature2": "1080p 32-bit TrueColor RTG HDMI çıkışı",
-        "feature3": "Çoklu görev için 1 GB ile 2 GB arası Fast RAM",
-        "feature4": "Yüksek hızlı emu68-sd.device disk erişimi (20+ MB/s)"
+      "apply": "Bunu kullan",
+      "applied": "{{name}} uygulandı. Siz kaydedene kadar hiçbir şey yazılmaz.",
+      "performance": {
+        "title": "Performans",
+        "description": "En hızlı Workbench ve RTG; zamanlama hassasiyetinin önemli olmadığı işler için."
       },
-      "balanced": {
-        "title": "Dengeli Günlük Kullanım ve WHDLoad Oyunları",
-        "badge": "En İyi Günlük Kullanım ve Oyunlar",
-        "description": "WHDLoad MMU ve önbellek temizleme optimizasyonlarıyla yüksek JIT performansı. Oyunlar için otomatik doğal OCS/ECS/AGA geçişli RTG masaüstü.",
-        "feature1": "%99 WHDLoad oyun uyumluluğu",
-        "feature2": "Otomatik ekran modu geçişi (RTG ↔ PAL/NTSC)",
-        "feature3": "512 MB Fast RAM ayırımı",
-        "feature4": "WHDLoad MMU güvenli önbellek temizlemeleri"
+      "daily": {
+        "title": "Günlük & WHDLoad",
+        "description": "Dengeli varsayılanlar. WHDLoad NOMMU modda çalışır — Emu68 MMU emüle etmez, başka bir mod yoktur."
       },
-      "classic": {
-        "title": "Klasik ve Demoscene Uyumluluğu",
-        "badge": "Çevrim Hassasiyetli ve Demolar",
-        "description": "Zamanlamaya duyarlı demoscene yapımları ve disket tabanlı eski yazılımlar için temkinli JIT çalıştırma.",
-        "feature1": "Sıkı zamanlama koruması",
-        "feature2": "128 MB ile 256 MB arası Fast RAM kullanımı",
-        "feature3": "Doğal 15 kHz Amiga video geçiş önceliği",
-        "feature4": "Azami eski yazılım kararlılığı"
+      "compatibility": {
+        "title": "Uyumluluk & demoscene",
+        "description": "Orijinal veri yolu zamanlamasına daha yakın: hız yerine doğruluk. A500 ailesinde ayrıca kapak altı belleği CHIP'e taşır."
+      },
+      "diagnostics": {
+        "title": "Tanılama",
+        "description": "Sorun avlamak için, makineyi kullanmak için değil. Ayrıntılı günlük her şeyi yavaşlatır."
       }
+    },
+    "display": {
+      "heading": "5. Görüntü & saat",
+      "auto": "Firmware monitöre sorsun",
+      "dmt1080p60": "1920×1080, 60 Hz (monitör zamanlaması)",
+      "cea1080p50": "1920×1080, 50 Hz (televizyon, PAL)",
+      "cea720p60": "1280×720, 60 Hz (televizyon)",
+      "disableBluetooth": "Pi'nin Bluetooth'unu kapat"
+    },
+    "overclock": {
+      "enable": "Pi'yi satıldığından hızlı çalıştır",
+      "warning": "Isı ve güç kaynağınızın kalitesi. Raspberry Pi'de bu garanti bitini de çevirir. Hiçbir profilin parçası değil — yalnızca sizin açtığınız bir şey."
+    },
+    "advanced": {
+      "heading": "6. Tüm seçenekler",
+      "intro": "Emu68'in tam listesi; her satır yazdığı token ile etiketli. Yukarıdaki donanımda anlamı olmayan seçenekler gösterilmez.",
+      "unset": "ayarlanmadı"
+    },
+    "group": {
+      "storage": "Depolama",
+      "cpu": "İşlemci",
+      "memory": "Bellek",
+      "rom": "ROM",
+      "rtg": "RTG video",
+      "timing": "Zamanlama",
+      "floppy": "Disket",
+      "board": "Kart",
+      "diagnostics": "Tanılama"
+    },
+    "option": {
+      "storage_unit0": "Amiga kartı nasıl görüyor",
+      "storage_verbose": "depolama sürücüsünün günlük ayrıntısı (0–2)",
+      "storage_low_speed": "50 MHz modunu kullanma — kabul etmeyen kartlar için",
+      "storage_clock_mhz": "saat değeri, MHz",
+      "vbr_move": "vektör tablosunu fast RAM'e taşı",
+      "nofpu": "FPU yok (nadir, uyumluluk için)",
+      "enable_cache": "JIT önbelleği açılıştan itibaren etkin",
+      "limit_2g": "eşlenen RAM'i 2 GB ile sınırla",
+      "z2_ram_size": "Zorro II RAM, MB (0, 1, 2, 4 ya da 8)",
+      "enable_c0_slow": "$C0'daki yavaş bellek",
+      "enable_c8_slow": "$C8'deki yavaş bellek",
+      "enable_d0_slow": "$D0'daki yavaş bellek",
+      "move_slow_to_chip": "kapak altı 512K'yı CHIP RAM yap",
+      "copy_rom_kb": "ROM'u fast RAM'e kopyala, KB",
+      "checksum_rom": "ROM sağlama toplamını yeniden hesapla",
+      "vc4_mem_mb": "Picasso96'ya bildirilen video belleği, MB",
+      "chip_slowdown": "orijinal veri yolu zamanlamasına yaklaş",
+      "cs_dist": "ne kadar kaba (1–8)",
+      "swap_df0_with": "DF0'ı başka bir sürücüyle değiştir (1, 2 ya da 3)",
+      "one_slot": "tek yuva protokolünü zorla",
+      "debug": "JIT istatistikleri",
+      "disassemble": "disassembly çıktısı",
+      "async_log": "beklemeden günlükle",
+      "fast_serial": "daha hızlı seri çıkış",
+      "buptest_kb": "açılışta bellek testi, KB",
+      "bupiter": "kaç geçiş yapılacak"
+    },
+    "choice": {
+      "storage_unit0": {
+        "off": "görünmez",
+        "read-only": "görünür, salt okunur",
+        "read-write": "yazılabilir"
+      }
+    },
+    "tokens": {
+      "heading": "Yazılacak olan",
+      "none": "Hiçbir Emu68 seçeneği ayarlanmadı.",
+      "yours": "Sizin açılış parametreleriniz",
+      "yoursHint": "ART'ın işi değil, olduğu gibi bırakılır. root= olmadan Pi hiç açılmaz."
+    },
+    "preview": {
+      "button": "Değişikliği göster",
+      "title": "Kaydetmeden önce",
+      "unchanged": "değişmedi",
+      "absent": "(henüz böyle bir dosya yok)"
+    },
+    "save": {
+      "button": "Karta kaydet"
+    },
+    "saved": {
+      "withBackup": "Kaydedildi. Önceki sürüm {{path}} konumunda.",
+      "plain": "Kaydedildi."
+    },
+    "wifi": {
+      "heading": "WiFi & ağ",
+      "explain": "PiStorm'da WiFi bir açılış seçeneği değil, Amiga tarafının işidir: Roadshow ile wifipi.device, sistem birimindeki DEVS:NetInterfaces altında yapılandırılır. Bu, birimleri oluşturmaya ait bir iş ve ART henüz bunu yapamıyor — bu yüzden burada hiçbir yere yazmayacak bir form yerine hiçbir şey yok."
     }
   },
   "gotek": {

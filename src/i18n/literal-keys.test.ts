@@ -132,6 +132,15 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // reading a `Phrase.key` from `@/lib/hdfSize` — same pattern as every
     // other refusal on this list, and every branch of both is enumerated in
     // that module's own test file.
-    expect(dynamicCalls).toBe(50);
+    // 50 → 54 (ART-090, the PiStorm rebuild): the screen is now generated from
+    // Rust's own tables rather than from a list of cards written by hand, so
+    // its labels are read by id — the hardware notes, the four profiles' title
+    // and description, the display presets, and each option group and row in
+    // the full inventory. Every one of those ids is an enum in
+    // `core/pistorm`, and `pistormOptions.test.ts` proves the inventory
+    // matches the engine field for field, which is the check this scan cannot
+    // make. It replaces four dynamic calls the old screen made over a table of
+    // cards it invented.
+    expect(dynamicCalls).toBe(54);
   });
 });

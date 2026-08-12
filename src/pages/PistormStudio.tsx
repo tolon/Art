@@ -1,166 +1,213 @@
-import { useState } from "react";
+// PiStorm Studio (spec §40, brief `ART-brief-pistorm-studio-v2.md`).
+//
+// **Every control on this screen writes a documented Emu68 token or a
+// Raspberry Pi firmware key.** Nothing else is a control. That rule is the
+// whole of ART-090's fix: the screen this replaces offered a JIT switch (Emu68
+// *is* a JIT and cannot be turned off), an MMU switch (Emu68 emulates no MMU —
+// WHDLoad runs NOMMU), a Fast RAM slider (Emu68 maps RAM itself), and profile
+// cards claiming "99 % WHDLoad compatibility" and "~800+ MIPS". It wrote
+// `emu68.jit`, `emu68.mmu` and `buptest.fastram_size`, three tokens Emu68 has
+// never read.
+//
+// Things worth telling a user that are *not* tokens are prose, in the notes
+// panel — never a control that appears to do something.
+//
+// The hardware matrix comes from Rust (`pistorm_hardware_matrix`), which is
+// where it is tested. Three fields filtering each other, because what a setup
+// can do is a function of all three: the kernel build follows the board, the
+// storage device name follows the Pi, and which tokens even apply follows the
+// Amiga.
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
 import {
-  pistormScan,
+  pistormHardwareMatrix,
+  pistormHardwareNotes,
+  pistormPreview,
+  pistormProfile,
   pistormSave,
-  type PistormBoard,
-  type PistormConfig,
-  type PistormProfileMode,
-  type RtgResolution,
+  pistormScan,
+  pistormTokens,
+  DEFAULT_EMU68_OPTIONS,
+  DEFAULT_FIRMWARE_CONFIG,
+  DEFAULT_HARDWARE,
+  type AmigaChoice,
+  type DisplayMode,
+  type Emu68Options,
+  type Emu68Profile,
+  type FirmwareConfig,
+  type HardwareNote,
+  type PiChoice,
+  type PistormCard,
+  type PistormHardware,
+  type PistormPreview,
+  type VariantChoice,
 } from "@/lib/pistorm";
-import {
-  isFlag,
-  isOneOf,
-  isTextOrNothing,
-  isWholeNumberBetween,
-  type Guard,
-} from "@/lib/remembered";
+import { usePowerMode } from "@/lib/uxmode";
+import { isTextOrNothing } from "@/lib/remembered";
 import { useRemembered, useRememberedShape } from "@/lib/useRemembered";
+import {
+  EMU68_OPTION_SPEC,
+  FIRMWARE_SPEC,
+  HARDWARE_SPEC,
+  visibleOptionGroups,
+  type OptionGroup,
+} from "@/lib/pistormOptions";
 
-const DEFAULT_PISTORM_CONFIG: PistormConfig = {
-  board: "a500a2000",
-  profile_mode: "workstation",
-  fast_ram_mb: 1024,
-  rtg_resolution: "res1080p",
-  enable_jit: true,
-  enable_mmu: true,
-  enable_wifi: true,
-  enable_sd_storage: true,
-  custom_kickstart_path: "kick.rom",
-};
+const PROFILES: Emu68Profile[] = ["performance", "daily", "compatibility", "diagnostics"];
 
-/**
- * How a remembered PiStorm config is checked on the way back in.
- *
- * The Fast RAM bound is the hardware's, not a guess: a PiStorm addresses up to
- * 2 GB of Fast RAM, and a remembered `-1` or `1e9` would reach a generated
- * `emu68.cfg` and be handed to a real machine.
- */
-const PISTORM_CONFIG_SPEC: { [K in keyof PistormConfig]: Guard<PistormConfig[K]> } = {
-  board: isOneOf<PistormBoard>("a500a2000", "a1200lite", "a600"),
-  profile_mode: isOneOf<PistormProfileMode>(
-    "workstation",
-    "balancedwhdload",
-    "classiccompat"
-  ),
-  fast_ram_mb: isWholeNumberBetween(0, 2048),
-  rtg_resolution: isOneOf<RtgResolution>(
-    "res1080p",
-    "res720p",
-    "res1024x768",
-    "res800x600",
-    "disabled"
-  ),
-  enable_jit: isFlag,
-  enable_mmu: isFlag,
-  enable_wifi: isFlag,
-  enable_sd_storage: isFlag,
-  custom_kickstart_path: isTextOrNothing,
-};
-
-interface ProfileChoice {
-  id: PistormProfileMode;
-  emoji: string;
-  titleKey: string;
-  badgeKey: string;
-  badgeType: "ok" | "muted" | "warn";
-  descriptionKey: string;
-  featureKeys: string[];
-}
-
-const PROFILE_CHOICES: ProfileChoice[] = [
-  {
-    id: "workstation",
-    emoji: "⚡",
-    titleKey: "pistorm.profile.workstation.title",
-    badgeKey: "pistorm.profile.workstation.badge",
-    badgeType: "ok",
-    descriptionKey: "pistorm.profile.workstation.description",
-    featureKeys: [
-      "pistorm.profile.workstation.feature1",
-      "pistorm.profile.workstation.feature2",
-      "pistorm.profile.workstation.feature3",
-      "pistorm.profile.workstation.feature4",
-    ],
-  },
-  {
-    id: "balancedwhdload",
-    emoji: "🕹️",
-    titleKey: "pistorm.profile.balanced.title",
-    badgeKey: "pistorm.profile.balanced.badge",
-    badgeType: "muted",
-    descriptionKey: "pistorm.profile.balanced.description",
-    featureKeys: [
-      "pistorm.profile.balanced.feature1",
-      "pistorm.profile.balanced.feature2",
-      "pistorm.profile.balanced.feature3",
-      "pistorm.profile.balanced.feature4",
-    ],
-  },
-  {
-    id: "classiccompat",
-    emoji: "🎯",
-    titleKey: "pistorm.profile.classic.title",
-    badgeKey: "pistorm.profile.classic.badge",
-    badgeType: "warn",
-    descriptionKey: "pistorm.profile.classic.description",
-    featureKeys: [
-      "pistorm.profile.classic.feature1",
-      "pistorm.profile.classic.feature2",
-      "pistorm.profile.classic.feature3",
-      "pistorm.profile.classic.feature4",
-    ],
-  },
+const DISPLAY_MODES: Array<{ id: string; mode: DisplayMode; tokens: string }> = [
+  { id: "auto", mode: "auto", tokens: "—" },
+  { id: "dmt1080p60", mode: "dmt1080p60", tokens: "hdmi_group=2 hdmi_mode=82" },
+  { id: "cea1080p50", mode: "cea1080p50", tokens: "hdmi_group=1 hdmi_mode=31" },
+  { id: "cea720p60", mode: "cea720p60", tokens: "hdmi_group=1 hdmi_mode=4" },
 ];
+
+function displayModeId(mode: DisplayMode): string {
+  return typeof mode === "string" ? mode : "custom";
+}
 
 export function PistormStudio() {
   const { t } = useTranslation();
+  const powerMode = usePowerMode();
 
-  // The board, the profile and every toggle below are the user's machine
-  // described — the single most expensive thing in ART to re-enter, and the
-  // thing a user comes back to across sessions while building one image. So it
-  // is remembered field by field (`@/lib/useRemembered`): a config that gains
-  // an option in a later ART keeps everything already chosen.
-  const [sdPath, setSdPath] = useRemembered<string | null>(
-    "pistorm.sdPath",
+  // --- what the user has chosen, remembered across sessions ---------------
+  const [hardware, applyHardware] = useRememberedShape<PistormHardware>(
+    "pistorm.hardware",
+    HARDWARE_SPEC,
+    DEFAULT_HARDWARE
+  );
+  const [options, applyOptions] = useRememberedShape<Emu68Options>(
+    "pistorm.options",
+    EMU68_OPTION_SPEC,
+    DEFAULT_EMU68_OPTIONS
+  );
+  const [firmware, applyFirmware] = useRememberedShape<FirmwareConfig>(
+    "pistorm.firmware",
+    FIRMWARE_SPEC,
+    DEFAULT_FIRMWARE_CONFIG
+  );
+  const [cardPath, setCardPath] = useRemembered<string | null>(
+    "pistorm.cardPath",
     isTextOrNothing,
     null
   );
-  const [config, applyConfig] = useRememberedShape<PistormConfig>(
-    "pistorm.config",
-    PISTORM_CONFIG_SPEC,
-    DEFAULT_PISTORM_CONFIG
-  );
-  const setConfig = applyConfig;
 
+  // --- what the screen is doing -------------------------------------------
+  const [matrix, setMatrix] = useState<AmigaChoice[]>([]);
+  const [notes, setNotes] = useState<HardwareNote[]>([]);
+  const [tokens, setTokens] = useState<string[]>([]);
+  const [card, setCard] = useState<PistormCard | null>(null);
+  const [preview, setPreview] = useState<PistormPreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
-  async function handleSelectSd() {
-    const sel = await open({
+  useEffect(() => {
+    pistormHardwareMatrix().then(setMatrix).catch((e) => setError(String(e)));
+  }, []);
+
+  // The notes and the token line both follow the hardware, and both come from
+  // Rust — so that what the screen shows is what will be written, not a second
+  // implementation of the same rules.
+  useEffect(() => {
+    pistormHardwareNotes(hardware).then(setNotes).catch(() => setNotes([]));
+  }, [hardware]);
+
+  useEffect(() => {
+    pistormTokens(options, hardware).then(setTokens).catch(() => setTokens([]));
+  }, [options, hardware]);
+
+  const amigaChoice = matrix.find((entry) => entry.amiga === hardware.amiga);
+  const variantChoice: VariantChoice | undefined = amigaChoice?.variants.find(
+    (entry) => entry.variant === hardware.variant
+  );
+  const piChoice: PiChoice | undefined = variantChoice?.pi_models.find(
+    (entry) => entry.model === hardware.pi
+  );
+
+  // Changing one field can leave the ones below it naming something that does
+  // not exist — an A1200 with a PiStorm600. Each falls back to the first
+  // choice its predecessor allows, which is what the dropdown would show anyway.
+  function chooseAmiga(next: AmigaChoice) {
+    const variant = next.variants[0];
+    applyHardware({
+      amiga: next.amiga,
+      variant: variant.variant,
+      pi: variant.pi_models[0].model,
+    });
+  }
+
+  function chooseVariant(next: VariantChoice) {
+    applyHardware({ variant: next.variant, pi: next.pi_models[0].model });
+  }
+
+  const scan = useCallback(
+    async (path: string, announce: boolean) => {
+      setBusy(true);
+      setError(null);
+      try {
+        const found = await pistormScan(path, hardware);
+        setCard(found);
+        setCardPath(path);
+        // What is on the card wins over what ART remembered: the card is the
+        // thing being edited, and showing anything else would be editing a
+        // copy of somebody's settings rather than their settings.
+        if (found.has_cmdline_txt) applyOptions(found.setup.options);
+        if (found.has_config_txt) applyFirmware(found.setup.firmware);
+        setStatusMsg(
+          found.is_pistorm_card
+            ? t("pistorm.scan.found", { path })
+            : t("pistorm.scan.notACard", { path })
+        );
+      } catch (e) {
+        // A folder reopened from last time may simply not be mounted, which is
+        // the normal state of a card reader with no card in it.
+        if (announce) setError(String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hardware, t]
+  );
+
+  const reopened = useRef<string | null>(null);
+  useEffect(() => {
+    if (!cardPath || reopened.current === cardPath) return;
+    reopened.current = cardPath;
+    void scan(cardPath, false);
+  }, [cardPath, scan]);
+
+  async function chooseCard() {
+    const picked = await open({
       directory: true,
       multiple: false,
-      title: t("pistorm.selectSdTitle"),
+      title: t("pistorm.chooseCardTitle"),
     });
-    if (typeof sel !== "string") return;
+    if (typeof picked !== "string") return;
+    await scan(picked, true);
+  }
 
+  async function applyProfile(profile: Emu68Profile) {
+    setError(null);
+    try {
+      const { options: next } = await pistormProfile(profile, hardware);
+      applyOptions(next);
+      setStatusMsg(t("pistorm.profile.applied", { name: t(`pistorm.profile.${profile}.title`) }));
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function showPreview() {
+    if (!cardPath) return;
     setBusy(true);
     setError(null);
-    setStatusMsg(null);
     try {
-      const scanned = await pistormScan(sel);
-      setSdPath(sel);
-      setConfig(scanned.detected_config);
-      const firmware = scanned.has_emu68_img
-        ? t("pistorm.scan.firmwareFound")
-        : t("pistorm.scan.firmwareMissing");
-      const kickstart = scanned.has_kickstart
-        ? t("pistorm.scan.kickstartFound", { name: scanned.kickstart_name })
-        : t("pistorm.scan.kickstartMissing");
-      setStatusMsg(t("pistorm.scan.summary", { firmware, kickstart }));
+      setPreview(await pistormPreview(cardPath, { hardware, options, firmware }));
     } catch (e) {
       setError(String(e));
     } finally {
@@ -168,252 +215,650 @@ export function PistormStudio() {
     }
   }
 
-  function handleProfileSelect(mode: PistormProfileMode) {
-    if (mode === "workstation") {
-      setConfig({
-        ...config,
-        profile_mode: mode,
-        enable_jit: true,
-        enable_mmu: true,
-        fast_ram_mb: 1024,
-        rtg_resolution: "res1080p",
-      });
-    } else if (mode === "balancedwhdload") {
-      setConfig({
-        ...config,
-        profile_mode: mode,
-        enable_jit: true,
-        enable_mmu: true,
-        fast_ram_mb: 512,
-        rtg_resolution: "res720p",
-      });
-    } else {
-      setConfig({
-        ...config,
-        profile_mode: mode,
-        enable_jit: false,
-        enable_mmu: false,
-        fast_ram_mb: 256,
-        rtg_resolution: "disabled",
-      });
-    }
-  }
-
-  async function handleSave() {
-    if (!sdPath) return;
+  async function save() {
+    if (!cardPath) return;
     setBusy(true);
     setError(null);
-    setStatusMsg(null);
     try {
-      await pistormSave(sdPath, config);
-      setStatusMsg(t("pistorm.msg.saved"));
+      const outcome = await pistormSave(cardPath, { hardware, options, firmware });
+      setPreview(null);
+      setStatusMsg(
+        outcome.cmdline_txt_backup
+          ? t("pistorm.saved.withBackup", { path: outcome.cmdline_txt_backup })
+          : t("pistorm.saved.plain")
+      );
+      await scan(cardPath, true);
     } catch (e) {
-      setError(t("pistorm.msg.saveFailed", { error: String(e) }));
+      setError(String(e));
     } finally {
       setBusy(false);
     }
   }
 
+  const groups: OptionGroup[] = useMemo(
+    () => visibleOptionGroups(hardware, amigaChoice, variantChoice),
+    [hardware, amigaChoice, variantChoice]
+  );
+
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1 style={{ fontSize: 20, margin: 0 }}>{t("nav.pistorm")} — {t("pistorm.title")}</h1>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn btn-sm" onClick={handleSelectSd} disabled={busy}>
-            📂 {t("pistorm.selectSd")}
-          </button>
-          {sdPath && (
-            <button className="btn btn-sm btn-primary" onClick={handleSave} disabled={busy}>
-              💾 {t("pistorm.saveSync")}
-            </button>
-          )}
-        </div>
-      </div>
+      <h1 style={{ fontSize: 20 }}>
+        {t("nav.pistorm")} — {t("pistorm.title")}
+      </h1>
+      <p className="muted" style={{ fontSize: 12, margin: "4px 0 16px" }}>
+        {t("pistorm.intro")}
+      </p>
 
-      {sdPath && (
-        <div style={{ margin: "8px 0 12px", fontSize: 12 }}>
-          <span className="muted">{t("pistorm.sdCardLabel")}</span>{" "}
-          <strong style={{ wordBreak: "break-all" }}>{sdPath}</strong>
+      {error && (
+        <div className="badge badge-err" style={{ margin: "12px 0", padding: "6px 12px" }}>
+          {error}
+        </div>
+      )}
+      {statusMsg && !error && (
+        <div className="badge badge-ok" style={{ margin: "12px 0", padding: "6px 12px" }}>
+          {statusMsg}
         </div>
       )}
 
-      {error && <div className="badge badge-err" style={{ marginBottom: 12, padding: "6px 12px" }}>{error}</div>}
-      {statusMsg && <div className="badge badge-ok" style={{ marginBottom: 12, padding: "6px 12px" }}>{statusMsg}</div>}
-      {busy && <div className="muted" style={{ marginBottom: 12 }}>{t("pistorm.working")}</div>}
-
-      {/* Profile Modes: Parametric Workstation vs Gaming Explanations */}
-      <section className="card" style={{ marginTop: 12 }}>
-        <h2 style={{ fontSize: 15 }}>🎯 {t("pistorm.profilesHeading")}</h2>
-        <p className="muted" style={{ fontSize: 12, margin: "2px 0 12px" }}>
-          {t("pistorm.profilesIntro")}
+      {/* 1 — Hardware. Everything downstream derives from these three. */}
+      <section className="card" style={{ marginBottom: 16 }}>
+        <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("pistorm.hardware.heading")}</h2>
+        <p className="muted" style={{ fontSize: 12, margin: "4px 0 12px" }}>
+          {t("pistorm.hardware.intro")}
         </p>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 10 }}>
-          {PROFILE_CHOICES.map((p) => {
-            const isSel = config.profile_mode === p.id;
-            return (
-              <div
-                key={p.id}
-                onClick={() => handleProfileSelect(p.id)}
-                style={{
-                  padding: "12px",
-                  borderRadius: "var(--radius-sm)",
-                  border: isSel ? "1px solid var(--accent)" : "1px solid var(--border)",
-                  background: isSel ? "var(--bg-hover)" : "var(--bg)",
-                  cursor: "pointer",
-                  display: "flex",
-                  flexDirection: "column",
-                  justifyContent: "space-between",
-                }}
-              >
-                <div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 6 }}>
-                    <strong style={{ fontSize: 14 }}>{p.emoji} {t(p.titleKey)}</strong>
-                    <span className={`badge badge-${p.badgeType}`} style={{ fontSize: 10 }}>
-                      {p.badgeType === "ok" ? "⭐ " : ""}
-                      {t(p.badgeKey)}
-                    </span>
-                  </div>
-                  <p className="muted" style={{ fontSize: 12, margin: "6px 0 10px" }}>
-                    {t(p.descriptionKey)}
-                  </p>
-                </div>
-                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 11, color: "var(--text-muted)" }}>
-                  {p.featureKeys.map((key) => (
-                    <li key={key}>{t(key)}</li>
-                  ))}
-                </ul>
-              </div>
-            );
-          })}
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, flex: "1 1 180px" }}>
+            <span className="muted" style={{ fontSize: 12 }}>
+              {t("pistorm.hardware.amiga")}
+            </span>
+            <select
+              className="btn"
+              value={hardware.amiga}
+              onChange={(e) => {
+                const next = matrix.find((entry) => entry.amiga === e.target.value);
+                if (next) chooseAmiga(next);
+              }}
+            >
+              {matrix.map((entry) => (
+                <option key={entry.amiga} value={entry.amiga}>
+                  {entry.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, flex: "1 1 180px" }}>
+            <span className="muted" style={{ fontSize: 12 }}>
+              {t("pistorm.hardware.variant")}
+            </span>
+            <select
+              className="btn"
+              value={hardware.variant}
+              onChange={(e) => {
+                const next = amigaChoice?.variants.find((v) => v.variant === e.target.value);
+                if (next) chooseVariant(next);
+              }}
+            >
+              {(amigaChoice?.variants ?? []).map((entry) => (
+                <option key={entry.variant} value={entry.variant}>
+                  {entry.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, flex: "1 1 180px" }}>
+            <span className="muted" style={{ fontSize: 12 }}>
+              {t("pistorm.hardware.pi")}
+            </span>
+            <select
+              className="btn"
+              value={hardware.pi}
+              onChange={(e) => applyHardware({ pi: e.target.value as PistormHardware["pi"] })}
+            >
+              {(variantChoice?.pi_models ?? []).map((entry) => (
+                <option key={entry.model} value={entry.model}>
+                  {entry.name}
+                  {entry.support === "reported" ? " *" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        {/* What follows from the three, stated rather than implied. */}
+        {variantChoice && piChoice && (
+          <dl
+            style={{
+              display: "grid",
+              gridTemplateColumns: "auto 1fr",
+              gap: "4px 12px",
+              margin: "12px 0 0",
+              fontSize: 12,
+            }}
+          >
+            <dt className="muted">{t("pistorm.derived.kernel")}</dt>
+            <dd style={{ margin: 0, fontFamily: "monospace" }}>{variantChoice.kernel_archive}</dd>
+            <dt className="muted">{t("pistorm.derived.storageDevice")}</dt>
+            <dd style={{ margin: 0, fontFamily: "monospace" }}>{piChoice.storage_device}</dd>
+            <dt className="muted">{t("pistorm.derived.piRam")}</dt>
+            <dd style={{ margin: 0 }}>
+              {piChoice.ram_min_mb === piChoice.ram_max_mb
+                ? t("pistorm.derived.ramFixed", { mb: piChoice.ram_min_mb })
+                : t("pistorm.derived.ramRange", {
+                    min: piChoice.ram_min_mb,
+                    max: piChoice.ram_max_mb,
+                  })}
+            </dd>
+          </dl>
+        )}
+
+        {notes.length > 0 && (
+          <ul className="muted" style={{ fontSize: 11, margin: "12px 0 0", paddingLeft: 18 }}>
+            {notes.map((note) => (
+              <li key={note}>{t(`pistorm.note.${note}`)}</li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* 2 — The card, and the Kickstart on it. */}
+      <section className="card" style={{ marginBottom: 16 }}>
+        <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("pistorm.card.heading")}</h2>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <button className="btn btn-primary" onClick={() => void chooseCard()} disabled={busy}>
+            {t("pistorm.card.choose")}
+          </button>
+          <span style={{ fontSize: 12, wordBreak: "break-all" }}>
+            {cardPath ?? t("pistorm.card.none")}
+          </span>
+        </div>
+
+        {card && (
+          <ul className="muted" style={{ fontSize: 12, margin: "10px 0 0", paddingLeft: 18 }}>
+            <li>
+              {card.has_kernel ? t("pistorm.card.kernelFound") : t("pistorm.card.kernelMissing")}
+            </li>
+            <li>
+              {card.kickstart_files.length > 0
+                ? t("pistorm.card.kickstartsFound", { list: card.kickstart_files.join(", ") })
+                : t("pistorm.card.kickstartsMissing")}
+            </li>
+            {card.config_sets.length > 0 && (
+              <li>{t("pistorm.card.configSets", { list: card.config_sets.join(", ") })}</li>
+            )}
+          </ul>
+        )}
+
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 12 }}>
+          <span className="muted" style={{ fontSize: 12 }}>
+            {t("pistorm.kickstart.label")}
+          </span>
+          {card && card.kickstart_files.length > 0 && !powerMode ? (
+            <select
+              className="btn"
+              value={firmware.kickstart_file}
+              onChange={(e) => applyFirmware({ kickstart_file: e.target.value })}
+            >
+              {card.kickstart_files.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              className="btn"
+              value={firmware.kickstart_file}
+              onChange={(e) => applyFirmware({ kickstart_file: e.target.value })}
+              style={{ fontFamily: "monospace" }}
+            />
+          )}
+          <span className="faint" style={{ fontSize: 11 }}>
+            {t("pistorm.kickstart.hint")}
+          </span>
+        </label>
+      </section>
+
+      {/* 3 — Profiles. Every card shows the tokens it stands for. */}
+      <section className="card" style={{ marginBottom: 16 }}>
+        <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("pistorm.profiles.heading")}</h2>
+        <p className="muted" style={{ fontSize: 12, margin: "4px 0 12px" }}>
+          {t("pistorm.profiles.intro")}
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {PROFILES.filter((profile) => profile !== "diagnostics" || powerMode).map((profile) => (
+            <ProfileCard
+              key={profile}
+              profile={profile}
+              hardware={hardware}
+              onApply={() => void applyProfile(profile)}
+            />
+          ))}
         </div>
       </section>
 
-      {/* Hardware & Parameter Tuning Grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 16 }}>
-        {/* Left: Hardware & RTG Settings */}
-        <section className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <h2 style={{ fontSize: 15 }}>🖥️ {t("pistorm.hardwareHeading")}</h2>
-
-          {/* PiStorm Board Model */}
-          <div>
-            <label className="muted" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
-              {t("pistorm.boardLabel")}
-            </label>
-            <select
-              value={config.board}
-              onChange={(e) => setConfig({ ...config, board: e.target.value as PistormBoard })}
-              style={{ width: "100%", padding: "6px 8px", background: "var(--bg)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 4 }}
+      {/* 4 — Display and clock. */}
+      <section className="card" style={{ marginBottom: 16 }}>
+        <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("pistorm.display.heading")}</h2>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {DISPLAY_MODES.map((entry) => (
+            <label
+              key={entry.id}
+              style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 13 }}
             >
-              <option value="a500a2000">{t("pistorm.board.a500a2000")}</option>
-              <option value="a1200lite">{t("pistorm.board.a1200lite")}</option>
-              <option value="a600">{t("pistorm.board.a600")}</option>
-            </select>
-          </div>
-
-          {/* RTG HDMI Video Output */}
-          <div>
-            <label className="muted" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
-              {t("pistorm.rtgLabel")}
+              <input
+                type="radio"
+                name="pistorm-display"
+                checked={displayModeId(firmware.display) === entry.id}
+                onChange={() => applyFirmware({ display: entry.mode })}
+              />
+              <span style={{ flex: "0 0 auto" }}>{t(`pistorm.display.${entry.id}`)}</span>
+              <code className="faint" style={{ fontSize: 11 }}>
+                {entry.tokens}
+              </code>
             </label>
-            <select
-              value={config.rtg_resolution}
-              onChange={(e) => setConfig({ ...config, rtg_resolution: e.target.value as RtgResolution })}
-              style={{ width: "100%", padding: "6px 8px", background: "var(--bg)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 4 }}
+          ))}
+        </div>
+
+        <OverclockField
+          value={firmware.overclock}
+          onChange={(overclock) => applyFirmware({ overclock })}
+        />
+
+        <label
+          style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, marginTop: 12 }}
+        >
+          <input
+            type="checkbox"
+            checked={firmware.disable_bluetooth}
+            onChange={(e) => applyFirmware({ disable_bluetooth: e.target.checked })}
+          />
+          {t("pistorm.display.disableBluetooth")}
+          <code className="faint" style={{ fontSize: 11 }}>
+            dtoverlay=disable-bt
+          </code>
+        </label>
+      </section>
+
+      {/* 5 — The full inventory, for anyone who wants it. */}
+      {powerMode && (
+        <section className="card" style={{ marginBottom: 16 }}>
+          <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("pistorm.advanced.heading")}</h2>
+          <p className="muted" style={{ fontSize: 12, margin: "4px 0 12px" }}>
+            {t("pistorm.advanced.intro")}
+          </p>
+          {groups.map((group) => (
+            <div key={group.id} style={{ marginBottom: 14 }}>
+              <h3 style={{ fontSize: 13, margin: "0 0 6px" }}>{t(`pistorm.group.${group.id}`)}</h3>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {group.fields.map((field) => (
+                  <OptionField
+                    key={field.key}
+                    field={field}
+                    options={options}
+                    storagePrefix={piChoice?.storage_device === "brcm-emmc.device" ? "emmc" : "sd"}
+                    onChange={applyOptions}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {/* What the line will say — the honesty mechanism for everything above. */}
+      <section className="card" style={{ marginBottom: 16 }}>
+        <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("pistorm.tokens.heading")}</h2>
+        <pre
+          style={{
+            fontSize: 12,
+            margin: 0,
+            padding: "8px 10px",
+            background: "var(--bg)",
+            border: "1px solid var(--border)",
+            borderRadius: 4,
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-all",
+          }}
+        >
+          {tokens.length > 0 ? tokens.join(" ") : t("pistorm.tokens.none")}
+        </pre>
+        {card && card.unmanaged_cmdline.length > 0 && (
+          <>
+            <h3 style={{ fontSize: 13, margin: "12px 0 4px" }}>
+              {t("pistorm.tokens.yours")}
+            </h3>
+            <p className="faint" style={{ fontSize: 11, margin: "0 0 6px" }}>
+              {t("pistorm.tokens.yoursHint")}
+            </p>
+            <pre
+              className="muted"
+              style={{
+                fontSize: 12,
+                margin: 0,
+                padding: "8px 10px",
+                background: "var(--bg)",
+                border: "1px solid var(--border)",
+                borderRadius: 4,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-all",
+              }}
             >
-              <option value="res1080p">{t("pistorm.rtg.res1080p")}</option>
-              <option value="res720p">{t("pistorm.rtg.res720p")}</option>
-              <option value="res1024x768">{t("pistorm.rtg.res1024")}</option>
-              <option value="res800x600">{t("pistorm.rtg.res800")}</option>
-              <option value="disabled">{t("pistorm.rtg.disabled")}</option>
-            </select>
-          </div>
+              {card.unmanaged_cmdline.join(" ")}
+            </pre>
+          </>
+        )}
 
-          {/* Kickstart ROM */}
-          <div>
-            <label className="muted" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
-              {t("pistorm.kickstartLabel")}
-            </label>
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <button className="btn" onClick={() => void showPreview()} disabled={!cardPath || busy}>
+            {t("pistorm.preview.button")}
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={() => void save()}
+            disabled={!cardPath || busy}
+          >
+            {t("pistorm.save.button")}
+          </button>
+        </div>
+      </section>
+
+      {preview && (
+        <PreviewDialog
+          preview={preview}
+          onClose={() => setPreview(null)}
+          onConfirm={() => void save()}
+        />
+      )}
+
+      {/* 6 & 7 — declared, not pretended (spec §96). */}
+      <section className="card" style={{ marginBottom: 16, opacity: 0.75 }}>
+        <h2 style={{ fontSize: 16, marginTop: 0 }}>
+          {t("pistorm.wifi.heading")}{" "}
+          <span className="badge badge-muted" style={{ fontSize: 10 }}>
+            {t("common.comingLater")}
+          </span>
+        </h2>
+        <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>
+          {t("pistorm.wifi.explain")}
+        </p>
+      </section>
+    </div>
+  );
+}
+
+/**
+ * One profile, with the tokens it means.
+ *
+ * The tokens are fetched rather than restated, so the card cannot drift from
+ * what applying it would actually write — which is precisely how the previous
+ * cards came to promise MIPS figures nobody measured.
+ */
+function ProfileCard({
+  profile,
+  hardware,
+  onApply,
+}: {
+  profile: Emu68Profile;
+  hardware: PistormHardware;
+  onApply: () => void;
+}) {
+  const { t } = useTranslation();
+  const [tokens, setTokens] = useState<string[]>([]);
+
+  useEffect(() => {
+    pistormProfile(profile, hardware)
+      .then((preview) => setTokens(preview.tokens))
+      .catch(() => setTokens([]));
+  }, [profile, hardware]);
+
+  return (
+    <div
+      style={{
+        padding: "10px 12px",
+        borderRadius: 4,
+        border: "1px solid var(--border)",
+        background: "var(--bg)",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+        <strong style={{ fontSize: 13 }}>{t(`pistorm.profile.${profile}.title`)}</strong>
+        <button className="btn btn-sm" onClick={onApply}>
+          {t("pistorm.profile.apply")}
+        </button>
+      </div>
+      <p className="muted" style={{ margin: "4px 0 6px", fontSize: 11 }}>
+        {t(`pistorm.profile.${profile}.description`)}
+      </p>
+      <code className="faint" style={{ fontSize: 11, wordBreak: "break-all" }}>
+        {tokens.join(" ")}
+      </code>
+    </div>
+  );
+}
+
+/**
+ * The overclock, off unless somebody turns it on.
+ *
+ * Never in a profile and never a default: it is heat, it is the quality of the
+ * user's power supply, and on a Pi it sets the warranty bit.
+ */
+function OverclockField({
+  value,
+  onChange,
+}: {
+  value: FirmwareConfig["overclock"];
+  onChange: (next: FirmwareConfig["overclock"]) => void;
+}) {
+  const { t } = useTranslation();
+  const on = value !== null;
+
+  return (
+    <div style={{ marginTop: 14 }}>
+      <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13 }}>
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={(e) =>
+            onChange(
+              e.target.checked ? { arm_freq_mhz: 1300, over_voltage: 2, force_turbo: false } : null
+            )
+          }
+        />
+        {t("pistorm.overclock.enable")}
+      </label>
+      <p className="badge badge-warn" style={{ fontSize: 11, margin: "6px 0 0", display: "inline-block" }}>
+        {t("pistorm.overclock.warning")}
+      </p>
+      {on && value && (
+        <div style={{ display: "flex", gap: 12, marginTop: 8, flexWrap: "wrap" }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+            <span className="muted">arm_freq</span>
             <input
-              type="text"
-              value={config.custom_kickstart_path ?? "kick.rom"}
-              onChange={(e) => setConfig({ ...config, custom_kickstart_path: e.target.value })}
-              placeholder="kick.rom"
-              style={{ width: "100%", padding: "6px 8px", background: "var(--bg)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 4 }}
+              className="btn"
+              type="number"
+              min={600}
+              max={2400}
+              value={value.arm_freq_mhz}
+              onChange={(e) =>
+                onChange({ ...value, arm_freq_mhz: Number(e.target.value) || value.arm_freq_mhz })
+              }
+              style={{ width: "7em" }}
             />
-          </div>
-        </section>
-
-        {/* Right: CPU JIT & Fast RAM Parameters */}
-        <section className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <h2 style={{ fontSize: 15 }}>⚡ {t("pistorm.performanceHeading")}</h2>
-
-          {/* Fast RAM Slider */}
-          <div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-              <span className="muted">{t("pistorm.fastRamLabel")}</span>
-              <strong>{config.fast_ram_mb >= 1024 ? `${config.fast_ram_mb / 1024} GB` : `${config.fast_ram_mb} MB`}</strong>
-            </div>
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+            <span className="muted">over_voltage</span>
             <input
-              type="range"
-              min="128"
-              max="2048"
-              step="128"
-              value={config.fast_ram_mb}
-              onChange={(e) => setConfig({ ...config, fast_ram_mb: Number(e.target.value) })}
-              style={{ width: "100%", marginTop: 4 }}
+              className="btn"
+              type="number"
+              min={-16}
+              max={8}
+              value={value.over_voltage}
+              onChange={(e) => onChange({ ...value, over_voltage: Number(e.target.value) })}
+              style={{ width: "7em" }}
             />
-            <div className="faint" style={{ fontSize: 10, marginTop: 2 }}>
-              {t("pistorm.fastRamHint")}
-            </div>
-          </div>
-
-          {/* JIT Recompiler */}
-          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+          </label>
+          <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
             <input
               type="checkbox"
-              checked={config.enable_jit}
-              onChange={(e) => setConfig({ ...config, enable_jit: e.target.checked })}
+              checked={value.force_turbo}
+              onChange={(e) => onChange({ ...value, force_turbo: e.target.checked })}
             />
-            <div>
-              <strong>{t("pistorm.jitLabel")}</strong>
-              <div className="muted" style={{ fontSize: 11 }}>
-                {t("pistorm.jitHint")}
-              </div>
-            </div>
+            force_turbo
           </label>
+        </div>
+      )}
+    </div>
+  );
+}
 
-          {/* MMU */}
-          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              checked={config.enable_mmu}
-              onChange={(e) => setConfig({ ...config, enable_mmu: e.target.checked })}
-            />
-            <div>
-              <strong>{t("pistorm.mmuLabel")}</strong>
-              <div className="muted" style={{ fontSize: 11 }}>
-                {t("pistorm.mmuHint")}
-              </div>
-            </div>
-          </label>
+/** One row of the full option inventory, labelled with its real token name. */
+function OptionField({
+  field,
+  options,
+  storagePrefix,
+  onChange,
+}: {
+  field: OptionGroup["fields"][number];
+  options: Emu68Options;
+  storagePrefix: string;
+  onChange: (change: Partial<Emu68Options>) => void;
+}) {
+  const { t } = useTranslation();
+  const tokenName = field.token.replace("{prefix}", storagePrefix);
+  const value = options[field.key];
 
-          {/* SD Card Direct Storage */}
-          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              checked={config.enable_sd_storage}
-              onChange={(e) => setConfig({ ...config, enable_sd_storage: e.target.checked })}
-            />
-            <div>
-              <strong>{t("pistorm.sdStorageLabel")}</strong>
-              <div className="muted" style={{ fontSize: 11 }}>
-                {t("pistorm.sdStorageHint")}
-              </div>
-            </div>
-          </label>
-        </section>
+  return (
+    <label style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 13 }}>
+      {field.kind === "flag" ? (
+        <input
+          type="checkbox"
+          checked={value === true}
+          onChange={(e) => onChange({ [field.key]: e.target.checked } as Partial<Emu68Options>)}
+        />
+      ) : field.kind === "choice" ? (
+        <select
+          className="btn btn-sm"
+          value={String(value)}
+          onChange={(e) => onChange({ [field.key]: e.target.value } as Partial<Emu68Options>)}
+        >
+          {(field.choices ?? []).map((choice) => (
+            <option key={choice} value={choice}>
+              {t(`pistorm.choice.${field.key}.${choice}`)}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <input
+          className="btn btn-sm"
+          type="number"
+          value={value === null || value === undefined ? "" : String(value)}
+          placeholder={t("pistorm.advanced.unset")}
+          onChange={(e) =>
+            onChange({
+              [field.key]: e.target.value === "" ? null : Number(e.target.value),
+            } as Partial<Emu68Options>)
+          }
+          style={{ width: "7em" }}
+        />
+      )}
+      <code style={{ fontSize: 11 }}>{tokenName}</code>
+      <span className="muted" style={{ fontSize: 11 }}>
+        {t(`pistorm.option.${field.key}`)}
+      </span>
+    </label>
+  );
+}
+
+/** Both files, before and after — spec §92's preview step. */
+function PreviewDialog({
+  preview,
+  onClose,
+  onConfirm,
+}: {
+  preview: PistormPreview;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <div
+      role="dialog"
+      aria-label={t("pistorm.preview.title")}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.5)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 50,
+      }}
+      onClick={onClose}
+    >
+      <div
+        className="card"
+        style={{ maxWidth: 760, width: "90%", maxHeight: "80vh", overflowY: "auto" }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("pistorm.preview.title")}</h2>
+        <FileDiff
+          name="cmdline.txt"
+          before={preview.cmdline_before}
+          after={preview.cmdline_after}
+        />
+        <FileDiff name="config.txt" before={preview.config_before} after={preview.config_after} />
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+          <button className="btn" onClick={onClose}>
+            {t("common.cancel")}
+          </button>
+          <button className="btn btn-primary" onClick={onConfirm}>
+            {t("pistorm.save.button")}
+          </button>
+        </div>
       </div>
     </div>
   );
 }
+
+function FileDiff({ name, before, after }: { name: string; before: string; after: string }) {
+  const { t } = useTranslation();
+  const unchanged = before.trim() === after.trim();
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <h3 style={{ fontSize: 13, margin: "0 0 4px" }}>
+        <code>{name}</code>{" "}
+        {unchanged && (
+          <span className="badge badge-muted" style={{ fontSize: 10 }}>
+            {t("pistorm.preview.unchanged")}
+          </span>
+        )}
+      </h3>
+      {!unchanged && (
+        <div style={{ display: "grid", gap: 6 }}>
+          <pre className="muted" style={diffStyle}>
+            {before || t("pistorm.preview.absent")}
+          </pre>
+          <pre style={diffStyle}>{after}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const diffStyle: React.CSSProperties = {
+  fontSize: 11,
+  margin: 0,
+  padding: "6px 8px",
+  background: "var(--bg)",
+  border: "1px solid var(--border)",
+  borderRadius: 4,
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-all",
+  maxHeight: 180,
+  overflowY: "auto",
+};

@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### The PiStorm screen tells the truth now (2026-08-12)
+
+#### Fixed
+- **Four controls that did nothing are gone**, because the things they claimed
+  to switch do not exist: Emu68 *is* a JIT engine and cannot be turned off; it
+  emulates no MMU, so WHDLoad runs in NOMMU mode; it maps Fast RAM itself, so
+  there is no size to set; and the storage driver is called `brcm-sdhc.device`
+  or `brcm-emmc.device`, never `emu68-sd.device`. ART was writing three options
+  Emu68 has never read. A card written by an older ART has them removed the
+  next time you save.
+- **The profile cards no longer quote numbers nobody measured.** Each one now
+  lists the exact options it sets, and you can read them before you apply it.
+
+#### Added
+- **Your hardware is three answers, not one**: which Amiga, which PiStorm
+  board, which Raspberry Pi — each narrowing the next. ART then tells you which
+  Emu68 build to use, what your storage driver is called, and what is worth
+  knowing about that combination, from the CM4's eMMC to why a poor power
+  supply looks exactly like a slow PiStorm.
+- **Every option, with the name of what it writes** beside it, and the whole
+  `cmdline.txt` line beneath. Your own boot parameters are shown too,
+  read-only — so you can see for yourself that they survive.
+- **Show me the change** before saving: both files, before and after, in full.
+- Options that mean nothing on your machine are not shown. The slow-RAM ones on
+  an A1200 are not a harmless extra — they are the documented cause of a wrong
+  memory report.
+
+Not yet booted on real hardware. What ART writes is what the Emu68
+documentation says; whether a given machine likes a given set of options is a
+separate claim, and not one ART is making.
+
 ### The whole program can be made bigger, and it remembers everything (2026-08-12)
 
 #### Added

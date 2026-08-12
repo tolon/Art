@@ -628,78 +628,159 @@
     }
   },
   "pistorm": {
-    "title": "PiStorm & Emu68 Studio",
-    "selectSdTitle": "Select PiStorm / Emu68 MicroSD Card Root Folder",
+    "title": "PiStorm & Emu68 Card",
+    "intro": "Every control here writes a documented Emu68 option or a Raspberry Pi firmware setting — and shows you which one. Both files are merged into what is already on the card, never rewritten.",
+    "chooseCardTitle": "Choose the card's boot folder",
+    "hardware": {
+      "heading": "1. Hardware",
+      "intro": "Three answers, because what a setup can do depends on all three: the kernel follows the board, the storage driver's name follows the Pi, and which options apply at all follows the Amiga.",
+      "amiga": "Amiga",
+      "variant": "PiStorm board",
+      "pi": "Raspberry Pi"
+    },
+    "derived": {
+      "kernel": "Emu68 build",
+      "storageDevice": "Storage driver",
+      "piRam": "Pi memory",
+      "ramFixed": "{{mb}} MB",
+      "ramRange": "{{min}}–{{max}} MB depending on the model"
+    },
+    "note": {
+      "pi-not-guaranteed": "This Pi is reported working on this board by users, but the project does not guarantee it.",
+      "cm4-needs-lite-for-sd-card": "A Compute Module 4 with onboard eMMC cannot use the microSD slot at the same time. The usual recommendation is a CM4 Lite with no eMMC.",
+      "pi-physical-fit": "A 3B or 3B+ needs its ports removed, or a taller stacking header, to fit this board. A Zero 2 W or 3A+ fits as it is.",
+      "no-activity-led": "The 3B has no activity-LED support here.",
+      "needs-cpu-adapter": "This machine needs a CPU adapter to take the board.",
+      "power-supply-quality": "Use a good power supply. If the 5 V rail sags the Pi quietly underclocks itself, which looks exactly like a slow PiStorm and is the commonest cause of one.",
+      "ram-beyond-what-amiga-os-uses": "AmigaOS does not use more than 2 GB of Fast RAM, so a Pi with more is not buying the Amiga anything."
+    },
+    "card": {
+      "heading": "2. The card",
+      "choose": "Choose folder…",
+      "none": "No folder chosen",
+      "kernelFound": "Emu68.img is on the card.",
+      "kernelMissing": "No Emu68.img — the card will not start until the kernel is on it.",
+      "kickstartsFound": "Kickstart images found: {{list}}",
+      "kickstartsMissing": "No Kickstart image found on the card.",
+      "configSets": "Named firmware sets: {{list}}"
+    },
     "scan": {
-      "summary": "Scanned MicroSD: {{firmware}}, {{kickstart}}",
-      "firmwareFound": "✓ Emu68 Firmware Found",
-      "firmwareMissing": "⚠️ Emu68 kernel missing",
-      "kickstartFound": "✓ Kickstart ({{name}})",
-      "kickstartMissing": "⚠️ Kickstart ROM missing"
+      "found": "Read {{path}}.",
+      "notACard": "{{path}} has no Emu68 kernel and no config.txt, so it does not look like a PiStorm card yet."
     },
-    "msg": {
-      "saved": "✓ Successfully saved PiStorm config.txt and cmdline.txt to MicroSD card!",
-      "saveFailed": "Failed to save: {{error}}"
+    "kickstart": {
+      "label": "3. Kickstart",
+      "hint": "Written as the initramfs line in config.txt. The file itself lives on the card; ART never ships one."
     },
-    "sdCardLabel": "MicroSD Card:",
-    "working": "Working on PiStorm configuration…",
-    "profilesHeading": "Parametric Usage Profiles",
-    "profilesIntro": "PiStorm transforms your Amiga into a high-performance workstation while preserving custom chipset compatibility for games:",
-    "selectSd": "Select MicroSD Card…",
-    "saveSync": "Save & Sync PiStorm SD",
-    "hardwareHeading": "Hardware & RTG Display Setup",
-    "boardLabel": "PiStorm Hardware Board:",
-    "board": {
-      "a500a2000": "PiStorm A500 / A2000 (DIP-64 Socket)",
-      "a1200lite": "PiStorm32-Lite (Amiga 1200 Trapdoor)",
-      "a600": "PiStorm600 (Amiga 600 PLCC)"
+    "profiles": {
+      "heading": "4. Ready-made settings",
+      "intro": "Each one is a set of Emu68 options, listed under it. Applying a profile replaces the options; nothing else on the card changes until you save."
     },
-    "rtgLabel": "RTG Video Output (Picasso96 HDMI):",
-    "rtg": {
-      "res1080p": "1920x1080 @ 60Hz (Full HD TrueColor 32-bit)",
-      "res720p": "1280x720 @ 60Hz (HD Ready TrueColor 32-bit)",
-      "res1024": "1024x768 @ 60Hz (Classic 4:3 RTG)",
-      "res800": "800x600 @ 60Hz",
-      "disabled": "Disabled (Native Amiga Video Output Only)"
-    },
-    "kickstartLabel": "Kickstart ROM File on SD Card:",
-    "performanceHeading": "CPU Performance & Memory Map",
-    "fastRamLabel": "Fast RAM Allocation:",
-    "fastRamHint": "Fast RAM is mapped directly into Amiga 32-bit address space.",
-    "jitLabel": "Enable JIT Dynamic Recompiler (Emu68 JIT)",
-    "jitHint": "Translates 68k instructions to ARM64 on the fly for ~800+ MIPS.",
-    "mmuLabel": "Enable 68040 MMU Emulation",
-    "mmuHint": "Required for WHDLoad MuForce and advanced memory protections.",
-    "sdStorageLabel": "Enable High-Speed MicroSD Storage (`emu68-sd.device`)",
-    "sdStorageHint": "High speed hard drive access (20+ MB/s) directly from SD card partitions.",
     "profile": {
-      "workstation": {
-        "title": "AmigaOS Ultra Workstation",
-        "badge": "Recommended for AmigaOS & Productivity",
-        "description": "Maximum JIT performance (~800+ MIPS) with 1080p TrueColor RTG desktop. Instant Workbench loading, web browsing, raytracing, and high productivity.",
-        "feature1": "~800+ MIPS CPU speed (faster than 68060)",
-        "feature2": "1080p 32-bit TrueColor RTG HDMI output",
-        "feature3": "1 GB to 2 GB Fast RAM for multitasking",
-        "feature4": "High-speed emu68-sd.device disk access (20+ MB/s)"
+      "apply": "Use this",
+      "applied": "{{name}} applied. Nothing is written until you save.",
+      "performance": {
+        "title": "Performance",
+        "description": "The fastest Workbench and RTG, for work where exact timing does not matter."
       },
-      "balanced": {
-        "title": "Balanced Daily & WHDLoad Gaming",
-        "badge": "Optimal Daily Driver & Games",
-        "description": "High JIT performance with WHDLoad MMU and cache flush optimizations. RTG desktop with automatic native OCS/ECS/AGA switching for games.",
-        "feature1": "99% WHDLoad game compatibility",
-        "feature2": "Automatic screen-mode switching (RTG ↔ PAL/NTSC)",
-        "feature3": "512 MB Fast RAM allocation",
-        "feature4": "WHDLoad MMU-safe cache flushes"
+      "daily": {
+        "title": "Everyday & WHDLoad",
+        "description": "Balanced defaults. WHDLoad runs in NOMMU mode — Emu68 emulates no MMU, so there is no other mode to run in."
       },
-      "classic": {
-        "title": "Classic & Demoscene Compatibility",
-        "badge": "Cycle-Exact & Demos",
-        "description": "Conservative JIT execution for timing-sensitive demoscene productions and floppy-based legacy software.",
-        "feature1": "Strict timing preservation",
-        "feature2": "128 MB to 256 MB Fast RAM footprint",
-        "feature3": "Native 15 kHz Amiga video pass-through priority",
-        "feature4": "Maximum legacy software stability"
+      "compatibility": {
+        "title": "Compatibility & demoscene",
+        "description": "Closer to the original bus timing: accuracy instead of speed. On an A500-family machine this also moves the trapdoor memory to CHIP."
+      },
+      "diagnostics": {
+        "title": "Diagnostics",
+        "description": "For hunting a problem, not for using the machine. Verbose logging slows everything down."
       }
+    },
+    "display": {
+      "heading": "5. Display & clock",
+      "auto": "Let the firmware ask the monitor",
+      "dmt1080p60": "1920×1080 at 60 Hz (monitor timings)",
+      "cea1080p50": "1920×1080 at 50 Hz (television, PAL)",
+      "cea720p60": "1280×720 at 60 Hz (television)",
+      "disableBluetooth": "Turn off the Pi's Bluetooth"
+    },
+    "overclock": {
+      "enable": "Run the Pi faster than it is sold to run",
+      "warning": "Heat, and the quality of your power supply. On a Raspberry Pi this sets the warranty bit. Never part of a profile — only ever something you turn on yourself."
+    },
+    "advanced": {
+      "heading": "6. Every option",
+      "intro": "The full Emu68 inventory, each row labelled with the token it writes. Options that mean nothing on the hardware above are not shown.",
+      "unset": "not set"
+    },
+    "group": {
+      "storage": "Storage",
+      "cpu": "CPU",
+      "memory": "Memory",
+      "rom": "ROM",
+      "rtg": "RTG video",
+      "timing": "Timing",
+      "floppy": "Floppy",
+      "board": "Board",
+      "diagnostics": "Diagnostics"
+    },
+    "option": {
+      "storage_unit0": "how the Amiga sees the card",
+      "storage_verbose": "how much the storage driver logs (0–2)",
+      "storage_low_speed": "stay off the 50 MHz mode, for a card that will not take it",
+      "storage_clock_mhz": "clock override, in MHz",
+      "vbr_move": "vector table into fast RAM",
+      "nofpu": "no FPU (rare, for compatibility)",
+      "enable_cache": "JIT cache active from startup",
+      "limit_2g": "cap mapped RAM at 2 GB",
+      "z2_ram_size": "Zorro II RAM in MB (0, 1, 2, 4 or 8)",
+      "enable_c0_slow": "slow memory at $C0",
+      "enable_c8_slow": "slow memory at $C8",
+      "enable_d0_slow": "slow memory at $D0",
+      "move_slow_to_chip": "trapdoor 512K as CHIP RAM",
+      "copy_rom_kb": "copy ROM into fast RAM, in KB",
+      "checksum_rom": "recalculate the ROM checksum",
+      "vc4_mem_mb": "video memory reported to Picasso96, in MB",
+      "chip_slowdown": "approximate the original bus timing",
+      "cs_dist": "how coarsely (1–8)",
+      "swap_df0_with": "swap DF0 with another drive (1, 2 or 3)",
+      "one_slot": "force the single-slot protocol",
+      "debug": "JIT statistics",
+      "disassemble": "disassembly output",
+      "async_log": "log without waiting",
+      "fast_serial": "faster serial output",
+      "buptest_kb": "memory test at startup, in KB",
+      "bupiter": "how many passes of it"
+    },
+    "choice": {
+      "storage_unit0": {
+        "off": "not visible",
+        "read-only": "visible, read-only",
+        "read-write": "writable"
+      }
+    },
+    "tokens": {
+      "heading": "What will be written",
+      "none": "No Emu68 options set.",
+      "yours": "Your own boot parameters",
+      "yoursHint": "None of ART's business, and left exactly as they are. Without root= the Pi does not start at all."
+    },
+    "preview": {
+      "button": "Show me the change",
+      "title": "Before saving",
+      "unchanged": "unchanged",
+      "absent": "(no such file yet)"
+    },
+    "save": {
+      "button": "Save to the card"
+    },
+    "saved": {
+      "withBackup": "Saved. The previous version is at {{path}}.",
+      "plain": "Saved."
+    },
+    "wifi": {
+      "heading": "WiFi & network",
+      "explain": "WiFi on a PiStorm is an Amiga-side matter, not a boot option: wifipi.device with Roadshow, configured in DEVS:NetInterfaces on the system volume. It belongs to building the volumes, which ART cannot do yet — so there is nothing here to fill in rather than a form that would write nowhere."
     }
   },
   "gotek": {

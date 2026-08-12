@@ -25,6 +25,73 @@ what fixed it (with the test that proves it).
 
 _(ART-075 was open here; it is fixed — see [Phase 2a](#phase-2a) below.)_
 
+**ART-090** 🟠 **The PiStorm screen offered controls Emu68 does not have, and wrote tokens it does not read** — *fixed 2026-08-12*
+`core/pistorm.rs` · `src/pages/PistormStudio.tsx` · `src/i18n/*.json` · Four
+things on that screen were not merely wrong, they were invented:
+
+- **"Enable JIT Dynamic Recompiler."** Emu68 *is* a JIT engine. The official
+  FAQ's words are "Emu68 is exclusively a Just-In-Time (JIT) engine" — it
+  cannot be turned off short of powering the machine down. The real, adjacent
+  option is `enable_cache` (JIT cache active from startup).
+- **"Enable 68040 MMU Emulation — required for WHDLoad MuForce."** Emu68
+  documents no MMU emulation at all; the MMU is famously not emulated and
+  WHDLoad runs in NOMMU mode. This one actively misled: a user chasing a
+  WHDLoad problem would have turned it on and believed something had changed.
+- **A Fast RAM slider**, 1 GB by default. Emu68 maps RAM automatically. There
+  is no size to set. The real memory knobs are `limit_2g`, `z2_ram_size`, the
+  `enable_c*_slow` family and `move_slow_to_chip`.
+- **`emu68-sd.device`**, named in the UI as the "high-speed MicroSD" driver.
+  The real driver is `brcm-sdhc.device` on the Pi 3 family and
+  `brcm-emmc.device` on the Pi 4 / CM4. The `emu68-` prefix belongs to the RTG
+  card (`emu68-vc4.card`). This name reaches a user's mountlist, where a wrong
+  one mounts nothing.
+
+What was written to the card followed: `emu68.jit`, `emu68.mmu` and
+`buptest.fastram_size` — three tokens Emu68 has never read — plus `sd.unit0=0`,
+when that option takes `off`, `ro` or `rw`. Also `hdmi_cvt` and three
+`framebuffer_*` keys in `config.txt`, for an "RTG resolution" Emu68 does not
+take from there.
+
+The profile cards claimed "99 % WHDLoad compatibility", "~800+ MIPS", "512 MB
+Fast RAM" and "20+ MB/s" — none measured, none reproducible.
+
+Spec §10 and §89 in the one place a user is most likely to trust ART, and worse
+than the ADF equivalents: this screen's output goes onto a card that boots
+somebody's real machine.
+
+**Fixed 2026-08-12.** `core/pistorm/` is three modules with 58 tests:
+
+- `hardware.rs` — the matrix the screen models. A setup is **three** choices,
+  not one: Amiga → PiStorm board → Raspberry Pi, each filtering the next.
+  Everything downstream derives from it — the Emu68 release archive, the
+  storage device name in every generated hint, which tokens are meaningful, and
+  the notes (CM4 eMMC, 3B/3B+ physical fit, power supply, a Pi that is reported
+  working rather than guaranteed).
+- `options.rs` — one field per documented `cmdline.txt` token and nothing else.
+  `every_profile_is_made_of_real_tokens_only` is the test that keeps it that
+  way. Slow-RAM tokens are **dropped**, not hidden, on an A600/A1200: the Emu68
+  FAQ's own answer to "my A1200 reports the wrong RAM" is to remove them.
+- `firmware.rs` — `config.txt`: kernel, `initramfs`, display presets with their
+  real `hdmi_group`/`hdmi_mode` numbers shown on screen, and an overclock that
+  is opt-in only and never part of a profile.
+
+Both files are still merged, never regenerated, and
+`saving_never_loses_the_parameter_the_pi_boots_by` pins the one that matters.
+A card written by an older ART has the three fictional tokens removed on its
+next save.
+
+The screen prints the token beside every control and the whole `cmdline.txt`
+line beneath them, plus the user's own boot parameters read-only — which is the
+only way somebody can see for themselves that a control does what it says.
+
+Source: `ART-brief-pistorm-studio-v2.md` (Emu68 Options and SD_Preparation
+docs, pistorm.github.io hardware page and Emu68 FAQ, wiki.amiga.org
+Pistorm-500 / Pistorm32-Lite, MultibootOS 2.2). Found by the user, 2026-08-12.
+
+**Not yet verified on real hardware.** No card built by this screen has been
+booted. The tokens are what the documentation says; whether a given machine
+likes a given set of them is a separate claim ART is not making.
+
 **ART-089** 🟠 **Session restore could not work, and destroyed the session it was meant to restore** — *fixed 2026-08-12*
 `src/pages/FileManager.tsx` · `src/App.tsx` · `App` starts the settings store
 loading and deliberately does not await it — "non-blocking async

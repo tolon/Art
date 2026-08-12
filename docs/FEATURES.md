@@ -231,7 +231,12 @@ checks the image comes back byte for byte.
 | Kickstart ROM identification | §32 | ✅ | `core/rom.rs` |
 | Gotek scan + FlashFloppy config | §37, §39 | ✅ | `core/gotek.rs` |
 | Gotek bulk workflow | §38 | ⏳ | — |
-| PiStorm config inspect/edit | §40 | ✅ | `core/pistorm.rs` |
+| PiStorm hardware matrix (Amiga × board × Pi) | §40 | ✅ | `core/pistorm/hardware.rs` — kernel archive, storage device name, token gating and per-combination notes all derive from it |
+| PiStorm `cmdline.txt` options | §40 | ✅ | `core/pistorm/options.rs` — one field per documented Emu68 token, merged never regenerated. Four profiles, each the tokens it writes (ART-090) |
+| PiStorm `config.txt` firmware | §40 | ✅ | `core/pistorm/firmware.rs` — kernel, `initramfs`, display presets, opt-in overclock. Merged; the user's own lines survive |
+| PiStorm card verified on real hardware | §40 | ⏳ | no card built by this screen has been booted |
+| PiStorm WiFi / network pre-seeding | §40, SD G14 | ⏳ | Amiga-side (`wifipi.device`, `DEVS:NetInterfaces`), so it belongs to volume building — declared on screen rather than offered |
+| Multiboot `config_<name>.txt` sets | SD G16 | 🟡 | listed by `core/pistorm::list_config_sets`; creating and activating them is not built |
 | Raw device writes | §57 | ⏳ | deliberately absent until double-confirm UI exists |
 
 ### Collection & analysis
