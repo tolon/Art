@@ -984,6 +984,10 @@
       "newFolder": {
         "prompt": "Diskteki klasör adı"
       },
+      "markMask": {
+        "mark": "Şu kalıba uyanları işaretle (* ve ? kullanın)",
+        "unmark": "Şu kalıba uyanların işaretini kaldır (* ve ? kullanın)"
+      },
       "rename": {
         "prompt": "Yeni ad",
         "confirmIcon": "{{name}} bir simgeye sahip ({{icon}}). {{newName}}.info olarak onu da yeniden adlandırmak ister misiniz? Yapılmazsa {{newName}} Workbench'te görünmeyecek."

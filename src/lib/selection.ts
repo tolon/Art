@@ -15,6 +15,7 @@
 // touches React state, so a caller (a click handler, a keyboard hook) only
 // has to thread the two pieces of state through.
 
+import { matchesMask } from "@/lib/mask";
 import type { PanelEntry } from "@/lib/panel";
 
 export interface SelectionUpdate {
@@ -102,6 +103,61 @@ export function toggleSelectAll(entries: PanelEntry[], selected: Set<string>): S
   const allSelected = entries.length > 0 && entries.every((e) => selected.has(e.name));
   if (allSelected) return { selected: new Set(), anchor: null };
   return { selected: new Set(entries.map((e) => e.name)), anchor: null };
+}
+
+/**
+ * Num + / Num − — mark, or unmark, everything matching a filename mask.
+ *
+ * The mask is the same `*`/`?` matcher the filter box uses (`@/lib/mask`), so
+ * a user who has learned one has learned both. It **adds to** the selection
+ * rather than replacing it: Total Commander's Num+ is how a selection gets
+ * built up out of several patterns, and a version that started over each time
+ * would make "*.adf then *.hdf" impossible.
+ */
+export function markByMask(
+  entries: PanelEntry[],
+  selected: Set<string>,
+  mask: string,
+  mark: boolean
+): SelectionUpdate {
+  const next = new Set(selected);
+  for (const entry of entries) {
+    if (!matchesMask(entry.name, mask)) continue;
+    if (mark) next.add(entry.name);
+    else next.delete(entry.name);
+  }
+  return { selected: next, anchor: null };
+}
+
+/**
+ * Num * — invert the selection.
+ *
+ * Over the entries the pane is *showing*, which is what makes it compose with
+ * the filter box: mask the pane to `*.lha`, invert, and you have every `.lha`
+ * that was not already marked — not every file on the disk.
+ */
+export function invertSelection(entries: PanelEntry[], selected: Set<string>): SelectionUpdate {
+  const next = new Set<string>();
+  for (const entry of entries) {
+    if (!selected.has(entry.name)) next.add(entry.name);
+  }
+  return { selected: next, anchor: null };
+}
+
+/**
+ * Space — mark the entry under the cursor, and stay where you are.
+ *
+ * The difference from `insertToggle` is the whole point of having both: Insert
+ * marks and steps down, which is how a run of files gets marked; Space marks
+ * without moving, which is how one file gets marked without losing your place.
+ * Total Commander has both for that reason.
+ */
+export function spaceToggle(selected: Set<string>, cursor: string | null): SelectionUpdate {
+  if (!cursor) return { selected, anchor: cursor };
+  const next = new Set(selected);
+  if (next.has(cursor)) next.delete(cursor);
+  else next.add(cursor);
+  return { selected: next, anchor: cursor };
 }
 
 /** The entries a selection actually names, in pane order. */

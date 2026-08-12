@@ -984,6 +984,10 @@
       "newFolder": {
         "prompt": "Folder name on the disk"
       },
+      "markMask": {
+        "mark": "Mark files matching (use * and ?)",
+        "unmark": "Unmark files matching (use * and ?)"
+      },
       "rename": {
         "prompt": "New name",
         "confirmIcon": "{{name}} has an icon ({{icon}}). Rename it to {{newName}}.info as well? Without it, {{newName}} will not show up on Workbench."

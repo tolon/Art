@@ -15,6 +15,8 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 
+import { searchCharacter } from "@/lib/quickSearch";
+
 export interface FunctionAction {
   key: string;
   label: string;
@@ -274,6 +276,135 @@ export function usePaneHistoryKeys(
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onBack, onForward, active]);
+}
+
+/**
+ * The marking keys that are not Insert (brief §3.2).
+ *
+ * - **Space** marks the row under the cursor and stays there. Insert marks and
+ *   steps down; both exist because both are used, for different things.
+ * - **Num +** / **Num −** mark and unmark by filename mask,
+ *   **Num \*** inverts.
+ *
+ * The numpad keys are matched on `event.code`, not `event.key`, and that is
+ * load-bearing: `+`, `-` and `*` from the main keyboard are ordinary
+ * characters that must reach type-to-search. Total Commander draws the same
+ * line, for the same reason.
+ */
+export function useMarkKeys(
+  {
+    onSpace,
+    onMarkByMask,
+    onUnmarkByMask,
+    onInvert,
+  }: {
+    onSpace: () => void;
+    onMarkByMask: () => void;
+    onUnmarkByMask: () => void;
+    onInvert: () => void;
+  },
+  active: boolean
+) {
+  useEffect(() => {
+    if (!active) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      const handler =
+        event.key === " "
+          ? onSpace
+          : event.code === "NumpadAdd"
+            ? onMarkByMask
+            : event.code === "NumpadSubtract"
+              ? onUnmarkByMask
+              : event.code === "NumpadMultiply"
+                ? onInvert
+                : null;
+      if (!handler) return;
+      if (isShortcutBlocked(event)) return;
+
+      event.preventDefault();
+      handler();
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onSpace, onMarkByMask, onUnmarkByMask, onInvert, active]);
+}
+
+/**
+ * Type-to-search: letters move the cursor to the next matching name
+ * (brief §3.2, the user's `AltSearch=1`).
+ *
+ * Only the keystrokes come from here; every decision about what a letter does
+ * lives in `@/lib/quickSearch`. Escape ends a search, and Backspace is handed
+ * to the caller rather than acted on, because whether it shortens the search
+ * or goes up a directory depends on whether a search is running — a question
+ * this hook has no business knowing the answer to.
+ */
+export function useTypeAhead(
+  {
+    onCharacter,
+    onEscape,
+  }: {
+    onCharacter: (character: string) => void;
+    onEscape: () => void;
+  },
+  active: boolean
+) {
+  useEffect(() => {
+    if (!active) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (isShortcutBlocked(event)) return;
+
+      if (event.key === "Escape") {
+        onEscape();
+        return;
+      }
+
+      const character = searchCharacter(event);
+      if (character === null) return;
+
+      event.preventDefault();
+      onCharacter(character);
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onCharacter, onEscape, active]);
+}
+
+/**
+ * Alt+F1 and Alt+F2 — open the left and right pane's source box.
+ *
+ * Total Commander's own keys for "change this pane's drive", and the last
+ * mouse-only affordance on the screen once the button strip went behind a
+ * setting: without them a keyboard user could walk anywhere but could not
+ * change what a pane was pointed at.
+ *
+ * Alt is the modifier this pair wants, so the guard is spelled out here
+ * rather than adding a third escape hatch to `isShortcutBlocked` — see
+ * `usePaneHistoryKeys`, which has the same shape for the same reason.
+ */
+export function useSourceComboKeys(
+  { onLeft, onRight }: { onLeft: () => void; onRight: () => void },
+  active: boolean
+) {
+  useEffect(() => {
+    if (!active) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (!event.altKey || event.ctrlKey || event.metaKey) return;
+      if (event.key !== "F1" && event.key !== "F2") return;
+
+      event.preventDefault();
+      if (event.key === "F1") onLeft();
+      else onRight();
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onLeft, onRight, active]);
 }
 
 /**

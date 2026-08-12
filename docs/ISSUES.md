@@ -25,6 +25,28 @@ what fixed it (with the test that proves it).
 
 _(ART-075 was open here; it is fixed — see [Phase 2a](#phase-2a) below.)_
 
+**ART-087** 🔵 **Space marks a row but does not compute a directory's size**
+`src/pages/FileManager.tsx` · `src/lib/selection.ts::spaceToggle` · The brief
+(§3.2) asks for Total Commander's `CountSpace=1`: Space on a **directory**
+marks it *and* walks it, replacing the `<DIR>` in the Size column with the real
+total. ART marks; it does not count.
+
+The reason is the phase's own rule. There is no primitive to count with:
+`panel_list_local` lists one level, `scan_collection_directory` looks for Amiga
+files rather than totalling bytes, and `volume_plan_copy` computes a size only
+against a destination volume. A recursive walk is new engine capability — small
+and read-only, but new — and phase 2b's plan says a gap found on the way is
+filed rather than smuggled in.
+
+Fixing it means one command per side of the fence: a depth-limited local walk
+(the same guards `scan_collection_directory` already has — bounded depth, no
+symlink following) and a volume-side directory total, both as jobs, because a
+directory of forty thousand files must not block the command thread and must
+be stoppable. The Size column then needs a third state — not just a number or
+`<DIR>`, but "counting…".
+
+Found while building phase 2b task 5.
+
 **ART-086** 🔵 **Every path in Settings has to be typed by hand**
 `src/pages/Settings.tsx` · "WinUAE Path" and "Collection Directory" are plain
 `<input>`s with a placeholder. ART already opens native pickers everywhere else

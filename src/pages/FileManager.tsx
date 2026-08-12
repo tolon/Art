@@ -53,11 +53,14 @@ import {
   FunctionKeyBar,
   useFunctionKeys,
   useInsertToggle,
+  useMarkKeys,
   useNavigationKeys,
   usePaneHistoryKeys,
   usePaneTab,
   useRefreshKey,
   useSelectAll,
+  useSourceComboKeys,
+  useTypeAhead,
   type FunctionAction,
 } from "@/components/files/FunctionKeys";
 import { fileTextColorVar, TcRowIcon, UpDirIcon } from "@/components/files/TcIcon";
@@ -74,6 +77,7 @@ import { planFunctionKeys } from "@/lib/functionKeyPlan";
 import { onJobProgress, type JobProgress } from "@/lib/jobs";
 import { filterEntries } from "@/lib/mask";
 import { planMove } from "@/lib/movePlan";
+import { extendSearch, shortenSearch } from "@/lib/quickSearch";
 import { parseCommandLine } from "@/lib/commandLine";
 import {
   formatBytes,
@@ -111,8 +115,11 @@ import {
   emptySelectionUpdate,
   entriesIn,
   insertToggle,
+  invertSelection,
+  markByMask,
   selectOnly,
   selectRange,
+  spaceToggle,
   toggleOne,
   toggleSelectAll,
   type SelectionUpdate,
@@ -503,6 +510,14 @@ export function FileManager() {
    * the whole screen, acting on whichever pane is focused — Total Commander
    * has one too, for the same reason. */
   const [commandLine, setCommandLine] = useState("");
+  /** What has been typed into type-to-search, and the timer that ends it. */
+  const [search, setSearch] = useState("");
+  const searchTimer = useRef<number | null>(null);
+  /** The two source combos, so Alt+F1 / Alt+F2 can open them. */
+  const sourceCombos = {
+    left: useRef<HTMLSelectElement>(null),
+    right: useRef<HTMLSelectElement>(null),
+  };
   /**
    * Each pane's own back/forward list (`@/lib/paneHistory`).
    *
@@ -638,6 +653,40 @@ export function FileManager() {
   const applySelection = useCallback((side: Side, update: SelectionUpdate) => {
     setSelection((s) => ({ ...s, [side]: update.selected }));
     setAnchor((a) => ({ ...a, [side]: update.anchor }));
+  }, []);
+
+  /**
+   * Move a pane's cursor without touching what is marked.
+   *
+   * Type-to-search's whole contract: a user typing a name to get to it must
+   * not lose the selection they spent a minute building. `applySelection`
+   * cannot do this — it sets both — which is exactly why this exists.
+   */
+  const moveCursor = useCallback((side: Side, name: string) => {
+    setAnchor((a) => ({ ...a, [side]: name }));
+  }, []);
+
+  /** The names a pane is showing, in the order it is showing them. */
+  const paneNames = useCallback(
+    (side: Side): string[] => paneEntries(side).map((entry) => entry.name),
+    [paneEntries]
+  );
+
+  /**
+   * Note what has been typed into the type-to-search prefix, and arm the idle
+   * timer that ends the search.
+   *
+   * The timer is the only stateful half of the feature — every decision about
+   * what a letter *does* is in `@/lib/quickSearch`, where it is tested. One
+   * and a half seconds is Total Commander's own feel: long enough to think
+   * about the next letter of a name, short enough that a search you have
+   * forgotten about is not still swallowing keys.
+   */
+  const noteSearch = useCallback((prefix: string) => {
+    setSearch(prefix);
+    if (searchTimer.current !== null) window.clearTimeout(searchTimer.current);
+    searchTimer.current =
+      prefix === "" ? null : window.setTimeout(() => setSearch(""), 1500);
   }, []);
 
   /**
@@ -2608,6 +2657,22 @@ export function FileManager() {
     }
   }
 
+  /**
+   * Num + / Num − — mark or unmark by filename mask.
+   *
+   * The same `*`/`?` matcher the filter box uses, so a user who has learned
+   * one has learned both, and it *adds to* the selection rather than
+   * replacing it — see `markByMask` for why that matters.
+   */
+  async function markBy(mark: boolean) {
+    const mask = window.prompt(
+      mark ? t("files.dialog.markMask.mark") : t("files.dialog.markMask.unmark"),
+      "*.*"
+    );
+    if (!mask) return;
+    applySelection(focused, markByMask(paneEntries(focused), selection[focused], mask, mark));
+  }
+
   /** Drag a local file out to Explorer. */
   async function dragOut(entry: PanelEntry) {
     if (!entry.path || entry.is_dir) return;
@@ -2636,6 +2701,7 @@ export function FileManager() {
       // it refuses anything it does not recognise rather than guessing — so
       // re-picking the "not on a listed drive" placeholder navigates nowhere
       // instead of dropping the pane on the first mount in the list.
+      sourceRef: sourceCombos[side],
       onChooseSource: (value: string) => {
         const choice = parsePaneSource(value);
         if (!choice) return;
@@ -2896,7 +2962,57 @@ export function FileManager() {
         const entry = paneEntries(focused).find((candidate) => candidate.name === name);
         if (entry) void activate(focused, entry);
       },
-      onUp: () => void goUp(focused),
+      // Backspace shortens a running search before it means "up one level" —
+      // Total Commander's own precedence, and the only sane one: a user
+      // half-way through typing a name who mistypes expects to fix it, not to
+      // be thrown into the parent directory.
+      onUp: () => {
+        if (search !== "") {
+          const step = shortenSearch(paneNames(focused), search);
+          noteSearch(step.prefix);
+          if (step.match) moveCursor(focused, step.match);
+          return;
+        }
+        void goUp(focused);
+      },
+    },
+    keysActive
+  );
+
+  // Space marks where you stand; the numpad marks by mask and inverts.
+  useMarkKeys(
+    {
+      onSpace: () => applySelection(focused, spaceToggle(selection[focused], anchor[focused])),
+      onMarkByMask: () => void markBy(true),
+      onUnmarkByMask: () => void markBy(false),
+      onInvert: () =>
+        applySelection(focused, invertSelection(paneEntries(focused), selection[focused])),
+    },
+    keysActive
+  );
+
+  // Letters move the cursor to the next matching name. The cursor only — a
+  // search must never change what is marked, or typing a name would quietly
+  // throw away a selection the user spent a minute building.
+  useTypeAhead(
+    {
+      onCharacter: (character) => {
+        const step = extendSearch(paneNames(focused), search, character, anchor[focused]);
+        if (!step.accepted) return;
+        noteSearch(step.prefix);
+        if (step.match) moveCursor(focused, step.match);
+      },
+      onEscape: () => noteSearch(""),
+    },
+    keysActive
+  );
+
+  // Alt+F1 / Alt+F2 — the last mouse-only affordance left on the screen once
+  // the button strip went behind a setting.
+  useSourceComboKeys(
+    {
+      onLeft: () => sourceCombos.left.current?.focus(),
+      onRight: () => sourceCombos.right.current?.focus(),
     },
     keysActive
   );
@@ -3268,6 +3384,7 @@ function Pane({
   sourceOptions,
   sourceValue,
   onChooseSource,
+  sourceRef,
   showSourceButtons,
   selectedNames,
   cursorName,
@@ -3306,6 +3423,8 @@ function Pane({
    * under no enumerated mount. */
   sourceValue: string;
   onChooseSource: (value: string) => void;
+  /** So Alt+F1 / Alt+F2 can open this pane's combo from the keyboard. */
+  sourceRef: React.RefObject<HTMLSelectElement | null>;
   /** Whether the optional button strip is on (Settings, default off). */
   showSourceButtons: boolean;
   /** Every marked entry's name in this pane — see `@/lib/selection`. */
@@ -3433,6 +3552,7 @@ function Pane({
           `@/lib/paneSources` where a test can reach them. */}
       <div className="tc-chrome-row tc-path-row">
         <select
+          ref={sourceRef}
           className="tc-source-combo"
           aria-label={t("files.tc.sourceAriaLabel")}
           value={sourceValue}
