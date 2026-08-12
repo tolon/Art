@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### A real Amiga booted a disk ART wrote (2026-08-12)
+
+#### Verified
+- **On real hardware, not an emulator.** A disk ART made — boot code and all —
+  was put on a **Gotek** and started an **Amiga 500 / 500+** with **Kickstart
+  3.9** from cold, straight to an AmigaDOS prompt. Every earlier check ran
+  under WinUAE with licensed ROMs; this one is real silicon, and it is the
+  first time ART's own boot code has run on a real 68000.
+- **Still not claimed:** a Gotek is not a mechanical drive. Nothing ART writes
+  has yet been put on a physical floppy and read back by a real drive head.
+
 ### The Files screen loses its clutter, and F6 means Move (2026-08-12)
 
 #### Added
@@ -136,8 +147,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Verified
 - **For the first time, on hardware rather than only in tests.** Under a
-  licensed Kickstart and Workbench (Amiga Forever, WinUAE — not bare metal),
-  in both an Amiga 1200 and an Amiga 500+ configuration: a disk ART wrote
+  licensed Kickstart and Workbench (Amiga Forever, WinUAE — not bare metal;
+  that came later, on 2026-08-12, see above), in both an Amiga 1200 and an
+  Amiga 500+ configuration: a disk ART wrote
   mounted, its one file listed and read back correctly, and a second disk —
   identical except for its boot code — booted. Two earlier checks already
   existed (ART agreeing with itself, and with an independent implementation,

@@ -42,8 +42,8 @@ directory in it.
 The application builds and runs on Windows 10/11 x64. Working today: DD/HD
 floppy images and hard-disk (RDB/HDF) partitions — read, write, create and
 validate through one volume driver, including boot code that starts a real
-Amiga (verified by booting a disk under a licensed Kickstart/Workbench, not
-bare metal) — with a Total Commander-style dual pane (browse, multi-select,
+Amiga (verified by booting a disk on an actual A500/A500+ — see below) — with
+a Total Commander-style dual pane (browse, multi-select,
 batch copy in/out/delete, sort, filter by filename mask, rename, mkdir,
 attributes) over FFS/OFS volumes; **CD images (ISO9660 with Joliet, including
 raw 2352-byte tracks in Mode 1 and Mode 2/XA)** and **archives (LHA, ZIP, 7z)**
@@ -68,17 +68,30 @@ window yet.
 
 ### Verified how, exactly
 
-ART's disk writer has been checked three ways, and the third is the one that
-matters: `cargo test` (ART agrees with itself), `amitools` and 7-Zip (ART
-agrees with implementations that share no code with it), and finally **two
-disks ART wrote, opened under licensed Kickstart and Workbench in WinUAE /
-Amiga Forever** — one mounted and read back, one booted to a CLI prompt.
+ART's disk writer has been checked four ways, and the last one is the one that
+matters:
 
-That last rung is emulation with real ROMs, **not bare metal**. No photograph
-of a real A500 running an ART-written disk exists yet; when one does it goes in
-[`docs/assets/`](docs/assets/) and this section says which machine and which
-Kickstart. Claiming hardware ART has not been tried on is the one thing
-[docs/FEATURES.md](docs/FEATURES.md) exists to prevent.
+1. `cargo test` — ART agrees with itself.
+2. `amitools` and 7-Zip — ART agrees with implementations that share no code
+   with it, in both directions.
+3. **Two disks ART wrote, opened under licensed Kickstart and Workbench in
+   WinUAE / Amiga Forever** — one mounted and read back, one booted to a CLI
+   prompt.
+4. **A real Amiga.** On **2026-08-12**, `test/art-bootable-test.adf` cold-booted
+   an **A500 / A500+** running **Kickstart 3.9** — served from a **Gotek** as
+   `DF0:` — straight to an AmigaDOS `1>` prompt.
+
+Rung four is what rung three could not be: the boot code is ART's own,
+assembled from the published LVO table, and running it on a real **68000**
+(the emulated passes were an A1200's 68020 and an A500+ *configuration*) was
+an assumption until then.
+
+**What is still not claimed:** a Gotek is not a mechanical drive. Nothing ART
+has written has been through a real floppy head onto physical magnetic media.
+That rung is listed by name in [`test/README.md`](test/README.md) and is not
+being quietly folded into the one above it — claiming hardware ART has not
+been tried on is the one thing [docs/FEATURES.md](docs/FEATURES.md) exists to
+prevent.
 
 Data safety is enforced in `core/safety`: every write is atomic, and files are
 backed up to `.art-backup/` before being replaced (or, for images too large to

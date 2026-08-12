@@ -32,7 +32,7 @@ Update it at the end of any session that changes what works.
 | **i18n** | `en.json` and `tr.json`, 907 leaf keys each, parity enforced by `pnpm test` |
 | **Release bundle** | rebuilt 2026-08-12 — MSI and NSIS, and the application was launched and answered |
 | **Published** | <https://github.com/tolon/Art> — public, `main`, **GPL-3.0-or-later** (was MIT until 2026-08-12) |
-| **Real hardware** | Two ADFs booted/mounted under licensed Kickstart in WinUAE (Phase 1a); still not bare metal |
+| **Real hardware** | **Bare metal, reached 2026-08-12** — `test/art-bootable-test.adf` booted a real **A500/A500+** (Kickstart 3.9) from a **Gotek**, to an AmigaDOS CLI. Photographed. Two ADFs had already mounted/booted under licensed Kickstart in WinUAE (Phase 1a). Still untouched: physical magnetic media — a Gotek is not a mechanical drive |
 | **Seen on a screen** | The Dashboard, at last — a human looked at the running window on 2026-08-12 and the screenshot is in the README. **The Files screen still has not been looked at since phase 2a's panes were added** (ART-062) |
 
 Reproduce the numbers above:
@@ -357,8 +357,10 @@ mounted, its volume `Work` listed, and `Readme` inside it read back
 `hello from ART`; `test/art-bootable-test.adf` — the same disk with real boot
 code — booted to a CLI prompt. Both under **licensed Kickstart and Workbench,
 Amiga Forever under WinUAE, in A1200 and A500+ configurations — not bare
-metal**, and `test/README.md` says so plainly rather than letting the A1200/
-A500+ machine names imply real hardware. A `DIR DF0:` on the non-bootable
+metal at the time**, and `test/README.md` said so plainly rather than letting
+the A1200/A500+ machine names imply real hardware. (**That caveat has since
+been lifted** — the bootable image booted a real A500/A500+ on 2026-08-12; see
+the entry under Phase 2b below.) A `DIR DF0:` on the non-bootable
 image also read AmigaDOS's own free-space count off ART's bitmap for the
 first time (878 KB free of 880 for a 14-byte file, correct) — nothing set out
 to test that; it came free with the screenshot.
@@ -503,6 +505,23 @@ Done (3 of 8 tasks):
   `volume_copy_between` addresses a directory). Task 5's `F2`/`Ctrl+R` refresh
   came forward into this task, because hiding the button strip left Refresh
   with no other way to be reached.
+
+**Out of plan, and the bigger news of the day: a real Amiga booted a disk ART
+wrote.** `test/art-bootable-test.adf` was put on a **Gotek** and cold-booted a
+real **A500 / A500+** running **Kickstart 3.9** (the screen's copyright line
+reads `1985-2002`) straight to an AmigaDOS `1>` prompt. Photographed.
+
+This is the rung the project has been careful not to claim since Phase 1a. The
+boot code is ART's own, assembled from the published LVO table, and until this
+photograph "it runs on a real 68000" was an assumption: the emulated passes
+were an A1200 (68020) and an A500+ *configuration*, both under WinUAE with
+licensed ROMs. A Gotek also presents the image the way FlashFloppy reads an
+ADF — sector by sector — rather than as a file an emulator maps into memory,
+so the disk had to behave like a disk.
+
+**One caveat survives and is not being quietly dropped:** a Gotek is not a
+mechanical drive. Nothing ART has written has been through a real floppy head
+on physical magnetic media. `test/README.md` carries that as its own rung.
 
 Left: **Enter opens the container in the same pane** (Task 4, the headline);
 full keyboard coverage (5); tabs and session restore (6); colour rules and the
@@ -699,14 +718,16 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
    host-side delete, so nothing can be moved *off* a folder, and no primitive
    that moves a single file between two images); the next new defect starts at
    `ART-082`.
-3. **The hardware verification rung has been reached, for the two artifacts
-   built to test it.** `test/task-10-boot-test.adf` mounted, listed and read
-   back correctly, and `test/art-bootable-test.adf` booted — both under
-   licensed Kickstart/Workbench (Amiga Forever / WinUAE), not bare metal. That
-   is a different claim from "the running app has been looked at": no screen
-   ART shipped this phase or last has actually been opened by a person —
-   still `ART-062`, now covering Phase 1a's UI too (the Total Commander
-   restyle, the Attr column, the filter box, multi-select).
+3. **The hardware rung is climbed to the bottom, and it is a photograph now.**
+   `test/art-bootable-test.adf` booted a real **A500/A500+** (Kickstart 3.9)
+   off a **Gotek** to an AmigaDOS `1>` prompt on 2026-08-12 — real silicon, not
+   an emulator. `test/task-10-boot-test.adf` mounted, listed and read back
+   correctly under licensed Kickstart/Workbench (Amiga Forever / WinUAE) in
+   Phase 1a. What is left: **physical magnetic media** — a Gotek is not a
+   mechanical drive, and nothing ART wrote has been through a real floppy head.
+   All of that is a different claim from "the running app has been looked at":
+   apart from the Dashboard, no screen ART shipped in phases 1a, 2a or 2b has
+   actually been opened by a person — still `ART-062`.
 4. **Stage R and Stage W are both done.** Aminet Stage A is complete too,
    including the update view and install to HDF. **Phase 1a is done too** —
    the two-pane manager has real focus, multi-select, batch copy/delete,
@@ -760,6 +781,7 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-12 | **Bare metal.** `test/art-bootable-test.adf` cold-booted a real A500/A500+ (Kickstart 3.9) from a Gotek to an AmigaDOS `1>` prompt — ART's own boot code running on a real 68000, photographed. Every earlier pass was WinUAE with licensed ROMs. Left standing: physical magnetic media, which a Gotek is not | — |
 | 2026-08-12 | Phase 2b task 3: the pane header is a source combo, a path and a filter, with the button strip behind a Settings toggle; the command line navigates and filters and refuses everything else by name; one non-wrapping F-key row; one status strip inside the dock instead of three banners above the panes; the collision question moved into the copy dialog. **F6 is Move** — verified against the destination's own listing before anything is deleted — with three directions refused by name for want of a primitive (ART-080, ART-081) | 912 Rust / 178 frontend |
 | 2026-08-12 | **Published at github.com/tolon/Art** (public). Licence changed MIT → GPL-3.0-or-later to match the repository, in all seven places that claimed one. Phase 2a merged to `main`; phase 2b started on its own branch so half-finished UI did not travel with it | 912 Rust / 137 frontend |
 | 2026-08-12 | Phase 2b tasks 1–2: the commander fills the window with panes equal by construction, rows lost their buttons, `Ctrl+B` collapses the sidebar; the palette is now the user's own and the chrome follows the theme | 912 Rust / 137 frontend |

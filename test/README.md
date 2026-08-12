@@ -1,17 +1,24 @@
 # Test artifacts
 
 Files here are produced by ART for a human to check on real hardware or in an
-emulator. They are the third rung of the verification ladder:
+emulator. They are the bottom rungs of the verification ladder — the ones no
+amount of code in this repository can climb for itself:
 
 ```
 cargo test          ART agrees with itself
 amitools oracle     ART agrees with an independent implementation
-real Amiga          the disk actually works
+emulated Amiga      a licensed Kickstart accepts the disk
+real Amiga          real silicon accepts it        ← reached 2026-08-12
 ```
 
-The first two run in CI. The third is the only one that answers whether a disk
-ART wrote is a disk an Amiga will use, and nothing in this repository can
-answer it.
+The first two run in CI. The last two are the only ones that answer whether a
+disk ART wrote is a disk an Amiga will use, and nothing in this repository can
+answer them.
+
+**The bottom rung has been reached**, once: `art-bootable-test.adf` booted a
+real **A500/A500+** (Kickstart 3.9) from a **Gotek**, to an AmigaDOS CLI, on
+2026-08-12. See that file's own section below for what that proves and for
+the one caveat that is left.
 
 ## What is verified against what — the honest list
 
@@ -21,7 +28,7 @@ rather than left to be assumed:
 
 | What | Verified against | Not verified against |
 |---|---|---|
-| ADF / HDF written by ART | `amitools`, both directions, **and a real Amiga** (below) | — |
+| ADF / HDF written by ART | `amitools`, both directions, a licensed Kickstart under WinUAE, **and a real A500/A500+ off a Gotek** (below) | physical magnetic media — nothing ART wrote has been through a real floppy head |
 | **CD images (ISO9660, Joliet)** | **7-Zip's independent implementation** (`scripts/iso-oracle-check.py`) — names, sizes and every file's SHA-256, raw 2352-byte layouts included by stripping sectors to 2048 first | **a real Amiga CD filesystem.** No AmigaOS, CD32 or CDTV disc has been read by ART on real hardware |
 | ZIP / 7z / LHA | ART's own tests, the one hostile-archive test every backend is run through, **and files written by Windows and by the 7-Zip application** (below) | an outside implementation reading back what ART wrote — ART writes no archives |
 | **C64 disks** | ART's own tests, **and a D64 written by `scripts/make-c64-fixture.py`**, which is written from the published 1541 layout rather than from ART's code | `c1541`/VICE or DirMaster listing a disk ART read — nobody has run that |
@@ -112,11 +119,36 @@ file `Readme` containing `hello from ART` — so the only difference between
 this image and the one above is the 42 bytes at offset 12. That makes it a
 clean test of ART-063 and nothing else.
 
-**It boots — verified 2026-08-11.** That closes ART-063, and it is the only
-way that question could have been closed. Every automated check ART has, and
-the amitools oracle too, only ask whether the boot block is *well-formed*:
-`xdftool` reported `bootable: True` for the old `RTS` stub that did nothing at
-all. Whether the code inside it runs is a question only Kickstart answers.
+**It boots — verified 2026-08-11 under emulation, and 2026-08-12 on a real
+Amiga.** That closes ART-063, and it is the only way that question could have
+been closed. Every automated check ART has, and the amitools oracle too, only
+ask whether the boot block is *well-formed*: `xdftool` reported
+`bootable: True` for the old `RTS` stub that did nothing at all. Whether the
+code inside it runs is a question only Kickstart answers.
+
+### Rung four — bare metal, 2026-08-12
+
+**Machine:** a real **A500 / A500+**, Kickstart **3.9** (the ROM update — the
+screen's copyright line reads `1985-2002`).
+**Media:** a **Gotek** floppy emulator, reading this `.adf` from USB as `DF0:`.
+**Result:** the machine booted to an AmigaDOS CLI, `1>`, from a cold start.
+Photographed.
+
+This is the first time any ART output has run on **real Amiga silicon** rather
+than under WinUAE with licensed ROMs. Everything the emulated pass proved
+still holds, and two things it could not now do too:
+
+- **The boot code runs on a real 68000.** The A500 is a 68000; the emulated
+  passes were an A1200 (68020) and an A500+ configuration. ART assembles that
+  code itself from the published LVO table, so "it works on this CPU" was an
+  assumption until this photograph.
+- **A real drive, a real `strap`, real timing.** A Gotek presents the image
+  the way FlashFloppy reads an ADF — sector by sector off the wire — rather
+  than as a file an emulator maps into memory. The disk had to be a disk.
+
+The caveat that remains: **the Gotek is not a mechanical drive.** Nothing here
+has been written to physical magnetic media and read back by a real
+floppy head. That is a different rung again, and nobody has climbed it.
 
 What booting proves, link by link: `strap` accepted the `DOS` signature and the
 checksum, jumped to offset 12, our `move.l 4.w,a6` found `ExecBase`, the

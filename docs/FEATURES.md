@@ -141,7 +141,7 @@ Notes:
 | Open, browse, volume info | §11 | ✅ | `core/adf/{mod,fs,blocks}.rs` |
 | Extract file | §11 | ✅ | `core/adf/extract.rs` |
 | Add / delete / rename / mkdir | §11 | ✅ | `commands/adf.rs` → `core/volume/write/` |
-| Create blank / formatted / bootable | §11 | ✅ | `core/adf/create.rs`, `core/adf/bootcode.rs`. Until [ART-063](ISSUES.md#fixed) was fixed and verified by booting `test/art-bootable-test.adf`, `bootable` wrote a valid-looking but non-functional boot block (a bare `RTS`) — the boot block now reaches a CLI prompt on a real Kickstart/Workbench (not Workbench itself: `S/Startup-Sequence` and AmigaOS's own commands are content ART cannot supply) |
+| Create blank / formatted / bootable | §11 | ✅ | `core/adf/create.rs`, `core/adf/bootcode.rs`. Until [ART-063](ISSUES.md#fixed) was fixed and verified by booting `test/art-bootable-test.adf`, `bootable` wrote a valid-looking but non-functional boot block (a bare `RTS`) — the boot block now reaches a CLI prompt on a real Kickstart/Workbench (not Workbench itself: `S/Startup-Sequence` and AmigaOS's own commands are content ART cannot supply). **Verified on real hardware 2026-08-12**: a real A500/A500+ with Kickstart 3.9, booting the image off a Gotek |
 | Validate (boot block, checksums, bitmap) | §11, §12 | ✅ | `core/adf/validate.rs` |
 | Optimisation analysis | §13 | ⏳ | — |
 | Drag files in / out of the image | §11, §90 | ✅ | `/files` two-pane manager |
