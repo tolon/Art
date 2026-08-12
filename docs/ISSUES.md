@@ -25,6 +25,100 @@ what fixed it (with the test that proves it).
 
 _(ART-075 was open here; it is fixed — see [Phase 2a](#phase-2a) below.)_
 
+**ART-095** 🟠 **ART cannot open a real PiStorm card image at all** — *fixed 2026-08-13*
+`core/rdb.rs::find_rdb_location` · `core/hdf.rs` · `find_rdb_location` scans the
+first **16 blocks of the file** for `RDSK`. On every real PiStorm card those
+blocks are the MBR and the beginning of the FAT32 boot partition; the Amiga's
+RDB sits about 1.1 GB in, at the start of a partition of type `0x76`.
+
+Measured on two real distributions (2026-08-13, headers only, read-only):
+
+| | CaffeineOS 9317 | MultibootOS 2.2 |
+|---|---|---|
+| FAT32 | 1.10 GiB at byte 1 048 576 | the same |
+| RDB | byte **1 178 599 424** | byte **1 178 599 424** and byte **50 570 723 328** |
+
+So ART finds no RDB on either, and the Hard Disk studio, the Files screen and
+the workflow engine all see a file they cannot open. Nothing is at risk — ART
+reads and refuses — but this is the single thing standing between ART and the
+cards it exists to build.
+
+**ART has no MBR awareness anywhere.** That is the fix: parse the partition
+table, treat each `0x76` area as an Amiga disk with its own base offset, and
+give the RDB reader that base. `core/volume` already works through a
+`BlockDevice` at an offset, so the pieces below this are in place.
+
+Found by reading the two images the user supplied — the inspection
+`ART-research-distro-profiles.md` §8.2 parked SD-2a on. See
+[sd2-card-layout.md](sd2-card-layout.md).
+
+**Fixed 2026-08-13.** `core/mbr.rs` reads the partition table — four primary
+entries and deliberately nothing else, since a PiStorm card has never needed
+extended partitions or GPT and a parser with untested branches is worse than a
+narrow one. `core/card.rs` turns a file into the Amiga disks in it, and answers
+for a plain HDF too: no MBR means one disk at offset zero, so callers do not
+branch on what kind of file they were handed.
+
+**Verified against both real cards**, which is the point of having them:
+
+```
+CaffeineOS 9317   1 area at 1178599424   SDH0, SDH1        PFS3 19.2
+MultibootOS 2.2   2 areas                SDH0/SDH1 + 15    2 drivers
+```
+
+Every number agrees with an independent hand-decode of the same bytes, and with
+what the distributions' own documentation says about themselves.
+
+**ART-096** 🟡 **ART writes `MaxTransfer` and `Mask` as zero, and 100 buffers**
+`core/rdb.rs::create_rdb_layout` · The DosEnvec's `MaxTransfer` (longword 45)
+and `Mask` (longword 46) are left at zero, with a comment saying so. Every
+partition on both real cards — seventeen of them across three RDBs, without
+exception — carries:
+
+```
+maxtransfer = 0x0001FE00    mask = 0x7FFFFFFE    buffers = 600
+```
+
+A mask of zero says no memory is acceptable for a transfer, which is not what
+anybody means by it; ART's default of 100 buffers against the field's 600 is a
+performance choice made by not making one. Neither is dangerous — Emu68 is
+forgiving — but they are the fields that are cheap to get right and very hard
+to diagnose when wrong, and ART now has measured values rather than a guess.
+
+Also worth matching: real cards name their partitions `SDH0`/`SDH1`, not `DH0`.
+On a machine with an IDE drive `DH0` is already taken.
+
+Found 2026-08-13 while reading two real cards. See
+[sd2-card-layout.md](sd2-card-layout.md).
+
+**ART-097** 🟡 **A card may carry several RDBs, and ART models one — so it would report fifteen working partitions as broken** — *fixed 2026-08-13*
+`core/rdb.rs` · `@/lib/rdbDrivers` · MultibootOS 2.2 has **two** `0x76` areas,
+each with its own `RDSK`, its own geometry and its own partition list. ART
+returns `Option<usize>` from `find_rdb_location` and stops at the first.
+
+The consequence is worse than a missing half. That card's **second** RDB carries
+a `DOS` driver at version 45.16 and **no PFS3** — while all fifteen of its
+partitions are `PDS`. The card works, because the drivers a partition may use
+are the **union across every RDB on the disk**. `partitionsMissingDriver` looks
+at one RDB, so on this card it would name fifteen partitions as unmountable when
+none of them is — the same false confidence in reverse that ART-084 was.
+
+Fix: model a card as a list of Amiga areas, and take the driver set as the union
+before deciding anything is missing. Depends on [ART-095](#open).
+
+**Fixed 2026-08-13** with it. `CardImage::partitions_missing_driver` asks the
+whole card, and on the real MultibootOS image reports **nothing** where the
+per-area question would have named fifteen. The guard against over-correcting is
+`a_partition_with_no_driver_anywhere_is_still_reported`: the union must not turn
+ART-084's real finding into silence.
+
+Still owed: the Hard Disk studio and `@/lib/rdbDrivers` ask the old question
+against a single RDB. They keep working on HDFs, which is what they are pointed
+at today; moving them onto `CardImage` is the follow-up that makes a card
+openable from the UI rather than only from the core.
+
+Found 2026-08-13. See [sd2-card-layout.md](sd2-card-layout.md).
+
 **ART-094** 🟡 **Overwriting a write-protected file is not checked either** — *fixed 2026-08-13*
 `core/volume/write/mod.rs` · `commands/volume_write.rs::replace_file` · The
 delete half of [ART-088](#open) is fixed: the writer honours the `d` bit and

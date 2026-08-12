@@ -179,6 +179,10 @@ Notes:
 | Open HDF, report geometry | §16 | ✅ | `core/hdf.rs` |
 | Create HDF with RDB (sparse) | §16 | ✅ | `core/hdf.rs`, `core/rdb.rs` |
 | RDB parse, checksum, partitions | §18, §19 | ✅ | `core/rdb.rs` |
+| Read a PiStorm card (MBR + several RDBs) | SD-2a | ✅ | `core/mbr.rs`, `core/card.rs` — verified against CaffeineOS 9317 and MultibootOS 2.2. A plain HDF reads as one area at offset zero, so callers do not branch |
+| Filesystem drivers as the card's, not the area's | SD-2a | ✅ | `CardImage::partitions_missing_driver` — MultibootOS's second RDB carries no PFS3 while all fifteen of its partitions are PFS3, and the card works |
+| Card reading reaches the UI | SD-2a | ⏳ | the Hard Disk studio still asks a single RDB; it works on HDFs and cannot open a card yet |
+
 | Read embedded filesystem drivers (FSHD + LSEG) | §18, SD G4 | ✅ | `core/rdb.rs::parse_file_systems`; the studio names partitions nothing will mount (`@/lib/rdbDrivers`) |
 | Embed a filesystem driver into a new RDB | §16, SD G4 | ✅ | `core/rdb.rs::create_rdb_layout`; wizard step 4 (`@/lib/fsDriver`). Version read from the driver's `$VER:`. Verified with `rdbtool` both directions |
 | Partition layout validation | §18, §89 | ✅ | `core/rdb.rs` |

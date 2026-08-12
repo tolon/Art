@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ART can read a PiStorm card (2026-08-13)
+
+#### Fixed
+- **ART could not open a real PiStorm card at all.** It looked for the Amiga's
+  partition table in the first few blocks of the file; on every card those are
+  the MBR and the FAT32 boot partition, and the Amiga's own table is about a
+  gigabyte further in. Two real distributions were read to find this out, and
+  both now open.
+
+#### Added
+- **A card can hold more than one Amiga disk**, and ART reads them all.
+  MultibootOS keeps two, with different geometries and seventeen partitions
+  between them.
+- **A filesystem driver belongs to the card, not to one of its tables.** One of
+  those two tables carries no PFS3 while every partition in it is PFS3 — and
+  the card works perfectly. Asking the wrong question would have told you
+  fifteen working partitions were broken.
+
+A plain HDF still reads exactly as before. Reading a card from the Hard Disk
+screen is not wired up yet — this is the engine underneath it.
+
 ### Two that were owed (2026-08-13)
 
 #### Fixed
