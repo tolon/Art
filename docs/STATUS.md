@@ -20,16 +20,16 @@ Update it at the end of any session that changes what works.
 |---|---|
 | **Last updated** | 2026-08-12 |
 | **Version** | 0.1.0 (unreleased) |
-| **Current stage** | Phase 2b — the Files screen, done right (tasks 1–3 of 8, on branch `phase-2b`) |
+| **Current stage** | **Phase 2b complete** (8 of 8 tasks); next is the PiStorm image builder, SD-1 |
 | **Build** | PASS |
-| **Tests** | 912 Rust passed, 0 failed; 191 frontend passed, 0 failed |
+| **Tests** | 912 Rust passed, 0 failed; 279 frontend passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
 | **amitools oracle** | 48 checks, both directions |
 | **7-Zip disc oracle** | 4 fixtures — Joliet, ISO9660-only, raw Mode 1, raw Mode 2/XA — names, sizes and every file's SHA-256 |
 | **cargo-deny** | advisories, bans, licences, sources — all ok |
 | **MSRV** | 1.93 (raised from 1.77 on 2026-08-12, for a maintained 7z decoder) |
-| **i18n** | `en.json` and `tr.json`, 907 leaf keys each, parity enforced by `pnpm test` |
+| **i18n** | `en.json` and `tr.json`, 939 leaf keys each, parity enforced by `pnpm test` |
 | **Release bundle** | rebuilt 2026-08-12 — MSI and NSIS, and the application was launched and answered |
 | **Published** | <https://github.com/tolon/Art> — public, `main`, **GPL-3.0-or-later** (was MIT until 2026-08-12) |
 | **Real hardware** | **Bare metal, reached 2026-08-12** — `test/art-bootable-test.adf` booted a real **A500/A500+** (Kickstart 3.9) from a **Gotek**, to an AmigaDOS CLI. Photographed. Two ADFs had already mounted/booted under licensed Kickstart in WinUAE (Phase 1a). Still untouched: physical magnetic media — a Gotek is not a mechanical drive |
@@ -455,7 +455,7 @@ assumed licensed AmigaOS media reliably to hand. `scripts/iso-oracle-check.py`
 covers the risk it existed for, with an implementation that shares no code with
 ART's.
 
-### ⏳ Phase 2b — The Files screen, done right (in progress, branch `phase-2b`)
+### ✅ Phase 2b — The Files screen, done right (complete, 2026-08-12)
 
 Plan: [2026-08-12-phase-2b-commander-ui.md](superpowers/plans/2026-08-12-phase-2b-commander-ui.md).
 Brief: [brief-files-commander-ui.md](brief-files-commander-ui.md) — written from
@@ -523,12 +523,45 @@ so the disk had to behave like a disk.
 mechanical drive. Nothing ART has written has been through a real floppy head
 on physical magnetic media. `test/README.md` carries that as its own rung.
 
-Left: **Enter opens the container in the same pane** (Task 4, the headline);
-full keyboard coverage (5); tabs and session restore (6); colour rules and the
-confirmations his config keeps on (7); closing the phase (8).
+- **Task 4 — Enter opens the container, in the same pane.** The phase's
+  headline, and the one thing here that was *seen working on a real disk*:
+  Enter on `art-bootable-test.adf` turned the pane into the floppy — breadcrumb
+  `…	estrt-bootable-test.adf`, volume row `Work FFS 877 k of 880 k free` —
+  and Backspace came back out with the cursor sitting on the ADF it had
+  entered. What a row opens into comes from `analyze_paths`, never the
+  extension. `PaneState.host` is the mechanism, threaded through all seven
+  `openX` functions as a *required* parameter so the compiler names every call
+  site. Per-pane history (Alt+Left/Right) treats a container as a place.
+- **Task 5 — the keyboard covers everything.** Space marks where you stand,
+  Insert marks and advances, the numpad marks by mask and inverts,
+  type-to-search moves the cursor (and only the cursor — a search must never
+  throw away a selection), Alt+F1/F2 open the source combos.
+- **Task 6 — tabs and session restore.** A tab is a place plus how you were
+  looking at it, built on task 4's `PaneLocation`, so a tab can live inside an
+  image. Persistence falls out because the tab is *derived* from the pane
+  rather than remembered alongside it.
+- **Task 7 — colour rules, histories, confirmations.** Three shipped colour
+  rules that answer the question a directory of Amiga files poses — walk into
+  it, unpack it, identify it — sitting in front of the built-in classification
+  rather than replacing it. A dropdown history on the command line. Right-button
+  marking as a setting.
 
-**Nothing in this phase has been looked at running either.** All three tasks
-are green on tests and none has been seen.
+**Filed rather than built** (the phase's own rule): [ART-080](ISSUES.md#open),
+[ART-081](ISSUES.md#open) (move's missing primitives),
+[ART-087](ISSUES.md#open) (`Space` does not count a directory) and
+[ART-088](ISSUES.md#open) (the writer ignores the `d` protection bit; the file
+manager asks, the engine does not refuse).
+
+**What was and was not seen.** The acceptance walk is in the plan file, point
+by point: six of the twelve were verified on the running screen, four on tests
+alone, and two were not looked at. The two that matter:
+
+- **The light theme was never opened.** Its tokens derive from the dark ones by
+  role; nobody has looked at it.
+- **Session restore is not verified at all** — it is the only claim on that
+  list that cannot be true by construction, since it needs the application
+  closed and reopened. Nineteen tests cover the tab model; the store round-trip
+  has none.
 
 ### ⏳ PiStorm Image Builder — SD-0 … SD-5 (planned, not started)
 
@@ -807,13 +840,18 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
    the two-pane manager has real focus, multi-select, batch copy/delete,
    sorting, a filename mask, and now boot code that works; see "Phase 1a"
    above for what is not (volume→volume batching, ART-064/065).
-5. **Start here tomorrow: Phase 2b Task 4**, on branch `phase-2b` — the
-   headline: Enter (or a double-click) on a recognised container opens it *in
-   the same pane*, the pane kind switching underneath, with `[..]` leaving
-   again and the cursor landing back on the container file. A multi-partition
-   HDF lists its partitions as a level; an interior ART cannot read gets an
-   honest label, never an error toast. Task 3 is done — see "Phase 2b" above
-   for what it changed and for the two gaps it recorded (ART-080, ART-081).
+5. **Start here tomorrow: SD-1**, the PiStorm image builder's first slice —
+   MBR + FAT32 in an image file (G2), the RDB at a byte offset with FSHD/LSEG
+   embedded (G4, which also closes ART-084), the build manifest (G7), a build
+   as a drag & drop target (G15) and image validation (G8). SD-0 is done and
+   its findings are in [sd0-prior-art.md](sd0-prior-art.md) — read the
+   supersession table at its end before designing, and settle its one exit
+   test (drive `hst-imager` end to end on a scratch image) first.
+
+   **Phase 2b is complete and merged.** Two of its twelve acceptance points
+   were not verified — the light theme was never opened, and session restore
+   has never been seen working — and both are worth ten minutes with the
+   application before they are forgotten.
 6. **Phase 2a is complete** and merged to `main`
    — see its section above for what it changed and what it left owed, and its
    plan file's Amendments section for what changed after the plan was written
@@ -855,6 +893,7 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-12 | **Phase 2b complete.** Enter opens a container in the same pane and Backspace comes back out with the cursor on it — verified on a real disk. Full keyboard coverage, tabs with session restore, per-filetype colour rules, and the confirmations his config keeps on. Four gaps filed rather than smuggled in (ART-080/081/087/088). Two acceptance points unverified and said so: the light theme and session restore | 912 Rust / 279 frontend |
 | 2026-08-12 | **First human session with the running application.** ART-082 found and fixed in seconds — the Files panes filled the window and their listings did not, capped at 420 px, behind 178 green tests. ART-083 fixed (the HDF wizard's 8 GB ceiling was five numbers in a component, not an engine limit; there is a Custom size now). ART-084 recorded and labelled in the dialog: a PFS3/SFS HDF is a DosType with no filesystem and no RDB driver, so an Amiga cannot mount it. ART-085/086 recorded. **Scope decision: ART builds the PiStorm `.img`, never the card** — G1 deleted, and G14/G15/G16 (wallpaper + WiFi + prefs, a build as a drop target, real multiboot) added from the user | 912 Rust / 191 frontend |
 | 2026-08-12 | **Bare metal.** `test/art-bootable-test.adf` cold-booted a real A500/A500+ (Kickstart 3.9) from a Gotek to an AmigaDOS `1>` prompt — ART's own boot code running on a real 68000, photographed. Every earlier pass was WinUAE with licensed ROMs. Left standing: physical magnetic media, which a Gotek is not | — |
 | 2026-08-12 | Phase 2b task 3: the pane header is a source combo, a path and a filter, with the button strip behind a Settings toggle; the command line navigates and filters and refuses everything else by name; one non-wrapping F-key row; one status strip inside the dock instead of three banners above the panes; the collision question moved into the copy dialog. **F6 is Move** — verified against the destination's own listing before anything is deleted — with three directions refused by name for want of a primitive (ART-080, ART-081) | 912 Rust / 178 frontend |

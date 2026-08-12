@@ -18,6 +18,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Still not claimed:** a Gotek is not a mechanical drive. Nothing ART writes
   has yet been put on a physical floppy and read back by a real drive head.
 
+### Enter opens the disk (2026-08-12)
+
+#### Added
+- **Press Enter on an ADF, and you are inside it.** The pane becomes the disk —
+  path bar and all — and Backspace brings you back out with the cursor sitting
+  on the file you came from. The same for HDF partitions, CD images, LHA / ZIP
+  / 7z archives and Commodore disks. What a file *is* comes from its bytes, so
+  a floppy image called `.img` opens as a floppy. Alt+Left and Alt+Right walk
+  the history, and going back into an image lands you in the folder you left.
+- **Tabs, one row per pane.** Ctrl+T for another, Ctrl+W to close, Ctrl+Tab to
+  cycle, middle-click to close. A tab can live inside a disk image. **Your
+  tabs, paths, sort orders and filters come back when you reopen ART.**
+- **The keyboard reaches everything.** Space marks where you are, Insert marks
+  and moves down, the numpad marks by pattern and inverts, and simply typing a
+  name jumps the cursor to it. F2 refreshes, Alt+F1 and Alt+F2 open the source
+  boxes.
+- **File colours you choose.** Settings takes a list of "pattern → colour",
+  first match wins, and ART starts you off with three: the things it can open,
+  the things it can unpack, and ROMs.
+- **A history on the command line**, and a confirmation before deleting a file
+  the Amiga itself protects.
+
+#### Known limitations
+- Space marks a folder but does not add up what is inside it yet.
+- The delete-protection warning is a question, not a lock: only the file
+  manager asks.
+
 ### The Files screen loses its clutter, and F6 means Move (2026-08-12)
 
 #### Added
