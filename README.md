@@ -14,6 +14,12 @@ drag-and-drop-driven application.
 
 > **DROP IT INTO ART.**
 
+![ART's dashboard: the drop zone that starts every workflow](docs/assets/dashboard.png)
+
+*ART running on Windows 11, light theme. Everything starts by dropping
+something on that panel: ART works out what it is from its bytes and offers
+what can be done with it.*
+
 ## Which machines
 
 **The whole classic line, not one model.** ART's file work is machine-
