@@ -58,7 +58,6 @@ import {
   useSelectAll,
   type FunctionAction,
 } from "@/components/files/FunctionKeys";
-import { SelectionBar } from "@/components/files/SelectionBar";
 import { fileTextColorVar, TcRowIcon, UpDirIcon } from "@/components/files/TcIcon";
 import "@/pages/FileManager.css";
 import { adfOpen, type AdfInfo } from "@/lib/adf";
@@ -470,9 +469,33 @@ export function FileManager() {
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * ART declining something, as opposed to something breaking.
+   *
+   * "Both panes are local folders — use Explorer for that" is not a failure:
+   * nothing broke, nothing has an `ART-*` id to look up, and the red alert
+   * banner it used to get taught the user to read ART's real errors as noise.
+   * Same distinction `Refusal.tsx` draws for the WHDLoad panel; this is its
+   * one-line form for the commander's status strip (brief §1.4).
+   */
+  const [hint, setHint] = useState<string | null>(null);
 
-  /** What to do about names already taken. Sticky across operations. */
-  const [policy, setPolicy] = useState<OverwritePolicy>("skip");
+  /**
+   * What to do about names already taken.
+   *
+   * A *setting* since task 3, not a control on this screen: the permanent
+   * footer that used to ask the question — whether or not it was about to
+   * come up — is gone, and `CopyPlanDialog` asks it where Total Commander
+   * does, at the moment a collision is actually found. Changing it there
+   * changes the default, which is what a user who answers the same way every
+   * time expects.
+   */
+  const policy = useSettingsStore((s) => s.settings.overwritePolicy) as OverwritePolicy;
+  const updateSettings = useSettingsStore((s) => s.update);
+  const setPolicy = useCallback(
+    (next: OverwritePolicy) => void updateSettings({ overwritePolicy: next }),
+    [updateSettings]
+  );
   /**
    * The pre-flight report, while the user is deciding about it.
    *
@@ -573,9 +596,9 @@ export function FileManager() {
    * operates on — `selectedEntries` above already guarantees that on its
    * own, since it can only ever resolve to entries the filtered view still
    * shows. But a selection made before the mask narrowed the list would
-   * still sit in `selection[side]` invisibly: the status line and
-   * `SelectionBar` would keep reporting "20 selected" over a pane now
-   * showing three, which is a surprise the user has no way to see through.
+   * still sit in `selection[side]` invisibly: the pane's status line would
+   * keep reporting "20 selected" over a pane now showing three, which is a
+   * surprise the user has no way to see through.
    * Clearing the selection on every keystroke here — rather than keeping
    * the hidden names and merely showing their count — is the simpler rule
    * and the one Total Commander users expect: a filter change starts the
@@ -1143,6 +1166,7 @@ export function FileManager() {
       const target = pane(to);
 
       setError(null);
+      setHint(null);
       setMessage(null);
 
       // `copyDirection` (`@/lib/isoPane`) is the routing: which pipeline a
@@ -1159,7 +1183,7 @@ export function FileManager() {
         return;
       }
       if (direction.kind === "local-to-local") {
-        setError(t("files.err.bothLocal"));
+        setHint(t("files.err.bothLocal"));
         return;
       }
 
@@ -1587,10 +1611,11 @@ export function FileManager() {
     const target = pane(to);
 
     setError(null);
+    setHint(null);
     setMessage(null);
 
     if (source.kind === "local" && target.kind === "local") {
-      setError(t("files.err.bothLocal"));
+      setHint(t("files.err.bothLocal"));
       return;
     }
 
@@ -1771,6 +1796,7 @@ export function FileManager() {
     }
 
     setError(null);
+    setHint(null);
     setBusy(t("files.status.deleting", { name: entry.name }));
     try {
       // Its icon, if it has one: an orphan `.info` left behind clutters
@@ -1859,6 +1885,7 @@ export function FileManager() {
     }
 
     setError(null);
+    setHint(null);
     setBusy(t("files.status.deletingMany", { count: names.length }));
     try {
       const outcome = await volumeDeleteMany(
@@ -1913,6 +1940,7 @@ export function FileManager() {
     const target = pane(to);
 
     setError(null);
+    setHint(null);
     setMessage(null);
 
     const volume = writableVolume(source);
@@ -2118,6 +2146,7 @@ export function FileManager() {
     }
 
     setError(null);
+    setHint(null);
     setBusy(t("files.status.checkingOut", { name: entry.name }));
     try {
       const row = await checkoutOpen(
@@ -2150,6 +2179,7 @@ export function FileManager() {
     if (!name) return;
 
     setError(null);
+    setHint(null);
     setBusy(t("files.status.creatingFolder"));
     try {
       await volumeMakeDir(target.path, target.volumeIndex, target.dirBlock, name);
@@ -2174,6 +2204,7 @@ export function FileManager() {
     if (!name || name === entry.name) return;
 
     setError(null);
+    setHint(null);
     setBusy(t("files.status.renaming", { name: entry.name }));
     try {
       // §7.1: Workbench shows an object only when its `.info` is next to it,
@@ -2241,6 +2272,7 @@ export function FileManager() {
   async function runCommandLine() {
     const action = parseCommandLine(commandLine);
     setError(null);
+    setHint(null);
 
     switch (action.kind) {
       case "none":
@@ -2603,30 +2635,17 @@ export function FileManager() {
         </div>
       )}
 
-      {error && (
-        <div className="badge badge-err" style={{ display: "block", margin: "10px 0" }}>
-          {error}
-        </div>
-      )}
-      {message && !error && (
-        <div className="badge badge-ok" style={{ display: "block", margin: "10px 0" }}>
-          {message}
-        </div>
-      )}
-      {busy && (
-        <div className="muted" style={{ fontSize: 12, margin: "8px 0" }}>
-          {t("files.busy.suffix", { busy })}
-        </div>
-      )}
-
       {/*
        * The Total Commander presentation (task 6b) lives entirely inside
        * `.tc-commander` — see `src/pages/FileManager.css`'s header for how
        * that scoping works and why the rest of the app never sees it. Only
        * this wrapper and its descendants read the `--tc-*` custom
-       * properties; nothing outside it, and nothing above this point in the
-       * page (the title, the intro line, the recovery/error/busy banners),
-       * does either — they stay in the app's own light/dark theme.
+       * properties; nothing outside it does either. Since task 3 the only
+       * thing left outside is the recovery card — a decision that blocks
+       * every write until it is made, so it is deliberately not chrome —
+       * plus the modals, which are the app's own dialogs. The error, message
+       * and busy lines used to sit out here and push the panes down; they are
+       * one status strip inside the dock now.
        */}
       <div className="tc-commander">
         {/* `minmax(0, 1fr)` twice and `align-items: stretch` (in the CSS, not
@@ -2659,10 +2678,51 @@ export function FileManager() {
           <Pane {...paneProps("right")} />
         </div>
 
-        <SelectionBar
-          count={selection[focused].size}
-          bytes={selectedEntries(focused).reduce((sum, entry) => sum + entry.bytes, 0)}
+        {/* The files currently checked out for editing (F4). Renders nothing
+            when there are none. Inside the commander, above the status strip,
+            so the F-key row stays the last thing on the screen — brief §1.4
+            asks for it docked to the window bottom, and a panel underneath it
+            would be a strip that is not at the bottom. */}
+        <CheckoutPanel
+          onChanged={(row) => {
+            setMessage(t("files.status.writtenBack", { name: row.name }));
+            // Whichever pane holds that image needs re-listing: an edit that
+            // changed a file's size moved its blocks.
+            for (const side of ["left", "right"] as Side[]) {
+              if (pane(side).location === row.image) void refresh(side);
+            }
+          }}
+          onError={setError}
         />
+
+        {/*
+         * One status strip for the whole screen, docked with the rest of the
+         * chrome rather than stacked above the panes (brief §1.4, §1.1).
+         *
+         * Three things used to push the panes down from the top of the page:
+         * a red error banner, a green message banner and a "busy…" line. They
+         * are one line now, and they are *inside* the commander — a message
+         * that appears must never move the thing the user is looking at.
+         *
+         * Three levels, deliberately distinct (see `Refusal.tsx` for the same
+         * distinction drawn elsewhere in ART): **busy** is what is happening,
+         * **error** means something broke and carries an `ART-*` id,
+         * **hint** is ART declining a question that broke nothing — "both
+         * panes are local folders" is the second kind, and used to shout in
+         * red. The separate "N items selected" bar is gone: the per-pane
+         * status line already carries selected-of-total in Total Commander's
+         * own format, which is where task 3 was told to put it.
+         */}
+        {(busy || error || hint || message) && (
+          <div
+            className={`tc-chrome-row tc-message-row${
+              busy ? "" : error ? " tc-message-error" : hint ? " tc-message-hint" : " tc-message-ok"
+            }`}
+            role="status"
+          >
+            {busy ? t("files.busy.suffix", { busy }) : (error ?? hint ?? message)}
+          </div>
+        )}
 
         {/*
          * The command line (brief §1.4): full width, directly above the F-key
@@ -2700,40 +2760,6 @@ export function FileManager() {
         <div className="tc-chrome-row tc-fnkey-row">
           <FunctionKeyBar actions={actions} />
         </div>
-      </div>
-
-      <CheckoutPanel
-        onChanged={(row) => {
-          setMessage(t("files.status.writtenBack", { name: row.name }));
-          // Whichever pane holds that image needs re-listing: an edit that
-          // changed a file's size moved its blocks.
-          for (const side of ["left", "right"] as Side[]) {
-            if (pane(side).location === row.image) void refresh(side);
-          }
-        }}
-        onError={setError}
-      />
-
-      {/* What a copy will do to names already taken, kept where the user can
-          see it rather than buried in the plan dialog they may not see. */}
-      <div className="faint" style={{ fontSize: 11, marginTop: 6 }}>
-        {t("files.policy.label")}{" "}
-        {(
-          [
-            ["skip", "files.policy.skip"],
-            ["overwrite", "files.policy.overwrite"],
-            ["rename", "files.policy.rename"],
-          ] as Array<[OverwritePolicy, string]>
-        ).map(([value, labelKey]) => (
-          <button
-            key={value}
-            className={`btn${policy === value ? " btn-primary" : ""}`}
-            style={{ fontSize: 11, marginLeft: 4 }}
-            onClick={() => setPolicy(value)}
-          >
-            {t(labelKey)}
-          </button>
-        ))}
       </div>
 
       {plan && (

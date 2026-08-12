@@ -4,7 +4,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 
 import { useSettingsStore } from "@/stores/settingsStore";
 import { LANGUAGE_NAMES, SUPPORTED_LANGUAGES } from "@/i18n";
-import type { Theme, UxMode } from "@/lib/settings";
+import type { StoredOverwritePolicy, Theme, UxMode } from "@/lib/settings";
 import {
   oplogExportTo,
   oplogPath,
@@ -68,6 +68,25 @@ export function SettingsPage() {
           </label>
           <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
             {t("settings.showSourceButtonsHint")}
+          </p>
+        </Field>
+        {/* The permanent footer that used to ask this on the Files screen is
+            gone. The copy dialog still asks, at the moment a collision is
+            actually found — and answering it there changes this. */}
+        <Field label={t("settings.overwritePolicy")}>
+          <select
+            className="btn"
+            value={settings.overwritePolicy}
+            onChange={(e) =>
+              void update({ overwritePolicy: e.target.value as StoredOverwritePolicy })
+            }
+          >
+            <option value="skip">{t("files.policy.skip")}</option>
+            <option value="overwrite">{t("files.policy.overwrite")}</option>
+            <option value="rename">{t("files.policy.rename")}</option>
+          </select>
+          <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+            {t("settings.overwritePolicyHint")}
           </p>
         </Field>
       </section>

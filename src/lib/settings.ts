@@ -19,6 +19,10 @@ async function store() {
 export type Theme = "dark" | "light";
 export type UxMode = "beginner" | "power";
 
+/** Shape of `OverwritePolicy` in `lib/sources.ts`, restated so this module
+ *  stays free of feature types — the same reason `StoredMirror` below is. */
+export type StoredOverwritePolicy = "skip" | "overwrite" | "rename";
+
 /** Shape of `MirrorInfo` in `lib/sources.ts`, restated so this module stays
  *  free of feature types. */
 export interface StoredMirror {
@@ -53,6 +57,20 @@ export interface AppSettings {
    * six kinds of thing a pane can open.
    */
   showSourceButtons: boolean;
+  /**
+   * What a copy does about a name the destination already holds.
+   *
+   * A *setting* since phase 2b task 3, not a control on the Files screen. The
+   * commander used to carry a permanent footer asking the question whether or
+   * not it was about to come up; Total Commander asks it in the copy dialog,
+   * at the moment it matters, and `CopyPlanDialog` does exactly that when the
+   * pre-flight finds a collision. This is the answer it starts from — and the
+   * one the copies that never show a dialog (a single file, a copy out) use.
+   *
+   * `"skip"` by default: of the three, it is the only one that cannot lose
+   * data the user already had.
+   */
+  overwritePolicy: StoredOverwritePolicy;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -65,6 +83,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   aminetMirrors: null,
   sidebarCollapsed: false,
   showSourceButtons: false,
+  overwritePolicy: "skip",
 };
 
 export async function getSettings(): Promise<AppSettings> {
@@ -78,6 +97,9 @@ export async function getSettings(): Promise<AppSettings> {
         (await s.get<boolean>("sidebarCollapsed")) ?? DEFAULT_SETTINGS.sidebarCollapsed,
       showSourceButtons:
         (await s.get<boolean>("showSourceButtons")) ?? DEFAULT_SETTINGS.showSourceButtons,
+      overwritePolicy:
+        (await s.get<StoredOverwritePolicy>("overwritePolicy")) ??
+        DEFAULT_SETTINGS.overwritePolicy,
       lastCollectionDir:
         (await s.get<string>("lastCollectionDir")) ?? DEFAULT_SETTINGS.lastCollectionDir,
       winuaePath: (await s.get<string>("winuaePath")) ?? DEFAULT_SETTINGS.winuaePath,

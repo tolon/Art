@@ -125,6 +125,9 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // line's, all reading a `Phrase.key` the same way `copyDirection`'s
     // refusal already does. Both modules' every refusal is enumerated in
     // `phrase-keys.test.ts`, which is the check this one cannot make.
-    expect(dynamicCalls).toBe(49);
+    // 49 → 48 (same task): the permanent collision-policy footer is gone, and
+    // its `t(labelKey)` over a three-entry table with it. Settings names the
+    // same three keys literally now.
+    expect(dynamicCalls).toBe(48);
   });
 });

@@ -179,6 +179,8 @@
     "showSourceButtons": "Drive and source buttons",
     "showSourceButtonsLabel": "Show the button row above each pane",
     "showSourceButtonsHint": "Off by default: the source box in each pane's header opens the same drives and images, and Total Commander runs without a button bar.",
+    "overwritePolicy": "When a name is already taken",
+    "overwritePolicyHint": "Where a copy starts from. The copy dialog asks again whenever it actually finds a name in the way, and your answer there becomes this.",
     "theme": "Theme",
     "themeDark": "Dark",
     "themeLight": "Light",
@@ -861,7 +863,6 @@
       "toLeftTitle": "Copy the selected item to the left"
     },
     "policy": {
-      "label": "When a name is already taken:",
       "skip": "leave it alone",
       "overwrite": "replace it",
       "rename": "keep both"
@@ -907,10 +908,6 @@
       "attributesReasonSelect": "Select something first",
       "attributesReasonNeedsImage": "Attributes belong to files inside an image",
       "reasonMultiple": "Works on one entry — select only that one"
-    },
-    "selection": {
-      "summary_one": "{{count}} item selected ({{size}})",
-      "summary_other": "{{count}} items selected ({{size}})"
     },
     "toolbar": {
       "folder": "Folder...",

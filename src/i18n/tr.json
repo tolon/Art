@@ -179,6 +179,8 @@
     "showSourceButtons": "Sürücü ve kaynak düğmeleri",
     "showSourceButtonsLabel": "Her bölmenin üstündeki düğme satırını göster",
     "showSourceButtonsHint": "Öntanımlı olarak kapalı: her bölmenin başlığındaki kaynak kutusu aynı sürücüleri ve imajları açar, ayrıca Total Commander da düğme çubuğu olmadan çalışır.",
+    "overwritePolicy": "Bir ad zaten kullanılıyorsa",
+    "overwritePolicyHint": "Bir kopyalamanın başlangıç davranışı. Kopyalama penceresi, gerçekten önünde bir ad bulduğunda yeniden sorar ve oradaki yanıtınız buraya işlenir.",
     "theme": "Tema",
     "themeDark": "Koyu",
     "themeLight": "Açık",
@@ -861,7 +863,6 @@
       "toLeftTitle": "Seçili öğeyi sola kopyala"
     },
     "policy": {
-      "label": "Bir ad zaten kullanılıyorsa:",
       "skip": "olduğu gibi bırak",
       "overwrite": "üzerine yaz",
       "rename": "ikisini de tut"
@@ -907,10 +908,6 @@
       "attributesReasonSelect": "Önce bir şey seçin",
       "attributesReasonNeedsImage": "Nitelikler yalnızca bir imaj içindeki dosyalara aittir",
       "reasonMultiple": "Yalnızca tek bir öğede çalışır"
-    },
-    "selection": {
-      "summary_one": "{{count}} öğe seçili ({{size}})",
-      "summary_other": "{{count}} öğe seçili ({{size}})"
     },
     "toolbar": {
       "folder": "Klasör...",

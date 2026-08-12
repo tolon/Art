@@ -269,11 +269,32 @@
   font-size: 11px;
 }
 
-/* The selection-bar text (between the panes and the command line) is
-   read-only status, not the pane fill — it keeps its own muted styling
-   rather than inheriting pane colours it was never designed against. */
-.tc-commander .selection-bar {
-  padding: 2px 6px;
+/* The one status strip (task 3), between the panes and the command line.
+   Everything that used to stack above the panes and push them down — a red
+   error banner, a green message banner, a "busy…" line — is this one row now,
+   docked with the rest of the chrome.
+
+   Three levels, and the colours are what tell them apart at a glance: what is
+   happening (plain chrome), something broke (the error colour), and ART
+   declining something that broke nothing (the warning colour — see
+   `Refusal.tsx` for the same distinction drawn full-size). */
+.tc-message-row {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+  padding: 3px 6px;
+}
+.tc-message-error {
+  color: #ff9a9a;
+  background: color-mix(in srgb, #ff6b6b 18%, var(--tc-chrome-bg));
+}
+.tc-message-hint {
+  color: #ffdb70;
+  background: color-mix(in srgb, #ffd23f 16%, var(--tc-chrome-bg));
+}
+.tc-message-ok {
+  color: var(--tc-chrome-text);
 }
 
 /* ---- The column header row and the row list ---------------------------- */
@@ -450,7 +471,12 @@
 
 .tc-commander {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto auto;
+  /* Panes, then the dock: the checkout panel (usually absent), the status
+     strip (usually absent), the command line, the F-key bar. Only the first
+     track is sized; everything below it takes what it needs, and an absent
+     row is simply a zero-high one — the panes never move because a message
+     appeared. */
+  grid-template-rows: minmax(0, 1fr) auto auto auto auto;
   min-height: 0;
   flex: 1;
 }
