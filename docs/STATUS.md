@@ -18,17 +18,20 @@ Update it at the end of any session that changes what works.
 
 | | |
 |---|---|
-| **Last updated** | 2026-08-11 |
+| **Last updated** | 2026-08-12 |
 | **Version** | 0.1.0 (unreleased) |
-| **Current stage** | Phase 1a — the Commander (complete) |
+| **Current stage** | Phase 2a — content-first detection and containers (complete) |
 | **Build** | PASS |
-| **Tests** | 731 Rust passed, 0 failed; 107 frontend passed, 0 failed |
+| **Tests** | 908 Rust passed, 0 failed; 137 frontend passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
 | **amitools oracle** | 48 checks, both directions |
-| **i18n** | `en.json` and `tr.json`, 863 leaf keys each, parity enforced by `pnpm test` |
+| **7-Zip disc oracle** | 4 fixtures — Joliet, ISO9660-only, raw Mode 1, raw Mode 2/XA — names, sizes and every file's SHA-256 |
+| **cargo-deny** | advisories, bans, licences, sources — all ok |
+| **MSRV** | 1.93 (raised from 1.77 on 2026-08-12, for a maintained 7z decoder) |
+| **i18n** | `en.json` and `tr.json`, 872 leaf keys each, parity enforced by `pnpm test` |
 | **Release bundle** | built and verified in an earlier session; not rebuilt this pass |
-| **Real hardware** | Reached for the first time this phase — see Phase 1a below. No screen has been: ART-062 (language) is still open, and the Total Commander restyle this phase shipped has never been seen running by anyone. |
+| **Real hardware** | Two ADFs booted/mounted under licensed Kickstart in WinUAE (Phase 1a). **Nothing added since has been seen on a screen** — not the disc pane, not the archive pane, not the C64 pane (ART-062) |
 
 Reproduce the numbers above:
 
@@ -37,8 +40,10 @@ pnpm lint                                              # TypeScript
 pnpm test                                              # frontend unit tests (i18n parity, phrase keys)
 cd src-tauri && cargo fmt --check                      # formatting
 cd src-tauri && cargo clippy --all-targets -- -D warnings
-cd src-tauri && cargo test                             # unit + integration
+cd src-tauri && cargo test                             # unit + integration (twice — ART-059)
 pip install amitools && python scripts/oracle-check.py # independent cross-check
+python scripts/iso-oracle-check.py                     # the disc reader vs 7-Zip (needs 7z; not in CI)
+cd src-tauri && cargo deny check                       # licences and advisories
 pnpm tauri build                                       # full bundle (slow)
 ```
 
@@ -381,7 +386,124 @@ it was written and tested (Rust + Vitest), never opened in `pnpm tauri dev`.
 ART-062 (no language checked on screen) predates this phase and is still
 open; it now also covers a phase's worth of new UI nobody has looked at.
 
-### ⏳ Stage 5 — Spec addenda (next)
+### ✅ Phase 2a — Content-first detection and containers (complete, 2026-08-12)
+
+Plan: [2026-08-11-phase-2a-content-detection-and-optical.md](superpowers/plans/2026-08-11-phase-2a-content-detection-and-optical.md),
+amended 2026-08-11 (A1–A7 in that file's Amendments section).
+
+The commander stops asking what a file is *called* and starts asking what it
+*is*, and grows container kinds behind the pane model it already has: a CD, two
+archive formats, and Commodore 64 disk and tape images.
+
+Done: content-first `detect()`; an ISO9660 + Joliet reader; a disc pane with F5
+out of it in both directions; **an independent 7-Zip oracle** for the disc
+reader, raw layouts included; Mode 2/XA Form 1 (which closed ART-075); and one
+shared archive security gate with the format behind a backend trait.
+
+Then ZIP and 7z behind that gate, and the archive pane with the virtual tree
+that gives a flat list of names folders to walk into (Task 4). Then the
+Commodore side (Task 5): D64/D71/D81 and T64 read and browsable, TAP/PRG/CRT
+identified and described — with the 40-track variants and the "a T64's header
+is not to be trusted" rules amendments A3 and A4 added.
+
+**What the phase actually changed, in one line each:**
+
+- **A file is what its bytes say**, not what its name says. `.img` holding a
+  floppy is a floppy; an LHA renamed `.dat` still opens. Fixing that found
+  [ART-076](ISSUES.md#fixed) — LHA's own signature had been matched at the
+  wrong offset all along, so content-first detection had never worked for the
+  format ART is built around.
+- **Four new container kinds behind the one pane model**: a CD, ZIP, 7z, and
+  Commodore disks and tapes. Not four new screens.
+- **One security gate for every archive** (`core/archive/extract.rs`), written
+  *before* the second format arrived, with one hostile-archive test each
+  backend is run through.
+- **An independent oracle for the disc reader** (7-Zip), which is what
+  replaced the cancelled real-Amiga-CD rung and what closed
+  [ART-075](ISSUES.md#fixed)'s "two layers wrong together" for raw tracks.
+- **The MSRV moved to 1.93**, deliberately, so 7z uses a maintained decoder
+  rather than one fourteen versions behind.
+
+**Defects found and fixed on the way:** ART-075 (Mode 2/XA), ART-076 (LHA
+detection), ART-077 (the file manager ignored the object a workflow sent it —
+so "Open in the file manager" had been doing nothing since Task 3), and
+**ART-079** — a 7z from any real tool gave one entry another entry's bytes,
+found by pointing the reader at a file 7-Zip wrote while every fixture ART
+builds for itself passed.
+
+**The third time that shape has bitten this project** (ART-032…035, ART-075,
+now ART-079), so it is now one command rather than an idea:
+`read_foreign_archive_for_oracle_when_asked` and
+`read_foreign_c64_for_oracle_when_asked` read files ART did not write, and
+print a hash per entry rather than a length — the defect gave every file
+exactly the right length.
+
+**Owed, recorded not fixed:** [ART-078](ISSUES.md#open) — Rock Ridge and the
+Amiga `AS` System Use entry are not read, so an AmigaOS CD's protection bits
+and file comments are lost on the way out.
+
+**Nothing in this phase has been seen on a screen.** Not the disc pane, not
+the archive pane with its virtual tree, not the C64 pane. Every claim above
+rests on tests and on two oracles (ART-062).
+
+**The real-Amiga-CD verification step was cancelled** (amendment A1) — it
+assumed licensed AmigaOS media reliably to hand. `scripts/iso-oracle-check.py`
+covers the risk it existed for, with an implementation that shares no code with
+ART's.
+
+### ⏳ SD Card Appliance Builder — SD-0 … SD-5 (planned, not started)
+
+Gap analysis: [sd-appliance-gap-analysis.md](sd-appliance-gap-analysis.md)
+(2026-08-11, from the PiStorm multiboot architecture). It lists **only** what
+ART lacks; everything ART already has — WHDLoad install, ADF/LHA import, RDB
+creation, Gotek prep, config round-trip, journalled writes, Aminet, oplog, the
+job queue — the SD work consumes rather than reimplements.
+
+The story: build a complete PiStorm/Emu68 SD card from Windows, verified,
+that boots a real Amiga.
+
+**Which Amiga is a parameter, not an assumption** (decision, 2026-08-12). The
+gap analysis was written around "the A500"; that is one of the machines
+PiStorm goes into. What varies by machine is data the build already carries —
+which Kickstart ROM lands on the FAT32 partition, what the Emu68 config says
+about the board, which OS release is installed, what partition geometry suits
+the card — not a code path. Two things are still the user's to settle before
+SD-1 designs a layout: which PiStorm board(s) to target first, and which
+machine the first card gets verified on (recorded with the result, not
+generalised from it).
+
+| Phase | Contents |
+|---|---|
+| **SD-0** | Prior-art teardown: Emu68-Imager, emu68hatcher, hdf2emu68 (G0) |
+| **SD-1** | Image-first foundations: MBR + FAT32 boot partition (G2), RDB filesystem embedding FSHD/LSEG (G4), build manifest (G7) |
+| **SD-2** | The card exists: raw device flash + verify (G1), boot priority and a recovery volume (G6), whole-card validation (G8) |
+| **SD-3** | Content, preloaded: PFS3 via a scripted WinUAE session (G3 route D), OS install engine (G5), launcher metadata export (G10), layout policy (G11) |
+| **SD-4** | The flagship: native PFS3 write in ART (G3 route B) — its own brief; route D's harness becomes its oracle |
+| **SD-5** | Comfort: card backup/restore (G12), capacity planner (G13) |
+
+Three decisions in it are worth knowing before reading the code they will
+produce:
+
+- **Never build on the device.** Everything is built into a sparse image file
+  through the existing tested paths; a separate, dumb, heavily guarded step
+  flashes and verifies. §56 already forbids the alternative.
+- **v1 targets Emu68 only.** The classic Linux/Musashi route is a different
+  build and is out of scope in writing, not by omission.
+- **PFS3 preload starts borrowed and ends native.** Route D has the real
+  `pfs3aio` do the writing inside a scripted WinUAE session — correct by
+  construction, zero reimplementation risk — while route B (a native PFS3
+  writer, the thing no other imager has) stays the flagship. Once B exists, D
+  is its oracle.
+
+The milestone that matters first is not a preloaded 128 GB card: it is **one
+card, built entirely from Windows, that boots a real Amiga into AmigaOS 3.2
+with a recovery volume beside it** — with the machine and the board it was
+proved on written down beside the claim.
+
+Sequenced after Phase 2a. Whether it goes before or after Stage 5's AI layer
+is open.
+
+### ⏳ Stage 5 — Spec addenda
 
 From `ART-SPEC-ADDENDA-COMPLETE.md` in the project root. **Stage 4 has landed, so
 both are now unblocked** — every prerequisite they name by hand exists:
@@ -527,7 +649,15 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
    the two-pane manager has real focus, multi-select, batch copy/delete,
    sorting, a filename mask, and now boot code that works; see "Phase 1a"
    above for what is not (volume→volume batching, ART-064/065).
-5. The named work left in the briefs:
+5. **Phase 2a is complete** on branch `phase-2a` (not yet merged to `master`)
+   — see its section above for what it changed and what it left owed, and its
+   plan file's Amendments section for what changed after the plan was written
+   (the real-Amiga-CD step is cancelled; a 7-Zip oracle replaced it).
+6. **The SD Card Appliance Builder is planned but not started** —
+   [sd-appliance-gap-analysis.md](sd-appliance-gap-analysis.md), phases
+   SD-0 … SD-5. It is sequenced after Phase 2a; its order relative to the AI
+   layer is still open.
+7. The named work left in the briefs:
    - **§45.5 AI Workflow Layer.** Designed
      ([design-ai-layer.md](design-ai-layer.md)), not built. Its prerequisites
      (operation log with `origin: ai-plan`, a tested workflow catalogue) are
@@ -560,6 +690,11 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-12 | Phase 2a closed. Also this session: the built-in machine profiles now cover the classic line end to end (A1000 … CD32), and Commodore 8-bit files became scope in writing (spec addendum §10.5) | 908 Rust / 137 frontend |
+| 2026-08-12 | Task 5: `core/cbm` — D64/D71/D81 (35 and 40 track) and T64 read and browsable, TAP/PRG/CRT identified with a real answer rather than a shrug. Amendments A3 (40-track sizes, refusal carries the size) and A4 (a T64's header is not trusted) both in. New `Commodore8Bit` category so a 1541 image is never offered ADF Studio or Gotek | 908 Rust / 137 frontend |
+| 2026-08-12 | Task 4: one archive security gate with the format behind a backend trait, then ZIP and 7z through it, then the archive pane and its virtual tree. MSRV 1.77 → 1.93 for a maintained 7z decoder. ART-076 (LHA matched at the wrong offset) and ART-077 (the file manager ignored a workflow's object) found and fixed; cargo-deny was broken three ways and now runs | 857 Rust / 134 frontend |
+| 2026-08-12 | Tasks 3a/3b: `scripts/iso-oracle-check.py` checks the disc reader against 7-Zip (raw layouts included, by stripping sectors); Mode 2/XA Form 1 read and Form 2 refused, closing ART-075 | 819 Rust / 129 frontend |
+| 2026-08-11 | Tasks 1–3: content-first `detect()`, an ISO9660 + Joliet reader, and a disc pane with F5 out of it both ways. Task 3's review fixes landed after a mid-session reboot: one copy-out boundary joined in Rust, the user's overwrite policy reaching a disc, and one selected file copying as that file | 814 Rust / 129 frontend |
 | 2026-08-11 | Task 8 closes Phase 1a: `volume_copy_between` covered end to end through its own command pipeline, not just the staging primitives beneath it (source proved byte-for-byte unchanged). Docs updated for the whole phase; five debt items opened (ART-064 … ART-068), none data-unsafe | 731 Rust / 107 frontend |
 | 2026-08-11 | Phase 1a: real pane focus + Tab, `Set<string>` multi-select (Shift/Ctrl/Insert/Ctrl+A), batch copy-in/delete/multi-archive-install as one job each, one listing order + per-pane sort + filename mask, Files restyled as Total Commander with an Attr column. Outside the plan: ART-063 fixed — ART writes real boot code, verified by booting a real image; first real-hardware verification of any kind, under WinUAE/Amiga Forever (A1200, A500+), not bare metal. First frontend test infrastructure (Vitest+jsdom) landed in Task 1 | 729 Rust / 107 frontend |
 | 2026-08-10 | Phase 0b: nine dead code paths removed (ART-047/048/051 closed); `tr.json` ships beside `en.json` at 814 keys each, every screen/component/`src/lib` helper translated, parity enforced by a new frontend test suite (vitest, 0 → 10 tests). Rust error strings and `formatAge`'s English pluralisation remain untranslated, and no language has been checked on screen — recorded as ART-060/061/062 | 683 Rust / 10 frontend |

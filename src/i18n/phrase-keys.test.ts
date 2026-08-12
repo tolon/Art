@@ -21,6 +21,7 @@ import {
   type PackageMeta,
   type PackageUpdate,
 } from "@/lib/sources";
+import { copyDirection, ISO_WRITE_REFUSAL } from "@/lib/isoPane";
 import { describeLayout, type ImageLayout } from "@/lib/volume";
 import {
   describeCopy,
@@ -258,6 +259,21 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     for (const report of reports) {
       const phrase = describeCopy(report);
       expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  // Only one variant to enumerate — every direction that writes into a disc
+  // resolves to the same `Phrase` — but it is still a `Phrase` reaching the
+  // screen through `t()` rather than a literal `t("…")` call, so it is the
+  // shape `literal-keys.test.ts` cannot check for itself.
+  it("copyDirection: a refused direction's reason resolves, for every source kind", () => {
+    expect(isLeafKey(ISO_WRITE_REFUSAL.key)).toBe(true);
+    for (const source of ["local", "adf", "hdf", "iso"] as const) {
+      const result = copyDirection(source, "iso");
+      expect(result.kind).toBe("refused");
+      if (result.kind === "refused") {
+        expect(isLeafKey(result.reason.key), result.reason.key).toBe(true);
+      }
     }
   });
 

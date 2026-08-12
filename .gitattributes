@@ -1,0 +1,56 @@
+# Line endings, pinned once.
+#
+# Without this file and with `core.autocrlf` unset, a checkout on Windows can
+# flip every text file between CRLF and LF and present ~50k changed lines as
+# real work — which is exactly what a reboot mid-session left behind on
+# 2026-08-11. What the repository stores is LF; what your editor sees is up to
+# your checkout.
+#
+# The rule: source is LF in the repository, binaries are never touched.
+
+* text=auto
+
+.gitattributes text eol=lf
+.gitignore     text eol=lf
+
+*.rs   text eol=lf
+*.ts   text eol=lf
+*.tsx  text eol=lf
+*.js   text eol=lf
+*.css  text eol=lf
+*.html text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.py   text eol=lf
+*.sql  text eol=lf
+*.sh   text eol=lf
+
+# Amiga and disc images ART reads and writes: a single translated byte is a
+# corrupt image, so these are never text.
+*.adf  binary
+*.hdf  binary
+*.hdz  binary
+*.iso  binary
+*.img  binary
+*.raw  binary
+*.rom  binary
+*.lha  binary
+*.lzx  binary
+*.zip  binary
+*.7z   binary
+*.d64  binary
+*.d71  binary
+*.d81  binary
+*.t64  binary
+*.uaem binary
+
+# Assets.
+*.png  binary
+*.ico  binary
+*.icns binary
+*.ttf  binary
+*.woff binary
+*.woff2 binary

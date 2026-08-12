@@ -1,8 +1,8 @@
 // Two-pane file manager, Norton Commander style.
 //
-// Each pane independently shows a local folder, an ADF image or an HDF image.
-// Copying runs between panes, by button or by dragging, and a local file can be
-// dragged out to Explorer.
+// Each pane independently shows a local folder, an ADF image, an HDF image or
+// an optical disc (ISO9660/Joliet). Copying runs between panes, by button or
+// by dragging, and a local file can be dragged out to Explorer.
 //
 // ## One kind of volume, two kinds of file
 //
@@ -17,6 +17,20 @@
 // rule covers writing: a volume ART will not write to keeps its lock badge and
 // the reason on hover, rather than a pane that quietly does nothing (§96).
 //
+// ## A disc is not a volume
+//
+// An ISO pane looks like a third kind of volume but is not one: it carries no
+// `volumeIndex` (there is nothing to index — a disc is a bare, single-volume
+// read), no `capability` (there is nothing to write, ever), and its own
+// `isoExtent`/`isoLength`/`isoTrail` rather than the ADF/HDF `dirBlock`/
+// `trail` — a disc's directory is `(extent, length)`, not a block number, and
+// giving it a second meaning inside `dirBlock` is how the wrong block gets
+// read. `writableVolume` already returns `null` for it (no `volumeIndex`),
+// which is what makes F4/F6/F7/F8 and F5-in refuse without any extra check at
+// their call sites; see `@/lib/isoPane`'s `copyDirection` for the one place
+// that routes every copy direction, including refusing every one that would
+// write *into* a disc.
+//
 // ## Function keys
 //
 // F3 View · F5 Copy · F6 Rename · F7 New folder · F8 Delete · F9 Attributes,
@@ -24,6 +38,9 @@
 // about is a feature nobody has.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
+
+import { analyzePaths } from "@/lib/api";
 import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
@@ -111,8 +128,29 @@ import {
   type WriteCapability,
 } from "@/lib/volumeWrite";
 import { usePowerMode } from "@/lib/uxmode";
+import { isoCopyToVolume, isoExtract, isoExtractFile, isoList, isoOpen, type IsoInfo } from "@/lib/iso";
+import {
+  archiveEnter,
+  archiveLeave,
+  copyDirection,
+  enterIsoTrail,
+  leaveIsoTrail,
+  ARCHIVE_WRITE_REFUSAL,
+  C64_WRITE_REFUSAL,
+  ISO_WRITE_REFUSAL,
+  type IsoTrailEntry,
+  type PaneKind,
+} from "@/lib/isoPane";
+import {
+  archiveCopyToVolume,
+  archiveExtract,
+  archiveExtractFile,
+  archiveList,
+  archiveOpen,
+  type ArchiveInfo,
+} from "@/lib/archive";
+import { cbmExtract, cbmExtractFile, cbmList, cbmOpen, type CbmInfo } from "@/lib/cbm";
 
-type PaneKind = "local" | "adf" | "hdf";
 type Side = "left" | "right";
 
 /** One pane's state. */
@@ -120,10 +158,31 @@ interface PaneState {
   kind: PaneKind;
   /** Local folder path, or the image file path. */
   location: string;
-  /** Image panes: the directory being shown. */
+  /** ADF/HDF panes: the directory being shown. Never meaningful for an
+   * `"iso"` pane — a disc's directory is `(extent, length)`, not a block
+   * number, so it gets its own `isoExtent`/`isoLength` below rather than
+   * overloading this field with a second meaning. */
   dirBlock: number | null;
-  /** Image panes: folders walked into, so "up" can go back. */
+  /** ADF/HDF panes: folders walked into, so "up" can go back. */
   trail: Array<{ name: string; block: number | null }>;
+  /** ISO panes: the directory being shown — see `dirBlock`'s comment for why
+   * this is not that field. `null` until the disc has been opened. */
+  isoExtent: number | null;
+  isoLength: number | null;
+  /** ISO panes: folders walked into, so "up" can go back — see `trail`'s
+   * comment for why this is not that field. */
+  isoTrail: IsoTrailEntry[];
+  /**
+   * Archive panes: the folder being shown, as a path inside the archive
+   * (`""` is the root). `null` for every other pane kind.
+   *
+   * One string and no trail, unlike the two fields above, because an
+   * archive's folders come from the entry *names* — `Tools/Sub/Deep.txt` — so
+   * the path is the address and "up" is arithmetic on it
+   * (`archiveLeave` in `@/lib/isoPane`). A disc needs a trail because
+   * `(extent, length)` says nothing about what is above it.
+   */
+  archiveDir: string | null;
   entries: PanelEntry[];
   parent: string | null;
   truncated: boolean;
@@ -161,6 +220,10 @@ function emptyPane(): PaneState {
     location: "",
     dirBlock: null,
     trail: [],
+    isoExtent: null,
+    isoLength: null,
+    isoTrail: [],
+    archiveDir: null,
     entries: [],
     parent: null,
     truncated: false,
@@ -197,6 +260,9 @@ function writableVolume(
 /** Why writing is unavailable in this pane, for a disabled key's tooltip. */
 function writeRefusal(state: PaneState, t: (key: string) => string): string {
   if (state.kind === "local") return t("files.writeRefusal.local");
+  if (state.kind === "iso") return t(ISO_WRITE_REFUSAL.key);
+  if (state.kind === "archive") return t(ARCHIVE_WRITE_REFUSAL.key);
+  if (state.kind === "c64") return t(C64_WRITE_REFUSAL.key);
   if (state.volumeIndex === null) return t("files.writeRefusal.noPartition");
   return state.capability?.reason ?? t("files.writeRefusal.default");
 }
@@ -649,18 +715,204 @@ export function FileManager() {
     [setPane, resetSelection]
   );
 
-  async function chooseImage(side: Side, kind: "adf" | "hdf") {
+  /**
+   * Open a disc on its root directory — a bare volume, the same shape an ADF
+   * is, just addressed by `(extent, length)` instead of a block number.
+   *
+   * A disc is read-only end to end: no `capability` is fetched, because
+   * there is no `volumeIndex` to fetch one for (`writableVolume` already
+   * returns `null` for any pane with `volumeIndex === null`, which is what
+   * makes F6/F7/F8 and F5-in refuse without any extra check at their call
+   * sites — see `writeRefusal` for the message that refusal shows).
+   */
+  const openIso = useCallback(
+    async (
+      side: Side,
+      path: string,
+      extent: number | null,
+      length: number | null,
+      trail: IsoTrailEntry[]
+    ) => {
+      try {
+        // `extent`/`length` are `null` only when the disc has not been
+        // opened this session yet (first open, or "up" past a stale pane) —
+        // `isoOpen` is what finds the root in that case.
+        const info: IsoInfo = await isoOpen(path);
+        const rootExtent = extent ?? info.root_extent;
+        const rootLength = length ?? info.root_length;
+        const entries: PanelEntry[] = await isoList(path, rootExtent, rootLength);
+        setPane(side, {
+          ...emptyPane(),
+          kind: "iso",
+          location: path,
+          isoExtent: rootExtent,
+          isoLength: rootLength,
+          isoTrail: trail,
+          entries,
+          volumeName: info.volume_name,
+        });
+        resetSelection(side);
+        setFocused(side);
+      } catch (e) {
+        setPane(side, { ...emptyPane(), kind: "iso", location: path, error: String(e) });
+      }
+    },
+    [setPane, resetSelection]
+  );
+
+  /**
+   * Open an archive as a pane — the same container model as a disc, over a
+   * format that has no directories at all.
+   *
+   * `dir` is a path inside the archive (`""` is the root). The folders it
+   * walks are built from the entry names by `core::archive::tree`, which
+   * refuses to show a name that is not a plain relative path; `archive_open`
+   * reports how many it left out, so a listing that is missing entries says
+   * so instead of quietly being short.
+   *
+   * Read-only end to end, like a disc: no `capability` is fetched and no
+   * `volumeIndex` is set, which is what makes F6/F7/F8 and every copy *into*
+   * this pane refuse without a single extra check at their call sites.
+   */
+  const openArchive = useCallback(
+    async (side: Side, path: string, dir: string) => {
+      try {
+        const info: ArchiveInfo = await archiveOpen(path);
+        const entries: PanelEntry[] = await archiveList(path, dir);
+        setPane(side, {
+          ...emptyPane(),
+          kind: "archive",
+          location: path,
+          archiveDir: dir,
+          entries,
+          volumeName: info.format.toUpperCase(),
+          warnings:
+            info.unusable_names > 0
+              ? [t("files.archive.unusableNames", { count: info.unusable_names })]
+              : [],
+        });
+        resetSelection(side);
+        setFocused(side);
+      } catch (e) {
+        setPane(side, { ...emptyPane(), kind: "archive", location: path, error: String(e) });
+      }
+    },
+    [setPane, resetSelection, t]
+  );
+
+  /**
+   * Open a Commodore 8-bit disk or tape as a pane.
+   *
+   * **Flat, so there is no navigation.** A 1541 directory has no
+   * subdirectories and neither does a T64: what opens is the whole image, and
+   * `goUp` has nothing to do here on purpose rather than by omission.
+   *
+   * Read-only like the disc and archive panes, and by the same mechanism —
+   * no `volumeIndex`, so every write action refuses without a check of its
+   * own. Whatever the image says about itself that ART had to work around
+   * (a T64 header that disagrees with its records, entries whose declared
+   * length the file cannot hold) arrives as `notes` and is shown, because an
+   * image that lists differently from what its own header claims should say
+   * so.
+   */
+  const openCbm = useCallback(
+    async (side: Side, path: string) => {
+      try {
+        const info: CbmInfo = await cbmOpen(path);
+        const entries: PanelEntry[] = await cbmList(path);
+        setPane(side, {
+          ...emptyPane(),
+          kind: "c64",
+          location: path,
+          entries,
+          volumeName: info.disk_id
+            ? `${info.volume_name} ${info.disk_id}`
+            : info.volume_name,
+          warnings: info.notes,
+        });
+        resetSelection(side);
+        setFocused(side);
+      } catch (e) {
+        setPane(side, { ...emptyPane(), kind: "c64", location: path, error: String(e) });
+      }
+    },
+    [setPane, resetSelection]
+  );
+
+  async function chooseImage(side: Side, kind: "adf" | "hdf" | "iso" | "archive" | "c64") {
     const picked = await open({
       multiple: false,
       filters:
         kind === "adf"
           ? [{ name: "Amiga floppy image", extensions: ["adf"] }]
-          : [{ name: "Amiga hard disk image", extensions: ["hdf", "hda", "img"] }],
+          : kind === "hdf"
+            ? [{ name: "Amiga hard disk image", extensions: ["hdf", "hda", "img"] }]
+            : kind === "iso"
+              ? [{ name: "Optical disc image", extensions: ["iso"] }]
+              : kind === "archive"
+                ? // The dialog filters by extension because that is all a file
+                  // dialog can do; what the file *is* is decided from its bytes
+                  // once it is open, so a `.lha` holding a ZIP still opens.
+                  [{ name: "Archive", extensions: ["lha", "lzh", "zip", "7z"] }]
+                : [
+                    {
+                      name: "Commodore disk or tape",
+                      extensions: ["d64", "d71", "d81", "t64"],
+                    },
+                  ],
     });
     if (typeof picked !== "string") return;
     if (kind === "adf") await openAdf(side, picked, null, []);
-    else await openHdf(side, picked);
+    else if (kind === "hdf") await openHdf(side, picked);
+    else if (kind === "iso") await openIso(side, picked, null, null, []);
+    else if (kind === "archive") await openArchive(side, picked, "");
+    else await openCbm(side, picked);
   }
+
+  /**
+   * Open whatever the workflow engine sent here, in the left pane.
+   *
+   * Every `Navigate` workflow hands its object over the same way — a route
+   * plus `{ state: { path } }` — and every other studio reads it on mount
+   * (`AdfBrowser`, `CollectionStudio`, …). This screen did not, so
+   * `iso.browse` (Task 3) and `archive.browse` (Task 4) both landed the user
+   * on the file manager with the pane they already had, and the dropped
+   * object nowhere in sight.
+   *
+   * What it is decides which pane opens, and that answer comes from
+   * `analyze_paths` — the same detection the drop panel used to offer the
+   * action in the first place — rather than from the extension.
+   */
+  const location = useLocation();
+  useEffect(() => {
+    const wanted = (location.state as { path?: string } | null)?.path;
+    if (!wanted) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [analysis] = await analyzePaths([wanted]);
+        if (cancelled || !analysis?.plan) return;
+        const category = analysis.plan.detection.category;
+        if (category === "optical-image") await openIso("left", wanted, null, null, []);
+        else if (category === "archive") await openArchive("left", wanted, "");
+        else if (category === "commodore-8bit") await openCbm("left", wanted);
+        else if (category === "floppy-image") await openAdf("left", wanted, null, []);
+        else if (category === "harddisk-image") await openHdf("left", wanted);
+        else if (category === "directory") await openLocal("left", wanted);
+      } catch {
+        // A path that cannot be analysed is not worth an error banner on a
+        // screen the user may have navigated to for something else; the pane
+        // simply stays as it was.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // `location.state` is the trigger: navigating here again with a different
+    // object must open that one.
+  }, [location.state, openIso, openArchive, openCbm, openAdf, openHdf, openLocal]);
 
   async function chooseFolder(side: Side) {
     const picked = await open({ directory: true, multiple: false });
@@ -689,6 +941,21 @@ export function FileManager() {
         ...state.trail,
         { name: entry.name, block: state.dirBlock },
       ]);
+    } else if (
+      state.kind === "iso" &&
+      entry.iso_extent !== null &&
+      state.isoExtent !== null &&
+      state.isoLength !== null
+    ) {
+      await openIso(
+        side,
+        state.location,
+        entry.iso_extent,
+        entry.bytes,
+        enterIsoTrail(state.isoTrail, entry.name, state.isoExtent, state.isoLength)
+      );
+    } else if (state.kind === "archive" && state.archiveDir !== null) {
+      await openArchive(side, state.location, archiveEnter(state.archiveDir, entry.name));
     }
   }
 
@@ -717,6 +984,12 @@ export function FileManager() {
         // Out of the partition, back to the list of them.
         await openHdf(side, state.location);
       }
+    } else if (state.kind === "iso" && state.isoTrail.length > 0) {
+      const back = leaveIsoTrail(state.isoTrail);
+      if (back) await openIso(side, state.location, back.extent, back.length, back.trail);
+    } else if (state.kind === "archive" && state.archiveDir !== null) {
+      const up = archiveLeave(state.archiveDir);
+      if (up !== null) await openArchive(side, state.location, up);
     }
   }
 
@@ -727,6 +1000,12 @@ export function FileManager() {
         await openLocal(side, state.location);
       } else if (state.kind === "adf") {
         await openAdf(side, state.location, state.dirBlock, state.trail);
+      } else if (state.kind === "iso") {
+        await openIso(side, state.location, state.isoExtent, state.isoLength, state.isoTrail);
+      } else if (state.kind === "archive") {
+        await openArchive(side, state.location, state.archiveDir ?? "");
+      } else if (state.kind === "c64") {
+        await openCbm(side, state.location);
       } else if (state.kind === "hdf") {
         if (state.image && state.volumeIndex !== null) {
           await openVolume(
@@ -742,7 +1021,7 @@ export function FileManager() {
         }
       }
     },
-    [pane, openLocal, openAdf, openHdf, openVolume]
+    [pane, openLocal, openAdf, openHdf, openVolume, openIso, openArchive, openCbm]
   );
 
   // A copy job's result arrives here (§54). One listener, registered once.
@@ -756,6 +1035,17 @@ export function FileManager() {
         setMessage(copyResultText(result.report, t));
         if (result.report.skipped.length > 0) {
           setError(result.report.skipped.slice(0, 3).join(" · "));
+        }
+      } else if (result.kind === "archive_out") {
+        // An archive's own report: it counts entries the gate refused by
+        // name and entries whose declared size was a lie, neither of which a
+        // volume's report has a field for.
+        const { report } = result;
+        setMessage(t("files.status.filesWrittenOut", { count: report.total_files }));
+        if (report.aborted && report.abort_reason) {
+          setError(report.abort_reason);
+        } else if (report.errors.length > 0) {
+          setError(report.errors.slice(0, 3).join(" · "));
         }
       } else {
         const { report } = result;
@@ -810,14 +1100,19 @@ export function FileManager() {
   /**
    * F5 — copy `entry` from one pane into the other.
    *
-   * All four directions now work, because a volume is a volume whether it came
-   * from a floppy or a partition two gigabytes into a hard disk:
+   * All four Amiga-volume directions work, because a volume is a volume
+   * whether it came from a floppy or a partition two gigabytes into a hard
+   * disk, and both directions out of a disc work too — the whole point of
+   * Task 3:
    *
    * ```text
    * folder → volume    planned first, then one journalled write per file
    * volume → folder    with .uaem sidecars for what NTFS cannot hold
    * volume → volume    staged through a temp folder, verified at both ends
    * folder → folder    refused; that is what Explorer is for
+   * disc   → volume    IsoSource through the same copy_into_volume
+   * disc   → folder    isoExtract/isoExtractFile, `core::iso::IsoImage`
+   * *      → disc      refused; a disc is read-only (see `copyDirection`)
    * ```
    */
   const copyTo = useCallback(
@@ -829,8 +1124,218 @@ export function FileManager() {
       setError(null);
       setMessage(null);
 
-      if (source.kind === "local" && target.kind === "local") {
+      // `copyDirection` (`@/lib/isoPane`) is the routing: which pipeline a
+      // source/target pane pair needs, and the one place that knows every
+      // direction into a disc is refused. `"local-to-local"` and
+      // `"refused"` are handled right here; the two `iso-*` directions get
+      // their own blocks below, before the untouched ADF/HDF logic — a disc
+      // never reaches that code, because both directions it can take are
+      // resolved and returned before it would.
+      const direction = copyDirection(source.kind, target.kind);
+
+      if (direction.kind === "refused") {
+        setError(t(direction.reason.key));
+        return;
+      }
+      if (direction.kind === "local-to-local") {
         setError(t("files.err.bothLocal"));
+        return;
+      }
+
+      // ---- out of a disc, into a volume ----
+      if (direction.kind === "iso-to-volume") {
+        const destination = writableVolume(target);
+        if (!destination) {
+          setError(writeRefusal(target, t));
+          return;
+        }
+        // The picked row carries its own address now, so the pane's open
+        // directory is no longer part of what gets copied.
+        if (entry.iso_extent === null) return;
+        // A subfolder copies its subtree, a file copies exactly itself:
+        // Rust decides which from `is_dir`, so a single picked file no
+        // longer drags the whole open folder across with it — on an install
+        // CD that was hundreds of megabytes while the status line named one
+        // file.
+        setBusy(t("files.status.copying", { name: entry.name }));
+        try {
+          pendingCopy.current = await isoCopyToVolume(
+            source.location,
+            entry.iso_extent,
+            entry.bytes,
+            entry.name,
+            entry.is_dir,
+            entry.date,
+            destination.path,
+            destination.volumeIndex,
+            destination.dirBlock,
+            { overwrite: policy }
+          );
+          copyDestination.current = to;
+        } catch (e) {
+          setError(String(e));
+          setBusy(null);
+        }
+        return;
+      }
+
+      // ---- out of a disc, to the user's disk ----
+      if (direction.kind === "iso-to-local") {
+        if (entry.iso_extent === null) return;
+
+        if (entry.is_dir) {
+          setBusy(t("files.status.copyingOut", { name: entry.name }));
+          try {
+            pendingCopy.current = await isoExtract(
+              source.location,
+              entry.iso_extent,
+              entry.bytes,
+              target.location,
+              entry.name,
+              { overwrite: policy }
+            );
+            copyDestination.current = to;
+          } catch (e) {
+            setError(String(e));
+            setBusy(null);
+          }
+          return;
+        }
+
+        setBusy(t("files.status.copying", { name: entry.name }));
+        try {
+          const outcome = await isoExtractFile(
+            source.location,
+            entry.iso_extent,
+            entry.bytes,
+            entry.name,
+            target.location
+          );
+          setMessage(
+            outcome.skipped_existing
+              ? t("files.status.alreadyThere", { name: entry.name })
+              : t("files.status.copiedOut", {
+                  name: entry.name,
+                  volume: source.volumeName,
+                  size: formatBytes(outcome.bytes),
+                })
+          );
+          await refresh(to);
+        } catch (e) {
+          setError(String(e));
+        } finally {
+          setBusy(null);
+        }
+        return;
+      }
+
+      // ---- out of a Commodore image, to the user's disk ----
+      //
+      // Flat media, so there is no folder to pick: a row is a file, and F5 on
+      // one copies that file. The Commodore type becomes the extension on the
+      // way out (Rust decides that), because a folder of extensionless files
+      // called `LOADER` helps nobody.
+      if (direction.kind === "c64-to-local") {
+        setBusy(t("files.status.copying", { name: entry.name }));
+        try {
+          const outcome = await cbmExtractFile(source.location, entry.name, target.location);
+          setMessage(
+            outcome.skipped_existing
+              ? t("files.status.alreadyThere", { name: entry.name })
+              : t("files.status.copiedOut", {
+                  name: entry.name,
+                  volume: source.volumeName,
+                  size: formatBytes(outcome.bytes),
+                })
+          );
+          await refresh(to);
+        } catch (e) {
+          setError(String(e));
+        } finally {
+          setBusy(null);
+        }
+        return;
+      }
+
+      // ---- out of an archive, into a volume ----
+      //
+      // The direction this pane exists for: a `.lha`, `.zip` or `.7z` on the
+      // user's disk, its contents on an Amiga volume. Rust unpacks the chosen
+      // folder into a scratch directory and hands it to the Stage W writer,
+      // which is what installing a downloaded package already does — so
+      // there is no second copy engine and no second set of guarantees.
+      if (direction.kind === "archive-to-volume") {
+        const destination = writableVolume(target);
+        if (!destination) {
+          setError(writeRefusal(target, t));
+          return;
+        }
+        if (source.archiveDir === null) return;
+
+        setBusy(t("files.status.copying", { name: entry.name }));
+        try {
+          pendingCopy.current = await archiveCopyToVolume(
+            source.location,
+            source.archiveDir,
+            entry.name,
+            destination.path,
+            destination.volumeIndex,
+            destination.dirBlock,
+            { overwrite: policy }
+          );
+          copyDestination.current = to;
+        } catch (e) {
+          setError(String(e));
+          setBusy(null);
+        }
+        return;
+      }
+
+      // ---- out of an archive, to the user's disk ----
+      if (direction.kind === "archive-to-local") {
+        if (source.archiveDir === null) return;
+
+        if (entry.is_dir) {
+          setBusy(t("files.status.copyingOut", { name: entry.name }));
+          try {
+            pendingCopy.current = await archiveExtract(
+              source.location,
+              source.archiveDir,
+              entry.name,
+              target.location,
+              { overwrite: policy }
+            );
+            copyDestination.current = to;
+          } catch (e) {
+            setError(String(e));
+            setBusy(null);
+          }
+          return;
+        }
+
+        setBusy(t("files.status.copying", { name: entry.name }));
+        try {
+          const outcome = await archiveExtractFile(
+            source.location,
+            source.archiveDir,
+            entry.name,
+            target.location
+          );
+          setMessage(
+            outcome.skipped_existing
+              ? t("files.status.alreadyThere", { name: entry.name })
+              : t("files.status.copiedOut", {
+                  name: entry.name,
+                  volume: source.volumeName,
+                  size: formatBytes(outcome.bytes),
+                })
+          );
+          await refresh(to);
+        } catch (e) {
+          setError(String(e));
+        } finally {
+          setBusy(null);
+        }
         return;
       }
 
@@ -935,7 +1440,8 @@ export function FileManager() {
             source.location,
             source.volumeIndex,
             entry.header_block,
-            `${target.location}/${entry.name}`,
+            target.location,
+            entry.name,
             { overwrite: policy, sidecars: powerMode }
           );
           copyDestination.current = to;
@@ -1134,6 +1640,40 @@ export function FileManager() {
       return;
     }
 
+    // ---- a Commodore pick, out to the user's disk: one job for the lot ----
+    //
+    // Unlike the volume case below, this is a single job rather than one per
+    // entry: the image is small enough to walk once (a D81 is 800 KB), the
+    // rows are files with no folders among them, and one job means one
+    // progress bar and one Stop that actually stops everything.
+    if (source.kind === "c64" && target.kind === "local") {
+      setBusy(t("files.status.copyingSelectionOut", { count: entries.length }));
+      try {
+        const outcome = await runJob(() =>
+          cbmExtract(
+            source.location,
+            entries.map((entry) => entry.name),
+            target.location,
+            { overwrite: policy }
+          )
+        );
+        setMessage(
+          outcome === "cancelled"
+            ? t("files.status.selectionCopyOutCancelled", {
+                done: 0,
+                total: entries.length,
+              })
+            : t("files.status.selectionCopiedOut", { count: entries.length })
+        );
+        await refresh(to);
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setBusy(null);
+      }
+      return;
+    }
+
     // ---- a volume pick, out to the user's disk: each entry its own extract ----
     if (source.kind !== "local" && target.kind === "local" && source.volumeIndex !== null) {
       const volumeIndex = source.volumeIndex;
@@ -1155,7 +1695,8 @@ export function FileManager() {
                     source.location,
                     volumeIndex,
                     headerBlock,
-                    `${target.location}/${entry.name}`,
+                    target.location,
+                    entry.name,
                     { overwrite: policy, sidecars: powerMode }
                   )
                 );
@@ -1491,7 +2032,8 @@ export function FileManager() {
       onActivate: (entry: PanelEntry) => void activate(side, entry),
       onUp: () => void goUp(side),
       onOpenFolder: () => void chooseFolder(side),
-      onOpenImage: (kind: "adf" | "hdf") => void chooseImage(side, kind),
+      onOpenImage: (kind: "adf" | "hdf" | "iso" | "archive" | "c64") =>
+        void chooseImage(side, kind),
       onOpenRoot: (root: string) => void openLocal(side, root),
       onOpenVolume: (index: number) => {
         if (state.image) void openVolume(side, state.location, state.image, index, null, []);
@@ -1895,13 +2437,23 @@ function VolumeFooter({
 }) {
   const { t } = useTranslation();
   const capability = state.capability;
+  // "ISO9660" is a format name, not a sentence — shown as-is, the same way
+  // an ADF/HDF's "FFS INTL" filesystem string is never translated.
   const filesystem =
-    capability?.filesystem ??
-    (state.volumeIndex !== null
-      ? state.image?.volumes[state.volumeIndex]?.filesystem
-      : undefined) ??
-    state.adf?.fs_type.toUpperCase() ??
-    "";
+    state.kind === "iso"
+      ? "ISO9660"
+      : state.kind === "archive"
+        ? // The format ART decided from the file's bytes, already uppercased
+          // by `openArchive` — "ZIP", "LHA", "7Z".
+          state.volumeName
+        : state.kind === "c64"
+          ? "CBM DOS"
+        : capability?.filesystem ??
+        (state.volumeIndex !== null
+          ? state.image?.volumes[state.volumeIndex]?.filesystem
+          : undefined) ??
+        state.adf?.fs_type.toUpperCase() ??
+        "";
 
   return (
     <div
@@ -1919,11 +2471,26 @@ function VolumeFooter({
       <span>{filesystem}</span>
       {capability && <span>{t("files.footer.free", { size: formatBytes(capability.free_bytes) })}</span>}
 
-      {capability && !capability.writable && (
+      {/* A disc has no `capability` to read `writable` off — it is read-only
+          by construction, so the badge shows unconditionally rather than
+          waiting on a fetch that would never happen (§8: never a pane that
+          looks the same and quietly refuses everything). */}
+      {(state.kind === "iso" ||
+        state.kind === "archive" ||
+        state.kind === "c64" ||
+        (capability && !capability.writable)) && (
         <span
           className="badge badge-warn"
           style={{ fontSize: 10 }}
-          title={capability.reason ?? t("files.writeRefusal.default")}
+          title={
+            state.kind === "iso"
+              ? t(ISO_WRITE_REFUSAL.key)
+              : state.kind === "archive"
+                ? t(ARCHIVE_WRITE_REFUSAL.key)
+                : state.kind === "c64"
+                  ? t(C64_WRITE_REFUSAL.key)
+                  : capability?.reason ?? t("files.writeRefusal.default")
+          }
         >
           {t("files.footer.readOnly")}
         </span>
@@ -2003,7 +2570,7 @@ function Pane({
   onActivate: (entry: PanelEntry) => void;
   onUp: () => void;
   onOpenFolder: () => void;
-  onOpenImage: (kind: "adf" | "hdf") => void;
+  onOpenImage: (kind: "adf" | "hdf" | "iso" | "archive" | "c64") => void;
   onOpenRoot: (root: string) => void;
   onOpenVolume: (index: number) => void;
   onRefresh: () => void;
@@ -2020,10 +2587,16 @@ function Pane({
   const canGoUp =
     (state.kind === "local" && state.parent !== null) ||
     (state.kind === "adf" && state.trail.length > 0) ||
-    (state.kind === "hdf" && state.volumeIndex !== null);
+    (state.kind === "hdf" && state.volumeIndex !== null) ||
+    (state.kind === "iso" && state.isoTrail.length > 0) ||
+    (state.kind === "archive" && !!state.archiveDir);
+  // A Commodore image is flat: there is nowhere to go up to, ever.
 
-  // An HDF is never a destination: writing into a partition is not implemented.
-  const acceptsDrops = state.kind !== "hdf";
+  // An HDF is never a destination: writing into a partition is not
+  // implemented. A disc never is either — it is read-only end to end
+  // (`copyDirection` in `@/lib/isoPane` is what actually refuses a drop
+  // that lands here anyway; this only controls the drag-over affordance).
+  const acceptsDrops = state.kind !== "hdf" && state.kind !== "iso";
 
   // Total Commander's drive row shows "free of total", in kilobytes grouped
   // by the active locale (`@/lib/tcFormat`, not the dots the reference
@@ -2104,13 +2677,25 @@ function Pane({
         <button className="btn btn-sm" onClick={() => onOpenImage("hdf")}>
           {t("files.toolbar.hdf")}
         </button>
+        <button className="btn btn-sm" onClick={() => onOpenImage("iso")}>
+          {t("files.toolbar.disc")}
+        </button>
+        <button className="btn btn-sm" onClick={() => onOpenImage("archive")}>
+          {t("files.toolbar.archive")}
+        </button>
+        <button className="btn btn-sm" onClick={() => onOpenImage("c64")}>
+          {t("files.toolbar.c64")}
+        </button>
         {state.kind === "local" &&
           roots.map((root) => (
             <button key={root} className="btn btn-sm" onClick={() => onOpenRoot(root)}>
               {root}
             </button>
           ))}
-        {state.kind !== "local" && state.volumeIndex !== null && (
+        {((state.kind !== "local" && state.volumeIndex !== null) ||
+          state.kind === "iso" ||
+          state.kind === "archive" ||
+          state.kind === "c64") && (
           <span className="tc-drive-volume">
             [{state.capability?.volume_name || state.volumeName || t("files.footer.unnamed")}]
           </span>
@@ -2140,7 +2725,15 @@ function Pane({
         <span className="tc-path-text">
           {state.location || t("files.pane.nothingOpen")}
           {state.kind === "hdf" && state.volumeName && ` > ${state.volumeName}:`}
+          {state.kind === "iso" && state.volumeName && ` > ${state.volumeName}:`}
           {state.trail.length > 0 && ` > ${state.trail.map((crumb) => crumb.name).join(" > ")}`}
+          {state.isoTrail.length > 0 &&
+            ` > ${state.isoTrail.map((crumb) => crumb.name).join(" > ")}`}
+          {/* An archive's breadcrumb is its path, split — there is no trail
+              to read it out of, because the path is the address. */}
+          {state.kind === "archive" &&
+            state.archiveDir &&
+            ` > ${state.archiveDir.split("/").join(" > ")}`}
         </span>
         <input
           type="text"
@@ -2179,10 +2772,16 @@ function Pane({
 
       {/* §8: the footer always carries the volume's name, its filesystem and
           how much room is left — and a lock with the reason when ART will not
-          write, rather than a pane that quietly does nothing. */}
-      {state.kind !== "local" && state.volumeIndex !== null && (
-        <VolumeFooter state={state} powerMode={powerMode} />
-      )}
+          write, rather than a pane that quietly does nothing. A disc has no
+          `volumeIndex` to gate on (it is not addressed by one — see
+          `PaneState`), so it gets its own clause; `VolumeFooter` itself
+          always shows the disc's lock badge, unconditionally, since
+          `capability` — the ADF/HDF path's source for that badge — is never
+          fetched for a disc there is nothing to ask. */}
+      {((state.kind !== "local" && state.volumeIndex !== null) ||
+        state.kind === "iso" ||
+        state.kind === "archive" ||
+        state.kind === "c64") && <VolumeFooter state={state} powerMode={powerMode} />}
 
       {state.warnings.map((warning) => (
         <div

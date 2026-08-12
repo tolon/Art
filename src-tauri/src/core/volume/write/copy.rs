@@ -732,6 +732,83 @@ impl ExtractReport {
     }
 }
 
+/// What writing one entry out to a host folder should do.
+///
+/// See [`host_target`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostTarget {
+    /// The directory now exists on the host; descend into it.
+    Descend(PathBuf),
+    /// Write the file's bytes here.
+    Write(PathBuf),
+    /// Leave it alone — `report` already says why.
+    Skip,
+}
+
+/// Decide — and record — what happens to one entry called `name` under `dest`.
+///
+/// Three questions every "copy out" path asks in the same order: what name
+/// will the host filesystem accept, does that name stay inside the folder the
+/// user picked, and what does the user's collision policy say about a name
+/// already there.
+///
+/// Shared rather than repeated. `extract_from_volume` below and
+/// [`IsoImage::extract_tree`](crate::core::iso::IsoImage::extract_tree) read
+/// sources with nothing in common — a block device with header blocks, a disc
+/// with `(extent, length)` pairs — so their loops cannot merge, but these
+/// three answers are identical for both. When each answered them for itself
+/// they diverged: the disc path hardcoded [`OverwritePolicy::Skip`] and
+/// dropped the setting the same user had just chosen for an ADF.
+pub fn host_target(
+    dest: &Path,
+    name: &str,
+    is_dir: bool,
+    policy: OverwritePolicy,
+    report: &mut ExtractReport,
+) -> CoreResult<HostTarget> {
+    let safe = windows_safe_name(name);
+    if safe != name {
+        report.renamed.push(format!("{name} → {safe}"));
+    }
+
+    // Through `safe_join` even though the name has just been escaped: the
+    // escaping is about what NTFS will accept, and containment is a separate
+    // question with a separate answer.
+    let target = match safe_join(dest, &safe) {
+        Ok(path) => path,
+        Err(err) => {
+            report.skipped.push(format!("{name} — {err}"));
+            return Ok(HostTarget::Skip);
+        }
+    };
+
+    if is_dir {
+        std::fs::create_dir_all(&target)?;
+        report.directories_created += 1;
+        return Ok(HostTarget::Descend(target));
+    }
+
+    if target.exists() {
+        match policy {
+            OverwritePolicy::Skip => {
+                report
+                    .skipped
+                    .push(format!("{name} — already in the destination folder"));
+                return Ok(HostTarget::Skip);
+            }
+            OverwritePolicy::Rename => {
+                report.skipped.push(format!(
+                    "{name} — already there, and ART does not invent names on the way out"
+                ));
+                return Ok(HostTarget::Skip);
+            }
+            OverwritePolicy::Overwrite => {}
+        }
+    }
+
+    Ok(HostTarget::Write(target))
+}
+
 /// Copy a directory out of a volume into a folder on the user's disk.
 ///
 /// Names NTFS refuses are escaped deterministically and reported. Metadata
@@ -800,58 +877,24 @@ fn extract_dir<D: BlockDevice + ?Sized>(
         }
         sink.report(report.files_written as u64, None, &entry.name);
 
-        let safe = windows_safe_name(&entry.name);
-        if safe != entry.name {
-            report.renamed.push(format!("{} → {safe}", entry.name));
-        }
-
-        // Through `safe_join` even though the name has just been escaped: the
-        // escaping is about what NTFS will accept, and containment is a
-        // separate question with a separate answer.
-        let target = match safe_join(dest, &safe) {
-            Ok(path) => path,
-            Err(err) => {
-                report.skipped.push(format!("{} — {err}", entry.name));
+        let target = match host_target(dest, &entry.name, entry.is_dir, policy, report)? {
+            HostTarget::Skip => continue,
+            HostTarget::Descend(target) => {
+                extract_dir(
+                    device,
+                    geometry,
+                    entry.block,
+                    &target,
+                    depth + 1,
+                    write_sidecars,
+                    policy,
+                    sink,
+                    report,
+                )?;
                 continue;
             }
+            HostTarget::Write(target) => target,
         };
-
-        if entry.is_dir {
-            std::fs::create_dir_all(&target)?;
-            report.directories_created += 1;
-            extract_dir(
-                device,
-                geometry,
-                entry.block,
-                &target,
-                depth + 1,
-                write_sidecars,
-                policy,
-                sink,
-                report,
-            )?;
-            continue;
-        }
-
-        if target.exists() {
-            match policy {
-                OverwritePolicy::Skip => {
-                    report.skipped.push(format!(
-                        "{} — already in the destination folder",
-                        entry.name
-                    ));
-                    continue;
-                }
-                OverwritePolicy::Rename => {
-                    report.skipped.push(format!(
-                        "{} — already there, and ART does not invent names on the way out",
-                        entry.name
-                    ));
-                    continue;
-                }
-                OverwritePolicy::Overwrite => {}
-            }
-        }
 
         let data = match super::file::read_file(device, &set, geometry, entry.block) {
             Ok(data) => data,

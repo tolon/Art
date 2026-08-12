@@ -15,6 +15,13 @@ export interface PanelEntry {
   path: string | null;
   /** Set for an ADF entry. */
   header_block: number | null;
+  /**
+   * Set for an ISO entry: its starting logical block. Deliberately a
+   * separate field from `header_block` — a disc's directory addressing is
+   * `(extent, length)`, not a block number, and this alone is only half of
+   * that (see `bytes` for a directory's length).
+   */
+  iso_extent: number | null;
   /** Reported, never followed. */
   is_link: boolean;
   /** Last-modified time, Unix seconds. `null` when the source has none. */
@@ -64,6 +71,7 @@ export async function panelListAdf(
     bytes: entry.byte_size,
     path: null,
     header_block: entry.header_block,
+    iso_extent: null,
     is_link: false,
     date: entry.unix_date,
     attrs: entry.attrs,

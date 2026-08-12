@@ -17,6 +17,29 @@ DROP → ANALYZE → UNDERSTAND → RECOMMEND → PREVIEW → BACKUP → APPLY �
 The user should not need to know *which* low-level Amiga utility a task
 requires. ART understands the object and presents the appropriate workflows.
 
+## What ART covers
+
+**Every classic Amiga, not one model.** Most of what ART does is
+machine-independent by nature: ADF, HDF/RDB, OFS/FFS, LHA, ISO9660 are
+formats, and a format does not know which machine wrote it. Where the machine
+matters — which Kickstart, which chipset a game wants, what WinUAE should be
+told, which RDB geometry a hard disk expects — it is carried as a **machine
+profile** (§33), and the built-in set spans the line: A1000, A500, A500+,
+A600, A2000, A3000, A1200, A4000, CDTV, CD32. Users add their own; a profile
+is data, never a branch in the code.
+
+**Commodore's 8-bit side is in scope.** C64 disk and tape images (`.d64`,
+`.d71`, `.d81`, `.t64`) belong in the same commander as an ADF, for the same
+reason a CD and an archive do: they are containers you walk into, list and
+copy out of. `.tap`, `.prg` and `.crt` are identified and described, not
+browsed — a TAP is a sampled tape signal, not a directory, and claiming to
+list one would be exactly the overclaiming §10 forbids.
+
+This does widen what the name implies. The decision was taken deliberately
+(2026-08-12): the audience keeps its C64 files in the same drawer as its Amiga
+files, and a toolkit that refuses half the drawer is less useful for no
+technical reason.
+
 ## Target users
 
 ART serves three levels, progressively revealing complexity:

@@ -49,6 +49,16 @@ fn is_floppy(d: &Detection) -> bool {
 fn is_archive(d: &Detection) -> bool {
     d.category == FormatCategory::Archive
 }
+/// LHA specifically, not "any archive".
+///
+/// The distinction earns its keep from Phase 2a Task 4: `Archive` used to mean
+/// LHA and nothing else, so every LHA action was written against the category.
+/// Detection recognises ZIP and 7z now, and LHA Studio cannot open either —
+/// offering "Open in LHA Studio" for a ZIP would be an action that exists to
+/// fail (§46, §89).
+fn is_lha(d: &Detection) -> bool {
+    is_archive(d) && d.format_hint == "lha"
+}
 fn is_harddisk(d: &Detection) -> bool {
     d.category == FormatCategory::HardDiskImage
 }
@@ -58,11 +68,31 @@ fn is_rom(d: &Detection) -> bool {
 fn is_directory(d: &Detection) -> bool {
     d.category == FormatCategory::Directory
 }
+fn is_optical(d: &Detection) -> bool {
+    d.category == FormatCategory::OpticalImage
+}
+/// A Commodore 8-bit container ART can walk into: D64, D71, D81, T64.
+fn is_c64_browsable(d: &Detection) -> bool {
+    d.category == FormatCategory::Commodore8Bit && crate::core::cbm::is_browsable(&d.format_hint)
+}
+/// The Commodore formats ART identifies and deliberately does not browse —
+/// TAP, PRG, CRT. They are not dead ends: `c64.identify` says what they are,
+/// which for a TAP is the honest whole answer (§10, §89).
+fn is_c64_identify_only(d: &Detection) -> bool {
+    d.category == FormatCategory::Commodore8Bit && !crate::core::cbm::is_browsable(&d.format_hint)
+}
 /// Any recognised file (not a directory, not unknown).
 fn is_known_file(d: &Detection) -> bool {
     !d.is_dir && d.category != FormatCategory::Unknown
 }
 /// Anything ART can hold in its collection.
+///
+/// `FormatCategory::OpticalImage` is deliberately absent: ART can open a disc
+/// now (`core::iso`) and browse it in the file manager, but nothing hashes or
+/// catalogues one yet — the Collection Studio has no ISO code path, and
+/// claiming otherwise would overclaim support (spec §10, §89). It still
+/// isn't a dead end — `iso.browse` offers the file manager, and `any.hex`
+/// below accepts any known-but-not-collectable file too.
 fn is_collectable(d: &Detection) -> bool {
     matches!(
         d.category,
@@ -205,6 +235,41 @@ impl Workflow for Hash {
     }
 }
 
+/// What a Commodore file ART does not browse actually is.
+///
+/// The counterpart to "identify only" being a real answer rather than a
+/// refusal: a TAP has no directory in it, and saying so — with the size, and
+/// with what reading it would actually take — is the whole of what ART can
+/// honestly offer. Registering nothing here would leave those files with only
+/// the Advanced catch-alls and no starred action at all (§46).
+pub struct C64Identify;
+
+impl Workflow for C64Identify {
+    fn info(&self) -> &WorkflowInfo {
+        &WorkflowInfo {
+            id: "c64.identify",
+            name: "What is this?",
+            description: "Name the format, its size and why there is nothing inside it to open.",
+            category: WorkflowCategory::Recommended,
+            safety: Safety::ReadOnly,
+            priority: 10,
+            available: true,
+            kind: WorkflowKind::Execute,
+        }
+    }
+    fn can_handle(&self, d: &Detection) -> bool {
+        is_c64_identify_only(d)
+    }
+    fn run(&self, input: &Path, d: &Detection) -> CoreResult<WorkflowOutcome> {
+        Ok(WorkflowOutcome {
+            workflow_id: "c64.identify".into(),
+            success: true,
+            message: crate::core::cbm::identify(input, &d.format_hint)?,
+            verification: None,
+        })
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The catalogue
 // ---------------------------------------------------------------------------
@@ -280,7 +345,39 @@ fn navigation_workflows() -> Vec<NavWorkflow> {
             true,
             is_floppy,
         ),
-        // --- Archives (LHA) ---
+        // --- Commodore 8-bit ---
+        //
+        // A D64 is the same thing to the commander an ADF is: a container you
+        // walk into. It is deliberately *not* offered the Amiga floppy
+        // actions — ADF Studio cannot read it, and "copy to Gotek" would put
+        // a 1541 image on a device expecting an Amiga floppy.
+        nav(
+            "c64.browse",
+            "Open in the file manager",
+            "Walk the disk's directory and copy files out of it.",
+            route::FILES,
+            Recommended,
+            10,
+            true,
+            is_c64_browsable,
+        ),
+        // --- Archives ---
+        //
+        // Every archive ART reads — LHA, ZIP, 7z — opens in the commander as
+        // a pane you can walk into and copy out of (Task 4). The LHA-only
+        // actions below it stay LHA-only: LHA Studio, WHDLoad detection and
+        // install-to-hard-disk are all written against `core::lha` and would
+        // fail on a ZIP.
+        nav(
+            "archive.browse",
+            "Open in the file manager",
+            "Walk the archive's folders and copy files out of it, to a folder or into an Amiga volume.",
+            route::FILES,
+            Recommended,
+            5,
+            true,
+            is_archive,
+        ),
         nav(
             "lha.browse",
             "Open in LHA Studio",
@@ -289,7 +386,7 @@ fn navigation_workflows() -> Vec<NavWorkflow> {
             Recommended,
             10,
             true,
-            is_archive,
+            is_lha,
         ),
         nav(
             "lha.extract",
@@ -299,7 +396,7 @@ fn navigation_workflows() -> Vec<NavWorkflow> {
             Recommended,
             20,
             true,
-            is_archive,
+            is_lha,
         ),
         nav(
             "lha.add_collection",
@@ -309,7 +406,7 @@ fn navigation_workflows() -> Vec<NavWorkflow> {
             Recommended,
             30,
             true,
-            is_archive,
+            is_lha,
         ),
         // §82's success scenario, end to end: drop a package, ART detects
         // WHDLoad, and one click puts it on a hard disk with a backup and a
@@ -323,7 +420,7 @@ fn navigation_workflows() -> Vec<NavWorkflow> {
             Recommended,
             25,
             true,
-            is_archive,
+            is_lha,
         ),
         nav(
             "lha.launch_winuae",
@@ -333,7 +430,7 @@ fn navigation_workflows() -> Vec<NavWorkflow> {
             Standard,
             50,
             false,
-            is_archive,
+            is_lha,
         ),
         // --- Hard disk images (HDF / HDZ) ---
         nav(
@@ -438,6 +535,17 @@ fn navigation_workflows() -> Vec<NavWorkflow> {
             true,
             is_directory,
         ),
+        // --- Optical discs (ISO9660 / Joliet) ---
+        nav(
+            "iso.browse",
+            "Open in the File Manager",
+            "Browse the disc's filesystem and copy files out — a disc is read-only.",
+            route::FILES,
+            Recommended,
+            10,
+            true,
+            is_optical,
+        ),
         // --- Anything collectable ---
         nav(
             "any.hex",
@@ -459,6 +567,7 @@ pub fn register_all(registry: &mut super::registry::WorkflowRegistry) {
     }
     registry.register(AdfValidate);
     registry.register(Hash);
+    registry.register(C64Identify);
 }
 
 #[cfg(test)]
@@ -490,14 +599,27 @@ mod tests {
     }
 
     /// Spec §91: no recognised object may be a dead end.
+    ///
+    /// Includes `OpticalImage`: `iso.browse` (below) gives it a dedicated,
+    /// starred action now that the file manager can open one.
     #[test]
     fn every_recognised_format_offers_actions() {
         let cases = [
             (FormatCategory::FloppyImage, "adf", false),
             (FormatCategory::HardDiskImage, "hdf", false),
             (FormatCategory::Archive, "lha", false),
+            // ZIP and 7z are archives ART reads but LHA Studio cannot open.
+            // They would have been dead ends the moment detection learned to
+            // recognise them, if `archive.browse` did not exist (§91).
+            (FormatCategory::Archive, "zip", false),
+            (FormatCategory::Archive, "7z", false),
             (FormatCategory::Rom, "rom", false),
             (FormatCategory::Directory, "directory", true),
+            (FormatCategory::OpticalImage, "iso9660", false),
+            // Both halves of the Commodore side: one ART opens, one it only
+            // names. Neither may be a dead end (§91).
+            (FormatCategory::Commodore8Bit, "d64", false),
+            (FormatCategory::Commodore8Bit, "tap", false),
         ];
 
         for (category, hint, is_dir) in cases {
@@ -542,7 +664,93 @@ mod tests {
             .iter()
             .any(|r| r.info.id == "dir.scan_collection"));
 
+        // And a real ZIP, dropped: it is an `Archive` like an LHA, but LHA
+        // Studio cannot open one, so the LHA actions must *not* be offered
+        // and the commander must be — otherwise recognising ZIP at all would
+        // have turned it into a dead end with three broken buttons.
+        let zip = dir.join("pack.zip");
+        std::fs::write(
+            &zip,
+            crate::core::archive::zip::tests::make_zip_with(&[("readme.txt", b"hi")]),
+        )
+        .unwrap();
+
+        let plan = engine().plan(&zip).unwrap();
+        let ids: Vec<&str> = plan.candidates.iter().map(|c| c.id).collect();
+        assert!(
+            ids.contains(&"archive.browse"),
+            "a ZIP must open in the commander: {ids:?}"
+        );
+        assert!(
+            !ids.iter().any(|id| id.starts_with("lha.")),
+            "no LHA-only action may be offered for a ZIP: {ids:?}"
+        );
+        assert!(plan
+            .recommendations
+            .iter()
+            .any(|r| r.info.id == "archive.browse"));
+
+        // A C64 disk: the commander, and none of the Amiga floppy actions —
+        // ADF Studio cannot read a 1541 image, and `adf.to_gotek` would put
+        // one on a device expecting an Amiga floppy.
+        let d64 = dir.join("game.d64");
+        std::fs::write(
+            &d64,
+            crate::core::cbm::d64::fixture::D64Builder::new(35).build(),
+        )
+        .unwrap();
+
+        let plan = engine().plan(&d64).unwrap();
+        let ids: Vec<&str> = plan.candidates.iter().map(|c| c.id).collect();
+        assert!(ids.contains(&"c64.browse"), "{ids:?}");
+        assert!(
+            !ids.iter().any(|id| id.starts_with("adf.")),
+            "an Amiga floppy action was offered for a 1541 image: {ids:?}"
+        );
+        assert!(plan
+            .recommendations
+            .iter()
+            .any(|r| r.info.id == "c64.browse"));
+
+        // And a TAP, which ART deliberately does not browse: it still gets a
+        // starred action, because "what is this?" is a real answer.
+        let tap = dir.join("game.tap");
+        std::fs::write(&tap, b"C64-TAPE-RAW\x00\x00\x00\x00").unwrap();
+
+        let plan = engine().plan(&tap).unwrap();
+        let ids: Vec<&str> = plan.candidates.iter().map(|c| c.id).collect();
+        assert!(ids.contains(&"c64.identify"), "{ids:?}");
+        assert!(
+            !ids.contains(&"c64.browse"),
+            "a TAP has no directory to open: {ids:?}"
+        );
+        assert!(plan
+            .recommendations
+            .iter()
+            .any(|r| r.info.id == "c64.identify"));
+
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The candidate list, not the whole `plan()` pipeline (which needs a
+    /// real optical-disc file on disk to detect): an optical image must get
+    /// its own starred action now that the file manager opens one, not just
+    /// fall through to `any.hex`.
+    #[test]
+    fn an_optical_image_recommends_the_file_manager() {
+        let d = detection(FormatCategory::OpticalImage, "iso9660", false);
+        let ids = ids_for(&d);
+        assert!(ids.contains(&"iso.browse"), "got {ids:?}");
+
+        let mut reg = WorkflowRegistry::new();
+        register_all(&mut reg);
+        let recommended: Vec<&str> = reg
+            .candidates_for(&d)
+            .into_iter()
+            .filter(|w| w.info().category == Recommended)
+            .map(|w| w.info().id)
+            .collect();
+        assert!(recommended.contains(&"iso.browse"), "got {recommended:?}");
     }
 
     #[test]

@@ -27,6 +27,8 @@ It is maintained manually and verified with `cargo deny check` (see
 | `sha2` | SHA256 hashing | MIT / Apache-2.0 |
 | `log` | Logging facade | MIT / Apache-2.0 |
 | `delharc` | LHA/LZH decompression | MIT / Apache-2.0 |
+| `zip` | ZIP reading (deflate only; compression, encryption and the other codecs are off) | MIT |
+| `sevenz-rust2` | 7z reading (LZMA; the encoder is a dev-dependency for fixtures only) | MIT / Apache-2.0 |
 
 (Transitive dependencies are audited via `cargo deny check licenses`.)
 

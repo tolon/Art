@@ -13,6 +13,7 @@ function entry(name: string, overrides: Partial<PanelEntry> = {}): PanelEntry {
     bytes: 100,
     path: null,
     header_block: null,
+    iso_extent: null,
     is_link: false,
     date: null,
     attrs: null,

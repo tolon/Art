@@ -383,7 +383,7 @@ pub(crate) mod tests {
             if let Some(limit) = self.truncate_to {
                 payload.truncate(limit);
             }
-            payload.extend(std::iter::repeat(b'\xff').take(self.pad_with));
+            payload.extend(std::iter::repeat_n(b'\xff', self.pad_with));
 
             if let Some((token, after)) = &self.cancel_after {
                 if payload.len() as u64 >= *after {

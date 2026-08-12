@@ -36,8 +36,8 @@ use crate::core::volume::device::{FileRegionMut, VecDevice};
 use crate::core::volume::journal::find_journal;
 use crate::core::volume::mount::{mount, scan_image, VolumeEntry};
 use crate::core::volume::write::copy::{
-    copy_into_volume, extract_from_volume, CopyReport, CopySource, ExtractReport, HostFolder,
-    HostSelection, StagedTree,
+    copy_into_volume, extract_from_volume, windows_safe_name, CopyReport, CopySource,
+    ExtractReport, HostFolder, HostSelection, StagedTree,
 };
 use crate::core::volume::write::plan::{plan_copy, CopyPlan, SourceEntry};
 use crate::core::volume::write::{VolumeWriter, WriteOutcome};
@@ -937,6 +937,15 @@ pub enum VolumeWriteResult {
         job_id: JobId,
         report: ExtractReport,
     },
+    /// A folder copied out of an *archive*. Its own variant rather than a
+    /// borrowed `CopyOut`: an archive's report is the extraction gate's
+    /// (`core::archive::extract::ExtractOutcome`), which counts entries
+    /// refused by name and entries whose declared size was a lie — things a
+    /// volume's `ExtractReport` has no field for and no reason to grow one.
+    ArchiveOut {
+        job_id: JobId,
+        report: crate::core::archive::extract::ExtractOutcome,
+    },
 }
 
 /// Options a copy carries from the UI.
@@ -1341,7 +1350,81 @@ pub(crate) fn install_into_folder(
     )
 }
 
+/// The folder a copy-out lands in, from the destination the user picked and
+/// the name of the directory being copied out.
+///
+/// **This is a security boundary.** `name` is a name ART did not write — a
+/// directory record on a disc ART only ever reads, a header block in an ADF
+/// that arrived from somewhere else. The frontend used to concatenate it into
+/// the destination string *before* the call, which made this boundary one that
+/// could be handed `C:\Users\me\Downloads/..\..\..\Users\Public\Startup` as a
+/// single opaque string, and `create_dir_all` would make it. A boundary that
+/// takes a pre-joined string can always be handed a joined-in escape; a
+/// boundary that joins for itself cannot, which is why both `volume_copy_out`
+/// and `iso_extract` now take `dest_dir` and `name` separately and call this.
+///
+/// Two questions, in this order, and never merged into one:
+///
+/// 1. **Containment**, of the *raw* name. `windows_safe_name` would turn
+///    `..\..\Startup` into `_.._..Startup` — a name that passes containment
+///    trivially — so asking containment after it would be asking a question
+///    whose answer had already been changed. A name that was trying to leave
+///    the folder the user picked is refused outright and said so, not quietly
+///    renamed into something that looks harmless.
+/// 2. **Host legality**, of the escaped name: what NTFS will actually accept
+///    (`AUX`, `Prices: 1993`, a trailing dot).
+pub(crate) fn folder_destination(dest_dir: &Path, name: &str) -> CoreResult<PathBuf> {
+    let refuse = |err: crate::core::security::PathTraversalError| {
+        CoreError::SafetyRefused(format!(
+            "'{name}' cannot be written under {}: {err}",
+            dest_dir.display()
+        ))
+    };
+
+    crate::core::security::safe_join(dest_dir, name).map_err(refuse)?;
+    crate::core::security::safe_join(dest_dir, &windows_safe_name(name)).map_err(refuse)
+}
+
+/// The whole of what [`volume_copy_out`]'s job runs: resolve the destination
+/// folder from `dest_dir` + `name`, then extract into it.
+///
+/// Its own function, called from the job closure rather than reimplemented in
+/// a test — the same reason [`copy_between_volumes`] below is one. A test that
+/// rebuilt this sequence for itself could not catch the destination being
+/// resolved the wrong way; calling this can.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn copy_out_folder(
+    image: &Path,
+    volume_index: usize,
+    dir_block: u32,
+    dest_dir: &Path,
+    name: &str,
+    write_sidecars: bool,
+    policy: OverwritePolicy,
+    progress: &dyn ProgressSink,
+) -> CoreResult<ExtractReport> {
+    // Before the image is even opened: a name that cannot be written is a
+    // refusal, not work done and then thrown away.
+    let destination = folder_destination(dest_dir, name)?;
+
+    let entry = pick(image, volume_index)?;
+    let (device, geometry) = mount(image, &entry)?;
+    extract_from_volume(
+        &device,
+        &geometry,
+        dir_block,
+        &destination,
+        write_sidecars,
+        policy,
+        progress,
+    )
+}
+
 /// F5 the other way — copy a folder out of a volume onto the user's disk.
+///
+/// `dest_dir` is the folder the user picked and `name` is the directory's own
+/// name from the listing; they are joined *here*, by
+/// [`folder_destination`], never by the caller.
 #[tauri::command]
 // A Tauri command's parameters are its wire protocol: the names here are the
 // keys the frontend sends. Folding them into a struct to satisfy the argument
@@ -1352,14 +1435,15 @@ pub fn volume_copy_out(
     path: String,
     volume_index: usize,
     dir_block: Option<u32>,
-    dest: String,
+    dest_dir: String,
+    name: String,
     options: Option<CopyOptions>,
     app: AppHandle,
     registry: State<'_, Arc<JobRegistry>>,
     oplog: State<'_, JsonlOperationLog>,
 ) -> AppResult<JobId> {
     let image = PathBuf::from(path.trim());
-    let destination = PathBuf::from(dest.trim());
+    let destination = PathBuf::from(dest_dir.trim());
     let options = options.unwrap_or_default();
     let policy = options.overwrite.unwrap_or_default();
     let sidecars = options.sidecars.unwrap_or(true);
@@ -1371,23 +1455,20 @@ pub fn volume_copy_out(
     let title = format!("Copying out of {}", image.display());
 
     let id = spawn_job(&app, registry, &title, move |job_id, progress| {
-        let outcome = (|| -> CoreResult<ExtractReport> {
-            let entry = pick(&image, volume_index)?;
-            let (device, geometry) = mount(&image, &entry)?;
-            extract_from_volume(
-                &device,
-                &geometry,
-                parent,
-                &destination,
-                sidecars,
-                policy,
-                progress,
-            )
-        })();
+        let outcome = copy_out_folder(
+            &image,
+            volume_index,
+            parent,
+            &destination,
+            &name,
+            sidecars,
+            policy,
+            progress,
+        );
 
         let record = user_operation("Copy folder out of volume")
             .source(format!("{}:{volume_index}", image.display()))
-            .destination(destination.display().to_string());
+            .destination(format!("{}/{name}", destination.display()));
         let record = match &outcome {
             Ok(report) => record
                 .detail("Files", report.files_written.to_string())
@@ -2778,5 +2859,88 @@ mod tests {
         let image = Image::new("between-same-image", 1760);
         let err = refuse_same_image(&image.path, &image.path).unwrap_err();
         assert!(err.to_string().contains("same image"), "{err}");
+    }
+
+    /// The name a directory carries out of an image is a name ART did not
+    /// write. Joined here rather than by the caller, a traversal in it is a
+    /// refusal — and one that never renames its way into looking harmless
+    /// (`..\..\Startup` escaped first would be `_.._..Startup`, which passes
+    /// containment trivially and lands a file the user never asked for).
+    #[test]
+    fn a_name_that_leaves_the_chosen_folder_is_refused_not_escaped() {
+        let dir = scratch("folder-destination");
+
+        for name in [r"..\..\Startup", "../../Startup", r"C:\Windows\Temp"] {
+            let err = folder_destination(&dir, name).unwrap_err();
+            assert_eq!(err.code(), "ART-SAFETY-REFUSED", "{name}: {err}");
+        }
+
+        // The ordinary case still joins, and a name NTFS refuses is escaped
+        // rather than rejected — two different questions, two different
+        // answers.
+        assert_eq!(
+            folder_destination(&dir, "Tools").unwrap(),
+            dir.join("Tools")
+        );
+        assert_eq!(
+            folder_destination(&dir, "Prices: 1993").unwrap(),
+            dir.join(windows_safe_name("Prices: 1993"))
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// And the whole of what the job runs: a directory copied out lands in a
+    /// folder of its own name *inside* the folder the user picked, with the
+    /// destination resolved by the command rather than by whoever called it.
+    #[test]
+    fn copying_a_folder_out_lands_it_under_the_folder_the_user_picked() {
+        let image = Image::new("copy-out-folder", 1760);
+        with_writer(&image.path, 0, |writer| writer.make_dir(0, "Tools")).unwrap();
+        let tools = image
+            .listing()
+            .into_iter()
+            .find(|e| e.name == "Tools")
+            .unwrap();
+        with_writer(&image.path, 0, |writer| {
+            writer.add_file(tools.block, "Editor", b"editor bytes", Default::default())
+        })
+        .unwrap();
+
+        let dest = scratch("copy-out-folder-dest");
+        let report = copy_out_folder(
+            &image.path,
+            0,
+            tools.block,
+            &dest,
+            "Tools",
+            false,
+            OverwritePolicy::Skip,
+            &NoProgress,
+        )
+        .unwrap();
+
+        assert_eq!(report.files_written, 1, "{report:?}");
+        assert_eq!(
+            std::fs::read(dest.join("Tools").join("Editor")).unwrap(),
+            b"editor bytes"
+        );
+
+        // The same call with a traversing name writes nothing at all.
+        let err = copy_out_folder(
+            &image.path,
+            0,
+            tools.block,
+            &dest,
+            r"..\Escaped",
+            false,
+            OverwritePolicy::Skip,
+            &NoProgress,
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "ART-SAFETY-REFUSED", "{err}");
+        assert!(!dest.parent().unwrap().join("Escaped").exists());
+
+        let _ = std::fs::remove_dir_all(&dest);
     }
 }

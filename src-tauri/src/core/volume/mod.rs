@@ -281,7 +281,7 @@ impl VolumeGeometry {
         reserved: u32,
         dos_type: DosType,
     ) -> CoreResult<Self> {
-        if block_size == 0 || block_size % SECTOR_BYTES != 0 {
+        if block_size == 0 || !block_size.is_multiple_of(SECTOR_BYTES) {
             return Err(CoreError::Malformed {
                 format: "volume".into(),
                 detail: format!("block size {block_size} is not a multiple of {SECTOR_BYTES}"),

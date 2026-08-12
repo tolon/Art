@@ -1,10 +1,20 @@
 // Shared types mirroring the Rust core's serde models.
 // Keep these in sync with src-tauri/src/core/**.
 
+// These strings are a contract with `core/detect.rs`, and they are spelled out
+// there per variant rather than derived by `rename_all` — which would have
+// produced `floppyimage`, or `hard-disk-image` where this says
+// `harddisk-image`. `serde_name_matches_as_str` in that module is what keeps
+// the two sides honest; without it, a `===` here type-checks and never matches.
 export type FormatCategory =
   | "floppy-image"
   | "harddisk-image"
+  | "optical-image"
   | "archive"
+  // A Commodore 8-bit disk, tape or program. Its own category rather than
+  // `floppy-image`: a D64 routed to the Amiga floppy actions would be offered
+  // ADF Studio and "copy to Gotek".
+  | "commodore-8bit"
   | "rom"
   | "directory"
   | "unknown";

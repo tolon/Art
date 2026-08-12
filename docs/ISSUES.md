@@ -23,6 +23,34 @@ what fixed it (with the test that proves it).
 
 ## Open
 
+_(ART-075 was open here; it is fixed — see [Phase 2a](#phase-2a) below.)_
+
+**ART-078** 🟡 **An AmigaOS CD's protection bits and file comments are lost, because Rock Ridge and the Amiga `AS` entry are not read**
+`core/iso/` · ART reads ISO9660 and prefers Joliet when a disc carries it.
+Neither carries what an Amiga CD actually says about its files: protection bits
+(`HSPARWED`) and the file comment live in the **Amiga `AS` System Use entry**, a
+Rock Ridge-style extension, and ART reads no System Use area at all. Two
+consequences, both quiet:
+
+- **A WHDLoad-era disc loses its slave's `S` and `P` bits on the way out.** A
+  game copied off a CD onto an HDF can arrive with the right bytes and the
+  wrong protection, which is a game that starts and then does not work — the
+  same class of failure §7.2 records for archives, where ART *does* carry the
+  bits through `.uaem` sidecars.
+- **A Unix-mastered disc with no Joliet descriptor falls back to uppercase
+  8.3 names.** Rock Ridge is where its real names are, so `MyGame.info`
+  becomes `MYGAME.INF` and the icon stops matching the drawer.
+
+Neither is a regression: nothing ever claimed to read them, `FEATURES.md` and
+`format-support-matrix.md` both say so, and the disc still copies. Fixing it
+means reading the System Use area after each directory record, handling the
+`SP`/`CE`/`NM` continuation entries, and mapping `AS` onto the same
+`Protection` type `core/volume/write` already has — at which point the
+existing `.uaem` writer carries the bits out to a folder for free.
+
+Found while closing Phase 2a; recorded rather than fixed because it is a
+format layer of its own, not an omission in the one that landed.
+
 **ART-073** 🟡 **`delete_many`'s all-or-nothing guarantee only holds for the whole-file strategy**
 `src-tauri/src/commands/volume_write.rs::delete_many` (line ~505) · The
 pre-check (`check_batch_deletable`) runs once, against a read-only listing,
@@ -332,6 +360,117 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+### Phase 2a
+
+**ART-079** 🔴 **A 7z archive from any real tool gave one entry another entry's bytes**
+`core/archive/sevenz.rs` · Two defects in one read path, both invisible to
+ART's own tests and both producing **wrong data with no error**:
+
+1. **Index drift.** `sevenz-rust2`'s `for_each_entries` walks the archive's
+   compressed *blocks* first — the entries that carry data, in block order —
+   and the streamless ones (directories, empty files) after them. ART counted
+   the yields as though they matched `archive().files`, so the moment an
+   archive held a directory every index after it pointed at the wrong entry.
+   Every archive a real tool writes holds directories; none of ART's fixtures
+   did.
+2. **A skipped entry was not drained.** A 7z block is one compressed stream
+   holding several files end to end, so a file's data begins where the
+   previous one's ended. Returning from an unwanted entry without consuming
+   its bytes left the block reader short and decoded the *next* wanted file
+   from the wrong place — right length, wrong contents. A partial selection is
+   the normal case: the gate skips entries that already exist and refuses
+   hostile names.
+
+The two together are why `ReadMe.txt` came back holding `Notes.txt`'s text.
+
+→ Entries are matched to indices **by the name the archive stores**, which is
+stable under both orderings, and every entry the pass skips has its stream
+drained. Verified against an archive the 7-Zip application wrote: ART's
+SHA-256 for every entry now equals `7z e -so`'s, through both read paths.
+
+**How it was found, because that is the lesson.** ART's 7z fixtures are built
+by ART's own writer, which produces one block per file and no directories —
+so they exercised neither defect and passed throughout. Pointing the reader at
+a file *another tool* wrote found both in one run. That is the same failure
+mode as ART-032…035 and ART-075, for the third time in this project:
+`read_foreign_archive_for_oracle_when_asked` and
+`read_foreign_c64_for_oracle_when_asked` exist now so it is one command rather
+than an idea.
+
+**ART-077** 🟠 **The file manager ignored the object a workflow sent it, so "Open in the file manager" opened nothing**
+`src/pages/FileManager.tsx` · Every `Navigate` workflow hands its object over
+the same way — a route plus `{ state: { path } }` — and every other studio
+reads it on mount (`AdfBrowser`, `CollectionStudio`, `HardDiskStudio`, …).
+This screen never did. `iso.browse` (Task 3) pointed at `/files` precisely
+because the commander is where a disc belongs, and choosing it left the user
+on the file manager with whatever panes they already had and the disc they
+dropped nowhere in sight. Nothing failed and nothing said so, which is why it
+survived Task 3's review: the route existed, the test asserting
+`every_workflow_route_is_a_real_app_route` passed, and the action did nothing.
+
+→ The screen now reads `location.state.path` and opens it in the left pane,
+choosing the pane kind from `analyze_paths` — the same detection that offered
+the action — rather than from the extension. Found while adding
+`archive.browse`, the second workflow to depend on it.
+
+**ART-076** 🟠 **Content-first detection never actually recognised an LHA, and its test could not tell**
+`core/detect.rs` · An LHA header carries its compression-method field
+(`-lh5-`, `-lhd-`, …) at **offset 2**, after the header length and its
+checksum. Detection matched `-l` at offset **0**, which no LHA tool has ever
+written — so a real archive fell through to the extension fallback, and one
+renamed to `.dat` came back `Unknown`. The whole point of Phase 2a Task 1 was
+that a file's name stops deciding what it is; for the format ART was built
+around, it still did.
+
+The test that was supposed to cover this, `detects_lha_by_signature`, wrote
+five bytes — `-lh5-` — into a file and asserted they were detected. That is
+not an archive; it is the method field with nothing around it. Fixture and
+code agreed with each other and with no LHA in the world, which is
+ART-032…035's shape once again, and the reason the fix is filed rather than
+quietly applied.
+
+→ `is_lha_header` checks the field where it belongs: dash, family (`lh`,
+`lz`, `pm`), level, dash. The test now builds a real archive with the same
+`make_lha_with` the LHA tests use and gives it a `.dat` extension, so it can
+only pass on the strength of the signature. `a_method_field_at_offset_zero_is_not_an_lha`
+pins the old fixture as *not* an archive. Found while adding ZIP and 7z
+signatures next to it (Task 4).
+
+**ART-075** 🟡 **A raw CD image in Mode 2 Form 1 would be misread, and two layers would be wrong together**
+`core/detect.rs`, `core/iso/` · ART found a raw 2352-byte-sector track by
+probing `CD001` at `0x9311`, which assumes **Mode 1**: 12 bytes of sync, a
+4-byte header, then 2048 bytes of user data. A **Mode 2/XA Form 1** sector
+carries an 8-byte subheader as well, so its user data starts at 24 and the
+signature sits at `0x9319`. ART did not recognise such an image at all — and
+worse, the reader took its data offset from the same assumption detection
+made, so had one ever been recognised, both layers would have been wrong
+*together*. That is the shape behind ART-032…035, and it is the one thing a
+green test suite cannot show you. CD32 and mixed-mode discs are written this
+way.
+
+→ `SectorLayout::Raw2352Xa` carries the data offset (24) the way the existing
+variants carry 0 and 16, so Mode 1 and Mode 2 Form 1 differ in one number
+rather than in a branch at every read. Detection probes `0x9319` and reports
+`iso9660-raw-xa`; `from_format_hint` turns it back into the layout, pinned by
+`detections_format_hints_open_the_right_layout`. **Mode 2 Form 2** — 2324
+bytes of audio or video and no filesystem — is refused by reading the submode
+byte rather than misread as Form 1 (`refuse_form2`).
+
+Pinned by `a_raw_mode2_xa_track_is_detected_at_0x9319`,
+`a_mode1_raw_track_is_not_reported_as_xa`,
+`an_xa_form1_disc_reads_exactly_as_a_mode1_one_does` (listing *and* bytes: an
+eight-byte slip gives a file that is almost right, which is worse than one
+that fails) and `a_mode2_form2_track_is_refused_rather_than_misread`.
+
+The issue also recorded *why* ART's own tests could not close this: no host
+mounts a raw track dump, so the 2352 path rested entirely on ART agreeing with
+itself. That half is closed too, and separately —
+`scripts/iso-oracle-check.py` strips both raw layouts down to 2048-byte
+sectors from the *layout's* documented offsets (16 and 24, written in the
+script, never read from `core::iso`) and diffs ART's listing and every file's
+SHA-256 against 7-Zip's. Both raw fixtures now have an independent
+implementation agreeing with them.
 
 ### Phase 1a
 

@@ -104,6 +104,15 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
   it("has exactly the expected number of dynamic (non-literal) call sites", () => {
     // Widening this number on purpose means a new t() call whose key isn't
     // a plain string literal — see the file header for what to do about it.
-    expect(dynamicCalls).toBe(36);
+    // 36 → 39 (Task 3): FileManager.tsx's `writeRefusal`, `copyTo`'s
+    // `copyDirection` refusal and the disc footer badge all read `t()` off
+    // a `Phrase`'s `.key` — `ISO_WRITE_REFUSAL` (`@/lib/isoPane`) and
+    // `copyDirection`'s `"refused"` reason — the same reason
+    // `describeCopy`'s callers already do, not a new pattern.
+    // 39 → 41 (Task 4): the archive pane reads `ARCHIVE_WRITE_REFUSAL.key`
+    // in the same two places the disc reads its own — `writeRefusal` and the
+    // footer's read-only badge. Same pattern, one more read-only container.
+    // 41 → 43 (Task 5): and the Commodore pane, in those same two places.
+    expect(dynamicCalls).toBe(43);
   });
 });

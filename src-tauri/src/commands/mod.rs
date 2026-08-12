@@ -5,12 +5,15 @@
 //! logic lives here.
 
 pub mod adf;
+pub mod archive;
 pub mod archives;
+pub mod cbm;
 pub mod checkout;
 pub mod collection;
 pub mod dragdrop;
 pub mod gotek;
 pub mod hdf;
+pub mod iso;
 pub mod jobs;
 pub mod lha;
 pub mod oplog;

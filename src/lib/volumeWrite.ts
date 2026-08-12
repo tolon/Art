@@ -379,9 +379,25 @@ export async function volumeRecover(
 
 export const VOLUME_WRITE_EVENT = "volume-write-result";
 
+/**
+ * What an archive's extraction reports — the archive gate's own outcome
+ * (`core::archive::extract::ExtractOutcome`), not a volume's `ExtractReport`.
+ * It counts entries refused by name and entries whose declared size was a
+ * lie, which a volume has no equivalent for.
+ */
+export interface ArchiveExtractOutcome {
+  total_files: number;
+  total_bytes: number;
+  errors: string[];
+  aborted: boolean;
+  abort_reason: string | null;
+  skipped_existing: number;
+}
+
 export type VolumeWriteResult =
   | { kind: "copy_in"; job_id: number; report: CopyReport; backup: string | null }
-  | { kind: "copy_out"; job_id: number; report: ExtractReport };
+  | { kind: "copy_out"; job_id: number; report: ExtractReport }
+  | { kind: "archive_out"; job_id: number; report: ArchiveExtractOutcome };
 
 /** One listener for every background write result (§54). */
 export function onVolumeWriteResult(
@@ -434,19 +450,29 @@ export async function volumeCopyInMany(
   });
 }
 
-/** F5 the other way — copy a folder out of a volume. Returns a job id. */
+/**
+ * F5 the other way — copy a folder out of a volume. Returns a job id.
+ *
+ * `destDir` is the folder the user picked and `name` is the directory's own
+ * name from the listing. They are passed separately and joined in Rust, by
+ * `folder_destination`: `name` came out of an image ART did not write, and a
+ * caller that concatenated the two first would be handing a security boundary
+ * a path it can no longer check.
+ */
 export async function volumeCopyOut(
   path: string,
   volumeIndex: number,
   dirBlock: number | null,
-  dest: string,
+  destDir: string,
+  name: string,
   options?: CopyOptions
 ): Promise<number> {
   return invoke<number>("volume_copy_out", {
     path,
     volumeIndex,
     dirBlock,
-    dest,
+    destDir,
+    name,
     options: options ?? null,
   });
 }

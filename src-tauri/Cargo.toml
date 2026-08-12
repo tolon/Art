@@ -4,7 +4,18 @@ version = "0.1.0"
 description = "ART — The Swiss Army Knife for Amiga Files"
 authors = ["ART Project"]
 edition = "2021"
-rust-version = "1.77"
+# Raised from 1.77 on 2026-08-12, deliberately and for one reason: 7z support.
+# The maintained `sevenz-rust2` requires 1.93, and the newest release that
+# still built on 1.77 was fourteen minor versions behind — an old LZMA decoder
+# is not a good thing to point at untrusted files, and LZMA is where that
+# class of bug lives. CI builds on `stable` (`dtolnay/rust-toolchain@stable`),
+# so nothing in the pipeline pins an older compiler.
+rust-version = "1.93"
+# The repository has said MIT in `LICENSE` since the first commit; the manifest
+# had not, and current cargo-deny rejects the crate as unlicensed for it —
+# `cargo deny check licenses` failed on ART itself before it got as far as any
+# dependency.
+license = "MIT"
 
 # Tauri 2 requires the lib to be a cdylib/staticlib for cross-binary use
 # (and an rlib so the binary target and tests can reuse it).
@@ -38,10 +49,11 @@ delharc = { version = "0.8", default-features = false, features = ["std", "lh1",
 # resume offset and the size gate — the two things the download pipeline relies
 # on to know it received the right file.
 #
-# Pinned exactly: ureq 3.4 raised its own MSRV to 1.85, and this crate promises
-# 1.77 (see `rust-version` above). A caret requirement quietly resolves to 3.4
-# and breaks that promise on the next lockfile refresh. Raise the pin only
-# together with the MSRV.
+# Pinned exactly. The original reason — ureq 3.4 raised its MSRV to 1.85 and
+# this crate promised 1.77 — no longer applies now that the MSRV is 1.93, so
+# the pin is now only "not yet re-verified": moving the HTTP client means
+# re-running the transport tests and the live-mirror checks that found ART-030,
+# and that is its own change rather than a side effect of adding 7z support.
 ureq = { version = "=3.2.1", default-features = false, features = [
     "rustls",
     "rustls-webpki-roots",
@@ -49,6 +61,45 @@ ureq = { version = "=3.2.1", default-features = false, features = [
 # Dragging a file OUT of the window into Explorer. Windows has no way to do
 # that from a webview, so it needs a native plugin (see ART-kaynak-listesi §11).
 tauri-plugin-drag = "2.1.1"
+# ZIP, read-only, behind `core/archive`'s one security gate.
+#
+# `default-features = false` on purpose, and the feature list is the whole
+# decision: ART only ever *reads* an archive, and every enabled feature is more
+# code parsing a hostile file inside this process. Off, deliberately: `aes-crypto`
+# and `pbkdf2` (ART does not open encrypted archives — it says so instead),
+# `bzip2`/`zstd`/`lzma`/`xz`/`deflate64` (not what Amiga-era ZIPs use, and each
+# is another decompressor), `deflate-zopfli` (a *compressor*), and the date
+# crates. Deflate through `flate2` + `zlib-rs` keeps it pure Rust with no C
+# toolchain in the build.
+#
+# 8.x needs rustc 1.88; it was held at 4.6 for exactly as long as the old MSRV
+# lasted, and arrived with the bump above.
+zip = { version = "8", default-features = false, features = [
+    "deflate-flate2",
+    "deflate-flate2-zlib-rs",
+] }
+
+# 7z, read-only, behind the same gate as ZIP and LHA.
+#
+# `default-features = false` for the same reason: ART reads and never writes an
+# archive. The dependency surface is two crates — `crc32fast` and `lzma-rust2`
+# — and LZMA is the whole point of it.
+#
+# **This crate is why the MSRV moved to 1.93** (see `rust-version` above). The
+# newest release that still built on 1.77 was fourteen minor versions behind,
+# and an old LZMA decoder is precisely the thing not to point at files
+# strangers wrote.
+sevenz-rust2 = { version = "0.21.4", default-features = false }
+
+[dev-dependencies]
+# The 7z *encoder*, for building test fixtures only. ART ships no archives, so
+# every fixture is written at runtime — and a 7z cannot be hand-assembled the
+# way a level-0 LHA header can, so the writer has to come from somewhere.
+#
+# In `[dev-dependencies]` on purpose: cargo unifies features here only when
+# building tests, so `cargo build` still compiles the decoder alone and the
+# shipped application carries no LZMA encoder.
+sevenz-rust2 = { version = "0.21.4", default-features = false, features = ["compress"] }
 
 [profile.dev]
 incremental = true
