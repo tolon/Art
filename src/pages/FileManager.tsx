@@ -109,10 +109,14 @@ import {
   type HostReturn,
 } from "@/lib/containerStep";
 import {
+  highestTabNumber,
+  readSession,
+  toSession,
+} from "@/lib/paneSession";
+import {
   activeTab,
   closeTab,
   duplicateTab,
-  isUsableTabSet,
   selectTab,
   singleTabSet,
   tabTitle,
@@ -824,36 +828,26 @@ export function FileManager() {
    */
   async function restoreSession(): Promise<boolean> {
     sessionRestored.current = true;
-    const saved = savedSession;
-    if (!saved || typeof saved !== "object") return false;
 
-    const record = saved as { left?: unknown; right?: unknown; focused?: unknown };
-    if (!isUsableTabSet(record.left) || !isUsableTabSet(record.right)) return false;
+    // Everything about *what a saved session is* — and what makes one
+    // unusable — lives in `@/lib/paneSession`, which has the round-trip tests
+    // this function cannot have. All that is left here is applying it.
+    const session = readSession(savedSession);
+    if (!session) return false;
 
     // Keep minting ids past anything restored, so a Ctrl+T cannot collide
     // with a tab that came back from disk.
-    for (const set of [record.left, record.right]) {
-      for (const tab of set.tabs) {
-        const numeric = Number(tab.id.replace(/^tab-/, ""));
-        if (Number.isFinite(numeric)) nextTabId.current = Math.max(nextTabId.current, numeric + 1);
-      }
-    }
+    nextTabId.current = Math.max(nextTabId.current, highestTabNumber(session) + 1);
 
-    setTabs({ left: record.left, right: record.right });
+    setTabs({ left: session.left, right: session.right });
     for (const side of ["left", "right"] as Side[]) {
-      const set = side === "left" ? record.left : record.right;
-      const tab = activeTab(set);
+      const tab = activeTab(session[side]);
       setSort((s) => ({ ...s, [side]: tab.sort ?? defaultSortState() }));
       setFilter((f) => ({ ...f, [side]: tab.filter }));
       await openLocation(side, tab.location);
     }
-    if (record.focused === "left" || record.focused === "right") setFocused(record.focused);
-    // The command history is a nice-to-have, so it is restored on its own
-    // terms: a malformed one is dropped rather than costing the whole session.
-    const history = (saved as { commandHistory?: unknown }).commandHistory;
-    if (Array.isArray(history) && history.every((e) => typeof e === "string")) {
-      setCommandHistory(history.slice(0, 20));
-    }
+    setFocused(session.focused);
+    setCommandHistory(session.commandHistory);
     return true;
   }
 
@@ -1508,7 +1502,7 @@ export function FileManager() {
   useEffect(() => {
     if (!sessionRestored.current || !tabs.left || !tabs.right) return;
     void updateSettings({
-      filesSession: { left: tabs.left, right: tabs.right, focused, commandHistory },
+      filesSession: toSession(tabs.left, tabs.right, focused, commandHistory),
     });
   }, [tabs, focused, commandHistory, updateSettings]);
 
