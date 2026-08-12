@@ -22,7 +22,7 @@ Update it at the end of any session that changes what works.
 | **Version** | 0.1.0 (unreleased) |
 | **Current stage** | Phase 2b — the Files screen, done right (tasks 1–3 of 8, on branch `phase-2b`) |
 | **Build** | PASS |
-| **Tests** | 912 Rust passed, 0 failed; 178 frontend passed, 0 failed |
+| **Tests** | 912 Rust passed, 0 failed; 191 frontend passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
 | **amitools oracle** | 48 checks, both directions |
@@ -33,7 +33,7 @@ Update it at the end of any session that changes what works.
 | **Release bundle** | rebuilt 2026-08-12 — MSI and NSIS, and the application was launched and answered |
 | **Published** | <https://github.com/tolon/Art> — public, `main`, **GPL-3.0-or-later** (was MIT until 2026-08-12) |
 | **Real hardware** | **Bare metal, reached 2026-08-12** — `test/art-bootable-test.adf` booted a real **A500/A500+** (Kickstart 3.9) from a **Gotek**, to an AmigaDOS CLI. Photographed. Two ADFs had already mounted/booted under licensed Kickstart in WinUAE (Phase 1a). Still untouched: physical magnetic media — a Gotek is not a mechanical drive |
-| **Seen on a screen** | The Dashboard, at last — a human looked at the running window on 2026-08-12 and the screenshot is in the README. **The Files screen still has not been looked at since phase 2a's panes were added** (ART-062) |
+| **Seen on a screen** | **The Files screen, at last** — opened, driven and screenshotted on 2026-08-12, along with the ADF, hard-disk, PiStorm, WHDLoad and Settings screens. It cost immediately: [ART-082](ISSUES.md#open) (the listings were capped at 420 px inside panes that filled the window) had shipped green behind 178 tests. Four more findings came out of the same session — ART-083 … ART-086. `ART-062` narrows to the screens still unopened (Aminet, Collection, Gotek, ROM, WinUAE, Tools) |
 
 Reproduce the numbers above:
 
@@ -530,16 +530,47 @@ confirmations his config keeps on (7); closing the phase (8).
 **Nothing in this phase has been looked at running either.** All three tasks
 are green on tests and none has been seen.
 
-### ⏳ SD Card Appliance Builder — SD-0 … SD-5 (planned, not started)
+### ⏳ PiStorm Image Builder — SD-0 … SD-5 (planned, not started)
+
+**This is the project's largest unbuilt feature and, per the user, its point.**
 
 Gap analysis: [sd-appliance-gap-analysis.md](sd-appliance-gap-analysis.md)
-(2026-08-11, from the PiStorm multiboot architecture). It lists **only** what
-ART lacks; everything ART already has — WHDLoad install, ADF/LHA import, RDB
-creation, Gotek prep, config round-trip, journalled writes, Aminet, oplog, the
-job queue — the SD work consumes rather than reimplements.
+(2026-08-11, from the PiStorm multiboot architecture; rescoped 2026-08-12). It
+lists **only** what ART lacks; everything ART already has — WHDLoad install,
+ADF/LHA import, RDB creation, Gotek prep, config round-trip, journalled
+writes, Aminet, oplog, the job queue — the build consumes rather than
+reimplements.
 
-The story: build a complete PiStorm/Emu68 SD card from Windows, verified,
-that boots a real Amiga.
+The story: build a complete PiStorm/Emu68 **image file** on Windows, verified,
+that boots a real Amiga once the user has flashed it.
+
+**Scope decision, 2026-08-12: ART builds the image; it never touches physical
+media.** The user flashes the `.img` with whichever imager they already have.
+This deletes **G1** — raw `\\.\PhysicalDriveN` access, device enumeration and
+identification, dismount/lock, verify-back and the typed-confirmation UI
+around all of it — which was blocker number one and ART's single largest
+safety surface. G8 becomes image validation rather than card validation (and
+moves up, since it is now the last thing before the file is handed over), and
+G12 (card backup) goes with G1: the build manifest already describes how to
+*rebuild* an image, which is better than a 32 GB blob. Everything that makes
+the image an Amiga — partitioning, filesystems, the OS, the content, the
+multiboot layout — is untouched by the decision and is all file work.
+
+**Three gaps the analysis did not name, added 2026-08-12 from the user:**
+
+- **G14** — the build inputs that make a distribution *theirs*: wallpaper,
+  WiFi credentials, prefs, Startup-Sequence additions. Every one is a config
+  file, so §39/§40's "edit in place, never regenerate" rule applies to all of
+  them, and the WiFi key is secret material that must stay out of the oplog,
+  the manifest and any AI prompt. **Wallpaper is new scope** — it is in no
+  existing document. WiFi is not: §45.5 designed `write_pistorm_wifi` with
+  `@form.wifi_psk`, reachable only through an AI layer that is not built.
+- **G15** — a **build** as a drag & drop target. ART already has exactly one
+  drop pipeline (`analyze_paths` → `WorkflowEngine::plan`); what is missing is
+  not the pipeline but the question "what does this file become in *this*
+  image", as against today's "what can I do with this file".
+- **G16** — multiboot as several complete AmigaOS environments and a boot
+  menu, not a boot-priority field.
 
 **Which Amiga is a parameter, not an assumption** (decision, 2026-08-12). The
 gap analysis was written around "the A500"; that is one of the machines
@@ -554,18 +585,24 @@ generalised from it).
 | Phase | Contents |
 |---|---|
 | **SD-0** | Prior-art teardown: Emu68-Imager, emu68hatcher, hdf2emu68 (G0) |
-| **SD-1** | Image-first foundations: MBR + FAT32 boot partition (G2), RDB filesystem embedding FSHD/LSEG (G4), build manifest (G7) |
-| **SD-2** | The card exists: raw device flash + verify (G1), boot priority and a recovery volume (G6), whole-card validation (G8) |
-| **SD-3** | Content, preloaded: PFS3 via a scripted WinUAE session (G3 route D), OS install engine (G5), launcher metadata export (G10), layout policy (G11) |
+| **SD-1** | The image has a shape: MBR + FAT32 boot partition (G2), RDB filesystem embedding FSHD/LSEG (G4 — also closes ART-084), build manifest (G7), a build as a drop target (G15), image validation (G8) |
+| **SD-2** | Content, preloaded: PFS3 via a scripted WinUAE session (G3 route D), OS install engine (G5), ROM pairing (G9), launcher metadata export (G10), layout policy (G11) |
+| **SD-3** | It is *mine*: wallpaper, WiFi, prefs and Startup-Sequence, each edited in place (G14); multiboot as several complete environments and a boot menu (G16) |
 | **SD-4** | The flagship: native PFS3 write in ART (G3 route B) — its own brief; route D's harness becomes its oracle |
-| **SD-5** | Comfort: card backup/restore (G12), capacity planner (G13) |
+| **SD-5** | Comfort: capacity planner and build profiles (G13) |
 
-Three decisions in it are worth knowing before reading the code they will
+*The old SD-2 ("the card exists") is gone with G1, and everything after it
+moved up a number; validation came forward into SD-1, where it is now the last
+thing that happens before the file is handed over.*
+
+Four decisions in it are worth knowing before reading the code they will
 produce:
 
-- **Never build on the device.** Everything is built into a sparse image file
-  through the existing tested paths; a separate, dumb, heavily guarded step
-  flashes and verifies. §56 already forbids the alternative.
+- **ART never touches physical media.** Everything is built into a sparse
+  image file through the existing tested paths, and there the job ends: the
+  user flashes it with the imager they already have. §56's raw-device guard
+  stays in the spec as the reason ART does not do this, rather than as a
+  problem ART has to solve.
 - **v1 targets Emu68 only.** The classic Linux/Musashi route is a different
   build and is out of scope in writing, not by omission.
 - **PFS3 preload starts borrowed and ends native.** Route D has the real
@@ -573,11 +610,17 @@ produce:
   construction, zero reimplementation risk — while route B (a native PFS3
   writer, the thing no other imager has) stays the flagship. Once B exists, D
   is its oracle.
+- **A distribution is configured in ART, not afterwards on the Amiga.**
+  Wallpaper, WiFi, prefs and Startup-Sequence are build inputs (G14), and
+  every one of them is edited in place rather than regenerated — the same rule
+  §39/§40 already impose on `FF.CFG` and `cmdline.txt`, applied to AmigaOS.
 
-The milestone that matters first is not a preloaded 128 GB card: it is **one
-card, built entirely from Windows, that boots a real Amiga into AmigaOS 3.2
+The milestone that matters first is not a preloaded 128 GB image: it is **one
+image, built entirely from Windows, that boots a real Amiga into AmigaOS 3.2
 with a recovery volume beside it** — with the machine and the board it was
-proved on written down beside the claim.
+proved on written down beside the claim. The bootable-ADF pass on a real
+A500/A500+ (2026-08-12) is what that proof looks like, and what its honesty
+standard is.
 
 Sequenced after Phase 2a. Whether it goes before or after Stage 5's AI layer
 is open.
@@ -781,6 +824,7 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-12 | **First human session with the running application.** ART-082 found and fixed in seconds — the Files panes filled the window and their listings did not, capped at 420 px, behind 178 green tests. ART-083 fixed (the HDF wizard's 8 GB ceiling was five numbers in a component, not an engine limit; there is a Custom size now). ART-084 recorded and labelled in the dialog: a PFS3/SFS HDF is a DosType with no filesystem and no RDB driver, so an Amiga cannot mount it. ART-085/086 recorded. **Scope decision: ART builds the PiStorm `.img`, never the card** — G1 deleted, and G14/G15/G16 (wallpaper + WiFi + prefs, a build as a drop target, real multiboot) added from the user | 912 Rust / 191 frontend |
 | 2026-08-12 | **Bare metal.** `test/art-bootable-test.adf` cold-booted a real A500/A500+ (Kickstart 3.9) from a Gotek to an AmigaDOS `1>` prompt — ART's own boot code running on a real 68000, photographed. Every earlier pass was WinUAE with licensed ROMs. Left standing: physical magnetic media, which a Gotek is not | — |
 | 2026-08-12 | Phase 2b task 3: the pane header is a source combo, a path and a filter, with the button strip behind a Settings toggle; the command line navigates and filters and refuses everything else by name; one non-wrapping F-key row; one status strip inside the dock instead of three banners above the panes; the collision question moved into the copy dialog. **F6 is Move** — verified against the destination's own listing before anything is deleted — with three directions refused by name for want of a primitive (ART-080, ART-081) | 912 Rust / 178 frontend |
 | 2026-08-12 | **Published at github.com/tolon/Art** (public). Licence changed MIT → GPL-3.0-or-later to match the repository, in all seven places that claimed one. Phase 2a merged to `main`; phase 2b started on its own branch so half-finished UI did not travel with it | 912 Rust / 137 frontend |
