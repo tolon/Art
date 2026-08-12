@@ -239,7 +239,7 @@ checks the image comes back byte for byte.
 | PiStorm kernel update from GitHub | §40 | ⏳ | F4's second half — not built; the screen offers nothing rather than a button that does nothing |
 | PiStorm card verified on real hardware | §40 | ⏳ | no card built by this screen has been booted |
 | PiStorm WiFi / network pre-seeding | §40, SD G14 | ⏳ | Amiga-side (`wifipi.device`, `DEVS:NetInterfaces`), so it belongs to volume building — declared on screen rather than offered |
-| Multiboot `config_<name>.txt` sets | SD G16 | ✅ | list, create, duplicate, rename, activate — each through preview → backup → write. Deleting one is [ART-092](ISSUES.md#open), deliberately deferred |
+| Multiboot `config_<name>.txt` sets | SD G16 | ✅ | list, create, duplicate, rename, activate, delete — each through preview → backup → write. A deleted set is kept; the one the card is running cannot be deleted |
 | Distro profile registry | SD G13 | ✅ | `core/distro/registry.json` — data, not code; CaffeineOS, CoffinOS, AmiKit and two ART Baseline entries. No profile can name a token Emu68 lacks |
 | OS Builder: licence, ROM family and card checks | SD G13 | ✅ | `/os-builder` — what each distribution requires of you, and whether the ROM and card you have suit it |
 | OS Builder: prepare the card | SD-2a | ⏳ | blocked on inspecting a real distribution's layout by hand (research §8.2). Every profile is `available: false` and the screen says so |

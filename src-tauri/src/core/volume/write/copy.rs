@@ -32,7 +32,7 @@ use crate::core::volume::{BlockDevice, VolumeGeometry};
 use super::layout::{amiga_from_unix, BlockSet, PROTECT_OFFSET};
 use super::plan::{order_for_creation, SourceEntry};
 use super::uaem::{self, Sidecar};
-use super::{FileMeta, VolumeWriter};
+use super::{DeleteProtection, FileMeta, OverwriteProtection, VolumeWriter};
 
 /// What to do when a name is already taken.
 ///
@@ -182,7 +182,14 @@ fn copy_one(
             return Ok(None);
         }
         Resolution::Replace(existing) => {
-            writer.delete(parent, existing)?;
+            // The `w` bit is the question a replace asks; `d` is not. ART
+            // deletes and re-creates as an implementation detail, so the
+            // delete is overridden and the real check is made first
+            // (ART-088 for the one, ART-094 for the other). A refusal here
+            // becomes this entry's line in `skipped`, which is what the
+            // engine does with any error from one entry.
+            writer.ensure_overwritable(existing, OverwriteProtection::Honour)?;
+            writer.delete_with(parent, existing, DeleteProtection::Override)?;
             name.to_string()
         }
     };

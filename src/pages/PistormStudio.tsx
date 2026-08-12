@@ -25,6 +25,7 @@ import { useTranslation } from "react-i18next";
 import {
   archiveForLine,
   pistormActivateConfigSet,
+  pistormDeleteConfigSet,
   pistormCopyRom,
   pistormHardwareMatrix,
   pistormHardwareNotes,
@@ -1075,6 +1076,24 @@ function ConfigSetsSection({
     }
   }
 
+  async function removeSet(setName: string) {
+    // Destructive, so it asks — and says what "delete" actually means here,
+    // because ART keeps a copy (ART-092).
+    if (!window.confirm(t("pistorm.sets.confirmDelete", { name: setName }))) return;
+    onError(null);
+    try {
+      const backup = await pistormDeleteConfigSet(cardPath, setName);
+      onStatus(
+        backup
+          ? t("pistorm.sets.deletedWithBackup", { name: setName, path: backup })
+          : t("pistorm.sets.deleted", { name: setName })
+      );
+      onChanged();
+    } catch (e) {
+      onError(String(e));
+    }
+  }
+
   async function commitRename() {
     if (!renaming) return;
     onError(null);
@@ -1121,6 +1140,9 @@ function ConfigSetsSection({
                 onClick={() => setRenaming({ from: entry, to: entry })}
               >
                 {t("pistorm.sets.rename")}
+              </button>
+              <button className="btn btn-sm" onClick={() => void removeSet(entry)}>
+                {t("pistorm.sets.delete")}
               </button>
             </li>
           ))}
@@ -1194,7 +1216,7 @@ function ConfigSetsSection({
       </div>
 
       <p className="faint" style={{ fontSize: 11, margin: "10px 0 0" }}>
-        {t("pistorm.sets.noDelete")}
+        {t("pistorm.sets.deleteKeeps")}
       </p>
 
       {preview && (

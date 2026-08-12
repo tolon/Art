@@ -553,6 +553,39 @@ pub fn rename_config_set(root: &Path, from: &str, to: &str) -> CoreResult<()> {
     Ok(())
 }
 
+/// Delete a named firmware set (ART-092).
+///
+/// **Destructive, and the only thing in this module that is** — so it behaves
+/// like the rest of ART's destructive operations rather than like a button: the
+/// file is backed up before it goes, so "deleted" here means "moved out of the
+/// way and recoverable", not "gone".
+///
+/// The active `config.txt` is never a set and cannot be reached from here: the
+/// name is turned into `config_<name>.txt` by [`config_set_path`], which has no
+/// spelling that produces the plain one.
+///
+/// Refuses the set that is currently active, in the sense that matters — if its
+/// text is byte-for-byte what `config.txt` holds, deleting it takes away the
+/// only copy of the configuration the card boots from.
+pub fn delete_config_set(root: &Path, name: &str) -> CoreResult<Option<String>> {
+    let path = config_set_path(root, name)?;
+    if !path.is_file() {
+        return Err(CoreError::InvalidInput(format!("There is no '{name}' set")));
+    }
+
+    let text = std::fs::read_to_string(&path)?;
+    if !text.trim().is_empty() && text == read_or_empty(&root.join("config.txt")) {
+        return Err(CoreError::InvalidInput(format!(
+            "'{name}' is the configuration the card is set up with right now. \
+             Make another set active first, then delete this one."
+        )));
+    }
+
+    let backup = crate::core::safety::backup_file(&path, BackupPolicy::CONFIG)?;
+    std::fs::remove_file(&path)?;
+    Ok(backup.map(|path| path.to_string_lossy().into_owned()))
+}
+
 /// What activating a set would do to `config.txt` (spec §92).
 pub fn preview_activate_config_set(root: &Path, name: &str) -> CoreResult<ConfigSetPreview> {
     let path = config_set_path(root, name)?;
@@ -936,6 +969,62 @@ mod tests {
             std::fs::read_to_string(dir.path().join("config.txt")).unwrap(),
             "unchanged\n"
         );
+    }
+
+    /// ART-092. Deferred out of the fix round because removing a user's
+    /// configuration needs its own shape, not a bare button — this is that
+    /// shape: backed up first, so "deleted" means recoverable.
+    #[test]
+    fn a_set_is_deleted_and_kept() {
+        let dir = card(&[
+            ("config.txt", "the active one\n"),
+            ("config_os39.txt", "the os39 one\n"),
+        ]);
+
+        let backup = delete_config_set(dir.path(), "os39")
+            .unwrap()
+            .expect("a deleted set must be recoverable");
+        assert!(!dir.path().join("config_os39.txt").exists());
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), "the os39 one\n");
+    }
+
+    #[test]
+    fn the_set_the_card_is_running_is_not_deletable() {
+        // Deleting it would take away the only copy of the configuration the
+        // card boots from. Make another active first.
+        let dir = card(&[
+            ("config.txt", "shared text\n"),
+            ("config_os39.txt", "shared text\n"),
+        ]);
+
+        let err = delete_config_set(dir.path(), "os39").unwrap_err();
+        assert!(err.to_string().contains("os39"), "{err}");
+        assert!(dir.path().join("config_os39.txt").exists());
+    }
+
+    #[test]
+    fn deleting_cannot_reach_the_active_config_or_anything_outside_the_card() {
+        let dir = card(&[("config.txt", "the active one\n")]);
+
+        // There is no name that spells the plain `config.txt`…
+        assert!(delete_config_set(dir.path(), "").is_err());
+        assert!(delete_config_set(dir.path(), ".txt").is_err());
+        // …and none that leaves the card.
+        for name in ["../config", "..\\config", "a/b"] {
+            assert!(delete_config_set(dir.path(), name).is_err(), "{name}");
+        }
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config.txt")).unwrap(),
+            "the active one\n",
+            "config.txt must be untouched"
+        );
+    }
+
+    #[test]
+    fn deleting_a_set_that_is_not_there_says_so() {
+        let dir = card(&[("config.txt", "x\n")]);
+        let err = delete_config_set(dir.path(), "nope").unwrap_err();
+        assert!(err.to_string().contains("nope"), "{err}");
     }
 
     #[test]

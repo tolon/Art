@@ -134,6 +134,15 @@ pub fn is_delete_protected(protection: u32) -> bool {
     protection & DELETE_BIT != 0
 }
 
+/// The `W` bit, stored inverted for the same reason: **set** means the
+/// permission is withheld.
+const WRITE_BIT: u32 = 1 << 2;
+
+/// Whether AmigaDOS would refuse to write to an entry with these bits.
+pub fn is_write_protected(protection: u32) -> bool {
+    protection & WRITE_BIT != 0
+}
+
 /// What to do about an entry the Amiga itself protects from deletion.
 ///
 /// Default is [`Honour`](Self::Honour), so a caller that has not thought about
@@ -147,6 +156,20 @@ pub enum DeleteProtection {
     /// Delete it anyway, because the user has been asked and said yes.
     ///
     /// Only ever passed by a path that has actually shown that question.
+    Override,
+}
+
+/// The same question for **replacing** an entry's contents (ART-094).
+///
+/// A separate type from [`DeleteProtection`] because they are separate bits
+/// and separate questions. Overwriting is governed by `w`; `d` governs
+/// deletion. ART's overwrite happens to be implemented as a delete followed by
+/// a create, and letting that implementation detail ask the *deletion*
+/// question would refuse a file the Amiga would happily let you write to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OverwriteProtection {
+    #[default]
+    Honour,
     Override,
 }
 
@@ -512,6 +535,39 @@ impl<'a> VolumeWriter<'a> {
     /// consistent volume rather than a directory tree half gone (§2).
     pub fn delete(&mut self, parent: u32, entry_block: u32) -> CoreResult<WriteOutcome> {
         self.delete_with(parent, entry_block, DeleteProtection::Honour)
+    }
+
+    /// Refuse to replace the contents of an entry the Amiga protects (ART-094).
+    ///
+    /// Called by every path that overwrites, **before** it starts. The delete
+    /// those paths then perform is an implementation detail of a replace, not
+    /// a deletion the user asked for, so they pass
+    /// [`DeleteProtection::Override`] for it — this is the question that
+    /// actually belongs to them.
+    pub fn ensure_overwritable(
+        &self,
+        entry_block: u32,
+        protection: OverwriteProtection,
+    ) -> CoreResult<()> {
+        if protection == OverwriteProtection::Override {
+            return Ok(());
+        }
+
+        let set = BlockSet::new(self.geometry.block_size);
+        let entry = set.view(self.device, entry_block)?;
+        let bits = layout::get_u32(&entry, layout::PROTECT_OFFSET)?;
+        if is_write_protected(bits) {
+            let name = dir::name_of(&entry);
+            // Named remedies the user actually has today. The copy dialog will
+            // grow the same third question the delete flow has, and then this
+            // can offer it — until it does, promising a confirmation that is
+            // not there would be worse than the refusal.
+            return Err(CoreError::InvalidInput(format!(
+                "'{name}' is write-protected on the Amiga. Clear its W bit in \
+                 Attributes, or copy it in under another name."
+            )));
+        }
+        Ok(())
     }
 
     /// The same, saying what to do about an entry the Amiga itself protects.
@@ -1214,6 +1270,79 @@ mod tests {
 
         with_writer(&disk, |w| w.delete(0, added.block.unwrap())).unwrap();
         assert!(listing(&disk).is_empty());
+    }
+
+    /// ART-094. AmigaDOS governs replacing a file's contents with `w`, and a
+    /// file with it withheld is one it will not let you write to.
+    #[test]
+    fn a_write_protected_entry_is_refused_before_it_is_replaced() {
+        let disk = floppy("overwrite-protected");
+        let protection = file::default_protection() | (1 << 2);
+        let added = with_writer(&disk, |w| {
+            w.add_file(
+                0,
+                "Startup-Sequence",
+                b"original",
+                FileMeta {
+                    protection: Some(protection),
+                    date: None,
+                },
+            )
+        })
+        .unwrap();
+        let block = added.block.unwrap();
+
+        let err = with_writer(&disk, |w| {
+            w.ensure_overwritable(block, OverwriteProtection::Honour)
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("Startup-Sequence"), "{err}");
+
+        // And the override is there for the path that has asked.
+        with_writer(&disk, |w| {
+            w.ensure_overwritable(block, OverwriteProtection::Override)
+        })
+        .unwrap();
+    }
+
+    /// The distinction the two guards exist to keep apart. A file that may be
+    /// written but not deleted is one an overwrite must still accept —
+    /// refusing it would be ART's delete-then-create showing through.
+    #[test]
+    fn a_delete_protected_file_may_still_be_overwritten() {
+        let disk = floppy("overwrite-vs-delete");
+        let protection = file::default_protection() | 1; // D withheld, W granted
+        let added = with_writer(&disk, |w| {
+            w.add_file(
+                0,
+                "Locked.txt",
+                b"original",
+                FileMeta {
+                    protection: Some(protection),
+                    date: None,
+                },
+            )
+        })
+        .unwrap();
+        let block = added.block.unwrap();
+
+        with_writer(&disk, |w| {
+            w.ensure_overwritable(block, OverwriteProtection::Honour)
+        })
+        .expect("the write bit is granted, so replacing it is allowed");
+
+        // …while deleting it outright is still refused.
+        assert!(with_writer(&disk, |w| w.delete(0, block)).is_err());
+    }
+
+    #[test]
+    fn the_write_bit_is_read_the_way_amigados_stores_it() {
+        assert!(!is_write_protected(file::default_protection()));
+        assert!(is_write_protected(file::default_protection() | (1 << 2)));
+        assert!(
+            !is_write_protected(file::default_protection() | 1),
+            "the D bit is not the W bit"
+        );
     }
 
     #[test]

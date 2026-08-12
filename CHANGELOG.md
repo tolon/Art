@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Two that were owed (2026-08-13)
+
+#### Fixed
+- **A write-protected file is no longer replaced without a word.** The delete
+  half of this landed yesterday; the *overwrite* half is what AmigaDOS actually
+  governs with the W bit, and nothing checked it. Fixing it also caught a side
+  effect of yesterday's change: copying over a file that was delete-protected
+  but perfectly writable had started being refused for the wrong reason.
+
+#### Added
+- **A named firmware set can be deleted**, and ART keeps a copy when it goes.
+  The set the card is currently running is refused — deleting that one would
+  take away the only copy of the configuration it boots from, so make another
+  active first.
+
 ### Four fixes (2026-08-13)
 
 #### Fixed
@@ -73,8 +88,8 @@ guessing at it is how a tool ends up writing a card that quietly does not boot.
   now adds free typing beside it instead of taking it away.
 
 #### Not built
-Fetching a kernel update from GitHub, and deleting a firmware set. Both are
-named in the issues list rather than offered as buttons that do nothing.
+Fetching a kernel update from GitHub. Named in the issues list rather than
+offered as a button that does nothing.
 
 ### The PiStorm screen tells the truth now (2026-08-12)
 

@@ -408,6 +408,21 @@ export async function pistormPreviewActivateSet(
   return invoke<ConfigSetPreview>("pistorm_preview_activate_set", { path, name });
 }
 
+/**
+ * Delete a named firmware set (ART-092).
+ *
+ * Backed up first, so "deleted" means moved out of the way and recoverable.
+ * Returns where the previous file went. Refused for the set the card is
+ * currently running: deleting that one would take away the only copy of the
+ * configuration it boots from.
+ */
+export async function pistormDeleteConfigSet(
+  path: string,
+  name: string
+): Promise<string | null> {
+  return invoke<string | null>("pistorm_delete_config_set", { path, name });
+}
+
 export async function pistormActivateConfigSet(
   path: string,
   name: string

@@ -151,6 +151,7 @@ pub fn run() {
             commands::pistorm::pistorm_rename_config_set,
             commands::pistorm::pistorm_preview_activate_set,
             commands::pistorm::pistorm_activate_config_set,
+            commands::pistorm::pistorm_delete_config_set,
             commands::pistorm::hex_read,
             commands::collection::collection_scan,
             commands::winuae::winuae_detect,

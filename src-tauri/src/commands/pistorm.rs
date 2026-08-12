@@ -13,10 +13,10 @@ use crate::core::pistorm::hardware::{
 };
 use crate::core::pistorm::options::{profile_options, tokens_for, Emu68Options, Emu68Profile};
 use crate::core::pistorm::{
-    activate_config_set, copy_rom_to_card, preview_activate_config_set, preview_config_set,
-    preview_save, rename_config_set, rom_suits, save_card, scan_card, write_config_set,
-    ConfigSetPreview, ConfigSetSource, PistormCard, PistormPreview, PistormSaveOutcome,
-    PistormSetup, RomCopyOutcome,
+    activate_config_set, copy_rom_to_card, delete_config_set, preview_activate_config_set,
+    preview_config_set, preview_save, rename_config_set, rom_suits, save_card, scan_card,
+    write_config_set, ConfigSetPreview, ConfigSetSource, PistormCard, PistormPreview,
+    PistormSaveOutcome, PistormSetup, RomCopyOutcome,
 };
 use crate::core::rom::{identify_rom, RomInfo};
 use crate::error::AppResult;
@@ -277,6 +277,29 @@ pub fn pistorm_rename_config_set(
             .destination(format!("{path}\\config_{to}.txt")),
         &result,
         |record, _: &()| record.outcome(OperationOutcome::success()),
+    );
+
+    result
+}
+
+/// Delete a named firmware set. Backed up first, so it stays recoverable.
+#[tauri::command]
+pub fn pistorm_delete_config_set(
+    path: String,
+    name: String,
+    oplog: State<'_, JsonlOperationLog>,
+) -> AppResult<Option<String>> {
+    let result = delete_config_set(&PathBuf::from(&path), &name).map_err(Into::into);
+
+    write_result(
+        &oplog,
+        user_operation("Delete PiStorm firmware set").source(format!("{path}\\config_{name}.txt")),
+        &result,
+        |record, backup: &Option<String>| {
+            record
+                .backup(backup.clone())
+                .outcome(OperationOutcome::success())
+        },
     );
 
     result

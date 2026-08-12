@@ -25,7 +25,7 @@ what fixed it (with the test that proves it).
 
 _(ART-075 was open here; it is fixed — see [Phase 2a](#phase-2a) below.)_
 
-**ART-094** 🟡 **Overwriting a write-protected file is not checked either**
+**ART-094** 🟡 **Overwriting a write-protected file is not checked either** — *fixed 2026-08-13*
 `core/volume/write/mod.rs` · `commands/volume_write.rs::replace_file` · The
 delete half of [ART-088](#open) is fixed: the writer honours the `d` bit and
 refuses unless the user has been asked. The **overwrite** half is not.
@@ -41,6 +41,28 @@ The same shape as the fix that just landed: honour the bit by default, and let
 a caller that has shown the question say so. The Files screen's copy dialog is
 where that question already belongs — it asks about collisions there, and
 "this one is write-protected" is the same conversation.
+
+**Fixed the same day**, and it caught a side effect of the fix that created
+it: ART-088 made `delete` honour the `d` bit, and the three overwrite paths all
+reach `delete` — so copying over a delete-protected-but-writable file started
+being refused for the wrong reason. `ensure_overwritable` is the right question
+(`w`), asked before the replace begins; the delete underneath is
+`DeleteProtection::Override`, because it is how ART performs a replace and not
+a deletion the user asked for. Two bits, two guards, and
+`a_delete_protected_file_may_still_be_overwritten` is the test that keeps them
+apart.
+
+All three paths honour it: the copy engine (a refusal becomes that entry's line
+in `skipped`), `volume_put_file`, and check-in — where refusing is simply
+correct, since putting an edit back into a file the Amiga would not let you
+write to is what the bit exists to stop.
+
+**The remaining half is the question itself.** `volume_put_file` takes an
+override so the copy dialog can offer it, and nothing sends it yet: the refusal
+names the remedies that exist today (clear the W bit in Attributes, or copy in
+under another name) rather than promising a confirmation that is not there.
+Adding it to the copy dialog, beside the collision question it already asks, is
+the follow-up.
 
 Split out of ART-088 on 2026-08-13 rather than left as a sentence inside it.
 
@@ -70,7 +92,7 @@ which release line, which is the part they cannot work out for themselves.
 
 Recorded 2026-08-13 as owed work, not a defect.
 
-**ART-092** 🔵 **A named PiStorm firmware set cannot be deleted from ART**
+**ART-092** 🔵 **A named PiStorm firmware set cannot be deleted from ART** — *fixed 2026-08-13*
 `core/pistorm/mod.rs` · `src/pages/PistormStudio.tsx` · Named sets can be
 created, duplicated, renamed and activated. Deleting one is deliberately absent
 from that list: removing a user's configuration is destructive, and destructive
@@ -81,6 +103,19 @@ Not urgent — a set is a file on a card the user can already delete in Files, o
 in Explorer. Worth doing properly when the confirm shape for "delete a thing
 the user made" is settled, which is the same question a future *delete a ROM
 from the card* will ask.
+
+**Fixed 2026-08-13**, and the shape is the answer: the set is **backed up
+before it goes**, so "deleted" means moved out of the way and recoverable, and
+the screen says so rather than implying otherwise. Two things it refuses: a
+name that would reach outside the card (`config_set_path` is the only spelling,
+and there is none that produces the plain `config.txt`), and the set the card
+is *currently running* — whose text matches `config.txt` byte for byte, so
+deleting it would take away the only copy of the configuration it boots from.
+Make another active first.
+
+Tests: `a_set_is_deleted_and_kept`, `the_set_the_card_is_running_is_not_deletable`,
+`deleting_cannot_reach_the_active_config_or_anything_outside_the_card`,
+`deleting_a_set_that_is_not_there_says_so`.
 
 Recorded 2026-08-13 as a deferral, not a defect.
 

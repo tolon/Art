@@ -911,7 +911,11 @@
       "activated": "Etkin config.txt artık '{{name}}'.",
       "activatedWithBackup": "Etkin config.txt artık '{{name}}'. Önceki dosya {{path}} konumunda.",
       "renamed": "'{{from}}' artık '{{to}}' adını taşıyor.",
-      "noDelete": "ART setleri silmez. Kaldırmak isterseniz kendiniz silin."
+      "delete": "Sil",
+        "confirmDelete": "'{{name}}' seti silinsin mi? ART bir kopyasını saklar, yani geri alınabilir — ama set listeden çıkar.",
+        "deleted": "'{{name}}' seti silindi.",
+        "deletedWithBackup": "'{{name}}' seti silindi. Bir kopyası {{path}} konumunda.",
+        "deleteKeeps": "Bir seti silmek kopyasını saklar. Kartın çalıştırdığı set silinemez — önce başka birini etkin yapın."
     }
   },
   "gotek": {

@@ -40,7 +40,9 @@ use crate::core::volume::write::copy::{
     ExtractReport, HostFolder, HostSelection, StagedTree,
 };
 use crate::core::volume::write::plan::{plan_copy, CopyPlan, SourceEntry};
-use crate::core::volume::write::{DeleteProtection, VolumeWriter, WriteOutcome};
+use crate::core::volume::write::{
+    DeleteProtection, OverwriteProtection, VolumeWriter, WriteOutcome,
+};
 use crate::core::volume::{read_block_vec, BlockDeviceMut, VolumeGeometry, WriteStrategy};
 use crate::error::{AppError, AppResult};
 
@@ -606,6 +608,16 @@ pub fn volume_delete_many(
 }
 
 /// Write one file into a volume — the single-file fast path of F5.
+///
+/// `override_protection` is the answer to the write-protection question
+/// (ART-094): the file being replaced has its `w` bit withheld, the user was
+/// asked anyway, and said yes. False is the safe answer and is what any caller
+/// that has not asked sends.
+// A Tauri command's arguments are its wire format; grouping them into a struct
+// to please the lint would change what the frontend sends without making
+// anything clearer. The same allow every other multi-argument command here
+// carries.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub fn volume_put_file(
     path: String,
@@ -614,11 +626,17 @@ pub fn volume_put_file(
     source: String,
     name: Option<String>,
     overwrite: Option<OverwritePolicy>,
+    override_protection: Option<bool>,
     oplog: State<'_, JsonlOperationLog>,
 ) -> AppResult<MutationResult> {
     let image = PathBuf::from(path.trim());
     let source_path = PathBuf::from(source.trim());
     let parent = dir_block.unwrap_or(0);
+    let overwrite_protection = if override_protection.unwrap_or(false) {
+        OverwriteProtection::Override
+    } else {
+        OverwriteProtection::Honour
+    };
 
     let chosen = name.unwrap_or_else(|| {
         source_path
@@ -646,7 +664,11 @@ pub fn volume_put_file(
                         )))
                     }
                     OverwritePolicy::Overwrite => {
-                        writer.delete(parent, existing.block)?;
+                        // `w`, not `d`: replacing a file's contents is what
+                        // AmigaDOS governs with the write bit, and the delete
+                        // below is only how ART gets there (ART-094).
+                        writer.ensure_overwritable(existing.block, overwrite_protection)?;
+                        writer.delete_with(parent, existing.block, DeleteProtection::Override)?;
                     }
                     OverwritePolicy::Rename => {
                         return Err(CoreError::InvalidInput(format!(
@@ -699,10 +721,11 @@ pub fn replace_file(
     data: &[u8],
 ) -> CoreResult<MutationResult> {
     let (outcome, strategy, backup) = with_writer(image, volume_index, |writer| {
-        // `Override` because this is a replace, not a delete: the entry is
-        // going away only so the same name can carry new bytes, and AmigaDOS
-        // governs overwriting with the `w` bit rather than `d`. ART does not
-        // check `w` yet either — ART-094.
+        // `w` is the question, `d` is not: the entry is going away only so
+        // the same name can carry new bytes. Honoured rather than overridden —
+        // putting an edit back into a file the Amiga would not let you write
+        // to is exactly what the bit is there to stop.
+        writer.ensure_overwritable(entry_block, OverwriteProtection::Honour)?;
         writer.delete_with(dir_block, entry_block, DeleteProtection::Override)?;
         writer.add_file(dir_block, name, data, Default::default())
     })?;

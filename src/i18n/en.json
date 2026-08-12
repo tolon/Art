@@ -911,7 +911,11 @@
       "activated": "'{{name}}' is now the active config.txt.",
       "activatedWithBackup": "'{{name}}' is now the active config.txt. The previous one is at {{path}}.",
       "renamed": "'{{from}}' is now called '{{to}}'.",
-      "noDelete": "ART does not delete sets. Remove one yourself if you want it gone."
+      "delete": "Delete",
+        "confirmDelete": "Delete the '{{name}}' set? ART keeps a copy, so this can be undone — but the set stops being in the list.",
+        "deleted": "Set '{{name}}' deleted.",
+        "deletedWithBackup": "Set '{{name}}' deleted. A copy is kept at {{path}}.",
+        "deleteKeeps": "Deleting a set keeps a copy of it. The set the card is running cannot be deleted — make another one active first."
     }
   },
   "gotek": {
