@@ -2039,8 +2039,6 @@ export function FileManager() {
         if (state.image) void openVolume(side, state.location, state.image, index, null, []);
       },
       onRefresh: () => void refresh(side),
-      onCopy: (entry: PanelEntry) => void copyTo(side, entry),
-      onDelete: (entry: PanelEntry) => void deleteEntry(side, entry),
       onNewFolder: () => void newFolder(side),
       onDragOut: (entry: PanelEntry) => void dragOut(entry),
       onDropped: (entry: PanelEntry, from: Side) => {
@@ -2232,11 +2230,10 @@ export function FileManager() {
   }
 
   return (
-    <div className="app-content-wide">
-      <h1 style={{ fontSize: 20 }}>{t("nav.files")}</h1>
-      <p className="muted" style={{ marginTop: 4 }}>
-        {t("files.intro")}
-      </p>
+    // Full-bleed: the commander *is* the window (brief §1.1). No page title
+    // and no explainer paragraph — Total Commander needs neither, and the
+    // room they took is room the panes now have.
+    <div className="app-content-full">
 
       {/* §2: an unfinished operation blocks every write until it is decided
           about, so it is offered first and cannot be scrolled past. */}
@@ -2295,17 +2292,15 @@ export function FileManager() {
        * does either — they stay in the app's own light/dark theme.
        */}
       <div className="tc-commander">
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr auto 1fr",
-            gap: 10,
-            alignItems: "start",
-          }}
-        >
+        {/* `minmax(0, 1fr)` twice and `align-items: stretch` (in the CSS, not
+            here) are the height contract: the two panes are the same height
+            because the grid says so, not because their contents happen to
+            match. A content-sized flex row is what let the right pane come up
+            short in the first screenshot. */}
+        <div className="tc-pane-grid">
           <Pane {...paneProps("left")} />
 
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 90 }}>
+          <div className="tc-transfer-buttons">
             <button
               className="btn"
               title={t("files.arrows.toRightTitle")}
@@ -2533,8 +2528,6 @@ function Pane({
   onOpenRoot,
   onOpenVolume,
   onRefresh,
-  onCopy,
-  onDelete,
   onNewFolder,
   onDragOut,
   onDropped,
@@ -2574,8 +2567,6 @@ function Pane({
   onOpenRoot: (root: string) => void;
   onOpenVolume: (index: number) => void;
   onRefresh: () => void;
-  onCopy: (entry: PanelEntry) => void;
-  onDelete: (entry: PanelEntry) => void;
   onNewFolder: () => void;
   onDragOut: (entry: PanelEntry) => void;
   onDropped: (entry: PanelEntry, from: Side) => void;
@@ -2819,7 +2810,6 @@ function Pane({
               <span className="tc-cell tc-cell-size" />
               <span className="tc-cell tc-cell-date" />
               <span className="tc-cell tc-cell-attr" />
-              <span className="tc-cell tc-cell-actions" />
             </li>
           )}
 
@@ -2881,40 +2871,6 @@ function Pane({
                 </span>
                 <span className="tc-cell tc-cell-date">{formattedDate ?? "—"}</span>
                 <span className="tc-cell tc-cell-attr">{entry.attrs ?? "—"}</span>
-                <span className="tc-cell tc-cell-actions">
-                  {!entry.is_dir && (
-                    <button
-                      className="btn"
-                      style={{ fontSize: 10, padding: "0 5px" }}
-                      title={t("files.pane.copyTitle")}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        // stopPropagation above means this click never bubbles
-                        // to the pane's own onClick={onFocus} — without this,
-                        // clicking Copy on an unfocused pane would act on the
-                        // wrong side's F-key state.
-                        onFocus();
-                        onCopy(entry);
-                      }}
-                    >
-                      {side === "left" ? "→" : "←"}
-                    </button>
-                  )}
-                  {writableVolume(state) !== null && (
-                    <button
-                      className="btn"
-                      style={{ fontSize: 10, padding: "0 5px" }}
-                      title={t("files.pane.deleteTitle")}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onFocus();
-                        onDelete(entry);
-                      }}
-                    >
-                      X
-                    </button>
-                  )}
-                </span>
               </li>
             );
           })}
@@ -2992,7 +2948,6 @@ function TcHeaderRow({
         <SortHeaderButton column="date" sort={sort} onSortChange={onSortChange} />
       </span>
       <span className="tc-cell tc-cell-attr">{t("files.sort.attrs")}</span>
-      <span className="tc-cell tc-cell-actions" aria-hidden="true" />
     </div>
   );
 }

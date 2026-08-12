@@ -17,7 +17,9 @@
     "settings": "Settings",
     "aminet": "Aminet",
     "files": "Files",
-    "whdload": "Install WHDLoad"
+    "whdload": "Install WHDLoad",
+    "showSidebar": "Show sidebar",
+    "hideSidebar": "Hide sidebar"
   },
   "dashboard": {
     "dropHere": "DROP AMIGA FILES HERE",
@@ -839,7 +841,6 @@
     }
   },
   "files": {
-    "intro": "Two panes. Put a folder on one side and a disk image on the other, then drag between them — or use the function keys.",
     "busy": {
       "suffix": "{{busy}} — progress is in the job bar, and you can stop it there."
     },

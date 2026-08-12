@@ -287,3 +287,62 @@
   gap: 6px;
   margin-top: 4px;
 }
+
+/* ---------------------------------------------------------------------------
+   A collapsible sidebar (Ctrl+B), and pages that fill the window
+   ---------------------------------------------------------------------------
+
+   Two things the Files screen needs from the shell, added here rather than in
+   its own stylesheet because they are the shell's business: the sidebar has to
+   be able to get out of the way, and a page has to be able to say "I am the
+   window" instead of "I am an article in the middle of one". */
+
+.app-shell-collapsed .sidebar {
+  display: none;
+}
+
+/* The way back. Pinned to the shell's left edge so it is reachable whether the
+   sidebar is there or not, and quiet enough not to compete with the content. */
+.app-sidebar-toggle {
+  position: fixed;
+  left: 0;
+  bottom: 12px;
+  z-index: 30;
+  width: 16px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-left: none;
+  border-radius: 0 4px 4px 0;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.app-sidebar-toggle:hover {
+  color: var(--text);
+  background: var(--panel-hover, var(--panel));
+}
+
+/* A full-bleed page: no page padding, no centred column, no page scrollbar —
+   the page manages its own height and scrolls inside itself.
+
+   `:has()` rather than a prop threaded down from the router: the shell should
+   not have to know which routes are full-bleed, and the page already says so
+   by wearing the class. */
+.app-content:has(> .app-content-full) {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.app-content > .app-content-full {
+  max-width: none;
+  margin: 0;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}

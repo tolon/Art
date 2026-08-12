@@ -113,6 +113,8 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // in the same two places the disc reads its own — `writeRefusal` and the
     // footer's read-only badge. Same pattern, one more read-only container.
     // 41 → 43 (Task 5): and the Commodore pane, in those same two places.
-    expect(dynamicCalls).toBe(43);
+    // 43 → 45 (phase 2b): the shell's sidebar toggle reads its label and its
+    // title from whichever of two keys the current state calls for.
+    expect(dynamicCalls).toBe(45);
   });
 });

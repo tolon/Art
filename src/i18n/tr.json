@@ -17,7 +17,9 @@
     "settings": "Ayarlar",
     "aminet": "Aminet",
     "files": "Dosyalar",
-    "whdload": "WHDLoad Kur"
+    "whdload": "WHDLoad Kur",
+    "showSidebar": "Kenar çubuğunu göster",
+    "hideSidebar": "Kenar çubuğunu gizle"
   },
   "dashboard": {
     "dropHere": "AMIGA DOSYALARINI BURAYA BIRAKIN",
@@ -839,7 +841,6 @@
     }
   },
   "files": {
-    "intro": "İki bölme. Bir tarafa klasör, diğer tarafa disk imajı koyun, sonra aralarında sürükleyin — ya da fonksiyon tuşlarını kullanın.",
     "busy": {
       "suffix": "{{busy}} — ilerleme iş çubuğunda; oradan durdurabilirsiniz."
     },

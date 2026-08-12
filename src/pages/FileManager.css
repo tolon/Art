@@ -318,3 +318,57 @@
     display: none;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   The commander fills the window (phase 2b, brief §1.1)
+   ---------------------------------------------------------------------------
+
+   Total Commander is not a widget on a page; it is the window. So the
+   commander is a grid of three rows — the panes, the command line, the F-key
+   bar — and the panes row takes everything left over.
+
+   The height contract is `minmax(0, 1fr)` in both directions, and it is worth
+   being explicit about why: a flex row sizes its children to their *content*,
+   so a pane with four rows in it comes up shorter than one with forty. That is
+   exactly what the first screenshot showed. A grid track sized `1fr` with
+   `align-items: stretch` makes the two equal by construction — there is no
+   arrangement of contents that can make them differ. */
+
+.tc-commander {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  min-height: 0;
+  flex: 1;
+}
+
+.tc-pane-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: stretch;
+  gap: 6px;
+  min-height: 0;
+}
+
+/* Each pane is a column: chrome at the top, the listing taking the rest and
+   scrolling inside itself. `min-height: 0` on both is what lets the listing
+   scroll instead of pushing the pane taller than its track. */
+.tc-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.tc-pane .tc-row-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* An empty listing still paints to the bottom of the pane — a half-painted
+     pane reads as a rendering fault rather than as an empty folder. */
+  background: var(--tc-bg);
+}
+
+.tc-transfer-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-self: center;
+}

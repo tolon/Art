@@ -38,6 +38,10 @@ export interface AppSettings {
   /** A custom mirror order. Null means "use the ones ART ships with", which is
    *  not the same as an empty list — an empty list would disable syncing. */
   aminetMirrors: StoredMirror[] | null;
+  /** Whether the app sidebar is collapsed (Ctrl+B). A preference rather than
+   *  view state: someone who works with the panes full-width expects them
+   *  full-width the next time they open ART, not one keystroke away from it. */
+  sidebarCollapsed: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -48,6 +52,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   winuaePath: null,
   aminetRoot: null,
   aminetMirrors: null,
+  sidebarCollapsed: false,
 };
 
 export async function getSettings(): Promise<AppSettings> {
@@ -57,6 +62,8 @@ export async function getSettings(): Promise<AppSettings> {
       theme: (await s.get<Theme>("theme")) ?? DEFAULT_SETTINGS.theme,
       uxMode: (await s.get<UxMode>("uxMode")) ?? DEFAULT_SETTINGS.uxMode,
       language: (await s.get<string>("language")) ?? DEFAULT_SETTINGS.language,
+      sidebarCollapsed:
+        (await s.get<boolean>("sidebarCollapsed")) ?? DEFAULT_SETTINGS.sidebarCollapsed,
       lastCollectionDir:
         (await s.get<string>("lastCollectionDir")) ?? DEFAULT_SETTINGS.lastCollectionDir,
       winuaePath: (await s.get<string>("winuaePath")) ?? DEFAULT_SETTINGS.winuaePath,
