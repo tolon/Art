@@ -25,6 +25,33 @@ what fixed it (with the test that proves it).
 
 _(ART-075 was open here; it is fixed — see [Phase 2a](#phase-2a) below.)_
 
+**ART-089** 🟠 **Session restore could not work, and destroyed the session it was meant to restore** — *fixed 2026-08-12*
+`src/pages/FileManager.tsx` · `src/App.tsx` · `App` starts the settings store
+loading and deliberately does not await it — "non-blocking async
+initializations", which is right for a theme and a language. The Files screen
+mounts in parallel and reads `filesSession` off the store's **defaults**, which
+is `null`.
+
+So the cold start found no session, opened the first enumerated drive, and then
+the persistence effect — doing exactly its job — wrote *that* over the real
+session. Two tabs on `D:\…\test` became one tab on `C:\`, on disk, before the
+user had touched anything.
+
+Both halves of that are worth naming: the feature could not work at all, and it
+was **destructive** — the failure erased the thing it failed to read. A
+restore that merely did nothing would have been a bug; this lost data.
+
+Found by reading `%APPDATA%\com.amiga-retro-toolkit.desktop\settings.json`
+after the application had been reloaded, and noticing the saved session had
+shrunk. No test could have caught it: the round-trip is correct
+(`paneSession.test.ts` proves it), the tab model is correct, and the defect
+lives entirely in *when* the screen asked.
+
+Fixed by keying the cold start on the store's own `loaded` flag rather than on
+mount, with `sessionRestored` keeping it once-only. **This is the second time
+in one day that a defect survived a green suite and was found only by running
+the application** — see [ART-082](#open).
+
 **ART-088** 🟡 **The volume writer deletes a delete-protected entry without noticing the bit**
 `src-tauri/src/core/volume/write/mod.rs::delete` · AmigaDOS refuses to delete a
 file whose `d` protection bit is clear — that is what the bit is *for*, and

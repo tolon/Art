@@ -623,6 +623,18 @@ export function FileManager() {
   const defaultLeftPath = useSettingsStore((s) => s.settings.defaultLeftPath);
   const defaultRightPath = useSettingsStore((s) => s.settings.defaultRightPath);
   const alwaysUseDefaultFolders = useSettingsStore((s) => s.settings.alwaysUseDefaultFolders);
+  /**
+   * Whether the settings store has actually read `settings.json` yet.
+   *
+   * Load-bearing, and ART-089 is what happens without it: `App` fires
+   * `loadSettings()` and does not await it, so this screen can mount while
+   * every setting is still its default — `filesSession` included. The cold
+   * start below would then find no session, open the first drive, and the
+   * persistence effect would immediately **overwrite the saved session with
+   * that**. Session restore could not merely fail; it destroyed what it was
+   * meant to restore.
+   */
+  const settingsLoaded = useSettingsStore((s) => s.loaded);
   const colourRules: ColourRule[] = isUsableRuleList(storedColourRules)
     ? storedColourRules
     : DEFAULT_COLOUR_RULES;
@@ -793,6 +805,11 @@ export function FileManager() {
   }, []);
 
   useEffect(() => {
+    // Nothing here may run before the settings are in: everything it decides
+    // — the session, the default folders, which of them wins — is read from
+    // them. `sessionRestored` makes it once-only regardless (ART-089).
+    if (!settingsLoaded || sessionRestored.current) return;
+
     panelLocalRoots()
       .then(async (found) => {
         setRoots(found);
@@ -829,10 +846,9 @@ export function FileManager() {
         setFocused("left");
       })
       .catch((e) => setError(String(e)));
-    // Runs once, on mount: `restoreSession` reads the settings store directly
-    // rather than the live mirror, so it has nothing to react to.
+    // Keyed on the settings arriving, not on mount: see `settingsLoaded`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [settingsLoaded]);
 
   /**
    * Put both panes back where the last session left them.
