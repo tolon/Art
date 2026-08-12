@@ -10,10 +10,17 @@ import {
   type MediaKind,
   type ChipsetRequirement,
 } from "@/lib/collection";
+import { isOneOf } from "@/lib/remembered";
+import { useRemembered } from "@/lib/useRemembered";
+import { useSettingsStore } from "@/stores/settingsStore";
 
 type ViewMode = "grid" | "table";
 type FormatFilter = "all" | MediaKind;
 type ChipsetFilter = "all" | ChipsetRequirement;
+
+const isViewMode = isOneOf<ViewMode>("grid", "table");
+const isFormatFilter = isOneOf<FormatFilter>("all", "adf", "lhawhdload", "hdf");
+const isChipsetFilter = isOneOf<ChipsetFilter>("all", "ocsecs", "aga");
 
 export function CollectionStudio() {
   const { t } = useTranslation();
@@ -23,9 +30,32 @@ export function CollectionStudio() {
   const [scanDir, setScanDir] = useState<string | null>(null);
   const [items, setItems] = useState<CollectionItem[]>([]);
   const [searchTerm, setSearchTerm] = useState<string>("");
-  const [viewMode, setViewMode] = useState<ViewMode>("grid");
-  const [formatFilter, setFormatFilter] = useState<FormatFilter>("all");
-  const [chipsetFilter, setChipsetFilter] = useState<ChipsetFilter>("all");
+
+  // How the library is being looked at is the user's choice, not the screen's
+  // (see `@/lib/useRemembered`). A grid-and-AGA view set on Monday is still
+  // grid-and-AGA on Tuesday.
+  const [viewMode, setViewMode] = useRemembered<ViewMode>(
+    "collection.viewMode",
+    isViewMode,
+    "grid"
+  );
+  const [formatFilter, setFormatFilter] = useRemembered<FormatFilter>(
+    "collection.formatFilter",
+    isFormatFilter,
+    "all"
+  );
+  const [chipsetFilter, setChipsetFilter] = useRemembered<ChipsetFilter>(
+    "collection.chipsetFilter",
+    isChipsetFilter,
+    "all"
+  );
+
+  // The folder shares `lastCollectionDir` with Settings rather than living in
+  // the bag: it is a path the user can also set there, and two places holding
+  // the same answer separately is how they come to disagree.
+  const rememberedDir = useSettingsStore((s) => s.settings.lastCollectionDir);
+  const settingsLoaded = useSettingsStore((s) => s.loaded);
+  const updateSettings = useSettingsStore((s) => s.update);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,11 +92,30 @@ export function CollectionStudio() {
     setStatusMsg(t("collection.status.scanning"));
     try {
       await collectionScan(dir);
+      // Remembered only once the scan was accepted, so a folder that failed is
+      // not the one waiting at the next launch.
+      if (dir !== rememberedDir) await updateSettings({ lastCollectionDir: dir });
     } catch (e) {
       setError(String(e));
       setBusy(false);
     }
   }
+
+  // Open where the user left off. Gated on `loaded` for the reason ART-089
+  // exists: reading this before the settings arrive gives the default, and the
+  // screen would open empty and then be told, too late, where it should have
+  // been. `openedFor` keeps StrictMode's double mount from scanning twice.
+  const openedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!settingsLoaded || !rememberedDir) return;
+    if (openedFor.current === rememberedDir) return;
+    // A folder that arrived through navigation wins; it is the more recent
+    // instruction, and it will set `lastCollectionDir` itself.
+    if ((location.state as { path?: string } | null)?.path) return;
+    openedFor.current = rememberedDir;
+    void startScan(rememberedDir);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsLoaded, rememberedDir]);
 
   async function handleScanFolder() {
     const sel = await open({

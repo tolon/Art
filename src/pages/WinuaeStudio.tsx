@@ -12,6 +12,8 @@ import {
   type LaunchMedia,
 } from "@/lib/winuae";
 import { romIdentify, type RomInfo } from "@/lib/rom";
+import { isFlag, isTextOrNothing } from "@/lib/remembered";
+import { useRemembered } from "@/lib/useRemembered";
 
 export function WinuaeStudio() {
   const { t } = useTranslation();
@@ -22,12 +24,33 @@ export function WinuaeStudio() {
   const [selectedProfile, setSelectedProfile] = useState<AmigaProfile | null>(null);
   const [customExePath, setCustomExePath] = useState<string>("");
 
-  // Attached media
+  /**
+   * Which machine the user runs, by id.
+   *
+   * The id rather than the profile: the profiles themselves come from Rust and
+   * may gain fields or change defaults between versions, and a whole profile
+   * frozen into `settings.json` would go stale silently. An id that no longer
+   * matches simply falls back to the first profile.
+   */
+  const [profileId, setProfileId] = useRemembered<string | null>(
+    "winuae.profileId",
+    isTextOrNothing,
+    null
+  );
+
+  // Attached media. The ROM and the AROS choice are settings — the same
+  // machine, launched again. The disk and the hard disk are what is being
+  // worked on right now, and a stale one pointing at a file since deleted is
+  // worse than an empty slot, so those two stay `useState`.
   const [df0Path, setDf0Path] = useState<string | null>(null);
   const [hdfPath, setHdfPath] = useState<string | null>(null);
-  const [kickstartPath, setKickstartPath] = useState<string | null>(null);
+  const [kickstartPath, setKickstartPath] = useRemembered<string | null>(
+    "winuae.kickstartPath",
+    isTextOrNothing,
+    null
+  );
   const [kickstartInfo, setKickstartInfo] = useState<RomInfo | null>(null);
-  const [useAros, setUseAros] = useState<boolean>(false);
+  const [useAros, setUseAros] = useRemembered("winuae.useAros", isFlag, false);
 
   // Missing ROM confirmation modal
   const [showRomPromptModal, setShowRomPromptModal] = useState<boolean>(false);
@@ -58,7 +81,10 @@ export function WinuaeStudio() {
       setInstall(inst);
       setProfiles(profList);
       if (profList.length > 0) {
-        setSelectedProfile(profList[0]);
+        // The machine the user last chose, by id. An id from an older ART that
+        // no longer names a profile falls back to the first rather than
+        // leaving the screen with nothing selected.
+        setSelectedProfile(profList.find((p) => p.id === profileId) ?? profList[0]);
       }
     } catch (e) {
       setError(String(e));
@@ -195,7 +221,10 @@ export function WinuaeStudio() {
               return (
                 <div
                   key={p.id}
-                  onClick={() => setSelectedProfile(p)}
+                  onClick={() => {
+                    setSelectedProfile(p);
+                    setProfileId(p.id);
+                  }}
                   style={{
                     padding: "10px 12px",
                     borderRadius: "var(--radius-sm)",

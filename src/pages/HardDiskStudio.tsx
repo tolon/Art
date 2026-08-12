@@ -14,6 +14,25 @@ import {
 import { hdfSizeWarning, parseCustomSize, type HdfFsId } from "@/lib/hdfSize";
 import { partitionsMissingDriver } from "@/lib/rdbDrivers";
 import { driverFileName, driverRequirement, fileSystemInputsFor } from "@/lib/fsDriver";
+import {
+  isFlag,
+  isOneOf,
+  isText,
+  isTextOrNothing,
+  isWholeNumberBetween,
+} from "@/lib/remembered";
+import { useRemembered } from "@/lib/useRemembered";
+
+/** The filesystems the wizard offers. A remembered value that is not one of
+ *  them — an older ART's, or a hand-edited file's — falls back rather than
+ *  reaching `to_dostype_u32` with something it has no branch for. */
+const isFilesystem = isOneOf<AmigaHardDiskFs>(
+  "pfs3directscsi",
+  "pfs3standard",
+  "sfs0",
+  "ffsdircache",
+  "ffsstandard"
+);
 
 interface FsChoice {
   id: AmigaHardDiskFs;
@@ -71,20 +90,43 @@ export function HardDiskStudio() {
   const [error, setError] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
-  // Wizard Modal State
+  // Wizard Modal State.
+  //
+  // Everything the wizard asks is remembered (`@/lib/useRemembered`). Somebody
+  // building a set of disks answers the same four questions the same way every
+  // time, and the driver especially: having found `pfs3aio` once, nobody should
+  // have to go and find it again.
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [createPresetSizeMb, setCreatePresetSizeMb] = useState<number>(1024); // 1 GB
-  const [createTemplate, setCreateTemplate] = useState<"single" | "split">("split");
-  const [selectedFs, setSelectedFs] = useState<AmigaHardDiskFs>("pfs3directscsi");
+  const [createPresetSizeMb, setCreatePresetSizeMb] = useRemembered(
+    "hdf.presetSizeMb",
+    isWholeNumberBetween(10, 4 * 1024 * 1024),
+    1024 // 1 GB
+  );
+  const [createTemplate, setCreateTemplate] = useRemembered<"single" | "split">(
+    "hdf.template",
+    isOneOf("single", "split"),
+    "split"
+  );
+  const [selectedFs, setSelectedFs] = useRemembered<AmigaHardDiskFs>(
+    "hdf.filesystem",
+    isFilesystem,
+    "pfs3directscsi"
+  );
   /** Whether the size is being typed rather than picked from the five
    *  presets. The presets are common answers, not the range (ART-083). */
-  const [customSize, setCustomSize] = useState(false);
-  const [customText, setCustomText] = useState("");
-  const [customUnit, setCustomUnit] = useState<"mb" | "gb">("gb");
-  /** The filesystem driver to embed in the new RDB, if one is needed. Kept
-   *  across openings of the wizard: a user who has found `pfs3aio` once should
-   *  not have to find it again for the next disk. */
-  const [driverPath, setDriverPath] = useState<string | null>(null);
+  const [customSize, setCustomSize] = useRemembered("hdf.customSize", isFlag, false);
+  const [customText, setCustomText] = useRemembered("hdf.customText", isText, "");
+  const [customUnit, setCustomUnit] = useRemembered<"mb" | "gb">(
+    "hdf.customUnit",
+    isOneOf("mb", "gb"),
+    "gb"
+  );
+  /** The filesystem driver to embed in the new RDB, if one is needed. */
+  const [driverPath, setDriverPath] = useRemembered<string | null>(
+    "hdf.driverPath",
+    isTextOrNothing,
+    null
+  );
 
   // Parsing and warning both live in `@/lib/hdfSize`, with their own tests —
   // the rule that a fraction of a megabyte is refused rather than rounded

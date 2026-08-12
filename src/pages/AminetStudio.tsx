@@ -14,7 +14,22 @@ import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { onJobProgress } from "@/lib/jobs";
-import { getSettings, saveSettings } from "@/lib/settings";
+import {
+  getSettings,
+  saveSettings,
+  type StoredOverwritePolicy,
+} from "@/lib/settings";
+import {
+  isFlag,
+  isOneOf,
+  isText,
+  isTextList,
+  isTextOrNothing,
+  isWholeNumberBetween,
+  type Guard,
+} from "@/lib/remembered";
+import { useRemembered, useRememberedShape } from "@/lib/useRemembered";
+import { useSettingsStore } from "@/stores/settingsStore";
 
 import {
   ageIsCapped,
@@ -89,6 +104,37 @@ const SIZE_CHOICES: Array<{ bytes: number | null; key: string }> = [
   { bytes: 10 * 1024 * 1024, key: "aminet.size.mb10" },
   { bytes: 100 * 1024 * 1024, key: "aminet.size.mb100" },
 ];
+
+const isSortOrder = isOneOf<SortOrder>(
+  "relevance",
+  "newest",
+  "oldest",
+  "largest",
+  "smallest",
+  "name"
+);
+
+/**
+ * How a remembered search narrowing is checked on the way back in.
+ *
+ * The bounds are the ones the dialog itself offers, widened to what is
+ * meaningful rather than to what fits: Aminet's age column saturates at 999
+ * weeks, and a size filter past 4 GB is not describing anything on Aminet. A
+ * value outside them came from a hand-edited file, and taking it would send a
+ * query nothing can answer.
+ */
+const FILTER_SPEC: { [K in keyof SearchFilters]: Guard<SearchFilters[K]> } = {
+  name_only: isFlag,
+  max_age_weeks: nullOr(isWholeNumberBetween(1, 999)),
+  min_size_bytes: nullOr(isWholeNumberBetween(1, 4 * 1024 * 1024 * 1024)),
+  max_size_bytes: nullOr(isWholeNumberBetween(1, 4 * 1024 * 1024 * 1024)),
+  extensions: isTextList,
+};
+
+/** "Either nothing, or this" — the shape of every optional filter above. */
+function nullOr<T>(guard: Guard<T>): Guard<T | null> {
+  return (value: unknown): value is T | null => value === null || guard(value);
+}
 
 /** How many filters are narrowing the search, for the "More filters" badge. */
 function activeFilterCount(filters: SearchFilters): number {
@@ -169,17 +215,43 @@ export function AminetStudio() {
   const [stats, setStats] = useState<CatalogStats | null>(null);
   const [provider, setProvider] = useState<ProviderInfo | null>(null);
   const [query, setQuery] = useState("");
-  const [directory, setDirectory] = useState<string | null>(null);
+  const [directory, setDirectory] = useRemembered<string | null>(
+    "aminet.directory",
+    isTextOrNothing,
+    null
+  );
   const [results, setResults] = useState<PackageMeta[] | null>(null);
   const [selected, setSelected] = useState<PackageMeta | null>(null);
 
-  const [sort, setSort] = useState<SortOrder>("relevance");
-  const [filters, setFilters] = useState<SearchFilters>(emptyFilters());
-  const [advanced, setAdvanced] = useState(false);
+  // How results are ordered and narrowed, and where downloads go, are the
+  // user's standing choices — not something to re-pick every session
+  // (`@/lib/useRemembered`). The search text itself is not remembered: it is
+  // an action, not a setting.
+  const [sort, setSort] = useRemembered<SortOrder>(
+    "aminet.sort",
+    isSortOrder,
+    "relevance"
+  );
+  const [filters, setFilters] = useRememberedShape<SearchFilters>(
+    "aminet.filters",
+    FILTER_SPEC,
+    emptyFilters()
+  );
+  const [advanced, setAdvanced] = useRemembered("aminet.advanced", isFlag, false);
 
   const [library, setLibrary] = useState<LibraryInfo | null>(null);
-  const [subfolder, setSubfolder] = useState("");
-  const [overwrite, setOverwrite] = useState<OverwritePolicy>("skip");
+  const [subfolder, setSubfolder] = useRemembered("aminet.subfolder", isText, "");
+  // The overwrite answer is a **global** setting, shared with the Files
+  // screen's copies: one question, asked once. A second private copy here is
+  // how a user comes to have two different answers to the same question.
+  const overwrite = useSettingsStore((s) => s.settings.overwritePolicy) as OverwritePolicy;
+  const updateSettings = useSettingsStore((s) => s.update);
+  const setOverwrite = useCallback(
+    (next: OverwritePolicy) => {
+      void updateSettings({ overwritePolicy: next as StoredOverwritePolicy });
+    },
+    [updateSettings]
+  );
 
   const [readme, setReadme] = useState<{ text: string; fields: ReadmeFields } | null>(
     null
@@ -702,7 +774,7 @@ export function AminetStudio() {
           <button
             className="btn"
             style={{ fontSize: 12, marginLeft: "auto" }}
-            onClick={() => setAdvanced((shown) => !shown)}
+            onClick={() => setAdvanced(!advanced)}
             disabled={empty}
           >
             {advanced ? t("aminet.filters.hide") : t("aminet.filters.more")}

@@ -10,6 +10,55 @@ import {
   type PistormProfileMode,
   type RtgResolution,
 } from "@/lib/pistorm";
+import {
+  isFlag,
+  isOneOf,
+  isTextOrNothing,
+  isWholeNumberBetween,
+  type Guard,
+} from "@/lib/remembered";
+import { useRemembered, useRememberedShape } from "@/lib/useRemembered";
+
+const DEFAULT_PISTORM_CONFIG: PistormConfig = {
+  board: "a500a2000",
+  profile_mode: "workstation",
+  fast_ram_mb: 1024,
+  rtg_resolution: "res1080p",
+  enable_jit: true,
+  enable_mmu: true,
+  enable_wifi: true,
+  enable_sd_storage: true,
+  custom_kickstart_path: "kick.rom",
+};
+
+/**
+ * How a remembered PiStorm config is checked on the way back in.
+ *
+ * The Fast RAM bound is the hardware's, not a guess: a PiStorm addresses up to
+ * 2 GB of Fast RAM, and a remembered `-1` or `1e9` would reach a generated
+ * `emu68.cfg` and be handed to a real machine.
+ */
+const PISTORM_CONFIG_SPEC: { [K in keyof PistormConfig]: Guard<PistormConfig[K]> } = {
+  board: isOneOf<PistormBoard>("a500a2000", "a1200lite", "a600"),
+  profile_mode: isOneOf<PistormProfileMode>(
+    "workstation",
+    "balancedwhdload",
+    "classiccompat"
+  ),
+  fast_ram_mb: isWholeNumberBetween(0, 2048),
+  rtg_resolution: isOneOf<RtgResolution>(
+    "res1080p",
+    "res720p",
+    "res1024x768",
+    "res800x600",
+    "disabled"
+  ),
+  enable_jit: isFlag,
+  enable_mmu: isFlag,
+  enable_wifi: isFlag,
+  enable_sd_storage: isFlag,
+  custom_kickstart_path: isTextOrNothing,
+};
 
 interface ProfileChoice {
   id: PistormProfileMode;
@@ -69,18 +118,22 @@ const PROFILE_CHOICES: ProfileChoice[] = [
 export function PistormStudio() {
   const { t } = useTranslation();
 
-  const [sdPath, setSdPath] = useState<string | null>(null);
-  const [config, setConfig] = useState<PistormConfig>({
-    board: "a500a2000",
-    profile_mode: "workstation",
-    fast_ram_mb: 1024,
-    rtg_resolution: "res1080p",
-    enable_jit: true,
-    enable_mmu: true,
-    enable_wifi: true,
-    enable_sd_storage: true,
-    custom_kickstart_path: "kick.rom",
-  });
+  // The board, the profile and every toggle below are the user's machine
+  // described — the single most expensive thing in ART to re-enter, and the
+  // thing a user comes back to across sessions while building one image. So it
+  // is remembered field by field (`@/lib/useRemembered`): a config that gains
+  // an option in a later ART keeps everything already chosen.
+  const [sdPath, setSdPath] = useRemembered<string | null>(
+    "pistorm.sdPath",
+    isTextOrNothing,
+    null
+  );
+  const [config, applyConfig] = useRememberedShape<PistormConfig>(
+    "pistorm.config",
+    PISTORM_CONFIG_SPEC,
+    DEFAULT_PISTORM_CONFIG
+  );
+  const setConfig = applyConfig;
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

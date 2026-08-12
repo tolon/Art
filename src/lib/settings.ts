@@ -157,6 +157,22 @@ export interface AppSettings {
    * feature the people who most need it will never find.
    */
   paneFontSize: number;
+  /**
+   * Every other choice the user has made, across every screen.
+   *
+   * The rule, in the user's words: *nothing changes unless the user changes
+   * it*, and that is about the whole application rather than the fields above.
+   * A studio's view mode, its filters, the folder it last worked in, the
+   * filesystem its wizard was left on — all of it belongs to the user, and all
+   * of it used to be a `useState` that forgot.
+   *
+   * A bag rather than thirty more named fields here, because these are the
+   * screens' own choices: a new one should cost the screen a line and this
+   * module nothing. `unknown` for the same reason `filesSession` is — the
+   * shapes belong to the screens, and `@/lib/remembered` validates every value
+   * on the way out. `null` means nothing has been remembered yet.
+   */
+  remembered: unknown;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -178,6 +194,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   alwaysUseDefaultFolders: true,
   commandLineHeight: 26,
   paneFontSize: 12,
+  remembered: null,
 };
 
 export async function getSettings(): Promise<AppSettings> {
@@ -215,6 +232,7 @@ export async function getSettings(): Promise<AppSettings> {
       aminetRoot: (await s.get<string>("aminetRoot")) ?? DEFAULT_SETTINGS.aminetRoot,
       aminetMirrors:
         (await s.get<StoredMirror[]>("aminetMirrors")) ?? DEFAULT_SETTINGS.aminetMirrors,
+      remembered: (await s.get<unknown>("remembered")) ?? DEFAULT_SETTINGS.remembered,
     };
   } catch (e) {
     console.warn("[ART] settings load failed, using defaults:", e);

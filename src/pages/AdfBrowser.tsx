@@ -18,6 +18,8 @@ import {
   type MutationOutcome,
   type ValidationReport,
 } from "@/lib/adf";
+import { isFlag, isOneOf } from "@/lib/remembered";
+import { useRemembered } from "@/lib/useRemembered";
 
 interface Breadcrumb {
   block: number | null;
@@ -43,13 +45,21 @@ export function AdfBrowser() {
   ]);
 
   // Dual-option mode for damaged / non-dos disks
-  const [showHexMode, setShowHexMode] = useState(false);
+  // A view the user turned on, not a mode the screen is in: somebody who works
+  // at block level wants the hex panel there again next time.
+  const [showHexMode, setShowHexMode] = useRemembered("adf.showHex", isFlag, false);
 
   // Modal dialog states
   const [showNewAdfModal, setShowNewAdfModal] = useState(false);
   const [newVolumeName, setNewVolumeName] = useState("EmptyDisk");
-  const [newFsType, setNewFsType] = useState<"ofs" | "ffs">("ffs");
-  const [newBootable, setNewBootable] = useState(false);
+  // The name belongs to the disk being made; the filesystem and the boot block
+  // are how *this user* makes disks, and are the same answer nearly every time.
+  const [newFsType, setNewFsType] = useRemembered<"ofs" | "ffs">(
+    "adf.newFsType",
+    isOneOf("ofs", "ffs"),
+    "ffs"
+  );
+  const [newBootable, setNewBootable] = useRemembered("adf.newBootable", isFlag, false);
 
   const [showMkdirModal, setShowMkdirModal] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
