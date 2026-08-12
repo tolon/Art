@@ -24,6 +24,7 @@ import {
   succeeded,
   type OperationRecord,
 } from "@/lib/oplog";
+import { sourcesLibrary, sourcesSetLibraryRoot } from "@/lib/sources";
 
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -229,6 +230,7 @@ export function SettingsPage() {
           pick="folder"
           onChange={(next) => void update({ lastCollectionDir: next })}
         />
+        <AminetDownloadField />
       </section>
 
       <OperationLogSection />
@@ -495,6 +497,74 @@ function OperationLogSection() {
  * "the user cleared this" and "the user never touched it" stay the same thing
  * — which is what the callers' `?? fallback` already assumes.
  */
+/**
+ * Where Aminet downloads land (§41.5.6).
+ *
+ * Not a plain {@link PathField}, because this path is not merely remembered —
+ * the engine owns it, creates it if it is missing, and can refuse it. So the
+ * folder is offered to Rust first and only written to settings once Rust has
+ * taken it, the same rule the Aminet studio's own picker follows: a folder that
+ * failed validation must not be the one waiting at the next launch.
+ *
+ * It is also shown *read back from the engine* rather than echoed from the
+ * input, so "where downloads go" is the truth and not the intention. Cleared,
+ * it reverts to ART's own folder — which is why the engine's answer is still
+ * shown when the field is empty.
+ */
+function AminetDownloadField() {
+  const { t } = useTranslation();
+  const stored = useSettingsStore((s) => s.settings.aminetRoot);
+  const update = useSettingsStore((s) => s.update);
+  const [inUse, setInUse] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Best-effort: the studio may never have been opened, and a Settings
+    // screen that errors because a subsystem is idle helps nobody.
+    sourcesLibrary()
+      .then((library) => setInUse(library.root))
+      .catch(() => setInUse(null));
+  }, [stored]);
+
+  async function apply(next: string | null) {
+    setError(null);
+    if (next === null) {
+      await update({ aminetRoot: null });
+      return;
+    }
+    try {
+      const library = await sourcesSetLibraryRoot(next);
+      setInUse(library.root);
+      await update({ aminetRoot: next });
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  return (
+    <>
+      <PathField
+        label={t("settings.aminetRoot")}
+        placeholder="D:\\Amiga\\Aminet"
+        value={stored}
+        pick="folder"
+        onChange={(next) => void apply(next)}
+      />
+      {error ? (
+        <p className="badge badge-warn" style={{ fontSize: 11, margin: "-4px 0 0" }}>
+          {error}
+        </p>
+      ) : (
+        <p className="faint" style={{ fontSize: 11, margin: "-4px 0 0" }}>
+          {inUse
+            ? t("settings.aminetRootInUse", { path: inUse })
+            : t("settings.aminetRootHint")}
+        </p>
+      )}
+    </>
+  );
+}
+
 function PathField({
   label,
   placeholder,

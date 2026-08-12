@@ -179,6 +179,8 @@ Notes:
 | Open HDF, report geometry | §16 | ✅ | `core/hdf.rs` |
 | Create HDF with RDB (sparse) | §16 | ✅ | `core/hdf.rs`, `core/rdb.rs` |
 | RDB parse, checksum, partitions | §18, §19 | ✅ | `core/rdb.rs` |
+| Read embedded filesystem drivers (FSHD + LSEG) | §18, SD G4 | ✅ | `core/rdb.rs::parse_file_systems`; the studio names partitions nothing will mount (`@/lib/rdbDrivers`) |
+| Embed a filesystem driver into a new RDB | §16, SD G4 | ✅ | `core/rdb.rs::create_rdb_layout`; wizard step 4 (`@/lib/fsDriver`). Version read from the driver's `$VER:`. Verified with `rdbtool` both directions |
 | Partition layout validation | §18, §89 | ✅ | `core/rdb.rs` |
 | Browse partition contents | §17 | ✅ | `core/volume/`, `commands/volume.rs` |
 | Write into a partition | §17, §57 | ✅ | `core/volume/write/` — OFS/FFS/INTL. Dircache and long-filename volumes stay read-only, with the reason |

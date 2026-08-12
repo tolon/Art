@@ -224,7 +224,7 @@ the emergency exit only. Bonus: once B exists, **D becomes its perfect
 oracle** — the reference implementation writing the fixtures that the native
 writer must match. Build D's harness with that future in mind.
 
-## G4 🟥 RDB filesystem embedding (FSHD + LSEG blocks)
+## G4 ✅ RDB filesystem embedding (FSHD + LSEG blocks) — *done 2026-08-12*
 
 For AmigaOS to mount PFS3 volumes at boot, the PFS3 driver must live **inside
 the RDB** as FileSysHeader + LoadSeg blocks. ART's RDB writer creates RDSK +
@@ -233,6 +233,23 @@ gap: segment-splitting a user-supplied filesystem binary into LSEG chains,
 checksumming them, and wiring `DosType → SegListBlocks` correctly. Needed for
 route A and B alike, and verifiable with amitools (`rdbtool` reads FSHD/LSEG)
 — the oracle already exists.
+
+**Both halves built.** Reading: `parse_file_systems` walks the FSHD/LSEG chain
+and reports each driver's DosType, version and true size, with the bound and
+loop-limit rules the rest of `core/rdb.rs` follows;
+`partitionsMissingDriver` (`@/lib/rdbDrivers`) turns that into the sentence the
+Hard Disk studio shows. Writing: `create_rdb_layout(total, partitions,
+file_systems)` lays out FSHD + LSEG per driver inside the reserved area, and
+refuses — with the block numbers — a driver that will not fit there rather than
+producing an image the first partition would overwrite.
+`version_from_ver_string` reads the version out of the binary's own `$VER:`
+string, so nobody has to type it.
+
+**Verified against the oracle in both directions**, which is the point: ART
+reads `hst-imager`'s RDB and agrees with `rdbtool` on every field, and
+`rdbtool` reads an RDB ART built (`PDS3 version=19.2 size=59120`) and extracts
+the driver back out SHA-256-identical to the file that went in. Closes
+[ART-084](ISSUES.md).
 
 ## G5 🟧 OS installation engine (3.2.x / 3.9 system volumes)
 
@@ -403,7 +420,7 @@ SD-0  Prior art study         : G0 — Emu68-Imager + emu68hatcher teardown;
                                 Their *flashing* code is now irrelevant to us;
                                 their layout and OS-install decisions are not
 SD-1  The image has a shape   : G2 (MBR + FAT32 boot partition, in a file)
-                                + G4 (FSHD/LSEG — also closes ART-084)
+                                + G4 ✅ (FSHD/LSEG — closed ART-084)
                                 + G7 (build manifest)
                                 + G15 (a build as a drop target — the drag &
                                   drop pipeline exists; this is what it drops

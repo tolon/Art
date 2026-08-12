@@ -138,7 +138,7 @@ bolting a `useRef` onto each studio.
 
 Found by the user in the running application, 2026-08-12.
 
-**ART-084** 🟠 **An HDF created as PFS3 or SFS is a DosType with no filesystem behind it, and an Amiga cannot mount it**
+**ART-084** 🟠 **An HDF created as PFS3 or SFS is a DosType with no filesystem behind it, and an Amiga cannot mount it** — *fixed 2026-08-12*
 `core/hdf.rs::create_hdf` · `core/rdb.rs::create_rdb_layout` ·
 `src/pages/HardDiskStudio.tsx` · The New HDF wizard's third step is "Choose
 Amiga Filesystem", and it offers **PFS3-AIO as the default, badged
@@ -186,6 +186,38 @@ is still owed. The fix is G4 —
 segment-splitting a user-supplied `pfs3aio` binary into an LSEG chain,
 checksumming it and wiring `DosType → SegListBlocks` — which is scheduled as
 SD-1 and verifiable against `rdbtool`, an oracle that already exists.
+
+**Fixed 2026-08-12 — the writing half (G4 complete).** `create_rdb_layout` now
+takes `&[FileSystemSpec]` and writes, per driver, an FSHD block
+(`DosType`, `Version`, `PatchFlags = 0x10`, `dn_SegListBlock`,
+`dn_GlobalVec = -1`) followed by its own LSEG chain, 492 bytes a block, with
+`SummedLongs` declaring how much of the last block is real — the same field the
+reader already relied on from the other side. `create_hdf` and the `hdf_create`
+command thread it through; the wizard's step 4 asks for the driver when the
+chosen filesystem is one Kickstart does not have (`@/lib/fsDriver`, 8 tests).
+
+Rust tests: `a_written_driver_reads_back_with_its_version_and_exact_size`,
+`the_drivers_bytes_survive_the_trip_verbatim`, `two_drivers_are_chained_and_both_come_back`,
+`a_disk_with_no_drivers_says_so_rather_than_pointing_at_block_zero`,
+`a_driver_too_big_for_the_reserved_area_is_refused_with_the_numbers`.
+
+**Verified from outside, both directions.** `rdbtool` reads an image ART built
+carrying the real `pfs3aio`, reporting `PDS3/0x50445303 version=19.2
+size=59120` — the same three numbers `hst-imager`'s own image reports — and
+`rdbtool fsget` extracts the driver back out **SHA-256-identical** to the file
+that went in. `hst.imager info` reads the same image and lays out the RDB and
+the `PDS\3` partition correctly. ART's reader and writer agreeing with each
+other would have proved nothing; this is the half that answers to somebody else.
+
+The version is no longer asked for: `version_from_ver_string` reads it out of
+the driver's own `$VER:` string, and refuses rather than defaulting when the
+binary says nothing. 0.0 is not a harmless default — AmigaOS keeps the higher
+of the version in the RDB and the one already loaded, so a driver claiming 0.0
+is one that never runs.
+
+`hardDisk.modal.warnNoDriver` is gone with the limitation it described.
+`hdfSizeWarning` no longer answers the driver question at all — it is a size
+function, and the answer now depends on what the user picked.
 
 Found by the user in the running application, 2026-08-12.
 

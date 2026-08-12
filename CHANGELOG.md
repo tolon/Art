@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### A PFS3 disk ART makes now actually mounts (2026-08-12)
+
+#### Added
+- **The New HDF wizard carries the filesystem.** Pick PFS3 or SFS and ART asks
+  for the driver — `pfs3aio`, usually — and writes it *inside* the disk, where
+  Kickstart looks for it. Until now ART wrote the name of a filesystem it did
+  not put there, and an Amiga ignored the partition in silence (ART-084).
+- **ART reads the version off the driver itself**, out of the `$VER:` string
+  every Amiga binary carries, so there is no number to type. If the driver says
+  nothing, ART asks rather than guessing: a version of 0.0 loses to whatever is
+  already loaded, and the driver would never run.
+- **The Hard Disk studio lists what a disk carries**, and names any partition
+  whose filesystem is not there — the same question, asked of a disk somebody
+  else made.
+- **The Aminet download folder is in Settings now**, beside the other paths and
+  with the same Browse button. ART checks the folder before remembering it, and
+  tells you where downloads are actually going.
+
+#### Verified
+- Round-tripped through **amitools**, not just through ART: `rdbtool` reads an
+  image ART built and reports `PDS3 version=19.2 size=59120`, and pulls the
+  driver back out byte-for-byte identical to the file that went in.
+  `hst-imager` reads the same image. ART's own reader agreeing with ART's own
+  writer would have proved nothing.
+
 ### A real Amiga booted a disk ART wrote (2026-08-12)
 
 #### Verified

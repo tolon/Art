@@ -71,6 +71,26 @@ export interface HdfInfo {
   rdb_checksum_valid: boolean;
 }
 
+/**
+ * A driver to embed while creating the image — the writing half of the above.
+ *
+ * The **path** travels, not the bytes: the Rust side reads the file, so a
+ * 60 KB driver never has to cross the bridge as a JSON array of numbers.
+ * `dos_type` is written the way a person says it — `"PDS3"` — and the command
+ * turns the last character into the digit **value** an Amiga expects.
+ *
+ * Leaving the version out is the normal case: ART reads it from the driver's
+ * own `$VER:` string. Supplying one is for a driver that says nothing about
+ * itself — there is no safe default, because AmigaOS keeps the higher of the
+ * version in the disk and the one already loaded.
+ */
+export interface FileSystemInput {
+  path: string;
+  dos_type: string;
+  version?: number;
+  revision?: number;
+}
+
 export async function hdfOpen(path: string): Promise<HdfInfo> {
   return invoke<HdfInfo>("hdf_open", { path });
 }
@@ -79,12 +99,14 @@ export async function hdfCreate(
   path: string,
   totalBytes: number,
   isRdb: boolean,
-  partitions: PartitionSpec[]
+  partitions: PartitionSpec[],
+  fileSystems: FileSystemInput[] = []
 ): Promise<HdfInfo> {
   return invoke<HdfInfo>("hdf_create", {
     path,
     totalBytes,
     isRdb,
     partitions,
+    fileSystems,
   });
 }

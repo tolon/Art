@@ -67,15 +67,15 @@ describe("largestPartitionMb", () => {
 });
 
 describe("hdfSizeWarning", () => {
-  it("says PFS3 and SFS arrive as a DosType with no driver behind them", () => {
-    // The wizard offers PFS3 as the recommended choice, and `create_hdf`
-    // writes RDSK + PART and nothing else — no FSHD/LSEG (ART-025), so an
-    // Amiga will not even see the partition. ART-084 is the fix; saying so is
-    // the difference between a limitation and a lie.
+  it("says nothing about the size of a PFS3 or SFS disk", () => {
+    // Addressing large disks is most of why anyone picks them, so the 4 GB
+    // ceiling below does not apply. This used to return "no driver behind it"
+    // for every size, which was true of every image ART could make (ART-084)
+    // and is now true only of one the user declined to embed a driver into —
+    // a question `@/lib/fsDriver` answers, and a size function cannot.
     for (const fs of ["pfs3directscsi", "sfs0"] as const) {
-      expect(hdfSizeWarning(1024, "split", fs)).toEqual({
-        key: "hardDisk.modal.warnNoDriver",
-      });
+      expect(hdfSizeWarning(1024, "split", fs)).toBeNull();
+      expect(hdfSizeWarning(32768, "single", fs)).toBeNull();
     }
   });
 

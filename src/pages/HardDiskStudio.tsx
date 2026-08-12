@@ -13,6 +13,7 @@ import {
 } from "@/lib/hdf";
 import { hdfSizeWarning, parseCustomSize, type HdfFsId } from "@/lib/hdfSize";
 import { partitionsMissingDriver } from "@/lib/rdbDrivers";
+import { driverFileName, driverRequirement, fileSystemInputsFor } from "@/lib/fsDriver";
 
 interface FsChoice {
   id: AmigaHardDiskFs;
@@ -80,6 +81,10 @@ export function HardDiskStudio() {
   const [customSize, setCustomSize] = useState(false);
   const [customText, setCustomText] = useState("");
   const [customUnit, setCustomUnit] = useState<"mb" | "gb">("gb");
+  /** The filesystem driver to embed in the new RDB, if one is needed. Kept
+   *  across openings of the wizard: a user who has found `pfs3aio` once should
+   *  not have to find it again for the next disk. */
+  const [driverPath, setDriverPath] = useState<string | null>(null);
 
   // Parsing and warning both live in `@/lib/hdfSize`, with their own tests —
   // the rule that a fraction of a megabyte is refused rather than rounded
@@ -94,6 +99,11 @@ export function HardDiskStudio() {
     effectiveSizeMb === null
       ? null
       : hdfSizeWarning(effectiveSizeMb, createTemplate, selectedFs as HdfFsId);
+
+  // Whether this filesystem is one Kickstart has. PFS3 and SFS are not, and a
+  // disk that names one without carrying it is a disk an Amiga ignores in
+  // silence — which is exactly what this wizard used to produce (ART-084).
+  const driverNeed = driverRequirement(selectedFs);
 
   useEffect(() => {
     const navState = location.state as { path?: string } | undefined;
@@ -130,6 +140,18 @@ export function HardDiskStudio() {
     });
     if (typeof sel === "string") {
       await loadHdf(sel);
+    }
+  }
+
+  async function handlePickDriver() {
+    // No extension filter: an Amiga executable has no extension, and one
+    // would only hide the file the user came here to pick.
+    const sel = await open({
+      multiple: false,
+      title: t("hardDisk.modal.driver.dialogTitle"),
+    });
+    if (typeof sel === "string") {
+      setDriverPath(sel);
     }
   }
 
@@ -187,7 +209,13 @@ export function HardDiskStudio() {
       }
 
       const totalBytes = (sizeMb as number) * 1024 * 1024;
-      const created = await hdfCreate(dest, totalBytes, true, partitions);
+      const created = await hdfCreate(
+        dest,
+        totalBytes,
+        true,
+        partitions,
+        fileSystemInputsFor(selectedFs, driverPath)
+      );
       setInfo(created);
       setPath(dest);
       setStatusMsg(
@@ -619,6 +647,45 @@ export function HardDiskStudio() {
                 })}
               </div>
             </div>
+
+            {/* Step 4: the driver, for a filesystem Kickstart does not have */}
+            {driverNeed.required && (
+              <div style={{ marginBottom: 16 }}>
+                <label
+                  className="muted"
+                  style={{ fontSize: 12, display: "block", marginBottom: 6 }}
+                >
+                  {t("hardDisk.modal.driver.label")}
+                </label>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <button className="btn" onClick={handlePickDriver}>
+                    {t("hardDisk.modal.driver.browse")}
+                  </button>
+                  <span style={{ fontSize: 12, flex: 1, wordBreak: "break-all" }}>
+                    {driverPath ? driverFileName(driverPath) : t("hardDisk.modal.driver.none")}
+                  </span>
+                  {driverPath && (
+                    <button className="btn" onClick={() => setDriverPath(null)}>
+                      {t("hardDisk.modal.driver.clear")}
+                    </button>
+                  )}
+                </div>
+                <p className="muted" style={{ margin: "6px 0 0", fontSize: 11 }}>
+                  {t("hardDisk.modal.driver.explain", {
+                    dosType: driverNeed.dosType,
+                    hint: driverNeed.hint,
+                  })}
+                </p>
+                {!driverPath && (
+                  <p
+                    className="badge badge-warn"
+                    style={{ margin: "6px 0 0", fontSize: 11, display: "inline-block" }}
+                  >
+                    {t("hardDisk.modal.driver.warning")}
+                  </p>
+                )}
+              </div>
+            )}
 
             {/* Actions */}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>

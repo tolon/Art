@@ -206,6 +206,9 @@
     "language": "Language",
     "winuaePath": "WinUAE Path",
     "collectionDir": "Collection Directory",
+    "aminetRoot": "Aminet Download Folder",
+    "aminetRootHint": "Where packages downloaded from Aminet are kept. Left empty, ART uses its own folder.",
+    "aminetRootInUse": "Downloads go to {{path}}",
     "uxModePowerHint": "Showing raw data tools, block and sector detail, and advanced actions.",
     "uxModeBeginnerHint": "Hiding raw data tools and block-level detail. Nothing is disabled — switch to Power User to see everything.",
     "colourRules": {
@@ -559,7 +562,15 @@
       "singleTitle": "Single Partition",
       "singleDesc": "DH0: System (100% capacity)",
       "createButton": "Create HDF File…",
-      "warnNoDriver": "ART writes the partition table and this filesystem's DosType, but not the filesystem itself: no PFS3 or SFS driver is placed in the RDB, so an Amiga will not see this partition until one is put there with another tool. Fast File System partitions are formatted on the Amiga with Format, as on a real disk.",
+      "driver": {
+        "label": "4. File System Driver:",
+        "browse": "Choose driver…",
+        "none": "None chosen",
+        "clear": "Remove",
+        "dialogTitle": "Choose the file system driver to embed",
+        "explain": "Kickstart has no {{dosType}} filesystem, so it has to travel inside the disk itself. Point ART at the driver — {{hint}}, usually — and it goes into the RDB with the version it states about itself.",
+        "warning": "Without a driver an Amiga will not see these partitions at all. The image is still made; it will not mount until a driver is added."
+      },
       "warnOver4Gb": "A single {{size}} GB partition is past the 4 GB that standard AmigaDOS can address; it needs TD64 or NSD support in both the controller and the filesystem. Fine for an emulator, and for a machine that has them — split the disk if it does not.",
       "custom": {
         "button": "Custom…",

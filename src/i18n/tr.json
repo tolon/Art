@@ -206,6 +206,9 @@
     "language": "Dil",
     "winuaePath": "WinUAE Yolu",
     "collectionDir": "Koleksiyon Klasörü",
+    "aminetRoot": "Aminet İndirme Klasörü",
+    "aminetRootHint": "Aminet'ten indirilen paketlerin saklandığı yer. Boş bırakılırsa ART kendi klasörünü kullanır.",
+    "aminetRootInUse": "İndirilenler {{path}} klasörüne gidiyor",
     "uxModePowerHint": "Ham veri araçlarını, blok ve sektör ayrıntılarını ve gelişmiş işlemleri gösterir.",
     "uxModeBeginnerHint": "Ham veri araçlarını ve blok düzeyindeki ayrıntıları gizler. Hiçbir şey devre dışı bırakılmaz — her şeyi görmek için Uzman Kullanıcı moduna geçin.",
     "colourRules": {
@@ -559,7 +562,15 @@
       "singleTitle": "Tek Bölüm",
       "singleDesc": "DH0: Sistem (%100 kapasite)",
       "createButton": "HDF Dosyası Oluştur…",
-      "warnNoDriver": "ART bölüm tablosunu ve bu dosya sisteminin DosType'ını yazar, ancak dosya sisteminin kendisini yazmaz: RDB'ye PFS3 ya da SFS sürücüsü yerleştirilmez, dolayısıyla başka bir araçla oraya bir sürücü konulana kadar Amiga bu bölümü göremez. Fast File System bölümleri, gerçek bir diskte olduğu gibi Amiga tarafında Format ile biçimlendirilir.",
+      "driver": {
+        "label": "4. Dosya Sistemi Sürücüsü:",
+        "browse": "Sürücü seç…",
+        "none": "Seçilmedi",
+        "clear": "Kaldır",
+        "dialogTitle": "RDB'ye gömülecek dosya sistemi sürücüsünü seçin",
+        "explain": "Kickstart'ta {{dosType}} dosya sistemi yok; bu yüzden sürücünün diskin kendi içinde taşınması gerekir. ART'a sürücüyü gösterin — genellikle {{hint}} — kendi belirttiği sürümüyle RDB'ye yazılsın.",
+        "warning": "Sürücü olmadan Amiga bu bölümleri hiç göremez. İmaj yine de oluşturulur; bir sürücü eklenene kadar bağlanmaz."
+      },
       "warnOver4Gb": "Tek parça {{size}} GB'lık bir bölüm, standart AmigaDOS'un adresleyebildiği 4 GB sınırının ötesinde; hem denetleyicide hem dosya sisteminde TD64 ya da NSD desteği gerektirir. Emülatör için ve bu desteğe sahip bir makine için sorun değil — değilse diski bölün.",
       "custom": {
         "button": "Özel…",
