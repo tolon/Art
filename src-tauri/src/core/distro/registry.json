@@ -35,7 +35,7 @@
       "packages": [],
       "post_install_notes": [
         "distro.note.caffeineos.download",
-        "distro.note.caffeineos.wifi",
+        "distro.note.caffeineos.network",
         "distro.note.paidIsARefund"
       ],
       "available": false

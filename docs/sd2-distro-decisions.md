@@ -134,14 +134,68 @@ interop is worth having.
 
 ---
 
+## §8.2 — CaffeineOS: what the 9318 preview folder yields, and what it does not
+
+The user pointed at a second Drive folder,
+`drive.google.com/drive/folders/1VIK8ZyRmd04HMy5OArwUQRAfZvOYZnNe`, titled
+**`9318_Preview`**, alongside a Google Doc, *CaffeineOS_Storm ReadMe + Log*.
+
+**It does not unblock the adapter.** Drive serves the folder's *listing* but
+refuses the files, and the Doc's body needs a signed-in session — the export
+endpoint redirects to a host that answers 400 without one. So §8.2 stands
+exactly as the research left it: the distribution has to be downloaded by hand
+and inspected with ART's own tools before an adapter is written.
+
+### What the listing does establish (fetched, not inferred)
+
+| Item | |
+|---|---|
+| `Caffeinerom.txt` | 7 KB — the custom ROM, described |
+| `Dopus_CaffeineEdition/` | its own DOpus build |
+| `WiFiPi.device-1.4.readme` | the Emu68 WiFi driver |
+| `wifipi.mni-1.2.readme`, `genet.mni-1.3.readme` | `.mni` modules |
+| `ChangeWPA-2.4.readme` | a WPA credentials tool |
+| `sanautil-0.40`, `netio-1.33r4`, `netsummary-1.0` | SANA-II utilities |
+
+Two things follow that are worth carrying into the design.
+
+**The version line runs past 9317.** The research recorded 9281→9317; a 9318
+preview exists. A profile that pinned a version would already be stale, which
+is why the registry pins none — it describes the distribution, not a release.
+
+**Where WiFi credentials live is stack-dependent, and ART must not assume.**
+For the Roadshow-based path — AmiKit's, and Emu68's own — the SSID and password
+are in `DEVS:NetInterfaces/WiFiPi`, edited as a text file
+(<https://www.amikit.amiga.sk/wifipi>). That is the location the research names
+in §3.3, and it is correct *for that stack*.
+
+But CaffeineOS's folder lists `.mni` modules and a `ChangeWPA` tool, and the
+research independently records it as shipping **Miami DX**. Miami keeps its own
+configuration and does not read `DEVS:NetInterfaces`. **Inference, flagged as
+such** — the readmes are behind the same Drive wall — but the shape of the
+evidence is clear enough to act on defensively: G14 must ask *which TCP/IP
+stack* a built volume runs before it writes a credential anywhere, and a
+`DEVS:NetInterfaces/WiFiPi` written onto a Miami system is a file nothing
+reads.
+
+### What is still needed, and from whom
+
+The adapter needs a real card to read, not a folder of readmes. Concretely:
+the distribution image itself, mounted and inspected with ART's own tools —
+partition map, FAT32 contents, `cmdline.txt` and `config.txt` as shipped, the
+Kickstart's name on the card, and what differs between the per-board variants.
+That is the adaptation checklist, and every line of it has to be read rather
+than guessed.
+
+---
+
 ## Still parked, deliberately
 
 - **§8.1 OnyxSoft** — the site answered 503 during both research passes.
-- **§8.2 CaffeineOS layout** — Google Drive blocks automated listing. The
-  distribution has to be downloaded by hand and inspected with ART's own tools
-  before the adapter is written. **This is what blocks SD-2a**, and it is a
-  deliberate block: guessing at a card layout is how a tool comes to write
-  something that quietly does not boot.
+- **§8.2 CaffeineOS layout** — still blocked; see the section above for what the
+  9318 preview folder did and did not yield. **This is what blocks SD-2a**, and
+  it is a deliberate block: guessing at a card layout is how a tool comes to
+  write something that quietly does not boot.
 - **§8.5 PiMiga's PiStorm lineage** — revisited when its adapter is scheduled.
 - **§8.6 AmigaOS "3.3"** — watch what it turns out to be; add to ROM Manager's
   per-OS table when it is real rather than named.

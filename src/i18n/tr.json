@@ -684,7 +684,7 @@
     "note": {
       "caffeineos": {
         "download": "Yaklaşık 17 GB'lık tek bir ham imaj olarak dağıtılıyor. Herhangi bir imaj yazıcıyla yazılır; o adım geldiğinde ART donanımınıza uyarlayacak.",
-        "wifi": "WiFi, açılış dosyalarında değil, Amiga tarafında DEVS: altında yapılandırılır."
+        "network": "CaffeineOS kendi ağ yığınını kullanıyor (wifipi.device ile Miami DX), Roadshow'unkini değil — yani WiFi, DEVS:NetInterfaces düzenlenerek değil, Amiga tarafındaki kendi aracıyla değiştiriliyor. Hangi yığın olursa olsun ayarlar açılış dosyalarında değil Amiga tarafında durur."
       },
       "coffinos": {
         "romFamily": "CoffinOS, Hyperion'un 3.1.4 ve 3.2 Kickstart'larının kendisini bozduğunu belirtiyor. Klasik bir 3.1 ROM istiyor.",

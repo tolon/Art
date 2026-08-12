@@ -684,7 +684,7 @@
     "note": {
       "caffeineos": {
         "download": "Distributed as a single raw image of about 17 GB. Written with any imager; ART will adapt it to your hardware once that step exists.",
-        "wifi": "WiFi is configured on the Amiga side, in DEVS:, not in the boot files."
+        "network": "CaffeineOS runs its own networking stack (Miami DX with wifipi.device), not the Roadshow one — so WiFi is changed with its own tool on the Amiga, not by editing DEVS:NetInterfaces. Whichever stack a system uses, the settings live on the Amiga side and not in the boot files."
       },
       "coffinos": {
         "romFamily": "CoffinOS states that Hyperion's 3.1.4 and 3.2 Kickstarts break it. It wants a classic 3.1 ROM.",
