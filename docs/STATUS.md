@@ -22,7 +22,7 @@ Update it at the end of any session that changes what works.
 | **Version** | 0.1.0 (unreleased) |
 | **Current stage** | **Phase 2b complete** (8 of 8 tasks); next is the PiStorm image builder, SD-1 |
 | **Build** | PASS |
-| **Tests** | 912 Rust passed, 0 failed; 279 frontend passed, 0 failed |
+| **Tests** | 912 Rust passed, 0 failed; 288 frontend passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
 | **amitools oracle** | 48 checks, both directions |
@@ -558,10 +558,12 @@ alone, and two were not looked at. The two that matter:
 
 - **The light theme was never opened.** Its tokens derive from the dark ones by
   role; nobody has looked at it.
-- **Session restore is not verified at all** — it is the only claim on that
-  list that cannot be true by construction, since it needs the application
-  closed and reopened. Nineteen tests cover the tab model; the store round-trip
-  has none.
+- **Session restore is half verified.** Two tabs made in the running pane do
+  reach `settings.json` as two tabs, with their paths, the focused side and the
+  command history — so the *write* half is real. The **read-back half has still
+  not been seen**, because nothing has closed and reopened ART since. The
+  round trip itself now has its own tests (`src/lib/paneSession.ts`), added
+  because the acceptance walk said it had none.
 
 ### ⏳ PiStorm Image Builder — SD-0 … SD-5 (planned, not started)
 
