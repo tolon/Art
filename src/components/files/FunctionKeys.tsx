@@ -202,6 +202,81 @@ export function useRefreshKey(onRefresh: () => void, active: boolean) {
 }
 
 /**
+ * Bind the keys that walk in and out of things (brief §3.1, §3.2).
+ *
+ * - **Enter** and **Ctrl+PgDn** open what the cursor is on. They are the same
+ *   action here: Total Commander separates them because Enter may run a file
+ *   association and Ctrl+PgDn forces the *listing* instead, and ART has no
+ *   associations to run — Enter already means "step inside", so the second key
+ *   exists for the fingers that expect it, not for a second behaviour.
+ * - **Backspace** and **Ctrl+PgUp** go up one level, container boundaries
+ *   included.
+ *
+ * Separate from `useFunctionKeys` for the same reason `usePaneTab` is: none of
+ * these is a `FunctionAction` — no label, no enabled state, nothing to draw on
+ * the bar.
+ */
+export function useNavigationKeys(
+  { onOpen, onUp }: { onOpen: () => void; onUp: () => void },
+  active: boolean
+) {
+  useEffect(() => {
+    if (!active) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      const ctrl = event.ctrlKey;
+      const open = event.key === "Enter" || (ctrl && event.key === "PageDown");
+      const up = event.key === "Backspace" || (ctrl && event.key === "PageUp");
+      if (!open && !up) return;
+      if (isShortcutBlocked(event, ctrl)) return;
+
+      event.preventDefault();
+      if (open) onOpen();
+      else onUp();
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onOpen, onUp, active]);
+}
+
+/**
+ * Bind Alt+Left and Alt+Right to the focused pane's own back/forward history.
+ *
+ * The one pair of shortcuts in this file that *wants* Alt, which
+ * `isShortcutBlocked` treats as "the user is asking the OS for something" —
+ * so the guard is written out here rather than given a third escape hatch for
+ * a single caller. It still refuses to fire while a text field has focus,
+ * which is the half of that guard that matters.
+ */
+export function usePaneHistoryKeys(
+  { onBack, onForward }: { onBack: () => void; onForward: () => void },
+  active: boolean
+) {
+  useEffect(() => {
+    if (!active) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (!event.altKey || event.ctrlKey || event.metaKey) return;
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) {
+        return;
+      }
+
+      event.preventDefault();
+      if (event.key === "ArrowLeft") onBack();
+      else onForward();
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onBack, onForward, active]);
+}
+
+/**
  * The docked function-key row (brief §1.4).
  *
  * **One row, always.** Total Commander's F-keys are a strip along the bottom

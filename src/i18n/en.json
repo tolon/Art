@@ -1068,6 +1068,7 @@
       "checkingOut": "Checking out {{name}}…",
       "checkedOut": "{{name}} is open for editing. Put it back from the panel below when you are done.",
       "creatingFolder": "Creating folder…",
+      "opening": "Opening {{name}}…",
       "renaming": "Renaming {{name}}…",
       "renamed": "{{name}} is now {{newName}}",
       "renamedWithIcon": "{{name}} is now {{newName}}, and its icon with it",

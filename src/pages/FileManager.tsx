@@ -53,6 +53,8 @@ import {
   FunctionKeyBar,
   useFunctionKeys,
   useInsertToggle,
+  useNavigationKeys,
+  usePaneHistoryKeys,
   usePaneTab,
   useRefreshKey,
   useSelectAll,
@@ -87,6 +89,22 @@ import {
   parsePaneSource,
   type PaneSourceOption,
 } from "@/lib/paneSources";
+import {
+  asksWhatItIs,
+  containerBreadcrumb,
+  containerFor,
+  type ContainerKind,
+  type HostReturn,
+} from "@/lib/containerStep";
+import {
+  emptyHistory,
+  goBack,
+  goForward,
+  leaveToHost,
+  pushLocation,
+  type PaneHistory,
+  type PaneLocation,
+} from "@/lib/paneHistory";
 import { paneStatusCounts } from "@/lib/panelStatus";
 import { formatDateTC, formatGroupedSize } from "@/lib/tcFormat";
 import {
@@ -220,6 +238,24 @@ interface PaneState {
    * a new call of its own.
    */
   totalBytes: number | null;
+  /**
+   * The host folder this pane's container was entered from, and the container
+   * file's own name (brief §3.1).
+   *
+   * Set when Enter on a row opened an image *in the same pane*; `null` for a
+   * plain folder, and for an image opened straight from the source combo,
+   * which has nowhere to go back out to. It is what makes `[..]` at a
+   * container's root leave the image and land the cursor back on the file it
+   * came from, rather than leaving the user inside a disk with no way out but
+   * the combo.
+   *
+   * A single value rather than a stack, and that is not an oversight: ART
+   * opens an image by path, so a container can only ever be entered from a
+   * host *folder* — there is no route from inside one container into another
+   * (see `asksWhatItIs` in `@/lib/containerStep`). One level is all there can
+   * be.
+   */
+  host: HostReturn | null;
   error: string | null;
 }
 
@@ -243,6 +279,7 @@ function emptyPane(): PaneState {
     warnings: [],
     capability: null,
     totalBytes: null,
+    host: null,
     error: null,
   };
 }
@@ -466,6 +503,20 @@ export function FileManager() {
    * the whole screen, acting on whichever pane is focused — Total Commander
    * has one too, for the same reason. */
   const [commandLine, setCommandLine] = useState("");
+  /**
+   * Each pane's own back/forward list (`@/lib/paneHistory`).
+   *
+   * Recorded by watching the panes rather than by every `openX` remembering to
+   * call something: there are seven of those and a new one would silently not
+   * be in the history. `historyNav` is what keeps a Back from being recorded
+   * as a move of its own — without it, going back would truncate the forward
+   * entries it had just created, and Forward would never work once.
+   */
+  const [history, setHistory] = useState<Record<Side, PaneHistory>>({
+    left: emptyHistory(),
+    right: emptyHistory(),
+  });
+  const historyNav = useRef(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -646,8 +697,18 @@ export function FileManager() {
 
   // ---- opening things ----
 
+  /**
+   * Show a host folder.
+   *
+   * `cursor` is the one addition task 4 needed: leaving a container puts the
+   * cursor back on the file it came from, so a user who steps into
+   * `Lotus.adf`, looks around and comes out again finds themself exactly where
+   * they were rather than at the top of a folder of four hundred names. It is
+   * set *after* `resetSelection`, which clears the anchor — the order matters,
+   * and reversing it would silently do nothing.
+   */
   const openLocal = useCallback(
-    async (side: Side, path: string) => {
+    async (side: Side, path: string, cursor?: string) => {
       try {
         const listing = await panelListLocal(path);
         setPane(side, {
@@ -659,6 +720,7 @@ export function FileManager() {
           truncated: listing.truncated,
         });
         resetSelection(side);
+        if (cursor) setAnchor((a) => ({ ...a, [side]: cursor }));
         setFocused(side);
       } catch (e) {
         setPane(side, { ...emptyPane(), location: path, error: String(e) });
@@ -668,7 +730,13 @@ export function FileManager() {
   );
 
   const openAdf = useCallback(
-    async (side: Side, path: string, dirBlock: number | null, trail: PaneState["trail"]) => {
+    async (
+      side: Side,
+      path: string,
+      dirBlock: number | null,
+      trail: PaneState["trail"],
+      host: HostReturn | null
+    ) => {
       try {
         const [info, entries, capability] = await Promise.all([
           adfOpen(path),
@@ -684,6 +752,7 @@ export function FileManager() {
           location: path,
           dirBlock,
           trail,
+          host,
           entries,
           adf: info,
           volumeIndex: 0,
@@ -694,7 +763,7 @@ export function FileManager() {
         resetSelection(side);
         setFocused(side);
       } catch (e) {
-        setPane(side, { ...emptyPane(), kind: "adf", location: path, error: String(e) });
+        setPane(side, { ...emptyPane(), kind: "adf", location: path, host, error: String(e) });
       }
     },
     [setPane, resetSelection]
@@ -702,14 +771,14 @@ export function FileManager() {
 
   /** Open an HDF on its partition list. */
   const openHdf = useCallback(
-    async (side: Side, path: string) => {
+    async (side: Side, path: string, host: HostReturn | null) => {
       try {
         const image = await volumeScan(path);
-        setPane(side, { ...emptyPane(), kind: "hdf", location: path, image });
+        setPane(side, { ...emptyPane(), kind: "hdf", location: path, image, host });
         resetSelection(side);
         setFocused(side);
       } catch (e) {
-        setPane(side, { ...emptyPane(), kind: "hdf", location: path, error: String(e) });
+        setPane(side, { ...emptyPane(), kind: "hdf", location: path, host, error: String(e) });
       }
     },
     [setPane, resetSelection]
@@ -723,7 +792,8 @@ export function FileManager() {
       image: ImageVolumes,
       volumeIndex: number,
       dirBlock: number | null,
-      trail: PaneState["trail"]
+      trail: PaneState["trail"],
+      host: HostReturn | null
     ) => {
       try {
         const [listing, capability] = await Promise.all([
@@ -742,6 +812,7 @@ export function FileManager() {
           totalBytes: listing.total_blocks * listing.block_size,
           dirBlock: dirBlock ?? listing.root_block,
           trail,
+          host,
           entries: listing.entries,
         });
         resetSelection(side);
@@ -752,6 +823,7 @@ export function FileManager() {
           kind: "hdf",
           location: path,
           image,
+          host,
           error: String(e),
         });
       }
@@ -775,7 +847,8 @@ export function FileManager() {
       path: string,
       extent: number | null,
       length: number | null,
-      trail: IsoTrailEntry[]
+      trail: IsoTrailEntry[],
+      host: HostReturn | null
     ) => {
       try {
         // `extent`/`length` are `null` only when the disc has not been
@@ -792,13 +865,14 @@ export function FileManager() {
           isoExtent: rootExtent,
           isoLength: rootLength,
           isoTrail: trail,
+          host,
           entries,
           volumeName: info.volume_name,
         });
         resetSelection(side);
         setFocused(side);
       } catch (e) {
-        setPane(side, { ...emptyPane(), kind: "iso", location: path, error: String(e) });
+        setPane(side, { ...emptyPane(), kind: "iso", location: path, host, error: String(e) });
       }
     },
     [setPane, resetSelection]
@@ -819,7 +893,7 @@ export function FileManager() {
    * this pane refuse without a single extra check at their call sites.
    */
   const openArchive = useCallback(
-    async (side: Side, path: string, dir: string) => {
+    async (side: Side, path: string, dir: string, host: HostReturn | null) => {
       try {
         const info: ArchiveInfo = await archiveOpen(path);
         const entries: PanelEntry[] = await archiveList(path, dir);
@@ -828,6 +902,7 @@ export function FileManager() {
           kind: "archive",
           location: path,
           archiveDir: dir,
+          host,
           entries,
           volumeName: info.format.toUpperCase(),
           warnings:
@@ -838,7 +913,7 @@ export function FileManager() {
         resetSelection(side);
         setFocused(side);
       } catch (e) {
-        setPane(side, { ...emptyPane(), kind: "archive", location: path, error: String(e) });
+        setPane(side, { ...emptyPane(), kind: "archive", location: path, host, error: String(e) });
       }
     },
     [setPane, resetSelection, t]
@@ -860,7 +935,7 @@ export function FileManager() {
    * so.
    */
   const openCbm = useCallback(
-    async (side: Side, path: string) => {
+    async (side: Side, path: string, host: HostReturn | null) => {
       try {
         const info: CbmInfo = await cbmOpen(path);
         const entries: PanelEntry[] = await cbmList(path);
@@ -868,6 +943,7 @@ export function FileManager() {
           ...emptyPane(),
           kind: "c64",
           location: path,
+          host,
           entries,
           volumeName: info.disk_id
             ? `${info.volume_name} ${info.disk_id}`
@@ -877,7 +953,7 @@ export function FileManager() {
         resetSelection(side);
         setFocused(side);
       } catch (e) {
-        setPane(side, { ...emptyPane(), kind: "c64", location: path, error: String(e) });
+        setPane(side, { ...emptyPane(), kind: "c64", location: path, host, error: String(e) });
       }
     },
     [setPane, resetSelection]
@@ -906,11 +982,14 @@ export function FileManager() {
                   ],
     });
     if (typeof picked !== "string") return;
-    if (kind === "adf") await openAdf(side, picked, null, []);
-    else if (kind === "hdf") await openHdf(side, picked);
-    else if (kind === "iso") await openIso(side, picked, null, null, []);
-    else if (kind === "archive") await openArchive(side, picked, "");
-    else await openCbm(side, picked);
+    // `host: null` throughout — an image opened from the source combo was not
+    // entered *from* anywhere, so `[..]` at its root correctly has nowhere to
+    // go and is not offered.
+    if (kind === "adf") await openAdf(side, picked, null, [], null);
+    else if (kind === "hdf") await openHdf(side, picked, null);
+    else if (kind === "iso") await openIso(side, picked, null, null, [], null);
+    else if (kind === "archive") await openArchive(side, picked, "", null);
+    else await openCbm(side, picked, null);
   }
 
   /**
@@ -938,11 +1017,13 @@ export function FileManager() {
         const [analysis] = await analyzePaths([wanted]);
         if (cancelled || !analysis?.plan) return;
         const category = analysis.plan.detection.category;
-        if (category === "optical-image") await openIso("left", wanted, null, null, []);
-        else if (category === "archive") await openArchive("left", wanted, "");
-        else if (category === "commodore-8bit") await openCbm("left", wanted);
-        else if (category === "floppy-image") await openAdf("left", wanted, null, []);
-        else if (category === "harddisk-image") await openHdf("left", wanted);
+        // Also `host: null`: the object came from a drop, not from a folder
+        // this pane was standing in.
+        if (category === "optical-image") await openIso("left", wanted, null, null, [], null);
+        else if (category === "archive") await openArchive("left", wanted, "", null);
+        else if (category === "commodore-8bit") await openCbm("left", wanted, null);
+        else if (category === "floppy-image") await openAdf("left", wanted, null, [], null);
+        else if (category === "harddisk-image") await openHdf("left", wanted, null);
         else if (category === "directory") await openLocal("left", wanted);
       } catch {
         // A path that cannot be analysed is not worth an error banner on a
@@ -963,28 +1044,57 @@ export function FileManager() {
     if (typeof picked === "string") await openLocal(side, picked);
   }
 
-  /** Double-click on a row. */
+  /**
+   * Enter, or a double-click, on a row (brief §3.1).
+   *
+   * A directory walks into itself, as it always has. A **file in a host
+   * folder** is the new half: ART asks what it actually is, and if the answer
+   * is something ART can list, **this pane becomes that container** — the
+   * pane kind changes underneath and `[..]` comes back out.
+   *
+   * The question goes to `analyze_paths`, the same content-first detection the
+   * drop panel uses, never to the extension: an `.img` holding a floppy opens
+   * as a floppy and an LHA somebody renamed `.dat` still opens (phase 2a, and
+   * ART-076 for what happens when that is got wrong). A file ART has no pane
+   * for — a ROM, anything unrecognised — does nothing, quietly: Enter is not
+   * a place to put an error about a file the user may simply have been
+   * cursoring past.
+   */
   async function activate(side: Side, entry: PanelEntry) {
     const state = pane(side);
-    if (!entry.is_dir) return;
+
+    if (!entry.is_dir) {
+      if (asksWhatItIs(entry, state.kind) && entry.path) {
+        await enterContainer(side, entry.path, entry.name, state.location);
+      }
+      return;
+    }
 
     if (state.kind === "local" && entry.path) {
       await openLocal(side, entry.path);
     } else if (state.kind === "adf" && entry.header_block !== null) {
-      await openAdf(side, state.location, entry.header_block, [
-        ...state.trail,
-        { name: entry.name, block: state.dirBlock },
-      ]);
+      await openAdf(
+        side,
+        state.location,
+        entry.header_block,
+        [...state.trail, { name: entry.name, block: state.dirBlock }],
+        state.host
+      );
     } else if (
       state.kind === "hdf" &&
       state.image &&
       state.volumeIndex !== null &&
       entry.header_block !== null
     ) {
-      await openVolume(side, state.location, state.image, state.volumeIndex, entry.header_block, [
-        ...state.trail,
-        { name: entry.name, block: state.dirBlock },
-      ]);
+      await openVolume(
+        side,
+        state.location,
+        state.image,
+        state.volumeIndex,
+        entry.header_block,
+        [...state.trail, { name: entry.name, block: state.dirBlock }],
+        state.host
+      );
     } else if (
       state.kind === "iso" &&
       entry.iso_extent !== null &&
@@ -996,23 +1106,200 @@ export function FileManager() {
         state.location,
         entry.iso_extent,
         entry.bytes,
-        enterIsoTrail(state.isoTrail, entry.name, state.isoExtent, state.isoLength)
+        enterIsoTrail(state.isoTrail, entry.name, state.isoExtent, state.isoLength),
+        state.host
       );
     } else if (state.kind === "archive" && state.archiveDir !== null) {
-      await openArchive(side, state.location, archiveEnter(state.archiveDir, entry.name));
+      await openArchive(
+        side,
+        state.location,
+        archiveEnter(state.archiveDir, entry.name),
+        state.host
+      );
     }
   }
+
+  /**
+   * Open `path` as a container in this pane, remembering where to come back to.
+   *
+   * The detection round trip is the only thing that makes this slower than
+   * walking into a folder, and it is not optional: it is what decides *which*
+   * pane opens, and it is the one place a wrong answer would put the user
+   * inside the wrong reader. A file that turns out not to be a container
+   * leaves the pane exactly as it was.
+   */
+  async function enterContainer(
+    side: Side,
+    path: string,
+    name: string,
+    hostPath: string
+  ) {
+    setBusy(t("files.status.opening", { name }));
+    try {
+      const [analysis] = await analyzePaths([path]);
+      const category = analysis?.plan?.detection.category;
+      const container: ContainerKind | null = category
+        ? containerFor(category as Parameters<typeof containerFor>[0])
+        : null;
+      if (!container) return;
+
+      const host: HostReturn = { path: hostPath, name };
+      if (container === "adf") await openAdf(side, path, null, [], host);
+      else if (container === "hdf") await openHdf(side, path, host);
+      else if (container === "iso") await openIso(side, path, null, null, [], host);
+      else if (container === "archive") await openArchive(side, path, "", host);
+      else await openCbm(side, path, host);
+    } catch (e) {
+      setError(String(e));
+      setHint(null);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /**
+   * `[..]`, Backspace and Ctrl+PgUp — up one level, whatever "level" means
+   * here.
+   *
+   * The levels a pane can climb, innermost first: a directory inside a
+   * volume, a partition back to its image's partition list, a folder inside a
+   * disc or an archive — and then, at the container's own root, **out of the
+   * image entirely** to the host folder it was entered from, with the cursor
+   * landing back on the container file. That last step is what makes Enter
+   * into a container a place you can leave rather than a one-way door
+   * (brief §3.1).
+   */
+  /**
+   * Where a pane is, as the serialisable shape history and (task 6) session
+   * restore both read. `null` before anything has been opened.
+   */
+  function locationOf(state: PaneState): PaneLocation | null {
+    if (!state.location) return null;
+    switch (state.kind) {
+      case "local":
+        return { kind: "local", path: state.location };
+      case "adf":
+        return {
+          kind: "adf",
+          path: state.location,
+          dirBlock: state.dirBlock,
+          trail: state.trail,
+          host: state.host,
+        };
+      case "hdf":
+        return {
+          kind: "hdf",
+          path: state.location,
+          volumeIndex: state.volumeIndex,
+          dirBlock: state.dirBlock,
+          trail: state.trail,
+          host: state.host,
+        };
+      case "iso":
+        return {
+          kind: "iso",
+          path: state.location,
+          extent: state.isoExtent,
+          length: state.isoLength,
+          trail: state.isoTrail,
+          host: state.host,
+        };
+      case "archive":
+        return {
+          kind: "archive",
+          path: state.location,
+          dir: state.archiveDir ?? "",
+          host: state.host,
+        };
+      case "c64":
+        return { kind: "c64", path: state.location, host: state.host };
+    }
+  }
+
+  /** Put a pane back at a location the history remembered. */
+  async function openLocation(side: Side, target: PaneLocation) {
+    historyNav.current = true;
+    switch (target.kind) {
+      case "local":
+        await openLocal(side, target.path);
+        return;
+      case "adf":
+        await openAdf(side, target.path, target.dirBlock, target.trail, target.host);
+        return;
+      case "hdf": {
+        if (target.volumeIndex === null) {
+          await openHdf(side, target.path, target.host);
+          return;
+        }
+        // A partition needs its image's volume table. The pane usually still
+        // holds it; re-scanning is the fallback for a history step that
+        // crossed to a different image.
+        const current = pane(side);
+        const image =
+          current.image && current.location === target.path
+            ? current.image
+            : await volumeScan(target.path);
+        await openVolume(
+          side,
+          target.path,
+          image,
+          target.volumeIndex,
+          target.dirBlock,
+          target.trail,
+          target.host
+        );
+        return;
+      }
+      case "iso":
+        await openIso(side, target.path, target.extent, target.length, target.trail, target.host);
+        return;
+      case "archive":
+        await openArchive(side, target.path, target.dir, target.host);
+        return;
+      case "c64":
+        await openCbm(side, target.path, target.host);
+        return;
+    }
+  }
+
+  // Record every move. Watching the panes rather than trusting seven `openX`
+  // functions to each remember is what makes a new one impossible to forget.
+  useEffect(() => {
+    if (historyNav.current) {
+      historyNav.current = false;
+      return;
+    }
+    setHistory((current) => {
+      let next = current;
+      for (const side of ["left", "right"] as Side[]) {
+        const target = locationOf(side === "left" ? left : right);
+        if (!target) continue;
+        const pushed = pushLocation(next[side], target);
+        if (pushed !== next[side]) next = { ...next, [side]: pushed };
+      }
+      return next;
+    });
+    // Only the panes themselves are the trigger: `locationOf` is pure over
+    // them, and adding it to the deps would re-run this on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [left, right]);
 
   async function goUp(side: Side) {
     const state = pane(side);
 
     if (state.kind === "local" && state.parent) {
       await openLocal(side, state.parent);
-    } else if (state.kind === "adf" && state.trail.length > 0) {
+      return;
+    }
+
+    if (state.kind === "adf" && state.trail.length > 0) {
       const trail = [...state.trail];
       const previous = trail.pop()!;
-      await openAdf(side, state.location, previous.block, trail);
-    } else if (state.kind === "hdf" && state.volumeIndex !== null && state.image) {
+      await openAdf(side, state.location, previous.block, trail, state.host);
+      return;
+    }
+
+    if (state.kind === "hdf" && state.volumeIndex !== null && state.image) {
       if (state.trail.length > 0) {
         const trail = [...state.trail];
         const previous = trail.pop()!;
@@ -1022,19 +1309,37 @@ export function FileManager() {
           state.image,
           state.volumeIndex,
           previous.block,
-          trail
+          trail,
+          state.host
         );
       } else {
-        // Out of the partition, back to the list of them.
-        await openHdf(side, state.location);
+        // Out of the partition, back to the list of them — a level of its
+        // own, and the reason an HDF's partitions are browsable at all.
+        await openHdf(side, state.location, state.host);
       }
-    } else if (state.kind === "iso" && state.isoTrail.length > 0) {
-      const back = leaveIsoTrail(state.isoTrail);
-      if (back) await openIso(side, state.location, back.extent, back.length, back.trail);
-    } else if (state.kind === "archive" && state.archiveDir !== null) {
-      const up = archiveLeave(state.archiveDir);
-      if (up !== null) await openArchive(side, state.location, up);
+      return;
     }
+
+    if (state.kind === "iso" && state.isoTrail.length > 0) {
+      const back = leaveIsoTrail(state.isoTrail);
+      if (back) {
+        await openIso(side, state.location, back.extent, back.length, back.trail, state.host);
+      }
+      return;
+    }
+
+    if (state.kind === "archive" && state.archiveDir) {
+      const up = archiveLeave(state.archiveDir);
+      if (up !== null) await openArchive(side, state.location, up, state.host);
+      return;
+    }
+
+    // Nothing left inside the container: leave the image for the folder it
+    // was entered from. `leaveToHost` is `null` for a pane that was opened
+    // from the source combo or by a workflow, which is exactly the case where
+    // `[..]` is not offered.
+    const back = leaveToHost(state.host);
+    if (back) await openLocal(side, back.path, back.cursor);
   }
 
   const refresh = useCallback(
@@ -1043,13 +1348,20 @@ export function FileManager() {
       if (state.kind === "local" && state.location) {
         await openLocal(side, state.location);
       } else if (state.kind === "adf") {
-        await openAdf(side, state.location, state.dirBlock, state.trail);
+        await openAdf(side, state.location, state.dirBlock, state.trail, state.host);
       } else if (state.kind === "iso") {
-        await openIso(side, state.location, state.isoExtent, state.isoLength, state.isoTrail);
+        await openIso(
+          side,
+          state.location,
+          state.isoExtent,
+          state.isoLength,
+          state.isoTrail,
+          state.host
+        );
       } else if (state.kind === "archive") {
-        await openArchive(side, state.location, state.archiveDir ?? "");
+        await openArchive(side, state.location, state.archiveDir ?? "", state.host);
       } else if (state.kind === "c64") {
-        await openCbm(side, state.location);
+        await openCbm(side, state.location, state.host);
       } else if (state.kind === "hdf") {
         if (state.image && state.volumeIndex !== null) {
           await openVolume(
@@ -1058,10 +1370,11 @@ export function FileManager() {
             state.image,
             state.volumeIndex,
             state.dirBlock,
-            state.trail
+            state.trail,
+            state.host
           );
         } else {
-          await openHdf(side, state.location);
+          await openHdf(side, state.location, state.host);
         }
       }
     },
@@ -2358,7 +2671,12 @@ export function FileManager() {
         void chooseImage(side, kind),
       onOpenRoot: (root: string) => void openLocal(side, root),
       onOpenVolume: (index: number) => {
-        if (state.image) void openVolume(side, state.location, state.image, index, null, []);
+        // Entering a partition from the list: still inside the same image, so
+        // the host it was entered from travels with it — `[..]` out of the
+        // partition goes to the list, and `[..]` again leaves the image.
+        if (state.image) {
+          void openVolume(side, state.location, state.image, index, null, [], state.host);
+        }
       },
       onRefresh: () => void refresh(side),
       onNewFolder: () => void newFolder(side),
@@ -2561,6 +2879,48 @@ export function FileManager() {
   // because task 3 hides the button strip Refresh used to live in — see
   // `useRefreshKey`'s own comment for why that could not wait a task.
   useRefreshKey(() => void refresh(focused), keysActive);
+
+  // Enter / Ctrl+PgDn walk into whatever the cursor is on — a folder, or an
+  // image, which becomes this pane. Backspace / Ctrl+PgUp walk back out,
+  // container boundaries included (brief §3.1).
+  //
+  // The cursor, not the selection: Total Commander's Enter opens the row you
+  // are standing on, whether or not it is marked, and a user who has five
+  // files marked for F5 and presses Enter means "open this one", not "open
+  // the first of those five".
+  useNavigationKeys(
+    {
+      onOpen: () => {
+        const name = anchor[focused];
+        if (!name) return;
+        const entry = paneEntries(focused).find((candidate) => candidate.name === name);
+        if (entry) void activate(focused, entry);
+      },
+      onUp: () => void goUp(focused),
+    },
+    keysActive
+  );
+
+  // Alt+Left / Alt+Right — the focused pane's own history, container steps
+  // included: going back into `Lotus.adf` reopens the image at the directory
+  // it was left at, because that is what a location *is* here.
+  usePaneHistoryKeys(
+    {
+      onBack: () => {
+        const step = goBack(history[focused]);
+        if (!step) return;
+        setHistory((current) => ({ ...current, [focused]: step.history }));
+        void openLocation(focused, step.to);
+      },
+      onForward: () => {
+        const step = goForward(history[focused]);
+        if (!step) return;
+        setHistory((current) => ({ ...current, [focused]: step.history }));
+        void openLocation(focused, step.to);
+      },
+    },
+    keysActive
+  );
 
   // An unfinished operation is offered as soon as a pane shows an image that
   // has one — before the user tries to write and is refused.
@@ -2977,13 +3337,19 @@ function Pane({
   const [dragOver, setDragOver] = useState(false);
 
   const showingFiles = state.kind !== "hdf" || state.volumeIndex !== null;
+  // Somewhere to go up *to* — one more level inside the container, or, at its
+  // root, out of the image to the folder it was entered from (`state.host`).
+  // That last clause is what gives a Commodore image, which is flat and has no
+  // level of its own, a `[..]` at all: it is how you leave a `.d64` you walked
+  // into. An image opened from the source combo has no host, so it correctly
+  // shows none.
   const canGoUp =
     (state.kind === "local" && state.parent !== null) ||
     (state.kind === "adf" && state.trail.length > 0) ||
     (state.kind === "hdf" && state.volumeIndex !== null) ||
     (state.kind === "iso" && state.isoTrail.length > 0) ||
-    (state.kind === "archive" && !!state.archiveDir);
-  // A Commodore image is flat: there is nowhere to go up to, ever.
+    (state.kind === "archive" && !!state.archiveDir) ||
+    state.host !== null;
 
   // An HDF is never a destination: writing into a partition is not
   // implemented. A disc never is either — it is read-only end to end
@@ -3005,6 +3371,24 @@ function Pane({
   // still reading "20" would be the exact kind of mismatch task 7 exists to
   // avoid.
   const status = paneStatusCounts(sortedEntries, selectedNames);
+
+  // Where this pane is, as a list of steps. Each kind keeps its position in a
+  // field of its own (see `PaneState` for why `dirBlock`, `isoExtent` and
+  // `archiveDir` are three fields rather than one), so the interior is
+  // assembled here and the container step is joined on by `containerBreadcrumb`.
+  const interior: string[] = [
+    ...(state.kind === "hdf" || state.kind === "iso"
+      ? [state.volumeName ? `${state.volumeName}:` : ""]
+      : []),
+    ...state.trail.map((crumb) => crumb.name),
+    ...state.isoTrail.map((crumb) => crumb.name),
+    ...(state.kind === "archive" && state.archiveDir ? state.archiveDir.split("/") : []),
+  ];
+  const breadcrumb = containerBreadcrumb(
+    state.host,
+    state.location || t("files.pane.nothingOpen"),
+    interior
+  );
 
   return (
     <section
@@ -3065,18 +3449,15 @@ function Pane({
             </option>
           ))}
         </select>
-        <span className="tc-path-text">
-          {state.location || t("files.pane.nothingOpen")}
-          {state.kind === "hdf" && state.volumeName && ` > ${state.volumeName}:`}
-          {state.kind === "iso" && state.volumeName && ` > ${state.volumeName}:`}
-          {state.trail.length > 0 && ` > ${state.trail.map((crumb) => crumb.name).join(" > ")}`}
-          {state.isoTrail.length > 0 &&
-            ` > ${state.isoTrail.map((crumb) => crumb.name).join(" > ")}`}
-          {/* An archive's breadcrumb is its path, split — there is no trail
-              to read it out of, because the path is the address. */}
-          {state.kind === "archive" &&
-            state.archiveDir &&
-            ` > ${state.archiveDir.split("/").join(" > ")}`}
+        {/* The breadcrumb, container step and all (brief §3.1). A pane entered
+            from a folder leads with the container's full path — the image
+            reads as the folder it now behaves like — and one opened from the
+            combo leads with its own location, which is the same string.
+            `containerBreadcrumb` (`@/lib/containerStep`) joins the head; the
+            interior steps are assembled here because each pane kind keeps its
+            position in its own field, for the reasons `PaneState` gives. */}
+        <span className="tc-path-text" title={breadcrumb.join(" > ")}>
+          {breadcrumb.join(" > ")}
         </span>
         <input
           type="text"

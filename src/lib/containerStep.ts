@@ -94,18 +94,26 @@ export function asksWhatItIs(
 }
 
 /**
- * The breadcrumb a pane inside a container shows.
+ * The breadcrumb a pane shows, container step included.
  *
  * Total Commander writes the container step as though it were a folder —
  * `E:\amiga\Games\Lotus.adf\` — and that is exactly right: the whole point of
  * the feature is that an image *is* a folder as far as walking around is
- * concerned. `interior` is whatever the pane already renders for its position
- * inside the image (a trail, a partition name, an archive path).
+ * concerned. So a pane entered from a folder leads with the container's full
+ * path, and one opened straight from the source combo leads with its own
+ * `location`, which is the same string.
+ *
+ * `interior` is whatever the pane renders for its position inside the image (a
+ * partition name, a trail, an archive path). Empty steps are dropped: an
+ * archive at its root has `archiveDir === ""`, which is a position, not a name.
  */
-export function containerBreadcrumb(host: HostReturn | null, interior: string[]): string[] {
+export function containerBreadcrumb(
+  host: HostReturn | null,
+  location: string,
+  interior: string[]
+): string[] {
   const inside = interior.filter((step) => step !== "");
-  if (!host) return inside;
-  return [joinHostPath(host.path, host.name), ...inside];
+  return [host ? joinHostPath(host.path, host.name) : location, ...inside];
 }
 
 /** Join a host folder and a file name with the separator the path already

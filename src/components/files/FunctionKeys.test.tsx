@@ -21,6 +21,8 @@ import { useState } from "react";
 import {
   useFunctionKeys,
   useInsertToggle,
+  useNavigationKeys,
+  usePaneHistoryKeys,
   usePaneTab,
   useRefreshKey,
   useSelectAll,
@@ -258,6 +260,107 @@ function ShiftHarness() {
   useFunctionKeys(actions, true);
   return <div data-testid="fired">{fired.join(",")}</div>;
 }
+
+// Walking in and out of things (brief §3.1). Enter is the key that turns a
+// file into a pane, and Backspace is the only way back out of one — a guard
+// regression in either direction leaves a user inside a disk image.
+
+function NavigationHarness({ active = true }: { active?: boolean }) {
+  const [log, setLog] = useState<string[]>([]);
+  useNavigationKeys(
+    {
+      onOpen: () => setLog((l) => [...l, "open"]),
+      onUp: () => setLog((l) => [...l, "up"]),
+    },
+    active
+  );
+  return (
+    <div>
+      <div data-testid="log">{log.join(",")}</div>
+      <input aria-label="filter box" />
+    </div>
+  );
+}
+
+describe("useNavigationKeys", () => {
+  it("opens on Enter and on Ctrl+PgDn, and goes up on Backspace and Ctrl+PgUp", async () => {
+    const user = userEvent.setup();
+    render(<NavigationHarness />);
+
+    await user.keyboard("{Enter}");
+    await user.keyboard("{Control>}{PageDown}{/Control}");
+    await user.keyboard("{Backspace}");
+    await user.keyboard("{Control>}{PageUp}{/Control}");
+    expect(screen.getByTestId("log").textContent).toBe("open,open,up,up");
+  });
+
+  it("does not fire while typing — Backspace in a text box deletes a character", async () => {
+    const user = userEvent.setup();
+    render(<NavigationHarness />);
+
+    const input = screen.getByRole("textbox", { name: "filter box" });
+    await user.click(input);
+    await user.keyboard("abc{Backspace}{Enter}");
+    expect(screen.getByTestId("log").textContent).toBe("");
+    expect((input as HTMLInputElement).value).toBe("ab");
+  });
+
+  it("does nothing while inactive (a dialog is on top)", async () => {
+    const user = userEvent.setup();
+    render(<NavigationHarness active={false} />);
+
+    await user.keyboard("{Enter}{Backspace}");
+    expect(screen.getByTestId("log").textContent).toBe("");
+  });
+});
+
+function HistoryHarness({ active = true }: { active?: boolean }) {
+  const [log, setLog] = useState<string[]>([]);
+  usePaneHistoryKeys(
+    {
+      onBack: () => setLog((l) => [...l, "back"]),
+      onForward: () => setLog((l) => [...l, "forward"]),
+    },
+    active
+  );
+  return (
+    <div>
+      <div data-testid="log">{log.join(",")}</div>
+      <input aria-label="filter box" />
+    </div>
+  );
+}
+
+describe("usePaneHistoryKeys", () => {
+  it("fires on Alt+Left and Alt+Right", async () => {
+    const user = userEvent.setup();
+    render(<HistoryHarness />);
+
+    await user.keyboard("{Alt>}{ArrowLeft}{/Alt}");
+    await user.keyboard("{Alt>}{ArrowRight}{/Alt}");
+    expect(screen.getByTestId("log").textContent).toBe("back,forward");
+  });
+
+  it("ignores the arrows without Alt, and Alt with another modifier", async () => {
+    // Plain arrows belong to the pane's own cursor movement, not to history.
+    const user = userEvent.setup();
+    render(<HistoryHarness />);
+
+    await user.keyboard("{ArrowLeft}{ArrowRight}");
+    await user.keyboard("{Control>}{Alt>}{ArrowLeft}{/Alt}{/Control}");
+    expect(screen.getByTestId("log").textContent).toBe("");
+  });
+
+  it("does not fire while a text field has focus", async () => {
+    const user = userEvent.setup();
+    render(<HistoryHarness />);
+
+    const input = screen.getByRole("textbox", { name: "filter box" });
+    await user.click(input);
+    await user.keyboard("{Alt>}{ArrowLeft}{/Alt}");
+    expect(screen.getByTestId("log").textContent).toBe("");
+  });
+});
 
 describe("useFunctionKeys and the shifted variant of a key", () => {
   it("runs F6 for F6 and Shift+F6 for Shift+F6, never both and never the wrong one", async () => {

@@ -56,32 +56,40 @@ describe("asksWhatItIs", () => {
 });
 
 describe("containerBreadcrumb", () => {
+  const lotus = { path: "E:\\amiga\\Games", name: "Lotus.adf" };
+
   it("writes the container step as though it were a folder", () => {
     // Total Commander's own convention, and the point of the feature: an
     // image *is* a folder as far as walking around is concerned.
-    expect(
-      containerBreadcrumb({ path: "E:\\amiga\\Games", name: "Lotus.adf" }, ["Data"])
-    ).toEqual(["E:\\amiga\\Games\\Lotus.adf", "Data"]);
+    expect(containerBreadcrumb(lotus, "E:\\amiga\\Games\\Lotus.adf", ["Data"])).toEqual([
+      "E:\\amiga\\Games\\Lotus.adf",
+      "Data",
+    ]);
   });
 
   it("keeps a POSIX path POSIX and a Windows path Windows", () => {
-    expect(containerBreadcrumb({ path: "/media/sd", name: "work.hdf" }, [])).toEqual([
+    expect(containerBreadcrumb({ path: "/media/sd", name: "work.hdf" }, "", [])).toEqual([
       "/media/sd/work.hdf",
     ]);
-    expect(containerBreadcrumb({ path: "E:\\", name: "work.hdf" }, [])).toEqual([
+    expect(containerBreadcrumb({ path: "E:\\", name: "work.hdf" }, "", [])).toEqual([
       "E:\\work.hdf",
     ]);
   });
 
-  it("shows only the interior when the pane was not entered from a folder", () => {
-    // An image opened straight from the source combo has no host to return to.
-    expect(containerBreadcrumb(null, ["DH0", "Games"])).toEqual(["DH0", "Games"]);
+  it("leads with the pane's own location when it was not entered from a folder", () => {
+    // An image opened straight from the source combo has no host to return to
+    // — and its `location` is the same string the host join would have built.
+    expect(containerBreadcrumb(null, "D:\\work.hdf", ["DH0", "Games"])).toEqual([
+      "D:\\work.hdf",
+      "DH0",
+      "Games",
+    ]);
   });
 
   it("drops empty interior steps rather than rendering a stray separator", () => {
     // An archive at its root has `archiveDir === ""`, which is a position, not
     // a name.
-    expect(containerBreadcrumb({ path: "D:\\dl", name: "game.lha" }, [""])).toEqual([
+    expect(containerBreadcrumb({ path: "D:\\dl", name: "game.lha" }, "", [""])).toEqual([
       "D:\\dl\\game.lha",
     ]);
   });
