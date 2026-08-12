@@ -363,6 +363,41 @@ re-audits them without reason:
 
 ### Phase 2a
 
+**ART-079** 🔴 **A 7z archive from any real tool gave one entry another entry's bytes**
+`core/archive/sevenz.rs` · Two defects in one read path, both invisible to
+ART's own tests and both producing **wrong data with no error**:
+
+1. **Index drift.** `sevenz-rust2`'s `for_each_entries` walks the archive's
+   compressed *blocks* first — the entries that carry data, in block order —
+   and the streamless ones (directories, empty files) after them. ART counted
+   the yields as though they matched `archive().files`, so the moment an
+   archive held a directory every index after it pointed at the wrong entry.
+   Every archive a real tool writes holds directories; none of ART's fixtures
+   did.
+2. **A skipped entry was not drained.** A 7z block is one compressed stream
+   holding several files end to end, so a file's data begins where the
+   previous one's ended. Returning from an unwanted entry without consuming
+   its bytes left the block reader short and decoded the *next* wanted file
+   from the wrong place — right length, wrong contents. A partial selection is
+   the normal case: the gate skips entries that already exist and refuses
+   hostile names.
+
+The two together are why `ReadMe.txt` came back holding `Notes.txt`'s text.
+
+→ Entries are matched to indices **by the name the archive stores**, which is
+stable under both orderings, and every entry the pass skips has its stream
+drained. Verified against an archive the 7-Zip application wrote: ART's
+SHA-256 for every entry now equals `7z e -so`'s, through both read paths.
+
+**How it was found, because that is the lesson.** ART's 7z fixtures are built
+by ART's own writer, which produces one block per file and no directories —
+so they exercised neither defect and passed throughout. Pointing the reader at
+a file *another tool* wrote found both in one run. That is the same failure
+mode as ART-032…035 and ART-075, for the third time in this project:
+`read_foreign_archive_for_oracle_when_asked` and
+`read_foreign_c64_for_oracle_when_asked` exist now so it is one command rather
+than an idea.
+
 **ART-077** 🟠 **The file manager ignored the object a workflow sent it, so "Open in the file manager" opened nothing**
 `src/pages/FileManager.tsx` · Every `Navigate` workflow hands its object over
 the same way — a route plus `{ state: { path } }` — and every other studio

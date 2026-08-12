@@ -426,7 +426,17 @@ is not to be trusted" rules amendments A3 and A4 added.
 
 **Defects found and fixed on the way:** ART-075 (Mode 2/XA), ART-076 (LHA
 detection), ART-077 (the file manager ignored the object a workflow sent it —
-so "Open in the file manager" had been doing nothing since Task 3).
+so "Open in the file manager" had been doing nothing since Task 3), and
+**ART-079** — a 7z from any real tool gave one entry another entry's bytes,
+found by pointing the reader at a file 7-Zip wrote while every fixture ART
+builds for itself passed.
+
+**The third time that shape has bitten this project** (ART-032…035, ART-075,
+now ART-079), so it is now one command rather than an idea:
+`read_foreign_archive_for_oracle_when_asked` and
+`read_foreign_c64_for_oracle_when_asked` read files ART did not write, and
+print a hash per entry rather than a length — the defect gave every file
+exactly the right length.
 
 **Owed, recorded not fixed:** [ART-078](ISSUES.md#open) — Rock Ridge and the
 Amiga `AS` System Use entry are not read, so an AmigaOS CD's protection bits

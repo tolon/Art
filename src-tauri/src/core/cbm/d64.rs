@@ -594,6 +594,41 @@ mod tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
+    /// Read a disk image ART did not write, and print what it made of it.
+    ///
+    /// The same shape `read_foreign_volume_for_oracle_when_asked` has for an
+    /// Amiga volume, and for the same reason: every fixture above is built by
+    /// ART's own builder from the same sector table ART's reader uses, so they
+    /// can agree with each other and both be wrong — ART-032 … ART-035's
+    /// shape. `scripts/make-c64-fixture.py` writes a disk from the published
+    /// 1541 layout instead, and this is what points ART at it.
+    ///
+    /// ```text
+    /// python scripts/make-c64-fixture.py test/sample.d64
+    /// ART_C64_READ_IN=../test/sample.d64 cargo test read_foreign_c64_for_oracle_when_asked -- --nocapture
+    /// ```
+    #[test]
+    fn read_foreign_c64_for_oracle_when_asked() {
+        let Ok(source) = std::env::var("ART_C64_READ_IN") else {
+            return;
+        };
+        let image = D64Image::open(std::path::Path::new(&source)).unwrap();
+        let (name, id) = image.disk_name().unwrap();
+        println!("disk={name}");
+        println!("id={id}");
+        println!("tracks={}", image.geometry().tracks);
+        for entry in image.list().unwrap() {
+            let data = image.read_file(&entry).unwrap();
+            println!(
+                "file={}|{}|{}|{}",
+                entry.name,
+                entry.file_type.as_str(),
+                entry.blocks,
+                data.len()
+            );
+        }
+    }
+
     #[test]
     fn a_file_that_is_not_a_disk_image_is_refused_at_open() {
         let (d, p) = write(&vec![0u8; 1000]);

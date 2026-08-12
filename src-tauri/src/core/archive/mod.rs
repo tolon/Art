@@ -294,6 +294,71 @@ mod tests {
         }
     }
 
+    /// Read an archive ART did not write, and print what it made of it.
+    ///
+    /// Every fixture in this module is built by ART's own writer, which is
+    /// enough to test the gate and not enough to test the *readers*: a writer
+    /// and a reader from the same crate agree by construction. Pointing this
+    /// at a ZIP Windows made, or a 7z the 7-Zip application made, is the
+    /// cheap cross-implementation check — the same shape
+    /// `read_foreign_c64_for_oracle_when_asked` has for a disk image.
+    ///
+    /// ```text
+    /// ART_ARCHIVE_READ_IN=../test/sample.zip cargo test read_foreign_archive_for_oracle_when_asked -- --nocapture
+    /// ```
+    #[test]
+    fn read_foreign_archive_for_oracle_when_asked() {
+        let Ok(source) = std::env::var("ART_ARCHIVE_READ_IN") else {
+            return;
+        };
+        let mut backend = open(std::path::Path::new(&source)).unwrap();
+        println!("format={}", backend.format());
+        let entries = backend.entries().unwrap();
+        let tree = tree::ArchiveTree::build(&entries);
+        println!("entries={}", entries.len());
+        println!("unusable={}", tree.refused().len());
+        // Through `read_selected`, because that is the path the gate takes:
+        // one pass, every wanted entry delivered by index.
+        let wanted: Vec<bool> = entries.iter().map(|e| !e.is_dir).collect();
+        let mut got: Vec<Option<Result<String, String>>> = vec![None; entries.len()];
+        backend
+            .read_selected(&wanted, extract::MAX_ENTRY_OUTPUT, &mut |index, data| {
+                // The hash, not the length: the defect this hook was written
+                // to catch gave every file the *right* length and another
+                // file's bytes.
+                got[index] = Some(
+                    data.map(|d| crate::core::hashing::sha256_bytes(&d))
+                        .map_err(|e| e.to_string()),
+                );
+                Ok(())
+            })
+            .unwrap();
+
+        for (index, entry) in entries.iter().enumerate() {
+            let batch = match &got[index] {
+                _ if entry.is_dir => "dir".to_string(),
+                None => "NOT DELIVERED".to_string(),
+                Some(Ok(hash)) => hash.clone(),
+                Some(Err(e)) => format!("ERROR {e}"),
+            };
+            // And one at a time, which for a solid archive is the harder of
+            // the two: every entry before this one has to be decoded and
+            // thrown away for this one to start in the right place.
+            let single = if entry.is_dir {
+                "dir".to_string()
+            } else {
+                match backend.read(index, extract::MAX_ENTRY_OUTPUT) {
+                    Ok(data) => crate::core::hashing::sha256_bytes(&data),
+                    Err(e) => format!("ERROR {e}"),
+                }
+            };
+            println!(
+                "entry={}|declared={}|batch={batch}|single={single}",
+                entry.name, entry.declared_bytes
+            );
+        }
+    }
+
     /// A backend must stop at the limit the gate gives it, in its own
     /// decompression loop. Checking the size afterwards is too late: the
     /// memory is already gone, which is what a decompression bomb is for.

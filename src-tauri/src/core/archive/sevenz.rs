@@ -118,7 +118,28 @@ impl ArchiveBackend for SevenZBackend {
         }
 
         let mut reader = Self::reader(&self.path)?;
-        let mut index = 0usize;
+
+        // **Not a counter.** The reader walks its compressed *blocks* first —
+        // every entry that carries data, in block order — and the streamless
+        // ones (directories, empty files) after them. That is neither the
+        // order of `archive().files` nor the same set, so counting yields as
+        // though it were puts one entry's bytes into another entry's file the
+        // moment an archive holds a directory. Every archive a real tool
+        // writes holds directories (ART-079).
+        //
+        // Matching on the stored name instead is stable under both. Duplicate
+        // names keep their order, which is the best a duplicate can be given.
+        let mut pending: std::collections::HashMap<String, std::collections::VecDeque<usize>> =
+            std::collections::HashMap::new();
+        for (index, file) in reader.archive().files.iter().enumerate() {
+            if wanted.get(index).copied().unwrap_or(false) {
+                pending
+                    .entry(file.name.clone())
+                    .or_default()
+                    .push_back(index);
+            }
+        }
+
         // The callback cannot return a `CoreError` through the crate's own
         // signature, so a refusal from the sink is carried out here and
         // re-raised once the pass has ended.
@@ -128,14 +149,30 @@ impl ArchiveBackend for SevenZBackend {
         // produces one — every failure ART cares about is carried to the sink
         // as a `CoreResult` or out through `escaped` — so it has to be
         // spelled out rather than inferred.
-        let result = reader.for_each_entries(&mut |_entry: &sevenz_rust2::ArchiveEntry,
+        let result = reader.for_each_entries(&mut |entry: &sevenz_rust2::ArchiveEntry,
                                                    stream: &mut dyn Read|
          -> Result<bool, sevenz_rust2::Error> {
-            let at = index;
-            index += 1;
-            if !wanted.get(at).copied().unwrap_or(false) {
+            let Some(at) = pending
+                .get_mut(entry.name.as_str())
+                .and_then(|queue| queue.pop_front())
+            else {
+                // Not one of the entries the gate asked for — but its bytes
+                // still have to be **drained**, not skipped.
+                //
+                // A 7z block is one compressed stream holding several files
+                // end to end, so a file's data only starts where the previous
+                // one's ended. Returning without consuming this entry leaves
+                // the block reader short, and the *next* wanted file is then
+                // decoded from the wrong place: right length, wrong contents,
+                // no error. A partial selection is the normal case — the gate
+                // skips entries that already exist and refuses hostile names —
+                // so this is not an edge (ART-079).
+                std::io::copy(
+                    &mut stream.take(limit.saturating_add(1)),
+                    &mut std::io::sink(),
+                )?;
                 return Ok(true);
-            }
+            };
 
             // `take(limit + 1)`: one byte past what is allowed is how "at the
             // limit" and "past it" are told apart without ever holding the
@@ -180,10 +217,23 @@ pub mod tests {
     /// A 7z holding the given entries, built at runtime — ART ships no
     /// fixtures, and a 7z cannot be hand-assembled the way a level-0 LHA
     /// header can.
+    /// A name ending in `/` becomes a **directory entry**, which matters more
+    /// than it looks: a directory carries no data stream, and the reader's
+    /// `for_each_entries` walks only the entries that do. A fixture set with
+    /// no directories in it cannot catch an index that drifts because of one.
     pub fn make_7z_with(files: &[(&str, &[u8])]) -> Vec<u8> {
         let mut writer = ArchiveWriter::new(std::io::Cursor::new(Vec::new()))
             .expect("the fixture writer must start");
         for (name, data) in files {
+            if let Some(folder) = name.strip_suffix('/') {
+                writer
+                    .push_archive_entry::<std::io::Cursor<Vec<u8>>>(
+                        sevenz_rust2::ArchiveEntry::new_directory(folder),
+                        None,
+                    )
+                    .expect("the fixture writer must accept a directory");
+                continue;
+            }
             writer
                 .push_archive_entry(
                     sevenz_rust2::ArchiveEntry::new_file(name),
@@ -258,6 +308,110 @@ pub mod tests {
         assert_eq!(seen.len(), 2, "{seen:?}");
         assert_eq!(seen[0], (0, b"aaa".to_vec()));
         assert_eq!(seen[1], (2, b"ccc".to_vec()));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// ART-079. The reader walks its *blocks* — every entry that carries data
+    /// — and then the empty ones, which is neither the order nor the set of
+    /// `archive().files`. Counting yields as though they matched that list
+    /// puts one entry's bytes in another entry's file the moment the archive
+    /// holds a directory, and every archive a real tool writes holds
+    /// directories.
+    ///
+    /// It survived because the fixtures here were all-files: the bug needs a
+    /// streamless entry to exist at all. Found by pointing ART at a 7z the
+    /// 7-Zip application wrote.
+    #[test]
+    fn an_archive_with_a_directory_still_reads_each_file_as_itself() {
+        let dir = scratch("dir-drift");
+        let archive = dir.join("mixed.7z");
+        std::fs::write(
+            &archive,
+            make_7z_with(&[
+                ("Tools/", b"" as &[u8]),
+                ("ReadMe.txt", b"the readme"),
+                ("Tools/Notes.txt", b"the notes"),
+            ]),
+        )
+        .unwrap();
+
+        let mut backend = SevenZBackend::open(&archive).unwrap();
+        let entries = backend.entries().unwrap();
+
+        // Whatever order the archive stores them in, each index must read the
+        // entry *at that index* — checked by name, not by position.
+        for (index, entry) in entries.iter().enumerate() {
+            if entry.is_dir {
+                continue;
+            }
+            let expected: &[u8] = match entry.name.as_str() {
+                "ReadMe.txt" => b"the readme",
+                "Tools/Notes.txt" => b"the notes",
+                other => panic!("unexpected entry {other}"),
+            };
+            assert_eq!(
+                backend.read(index, 1024).unwrap(),
+                expected,
+                "entry {index} ({}) read somebody else's bytes",
+                entry.name
+            );
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The other half of ART-079: a *partial* selection, which is the normal
+    /// case — the gate skips entries that already exist on disk and refuses
+    /// hostile names, so most extractions want some entries and not others.
+    ///
+    /// **What this test cannot prove**, said plainly: the fixture writer here
+    /// produces non-solid archives, one block per file, and the defect only
+    /// bites in a solid block where a skipped file's bytes have to be drained
+    /// for the next one to start in the right place. The proof for that is
+    /// `read_foreign_archive_for_oracle_when_asked` pointed at an archive the
+    /// 7-Zip application wrote (see `test/README.md`), which is where the
+    /// defect was found. This test holds the shape so the plumbing cannot rot.
+    #[test]
+    fn a_partial_selection_delivers_only_what_was_asked_for_and_gets_it_right() {
+        let dir = scratch("partial");
+        let archive = dir.join("some.7z");
+        std::fs::write(
+            &archive,
+            make_7z_with(&[
+                ("Tools/", b"" as &[u8]),
+                ("first.txt", b"the first file"),
+                ("second.txt", b"the second file"),
+                ("third.txt", b"the third file"),
+            ]),
+        )
+        .unwrap();
+
+        let mut backend = SevenZBackend::open(&archive).unwrap();
+        let entries = backend.entries().unwrap();
+        let wanted: Vec<bool> = entries
+            .iter()
+            .map(|e| e.name == "third.txt" || e.name == "first.txt")
+            .collect();
+
+        let mut delivered: Vec<(String, Vec<u8>)> = Vec::new();
+        backend
+            .read_selected(&wanted, 1024, &mut |index, data| {
+                delivered.push((entries[index].name.clone(), data.unwrap()));
+                Ok(())
+            })
+            .unwrap();
+
+        delivered.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(delivered.len(), 2, "{delivered:?}");
+        assert_eq!(
+            delivered[0],
+            ("first.txt".into(), b"the first file".to_vec())
+        );
+        assert_eq!(
+            delivered[1],
+            ("third.txt".into(), b"the third file".to_vec())
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
