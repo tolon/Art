@@ -234,9 +234,12 @@ checks the image comes back byte for byte.
 | PiStorm hardware matrix (Amiga × board × Pi) | §40 | ✅ | `core/pistorm/hardware.rs` — kernel archive, storage device name, token gating and per-combination notes all derive from it |
 | PiStorm `cmdline.txt` options | §40 | ✅ | `core/pistorm/options.rs` — one field per documented Emu68 token, merged never regenerated. Four profiles, each the tokens it writes (ART-090) |
 | PiStorm `config.txt` firmware | §40 | ✅ | `core/pistorm/firmware.rs` — kernel, `initramfs`, display presets, opt-in overclock. Merged; the user's own lines survive |
+| PiStorm Kickstart through ROM Manager | §32, §40 | ✅ | every ROM on the card identified by checksum; pick one from anywhere and copy it on, named and confirmed. Unrecognised is a label, never a refusal |
+| PiStorm kernel version detection | §40 | ✅ | `firmware.rs::version_from_kernel` reads the `$VER:` string Emu68's own build compiles in; "unknown" when it says nothing |
+| PiStorm kernel update from GitHub | §40 | ⏳ | F4's second half — not built; the screen offers nothing rather than a button that does nothing |
 | PiStorm card verified on real hardware | §40 | ⏳ | no card built by this screen has been booted |
 | PiStorm WiFi / network pre-seeding | §40, SD G14 | ⏳ | Amiga-side (`wifipi.device`, `DEVS:NetInterfaces`), so it belongs to volume building — declared on screen rather than offered |
-| Multiboot `config_<name>.txt` sets | SD G16 | 🟡 | listed by `core/pistorm::list_config_sets`; creating and activating them is not built |
+| Multiboot `config_<name>.txt` sets | SD G16 | ✅ | list, create, duplicate, rename, activate — each through preview → backup → write. Deleting one is [ART-092](ISSUES.md#open), deliberately deferred |
 | Raw device writes | §57 | ⏳ | deliberately absent until double-confirm UI exists |
 
 ### Collection & analysis

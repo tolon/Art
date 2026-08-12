@@ -90,21 +90,84 @@ impl PistormVariant {
         }
     }
 
-    /// The Emu68 release archive for this board.
-    ///
-    /// Named rather than guessed: fetching the wrong one produces a card that
-    /// does nothing at all, with no error anywhere to explain it.
-    pub fn kernel_archive(self) -> &'static str {
-        match self {
-            Self::Classic | Self::Pistorm600 => "Emu68-pistorm.zip",
-            Self::Pistorm16 => "Emu68-pistorm16.zip",
-            Self::Pistorm32Lite => "Emu68-pistorm32lite.zip",
-        }
-    }
-
     /// `one_slot` — forcing the single-slot protocol — exists only here.
     pub fn has_one_slot_option(self) -> bool {
         matches!(self, Self::Pistorm32Lite)
+    }
+}
+
+/// Which line of Emu68 releases a card is being built against.
+///
+/// **Not a nicety.** The archive names are not stable across the two lines, and
+/// one of them changes meaning: in 1.0.x, `Emu68-pistorm.zip` is the *classic*
+/// board's firmware; in 1.1 alpha it is the **PiStorm32-lite and PiStorm16**
+/// firmware, and the classic board's has been renamed
+/// `Emu68-pistorm-classic.zip`. A user told "download Emu68-pistorm.zip" with
+/// no line to go with it has a good chance of flashing the wrong one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Emu68Line {
+    /// The latest stable release — 1.0.7 when this was written.
+    #[default]
+    Stable,
+    /// The 1.1 alpha line: `v1.1.0-alpha.1`, a GitHub prerelease, and the
+    /// first Emu68 to support PiStorm16 at all.
+    Alpha11,
+}
+
+impl Emu68Line {
+    pub const ALL: &'static [Self] = &[Self::Stable, Self::Alpha11];
+}
+
+/// What the kernel archive for a board is called — or why there is no answer.
+///
+/// Three cases rather than a string, because two of them are real and a string
+/// cannot hold them. Returning a plausible filename for a board the release
+/// does not ship is exactly the slip this type exists to make impossible: ART
+/// claimed `Emu68-pistorm16.zip` for months, and no Emu68 release has ever
+/// contained a file by that name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", tag = "kind", content = "name")]
+pub enum KernelArchive {
+    /// The asset's real filename in that release.
+    Named(&'static str),
+    /// That release line ships nothing for this board.
+    Absent,
+    /// The release exists for this board but its notes do not say which asset
+    /// covers it. Not the same as absent, and not something to guess at.
+    Unstated,
+}
+
+/// The Emu68 archive for a board, in a given release line.
+///
+/// Verified 2026-08-13 against the GitHub releases API and the project's own
+/// SD-preparation tutorial:
+///
+/// | | 1.0.7 (stable) | 1.1.0-alpha.1 |
+/// |---|---|---|
+/// | PiStorm (classic) | `Emu68-pistorm.zip` | `Emu68-pistorm-classic.zip` |
+/// | PiStorm600 | `Emu68-pistorm.zip` | not stated |
+/// | PiStorm32-lite | `Emu68-pistorm32lite.zip` | `Emu68-pistorm.zip` |
+/// | PiStorm16 | **no asset** | `Emu68-pistorm.zip` |
+///
+/// PiStorm600 sits under the classic archive in the stable line because the
+/// tutorial says so in as many words — "the release for users of classic
+/// PiStorm for A500, A600, A1000, or A2000". The 1.1 alpha notes name the
+/// classic archive for "A500, A1000, A2000" and say nothing about the A600, so
+/// that cell is `Unstated` rather than a guess either way.
+pub fn kernel_archive(variant: PistormVariant, line: Emu68Line) -> KernelArchive {
+    use Emu68Line::*;
+    use PistormVariant::*;
+
+    match (variant, line) {
+        (Classic, Stable) => KernelArchive::Named("Emu68-pistorm.zip"),
+        (Classic, Alpha11) => KernelArchive::Named("Emu68-pistorm-classic.zip"),
+        (Pistorm600, Stable) => KernelArchive::Named("Emu68-pistorm.zip"),
+        (Pistorm600, Alpha11) => KernelArchive::Unstated,
+        (Pistorm32Lite, Stable) => KernelArchive::Named("Emu68-pistorm32lite.zip"),
+        (Pistorm32Lite, Alpha11) => KernelArchive::Named("Emu68-pistorm.zip"),
+        (Pistorm16, Stable) => KernelArchive::Absent,
+        (Pistorm16, Alpha11) => KernelArchive::Named("Emu68-pistorm.zip"),
     }
 }
 
@@ -286,11 +349,38 @@ pub enum HardwareNote {
     PowerSupplyQuality,
     /// This Pi has more RAM than AmigaOS can use as Fast RAM.
     RamBeyondWhatAmigaOsUses,
+    /// No stable Emu68 supports this board; the 1.1 alpha is the first that
+    /// does.
+    NeedsPrereleaseEmu68,
+    /// `Emu68-pistorm.zip` means a **different board** in the stable line. The
+    /// name alone is not enough to download by.
+    ArchiveNameDiffersByRelease,
+    /// The release notes for this line do not say which asset covers this
+    /// board.
+    ArchiveNotStatedForThisRelease,
 }
 
 /// Everything worth saying about one combination.
-pub fn notes_for(hardware: PistormHardware) -> Vec<HardwareNote> {
+pub fn notes_for(hardware: PistormHardware, line: Emu68Line) -> Vec<HardwareNote> {
     let mut notes = Vec::new();
+
+    match kernel_archive(hardware.variant, line) {
+        KernelArchive::Absent => notes.push(HardwareNote::NeedsPrereleaseEmu68),
+        KernelArchive::Unstated => notes.push(HardwareNote::ArchiveNotStatedForThisRelease),
+        KernelArchive::Named(name) => {
+            // The one dangerous case: the same filename is the classic board's
+            // firmware in the other line, so a user who writes the name down
+            // and fetches "the latest Emu68" gets firmware for another board.
+            let means_something_else = Emu68Line::ALL.iter().any(|other| {
+                *other != line
+                    && kernel_archive(PistormVariant::Classic, *other) == KernelArchive::Named(name)
+                    && hardware.variant != PistormVariant::Classic
+            });
+            if means_something_else {
+                notes.push(HardwareNote::ArchiveNameDiffersByRelease);
+            }
+        }
+    }
 
     if pi_models_for(hardware.variant)
         .iter()
@@ -363,6 +453,12 @@ pub fn nearest_coherent(hardware: PistormHardware) -> PistormHardware {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The notes for a setup on the stable release line — what most of these
+    /// tests are asking about, with the release line held still.
+    fn notes_for_stable(hardware: PistormHardware) -> Vec<HardwareNote> {
+        notes_for(hardware, Emu68Line::Stable)
+    }
 
     #[test]
     fn every_amiga_has_a_board_and_every_board_has_a_pi() {
@@ -463,9 +559,136 @@ mod tests {
         // bench. A default that has never been assembled is a guess.
         let hardware = PistormHardware::default();
         assert!(is_coherent(hardware));
-        assert_eq!(hardware.variant.kernel_archive(), "Emu68-pistorm.zip");
+        assert_eq!(
+            kernel_archive(hardware.variant, Emu68Line::Stable),
+            KernelArchive::Named("Emu68-pistorm.zip")
+        );
         assert_eq!(hardware.pi.storage_device(), "brcm-sdhc.device");
         assert!(hardware.amiga.has_slow_ram());
+    }
+
+    /// ART-091. Verified 2026-08-13 against
+    /// `api.github.com/repos/michalsc/Emu68/releases` and
+    /// `pistorm.github.io/tutorials/sd_setup/`.
+    #[test]
+    fn the_kernel_archive_names_are_the_ones_the_releases_actually_ship() {
+        use Emu68Line::*;
+        use PistormVariant::*;
+
+        // 1.0.7 ships exactly three assets: Emu68-pistorm.zip,
+        // Emu68-pistorm32lite.zip, Emu68-raspi.zip.
+        assert_eq!(
+            kernel_archive(Classic, Stable),
+            KernelArchive::Named("Emu68-pistorm.zip")
+        );
+        assert_eq!(
+            kernel_archive(Pistorm600, Stable),
+            KernelArchive::Named("Emu68-pistorm.zip"),
+            "the tutorial names the A600 under classic PiStorm"
+        );
+        assert_eq!(
+            kernel_archive(Pistorm32Lite, Stable),
+            KernelArchive::Named("Emu68-pistorm32lite.zip")
+        );
+
+        // 1.1.0-alpha.1 ships Emu68-pistorm-classic.zip, Emu68-pistorm.zip,
+        // Emu68-raspi.zip and VideoCore.card.
+        assert_eq!(
+            kernel_archive(Classic, Alpha11),
+            KernelArchive::Named("Emu68-pistorm-classic.zip")
+        );
+        assert_eq!(
+            kernel_archive(Pistorm32Lite, Alpha11),
+            KernelArchive::Named("Emu68-pistorm.zip")
+        );
+        assert_eq!(
+            kernel_archive(Pistorm16, Alpha11),
+            KernelArchive::Named("Emu68-pistorm.zip")
+        );
+    }
+
+    #[test]
+    fn no_archive_name_is_one_no_release_has_ever_contained() {
+        // ART claimed `Emu68-pistorm16.zip` for months. No Emu68 release has
+        // ever shipped a file by that name — the PiStorm16 build is in
+        // `Emu68-pistorm.zip`, and only from 1.1 alpha onward.
+        for variant in PistormVariant::ALL {
+            for line in Emu68Line::ALL {
+                if let KernelArchive::Named(name) = kernel_archive(*variant, *line) {
+                    assert!(
+                        [
+                            "Emu68-pistorm.zip",
+                            "Emu68-pistorm-classic.zip",
+                            "Emu68-pistorm32lite.zip",
+                        ]
+                        .contains(&name),
+                        "{name} is not an asset any verified Emu68 release ships"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_pistorm16_has_no_stable_release_and_says_so() {
+        assert_eq!(
+            kernel_archive(PistormVariant::Pistorm16, Emu68Line::Stable),
+            KernelArchive::Absent
+        );
+
+        let notes = notes_for(
+            PistormHardware {
+                amiga: AmigaTarget::A600,
+                variant: PistormVariant::Pistorm16,
+                pi: PiModel::Cm4,
+            },
+            Emu68Line::Stable,
+        );
+        assert!(notes.contains(&HardwareNote::NeedsPrereleaseEmu68));
+    }
+
+    #[test]
+    fn a_name_that_means_another_board_in_the_other_release_is_flagged() {
+        // The trap: a PiStorm32-lite or PiStorm16 user on the 1.1 alpha line is
+        // told `Emu68-pistorm.zip` — which, in the stable line they are far
+        // more likely to land on, is the *classic* board's firmware.
+        for variant in [PistormVariant::Pistorm32Lite, PistormVariant::Pistorm16] {
+            let notes = notes_for(
+                PistormHardware {
+                    amiga: AmigaTarget::A1200,
+                    variant,
+                    pi: PiModel::Cm4,
+                },
+                Emu68Line::Alpha11,
+            );
+            assert!(
+                notes.contains(&HardwareNote::ArchiveNameDiffersByRelease),
+                "{variant:?}"
+            );
+        }
+
+        // The classic board's own name is not a trap for the classic board.
+        let classic = notes_for(PistormHardware::default(), Emu68Line::Stable);
+        assert!(!classic.contains(&HardwareNote::ArchiveNameDiffersByRelease));
+    }
+
+    #[test]
+    fn a_board_the_notes_do_not_cover_is_not_guessed_at() {
+        // The 1.1 alpha notes name the classic archive for "A500, A1000,
+        // A2000" and say nothing about the A600's own board.
+        assert_eq!(
+            kernel_archive(PistormVariant::Pistorm600, Emu68Line::Alpha11),
+            KernelArchive::Unstated
+        );
+        let notes = notes_for(
+            PistormHardware {
+                amiga: AmigaTarget::A600,
+                variant: PistormVariant::Pistorm600,
+                pi: PiModel::Zero2W,
+            },
+            Emu68Line::Alpha11,
+        );
+        assert!(notes.contains(&HardwareNote::ArchiveNotStatedForThisRelease));
     }
 
     #[test]
@@ -509,20 +732,20 @@ mod tests {
     fn a_pi_that_is_only_reported_working_is_labelled_as_such() {
         // Honesty about somebody else's hardware budget: "reported working,
         // not guaranteed" is what the project says, so it is what ART says.
-        let notes = notes_for(PistormHardware {
+        let notes = notes_for_stable(PistormHardware {
             amiga: AmigaTarget::A500,
             variant: PistormVariant::Classic,
             pi: PiModel::Pi4B,
         });
         assert!(notes.contains(&HardwareNote::PiNotGuaranteed));
 
-        let supported = notes_for(PistormHardware::default());
+        let supported = notes_for_stable(PistormHardware::default());
         assert!(!supported.contains(&HardwareNote::PiNotGuaranteed));
     }
 
     #[test]
     fn a_cm4_is_told_about_its_emmc_before_the_card_is_built() {
-        let notes = notes_for(PistormHardware {
+        let notes = notes_for_stable(PistormHardware {
             amiga: AmigaTarget::A1200,
             variant: PistormVariant::Pistorm32Lite,
             pi: PiModel::Cm4,
@@ -537,7 +760,7 @@ mod tests {
         for amiga in AmigaTarget::ALL {
             for variant in variants_for(*amiga) {
                 for (pi, _) in pi_models_for(*variant) {
-                    let notes = notes_for(PistormHardware {
+                    let notes = notes_for_stable(PistormHardware {
                         amiga: *amiga,
                         variant: *variant,
                         pi: *pi,
@@ -550,7 +773,7 @@ mod tests {
 
     #[test]
     fn a_pi_with_more_ram_than_amigaos_uses_says_so() {
-        let notes = notes_for(PistormHardware {
+        let notes = notes_for_stable(PistormHardware {
             amiga: AmigaTarget::A1200,
             variant: PistormVariant::Pistorm32Lite,
             pi: PiModel::Pi4B,
@@ -558,7 +781,7 @@ mod tests {
         assert!(notes.contains(&HardwareNote::RamBeyondWhatAmigaOsUses));
 
         // A 512 MB Pi has nothing to say about a 2 GB ceiling.
-        let small = notes_for(PistormHardware::default());
+        let small = notes_for_stable(PistormHardware::default());
         assert!(!small.contains(&HardwareNote::RamBeyondWhatAmigaOsUses));
     }
 }

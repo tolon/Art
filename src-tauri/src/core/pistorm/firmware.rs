@@ -117,6 +117,75 @@ const MANAGED_KEYS: &[&str] = &[
 /// The Emu68 kernel image, as its own release names it.
 pub const KERNEL_IMAGE: &str = "Emu68.img";
 
+/// The largest `Emu68.img` ART will read to look for a version.
+///
+/// The real one is a couple of megabytes. The ceiling is here because the file
+/// is whatever is on somebody's card (§56) — without it, a card carrying a
+/// several-gigabyte file under that name would be pulled into memory.
+const MAX_KERNEL_BYTES: u64 = 32 * 1024 * 1024;
+
+/// What ART can say about the kernel on a card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KernelInfo {
+    pub file_name: String,
+    pub size_bytes: u64,
+    /// The version the build stamped into the image, when it is there.
+    ///
+    /// `None` is an honest answer and the screen says so, rather than guessing
+    /// from a file date or a release note.
+    pub version: Option<String>,
+}
+
+/// The version Emu68 stamps into its own image.
+///
+/// Not hopeful parsing: Emu68's build assembles
+/// `"$VER: ${PROJECT_NAME} ${PROJECT_VERSION} ${PROJECT_DATE} git:${GIT_HASH}"`
+/// in `cmake/verstring.cmake` and compiles it in, so the string is there by
+/// construction and in a known shape. `None` when it is not — an image built
+/// some other way, or not an Emu68 image at all.
+///
+/// Returns the whole `$VER:` line rather than a parsed version, because that
+/// line is what the author wrote and it carries the date and the git hash a
+/// user would need to report a problem.
+pub fn version_from_kernel(image: &[u8]) -> Option<String> {
+    const MARKER: &[u8] = b"$VER: Emu68 ";
+
+    let start = image
+        .windows(MARKER.len())
+        .position(|window| window == MARKER)?
+        + MARKER.len();
+
+    // Up to the first control byte or the end of a generous window — the
+    // string is NUL-terminated in the binary, and bounded here so a corrupt
+    // image cannot hand back a megabyte of noise.
+    let end = (start + 128).min(image.len());
+    let text: String = image[start..end]
+        .iter()
+        .take_while(|byte| byte.is_ascii_graphic() || **byte == b' ')
+        .map(|byte| *byte as char)
+        .collect();
+
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Read the kernel on a card and say what it is.
+pub fn read_kernel(path: &std::path::Path) -> Option<KernelInfo> {
+    let size_bytes = std::fs::metadata(path).ok()?.len();
+    let file_name = path.file_name()?.to_str()?.to_string();
+
+    let version = (size_bytes <= MAX_KERNEL_BYTES)
+        .then(|| std::fs::read(path).ok())
+        .flatten()
+        .and_then(|bytes| version_from_kernel(&bytes));
+
+    Some(KernelInfo {
+        file_name,
+        size_bytes,
+        version,
+    })
+}
+
 fn managed_lines(config: &FirmwareConfig) -> Vec<(&'static str, String)> {
     let mut lines = vec![
         ("arm_64bit", "1".to_string()),
@@ -486,6 +555,47 @@ gpu_mem=64
             parse_config_txt(&text).display,
             DisplayMode::Custom { group: 2, mode: 16 }
         );
+    }
+
+    #[test]
+    fn the_kernel_states_its_own_version() {
+        // The shape Emu68's own build assembles in `cmake/verstring.cmake`
+        // (verified 2026-08-13): `$VER: Emu68 <version> <date> git:<hash>`.
+        let mut image = vec![0x7fu8; 4096];
+        image.extend_from_slice(b"$VER: Emu68 1.0.7 (18.05.2026) git:a1b2c3d\0");
+        image.extend_from_slice(&[0u8; 512]);
+
+        assert_eq!(
+            version_from_kernel(&image).as_deref(),
+            Some("1.0.7 (18.05.2026) git:a1b2c3d"),
+            "the whole line, because the date and hash are what a bug report needs"
+        );
+    }
+
+    #[test]
+    fn an_image_with_no_version_says_nothing_rather_than_guessing() {
+        // A card built some other way, or a file that is not an Emu68 image at
+        // all. "Unknown" is an answer; a version inferred from a file date is
+        // not.
+        assert_eq!(version_from_kernel(&[0u8; 8192]), None);
+        assert_eq!(version_from_kernel(b"$VER: SomethingElse 1.0"), None);
+        assert_eq!(version_from_kernel(b"$VER: Emu68 "), None);
+    }
+
+    #[test]
+    fn the_version_search_does_not_run_off_the_end_of_a_short_image() {
+        let full = b"$VER: Emu68 1.0.7";
+        for len in 0..=full.len() {
+            let _ = version_from_kernel(&full[..len]);
+        }
+    }
+
+    #[test]
+    fn a_corrupt_image_cannot_hand_back_a_megabyte_of_noise() {
+        let mut image = b"$VER: Emu68 ".to_vec();
+        image.extend(std::iter::repeat_n(b'A', 1024 * 1024));
+        let version = version_from_kernel(&image).expect("a version");
+        assert!(version.len() <= 128, "{}", version.len());
     }
 
     #[test]

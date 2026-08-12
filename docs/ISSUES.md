@@ -25,6 +25,84 @@ what fixed it (with the test that proves it).
 
 _(ART-075 was open here; it is fixed — see [Phase 2a](#phase-2a) below.)_
 
+**ART-093** 🟡 **ART cannot fetch an Emu68 kernel update; it can only tell you which one you need**
+`core/pistorm/` · `net/` · The fix round's F4 asked for two things. The reading
+half is built: the card's `Emu68.img` is identified from the `$VER:` string its
+own build compiles in, and the hardware matrix names the archive that belongs on
+it. The **fetching** half is not.
+
+Not built rather than half-built, and the screen offers no button for it — the
+same rule the WiFi panel follows. Three things make it more than an afternoon,
+and each is a decision worth making deliberately:
+
+- **The host policy.** `net/http_mirror.rs` refuses cross-host redirects on
+  purpose (§41.5.7): a followed redirect is a fetch the user never configured.
+  A GitHub release asset redirects to `objects.githubusercontent.com`, so this
+  needs its own client with its own stated policy, not a relaxation of that one.
+- **Which release.** The archive name depends on the release line, and one name
+  means a different board in each ([ART-091](#open)). A fetch that resolves
+  "latest" without the line would be the same defect with a network connection.
+- **Writing it.** Unpacking an archive onto a card that boots somebody's machine
+  is a multi-file write and wants the same preview → backup → verify every other
+  write in ART has, per file.
+
+Until then the screen tells the user exactly which archive to download and from
+which release line, which is the part they cannot work out for themselves.
+
+Recorded 2026-08-13 as owed work, not a defect.
+
+**ART-092** 🔵 **A named PiStorm firmware set cannot be deleted from ART**
+`core/pistorm/mod.rs` · `src/pages/PistormStudio.tsx` · Named sets can be
+created, duplicated, renamed and activated. Deleting one is deliberately absent
+from that list: removing a user's configuration is destructive, and destructive
+actions in ART carry their own confirmation design (§92) rather than a bare
+button. The screen says so rather than leaving a gap the user has to discover.
+
+Not urgent — a set is a file on a card the user can already delete in Files, or
+in Explorer. Worth doing properly when the confirm shape for "delete a thing
+the user made" is settled, which is the same question a future *delete a ROM
+from the card* will ask.
+
+Recorded 2026-08-13 as a deferral, not a defect.
+
+**ART-091** 🟠 **ART named an Emu68 archive that has never existed, and the name that does exist means a different board in each release line** — *fixed 2026-08-13*
+`core/pistorm/hardware.rs` · `PistormVariant::kernel_archive()` returned
+`"Emu68-pistorm16.zip"` for the PiStorm16. **No Emu68 release has ever shipped a
+file by that name.** It was invented to fill a cell in the table — in a module
+whose own doc comment says "named rather than guessed" — and it survived the
+ART-090 rebuild and its review.
+
+Verified 2026-08-13 against `api.github.com/repos/michalsc/Emu68/releases` and
+`pistorm.github.io/tutorials/sd_setup/`, the answer is worse than a wrong
+filename:
+
+| | 1.0.7 (latest stable) | 1.1.0-alpha.1 (prerelease) |
+|---|---|---|
+| PiStorm (classic) | `Emu68-pistorm.zip` | `Emu68-pistorm-classic.zip` |
+| PiStorm600 | `Emu68-pistorm.zip` | not stated |
+| PiStorm32-lite | `Emu68-pistorm32lite.zip` | `Emu68-pistorm.zip` |
+| PiStorm16 | **no asset at all** | `Emu68-pistorm.zip` |
+
+Two things follow, and neither can be said by a single string:
+
+- **PiStorm16 has no stable release.** `v1.1.0-alpha.1` is the first Emu68 to
+  support it — a GitHub prerelease. "Which zip" has no honest stable answer.
+- **`Emu68-pistorm.zip` changes meaning between the lines.** In 1.0.x it is the
+  classic board's firmware; in 1.1 alpha it is the PiStorm32-lite's and
+  PiStorm16's. A user told "download Emu68-pistorm.zip", who then lands on the
+  latest *stable* release — the obvious thing to do — flashes firmware for
+  another board entirely.
+
+Fixed by making the release line a field of its own and the answer a type
+rather than a string: `KernelArchive::{Named, Absent, Unstated}`. `Absent` and
+`Unstated` are both real cells in that table, and a plausible filename in
+either is the slip this type exists to prevent. Three new notes carry it to the
+screen — no stable release, the name means another board in the other line, and
+the notes do not say. `no_archive_name_is_one_no_release_has_ever_contained`
+pins the whole table against the three assets those releases actually ship.
+
+Found in review of the ART-090 work, 2026-08-13.
+
 **ART-090** 🟠 **The PiStorm screen offered controls Emu68 does not have, and wrote tokens it does not read** — *fixed 2026-08-12*
 `core/pistorm.rs` · `src/pages/PistormStudio.tsx` · `src/i18n/*.json` · Four
 things on that screen were not merely wrong, they were invented:
@@ -87,6 +165,28 @@ only way somebody can see for themselves that a control does what it says.
 Source: `ART-brief-pistorm-studio-v2.md` (Emu68 Options and SD_Preparation
 docs, pistorm.github.io hardware page and Emu68 FAQ, wiki.amiga.org
 Pistorm-500 / Pistorm32-Lite, MultibootOS 2.2). Found by the user, 2026-08-12.
+
+**Closed 2026-08-13 after the fix round** (`ART-prompt-pistorm-studio-fixes.md`),
+which reviewed the above and closed what it left:
+
+- **The Kickstart goes through ROM Manager.** Every ROM-shaped file on the card
+  is identified by checksum and labelled with its version and the machines it is
+  for; a ROM can be picked from anywhere on the PC, identified, and copied onto
+  the card under a confirmed name. Unrecognised stays a label, never a refusal —
+  a custom or byte-swapped image copies like any other. The picker is shown to
+  *everyone*; Power Mode adds free typing rather than replacing it, which is the
+  way round the first version had it.
+- **The kernel states its version.** `$VER: Emu68 <version> <date> git:<hash>`,
+  which Emu68's own build assembles in `cmake/verstring.cmake` and compiles in.
+  A card whose image says nothing reports "unknown" rather than a guess.
+- **Named firmware sets are managed, not just listed**: create, duplicate,
+  rename and activate, each through preview → backup → write. Deleting one is
+  [ART-092](#open), deliberately.
+- ART-091 above, found in the same review.
+
+Still owed and named as such: fetching a kernel update from GitHub is not built
+(F4's second half), and the WiFi panel stays declared rather than offered until
+G14 can edit the volumes it would write into.
 
 **Not yet verified on real hardware.** No card built by this screen has been
 booted. The tokens are what the documentation says; whether a given machine

@@ -22,31 +22,60 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::core::error::{CoreError, CoreResult};
+use crate::core::rom::{identify_rom, RomInfo};
 use crate::core::safety::{guarded_write, BackupPolicy};
+use crate::core::security::path::safe_join;
 use firmware::{parse_config_txt, FirmwareConfig, KERNEL_IMAGE};
-use hardware::PistormHardware;
+use hardware::{Emu68Line, PistormHardware};
 use options::{parse_cmdline, unmanaged_tokens, Emu68Options};
 
 /// Everything ART sets on one card.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PistormSetup {
     pub hardware: PistormHardware,
+    /// Which Emu68 release line the card is being built for.
+    ///
+    /// Not part of `hardware`, because it is not a fact about the machine —
+    /// but it decides the kernel archive's *name*, and that name is not stable
+    /// across the two lines (ART-091). It changes nothing about the tokens.
+    pub line: Emu68Line,
     pub options: Emu68Options,
     pub firmware: FirmwareConfig,
 }
 
-/// The Kickstart images a card is likely to carry.
+/// A Kickstart-shaped file on the card, and what `core/rom` makes of it.
 ///
-/// A list of likely names, not a claim about contents: whether a file is really
-/// a Kickstart, and which one, is `core/rom`'s question and it answers it by
-/// checksum. This only decides what to offer first.
-const KICKSTART_CANDIDATES: &[&str] = &[
-    "kick.rom",
-    "kickstart.rom",
-    "kick31.rom",
-    "kick32.rom",
-    "kick13.rom",
-];
+/// The name alone was never an answer. A card can carry `kick.rom` that is a
+/// 1.3 image, a 3.1 image, a byte-swapped one or a text file somebody renamed —
+/// and until this existed ART wrote whichever name it found into `initramfs`
+/// and said nothing about it (F1). `core/rom` identifies by checksum, so the
+/// screen can say *which* Kickstart, for which machines.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CardRom {
+    pub file_name: String,
+    /// What `core/rom` made of it.
+    ///
+    /// `None` only when the file could not be read or was refused outright —
+    /// **not** the same as "not a known Kickstart", which comes back as a
+    /// `RomInfo` whose version is `Custom`. A ROM ART does not recognise is
+    /// still a ROM the user may want; unknown is a label, never a refusal.
+    pub info: Option<RomInfo>,
+}
+
+/// Files worth putting through ROM identification.
+///
+/// Anything with a `.rom` extension, plus the handful of names cards
+/// conventionally use without one. Cheap by construction: `identify_rom`
+/// refuses anything over 4 MB before reading it, and a Kickstart is at most 1.
+fn looks_like_a_rom(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with(".rom")
+        || matches!(
+            lower.as_str(),
+            "kick.rom" | "kickstart.rom" | "kick31.rom" | "kick32.rom" | "kick13.rom"
+        )
+}
 
 /// What ART found on a card.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,10 +85,15 @@ pub struct PistormCard {
     pub is_pistorm_card: bool,
     /// The Emu68 kernel image.
     pub has_kernel: bool,
+    /// What the kernel says about itself, when there is one and it says
+    /// anything (F4). `None` for "no kernel"; a `KernelInfo` whose `version`
+    /// is `None` for "a kernel that does not state one".
+    pub kernel: Option<firmware::KernelInfo>,
     pub has_config_txt: bool,
     pub has_cmdline_txt: bool,
-    /// Kickstart images actually present, whatever `config.txt` names.
-    pub kickstart_files: Vec<String>,
+    /// Kickstart images actually present, identified — whatever `config.txt`
+    /// names.
+    pub kickstart_files: Vec<CardRom>,
     /// The settings read back off the card, under the given hardware.
     pub setup: PistormSetup,
     /// Boot parameters on `cmdline.txt` that are none of ART's business.
@@ -104,12 +138,33 @@ pub fn scan_card(root: &Path, hardware: PistormHardware) -> CoreResult<PistormCa
 
     let config_path = find("config.txt");
     let cmdline_path = find("cmdline.txt");
-    let has_kernel = find(KERNEL_IMAGE).is_some();
+    let kernel_path = find(KERNEL_IMAGE);
+    let has_kernel = kernel_path.is_some();
+    let kernel = kernel_path.as_deref().and_then(firmware::read_kernel);
 
-    let kickstart_files: Vec<String> = KICKSTART_CANDIDATES
-        .iter()
-        .filter_map(|name| find(name).map(|_| (*name).to_string()))
-        .collect();
+    // Every ROM-shaped file, identified. Not a fixed list of names any more:
+    // a card names its Kickstart whatever `initramfs` says, and a name ART did
+    // not think of was previously a Kickstart ART could not see.
+    let mut kickstart_files: Vec<CardRom> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !looks_like_a_rom(file_name) {
+                continue;
+            }
+            kickstart_files.push(CardRom {
+                file_name: file_name.to_string(),
+                info: identify_rom(&path).ok(),
+            });
+        }
+    }
+    kickstart_files.sort_by(|a, b| a.file_name.cmp(&b.file_name));
 
     let cmdline_text = cmdline_path
         .as_deref()
@@ -120,6 +175,9 @@ pub fn scan_card(root: &Path, hardware: PistormHardware) -> CoreResult<PistormCa
 
     let setup = PistormSetup {
         hardware,
+        // Nothing on a card says which Emu68 line it was built for, so this
+        // stays the caller's answer rather than a guess read off the files.
+        line: Emu68Line::default(),
         options: cmdline_text
             .as_deref()
             .map(|text| parse_cmdline(text, hardware))
@@ -134,6 +192,7 @@ pub fn scan_card(root: &Path, hardware: PistormHardware) -> CoreResult<PistormCa
         path: root.to_string_lossy().into_owned(),
         is_pistorm_card: has_kernel || config_path.is_some(),
         has_kernel,
+        kernel,
         has_config_txt: config_path.is_some(),
         has_cmdline_txt: cmdline_path.is_some(),
         kickstart_files,
@@ -226,6 +285,99 @@ pub fn save_card(root: &Path, setup: &PistormSetup) -> CoreResult<PistormSaveOut
     })
 }
 
+/// Put a Kickstart the user picked onto the card (F1).
+///
+/// The ROM is **identified before it is copied**, so a file that cannot even be
+/// read never reaches the card — and so the caller has something to show in the
+/// confirmation. Identification never refuses on grounds of *recognition*: a
+/// custom or byte-swapped ROM is the user's business and copies like any other.
+///
+/// `name` goes through `safe_join`: it arrives from the frontend, and a name
+/// like `..\\..\\windows\\system32\\x` must land on the card or nowhere.
+///
+/// An existing file is refused unless `overwrite` is set — `SAFE_CREATE`, the
+/// same rule every other create in ART follows. When it is set, the previous
+/// file is backed up first; ART never deletes a ROM.
+pub fn copy_rom_to_card(
+    card: &Path,
+    source: &Path,
+    name: &str,
+    overwrite: bool,
+) -> CoreResult<RomCopyOutcome> {
+    if !card.is_dir() {
+        return Err(CoreError::InvalidInput(format!(
+            "No folder at '{}'",
+            card.display()
+        )));
+    }
+
+    let destination = safe_join(card, name)
+        .map_err(|e| CoreError::InvalidInput(format!("'{name}' is not a usable file name: {e}")))?;
+    if destination.parent() != Some(card) {
+        return Err(CoreError::InvalidInput(format!(
+            "'{name}' would put the ROM in a folder of its own; give a plain file name"
+        )));
+    }
+
+    let info = identify_rom(source)?;
+
+    if destination.exists() && !overwrite {
+        return Err(CoreError::InvalidInput(format!(
+            "'{name}' is already on the card. Confirm replacing it, or choose another name."
+        )));
+    }
+
+    let bytes = std::fs::read(source)?;
+    let backup = guarded_write(&destination, &bytes, BackupPolicy::CONFIG)?;
+
+    Ok(RomCopyOutcome {
+        rom: CardRom {
+            file_name: name.to_string(),
+            info: Some(info),
+        },
+        backup: backup.map(|path| path.to_string_lossy().into_owned()),
+    })
+}
+
+/// The ROM that arrived, and where the one it replaced went.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RomCopyOutcome {
+    pub rom: CardRom,
+    /// Where the previous file went, when there was one. ART never deletes a
+    /// ROM — replacing one keeps it.
+    pub backup: Option<String>,
+}
+
+/// Whether a ROM suits the machine the user has chosen.
+///
+/// A **note**, never a block: people boot 1.3 on an A1200 on purpose, and an
+/// unrecognised ROM has no opinion attached at all. `compatible_models` is a
+/// list of names from `core/rom`'s table, so this is a name match and says so.
+pub fn rom_suits(info: &RomInfo, amiga: hardware::AmigaTarget) -> Option<bool> {
+    if info.compatible_models.is_empty() || info.version == "Custom" {
+        return None;
+    }
+    if info
+        .compatible_models
+        .iter()
+        .any(|model| model.eq_ignore_ascii_case("All Models"))
+    {
+        return Some(true);
+    }
+    let wanted = match amiga {
+        hardware::AmigaTarget::A500 => "A500",
+        hardware::AmigaTarget::A1000 => "A1000",
+        hardware::AmigaTarget::A2000 => "A2000",
+        hardware::AmigaTarget::A600 => "A600",
+        hardware::AmigaTarget::A1200 => "A1200",
+    };
+    Some(
+        info.compatible_models
+            .iter()
+            .any(|model| model.eq_ignore_ascii_case(wanted)),
+    )
+}
+
 /// The named firmware sets beside `config.txt` — `config_<name>.txt`.
 ///
 /// The pattern MultibootOS uses: one file per distribution, copied over
@@ -252,6 +404,180 @@ pub fn list_config_sets(root: &Path) -> Vec<String> {
     names.sort();
     names.dedup();
     names
+}
+
+/// The file a named set lives in.
+///
+/// The name is checked rather than interpolated: it arrives from the frontend,
+/// and `config_../../boot.txt` must land on the card or nowhere. Only letters,
+/// digits, `-` and `_` — which is also what makes the name recognisable on a
+/// FAT32 card read by an Amiga.
+fn config_set_path(root: &Path, name: &str) -> CoreResult<PathBuf> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(CoreError::InvalidInput("Give the set a name".into()));
+    }
+    if trimmed.len() > 32 {
+        return Err(CoreError::InvalidInput(format!(
+            "'{trimmed}' is too long for a set name; keep it to 32 characters"
+        )));
+    }
+    if !trimmed
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(CoreError::InvalidInput(format!(
+            "'{trimmed}' has characters a set name cannot use; letters, digits, - and _ only"
+        )));
+    }
+
+    safe_join(
+        root,
+        &format!("config_{}.txt", trimmed.to_ascii_lowercase()),
+    )
+    .map_err(|e| CoreError::InvalidInput(format!("'{trimmed}' is not a usable name: {e}")))
+}
+
+/// What writing a named set would do, before it does it (spec §92).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigSetPreview {
+    /// The file that would be written.
+    pub file_name: String,
+    pub before: String,
+    pub after: String,
+}
+
+/// Where a named set's text would come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConfigSetSource {
+    /// The card's current `config.txt`, verbatim.
+    CurrentConfig,
+    /// Another named set — a duplicate.
+    Set,
+    /// The settings on screen, as they would be written to `config.txt`.
+    ScreenSettings,
+}
+
+fn config_set_text(
+    root: &Path,
+    source: ConfigSetSource,
+    from: Option<&str>,
+    setup: &PistormSetup,
+) -> CoreResult<String> {
+    match source {
+        ConfigSetSource::CurrentConfig => Ok(read_or_empty(&root.join("config.txt"))),
+        ConfigSetSource::Set => {
+            let name = from.ok_or_else(|| {
+                CoreError::InvalidInput("Say which set is being duplicated".into())
+            })?;
+            let path = config_set_path(root, name)?;
+            if !path.is_file() {
+                return Err(CoreError::InvalidInput(format!("There is no '{name}' set")));
+            }
+            Ok(std::fs::read_to_string(path)?)
+        }
+        ConfigSetSource::ScreenSettings => Ok(firmware::merge_config_txt(
+            &setup.firmware,
+            Some(read_or_empty(&root.join("config.txt")).as_str()).filter(|t| !t.is_empty()),
+        )),
+    }
+}
+
+/// What creating or duplicating a named set would write.
+pub fn preview_config_set(
+    root: &Path,
+    name: &str,
+    source: ConfigSetSource,
+    from: Option<&str>,
+    setup: &PistormSetup,
+) -> CoreResult<ConfigSetPreview> {
+    let path = config_set_path(root, name)?;
+    Ok(ConfigSetPreview {
+        file_name: path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        before: read_or_empty(&path),
+        after: config_set_text(root, source, from, setup)?,
+    })
+}
+
+/// Create or replace a named set. Returns the backup path, if there was one.
+pub fn write_config_set(
+    root: &Path,
+    name: &str,
+    source: ConfigSetSource,
+    from: Option<&str>,
+    setup: &PistormSetup,
+) -> CoreResult<Option<String>> {
+    let preview = preview_config_set(root, name, source, from, setup)?;
+    if preview.after.trim().is_empty() {
+        // A set of nothing would activate as a `config.txt` of nothing, and a
+        // Pi with an empty `config.txt` does not boot. Refused rather than
+        // written and discovered later.
+        return Err(CoreError::InvalidInput(
+            "There is nothing to save into that set yet — the card has no config.txt".into(),
+        ));
+    }
+
+    let path = config_set_path(root, name)?;
+    Ok(
+        guarded_write(&path, preview.after.as_bytes(), BackupPolicy::CONFIG)?
+            .map(|backup| backup.to_string_lossy().into_owned()),
+    )
+}
+
+/// Give a named set another name. The file is copied, then the old one is
+/// removed — the one place ART deletes a config set, and only ever the one it
+/// has just finished copying.
+pub fn rename_config_set(root: &Path, from: &str, to: &str) -> CoreResult<()> {
+    let source = config_set_path(root, from)?;
+    let destination = config_set_path(root, to)?;
+
+    if !source.is_file() {
+        return Err(CoreError::InvalidInput(format!("There is no '{from}' set")));
+    }
+    if source == destination {
+        return Ok(());
+    }
+    if destination.exists() {
+        return Err(CoreError::InvalidInput(format!(
+            "There is already a '{to}' set"
+        )));
+    }
+
+    let text = std::fs::read(&source)?;
+    crate::core::safety::atomic_write(&destination, &text)?;
+    std::fs::remove_file(&source)?;
+    Ok(())
+}
+
+/// What activating a set would do to `config.txt` (spec §92).
+pub fn preview_activate_config_set(root: &Path, name: &str) -> CoreResult<ConfigSetPreview> {
+    let path = config_set_path(root, name)?;
+    if !path.is_file() {
+        return Err(CoreError::InvalidInput(format!("There is no '{name}' set")));
+    }
+    Ok(ConfigSetPreview {
+        file_name: "config.txt".into(),
+        before: read_or_empty(&root.join("config.txt")),
+        after: std::fs::read_to_string(path)?,
+    })
+}
+
+/// Copy a named set over `config.txt` — the MultibootOS pattern.
+///
+/// The set itself is untouched, so activating one is reversible by activating
+/// another. The `config.txt` being replaced is backed up first.
+pub fn activate_config_set(root: &Path, name: &str) -> CoreResult<Option<String>> {
+    let preview = preview_activate_config_set(root, name)?;
+    Ok(guarded_write(
+        &root.join("config.txt"),
+        preview.after.as_bytes(),
+        BackupPolicy::CONFIG,
+    )?
+    .map(|backup| backup.to_string_lossy().into_owned()))
 }
 
 #[cfg(test)]
@@ -291,6 +617,384 @@ mod tests {
         Card(dir)
     }
 
+    /// A 256 KB block that passes `verify_kickstart_checksum`.
+    ///
+    /// Synthetic, and it has to be: ART ships no Amiga content, ever. It is not
+    /// a real Kickstart and `identify_rom` will not claim it is one — which is
+    /// exactly the case worth testing, because "not a known Kickstart" must
+    /// stay a label and never a refusal.
+    fn rom_bytes(size: usize) -> Vec<u8> {
+        vec![0x11u8; size]
+    }
+
+    #[test]
+    fn a_rom_on_the_card_is_identified_rather_than_merely_named() {
+        // F1. The name was never an answer: `kick.rom` can be a 1.3 image, a
+        // 3.1 image, or a text file somebody renamed.
+        let dir = card(&[("kick31.rom", "")]);
+        std::fs::write(dir.path().join("kick31.rom"), rom_bytes(512 * 1024)).unwrap();
+
+        let found = scan_card(dir.path(), PistormHardware::default()).unwrap();
+        assert_eq!(found.kickstart_files.len(), 1);
+        let rom = &found.kickstart_files[0];
+        assert_eq!(rom.file_name, "kick31.rom");
+        let info = rom
+            .info
+            .as_ref()
+            .expect("a verdict, even an unflattering one");
+        assert_eq!(info.size_bytes, 512 * 1024);
+    }
+
+    #[test]
+    fn a_rom_art_does_not_recognise_is_labelled_not_refused() {
+        // Unknown is a label. The file may be byte-swapped, custom, or a
+        // Kickstart newer than ART's table — all of them the user's business.
+        let dir = card(&[]);
+        std::fs::write(dir.path().join("mystery.rom"), rom_bytes(4096)).unwrap();
+
+        let found = scan_card(dir.path(), PistormHardware::default()).unwrap();
+        assert_eq!(found.kickstart_files.len(), 1);
+        let info = found.kickstart_files[0]
+            .info
+            .as_ref()
+            .expect("an unrecognised ROM still gets a verdict");
+        assert_eq!(info.version, "Custom");
+    }
+
+    #[test]
+    fn a_kickstart_under_a_name_art_never_thought_of_is_still_found() {
+        // The old fixed list could not see this one, and `initramfs` may name
+        // anything at all.
+        let dir = card(&[]);
+        std::fs::write(dir.path().join("ThreePointOne.rom"), rom_bytes(4096)).unwrap();
+
+        let found = scan_card(dir.path(), PistormHardware::default()).unwrap();
+        assert_eq!(found.kickstart_files.len(), 1);
+        assert_eq!(found.kickstart_files[0].file_name, "ThreePointOne.rom");
+    }
+
+    #[test]
+    fn a_rom_is_copied_onto_the_card_under_the_name_it_is_given() {
+        let dir = card(&[]);
+        let source = dir.path().join("source-kick.rom");
+        std::fs::write(&source, rom_bytes(4096)).unwrap();
+
+        let copied = copy_rom_to_card(dir.path(), &source, "kick.rom", false).unwrap();
+        assert_eq!(copied.rom.file_name, "kick.rom");
+        assert!(copied.rom.info.is_some());
+        assert_eq!(copied.backup, None, "nothing was replaced");
+        assert_eq!(
+            std::fs::read(dir.path().join("kick.rom")).unwrap(),
+            rom_bytes(4096),
+            "the bytes must arrive unaltered"
+        );
+    }
+
+    #[test]
+    fn a_rom_never_lands_outside_the_card() {
+        // The name arrives from the frontend. `safe_join` is the only way an
+        // archive entry name becomes a path anywhere in ART, and this is no
+        // different for being typed rather than read out of a zip.
+        let dir = card(&[]);
+        let source = dir.path().join("source.rom");
+        std::fs::write(&source, rom_bytes(4096)).unwrap();
+
+        for name in [
+            "../escaped.rom",
+            "..\\escaped.rom",
+            "sub/kick.rom",
+            "C:\\kick.rom",
+        ] {
+            let err = copy_rom_to_card(dir.path(), &source, name, false).unwrap_err();
+            assert!(
+                err.to_string().contains(name) || err.to_string().contains("folder"),
+                "{name}: {err}"
+            );
+            assert!(
+                !dir.path().parent().unwrap().join("escaped.rom").exists(),
+                "{name} escaped the card"
+            );
+        }
+    }
+
+    #[test]
+    fn an_existing_rom_on_the_card_is_not_replaced_without_being_asked() {
+        // SAFE_CREATE, the same rule every other create in ART follows.
+        let dir = card(&[("kick.rom", "the one already there")]);
+        let source = dir.path().join("source.rom");
+        std::fs::write(&source, rom_bytes(4096)).unwrap();
+
+        let err = copy_rom_to_card(dir.path(), &source, "kick.rom", false).unwrap_err();
+        assert!(err.to_string().contains("kick.rom"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("kick.rom")).unwrap(),
+            "the one already there",
+            "the original must be untouched"
+        );
+    }
+
+    #[test]
+    fn replacing_a_rom_on_purpose_keeps_the_previous_one() {
+        let dir = card(&[("kick.rom", "the one already there")]);
+        let source = dir.path().join("source.rom");
+        std::fs::write(&source, rom_bytes(4096)).unwrap();
+
+        let copied = copy_rom_to_card(dir.path(), &source, "kick.rom", true).unwrap();
+        assert_eq!(
+            std::fs::read(dir.path().join("kick.rom")).unwrap(),
+            rom_bytes(4096)
+        );
+
+        // ART never deletes a ROM: replacing one keeps it, and says where.
+        let backup = copied.backup.expect("the replaced ROM was not backed up");
+        assert_eq!(
+            std::fs::read_to_string(&backup).unwrap(),
+            "the one already there"
+        );
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_a_rom_never_reaches_the_card() {
+        // Identified before it is copied, so a mistaken pick is refused rather
+        // than written and discovered on the Amiga.
+        let dir = card(&[]);
+        let source = dir.path().join("empty.rom");
+        std::fs::write(&source, b"").unwrap();
+
+        assert!(copy_rom_to_card(dir.path(), &source, "kick.rom", false).is_err());
+        assert!(!dir.path().join("kick.rom").exists());
+    }
+
+    #[test]
+    fn rom_suitability_is_an_opinion_and_only_where_there_is_one() {
+        use hardware::AmigaTarget;
+
+        let known = RomInfo {
+            name: "Kickstart 3.1".into(),
+            version: "3.1".into(),
+            revision: "40.63".into(),
+            size_bytes: 512 * 1024,
+            sha256: String::new(),
+            crc32: String::new(),
+            is_cloanto: false,
+            is_aros: false,
+            checksum_valid: true,
+            compatible_models: vec!["A500".into(), "A600".into(), "A2000".into()],
+            file_path: String::new(),
+        };
+        assert_eq!(rom_suits(&known, AmigaTarget::A500), Some(true));
+        // A note, not a block: people boot odd combinations on purpose.
+        assert_eq!(rom_suits(&known, AmigaTarget::A1200), Some(false));
+
+        let unknown = RomInfo {
+            version: "Custom".into(),
+            compatible_models: vec!["Unknown".into()],
+            ..known.clone()
+        };
+        assert_eq!(
+            rom_suits(&unknown, AmigaTarget::A500),
+            None,
+            "an unrecognised ROM has no opinion attached"
+        );
+    }
+
+    // ---- F3: named firmware sets ------------------------------------------
+
+    #[test]
+    fn a_named_set_is_created_from_the_cards_current_config() {
+        let dir = card(&[("config.txt", "arm_64bit=1\ngpu_mem=64\n")]);
+        write_config_set(
+            dir.path(),
+            "os39",
+            ConfigSetSource::CurrentConfig,
+            None,
+            &PistormSetup::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config_os39.txt")).unwrap(),
+            "arm_64bit=1\ngpu_mem=64\n"
+        );
+        let found = scan_card(dir.path(), PistormHardware::default()).unwrap();
+        assert_eq!(found.config_sets, vec!["os39"]);
+    }
+
+    #[test]
+    fn a_set_is_duplicated_verbatim() {
+        let dir = card(&[("config.txt", "x=1\n"), ("config_os39.txt", "os39 only\n")]);
+        write_config_set(
+            dir.path(),
+            "os39-copy",
+            ConfigSetSource::Set,
+            Some("os39"),
+            &PistormSetup::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config_os39-copy.txt")).unwrap(),
+            "os39 only\n"
+        );
+    }
+
+    #[test]
+    fn duplicating_a_set_that_is_not_there_says_so() {
+        let dir = card(&[("config.txt", "x=1\n")]);
+        let err = write_config_set(
+            dir.path(),
+            "copy",
+            ConfigSetSource::Set,
+            Some("nope"),
+            &PistormSetup::default(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("nope"), "{err}");
+    }
+
+    #[test]
+    fn a_set_name_never_becomes_a_path() {
+        // It arrives from the frontend, so it goes through the same gate every
+        // other name-to-path in ART goes through.
+        let dir = card(&[("config.txt", "x=1\n")]);
+        for name in ["../boot", "..\\boot", "a/b", "a b", "os39!"] {
+            assert!(
+                write_config_set(
+                    dir.path(),
+                    name,
+                    ConfigSetSource::CurrentConfig,
+                    None,
+                    &PistormSetup::default()
+                )
+                .is_err(),
+                "{name} was accepted"
+            );
+        }
+        assert!(!dir
+            .path()
+            .parent()
+            .unwrap()
+            .join("config_boot.txt")
+            .exists());
+    }
+
+    #[test]
+    fn an_empty_set_is_refused_rather_than_written() {
+        // A set of nothing activates as a `config.txt` of nothing, and a Pi
+        // with an empty `config.txt` does not boot.
+        let dir = card(&[]);
+        let err = write_config_set(
+            dir.path(),
+            "os39",
+            ConfigSetSource::CurrentConfig,
+            None,
+            &PistormSetup::default(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("config.txt"), "{err}");
+        assert!(!dir.path().join("config_os39.txt").exists());
+    }
+
+    #[test]
+    fn activating_a_set_replaces_config_txt_and_keeps_the_old_one() {
+        let dir = card(&[
+            ("config.txt", "the one that was active\n"),
+            ("config_os39.txt", "the os39 one\n"),
+        ]);
+
+        let preview = preview_activate_config_set(dir.path(), "os39").unwrap();
+        assert_eq!(preview.before, "the one that was active\n");
+        assert_eq!(preview.after, "the os39 one\n");
+        // Nothing written yet.
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config.txt")).unwrap(),
+            "the one that was active\n"
+        );
+
+        let backup = activate_config_set(dir.path(), "os39")
+            .unwrap()
+            .expect("a backup");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config.txt")).unwrap(),
+            "the os39 one\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&backup).unwrap(),
+            "the one that was active\n"
+        );
+        // The set itself is untouched, so activating another is reversible.
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config_os39.txt")).unwrap(),
+            "the os39 one\n"
+        );
+    }
+
+    #[test]
+    fn activating_a_set_that_is_not_there_is_refused_before_anything_is_touched() {
+        let dir = card(&[("config.txt", "unchanged\n")]);
+        assert!(activate_config_set(dir.path(), "nope").is_err());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config.txt")).unwrap(),
+            "unchanged\n"
+        );
+    }
+
+    #[test]
+    fn a_set_is_renamed_and_the_old_name_stops_existing() {
+        let dir = card(&[("config_os39.txt", "text\n")]);
+        rename_config_set(dir.path(), "os39", "workbench").unwrap();
+        assert!(!dir.path().join("config_os39.txt").exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config_workbench.txt")).unwrap(),
+            "text\n"
+        );
+    }
+
+    #[test]
+    fn a_rename_onto_a_name_already_taken_is_refused_and_loses_nothing() {
+        let dir = card(&[("config_os39.txt", "a\n"), ("config_os32.txt", "b\n")]);
+        assert!(rename_config_set(dir.path(), "os39", "os32").is_err());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config_os39.txt")).unwrap(),
+            "a\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config_os32.txt")).unwrap(),
+            "b\n"
+        );
+    }
+
+    #[test]
+    fn two_sets_and_a_switch_between_them() {
+        // The acceptance case from the brief, end to end.
+        let dir = card(&[("config.txt", "arm_64bit=1\nhdmi_group=2\n")]);
+        write_config_set(
+            dir.path(),
+            "os32",
+            ConfigSetSource::CurrentConfig,
+            None,
+            &PistormSetup::default(),
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("config.txt"), "arm_64bit=1\nos39 flavour\n").unwrap();
+        write_config_set(
+            dir.path(),
+            "os39",
+            ConfigSetSource::CurrentConfig,
+            None,
+            &PistormSetup::default(),
+        )
+        .unwrap();
+
+        let found = scan_card(dir.path(), PistormHardware::default()).unwrap();
+        assert_eq!(found.config_sets, vec!["os32", "os39"]);
+
+        activate_config_set(dir.path(), "os32").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config.txt")).unwrap(),
+            "arm_64bit=1\nhdmi_group=2\n"
+        );
+    }
+
     #[test]
     fn an_empty_folder_is_not_a_pistorm_card() {
         let dir = card(&[]);
@@ -326,7 +1030,14 @@ mod tests {
         assert!(found.is_pistorm_card);
         assert!(found.has_kernel);
         assert!(found.has_config_txt && found.has_cmdline_txt);
-        assert_eq!(found.kickstart_files, vec!["kick31.rom"]);
+        assert_eq!(
+            found
+                .kickstart_files
+                .iter()
+                .map(|rom| rom.file_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["kick31.rom"]
+        );
         assert!(found.setup.options.vbr_move);
         assert_eq!(found.setup.options.copy_rom_kb, Some(1024));
         assert_eq!(found.setup.firmware.kickstart_file, "kick31.rom");
@@ -416,6 +1127,7 @@ mod tests {
         };
         let setup = PistormSetup {
             hardware,
+            line: Emu68Line::default(),
             options: options::profile_options(options::Emu68Profile::Performance, hardware),
             firmware: FirmwareConfig {
                 kickstart_file: "kick31.rom".into(),

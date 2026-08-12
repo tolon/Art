@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### The PiStorm screen knows which Kickstart you have (2026-08-13)
+
+#### Added
+- **Every ROM on the card is identified, not just listed.** ART checks it by
+  checksum and tells you which Kickstart it is, its revision, and the machines
+  it is for. A ROM it does not recognise is *labelled* and stays perfectly
+  usable — it may be custom, byte-swapped, or newer than ART's table.
+- **Choose a Kickstart from anywhere on your PC** and ART copies it onto the
+  card under a name you confirm. It never replaces a file without being asked,
+  and the one it replaces is kept.
+- **The kernel says which Emu68 it is**, read from the version string Emu68's
+  own build puts in the image. If the image says nothing, so does ART.
+- **Named firmware sets**, the way MultibootOS does it: one `config.txt` per
+  system, created from the card or from the settings on screen, duplicated,
+  renamed, and made active — each one showing you the change first.
+
+#### Fixed
+- **ART named an Emu68 download that has never existed.** For the PiStorm16 it
+  said `Emu68-pistorm16.zip`; no Emu68 release has ever contained a file by that
+  name. Worse, the name that *does* exist means different things in different
+  releases: `Emu68-pistorm.zip` is the classic board's firmware in 1.0.x and the
+  PiStorm32-lite's and PiStorm16's in the 1.1 alpha. ART now asks which release
+  line you are building for, and says plainly when a board has no download in it
+  at all — as the PiStorm16 has none in any stable release.
+- A card forcing an HDMI mode ART had no name for selected nothing at all, and
+  saving would quietly have removed the forcing.
+- The Kickstart picker was shown to everyone *except* Power Users. Power Mode
+  now adds free typing beside it instead of taking it away.
+
+#### Not built
+Fetching a kernel update from GitHub, and deleting a firmware set. Both are
+named in the issues list rather than offered as buttons that do nothing.
+
 ### The PiStorm screen tells the truth now (2026-08-12)
 
 #### Fixed

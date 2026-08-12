@@ -632,11 +632,12 @@
     "intro": "Every control here writes a documented Emu68 option or a Raspberry Pi firmware setting — and shows you which one. Both files are merged into what is already on the card, never rewritten.",
     "chooseCardTitle": "Choose the card's boot folder",
     "hardware": {
-      "heading": "1. Hardware",
+      "heading": "Hardware",
       "intro": "Three answers, because what a setup can do depends on all three: the kernel follows the board, the storage driver's name follows the Pi, and which options apply at all follows the Amiga.",
       "amiga": "Amiga",
       "variant": "PiStorm board",
-      "pi": "Raspberry Pi"
+      "pi": "Raspberry Pi",
+      "line": "Emu68 release"
     },
     "derived": {
       "kernel": "Emu68 build",
@@ -655,25 +656,41 @@
       "ram-beyond-what-amiga-os-uses": "AmigaOS does not use more than 2 GB of Fast RAM, so a Pi with more is not buying the Amiga anything."
     },
     "card": {
-      "heading": "2. The card",
+      "heading": "The card",
       "choose": "Choose folder…",
       "none": "No folder chosen",
       "kernelFound": "Emu68.img is on the card.",
       "kernelMissing": "No Emu68.img — the card will not start until the kernel is on it.",
       "kickstartsFound": "Kickstart images found: {{list}}",
       "kickstartsMissing": "No Kickstart image found on the card.",
-      "configSets": "Named firmware sets: {{list}}"
+      "configSets": "Named firmware sets: {{list}}",
+      "kernelVersion": "Emu68 on the card: {{version}}",
+      "kernelUnknownVersion": "Emu68.img is on the card, but it does not state a version."
     },
     "scan": {
       "found": "Read {{path}}.",
       "notACard": "{{path}} has no Emu68 kernel and no config.txt, so it does not look like a PiStorm card yet."
     },
     "kickstart": {
-      "label": "3. Kickstart",
-      "hint": "Written as the initramfs line in config.txt. The file itself lives on the card; ART never ships one."
+      "label": "Kickstart",
+      "hint": "Written as the initramfs line in config.txt. The file itself lives on the card; ART never ships one.",
+      "onTheCard": "On the card",
+      "fileName": "File name written to config.txt",
+      "choose": "Choose ROM file…",
+      "chooseTitle": "Choose a Kickstart ROM",
+      "copyTitle": "Copy this Kickstart onto the card",
+      "picked": "{{rom}} ({{revision}}) — for {{models}}",
+      "pickedUnrecognised": "ART does not recognise this ROM. It may be a custom or byte-swapped image — it will be copied exactly as it is.",
+      "nameOnCard": "Name on the card",
+      "badName": "That is not a name a card can carry: a plain file name, no folders, and none of < > : \" | ? * or spaces.",
+      "willReplace": "{{name}} is already on the card. The one there now will be kept as a backup.",
+      "copyButton": "Copy",
+      "replaceButton": "Replace",
+      "copied": "{{name}} is on the card. It is written to config.txt when you save.",
+      "copiedOver": "{{name}} is on the card. The previous one is at {{path}}."
     },
     "profiles": {
-      "heading": "4. Ready-made settings",
+      "heading": "Ready-made settings",
       "intro": "Each one is a set of Emu68 options, listed under it. Applying a profile replaces the options; nothing else on the card changes until you save."
     },
     "profile": {
@@ -697,19 +714,21 @@
       }
     },
     "display": {
-      "heading": "5. Display & clock",
+      "heading": "Display & clock",
       "auto": "Let the firmware ask the monitor",
       "dmt1080p60": "1920×1080 at 60 Hz (monitor timings)",
       "cea1080p50": "1920×1080 at 50 Hz (television, PAL)",
       "cea720p60": "1280×720 at 60 Hz (television)",
-      "disableBluetooth": "Turn off the Pi's Bluetooth"
+      "disableBluetooth": "Turn off the Pi's Bluetooth",
+      "custom": "As on the card",
+      "customHint": "a pair the presets do not cover"
     },
     "overclock": {
       "enable": "Run the Pi faster than it is sold to run",
       "warning": "Heat, and the quality of your power supply. On a Raspberry Pi this sets the warranty bit. Never part of a profile — only ever something you turn on yourself."
     },
     "advanced": {
-      "heading": "6. Every option",
+      "heading": "Every option",
       "intro": "The full Emu68 inventory, each row labelled with the token it writes. Options that mean nothing on the hardware above are not shown.",
       "unset": "not set"
     },
@@ -781,6 +800,40 @@
     "wifi": {
       "heading": "WiFi & network",
       "explain": "WiFi on a PiStorm is an Amiga-side matter, not a boot option: wifipi.device with Roadshow, configured in DEVS:NetInterfaces on the system volume. It belongs to building the volumes, which ART cannot do yet — so there is nothing here to fill in rather than a form that would write nowhere."
+    },
+    "line": {
+      "stable": "Latest stable (1.0.x)",
+      "alpha11": "1.1 alpha (prerelease)"
+    },
+    "archive": {
+      "absent": "no archive in this release — the 1.1 alpha is the first to support this board",
+      "unstated": "the release notes do not say which archive covers this board"
+    },
+    "rom": {
+      "identified": "{{name}} — {{rom}} ({{revision}}), for {{models}}",
+      "unrecognised": "{{name}} — not a Kickstart ART recognises",
+      "unreadable": "{{name}} — could not be read",
+      "mayNotSuit": "{{rom}} is for {{models}}, and you have chosen a {{machine}}. That may still be what you want."
+    },
+    "sets": {
+      "heading": "Named firmware sets",
+      "intro": "One config.txt per system, copied over the active one to choose which boots — the pattern MultibootOS uses. ART does not read what is inside them.",
+      "none": "There are no named sets on this card yet.",
+      "newName": "New set",
+      "from": "Made from",
+      "fromCurrent": "the card's current config.txt",
+      "fromScreen": "the settings on this screen",
+      "fromSet": "another set",
+      "create": "Create",
+      "activate": "Make active",
+      "rename": "Rename",
+      "write": "Write it",
+      "previewTitle": "Before writing",
+      "saved": "Set '{{name}}' saved.",
+      "activated": "'{{name}}' is now the active config.txt.",
+      "activatedWithBackup": "'{{name}}' is now the active config.txt. The previous one is at {{path}}.",
+      "renamed": "'{{from}}' is now called '{{to}}'.",
+      "noDelete": "ART does not delete sets. Remove one yourself if you want it gone."
     }
   },
   "gotek": {

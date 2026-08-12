@@ -141,6 +141,11 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // matches the engine field for field, which is the check this scan cannot
     // make. It replaces four dynamic calls the old screen made over a table of
     // cards it invented.
-    expect(dynamicCalls).toBe(54);
+    // 54 → 57 (the PiStorm fix round): the Emu68 release-line dropdown labels
+    // its two options by id, and the Kickstart picker and its suitability note
+    // both read a `Phrase.key` from `@/lib/pistormRom` — the same pattern every
+    // other refusal on this list follows, with every branch enumerated in that
+    // module's own test file.
+    expect(dynamicCalls).toBe(57);
   });
 });

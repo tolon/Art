@@ -28,7 +28,10 @@ function variantRow(hasOneSlot: boolean): VariantChoice {
   return {
     variant: "classic",
     name: "PiStorm",
-    kernel_archive: "Emu68-pistorm.zip",
+    kernel_archives: [
+      { line: "stable", archive: { kind: "named", name: "Emu68-pistorm.zip" } },
+      { line: "alpha11", archive: { kind: "named", name: "Emu68-pistorm-classic.zip" } },
+    ],
     has_one_slot_option: hasOneSlot,
     pi_models: [],
   };

@@ -632,11 +632,12 @@
     "intro": "Buradaki her denetim, belgelenmiş bir Emu68 seçeneği ya da Raspberry Pi firmware ayarı yazar — ve hangisi olduğunu size gösterir. İki dosya da kartta zaten olanla birleştirilir, asla yeniden yazılmaz.",
     "chooseCardTitle": "Kartın açılış klasörünü seçin",
     "hardware": {
-      "heading": "1. Donanım",
+      "heading": "Donanım",
       "intro": "Üç cevap, çünkü bir kurulumun neler yapabileceği üçüne birden bağlı: çekirdek karta, depolama sürücüsünün adı Pi'ye, hangi seçeneklerin anlamı olduğu ise Amiga'ya göre değişir.",
       "amiga": "Amiga",
       "variant": "PiStorm kartı",
-      "pi": "Raspberry Pi"
+      "pi": "Raspberry Pi",
+      "line": "Emu68 sürümü"
     },
     "derived": {
       "kernel": "Emu68 sürümü",
@@ -655,25 +656,41 @@
       "ram-beyond-what-amiga-os-uses": "AmigaOS 2 GB'tan fazla Fast RAM kullanmaz; daha fazlası Amiga tarafına bir şey kazandırmaz."
     },
     "card": {
-      "heading": "2. Kart",
+      "heading": "Kart",
       "choose": "Klasör seç…",
       "none": "Klasör seçilmedi",
       "kernelFound": "Kartta Emu68.img var.",
       "kernelMissing": "Emu68.img yok — çekirdek karta konulana kadar kart açılmaz.",
       "kickstartsFound": "Bulunan Kickstart dosyaları: {{list}}",
       "kickstartsMissing": "Kartta Kickstart dosyası bulunamadı.",
-      "configSets": "Adlandırılmış firmware setleri: {{list}}"
+      "configSets": "Adlandırılmış firmware setleri: {{list}}",
+      "kernelVersion": "Karttaki Emu68: {{version}}",
+      "kernelUnknownVersion": "Kartta Emu68.img var ama sürümünü belirtmiyor."
     },
     "scan": {
       "found": "{{path}} okundu.",
       "notACard": "{{path}} içinde Emu68 çekirdeği ve config.txt yok; henüz bir PiStorm kartına benzemiyor."
     },
     "kickstart": {
-      "label": "3. Kickstart",
-      "hint": "config.txt içine initramfs satırı olarak yazılır. Dosyanın kendisi kartta durur; ART hiçbir Kickstart dağıtmaz."
+      "label": "Kickstart",
+      "hint": "config.txt içine initramfs satırı olarak yazılır. Dosyanın kendisi kartta durur; ART hiçbir Kickstart dağıtmaz.",
+      "onTheCard": "Kartta",
+      "fileName": "config.txt'e yazılacak dosya adı",
+      "choose": "ROM dosyası seç…",
+      "chooseTitle": "Bir Kickstart ROM seçin",
+      "copyTitle": "Bu Kickstart karta kopyalansın mı",
+      "picked": "{{rom}} ({{revision}}) — {{models}} için",
+      "pickedUnrecognised": "ART bu ROM'u tanımıyor. Özel ya da bayt sırası değiştirilmiş bir imaj olabilir — olduğu gibi kopyalanacak.",
+      "nameOnCard": "Karttaki adı",
+      "badName": "Bu, bir kartın taşıyabileceği bir ad değil: düz bir dosya adı, klasör yok, < > : \" | ? * ve boşluk yok.",
+      "willReplace": "{{name}} zaten kartta. Şu anda orada olan yedek olarak saklanacak.",
+      "copyButton": "Kopyala",
+      "replaceButton": "Değiştir",
+      "copied": "{{name}} kartta. Kaydettiğinizde config.txt’e yazılır.",
+      "copiedOver": "{{name}} kartta. Önceki dosya {{path}} konumunda."
     },
     "profiles": {
-      "heading": "4. Hazır ayarlar",
+      "heading": "Hazır ayarlar",
       "intro": "Her biri bir Emu68 seçenek kümesidir; altında listelenir. Bir profili uygulamak seçenekleri değiştirir; siz kaydedene kadar kartta hiçbir şey değişmez."
     },
     "profile": {
@@ -697,19 +714,21 @@
       }
     },
     "display": {
-      "heading": "5. Görüntü & saat",
+      "heading": "Görüntü & saat",
       "auto": "Firmware monitöre sorsun",
       "dmt1080p60": "1920×1080, 60 Hz (monitör zamanlaması)",
       "cea1080p50": "1920×1080, 50 Hz (televizyon, PAL)",
       "cea720p60": "1280×720, 60 Hz (televizyon)",
-      "disableBluetooth": "Pi'nin Bluetooth'unu kapat"
+      "disableBluetooth": "Pi'nin Bluetooth'unu kapat",
+      "custom": "Kartta olduğu gibi",
+      "customHint": "ön ayarların kapsamadığı bir çift"
     },
     "overclock": {
       "enable": "Pi'yi satıldığından hızlı çalıştır",
       "warning": "Isı ve güç kaynağınızın kalitesi. Raspberry Pi'de bu garanti bitini de çevirir. Hiçbir profilin parçası değil — yalnızca sizin açtığınız bir şey."
     },
     "advanced": {
-      "heading": "6. Tüm seçenekler",
+      "heading": "Tüm seçenekler",
       "intro": "Emu68'in tam listesi; her satır yazdığı token ile etiketli. Yukarıdaki donanımda anlamı olmayan seçenekler gösterilmez.",
       "unset": "ayarlanmadı"
     },
@@ -781,6 +800,40 @@
     "wifi": {
       "heading": "WiFi & ağ",
       "explain": "PiStorm'da WiFi bir açılış seçeneği değil, Amiga tarafının işidir: Roadshow ile wifipi.device, sistem birimindeki DEVS:NetInterfaces altında yapılandırılır. Bu, birimleri oluşturmaya ait bir iş ve ART henüz bunu yapamıyor — bu yüzden burada hiçbir yere yazmayacak bir form yerine hiçbir şey yok."
+    },
+    "line": {
+      "stable": "En son kararlı (1.0.x)",
+      "alpha11": "1.1 alfa (ön sürüm)"
+    },
+    "archive": {
+      "absent": "bu sürümde arşiv yok — bu kartı ilk destekleyen 1.1 alfa",
+      "unstated": "sürüm notları bu kartı hangi arşivin kapsadığını söylemiyor"
+    },
+    "rom": {
+      "identified": "{{name}} — {{rom}} ({{revision}}), {{models}} için",
+      "unrecognised": "{{name}} — ART'ın tanıdığı bir Kickstart değil",
+      "unreadable": "{{name}} — okunamadı",
+      "mayNotSuit": "{{rom}} {{models}} için; siz {{machine}} seçtiniz. Yine de istediğiniz bu olabilir."
+    },
+    "sets": {
+      "heading": "Adlandırılmış firmware setleri",
+      "intro": "Her sistem için bir config.txt; hangisinin açılacağını seçmek için etkin olanın üzerine kopyalanır — MultibootOS’un kullandığı yöntem. ART içlerinde ne yazdığını okumaz.",
+      "none": "Bu kartta henüz adlandırılmış set yok.",
+      "newName": "Yeni set",
+      "from": "Kaynak",
+      "fromCurrent": "kartın şu anki config.txt dosyası",
+      "fromScreen": "bu ekrandaki ayarlar",
+      "fromSet": "başka bir set",
+      "create": "Oluştur",
+      "activate": "Etkin yap",
+      "rename": "Yeniden adlandır",
+      "write": "Yaz",
+      "previewTitle": "Yazmadan önce",
+      "saved": "'{{name}}' seti kaydedildi.",
+      "activated": "Etkin config.txt artık '{{name}}'.",
+      "activatedWithBackup": "Etkin config.txt artık '{{name}}'. Önceki dosya {{path}} konumunda.",
+      "renamed": "'{{from}}' artık '{{to}}' adını taşıyor.",
+      "noDelete": "ART setleri silmez. Kaldırmak isterseniz kendiniz silin."
     }
   },
   "gotek": {
