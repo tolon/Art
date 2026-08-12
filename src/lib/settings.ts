@@ -136,6 +136,16 @@ export interface AppSettings {
    * as it would have been.
    */
   alwaysUseDefaultFolders: boolean;
+  /**
+   * How tall the Files screen's command-line row is, in pixels.
+   *
+   * Draggable by its top edge and remembered, the way Total Commander
+   * remembers where its own dividers were left. A single line is the default
+   * and is all most people ever want; somebody pasting a long path, or reading
+   * back what they typed, wants more, and having to want it *again* every time
+   * the application starts is the part that grates.
+   */
+  commandLineHeight: number;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -155,6 +165,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultLeftPath: null,
   defaultRightPath: null,
   alwaysUseDefaultFolders: true,
+  commandLineHeight: 26,
 };
 
 export async function getSettings(): Promise<AppSettings> {
@@ -183,6 +194,8 @@ export async function getSettings(): Promise<AppSettings> {
       alwaysUseDefaultFolders:
         (await s.get<boolean>("alwaysUseDefaultFolders")) ??
         DEFAULT_SETTINGS.alwaysUseDefaultFolders,
+      commandLineHeight:
+        (await s.get<number>("commandLineHeight")) ?? DEFAULT_SETTINGS.commandLineHeight,
       lastCollectionDir:
         (await s.get<string>("lastCollectionDir")) ?? DEFAULT_SETTINGS.lastCollectionDir,
       winuaePath: (await s.get<string>("winuaePath")) ?? DEFAULT_SETTINGS.winuaePath,

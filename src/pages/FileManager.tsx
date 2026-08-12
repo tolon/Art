@@ -369,6 +369,17 @@ function copyResultText(report: CopyReport, t: TranslateFn): string {
   return t(phrase.key, { ...phrase.params, what });
 }
 
+/**
+ * Keep the command-line row between one line and a third of a small screen.
+ *
+ * A floor because a row dragged to nothing is a control the user cannot find
+ * again; a ceiling because the panes are what this screen is for, and a dock
+ * that can eat them is a dock that will.
+ */
+function clampDockHeight(px: number): number {
+  return Math.round(Math.max(26, Math.min(360, px)));
+}
+
 /** How [`runJob`] settled: `"finished"` alone must never be read as success —
  * callers still need to check the job's own report for what actually
  * landed — but `"cancelled"` must never be read as `"finished"` either. */
@@ -635,9 +646,21 @@ export function FileManager() {
    * meant to restore.
    */
   const settingsLoaded = useSettingsStore((s) => s.loaded);
+  /**
+   * How tall the command-line row is, dragged by its top edge and remembered.
+   *
+   * Held locally *while dragging* and written to the settings store when the
+   * pointer is released: a `set` per mouse-move would be a hundred writes to
+   * a JSON file for one gesture.
+   */
+  const savedCommandLineHeight = useSettingsStore((s) => s.settings.commandLineHeight);
+  const [dragHeight, setDragHeight] = useState<number | null>(null);
+  const commandLineHeight = dragHeight ?? savedCommandLineHeight;
   const colourRules: ColourRule[] = isUsableRuleList(storedColourRules)
     ? storedColourRules
     : DEFAULT_COLOUR_RULES;
+  /** A rule stores one colour and ART has two themes — see `colourFor`. */
+  const theme = useSettingsStore((s) => s.settings.theme);
   const setPolicy = useCallback(
     (next: OverwritePolicy) => void updateSettings({ overwritePolicy: next }),
     [updateSettings]
@@ -2976,6 +2999,7 @@ export function FileManager() {
       onSelectTab: (index: number) => void goToTab(side, index),
       onCloseTab: (index: number) => void dropTab(side, index),
       colourRules,
+      theme,
       rightButtonSelects,
       selectedNames: selection[side],
       cursorName: anchor[side],
@@ -3492,7 +3516,44 @@ export function FileManager() {
          * anything it will not do rather than swallowing the keystroke, which
          * is the one behaviour a prompt-shaped box must never have.
          */}
-        <div className="tc-chrome-row tc-command-line">
+        {/* The grip: drag the command line taller or shorter, and it stays
+            where it was left (§3.4's spirit — Total Commander remembers where
+            its dividers were put). Pointer events rather than mouse events so
+            a pen or a touch screen works, and `setPointerCapture` so a fast
+            drag that leaves the strip does not silently stop. */}
+        <div
+          className="tc-dock-grip"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label={t("files.commandLine.resizeAriaLabel")}
+          onPointerDown={(event) => {
+            event.currentTarget.setPointerCapture(event.pointerId);
+            const startY = event.clientY;
+            const startHeight = commandLineHeight;
+            const onMove = (move: PointerEvent) => {
+              // Dragging *up* makes it taller, which is the direction the
+              // edge is being pulled.
+              setDragHeight(clampDockHeight(startHeight + (startY - move.clientY)));
+            };
+            const onUp = (up: PointerEvent) => {
+              window.removeEventListener("pointermove", onMove);
+              window.removeEventListener("pointerup", onUp);
+              const settled = clampDockHeight(startHeight + (startY - up.clientY));
+              setDragHeight(null);
+              void updateSettings({ commandLineHeight: settled });
+            };
+            window.addEventListener("pointermove", onMove);
+            window.addEventListener("pointerup", onUp);
+          }}
+          // A double-click puts it back to one line, which is the way out of
+          // a drag that went too far without hunting for the original size.
+          onDoubleClick={() => void updateSettings({ commandLineHeight: 26 })}
+        />
+
+        <div
+          className="tc-chrome-row tc-command-line"
+          style={{ height: commandLineHeight, alignItems: "flex-start" }}
+        >
           <span className="tc-command-prompt">{`${pane(focused).location}>`}</span>
           <input
             type="text"
@@ -3682,6 +3743,7 @@ function Pane({
   onSelectTab,
   onCloseTab,
   colourRules,
+  theme,
   rightButtonSelects,
   selectedNames,
   cursorName,
@@ -3731,6 +3793,8 @@ function Pane({
   onCloseTab: (index: number) => void;
   /** The colour rules a row is matched against (`@/lib/colourRules`). */
   colourRules: ColourRule[];
+  /** Which theme is on, so a rule's colour can be made readable on paper. */
+  theme: "dark" | "light";
   /** Whether a right-click marks a row rather than doing nothing. */
   rightButtonSelects: boolean;
   /** Every marked entry's name in this pane — see `@/lib/selection`. */
@@ -4070,7 +4134,7 @@ function Pane({
               ? "var(--tc-selected-text)"
               : isCursor
                 ? "var(--tc-cursor-text)"
-                : (colourFor(entry.name, entry.is_dir, colourRules) ?? fileTextColorVar(entry));
+                : (colourFor(entry.name, entry.is_dir, colourRules, theme) ?? fileTextColorVar(entry));
 
             return (
               <li

@@ -34,17 +34,32 @@
   --radius-sm: 4px;
 }
 
+/*
+ * Light: **paper, not paper-white.**
+ *
+ * The first human look at this theme said it plainly — too bright to read.
+ * Three of its four surfaces were `#ffffff`, so a full-screen window was one
+ * flat sheet of maximum-luminance white with nothing to give it depth: the eye
+ * works against the background instead of reading what is on it, and the
+ * borders that were supposed to separate things had nothing to separate them
+ * from.
+ *
+ * The fix is not "less light". It is **a range**: a page a little darker than
+ * its panels, panels a little darker than white, and borders strong enough to
+ * be seen against them. Same idea the dark theme already uses, in the other
+ * direction.
+ */
 .theme-light {
-  --bg: #f4f6f9;
-  --bg-elevated: #ffffff;
-  --bg-panel: #ffffff;
-  --bg-hover: #eef1f5;
-  --border: #e0e4ea;
-  --border-strong: #c8cfd8;
+  --bg: #e9ecf1;
+  --bg-elevated: #f5f6f9;
+  --bg-panel: #fafbfc;
+  --bg-hover: #e3e7ee;
+  --border: #ccd3dc;
+  --border-strong: #aab3bf;
 
-  --text: #1f2530;
-  --text-muted: #5b6573;
-  --text-faint: #8a93a2;
+  --text: #1b212b;
+  --text-muted: #545e6c;
+  --text-faint: #7d8794;
 
   --accent: #2d8aab;
   --accent-hover: #247a99;

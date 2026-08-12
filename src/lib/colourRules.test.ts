@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   colourFor,
+  darken,
   DEFAULT_COLOUR_RULES,
   isUsableRuleList,
   type ColourRule,
@@ -106,5 +107,36 @@ describe("isUsableRuleList", () => {
     expect(isUsableRuleList({})).toBe(false);
     expect(isUsableRuleList([{ patterns: "*.adf" }])).toBe(false);
     expect(isUsableRuleList([{ patterns: 1, colour: "#fff", label: "x" }])).toBe(false);
+  });
+});
+
+describe("darken, and what the light theme does with a rule", () => {
+  it("mixes a hex toward black without touching its shape", () => {
+    expect(darken("#ffffff", 0.5)).toBe("#808080");
+    expect(darken("#7fd7ff", 0)).toBe("#7fd7ff");
+    expect(darken("#7fd7ff", 1)).toBe("#000000");
+  });
+
+  it("leaves a colour it cannot parse exactly as the user typed it", () => {
+    // A name, an `rgb()`, an `#abc` — returned untouched rather than mangled.
+    for (const colour of ["red", "rgb(1,2,3)", "#abc", "  "]) {
+      expect(darken(colour, 0.5), colour).toBe(colour);
+    }
+  });
+
+  it("darkens a rule's colour on a light pane and leaves it alone on a dark one", () => {
+    // A rule stores one colour and ART has two themes. The shipped defaults
+    // are picked to sing against the dark pane the user actually runs; the
+    // same values on white are pale to the point of unreadable, which is what
+    // the first look at the light theme showed.
+    const rules: ColourRule[] = [{ label: "x", patterns: "*.adf", colour: "#7fd7ff" }];
+    expect(colourFor("a.adf", false, rules, "dark")).toBe("#7fd7ff");
+    expect(colourFor("a.adf", false, rules, "light")).toBe(darken("#7fd7ff", 0.45));
+  });
+
+  it("defaults to the dark theme when no theme is given", () => {
+    expect(colourFor("a.adf", false, DEFAULT_COLOUR_RULES)).toBe(
+      colourFor("a.adf", false, DEFAULT_COLOUR_RULES, "dark")
+    );
   });
 });

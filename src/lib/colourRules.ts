@@ -55,6 +55,35 @@ export const DEFAULT_COLOUR_RULES: ColourRule[] = [
 ];
 
 /**
+ * Darken a `#rrggbb` toward black by `amount` (0–1).
+ *
+ * Exists because a rule stores **one** colour and ART has **two** themes. The
+ * shipped defaults are chosen to sing against the dark pane the user actually
+ * runs; the same values on white are pale to the point of unreadable, which is
+ * exactly what the first look at the light theme showed.
+ *
+ * Storing two colours per rule would double the Settings UI for a case most
+ * users never see, and darkening in CSS is not available: the colour is applied
+ * inline per row, so there is no rule for `color-mix` to reach. Doing the mix
+ * here keeps one colour per rule and makes both themes legible.
+ *
+ * A colour that is not a plain 6-digit hex — a name, `rgb()`, anything a user
+ * typed — is returned untouched rather than mangled.
+ */
+export function darken(colour: string, amount: number): string {
+  const match = /^#([0-9a-f]{6})$/i.exec(colour.trim());
+  if (!match) return colour;
+
+  const value = parseInt(match[1], 16);
+  const scale = Math.max(0, Math.min(1, 1 - amount));
+  const channel = (shift: number) =>
+    Math.round(((value >> shift) & 0xff) * scale)
+      .toString(16)
+      .padStart(2, "0");
+  return `#${channel(16)}${channel(8)}${channel(0)}`;
+}
+
+/**
  * The colour for a name, or `null` when no rule claims it.
  *
  * **First match wins**, which is what makes the order in Settings meaningful:
@@ -68,7 +97,8 @@ export const DEFAULT_COLOUR_RULES: ColourRule[] = [
 export function colourFor(
   name: string,
   isDir: boolean,
-  rules: ColourRule[]
+  rules: ColourRule[],
+  theme: "dark" | "light" = "dark"
 ): string | null {
   if (isDir) return null;
 
@@ -76,7 +106,12 @@ export function colourFor(
     if (rule.colour.trim() === "") continue;
     for (const pattern of rule.patterns.split(";")) {
       const mask = pattern.trim();
-      if (mask !== "" && matchesMask(name, mask)) return rule.colour;
+      if (mask !== "" && matchesMask(name, mask)) {
+        // 45% toward black on a light pane. Enough to bring a colour picked
+        // for a near-black background up to a readable contrast on paper,
+        // without turning every rule into the same muddy dark grey.
+        return theme === "light" ? darken(rule.colour, 0.45) : rule.colour;
+      }
     }
   }
   return null;

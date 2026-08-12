@@ -1052,6 +1052,7 @@
     },
     "commandLine": {
       "ariaLabel": "Command line",
+      "resizeAriaLabel": "Drag to resize the command line; double-click to reset",
       "placeholder": "cd D:\\Amiga · *.adf",
       "refuseRelative": "Type a full path — the pane may be inside an image, where a name on its own is not one.",
       "refuseNotAShell": "This line goes to a folder or sets a filter. ART does not run programs from it."

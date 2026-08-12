@@ -1052,6 +1052,7 @@
     },
     "commandLine": {
       "ariaLabel": "Komut satırı",
+      "resizeAriaLabel": "Komut satırını yeniden boyutlandırmak için sürükleyin; sıfırlamak için çift tıklayın",
       "placeholder": "cd D:\\Amiga · *.adf",
       "refuseRelative": "Tam bir yol yazın — bölme bir imajın içinde olabilir, orada tek başına bir ad yol değildir.",
       "refuseNotAShell": "Bu satır bir klasöre gider ya da bir filtre uygular. ART buradan program çalıştırmaz."
