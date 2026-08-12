@@ -108,10 +108,38 @@ no button bar, no drive bar, a drive combo.
 - The permanent collision-policy footer moves into the copy dialog; the red
   "both panes are local" banner becomes a status-bar hint.
 
-- [ ] Step 1: pane header and the source combo
-- [ ] Step 2: the bottom dock and F6 = Move
-- [ ] Step 3: status bar absorbs the selection line; footer and banner go
-- [ ] Step 4: gates and commit
+- [x] Step 1: pane header and the source combo
+- [x] Step 2: the bottom dock and F6 = Move
+- [x] Step 3: status bar absorbs the selection line; footer and banner go
+- [x] Step 4: gates and commit
+
+**What changed against the plan, and why (2026-08-12):**
+
+- **F2 / Ctrl+R refresh came forward from Task 5.** Hiding the button strip
+  left Refresh with no other way to reach it — Up is the `[..]` row, New folder
+  is F7, every source is in the combo. Shipping a task's worth of screen with
+  no way to re-read a pane was not an option.
+- **F6 = Move is narrower than "bind a command that is already there".**
+  Three directions have no primitive underneath, and each is refused by name
+  rather than half-implemented: moving *out of* a host folder (ART owns no
+  host-side delete — **ART-080**), several entries between two images
+  (ART-064), and a single *file* between two images (`volume_copy_between`
+  addresses a directory — **ART-081**). Volume → host folder, and one folder
+  between two images, both work.
+- **Move verifies before it deletes.** The destination is re-listed and every
+  moved name looked for in it; a copy that reported success and a destination
+  that does not hold the file are the same thing as far as the user's data is
+  concerned. A collision is refused up front rather than handed to the
+  overwrite policy — "leave it alone" would skip the copy and then delete the
+  source.
+- **`VolumeFooter` became a chrome row** and took the drive row's "free of
+  total" with it, so hiding the button strip loses no information.
+- **`CheckoutPanel` moved inside the commander**, above the status strip: a
+  panel below the F-key row would be a docked strip that is not at the bottom.
+- **The error / message / busy lines moved into the dock too**, as one status
+  strip with three levels. The brief only names the "both panes are local"
+  banner, but all three had the same fault — they pushed the panes down from
+  the top of the page.
 
 ## Task 4 — Enter opens the container (brief §3.1, the headline)
 

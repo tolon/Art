@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### The Files screen loses its clutter, and F6 means Move (2026-08-12)
+
+#### Added
+- **F6 moves.** It copies first, then goes and looks in the destination for
+  every name that was supposed to land there, and only then removes anything
+  from the source. Stop it halfway and the worst you are left with is a
+  duplicate — never a missing file. Shift+F6 still renames in place.
+  If a name is already taken at the other end, the move is refused outright
+  rather than offering to overwrite or to skip: skipping would leave the copy
+  undone and remove the original anyway. Icons come along, if you say so —
+  a drawer that arrives without its `.info` is invisible on Workbench.
+- **Each pane header is a source box, a path and a filter.** The source box
+  lists the drives you actually have — nothing is assumed — plus Folder, ADF,
+  HDF, Disc, Archive and C64. The old row of buttons is a Settings switch now,
+  off unless you turn it on.
+- **The command line works.** Type a full path to go there, `cd ..` to go up,
+  or a mask like `*.adf` to filter the pane. It does not run programs, and it
+  says so plainly rather than doing nothing.
+- **F2 and Ctrl+R re-read a pane.**
+
+#### Changed
+- **One line of status, at the bottom.** The red errors, the green messages
+  and the "busy…" line used to stack above the panes and shove them down the
+  screen; they are one row in the bottom bar now, and the panes never move
+  because something had to be said.
+- **"Both panes are local folders" stopped shouting.** It is ART declining a
+  question, not something breaking, and it no longer looks like a failure.
+- **The "when a name is already taken" row is gone from the screen.** The copy
+  dialog asks when there is actually a name in the way, and Settings holds
+  what it starts from.
+- **The function keys are one row that stays one row.** At narrow widths the
+  labels give way to the key names instead of wrapping onto a second line.
+- **The selected-items line merged into each pane's own status line**, which
+  already counted them.
+
+#### Known limitations
+- Nothing can be moved *off* a folder on your own disk: ART does not delete
+  files there, by design. F6 says so and points at F5.
+- Between two images, F6 moves a folder; a single file has to be copied for
+  now.
+
 ### ART opens CDs, ZIPs, 7z archives and C64 disks — and decides what a file is by looking inside it (2026-08-12)
 
 #### Added

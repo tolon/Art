@@ -20,16 +20,16 @@ Update it at the end of any session that changes what works.
 |---|---|
 | **Last updated** | 2026-08-12 |
 | **Version** | 0.1.0 (unreleased) |
-| **Current stage** | Phase 2b — the Files screen, done right (tasks 1–2 of 8, on branch `phase-2b`) |
+| **Current stage** | Phase 2b — the Files screen, done right (tasks 1–3 of 8, on branch `phase-2b`) |
 | **Build** | PASS |
-| **Tests** | 908 Rust passed, 0 failed; 137 frontend passed, 0 failed |
+| **Tests** | 912 Rust passed, 0 failed; 178 frontend passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
 | **amitools oracle** | 48 checks, both directions |
 | **7-Zip disc oracle** | 4 fixtures — Joliet, ISO9660-only, raw Mode 1, raw Mode 2/XA — names, sizes and every file's SHA-256 |
 | **cargo-deny** | advisories, bans, licences, sources — all ok |
 | **MSRV** | 1.93 (raised from 1.77 on 2026-08-12, for a maintained 7z decoder) |
-| **i18n** | `en.json` and `tr.json`, 872 leaf keys each, parity enforced by `pnpm test` |
+| **i18n** | `en.json` and `tr.json`, 907 leaf keys each, parity enforced by `pnpm test` |
 | **Release bundle** | rebuilt 2026-08-12 — MSI and NSIS, and the application was launched and answered |
 | **Published** | <https://github.com/tolon/Art> — public, `main`, **GPL-3.0-or-later** (was MIT until 2026-08-12) |
 | **Real hardware** | Two ADFs booted/mounted under licensed Kickstart in WinUAE (Phase 1a); still not bare metal |
@@ -463,7 +463,7 @@ Total Commander `wincmd.ini`, and it supersedes the earlier restyle briefs.
 The verdict it starts from: the first restyle got Total Commander's *components*
 right and its *gestalt* wrong. TC is not a widget on a page; it is the window.
 
-Done (2 of 8 tasks):
+Done (3 of 8 tasks):
 
 - **Task 1 — the panes fill the window.** Page title and intro gone, full-bleed
   grid, and panes that are equal **by construction** (`minmax(0, 1fr)`, not a
@@ -475,14 +475,41 @@ Done (2 of 8 tasks):
   (`InverseCursor=1` settles the question the first restyle guessed wrong),
   selected names `#FF3C3C`. Chrome is one step lighter than the rows instead of
   Windows-95 grey, in dark and light alike, and focus moved to the path row.
+- **Task 3 — minimal chrome, and F6 means Move.** The pane header is
+  `[source ▾] [path] [filter]`; the button strip behind it is a Settings
+  toggle, off by default, because his `[Layout]` is `ButtonBar=0, DriveBar1=0,
+  DriveCombo=1`. The combo lists **enumerated** mounts plus the six things ART
+  opens — no hardcoded letters — and a folder under no listed mount says so
+  rather than claiming one. The command line stops being decoration: it
+  navigates and filters, and refuses anything else *by name* (§56 — it is not
+  a shell, and a prompt-shaped box that swallows a keystroke is worse than
+  none). The F-key row is one row that cannot become two, with labels giving
+  way to keycaps below 1000px. Everything that used to push the panes down
+  from the top of the page — error, message, busy — is one status strip inside
+  the dock, and the permanent collision footer moved into the copy dialog,
+  where Total Commander asks that question, with its default now a Setting.
 
-Left: the pane header and source combo, the bottom dock and **F6 = Move**
-(Task 3); **Enter opens the container in the same pane** (Task 4, the headline);
+  **F6 is Move** (Shift+F6 renames), and it is the one function key that can
+  destroy the original, so it runs §92's pipeline in full: validate → offer
+  the icons (§7.1) → confirm → copy → **re-list the destination and look for
+  every moved name** → delete. Nothing is deleted unless the destination's own
+  listing has it, so the worst a stopped move can leave is a duplicate. A
+  collision is refused up front rather than handed to the overwrite policy —
+  "leave it alone" would skip the copy and then delete the source. Three
+  directions have no primitive underneath and are refused by name rather than
+  half-built: out of a host folder ([ART-080](ISSUES.md#open) — ART owns no
+  host-side delete), several entries between two images (ART-064), and a
+  single *file* between two images ([ART-081](ISSUES.md#open) —
+  `volume_copy_between` addresses a directory). Task 5's `F2`/`Ctrl+R` refresh
+  came forward into this task, because hiding the button strip left Refresh
+  with no other way to be reached.
+
+Left: **Enter opens the container in the same pane** (Task 4, the headline);
 full keyboard coverage (5); tabs and session restore (6); colour rules and the
 confirmations his config keeps on (7); closing the phase (8).
 
-**Nothing in this phase has been looked at running either.** Both tasks are
-green on tests and neither has been seen.
+**Nothing in this phase has been looked at running either.** All three tasks
+are green on tests and none has been seen.
 
 ### ⏳ SD Card Appliance Builder — SD-0 … SD-5 (planned, not started)
 
@@ -668,7 +695,10 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
    don't share the other two directions' atomicity, `archives_plan_install`
    blocks the command thread, a batch install's Stop is unresponsive
    mid-archive, the filter's empty-vs-no-match message is inferred rather
-   than carried); the next new defect starts at `ART-069`.
+   than carried), and `ART-080`/`ART-081` (Phase 2b task 3's own: there is no
+   host-side delete, so nothing can be moved *off* a folder, and no primitive
+   that moves a single file between two images); the next new defect starts at
+   `ART-082`.
 3. **The hardware verification rung has been reached, for the two artifacts
    built to test it.** `test/task-10-boot-test.adf` mounted, listed and read
    back correctly, and `test/art-bootable-test.adf` booted — both under
@@ -682,12 +712,13 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
    the two-pane manager has real focus, multi-select, batch copy/delete,
    sorting, a filename mask, and now boot code that works; see "Phase 1a"
    above for what is not (volume→volume batching, ART-064/065).
-5. **Start here tomorrow: Phase 2b Task 3**, on branch `phase-2b` — the pane
-   header becomes `[source ▾] [path] [filter]`, the drive/source button row
-   moves behind a Settings toggle (default off), the command line docks
-   directly above the F-key bar, and **F6 becomes Move** (Shift+F6 = rename),
-   labels in both catalogues. Then Task 4, which is the headline: Enter on a
-   container opens it *in the same pane*.
+5. **Start here tomorrow: Phase 2b Task 4**, on branch `phase-2b` — the
+   headline: Enter (or a double-click) on a recognised container opens it *in
+   the same pane*, the pane kind switching underneath, with `[..]` leaving
+   again and the cursor landing back on the container file. A multi-partition
+   HDF lists its partitions as a level; an interior ART cannot read gets an
+   honest label, never an error toast. Task 3 is done — see "Phase 2b" above
+   for what it changed and for the two gaps it recorded (ART-080, ART-081).
 6. **Phase 2a is complete** and merged to `main`
    — see its section above for what it changed and what it left owed, and its
    plan file's Amendments section for what changed after the plan was written
@@ -729,6 +760,7 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-12 | Phase 2b task 3: the pane header is a source combo, a path and a filter, with the button strip behind a Settings toggle; the command line navigates and filters and refuses everything else by name; one non-wrapping F-key row; one status strip inside the dock instead of three banners above the panes; the collision question moved into the copy dialog. **F6 is Move** — verified against the destination's own listing before anything is deleted — with three directions refused by name for want of a primitive (ART-080, ART-081) | 912 Rust / 178 frontend |
 | 2026-08-12 | **Published at github.com/tolon/Art** (public). Licence changed MIT → GPL-3.0-or-later to match the repository, in all seven places that claimed one. Phase 2a merged to `main`; phase 2b started on its own branch so half-finished UI did not travel with it | 912 Rust / 137 frontend |
 | 2026-08-12 | Phase 2b tasks 1–2: the commander fills the window with panes equal by construction, rows lost their buttons, `Ctrl+B` collapses the sidebar; the palette is now the user's own and the chrome follows the theme | 912 Rust / 137 frontend |
 | 2026-08-12 | Phase 2a closed. Also this session: the built-in machine profiles now cover the classic line end to end (A1000 … CD32), and Commodore 8-bit files became scope in writing (spec addendum §10.5) | 908 Rust / 137 frontend |
