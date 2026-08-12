@@ -32,7 +32,8 @@ phase, treat it as the original plan, not a status claim.
 ### HDF — Hard Disk File
 - May contain an RDB (Rigid Disk Block) with partition + filesystem info.
 - Filesystems: OFS, FFS, PFS3, SFS.
-- Detected by extension only. RDB presence is confirmed by parsing (`RDSK`).
+- Detected by content: `RDSK` at offset 0, or an AmigaDOS `DOS` signature with
+  a size past floppy range. The extension is only the fallback.
 
 ### HDZ — compressed HDF
 - Detected by extension only.
