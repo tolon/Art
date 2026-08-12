@@ -329,3 +329,107 @@ DOpus4). The package manifest needs a **licence column**, and anything not
 clearly redistributable ships as a *fetch task* through ART's existing Aminet
 engine rather than as bundled bytes. That engine (§41.5, built) turns a
 licensing problem into a build step.
+
+---
+
+# The exit test, run — 2026-08-12
+
+§5 named one blocker-grade unknown and one acceptance condition for this whole
+report: drive `hst-imager` end to end on a scratch image and see whether the
+PFS3 route is real. **It is.** Run on Windows, on `F:`, against
+**hst-imager 1.6.616** (2026-05-26) and **amitools** as the independent
+witness.
+
+## The command set, verbatim
+
+Discovered from the tool's own `scripts/create_1gb_vhd_rdb_pfs3.txt`, not
+guessed:
+
+```text
+hst.imager blank      F:\art-sd0\sd0-test.img 64mb
+hst.imager rdb init   F:\art-sd0\sd0-test.img
+hst.imager rdb fs import F:\art-sd0\sd0-test.img https://aminet.net/disk/misc/pfs3aio.lha --dos-type PDS3 --name pfs3aio
+hst.imager rdb part add  F:\art-sd0\sd0-test.img DH0 PDS3 * --bootable
+hst.imager rdb part format F:\art-sd0\sd0-test.img 1 Work
+hst.imager fs copy F:\art-sd0\tree "F:\art-sd0\sd0-test.img\rdb\dh0" --recursive --makedir
+```
+
+Every step succeeded. The copy reported `1 directory, 2 files, 36 B`.
+
+## Four findings, in the order they matter
+
+### 1. The filesystem must be in the RDB *before* a PFS3 partition can exist
+
+`rdb part add … PDS3` **refused** until `rdb fs import` had run:
+
+```text
+[ERR] File system with DOS type 'PDS3' not found in Rigid Disk Block
+```
+
+This is the single most useful thing the test produced, because it is an
+independent, shipping implementation refusing to do **exactly what ART's New
+HDF wizard does today** ([ART-084](../ISSUES.md#open)): write a PDS3 partition
+with no FSHD/LSEG behind it. ART is not being conservative in calling that a
+defect; it is being late.
+
+It also **forces the order of the work**. G4 is not "also needed" alongside
+G3 — it is the precondition for any PFS3 partition existing at all, and SD-1
+has it before SD-2 for a reason that is now demonstrated rather than assumed.
+
+### 2. `pfs3aio` comes from Aminet, and ART already has the engine for that
+
+The tool's own canonical script fetches it from `https://aminet.net/` at build
+time rather than bundling it. That is precisely the pattern this report
+recommended for every non-redistributable package (§4), and ART's Aminet engine
+(§41.5, built and tested) does it **better** than a bare URL fetch: mirror
+failover, size check, SHA-256, a content-addressed cache, and an oplog entry.
+
+The driver is user-supplied content either way — `rdb fs add` takes a *path*,
+and nothing is bundled with the tool.
+
+### 3. ART reads such an RDB correctly — and is blind to its file systems
+
+A new oracle hook (`read_foreign_rdb_for_oracle_when_asked`, the same idiom
+`read_foreign_archive_*` and `read_foreign_c64_*` already use) was pointed at
+the image hst-imager built:
+
+```text
+rdb_at=Some(0)   checksum_valid=true
+geometry cyls=130 heads=16 sectors=63 block_size=512
+partitions=1
+  DH0 dostype=PDS3 (0x50445303) fs=Pfs3DirectScsi bootable=true cyls=2..129 bytes=66060288
+```
+
+Which agrees with `rdbtool` exactly. But `rdbtool` also reports:
+
+```text
+FileSystem #0 PDS3/0x50445303 version=19.2 size=59120 seg_list_blk=0x3
+```
+
+and **ART has nothing to print there**, because `ParsedRdb` has no notion of a
+FileSysHeader at all. So ART today cannot answer "does this RDB carry a
+filesystem driver?" — which means G8 cannot validate a built image, and a user
+cannot be told why their PFS3 partition will not mount.
+
+**G4 therefore has a reading half as well as a writing one**, and the reading
+half is the cheaper of the two and useful on its own: it turns ART-084's
+warning from a guess into a fact ART can check.
+
+### 4. Packaging: no .NET runtime needed
+
+The Windows x64 console build is a **single self-contained 137 MB
+`hst.imager.exe`**. That closes §8's packaging question for Route E: no runtime
+prerequisite, one file, MIT.
+
+## What this settles for SD-1
+
+- **Route E is viable and proven**, with the caveat that 137 MB is a large
+  thing to ship beside a Tauri app; a "point ART at your own hst-imager" option
+  is worth designing alongside bundling.
+- **G4 comes first**, and starts with reading FSHD/LSEG rather than writing it.
+- **The Aminet engine is a build-time dependency of the PiStorm builder**, not
+  merely a feature that happens to exist.
+- What is still **not** verified: none of this has been near an Amiga. The
+  image mounts as far as `rdbtool` and ART's reader are concerned; whether
+  AmigaOS mounts it is SD-1's milestone and needs the real machine that booted
+  `art-bootable-test.adf`.

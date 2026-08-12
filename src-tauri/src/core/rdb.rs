@@ -662,6 +662,59 @@ mod dosenv_layout {
 
 #[cfg(test)]
 mod tests {
+    /// Read an RDB **ART did not write**, and print what it found.
+    ///
+    /// The third time this shape of hook has been needed, and the reason is
+    /// always the same: ART's reader and ART's writer can agree with each
+    /// other and with nothing else (ART-032…035, ART-075, ART-079). An RDB
+    /// built by `hst-imager` — which is what both existing PiStorm imagers
+    /// stand on — is the one ART has to be able to read before SD-1 can write
+    /// one.
+    ///
+    /// It prints the **file system entries** as well as the partitions,
+    /// because that is the part ART does not write yet and the part the whole
+    /// PiStorm build depends on (G4, and ART-084): a PDS3 partition with no
+    /// FSHD/LSEG behind it is one an Amiga cannot mount, and `hst-imager`
+    /// refuses to create one at all.
+    ///
+    /// ```text
+    /// ART_RDB_READ_IN=F:rt-sd0\sd0-test.img cargo test read_foreign_rdb_for_oracle_when_asked -- --nocapture
+    /// ```
+    #[test]
+    fn read_foreign_rdb_for_oracle_when_asked() {
+        let Ok(source) = std::env::var("ART_RDB_READ_IN") else {
+            return;
+        };
+        // The same window `open_hdf` reads, so this exercises the path the
+        // application actually takes rather than a convenient shortcut.
+        let bytes = std::fs::read(&source).unwrap();
+        let window = &bytes[..bytes.len().min(1024 * 1024)];
+
+        let at = find_rdb_location(window);
+        println!("rdb_at={at:?}");
+
+        let parsed = parse_rdb(window).unwrap();
+        println!("checksum_valid={}", parsed.checksum_valid);
+        println!(
+            "geometry cyls={} heads={} sectors={} block_size={}",
+            parsed.cylinders, parsed.heads, parsed.sectors, parsed.block_size
+        );
+        println!("partitions={}", parsed.partitions.len());
+        for part in &parsed.partitions {
+            println!(
+                "  {} dostype={} ({:#010x}) fs={:?} bootable={} cyls={}..{} bytes={}",
+                part.drive_name,
+                part.dostype_str,
+                part.dostype,
+                part.fs_type,
+                part.bootable,
+                part.low_cyl,
+                part.high_cyl,
+                part.size_bytes,
+            );
+        }
+    }
+
     use super::*;
 
     #[test]
