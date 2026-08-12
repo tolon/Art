@@ -556,6 +556,37 @@ G12 (card backup) goes with G1: the build manifest already describes how to
 the image an Amiga — partitioning, filesystems, the OS, the content, the
 multiboot layout — is untouched by the decision and is all file work.
 
+**SD-0 is complete** ([sd0-prior-art.md](sd0-prior-art.md), from the user's own
+research). Three of its findings change what gets built, not merely how:
+
+- **The card's shape is exact now**: MBR, a FAT32 primary, then 1–3 `0x76`
+  primaries, each of which the m68k side sees as a separate hard drive — and
+  **the RDB sits at a byte offset inside one of those**, not at offset 0. So G4
+  is bigger than "write FSHD/LSEG": ART's RDB writer has to work at an offset,
+  which is the same shape as [ART-043](ISSUES.md#open). One coherent fix, with
+  tests at both offsets.
+- **PC-side PFS3 write is already solved and MIT-licensed.** `hst-amiga` /
+  `hst-imager` read, write *and format* PFS3 and FFS with no emulator, and both
+  existing imagers stand on them. G3 gains a Route E that is proven rather than
+  speculative, and Route B (native PFS3 in ART, the flagship) gains a PC-side
+  oracle — which likely pulls SD-2 in by weeks.
+- **Multiboot mechanism B ships in the field today** on stock Emu68: one
+  `config_{distro}.txt` per distribution on FAT32, and an Amiga-side selector
+  that rewrites `CONFIG.TXT` and reboots. ART can generate the entire static
+  side at build time; the selector itself is later work and must be ART's own
+  code — the pattern is free, the implementation is not.
+
+Also settled: install media is identified **by content checksum, not by
+filename** (ART's own content-first rule, applied to OS media); Kickstarts are
+A1200-only against a checksum DB; and the community-standard package set is
+full of demo and conditionally-redistributable software, so SD-2's manifest
+needs a **licence column** and anything not clearly redistributable ships as a
+fetch task through the Aminet engine instead of as bundled bytes.
+
+One blocker-grade unknown is carried into SD-1: SD-0's own exit test — drive
+`hst-imager` on a scratch image end to end (init RDB, add a PFS3 partition,
+format, copy a tree in) and verify the result with ART's readers and WinUAE.
+
 **Three gaps the analysis did not name, added 2026-08-12 from the user:**
 
 - **G14** — the build inputs that make a distribution *theirs*: wallpaper,
@@ -584,7 +615,7 @@ generalised from it).
 
 | Phase | Contents |
 |---|---|
-| **SD-0** | Prior-art teardown: Emu68-Imager, emu68hatcher, hdf2emu68 (G0) |
+| **SD-0** | ✅ **Done 2026-08-12** — prior-art teardown, written up as [sd0-prior-art.md](sd0-prior-art.md). One exit test still owed (drive `hst-imager` end to end on a scratch image) |
 | **SD-1** | The image has a shape: MBR + FAT32 boot partition (G2), RDB filesystem embedding FSHD/LSEG (G4 — also closes ART-084), build manifest (G7), a build as a drop target (G15), image validation (G8) |
 | **SD-2** | Content, preloaded: PFS3 via a scripted WinUAE session (G3 route D), OS install engine (G5), ROM pairing (G9), launcher metadata export (G10), layout policy (G11) |
 | **SD-3** | It is *mine*: wallpaper, WiFi, prefs and Startup-Sequence, each edited in place (G14); multiboot as several complete environments and a boot menu (G16) |

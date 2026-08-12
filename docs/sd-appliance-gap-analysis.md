@@ -89,7 +89,33 @@ Legend: 🟥 blocker (the build story does not exist without it) ·
 
 ---
 
-## G0 — Prior art: existing PiStorm imagers (study before building)
+## G0 — Prior art: existing PiStorm imagers ✅ **done, 2026-08-12**
+
+> **The teardown is written: [sd0-prior-art.md](sd0-prior-art.md).** It is SD-0,
+> and where it disagrees with this document **it wins** — its final section
+> lists exactly what it supersedes here, gap by gap, so the corrections can be
+> made deliberately when SD-1 designs from them rather than in a hurry now.
+>
+> The three findings that change what gets built:
+>
+> - **The card's shape is now exact.** MBR, FAT32 primary #1, then 1–3 `0x76`
+>   primaries — and **the RDB lives at a byte offset inside one of those**, not
+>   at offset 0. G4 is therefore bigger than "write FSHD/LSEG": ART's RDB
+>   writer has to work at an offset, which is the same shape as ART-043. One
+>   coherent fix.
+> - **PC-side PFS3 write is already solved and MIT-licensed** — `hst-amiga` /
+>   `hst-imager` read, write *and format* PFS3 and FFS, and both existing
+>   imagers stand on them. That adds a Route E to G3 that is proven rather
+>   than speculative, and gives Route B a PC-side oracle that needs no
+>   emulator.
+> - **Multiboot mechanism B ships in the field today** on stock Emu68:
+>   per-distro `config_{distro}.txt` and an Amiga-side selector that rewrites
+>   `CONFIG.TXT` and reboots. ART can generate the whole static side at build
+>   time; the selector is later work and must be ART's own code.
+>
+> One blocker-grade unknown is carried forward: SD-0's own exit test — drive
+> `hst-imager` on a scratch image end to end and verify the result with ART's
+> readers and WinUAE.
 
 ART is NOT the first mover here. Several active projects already build Emu68
 SD cards or ship a finished multiboot distribution, and every one must be
