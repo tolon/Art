@@ -164,7 +164,25 @@ likely to trust ART.
 **Half-fixed 2026-08-12:** the wizard now shows the limitation in the dialog,
 in both languages, before the image is made
 (`hardDisk.modal.warnNoDriver`, `hdfSizeWarning` in `@/lib/hdfSize`, tested).
-That turns a false claim into a stated one; it is not the fix. The fix is G4 —
+That turns a false claim into a stated one; it is not the fix.
+
+**And confirmed from outside, the same day.** `hst-imager` — the tool both
+existing PiStorm imagers stand on — **refuses** to do what ART's wizard does:
+
+```text
+[ERR] File system with DOS type 'PDS3' not found in Rigid Disk Block
+```
+
+It will not add a `PDS` partition until the driver is in the RDB. ART is not
+being conservative in calling this a defect; it is being late.
+
+**Reading half now built (SD-1, 2026-08-12).** `core/rdb.rs` reads the
+FSHD/LSEG chain, and `partitionsMissingDriver` (`@/lib/rdbDrivers`, 6 tests)
+answers the question this issue is about: the Hard Disk studio now *names the
+partition* that will not mount, instead of warning in general. Verified against
+an image `hst-imager` built, agreeing with `rdbtool` on version, size and
+seg-list block. The writing half — putting a driver *into* an RDB ART creates —
+is still owed. The fix is G4 —
 segment-splitting a user-supplied `pfs3aio` binary into an LSEG chain,
 checksumming it and wiring `DosType → SegListBlocks` — which is scheduled as
 SD-1 and verifiable against `rdbtool`, an oracle that already exists.

@@ -12,6 +12,7 @@ import {
   type AmigaHardDiskFs,
 } from "@/lib/hdf";
 import { hdfSizeWarning, parseCustomSize, type HdfFsId } from "@/lib/hdfSize";
+import { partitionsMissingDriver } from "@/lib/rdbDrivers";
 
 interface FsChoice {
   id: AmigaHardDiskFs;
@@ -204,6 +205,10 @@ export function HardDiskStudio() {
 
   const partitionColors = ["#388bfd", "#3fb950", "#d29922", "#a371f7", "#f85149"];
 
+  /** Partitions naming a filesystem this disk does not carry — the question
+   *  ART could not answer before it read FSHD/LSEG. */
+  const missingDriver = info ? partitionsMissingDriver(info) : [];
+
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -364,6 +369,56 @@ export function HardDiskStudio() {
               })}
             </div>
           </section>
+
+          {/* What drivers this disk carries, and which partitions are left
+              without one (G4's reading half).
+
+              The banner is the point: a `PDS\3` partition with no `PDS\3`
+              driver in the RDB is one an Amiga ignores in silence — no error,
+              no icon, nothing to search for. Until ART could read FSHD/LSEG it
+              could only warn in general (ART-084); now it can name the
+              partition. */}
+          {info.hdf_type === "rdb" && (
+            <section className="card">
+              <h2 style={{ fontSize: 15 }}>{t("hardDisk.drivers.title")}</h2>
+              {info.file_systems.length === 0 ? (
+                <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                  {t("hardDisk.drivers.none")}
+                </p>
+              ) : (
+                <ul style={{ listStyle: "none", padding: 0, margin: "8px 0 0", fontSize: 13 }}>
+                  {info.file_systems.map((fs, i) => (
+                    <li key={i} style={{ padding: "3px 0" }}>
+                      <code>{fs.dos_type_str}</code>{" "}
+                      <span className="muted">
+                        {t("hardDisk.drivers.entry", {
+                          version: `${fs.version}.${fs.revision}`,
+                          size: fmtBytes(fs.size_bytes),
+                          blocks: fs.segment_blocks,
+                        })}
+                      </span>
+                      {fs.truncated && (
+                        <span className="badge badge-warn" style={{ marginLeft: 6, fontSize: 10 }}>
+                          {t("hardDisk.drivers.truncated")}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {missingDriver.length > 0 && (
+                <p className="badge badge-warn" style={{ display: "block", marginTop: 10 }}>
+                  {t("hardDisk.drivers.missing", {
+                    count: missingDriver.length,
+                    names: missingDriver
+                      .map((p) => `${p.drive_name} (${p.dostype_str})`)
+                      .join(", "),
+                  })}
+                </p>
+              )}
+            </section>
+          )}
 
           {/* Selected Partition Deep Inspector */}
           {selectedPart && (

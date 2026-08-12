@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use super::rdb::{
-    create_rdb_layout, find_rdb_location, parse_rdb, AmigaHardDiskFs, ParsedPartition,
-    PartitionSpec, BLOCK_SIZE,
+    create_rdb_layout, find_rdb_location, parse_rdb, AmigaHardDiskFs, ParsedFileSystem,
+    ParsedPartition, PartitionSpec, BLOCK_SIZE,
 };
 use crate::core::error::{CoreError, CoreResult};
 
@@ -33,6 +33,14 @@ pub struct HdfInfo {
     pub sectors: u32,
     pub block_size: u32,
     pub partitions: Vec<ParsedPartition>,
+    /// The filesystem drivers the RDB carries (G4's reading half).
+    ///
+    /// Empty is normal for a disk that only uses what Kickstart already has.
+    /// It is **not** normal for one with a `PDS\3` or `SFS\0` partition:
+    /// those drivers live in the RDB, and a partition naming one the disk does
+    /// not provide is a partition an Amiga silently ignores. This is what lets
+    /// ART say which of the two it is looking at.
+    pub file_systems: Vec<ParsedFileSystem>,
     pub free_bytes: u64,
     pub rdb_checksum_valid: bool,
 }
@@ -79,6 +87,7 @@ pub fn open_hdf(path: &Path) -> CoreResult<HdfInfo> {
             sectors: parsed.sectors,
             block_size: parsed.block_size,
             partitions: parsed.partitions,
+            file_systems: parsed.file_systems,
             free_bytes,
             rdb_checksum_valid: parsed.checksum_valid,
         });
@@ -133,6 +142,9 @@ pub fn open_hdf(path: &Path) -> CoreResult<HdfInfo> {
         sectors: 0,
         block_size: BLOCK_SIZE as u32,
         partitions: vec![synthetic_part],
+        // A bare hardfile has no RDB, so there is nowhere for a driver to
+        // live — which is a different thing from "none found in the RDB".
+        file_systems: Vec::new(),
         free_bytes: 0,
         rdb_checksum_valid: true,
     })

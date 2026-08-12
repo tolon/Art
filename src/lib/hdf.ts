@@ -35,6 +35,27 @@ export interface ParsedPartition {
   checksum_valid: boolean;
 }
 
+/**
+ * One filesystem driver embedded in the RDB — mirrors `ParsedFileSystem`.
+ *
+ * PFS3 and SFS are not in Kickstart: a partition whose DosType names one
+ * mounts only if the driver for it sits inside the RDB. A disk that names a
+ * filesystem it does not carry is one the Amiga silently ignores, which is
+ * the difference this type exists to let ART report.
+ */
+export interface ParsedFileSystem {
+  dos_type: number;
+  dos_type_str: string;
+  version: number;
+  revision: number;
+  seg_list_block: number;
+  segment_blocks: number;
+  size_bytes: number;
+  checksum_valid: boolean;
+  /** The LSEG chain could not be followed to its end. */
+  truncated: boolean;
+}
+
 export interface HdfInfo {
   path: string;
   total_bytes: number;
@@ -44,6 +65,8 @@ export interface HdfInfo {
   sectors: number;
   block_size: number;
   partitions: ParsedPartition[];
+  /** Empty is normal for a disk using only what Kickstart already has. */
+  file_systems: ParsedFileSystem[];
   free_bytes: number;
   rdb_checksum_valid: boolean;
 }

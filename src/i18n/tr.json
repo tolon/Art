@@ -531,6 +531,14 @@
     "visualLayout": "Görsel Bölüm Yerleşimi",
     "partitionsTable": "Bölüm Tablosu ({{count}})",
     "bootablePri": "Önyüklenebilir (Öncelik {{n}})",
+    "drivers": {
+      "title": "RDB içindeki dosya sistemi sürücüleri",
+      "none": "Yok. Yalnızca Kickstart'ın zaten sahip olduğu dosya sistemlerini — Old ve Fast File System, DOS tipleri 0'dan 7'ye — kullanan bir disk için bu doğrudur.",
+      "entry": "sürüm {{version}} · {{size}} · {{blocks}} blok",
+      "truncated": "zincir eksik",
+      "missing_one": "{{names}}, bu diskin taşımadığı bir dosya sistemini adıyla anıyor. Amiga bunu bağlamayacak — sessizce, hiçbir hata vermeden. Sürücünün RDB’ye eklenmesi gerekir.",
+      "missing_other": "{{count}} bölüm, bu diskin taşımadığı dosya sistemlerini adıyla anıyor ({{names}}). Amiga bunları bağlamayacak — sessizce, hiçbir hata vermeden."
+    },
     "partitionProperties": "Bölüm Özellikleri",
     "deviceName": "Aygıt Adı:",
     "dosTypeSignature": "DosType İmzası:",

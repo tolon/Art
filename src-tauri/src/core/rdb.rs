@@ -148,6 +148,47 @@ impl ParsedPartition {
     }
 }
 
+/// One file system driver embedded in the RDB — an `FSHD` block and the
+/// `LSEG` chain hanging off it.
+///
+/// **Why this matters more than it looks.** PFS3 and SFS are not in Kickstart.
+/// A partition whose DosType is `PDS\3` mounts only if the driver for it is
+/// *inside the RDB*, loaded from these blocks at boot. A partition table that
+/// names a filesystem nothing on the disk provides is one an Amiga silently
+/// ignores — which is exactly the image ART's own New HDF wizard produces
+/// today (ART-084), and exactly what `hst-imager` refuses to produce at all:
+///
+/// ```text
+/// [ERR] File system with DOS type 'PDS3' not found in Rigid Disk Block
+/// ```
+///
+/// Reading these is the cheaper half of G4 and useful on its own: it is what
+/// lets ART say *why* a partition will not mount, instead of guessing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParsedFileSystem {
+    pub dos_type: u32,
+    pub dos_type_str: String,
+    /// `19` and `2` for a `version=19.2` driver — the two halves of one
+    /// longword, which is how the FSHD stores them.
+    pub version: u16,
+    pub revision: u16,
+    /// Where the `LSEG` chain starts.
+    pub seg_list_block: u32,
+    /// How many `LSEG` blocks the chain holds.
+    pub segment_blocks: u32,
+    /// The driver's size in bytes: the data each `LSEG` actually carries,
+    /// which its own `SummedLongs` declares — the last block of a chain is
+    /// usually part-full, and counting every block as full would overstate
+    /// every driver by up to 492 bytes.
+    pub size_bytes: u64,
+    pub checksum_valid: bool,
+    /// The chain could not be followed to its end — a loop, a pointer past
+    /// the end of what was read, or a block that is not an `LSEG`. The entry
+    /// is still reported: "there is a driver here and ART could not measure
+    /// it" is a different and more useful answer than silence.
+    pub truncated: bool,
+}
+
 /// Parsed Rigid Disk Block (`RDSK`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedRdb {
@@ -158,8 +199,28 @@ pub struct ParsedRdb {
     pub block_size: u32,
     pub total_capacity_bytes: u64,
     pub partitions: Vec<ParsedPartition>,
+    /// The drivers the RDB carries, in chain order. Empty is the normal and
+    /// correct state for a disk that only uses filesystems Kickstart already
+    /// has (`DOS\0` … `DOS\7`).
+    pub file_systems: Vec<ParsedFileSystem>,
     pub free_cylinders: u32,
     pub checksum_valid: bool,
+}
+
+impl ParsedRdb {
+    /// Whether this RDB carries a driver for `dos_type`.
+    ///
+    /// The question ART-084 needs answered before it can stop guessing: a
+    /// `PDS\3` partition with no `PDS\3` file system beside it is a partition
+    /// an Amiga will not mount, and ART can now say so as a fact rather than
+    /// as a general warning.
+    ///
+    /// Kickstart's own filesystems are not in the RDB and do not need to be,
+    /// so this answering `false` is only interesting for a DosType Kickstart
+    /// does not know.
+    pub fn provides_file_system(&self, dos_type: u32) -> bool {
+        self.file_systems.iter().any(|fs| fs.dos_type == dos_type)
+    }
 }
 
 /// How many longwords an RDB block's checksum covers.
@@ -231,7 +292,132 @@ pub fn find_rdb_location(image: &[u8]) -> Option<usize> {
     None
 }
 
-/// Parse RDB structure and all linked partition blocks.
+/// A longword from `block` at byte `offset`, or `0` past the end.
+fn lw(block: &[u8], offset: usize) -> u32 {
+    if offset + 4 > block.len() {
+        return 0;
+    }
+    u32::from_be_bytes([
+        block[offset],
+        block[offset + 1],
+        block[offset + 2],
+        block[offset + 3],
+    ])
+}
+
+/// A DosType as its four printable characters — `PDS\3`, `DOS\1`.
+fn dos_type_string(dos_type: u32) -> String {
+    format!(
+        "{}{}{}{}",
+        ((dos_type >> 24) & 0xFF) as u8 as char,
+        ((dos_type >> 16) & 0xFF) as u8 as char,
+        ((dos_type >> 8) & 0xFF) as u8 as char,
+        (dos_type & 0xFF) as u8
+    )
+}
+
+/// The most `LSEG` blocks one driver's chain may have.
+///
+/// A generous ceiling on a real driver — `pfs3aio` is 121 blocks — and a hard
+/// stop for a malformed chain that points at itself. Reaching it marks the
+/// entry `truncated` rather than failing the whole parse: an RDB with one bad
+/// filesystem chain still has partitions worth reading.
+const MAX_LSEG_BLOCKS: u32 = 4096;
+
+/// The most `FSHD` blocks a chain may have. Real disks carry one or two.
+const MAX_FILE_SYSTEMS: usize = 32;
+
+/// Walk the `LSEG` chain from `first`, returning (blocks, data bytes, truncated).
+///
+/// The data length comes from each block's own `SummedLongs` rather than from
+/// a fixed 492: the last block of a chain is nearly always part-full, and
+/// counting every block as full overstates a driver by up to half a kilobyte.
+/// `pfs3aio` measured this way comes to 59,120 bytes, which is what `rdbtool`
+/// independently reports.
+fn walk_segment_chain(image: &[u8], first: u32) -> (u32, u64, bool) {
+    let mut block = first;
+    let mut blocks = 0u32;
+    let mut bytes = 0u64;
+    let mut seen = std::collections::HashSet::new();
+
+    while block != 0 && block != 0xFFFF_FFFF {
+        if blocks >= MAX_LSEG_BLOCKS || !seen.insert(block) {
+            return (blocks, bytes, true);
+        }
+
+        let off = (block as usize).saturating_mul(BLOCK_SIZE);
+        if off + BLOCK_SIZE > image.len() {
+            return (blocks, bytes, true);
+        }
+        let slice = &image[off..off + BLOCK_SIZE];
+        if lw(slice, 0) != IDNAME_LSEG {
+            return (blocks, bytes, true);
+        }
+
+        // Five longwords of header — id, summed longs, checksum, host id,
+        // next — and the rest is the driver's own bytes.
+        let longs = summed_longs(slice);
+        bytes += (longs.saturating_sub(5) as u64) * 4;
+        blocks += 1;
+        block = lw(slice, 16);
+    }
+
+    (blocks, bytes, false)
+}
+
+/// Read the `FSHD` chain hanging off the RDSK block.
+///
+/// Every step is bounded the same way the partition walk is — a visited set, a
+/// ceiling, and a containment check before each read — because these pointers
+/// come out of a file ART did not write, and an RDB that points its filesystem
+/// list at itself must cost a loop iteration rather than the application.
+fn parse_file_systems(image: &[u8], first: u32) -> Vec<ParsedFileSystem> {
+    let mut found = Vec::new();
+    let mut block = first;
+    let mut seen = std::collections::HashSet::new();
+
+    while block != 0 && block != 0xFFFF_FFFF {
+        if found.len() >= MAX_FILE_SYSTEMS || !seen.insert(block) {
+            break;
+        }
+
+        let off = (block as usize).saturating_mul(BLOCK_SIZE);
+        if off + BLOCK_SIZE > image.len() {
+            break;
+        }
+        let slice = &image[off..off + BLOCK_SIZE];
+        if lw(slice, 0) != IDNAME_FSHD {
+            break;
+        }
+
+        // FSHD, in longwords: 0 id · 1 summed longs · 2 checksum · 3 host id ·
+        // 4 next · 5 flags · 6-7 reserved · 8 DosType · 9 Version ·
+        // 10 PatchFlags · then the DeviceNode, whose `dn_SegListBlock` at
+        // LW 18 is where the driver itself begins.
+        let dos_type = lw(slice, 32);
+        let version_long = lw(slice, 36);
+        let seg_list_block = lw(slice, 72);
+        let (segment_blocks, size_bytes, truncated) = walk_segment_chain(image, seg_list_block);
+
+        found.push(ParsedFileSystem {
+            dos_type,
+            dos_type_str: dos_type_string(dos_type),
+            version: (version_long >> 16) as u16,
+            revision: (version_long & 0xFFFF) as u16,
+            seg_list_block,
+            segment_blocks,
+            size_bytes,
+            checksum_valid: verify_rdb_block_checksum(slice),
+            truncated,
+        });
+
+        block = lw(slice, 16);
+    }
+
+    found
+}
+
+/// Parse RDB structure, its partition chain and its file system chain.
 pub fn parse_rdb(image: &[u8]) -> CoreResult<ParsedRdb> {
     let rdb_block_idx = find_rdb_location(image).ok_or_else(|| CoreError::Malformed {
         format: "rdb".into(),
@@ -257,6 +443,11 @@ pub fn parse_rdb(image: &[u8]) -> CoreResult<ParsedRdb> {
         .and_then(|v| v.checked_mul(sectors as u64))
         .and_then(|v| v.checked_mul(block_size as u64))
         .unwrap_or(0);
+
+    // The file system list at offset 32 (LW 8), beside the partition list at
+    // LW 7. Read before the partitions so a partition can be judged against
+    // what the disk actually provides.
+    let file_systems = parse_file_systems(image, lw(rdb_slice, 32));
 
     // First partition pointer at offset 28 (LW 7)
     let mut part_ptr =
@@ -376,6 +567,7 @@ pub fn parse_rdb(image: &[u8]) -> CoreResult<ParsedRdb> {
         block_size,
         total_capacity_bytes,
         partitions,
+        file_systems,
         free_cylinders,
         checksum_valid,
     })
@@ -662,6 +854,153 @@ mod dosenv_layout {
 
 #[cfg(test)]
 mod tests {
+    // ---- FSHD / LSEG reading (G4's reading half) ------------------------
+    //
+    // Synthetic and built here at runtime, per the project's rule: ART ships
+    // no copyrighted Amiga content, so the fixtures are the smallest blocks
+    // that carry the shape being tested. The real thing — an RDB `hst-imager`
+    // built, with `pfs3aio` in it — is checked by
+    // `read_foreign_rdb_for_oracle_when_asked` above, against `rdbtool`.
+
+    /// A one-megabyte image with an `RDSK` at block 0 and nothing else.
+    fn blank_image_with_rdsk(fs_list: u32, part_list: u32) -> Vec<u8> {
+        let mut image = vec![0u8; 64 * BLOCK_SIZE];
+        image[0..4].copy_from_slice(&IDNAME_RDSK.to_be_bytes());
+        image[4..8].copy_from_slice(&64u32.to_be_bytes()); // SummedLongs
+        image[28..32].copy_from_slice(&part_list.to_be_bytes());
+        image[32..36].copy_from_slice(&fs_list.to_be_bytes());
+        image[64..68].copy_from_slice(&10u32.to_be_bytes()); // cylinders
+        image[68..72].copy_from_slice(&32u32.to_be_bytes()); // sectors
+        image[72..76].copy_from_slice(&2u32.to_be_bytes()); // heads
+        image
+    }
+
+    /// Write an `FSHD` at `block`, pointing at `seg_list` and `next`.
+    fn put_fshd(
+        image: &mut [u8],
+        block: u32,
+        dos_type: u32,
+        version: u32,
+        seg_list: u32,
+        next: u32,
+    ) {
+        let off = block as usize * BLOCK_SIZE;
+        image[off..off + 4].copy_from_slice(&IDNAME_FSHD.to_be_bytes());
+        image[off + 4..off + 8].copy_from_slice(&64u32.to_be_bytes());
+        image[off + 16..off + 20].copy_from_slice(&next.to_be_bytes());
+        image[off + 32..off + 36].copy_from_slice(&dos_type.to_be_bytes());
+        image[off + 36..off + 40].copy_from_slice(&version.to_be_bytes());
+        image[off + 72..off + 76].copy_from_slice(&seg_list.to_be_bytes());
+    }
+
+    /// Write an `LSEG` at `block` declaring `longs` summed longwords.
+    fn put_lseg(image: &mut [u8], block: u32, longs: u32, next: u32) {
+        let off = block as usize * BLOCK_SIZE;
+        image[off..off + 4].copy_from_slice(&IDNAME_LSEG.to_be_bytes());
+        image[off + 4..off + 8].copy_from_slice(&longs.to_be_bytes());
+        image[off + 16..off + 20].copy_from_slice(&next.to_be_bytes());
+    }
+
+    #[test]
+    fn an_rdb_with_no_file_systems_reports_none() {
+        // The normal, correct state for a disk that only uses filesystems
+        // Kickstart already has. Empty must not read as "something went
+        // wrong".
+        let image = blank_image_with_rdsk(0, 0);
+        let parsed = parse_rdb(&image).unwrap();
+        assert!(parsed.file_systems.is_empty());
+        assert!(!parsed.provides_file_system(0x5044_5303));
+    }
+
+    #[test]
+    fn a_file_system_is_read_with_its_version_and_measured_size() {
+        let mut image = blank_image_with_rdsk(1, 0);
+        put_fshd(&mut image, 1, 0x5044_5303, 0x0013_0002, 2, 0);
+        // Two full blocks and one part-full: 492 + 492 + 80.
+        put_lseg(&mut image, 2, 128, 3);
+        put_lseg(&mut image, 3, 128, 4);
+        put_lseg(&mut image, 4, 25, 0);
+
+        let parsed = parse_rdb(&image).unwrap();
+        assert_eq!(parsed.file_systems.len(), 1);
+        let fs = &parsed.file_systems[0];
+        assert_eq!(fs.dos_type_str, "PDS3");
+        assert_eq!((fs.version, fs.revision), (19, 2));
+        assert_eq!(fs.segment_blocks, 3);
+        // **From each block's own SummedLongs, not from a fixed 492.** Three
+        // blocks counted as full would be 1476; the real answer is 1064, and
+        // getting this wrong overstates every driver by up to half a
+        // kilobyte. `pfs3aio` measured this way comes to 59,120 bytes, which
+        // is exactly what `rdbtool` independently reports.
+        assert_eq!(fs.size_bytes, 492 + 492 + 80);
+        assert!(!fs.truncated);
+        assert!(parsed.provides_file_system(0x5044_5303));
+    }
+
+    #[test]
+    fn several_file_systems_are_read_in_chain_order() {
+        let mut image = blank_image_with_rdsk(1, 0);
+        put_fshd(&mut image, 1, 0x5044_5303, 0x0013_0002, 3, 2);
+        put_fshd(&mut image, 2, 0x5346_5300, 0x0001_0000, 4, 0);
+        put_lseg(&mut image, 3, 25, 0);
+        put_lseg(&mut image, 4, 25, 0);
+
+        let parsed = parse_rdb(&image).unwrap();
+        let types: Vec<&str> = parsed
+            .file_systems
+            .iter()
+            .map(|fs| fs.dos_type_str.as_str())
+            .collect();
+        assert_eq!(types, vec!["PDS3", "SFS0"]);
+    }
+
+    #[test]
+    fn a_segment_chain_that_loops_is_marked_rather_than_followed_forever() {
+        // These pointers come out of a file ART did not write. A chain that
+        // points at itself must cost a loop iteration, not the application.
+        let mut image = blank_image_with_rdsk(1, 0);
+        put_fshd(&mut image, 1, 0x5044_5303, 0x0013_0002, 2, 0);
+        put_lseg(&mut image, 2, 128, 3);
+        put_lseg(&mut image, 3, 128, 2); // back to 2
+
+        let parsed = parse_rdb(&image).unwrap();
+        let fs = &parsed.file_systems[0];
+        assert!(fs.truncated);
+        // What it did manage to walk is still reported: "there is a driver
+        // here and ART could not measure it" beats silence.
+        assert_eq!(fs.segment_blocks, 2);
+        assert!(parsed.provides_file_system(0x5044_5303));
+    }
+
+    #[test]
+    fn a_segment_pointer_past_the_end_is_refused_not_indexed() {
+        let mut image = blank_image_with_rdsk(1, 0);
+        put_fshd(&mut image, 1, 0x5044_5303, 0x0013_0002, 9_000_000, 0);
+
+        let parsed = parse_rdb(&image).unwrap();
+        assert!(parsed.file_systems[0].truncated);
+        assert_eq!(parsed.file_systems[0].segment_blocks, 0);
+    }
+
+    #[test]
+    fn a_file_system_chain_that_loops_stops() {
+        let mut image = blank_image_with_rdsk(1, 0);
+        put_fshd(&mut image, 1, 0x5044_5303, 0x0013_0002, 0, 2);
+        put_fshd(&mut image, 2, 0x4453_0003, 0x0001_0000, 0, 1); // back to 1
+
+        let parsed = parse_rdb(&image).unwrap();
+        assert_eq!(parsed.file_systems.len(), 2);
+    }
+
+    #[test]
+    fn a_block_that_is_not_an_fshd_ends_the_list() {
+        // A pointer into the middle of a partition, say. Stop; do not
+        // interpret whatever happens to be there as a driver.
+        let image = blank_image_with_rdsk(5, 0);
+        let parsed = parse_rdb(&image).unwrap();
+        assert!(parsed.file_systems.is_empty());
+    }
+
     /// Read an RDB **ART did not write**, and print what it found.
     ///
     /// The third time this shape of hook has been needed, and the reason is
@@ -678,7 +1017,7 @@ mod tests {
     /// refuses to create one at all.
     ///
     /// ```text
-    /// ART_RDB_READ_IN=F:rt-sd0\sd0-test.img cargo test read_foreign_rdb_for_oracle_when_asked -- --nocapture
+    /// ART_RDB_READ_IN=F:\art-sd0\sd0-test.img cargo test read_foreign_rdb_for_oracle_when_asked -- --nocapture
     /// ```
     #[test]
     fn read_foreign_rdb_for_oracle_when_asked() {
@@ -699,6 +1038,22 @@ mod tests {
             "geometry cyls={} heads={} sectors={} block_size={}",
             parsed.cylinders, parsed.heads, parsed.sectors, parsed.block_size
         );
+        // The half rdbtool reports and ART used to be blind to.
+        println!("file_systems={}", parsed.file_systems.len());
+        for fs in &parsed.file_systems {
+            println!(
+                "  {} ({:#010x}) version={}.{} size={} seg_list_blk={:#x} blocks={} checksum_ok={} truncated={}",
+                fs.dos_type_str,
+                fs.dos_type,
+                fs.version,
+                fs.revision,
+                fs.size_bytes,
+                fs.seg_list_block,
+                fs.segment_blocks,
+                fs.checksum_valid,
+                fs.truncated,
+            );
+        }
         println!("partitions={}", parsed.partitions.len());
         for part in &parsed.partitions {
             println!(
@@ -711,6 +1066,10 @@ mod tests {
                 part.low_cyl,
                 part.high_cyl,
                 part.size_bytes,
+            );
+            println!(
+                "    driver present in RDB: {}",
+                parsed.provides_file_system(part.dostype)
             );
         }
     }

@@ -531,6 +531,14 @@
     "visualLayout": "Visual Partition Layout",
     "partitionsTable": "Partitions Table ({{count}})",
     "bootablePri": "Bootable (Pri {{n}})",
+    "drivers": {
+      "title": "File system drivers in the RDB",
+      "none": "None. That is correct for a disk using only the file systems Kickstart already has — the Old and Fast File Systems, DOS types 0 to 7.",
+      "entry": "version {{version}} · {{size}} · {{blocks}} blocks",
+      "truncated": "chain incomplete",
+      "missing_one": "{{names}} names a file system this disk does not carry. An Amiga will not mount it — silently, with no error. The driver has to be added to the RDB.",
+      "missing_other": "{{count}} partitions name file systems this disk does not carry ({{names}}). An Amiga will not mount them — silently, with no error."
+    },
     "partitionProperties": "Partition Properties",
     "deviceName": "Device Name:",
     "dosTypeSignature": "DosType Signature:",
