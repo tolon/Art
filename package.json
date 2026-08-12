@@ -4,6 +4,12 @@
   "version": "0.1.0",
   "type": "module",
   "description": "ART — The Swiss Army Knife for Amiga Files",
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tolon/Art.git"
+  },
+  "homepage": "https://github.com/tolon/Art",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

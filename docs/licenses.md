@@ -1,6 +1,13 @@
 # License Inventory
 
-ART is MIT-licensed. This document tracks the licenses of its dependencies.
+ART is licensed **GPL-3.0-or-later**. This document tracks the licenses of its
+dependencies.
+
+Every dependency below is permissive (MIT, Apache-2.0, Zlib, BSD, CDLA) and so
+is compatible with distributing ART under the GPL. The reverse does not hold —
+a GPL *dependency* would be fine for ART's own licence but is still avoided
+where it would constrain reuse of a module, which is why ADFlib is read for
+understanding and never copied (see the note at the foot of this file).
 It is maintained manually and verified with `cargo deny check` (see
 `deny.toml`).
 

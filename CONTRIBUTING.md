@@ -69,4 +69,4 @@ Reference issues when relevant.
 ## Licensing
 
 By contributing, you agree your contributions are licensed under the project's
-[MIT license](LICENSE).
+[GPL-3.0-or-later license](LICENSE).
