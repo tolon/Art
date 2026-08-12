@@ -19,9 +19,11 @@ A2000, A3000, A1200, A4000, CDTV and CD32**, and users add their own (spec
 §33). Kickstart identification, WinUAE configuration and the compatibility
 check all read those profiles.
 
-Commodore's 8-bit side is in scope too: **C64 disk and tape images** (`.d64`,
-`.d71`, `.d81`, `.t64`, with `.tap`/`.prg`/`.crt` identified but not browsable)
-are being built now — see the status below for exactly how far that has got.
+Commodore's 8-bit side is in scope too, and built: **C64 disk and tape
+images** (`.d64`, `.d71`, `.d81`, `.t64`) open in the same commander and copy
+out to a folder, read-only. `.tap`, `.prg` and `.crt` are identified and
+described rather than browsed — a TAP is a sampled tape signal with no
+directory in it.
 
 ## Status
 
@@ -61,8 +63,7 @@ The interface ships in English and Turkish. The language is chosen in
 Settings and remembered across restarts. Error messages coming from the Rust
 core are still English regardless of the chosen language.
 
-Not yet built: **C64 disk and tape images** (`.d64`/`.d71`/`.d81`/`.t64` — the
-next task in the current phase; nothing reads them today), PFS3/SFS
+Not yet built: PFS3/SFS
 (partitions using them are listed but their contents are not readable),
 DMS/ADZ conversion, recovery tools, and writing *into* a CD or an archive
 (both are read-only, deliberately and permanently).

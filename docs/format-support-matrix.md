@@ -81,13 +81,11 @@ ISO9660 with Joliet is built and read-only (above). These are not:
   formats around the same filesystem.
 - Writing a disc. Not planned; ART reads optical media.
 
-### Commodore 64 disk and tape images — planned, not implemented
+### Commodore 64 disk and tape images — read-only
 
-**No code for these exists yet.** They are the next task of the current phase
-(see [STATUS.md](STATUS.md)); nothing in `core/` reads one today. Recorded here
-because the scope decision is made (2026-08-12) — ART covers Commodore's 8-bit
-files as well as the Amiga's — and because the shape of each is what the work
-has to match:
+Built in `core/cbm` (2026-08-12). Read-only: ART opens these, copies files out
+of them, and writes none of them. The shape of each is what the reader is
+built on:
 
 - **D64** — 1541 disk image, 256-byte blocks, no header: the file *is* the
   sectors. 35 tracks = 174,848 bytes (175,531 with error bytes); 40 tracks =
@@ -97,7 +95,8 @@ has to match:
 - **D81** — 1581, 3.5″: 819,200 bytes, 80 tracks × 40 sectors.
 - **T64** — a tape *archive* with a real header and directory, despite the
   name. Written by tools that get their own header wrong often enough that the
-  records, not the counts, are what ART will trust.
+  records, not the counts, are what ART trusts: a `used` count of zero still
+  lists the records, and an end address the file cannot support is clamped.
 - **TAP** — **identify only, permanently.** A TAP holds the tape signal
   sampled as pulse widths: no directory, no file table. Listing one means
   demodulating the ROM tape format, and most commercial titles shipped their
@@ -108,7 +107,16 @@ has to match:
 - **CRT** — cartridge image. Identify only.
 
 Names are PETSCII, not ASCII, and `0xA0` is padding rather than a character —
-a name that comes back as mojibake is a defect even though nothing crashes.
+though only at the end of a field: inside a name it *is* a character, and
+stripping it would merge two files into one name. The graphics set renders as
+`·`: each Unicode mapping would be a claim about a specific byte with nothing
+to check it against, and a name drawn with the wrong symbols looks correct
+while being wrong.
+
+**Detection has nothing to go on but size** for D64/D71/D81 — these formats
+have no header and no signature — so the accepted sizes are exact and few, and
+anything else is refused with its size in the message. The header sector is
+then read to *raise* confidence, never to gate.
 
 ## Detection confidence
 

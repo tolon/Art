@@ -42,7 +42,8 @@ python scripts/oracle-check.py
 | Task 3a | complete (`5be5529`) — the 7-Zip oracle, added by amendment A1 |
 | Task 3b | complete (`787fe15`) — Mode 2/XA Form 1, which closed ART-075 |
 | Task 4 | complete — the shared gate (`efaaf00`), ZIP (`bf5e577`), 7z + the MSRV bump (`b07ad1c`), the archive pane with its virtual tree (`9c4e578`) |
-| Tasks 5, 6 | not started — **Task 5 (D64/D71/D81/T64) is the next work** |
+| Task 5 | complete (`402d9bf`) — D64/D71/D81 and T64 read and browsable, TAP/PRG/CRT identified; amendments A3 and A4 both in |
+| Task 6 | not started — **closing the phase is the next work** |
 
 See the Amendments section at the foot of this file for what changed after the
 plan was written.
@@ -443,11 +444,11 @@ PETSCII's default upper-case set, 0x41–0x5A are uppercase letters. A name that
 comes out as mojibake is a bug even though nothing crashes — pin a few real
 names in tests.
 
-- [ ] **Step 1: The track/sector geometry, tested at every zone boundary**
-- [ ] **Step 2: BAM and disk name, with PETSCII decoding**
-- [ ] **Step 3: The directory walk, with the loop guard proved by a self-referencing fixture**
-- [ ] **Step 4: Reading a file's sector chain back byte for byte**
-- [ ] **Step 5: T64 — never trust the header, and prove it (amendment A4)**
+- [x] **Step 1: The track/sector geometry, tested at every zone boundary**
+- [x] **Step 2: BAM and disk name, with PETSCII decoding**
+- [x] **Step 3: The directory walk, with the loop guard proved by a self-referencing fixture**
+- [x] **Step 4: Reading a file's sector chain back byte for byte**
+- [x] **Step 5: T64 — never trust the header, and prove it (amendment A4)**
 
 A T64 has a header, a record count and per-entry load/end addresses, and
 real-world files written by buggy tools get all three wrong: `used entries` is
@@ -463,9 +464,9 @@ often wrong**, so a declared size is not a size.
   not an error, and never a negative length.
 - Fixtures, all of which must list and extract (clamped) without a panic:
   `used = 0` with one real record; end < start; a declared range past EOF.
-- [ ] **Step 6: Detection signatures, and identify-only for TAP, PRG and CRT**
-- [ ] **Step 7: Open a D64 and a T64 as panes, read-only**
-- [ ] **Step 8: Gates and commit**
+- [x] **Step 6: Detection signatures, and identify-only for TAP, PRG and CRT**
+- [x] **Step 7: Open a D64 and a T64 as panes, read-only**
+- [x] **Step 8: Gates and commit**
 
 **A note on scope, recorded rather than argued.** This is a Commodore 64
 format in a toolkit named for the Amiga. It fits architecturally — the

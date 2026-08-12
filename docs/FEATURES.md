@@ -27,9 +27,9 @@ path. Built-in presets: **A1000, A500, A500+, A600, A2000, A3000, A1200,
 A4000, CDTV, CD32** (`core/profile.rs`, read by the WinUAE launcher and the
 compatibility check).
 
-Commodore's 8-bit files are in scope as well, as of 2026-08-12 — see the C64
-rows below for how far that has actually got, which today is "decided, not
-built".
+Commodore's 8-bit files are in scope as well, as of 2026-08-12, and read-only:
+D64, D71, D81 and T64 open in the same commander an ADF does; TAP, PRG and CRT
+are identified and described rather than browsed. See the C64 rows below.
 
 ## Format support
 
@@ -49,9 +49,9 @@ the other columns mean it can act on it.
 | **7z** | ✅ | ✅ | — | — | 🟡 | — |
 | **ISO9660 / Joliet** | ✅ | ✅ | — | — | 🟡 | — |
 | **ROM** | ✅ | ✅ | — | — | ✅ | — |
-| **D64 / D71 / D81** (C64 disk) | ⏳ | ⏳ | — | — | ⏳ | — |
-| **T64** (C64 tape archive) | ⏳ | ⏳ | — | — | ⏳ | — |
-| **TAP / PRG / CRT** (C64) | ⏳ | — | — | — | — | — |
+| **D64 / D71 / D81** (C64 disk) | ✅ | ✅ | — | — | 🟡 | — |
+| **T64** (C64 tape archive) | ✅ | ✅ | — | — | 🟡 | — |
+| **TAP / PRG / CRT** (C64) | ✅ | — | — | — | — | — |
 
 Notes:
 
@@ -82,11 +82,23 @@ Notes:
     (`scripts/iso-oracle-check.py`), raw layouts included via
     sector-stripping. Not against a real Amiga CD filesystem; nothing claims
     otherwise.
-- ⏳ **C64 formats** — the scope decision is made (2026-08-12: ART covers
-  Commodore's 8-bit files too) and the work is the next task of the current
-  phase, but **no code reads one today**. `.tap`, `.prg` and `.crt` are
-  identify-only by design, not by schedule: a TAP is a sampled tape signal
-  with no directory in it at all.
+- **C64 formats — read-only, like every other container ART opens.** D64,
+  D71 and D81 (35- and 40-track, with or without error bytes), and T64 tape
+  archives, open as panes and copy out to a folder. Writing one is not
+  implemented and not planned.
+  - 🟡 **validate** = malformed images are refused rather than misread — an
+    unknown size with the size in the message, a track or sector outside the
+    disk, a sector chain that loops. There is no BAM-versus-directory
+    consistency check.
+  - **A T64's header is not trusted**: `used = 0` with real records lists the
+    records, and an end address the file cannot support is clamped to what is
+    actually there. The pane says when it had to do either.
+  - `.tap`, `.prg` and `.crt` are **identify-only by design, not by
+    schedule** — `c64.identify` reports what the file is, how big it is and
+    why there is nothing inside to open. A TAP is the tape signal sampled as
+    pulse widths: no directory, no file table.
+  - Names are PETSCII with `0xA0` padding stripped from the end only. The
+    graphics set renders as `·` rather than guessed-at Unicode look-alikes.
 - **ADZ / HDZ / DMS** decompression is Stage 5 work; `xdms-rs` is the candidate
   for DMS (see `ART-kaynak-listesi.md`).
 
@@ -133,6 +145,18 @@ Notes:
 | Validate (boot block, checksums, bitmap) | §11, §12 | ✅ | `core/adf/validate.rs` |
 | Optimisation analysis | §13 | ⏳ | — |
 | Drag files in / out of the image | §11, §90 | ✅ | `/files` two-pane manager |
+
+### Commodore 8-bit reader
+
+| Feature | Spec | State | Code |
+|---|---|:---:|---|
+| Sector geometry (D64 35/40 track, D71, D81) | §10.5 | ✅ | `core/cbm/geometry.rs` — every zone boundary pinned |
+| PETSCII names | §10.5 | ✅ | `core/cbm/petscii.rs` — `0xA0` stripped from the end only |
+| Directory and file sector chains | §10.5 | ✅ | `core/cbm/d64.rs` — step limit *and* visited set, both proved by self-referencing fixtures |
+| T64 tape archives | §10.5 | ✅ | `core/cbm/t64.rs` — records over header, ranges clamped |
+| Identify-only formats (TAP, PRG, CRT) | §10.5 | ✅ | `core/cbm/mod.rs::identify`, offered as `c64.identify` |
+| Open as a pane, copy files out | §10.5 | ✅ | `commands/cbm.rs`, `/files` |
+| Writing any Commodore image | — | — | Not implemented, not planned |
 
 ### LHA Studio
 

@@ -395,8 +395,13 @@ out of it in both directions; **an independent 7-Zip oracle** for the disc
 reader, raw layouts included; Mode 2/XA Form 1 (which closed ART-075); and one
 shared archive security gate with the format behind a backend trait.
 
-Left: ZIP and 7z behind that gate (Task 4), D64/D71/D81/T64 (Task 5), and
-closing the phase (Task 6).
+Then ZIP and 7z behind that gate, and the archive pane with the virtual tree
+that gives a flat list of names folders to walk into (Task 4). Then the
+Commodore side (Task 5): D64/D71/D81 and T64 read and browsable, TAP/PRG/CRT
+identified and described — with the 40-track variants and the "a T64's header
+is not to be trusted" rules amendments A3 and A4 added.
+
+Left: closing the phase (Task 6).
 
 **The real-Amiga-CD verification step was cancelled** (amendment A1) — it
 assumed licensed AmigaOS media reliably to hand. `scripts/iso-oracle-check.py`
