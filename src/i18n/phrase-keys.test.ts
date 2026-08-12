@@ -249,7 +249,31 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     ];
     for (const age_weeks of ageWeeks) {
       const phrase = formatAge({ ...base, age_weeks });
-      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+      // `resolvesAtRuntime`, not `isLeafKey`: two of these branches are
+      // pluralised, so the catalogue holds `_one`/`_other` and no bare key
+      // (ART-061).
+      expect(resolvesAtRuntime(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("formatAge: the pluralised branches carry the count i18next selects on", () => {
+    // The half a key check cannot see. i18next picks the plural form from
+    // `count` and from nothing else, so a phrase that says `{ n }` renders the
+    // `_other` form at every number — which is the "1 weeks ago" this fixed.
+    const base: Omit<PackageMeta, "age_weeks"> = {
+      reference: { provider: "aminet", path: "util/libs/AmiSSL.lha" },
+      name: "AmiSSL",
+      directory: "util/libs",
+      size_bytes: 1024,
+      short: "AmiSSL",
+      version: null,
+      requires: [],
+      author: null,
+      distribution: null,
+    };
+    for (const age_weeks of [1, 3, 20, 40]) {
+      const phrase = formatAge({ ...base, age_weeks });
+      expect(phrase.params, phrase.key).toHaveProperty("count");
     }
   });
 

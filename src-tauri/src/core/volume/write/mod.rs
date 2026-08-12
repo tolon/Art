@@ -123,6 +123,33 @@ pub struct FileMeta {
     pub date: Option<AmigaDate>,
 }
 
+/// The `D` bit of `HSPARWED`, and it is stored **inverted** like the rest of
+/// `RWED`: a *clear* bit is the permission granted. So "protected against
+/// deletion" is the bit being **set**, which is the way round that catches
+/// everybody at least once.
+const DELETE_BIT: u32 = 1;
+
+/// Whether AmigaDOS would refuse to delete an entry with these bits.
+pub fn is_delete_protected(protection: u32) -> bool {
+    protection & DELETE_BIT != 0
+}
+
+/// What to do about an entry the Amiga itself protects from deletion.
+///
+/// Default is [`Honour`](Self::Honour), so a caller that has not thought about
+/// it gets the safe answer — the same shape `SAFE_CREATE` has for "creating
+/// never replaces".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DeleteProtection {
+    /// Refuse, naming the entry. What the bit is for.
+    #[default]
+    Honour,
+    /// Delete it anyway, because the user has been asked and said yes.
+    ///
+    /// Only ever passed by a path that has actually shown that question.
+    Override,
+}
+
 /// A volume open for writing.
 ///
 /// Holds the device and the geometry; each operation loads its own allocator,
@@ -484,12 +511,42 @@ impl<'a> VolumeWriter<'a> {
     /// job, one journalled operation per entry, so a cancelled batch leaves a
     /// consistent volume rather than a directory tree half gone (§2).
     pub fn delete(&mut self, parent: u32, entry_block: u32) -> CoreResult<WriteOutcome> {
+        self.delete_with(parent, entry_block, DeleteProtection::Honour)
+    }
+
+    /// The same, saying what to do about an entry the Amiga itself protects.
+    ///
+    /// See [`DeleteProtection`]. The two-argument [`delete`](Self::delete)
+    /// honours the bit, so a caller has to *ask* to ignore it rather than
+    /// ignore it by not thinking about it.
+    pub fn delete_with(
+        &mut self,
+        parent: u32,
+        entry_block: u32,
+        protection: DeleteProtection,
+    ) -> CoreResult<WriteOutcome> {
         let parent = self.resolve_directory(parent)?;
         let set = BlockSet::new(self.geometry.block_size);
 
         let entry = set.view(self.device, entry_block)?;
         let name = dir::name_of(&entry);
         let is_dir = dir::is_directory(&entry)?;
+
+        // ART-088. AmigaDOS refuses to delete an entry whose `d` bit is clear,
+        // and that is what the bit is *for* — WHDLoad slaves and system files
+        // routinely ship that way. The file manager asks a third time before
+        // getting here, but a confirmation on one screen is not a guard: until
+        // this existed, anything else that reached `delete` removed a
+        // protected entry without noticing.
+        if protection == DeleteProtection::Honour {
+            let bits = layout::get_u32(&entry, layout::PROTECT_OFFSET)?;
+            if is_delete_protected(bits) {
+                return Err(CoreError::InvalidInput(format!(
+                    "'{name}' is protected against deletion on the Amiga. \
+                     Clear its D bit, or confirm deleting it anyway."
+                )));
+            }
+        }
 
         if is_dir && !dir::entries_in(self.device, &set, &self.geometry, entry_block)?.is_empty() {
             return Err(CoreError::InvalidInput(format!(
@@ -1084,6 +1141,90 @@ mod tests {
         let inside = dir::entries_in(&device, &set, &disk.geometry, folder).unwrap();
         assert_eq!(inside.len(), 1);
         assert_eq!(inside[0].name, "Inside.txt");
+    }
+
+    /// ART-088. AmigaDOS refuses to delete an entry whose `d` bit is set —
+    /// that is what the bit is for, and WHDLoad slaves and system files ship
+    /// that way. ART checked that a directory was empty and nothing else.
+    #[test]
+    fn a_delete_protected_entry_is_refused_by_name() {
+        let disk = floppy("delete-protected");
+
+        // `----RWED` with the D bit set: RWED are stored inverted, so a *set*
+        // bit is the permission withheld.
+        let protection = file::default_protection() | 1;
+        let added = with_writer(&disk, |w| {
+            w.add_file(
+                0,
+                "Turrican.slave",
+                b"slave bytes",
+                FileMeta {
+                    protection: Some(protection),
+                    date: None,
+                },
+            )
+        })
+        .unwrap();
+        let block = added.block.unwrap();
+
+        let err = with_writer(&disk, |w| w.delete(0, block)).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("Turrican.slave"), "{message}");
+
+        // And it is still there afterwards — a refusal that deleted it anyway
+        // would be the worst of both.
+        assert_eq!(listing(&disk).len(), 1);
+    }
+
+    #[test]
+    fn a_delete_protected_entry_goes_when_the_user_has_been_asked() {
+        // The override exists because the file manager *does* ask, a third
+        // time, and an answer nothing acts on is not an answer.
+        let disk = floppy("delete-protected-override");
+        let protection = file::default_protection() | 1;
+        let added = with_writer(&disk, |w| {
+            w.add_file(
+                0,
+                "Turrican.slave",
+                b"slave bytes",
+                FileMeta {
+                    protection: Some(protection),
+                    date: None,
+                },
+            )
+        })
+        .unwrap();
+
+        with_writer(&disk, |w| {
+            w.delete_with(0, added.block.unwrap(), DeleteProtection::Override)
+        })
+        .unwrap();
+        assert!(listing(&disk).is_empty());
+    }
+
+    #[test]
+    fn an_ordinary_file_still_deletes_without_being_asked_twice() {
+        // The guard must not make every delete a negotiation: the default
+        // protection grants D, so nothing changes for a normal file.
+        let disk = floppy("delete-unprotected");
+        let added = with_writer(&disk, |w| {
+            w.add_file(0, "Readme.txt", b"x", FileMeta::default())
+        })
+        .unwrap();
+
+        with_writer(&disk, |w| w.delete(0, added.block.unwrap())).unwrap();
+        assert!(listing(&disk).is_empty());
+    }
+
+    #[test]
+    fn the_delete_bit_is_read_the_way_amigados_stores_it() {
+        // Inverted, like the rest of RWED — a *set* bit withholds the
+        // permission. Getting this backwards would refuse every ordinary
+        // delete and allow every protected one, which is the failure worth
+        // one explicit test.
+        assert!(!is_delete_protected(file::default_protection()));
+        assert!(is_delete_protected(file::default_protection() | 1));
+        assert!(!is_delete_protected(0b1111_0000), "only the D bit counts");
     }
 
     #[test]

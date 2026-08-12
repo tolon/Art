@@ -40,7 +40,7 @@ use crate::core::volume::write::copy::{
     ExtractReport, HostFolder, HostSelection, StagedTree,
 };
 use crate::core::volume::write::plan::{plan_copy, CopyPlan, SourceEntry};
-use crate::core::volume::write::{VolumeWriter, WriteOutcome};
+use crate::core::volume::write::{DeleteProtection, VolumeWriter, WriteOutcome};
 use crate::core::volume::{read_block_vec, BlockDeviceMut, VolumeGeometry, WriteStrategy};
 use crate::error::{AppError, AppResult};
 
@@ -379,19 +379,30 @@ pub fn volume_rename(
 /// `Destructive` (§63): the frontend double-confirms before calling this. A
 /// directory must be empty, so deleting a tree is the caller's loop and each
 /// entry is its own journalled operation.
+///
+/// `override_protection` says the user was shown the *third* question — the
+/// one about an entry the Amiga itself protects — and said yes. False is the
+/// safe answer, and it is what any caller that has not asked will send
+/// (ART-088).
 #[tauri::command]
 pub fn volume_delete(
     path: String,
     volume_index: usize,
     dir_block: Option<u32>,
     entry_block: u32,
+    override_protection: bool,
     oplog: State<'_, JsonlOperationLog>,
 ) -> AppResult<MutationResult> {
     let image = PathBuf::from(path.trim());
     let parent = dir_block.unwrap_or(0);
+    let protection = if override_protection {
+        DeleteProtection::Override
+    } else {
+        DeleteProtection::Honour
+    };
 
     let result = with_writer(&image, volume_index, |writer| {
-        writer.delete(parent, entry_block)
+        writer.delete_with(parent, entry_block, protection)
     })
     .map(|(outcome, strategy, backup)| {
         let block_size = outcome_block_size(&image, volume_index);
@@ -507,6 +518,7 @@ fn delete_many(
     volume_index: usize,
     dir_block: Option<u32>,
     names: &[String],
+    protection: DeleteProtection,
 ) -> CoreResult<DeleteManyResult> {
     let parent = dir_block.unwrap_or(0);
     let names = dedupe_case_insensitive(names);
@@ -531,7 +543,7 @@ fn delete_many(
                     "'{name}' is not in this directory any more"
                 )));
             };
-            outcomes.push(writer.delete(parent, found.block)?);
+            outcomes.push(writer.delete_with(parent, found.block, protection)?);
         }
         Ok(outcomes)
     })?;
@@ -562,11 +574,18 @@ pub fn volume_delete_many(
     volume_index: usize,
     dir_block: Option<u32>,
     names: Vec<String>,
+    override_protection: bool,
     oplog: State<'_, JsonlOperationLog>,
 ) -> AppResult<DeleteManyResult> {
     let image = PathBuf::from(path.trim());
+    let protection = if override_protection {
+        DeleteProtection::Override
+    } else {
+        DeleteProtection::Honour
+    };
 
-    let result = delete_many(&image, volume_index, dir_block, &names).map_err(AppError::from);
+    let result =
+        delete_many(&image, volume_index, dir_block, &names, protection).map_err(AppError::from);
 
     write_result(
         &oplog,
@@ -680,7 +699,11 @@ pub fn replace_file(
     data: &[u8],
 ) -> CoreResult<MutationResult> {
     let (outcome, strategy, backup) = with_writer(image, volume_index, |writer| {
-        writer.delete(dir_block, entry_block)?;
+        // `Override` because this is a replace, not a delete: the entry is
+        // going away only so the same name can carry new bytes, and AmigaDOS
+        // governs overwriting with the `w` bit rather than `d`. ART does not
+        // check `w` yet either — ART-094.
+        writer.delete_with(dir_block, entry_block, DeleteProtection::Override)?;
         writer.add_file(dir_block, name, data, Default::default())
     })?;
 
@@ -2529,7 +2552,7 @@ mod tests {
         assert_eq!(image.listing().len(), 5);
 
         let names: Vec<String> = (0..5).map(|i| format!("F{i}.txt")).collect();
-        let result = delete_many(&image.path, 0, None, &names).unwrap();
+        let result = delete_many(&image.path, 0, None, &names, DeleteProtection::Honour).unwrap();
 
         assert_eq!(result.deleted, 5);
         assert!(result.verified);
@@ -2576,7 +2599,7 @@ mod tests {
             "NotEmpty".to_string(),
             "Readme.txt".to_string(),
         ];
-        let err = delete_many(&image.path, 0, None, &names).unwrap_err();
+        let err = delete_many(&image.path, 0, None, &names, DeleteProtection::Honour).unwrap_err();
         let message = err.to_string();
         assert!(message.contains("NotEmpty"), "{message}");
 
@@ -2601,7 +2624,7 @@ mod tests {
         let before = image.bytes();
 
         let names = vec!["Real.txt".to_string(), "Ghost.txt".to_string()];
-        let err = delete_many(&image.path, 0, None, &names).unwrap_err();
+        let err = delete_many(&image.path, 0, None, &names, DeleteProtection::Honour).unwrap_err();
         assert!(err.to_string().contains("Ghost.txt"), "{err}");
 
         assert_eq!(image.bytes(), before);
@@ -2624,7 +2647,7 @@ mod tests {
         .unwrap();
 
         let names = vec!["A.txt".to_string(), "a.txt".to_string()];
-        let result = delete_many(&image.path, 0, None, &names).unwrap();
+        let result = delete_many(&image.path, 0, None, &names, DeleteProtection::Honour).unwrap();
 
         assert_eq!(result.deleted, 1, "one entry, named twice, deletes once");
         assert!(image.listing().is_empty());

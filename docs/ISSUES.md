@@ -25,6 +25,25 @@ what fixed it (with the test that proves it).
 
 _(ART-075 was open here; it is fixed — see [Phase 2a](#phase-2a) below.)_
 
+**ART-094** 🟡 **Overwriting a write-protected file is not checked either**
+`core/volume/write/mod.rs` · `commands/volume_write.rs::replace_file` · The
+delete half of [ART-088](#open) is fixed: the writer honours the `d` bit and
+refuses unless the user has been asked. The **overwrite** half is not.
+
+AmigaDOS governs replacing a file's contents with the `w` bit, and a file with
+it withheld is one the Amiga will not let you write to. ART's `replace_file`
+deletes and re-adds — an implementation detail — and passes
+`DeleteProtection::Override` precisely because that delete is not a deletion
+the user asked for. Which is right, and leaves the real question unasked:
+nothing anywhere checks `w` before overwriting.
+
+The same shape as the fix that just landed: honour the bit by default, and let
+a caller that has shown the question say so. The Files screen's copy dialog is
+where that question already belongs — it asks about collisions there, and
+"this one is write-protected" is the same conversation.
+
+Split out of ART-088 on 2026-08-13 rather than left as a sentence inside it.
+
 **ART-093** 🟡 **ART cannot fetch an Emu68 kernel update; it can only tell you which one you need**
 `core/pistorm/` · `net/` · The fix round's F4 asked for two things. The reading
 half is built: the card's `Emu68.img` is identified from the `$VER:` string its
@@ -219,7 +238,7 @@ mount, with `sessionRestored` keeping it once-only. **This is the second time
 in one day that a defect survived a green suite and was found only by running
 the application** — see [ART-082](#open).
 
-**ART-088** 🟡 **The volume writer deletes a delete-protected entry without noticing the bit**
+**ART-088** 🟡 **The volume writer deletes a delete-protected entry without noticing the bit** — *fixed 2026-08-13*
 `src-tauri/src/core/volume/write/mod.rs::delete` · AmigaDOS refuses to delete a
 file whose `d` protection bit is clear — that is what the bit is *for*, and
 WHDLoad slaves and system files routinely have it set that way. ART's `delete`
@@ -240,6 +259,33 @@ The real fix belongs in the writer: refuse unless an explicit override is
 passed, the same shape `SAFE_CREATE` already has for "creating never replaces".
 Worth doing alongside the same question for **overwrite** — `volume_put_file`
 does not check the `w` bit either.
+
+**Fixed 2026-08-13.** `VolumeWriter::delete` honours the bit and refuses,
+naming the entry; `delete_with(.., DeleteProtection::Override)` is the way past
+it, so a caller has to *ask* rather than get there by not thinking about it.
+The default is `Honour`, so anything that has not been taught the question gets
+the safe answer.
+
+The file manager's three confirmations now reach the writer: `volume_delete`
+and `volume_delete_many` take the answer as an argument, and the Files screen
+sends it only where it has actually shown the question. Move asks **before**
+the copy half rather than after — a move is a copy and then a delete, so a
+refusal at the end would have left the user with both a duplicate and an error.
+An icon deleted alongside the object it belongs to inherits the answer, because
+asking again about `Turrican.info` after the user has agreed to delete
+`Turrican` is a question with no new information in it.
+
+`replace_file` passes `Override` deliberately: it deletes only so the same name
+can carry new bytes, and AmigaDOS governs overwriting with the `w` bit rather
+than `d`. **ART does not check `w` yet either** — that half is now
+[ART-094](#open) rather than a sentence at the bottom of this one.
+
+Tests: `a_delete_protected_entry_is_refused_by_name` (and the entry is still
+there afterwards), `a_delete_protected_entry_goes_when_the_user_has_been_asked`,
+`an_ordinary_file_still_deletes_without_being_asked_twice`, and
+`the_delete_bit_is_read_the_way_amigados_stores_it` — RWED are stored inverted,
+and getting that backwards would refuse every ordinary delete and allow every
+protected one.
 
 Found while auditing the brief's §3.4 confirmations against what ART actually
 does.
@@ -513,7 +559,7 @@ would need the block-journal strategy to buffer its own generation of
 deletes behind one commit point the way the whole-file strategy already
 does, which is a real design change, not a one-line fix.
 
-**ART-072** 🟡 **Selection collision checks compare names case-sensitively, so `Docs` and `docs` are not caught**
+**ART-072** 🟡 **Selection collision checks compare names case-sensitively, so `Docs` and `docs` are not caught** — *fixed 2026-08-13*
 `src-tauri/src/core/volume/write/copy.rs::HostSelection::check_for_name_collisions`
 (line ~489) and `src-tauri/src/commands/archives.rs::prepare_archives`
 (line ~350) both keep a `BTreeMap<String, _>` keyed on the name exactly as
@@ -534,7 +580,11 @@ already gets. Fix is to key both maps on `name.to_lowercase()` instead of
 the name itself, the same change `dedupe_case_insensitive`
 (`commands/volume_write.rs`) just made for batch deletes.
 
-**ART-071** 🟡 **A selection of only symlinks copies nothing and reports success**
+**Fixed 2026-08-13**, both maps, keeping the name as *typed* for the message
+so the sentence still says `Docs` rather than `docs`. Test:
+`two_roots_differing_only_in_case_are_refused_too`.
+
+**ART-071** 🟡 **A selection of only symlinks copies nothing and reports success** — *fixed 2026-08-13*
 `src-tauri/src/core/volume/write/copy.rs::HostSelection::entries_capped`
 (line ~527) · A root that is a symlink is skipped with a bare `continue` —
 correct on its own (a link out of the pick would copy in something the user
@@ -548,6 +598,13 @@ one or more things, ART copied none of them, and every signal available to
 the UI says the copy worked. Fix is for `entries_capped` to push a skipped
 entry (as `walk`'s sibling check already could, but currently does not
 either) rather than silently dropping the root.
+
+**Fixed 2026-08-13** by a `CopySource::skipped_sources` the engine merges into
+the report *before* the loop — which is the point, since a source that declined
+everything runs the loop zero times. Default-empty on the trait, so no other
+source is affected. Tests:
+`a_selection_of_nothing_but_shortcuts_says_so_rather_than_reporting_success`
+and `a_selection_of_ordinary_files_declines_nothing`.
 
 **ART-070** 🔵 **`refresh(side)` moves keyboard focus to the pane it refreshed**
 `src/pages/FileManager.tsx` — `openLocal`, `openAdf`, `openHdf` and
@@ -690,7 +747,7 @@ looked at it in Turkish. Needs an actual run of `pnpm tauri dev` with the
 language switched to Turkish, working through PiStorm, the hard disk screen,
 and the Files function-key bar at a few window widths.
 
-**ART-061** 🟡 **`formatAge` is always plural in English**
+**ART-061** 🟡 **`formatAge` is always plural in English** — *fixed 2026-08-13*
 `src/lib/sources.ts::formatAge` · Returns `{ key: "aminet.age.weeksAgo", params:
 { n } }` (and the `monthsAgo` sibling) for any `n`, and `aminet.age.weeksAgo`'s
 English text is the fixed template `"{{n}} weeks ago"` — so a package uploaded
@@ -703,6 +760,14 @@ at any `n`, because Turkish does not inflect the noun after a number. Fixing it
 means either a plural-aware key pair (`weekAgo` / `weeksAgo`, chosen by `n
 === 1`) or i18next's own plural key suffix (`_one` / `_other`), English-only —
 Turkish needs no equivalent change.
+
+**Fixed 2026-08-13** with `_one`/`_other`, and the part that is easy to miss:
+i18next picks the plural form from **`count`** and from nothing else, so
+`formatAge` returns `{ count }` rather than `{ n }` now. A phrase that kept `n`
+would have rendered the `_other` form at every number — the same bug with more
+keys. `yearsAgo` is left alone deliberately: it carries a decimal, and "1.0
+year ago" is worse English than what it replaces. Both catalogues carry the
+pair; the two Turkish forms are identical to each other, which is correct.
 
 **ART-060** 🔵 **Rust-side error sentences do not translate**
 `core/error.rs::CoreError`, `commands/whdload.rs::WhdloadRefusal` · Every

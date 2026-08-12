@@ -307,8 +307,10 @@
       "dateUnknown": "date unknown",
       "capped": "19 years or older",
       "thisWeek": "this week",
-      "weeksAgo": "{{n}} weeks ago",
-      "monthsAgo": "{{n}} months ago",
+      "weeksAgo_one": "{{count}} week ago",
+        "weeksAgo_other": "{{count}} weeks ago",
+      "monthsAgo_one": "{{count}} month ago",
+        "monthsAgo_other": "{{count}} months ago",
       "yearsAgo": "{{n}} years ago"
     },
     "size": {
@@ -1271,7 +1273,9 @@
         "confirm_one": "Move {{count}} item from {{source}} to {{destination}}? It is copied first and only removed once the copy has been checked.",
         "confirm_other": "Move {{count}} items from {{source}} to {{destination}}? They are copied first and only removed once the copies have been checked.",
         "confirmIcons_one": "{{names}} has an icon. Move it too? Without it, the object will not show up on Workbench.",
-        "confirmIcons_other": "{{count}} of these have icons ({{names}}). Move them too? Without them, the objects will not show up on Workbench."
+        "confirmIcons_other": "{{count}} of these have icons ({{names}}). Move them too? Without them, the objects will not show up on Workbench.",
+        "confirmProtected_one": "{{names}} is protected against deletion on the Amiga. Moving it means deleting it from here once the copy is checked. Move it anyway?",
+        "confirmProtected_other": "{{count}} of these are protected against deletion on the Amiga ({{names}}). Moving them means deleting them from here once the copies are checked. Move them anyway?"
       }
     },
     "move": {

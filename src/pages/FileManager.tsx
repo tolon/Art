@@ -2435,20 +2435,27 @@ export function FileManager() {
         entry.name
       ).catch(() => null);
 
+      // The writer honours the `d` bit now (ART-088); the last argument is the
+      // answer to the question asked above, and nothing else may send it.
       const outcome = await volumeDelete(
         target.path,
         target.volumeIndex,
         target.dirBlock,
-        entry.header_block
+        entry.header_block,
+        isDeleteProtected(entry.attrs)
       );
 
       let alsoIcon = false;
       if (icon && window.confirm(t("files.dialog.delete.confirmIcon", { icon: icon.icon_name }))) {
+        // The icon goes with the file it belongs to: asking a second time
+        // about `Turrican.info` after the user has just agreed to delete
+        // `Turrican` would be a question with no new information in it.
         await volumeDelete(
           target.path,
           target.volumeIndex,
           target.dirBlock,
-          icon.icon_block
+          icon.icon_block,
+          true
         );
         alsoIcon = true;
       }
@@ -2531,7 +2538,8 @@ export function FileManager() {
         target.path,
         target.volumeIndex,
         target.dirBlock,
-        names
+        names,
+        protectedNames.length > 0
       );
       setMessage(
         outcome.backup
@@ -2648,6 +2656,23 @@ export function FileManager() {
       return;
     }
 
+    // Asked **before** the copy half, not after. A move is a copy and then a
+    // delete, and the writer now refuses to delete a protected entry
+    // (ART-088) — so asking afterwards would mean the copy had already landed
+    // and the user got both a duplicate and an error.
+    const movingProtected = deleteProtectedNames(moving);
+    if (
+      movingProtected.length > 0 &&
+      !window.confirm(
+        t("files.dialog.move.confirmProtected", {
+          count: movingProtected.length,
+          names: movingProtected.slice(0, 3).join(", "),
+        })
+      )
+    ) {
+      return;
+    }
+
     setBusy(t("files.status.moving", { count: moving.length }));
     try {
       // ---- APPLY: the copy half, through the commands F5 already uses ----
@@ -2729,9 +2754,16 @@ export function FileManager() {
               volume.path,
               volume.volumeIndex,
               volume.dirBlock,
-              moving[0].header_block
+              moving[0].header_block,
+              movingProtected.length > 0
             )
-          : await volumeDeleteMany(volume.path, volume.volumeIndex, volume.dirBlock, names);
+          : await volumeDeleteMany(
+              volume.path,
+              volume.volumeIndex,
+              volume.dirBlock,
+              names,
+              movingProtected.length > 0
+            );
 
       setMessage(
         outcome.backup

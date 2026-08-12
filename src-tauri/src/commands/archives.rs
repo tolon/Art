@@ -345,18 +345,27 @@ fn prepare_archives(
     // Two archives that would both create the same drawer are reported by
     // name, before anything moves — silently interleaving two unrelated
     // archives into one directory would be worse than refusing (§92).
-    let mut seen: std::collections::BTreeMap<String, &Path> = std::collections::BTreeMap::new();
+    //
+    // Keyed **without case** (ART-072): AmigaDOS is case-preserving but
+    // case-insensitive, so `Docs` and `docs` are two keys here and one drawer
+    // there. Keyed as typed, the pair reached `std::fs::rename` instead, and
+    // the user got a raw OS error where the exact-match case gets a sentence.
+    let mut seen: std::collections::BTreeMap<String, (&Path, &str)> =
+        std::collections::BTreeMap::new();
     for item in &unpacked {
-        if let Some(other) = seen.get(item.drawer.as_str()) {
+        if let Some((other, other_drawer)) = seen.get(&item.drawer.to_lowercase()) {
             return Err(CoreError::InvalidInput(format!(
                 "'{}' and '{}' would both create a drawer called '{}' — rename one \
                  before installing them together",
                 other.display(),
                 item.archive.display(),
-                item.drawer
+                other_drawer
             )));
         }
-        seen.insert(item.drawer.clone(), item.archive.as_path());
+        seen.insert(
+            item.drawer.to_lowercase(),
+            (item.archive.as_path(), item.drawer.as_str()),
+        );
     }
 
     let mut drawers = Vec::with_capacity(unpacked.len());

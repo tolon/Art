@@ -220,18 +220,27 @@ export async function volumeRename(
   });
 }
 
-/** F8 — delete an entry. Destructive: confirm twice before calling (§63). */
+/**
+ * F8 — delete an entry. Destructive: confirm twice before calling (§63).
+ *
+ * `overrideProtection` is the *third* answer: the entry's `d` bit says
+ * AmigaDOS itself would refuse to delete it, the user was asked anyway, and
+ * said yes. Leave it false and the writer refuses, naming the entry — which is
+ * what any path that has not asked should get (ART-088).
+ */
 export async function volumeDelete(
   path: string,
   volumeIndex: number,
   dirBlock: number | null,
-  entryBlock: number
+  entryBlock: number,
+  overrideProtection = false
 ): Promise<MutationResult> {
   return invoke<MutationResult>("volume_delete", {
     path,
     volumeIndex,
     dirBlock,
     entryBlock,
+    overrideProtection,
   });
 }
 
@@ -257,13 +266,15 @@ export async function volumeDeleteMany(
   path: string,
   volumeIndex: number,
   dirBlock: number | null,
-  names: string[]
+  names: string[],
+  overrideProtection = false
 ): Promise<DeleteManyResult> {
   return invoke<DeleteManyResult>("volume_delete_many", {
     path,
     volumeIndex,
     dirBlock,
     names,
+    overrideProtection,
   });
 }
 

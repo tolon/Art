@@ -307,8 +307,10 @@
       "dateUnknown": "tarih bilinmiyor",
       "capped": "19 yıl veya daha eski",
       "thisWeek": "bu hafta",
-      "weeksAgo": "{{n}} hafta önce",
-      "monthsAgo": "{{n}} ay önce",
+      "weeksAgo_one": "{{count}} hafta önce",
+        "weeksAgo_other": "{{count}} hafta önce",
+      "monthsAgo_one": "{{count}} ay önce",
+        "monthsAgo_other": "{{count}} ay önce",
       "yearsAgo": "{{n}} yıl önce"
     },
     "size": {
@@ -1271,7 +1273,9 @@
         "confirm_one": "{{count}} öğe {{source}} biriminden {{destination}} hedefine taşınsın mı? Önce kopyalanır, ancak kopya denetlendikten sonra kaldırılır.",
         "confirm_other": "{{count}} öğe {{source}} biriminden {{destination}} hedefine taşınsın mı? Önce kopyalanır, ancak kopyalar denetlendikten sonra kaldırılır.",
         "confirmIcons_one": "{{names}} bir simgeye sahip. O da taşınsın mı? Taşınmazsa nesne Workbench'te görünmeyecek.",
-        "confirmIcons_other": "Bunlardan {{count}} tanesinin simgesi var ({{names}}). Onlar da taşınsın mı? Taşınmazlarsa nesneler Workbench'te görünmeyecek."
+        "confirmIcons_other": "Bunlardan {{count}} tanesinin simgesi var ({{names}}). Onlar da taşınsın mı? Taşınmazlarsa nesneler Workbench'te görünmeyecek.",
+        "confirmProtected_one": "{{names}} Amiga tarafında silinmeye karşı korumalı. Taşımak, kopya denetlendikten sonra buradan silmek demek. Yine de taşınsın mı?",
+        "confirmProtected_other": "Bunların {{count}} tanesi Amiga tarafında silinmeye karşı korumalı ({{names}}). Taşımak, kopyalar denetlendikten sonra buradan silmek demek. Yine de taşınsın mı?"
       }
     },
     "move": {

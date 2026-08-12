@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Four fixes (2026-08-13)
+
+#### Fixed
+- **A file the Amiga itself protects is no longer deleted without a word.**
+  ART asked, but only on one screen — the writer underneath removed it either
+  way. It refuses now, names the file, and only goes ahead when you have
+  actually been asked. Moving one asks *before* the copy, so a refusal cannot
+  leave you with a duplicate and an error.
+- **`Docs` and `docs` are the same drawer on an Amiga**, and ART now says so up
+  front — "rename one of these" — instead of quietly dropping the second one
+  and its whole contents.
+- **A selection of nothing but shortcuts said it had copied everything.** It
+  had copied nothing. The report says which ones it declined, and why.
+- **"1 weeks ago"** in the Aminet listing.
+
 ### The OS Builder knows the distributions (2026-08-13)
 
 #### Added
