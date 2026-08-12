@@ -618,6 +618,11 @@ export function FileManager() {
   /** Norton Commander's right-button marking (`UseRightButton=1`), off unless
    *  asked for — right-click is the gesture a context menu will want. */
   const rightButtonSelects = useSettingsStore((s) => s.settings.rightButtonSelects);
+  /** Where each pane starts when there is no session to come back to, and
+   *  whether there is one to come back to at all. */
+  const defaultLeftPath = useSettingsStore((s) => s.settings.defaultLeftPath);
+  const defaultRightPath = useSettingsStore((s) => s.settings.defaultRightPath);
+  const alwaysUseDefaultFolders = useSettingsStore((s) => s.settings.alwaysUseDefaultFolders);
   const colourRules: ColourRule[] = isUsableRuleList(storedColourRules)
     ? storedColourRules
     : DEFAULT_COLOUR_RULES;
@@ -791,25 +796,37 @@ export function FileManager() {
     panelLocalRoots()
       .then(async (found) => {
         setRoots(found);
-        // A saved session wins over the first drive: twenty years of muscle
-        // memory expect the application to reopen where it was left (§3.3,
-        // his `Savepath=1` / `Savepanels=1`). What it *cannot* be allowed to
-        // do is fail to open at all, so anything the guard does not recognise
-        // — an older ART's file, a hand-edited one — falls through to the
-        // fresh start below rather than throwing.
-        if (await restoreSession()) return;
-        if (found[0]) {
-          const listing = await panelListLocal(found[0]);
-          const base = {
-            ...emptyPane(),
-            location: listing.path,
-            entries: listing.entries,
-            parent: listing.parent,
-            truncated: listing.truncated,
-          };
-          setLeft(base);
-          setRight({ ...base });
+        // Where a cold start lands, in order:
+        //
+        // 1. **The default folders**, when they are set and the user wants
+        //    them to win. ART is an Amiga toolkit, not a disk manager: the
+        //    files it works on live in one or two folders the user already
+        //    knows, and it should open in them every time rather than costing
+        //    two navigations at every launch.
+        // 2. **Where the session was left** (§3.3, his `Savepath=1` /
+        //    `Savepanels=1`) — which is also what happens when no default
+        //    folder is set at all, so turning the preference on costs nothing
+        //    until there is something for it to prefer. Anything the guard
+        //    does not recognise falls through rather than throwing: failing to
+        //    open at all is the one outcome that is never acceptable.
+        // 3. The first enumerated mount, which is what there was before any of
+        //    this and is still the honest answer when nothing else is known.
+        const hasDefaults = Boolean(defaultLeftPath || defaultRightPath);
+        if (!(alwaysUseDefaultFolders && hasDefaults) && (await restoreSession())) return;
+        sessionRestored.current = true;
+
+        const wanted: Record<Side, string | null> = {
+          left: defaultLeftPath ?? found[0] ?? null,
+          right: defaultRightPath ?? found[0] ?? null,
+        };
+        for (const side of ["left", "right"] as Side[]) {
+          // A default folder that has been deleted or unplugged opens as an
+          // error in its own pane, which says what happened — rather than
+          // silently landing somewhere else and leaving the user to work out
+          // that their setting was ignored.
+          if (wanted[side]) await openLocal(side, wanted[side] as string);
         }
+        setFocused("left");
       })
       .catch((e) => setError(String(e)));
     // Runs once, on mount: `restoreSession` reads the settings store directly

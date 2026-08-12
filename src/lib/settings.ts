@@ -108,6 +108,34 @@ export interface AppSettings {
    * it again.
    */
   rightButtonSelects: boolean;
+  /**
+   * Where each pane of the Files screen starts, when there is no session to
+   * come back to.
+   *
+   * ART is not a disk manager; it is an Amiga toolkit, and a user's Amiga
+   * files live in one or two folders they already know. Opening on the first
+   * enumerated drive is the habit of a general file manager and the wrong
+   * default here — it costs two navigations at every cold start, every time,
+   * for a program that only ever wants the same two places.
+   *
+   * `null` means "no preference", which falls back to the first enumerated
+   * mount exactly as before.
+   */
+  defaultLeftPath: string | null;
+  defaultRightPath: string | null;
+  /**
+   * Whether the default folders above win over the last session.
+   *
+   * **On by default**, and that is the user's own call: ART is used for one
+   * purpose, so the two folders it should open in are the same two every time
+   * — "hep oradan açılsın". Turning it off gets Total Commander's
+   * `Savepath=1` behaviour instead, reopening wherever the panes were left.
+   *
+   * It costs nothing until the folders are actually set: with neither one
+   * configured there is nothing to prefer, and the session is restored exactly
+   * as it would have been.
+   */
+  alwaysUseDefaultFolders: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -124,6 +152,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   filesSession: null,
   fileColourRules: null,
   rightButtonSelects: false,
+  defaultLeftPath: null,
+  defaultRightPath: null,
+  alwaysUseDefaultFolders: true,
 };
 
 export async function getSettings(): Promise<AppSettings> {
@@ -145,6 +176,13 @@ export async function getSettings(): Promise<AppSettings> {
         (await s.get<unknown>("fileColourRules")) ?? DEFAULT_SETTINGS.fileColourRules,
       rightButtonSelects:
         (await s.get<boolean>("rightButtonSelects")) ?? DEFAULT_SETTINGS.rightButtonSelects,
+      defaultLeftPath:
+        (await s.get<string>("defaultLeftPath")) ?? DEFAULT_SETTINGS.defaultLeftPath,
+      defaultRightPath:
+        (await s.get<string>("defaultRightPath")) ?? DEFAULT_SETTINGS.defaultRightPath,
+      alwaysUseDefaultFolders:
+        (await s.get<boolean>("alwaysUseDefaultFolders")) ??
+        DEFAULT_SETTINGS.alwaysUseDefaultFolders,
       lastCollectionDir:
         (await s.get<string>("lastCollectionDir")) ?? DEFAULT_SETTINGS.lastCollectionDir,
       winuaePath: (await s.get<string>("winuaePath")) ?? DEFAULT_SETTINGS.winuaePath,

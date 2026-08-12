@@ -72,13 +72,23 @@ be stoppable. The Size column then needs a third state — not just a number or
 
 Found while building phase 2b task 5.
 
-**ART-086** 🔵 **Every path in Settings has to be typed by hand**
-`src/pages/Settings.tsx` · "WinUAE Path" and "Collection Directory" are plain
+**ART-086** 🔵 **Every path in Settings had to be typed by hand** — *fixed 2026-08-12*
+`src/pages/Settings.tsx` · "WinUAE Path" and "Collection Directory" were plain
 `<input>`s with a placeholder. ART already opens native pickers everywhere else
 (`@tauri-apps/plugin-dialog`'s `open`, used by the Files screen, both studios
-and the WHDLoad installer), so the fix is a Browse button beside each field
-that fills it in — not new capability, just the capability wired to the two
-fields that were left out.
+and the WHDLoad installer); these were simply the fields that never got it
+wired.
+
+Fixed with a `PathField` — the box, a **Browse…** button that opens the right
+kind of picker (file for an executable, folder for a directory), and a clear
+button. The box stays editable, because a path can be pasted and somebody who
+knows where they are going types faster than they click. Empty is stored as
+`null` rather than `""`, so "cleared" and "never set" stay the same thing,
+which is what every caller's `?? fallback` already assumed.
+
+The same component now serves the two **default folders** the Files screen
+opens in, which is what made the fix worth doing today rather than eventually:
+a setting the user is expected to fill in is a setting that needs a picker.
 
 Found by the user in the running application, 2026-08-12.
 

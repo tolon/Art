@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 
 import { useSettingsStore } from "@/stores/settingsStore";
 import { LANGUAGE_NAMES, SUPPORTED_LANGUAGES } from "@/i18n";
@@ -94,6 +94,41 @@ export function SettingsPage() {
             {t("settings.overwritePolicyHint")}
           </p>
         </Field>
+        {/* Default folders — a file-manager setting, not a general path, so
+            it lives here rather than under Paths. ART is used for one purpose:
+            the two folders it should open in are the same two every time. */}
+        <h3 style={{ fontSize: 13, margin: "16px 0 0" }}>{t("settings.defaultFolders")}</h3>
+        <p className="faint" style={{ fontSize: 11, margin: "2px 0 0" }}>
+          {t("settings.defaultFoldersHint")}
+        </p>
+        <PathField
+          label={t("settings.defaultLeftPath")}
+          placeholder="D:\\Amiga\\Games"
+          value={settings.defaultLeftPath}
+          pick="folder"
+          onChange={(next) => void update({ defaultLeftPath: next })}
+        />
+        <PathField
+          label={t("settings.defaultRightPath")}
+          placeholder="D:\\Amiga\\Images"
+          value={settings.defaultRightPath}
+          pick="folder"
+          onChange={(next) => void update({ defaultRightPath: next })}
+        />
+        <Field label={t("settings.alwaysUseDefaultFolders")}>
+          <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13 }}>
+            <input
+              type="checkbox"
+              checked={settings.alwaysUseDefaultFolders}
+              onChange={(e) => void update({ alwaysUseDefaultFolders: e.target.checked })}
+            />
+            {t("settings.alwaysUseDefaultFoldersLabel")}
+          </label>
+          <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+            {t("settings.alwaysUseDefaultFoldersHint")}
+          </p>
+        </Field>
+
         <Field label={t("settings.rightButtonSelects")}>
           <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13 }}>
             <input
@@ -130,26 +165,26 @@ export function SettingsPage() {
 
       <section className="card">
         <h2 style={{ fontSize: 15 }}>{t("settings.paths")}</h2>
-        <Field label={t("settings.winuaePath")}>
-          <input
-            className="btn"
-            style={{ width: "100%" }}
-            placeholder="C:\\WinUAE\\winuae64.exe"
-            value={settings.winuaePath ?? ""}
-            onChange={(e) => void update({ winuaePath: e.target.value || null })}
-          />
-        </Field>
-        <Field label={t("settings.collectionDir")}>
-          <input
-            className="btn"
-            style={{ width: "100%" }}
-            placeholder="D:\\Amiga"
-            value={settings.lastCollectionDir ?? ""}
-            onChange={(e) =>
-              void update({ lastCollectionDir: e.target.value || null })
-            }
-          />
-        </Field>
+        <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          {t("settings.pathsHint")}
+        </p>
+        {/* Every one of these takes a Browse button (ART-086). ART opens a
+            native picker everywhere else it asks for a path; these four were
+            simply the fields that never got it wired. */}
+        <PathField
+          label={t("settings.winuaePath")}
+          placeholder="C:\\WinUAE\\winuae64.exe"
+          value={settings.winuaePath}
+          pick="file"
+          onChange={(next) => void update({ winuaePath: next })}
+        />
+        <PathField
+          label={t("settings.collectionDir")}
+          placeholder="D:\\Amiga"
+          value={settings.lastCollectionDir}
+          pick="folder"
+          onChange={(next) => void update({ lastCollectionDir: next })}
+        />
       </section>
 
       <OperationLogSection />
@@ -400,6 +435,71 @@ function OperationLogSection() {
         )}
       </div>
     </section>
+  );
+}
+
+/**
+ * A path setting with a Browse button beside it (ART-086).
+ *
+ * The field stays editable — a path can be pasted, and somebody who knows
+ * where they are going types faster than they click — but it is no longer the
+ * *only* way in. ART already opens a native picker on the Files screen, in
+ * both studios and in the WHDLoad installer; these were the fields that never
+ * got it wired.
+ *
+ * An empty box means "not set" and is stored as `null` rather than `""`, so
+ * "the user cleared this" and "the user never touched it" stay the same thing
+ * — which is what the callers' `?? fallback` already assumes.
+ */
+function PathField({
+  label,
+  placeholder,
+  value,
+  pick,
+  onChange,
+}: {
+  label: string;
+  placeholder: string;
+  value: string | null;
+  pick: "file" | "folder";
+  onChange: (next: string | null) => void;
+}) {
+  const { t } = useTranslation();
+
+  async function browse() {
+    const picked = await open({
+      directory: pick === "folder",
+      multiple: false,
+      defaultPath: value ?? undefined,
+      title: label,
+    });
+    if (typeof picked === "string") onChange(picked);
+  }
+
+  return (
+    <Field label={label}>
+      <div style={{ display: "flex", gap: 6 }}>
+        <input
+          className="btn"
+          style={{ flex: "1 1 auto", minWidth: 0 }}
+          placeholder={placeholder}
+          value={value ?? ""}
+          onChange={(e) => onChange(e.target.value || null)}
+        />
+        <button className="btn btn-sm" onClick={() => void browse()}>
+          {t("settings.browse")}
+        </button>
+        {value && (
+          <button
+            className="btn btn-sm"
+            onClick={() => onChange(null)}
+            title={t("settings.clearPath")}
+          >
+            ✕
+          </button>
+        )}
+      </div>
+    </Field>
   );
 }
 
