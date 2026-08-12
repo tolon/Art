@@ -25,6 +25,104 @@ what fixed it (with the test that proves it).
 
 _(ART-075 was open here; it is fixed — see [Phase 2a](#phase-2a) below.)_
 
+**ART-086** 🔵 **Every path in Settings has to be typed by hand**
+`src/pages/Settings.tsx` · "WinUAE Path" and "Collection Directory" are plain
+`<input>`s with a placeholder. ART already opens native pickers everywhere else
+(`@tauri-apps/plugin-dialog`'s `open`, used by the Files screen, both studios
+and the WHDLoad installer), so the fix is a Browse button beside each field
+that fills it in — not new capability, just the capability wired to the two
+fields that were left out.
+
+Found by the user in the running application, 2026-08-12.
+
+**ART-085** 🟡 **A studio forgets the image it had open the moment you leave the screen**
+`src/pages/AdfBrowser.tsx`, `HardDiskStudio.tsx`, and every other studio ·
+Each holds its open file in a local `useState`. Navigating away unmounts the
+component and the state goes with it, so coming back gives the empty
+"open an .adf to begin" page again — while the Dashboard's Recent list, which
+*is* persisted (SQLite `recent_files`), still shows the file that was open a
+second ago. That contrast is what makes it read as a fault rather than as a
+design.
+
+What is missing is a notion of **the object ART currently has open**, shared
+across screens: the Files panes, the studios and the workflow engine all
+address the same kinds of thing and none of them can tell the others what it
+is looking at. Phase 2b task 6 already has to persist per-pane paths for
+session restore, and this is the same question asked once for the whole
+application rather than once per screen — worth designing together rather than
+bolting a `useRef` onto each studio.
+
+Found by the user in the running application, 2026-08-12.
+
+**ART-084** 🟠 **An HDF created as PFS3 or SFS is a DosType with no filesystem behind it, and an Amiga cannot mount it**
+`core/hdf.rs::create_hdf` · `core/rdb.rs::create_rdb_layout` ·
+`src/pages/HardDiskStudio.tsx` · The New HDF wizard's third step is "Choose
+Amiga Filesystem", and it offers **PFS3-AIO as the default, badged
+"⭐ Recommended (Fast & Safe)"**. What `create_hdf` actually writes is the RDSK
+block, the PART blocks, and nothing else:
+
+- **No filesystem is created**, for any choice. The partition has no root
+  block and no bitmap. For DOS\1 / DOS\3 that is correct and normal — a real
+  disk is partitioned on one machine and `Format`ted on the Amiga — but the
+  wizard's wording does not say so.
+- **No driver is embedded in the RDB.** PFS3 and SFS are not in Kickstart;
+  they are loaded from FSHD + LSEG blocks inside the RDB, which ART
+  deliberately does not write ([ART-025](#fixed), and G4 of the
+  [SD gap analysis](sd-appliance-gap-analysis.md)). `IDNAME_FSHD` and
+  `IDNAME_LSEG` exist in `core/rdb.rs` as constants and are referenced by
+  nothing.
+
+So the recommended, default option produces an image whose partition an Amiga
+does not see at all. That is exactly the "don't claim support that isn't
+implemented" rule (spec §10, §89) broken in the one place a user is most
+likely to trust ART.
+
+**Half-fixed 2026-08-12:** the wizard now shows the limitation in the dialog,
+in both languages, before the image is made
+(`hardDisk.modal.warnNoDriver`, `hdfSizeWarning` in `@/lib/hdfSize`, tested).
+That turns a false claim into a stated one; it is not the fix. The fix is G4 —
+segment-splitting a user-supplied `pfs3aio` binary into an LSEG chain,
+checksumming it and wiring `DosType → SegListBlocks` — which is scheduled as
+SD-1 and verifiable against `rdbtool`, an oracle that already exists.
+
+Found by the user in the running application, 2026-08-12.
+
+**ART-083** 🟡 **The New HDF wizard capped disk size at 8 GB, and nothing in the engine asked it to** — *fixed 2026-08-12*
+`src/pages/HardDiskStudio.tsx` · The five size buttons (500 MB … 8 GB) were
+the whole of what could be chosen. `create_rdb_layout` refuses below 10 MB and
+then only when the cylinder count will not fit a `u32` — at 516,096 bytes per
+cylinder, a limit measured in petabytes. The 8 GB ceiling was a list of five
+numbers in a component.
+
+Fixed by a "Custom…" size that is typed, parsed and validated in
+`@/lib/hdfSize` (13 tests): a comma decimal separator (the user's own locale),
+the engine's own 10 MB floor as the only lower bound, no upper bound, and a
+fraction of a megabyte **refused rather than rounded away** — this is the one
+number in the dialog that cannot be changed after the image exists. A
+partition past 4 GB now carries a warning about TD64/NSD rather than a
+refusal: the image may be for an emulator, or for a machine that has both.
+
+Found by the user in the running application, 2026-08-12.
+
+**ART-082** 🟠 **The Files panes filled the window; their listings did not** — *fixed 2026-08-12*
+`src/pages/FileManager.css` · Phase 2b task 1 made the panes fill the window
+by construction and was checked by tests, which cannot see a pane. A
+`max-height: 420px` on `.tc-row-list` — left from when the commander was a
+widget on a page — survived it, so the *pane* grew to the window and the
+*listing inside it* stayed 420 CSS pixels tall. On a maximized 4K window that
+is twenty rows above six hundred pixels of dead pane, with the status line
+stranded in the middle of it: acceptance point 1 of the phase brief
+("panes always filling; no dead space") failing in the most visible way
+possible.
+
+Fixed by deleting the `max-height`; the flex rule further down the file was
+always the thing that should have decided the height.
+
+**Worth more than the fix:** this is the first defect [ART-062](#open) has
+actually cost. Two tasks' worth of layout work went in green on 178 frontend
+tests, and the first human look at the running screen found this in seconds.
+Nothing in a jsdom test has a viewport height.
+
 **ART-081** 🟡 **A single file cannot be moved between two images, because the primitive underneath addresses a directory**
 `src-tauri/src/commands/volume_write.rs::volume_copy_between` ·
 `src/lib/movePlan.ts` · The command takes a *directory* block at both ends and

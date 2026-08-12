@@ -234,6 +234,65 @@ Pure UI over G1–G7; last piece to build, first piece the user sees.
 
 ---
 
+# Added 2026-08-12, from the user
+
+Three gaps this analysis did not name, added after the first human session
+with the running application. They are what turns "a card that boots" into
+"**my** distribution" — the difference the user was pointing at, and none of
+them is reachable from G0–G13 as written.
+
+## G14 🟧 Build inputs the user defines, not just content ART copies
+
+G5 installs an OS and G11 decides what goes where. Neither covers the settings
+that make a distribution *someone's*, all of which are ordinary files on the
+built volumes and none of which ART can currently set:
+
+| Input | Where it lands | Why it is not G5 |
+|---|---|---|
+| **Wallpaper / Workbench backdrop** | `Prefs/Env-Archive/sys/wbpattern.prefs` + the picture itself | An IFF/PNG the user supplies, plus a prefs file ART has to write in place — the same "never regenerate a hand-tuned config" rule §39/§40 already impose |
+| **WiFi credentials** | the Emu68/Linux side of the FAT32 partition (`wpa_supplicant.conf`), or an AmigaOS TCP stack's own config | Secret material. §45.5's `write_pistorm_wifi` already exists **as a design**, with `@form.wifi_psk` and the rule that a literal secret is a validator *rejection*; the plain, non-AI path to the same thing does not |
+| Hostname, timezone, keymap, screen mode, overscan | `Prefs/Env-Archive/sys/*`, `devs/keymaps/` | Same shape: small files on a volume ART is already building |
+| Startup-Sequence / user-startup additions | `S/` | Must be **edited in place**, never regenerated — this is exactly the FF.CFG / `cmdline.txt` rule (§39, §40) applied to AmigaOS |
+
+The engineering here is small; the discipline is not. Every one of these is a
+config file, which means §39/§40's in-place editing rule applies to all of
+them, and the WiFi key means `core/security` has a secret to keep out of the
+oplog, out of the build manifest (G7) and out of any AI prompt (§45.5).
+
+**Wallpaper is new scope**: it appears in no existing document, including the
+master spec. WiFi is not new — it is §45.5's, reachable only through an AI
+layer that is not built.
+
+## G15 🟧 Drag and drop as the way a build is fed
+
+ART already has exactly one drag & drop pipeline, and it is architectural
+rather than a convenience: `analyze_paths` → `WorkflowEngine::plan` → "what
+can I do?" (see CLAUDE.md). The distribution builder should be its largest
+consumer — drop a folder of WHDLoad archives, a Kickstart ROM, an OS 3.2 ISO,
+a wallpaper, a pile of `.lha`s, and have each one detected, placed and
+reported against the build it is being added to.
+
+What is missing is not the pipeline but a **drop target that is a build**:
+today `plan()` answers "what can I do with this file", and the builder needs
+"what does this file become in *this* card". Detection, the workflow
+catalogue and the job queue all already exist to hang it on.
+
+## G16 🟧 Multiboot as a first-class build, not a boot-priority field
+
+G6 covers boot priority and a recovery volume. What the user is asking for is
+larger: **several complete AmigaOS environments on one card**, chosen at boot
+— e.g. 3.1 for compatibility, 3.2 for daily use, a games-only volume, a
+recovery volume — each with its own system partition, its own Startup-Sequence
+and its own place in the boot menu.
+
+That is G5 (OS install) run more than once, G6's boot priorities used as a
+menu rather than a tiebreak, G11's layout policy made per-environment, and
+G7's manifest describing all of it so the card can be rebuilt. It changes no
+gap below it; it changes the shape of the thing being built, so it belongs
+here rather than inside G6.
+
+---
+
 ## Suggested phasing (after Phase 2a + user's screen/hardware checks)
 
 ```text
@@ -241,12 +300,16 @@ SD-0  Prior art study         : G0 — Emu68-Imager + emu68hatcher teardown;
                                 document their layouts, OS-media handling and
                                 PFS3 provisioning before designing ours
 SD-1  Image-first foundations : G2 (MBR+FAT32) + G4 (FSHD/LSEG) + G7 (manifest)
+                                + G15 (a build as a drop target — the pipeline
+                                  exists; this is what it drops *into*)
 SD-2  The card exists         : G1 (flash+verify) + G6 (bootpri/recovery) + G8 (validate)
       → milestone: card built from an image boots a real Amiga into 3.2
                       (which machine and which PiStorm board: recorded, not assumed)
 SD-3  Content, preloaded      : G3 Route D (WinUAE-assisted PFS3 format+fill)
                                 + G5 (OS install) + G10 (launcher export)
-                                + G11 (layout policy)
+                                + G11 (layout policy) + G14 (wallpaper, WiFi,
+                                  prefs — the build inputs that make it *mine*)
+                                + G16 (multiboot: several environments, one menu)
       → milestone: games preloaded onto PFS3 volumes from Windows
 SD-4  The flagship            : G3 Route B — native PFS3 write, own brief;
                                 Route D's harness becomes its oracle

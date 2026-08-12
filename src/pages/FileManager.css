@@ -339,7 +339,14 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 420px;
+  /* No `max-height` here on purpose. There was one — 420px, from the days
+     when the commander was a widget on a page — and it survived task 1's
+     "the panes fill the window" work invisibly: the *pane* grew to the window
+     and the *listing inside it* stayed capped, so on a maximized 4K window
+     twenty rows sat above six hundred pixels of dead pane. The first human
+     look at the running screen found it in about four seconds (ART-082).
+     The height now comes from the flex rule further down this file, which is
+     the only thing that should decide it. */
   /* The pane's own scroll box (spec: a pane's list scrolls inside the pane,
      never the page) — `overflow-x: hidden` because every column already has
      a fixed or flexible width that fits the row, so nothing needs to pan

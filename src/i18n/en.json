@@ -522,6 +522,20 @@
       "singleTitle": "Single Partition",
       "singleDesc": "DH0: System (100% capacity)",
       "createButton": "Create HDF File…",
+      "warnNoDriver": "ART writes the partition table and this filesystem's DosType, but not the filesystem itself: no PFS3 or SFS driver is placed in the RDB, so an Amiga will not see this partition until one is put there with another tool. Fast File System partitions are formatted on the Amiga with Format, as on a real disk.",
+      "warnOver4Gb": "A single {{size}} GB partition is past the 4 GB that standard AmigaDOS can address; it needs TD64 or NSD support in both the controller and the filesystem. Fine for an emulator, and for a machine that has them — split the disk if it does not.",
+      "custom": {
+        "button": "Custom…",
+        "hint": "Type a size",
+        "placeholder": "e.g. 16",
+        "ariaLabel": "Disk size",
+        "unitAriaLabel": "Size unit",
+        "empty": "Type a size.",
+        "notANumber": "That is not a size. Type a number greater than zero.",
+        "notWholeMegabytes": "Sizes are whole megabytes — 0.5 GB is fine, 12.5 MB is not.",
+        "tooSmall": "The smallest hard disk image ART will build is {{min}} MB.",
+        "needsSize": "Type a valid size first"
+      },
       "sizeHints": {
         "compact": "Compact",
         "classic": "Classic",

@@ -128,6 +128,10 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // 49 → 48 (same task): the permanent collision-policy footer is gone, and
     // its `t(labelKey)` over a three-entry table with it. Settings names the
     // same three keys literally now.
-    expect(dynamicCalls).toBe(48);
+    // 48 → 50: the HDF wizard's custom-size refusal and its size warning, both
+    // reading a `Phrase.key` from `@/lib/hdfSize` — same pattern as every
+    // other refusal on this list, and every branch of both is enumerated in
+    // that module's own test file.
+    expect(dynamicCalls).toBe(50);
   });
 });
