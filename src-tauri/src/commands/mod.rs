@@ -10,6 +10,7 @@ pub mod archives;
 pub mod cbm;
 pub mod checkout;
 pub mod collection;
+pub mod distro;
 pub mod dragdrop;
 pub mod gotek;
 pub mod hdf;

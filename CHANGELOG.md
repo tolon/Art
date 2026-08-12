@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### The OS Builder knows the distributions (2026-08-13)
+
+#### Added
+- **A new screen: OS Builder.** The AmigaOS distributions that run on a
+  PiStorm — CaffeineOS, CoffinOS, AmiKit, and ART's own Baseline — each one
+  leading with its licence, because that decides what you have to do before ART
+  can help. It tells you what you must supply, checks whether the Kickstart you
+  picked is from the family that distribution's base actually wants, and
+  whether your card is big enough — before a copy, not two thirds of the way
+  through one.
+- **ART downloads no distribution, and never will.** The link goes to the
+  project's own page; you come back with a file. The same rule ART already
+  follows for Kickstart ROMs. And both free distributions ship the same
+  sentence, so ART does too: if you bought this from somebody, ask for your
+  money back — building the card yourself is what this screen is for.
+
+#### Not built
+ART cannot prepare a card yet, and every profile says so. What a real
+distribution's card looks like has to be read off a genuine download first;
+guessing at it is how a tool ends up writing a card that quietly does not boot.
+
 ### The PiStorm screen knows which Kickstart you have (2026-08-13)
 
 #### Added

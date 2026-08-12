@@ -12,6 +12,7 @@
     "rom": "ROM Yöneticisi",
     "winuae": "WinUAE",
     "pistorm": "PiStorm",
+    "osBuilder": "İşletim Sistemi Kurucusu",
     "collection": "Koleksiyon",
     "tools": "Araçlar",
     "settings": "Ayarlar",
@@ -625,6 +626,81 @@
         "feature2": "Evrensel eski sistem desteği",
         "feature3": "Temel yapı"
       }
+    }
+  },
+  "osBuilder": {
+    "intro": "PiStorm üzerinde çalışan AmigaOS dağıtımları, her birinin sizden ne istediği ve elinizdekinin uyup uymadığı. ART hiçbir dağıtımı indirmez — siz indirir, ART'a dosyayı gösterirsiniz.",
+    "notBuiltYet": "ART henüz kart yazamıyor. Bu ekran bir dağıtımın neye ihtiyaç duyduğunu söyler ve elinizdeki ROM ile kartı buna göre denetler; kartın hazırlanması yapılmadı — sebebi, yerleşiminin tahmin edilmek yerine gerçek bir indirme üzerinde incelenmesi gerekmesi.",
+    "profiles": {
+      "heading": "Hangi dağıtım",
+      "intro": "Her kart lisansıyla başlıyor, çünkü ART yardımcı olmadan önce sizin ne yapmanız gerektiğini o belirliyor."
+    },
+    "material": {
+      "heading": "Sizin sağladıklarınız",
+      "intro": "{{name}} sizin edinmeniz gereken bir şey. ART sizin kopyanız üzerinde çalışır; indirmez, barındırmaz, birlikte dağıtmaz.",
+      "homepage": "Projenin kendi sayfası:",
+      "chooseImage": "İmajı seç…",
+      "chooseImageTitle": "İndirdiğiniz dağıtım imajını seçin",
+      "noImage": "İmaj seçilmedi",
+      "imageSize": "{{gb}} GB",
+      "chooseRom": "Kickstart seç…",
+      "chooseRomTitle": "Bir Kickstart ROM seçin",
+      "noRom": "ROM seçilmedi",
+      "romIs": "{{rom}} ({{revision}})",
+      "romUnrecognised": "ART bu ROM'u tanımıyor. Yine de doğru ROM olabilir.",
+      "romWrongFamily": "{{base}} için Kickstart {{family}} gerekiyor. Başka bir aileden ROM genelde açılmayan bir kart demektir ve ekranda bunu açıklayan hiçbir şey olmaz — ama ne yaptığınızı biliyorsanız devam edin."
+    },
+    "card": {
+      "heading": "Kart",
+      "size": "Kart boyutu",
+      "tooSmall": "Bu dağıtım en az {{needs}} GB istiyor, siz {{has}} GB seçtiniz.",
+      "hint": "Kopyalamanın üçte ikisine gelindiğinde değil, şimdi denetleniyor."
+    },
+    "notes": {
+      "heading": "Bilinmesi gerekenler"
+    },
+    "prepare": {
+      "heading": "Kartı hazırla",
+      "explain": "İmajın yazılması, ART'ın zaten bildiği donanım ayarlarıyla PiStorm'unuza uyarlanması, Kickstart'ınızın yerleştirilmesi, multiboot setinin oluşturulması ve sonucun doğrulanması. Hiçbiri yapılmadı. Başladığı nokta — gerçek bir dağıtım kartının nasıl göründüğü — önce gerçek bir indirmeden okunmalı; bunu tahmin etmek, bir aracın sessizce açılmayan bir kart yazmasıyla biten yoldur."
+    }
+  },
+  "distro": {
+    "licence": {
+      "freeGrey": "{{name}}, yapanlar tarafından ücretsiz dağıtılıyor ve lisanslayamayacakları AmigaOS içeriği taşıyor. ART sizin kopyanızı denetlemez, indirmez de. Bunun için birine para ödediyseniz paranızı geri isteyin.",
+      "userLicensed": "{{name}}, sahip olmanız gereken bir AmigaOS üzerine kurulu ticari bir ürün. ART, ürününün beklediği kartı hazırlar; onların işini yeniden üretmez.",
+      "artBaseline": "ART tarafından sizin lisanslı medyanızdan kurulur. Tarif olarak paylaşılabilir — imaj olarak asla."
+    },
+    "supply": {
+      "image": "{{name}}'i kendiniz indirirsiniz.",
+      "media": "Kendi {{base}} kurulum medyanız.",
+      "rom": "Bir Kickstart {{family}} ROM'u.",
+      "card": "En az {{gb}} GB'lık bir kart."
+    },
+    "image": {
+      "notAFile": "{{path}} bir dosya değil.",
+      "empty": "{{path}} boş.",
+      "tooSmallForRaw": "{{gb}} GB, bir {{name}} imajı olmak için fazlasıyla küçük — muhtemelen yanlış dosya ya da yarıda kalmış bir indirme."
+    },
+    "note": {
+      "caffeineos": {
+        "download": "Yaklaşık 17 GB'lık tek bir ham imaj olarak dağıtılıyor. Herhangi bir imaj yazıcıyla yazılır; o adım geldiğinde ART donanımınıza uyarlayacak.",
+        "wifi": "WiFi, açılış dosyalarında değil, Amiga tarafında DEVS: altında yapılandırılır."
+      },
+      "coffinos": {
+        "romFamily": "CoffinOS, Hyperion'un 3.1.4 ve 3.2 Kickstart'larının kendisini bozduğunu belirtiyor. Klasik bir 3.1 ROM istiyor.",
+        "demoware": "Roadshow ve iBrowse'un demo sürümleriyle geliyor. Kullanıyorsanız tam sürümlerini yazarlarından satın alın."
+      },
+      "amikit": {
+        "ownIt": "AmiKit'i satın alır, kendi AmigaOS 3.2 ve P96'nızı sağlarsınız; onlar yalnızca kendi katmanlarını dağıtıyor.",
+        "adaptOnly": "ART, ürünün beklediği kartı hazırlar. AmiKit'i yeniden kurmaz."
+      },
+      "baseline": {
+        "recipe": "ART bunu sizin medyanızdan kurar ve nasıl kurulduğunu paylaşabilir — sonucu değil, tarifi.",
+        "yourMedia": "Hiçbir şey birlikte dağıtılmıyor. Sizin işletim sisteminiz, sizin ROM'unuz, sizin lisanslarınız.",
+        "boingBags": "BoingBag 1 ve 2 her zaman ücretsiz indirmelerdi; ART isterseniz onları getirebilir.",
+        "romFamily": "3.9 sistemi klasik bir 3.1 ROM ister; Hyperion 3.1.4 ya da 3.2 değil."
+      },
+      "paidIsARefund": "Bunu eBay, Etsy ya da başka bir yerden satın aldıysanız paranızı geri isteyin. Bu ekran zaten kartı kendiniz oluşturmanız için var."
     }
   },
   "pistorm": {

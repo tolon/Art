@@ -146,6 +146,13 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // both read a `Phrase.key` from `@/lib/pistormRom` — the same pattern every
     // other refusal on this list follows, with every branch enumerated in that
     // module's own test file.
-    expect(dynamicCalls).toBe(57);
+    // 57 → 61 (the OS Builder): a profile's licence sentence, what it asks the
+    // user to supply, what may be wrong with the file they pointed at, and its
+    // post-install notes are all data in the distro registry rather than
+    // sentences on the screen — so they are read by key. Every branch of the
+    // first three is enumerated in `osBuilder.test.ts`, and the notes are
+    // checked against both catalogues by `distro-registry-keys.test.ts`, which
+    // is the check this scan cannot make.
+    expect(dynamicCalls).toBe(61);
   });
 });

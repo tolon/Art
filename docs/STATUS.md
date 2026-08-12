@@ -22,14 +22,14 @@ Update it at the end of any session that changes what works.
 | **Version** | 0.1.0 (unreleased) |
 | **Current stage** | **SD-1 in progress** — G4 (RDB filesystem embedding) done both ways; G2, G7, G15, G8 owed |
 | **Build** | PASS |
-| **Tests** | 1013 Rust passed, 0 failed; 379 frontend passed, 0 failed |
+| **Tests** | 1024 Rust passed, 0 failed; 400 frontend passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
 | **amitools oracle** | 53 checks, both directions — now including a filesystem driver ART embedded in an RDB and `rdbtool` extracted back out byte-for-byte |
 | **7-Zip disc oracle** | 4 fixtures — Joliet, ISO9660-only, raw Mode 1, raw Mode 2/XA — names, sizes and every file's SHA-256 |
 | **cargo-deny** | advisories, bans, licences, sources — all ok |
 | **MSRV** | 1.93 (raised from 1.77 on 2026-08-12, for a maintained 7z decoder) |
-| **i18n** | `en.json` and `tr.json`, 1065 leaf keys each, parity enforced by `pnpm test` |
+| **i18n** | `en.json` and `tr.json`, 1111 leaf keys each, parity enforced by `pnpm test` |
 | **Release bundle** | rebuilt 2026-08-12 — MSI and NSIS, and the application was launched and answered |
 | **Published** | <https://github.com/tolon/Art> — public, `main`, **GPL-3.0-or-later** (was MIT until 2026-08-12) |
 | **Real hardware** | **Bare metal, reached 2026-08-12** — `test/art-bootable-test.adf` booted a real **A500/A500+** (Kickstart 3.9) from a **Gotek**, to an AmigaDOS CLI. Photographed. Two ADFs had already mounted/booted under licensed Kickstart in WinUAE (Phase 1a). Still untouched: physical magnetic media — a Gotek is not a mechanical drive |
@@ -895,6 +895,7 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-13 | **The OS Builder knows the distributions.** `core/distro/` is a registry of real AmigaOS distros as data — CaffeineOS, CoffinOS, AmiKit, two ART Baseline entries — with the licence model each one obliges the user to, the Kickstart family its base wants, and the card it needs. The `/os-builder` screen leads with the licence, checks the ROM family and the card size, and says plainly that ART cannot write a card yet: the adapter is blocked on reading a real distribution's layout by hand (research §8.2) rather than guessing at it. Two open questions closed with evidence in [sd2-distro-decisions.md](sd2-distro-decisions.md) — the **free Aminet Picasso96 is enough** (so ART Baseline is reproducible without a paid component), and the HstWB package format, whose `Install` turns out to be 26 KB of Amiga script only an Amiga can run | 1024 Rust / 400 frontend |
 | 2026-08-13 | **PiStorm fix round.** The Kickstart goes through ROM Manager now — every ROM on a card identified by checksum and labelled with its version and machines, one pickable from anywhere on the PC and copied on under a confirmed name; unrecognised stays a label, never a refusal. The kernel states its version, read from the `$VER:` string Emu68's own build compiles in. Named firmware sets can be created, duplicated, renamed and activated, each through preview to backup to write. **[ART-091](ISSUES.md#open) found in review**: ART named `Emu68-pistorm16.zip`, which no Emu68 release has ever shipped — and the name that does exist, `Emu68-pistorm.zip`, means the *classic* board in 1.0.x and the PiStorm32-lite/PiStorm16 in 1.1 alpha. The release line is now a field and the answer a type with `Absent` and `Unstated` cases. Owed and named: [ART-093](ISSUES.md#open) (fetching a kernel update) and [ART-092](ISSUES.md#open) (deleting a set) | 1013 Rust / 379 frontend |
 | 2026-08-12 | **The PiStorm screen stopped inventing things (ART-090).** It offered a JIT switch (Emu68 *is* a JIT), an MMU switch (it emulates none), a Fast RAM slider (it maps RAM itself) and `emu68-sd.device` (the real driver is `brcm-sdhc`/`brcm-emmc`), and wrote three tokens Emu68 has never read. Rebuilt from the user's research brief as `core/pistorm/{hardware,options,firmware}.rs`, 58 tests: a three-field hardware matrix everything derives from, one field per documented token, four profiles whose claims are the tokens they write. The screen prints the token beside every control and the whole line beneath them. **Not verified on real hardware** — no card built by it has been booted | 985 Rust / 367 frontend |
 | 2026-08-12 | **Every choice is remembered now, and the whole program can be made bigger.** `@/lib/remembered` gives every screen's view modes, filters, folders and configs a checked home in `settings.json`; Application Size scales the entire UI 70–250 % with Ctrl+wheel, Ctrl+±, Ctrl+0 and a Settings slider. Both from the user: *nothing changes unless the user changes it*, and *fonts, search fields and icons on every screen* | 985 Rust / 367 frontend |

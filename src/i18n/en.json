@@ -12,6 +12,7 @@
     "rom": "ROM Manager",
     "winuae": "WinUAE",
     "pistorm": "PiStorm",
+    "osBuilder": "OS Builder",
     "collection": "Collection",
     "tools": "Tools",
     "settings": "Settings",
@@ -625,6 +626,81 @@
         "feature2": "Universal legacy support",
         "feature3": "Basic structure"
       }
+    }
+  },
+  "osBuilder": {
+    "intro": "The AmigaOS distributions that run on a PiStorm, what each one needs from you, and whether what you have suits it. ART never downloads a distribution — you fetch it yourself and point ART at the file.",
+    "notBuiltYet": "ART cannot write a card yet. This screen tells you what a distribution requires and checks the ROM and card you have against it; preparing the card itself is not built, and the reason is that its layout has to be inspected on a real download first rather than guessed at.",
+    "profiles": {
+      "heading": "Which distribution",
+      "intro": "Each card leads with its licence, because that decides what you have to do before ART can help."
+    },
+    "material": {
+      "heading": "What you supply",
+      "intro": "{{name}} is yours to obtain. ART works on your copy; it does not fetch, host or bundle one.",
+      "homepage": "The project's own page:",
+      "chooseImage": "Choose the image…",
+      "chooseImageTitle": "Choose the distribution image you downloaded",
+      "noImage": "No image chosen",
+      "imageSize": "{{gb}} GB",
+      "chooseRom": "Choose a Kickstart…",
+      "chooseRomTitle": "Choose a Kickstart ROM",
+      "noRom": "No ROM chosen",
+      "romIs": "{{rom}} ({{revision}})",
+      "romUnrecognised": "ART does not recognise this ROM. It may still be the right one.",
+      "romWrongFamily": "{{base}} wants a Kickstart {{family}}. A ROM from another family usually means a card that does not boot, with nothing on screen to explain it — but if you know what you are doing, carry on."
+    },
+    "card": {
+      "heading": "The card",
+      "size": "Card size",
+      "tooSmall": "This distribution needs at least {{needs}} GB, and you have chosen {{has}} GB.",
+      "hint": "Checked now rather than two thirds of the way through a copy."
+    },
+    "notes": {
+      "heading": "Worth knowing"
+    },
+    "prepare": {
+      "heading": "Prepare the card",
+      "explain": "Writing the image, adapting it to your PiStorm through the hardware settings ART already knows, placing your Kickstart, creating the multiboot set and verifying the result. None of it is built. The step it starts from — what a real distribution's card actually looks like — has to be read off a genuine download first; guessing at it is how a tool ends up writing a card that quietly does not boot."
+    }
+  },
+  "distro": {
+    "licence": {
+      "freeGrey": "{{name}} is given away free by the people who make it, and carries AmigaOS material they cannot license. ART does not police your copy and does not fetch it either. If you paid somebody for this, ask for your money back.",
+      "userLicensed": "{{name}} is a commercial product built on an AmigaOS you must own. ART prepares the card their product expects; it does not reproduce their work.",
+      "artBaseline": "Built by ART from your own licensed media. Shareable as a recipe — never as an image."
+    },
+    "supply": {
+      "image": "You download {{name}} yourself.",
+      "media": "Your own {{base}} installation media.",
+      "rom": "A Kickstart {{family}} ROM.",
+      "card": "A card of at least {{gb}} GB."
+    },
+    "image": {
+      "notAFile": "{{path}} is not a file.",
+      "empty": "{{path}} is empty.",
+      "tooSmallForRaw": "{{gb}} GB is far too small to be a {{name}} image — this is probably the wrong file, or a download that stopped early."
+    },
+    "note": {
+      "caffeineos": {
+        "download": "Distributed as a single raw image of about 17 GB. Written with any imager; ART will adapt it to your hardware once that step exists.",
+        "wifi": "WiFi is configured on the Amiga side, in DEVS:, not in the boot files."
+      },
+      "coffinos": {
+        "romFamily": "CoffinOS states that Hyperion's 3.1.4 and 3.2 Kickstarts break it. It wants a classic 3.1 ROM.",
+        "demoware": "Ships demo versions of Roadshow and iBrowse. Buy the full ones from their authors if you use them."
+      },
+      "amikit": {
+        "ownIt": "You buy AmiKit and supply your own AmigaOS 3.2 and P96; they ship only their own layer.",
+        "adaptOnly": "ART prepares the card their product expects. It does not rebuild AmiKit."
+      },
+      "baseline": {
+        "recipe": "ART builds this from your media and can share how it was built — the recipe, not the result.",
+        "yourMedia": "Nothing is bundled. Your OS, your ROM, your licences.",
+        "boingBags": "BoingBag 1 and 2 were always free downloads and ART can fetch them on request.",
+        "romFamily": "A 3.9 system wants a classic 3.1 ROM, not a Hyperion 3.1.4 or 3.2 one."
+      },
+      "paidIsARefund": "If you bought this on eBay, Etsy or anywhere else, ask for your money back. Building the card yourself is what this screen is for."
     }
   },
   "pistorm": {

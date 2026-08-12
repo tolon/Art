@@ -346,6 +346,28 @@ The guided wizard: pick a profile (Power Retro / Gamer / Preservationist…),
 see the proposed volume table scaled to the actual card size, adjust, go.
 Pure UI over G1–G7; last piece to build, first piece the user sees.
 
+**Reframed 2026-08-13 by `ART-research-distro-profiles.md`.** A "profile" is no
+longer a made-up name for a volume layout — it is a **real AmigaOS
+distribution**: CaffeineOS, CoffinOS, AmiKit, or ART's own Baseline built from
+the user's licences. That research is the design; this row is its home in the
+ladder.
+
+**Half built, 2026-08-13.** The registry exists (`core/distro/`, JSON data with
+11 tests over it) and the OS Builder screen renders it: which distribution,
+what it requires of you, whether the ROM you picked is from the family its base
+wants, whether your card is big enough. Every entry is `available: false` and
+says so — because *preparing* the card is blocked on §8.2 of that research:
+the layout has to be read off a real download by hand before an adapter is
+written. Guessing at it is how a tool comes to write a card that quietly does
+not boot.
+
+Two of the research's open questions are closed with evidence in
+[sd2-distro-decisions.md](sd2-distro-decisions.md): the **free Aminet
+Picasso96 is enough** (the commercial P96 is newer, not required — which is
+what makes ART Baseline reproducible at all), and the **HstWB package format**,
+whose manifest and content ART can use today but whose `Install` is 26 KB of
+Amiga script that only an Amiga can run.
+
 ---
 
 # Added 2026-08-12, from the user

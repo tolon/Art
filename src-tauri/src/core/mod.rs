@@ -15,6 +15,7 @@ pub mod collection;
 pub mod compatibility;
 pub mod conversion;
 pub mod detect;
+pub mod distro;
 pub mod error;
 pub mod gotek;
 pub mod hashing;
