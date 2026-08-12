@@ -31,7 +31,9 @@ pnpm, MSVC Build Tools).
    [docs/FEATURES.md](docs/FEATURES.md) if you finished a feature, and an
    `ART-NNN` entry in [docs/ISSUES.md](docs/ISSUES.md) if you found or fixed a
    defect.
-8. This repository has no GitHub remote — there is nowhere to open a hosted pull request.
+8. The repository is at <https://github.com/tolon/Art>. `main` is the published
+   branch; phase work happens on its own branch and lands through a pull
+   request there.
    Merge your branch back to `master` locally (or hand it off for review) with a clear
    description of what changed and why.
 
@@ -69,4 +71,4 @@ Reference issues when relevant.
 ## Licensing
 
 By contributing, you agree your contributions are licensed under the project's
-[MIT license](LICENSE).
+[GPL-3.0-or-later license](LICENSE).

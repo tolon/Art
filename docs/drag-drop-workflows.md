@@ -50,7 +50,10 @@ There is **one** central drag & drop system, not per-module implementations.
 
 - ADF, ADZ, DMS (floppy images)
 - HDF, HDZ (hard disk images)
-- LHA (archives)
+- LHA, ZIP, 7z (archives)
+- ISO9660 discs, including raw 2352-byte track dumps (Mode 1 and Mode 2/XA)
+- D64, D71, D81, T64 (Commodore 8-bit disks and tapes); TAP, PRG and CRT are
+  identified and described rather than opened
 - ROM (Kickstart)
 - Amiga executables / WHDLoad packages
 - Folders (smart folder analysis)
@@ -84,10 +87,19 @@ The catalogue lives in `src-tauri/src/core/workflow/builtin.rs` — that file is
 the source of truth, and tests enforce that every recognised format offers at
 least one starred action and that no workflow crosses formats.
 
+**LHA Studio, WHDLoad detection and install-to-hard-disk are offered for LHA
+only**, not for every `Archive`. They are written against `core/lha` and would
+fail on a ZIP; a test asserts no `lha.*` action reaches one. Every archive gets
+the file manager instead, which reads all three formats.
+
 | Drop | Starred actions | Also offered |
 |------|-----------------|--------------|
 | ADF / ADZ / DMS | Open in ADF Studio · Launch in WinUAE · Add to Collection | Copy to Gotek (raw ADF only) · Check Disk Health (raw ADF only) · Copy into a hard disk image · Hex Viewer† |
-| LHA | Open in LHA Studio · Extract Files · Add to Collection · Install to a hard disk | Launch in WinUAE* |
+| LHA | Open in the file manager · Open in LHA Studio · Extract Files · Add to Collection · Install to a hard disk | Launch in WinUAE* |
+| ZIP / 7z | Open in the file manager | Hex Viewer† |
+| ISO9660 disc | Open in the file manager | Hex Viewer† |
+| D64 / D71 / D81 / T64 | Open in the file manager | Hex Viewer† · SHA-256 |
+| TAP / PRG / CRT | What is this? | Hex Viewer† · SHA-256 |
 | HDF / HDZ | Open in Hard Disk Studio · Launch in WinUAE | Add to Collection · Hex Viewer† |
 | ROM | Identify in ROM Studio · Use in a Machine Profile | Hex Viewer† |
 | Folder | Scan into Collection · Build an HDF from this folder* | Prepare as Gotek drive |

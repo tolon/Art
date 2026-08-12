@@ -11,11 +11,16 @@ edition = "2021"
 # class of bug lives. CI builds on `stable` (`dtolnay/rust-toolchain@stable`),
 # so nothing in the pipeline pins an older compiler.
 rust-version = "1.93"
-# The repository has said MIT in `LICENSE` since the first commit; the manifest
-# had not, and current cargo-deny rejects the crate as unlicensed for it —
-# `cargo deny check licenses` failed on ART itself before it got as far as any
-# dependency.
-license = "MIT"
+# Declared so `cargo deny check licenses` can see it: without a licence field
+# the crate is reported as unlicensed against its own allow-list, which is how
+# that check was failing before 2026-08-12.
+#
+# GPL-3.0-or-later, decided 2026-08-12. The repository said MIT until then; the
+# public repository was created under GPL-3.0 and that is the licence the
+# project ships under. `-or-later` follows the wording the licence's own
+# "how to apply" section recommends.
+license = "GPL-3.0-or-later"
+repository = "https://github.com/tolon/Art"
 
 # Tauri 2 requires the lib to be a cdylib/staticlib for cross-binary use
 # (and an rlib so the binary target and tests can reuse it).

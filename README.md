@@ -1,12 +1,24 @@
 # Amiga Retro Toolkit (ART)
 
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+![Platform: Windows 10/11 x64](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-informational)
+![Rust 1.93+](https://img.shields.io/badge/rust-1.93%2B-orange)
+
 **The Swiss Army Knife for Amiga Files**
+
+<https://github.com/tolon/Art>
 
 A professional Windows desktop toolkit for Commodore Amiga users. ART combines
 ADF, HDF, LHA, ROM, Gotek, WinUAE and collection management into one coherent,
 drag-and-drop-driven application.
 
 > **DROP IT INTO ART.**
+
+![ART's dashboard: the drop zone that starts every workflow](docs/assets/dashboard.png)
+
+*ART running on Windows 11, light theme. Everything starts by dropping
+something on that panel: ART works out what it is from its bytes and offers
+what can be done with it.*
 
 ## Which machines
 
@@ -53,6 +65,20 @@ atomic operation rather than several running together — see
 [docs/ISSUES.md](docs/ISSUES.md) (ART-064, ART-065). The restyled Files
 screen is covered by automated tests only; nobody has opened it in a running
 window yet.
+
+### Verified how, exactly
+
+ART's disk writer has been checked three ways, and the third is the one that
+matters: `cargo test` (ART agrees with itself), `amitools` and 7-Zip (ART
+agrees with implementations that share no code with it), and finally **two
+disks ART wrote, opened under licensed Kickstart and Workbench in WinUAE /
+Amiga Forever** — one mounted and read back, one booted to a CLI prompt.
+
+That last rung is emulation with real ROMs, **not bare metal**. No photograph
+of a real A500 running an ART-written disk exists yet; when one does it goes in
+[`docs/assets/`](docs/assets/) and this section says which machine and which
+Kickstart. Claiming hardware ART has not been tried on is the one thing
+[docs/FEATURES.md](docs/FEATURES.md) exists to prevent.
 
 Data safety is enforced in `core/safety`: every write is atomic, and files are
 backed up to `.art-backup/` before being replaced (or, for images too large to
@@ -155,4 +181,11 @@ Windows APIs. This keeps it unit-testable and reusable. See
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+**GNU General Public License v3.0 or later** (`GPL-3.0-or-later`). See
+[LICENSE](LICENSE).
+
+ART's dependencies are permissively licensed (MIT / Apache-2.0 / Zlib / CDLA)
+and remain compatible with this; they are listed in
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) and checked on every push by
+`cargo deny`. ART itself distributes **no** Amiga ROMs, no AmigaOS files and no
+copyrighted software — see [docs/licenses.md](docs/licenses.md).

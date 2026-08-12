@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-ART (Amiga Retro Toolkit) is MIT-licensed. This file acknowledges the
+ART (Amiga Retro Toolkit) is licensed **GPL-3.0-or-later**. This file acknowledges the
 third-party software ART depends on. For the full, machine-checked inventory
 see [docs/licenses.md](docs/licenses.md) and run `cargo deny check`.
 

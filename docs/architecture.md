@@ -90,7 +90,8 @@ amiga-retro-toolkit/
 ## The core independence rule
 
 `src-tauri/src/core/` compiles with **only `std` + `serde` + `sha2` + `thiserror`
-+ `delharc` + `zip`**. It never imports `tauri`, never calls Windows APIs, never touches
++ `delharc` + `zip` + `sevenz-rust2`** — the three decompressors are read-only
+and sit behind `core/archive`'s single security gate. It never imports `tauri`, never calls Windows APIs, never touches
 the network.
 This is what makes it unit-testable and what leaves the door open to a future
 CLI or other shells without rewriting the engine.

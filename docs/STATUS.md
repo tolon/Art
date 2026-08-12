@@ -20,7 +20,7 @@ Update it at the end of any session that changes what works.
 |---|---|
 | **Last updated** | 2026-08-12 |
 | **Version** | 0.1.0 (unreleased) |
-| **Current stage** | Phase 2a — content-first detection and containers (complete) |
+| **Current stage** | Phase 2b — the Files screen, done right (tasks 1–2 of 8, on branch `phase-2b`) |
 | **Build** | PASS |
 | **Tests** | 908 Rust passed, 0 failed; 137 frontend passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
@@ -30,8 +30,10 @@ Update it at the end of any session that changes what works.
 | **cargo-deny** | advisories, bans, licences, sources — all ok |
 | **MSRV** | 1.93 (raised from 1.77 on 2026-08-12, for a maintained 7z decoder) |
 | **i18n** | `en.json` and `tr.json`, 872 leaf keys each, parity enforced by `pnpm test` |
-| **Release bundle** | built and verified in an earlier session; not rebuilt this pass |
-| **Real hardware** | Two ADFs booted/mounted under licensed Kickstart in WinUAE (Phase 1a). **Nothing added since has been seen on a screen** — not the disc pane, not the archive pane, not the C64 pane (ART-062) |
+| **Release bundle** | rebuilt 2026-08-12 — MSI and NSIS, and the application was launched and answered |
+| **Published** | <https://github.com/tolon/Art> — public, `main`, **GPL-3.0-or-later** (was MIT until 2026-08-12) |
+| **Real hardware** | Two ADFs booted/mounted under licensed Kickstart in WinUAE (Phase 1a); still not bare metal |
+| **Seen on a screen** | The Dashboard, at last — a human looked at the running window on 2026-08-12 and the screenshot is in the README. **The Files screen still has not been looked at since phase 2a's panes were added** (ART-062) |
 
 Reproduce the numbers above:
 
@@ -451,6 +453,37 @@ assumed licensed AmigaOS media reliably to hand. `scripts/iso-oracle-check.py`
 covers the risk it existed for, with an implementation that shares no code with
 ART's.
 
+### ⏳ Phase 2b — The Files screen, done right (in progress, branch `phase-2b`)
+
+Plan: [2026-08-12-phase-2b-commander-ui.md](superpowers/plans/2026-08-12-phase-2b-commander-ui.md).
+Brief: [brief-files-commander-ui.md](brief-files-commander-ui.md) — written from
+the **first human look at the running screen** plus the user's own twenty-year-old
+Total Commander `wincmd.ini`, and it supersedes the earlier restyle briefs.
+
+The verdict it starts from: the first restyle got Total Commander's *components*
+right and its *gestalt* wrong. TC is not a widget on a page; it is the window.
+
+Done (2 of 8 tasks):
+
+- **Task 1 — the panes fill the window.** Page title and intro gone, full-bleed
+  grid, and panes that are equal **by construction** (`minmax(0, 1fr)`, not a
+  content-sized flex — that is what made the right pane come up short). Rows
+  lost their `→`/`←`/`X` buttons; TC puts nothing on rows. `Ctrl+B` collapses
+  the sidebar and the state survives a restart.
+- **Task 2 — one visual world, in the user's own colours.** Decoded from his
+  `[Colors]`: pane `#1C1F24`, cursor bar pure yellow with black text
+  (`InverseCursor=1` settles the question the first restyle guessed wrong),
+  selected names `#FF3C3C`. Chrome is one step lighter than the rows instead of
+  Windows-95 grey, in dark and light alike, and focus moved to the path row.
+
+Left: the pane header and source combo, the bottom dock and **F6 = Move**
+(Task 3); **Enter opens the container in the same pane** (Task 4, the headline);
+full keyboard coverage (5); tabs and session restore (6); colour rules and the
+confirmations his config keeps on (7); closing the phase (8).
+
+**Nothing in this phase has been looked at running either.** Both tasks are
+green on tests and neither has been seen.
+
 ### ⏳ SD Card Appliance Builder — SD-0 … SD-5 (planned, not started)
 
 Gap analysis: [sd-appliance-gap-analysis.md](sd-appliance-gap-analysis.md)
@@ -649,7 +682,13 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
    the two-pane manager has real focus, multi-select, batch copy/delete,
    sorting, a filename mask, and now boot code that works; see "Phase 1a"
    above for what is not (volume→volume batching, ART-064/065).
-5. **Phase 2a is complete** on branch `phase-2a` (not yet merged to `master`)
+5. **Start here tomorrow: Phase 2b Task 3**, on branch `phase-2b` — the pane
+   header becomes `[source ▾] [path] [filter]`, the drive/source button row
+   moves behind a Settings toggle (default off), the command line docks
+   directly above the F-key bar, and **F6 becomes Move** (Shift+F6 = rename),
+   labels in both catalogues. Then Task 4, which is the headline: Enter on a
+   container opens it *in the same pane*.
+6. **Phase 2a is complete** and merged to `main`
    — see its section above for what it changed and what it left owed, and its
    plan file's Amendments section for what changed after the plan was written
    (the real-Amiga-CD step is cancelled; a 7-Zip oracle replaced it).
@@ -690,6 +729,8 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-12 | **Published at github.com/tolon/Art** (public). Licence changed MIT → GPL-3.0-or-later to match the repository, in all seven places that claimed one. Phase 2a merged to `main`; phase 2b started on its own branch so half-finished UI did not travel with it | 912 Rust / 137 frontend |
+| 2026-08-12 | Phase 2b tasks 1–2: the commander fills the window with panes equal by construction, rows lost their buttons, `Ctrl+B` collapses the sidebar; the palette is now the user's own and the chrome follows the theme | 912 Rust / 137 frontend |
 | 2026-08-12 | Phase 2a closed. Also this session: the built-in machine profiles now cover the classic line end to end (A1000 … CD32), and Commodore 8-bit files became scope in writing (spec addendum §10.5) | 908 Rust / 137 frontend |
 | 2026-08-12 | Task 5: `core/cbm` — D64/D71/D81 (35 and 40 track) and T64 read and browsable, TAP/PRG/CRT identified with a real answer rather than a shrug. Amendments A3 (40-track sizes, refusal carries the size) and A4 (a T64's header is not trusted) both in. New `Commodore8Bit` category so a 1541 image is never offered ADF Studio or Gotek | 908 Rust / 137 frontend |
 | 2026-08-12 | Task 4: one archive security gate with the format behind a backend trait, then ZIP and 7z through it, then the archive pane and its virtual tree. MSRV 1.77 → 1.93 for a maintained 7z decoder. ART-076 (LHA matched at the wrong offset) and ART-077 (the file manager ignored a workflow's object) found and fixed; cargo-deny was broken three ways and now runs | 857 Rust / 134 frontend |

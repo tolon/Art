@@ -20,6 +20,13 @@ allow = [
   "Zlib",
   "CC0-1.0",
   "MPL-2.0",
+  # ART's own licence, as of 2026-08-12. It is in the *dependency* allow-list
+  # because cargo-deny checks this crate against it too — without the entry the
+  # check fails on ART itself before it reads a single dependency. It also
+  # means a GPL dependency would now pass, which is legally fine for a GPL
+  # program; the reason ART still prefers permissive dependencies is reuse of
+  # its own modules, not its own licence (see docs/licenses.md).
+  "GPL-3.0-or-later",
   # `webpki-roots` — Mozilla's CA trust list, reached through `ureq`'s
   # rustls-webpki-roots feature. CDLA-Permissive-2.0 is a permissive *data*
   # licence (it is a list of certificates, not code) with no copyleft and no
