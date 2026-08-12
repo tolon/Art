@@ -408,6 +408,43 @@ export function useSourceComboKeys(
 }
 
 /**
+ * Tabs (brief §3.3): **Ctrl+T** duplicates, **Ctrl+W** closes, **Ctrl+Tab**
+ * cycles.
+ *
+ * Ctrl+Tab needs its own guard rather than `isShortcutBlocked`'s: that one is
+ * shared with `usePaneTab`, where plain Tab moves pane focus, and letting
+ * Ctrl+Tab through there would make the two fight over the same key. Here the
+ * modifier is required, which is the whole distinction.
+ */
+export function useTabKeys(
+  {
+    onNewTab,
+    onCloseTab,
+    onNextTab,
+  }: { onNewTab: () => void; onCloseTab: () => void; onNextTab: () => void },
+  active: boolean
+) {
+  useEffect(() => {
+    if (!active) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (!event.ctrlKey) return;
+      const key = event.key.toLowerCase();
+      const handler =
+        key === "t" ? onNewTab : key === "w" ? onCloseTab : key === "tab" ? onNextTab : null;
+      if (!handler) return;
+      if (isShortcutBlocked(event, true)) return;
+
+      event.preventDefault();
+      handler();
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onNewTab, onCloseTab, onNextTab, active]);
+}
+
+/**
  * The docked function-key row (brief §1.4).
  *
  * **One row, always.** Total Commander's F-keys are a strip along the bottom

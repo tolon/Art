@@ -126,6 +126,47 @@
   gap: 6px;
 }
 
+/* The tab bar (task 6). Above the header, scrolling sideways rather than
+   wrapping: `DirTabLimit=32` means a pane can hold thirty-two of these, and a
+   bar that grew to four rows would eat the listing it exists to serve. */
+.tc-tab-row {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  gap: 2px;
+  padding: 2px 4px;
+  scrollbar-width: thin;
+}
+
+.tc-tab {
+  flex: 0 0 auto;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px solid var(--tc-chrome-border);
+  border-bottom: none;
+  border-radius: 2px 2px 0 0;
+  background: var(--tc-chrome-bg);
+  color: var(--tc-chrome-text);
+  cursor: pointer;
+}
+.tc-tab:hover {
+  background: color-mix(in srgb, var(--tc-chrome-bg) 82%, black);
+}
+
+/* The active tab reads as part of the pane below it — the same fill as the
+   rows, so the bar looks attached to what it is showing rather than floating
+   above it. */
+.tc-tab-active {
+  background: var(--tc-bg);
+  color: var(--tc-text);
+  font-weight: 700;
+}
+
 /* The source combo. Flat, chrome-coloured and narrow: it is a selector, not a
    control the eye should land on before the path beside it. `max-width` keeps
    a long "(not on a listed drive)" placeholder from eating the path's room. */

@@ -71,6 +71,23 @@ export interface AppSettings {
    * data the user already had.
    */
   overwritePolicy: StoredOverwritePolicy;
+  /**
+   * The Files screen's tabs, per pane, and which pane had the keyboard
+   * (`Savepath=1`, `Savepanels=1` — brief §3.3).
+   *
+   * **Deliberately `unknown` here.** The shape belongs to `@/lib/paneTabs` and
+   * `@/lib/paneHistory`; restating it would either drag feature types into
+   * this module — which it is the whole point of `StoredMirror` and
+   * `StoredOverwritePolicy` above to avoid — or fork it, so that a change in
+   * one would silently not reach the other.
+   *
+   * What that costs is a type guard, and the guard is needed anyway: this is a
+   * JSON file a user can edit and an older ART may have written, so it is
+   * validated by `isUsableTabSet` on the way in. A commander that opens to a
+   * blank screen because its settings file was half-written is worse than one
+   * that forgot your tabs.
+   */
+  filesSession: unknown;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -84,6 +101,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   sidebarCollapsed: false,
   showSourceButtons: false,
   overwritePolicy: "skip",
+  filesSession: null,
 };
 
 export async function getSettings(): Promise<AppSettings> {
@@ -100,6 +118,7 @@ export async function getSettings(): Promise<AppSettings> {
       overwritePolicy:
         (await s.get<StoredOverwritePolicy>("overwritePolicy")) ??
         DEFAULT_SETTINGS.overwritePolicy,
+      filesSession: (await s.get<unknown>("filesSession")) ?? DEFAULT_SETTINGS.filesSession,
       lastCollectionDir:
         (await s.get<string>("lastCollectionDir")) ?? DEFAULT_SETTINGS.lastCollectionDir,
       winuaePath: (await s.get<string>("winuaePath")) ?? DEFAULT_SETTINGS.winuaePath,

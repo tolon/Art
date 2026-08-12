@@ -60,6 +60,7 @@ import {
   useRefreshKey,
   useSelectAll,
   useSourceComboKeys,
+  useTabKeys,
   useTypeAhead,
   type FunctionAction,
 } from "@/components/files/FunctionKeys";
@@ -100,6 +101,17 @@ import {
   type ContainerKind,
   type HostReturn,
 } from "@/lib/containerStep";
+import {
+  activeTab,
+  closeTab,
+  duplicateTab,
+  isUsableTabSet,
+  selectTab,
+  singleTabSet,
+  tabTitle,
+  updateActiveTab,
+  type TabSet,
+} from "@/lib/paneTabs";
 import {
   emptyHistory,
   goBack,
@@ -519,6 +531,24 @@ export function FileManager() {
     right: useRef<HTMLSelectElement>(null),
   };
   /**
+   * Each pane's tabs (`@/lib/paneTabs`), and the counter that names them.
+   *
+   * `null` until the first listing has landed or a saved session has been
+   * restored — a `TabSet` is never empty by construction, so there is no
+   * "zero tabs" state to represent, only "not yet".
+   *
+   * The ids are minted here rather than in `paneTabs`, which stays pure for
+   * it; they only ever serve as React keys, so a monotonic counter is the
+   * whole requirement. Restored tabs keep the ids they were saved with, and
+   * `nextTabId` is pushed past them so a duplicate cannot collide with one.
+   */
+  const [tabs, setTabs] = useState<Record<Side, TabSet | null>>({ left: null, right: null });
+  const nextTabId = useRef(1);
+  const mintTabId = useCallback(() => `tab-${nextTabId.current++}`, []);
+  /** True once a saved session has been considered, so the first-run opener
+   *  below knows whether it still has a job to do. */
+  const sessionRestored = useRef(false);
+  /**
    * Each pane's own back/forward list (`@/lib/paneHistory`).
    *
    * Recorded by watching the panes rather than by every `openX` remembering to
@@ -558,6 +588,9 @@ export function FileManager() {
    */
   const policy = useSettingsStore((s) => s.settings.overwritePolicy) as OverwritePolicy;
   const updateSettings = useSettingsStore((s) => s.update);
+  /** What the last session left behind, as read from the settings store —
+   *  validated, not trusted (`isUsableTabSet`). */
+  const savedSession = useSettingsStore((s) => s.settings.filesSession);
   const setPolicy = useCallback(
     (next: OverwritePolicy) => void updateSettings({ overwritePolicy: next }),
     [updateSettings]
@@ -728,6 +761,13 @@ export function FileManager() {
     panelLocalRoots()
       .then(async (found) => {
         setRoots(found);
+        // A saved session wins over the first drive: twenty years of muscle
+        // memory expect the application to reopen where it was left (§3.3,
+        // his `Savepath=1` / `Savepanels=1`). What it *cannot* be allowed to
+        // do is fail to open at all, so anything the guard does not recognise
+        // — an older ART's file, a hand-edited one — falls through to the
+        // fresh start below rather than throwing.
+        if (await restoreSession()) return;
         if (found[0]) {
           const listing = await panelListLocal(found[0]);
           const base = {
@@ -742,7 +782,48 @@ export function FileManager() {
         }
       })
       .catch((e) => setError(String(e)));
+    // Runs once, on mount: `restoreSession` reads the settings store directly
+    // rather than the live mirror, so it has nothing to react to.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /**
+   * Put both panes back where the last session left them.
+   *
+   * Returns false — and leaves the panes alone — when there is nothing usable
+   * to restore, which is what lets the caller fall through to a fresh start.
+   * A path that has since been deleted or unplugged simply opens as an error
+   * in its own pane, which is the honest outcome and not a reason to discard
+   * the whole session.
+   */
+  async function restoreSession(): Promise<boolean> {
+    sessionRestored.current = true;
+    const saved = savedSession;
+    if (!saved || typeof saved !== "object") return false;
+
+    const record = saved as { left?: unknown; right?: unknown; focused?: unknown };
+    if (!isUsableTabSet(record.left) || !isUsableTabSet(record.right)) return false;
+
+    // Keep minting ids past anything restored, so a Ctrl+T cannot collide
+    // with a tab that came back from disk.
+    for (const set of [record.left, record.right]) {
+      for (const tab of set.tabs) {
+        const numeric = Number(tab.id.replace(/^tab-/, ""));
+        if (Number.isFinite(numeric)) nextTabId.current = Math.max(nextTabId.current, numeric + 1);
+      }
+    }
+
+    setTabs({ left: record.left, right: record.right });
+    for (const side of ["left", "right"] as Side[]) {
+      const set = side === "left" ? record.left : record.right;
+      const tab = activeTab(set);
+      setSort((s) => ({ ...s, [side]: tab.sort ?? defaultSortState() }));
+      setFilter((f) => ({ ...f, [side]: tab.filter }));
+      await openLocation(side, tab.location);
+    }
+    if (record.focused === "left" || record.focused === "right") setFocused(record.focused);
+    return true;
+  }
 
   // ---- opening things ----
 
@@ -1265,6 +1346,57 @@ export function FileManager() {
     }
   }
 
+  /**
+   * Go to a tab: restore its sort and mask, then its place.
+   *
+   * In that order, and it matters — `openLocal` and friends call
+   * `resetSelection`, which clears the sort and the filter, so setting them
+   * first would have them wiped a moment later by the listing that follows.
+   */
+  async function goToTab(side: Side, index: number) {
+    const set = tabs[side];
+    if (!set) return;
+    const moved = selectTab(set, index);
+    if (moved === set) return;
+
+    const tab = activeTab(moved);
+    setTabs((current) => ({ ...current, [side]: moved }));
+    await openLocation(side, tab.location);
+    setSort((s) => ({ ...s, [side]: tab.sort ?? defaultSortState() }));
+    setFilter((f) => ({ ...f, [side]: tab.filter }));
+    setFocused(side);
+  }
+
+  /** Ctrl+T — duplicate this pane's active tab. The pane does not move: the
+   *  copy is of where you already are, which is the point. */
+  function newTab(side: Side) {
+    setTabs((current) => {
+      const set = current[side];
+      if (!set) return current;
+      const grown = duplicateTab(set, mintTabId());
+      return grown === set ? current : { ...current, [side]: grown };
+    });
+    setFocused(side);
+  }
+
+  /** Ctrl+W, or a middle-click — close a tab. Never the last one. */
+  async function dropTab(side: Side, index: number) {
+    const set = tabs[side];
+    if (!set || set.tabs.length <= 1) return;
+
+    const shrunk = closeTab(set, index);
+    if (shrunk === set) return;
+    setTabs((current) => ({ ...current, [side]: shrunk }));
+
+    // Closing the tab you were on means the pane has to go somewhere else.
+    if (index === set.active) {
+      const tab = activeTab(shrunk);
+      await openLocation(side, tab.location);
+      setSort((s) => ({ ...s, [side]: tab.sort ?? defaultSortState() }));
+      setFilter((f) => ({ ...f, [side]: tab.filter }));
+    }
+  }
+
   /** Put a pane back at a location the history remembered. */
   async function openLocation(side: Side, target: PaneLocation) {
     historyNav.current = true;
@@ -1310,6 +1442,41 @@ export function FileManager() {
         return;
     }
   }
+
+  // Keep the active tab equal to what its pane is actually showing — the
+  // place, the sort order and the mask. Watching rather than being told, for
+  // the same reason the history does; and `updateActiveTab` returns the same
+  // object when nothing changed, which is what stops this looping.
+  //
+  // It is also what makes session restore free: the thing persisted below is
+  // this, and it is always current because it is derived rather than
+  // remembered.
+  useEffect(() => {
+    setTabs((current) => {
+      let next = current;
+      for (const side of ["left", "right"] as Side[]) {
+        const target = locationOf(side === "left" ? left : right);
+        if (!target) continue;
+        const patch = { location: target, sort: sort[side], filter: filter[side] };
+        const set = current[side];
+        const updated = set
+          ? updateActiveTab(set, patch)
+          : singleTabSet({ id: mintTabId(), ...patch });
+        if (updated !== set) next = { ...next, [side]: updated };
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [left, right, sort, filter]);
+
+  // And write it back to the settings store, so it survives a restart.
+  // Skipped until a session has actually been considered: saving the empty
+  // panes of the first render would throw away what is on disk before it has
+  // been read.
+  useEffect(() => {
+    if (!sessionRestored.current || !tabs.left || !tabs.right) return;
+    void updateSettings({ filesSession: { left: tabs.left, right: tabs.right, focused } });
+  }, [tabs, focused, updateSettings]);
 
   // Record every move. Watching the panes rather than trusting seven `openX`
   // functions to each remember is what makes a new one impossible to forget.
@@ -2710,6 +2877,9 @@ export function FileManager() {
         else void chooseImage(side, choice.image);
       },
       showSourceButtons,
+      tabSet: tabs[side],
+      onSelectTab: (index: number) => void goToTab(side, index),
+      onCloseTab: (index: number) => void dropTab(side, index),
       selectedNames: selection[side],
       cursorName: anchor[side],
       focused: focused === side,
@@ -3003,6 +3173,22 @@ export function FileManager() {
         if (step.match) moveCursor(focused, step.match);
       },
       onEscape: () => noteSearch(""),
+    },
+    keysActive
+  );
+
+  // Ctrl+T / Ctrl+W / Ctrl+Tab — tabs, on the focused pane.
+  useTabKeys(
+    {
+      onNewTab: () => newTab(focused),
+      onCloseTab: () => {
+        const set = tabs[focused];
+        if (set) void dropTab(focused, set.active);
+      },
+      onNextTab: () => {
+        const set = tabs[focused];
+        if (set) void goToTab(focused, (set.active + 1) % set.tabs.length);
+      },
     },
     keysActive
   );
@@ -3386,6 +3572,9 @@ function Pane({
   onChooseSource,
   sourceRef,
   showSourceButtons,
+  tabSet,
+  onSelectTab,
+  onCloseTab,
   selectedNames,
   cursorName,
   focused,
@@ -3427,6 +3616,11 @@ function Pane({
   sourceRef: React.RefObject<HTMLSelectElement | null>;
   /** Whether the optional button strip is on (Settings, default off). */
   showSourceButtons: boolean;
+  /** This pane's tabs (`@/lib/paneTabs`), or `null` before the first
+   *  listing has landed. */
+  tabSet: TabSet | null;
+  onSelectTab: (index: number) => void;
+  onCloseTab: (index: number) => void;
   /** Every marked entry's name in this pane — see `@/lib/selection`. */
   selectedNames: Set<string>;
   /** The entry the mouse/keyboard last landed on: a future Shift+click's
@@ -3539,6 +3733,35 @@ function Pane({
         }
       }}
     >
+      {/* The tab bar, above the header (brief §3.3). Hidden when there is one
+          tab: a single tab is not a choice, and a bar showing it would cost a
+          row of the listing for nothing. Ctrl+T brings it back into
+          existence. */}
+      {tabSet && tabSet.tabs.length > 1 && (
+        <div className="tc-chrome-row tc-tab-row" role="tablist">
+          {tabSet.tabs.map((tab, index) => (
+            <button
+              key={tab.id}
+              role="tab"
+              aria-selected={index === tabSet.active}
+              className={`tc-tab${index === tabSet.active ? " tc-tab-active" : ""}`}
+              title={tab.location.path}
+              onClick={() => onSelectTab(index)}
+              // Middle-click closes, the way it does in every browser and in
+              // Total Commander itself. `onAuxClick` rather than `onMouseDown`
+              // so a middle-drag scroll gesture cannot close a tab by accident.
+              onAuxClick={(event) => {
+                if (event.button !== 1) return;
+                event.preventDefault();
+                onCloseTab(index);
+              }}
+            >
+              {tabTitle(tab)}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Row 1: the pane header — Total Commander's `[drive ▾] [path]
           [filter]`, in one row (brief §1.3). His own `[Layout]` runs with no
           button bar and no drive bar, just the combo, so that is the default
