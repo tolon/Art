@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ART opens CDs, ZIPs, 7z archives and C64 disks — and decides what a file is by looking inside it (2026-08-12)
+
+#### Added
+- **A file is what it actually is, not what it is called.** ART now reads the
+  first bytes of anything you drop on it and decides from those. An `.img`
+  that holds a floppy is a floppy, an `.adf` that holds a CD image is a CD
+  image, and an archive somebody renamed to `.dat` still opens. The extension
+  is a fallback for files nothing else recognised.
+- **CD images open in the file manager.** ISO9660 with Joliet names, including
+  raw 2352-byte track dumps in both Mode 1 and Mode 2/XA — the layout CD32 and
+  mixed-mode discs use. Walk the disc, copy a folder out to your disk, or copy
+  it straight into an Amiga volume.
+- **Archives open in the file manager too — LHA, ZIP and 7z.** An archive has
+  no folders of its own, only names like `Tools/Shell.lha`, so ART builds the
+  folders from the names and lets you walk into them. Copy a folder out to
+  your disk, or into an Amiga volume, where it is unpacked and written through
+  the same tested writer an install already uses.
+- **Commodore 64 disks and tapes.** `.d64`, `.d71`, `.d81` and `.t64` open as
+  panes and their files copy out to a folder, with the Commodore file type as
+  the extension. 40-track disks (SpeedDOS, DolphinDOS) are read as well as the
+  usual 35-track ones. `.tap`, `.prg` and `.crt` are identified and described:
+  a TAP holds a tape signal with no directory inside it, so there is nothing
+  to list and ART says so rather than pretending.
+- **A disc, an archive and a Commodore disk are all read-only, and say so.**
+  Each refuses writes with its own sentence instead of a pane that quietly
+  does nothing.
+
+#### Fixed
+- **A real LHA archive was only ever recognised by its file extension.** The
+  signature was being looked for in the wrong place, so an archive renamed to
+  something else came back as "unknown" — and the test that was supposed to
+  cover it used a fixture no LHA tool would produce.
+- **"Open in the file manager" opened nothing.** Choosing that action from the
+  drop panel took you to the Files screen and left whatever was already there;
+  the screen never read the file it had been sent.
+- **A raw CD track in Mode 2/XA was not recognised**, and would have been
+  misread by two layers at once if it had been.
+- **Copying a folder out of an image** now builds the destination path itself
+  instead of accepting one built for it, and honours your overwrite choice on
+  a disc as well as on a floppy. Picking a single file out of a disc copies
+  that file, not the folder around it.
+
+#### Changed
+- **Machine profiles cover the whole classic line** — A1000, A500, A500+,
+  A600, A2000, A3000, A1200, A4000, CDTV and CD32 — rather than six of them.
+- Building ART now needs **Rust 1.93** (it was 1.77), so that 7z support uses
+  a maintained decompressor rather than one several years behind.
+
 ### The Files screen became a real commander, and ART writes a disk an Amiga boots (2026-08-11)
 
 #### Added

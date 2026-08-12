@@ -25,6 +25,32 @@ what fixed it (with the test that proves it).
 
 _(ART-075 was open here; it is fixed — see [Phase 2a](#phase-2a) below.)_
 
+**ART-078** 🟡 **An AmigaOS CD's protection bits and file comments are lost, because Rock Ridge and the Amiga `AS` entry are not read**
+`core/iso/` · ART reads ISO9660 and prefers Joliet when a disc carries it.
+Neither carries what an Amiga CD actually says about its files: protection bits
+(`HSPARWED`) and the file comment live in the **Amiga `AS` System Use entry**, a
+Rock Ridge-style extension, and ART reads no System Use area at all. Two
+consequences, both quiet:
+
+- **A WHDLoad-era disc loses its slave's `S` and `P` bits on the way out.** A
+  game copied off a CD onto an HDF can arrive with the right bytes and the
+  wrong protection, which is a game that starts and then does not work — the
+  same class of failure §7.2 records for archives, where ART *does* carry the
+  bits through `.uaem` sidecars.
+- **A Unix-mastered disc with no Joliet descriptor falls back to uppercase
+  8.3 names.** Rock Ridge is where its real names are, so `MyGame.info`
+  becomes `MYGAME.INF` and the icon stops matching the drawer.
+
+Neither is a regression: nothing ever claimed to read them, `FEATURES.md` and
+`format-support-matrix.md` both say so, and the disc still copies. Fixing it
+means reading the System Use area after each directory record, handling the
+`SP`/`CE`/`NM` continuation entries, and mapping `AS` onto the same
+`Protection` type `core/volume/write` already has — at which point the
+existing `.uaem` writer carries the bits out to a folder for free.
+
+Found while closing Phase 2a; recorded rather than fixed because it is a
+format layer of its own, not an omission in the one that landed.
+
 **ART-073** 🟡 **`delete_many`'s all-or-nothing guarantee only holds for the whole-file strategy**
 `src-tauri/src/commands/volume_write.rs::delete_many` (line ~505) · The
 pre-check (`check_batch_deletable`) runs once, against a read-only listing,

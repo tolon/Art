@@ -34,7 +34,7 @@ python scripts/oracle-check.py
 
 **Baseline at the start of this plan: 731 Rust tests, 107 frontend tests, oracle 48 checks** — Phase 1a's closing numbers (STATUS.md snapshot, 2026-08-11). An earlier draft of this line said 721/76; the gate arithmetic in the task reports is against the real baseline. **Run `cargo test` twice** — ART-059 was a race that failed about one run in five.
 
-**Where this plan stands (2026-08-12):**
+**Where this plan stands (2026-08-12): the phase is complete.**
 
 | | |
 |---|---|
@@ -43,7 +43,7 @@ python scripts/oracle-check.py
 | Task 3b | complete (`787fe15`) — Mode 2/XA Form 1, which closed ART-075 |
 | Task 4 | complete — the shared gate (`efaaf00`), ZIP (`bf5e577`), 7z + the MSRV bump (`b07ad1c`), the archive pane with its virtual tree (`9c4e578`) |
 | Task 5 | complete (`402d9bf`) — D64/D71/D81 and T64 read and browsable, TAP/PRG/CRT identified; amendments A3 and A4 both in |
-| Task 6 | not started — **closing the phase is the next work** |
+| Task 6 | complete — the phase is closed |
 
 See the Amendments section at the foot of this file for what changed after the
 plan was written.
@@ -479,7 +479,7 @@ widen to match; not a reason to delay the work.
 **Files:**
 - Modify: `docs/FEATURES.md`, `docs/STATUS.md`, `docs/ISSUES.md`, `CHANGELOG.md`, `docs/format-support-matrix.md`
 
-- [ ] **Step 1: Say what is true**
+- [x] **Step 1: Say what is true**
 
 `format-support-matrix.md` currently lists optical images as planned. Move only what a test now covers. **ISO9660 with Joliet, read-only** is the claim; Rock Ridge, the Amiga `AS` System Use entry, `.cue`/`.bin`, `.nrg`, `.mdf` and writing a disc are **not** in this phase and must stay listed as unbuilt (§10, §89).
 
@@ -487,7 +487,7 @@ widen to match; not a reason to delay the work.
 (including raw layouts via sector-stripping)"** — and claims no real Amiga CD
 and no host mount, because neither was done (amendment A1).
 
-- [ ] **Step 2: Record what is owed**
+- [x] **Step 2: Record what is owed**
 
 Open an `ART-*` for Rock Ridge and the Amiga `AS` entry — without them, an AmigaOS CD's protection bits and file comments are lost on extraction, which matters for a WHDLoad-era disc.
 
@@ -498,7 +498,7 @@ Open an `ART-*` for Rock Ridge and the Amiga `AS` entry — without them, an Ami
   and the phase must not block on media nobody can promise. The risk that step
   covered is covered instead by Task 3a's 7-Zip oracle.
 
-- [ ] **Step 3 (replacement): Say what the oracle does and does not prove**
+- [x] **Step 3 (replacement): Say what the oracle does and does not prove**
 
 `test/README.md` states that the disc reader is verified against **7-Zip's
 independent implementation**, not against a real Amiga CD filesystem, and that
@@ -506,7 +506,7 @@ a volunteer with a real CD32 or AmigaOS disc is a welcome extra rung — the
 community beta is where that arrives. Do not block the phase on it, and do not
 let the wording imply it happened.
 
-- [ ] **Step 4: Gates and commit**
+- [x] **Step 4: Gates and commit**
 
 ---
 
