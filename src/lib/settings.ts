@@ -42,6 +42,17 @@ export interface AppSettings {
    *  view state: someone who works with the panes full-width expects them
    *  full-width the next time they open ART, not one keystroke away from it. */
   sidebarCollapsed: boolean;
+  /**
+   * Whether the Files screen shows the row of source buttons above each pane.
+   *
+   * Off by default, because the user's own `[Layout]` is `ButtonBar=0,
+   * DriveBar1=0, DriveCombo=1` — he has run Total Commander with no button
+   * bar for twenty years, and the source combo in the pane header reaches
+   * every one of those buttons anyway (brief §1.3). Kept as a setting rather
+   * than deleted: the buttons are the only mouse-discoverable way to see the
+   * six kinds of thing a pane can open.
+   */
+  showSourceButtons: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -53,6 +64,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   aminetRoot: null,
   aminetMirrors: null,
   sidebarCollapsed: false,
+  showSourceButtons: false,
 };
 
 export async function getSettings(): Promise<AppSettings> {
@@ -64,6 +76,8 @@ export async function getSettings(): Promise<AppSettings> {
       language: (await s.get<string>("language")) ?? DEFAULT_SETTINGS.language,
       sidebarCollapsed:
         (await s.get<boolean>("sidebarCollapsed")) ?? DEFAULT_SETTINGS.sidebarCollapsed,
+      showSourceButtons:
+        (await s.get<boolean>("showSourceButtons")) ?? DEFAULT_SETTINGS.showSourceButtons,
       lastCollectionDir:
         (await s.get<string>("lastCollectionDir")) ?? DEFAULT_SETTINGS.lastCollectionDir,
       winuaePath: (await s.get<string>("winuaePath")) ?? DEFAULT_SETTINGS.winuaePath,

@@ -148,6 +148,38 @@ export function useSelectAll(onToggleAll: () => void, active: boolean) {
   }, [onToggleAll, active]);
 }
 
+/**
+ * Bind F2 and Ctrl+R to re-read the focused pane.
+ *
+ * Brought forward from task 5's keyboard sweep because task 3 hides the pane's
+ * button row by default, and Refresh was the one control in it with no other
+ * way to reach it — Up is the `[..]` row, New folder is F7, and every source
+ * the buttons opened is in the header's combo. A screen where the only way to
+ * re-read a directory is to navigate away and back is not one to ship for the
+ * length of a task.
+ *
+ * Two keys, one action: F2 is Total Commander's (his `AltSearch=1` config
+ * leaves it free) and Ctrl+R is the reflex a browser trained everyone with.
+ */
+export function useRefreshKey(onRefresh: () => void, active: boolean) {
+  useEffect(() => {
+    if (!active) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      const isF2 = event.key === "F2" && !event.ctrlKey;
+      const isCtrlR = event.ctrlKey && event.key.toLowerCase() === "r";
+      if (!isF2 && !isCtrlR) return;
+      if (isShortcutBlocked(event, isCtrlR)) return;
+
+      event.preventDefault();
+      onRefresh();
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onRefresh, active]);
+}
+
 export function FunctionKeyBar({ actions }: { actions: FunctionAction[] }) {
   const { t } = useTranslation();
   return (

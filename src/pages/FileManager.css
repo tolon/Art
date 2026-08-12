@@ -116,11 +116,41 @@
   flex: 1 1 auto;
 }
 
+/* The pane header (phase 2b task 3): `[source ▾] [path] [filter]`, one row,
+   never wrapping. Total Commander's own header, and the user's `[Layout]`
+   (`DriveCombo=1, ButtonBar=0, DriveBar1=0`) says it is all he keeps. */
 .tc-path-row {
   display: flex;
   align-items: center;
   flex-wrap: nowrap;
   gap: 6px;
+}
+
+/* The source combo. Flat, chrome-coloured and narrow: it is a selector, not a
+   control the eye should land on before the path beside it. `max-width` keeps
+   a long "(not on a listed drive)" placeholder from eating the path's room. */
+.tc-source-combo {
+  flex: 0 0 auto;
+  max-width: 34%;
+  font: inherit;
+  background: var(--tc-chrome-bg);
+  color: var(--tc-chrome-text);
+  border: 1px solid var(--tc-chrome-border);
+  border-radius: 2px;
+  padding: 1px 4px;
+}
+.tc-source-combo:focus-visible {
+  outline: 2px solid var(--tc-focus-ring);
+  outline-offset: -1px;
+}
+
+/* The volume identity band, directly under the header: name, filesystem,
+   "free of total", and the lock with its reason when ART will not write.
+   It was a floating muted line before this task; now it is a chrome row like
+   every other, since the drive row it used to sit beneath is gone by
+   default. */
+.tc-volume-row {
+  gap: 8px;
 }
 
 .tc-path-text {

@@ -174,7 +174,11 @@
     "title": "Settings",
     "general": "General",
     "appearance": "Appearance",
+    "files": "Files",
     "paths": "Paths",
+    "showSourceButtons": "Drive and source buttons",
+    "showSourceButtonsLabel": "Show the button row above each pane",
+    "showSourceButtonsHint": "Off by default: the source box in each pane's header opens the same drives and images, and Total Commander runs without a button bar.",
     "theme": "Theme",
     "themeDark": "Dark",
     "themeLight": "Light",
@@ -941,7 +945,9 @@
       "freeOfTotal": "{{free}} k of {{total}} k free",
       "statusLine": "{{selectedBytes}} k / {{totalBytes}} k in {{selectedFiles}} / {{totalFiles}} file(s), {{selectedDirs}} / {{totalDirs}} dir(s)",
       "maskPlaceholder": "*.*",
-      "maskAriaLabel": "Filter files by name"
+      "maskAriaLabel": "Filter files by name",
+      "sourceAriaLabel": "Source shown in this pane",
+      "sourceUnlisted": "(not on a listed drive)"
     },
     "footer": {
       "unnamed": "(unnamed)",

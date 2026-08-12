@@ -115,6 +115,11 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // 41 → 43 (Task 5): and the Commodore pane, in those same two places.
     // 43 → 45 (phase 2b): the shell's sidebar toggle reads its label and its
     // title from whichever of two keys the current state calls for.
-    expect(dynamicCalls).toBe(45);
+    // 45 → 46 (2b task 3): the pane header's source combo labels each option
+    // from the `labelKey` `@/lib/paneSources` gave it. The keys themselves
+    // are literals in that module's own table, and `paneSources.test.ts`
+    // proves every non-mount option carries one — so the scan below sees a
+    // variable where the catalogue still sees a fixed, tested set.
+    expect(dynamicCalls).toBe(46);
   });
 });

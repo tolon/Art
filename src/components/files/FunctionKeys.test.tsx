@@ -18,7 +18,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 
-import { useInsertToggle, usePaneTab, useSelectAll } from "./FunctionKeys";
+import { useInsertToggle, usePaneTab, useRefreshKey, useSelectAll } from "./FunctionKeys";
 
 // This project's Vitest config does not set `test.globals`, so
 // @testing-library/react's usual auto-cleanup (which hooks a global
@@ -167,6 +167,65 @@ describe("useSelectAll", () => {
     render(<SelectAllHarness active={false} />);
 
     await user.keyboard("{Control>}a{/Control}");
+    expect(screen.getByTestId("count").textContent).toBe("0");
+  });
+});
+
+// Refresh matters more than the other three here: phase 2b task 3 hides the
+// button strip Refresh used to live in, so from that task on these two keys
+// are the *only* way to re-read a pane. A guard regression would leave a
+// commander that cannot see a file the user just wrote from somewhere else.
+
+function RefreshHarness({ active = true }: { active?: boolean }) {
+  const [count, setCount] = useState(0);
+  useRefreshKey(() => setCount((n) => n + 1), active);
+  return (
+    <div>
+      <div data-testid="count">{count}</div>
+      <input aria-label="filter box" />
+    </div>
+  );
+}
+
+describe("useRefreshKey", () => {
+  it("fires on F2 and on Ctrl+R", async () => {
+    const user = userEvent.setup();
+    render(<RefreshHarness />);
+
+    await user.keyboard("{F2}");
+    expect(screen.getByTestId("count").textContent).toBe("1");
+
+    await user.keyboard("{Control>}r{/Control}");
+    expect(screen.getByTestId("count").textContent).toBe("2");
+  });
+
+  it("ignores plain R, and F2 or Ctrl+R held with another modifier", async () => {
+    const user = userEvent.setup();
+    render(<RefreshHarness />);
+
+    await user.keyboard("r");
+    await user.keyboard("{Control>}{F2}{/Control}");
+    await user.keyboard("{Alt>}{F2}{/Alt}");
+    await user.keyboard("{Control>}{Alt>}r{/Alt}{/Control}");
+    expect(screen.getByTestId("count").textContent).toBe("0");
+  });
+
+  it("does not fire while typing in a text field", async () => {
+    const user = userEvent.setup();
+    render(<RefreshHarness />);
+
+    const input = screen.getByRole("textbox", { name: "filter box" });
+    await user.click(input);
+    await user.keyboard("{F2}");
+    await user.keyboard("{Control>}r{/Control}");
+    expect(screen.getByTestId("count").textContent).toBe("0");
+  });
+
+  it("does nothing while inactive (a dialog is on top)", async () => {
+    const user = userEvent.setup();
+    render(<RefreshHarness active={false} />);
+
+    await user.keyboard("{F2}");
     expect(screen.getByTestId("count").textContent).toBe("0");
   });
 });

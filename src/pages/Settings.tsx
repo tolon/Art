@@ -52,6 +52,26 @@ export function SettingsPage() {
         </Field>
       </section>
 
+      {/* The Files screen's own chrome. Off by default — the pane header's
+          source combo reaches every one of these buttons, and Total Commander
+          with no button bar is what this phase's brief is built from. */}
+      <section className="card">
+        <h2 style={{ fontSize: 15 }}>{t("settings.files")}</h2>
+        <Field label={t("settings.showSourceButtons")}>
+          <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13 }}>
+            <input
+              type="checkbox"
+              checked={settings.showSourceButtons}
+              onChange={(e) => void update({ showSourceButtons: e.target.checked })}
+            />
+            {t("settings.showSourceButtonsLabel")}
+          </label>
+          <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+            {t("settings.showSourceButtonsHint")}
+          </p>
+        </Field>
+      </section>
+
       <section className="card">
         <h2 style={{ fontSize: 15 }}>{t("settings.general")}</h2>
         <Field label={t("settings.language")}>

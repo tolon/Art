@@ -37,7 +37,7 @@
 // on the keyboard and on a bar under the panes, because a key nobody knows
 // about is a feature nobody has.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 
 import { analyzePaths } from "@/lib/api";
@@ -54,6 +54,7 @@ import {
   useFunctionKeys,
   useInsertToggle,
   usePaneTab,
+  useRefreshKey,
   useSelectAll,
   type FunctionAction,
 } from "@/components/files/FunctionKeys";
@@ -79,6 +80,12 @@ import {
   type PanelEntry,
 } from "@/lib/panel";
 import { splitName } from "@/lib/panelName";
+import {
+  currentPaneSourceValue,
+  paneSourceOptions,
+  parsePaneSource,
+  type PaneSourceOption,
+} from "@/lib/paneSources";
 import { paneStatusCounts } from "@/lib/panelStatus";
 import { formatDateTC, formatGroupedSize } from "@/lib/tcFormat";
 import {
@@ -128,6 +135,7 @@ import {
   type WriteCapability,
 } from "@/lib/volumeWrite";
 import { usePowerMode } from "@/lib/uxmode";
+import { useSettingsStore } from "@/stores/settingsStore";
 import { isoCopyToVolume, isoExtract, isoExtractFile, isoList, isoOpen, type IsoInfo } from "@/lib/iso";
 import {
   archiveEnter,
@@ -395,9 +403,16 @@ function runJob(start: () => Promise<number>): Promise<JobOutcome> {
 export function FileManager() {
   const { t } = useTranslation();
   const powerMode = usePowerMode();
+  /** The optional button strip above each pane (brief §1.3). Off unless the
+   * user turns it on: the header's source combo reaches everything in it. */
+  const showSourceButtons = useSettingsStore((s) => s.settings.showSourceButtons);
   const [left, setLeft] = useState<PaneState>(emptyPane());
   const [right, setRight] = useState<PaneState>(emptyPane());
   const [roots, setRoots] = useState<string[]>([]);
+  /** The header combo's options — the enumerated mounts plus the six things
+   * ART opens with a picker (`@/lib/paneSources`). Both panes share one list;
+   * only which option is *current* differs between them. */
+  const sourceOptions = useMemo(() => paneSourceOptions(roots), [roots]);
   /** Which entries (by name) are marked in each pane. See `@/lib/selection`. */
   const [selection, setSelection] = useState<Record<Side, Set<string>>>({
     left: new Set(),
@@ -2009,6 +2024,20 @@ export function FileManager() {
       filter: filter[side],
       onFilterChange: (mask: string) => setPaneFilter(side, mask),
       roots,
+      sourceOptions,
+      sourceValue: currentPaneSourceValue(state.kind, state.location, roots),
+      // One place decides what a combo value means (`@/lib/paneSources`), and
+      // it refuses anything it does not recognise rather than guessing — so
+      // re-picking the "not on a listed drive" placeholder navigates nowhere
+      // instead of dropping the pane on the first mount in the list.
+      onChooseSource: (value: string) => {
+        const choice = parsePaneSource(value);
+        if (!choice) return;
+        if (choice.kind === "root") void openLocal(side, choice.path);
+        else if (choice.kind === "folder") void chooseFolder(side);
+        else void chooseImage(side, choice.image);
+      },
+      showSourceButtons,
       selectedNames: selection[side],
       cursorName: anchor[side],
       focused: focused === side,
@@ -2192,6 +2221,11 @@ export function FileManager() {
   useSelectAll(() => {
     applySelection(focused, toggleSelectAll(paneEntries(focused), selection[focused]));
   }, keysActive);
+
+  // F2 / Ctrl+R re-read the focused pane. Task 5's job, brought forward
+  // because task 3 hides the button strip Refresh used to live in — see
+  // `useRefreshKey`'s own comment for why that could not wait a task.
+  useRefreshKey(() => void refresh(focused), keysActive);
 
   // An unfinished operation is offered as soon as a pane shows an image that
   // has one — before the user tries to write and is refused.
@@ -2430,7 +2464,7 @@ function VolumeFooter({
   state: PaneState;
   powerMode: boolean;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const capability = state.capability;
   // "ISO9660" is a format name, not a sentence — shown as-is, the same way
   // an ADF/HDF's "FFS INTL" filesystem string is never translated.
@@ -2450,21 +2484,28 @@ function VolumeFooter({
         state.adf?.fs_type.toUpperCase() ??
         "";
 
+  // Total Commander's drive row shows "free of total", in kilobytes grouped by
+  // the active locale (`@/lib/tcFormat`). That row is gone by default in phase
+  // 2b — the pane header is a combo, a path and a filter — so the pair moved
+  // here, where the volume already says what it is. ART has the *total* only
+  // for a volume it has actually opened, so a pane that knows its free space
+  // but not its size still says so, in bytes, rather than showing a
+  // fabricated total.
+  const freeSpace =
+    capability && state.totalBytes !== null
+      ? t("files.tc.freeOfTotal", {
+          free: formatGroupedSize(Math.round(capability.free_bytes / 1024), i18n.language),
+          total: formatGroupedSize(Math.round(state.totalBytes / 1024), i18n.language),
+        })
+      : capability
+        ? t("files.footer.free", { size: formatBytes(capability.free_bytes) })
+        : null;
+
   return (
-    <div
-      className="muted"
-      style={{
-        fontSize: 11,
-        marginBottom: 6,
-        display: "flex",
-        gap: 6,
-        alignItems: "baseline",
-        flexWrap: "wrap",
-      }}
-    >
+    <div className="tc-chrome-row tc-volume-row">
       <strong>{capability?.volume_name || state.volumeName || t("files.footer.unnamed")}</strong>
       <span>{filesystem}</span>
-      {capability && <span>{t("files.footer.free", { size: formatBytes(capability.free_bytes) })}</span>}
+      {freeSpace && <span className="tc-drive-free">{freeSpace}</span>}
 
       {/* A disc has no `capability` to read `writable` off — it is read-only
           by construction, so the badge shows unconditionally rather than
@@ -2515,6 +2556,10 @@ function Pane({
   filter,
   onFilterChange,
   roots,
+  sourceOptions,
+  sourceValue,
+  onChooseSource,
+  showSourceButtons,
   selectedNames,
   cursorName,
   focused,
@@ -2546,6 +2591,14 @@ function Pane({
   filter: string;
   onFilterChange: (mask: string) => void;
   roots: string[];
+  /** What the header's source combo offers (`@/lib/paneSources`). */
+  sourceOptions: PaneSourceOption[];
+  /** Which of them is the one this pane is showing, or `""` for a folder
+   * under no enumerated mount. */
+  sourceValue: string;
+  onChooseSource: (value: string) => void;
+  /** Whether the optional button strip is on (Settings, default off). */
+  showSourceButtons: boolean;
   /** Every marked entry's name in this pane — see `@/lib/selection`. */
   selectedNames: Set<string>;
   /** The entry the mouse/keyboard last landed on: a future Shift+click's
@@ -2588,22 +2641,6 @@ function Pane({
   // (`copyDirection` in `@/lib/isoPane` is what actually refuses a drop
   // that lands here anyway; this only controls the drag-over affordance).
   const acceptsDrops = state.kind !== "hdf" && state.kind !== "iso";
-
-  // Total Commander's drive row shows "free of total", in kilobytes grouped
-  // by the active locale (`@/lib/tcFormat`, not the dots the reference
-  // screenshot happens to show — see that file's comment). ART has that pair
-  // only for a volume it has actually opened: an ADF or an HDF partition,
-  // via `state.capability.free_bytes` and `state.totalBytes` (see that
-  // field's own comment on `PaneState`). A local folder has none — ART has
-  // no free-space command for a Windows drive — so this renders nothing for
-  // one rather than a fabricated number.
-  const freeSpace =
-    state.capability && state.totalBytes !== null
-      ? t("files.tc.freeOfTotal", {
-          free: formatGroupedSize(Math.round(state.capability.free_bytes / 1024), i18n.language),
-          total: formatGroupedSize(Math.round(state.totalBytes / 1024), i18n.language),
-        })
-      : null;
 
   // The per-pane status line (row 5 of the reference): selected/total bytes,
   // then selected/total files, then selected/total directories. Reads
@@ -2650,67 +2687,35 @@ function Pane({
         }
       }}
     >
-      {/* Row 1 of the reference: TC's "drive row". ART's pane is not a
-          Windows drive — it can hold a local folder, an ADF or an HDF
-          partition — so this is every control that opens or navigates the
-          pane, in a button strip, plus the open volume's name and free
-          space when there is one; not a literal drive-letter dropdown (see
-          the task report for why). */}
-      <div className="tc-chrome-row tc-drive-row">
-        <button className="btn btn-sm" onClick={onOpenFolder}>
-          {t("files.toolbar.folder")}
-        </button>
-        <button className="btn btn-sm" onClick={() => onOpenImage("adf")}>
-          {t("files.toolbar.adf")}
-        </button>
-        <button className="btn btn-sm" onClick={() => onOpenImage("hdf")}>
-          {t("files.toolbar.hdf")}
-        </button>
-        <button className="btn btn-sm" onClick={() => onOpenImage("iso")}>
-          {t("files.toolbar.disc")}
-        </button>
-        <button className="btn btn-sm" onClick={() => onOpenImage("archive")}>
-          {t("files.toolbar.archive")}
-        </button>
-        <button className="btn btn-sm" onClick={() => onOpenImage("c64")}>
-          {t("files.toolbar.c64")}
-        </button>
-        {state.kind === "local" &&
-          roots.map((root) => (
-            <button key={root} className="btn btn-sm" onClick={() => onOpenRoot(root)}>
-              {root}
-            </button>
-          ))}
-        {((state.kind !== "local" && state.volumeIndex !== null) ||
-          state.kind === "iso" ||
-          state.kind === "archive" ||
-          state.kind === "c64") && (
-          <span className="tc-drive-volume">
-            [{state.capability?.volume_name || state.volumeName || t("files.footer.unnamed")}]
-          </span>
-        )}
-        {freeSpace && <span className="tc-drive-free">{freeSpace}</span>}
-        <span className="tc-drive-spacer" />
-        {writableVolume(state) !== null && (
-          <button className="btn btn-sm" onClick={onNewFolder}>
-            {t("files.toolbar.newFolder")}
-          </button>
-        )}
-        <button className="btn btn-sm" onClick={onRefresh}>
-          {t("files.toolbar.refresh")}
-        </button>
-        <button className="btn btn-sm" onClick={onUp} disabled={!canGoUp}>
-          {t("files.toolbar.up")}
-        </button>
-      </div>
+      {/* Row 1: the pane header — Total Commander's `[drive ▾] [path]
+          [filter]`, in one row (brief §1.3). His own `[Layout]` runs with no
+          button bar and no drive bar, just the combo, so that is the default
+          here; the button strip below is a Settings toggle, off unless asked
+          for.
 
-      {/* Row 2: the path row, plus the filename mask (task 7) — the `*.*`
-          the reference puts at the right of this same row. `*` and `?`
-          wildcards, case-insensitive, matched against the whole name
-          including its extension; see `@/lib/mask` for the matcher and
-          `setPaneFilter` in `FileManager` for what changing it does to the
-          selection. */}
+          The combo carries both halves of what a pane can hold: the real,
+          enumerated mounts (`panelLocalRoots`, never a hardcoded letter) and
+          the six things ART opens with a picker. Which option it shows as
+          current, and what a chosen value means, are decided in
+          `@/lib/paneSources` where a test can reach them. */}
       <div className="tc-chrome-row tc-path-row">
+        <select
+          className="tc-source-combo"
+          aria-label={t("files.tc.sourceAriaLabel")}
+          value={sourceValue}
+          onChange={(event) => onChooseSource(event.target.value)}
+        >
+          {/* A pane can sit somewhere no enumerated mount covers — a UNC
+              share. Rather than have the combo claim a drive the folder is
+              not on, it says so, and `parsePaneSource` refuses the empty
+              value so re-picking it navigates nowhere. */}
+          {sourceValue === "" && <option value="">{t("files.tc.sourceUnlisted")}</option>}
+          {sourceOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.literal !== null ? option.literal : t(option.labelKey as string)}
+            </option>
+          ))}
+        </select>
         <span className="tc-path-text">
           {state.location || t("files.pane.nothingOpen")}
           {state.kind === "hdf" && state.volumeName && ` > ${state.volumeName}:`}
@@ -2748,6 +2753,52 @@ function Pane({
           }}
         />
       </div>
+
+      {/* The button strip the header replaced, kept behind a Settings toggle
+          (`showSourceButtons`, default off). Every control in it is reachable
+          without it — the sources from the combo above, Up from the `[..]`
+          row, New folder from F7, Refresh from F2/Ctrl+R — so hiding it
+          removes chrome rather than capability. */}
+      {showSourceButtons && (
+      <div className="tc-chrome-row tc-drive-row">
+        <button className="btn btn-sm" onClick={onOpenFolder}>
+          {t("files.toolbar.folder")}
+        </button>
+        <button className="btn btn-sm" onClick={() => onOpenImage("adf")}>
+          {t("files.toolbar.adf")}
+        </button>
+        <button className="btn btn-sm" onClick={() => onOpenImage("hdf")}>
+          {t("files.toolbar.hdf")}
+        </button>
+        <button className="btn btn-sm" onClick={() => onOpenImage("iso")}>
+          {t("files.toolbar.disc")}
+        </button>
+        <button className="btn btn-sm" onClick={() => onOpenImage("archive")}>
+          {t("files.toolbar.archive")}
+        </button>
+        <button className="btn btn-sm" onClick={() => onOpenImage("c64")}>
+          {t("files.toolbar.c64")}
+        </button>
+        {state.kind === "local" &&
+          roots.map((root) => (
+            <button key={root} className="btn btn-sm" onClick={() => onOpenRoot(root)}>
+              {root}
+            </button>
+          ))}
+        <span className="tc-drive-spacer" />
+        {writableVolume(state) !== null && (
+          <button className="btn btn-sm" onClick={onNewFolder}>
+            {t("files.toolbar.newFolder")}
+          </button>
+        )}
+        <button className="btn btn-sm" onClick={onRefresh}>
+          {t("files.toolbar.refresh")}
+        </button>
+        <button className="btn btn-sm" onClick={onUp} disabled={!canGoUp}>
+          {t("files.toolbar.up")}
+        </button>
+      </div>
+      )}
 
       {state.error && (
         <div className="badge badge-err" style={{ display: "block" }}>

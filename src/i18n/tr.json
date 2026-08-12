@@ -174,7 +174,11 @@
     "title": "Ayarlar",
     "general": "Genel",
     "appearance": "Görünüm",
+    "files": "Dosyalar",
     "paths": "Yollar",
+    "showSourceButtons": "Sürücü ve kaynak düğmeleri",
+    "showSourceButtonsLabel": "Her bölmenin üstündeki düğme satırını göster",
+    "showSourceButtonsHint": "Öntanımlı olarak kapalı: her bölmenin başlığındaki kaynak kutusu aynı sürücüleri ve imajları açar, ayrıca Total Commander da düğme çubuğu olmadan çalışır.",
     "theme": "Tema",
     "themeDark": "Koyu",
     "themeLight": "Açık",
@@ -941,7 +945,9 @@
       "freeOfTotal": "{{total}} k içinden {{free}} k boş",
       "statusLine": "{{selectedBytes}} k / {{totalBytes}} k — {{selectedFiles}} / {{totalFiles}} dosya, {{selectedDirs}} / {{totalDirs}} dizin",
       "maskPlaceholder": "*.*",
-      "maskAriaLabel": "Dosyaları ada göre filtrele"
+      "maskAriaLabel": "Dosyaları ada göre filtrele",
+      "sourceAriaLabel": "Bu bölmede gösterilen kaynak",
+      "sourceUnlisted": "(listelenen bir sürücüde değil)"
     },
     "footer": {
       "unnamed": "(adsız)",
