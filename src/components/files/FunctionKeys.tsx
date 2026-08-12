@@ -23,6 +23,21 @@ export interface FunctionAction {
   /** Why it is unavailable. Shown on hover when `enabled` is false. */
   reason?: string;
   danger?: boolean;
+  /**
+   * This action wants Shift held — Total Commander's Shift+F6, rename in
+   * place, now that F6 itself is Move.
+   *
+   * Shift is matched *exactly* in both directions (an action without this
+   * flag only fires with Shift up), so the two F6s can never both run off one
+   * keystroke. A shifted action is keyboard-only: `FunctionKeyBar` renders
+   * the seven keys the bar has always had and mentions the shifted one in the
+   * base key's tooltip, rather than growing a second row of buttons nobody
+   * asked for.
+   */
+  shift?: boolean;
+  /** A second line for the tooltip — what the shifted variant of this key
+   *  does, since the bar itself never renders one. */
+  hint?: string;
   run: () => void;
 }
 
@@ -63,7 +78,13 @@ export function useFunctionKeys(actions: FunctionAction[], active: boolean) {
     function onKeyDown(event: KeyboardEvent) {
       if (isShortcutBlocked(event)) return;
 
-      const action = actions.find((candidate) => candidate.key === event.key);
+      // Shift is matched exactly, not ignored: F6 (Move) and Shift+F6
+      // (rename) are different operations on the same key, and a `find` that
+      // only compared `key` would give the first of the two whichever the
+      // user actually pressed.
+      const action = actions.find(
+        (candidate) => candidate.key === event.key && Boolean(candidate.shift) === event.shiftKey
+      );
       if (!action) return;
 
       event.preventDefault();
@@ -180,43 +201,45 @@ export function useRefreshKey(onRefresh: () => void, active: boolean) {
   }, [onRefresh, active]);
 }
 
+/**
+ * The docked function-key row (brief §1.4).
+ *
+ * **One row, always.** Total Commander's F-keys are a strip along the bottom
+ * edge of the window; a strip that wraps onto a second line at a narrow width
+ * is not that strip, it is a paragraph of buttons. So the keys share the width
+ * equally (`flex: 1 1 0`) and the *label* is what gives way — below the width
+ * this app already treats as its floor, each button shrinks to its keycap
+ * alone (`.tc-fnkey-label` is hidden in CSS), which still leaves every
+ * operation clickable and every one of them named on hover.
+ *
+ * Shifted actions (Shift+F6) are keyboard-only and are not rendered: they
+ * appear in their base key's tooltip instead.
+ */
 export function FunctionKeyBar({ actions }: { actions: FunctionAction[] }) {
   const { t } = useTranslation();
   return (
-    <div
-      style={{
-        display: "flex",
-        gap: 4,
-        marginTop: 12,
-        flexWrap: "wrap",
-      }}
-      role="toolbar"
-      aria-label={t("components.fnKeys.ariaLabel")}
-    >
-      {actions.map((action) => (
-        <button
-          key={action.key}
-          className="btn"
-          onClick={action.run}
-          disabled={!action.enabled}
-          title={
-            action.enabled
-              ? `${action.key} — ${action.label}`
-              : action.reason ?? t("components.fnKeys.notAvailable", { label: action.label })
-          }
-          style={{
-            flex: "1 1 90px",
-            fontSize: 12,
-            borderColor: action.danger && action.enabled ? "var(--err)" : undefined,
-            color: action.danger && action.enabled ? "var(--err)" : undefined,
-          }}
-        >
-          <span className="faint" style={{ marginRight: 5 }}>
-            {action.key}
-          </span>
-          {action.label}
-        </button>
-      ))}
+    <div className="tc-fnkeys" role="toolbar" aria-label={t("components.fnKeys.ariaLabel")}>
+      {actions
+        .filter((action) => !action.shift)
+        .map((action) => (
+          <button
+            key={action.key}
+            className={`btn tc-fnkey${action.danger && action.enabled ? " tc-fnkey-danger" : ""}`}
+            onClick={action.run}
+            disabled={!action.enabled}
+            title={[
+              action.enabled
+                ? `${action.key} — ${action.label}`
+                : action.reason ?? t("components.fnKeys.notAvailable", { label: action.label }),
+              action.hint,
+            ]
+              .filter(Boolean)
+              .join("\n")}
+          >
+            <span className="faint tc-fnkey-cap">{action.key}</span>
+            <span className="tc-fnkey-label">{action.label}</span>
+          </button>
+        ))}
     </div>
   );
 }

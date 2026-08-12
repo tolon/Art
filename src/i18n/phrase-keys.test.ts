@@ -22,6 +22,8 @@ import {
   type PackageUpdate,
 } from "@/lib/sources";
 import { copyDirection, ISO_WRITE_REFUSAL } from "@/lib/isoPane";
+import { parseCommandLine } from "@/lib/commandLine";
+import { planMove, type MoveInput } from "@/lib/movePlan";
 import { describeLayout, type ImageLayout } from "@/lib/volume";
 import {
   describeCopy,
@@ -40,6 +42,16 @@ function isLeafKey(dotted: string): boolean {
     node = (node as Record<string, unknown>)[part];
   }
   return typeof node === "string";
+}
+
+/**
+ * The same, allowing for i18next pluralisation: a `Phrase` carrying a
+ * `{{count}}` resolves against `key_one` / `key_other`, and there is no bare
+ * `key` in the catalogue at all (`literal-keys.test.ts` has the same helper,
+ * for the same reason).
+ */
+function resolvesAtRuntime(dotted: string): boolean {
+  return isLeafKey(dotted) || isLeafKey(`${dotted}_one`) || isLeafKey(`${dotted}_other`);
 }
 
 describe("Phrase keys returned by the discriminated-union mappers", () => {
@@ -273,6 +285,55 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       expect(result.kind).toBe("refused");
       if (result.kind === "refused") {
         expect(isLeafKey(result.reason.key), result.reason.key).toBe(true);
+      }
+    }
+  });
+
+  // F6's refusals are the most important `Phrase`s on the Files screen: each
+  // one is the sentence standing between the user and a move that could lose
+  // data, and a key nobody added would put a raw dotted string there instead.
+  it("planMove: every refusal's reason resolves", () => {
+    const base: MoveInput = {
+      sourceKind: "adf",
+      targetKind: "local",
+      sourceWritable: true,
+      targetWritable: true,
+      entries: [{ name: "Lotus", isDir: true }],
+      takenNames: [],
+    };
+    const refusals: MoveInput[] = [
+      { ...base, entries: [] },
+      { ...base, sourceKind: "local", targetKind: "adf" },
+      { ...base, sourceKind: "iso" },
+      { ...base, sourceWritable: false },
+      { ...base, targetKind: "archive" },
+      { ...base, targetKind: "hdf", targetWritable: false },
+      {
+        ...base,
+        targetKind: "hdf",
+        entries: [
+          { name: "Lotus", isDir: true },
+          { name: "Turrican", isDir: true },
+        ],
+      },
+      { ...base, targetKind: "hdf", entries: [{ name: "Readme", isDir: false }] },
+      { ...base, takenNames: ["Lotus"] },
+    ];
+    for (const input of refusals) {
+      const plan = planMove(input);
+      expect(plan.kind, JSON.stringify(input)).toBe("refused");
+      if (plan.kind === "refused") {
+        expect(resolvesAtRuntime(plan.reason.key), plan.reason.key).toBe(true);
+      }
+    }
+  });
+
+  it("parseCommandLine: both refusals resolve", () => {
+    for (const text of ["cd Games", "notepad readme.txt"]) {
+      const action = parseCommandLine(text);
+      expect(action.kind).toBe("refused");
+      if (action.kind === "refused") {
+        expect(resolvesAtRuntime(action.reason.key), action.reason.key).toBe(true);
       }
     }
   });

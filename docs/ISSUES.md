@@ -25,6 +25,47 @@ what fixed it (with the test that proves it).
 
 _(ART-075 was open here; it is fixed — see [Phase 2a](#phase-2a) below.)_
 
+**ART-081** 🟡 **A single file cannot be moved between two images, because the primitive underneath addresses a directory**
+`src-tauri/src/commands/volume_write.rs::volume_copy_between` ·
+`src/lib/movePlan.ts` · The command takes a *directory* block at both ends and
+copies that directory's tree. F5 on a lone file between two images already
+passes the pane's own `dirBlock` and therefore copies the whole folder the file
+happens to be in — noisy, but harmless, because F5 deletes nothing. F6 (Move)
+cannot use that: it would copy twenty files, delete the one that was marked, and
+report a move.
+
+So `planMove` refuses it by name (`files.move.refuseFileBetweenImages`), and
+the test `refuses a lone file between two images` pins the refusal. Folders
+move between images; files move out to a host folder; a file between two images
+is copied with F5 for now.
+
+Fixing it means a command that stages one *entry* — extract to a scratch path,
+then `put_file` into the destination volume, inside one write session at each
+end so the backup and journal guarantees hold — which is the same missing
+primitive ART-064 needs for batching, and it should be built once for both.
+The F5 whole-folder surprise above is worth fixing in the same pass.
+
+Found while building F6 in phase 2b task 3; recorded rather than smuggled into
+a UI task, which is what that task's plan requires.
+
+**ART-080** 🔵 **ART cannot delete a file on the user's own disk, so nothing can be moved *off* a host folder**
+`src/lib/movePlan.ts` · `src-tauri/src/commands/panel.rs` · Every delete ART
+owns goes *into* a disk image through `core/volume/write`; there is no command
+that removes a file from the user's own filesystem, and that is deliberate —
+Explorer does that job and a two-pane commander that can silently delete host
+files is a much larger safety surface than one that cannot.
+
+The consequence, once F6 became Move: the most obvious move of all — drag a
+game off `D:\downloads` and onto a floppy image — is a copy, and the original
+stays. F6 says so (`files.move.refuseLocalSource`) instead of being disabled
+with no explanation, and points at F5.
+
+Fixing it is not a line of code but a decision: a host-side delete needs its own
+`Safety` class, its own confirmation, its own oplog entry, and a policy on
+recycle bin versus unlink. Worth doing deliberately, if at all.
+
+Found while building F6 in phase 2b task 3.
+
 **ART-078** 🟡 **An AmigaOS CD's protection bits and file comments are lost, because Rock Ridge and the Amiga `AS` entry are not read**
 `core/iso/` · ART reads ISO9660 and prefers Joliet when a disc carries it.
 Neither carries what an Amiga CD actually says about its files: protection bits

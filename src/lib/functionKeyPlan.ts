@@ -1,10 +1,13 @@
-// The single-entry half of the function-key table (F3 View, F4 Edit, F6
-// Rename, F9 Attributes), factored out of `FileManager.tsx` so it can be
-// tested without rendering the page — which calls Tauri commands on mount,
-// the same reason `@/lib/selection` exists (see its own header comment).
+// The single-entry half of the function-key table (F3 View, F4 Edit,
+// Shift+F6 Rename, F9 Attributes), factored out of `FileManager.tsx` so it
+// can be tested without rendering the page — which calls Tauri commands on
+// mount, the same reason `@/lib/selection` exists (see its own header
+// comment).
 //
-// F5 Copy and F8 Delete act on the *whole* selection (one entry or several)
-// and are not covered here; this module is only the four keys that must
+// F5 Copy, F6 Move and F8 Delete act on the *whole* selection (one entry or
+// several) and are not covered here — F6's own rules live in
+// `@/lib/movePlan`, which needs both panes rather than one. This module is
+// only the four keys that must
 // refuse outright rather than guess at an entry when more than one is
 // selected (finding 4 of the phase-1a whole-branch review: nothing failed
 // if one of these `run` closures were changed to pick an arbitrary entry
@@ -35,10 +38,10 @@ export interface FunctionKeyPlanInput {
   selected: Set<string>;
   /** The pane holds an open ADF/HDF volume — what F3 and F9 require. */
   inVolume: boolean;
-  /** The pane's volume accepts writes — what F4 and F6 require. */
+  /** The pane's volume accepts writes — what F4 and Shift+F6 require. */
   canWrite: boolean;
-  /** A background operation is running — F4 and F6 wait for it, the same
-   * way their button in the bar disables while `busy !== null`. */
+  /** A background operation is running — F4 and Shift+F6 wait for it, the
+   * same way their button in the bar disables while `busy !== null`. */
   busy: boolean;
 }
 
@@ -46,14 +49,16 @@ export interface FunctionKeyPlan {
   /** The one entry a single-entry action may act on — `null` both when
    * nothing is selected and when more than one entry is. */
   single: PanelEntry | null;
-  /** More than one entry marked — what disables F3/F4/F6/F9 and drives their
-   * "select only one" reason text. */
+  /** More than one entry marked — what disables F3/F4/Shift+F6/F9 and drives
+   * their "select only one" reason text. */
   multipleSelected: boolean;
-  /** At least one entry marked — what F5/F8 gate on instead. */
+  /** At least one entry marked — what F5/F6/F8 gate on instead. */
   hasSelection: boolean;
   f3: SingleKeyPlan;
   f4: SingleKeyPlan;
-  f6: SingleKeyPlan;
+  /** Rename in place. Shift+F6 since phase 2b — F6 alone is Move now, Total
+   * Commander's own semantics. */
+  shiftF6: SingleKeyPlan;
   f9: SingleKeyPlan;
 }
 
@@ -63,7 +68,7 @@ export interface FunctionKeyPlan {
  * capability, busy) none of `@/lib/selection` knows about.
  *
  * A directory cannot be viewed or edited (F3, F4 refuse one even when it is
- * the sole selection); F6 and F9 do not care — renaming and setting
+ * the sole selection); Shift+F6 and F9 do not care — renaming and setting
  * attributes both work on a directory.
  */
 export function planFunctionKeys(input: FunctionKeyPlanInput): FunctionKeyPlan {
@@ -84,7 +89,7 @@ export function planFunctionKeys(input: FunctionKeyPlanInput): FunctionKeyPlan {
       enabled: Boolean(single && !single.is_dir && input.canWrite && notBusy),
       target: single,
     },
-    f6: {
+    shiftF6: {
       enabled: Boolean(single) && input.canWrite && notBusy,
       target: single,
     },

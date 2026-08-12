@@ -18,7 +18,14 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 
-import { useInsertToggle, usePaneTab, useRefreshKey, useSelectAll } from "./FunctionKeys";
+import {
+  useFunctionKeys,
+  useInsertToggle,
+  usePaneTab,
+  useRefreshKey,
+  useSelectAll,
+  type FunctionAction,
+} from "./FunctionKeys";
 
 // This project's Vitest config does not set `test.globals`, so
 // @testing-library/react's usual auto-cleanup (which hooks a global
@@ -227,5 +234,40 @@ describe("useRefreshKey", () => {
 
     await user.keyboard("{F2}");
     expect(screen.getByTestId("count").textContent).toBe("0");
+  });
+});
+
+// F6 and Shift+F6 are two different operations on one key — Move, which
+// deletes the original, and rename, which does not. Getting the match wrong
+// in either direction means a keystroke doing something the user did not ask
+// for, and one of the two directions destroys data. So it is checked here
+// rather than inferred from reading the `find` call.
+
+function ShiftHarness() {
+  const [fired, setFired] = useState<string[]>([]);
+  const actions: FunctionAction[] = [
+    { key: "F6", label: "Move", enabled: true, run: () => setFired((f) => [...f, "move"]) },
+    {
+      key: "F6",
+      shift: true,
+      label: "Rename",
+      enabled: true,
+      run: () => setFired((f) => [...f, "rename"]),
+    },
+  ];
+  useFunctionKeys(actions, true);
+  return <div data-testid="fired">{fired.join(",")}</div>;
+}
+
+describe("useFunctionKeys and the shifted variant of a key", () => {
+  it("runs F6 for F6 and Shift+F6 for Shift+F6, never both and never the wrong one", async () => {
+    const user = userEvent.setup();
+    render(<ShiftHarness />);
+
+    await user.keyboard("{F6}");
+    expect(screen.getByTestId("fired").textContent).toBe("move");
+
+    await user.keyboard("{Shift>}{F6}{/Shift}");
+    expect(screen.getByTestId("fired").textContent).toBe("move,rename");
   });
 });

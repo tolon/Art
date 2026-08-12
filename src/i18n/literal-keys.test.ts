@@ -120,6 +120,11 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // are literals in that module's own table, and `paneSources.test.ts`
     // proves every non-mount option carries one — so the scan below sees a
     // variable where the catalogue still sees a fixed, tested set.
-    expect(dynamicCalls).toBe(46);
+    // 46 → 49 (2b task 3): F6's refusal (twice — the key's own `reason`, and
+    // `moveSelection` re-checking after the icons are added) and the command
+    // line's, all reading a `Phrase.key` the same way `copyDirection`'s
+    // refusal already does. Both modules' every refusal is enumerated in
+    // `phrase-keys.test.ts`, which is the check this one cannot make.
+    expect(dynamicCalls).toBe(49);
   });
 });

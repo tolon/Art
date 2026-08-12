@@ -895,6 +895,9 @@
       "editReasonSelect": "Select a file to edit",
       "copy": "Copy",
       "copyReasonSelect": "Select something to copy",
+      "move": "Move",
+      "moveHintRename": "Shift+F6 — rename in place",
+      "moveReasonBusy": "Wait for the operation that is running",
       "rename": "Rename",
       "renameReasonSelect": "Select something to rename",
       "newFolder": "New folder",
@@ -984,7 +987,30 @@
         "confirm1_other": "Delete {{count}} items ({{size}}) from {{volume}}?",
         "confirm2_one": "This cannot be undone from inside ART once it has finished. Delete this item?",
         "confirm2_other": "This cannot be undone from inside ART once it has finished. Delete these {{count}} items?"
+      },
+      "move": {
+        "confirm_one": "Move {{count}} item from {{source}} to {{destination}}? It is copied first and only removed once the copy has been checked.",
+        "confirm_other": "Move {{count}} items from {{source}} to {{destination}}? They are copied first and only removed once the copies have been checked.",
+        "confirmIcons_one": "{{names}} has an icon. Move it too? Without it, the object will not show up on Workbench.",
+        "confirmIcons_other": "{{count}} of these have icons ({{names}}). Move them too? Without them, the objects will not show up on Workbench."
       }
+    },
+    "move": {
+      "refuseNothing": "Select something to move.",
+      "refuseLocalSource": "ART does not delete files on your own disk, so it cannot move them off it. Copy them with F5 and remove them yourself.",
+      "refuseReadOnlySource": "Nothing can be moved out of a disc, an archive or a Commodore image — ART only ever reads them. Copy with F5 instead.",
+      "refuseSourceNotWritable": "This volume does not take writes, so the entries cannot be removed from it. Copy with F5 instead.",
+      "refuseReadOnlyTarget": "The other pane is read-only, so nothing can be moved into it.",
+      "refuseTargetNotWritable": "Open a volume that takes writes on the other side first.",
+      "refuseFileBetweenImages": "Moving a single file between two images is not supported yet — a folder can be moved, and a file can be copied with F5.",
+      "refuseCollision_one": "{{names}} is already there. A move never overwrites and never silently skips — rename one of them first.",
+      "refuseCollision_other": "{{count}} of these names are already there ({{names}}). A move never overwrites and never silently skips — rename them first."
+    },
+    "commandLine": {
+      "ariaLabel": "Command line",
+      "placeholder": "cd D:\\Amiga · *.adf",
+      "refuseRelative": "Type a full path — the pane may be inside an image, where a name on its own is not one.",
+      "refuseNotAShell": "This line goes to a folder or sets a filter. ART does not run programs from it."
     },
     "err": {
       "bothLocal": "Both panes are local folders — use Explorer for that.",
@@ -1034,6 +1060,15 @@
       "renaming": "Renaming {{name}}…",
       "renamed": "{{name}} is now {{newName}}",
       "renamedWithIcon": "{{name}} is now {{newName}}, and its icon with it",
+      "moving_one": "Moving {{count}} item…",
+      "moving_other": "Moving {{count}} items…",
+      "moved_one": "Moved {{count}} item",
+      "moved_other": "Moved {{count}} items",
+      "movedBackedUp_one": "Moved {{count}} item — the previous image was backed up",
+      "movedBackedUp_other": "Moved {{count}} items — the previous image was backed up",
+      "moveCancelled": "Stopped. Whatever had been copied is still where it was — nothing has been removed.",
+      "moveNotVerified_one": "Copied, but {{names}} could not be found at the destination afterwards, so nothing was removed.",
+      "moveNotVerified_other": "Copied, but {{count}} of them ({{names}}) could not be found at the destination afterwards, so nothing was removed.",
       "writtenBack": "{{name}} was written back into the image.",
       "filesWrittenOut_one": "{{count}} file written out",
       "filesWrittenOut_other": "{{count}} files written out",

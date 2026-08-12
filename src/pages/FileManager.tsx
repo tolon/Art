@@ -72,6 +72,8 @@ import { checkoutEdit, checkoutOpen, volumeIconFor } from "@/lib/checkout";
 import { planFunctionKeys } from "@/lib/functionKeyPlan";
 import { onJobProgress, type JobProgress } from "@/lib/jobs";
 import { filterEntries } from "@/lib/mask";
+import { planMove } from "@/lib/movePlan";
+import { parseCommandLine } from "@/lib/commandLine";
 import {
   formatBytes,
   panelListAdf,
@@ -461,6 +463,10 @@ export function FileManager() {
    * function-key table below.
    */
   const [focused, setFocused] = useState<Side>("left");
+  /** What is typed into the command line above the F-key bar. One box for
+   * the whole screen, acting on whichever pane is focused — Total Commander
+   * has one too, for the same reason. */
+  const [commandLine, setCommandLine] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1875,6 +1881,227 @@ export function FileManager() {
   }
 
   /**
+   * F6 — move the marked entries to the other pane.
+   *
+   * The one function key that can destroy the original, so it runs §92's
+   * pipeline in full and in that order:
+   *
+   * ```text
+   * VALIDATE   planMove — every case where a move could end with less data
+   *            than it started with, decided before a byte moves
+   * RECOMMEND  the icons left behind, offered rather than assumed (§7.1)
+   * PREVIEW    one confirmation naming what moves and where
+   * APPLY      the copy, through the exact commands F5 already uses
+   * VERIFY     the destination is re-listed and every name looked for
+   * REPORT     ...and only then is anything deleted
+   * ```
+   *
+   * The VERIFY step is the point. A copy that reported success and a
+   * destination that does not actually hold the file are the same thing as
+   * far as the user's data is concerned, and the delete that follows is what
+   * makes the difference matter. Nothing is deleted unless the destination's
+   * own listing names every entry that was supposed to land in it — a
+   * cancelled copy, a job that failed, a name the writer refused all stop
+   * here, leaving a plain copy behind and saying so.
+   *
+   * A cancelled move is therefore always safe: the worst it can leave is a
+   * duplicate.
+   */
+  async function moveSelection(from: Side, entries: PanelEntry[]) {
+    const to: Side = from === "left" ? "right" : "left";
+    const source = pane(from);
+    const target = pane(to);
+
+    setError(null);
+    setMessage(null);
+
+    const volume = writableVolume(source);
+    if (!volume) {
+      setError(writeRefusal(source, t));
+      return;
+    }
+
+    // §7.1: Workbench shows an object only when its `.info` sits beside it, so
+    // moving `Game` and leaving `Game.info` behind gives a disk that looks
+    // right here and has an invisible game on a real Amiga — the same failure
+    // §82's install exists to prevent. Offered, not done silently: the user
+    // may be moving the icon on purpose.
+    const marked = new Set(entries.map((entry) => entry.name.toLowerCase()));
+    const icons: PanelEntry[] = [];
+    for (const entry of entries) {
+      const icon = await volumeIconFor(
+        volume.path,
+        volume.volumeIndex,
+        volume.dirBlock,
+        entry.name
+      ).catch(() => null);
+      if (!icon || marked.has(icon.icon_name.toLowerCase())) continue;
+      const row = source.entries.find((candidate) => candidate.name === icon.icon_name);
+      if (row) icons.push(row);
+    }
+
+    let moving = entries;
+    if (
+      icons.length > 0 &&
+      window.confirm(
+        t("files.dialog.move.confirmIcons", {
+          count: icons.length,
+          names: icons.slice(0, 3).map((icon) => icon.name).join(", "),
+        })
+      )
+    ) {
+      moving = [...entries, ...icons];
+    }
+
+    // Re-planned over what is *actually* about to move — the icons the user
+    // just agreed to bring along have names of their own, and one of those
+    // colliding at the destination is the same refusal as any other.
+    const plan = planMove({
+      sourceKind: source.kind,
+      targetKind: target.kind,
+      sourceWritable: true,
+      targetWritable: writableVolume(target) !== null,
+      entries: moving.map((entry) => ({ name: entry.name, isDir: entry.is_dir })),
+      takenNames: target.entries.map((entry) => entry.name),
+    });
+    if (plan.kind === "refused") {
+      setError(t(plan.reason.key, plan.reason.params));
+      return;
+    }
+
+    if (
+      !window.confirm(
+        t("files.dialog.move.confirm", {
+          count: moving.length,
+          source: source.volumeName || source.location,
+          destination: target.volumeName || target.location,
+        })
+      )
+    ) {
+      return;
+    }
+
+    setBusy(t("files.status.moving", { count: moving.length }));
+    try {
+      // ---- APPLY: the copy half, through the commands F5 already uses ----
+      if (target.kind === "local") {
+        for (const entry of moving) {
+          if (entry.header_block === null) continue;
+          if (entry.is_dir) {
+            const outcome = await runJob(() =>
+              volumeCopyOut(
+                volume.path,
+                volume.volumeIndex,
+                entry.header_block as number,
+                target.location,
+                entry.name,
+                { overwrite: policy, sidecars: powerMode }
+              )
+            );
+            if (outcome === "cancelled") {
+              setMessage(t("files.status.moveCancelled"));
+              await refresh(to);
+              return;
+            }
+          } else {
+            await volumeExtractTo(
+              volume.path,
+              volume.volumeIndex,
+              entry.header_block,
+              target.location
+            );
+          }
+        }
+      } else {
+        // Exactly one directory, and `planMove` is what guarantees that:
+        // `volume_copy_between` addresses a *directory*, so anything else
+        // would copy more than was marked.
+        const destination = writableVolume(target);
+        const entry = moving[0];
+        if (!destination || entry.header_block === null) {
+          setError(writeRefusal(target, t));
+          return;
+        }
+        const outcome = await runJob(() =>
+          volumeCopyBetween(
+            volume.path,
+            volume.volumeIndex,
+            entry.header_block as number,
+            destination.path,
+            destination.volumeIndex,
+            destination.dirBlock,
+            { overwrite: policy, sidecars: powerMode }
+          )
+        );
+        if (outcome === "cancelled") {
+          setMessage(t("files.status.moveCancelled"));
+          await refresh(to);
+          return;
+        }
+      }
+
+      // ---- VERIFY: the destination's own listing, not the copy's word ----
+      const landed = await destinationNames(target);
+      const missing = moving.filter((entry) => !landed.has(entry.name.toLowerCase()));
+      if (missing.length > 0) {
+        setError(
+          t("files.status.moveNotVerified", {
+            count: missing.length,
+            names: missing.slice(0, 3).map((entry) => entry.name).join(", "),
+          })
+        );
+        await refresh(to);
+        return;
+      }
+
+      // ---- and only now the delete half ----
+      const names = moving.map((entry) => entry.name);
+      const outcome =
+        names.length === 1 && moving[0].header_block !== null
+          ? await volumeDelete(
+              volume.path,
+              volume.volumeIndex,
+              volume.dirBlock,
+              moving[0].header_block
+            )
+          : await volumeDeleteMany(volume.path, volume.volumeIndex, volume.dirBlock, names);
+
+      setMessage(
+        outcome.backup
+          ? t("files.status.movedBackedUp", { count: names.length })
+          : t("files.status.moved", { count: names.length })
+      );
+      await refresh(from);
+      await refresh(to);
+    } catch (e) {
+      setError(String(e));
+      // Whatever failed, the panes are the truth about what is where now.
+      await refresh(from);
+      await refresh(to);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /**
+   * Every name a pane's destination directory holds right now, lowercased.
+   *
+   * Read back from the source of truth rather than from `state.entries`,
+   * which is a snapshot taken before the copy ran — the whole point of the
+   * VERIFY step is to ask the filesystem, not to trust what ART already
+   * believed.
+   */
+  async function destinationNames(target: PaneState): Promise<Set<string>> {
+    if (target.kind === "local") {
+      const listing = await panelListLocal(target.location);
+      return new Set(listing.entries.map((entry) => entry.name.toLowerCase()));
+    }
+    if (target.volumeIndex === null) return new Set();
+    const listing = await volumeList(target.location, target.volumeIndex, target.dirBlock);
+    return new Set(listing.entries.map((entry) => entry.name.toLowerCase()));
+  }
+
+  /**
    * F4 — check a file out for editing.
    *
    * The file comes out to a working copy and the user's editor opens it. The
@@ -2002,6 +2229,40 @@ export function FileManager() {
     }
   }
 
+  /**
+   * Enter on the command line.
+   *
+   * Every branch acts on the *focused* pane, the same source every F-key
+   * reads — a command line that navigated whichever pane it felt like would
+   * be worse than none. The line is cleared only when something actually
+   * happened; a refusal leaves the text where the user can see, and fix,
+   * what they typed.
+   */
+  async function runCommandLine() {
+    const action = parseCommandLine(commandLine);
+    setError(null);
+
+    switch (action.kind) {
+      case "none":
+        return;
+      case "refused":
+        setError(t(action.reason.key, action.reason.params));
+        return;
+      case "filter":
+        setPaneFilter(focused, action.mask);
+        setCommandLine("");
+        return;
+      case "up":
+        setCommandLine("");
+        await goUp(focused);
+        return;
+      case "open":
+        setCommandLine("");
+        await openLocal(focused, action.path);
+        return;
+    }
+  }
+
   /** Drag a local file out to Explorer. */
   async function dragOut(entry: PanelEntry) {
     if (!entry.path || entry.is_dir) return;
@@ -2099,6 +2360,24 @@ export function FileManager() {
   });
   const { multipleSelected, hasSelection } = keyPlan;
 
+  // F6 (Move) needs both panes, not one, so it is planned here rather than in
+  // `planFunctionKeys`: what it is allowed to do depends on what the *other*
+  // pane is and on what it already holds. `takenNames` comes from the
+  // destination's unfiltered `entries` — a filename mask hiding a colliding
+  // name must not make the collision invisible.
+  const moveTarget = pane(focused === "left" ? "right" : "left");
+  const movePlan = planMove({
+    sourceKind: focusedPane.kind,
+    targetKind: moveTarget.kind,
+    sourceWritable: canWrite,
+    targetWritable: writableVolume(moveTarget) !== null,
+    entries: selectedEntries(focused).map((entry) => ({
+      name: entry.name,
+      isDir: entry.is_dir,
+    })),
+    takenNames: moveTarget.entries.map((entry) => entry.name),
+  });
+
   const actions: FunctionAction[] = [
     {
       key: "F3",
@@ -2146,16 +2425,40 @@ export function FileManager() {
       },
     },
     {
+      // F6 is Move, Total Commander's own semantics and what twenty years of
+      // this user's muscle memory expects. Its rules — every case where a
+      // move could end with less data than it started with — are
+      // `planMove`'s (`@/lib/movePlan`), computed once above and read here for
+      // both `enabled` and the reason on hover, so a refusal is never
+      // discovered halfway through.
       key: "F6",
+      label: t("files.functionKeys.move"),
+      hint: t("files.functionKeys.moveHintRename"),
+      enabled: movePlan.kind === "move" && busy === null,
+      reason:
+        movePlan.kind === "refused"
+          ? t(movePlan.reason.key, movePlan.reason.params)
+          : t("files.functionKeys.moveReasonBusy"),
+      run: () => {
+        const entries = selectedEntries(focused);
+        if (entries.length > 0) void moveSelection(focused, entries);
+      },
+    },
+    {
+      // Shift+F6 — rename in place. Keyboard only: `FunctionKeyBar` renders
+      // the seven keys the bar has always had, and this one is named in F6's
+      // own tooltip instead of growing a second row.
+      key: "F6",
+      shift: true,
       label: t("files.functionKeys.rename"),
-      enabled: keyPlan.f6.enabled,
+      enabled: keyPlan.shiftF6.enabled,
       reason: multipleSelected
         ? t("files.functionKeys.reasonMultiple")
         : canWrite
           ? t("files.functionKeys.renameReasonSelect")
           : writeRefusal(focusedPane, t),
       run: () => {
-        if (keyPlan.f6.target) void renameEntry(focused, keyPlan.f6.target);
+        if (keyPlan.shiftF6.target) void renameEntry(focused, keyPlan.shiftF6.target);
       },
     },
     {
@@ -2362,16 +2665,36 @@ export function FileManager() {
         />
 
         {/*
-         * Decorative only — the reference's command line, reproduced as
-         * chrome, not as a feature. ART has no shell to run a typed command
-         * against (and adding one is well outside a frontend/CSS task), so
-         * this is a disabled-looking, non-interactive prompt line rather
-         * than a text box that would imply typing into it does something.
-         * It reflects whichever pane is focused, the same source `focused`
-         * everywhere else in this screen already reads.
+         * The command line (brief §1.4): full width, directly above the F-key
+         * bar, always visible, and reflecting whichever pane is focused.
+         *
+         * It **navigates and filters**. It does not run programs — §56, and
+         * `parseCommandLine` (`@/lib/commandLine`) says so out loud for
+         * anything it will not do rather than swallowing the keystroke, which
+         * is the one behaviour a prompt-shaped box must never have.
          */}
-        <div className="tc-chrome-row tc-command-line" aria-hidden="true">
-          {`${pane(focused).location}>`}
+        <div className="tc-chrome-row tc-command-line">
+          <span className="tc-command-prompt">{`${pane(focused).location}>`}</span>
+          <input
+            type="text"
+            className="tc-command-input"
+            value={commandLine}
+            aria-label={t("files.commandLine.ariaLabel")}
+            placeholder={t("files.commandLine.placeholder")}
+            onChange={(event) => setCommandLine(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                setCommandLine("");
+                event.currentTarget.blur();
+                return;
+              }
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              void runCommandLine();
+            }}
+          />
         </div>
 
         <div className="tc-chrome-row tc-fnkey-row">

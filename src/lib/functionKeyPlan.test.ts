@@ -53,7 +53,7 @@ describe("planFunctionKeys — the single-entry keys refuse a multi-selection", 
 
     expect(plan.f3).toEqual({ enabled: false, target: null });
     expect(plan.f4).toEqual({ enabled: false, target: null });
-    expect(plan.f6).toEqual({ enabled: false, target: null });
+    expect(plan.shiftF6).toEqual({ enabled: false, target: null });
     expect(plan.f9).toEqual({ enabled: false, target: null });
 
     // F5/F8 act on the whole selection — the opposite rule — so this
@@ -65,7 +65,7 @@ describe("planFunctionKeys — the single-entry keys refuse a multi-selection", 
     const plan = permissive(new Set(["Alpha", "Beta", "Gamma"]));
     expect(plan.f3.enabled).toBe(false);
     expect(plan.f4.enabled).toBe(false);
-    expect(plan.f6.enabled).toBe(false);
+    expect(plan.shiftF6.enabled).toBe(false);
     expect(plan.f9.enabled).toBe(false);
   });
 
@@ -76,7 +76,7 @@ describe("planFunctionKeys — the single-entry keys refuse a multi-selection", 
     expect(plan.hasSelection).toBe(false);
     expect(plan.f3.enabled).toBe(false);
     expect(plan.f4.enabled).toBe(false);
-    expect(plan.f6.enabled).toBe(false);
+    expect(plan.shiftF6.enabled).toBe(false);
     expect(plan.f9.enabled).toBe(false);
   });
 });
@@ -90,7 +90,7 @@ describe("planFunctionKeys — exactly one entry selected", () => {
 
     expect(plan.f3).toEqual({ enabled: true, target: plan.single });
     expect(plan.f4).toEqual({ enabled: true, target: plan.single });
-    expect(plan.f6).toEqual({ enabled: true, target: plan.single });
+    expect(plan.shiftF6).toEqual({ enabled: true, target: plan.single });
     expect(plan.f9).toEqual({ enabled: true, target: plan.single });
   });
 
@@ -106,7 +106,7 @@ describe("planFunctionKeys — exactly one entry selected", () => {
 
     expect(plan.f3.enabled).toBe(false);
     expect(plan.f4.enabled).toBe(false);
-    expect(plan.f6).toEqual({ enabled: true, target: plan.single });
+    expect(plan.shiftF6).toEqual({ enabled: true, target: plan.single });
     expect(plan.f9).toEqual({ enabled: true, target: plan.single });
   });
 
@@ -122,7 +122,7 @@ describe("planFunctionKeys — exactly one entry selected", () => {
     expect(plan.f9.enabled).toBe(false);
     // F4/F6 do not depend on inVolume, only on write capability.
     expect(plan.f4.enabled).toBe(true);
-    expect(plan.f6.enabled).toBe(true);
+    expect(plan.shiftF6.enabled).toBe(true);
   });
 
   it("F4 and F6 refuse on a read-only volume, even with one entry selected", () => {
@@ -134,7 +134,7 @@ describe("planFunctionKeys — exactly one entry selected", () => {
       busy: false,
     });
     expect(plan.f4.enabled).toBe(false);
-    expect(plan.f6.enabled).toBe(false);
+    expect(plan.shiftF6.enabled).toBe(false);
     // F3/F9 do not depend on write capability.
     expect(plan.f3.enabled).toBe(true);
     expect(plan.f9.enabled).toBe(true);
@@ -149,7 +149,7 @@ describe("planFunctionKeys — exactly one entry selected", () => {
       busy: true,
     });
     expect(plan.f4.enabled).toBe(false);
-    expect(plan.f6.enabled).toBe(false);
+    expect(plan.shiftF6.enabled).toBe(false);
     expect(plan.f3.enabled).toBe(true);
     expect(plan.f9.enabled).toBe(true);
   });

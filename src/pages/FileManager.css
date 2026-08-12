@@ -181,18 +181,74 @@
   outline-offset: -1px;
 }
 
+/* The command line (task 3): a prompt showing the focused pane's path and a
+   box that navigates and filters. Monospace because it is a path, not prose,
+   and full width because Total Commander's is. */
 .tc-command-line {
   font-family: ui-monospace, "Cascadia Code", Consolas, "Liberation Mono", monospace;
   color: var(--tc-chrome-text);
+  flex-wrap: nowrap;
+}
+
+.tc-command-prompt {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   opacity: 0.85;
 }
 
-/* The function-key bar sits in its own chrome strip below the panes,
-   spanning the full width — `FunctionKeyBar` itself is unchanged (it is
-   shared, tested, and still just renders a row of `.btn`s); this wrapper
-   only supplies the chrome background around it. */
+.tc-command-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  background: var(--tc-bg);
+  color: var(--tc-text);
+  border: 1px solid var(--tc-chrome-border);
+  border-radius: 2px;
+  padding: 1px 4px;
+}
+.tc-command-input:focus {
+  outline: 2px solid var(--tc-focus-ring);
+  outline-offset: -1px;
+}
+
+/* The function-key bar: one row docked to the bottom, spanning the full
+   width, never wrapping (brief §1.4 — a strip that wraps onto a second line
+   is not a strip). */
 .tc-fnkey-row {
   padding: 4px 6px;
+}
+
+.tc-fnkeys {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  width: 100%;
+}
+
+/* `1 1 0` rather than `1 1 90px`: the keys share the width equally and shrink
+   together, so seven of them still fit at any width instead of the last two
+   dropping to a second line. */
+.tc-fnkey {
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.tc-fnkey-danger:not(:disabled) {
+  border-color: var(--err);
+  color: var(--err);
+}
+.tc-fnkey-cap {
+  margin-right: 5px;
+}
+.tc-fnkey-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Every ordinary button inside the Total Commander presentation reads as
@@ -364,6 +420,16 @@
   .tc-cell-date,
   .tc-cell-attr {
     display: none;
+  }
+
+  /* And the F-key strip drops to keycaps alone rather than wrapping or
+     clipping its labels mid-word. Every key stays clickable and every one of
+     them still names itself on hover. */
+  .tc-fnkey-label {
+    display: none;
+  }
+  .tc-fnkey-cap {
+    margin-right: 0;
   }
 }
 

@@ -895,6 +895,9 @@
       "editReasonSelect": "Düzenlemek için bir dosya seçin",
       "copy": "Kopyala",
       "copyReasonSelect": "Kopyalamak için bir şey seçin",
+      "move": "Taşı",
+      "moveHintRename": "Shift+F6 — yerinde adlandır",
+      "moveReasonBusy": "Çalışan işlemin bitmesini bekleyin",
       "rename": "Adlandır",
       "renameReasonSelect": "Adlandırmak için bir şey seçin",
       "newFolder": "Yeni Klasör",
@@ -984,7 +987,30 @@
         "confirm1_other": "{{count}} öğe ({{size}}), {{volume}} biriminden silinsin mi?",
         "confirm2_one": "Bu, tamamlandıktan sonra ART içinden geri alınamaz. Bu öğe silinsin mi?",
         "confirm2_other": "Bu, tamamlandıktan sonra ART içinden geri alınamaz. Bu {{count}} öğe silinsin mi?"
+      },
+      "move": {
+        "confirm_one": "{{count}} öğe {{source}} biriminden {{destination}} hedefine taşınsın mı? Önce kopyalanır, ancak kopya denetlendikten sonra kaldırılır.",
+        "confirm_other": "{{count}} öğe {{source}} biriminden {{destination}} hedefine taşınsın mı? Önce kopyalanır, ancak kopyalar denetlendikten sonra kaldırılır.",
+        "confirmIcons_one": "{{names}} bir simgeye sahip. O da taşınsın mı? Taşınmazsa nesne Workbench'te görünmeyecek.",
+        "confirmIcons_other": "Bunlardan {{count}} tanesinin simgesi var ({{names}}). Onlar da taşınsın mı? Taşınmazlarsa nesneler Workbench'te görünmeyecek."
       }
+    },
+    "move": {
+      "refuseNothing": "Taşımak için bir şey seçin.",
+      "refuseLocalSource": "ART kendi diskinizdeki dosyaları silmez, bu yüzden onları oradan taşıyamaz. F5 ile kopyalayıp kendiniz kaldırın.",
+      "refuseReadOnlySource": "Bir diskten, arşivden ya da Commodore imajından hiçbir şey taşınamaz — ART onları yalnızca okur. Bunun yerine F5 ile kopyalayın.",
+      "refuseSourceNotWritable": "Bu birim yazma kabul etmiyor, dolayısıyla öğeler ondan kaldırılamaz. Bunun yerine F5 ile kopyalayın.",
+      "refuseReadOnlyTarget": "Diğer bölme salt okunur, oraya hiçbir şey taşınamaz.",
+      "refuseTargetNotWritable": "Önce diğer tarafta yazma kabul eden bir birim açın.",
+      "refuseFileBetweenImages": "Tek bir dosyayı iki imaj arasında taşımak henüz desteklenmiyor — bir klasör taşınabilir, bir dosya ise F5 ile kopyalanabilir.",
+      "refuseCollision_one": "{{names}} zaten orada. Taşıma hiçbir zaman üzerine yazmaz ve sessizce atlamaz — önce birinin adını değiştirin.",
+      "refuseCollision_other": "Bu adlardan {{count}} tanesi zaten orada ({{names}}). Taşıma hiçbir zaman üzerine yazmaz ve sessizce atlamaz — önce adlarını değiştirin."
+    },
+    "commandLine": {
+      "ariaLabel": "Komut satırı",
+      "placeholder": "cd D:\\Amiga · *.adf",
+      "refuseRelative": "Tam bir yol yazın — bölme bir imajın içinde olabilir, orada tek başına bir ad yol değildir.",
+      "refuseNotAShell": "Bu satır bir klasöre gider ya da bir filtre uygular. ART buradan program çalıştırmaz."
     },
     "err": {
       "bothLocal": "Her iki bölme de yerel klasör — bunun için Explorer'ı kullanın.",
@@ -1034,6 +1060,15 @@
       "renaming": "{{name}} yeniden adlandırılıyor…",
       "renamed": "{{name}} artık {{newName}}",
       "renamedWithIcon": "{{name}} artık {{newName}}, simgesiyle birlikte",
+      "moving_one": "{{count}} öğe taşınıyor…",
+      "moving_other": "{{count}} öğe taşınıyor…",
+      "moved_one": "{{count}} öğe taşındı",
+      "moved_other": "{{count}} öğe taşındı",
+      "movedBackedUp_one": "{{count}} öğe taşındı — önceki imajın yedeği alındı",
+      "movedBackedUp_other": "{{count}} öğe taşındı — önceki imajın yedeği alındı",
+      "moveCancelled": "Durduruldu. Kopyalanmış olan her şey yerinde duruyor — hiçbir şey kaldırılmadı.",
+      "moveNotVerified_one": "Kopyalandı, ancak {{names}} sonrasında hedefte bulunamadı, bu yüzden hiçbir şey kaldırılmadı.",
+      "moveNotVerified_other": "Kopyalandı, ancak bunlardan {{count}} tanesi ({{names}}) sonrasında hedefte bulunamadı, bu yüzden hiçbir şey kaldırılmadı.",
       "writtenBack": "{{name}} imajın içine geri yazıldı.",
       "filesWrittenOut_one": "{{count}} dosya dışarı yazıldı",
       "filesWrittenOut_other": "{{count}} dosya dışarı yazıldı",
