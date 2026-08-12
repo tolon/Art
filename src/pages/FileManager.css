@@ -12,21 +12,31 @@
  * bundles it into the same global stylesheet as everything else — the
  * *selectors*, not the file boundary, are what keeps it contained.
  *
- * The palette is deliberate and does not follow the app's light/dark theme
- * (`src/styles/theme.css`'s `.theme-dark`/`.theme-light`): Total Commander
- * looks like Total Commander regardless of the desktop theme, which is
- * exactly what was asked for. There is no `prefers-color-scheme` block
- * below on purpose.
+ * The palette is **the user's own**, decoded from the `[Colors]` section of
+ * his `wincmd.ini` (COLORREF is BGR, hence the conversions below). Phase 2b
+ * corrected two things about the first attempt: the chrome is no longer
+ * Windows-95 grey sitting around dark panes — half web app, half terminal —
+ * and the whole screen now follows the app's theme, one coherent world per
+ * theme rather than per element (brief §1.2).
+ *
+ * Dark is the "tolon" theme and is what he actually runs. Light derives from
+ * it sanely rather than being a second hand-tuned palette: the same roles,
+ * inverted, so a light-theme user gets a readable commander rather than a
+ * dark block in a bright window.
  */
 
 .tc-commander {
-  /* Pane background: very dark navy, near-black with a blue cast. */
-  --tc-bg: #06081c;
+  /* Pane background: `2367260` = BGR 0x24 1F 1C. */
+  --tc-bg: #1c1f24;
+  /* Text: `16777215` = white. */
   --tc-text: #ffffff;
 
-  /* The row under the keyboard cursor: solid bright yellow, black text —
-     spans the full row width (`.tc-row-cursor`, below). */
-  --tc-cursor-bg: #ffe000;
+  /* The row under the keyboard cursor: `65535` with `CursorText 0`, and
+     `InverseCursor=1` — a **solid bar** of pure yellow with black text,
+     spanning the full row width (`.tc-row-cursor`, below). The first attempt
+     guessed at a thin outline; his own config says otherwise, and the build's
+     yellow bar was right. */
+  --tc-cursor-bg: #ffff00;
   --tc-cursor-text: #000000;
 
   /* A selected file's name is drawn in red text on the pane's normal dark
@@ -34,7 +44,7 @@
      selected and under the cursor stays legible as red-on-yellow rather
      than the two affordances fighting for the same pixels (see `Pane`'s
      `rowTextColor` in `FileManager.tsx`). */
-  --tc-selected-text: #ff4d4d;
+  --tc-selected-text: #ff3c3c;
 
   /* File-type colour, second reference: plain files stay `--tc-text`
      (white); text files (`.txt`/`.md`/`.readme`/`.nfo`/`.doc`) are light
@@ -43,11 +53,19 @@
   --tc-text-file: #7fd7ff;
   --tc-text-hidden: #7d8494;
 
-  /* Column headers, drive row, path row, status line and the function-key
-     bar: classic light grey with black text — the Windows-95 chrome look. */
-  --tc-chrome-bg: #c0c0c0;
-  --tc-chrome-text: #101010;
-  --tc-chrome-border: #7a7a7a;
+  /* Column headers, path row, status line, command line and the function-key
+     bar. **One step lighter than the rows**, not a different world: TC's own
+     chrome sits inside the same palette its panes do, and the light-grey
+     Windows-95 bars of the first attempt were the single biggest reason the
+     screenshot read as "web app with a terminal in it". */
+  --tc-chrome-bg: #262a31;
+  --tc-chrome-text: #e6e8ec;
+  --tc-chrome-border: #3a3f47;
+  /* The chrome of the *focused* pane, so which side has the keyboard is
+     legible without hunting for the cursor bar (brief §2: the path row is
+     what shows focus). */
+  --tc-chrome-active-bg: #2f3644;
+  --tc-chrome-active-text: #ffffff;
 
   /* The focused pane needs to stay visibly distinct even inside this fixed
      palette (brief: focus and selection are not the app's theme accent
@@ -371,4 +389,47 @@
   flex-direction: column;
   gap: 6px;
   align-self: center;
+}
+
+/* ---------------------------------------------------------------------------
+   Light theme: the same roles, inverted (phase 2b, brief §1.2)
+   ---------------------------------------------------------------------------
+
+   Not a second hand-tuned palette — the same four roles with light values, so
+   a light-theme user gets a commander that belongs in their window instead of
+   a dark block sitting in it. The cursor bar stays the loudest thing on the
+   screen either way; in light it is a dark bar with light text, because a
+   yellow bar on white is unreadable and "make it yellow" was never the point.
+   The point was "you can see where the cursor is from across the room". */
+
+.theme-light .tc-commander {
+  --tc-bg: #ffffff;
+  --tc-text: #16181d;
+  --tc-cursor-bg: #1d4ed8;
+  --tc-cursor-text: #ffffff;
+  --tc-selected-text: #c11414;
+  --tc-text-file: #0b5f86;
+  --tc-text-hidden: #767b86;
+  --tc-chrome-bg: #eceef2;
+  --tc-chrome-text: #16181d;
+  --tc-chrome-border: #c3c7cf;
+  --tc-chrome-active-bg: #dfe4ee;
+  --tc-chrome-active-text: #0b0d11;
+  --tc-focus-ring: #1d4ed8;
+}
+
+/* The path row carries focus: the pane with the keyboard says so along its
+   whole width, rather than making the user find a one-row cursor bar to know
+   which side an F-key will act on. */
+.tc-pane-focused .tc-path-row {
+  background: var(--tc-chrome-active-bg);
+  color: var(--tc-chrome-active-text);
+  box-shadow: inset 2px 0 0 var(--tc-focus-ring);
+}
+
+/* And the cursor bar only ever appears in the focused pane — two yellow bars
+   on screen at once is two answers to "where am I". */
+.tc-pane:not(.tc-pane-focused) .tc-row-cursor {
+  background: transparent;
+  color: inherit;
 }

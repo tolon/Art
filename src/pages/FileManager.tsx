@@ -2622,16 +2622,14 @@ function Pane({
 
   return (
     <section
-      className="tc-pane"
-      // §64-style focus visibility, but for the pane rather than a control,
-      // and in the TC palette's own tokens rather than `--accent` — this
-      // pane deliberately does not follow the app theme, so its focus ring
-      // should not either. A commander where you cannot see which side the
-      // keyboard is talking to is worse than one with no keyboard at all.
-      style={{
-        outline: dragOver ? "2px solid var(--tc-focus-ring)" : "none",
-        boxShadow: focused ? "inset 0 0 0 2px var(--tc-focus-ring)" : undefined,
-      }}
+      className={`tc-pane${focused ? " tc-pane-focused" : ""}`}
+      // Focus is shown by the path row across the pane's whole width (see
+      // `.tc-pane-focused` in the stylesheet), not by a ring: a commander
+      // where you cannot see which side the keyboard is talking to is worse
+      // than one with no keyboard at all, and a two-pixel outline is
+      // something you have to look for. The drag ring stays — that one is
+      // about a pointer already in flight.
+      style={{ outline: dragOver ? "2px solid var(--tc-focus-ring)" : "none" }}
       aria-current={focused ? "true" : undefined}
       onClick={onFocus}
       onDragOver={(event) => {
