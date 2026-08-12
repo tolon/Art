@@ -146,6 +146,17 @@ export interface AppSettings {
    * the application starts is the part that grates.
    */
   commandLineHeight: number;
+  /**
+   * How big the file listing's text is, in pixels.
+   *
+   * **An accessibility setting, not a preference.** Most of the people this
+   * program is for are past fifty and wear reading glasses; a commander is a
+   * wall of small text by nature, and twelve pixels on a 4K screen is a wall
+   * they cannot read. Ctrl+wheel over a pane changes it, Ctrl+0 puts it back,
+   * and Settings has a control too — a shortcut nobody is told about is a
+   * feature the people who most need it will never find.
+   */
+  paneFontSize: number;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -166,6 +177,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultRightPath: null,
   alwaysUseDefaultFolders: true,
   commandLineHeight: 26,
+  paneFontSize: 12,
 };
 
 export async function getSettings(): Promise<AppSettings> {
@@ -196,6 +208,7 @@ export async function getSettings(): Promise<AppSettings> {
         DEFAULT_SETTINGS.alwaysUseDefaultFolders,
       commandLineHeight:
         (await s.get<number>("commandLineHeight")) ?? DEFAULT_SETTINGS.commandLineHeight,
+      paneFontSize: (await s.get<number>("paneFontSize")) ?? DEFAULT_SETTINGS.paneFontSize,
       lastCollectionDir:
         (await s.get<string>("lastCollectionDir")) ?? DEFAULT_SETTINGS.lastCollectionDir,
       winuaePath: (await s.get<string>("winuaePath")) ?? DEFAULT_SETTINGS.winuaePath,

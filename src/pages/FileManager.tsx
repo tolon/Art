@@ -61,6 +61,7 @@ import {
   useSelectAll,
   useSourceComboKeys,
   useTabKeys,
+  useTextSizeKeys,
   useTypeAhead,
   type FunctionAction,
 } from "@/components/files/FunctionKeys";
@@ -78,6 +79,14 @@ import { planFunctionKeys } from "@/lib/functionKeyPlan";
 import { onJobProgress, type JobProgress } from "@/lib/jobs";
 import { filterEntries } from "@/lib/mask";
 import { planMove } from "@/lib/movePlan";
+import {
+  clampDockHeight,
+  clampPaneFontSize,
+  commandLineFontSize,
+  DOCK_MIN_HEIGHT,
+  PANE_FONT_DEFAULT,
+  stepPaneFontSize,
+} from "@/lib/dockLayout";
 import { deleteProtectedNames, isDeleteProtected } from "@/lib/protection";
 import {
   colourFor,
@@ -369,17 +378,6 @@ function copyResultText(report: CopyReport, t: TranslateFn): string {
   return t(phrase.key, { ...phrase.params, what });
 }
 
-/**
- * Keep the command-line row between one line and a third of a small screen.
- *
- * A floor because a row dragged to nothing is a control the user cannot find
- * again; a ceiling because the panes are what this screen is for, and a dock
- * that can eat them is a dock that will.
- */
-function clampDockHeight(px: number): number {
-  return Math.round(Math.max(26, Math.min(360, px)));
-}
-
 /** How [`runJob`] settled: `"finished"` alone must never be read as success —
  * callers still need to check the job's own report for what actually
  * landed — but `"cancelled"` must never be read as `"finished"` either. */
@@ -654,6 +652,11 @@ export function FileManager() {
    * a JSON file for one gesture.
    */
   const savedCommandLineHeight = useSettingsStore((s) => s.settings.commandLineHeight);
+  /** How big the listing's text is — see `paneFontSize` in `@/lib/settings`
+   *  for why this is an accessibility setting rather than a preference. */
+  const paneFontSize = clampPaneFontSize(
+    useSettingsStore((s) => s.settings.paneFontSize) || PANE_FONT_DEFAULT
+  );
   const [dragHeight, setDragHeight] = useState<number | null>(null);
   const commandLineHeight = dragHeight ?? savedCommandLineHeight;
   const colourRules: ColourRule[] = isUsableRuleList(storedColourRules)
@@ -3298,6 +3301,17 @@ export function FileManager() {
     keysActive
   );
 
+  // Ctrl+plus / Ctrl+minus / Ctrl+0 — the listing's text size, on the keys
+  // every browser already uses for it.
+  useTextSizeKeys(
+    {
+      onBigger: () => void updateSettings({ paneFontSize: stepPaneFontSize(paneFontSize, 1) }),
+      onSmaller: () => void updateSettings({ paneFontSize: stepPaneFontSize(paneFontSize, -1) }),
+      onReset: () => void updateSettings({ paneFontSize: PANE_FONT_DEFAULT }),
+    },
+    keysActive
+  );
+
   // Ctrl+T / Ctrl+W / Ctrl+Tab — tabs, on the focused pane.
   useTabKeys(
     {
@@ -3430,7 +3444,20 @@ export function FileManager() {
        * and busy lines used to sit out here and push the panes down; they are
        * one status strip inside the dock now.
        */}
-      <div className="tc-commander">
+      <div
+        className="tc-commander"
+        style={{ ["--tc-font-size" as string]: `${paneFontSize}px` } as React.CSSProperties}
+        // Ctrl+wheel over the commander resizes its text — the gesture every
+        // browser, editor and map application already taught everyone. Without
+        // Ctrl the wheel scrolls the listing, which is the far commoner thing.
+        onWheel={(event) => {
+          if (!event.ctrlKey) return;
+          event.preventDefault();
+          void updateSettings({
+            paneFontSize: stepPaneFontSize(paneFontSize, -event.deltaY),
+          });
+        }}
+      >
         {/* `minmax(0, 1fr)` twice and `align-items: stretch` (in the CSS, not
             here) are the height contract: the two panes are the same height
             because the grid says so, not because their contents happen to
@@ -3547,12 +3574,19 @@ export function FileManager() {
           }}
           // A double-click puts it back to one line, which is the way out of
           // a drag that went too far without hunting for the original size.
-          onDoubleClick={() => void updateSettings({ commandLineHeight: 26 })}
+          onDoubleClick={() => void updateSettings({ commandLineHeight: DOCK_MIN_HEIGHT })}
         />
 
+        {/* The text grows with the row (`commandLineFontSize`): a taller box
+            with an eleven-pixel line floating in it is not what "bigger"
+            means. */}
         <div
           className="tc-chrome-row tc-command-line"
-          style={{ height: commandLineHeight, alignItems: "flex-start" }}
+          style={{
+            height: commandLineHeight,
+            fontSize: commandLineFontSize(commandLineHeight),
+            alignItems: "center",
+          }}
         >
           <span className="tc-command-prompt">{`${pane(focused).location}>`}</span>
           <input

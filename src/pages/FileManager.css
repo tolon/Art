@@ -85,7 +85,18 @@
      here), so this is its own token rather than reusing `--accent`. */
   --tc-focus-ring: #4fd1ff;
 
-  font-size: 12px;
+  /*
+   * **The listing's text size is set by the user, and everything here is
+   * relative to it.** Most of the people this program is for are past fifty
+   * and wear reading glasses; a file manager is a wall of small text by
+   * nature, and twelve pixels on a 4K screen is a wall they cannot read.
+   *
+   * So every size below this line is an `em` rather than a `px`, and the
+   * column widths with them — a Size column fixed at 128px clips
+   * `4,294,967,296` the moment the text grows, which would turn "bigger" into
+   * "bigger and broken".
+   */
+  font-size: var(--tc-font-size, 12px);
 }
 
 /* ---- Panes ------------------------------------------------------------ */
@@ -113,8 +124,8 @@
   background: var(--tc-chrome-bg);
   color: var(--tc-chrome-text);
   border-bottom: 1px solid var(--tc-chrome-border);
-  font-size: 11px;
-  min-height: 22px;
+  font-size: 0.92em;
+  min-height: 1.85em;
 }
 
 .tc-drive-volume {
@@ -158,7 +169,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font: inherit;
-  font-size: 11px;
+  font-size: 0.92em;
   padding: 2px 8px;
   border: 1px solid var(--tc-chrome-border);
   border-bottom: none;
@@ -321,7 +332,7 @@
 .tc-fnkey {
   flex: 1 1 0;
   min-width: 0;
-  font-size: 12px;
+  font-size: 1em;
   white-space: nowrap;
   overflow: hidden;
 }
@@ -392,11 +403,11 @@
    reference's column order). */
 .tc-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 52px 128px 118px 64px 58px;
+  grid-template-columns: minmax(0, 1fr) 4.3em 10.7em 9.8em 5.3em 4.8em;
   align-items: center;
   gap: 4px;
-  padding: 2px 6px;
-  font-size: 12px;
+  padding: 0.17em 6px;
+  font-size: 1em;
   white-space: nowrap;
 }
 
@@ -412,7 +423,7 @@
   border: none;
   color: inherit;
   font: inherit;
-  font-size: 11px;
+  font-size: 0.92em;
   font-weight: inherit;
   padding: 0;
   cursor: pointer;
@@ -529,7 +540,7 @@
    still degrades to a scrollable list rather than clipping. */
 @media (max-width: 1000px) {
   .tc-row {
-    grid-template-columns: minmax(0, 1fr) 40px 96px 58px;
+    grid-template-columns: minmax(0, 1fr) 3.3em 8em 4.8em;
   }
   .tc-cell-date,
   .tc-cell-attr {

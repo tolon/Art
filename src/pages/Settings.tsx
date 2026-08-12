@@ -6,6 +6,12 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { LANGUAGE_NAMES, SUPPORTED_LANGUAGES } from "@/i18n";
 import type { StoredOverwritePolicy, Theme, UxMode } from "@/lib/settings";
 import {
+  clampPaneFontSize,
+  PANE_FONT_DEFAULT,
+  PANE_FONT_MAX,
+  PANE_FONT_MIN,
+} from "@/lib/dockLayout";
+import {
   DEFAULT_COLOUR_RULES,
   isUsableRuleList,
   type ColourRule,
@@ -94,6 +100,44 @@ export function SettingsPage() {
             {t("settings.overwritePolicyHint")}
           </p>
         </Field>
+        {/* Text size. First in this section on purpose: for a good share of
+            this program's users — past fifty, reading glasses — it is not a
+            preference but whether the screen is usable at all. A Ctrl+wheel
+            shortcut alone would be a feature the people who most need it
+            never find. */}
+        <Field label={t("settings.paneFontSize")}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              type="range"
+              min={PANE_FONT_MIN}
+              max={PANE_FONT_MAX}
+              step={1}
+              value={clampPaneFontSize(settings.paneFontSize || PANE_FONT_DEFAULT)}
+              aria-label={t("settings.paneFontSize")}
+              style={{ flex: "1 1 auto" }}
+              onChange={(e) => void update({ paneFontSize: Number(e.target.value) })}
+            />
+            <span
+              style={{
+                fontSize: clampPaneFontSize(settings.paneFontSize || PANE_FONT_DEFAULT),
+                minWidth: "9ch",
+                textAlign: "right",
+              }}
+            >
+              {clampPaneFontSize(settings.paneFontSize || PANE_FONT_DEFAULT)} px
+            </span>
+            <button
+              className="btn btn-sm"
+              onClick={() => void update({ paneFontSize: PANE_FONT_DEFAULT })}
+            >
+              {t("settings.paneFontSizeReset")}
+            </button>
+          </div>
+          <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+            {t("settings.paneFontSizeHint")}
+          </p>
+        </Field>
+
         {/* Default folders — a file-manager setting, not a general path, so
             it lives here rather than under Paths. ART is used for one purpose:
             the two folders it should open in are the same two every time. */}

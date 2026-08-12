@@ -445,6 +445,43 @@ export function useTabKeys(
 }
 
 /**
+ * Ctrl+plus, Ctrl+minus and Ctrl+0 — the listing's text size.
+ *
+ * The keys every browser uses for the same thing, because the people who need
+ * this most are the least likely to go looking for a novel one. Matched on
+ * `event.key` so both the main row and the numeric keypad work, and `=` is
+ * accepted alongside `+` because that is the unshifted key it lives on.
+ */
+export function useTextSizeKeys(
+  { onBigger, onSmaller, onReset }: { onBigger: () => void; onSmaller: () => void; onReset: () => void },
+  active: boolean
+) {
+  useEffect(() => {
+    if (!active) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (!event.ctrlKey) return;
+      const handler =
+        event.key === "+" || event.key === "="
+          ? onBigger
+          : event.key === "-" || event.key === "_"
+            ? onSmaller
+            : event.key === "0"
+              ? onReset
+              : null;
+      if (!handler) return;
+      if (isShortcutBlocked(event, true)) return;
+
+      event.preventDefault();
+      handler();
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onBigger, onSmaller, onReset, active]);
+}
+
+/**
  * The docked function-key row (brief §1.4).
  *
  * **One row, always.** Total Commander's F-keys are a strip along the bottom
