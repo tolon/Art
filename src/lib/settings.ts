@@ -158,6 +158,17 @@ export interface AppSettings {
    */
   paneFontSize: number;
   /**
+   * How big the whole application is drawn, as a percentage.
+   *
+   * The setting above sizes the file listing; this one sizes **everything** —
+   * the Aminet search box, the studio cards, the buttons, the icons, on every
+   * screen. Same reason, asked once for the whole program rather than once per
+   * wall of small text. Ctrl+wheel anywhere outside the commander, Ctrl+plus,
+   * Ctrl+minus, Ctrl+0, and a control in Settings for the people who will
+   * never be told about a shortcut. See `@/lib/appZoom`.
+   */
+  appZoom: number;
+  /**
    * Every other choice the user has made, across every screen.
    *
    * The rule, in the user's words: *nothing changes unless the user changes
@@ -194,6 +205,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   alwaysUseDefaultFolders: true,
   commandLineHeight: 26,
   paneFontSize: 12,
+  appZoom: 100,
   remembered: null,
 };
 
@@ -232,6 +244,7 @@ export async function getSettings(): Promise<AppSettings> {
       aminetRoot: (await s.get<string>("aminetRoot")) ?? DEFAULT_SETTINGS.aminetRoot,
       aminetMirrors:
         (await s.get<StoredMirror[]>("aminetMirrors")) ?? DEFAULT_SETTINGS.aminetMirrors,
+      appZoom: (await s.get<number>("appZoom")) ?? DEFAULT_SETTINGS.appZoom,
       remembered: (await s.get<unknown>("remembered")) ?? DEFAULT_SETTINGS.remembered,
     };
   } catch (e) {

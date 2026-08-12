@@ -12,6 +12,14 @@ import {
   PANE_FONT_MIN,
 } from "@/lib/dockLayout";
 import {
+  clampZoom,
+  zoomLabel,
+  ZOOM_DEFAULT,
+  ZOOM_MAX,
+  ZOOM_MIN,
+  ZOOM_STEP,
+} from "@/lib/appZoom";
+import {
   DEFAULT_COLOUR_RULES,
   isUsableRuleList,
   type ColourRule,
@@ -60,6 +68,37 @@ export function SettingsPage() {
             {settings.uxMode === "power"
               ? t("settings.uxModePowerHint")
               : t("settings.uxModeBeginnerHint")}
+          </p>
+        </Field>
+        {/* How big the application is drawn. In Appearance rather than in
+            Files, because it is the whole program: text, search boxes, icons,
+            buttons, every screen. The listing has its own size below it, for
+            the one wall of text dense enough to want its own answer. */}
+        <Field label={t("settings.appZoom")}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              type="range"
+              min={ZOOM_MIN}
+              max={ZOOM_MAX}
+              step={ZOOM_STEP}
+              value={clampZoom(settings.appZoom)}
+              onChange={(e) => void update({ appZoom: clampZoom(Number(e.target.value)) })}
+              style={{ flex: "1 1 auto" }}
+              aria-label={t("settings.appZoom")}
+            />
+            <span style={{ fontSize: 13, minWidth: "3.5em", textAlign: "right" }}>
+              {zoomLabel(settings.appZoom)}
+            </span>
+            <button
+              className="btn btn-sm"
+              onClick={() => void update({ appZoom: ZOOM_DEFAULT })}
+              disabled={clampZoom(settings.appZoom) === ZOOM_DEFAULT}
+            >
+              {t("settings.appZoomReset")}
+            </button>
+          </div>
+          <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+            {t("settings.appZoomHint")}
           </p>
         </Field>
       </section>

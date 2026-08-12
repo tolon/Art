@@ -1,9 +1,16 @@
 /* App shell layout: fixed sidebar + topbar + scrolling content. */
 
+/* `--app-zoom` is set by `Layout.tsx` from the user's Application Size
+   (`@/lib/appZoom`), and it is applied *here* rather than on the document for
+   one reason: `zoom` does not scale viewport units. A shell left at `100vh`
+   would be drawn `zoom` times taller than the window and the whole application
+   would scroll. Dividing first makes the rendered height exactly one viewport
+   at every size — (100vh / z) × z. */
 .app-shell {
   display: grid;
   grid-template-columns: 224px 1fr;
-  height: 100vh;
+  zoom: var(--app-zoom, 1);
+  height: calc(100vh / var(--app-zoom, 1));
   overflow: hidden;
 }
 .app-shell-dragover {

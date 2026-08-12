@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### The whole program can be made bigger, and it remembers everything (2026-08-12)
+
+#### Added
+- **Application Size.** One control in Settings scales the *entire* program —
+  text, search boxes, icons, buttons — on every screen, from 70 % to 250 %.
+  Ctrl and the mouse wheel does the same anywhere outside the file listing,
+  along with Ctrl+plus, Ctrl+minus and Ctrl+0. The listing keeps its own text
+  size, because it is the one wall of text dense enough to want its own answer.
+  Most of the people this program is for are past fifty and wear reading
+  glasses; this is not a preference.
+- **Every choice you make is remembered.** Not just the Files screen's tabs:
+  the Collection's view and filters, Aminet's sort, narrowing and download
+  subfolder, the HDF wizard's size, template, filesystem and driver, PiStorm's
+  configuration, the Gotek folder, your WinUAE machine and ROM, how ADF Studio
+  makes disks. Nothing changes unless you change it.
+
+#### Fixed
+- A setting changed in the first moment after launch could be silently undone
+  by the settings file arriving a beat later.
+
 ### A PFS3 disk ART makes now actually mounts (2026-08-12)
 
 #### Added

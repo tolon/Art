@@ -5,6 +5,12 @@ import { Outlet } from "react-router-dom";
 import { JobBar } from "@/components/JobBar";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
+import {
+  belongsToFileListing,
+  stepZoom,
+  zoomCssValue,
+  ZOOM_DEFAULT,
+} from "@/lib/appZoom";
 import { setupDragDrop, type DropHandler } from "@/lib/dnd";
 import { useRecentFilesStore } from "@/stores/recentFilesStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -49,6 +55,68 @@ export function Layout() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [toggleSidebar]);
+
+  // ---------------------------------------------------------------------
+  // How big the application is drawn (`@/lib/appZoom`).
+  //
+  // One CSS variable, read by `.app-shell` — which is where the `zoom` is
+  // applied and why, see `layout.css`. Everything ART draws lives inside the
+  // shell, dialogs included, so one declaration covers every screen: text,
+  // inputs, icons and buttons alike, without a single size written twice.
+  // ---------------------------------------------------------------------
+  const zoom = useSettingsStore((s) => s.settings.appZoom);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty("--app-zoom", zoomCssValue(zoom));
+    return () => {
+      root.style.removeProperty("--app-zoom");
+    };
+  }, [zoom]);
+
+  const stepAppZoom = useCallback(
+    (direction: number) => {
+      const current = useSettingsStore.getState().settings.appZoom;
+      void updateSettings({ appZoom: stepZoom(current, direction) });
+    },
+    [updateSettings]
+  );
+
+  useEffect(() => {
+    // Non-passive, and a native listener rather than React's: `preventDefault`
+    // on a wheel event is what stops WebView2 doing its own page zoom on top
+    // of ours, and React attaches wheel handlers passively at the root.
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey) return;
+      // The commander's own Ctrl+wheel means something narrower — the listing's
+      // text alone — and the nearer gesture wins.
+      if (belongsToFileListing(event.target as Element | null)) return;
+      event.preventDefault();
+      stepAppZoom(-event.deltaY);
+    };
+
+    const onKey = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || event.altKey || event.metaKey) return;
+      // `code` rather than `key`: on a Turkish keyboard the plus and minus a
+      // user presses are not the characters `key` reports.
+      const grow = event.key === "+" || event.code === "Equal" || event.code === "NumpadAdd";
+      const shrink =
+        event.key === "-" || event.code === "Minus" || event.code === "NumpadSubtract";
+      const reset = event.code === "Digit0" || event.code === "Numpad0";
+      if (!grow && !shrink && !reset) return;
+
+      event.preventDefault();
+      if (reset) void updateSettings({ appZoom: ZOOM_DEFAULT });
+      else stepAppZoom(grow ? 1 : -1);
+    };
+
+    window.addEventListener("wheel", onWheel, { passive: false });
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("wheel", onWheel);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [stepAppZoom, updateSettings]);
 
   useEffect(() => {
     const handler: DropHandler = {
