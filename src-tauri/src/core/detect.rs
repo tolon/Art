@@ -46,6 +46,16 @@ pub enum FormatCategory {
     /// Archive, typically LHA on Amiga.
     #[serde(rename = "archive")]
     Archive,
+    /// A Commodore 8-bit disk, tape or program file (spec addendum §10.5).
+    ///
+    /// Its own category rather than [`FormatCategory::FloppyImage`], and the
+    /// reason is not tidiness: a D64 routed to the floppy workflows would be
+    /// offered ADF Studio, disk validation and **"copy to Gotek"** — writing a
+    /// 1541 image onto a Gotek as though it were an Amiga floppy. The format
+    /// within the category is `format_hint`: `d64`, `d71`, `d81`, `t64`,
+    /// `tap`, `prg`, `crt`.
+    #[serde(rename = "commodore-8bit")]
+    Commodore8Bit,
     /// Kickstart ROM.
     #[serde(rename = "rom")]
     Rom,
@@ -64,6 +74,7 @@ impl FormatCategory {
             Self::HardDiskImage => "harddisk-image",
             Self::OpticalImage => "optical-image",
             Self::Archive => "archive",
+            Self::Commodore8Bit => "commodore-8bit",
             Self::Rom => "rom",
             Self::Directory => "directory",
             Self::Unknown => "unknown",
@@ -255,6 +266,29 @@ pub fn detect(path: &Path) -> CoreResult<Detection> {
         }
     }
 
+    // --- Commodore 8-bit ---------------------------------------------------
+    //
+    // Tapes and cartridges carry a signature; disks carry nothing at all.
+    if let Ok(head) = read_head(path, 16) {
+        // Order matters here, and it is not alphabetical: all three of these
+        // begin `C64`, and the T64 check is only those three bytes because
+        // tools disagreed about the rest of its description field. The
+        // specific magics have to be asked first, or every tape dump and
+        // every cartridge is reported as a T64.
+        if head.len() >= TAP_MAGIC.len() && &head[0..TAP_MAGIC.len()] == TAP_MAGIC {
+            return Ok(commodore("tap", 0.95, size));
+        }
+        if head.len() >= CRT_MAGIC.len() && &head[0..CRT_MAGIC.len()] == CRT_MAGIC {
+            return Ok(commodore("crt", 0.95, size));
+        }
+        if head.len() >= T64_MAGIC.len() && &head[0..T64_MAGIC.len()] == T64_MAGIC {
+            return Ok(commodore("t64", 0.95, size));
+        }
+    }
+    if let Some(detection) = commodore_disk_by_size(path, size) {
+        return Ok(detection);
+    }
+
     if let Ok(head) = read_head(path, 4) {
         if head.as_slice() == b"PFS\x03" || head.as_slice() == b"PDS\x03" {
             return Ok(Detection {
@@ -402,6 +436,61 @@ fn rom_by_size(size: u64) -> Detection {
         size,
         is_dir: false,
     }
+}
+
+/// The first three bytes of a T64's 32-byte description field. Tools wrote
+/// several wordings — "C64 tape image file", "C64S tape file" — so only the
+/// part they agree on is checked.
+const T64_MAGIC: &[u8] = b"C64";
+
+/// A raw tape dump says so in full.
+const TAP_MAGIC: &[u8] = b"C64-TAPE-RAW";
+
+/// A cartridge image, padded to sixteen bytes.
+const CRT_MAGIC: &[u8] = b"C64 CARTRIDGE";
+
+/// One detection for a Commodore 8-bit object.
+fn commodore(hint: &str, confidence: f32, size: u64) -> Detection {
+    Detection {
+        category: FormatCategory::Commodore8Bit,
+        format_hint: hint.to_string(),
+        confidence,
+        size,
+        is_dir: false,
+    }
+}
+
+/// A `.d64` and its relatives have **no header and no signature**: the file is
+/// the sectors, starting at track 1 sector 0. Size is the only thing to go on,
+/// and it is enough to be worth acting on because the sizes are exact — every
+/// one is a whole number of sectors for a real drive, and none collides with
+/// an Amiga image.
+///
+/// The header sector is then read to *raise* confidence rather than to gate:
+/// a 1541 writes `A` as its DOS version at offset 2 of track 18 sector 0, a
+/// 1581 writes `D` at the same offset of track 40 sector 0. A disk whose
+/// header says something else is still that size and still very probably that
+/// disk, so it is reported at the confidence size alone deserves.
+fn commodore_disk_by_size(path: &Path, size: u64) -> Option<Detection> {
+    use crate::core::cbm::geometry::{Drive, Geometry};
+
+    let geometry = Geometry::from_len(size).ok()?;
+    let hint = match geometry.drive {
+        Drive::D64 => "d64",
+        Drive::D71 => "d71",
+        Drive::D81 => "d81",
+    };
+
+    let expected_dos = match geometry.drive {
+        Drive::D64 | Drive::D71 => b'A',
+        Drive::D81 => b'D',
+    };
+    let header_at = geometry.offset_of(geometry.directory_track(), 0).ok()?;
+    let confirmed = probe_at(path, header_at + 2, 1)
+        .map(|byte| byte == [expected_dos])
+        .unwrap_or(false);
+
+    Some(commodore(hint, if confirmed { 0.9 } else { 0.7 }, size))
 }
 
 /// True when `head` carries an LHA compression-method field where one belongs.
@@ -579,6 +668,96 @@ mod tests {
         let p = d.join("bogus.dat");
         fs::write(&p, b"-lh5-not-an-archive").unwrap();
         assert_ne!(detect(&p).unwrap().category, FormatCategory::Archive);
+        fs::remove_dir_all(&d).ok();
+    }
+
+    /// A D64 has no signature at all — the file is the sectors. Size decides,
+    /// and the header sector is read to raise confidence rather than to gate.
+    #[test]
+    fn detects_a_c64_disk_by_size_and_confirms_it_by_its_header() {
+        let d = tmp();
+
+        // A real fixture, so the header byte is where a drive would put it.
+        let p = d.join("game.d64");
+        fs::write(
+            &p,
+            crate::core::cbm::d64::fixture::D64Builder::new(35).build(),
+        )
+        .unwrap();
+        let det = detect(&p).unwrap();
+        assert_eq!(det.category, FormatCategory::Commodore8Bit);
+        assert_eq!(det.format_hint, "d64");
+        assert!(
+            det.confidence >= 0.9,
+            "header confirmed: {}",
+            det.confidence
+        );
+
+        // The same size with nothing recognisable in the header: still the
+        // right answer, reported at the confidence size alone earns.
+        let plain = d.join("mystery.dat");
+        fs::write(&plain, vec![0u8; 174_848]).unwrap();
+        let det = detect(&plain).unwrap();
+        assert_eq!(det.category, FormatCategory::Commodore8Bit);
+        assert_eq!(det.format_hint, "d64");
+        assert!(det.confidence < 0.9, "size only: {}", det.confidence);
+
+        // And the 40-track variant amendment A3 added.
+        let big = d.join("speeddos.d64");
+        fs::write(&big, vec![0u8; 196_608]).unwrap();
+        assert_eq!(detect(&big).unwrap().format_hint, "d64");
+
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn detects_the_other_commodore_disk_sizes() {
+        let d = tmp();
+        for (bytes, hint) in [(349_696usize, "d71"), (819_200, "d81")] {
+            let p = d.join(format!("{hint}.img"));
+            fs::write(&p, vec![0u8; bytes]).unwrap();
+            let det = detect(&p).unwrap();
+            assert_eq!(det.category, FormatCategory::Commodore8Bit, "{hint}");
+            assert_eq!(det.format_hint, hint);
+        }
+        fs::remove_dir_all(&d).ok();
+    }
+
+    /// The tape and cartridge formats do carry signatures, and each is
+    /// identified as itself — `tap` and `crt` are identify-only, which is a
+    /// property of the formats rather than a gap (§10, §89).
+    #[test]
+    fn detects_the_signed_commodore_formats() {
+        let d = tmp();
+        for (magic, hint) in [
+            (b"C64 tape image file".to_vec(), "t64"),
+            (b"C64-TAPE-RAW".to_vec(), "tap"),
+            (b"C64 CARTRIDGE   ".to_vec(), "crt"),
+        ] {
+            let p = d.join(format!("{hint}.bin"));
+            let mut bytes = magic;
+            bytes.resize(512, 0);
+            fs::write(&p, &bytes).unwrap();
+            let det = detect(&p).unwrap();
+            assert_eq!(det.category, FormatCategory::Commodore8Bit, "{hint}");
+            assert_eq!(det.format_hint, hint);
+            assert!(det.confidence >= 0.9, "{hint}");
+        }
+        fs::remove_dir_all(&d).ok();
+    }
+
+    /// An Amiga floppy is not a Commodore 8-bit disk, whatever the sizes look
+    /// like next to each other: 901,120 is not one of the accepted sizes, and
+    /// the `DOS` signature wins in any case.
+    #[test]
+    fn an_adf_is_not_mistaken_for_a_c64_disk() {
+        let d = tmp();
+        let p = d.join("disk.adf");
+        let mut bytes = vec![0u8; sizes::ADF_DD as usize];
+        bytes[0..4].copy_from_slice(b"DOS\x00");
+        fs::write(&p, &bytes).unwrap();
+
+        assert_eq!(detect(&p).unwrap().category, FormatCategory::FloppyImage);
         fs::remove_dir_all(&d).ok();
     }
 

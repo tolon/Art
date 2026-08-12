@@ -98,6 +98,31 @@ describe("copyDirection", () => {
     }
   });
 
+  it("routes a Commodore image to local as its extraction command", () => {
+    expect(copyDirection("c64", "local")).toEqual({ kind: "c64-to-local" });
+  });
+
+  it("refuses a Commodore image straight into a volume, with the way forward", () => {
+    for (const target of ["adf", "hdf"] as PaneKind[]) {
+      const result = copyDirection("c64", target);
+      expect(result.kind).toBe("refused");
+      if (result.kind === "refused") {
+        expect(result.reason.key).toBe("files.writeRefusal.c64ToVolume");
+      }
+    }
+  });
+
+  it("refuses every direction that would write into a Commodore image", () => {
+    const sources: PaneKind[] = ["local", "adf", "hdf", "iso", "archive", "c64"];
+    for (const source of sources) {
+      const result = copyDirection(source, "c64");
+      expect(result.kind).toBe("refused");
+      if (result.kind === "refused") {
+        expect(result.reason.key).toBe("files.writeRefusal.c64");
+      }
+    }
+  });
+
   it("a disc targeting itself is refused for being a write target, not treated as a copy", () => {
     // Guards against `target === "iso"` losing its priority check: if
     // `source === "iso"` were tested first, this would come back

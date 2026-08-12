@@ -71,6 +71,16 @@ fn is_directory(d: &Detection) -> bool {
 fn is_optical(d: &Detection) -> bool {
     d.category == FormatCategory::OpticalImage
 }
+/// A Commodore 8-bit container ART can walk into: D64, D71, D81, T64.
+fn is_c64_browsable(d: &Detection) -> bool {
+    d.category == FormatCategory::Commodore8Bit && crate::core::cbm::is_browsable(&d.format_hint)
+}
+/// The Commodore formats ART identifies and deliberately does not browse —
+/// TAP, PRG, CRT. They are not dead ends: `c64.identify` says what they are,
+/// which for a TAP is the honest whole answer (§10, §89).
+fn is_c64_identify_only(d: &Detection) -> bool {
+    d.category == FormatCategory::Commodore8Bit && !crate::core::cbm::is_browsable(&d.format_hint)
+}
 /// Any recognised file (not a directory, not unknown).
 fn is_known_file(d: &Detection) -> bool {
     !d.is_dir && d.category != FormatCategory::Unknown
@@ -225,6 +235,41 @@ impl Workflow for Hash {
     }
 }
 
+/// What a Commodore file ART does not browse actually is.
+///
+/// The counterpart to "identify only" being a real answer rather than a
+/// refusal: a TAP has no directory in it, and saying so — with the size, and
+/// with what reading it would actually take — is the whole of what ART can
+/// honestly offer. Registering nothing here would leave those files with only
+/// the Advanced catch-alls and no starred action at all (§46).
+pub struct C64Identify;
+
+impl Workflow for C64Identify {
+    fn info(&self) -> &WorkflowInfo {
+        &WorkflowInfo {
+            id: "c64.identify",
+            name: "What is this?",
+            description: "Name the format, its size and why there is nothing inside it to open.",
+            category: WorkflowCategory::Recommended,
+            safety: Safety::ReadOnly,
+            priority: 10,
+            available: true,
+            kind: WorkflowKind::Execute,
+        }
+    }
+    fn can_handle(&self, d: &Detection) -> bool {
+        is_c64_identify_only(d)
+    }
+    fn run(&self, input: &Path, d: &Detection) -> CoreResult<WorkflowOutcome> {
+        Ok(WorkflowOutcome {
+            workflow_id: "c64.identify".into(),
+            success: true,
+            message: crate::core::cbm::identify(input, &d.format_hint)?,
+            verification: None,
+        })
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The catalogue
 // ---------------------------------------------------------------------------
@@ -299,6 +344,22 @@ fn navigation_workflows() -> Vec<NavWorkflow> {
             80,
             true,
             is_floppy,
+        ),
+        // --- Commodore 8-bit ---
+        //
+        // A D64 is the same thing to the commander an ADF is: a container you
+        // walk into. It is deliberately *not* offered the Amiga floppy
+        // actions — ADF Studio cannot read it, and "copy to Gotek" would put
+        // a 1541 image on a device expecting an Amiga floppy.
+        nav(
+            "c64.browse",
+            "Open in the file manager",
+            "Walk the disk's directory and copy files out of it.",
+            route::FILES,
+            Recommended,
+            10,
+            true,
+            is_c64_browsable,
         ),
         // --- Archives ---
         //
@@ -506,6 +567,7 @@ pub fn register_all(registry: &mut super::registry::WorkflowRegistry) {
     }
     registry.register(AdfValidate);
     registry.register(Hash);
+    registry.register(C64Identify);
 }
 
 #[cfg(test)]
@@ -554,6 +616,10 @@ mod tests {
             (FormatCategory::Rom, "rom", false),
             (FormatCategory::Directory, "directory", true),
             (FormatCategory::OpticalImage, "iso9660", false),
+            // Both halves of the Commodore side: one ART opens, one it only
+            // names. Neither may be a dead end (§91).
+            (FormatCategory::Commodore8Bit, "d64", false),
+            (FormatCategory::Commodore8Bit, "tap", false),
         ];
 
         for (category, hint, is_dir) in cases {
@@ -623,6 +689,45 @@ mod tests {
             .recommendations
             .iter()
             .any(|r| r.info.id == "archive.browse"));
+
+        // A C64 disk: the commander, and none of the Amiga floppy actions —
+        // ADF Studio cannot read a 1541 image, and `adf.to_gotek` would put
+        // one on a device expecting an Amiga floppy.
+        let d64 = dir.join("game.d64");
+        std::fs::write(
+            &d64,
+            crate::core::cbm::d64::fixture::D64Builder::new(35).build(),
+        )
+        .unwrap();
+
+        let plan = engine().plan(&d64).unwrap();
+        let ids: Vec<&str> = plan.candidates.iter().map(|c| c.id).collect();
+        assert!(ids.contains(&"c64.browse"), "{ids:?}");
+        assert!(
+            !ids.iter().any(|id| id.starts_with("adf.")),
+            "an Amiga floppy action was offered for a 1541 image: {ids:?}"
+        );
+        assert!(plan
+            .recommendations
+            .iter()
+            .any(|r| r.info.id == "c64.browse"));
+
+        // And a TAP, which ART deliberately does not browse: it still gets a
+        // starred action, because "what is this?" is a real answer.
+        let tap = dir.join("game.tap");
+        std::fs::write(&tap, b"C64-TAPE-RAW\x00\x00\x00\x00").unwrap();
+
+        let plan = engine().plan(&tap).unwrap();
+        let ids: Vec<&str> = plan.candidates.iter().map(|c| c.id).collect();
+        assert!(ids.contains(&"c64.identify"), "{ids:?}");
+        assert!(
+            !ids.contains(&"c64.browse"),
+            "a TAP has no directory to open: {ids:?}"
+        );
+        assert!(plan
+            .recommendations
+            .iter()
+            .any(|r| r.info.id == "c64.identify"));
 
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -11,6 +11,10 @@ export type FormatCategory =
   | "harddisk-image"
   | "optical-image"
   | "archive"
+  // A Commodore 8-bit disk, tape or program. Its own category rather than
+  // `floppy-image`: a D64 routed to the Amiga floppy actions would be offered
+  // ADF Studio and "copy to Gotek".
+  | "commodore-8bit"
   | "rom"
   | "directory"
   | "unknown";

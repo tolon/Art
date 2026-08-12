@@ -112,6 +112,7 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // 39 → 41 (Task 4): the archive pane reads `ARCHIVE_WRITE_REFUSAL.key`
     // in the same two places the disc reads its own — `writeRefusal` and the
     // footer's read-only badge. Same pattern, one more read-only container.
-    expect(dynamicCalls).toBe(41);
+    // 41 → 43 (Task 5): and the Commodore pane, in those same two places.
+    expect(dynamicCalls).toBe(43);
   });
 });

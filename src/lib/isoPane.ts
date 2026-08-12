@@ -17,13 +17,13 @@
 
 import type { Phrase } from "@/lib/phrase";
 
-export type PaneKind = "local" | "adf" | "hdf" | "iso" | "archive";
+export type PaneKind = "local" | "adf" | "hdf" | "iso" | "archive" | "c64";
 
-/** The pane kinds that are containers ART only ever reads — a disc and an
- * archive. Both refuse every write with their own sentence, and both are
- * sources for the same two copy directions. */
+/** The pane kinds that are containers ART only ever reads — a disc, an
+ * archive, and a Commodore 8-bit disk or tape. Each refuses every write with
+ * its own sentence. */
 export function isReadOnlyContainer(kind: PaneKind): boolean {
-  return kind === "iso" || kind === "archive";
+  return kind === "iso" || kind === "archive" || kind === "c64";
 }
 
 /** ADF and HDF panes share every write/copy command, indexed by
@@ -44,6 +44,16 @@ export const ISO_WRITE_REFUSAL: Phrase = { key: "files.writeRefusal.iso" };
  * setting that turns it off. */
 export const ARCHIVE_WRITE_REFUSAL: Phrase = { key: "files.writeRefusal.archive" };
 
+/** And for a Commodore disk or tape. ART reads these; writing one is not a
+ * setting that is switched off, it is a thing ART does not do. */
+export const C64_WRITE_REFUSAL: Phrase = { key: "files.writeRefusal.c64" };
+
+/** Copying a C64 file straight into an Amiga volume is refused with a way
+ * forward rather than a flat no: out to a folder, then in. Two steps, both of
+ * which already exist and are tested, instead of a third copy path whose only
+ * user would be someone moving a PRG onto an Amiga disk. */
+export const C64_TO_VOLUME_REFUSAL: Phrase = { key: "files.writeRefusal.c64ToVolume" };
+
 export type CopyDirection =
   | { kind: "local-to-local" }
   | { kind: "local-to-volume" }
@@ -53,6 +63,7 @@ export type CopyDirection =
   | { kind: "iso-to-volume" }
   | { kind: "archive-to-local" }
   | { kind: "archive-to-volume" }
+  | { kind: "c64-to-local" }
   /** Refused before anything runs — the pane shows `reason` instead. */
   | { kind: "refused"; reason: Phrase };
 
@@ -74,6 +85,17 @@ export function copyDirection(source: PaneKind, target: PaneKind): CopyDirection
   }
   if (target === "archive") {
     return { kind: "refused", reason: ARCHIVE_WRITE_REFUSAL };
+  }
+  if (target === "c64") {
+    return { kind: "refused", reason: C64_WRITE_REFUSAL };
+  }
+  if (source === "c64") {
+    // Out to a folder, yes. Into an Amiga volume, not directly: a C64 file on
+    // an FFS disk is a niche enough want that a third copy path for it would
+    // be more code than it is worth, and the two-step route already works.
+    return target === "local"
+      ? { kind: "c64-to-local" }
+      : { kind: "refused", reason: C64_TO_VOLUME_REFUSAL };
   }
   if (source === "iso") {
     return { kind: target === "local" ? "iso-to-local" : "iso-to-volume" };

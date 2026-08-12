@@ -136,6 +136,7 @@ import {
   enterIsoTrail,
   leaveIsoTrail,
   ARCHIVE_WRITE_REFUSAL,
+  C64_WRITE_REFUSAL,
   ISO_WRITE_REFUSAL,
   type IsoTrailEntry,
   type PaneKind,
@@ -148,6 +149,7 @@ import {
   archiveOpen,
   type ArchiveInfo,
 } from "@/lib/archive";
+import { cbmExtract, cbmExtractFile, cbmList, cbmOpen, type CbmInfo } from "@/lib/cbm";
 
 type Side = "left" | "right";
 
@@ -260,6 +262,7 @@ function writeRefusal(state: PaneState, t: (key: string) => string): string {
   if (state.kind === "local") return t("files.writeRefusal.local");
   if (state.kind === "iso") return t(ISO_WRITE_REFUSAL.key);
   if (state.kind === "archive") return t(ARCHIVE_WRITE_REFUSAL.key);
+  if (state.kind === "c64") return t(C64_WRITE_REFUSAL.key);
   if (state.volumeIndex === null) return t("files.writeRefusal.noPartition");
   return state.capability?.reason ?? t("files.writeRefusal.default");
 }
@@ -797,7 +800,46 @@ export function FileManager() {
     [setPane, resetSelection, t]
   );
 
-  async function chooseImage(side: Side, kind: "adf" | "hdf" | "iso" | "archive") {
+  /**
+   * Open a Commodore 8-bit disk or tape as a pane.
+   *
+   * **Flat, so there is no navigation.** A 1541 directory has no
+   * subdirectories and neither does a T64: what opens is the whole image, and
+   * `goUp` has nothing to do here on purpose rather than by omission.
+   *
+   * Read-only like the disc and archive panes, and by the same mechanism —
+   * no `volumeIndex`, so every write action refuses without a check of its
+   * own. Whatever the image says about itself that ART had to work around
+   * (a T64 header that disagrees with its records, entries whose declared
+   * length the file cannot hold) arrives as `notes` and is shown, because an
+   * image that lists differently from what its own header claims should say
+   * so.
+   */
+  const openCbm = useCallback(
+    async (side: Side, path: string) => {
+      try {
+        const info: CbmInfo = await cbmOpen(path);
+        const entries: PanelEntry[] = await cbmList(path);
+        setPane(side, {
+          ...emptyPane(),
+          kind: "c64",
+          location: path,
+          entries,
+          volumeName: info.disk_id
+            ? `${info.volume_name} ${info.disk_id}`
+            : info.volume_name,
+          warnings: info.notes,
+        });
+        resetSelection(side);
+        setFocused(side);
+      } catch (e) {
+        setPane(side, { ...emptyPane(), kind: "c64", location: path, error: String(e) });
+      }
+    },
+    [setPane, resetSelection]
+  );
+
+  async function chooseImage(side: Side, kind: "adf" | "hdf" | "iso" | "archive" | "c64") {
     const picked = await open({
       multiple: false,
       filters:
@@ -807,16 +849,24 @@ export function FileManager() {
             ? [{ name: "Amiga hard disk image", extensions: ["hdf", "hda", "img"] }]
             : kind === "iso"
               ? [{ name: "Optical disc image", extensions: ["iso"] }]
-              : // The dialog filters by extension because that is all a file
-                // dialog can do; what the file *is* is decided from its bytes
-                // once it is open, so a `.lha` holding a ZIP still opens.
-                [{ name: "Archive", extensions: ["lha", "lzh", "zip", "7z"] }],
+              : kind === "archive"
+                ? // The dialog filters by extension because that is all a file
+                  // dialog can do; what the file *is* is decided from its bytes
+                  // once it is open, so a `.lha` holding a ZIP still opens.
+                  [{ name: "Archive", extensions: ["lha", "lzh", "zip", "7z"] }]
+                : [
+                    {
+                      name: "Commodore disk or tape",
+                      extensions: ["d64", "d71", "d81", "t64"],
+                    },
+                  ],
     });
     if (typeof picked !== "string") return;
     if (kind === "adf") await openAdf(side, picked, null, []);
     else if (kind === "hdf") await openHdf(side, picked);
     else if (kind === "iso") await openIso(side, picked, null, null, []);
-    else await openArchive(side, picked, "");
+    else if (kind === "archive") await openArchive(side, picked, "");
+    else await openCbm(side, picked);
   }
 
   /**
@@ -846,6 +896,7 @@ export function FileManager() {
         const category = analysis.plan.detection.category;
         if (category === "optical-image") await openIso("left", wanted, null, null, []);
         else if (category === "archive") await openArchive("left", wanted, "");
+        else if (category === "commodore-8bit") await openCbm("left", wanted);
         else if (category === "floppy-image") await openAdf("left", wanted, null, []);
         else if (category === "harddisk-image") await openHdf("left", wanted);
         else if (category === "directory") await openLocal("left", wanted);
@@ -861,7 +912,7 @@ export function FileManager() {
     };
     // `location.state` is the trigger: navigating here again with a different
     // object must open that one.
-  }, [location.state, openIso, openArchive, openAdf, openHdf, openLocal]);
+  }, [location.state, openIso, openArchive, openCbm, openAdf, openHdf, openLocal]);
 
   async function chooseFolder(side: Side) {
     const picked = await open({ directory: true, multiple: false });
@@ -953,6 +1004,8 @@ export function FileManager() {
         await openIso(side, state.location, state.isoExtent, state.isoLength, state.isoTrail);
       } else if (state.kind === "archive") {
         await openArchive(side, state.location, state.archiveDir ?? "");
+      } else if (state.kind === "c64") {
+        await openCbm(side, state.location);
       } else if (state.kind === "hdf") {
         if (state.image && state.volumeIndex !== null) {
           await openVolume(
@@ -968,7 +1021,7 @@ export function FileManager() {
         }
       }
     },
-    [pane, openLocal, openAdf, openHdf, openVolume, openIso, openArchive]
+    [pane, openLocal, openAdf, openHdf, openVolume, openIso, openArchive, openCbm]
   );
 
   // A copy job's result arrives here (§54). One listener, registered once.
@@ -1158,6 +1211,34 @@ export function FileManager() {
             entry.name,
             target.location
           );
+          setMessage(
+            outcome.skipped_existing
+              ? t("files.status.alreadyThere", { name: entry.name })
+              : t("files.status.copiedOut", {
+                  name: entry.name,
+                  volume: source.volumeName,
+                  size: formatBytes(outcome.bytes),
+                })
+          );
+          await refresh(to);
+        } catch (e) {
+          setError(String(e));
+        } finally {
+          setBusy(null);
+        }
+        return;
+      }
+
+      // ---- out of a Commodore image, to the user's disk ----
+      //
+      // Flat media, so there is no folder to pick: a row is a file, and F5 on
+      // one copies that file. The Commodore type becomes the extension on the
+      // way out (Rust decides that), because a folder of extensionless files
+      // called `LOADER` helps nobody.
+      if (direction.kind === "c64-to-local") {
+        setBusy(t("files.status.copying", { name: entry.name }));
+        try {
+          const outcome = await cbmExtractFile(source.location, entry.name, target.location);
           setMessage(
             outcome.skipped_existing
               ? t("files.status.alreadyThere", { name: entry.name })
@@ -1559,6 +1640,40 @@ export function FileManager() {
       return;
     }
 
+    // ---- a Commodore pick, out to the user's disk: one job for the lot ----
+    //
+    // Unlike the volume case below, this is a single job rather than one per
+    // entry: the image is small enough to walk once (a D81 is 800 KB), the
+    // rows are files with no folders among them, and one job means one
+    // progress bar and one Stop that actually stops everything.
+    if (source.kind === "c64" && target.kind === "local") {
+      setBusy(t("files.status.copyingSelectionOut", { count: entries.length }));
+      try {
+        const outcome = await runJob(() =>
+          cbmExtract(
+            source.location,
+            entries.map((entry) => entry.name),
+            target.location,
+            { overwrite: policy }
+          )
+        );
+        setMessage(
+          outcome === "cancelled"
+            ? t("files.status.selectionCopyOutCancelled", {
+                done: 0,
+                total: entries.length,
+              })
+            : t("files.status.selectionCopiedOut", { count: entries.length })
+        );
+        await refresh(to);
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setBusy(null);
+      }
+      return;
+    }
+
     // ---- a volume pick, out to the user's disk: each entry its own extract ----
     if (source.kind !== "local" && target.kind === "local" && source.volumeIndex !== null) {
       const volumeIndex = source.volumeIndex;
@@ -1917,7 +2032,8 @@ export function FileManager() {
       onActivate: (entry: PanelEntry) => void activate(side, entry),
       onUp: () => void goUp(side),
       onOpenFolder: () => void chooseFolder(side),
-      onOpenImage: (kind: "adf" | "hdf" | "iso" | "archive") => void chooseImage(side, kind),
+      onOpenImage: (kind: "adf" | "hdf" | "iso" | "archive" | "c64") =>
+        void chooseImage(side, kind),
       onOpenRoot: (root: string) => void openLocal(side, root),
       onOpenVolume: (index: number) => {
         if (state.image) void openVolume(side, state.location, state.image, index, null, []);
@@ -2330,6 +2446,8 @@ function VolumeFooter({
         ? // The format ART decided from the file's bytes, already uppercased
           // by `openArchive` — "ZIP", "LHA", "7Z".
           state.volumeName
+        : state.kind === "c64"
+          ? "CBM DOS"
         : capability?.filesystem ??
         (state.volumeIndex !== null
           ? state.image?.volumes[state.volumeIndex]?.filesystem
@@ -2357,7 +2475,10 @@ function VolumeFooter({
           by construction, so the badge shows unconditionally rather than
           waiting on a fetch that would never happen (§8: never a pane that
           looks the same and quietly refuses everything). */}
-      {(state.kind === "iso" || state.kind === "archive" || (capability && !capability.writable)) && (
+      {(state.kind === "iso" ||
+        state.kind === "archive" ||
+        state.kind === "c64" ||
+        (capability && !capability.writable)) && (
         <span
           className="badge badge-warn"
           style={{ fontSize: 10 }}
@@ -2366,7 +2487,9 @@ function VolumeFooter({
               ? t(ISO_WRITE_REFUSAL.key)
               : state.kind === "archive"
                 ? t(ARCHIVE_WRITE_REFUSAL.key)
-                : capability?.reason ?? t("files.writeRefusal.default")
+                : state.kind === "c64"
+                  ? t(C64_WRITE_REFUSAL.key)
+                  : capability?.reason ?? t("files.writeRefusal.default")
           }
         >
           {t("files.footer.readOnly")}
@@ -2447,7 +2570,7 @@ function Pane({
   onActivate: (entry: PanelEntry) => void;
   onUp: () => void;
   onOpenFolder: () => void;
-  onOpenImage: (kind: "adf" | "hdf" | "iso" | "archive") => void;
+  onOpenImage: (kind: "adf" | "hdf" | "iso" | "archive" | "c64") => void;
   onOpenRoot: (root: string) => void;
   onOpenVolume: (index: number) => void;
   onRefresh: () => void;
@@ -2467,6 +2590,7 @@ function Pane({
     (state.kind === "hdf" && state.volumeIndex !== null) ||
     (state.kind === "iso" && state.isoTrail.length > 0) ||
     (state.kind === "archive" && !!state.archiveDir);
+  // A Commodore image is flat: there is nowhere to go up to, ever.
 
   // An HDF is never a destination: writing into a partition is not
   // implemented. A disc never is either — it is read-only end to end
@@ -2559,6 +2683,9 @@ function Pane({
         <button className="btn btn-sm" onClick={() => onOpenImage("archive")}>
           {t("files.toolbar.archive")}
         </button>
+        <button className="btn btn-sm" onClick={() => onOpenImage("c64")}>
+          {t("files.toolbar.c64")}
+        </button>
         {state.kind === "local" &&
           roots.map((root) => (
             <button key={root} className="btn btn-sm" onClick={() => onOpenRoot(root)}>
@@ -2567,7 +2694,8 @@ function Pane({
           ))}
         {((state.kind !== "local" && state.volumeIndex !== null) ||
           state.kind === "iso" ||
-          state.kind === "archive") && (
+          state.kind === "archive" ||
+          state.kind === "c64") && (
           <span className="tc-drive-volume">
             [{state.capability?.volume_name || state.volumeName || t("files.footer.unnamed")}]
           </span>
@@ -2652,7 +2780,8 @@ function Pane({
           fetched for a disc there is nothing to ask. */}
       {((state.kind !== "local" && state.volumeIndex !== null) ||
         state.kind === "iso" ||
-        state.kind === "archive") && <VolumeFooter state={state} powerMode={powerMode} />}
+        state.kind === "archive" ||
+        state.kind === "c64") && <VolumeFooter state={state} powerMode={powerMode} />}
 
       {state.warnings.map((warning) => (
         <div

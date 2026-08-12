@@ -10,6 +10,7 @@ pub mod adf;
 pub mod analysis;
 pub mod archive;
 pub mod binary;
+pub mod cbm;
 pub mod collection;
 pub mod compatibility;
 pub mod conversion;

@@ -77,7 +77,12 @@ pub struct ExtractedEntry {
 }
 
 /// Overall outcome of an extraction operation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Default` is an outcome that did nothing — the starting point for any
+/// extraction that reports through this shape, including the Commodore one in
+/// `commands::cbm`, which walks flat media rather than an archive but reports
+/// the same counts to the same job event.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExtractOutcome {
     pub total_files: usize,
     pub total_bytes: u64,
@@ -91,15 +96,7 @@ pub struct ExtractOutcome {
 
 impl ExtractOutcome {
     fn new() -> Self {
-        Self {
-            total_files: 0,
-            total_bytes: 0,
-            extracted: Vec::new(),
-            errors: Vec::new(),
-            aborted: false,
-            abort_reason: None,
-            skipped_existing: 0,
-        }
+        Self::default()
     }
 
     fn refuse(&mut self, name: &str, is_dir: bool, reason: String) {

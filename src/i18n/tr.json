@@ -874,7 +874,10 @@
       "noPartition": "Önce bir bölüm açın",
       "default": "ART bu birime yazamıyor",
       "iso": "Bu bölme bir disk (CD/DVD) içeriyor — diskler salt okunurdur",
-      "archive": "Bu bölme bir arşiv içeriyor — ART arşivleri okur, onlara yazmaz"
+      "archive": "Bu bölme bir arşiv içeriyor — ART arşivleri okur, onlara yazmaz",
+      "c64": "Bu bölme bir Commodore disketi veya kaseti içeriyor — ART bunları okur, onlara yazmaz",
+      "c64ToVolume": "Önce bir klasöre kopyalayın, sonra birime — ART Commodore dosyalarını doğrudan bir Amiga diskine koymaz",
+      "c64": "C64..."
     },
     "archive": {
       "unusableNames": "{{count}} girdi gösterilmiyor: adları, ART'ın bir klasörün içine yerleştirebileceği yollar değil"
@@ -907,6 +910,7 @@
       "hdf": "HDF...",
       "disc": "Disk...",
       "archive": "Arşiv...",
+      "c64": "C64...",
       "up": "Yukarı",
       "refresh": "Yenile",
       "newFolder": "Yeni Klasör"
