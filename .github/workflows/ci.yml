@@ -2,7 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    # Phase work happens on its own branch and lands on `main` through a merge
+    # (CLAUDE.md). Watching only `main` meant a phase's whole history reached
+    # CI for the first time *as* it was being released — which is the moment a
+    # red build is least useful. Every branch runs now.
+    branches: ["**"]
   pull_request:
     branches: [main, master]
   workflow_dispatch:
