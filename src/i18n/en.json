@@ -176,6 +176,16 @@
     "general": "General",
     "appearance": "Appearance",
     "files": "Files",
+    "about": {
+      "heading": "About",
+      "developer": "Author",
+      "source": "Source code",
+      "licenceLabel": "Licence",
+      "copyright": "Copyright",
+      "licence": "GNU General Public License v3.0 or later",
+      "warranty": "This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you are welcome to redistribute it under certain conditions.",
+      "whereTheLicenceIs": "The full licence text is installed beside the program, as LICENSE."
+    },
     "paths": "Paths",
     "pathsHint": "ART is an Amiga toolkit, not a disk manager — tell it where your Amiga files live and it will start there.",
     "browse": "Browse…",

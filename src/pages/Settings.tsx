@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
 import { useSettingsStore } from "@/stores/settingsStore";
+import { getAppInfo } from "@/lib/api";
+import type { AppInfo } from "@/types";
 import { LANGUAGE_NAMES, SUPPORTED_LANGUAGES } from "@/i18n";
 import type { StoredOverwritePolicy, Theme, UxMode } from "@/lib/settings";
 import {
@@ -273,7 +275,73 @@ export function SettingsPage() {
       </section>
 
       <OperationLogSection />
+      <AboutSection />
     </div>
+  );
+}
+
+/**
+ * About — the notice GPLv3 §5 asks an interactive program to display.
+ *
+ * Static, and deliberately so: no version check, no update button, no network
+ * call of any kind. A panel that says who wrote the program and under what
+ * terms has no business reaching the internet to do it.
+ *
+ * The version comes from the build (`CARGO_PKG_VERSION`, through `app_info`)
+ * rather than from a string here, so it cannot drift from the installer's.
+ *
+ * The licence is named and its full text ships beside the program — there is
+ * no link, because opening one would need a plugin ART does not have, and a
+ * link that silently does nothing is worse than a sentence that does not
+ * pretend to be one.
+ */
+function AboutSection() {
+  const { t } = useTranslation();
+  const [info, setInfo] = useState<AppInfo | null>(null);
+
+  useEffect(() => {
+    getAppInfo()
+      .then(setInfo)
+      .catch(() => setInfo(null));
+  }, []);
+
+  return (
+    <section className="card">
+      <h2 style={{ fontSize: 15 }}>{t("settings.about.heading")}</h2>
+
+      <p style={{ fontSize: 13, margin: "8px 0 0" }}>
+        <strong>{info?.name ?? "Amiga Retro Toolkit"}</strong>{" "}
+        {info ? <span className="muted">{info.version}</span> : null}
+      </p>
+
+      <dl
+        style={{
+          display: "grid",
+          gridTemplateColumns: "auto 1fr",
+          gap: "4px 12px",
+          margin: "10px 0 0",
+          fontSize: 12,
+        }}
+      >
+        <dt className="muted">{t("settings.about.developer")}</dt>
+        <dd style={{ margin: 0 }}>tolon</dd>
+        <dt className="muted">{t("settings.about.source")}</dt>
+        <dd style={{ margin: 0 }}>
+          <code>https://github.com/tolon/Art</code>
+        </dd>
+        <dt className="muted">{t("settings.about.licenceLabel")}</dt>
+        <dd style={{ margin: 0 }}>{t("settings.about.licence")}</dd>
+        <dt className="muted">{t("settings.about.copyright")}</dt>
+        <dd style={{ margin: 0 }}>Copyright (C) 2026 tolon</dd>
+      </dl>
+
+      <p className="faint" style={{ fontSize: 11, margin: "12px 0 0" }}>
+        {t("settings.about.warranty")}
+      </p>
+      <p className="faint" style={{ fontSize: 11, margin: "6px 0 0" }}>
+        {t("settings.about.whereTheLicenceIs")}
+      </p>
+    </section>
   );
 }
 

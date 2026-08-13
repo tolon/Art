@@ -42,6 +42,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "publisher": "tolon",
+    "copyright": "Copyright (C) 2026 tolon",
+    "licenseFile": "../LICENSE",
     "category": "Utility",
     "shortDescription": "The Swiss Army Knife for Amiga Files",
     "longDescription": "Amiga Retro Toolkit (ART) is a professional Windows toolkit for Commodore Amiga users: ADF, HDF, LHA, ROM management, drag-and-drop analysis, and more.",

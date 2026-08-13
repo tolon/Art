@@ -2,7 +2,7 @@
 name = "amiga-retro-toolkit"
 version = "0.1.0"
 description = "ART — The Swiss Army Knife for Amiga Files"
-authors = ["ART Project"]
+authors = ["tolon"]
 edition = "2021"
 # Raised from 1.77 on 2026-08-12, deliberately and for one reason: 7z support.
 # The maintained `sevenz-rust2` requires 1.93, and the newest release that

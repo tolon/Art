@@ -16,7 +16,11 @@ It is maintained manually and verified with `cargo deny check` (see
 
 ## Application license
 
-- **ART**: [MIT](../LICENSE)
+- **ART**: [GPL-3.0-or-later](../LICENSE), Copyright (C) 2026 tolon.
+
+  This page said MIT until 2026-08-13, months after the project moved to the
+  GPL — the one line in the inventory that was about ART itself, and the one
+  nobody re-read.
 
 ## Rust dependencies (`src-tauri/Cargo.toml`)
 

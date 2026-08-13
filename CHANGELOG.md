@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### About, and the name on the installer (2026-08-13)
+
+#### Added
+- **An About panel in Settings**: the version the build actually carries, the
+  author, where the source lives, the licence, and the notice the GPL asks an
+  interactive program to display — that it comes with no warranty and that you
+  are welcome to redistribute it. Static: no version check, no update button,
+  nothing that reaches the network.
+
+#### Fixed
+- The installer's Publisher line said nothing; it says `tolon` now, as do the
+  package metadata and the copyright the bundle carries.
+- The licence inventory had been listing ART itself as MIT since months after
+  the project moved to the GPL.
+
 ### ART can read a PiStorm card (2026-08-13)
 
 #### Fixed

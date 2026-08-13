@@ -176,6 +176,16 @@
     "general": "Genel",
     "appearance": "Görünüm",
     "files": "Dosyalar",
+    "about": {
+      "heading": "Hakkında",
+      "developer": "Yazar",
+      "source": "Kaynak kodu",
+      "licenceLabel": "Lisans",
+      "copyright": "Telif",
+      "licence": "GNU Genel Kamu Lisansı sürüm 3 veya sonrası",
+      "warranty": "Bu program HİÇBİR GARANTİ vermez. Bu özgür bir yazılımdır; belirli koşullar altında yeniden dağıtmakta serbestsiniz.",
+      "whereTheLicenceIs": "Lisansın tam metni programın yanına LICENSE adıyla kurulur."
+    },
     "paths": "Yollar",
     "pathsHint": "ART bir disk yöneticisi değil, bir Amiga aracıdır — Amiga dosyalarınızın nerede olduğunu söyleyin, oradan başlasın.",
     "browse": "Gözat…",

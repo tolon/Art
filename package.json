@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "description": "ART — The Swiss Army Knife for Amiga Files",
+  "author": "tolon",
   "license": "GPL-3.0-or-later",
   "repository": {
     "type": "git",
