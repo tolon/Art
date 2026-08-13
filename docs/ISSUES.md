@@ -25,7 +25,22 @@ what fixed it (with the test that proves it).
 
 _(ART-075 was open here; it is fixed — see [Phase 2a](#phase-2a) below.)_
 
-**ART-099** 🟠 **Application Size cut the right-hand edge off every screen** — *fixed 2026-08-13*
+**ART-100** 🟡 **The PiStorm screen went grey without saying why** — *fixed 2026-08-13*
+`src/pages/PistormStudio.tsx` · Every control on that screen edits files on a
+card, so every one of them is disabled until a card folder is chosen — the ROM
+picker, the preview, the save. They said so **only by being grey**, which reads
+as a broken screen rather than as a first step. The user's words on finding it:
+the button is there but it does not work.
+
+Fixed by saying it, once where the folder is chosen and again on each disabled
+button's tooltip. The prerequisite was always right; it was simply never
+spoken.
+
+Worth generalising: a disabled control with no explanation is a defect of the
+same kind as a control that does nothing (ART-090), and the screen had four of
+them.
+
+**ART-099** 🟠 **Application Size cut the right-hand edge off every screen** — *open*
 `src/components/layout/layout.css` · The Application Size feature applies CSS
 `zoom` to `.app-shell`, and `zoom` does not scale viewport units — so the shell
 divides first: `height: calc(100vh / var(--app-zoom))`, rendered back to exactly
@@ -42,10 +57,28 @@ Found by screenshotting the running application to check something else — the
 same way [ART-082](#fixed) was, and for the same reason: the tests were all
 green, and no test looks at a window.
 
-Fixed with `width: calc(100% / var(--app-zoom, 1))`. `100%` rather than `100vw`
-because `vw` counts the vertical scrollbar and would leave a hair of overflow
-even at 100 %; the height has to stay `vh`, since a percentage height needs a
-sized parent and the shell has none.
+**Two attempted fixes, both wrong, and the second one shipped for an hour.**
+
+- `width: calc(100% / z)` left the shell at `1/z` of the window — a dead strip
+  down the right-hand side with the scrollbar stranded in the middle of the
+  glass. That is what the user saw and reported.
+- `width: calc(100vw / z)`, by symmetry with the height, did not correct the
+  overflow either.
+
+Both are reverted; the width rule is gone and the shell is back to the
+behaviour it had before this entry was opened. **The horizontal overflow above
+100 % is real and remains open.**
+
+What went wrong in the diagnosis is worth keeping: the first screenshot showed
+content running off the right edge, and I read that as a CSS bug without first
+establishing that the window was on the screen at all. It was not —
+`FindWindow` never located it, and the geometry only came out later
+(2575×1407 at −7,−7, i.e. maximised). Editing one line and taking another
+screenshot is not a reproduction, and three rounds of it produced two
+regressions and no fix.
+
+The next attempt needs the computed widths read out of the running page rather
+than measured off a picture.
 
 **ART-098** 🟠 **CI's licence gate could never pass, and the build and the installer never ran** — *fixed 2026-08-13*
 `.github/workflows/ci.yml` · The `Dependency licences & advisories` step used

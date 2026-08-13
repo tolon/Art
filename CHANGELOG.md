@@ -10,10 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### About, and the name on the installer (2026-08-13)
 
 #### Fixed
-- **Application Size cut the right-hand edge off every screen.** Above 100 %,
-  the window's contents were drawn wider than the window — input fields and log
-  rows ran off the side with no way to reach them. Only the height had been
-  given the correction; the width had not.
+- **The PiStorm screen no longer goes grey without saying why.** Everything on
+  it edits files on a card, so everything waits for you to choose the card's
+  folder — it says that now, instead of leaving you with buttons that look
+  broken.
+
+#### Known
+- Above 100 %, Application Size still cuts the right-hand edge off. Two
+  attempted fixes made it worse and were reverted; it is being tracked rather
+  than guessed at again.
 
 #### Added
 - **An About panel in Settings**: the version the build actually carries, the

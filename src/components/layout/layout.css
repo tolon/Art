@@ -7,21 +7,17 @@
    would scroll. Dividing first makes the rendered height exactly one viewport
    at every size — (100vh / z) × z.
 
-   **Both axes, and the width was missed the first time.** A block-level shell
-   takes its parent's width and `zoom` then renders it `z` times wider than the
-   window, so at any size above 100 % the right-hand edge of every screen was
-   cut off — which is what a screenshot of the running application showed. The
-   same division fixes it.
-
-   `100%` for the width rather than `100vw`: `vw` counts the vertical scrollbar
-   and would leave a hair of horizontal overflow even at 100 %. The height has
-   to stay `vh`, because a percentage height needs a sized parent and the shell
-   has none. */
+   **The width is deliberately not touched, after two attempts that were
+   worse** (ART-099). `calc(100% / z)` left the shell at `1/z` of the window
+   with a dead strip down the right and the scrollbar stranded in the middle of
+   the glass; `calc(100vw / z)` did not correct the overflow either. The
+   horizontal behaviour above 100 % is a real defect and it is open — but it is
+   one to fix against a reproduction, not by editing this line and taking
+   another screenshot. */
 .app-shell {
   display: grid;
   grid-template-columns: 224px 1fr;
   zoom: var(--app-zoom, 1);
-  width: calc(100% / var(--app-zoom, 1));
   height: calc(100vh / var(--app-zoom, 1));
   overflow: hidden;
 }

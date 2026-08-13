@@ -518,6 +518,15 @@ export function PistormStudio() {
           </span>
         </div>
 
+        {/* Every control on this screen edits files on a card. Without one
+            they were all simply grey, which reads as a broken screen rather
+            than as a first step. */}
+        {!cardPath && (
+          <p className="faint" style={{ fontSize: 11, margin: "8px 0 0" }}>
+            {t("pistorm.card.needed")}
+          </p>
+        )}
+
         {card && (
           <ul className="muted" style={{ fontSize: 12, margin: "10px 0 0", paddingLeft: 18 }}>
             <li>
@@ -581,11 +590,20 @@ export function PistormStudio() {
         )}
 
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
-          <button className="btn" onClick={() => void chooseRomFile()} disabled={!cardPath || busy}>
+          {/* Picking a ROM copies it *onto the card*, so it needs one. The
+              button said so only by being grey, which reads as broken rather
+              than as a prerequisite — the `title` and the line beside it are
+              what turn "nothing happens" into "do this first". */}
+          <button
+            className="btn"
+            onClick={() => void chooseRomFile()}
+            disabled={!cardPath || busy}
+            title={!cardPath ? t("pistorm.kickstart.needsCard") : undefined}
+          >
             {t("pistorm.kickstart.choose")}
           </button>
           <span className="faint" style={{ fontSize: 11 }}>
-            {t("pistorm.kickstart.hint")}
+            {cardPath ? t("pistorm.kickstart.hint") : t("pistorm.kickstart.needsCard")}
           </span>
         </div>
 
@@ -814,16 +832,27 @@ export function PistormStudio() {
         )}
 
         <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-          <button className="btn" onClick={() => void showPreview()} disabled={!cardPath || busy}>
+          <button
+            className="btn"
+            onClick={() => void showPreview()}
+            disabled={!cardPath || busy}
+            title={!cardPath ? t("pistorm.card.needed") : undefined}
+          >
             {t("pistorm.preview.button")}
           </button>
           <button
             className="btn btn-primary"
             onClick={() => void save()}
             disabled={!cardPath || busy}
+            title={!cardPath ? t("pistorm.card.needed") : undefined}
           >
             {t("pistorm.save.button")}
           </button>
+          {!cardPath && (
+            <span className="faint" style={{ fontSize: 11, alignSelf: "center" }}>
+              {t("pistorm.card.needed")}
+            </span>
+          )}
         </div>
       </section>
 
