@@ -131,6 +131,10 @@ pub fn open_hdf(path: &Path) -> CoreResult<HdfInfo> {
         surfaces: 1,
         blocks_per_track: 1,
         reserved: 2,
+        // A bare volume has no RDB, so no driver geometry was ever
+        // stated for it. Zero here means "unstated", not "forbidden".
+        max_transfer: 0,
+        mask: 0,
     };
 
     Ok(HdfInfo {

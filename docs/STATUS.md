@@ -811,83 +811,39 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
 
 ## Picking up next session
 
-1. Run the verification block above and confirm the snapshot still holds.
-   The oracle is part of it: it is the only check that can catch ART's reader
-   and writer being wrong in the same way.
-2. Read this file, then [ISSUES.md](ISSUES.md#open) — open defects are
-   `ART-043` (the whole-file strategy ignores a partition's offset),
-   `ART-046` … `ART-050` (recorded findings, none fixed yet), `ART-060` …
-   `ART-062` (Phase 0b's own: Rust error strings still English, `formatAge`'s
-   English pluralisation, no language checked on screen), and `ART-064` …
-   `ART-068` (Phase 1a's own: volume→volume and volume→local multi-select
-   don't share the other two directions' atomicity, `archives_plan_install`
-   blocks the command thread, a batch install's Stop is unresponsive
-   mid-archive, the filter's empty-vs-no-match message is inferred rather
-   than carried), and `ART-080`/`ART-081` (Phase 2b task 3's own: there is no
-   host-side delete, so nothing can be moved *off* a folder, and no primitive
-   that moves a single file between two images); the next new defect starts at
-   `ART-082`.
-3. **The hardware rung is climbed to the bottom, and it is a photograph now.**
-   `test/art-bootable-test.adf` booted a real **A500/A500+** (Kickstart 3.9)
-   off a **Gotek** to an AmigaDOS `1>` prompt on 2026-08-12 — real silicon, not
-   an emulator. `test/task-10-boot-test.adf` mounted, listed and read back
-   correctly under licensed Kickstart/Workbench (Amiga Forever / WinUAE) in
-   Phase 1a. What is left: **physical magnetic media** — a Gotek is not a
-   mechanical drive, and nothing ART wrote has been through a real floppy head.
-   All of that is a different claim from "the running app has been looked at":
-   apart from the Dashboard, no screen ART shipped in phases 1a, 2a or 2b has
-   actually been opened by a person — still `ART-062`.
-4. **Stage R and Stage W are both done.** Aminet Stage A is complete too,
-   including the update view and install to HDF. **Phase 1a is done too** —
-   the two-pane manager has real focus, multi-select, batch copy/delete,
-   sorting, a filename mask, and now boot code that works; see "Phase 1a"
-   above for what is not (volume→volume batching, ART-064/065).
-5. **Start here tomorrow: SD-1**, the PiStorm image builder's first slice —
-   MBR + FAT32 in an image file (G2), the RDB at a byte offset with FSHD/LSEG
-   embedded (G4, which also closes ART-084), the build manifest (G7), a build
-   as a drag & drop target (G15) and image validation (G8). SD-0 is done and
-   its findings are in [sd0-prior-art.md](sd0-prior-art.md) — read the
-   supersession table at its end before designing, and settle its one exit
-   test (drive `hst-imager` end to end on a scratch image) first.
+**Stopped mid-item on 2026-08-13, late.** The tree is green (1057 Rust, 401
+frontend, clippy clean) — nothing is half-written on disk. What is half-done
+is one issue, and it is the first thing to pick up:
 
-   **Phase 2b is complete and merged.** Two of its twelve acceptance points
-   were not verified — the light theme was never opened, and session restore
-   has never been seen working — and both are worth ten minutes with the
-   application before they are forgotten.
-6. **Phase 2a is complete** and merged to `main`
-   — see its section above for what it changed and what it left owed, and its
-   plan file's Amendments section for what changed after the plan was written
-   (the real-Amiga-CD step is cancelled; a 7-Zip oracle replaced it).
-6. **The SD Card Appliance Builder is planned but not started** —
-   [sd-appliance-gap-analysis.md](sd-appliance-gap-analysis.md), phases
-   SD-0 … SD-5. It is sequenced after Phase 2a; its order relative to the AI
-   layer is still open.
-7. The named work left in the briefs:
-   - **§45.5 AI Workflow Layer.** Designed
-     ([design-ai-layer.md](design-ai-layer.md)), not built. Its prerequisites
-     (operation log with `origin: ai-plan`, a tested workflow catalogue) are
-     all in place.
-   - **Dircache write support**, if it is wanted. Deliberately refused today;
-     doing it properly means maintaining the cache blocks in the same
-     journalled operation as the directory, which is real work rather than a
-     flag.
+**ART-096, in progress.** `core/rdb.rs` now writes `MaxTransfer`
+(`0x0001FE00`), `Mask` (`0x7FFFFFFE`) and defaults to 600 buffers, and reads
+both fields back into `ParsedPartition`. `dosenv_offsets_match_the_amiga_layout`
+was updated — a zero Mask used to be what proved BootPri was not written a
+longword early, and Mask now has a value, so the guard asserts the values
+themselves.
 
-Things deliberately left undone, so they are not mistaken for oversights:
+Still owed on it:
 
-- **No preview step** before destructive operations (§92) *except* copying into
-  a volume, which now plans first and shows the cost, the name problems and the
-  collisions before writing anything. Delete and overwrite still tell the user
-  what happened rather than what is about to.
-- **`pnpm tauri build`** succeeds; MSI and NSIS bundles were produced on
-  2026-08-09. The bundles have not been installed and run from a clean machine.
-- **i18n covers the interface, not the core.** Every screen, shared component
-  and `src/lib` helper goes through `t()` in English and Turkish. `CoreError`
-  and `WhdloadRefusal` sentences, written in Rust, still reach the UI in
-  English only regardless of the chosen language ([ART-060](ISSUES.md#open)) —
-  not a gap left to fill screen by screen, a design question about whether
-  `core/` gets its own catalogue or the frontend keys off `CoreError::code()`.
-- `docs/roadmap.md` phase marks remain the original Phase 0 plan by design —
-  this file is the live position.
+1. A test of its own: create an image, read it back, assert the three values.
+   The layout guard covers the offsets, not the intent.
+2. `HardDiskStudio.tsx` hard-codes `num_buffers: 100` in three places, so the
+   new default never reaches a partition the user creates through the UI. Send
+   600, or better, let the core choose and stop naming the number in the UI.
+3. `SDH0` naming is **not** part of this. It is a card convention, not an HDF
+   one — an HDF that WinUAE mounts wants `DH0`, and renaming globally would be
+   wrong. It belongs to SD-1, where the card is built.
+
+**Then, in order:** ART-085 (studios forget the open image — the same rule as
+"nothing changes unless the user changes it"); wiring `core/card.rs` into the
+Hard Disk studio, which reads real PiStorm cards today but has no screen;
+ART-099 (zoom overflow — **measure the running page, do not iterate on
+screenshots**, see the entry); then ART-043 together with SD-1's G4, since
+writing an RDB at an offset is one fix, not two.
+
+**Two decisions still with the user**, and SD-1's layout cannot be designed
+without them: which PiStorm board to target first, and which machine the first
+image gets verified on. Materials still missing for a distribution build:
+`pfs3aio`, Aminet Picasso96, the Emu68 kernel zip, `videocore.card`.
 
 ## Session log
 

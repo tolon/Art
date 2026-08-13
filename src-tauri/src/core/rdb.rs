@@ -168,6 +168,32 @@ pub fn version_from_ver_string(data: &[u8]) -> Option<(u16, u16)> {
     None
 }
 
+/// `MaxTransfer` — the largest single transfer the driver will be asked for.
+///
+/// `0x0001FE00` is 130 560 bytes, i.e. 255 blocks of 512. Every partition on
+/// both cards measured in `docs/sd2-card-layout.md` carries exactly this —
+/// seventeen of them across three RDBs, without one exception — and it is what
+/// hst-imager and the AmigaOS installers write. ART wrote zero here until
+/// ART-096, which is not a smaller limit but an unstated one.
+pub const DEFAULT_MAX_TRANSFER: u32 = 0x0001_FE00;
+
+/// `Mask` — which memory addresses the driver may DMA into.
+///
+/// `0x7FFFFFFE` is "anywhere in the low 2 GB, word-aligned". A mask of **zero**
+/// — ART's old value — says no address is acceptable, which is not a
+/// conservative reading of the field but a meaningless one; a strict driver is
+/// entitled to refuse every transfer. Emu68 is forgiving and did not, which is
+/// exactly why this was cheap to get wrong and expensive to diagnose.
+pub const DEFAULT_MASK: u32 = 0x7FFF_FFFE;
+
+/// `NumBuffers` when the caller does not choose.
+///
+/// The measured cards all use 600. ART's old 100 was a performance decision
+/// made by not making one: buffers are 512 bytes each, so this is the
+/// difference between 50 KB and 300 KB of cache on a machine that, with a
+/// PiStorm in it, has hundreds of megabytes.
+pub const DEFAULT_NUM_BUFFERS: u32 = 600;
+
 /// Specification for creating or adding a partition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PartitionSpec {
@@ -209,6 +235,12 @@ pub struct ParsedPartition {
     pub blocks_per_track: u32,
     /// `DosReserved` — boot blocks at the start of the volume. Typically 2.
     pub reserved: u32,
+    /// `MaxTransfer` — largest single transfer, in bytes. Read rather than
+    /// assumed: a disk written by another tool is the case where it matters.
+    pub max_transfer: u32,
+    /// `Mask` — acceptable DMA addresses. Zero here means the disk was written
+    /// by something that left the field unset (ART itself, before ART-096).
+    pub mask: u32,
 }
 
 impl ParsedPartition {
@@ -603,6 +635,9 @@ pub fn parse_rdb(image: &[u8]) -> CoreResult<ParsedRdb> {
             u32::from_be_bytes([p_slice[148], p_slice[149], p_slice[150], p_slice[151]]);
         let dos_reserved =
             u32::from_be_bytes([p_slice[152], p_slice[153], p_slice[154], p_slice[155]]);
+        let max_transfer =
+            u32::from_be_bytes([p_slice[180], p_slice[181], p_slice[182], p_slice[183]]);
+        let mask = u32::from_be_bytes([p_slice[184], p_slice[185], p_slice[186], p_slice[187]]);
         let boot_pri = p_slice[191] as i8;
         let dostype = u32::from_be_bytes([p_slice[192], p_slice[193], p_slice[194], p_slice[195]]);
 
@@ -643,6 +678,8 @@ pub fn parse_rdb(image: &[u8]) -> CoreResult<ParsedRdb> {
             surfaces,
             blocks_per_track,
             reserved: dos_reserved,
+            max_transfer,
+            mask,
         });
 
         part_ptr = next_part;
@@ -864,10 +901,14 @@ pub fn create_rdb_layout(
         let buffers = if spec.num_buffers > 0 {
             spec.num_buffers
         } else {
-            100
+            DEFAULT_NUM_BUFFERS
         };
         p_slice[172..176].copy_from_slice(&buffers.to_be_bytes());
-        // Mask (LW 46) stays zero; BootPri is LW 47 and DosType LW 48.
+        // MaxTransfer (LW 45) and Mask (LW 46). Both were left at zero until
+        // ART-096; see the constants for why zero is not a safe default for
+        // either. BootPri is LW 47 and DosType LW 48.
+        p_slice[180..184].copy_from_slice(&DEFAULT_MAX_TRANSFER.to_be_bytes());
+        p_slice[184..188].copy_from_slice(&DEFAULT_MASK.to_be_bytes());
         p_slice[188..192].copy_from_slice(&(spec.boot_priority as i32).to_be_bytes());
 
         // DosType at offset 192 (LW 48)
@@ -1023,8 +1064,21 @@ mod dosenv_layout {
             ])
         };
 
-        // Mask is left alone; BootPri and DosType sit where AmigaOS looks.
-        assert_eq!(long_at(184), 0, "longword 46 is Mask, not BootPri");
+        // MaxTransfer and Mask carry the measured values (ART-096), and — the
+        // point of this test since ART-032 — BootPri is *not* among them:
+        // writing the priority one longword early is the mistake being guarded
+        // against, and a zero Mask no longer proves its absence now that Mask
+        // has a value of its own.
+        assert_eq!(
+            long_at(180),
+            DEFAULT_MAX_TRANSFER,
+            "longword 45 is MaxTransfer"
+        );
+        assert_eq!(
+            long_at(184),
+            DEFAULT_MASK,
+            "longword 46 is Mask, not BootPri"
+        );
         assert_eq!(long_at(188), 3, "BootPri belongs at longword 47");
         assert_eq!(
             long_at(192),
