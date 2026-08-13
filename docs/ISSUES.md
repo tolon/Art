@@ -111,25 +111,6 @@ be stoppable. The Size column then needs a third state — not just a number or
 
 Found while building phase 2b task 5.
 
-**ART-085** 🟡 **A studio forgets the image it had open the moment you leave the screen**
-`src/pages/AdfBrowser.tsx`, `HardDiskStudio.tsx`, and every other studio ·
-Each holds its open file in a local `useState`. Navigating away unmounts the
-component and the state goes with it, so coming back gives the empty
-"open an .adf to begin" page again — while the Dashboard's Recent list, which
-*is* persisted (SQLite `recent_files`), still shows the file that was open a
-second ago. That contrast is what makes it read as a fault rather than as a
-design.
-
-What is missing is a notion of **the object ART currently has open**, shared
-across screens: the Files panes, the studios and the workflow engine all
-address the same kinds of thing and none of them can tell the others what it
-is looking at. Phase 2b task 6 already has to persist per-pane paths for
-session restore, and this is the same question asked once for the whole
-application rather than once per screen — worth designing together rather than
-bolting a `useRef` onto each studio.
-
-Found by the user in the running application, 2026-08-12.
-
 **ART-081** 🟡 **A single file cannot be moved between two images, because the primitive underneath addresses a directory**
 `src-tauri/src/commands/volume_write.rs::volume_copy_between` ·
 `src/lib/movePlan.ts` · The command takes a *directory* block at both ends and
@@ -460,6 +441,56 @@ partition) — no test covers it today, which is why it survived this long.
 ## Fixed
 
 ### Phase 2b, the PiStorm rebuild and the first real cards (2026-08-12 → 08-13)
+
+**ART-085** 🟡 **A studio forgot the image it had open the moment you left the screen** — *fixed 2026-08-13*
+`src/stores/openObjectStore.ts` · `AdfBrowser.tsx`, `HardDiskStudio.tsx`,
+`LhaBrowser.tsx`, `HexTools.tsx`, `WhdloadInstall.tsx`, `WinuaeStudio.tsx` ·
+Each held its open file in a local `useState`. Navigating away unmounted the
+component and the state went with it, so coming back gave the empty
+"open an .adf to begin" page again — while the Dashboard's Recent list, which
+*is* persisted (SQLite `recent_files`), still showed the file that was open a
+second ago. That contrast is what made it read as a fault rather than as a
+design.
+
+Found by the user in the running application, 2026-08-12.
+
+→ `useOpenObject(kind)`, a drop-in for the `useState<string | null>(null)` each
+studio held, backed by one small Zustand store. Four decisions in it are worth
+keeping:
+
+- **Session-scoped, and that was the user's call** (asked, 2026-08-13). It is
+  not `@/lib/remembered` and never reaches `settings.json`: closing ART forgets
+  what was open. A path that outlives the run can name a file since deleted,
+  moved, or unplugged with the drive it was on, and answering for that is a
+  bigger design than this issue asked for. The choices a studio *makes* — view
+  mode, filesystem, folder — are still `useRemembered`'s and still survive a
+  restart.
+- **Per kind, not one global object.** Nine slots, because opening an ADF must
+  not change what the Hard Disk studio is looking at, and WinUAE's attached
+  media are not the same thing as the image a studio is inspecting.
+- **Only the path is held; nothing parsed.** A studio re-reads its file on the
+  way back in, so a file that changed on disk meanwhile cannot come back stale.
+  `info === null` (or `chunk`, or `volumes`) is what "nothing is loaded *here*"
+  looks like on a fresh mount, and that is what the effect tests.
+- **Router state still wins.** Arriving from the drop panel or the Dashboard
+  with a file opens that file and makes it the open one — the whole point of
+  arriving that way.
+
+Two things the fix deliberately does not do, named rather than smuggled:
+`HexTools` comes back at the start of the file rather than where you were
+reading, and `WhdloadInstall` restores the image but re-picks the partition
+(automatically, when there is only one usable one).
+
+Also fixed on the way past: `loadDisk` in ADF Studio reset the hex panel every
+time it ran, which on a *reopen* would have switched off a remembered choice
+the user had made — a setting changing without the user changing it. It now
+resets only when a different disk is opened.
+
+Tests: `openObjectStore.test.ts` (per-kind independence, close, replace) and
+`openObjectSurvivesNavigation.test.tsx`, which mounts a harness wired the way
+the studios are, unmounts it — that *is* navigating away — and mounts it again.
+Mutation-checked: putting the harness back on `useState` fails two of its five
+cases, including the one this issue is about.
 
 **ART-096** 🟡 **ART wrote `MaxTransfer` and `Mask` as zero, and 100 buffers** — *fixed 2026-08-13*
 `core/rdb.rs::create_rdb_layout` · `src/pages/HardDiskStudio.tsx` · The

@@ -14,6 +14,7 @@ import {
 import { romIdentify, type RomInfo } from "@/lib/rom";
 import { isFlag, isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
+import { useOpenObject } from "@/stores/openObjectStore";
 
 export function WinuaeStudio() {
   const { t } = useTranslation();
@@ -40,10 +41,15 @@ export function WinuaeStudio() {
 
   // Attached media. The ROM and the AROS choice are settings — the same
   // machine, launched again. The disk and the hard disk are what is being
-  // worked on right now, and a stale one pointing at a file since deleted is
-  // worse than an empty slot, so those two stay `useState`.
-  const [df0Path, setDf0Path] = useState<string | null>(null);
-  const [hdfPath, setHdfPath] = useState<string | null>(null);
+  // worked on right now, and a path frozen into `settings.json` could name a
+  // file deleted between two runs, which is worse than an empty slot.
+  //
+  // `useOpenObject` is neither of those: it holds them for **this run only**
+  // (ART-085), so stepping over to the ADF studio to check something and
+  // coming back finds the machine still loaded, while a fresh launch of ART
+  // still starts with empty slots.
+  const [df0Path, setDf0Path] = useOpenObject("winuae-floppy");
+  const [hdfPath, setHdfPath] = useOpenObject("winuae-harddisk");
   const [kickstartPath, setKickstartPath] = useRemembered<string | null>(
     "winuae.kickstartPath",
     isTextOrNothing,

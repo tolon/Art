@@ -22,6 +22,7 @@ import {
   isWholeNumberBetween,
 } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
+import { useOpenObject } from "@/stores/openObjectStore";
 
 /** The filesystems the wizard offers. A remembered value that is not one of
  *  them — an older ART's, or a hand-edited file's — falls back rather than
@@ -83,7 +84,8 @@ export function HardDiskStudio() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const [path, setPath] = useState<string | null>(null);
+  // The open image outlives this screen (ART-085), for the length of the run.
+  const [path, setPath] = useOpenObject("harddisk");
   const [info, setInfo] = useState<HdfInfo | null>(null);
   const [selectedPart, setSelectedPart] = useState<ParsedPartition | null>(null);
   const [busy, setBusy] = useState(false);
@@ -147,10 +149,15 @@ export function HardDiskStudio() {
   // silence — which is exactly what this wizard used to produce (ART-084).
   const driverNeed = driverRequirement(selectedFs);
 
+  // Router state names a file when the Dashboard or the drop panel sent us
+  // here; otherwise the studio reopens whatever it had open (ART-085). `info`
+  // is null on every fresh mount, so it is what tells "nothing is loaded here"
+  // apart from "nothing is open at all".
   useEffect(() => {
-    const navState = location.state as { path?: string } | undefined;
-    if (navState?.path && navState.path !== path) {
-      void loadHdf(navState.path);
+    const fromNav = (location.state as { path?: string } | undefined)?.path;
+    const target = fromNav ?? path;
+    if (target && (info === null || target !== path)) {
+      void loadHdf(target);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state]);

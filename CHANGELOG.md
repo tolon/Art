@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### What you have open stays open (2026-08-13)
+
+#### Fixed
+- **Leaving a screen threw away the file you had open.** Step from ADF Studio
+  over to the hard disk screen and back, and the floppy you were working on was
+  gone — while the Dashboard's Recent list still had it at the top. Now it is
+  still there: the ADF, the HDF, the archive, the file in the hex viewer, the
+  package and target a WHDLoad install was being set up with, and the disks
+  attached in the WinUAE screen. Closing ART still starts you fresh.
+- The file is read again when you come back, so one that changed on disk in the
+  meantime shows what it says now rather than what it said when you left.
+- Turning on ADF Studio's hex panel used to switch itself back off every time
+  the disk was loaded again.
+
 ### Hard disks ART creates now describe themselves the way real ones do (2026-08-13)
 
 #### Fixed

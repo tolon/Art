@@ -22,7 +22,7 @@ Update it at the end of any session that changes what works.
 | **Version** | 0.1.0 (unreleased) |
 | **Current stage** | **SD-1 in progress** — G4 (RDB filesystem embedding) done both ways; G2, G7, G15, G8 owed. Reading a real card is done ahead of it ([ART-095](ISSUES.md), [ART-097](ISSUES.md)) but has no screen yet |
 | **Build** | PASS |
-| **Tests** | 1060 Rust passed, 0 failed; 401 frontend passed, 0 failed |
+| **Tests** | 1060 Rust passed, 0 failed; 410 frontend passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
 | **amitools oracle** | 53 checks, both directions — now including a filesystem driver ART embedded in an RDB and `rdbtool` extracted back out byte-for-byte |
@@ -816,12 +816,10 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
 
 ## Picking up next session
 
-**Nothing is half-done on disk.** The tree is green (1060 Rust, 401 frontend,
-clippy clean, oracle 53 both ways) and ART-096 — the item the previous session
-stopped inside — is closed.
+**Nothing is half-done on disk.** The tree is green (1060 Rust, 410 frontend,
+clippy clean, oracle 53 both ways). ART-096 and ART-085 are both closed.
 
-**In order:** ART-085 (studios forget the open image — the same rule as
-"nothing changes unless the user changes it"); wiring `core/card.rs` into the
+**In order:** wiring `core/card.rs` into the
 Hard Disk studio, which reads real PiStorm cards today but has no screen;
 ART-099 (zoom overflow — **measure the running page, do not iterate on
 screenshots**, see the entry); then ART-043 together with SD-1's G4, since
@@ -866,6 +864,7 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-13 | **ART-085 closed: what ART has open now outlives the screen.** Six studios each held their open file in a `useState`, so leaving the screen threw it away while the Dashboard's Recent list still named it a second later. `useOpenObject(kind)` — one small store, nine slots — is a drop-in for all six. **Session-scoped by the user's decision**: it never reaches `settings.json`, because a path that outlives the run can name a file since deleted or unplugged, and that is a bigger design than this asked for. Only the path is held; a studio re-reads its file on the way back, so nothing comes back stale. Router state still wins. Caught on the way past: ADF Studio's `loadDisk` reset the hex panel on every run, which on a reopen would have switched off a remembered choice — a setting changing without the user changing it. Mutation-checked: the harness back on `useState` fails two of five cases | 1060 Rust / 410 frontend |
 | 2026-08-13 | **ART-096 closed.** The RDB half had landed; what was left was the half that decides what a *user* gets. `HardDiskStudio.tsx` hard-coded `num_buffers: 100` in three places, so the core's measured 600 reached nothing anybody created through the UI — a literal in a component quietly outvoting the engine. The three are gone and the field is now `#[serde(default)]` / optional in `hdf.ts`: absent and zero both mean "the core decides", because a screen that never asks for a buffer count has no business stating one. Three tests, mutation-checked in both directions — restoring either old value fails them. Docs: CLAUDE.md gained the network layer, the two-catalogue string rule and the Vitest jsdom trap; CONTRIBUTING's "branch from `master`" is gone, published months ago | 1060 Rust / 401 frontend |
 | 2026-08-13 | ART-096 half done (RDB `MaxTransfer`, `Mask`, 600 buffers written and read back); ART-100 (the PiStorm screen said "choose a card first" only by being grey); ART-099 reopened after two bad fixes were reverted; docs swept — seventeen fixed entries moved out of ISSUES' Open section, fifteen stale `#open` anchors corrected, CLAUDE.md's dead branch name and missing CI step fixed | 1057 Rust / 401 frontend |
 | 2026-08-13 | **GitHub caught up, and CI turned out to be broken.** 28 commits of `main`, 15 of `phase-2b` and the whole `sd-1` branch had never reached the remote. Pushing them showed the last three runs on `main` red — and the reason was never in the code: the licence gate used a **container** action on a **Windows** runner, which cannot run, so it failed on every push since it was added and took `Build application` and the MSI artifact down with it ([ART-098](ISSUES.md)). `docs/licenses.md` had been claiming that check ran the whole time. The frontend tests were never in CI at all — four hundred of them, including the i18n parity check. Both fixed | 1057 Rust / 401 frontend |
