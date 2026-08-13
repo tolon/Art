@@ -6,18 +6,20 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { getAppInfo } from "@/lib/api";
 
 /**
- * The author's mark, if one has been dropped in.
+ * The project's mark, if one has been dropped in.
  *
  * `import.meta.glob` rather than a plain `import` for one reason: a plain
- * import of a file that is not there fails the build, and this is somebody's
- * personal logo rather than something ART ships by necessity. With the glob,
- * the slot is empty until a file lands in `src/assets/` and full the moment one
- * does — no code change, no broken image in between.
+ * import of a file that is not there fails the build, and a logo is not
+ * something ART needs in order to work. With the glob, the slot is empty until
+ * a file lands in `src/assets/` and full the moment one does — no code change,
+ * and no broken image in between.
  *
  * Any of the usual formats, so whatever the author has is the file they use.
  */
-const AUTHOR_LOGO: string | undefined = Object.values(
-  import.meta.glob<{ default: string }>("../assets/tolon-logo.*", { eager: true })
+const APP_LOGO: string | undefined = Object.values(
+  import.meta.glob<{ default: string }>("../assets/logo.{png,svg,jpg,jpeg,webp}", {
+    eager: true,
+  })
 )[0]?.default;
 import type { AppInfo } from "@/types";
 import { LANGUAGE_NAMES, SUPPORTED_LANGUAGES } from "@/i18n";
@@ -325,13 +327,15 @@ function AboutSection() {
       <h2 style={{ fontSize: 15 }}>{t("settings.about.heading")}</h2>
 
       <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 8 }}>
-        {AUTHOR_LOGO && (
+        {APP_LOGO && (
+          // `alt` deliberately empty: the name is right beside it, and a
+          // screen reader announcing "logo" before reading it is noise.
           <img
-            src={AUTHOR_LOGO}
-            alt="tolon"
-            width={48}
-            height={48}
-            style={{ borderRadius: 6, flex: "0 0 auto" }}
+            src={APP_LOGO}
+            alt=""
+            width={56}
+            height={56}
+            style={{ borderRadius: 8, flex: "0 0 auto", objectFit: "contain" }}
           />
         )}
         <div>
