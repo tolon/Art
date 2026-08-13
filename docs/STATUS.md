@@ -818,15 +818,17 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
 
 **Nothing is half-done on disk.** The tree is green (1068 Rust, 432 frontend,
 clippy clean, oracle 53 both ways). ART-096, ART-085 and the six-issue sweep
-(ART-049/058/066/067/068/070) are all closed; **fourteen** entries remain open,
-and three of those are waiting on a decision rather than on work.
+(ART-049/058/066/067/068/070) are all closed; **fifteen** entries remain open —
+fourteen from before plus ART-101, which came out of measuring ART-099 — and
+three of those are waiting on a decision rather than on work.
 
 **The Hard Disk studio can open a card now** — the last thing between
 `core/card.rs` and a user. Both real cards were read through it on 2026-08-13.
 
-**In order:** ART-099 (zoom overflow — **measure the running page, do not iterate on
-screenshots**, see the entry); then ART-043 together with SD-1's G4, since
-writing an RDB at an offset is one fix, not two.
+**In order:** ART-043 together with SD-1's G4, since writing an RDB at an
+offset is one fix, not two. ART-099 needs one thing only, and it is not code:
+open the real window at 130 % and look. Everything else about it has been
+measured (`scripts/zoom-check.py`).
 
 **Both of SD-1's open decisions are answered** (2026-08-13), and by hardware
 rather than by preference — the user has an **A500 with a classic PiStorm on a
@@ -867,6 +869,7 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-13 | **ART-099, measured instead of looked at — and the diagnosis was wrong.** `scripts/zoom-check.py` drives the running application in headless Chrome and reads the widths out of the page; seven screens, three sizes, in a window the size of the user's own. `.app-shell` renders **exactly one window wide at every size**, so it was never drawn `z` times too wide and both reverted fixes were corrections to something that was not happening. Nothing on any screen overflows its column at 130 % either. What *was* real: `.app-content` carried `overflow-x: hidden`, and since zoom spends width (2299 CSS px at 100 %, 1717 at 130 %, 1038 at 200 %) anything that did exceed the column would be clipped with no way to reach it — the box could still be scrolled by script while offering the user no scrollbar at all. One character. The entry stays open for the one check a dev server cannot make: the real WebView2 window with real data. Filed on the way: **ART-101**, the sidebar's `max-width: 1000px` collapse is asked of the real viewport and so never fires under zoom — 448 real px of a 1258 px window at 200 % | 1068 Rust / 432 frontend |
 | 2026-08-13 | **A card has a screen.** `core/card.rs` could read a real PiStorm card since the morning and nothing could show one; `card_open` and the Hard Disk studio's card view close that. The studio now asks the **card reader for every file** and branches on whether a partition table was found — an HDF comes back as one area at offset zero, so a card is never recognised by its extension and `hdf_open`, which cannot open a card at all, is never asked to. The card view is a list of *disks*: the four MBR slots as the card's own documentation numbers them, one section per Amiga disk with its offset and its partitions, and the drivers **unioned across the whole card** with the unmountable question asked against that union (ART-097, computed in Rust so the UI cannot get it wrong). Read-only, and it says so on the screen. Verified against both real cards: MultibootOS 2.2 — 128 GB, 2 Amiga disks, 17 partitions, 2 drivers, none unmountable; CaffeineOS 9317 — 64 GB, 1 disk, 2 partitions, 1 driver. Also: **every missing material arrived**, `VideoCore.card` among them (the name that needed checking), so G2 is unblocked | 1068 Rust / 432 frontend |
 | 2026-08-13 | **Two more off the open list.** ART-066: planning a batch of archives has to unpack every one of them, and it did that on the command thread — the window froze with no progress and no Stop, in the step that exists so the user can change their mind. It is a job now, with the plan arriving on its own event; `busy` is cleared by the plan *or* by the job ending, which is the cancelled case the old code could not have at all. ART-058: cancelling a copy into a large image left the files that had landed in place, correctly, and said only "cancelled" — the same word the whole-file strategy uses when it leaves nothing. `CancelledPartway { files }` carries the count as a number to `JobState::Cancelled { files_landed }`, still a cancellation and never a failure, and the sentence is the UI's in the user's language. The large-image test asserts the count against the volume's own listing | 1066 Rust / 425 frontend |
 | 2026-08-13 | **Four off the open list, the four that needed no decision first.** ART-070: refreshing a pane moved the keyboard into it, so after F5 the next key acted on the pane the user was not looking at — `refresh` puts focus back, and the harness test proves the old behaviour too by running with it. ART-067: Stop was heard between archives but not inside one, because the unpack was handed `NoProgress`; a `BatchStep` sink forwards the cancel flag while keeping the batch's own counts, since forwarding it raw would make the progress bar leap and fall back at every archive. ART-068: the pane inferred "your mask matches nothing" from two counts matching a shape; `filterEntriesReporting` answers it where the removing happens. ART-049: `VolumeWriter::open` now refuses a geometry that contradicts the bootblock's dostype — no existing caller was refused, which is the evidence they all already agreed | 1063 Rust / 419 frontend |

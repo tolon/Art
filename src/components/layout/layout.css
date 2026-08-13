@@ -7,13 +7,16 @@
    would scroll. Dividing first makes the rendered height exactly one viewport
    at every size — (100vh / z) × z.
 
-   **The width is deliberately not touched, after two attempts that were
-   worse** (ART-099). `calc(100% / z)` left the shell at `1/z` of the window
-   with a dead strip down the right and the scrollbar stranded in the middle of
-   the glass; `calc(100vw / z)` did not correct the overflow either. The
-   horizontal behaviour above 100 % is a real defect and it is open — but it is
-   one to fix against a reproduction, not by editing this line and taking
-   another screenshot. */
+   **The width is deliberately not touched, and now for a measured reason
+   rather than a suspicion** (ART-099). The running application was measured at
+   100 %, 130 % and 200 % — `.app-shell` renders *exactly one window wide* at
+   every one of them, because `width: auto` resolves against `#root` in the
+   parent's coordinate space and the zoom then applies to both alike. There was
+   never a width to correct here, which is why `calc(100% / z)` left the shell
+   at `1/z` with a dead strip down the right, and why `calc(100vw / z)` changed
+   nothing. Height is different and does need dividing: `100vh` is a viewport
+   unit, and viewport units are in real pixels that no coordinate space
+   touches. */
 .app-shell {
   display: grid;
   grid-template-columns: 224px 1fr;
@@ -36,11 +39,30 @@
      scrolling it. */
   min-height: 0;
 }
+/* `overflow-x: auto`, not `hidden` — the safety net Application Size needs
+   (ART-099).
+
+   Zoom buys size by spending width: measured on the running application in a
+   2575 px window, the content column is 2314 CSS px at 100 %, 1728 at 130 %
+   and 1157 at 200 %. Nothing on any screen overflows that today, but with
+   `hidden` anything that ever did would be **clipped with no way to reach
+   it** — and not merely invisible: the probe could still scroll the box by
+   script (`scrollLeft` moved to 396) while the user was offered no scrollbar,
+   no wheel and no drag. That is the shape of the original report, and one
+   character is the difference between a screen that is cramped and a screen
+   whose right-hand side does not exist.
+
+   The design below still stands: a page is not *meant* to scroll sideways, and
+   anything deliberately wider than the window — a hex dump row, a block table
+   — carries `.scroll-x` and scrolls inside its own box. This only means that
+   when something escapes that discipline, or when the user makes the window
+   small and the application large, the answer is a scrollbar rather than
+   silence. */
 .app-content {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  overflow-x: hidden;
+  overflow-x: auto;
   padding: 24px 28px;
 }
 

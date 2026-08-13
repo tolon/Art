@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Application Size cannot hide anything any more (2026-08-13)
+
+#### Fixed
+- **Content too wide for the window can be scrolled to.** Making the
+  application bigger makes the room smaller, and anything that no longer fitted
+  used to be cut off with no scrollbar, no wheel and no way to reach it. There
+  is a scrollbar now when there needs to be one.
+
+#### Known
+- The right-hand-edge problem reported earlier could not be reproduced: the
+  application was measured at 100 %, 130 % and 200 % across seven screens, in a
+  window the size of the one it was reported on, and nothing runs off the edge.
+  The two earlier attempts to fix it were both aimed at the wrong thing and
+  both made it worse; they are gone. If you still see it, say so — there is a
+  measuring tool now, and it beats another screenshot.
+- The sidebar keeps its full width at large Application Sizes, where it was
+  meant to shrink to icons. It costs room; nothing is unreachable.
+
 ### The Hard Disk screen opens a PiStorm card (2026-08-13)
 
 #### Added

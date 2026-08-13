@@ -23,7 +23,7 @@ what fixed it (with the test that proves it).
 
 ## Open
 
-**ART-099** 🟠 **Application Size cut the right-hand edge off every screen** — *open*
+**ART-099** 🟠 **Application Size cut the right-hand edge off every screen** — *diagnosis disproved by measurement; the clipping hazard fixed 2026-08-13; open only for a check on the real window*
 `src/components/layout/layout.css` · The Application Size feature applies CSS
 `zoom` to `.app-shell`, and `zoom` does not scale viewport units — so the shell
 divides first: `height: calc(100vh / var(--app-zoom))`, rendered back to exactly
@@ -49,8 +49,7 @@ green, and no test looks at a window.
   overflow either.
 
 Both are reverted; the width rule is gone and the shell is back to the
-behaviour it had before this entry was opened. **The horizontal overflow above
-100 % is real and remains open.**
+behaviour it had before this entry was opened.
 
 What went wrong in the diagnosis is worth keeping: the first screenshot showed
 content running off the right edge, and I read that as a CSS bug without first
@@ -60,8 +59,66 @@ establishing that the window was on the screen at all. It was not —
 screenshot is not a reproduction, and three rounds of it produced two
 regressions and no fix.
 
-The next attempt needs the computed widths read out of the running page rather
-than measured off a picture.
+**Measured at last, 2026-08-13** — `scripts/zoom-check.py`, which drives the
+running application in headless Chrome and reads the numbers out of the page.
+Seven screens, three sizes, in a window the size of the user's own:
+
+```
+#/settings  z=1    window=2538  shell=2538  client=2299  scroll=2299  over=0
+#/settings  z=1.3  window=2538  shell=2538  client=1717  scroll=1717  over=0
+#/settings  z=2    window=2538  shell=2538  client=1038  scroll=1038  over=0
+```
+
+Two things follow, and the first one **disproves this entry's own diagnosis**:
+
+- **`.app-shell` renders exactly one window wide at every size.** It is not
+  drawn `z` times too wide and never was. `width: auto` resolves against
+  `#root` in the parent's coordinate space, and the zoom applies to both alike;
+  only `100vh` needed dividing, because viewport units are real pixels no
+  coordinate space touches. That is why `calc(100% / z)` produced a shell at
+  `1/z` with a dead strip, and why `calc(100vw / z)` changed nothing: both were
+  corrections to something that was not happening.
+- **Nothing on any of the seven screens overflows its column at 130 %**, at
+  2538 px or at 1258. `scroll == client` everywhere. The reported symptom does
+  not reproduce on the code as it stands — which, given that the first
+  screenshot may not have been of the running window at all, is the likeliest
+  reading of how it arose.
+
+**What was real, and is fixed:** `.app-content` carried `overflow-x: hidden`.
+Zoom buys size by spending width — the column measures 2299 CSS px at 100 %,
+1717 at 130 % and 1038 at 200 % — so anything that *did* exceed it would be
+clipped with **no way for the user to reach it**. Not merely invisible: in the
+reproduction the box could still be scrolled by script (`scrollLeft` moved to
+396) while offering no scrollbar, no wheel and no drag. That is precisely the
+shape of the original report, and it is one character to fix. `.app-content`
+scrolls sideways now when it has to, and `.scroll-x` still carries the cases
+that are *meant* to (a hex dump row, a block table).
+
+**Left open on purpose**, and only for this: everything above was measured in
+Chrome against the dev server, and the application ships in **WebView2** with
+real data — long paths, real log rows — that a dev server cannot produce. The
+one check that remains is the user's own window at 130 %. If it is clean, this
+closes; if it is not, `scripts/zoom-check.py` is where the numbers come from,
+not another screenshot.
+
+**ART-101** 🔵 **The sidebar's collapse never fires under Application Size** — *open*
+`src/components/layout/layout.css` · `@media (max-width: 1000px)` collapses the
+sidebar to icons, "below this the sidebar's labels cost more than they give".
+Media queries are evaluated against the **real viewport**, and Application Size
+is a `zoom` on an element inside it — so the rule asks a question about a
+window the layout does not live in. Measured while closing ART-099: in a
+1258 px window the sidebar is 224 real px at 100 %, 291 at 130 % and **448 at
+200 %** — over a third of the glass — while the layout itself has only 629 CSS
+px to work with, which is well under the 1000 the design says it wants icons
+at. So the breakpoint the design already agreed on is exactly the one that
+cannot fire when it is most needed.
+
+Not a defect in the sense of anything being wrong or unreachable: the sidebar
+is merely wide, and every screen still fits (`over=0` at every size). Fixing it
+means deciding *where* the breakpoint belongs — the honest answer is that it
+should be asked of `innerWidth / zoom` rather than of `innerWidth`, which means
+a class from `@/lib/appZoom` rather than a media query, and that is a design
+choice worth making deliberately rather than while fixing something else.
 
 **ART-093** 🟡 **ART cannot fetch an Emu68 kernel update; it can only tell you which one you need**
 `core/pistorm/` · `net/` · The fix round's F4 asked for two things. The reading
