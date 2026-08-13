@@ -22,10 +22,11 @@ Update it at the end of any session that changes what works.
 | **Version** | 0.1.0 (unreleased) |
 | **Current stage** | **SD-1 in progress** — G4 (RDB filesystem embedding) done both ways; G2, G7, G15, G8 owed. Reading a real card is done ahead of it ([ART-095](ISSUES.md), [ART-097](ISSUES.md)) but has no screen yet |
 | **Build** | PASS |
-| **Tests** | 1080 Rust passed, 0 failed; 432 frontend passed, 0 failed |
+| **Tests** | 1089 Rust passed, 0 failed; 432 frontend passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
 | **amitools oracle** | 53 checks, both directions — now including a filesystem driver ART embedded in an RDB and `rdbtool` extracted back out byte-for-byte |
+| **7-Zip FAT32 oracle** | the card's boot partition, written by ART and read by 7-Zip: filesystem type, geometry, label, names and every file's bytes (`scripts/fat-oracle-check.py`) |
 | **7-Zip disc oracle** | 4 fixtures — Joliet, ISO9660-only, raw Mode 1, raw Mode 2/XA — names, sizes and every file's SHA-256 |
 | **cargo-deny** | advisories, bans, licences, sources — all ok |
 | **MSRV** | 1.93 (raised from 1.77 on 2026-08-12, for a maintained 7z decoder) |
@@ -825,13 +826,13 @@ those are waiting on a decision rather than on work.
 **The Hard Disk studio can open a card now** — the last thing between
 `core/card.rs` and a user. Both real cards were read through it on 2026-08-13.
 
-**In order:** G2's second half — **format the FAT32 partition and put the Emu68
-payload in it**. The table is written and tested (`plan_card`/`write_mbr`); what
-is missing is a filesystem inside the partition it describes. The route is
-already decided in the gap analysis: a maintained MIT/Apache crate rather than a
-hand-rolled formatter, with the usual licence check and `THIRD_PARTY_LICENSES`
-entry. After that, G7 (build manifest), G15 (a build as a drop target) and G8
-(image validation).
+**In order:** the **builder that ties G2 together** — create a sparse image,
+write the table, format the boot partition, put the Emu68 payload in it, and
+lay an RDB in each Amiga area. Every piece of that exists now except the
+payload's *selection* (unpacking the user's `Emu68-pistorm.zip`, picking the
+kernel for their board and release line, naming the Kickstart `kick.rom`) and
+the command and screen to drive it. After that, G7 (build manifest), G15 (a
+build as a drop target) and G8 (image validation).
 
 ART-099 needs one thing only, and it is not code: open the real window at 130 %
 and look. Everything else about it has been measured (`scripts/zoom-check.py`).
@@ -875,6 +876,7 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-13 | **The card's boot partition, and the first filesystem ART writes that is not an Amiga one.** `core/fat32.rs` creates the FAT32 the Raspberry Pi boots from and puts files in it — `fatfs` rather than a formatter of ART's own, which is what the gap analysis asked for and the right call for a filesystem whose entire job is to be read by somebody else's firmware. Three decisions worth keeping: **FAT32 is forced**, because `fatfs` picks a width from the size and a small partition would silently come out FAT16 and not boot; **`chrono` is off**, so files carry no timestamps and a build produces the same bytes twice, which is what a manifest can describe (G7); and **every write is bounded to the partition** by `Region`, because the Amiga's first RDB begins where this partition ends — a formatter that ran past its end would take it, so a write past the end is refused rather than shortened, and a test watches the bytes on both sides. Cross-checked against **7-Zip** (`scripts/fat-oracle-check.py`): `File System = FAT32`, 512-byte sectors, 4 KiB clusters, the label, and every file's bytes back byte-for-byte, long names included. `cargo deny` clean with the new crate; `THIRD_PARTY_LICENSES.md` and CLAUDE.md's core-dependency list both updated in the same commit | 1089 Rust / 432 frontend |
 | 2026-08-13 | **G2's first half: ART can decide a card's shape and write its partition table.** `plan_card` + `write_mbr` in `core/mbr.rs`, built on the two real cards rather than on the specification — and reading their tables byte by byte paid twice. First, the front of both cards is identical to the sector (LBA 2048, 2 299 904 sectors of FAT32, first Amiga area at LBA 2 301 952), so the defaults are measured: **1.10 GiB of boot partition, not the "~200 MB" the research estimated**. Second, the two cards *disagree* about the CHS fields and the boot flag and both boot — which is a far better licence for a design decision than a specification is, and is why ART writes the LBA sentinel in every CHS field. Asked for MultibootOS's shape the planner reproduces MultibootOS's layout to the sector. **An Amiga disk at byte zero is not expressible**: the boot partition is not optional and it is first, which is how SD-0's unit-0 rule is enforced — by having no way to say the dangerous thing. Ten tests. Still owed for G2: a filesystem inside that partition, and the Emu68 payload in it | 1080 Rust / 432 frontend |
 | 2026-08-13 | **ART-043 closed — a partition inside a small image is written where it lives.** The whole-file strategy handed the writer the whole file at offset zero while the geometry described a partition megabytes in, so for any RDB image of 16 MiB or less volume-relative block numbers were used as file-absolute. Nothing was ever at risk, and that is now *measured*: the gate ran `validate_image` over the whole file, which stops at the signature — `RDSK`, not `DOS` — so a small RDB image could not be committed at all. `WholeFileVolume` replaces the three copies of that branch with one session that gives the writer the volume's own bytes, opens it at the volume's offset, validates the volume, and splices it back into the file for one atomic write; everything around the partition survives byte-for-byte and a bare ADF is untouched by the change. The fixture the entry said nothing constructed now exists — a 12 MB image with a formatted 4 MB partition — and the test asserts every byte *before* the partition is unchanged, which is where the RDB is. Mutation-checked. The other half of "writing at an offset", writing an **RDB** at one, belongs to G2 and has no caller yet | 1070 Rust / 432 frontend |
 | 2026-08-13 | **ART-099, measured instead of looked at — and the diagnosis was wrong.** `scripts/zoom-check.py` drives the running application in headless Chrome and reads the widths out of the page; seven screens, three sizes, in a window the size of the user's own. `.app-shell` renders **exactly one window wide at every size**, so it was never drawn `z` times too wide and both reverted fixes were corrections to something that was not happening. Nothing on any screen overflows its column at 130 % either. What *was* real: `.app-content` carried `overflow-x: hidden`, and since zoom spends width (2299 CSS px at 100 %, 1717 at 130 %, 1038 at 200 %) anything that did exceed the column would be clipped with no way to reach it — the box could still be scrolled by script while offering the user no scrollbar at all. One character. The entry stays open for the one check a dev server cannot make: the real WebView2 window with real data. Filed on the way: **ART-101**, the sidebar's `max-width: 1000px` collapse is asked of the real viewport and so never fires under zoom — 448 real px of a 1258 px window at 200 % | 1068 Rust / 432 frontend |

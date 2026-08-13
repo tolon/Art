@@ -18,6 +18,7 @@ pub mod conversion;
 pub mod detect;
 pub mod distro;
 pub mod error;
+pub mod fat32;
 pub mod gotek;
 pub mod hashing;
 pub mod hdf;
