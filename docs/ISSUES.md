@@ -25,6 +25,28 @@ what fixed it (with the test that proves it).
 
 _(ART-075 was open here; it is fixed — see [Phase 2a](#phase-2a) below.)_
 
+**ART-099** 🟠 **Application Size cut the right-hand edge off every screen** — *fixed 2026-08-13*
+`src/components/layout/layout.css` · The Application Size feature applies CSS
+`zoom` to `.app-shell`, and `zoom` does not scale viewport units — so the shell
+divides first: `height: calc(100vh / var(--app-zoom))`, rendered back to exactly
+one viewport by the zoom.
+
+**The width was never given the same treatment.** A block-level shell takes its
+parent's width, and `zoom` then renders it `z` times wider than the window. At
+100 % nothing showed. At the 130 % this machine was actually set to, every
+screen lost its right-hand edge: the Settings cards' input fields and the
+Operation Log's rows ran off the side of the window with no scrollbar to reach
+them, because `.app-shell` is `overflow: hidden` by design.
+
+Found by screenshotting the running application to check something else — the
+same way [ART-082](#fixed) was, and for the same reason: the tests were all
+green, and no test looks at a window.
+
+Fixed with `width: calc(100% / var(--app-zoom, 1))`. `100%` rather than `100vw`
+because `vw` counts the vertical scrollbar and would leave a hair of overflow
+even at 100 %; the height has to stay `vh`, since a percentage height needs a
+sized parent and the shell has none.
+
 **ART-098** 🟠 **CI's licence gate could never pass, and the build and the installer never ran** — *fixed 2026-08-13*
 `.github/workflows/ci.yml` · The `Dependency licences & advisories` step used
 `EmbarkStudios/cargo-deny-action@v2`. That is a **container** action, container

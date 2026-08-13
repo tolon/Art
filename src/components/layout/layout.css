@@ -5,11 +5,23 @@
    one reason: `zoom` does not scale viewport units. A shell left at `100vh`
    would be drawn `zoom` times taller than the window and the whole application
    would scroll. Dividing first makes the rendered height exactly one viewport
-   at every size — (100vh / z) × z. */
+   at every size — (100vh / z) × z.
+
+   **Both axes, and the width was missed the first time.** A block-level shell
+   takes its parent's width and `zoom` then renders it `z` times wider than the
+   window, so at any size above 100 % the right-hand edge of every screen was
+   cut off — which is what a screenshot of the running application showed. The
+   same division fixes it.
+
+   `100%` for the width rather than `100vw`: `vw` counts the vertical scrollbar
+   and would leave a hair of horizontal overflow even at 100 %. The height has
+   to stay `vh`, because a percentage height needs a sized parent and the shell
+   has none. */
 .app-shell {
   display: grid;
   grid-template-columns: 224px 1fr;
   zoom: var(--app-zoom, 1);
+  width: calc(100% / var(--app-zoom, 1));
   height: calc(100vh / var(--app-zoom, 1));
   overflow: hidden;
 }

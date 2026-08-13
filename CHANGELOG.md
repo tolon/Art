@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### About, and the name on the installer (2026-08-13)
 
+#### Fixed
+- **Application Size cut the right-hand edge off every screen.** Above 100 %,
+  the window's contents were drawn wider than the window — input fields and log
+  rows ran off the side with no way to reach them. Only the height had been
+  given the correction; the width had not.
+
 #### Added
 - **An About panel in Settings**: the version the build actually carries, the
   author, where the source lives, the licence, and the notice the GPL asks an
