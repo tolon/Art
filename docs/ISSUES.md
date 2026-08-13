@@ -386,28 +386,54 @@ re-audits them without reason:
 
 ---
 
-**ART-043** 🟠 **A partition inside a small image is written at the wrong offset**
-`commands/volume_write.rs` · The whole-file strategy is chosen by the *file's*
-size, but it then builds its `VecDevice` from the whole file and opens the
-writer at offset `0`, while the geometry it was given describes a **partition**
-that may start megabytes into that file. For any RDB image of 16 MiB or less
-this reads and writes volume-relative block numbers as if they were
-file-absolute ones: the root block lands in the middle of the partition's data.
-In practice the first read then fails with something unhelpful ("block N is not
-a directory") rather than corrupting anything, and — since ART-042 — a result
-that did somehow get written is refused by the whole-image gate before it
-reaches the file. So the user's data is not at risk today; the strategy choice
-is simply wrong. The fix is to pick the block-journal strategy whenever the
-volume does not start at byte 0 and cover the whole file, or to give the
-whole-file branch the partition's slice and write it back at its offset. Needs
-its own task and its own fixture (a small RDB image with a formatted
-partition) — no test covers it today, which is why it survived this long.
-
----
-
 ## Fixed
 
 ### The open-list sweep (2026-08-13)
+
+**ART-043** 🟠 **A partition inside a small image was written at the wrong offset** — *fixed 2026-08-13*
+`commands/volume_write.rs` · The whole-file strategy is chosen by the *file's*
+size — read it whole, mutate in memory, validate, one atomic write — and that
+part was right. What was wrong was what it handed the writer: the whole file,
+opened at offset `0`, while the geometry it was given described a **partition**
+that may start megabytes in. For any RDB image of 16 MiB or less, volume-relative
+block numbers were read and written as if they were file-absolute, so the root
+block landed in the middle of the partition's data. Above the limit the
+block-journal strategy takes over, and it has always opened the volume at its
+own offset — the bug lived only in the small case, and no fixture in the suite
+was a small RDB image with a formatted partition, which is why it survived.
+
+**Nothing was ever at risk, and that is now measured rather than assumed.** The
+gate ran `validate_image` over the whole file, which stops at the signature:
+`RDSK`, not `DOS`. So a small RDB image could not be committed at all — this
+was a strategy that could not succeed, not one that could corrupt. The first
+read usually failed earlier still, with "block N is not a directory", because
+block 880 of the *file* is not that volume's root.
+
+→ `WholeFileVolume`, one session type replacing the three copies of the
+whole-file branch, so the fix cannot be applied to two of them and missed in
+the third. It gives the writer the **volume's own bytes**, opens it at the
+volume's offset, and on commit validates the volume and splices it back into
+the file for one atomic guarded write. Everything around the partition — the
+RDB, another partition, trailing bytes — survives byte-for-byte, and for a bare
+ADF (offset 0, length the whole file) the slice is the file and nothing changed.
+The gate is now `validate_volume` and is asked about the volume, which is the
+thing that has to be one.
+
+Two tests, and the fixture the entry said nothing constructed:
+`a_partition_inside_a_small_image_is_written_where_it_lives` writes into a
+12 MB RDB image with a formatted 4 MB partition, reads the file back through
+the volume's own geometry, and asserts every byte **before** the partition is
+unchanged — the RDB is in those bytes, and a write that addressed the file
+would have gone straight through it. `the_gate_asks_about_the_volume_not_the_file`
+pins both halves of the validation question. Mutation-checked: putting the
+session back on the whole file at offset zero fails the first outright.
+
+**Not the whole of the "one fix" this was paired with.** Writing an *RDB* at an
+offset — SD-1's G4 on a card, where each `0x76` area carries its own table
+inside the card — is the other half, and it has no caller yet: G2 builds the
+card. What is fixed here is writing *into* a volume that starts at an offset,
+which is what exists today.
+
 
 Six of the open entries closed in two passes, chosen because none of them
 needed a decision first — the ones that do are still open and say so.

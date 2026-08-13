@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Writing into a partition of a small hard disk image (2026-08-13)
+
+#### Fixed
+- **A small hard disk image could not be written into at all.** Anything under
+  16 MB went down a path that treated the partition's block numbers as if they
+  were the file's, so the first read failed with something unhelpful and the
+  write was refused. It works now, and everything around the partition — the
+  partition table, anything else on the image — is left byte-for-byte as it
+  was. Larger images were never affected.
+
 ### Application Size cannot hide anything any more (2026-08-13)
 
 #### Fixed
