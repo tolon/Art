@@ -15,7 +15,16 @@ export interface PartitionSpec {
   size_mb: number;
   bootable: boolean;
   boot_priority: number;
-  num_buffers: number;
+  /**
+   * `NumBuffers` — **omit it unless the user asked for a number.**
+   *
+   * ART-096: the studio used to send 100 in three places, which is what every
+   * partition ART created carried long after the core had a measured default
+   * of 600 (seventeen partitions on two real PiStorm cards, all 600). The core
+   * treats absent and zero alike and fills in its own value, so leaving this
+   * out is how the UI stays out of a decision it has no basis for.
+   */
+  num_buffers?: number;
 }
 
 export interface ParsedPartition {

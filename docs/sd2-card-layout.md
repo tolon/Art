@@ -57,8 +57,8 @@ Every partition on both cards, without exception:
 maxtransfer = 0x0001FE00      mask = 0x7FFFFFFE      buffers = 600
 ```
 
-**ART writes `maxtransfer = 0` and `mask = 0`**, and 100 buffers by default.
-Filed as [ART-096](ISSUES.md#open). A mask of zero says no memory is acceptable
+**ART wrote `maxtransfer = 0` and `mask = 0`**, and 100 buffers by default —
+[ART-096](ISSUES.md), fixed 2026-08-13. A mask of zero says no memory is acceptable
 for a transfer, which is not what anybody means by it, and it is the sort of
 field that costs nothing to get right and is very hard to diagnose when wrong.
 
@@ -105,8 +105,8 @@ Derived from the above, in the order the work has to happen:
 2. **One RDB per area**, each with its own geometry read from the disk.
 3. **Union the filesystem drivers** across areas before deciding a partition
    cannot mount ([ART-097](ISSUES.md)).
-4. **Write `maxtransfer`, `mask` and `buffers`** as the field does
-   ([ART-096](ISSUES.md#open)).
+4. ✅ **Write `maxtransfer`, `mask` and `buffers`** as the field does
+   ([ART-096](ISSUES.md), done 2026-08-13).
 5. **Adapt, do not regenerate**: the FAT32 side is `config.txt` and
    `cmdline.txt`, which `core/pistorm` already merges rather than rewrites, plus
    the Kickstart, which ROM Manager already identifies and places.

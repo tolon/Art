@@ -218,6 +218,10 @@ export function HardDiskStudio() {
     setStatusMsg(null);
 
     try {
+      // No `num_buffers` anywhere below, and that is the fix for ART-096: the
+      // screen has never asked the user for a buffer count, so it has nothing
+      // to say about one. The core fills in the measured default (600); the
+      // three literal 100s that used to sit here silently outvoted it.
       const partitions: PartitionSpec[] = [];
       if (createTemplate === "single") {
         partitions.push({
@@ -226,7 +230,6 @@ export function HardDiskStudio() {
           size_mb: sizeMb,
           bootable: true,
           boot_priority: 0,
-          num_buffers: 100,
         });
       } else {
         // Split: 500 MB (or 25%) System + Rest Work
@@ -238,7 +241,6 @@ export function HardDiskStudio() {
           size_mb: sysMb,
           bootable: true,
           boot_priority: 5,
-          num_buffers: 100,
         });
         partitions.push({
           drive_name: "DH1",
@@ -246,7 +248,6 @@ export function HardDiskStudio() {
           size_mb: workMb,
           bootable: false,
           boot_priority: 0,
-          num_buffers: 100,
         });
       }
 

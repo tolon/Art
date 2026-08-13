@@ -202,6 +202,15 @@ pub struct PartitionSpec {
     pub size_mb: u32,
     pub bootable: bool,
     pub boot_priority: i8,
+    /// `NumBuffers`, or **zero to let the core decide** — which is what a
+    /// caller with no opinion should send, and what the field defaults to when
+    /// a request omits it entirely.
+    ///
+    /// `#[serde(default)]` is the frontend half of ART-096: the Hard Disk
+    /// studio used to name 100 in three places, so a partition created through
+    /// the UI kept getting ART's old guess long after the core had a measured
+    /// value. A number the UI does not know is a number the UI must not state.
+    #[serde(default)]
     pub num_buffers: u32,
 }
 
@@ -1088,6 +1097,94 @@ mod dosenv_layout {
 
         // TableSize must cover DosType, or an Amiga would ignore it.
         assert!(long_at(128) >= 17, "TableSize must include DosType");
+    }
+
+    /// ART-096. The layout guard above pins *where* MaxTransfer and Mask sit;
+    /// this pins *what* they say, through the round trip a real tool takes —
+    /// create an image, parse it back, read the three fields off the parsed
+    /// partition rather than off the bytes.
+    ///
+    /// The values are the measured ones: seventeen partitions across three RDBs
+    /// on two real PiStorm cards carry `0x0001FE00` / `0x7FFFFFFE` / 600
+    /// without one exception (`docs/sd2-card-layout.md`). ART wrote zero, zero
+    /// and 100. A zero Mask says no address is acceptable for a transfer, and a
+    /// driver entitled to take that literally would refuse every one of them.
+    #[test]
+    fn a_created_partition_carries_the_measured_dosenv_values() {
+        let layout = create_rdb_layout(
+            32 * 1024 * 1024,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::FfsStandard,
+                size_mb: 10,
+                bootable: true,
+                boot_priority: 0,
+                // Zero is how a caller says "no opinion" — the UI's case since
+                // ART-096, and the one that has to reach the default.
+                num_buffers: 0,
+            }],
+            &[],
+        )
+        .unwrap();
+
+        let parsed = parse_rdb(&layout.blocks).unwrap();
+        let partition = &parsed.partitions[0];
+
+        assert_eq!(
+            partition.max_transfer, DEFAULT_MAX_TRANSFER,
+            "MaxTransfer must be the measured 0x1FE00, not the unstated zero"
+        );
+        assert_eq!(
+            partition.mask, DEFAULT_MASK,
+            "Mask must be 0x7FFFFFFE; zero accepts no address at all"
+        );
+        assert_eq!(
+            partition.num_buffers, DEFAULT_NUM_BUFFERS,
+            "a caller with no opinion gets the core's 600, not the UI's old 100"
+        );
+    }
+
+    /// The flip side: the default must not become a ceiling. A caller that
+    /// *does* have an opinion keeps it, or the core would be overriding the
+    /// user instead of standing in for them.
+    #[test]
+    fn an_explicit_buffer_count_survives_the_round_trip() {
+        let layout = create_rdb_layout(
+            32 * 1024 * 1024,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::FfsStandard,
+                size_mb: 10,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 150,
+            }],
+            &[],
+        )
+        .unwrap();
+
+        let parsed = parse_rdb(&layout.blocks).unwrap();
+        assert_eq!(parsed.partitions[0].num_buffers, 150);
+    }
+
+    /// A request that leaves the field out entirely is the same thing as one
+    /// that sends zero — the frontend does exactly this, and `#[serde(default)]`
+    /// is the only thing making the two agree.
+    #[test]
+    fn a_spec_without_a_buffer_count_deserialises_to_the_default() {
+        let spec: PartitionSpec = serde_json::from_str(
+            r#"{"drive_name":"DH0","fs_type":"ffsstandard","size_mb":10,
+                "bootable":true,"boot_priority":0}"#,
+        )
+        .expect("num_buffers is optional on the wire");
+        assert_eq!(
+            spec.num_buffers, 0,
+            "absent means 'no opinion', not a value"
+        );
+
+        let layout = create_rdb_layout(32 * 1024 * 1024, &[spec], &[]).unwrap();
+        let parsed = parse_rdb(&layout.blocks).unwrap();
+        assert_eq!(parsed.partitions[0].num_buffers, DEFAULT_NUM_BUFFERS);
     }
 
     /// The round trip has to agree with the layout, not merely with itself.

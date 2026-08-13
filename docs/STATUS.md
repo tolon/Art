@@ -22,7 +22,7 @@ Update it at the end of any session that changes what works.
 | **Version** | 0.1.0 (unreleased) |
 | **Current stage** | **SD-1 in progress** — G4 (RDB filesystem embedding) done both ways; G2, G7, G15, G8 owed. Reading a real card is done ahead of it ([ART-095](ISSUES.md), [ART-097](ISSUES.md)) but has no screen yet |
 | **Build** | PASS |
-| **Tests** | 1057 Rust passed, 0 failed; 401 frontend passed, 0 failed |
+| **Tests** | 1060 Rust passed, 0 failed; 401 frontend passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
 | **amitools oracle** | 53 checks, both directions — now including a filesystem driver ART embedded in an RDB and `rdbtool` extracted back out byte-for-byte |
@@ -813,29 +813,11 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
 
 ## Picking up next session
 
-**Stopped mid-item on 2026-08-13, late.** The tree is green (1057 Rust, 401
-frontend, clippy clean) — nothing is half-written on disk. What is half-done
-is one issue, and it is the first thing to pick up:
+**Nothing is half-done on disk.** The tree is green (1060 Rust, 401 frontend,
+clippy clean, oracle 53 both ways) and ART-096 — the item the previous session
+stopped inside — is closed.
 
-**ART-096, in progress.** `core/rdb.rs` now writes `MaxTransfer`
-(`0x0001FE00`), `Mask` (`0x7FFFFFFE`) and defaults to 600 buffers, and reads
-both fields back into `ParsedPartition`. `dosenv_offsets_match_the_amiga_layout`
-was updated — a zero Mask used to be what proved BootPri was not written a
-longword early, and Mask now has a value, so the guard asserts the values
-themselves.
-
-Still owed on it:
-
-1. A test of its own: create an image, read it back, assert the three values.
-   The layout guard covers the offsets, not the intent.
-2. `HardDiskStudio.tsx` hard-codes `num_buffers: 100` in three places, so the
-   new default never reaches a partition the user creates through the UI. Send
-   600, or better, let the core choose and stop naming the number in the UI.
-3. `SDH0` naming is **not** part of this. It is a card convention, not an HDF
-   one — an HDF that WinUAE mounts wants `DH0`, and renaming globally would be
-   wrong. It belongs to SD-1, where the card is built.
-
-**Then, in order:** ART-085 (studios forget the open image — the same rule as
+**In order:** ART-085 (studios forget the open image — the same rule as
 "nothing changes unless the user changes it"); wiring `core/card.rs` into the
 Hard Disk studio, which reads real PiStorm cards today but has no screen;
 ART-099 (zoom overflow — **measure the running page, do not iterate on
@@ -853,6 +835,7 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-13 | **ART-096 closed.** The RDB half had landed; what was left was the half that decides what a *user* gets. `HardDiskStudio.tsx` hard-coded `num_buffers: 100` in three places, so the core's measured 600 reached nothing anybody created through the UI — a literal in a component quietly outvoting the engine. The three are gone and the field is now `#[serde(default)]` / optional in `hdf.ts`: absent and zero both mean "the core decides", because a screen that never asks for a buffer count has no business stating one. Three tests, mutation-checked in both directions — restoring either old value fails them. Docs: CLAUDE.md gained the network layer, the two-catalogue string rule and the Vitest jsdom trap; CONTRIBUTING's "branch from `master`" is gone, published months ago | 1060 Rust / 401 frontend |
 | 2026-08-13 | ART-096 half done (RDB `MaxTransfer`, `Mask`, 600 buffers written and read back); ART-100 (the PiStorm screen said "choose a card first" only by being grey); ART-099 reopened after two bad fixes were reverted; docs swept — seventeen fixed entries moved out of ISSUES' Open section, fifteen stale `#open` anchors corrected, CLAUDE.md's dead branch name and missing CI step fixed | 1057 Rust / 401 frontend |
 | 2026-08-13 | **GitHub caught up, and CI turned out to be broken.** 28 commits of `main`, 15 of `phase-2b` and the whole `sd-1` branch had never reached the remote. Pushing them showed the last three runs on `main` red — and the reason was never in the code: the licence gate used a **container** action on a **Windows** runner, which cannot run, so it failed on every push since it was added and took `Build application` and the MSI artifact down with it ([ART-098](ISSUES.md)). `docs/licenses.md` had been claiming that check ran the whole time. The frontend tests were never in CI at all — four hundred of them, including the i18n parity check. Both fixed | 1057 Rust / 401 frontend |
 | 2026-08-13 | **ART can read a real PiStorm card — the thing that blocked SD-2a.** Two real distributions arrived (CaffeineOS 9317, MultibootOS 2.2) and reading them found that ART could not open either: `find_rdb_location` looked in the first 16 blocks of the file, and on every card those are the MBR and the FAT32 partition, with the Amiga's RDB about 1.1 GB in ([ART-095](ISSUES.md)). `core/mbr.rs` + `core/card.rs` fix it, and a card is a **list** of Amiga disks: MultibootOS has two, with different geometries, and its second RDB carries no PFS3 while all fifteen of its partitions are PFS3 — so drivers are the card's, not the area's, or ART would name fifteen working partitions as broken ([ART-097](ISSUES.md)). Both verified against the real files. Also filed: [ART-096](ISSUES.md#open), ART writes `MaxTransfer` and `Mask` as zero where every partition on both cards uses `0x1FE00` / `0x7FFFFFFE`. The layout is written up in [sd2-card-layout.md](sd2-card-layout.md) | 1057 Rust / 401 frontend |

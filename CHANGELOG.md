@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Hard disks ART creates now describe themselves the way real ones do (2026-08-13)
+
+#### Fixed
+- **A partition ART created told the driver nothing about how to transfer to
+  it.** Two fields — the largest transfer it will accept, and which memory it
+  may transfer into — were left at zero, and zero in the second one means "no
+  memory is acceptable". Nothing refused it in practice, because the PiStorm's
+  Emu68 is forgiving, but it is the kind of thing that is impossible to
+  diagnose from the symptom. Both now carry the values every partition on two
+  real cards uses.
+- **The cache size was decided by a number typed into a screen.** New
+  partitions were created with 100 buffers whatever the engine thought,
+  because the Hard Disk studio was sending its own figure — and the studio has
+  never asked you for one. It no longer names a number at all; the engine's
+  600 (300 KB, on a machine with a PiStorm's hundreds of megabytes in it) is
+  what you get, and a partition made before this keeps whatever it was made
+  with.
+
 ### About, and the name on the installer (2026-08-13)
 
 #### Fixed

@@ -63,42 +63,6 @@ regressions and no fix.
 The next attempt needs the computed widths read out of the running page rather
 than measured off a picture.
 
-**ART-096** 🟡 **ART writes `MaxTransfer` and `Mask` as zero, and 100 buffers**
-`core/rdb.rs::create_rdb_layout` · The DosEnvec's `MaxTransfer` (longword 45)
-and `Mask` (longword 46) are left at zero, with a comment saying so. Every
-partition on both real cards — seventeen of them across three RDBs, without
-exception — carries:
-
-```
-maxtransfer = 0x0001FE00    mask = 0x7FFFFFFE    buffers = 600
-```
-
-A mask of zero says no memory is acceptable for a transfer, which is not what
-anybody means by it; ART's default of 100 buffers against the field's 600 is a
-performance choice made by not making one. Neither is dangerous — Emu68 is
-forgiving — but they are the fields that are cheap to get right and very hard
-to diagnose when wrong, and ART now has measured values rather than a guess.
-
-Also worth matching: real cards name their partitions `SDH0`/`SDH1`, not `DH0`.
-On a machine with an IDE drive `DH0` is already taken.
-
-Found 2026-08-13 while reading two real cards. See
-[sd2-card-layout.md](sd2-card-layout.md).
-
-**Half fixed, 2026-08-13.** `core/rdb.rs` writes both fields and defaults to
-600 buffers; `ParsedPartition` reads them back. Still open, and the reason this
-entry is not closed:
-
-- No test of its own — `dosenv_offsets_match_the_amiga_layout` pins the
-  offsets, which is not the same as pinning the intent.
-- `HardDiskStudio.tsx` hard-codes `num_buffers: 100` in three places, so a
-  partition created through the UI still gets 100. The new default only reaches
-  callers that pass zero.
-
-`SDH0` naming is deliberately **not** part of this. It is a card convention,
-and an HDF that WinUAE mounts wants `DH0`; it belongs to SD-1, where the card
-is built.
-
 **ART-093** 🟡 **ART cannot fetch an Emu68 kernel update; it can only tell you which one you need**
 `core/pistorm/` · `net/` · The fix round's F4 asked for two things. The reading
 half is built: the card's `Emu68.img` is identified from the `$VER:` string its
@@ -496,6 +460,49 @@ partition) — no test covers it today, which is why it survived this long.
 ## Fixed
 
 ### Phase 2b, the PiStorm rebuild and the first real cards (2026-08-12 → 08-13)
+
+**ART-096** 🟡 **ART wrote `MaxTransfer` and `Mask` as zero, and 100 buffers** — *fixed 2026-08-13*
+`core/rdb.rs::create_rdb_layout` · `src/pages/HardDiskStudio.tsx` · The
+DosEnvec's `MaxTransfer` (longword 45) and `Mask` (longword 46) were left at
+zero, with a comment saying so. Every partition on both real cards — seventeen
+of them across three RDBs, without exception — carries:
+
+```
+maxtransfer = 0x0001FE00    mask = 0x7FFFFFFE    buffers = 600
+```
+
+A mask of zero says no memory is acceptable for a transfer, which is not what
+anybody means by it; ART's default of 100 buffers against the field's 600 was a
+performance choice made by not making one. Neither is dangerous — Emu68 is
+forgiving — but they are the fields that are cheap to get right and very hard
+to diagnose when wrong, and ART now has measured values rather than a guess.
+
+Found 2026-08-13 while reading two real cards. See
+[sd2-card-layout.md](sd2-card-layout.md).
+
+→ `core/rdb.rs` writes both fields and defaults to `DEFAULT_NUM_BUFFERS` (600);
+`ParsedPartition` reads them back. Closed 2026-08-13 with the two halves that
+were still owed:
+
+- **A test of its own.** `dosenv_offsets_match_the_amiga_layout` pins the
+  offsets, which is not the same as pinning the intent, and it reads bytes
+  rather than the round trip. `a_created_partition_carries_the_measured_dosenv_values`
+  creates an image, parses it back and asserts all three values off the parsed
+  partition; `an_explicit_buffer_count_survives_the_round_trip` proves the
+  default is not a ceiling. Mutation-checked both ways — restoring either old
+  value (`Mask` to zero, buffers to 100) fails them.
+- **The UI stopped naming a number it never asked for.** `HardDiskStudio.tsx`
+  hard-coded `num_buffers: 100` in three places, so the new default reached
+  nothing a user created — the core's measured value was silently outvoted by
+  a literal in a component. The three are gone; `PartitionSpec.num_buffers` is
+  `#[serde(default)]` on the Rust side and optional in `src/lib/hdf.ts`, so
+  absent and zero both mean "the core decides".
+  `a_spec_without_a_buffer_count_deserialises_to_the_default` covers the wire
+  format, which is the join the type system does not.
+
+**`SDH0` naming is deliberately not part of this.** It is a card convention,
+and an HDF that WinUAE mounts wants `DH0`; it belongs to SD-1, where the card
+is built.
 
 **ART-100** 🟡 **The PiStorm screen went grey without saying why** — *fixed 2026-08-13*
 `src/pages/PistormStudio.tsx` · Every control on that screen edits files on a
