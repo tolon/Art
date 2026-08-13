@@ -4,6 +4,21 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 
 import { useSettingsStore } from "@/stores/settingsStore";
 import { getAppInfo } from "@/lib/api";
+
+/**
+ * The author's mark, if one has been dropped in.
+ *
+ * `import.meta.glob` rather than a plain `import` for one reason: a plain
+ * import of a file that is not there fails the build, and this is somebody's
+ * personal logo rather than something ART ships by necessity. With the glob,
+ * the slot is empty until a file lands in `src/assets/` and full the moment one
+ * does — no code change, no broken image in between.
+ *
+ * Any of the usual formats, so whatever the author has is the file they use.
+ */
+const AUTHOR_LOGO: string | undefined = Object.values(
+  import.meta.glob<{ default: string }>("../assets/tolon-logo.*", { eager: true })
+)[0]?.default;
 import type { AppInfo } from "@/types";
 import { LANGUAGE_NAMES, SUPPORTED_LANGUAGES } from "@/i18n";
 import type { StoredOverwritePolicy, Theme, UxMode } from "@/lib/settings";
@@ -309,10 +324,26 @@ function AboutSection() {
     <section className="card">
       <h2 style={{ fontSize: 15 }}>{t("settings.about.heading")}</h2>
 
-      <p style={{ fontSize: 13, margin: "8px 0 0" }}>
-        <strong>{info?.name ?? "Amiga Retro Toolkit"}</strong>{" "}
-        {info ? <span className="muted">{info.version}</span> : null}
-      </p>
+      <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 8 }}>
+        {AUTHOR_LOGO && (
+          <img
+            src={AUTHOR_LOGO}
+            alt="tolon"
+            width={48}
+            height={48}
+            style={{ borderRadius: 6, flex: "0 0 auto" }}
+          />
+        )}
+        <div>
+          <p style={{ fontSize: 13, margin: 0 }}>
+            <strong>{info?.name ?? "Amiga Retro Toolkit"}</strong>{" "}
+            {info ? <span className="muted">{info.version}</span> : null}
+          </p>
+          <p className="faint" style={{ fontSize: 11, margin: "2px 0 0" }}>
+            {t("app.tagline")}
+          </p>
+        </div>
+      </div>
 
       <dl
         style={{
