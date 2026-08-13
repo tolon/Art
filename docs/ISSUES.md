@@ -25,6 +25,37 @@ what fixed it (with the test that proves it).
 
 _(ART-075 was open here; it is fixed — see [Phase 2a](#phase-2a) below.)_
 
+**ART-098** 🟠 **CI's licence gate could never pass, and the build and the installer never ran** — *fixed 2026-08-13*
+`.github/workflows/ci.yml` · The `Dependency licences & advisories` step used
+`EmbarkStudios/cargo-deny-action@v2`. That is a **container** action, container
+actions only run on Linux runners, and this job runs on `windows-latest`. So the
+step failed with
+
+```text
+##[error]Container action is only supported on Linux
+```
+
+on **every push since it was added** — and because it sits before them, the
+`Build application` and `Upload MSI artifact` steps never ran either. Three red
+runs in a row on `main` before anybody looked, and the reason was never in the
+code being pushed.
+
+Two things worth naming beyond the fix:
+
+- **`docs/licenses.md` claims cargo-deny runs on every push.** It has not. The
+  check itself is sound — it passes locally, and did today — but the claim was
+  not true, which is the same class of thing as ART-084 and ART-090 turned
+  inward.
+- **The frontend tests were never in CI at all.** `pnpm lint` type-checks and
+  stops there; the four hundred tests, including the en/tr parity check and the
+  two that prove every `Phrase` and every registry key resolves to a real
+  catalogue leaf, ran only on a developer's machine. A missing i18n key renders
+  a raw dotted string on screen and nothing in CI would have seen it.
+
+Fixed by installing `cargo-deny` and running the binary, and by adding a
+`Frontend tests` step. Found while pushing 28 commits of `main` that had never
+reached the remote.
+
 **ART-095** 🟠 **ART cannot open a real PiStorm card image at all** — *fixed 2026-08-13*
 `core/rdb.rs::find_rdb_location` · `core/hdf.rs` · `find_rdb_location` scans the
 first **16 blocks of the file** for `RDSK`. On every real PiStorm card those

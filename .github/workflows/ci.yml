@@ -42,6 +42,13 @@ jobs:
       - name: Type-check frontend
         run: pnpm lint
 
+      # These were missing entirely: 400-odd tests, including the en/tr parity
+      # check and the two that prove every `Phrase` and every registry key
+      # resolves to a real catalogue leaf. A typo there renders a raw dotted
+      # key on screen, and `pnpm lint` cannot see it.
+      - name: Frontend tests
+        run: pnpm test
+
       - name: Rust format check
         working-directory: src-tauri
         run: cargo fmt --check
@@ -79,10 +86,19 @@ jobs:
 
       # docs/licenses.md claims this runs; keep the claim true. deny.toml
       # rejects incompatible licences and known advisories (spec §67).
+      #
+      # Run as a binary, not as `EmbarkStudios/cargo-deny-action`. That action
+      # is a *container* action, containers only run on Linux runners, and this
+      # job runs on Windows -- so the step failed with "Container action is only
+      # supported on Linux" on every single push since it was added, and took
+      # the build and the MSI artifact down with it. A blocking gate that can
+      # never pass is not a gate.
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
       - name: Dependency licences & advisories
-        uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          manifest-path: src-tauri/Cargo.toml
+        working-directory: src-tauri
+        run: cargo deny check
 
       - name: Build application
         run: pnpm tauri build
