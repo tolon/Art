@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### The Hard Disk screen opens a PiStorm card (2026-08-13)
+
+#### Added
+- **Open a card and see what is on it.** A PiStorm SD card is not one hard
+  disk: it is a partition table with a FAT32 boot partition and one to three
+  Amiga disks inside it, each with its own partitions, and ART now shows it
+  that way — the four slots as the card's own documentation numbers them, then
+  a section per Amiga disk with where it starts and what is on it.
+- **The file system drivers are counted across the whole card**, which is what
+  the Amiga does. A card whose second disk carries no PFS3 while its partitions
+  are all PFS3 works perfectly, and ART no longer has any way to call those
+  partitions broken.
+- Any file can be opened this way: a plain hard disk image comes back as one
+  disk starting at the beginning, exactly as before. Nothing depends on the
+  file's extension.
+
+Reading only — ART cannot write a card yet, and the screen says so rather than
+leaving you to find out.
+
 ### Six from the open list (2026-08-13)
 
 #### Fixed

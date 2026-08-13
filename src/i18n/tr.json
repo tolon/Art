@@ -560,6 +560,27 @@
       "missing_one": "{{names}}, bu diskin taşımadığı bir dosya sistemini adıyla anıyor. Amiga bunu bağlamayacak — sessizce, hiçbir hata vermeden. Sürücünün RDB’ye eklenmesi gerekir.",
       "missing_other": "{{count}} bölüm, bu diskin taşımadığı dosya sistemlerini adıyla anıyor ({{names}}). Amiga bunları bağlamayacak — sessizce, hiçbir hata vermeden."
     },
+    "card": {
+      "title": "PiStorm SD kartı",
+      "readOnly": "Salt okunur — ART bir kartı henüz yazamıyor",
+      "disksLabel": "Amiga diski",
+      "bootLabel": "FAT32 önyükleme bölümü",
+      "noBoot": "yok — Pi'nin önyükleyeceği bir şey bulunmuyor",
+      "slot": "Yuva",
+      "type": "Tür",
+      "start": "Başlangıç",
+      "kind": {
+        "fat32": "FAT32 (Pi buradan açılıyor)",
+        "amiga": "Amiga diski (0x76)",
+        "other": "Diğer ({{code}})"
+      },
+      "disk": "Amiga diski {{n}}",
+      "diskAt": "Kartın {{offset}} içinde başlıyor · {{size}}. Amiga bunu kendi bölüm tablosu olan ayrı bir sürücü olarak görüyor.",
+      "driversTitle": "Bu karttaki dosya sistemi sürücüleri",
+      "unmountableEntry": "{{name}} ({{dosType}}, disk {{n}})",
+      "unmountable_one": "{{names}}, bu kartta hiçbir yerde bulunmayan bir dosya sistemini adıyla anıyor. Amiga bunu bağlamayacak — sessizce, hiçbir hata vermeden.",
+      "unmountable_other": "{{count}} bölüm, bu kartta hiçbir yerde bulunmayan dosya sistemlerini adıyla anıyor ({{names}}). Amiga bunları bağlamayacak — sessizce, hiçbir hata vermeden."
+    },
     "partitionProperties": "Bölüm Özellikleri",
     "deviceName": "Aygıt Adı:",
     "dosTypeSignature": "DosType İmzası:",

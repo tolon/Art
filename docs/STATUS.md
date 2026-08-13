@@ -22,7 +22,7 @@ Update it at the end of any session that changes what works.
 | **Version** | 0.1.0 (unreleased) |
 | **Current stage** | **SD-1 in progress** — G4 (RDB filesystem embedding) done both ways; G2, G7, G15, G8 owed. Reading a real card is done ahead of it ([ART-095](ISSUES.md), [ART-097](ISSUES.md)) but has no screen yet |
 | **Build** | PASS |
-| **Tests** | 1066 Rust passed, 0 failed; 425 frontend passed, 0 failed |
+| **Tests** | 1068 Rust passed, 0 failed; 432 frontend passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
 | **amitools oracle** | 53 checks, both directions — now including a filesystem driver ART embedded in an RDB and `rdbtool` extracted back out byte-for-byte |
@@ -816,14 +816,15 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
 
 ## Picking up next session
 
-**Nothing is half-done on disk.** The tree is green (1066 Rust, 425 frontend,
+**Nothing is half-done on disk.** The tree is green (1068 Rust, 432 frontend,
 clippy clean, oracle 53 both ways). ART-096, ART-085 and the six-issue sweep
 (ART-049/058/066/067/068/070) are all closed; **fourteen** entries remain open,
 and three of those are waiting on a decision rather than on work.
 
-**In order:** wiring `core/card.rs` into the
-Hard Disk studio, which reads real PiStorm cards today but has no screen;
-ART-099 (zoom overflow — **measure the running page, do not iterate on
+**The Hard Disk studio can open a card now** — the last thing between
+`core/card.rs` and a user. Both real cards were read through it on 2026-08-13.
+
+**In order:** ART-099 (zoom overflow — **measure the running page, do not iterate on
 screenshots**, see the entry); then ART-043 together with SD-1's G4, since
 writing an RDB at an offset is one fix, not two.
 
@@ -866,6 +867,7 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-13 | **A card has a screen.** `core/card.rs` could read a real PiStorm card since the morning and nothing could show one; `card_open` and the Hard Disk studio's card view close that. The studio now asks the **card reader for every file** and branches on whether a partition table was found — an HDF comes back as one area at offset zero, so a card is never recognised by its extension and `hdf_open`, which cannot open a card at all, is never asked to. The card view is a list of *disks*: the four MBR slots as the card's own documentation numbers them, one section per Amiga disk with its offset and its partitions, and the drivers **unioned across the whole card** with the unmountable question asked against that union (ART-097, computed in Rust so the UI cannot get it wrong). Read-only, and it says so on the screen. Verified against both real cards: MultibootOS 2.2 — 128 GB, 2 Amiga disks, 17 partitions, 2 drivers, none unmountable; CaffeineOS 9317 — 64 GB, 1 disk, 2 partitions, 1 driver. Also: **every missing material arrived**, `VideoCore.card` among them (the name that needed checking), so G2 is unblocked | 1068 Rust / 432 frontend |
 | 2026-08-13 | **Two more off the open list.** ART-066: planning a batch of archives has to unpack every one of them, and it did that on the command thread — the window froze with no progress and no Stop, in the step that exists so the user can change their mind. It is a job now, with the plan arriving on its own event; `busy` is cleared by the plan *or* by the job ending, which is the cancelled case the old code could not have at all. ART-058: cancelling a copy into a large image left the files that had landed in place, correctly, and said only "cancelled" — the same word the whole-file strategy uses when it leaves nothing. `CancelledPartway { files }` carries the count as a number to `JobState::Cancelled { files_landed }`, still a cancellation and never a failure, and the sentence is the UI's in the user's language. The large-image test asserts the count against the volume's own listing | 1066 Rust / 425 frontend |
 | 2026-08-13 | **Four off the open list, the four that needed no decision first.** ART-070: refreshing a pane moved the keyboard into it, so after F5 the next key acted on the pane the user was not looking at — `refresh` puts focus back, and the harness test proves the old behaviour too by running with it. ART-067: Stop was heard between archives but not inside one, because the unpack was handed `NoProgress`; a `BatchStep` sink forwards the cancel flag while keeping the batch's own counts, since forwarding it raw would make the progress bar leap and fall back at every archive. ART-068: the pane inferred "your mask matches nothing" from two counts matching a shape; `filterEntriesReporting` answers it where the removing happens. ART-049: `VolumeWriter::open` now refuses a geometry that contradicts the bootblock's dostype — no existing caller was refused, which is the evidence they all already agreed | 1063 Rust / 419 frontend |
 | 2026-08-13 | **ART-085 closed: what ART has open now outlives the screen.** Six studios each held their open file in a `useState`, so leaving the screen threw it away while the Dashboard's Recent list still named it a second later. `useOpenObject(kind)` — one small store, nine slots — is a drop-in for all six. **Session-scoped by the user's decision**: it never reaches `settings.json`, because a path that outlives the run can name a file since deleted or unplugged, and that is a bigger design than this asked for. Only the path is held; a studio re-reads its file on the way back, so nothing comes back stale. Router state still wins. Caught on the way past: ADF Studio's `loadDisk` reset the hex panel on every run, which on a reopen would have switched off a remembered choice — a setting changing without the user changing it. Mutation-checked: the harness back on `useState` fails two of five cases | 1060 Rust / 410 frontend |

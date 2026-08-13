@@ -130,6 +130,7 @@ pub fn run() {
             commands::lha::lha_detect_whdload,
             commands::hdf::hdf_open,
             commands::hdf::hdf_create,
+            commands::card::card_open,
             commands::gotek::gotek_scan,
             commands::gotek::gotek_save,
             commands::distro::distro_profiles,
