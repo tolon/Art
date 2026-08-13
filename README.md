@@ -166,6 +166,9 @@ pnpm tauri dev
 # Type-check the frontend
 pnpm lint
 
+# Run the frontend unit tests
+pnpm test
+
 # Run Rust unit tests
 cd src-tauri && cargo test
 
