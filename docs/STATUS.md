@@ -645,10 +645,13 @@ gap analysis was written around "the A500"; that is one of the machines
 PiStorm goes into. What varies by machine is data the build already carries —
 which Kickstart ROM lands on the FAT32 partition, what the Emu68 config says
 about the board, which OS release is installed, what partition geometry suits
-the card — not a code path. Two things are still the user's to settle before
-SD-1 designs a layout: which PiStorm board(s) to target first, and which
-machine the first card gets verified on (recorded with the result, not
-generalised from it).
+the card — not a code path.
+
+**Settled 2026-08-13: the classic PiStorm on a Pi 3A+, first verified on an
+A500** (an A500+ follows around 2026-08-28). That is the hardware in the room,
+which is the only kind of answer this question has. It is recorded *with* the
+result rather than generalised from it — a card that boots an A500 has proved
+one machine, not the line.
 
 | Phase | Contents |
 |---|---|
@@ -824,10 +827,38 @@ ART-099 (zoom overflow — **measure the running page, do not iterate on
 screenshots**, see the entry); then ART-043 together with SD-1's G4, since
 writing an RDB at an offset is one fix, not two.
 
-**Two decisions still with the user**, and SD-1's layout cannot be designed
-without them: which PiStorm board to target first, and which machine the first
-image gets verified on. Materials still missing for a distribution build:
-`pfs3aio`, Aminet Picasso96, the Emu68 kernel zip, `videocore.card`.
+**Both of SD-1's open decisions are answered** (2026-08-13), and by hardware
+rather than by preference — the user has an **A500 with a classic PiStorm on a
+Raspberry Pi 3A+**, plus a Gotek. So:
+
+- **Target board: the classic PiStorm, Pi 3A+.** Which is `PistormHardware::default()`
+  already, and the Pi 3A+ is on the project's own supported list for that board
+  rather than the reported-working one.
+- **First image verified on: the A500.** An **A500+ arrives around 2026-08-28**,
+  which makes a second witness possible — the same value the bare-metal ADF pass
+  had, twice over.
+
+Consequences that are now facts instead of parameters: the kernel archive is
+`Emu68-pistorm.zip` on the stable line (**not** the same file as on 1.1 alpha —
+ART-091), the SD driver is `brcm-sdhc.device`, and `genet.device` is irrelevant
+(the 3A+ has no ethernet; its WiFi is `wifipi.device`).
+
+**Materials: less missing than it looked.** The user's collection at
+`E:\amiga\Amigatolon` was inventoried on 2026-08-13 and **nothing copyrighted
+is absent** — A1200 Kickstarts in both families (3.1 rev 40.68, 3.2's
+`kicka1200.rom`, 3.2.1's `A1200.47.102.rom`), the full AmigaOS 3.2 ADF set plus
+its CD and the 3.2.1/3.2.2 updates, the 3.9 ISO with both BoingBags, every
+release from 1.0 to 3.1 as ADFs, and both real PiStorm distributions
+(CaffeineOS 9317, MultibootOS 2.2) as images. WinUAE, 7-Zip and amitools are
+installed.
+
+What is still to be fetched is free and small, and only the first item is on
+the critical path: **`Emu68-pistorm.zip`** (stable line — *not* the same file
+on 1.1 alpha, ART-091), an **SD card and reader**, then `pfs3aio.lha`, Aminet
+Picasso96, `videocore.card`, `wifipi.device`, and `hst-imager` for SD-0's exit
+test. The full list, with what each one unblocks, is `../eksik malzemeler.md`
+(Turkish, kept outside the repository since it is the user's own shopping
+list).
 
 ## Session log
 
