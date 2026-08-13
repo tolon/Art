@@ -77,7 +77,7 @@ import {
 import { checkoutEdit, checkoutOpen, volumeIconFor } from "@/lib/checkout";
 import { planFunctionKeys } from "@/lib/functionKeyPlan";
 import { onJobProgress, type JobProgress } from "@/lib/jobs";
-import { filterEntries } from "@/lib/mask";
+import { filterEntries, filterEntriesReporting } from "@/lib/mask";
 import { planMove } from "@/lib/movePlan";
 import {
   clampDockHeight,
@@ -538,6 +538,16 @@ export function FileManager() {
    * function-key table below.
    */
   const [focused, setFocused] = useState<Side>("left");
+  /**
+   * The same value, readable from a callback that must not depend on it.
+   *
+   * `refresh` (below) has to know which pane the user is in so it can put the
+   * keyboard back there, and taking `focused` as a dependency would rebuild
+   * every callback downstream of it on each Tab. A ref is read at call time,
+   * which is exactly when the answer is wanted.
+   */
+  const focusedRef = useRef<Side>(focused);
+  focusedRef.current = focused;
   /** What is typed into the command line above the F-key bar. One box for
    * the whole screen, acting on whichever pane is focused — Total Commander
    * has one too, for the same reason. */
@@ -1645,8 +1655,21 @@ export function FileManager() {
     if (back) await openLocal(side, back.path, back.cursor);
   }
 
+  /**
+   * Re-open a pane where it already is, to show what an operation changed.
+   *
+   * **Leaves the keyboard where it was** (ART-070). Each `open*` function ends
+   * with `setFocused(side)`, which is right when the *user* opens something in
+   * a pane and wrong here: F5's copy path refreshes the **destination** once
+   * the job result lands, so focus used to jump silently out of the pane the
+   * user was working in, and the next F-key press landed on the pane they were
+   * not looking at. Total Commander leaves focus on the source. Restoring
+   * afterwards rather than teaching six `open*` functions a flag keeps the fix
+   * in one place, and refreshing the pane that already has focus is a no-op.
+   */
   const refresh = useCallback(
     async (side: Side) => {
+      const keepFocusOn = focusedRef.current;
       const state = pane(side);
       if (state.kind === "local" && state.location) {
         await openLocal(side, state.location);
@@ -1680,6 +1703,7 @@ export function FileManager() {
           await openHdf(side, state.location, state.host);
         }
       }
+      setFocused(keepFocusOn);
     },
     [pane, openLocal, openAdf, openHdf, openVolume, openIso, openArchive, openCbm]
   );
@@ -3009,6 +3033,9 @@ export function FileManager() {
       side,
       state,
       sortedEntries: paneEntries(side),
+      // Asked of the filter itself rather than worked out from two counts
+      // downstream (ART-068).
+      maskHidEverything: filterEntriesReporting(state.entries, filter[side]).hidEverything,
       sort: sort[side],
       onSortChange: (column: SortColumn) =>
         setSort((s) => ({ ...s, [side]: clickColumn(s[side], column) })),
@@ -3795,6 +3822,7 @@ function Pane({
   side,
   state,
   sortedEntries,
+  maskHidEverything,
   sort,
   onSortChange,
   filter,
@@ -3834,6 +3862,9 @@ function Pane({
    * `FileManager` for why this and not `state.entries` is what the row list
    * below renders. */
   sortedEntries: PanelEntry[];
+  /** Whether the mask is the reason there is nothing to show — see
+   * `@/lib/mask`'s `FilteredEntries` (ART-068). */
+  maskHidEverything: boolean;
   sort: SortState;
   onSortChange: (column: SortColumn) => void;
   /** This pane's filename mask (`@/lib/mask`) — the `*.*` in the reference's
@@ -4255,12 +4286,12 @@ function Pane({
           {/* A mask matching nothing says so, rather than showing the same
               blank pane a genuinely empty directory would — that would read
               as ART having failed to open the disk, not as a filter doing
-              its job. Told apart by whether the *unfiltered* directory
-              (`state.entries`, not `sortedEntries`) actually had anything
-              in it. */}
+              its job. The two are told apart by `@/lib/mask` itself, which
+              did the removing; this used to compare the filtered count
+              against the unfiltered one and infer it (ART-068). */}
           {sortedEntries.length === 0 && !state.error && (
             <li className="muted" style={{ fontSize: 12, padding: "8px 0 8px 8px" }}>
-              {filter.trim() !== "" && state.entries.length > 0
+              {maskHidEverything
                 ? t("files.pane.filterNoMatch", { mask: filter })
                 : t("files.pane.empty")}
             </li>

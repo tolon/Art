@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Four from the open list (2026-08-13)
+
+#### Fixed
+- **After a copy, the keyboard stayed where you were.** F5 refreshes the
+  destination pane when the job finishes, and that used to move the keyboard
+  there — so the next F-key press acted on the pane you were not looking at.
+- **Stop now works in the middle of an archive**, not only between two. A batch
+  of five whose third one is large used to sit there ignoring Stop for as long
+  as that archive took to unpack.
+- A pane with a filter that matches nothing says so. It could, in principle,
+  have said "this folder is empty" instead — which reads as ART having failed
+  to open the disk rather than as a filter doing its job.
+
 ### What you have open stays open (2026-08-13)
 
 #### Fixed

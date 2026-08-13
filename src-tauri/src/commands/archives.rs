@@ -296,6 +296,45 @@ struct Unpacked {
 /// Both [`archives_plan_install`] and [`archives_install`] call this and get
 /// the same drawer name for the same archive — a plan that shows one name and
 /// an install that creates another would defeat §92 entirely.
+/// One archive's slice of a batch's progress (ART-067).
+///
+/// `prepare_archives` used to unpack with `NoProgress`, so `is_cancelled()`
+/// was answered `false` all the way down and Stop was honoured only *between*
+/// archives: a batch whose third archive is large left Stop unresponsive for
+/// however long that one extraction took.
+///
+/// Forwarding the batch's own sink fixes that, but forwarding it **raw** would
+/// let the extractor's per-entry counts (142 of 2000 files) overwrite the
+/// batch's per-archive ones (3 of 5), so the bar would leap forward inside an
+/// archive and fall back at every boundary. This keeps the batch's numbers and
+/// carries the inner message through.
+///
+/// The message keeps the `"Unpacking …"` prefix on purpose: the phase a report
+/// belongs to is told from that prefix — see
+/// `cancelling_during_the_copy_phase_writes_nothing`, whose sink waits for
+/// reports that are *not* the unpack phase's.
+struct BatchStep<'a> {
+    outer: &'a dyn ProgressSink,
+    /// Which archive of the batch, and how many there are.
+    index: u64,
+    total: u64,
+    label: String,
+}
+
+impl ProgressSink for BatchStep<'_> {
+    fn report(&self, _done: u64, _total: Option<u64>, message: &str) {
+        self.outer.report(
+            self.index,
+            Some(self.total),
+            &format!("Unpacking {} — {message}", self.label),
+        );
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.outer.is_cancelled()
+    }
+}
+
 fn prepare_archives(
     archives: &[PathBuf],
     staging: &Path,
@@ -309,16 +348,26 @@ fn prepare_archives(
     let mut unpacked: Vec<Unpacked> = Vec::with_capacity(archives.len());
 
     for (index, archive) in archives.iter().enumerate() {
-        // Between whole units of work, never mid-unpack (§54): one archive is
-        // one unit, so cancelling here stops before the next one starts and
-        // never leaves a partially unpacked archive behind.
+        // Stop, asked between two archives (§54). Since ART-067 it is also
+        // heard *inside* one, through `BatchStep` below — which does not
+        // weaken the rule: what a cancelled unpack leaves half-finished is a
+        // scratch directory ART owns and drops, never a file of the user's.
+        // Nothing reaches the volume until every archive is staged.
         if progress.is_cancelled() {
             return Err(CoreError::Cancelled);
         }
         let label = file_label(archive);
         progress.report(index as u64, Some(total), &format!("Unpacking {label}"));
 
-        let (scratch, unpack_skipped) = unpack_for_install(archive, &NoProgress)?;
+        // The batch's sink, not `NoProgress`: Stop has to be heard *inside* a
+        // large archive, not merely between two (ART-067).
+        let step = BatchStep {
+            outer: progress,
+            index: index as u64,
+            total,
+            label: label.clone(),
+        };
+        let (scratch, unpack_skipped) = unpack_for_install(archive, &step)?;
         let top = top_level_entries(scratch.path())?;
 
         let (drawer_name, content_root) = if top.len() == 1 && top[0].is_dir {
@@ -834,6 +883,58 @@ mod tests {
             before,
             "cancelling during unpacking must leave the image byte-for-byte unchanged"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ART-067. Stop has to be heard **inside** one archive, not only between
+    /// two: a batch of five whose third is large used to leave Stop
+    /// unresponsive for the whole of that extraction, because
+    /// `prepare_archives` unpacked with `NoProgress` and `is_cancelled()`
+    /// therefore answered `false` all the way down.
+    ///
+    /// One archive on purpose. The loop's own check at the top runs before the
+    /// sink has ever been called, and there is no second iteration to reach —
+    /// so the only way this can come back `Cancelled` is if the cancellation
+    /// travelled *into* the unpack. Against the old code it returned `Ok`.
+    #[test]
+    fn stop_is_heard_inside_an_archive_not_only_between_them() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        /// Trips on the first report the unpack itself makes — `BatchStep`
+        /// marks those with an em dash, where the loop's own per-archive line
+        /// is plain `"Unpacking Game0.lha"`.
+        struct StopInsideUnpack(AtomicBool);
+        impl ProgressSink for StopInsideUnpack {
+            fn report(&self, _done: u64, _total: Option<u64>, message: &str) {
+                if message.contains('—') {
+                    self.0.store(true, Ordering::SeqCst);
+                }
+            }
+            fn is_cancelled(&self) -> bool {
+                self.0.load(Ordering::SeqCst)
+            }
+        }
+
+        let dir = scratch("cancel-inside-archive");
+        let archive = dir.join("Game0.lha");
+        std::fs::write(
+            &archive,
+            make_lha_with(&[
+                ("Game0/One", b"aaaa".as_slice()),
+                ("Game0/Two", b"bbbb".as_slice()),
+                ("Game0/Three", b"cccc".as_slice()),
+            ]),
+        )
+        .unwrap();
+
+        let staging = dir.join("staging");
+        std::fs::create_dir_all(&staging).unwrap();
+
+        let sink = StopInsideUnpack(AtomicBool::new(false));
+        let err = prepare_archives(&[archive], &staging, &sink)
+            .expect_err("a cancelled unpack must not come back as a prepared batch");
+        assert_eq!(err.code(), "ART-CANCELLED", "{err}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

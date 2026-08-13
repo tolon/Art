@@ -200,20 +200,6 @@ would need the block-journal strategy to buffer its own generation of
 deletes behind one commit point the way the whole-file strategy already
 does, which is a real design change, not a one-line fix.
 
-**ART-070** 🔵 **`refresh(side)` moves keyboard focus to the pane it refreshed**
-`src/pages/FileManager.tsx` — `openLocal`, `openAdf`, `openHdf` and
-`openVolume` (lines 552, 585, 600, 638) each end with `resetSelection(side);
-setFocused(side);`, and `refresh(side)` (line ~723) calls whichever of them
-matches the pane's kind. F5's copy-in path calls `refresh(to)` on the
-*destination* pane once the job result arrives, so after a copy, keyboard
-focus silently jumps from the source pane (where the user was working) to
-the destination — Total Commander leaves focus on the source. Cosmetic, not
-a safety issue: nothing is acted on incorrectly, the next F-key press just
-lands on the pane the user was not looking at. Fix would need `refresh` to
-take an explicit "keep focus here" flag, or for its callers to restore
-`focused` afterward rather than trusting the open-pane functions' own
-default.
-
 **ART-069** 🔵 **No frontend test renders `FileManager.tsx`**
 `src/pages/FileManager.tsx` · It calls Tauri commands (`onVolumeWriteResult`,
 `onJobProgress`, panel listing, …) on mount, which is why every phase-1a
@@ -230,37 +216,6 @@ this needs either a mock of the Tauri IPC surface (`@tauri-apps/api/core`'s
 `invoke`, `@tauri-apps/api/event`'s `listen`) sufficient to render the page
 in a test, or splitting `FileManager.tsx` into smaller components each
 small enough to mock individually — a real task, not a quick fix.
-
-**ART-068** 🔵 **The filter box tells "empty" from "no match" by comparing entry counts, not a dedicated flag**
-`src/pages/FileManager.tsx` (~line 2260) · The "a mask matching nothing says so"
-message picks between `files.pane.filterNoMatch` and `files.pane.empty` with
-`filter.trim() !== "" && state.entries.length > 0` — a mask is active *and*
-the pane's unfiltered listing was non-empty. That reads correctly today
-because `filterEntries` (`src/lib/mask.ts`) never changes the unfiltered
-count and the mask resets on navigation, but the distinction the UI actually
-wants — "did the mask remove everything?" — is being inferred from two
-numbers matching a shape, not read off a value that says so directly. A
-future change to either side (a mask that also hid something for a different
-reason, a pane whose unfiltered count is not `state.entries` any more) could
-silently start showing "this folder is empty" for a folder that only looks
-empty because of the filter, which reads as ART having failed to open the
-disk. No test exercises the two counts diverging from what the boolean they
-stand in for would say. Fix is mechanical: have `filterEntries` (or a sibling)
-return whether it removed anything, and key the message off that instead of
-re-deriving it at the call site.
-
-**ART-067** 🔵 **A batch archive install can't be stopped mid-archive**
-`commands/archives.rs::prepare_archives` (line ~316) · `unpack_for_install(archive, &NoProgress)`
-is called with `&NoProgress` regardless of which caller is running — including
-`install_archives`, which is on a real job with a real `ProgressSink` one
-call up the stack. `is_cancelled()` is checked once per archive, at the top
-of the loop (line ~310), so Stop is honoured *between* archives but not
-during one — a batch of five archives where the third is large leaves Stop
-unresponsive for however long that one extraction takes. Not a data-safety
-issue (§54's "never mid-write" is still honoured: nothing is written to the
-volume until every archive is unpacked and staged), just a slower response
-to Stop than the rest of the job queue gives. Fix is to thread the real
-`progress` sink into `unpack_for_install` instead of a fixed `NoProgress`.
 
 **ART-066** 🟡 **`archives_plan_install` unpacks the whole batch on the Tauri command thread**
 `commands/archives.rs::archives_plan_install` (line ~104) · Every other
@@ -389,19 +344,6 @@ still passes the gate and commits. `CHANGELOG.md`'s entry for ART-042 was
 corrected in this pass to stop implying broader coverage than this. Deepening
 `validate_image` to catch these is real work, not a flag to flip.
 
-**ART-049** 🟡 **`create.rs`'s oracle hook and `VolumeWriter::open` agree by hand, not by a check**
-`core/adf/create.rs` (`oracle_export`), `core/volume/write/mod.rs`
-(`VolumeWriter::open`) · The oracle export hook hardcodes `DOS\x01` geometry
-while formatting with `FileSystemType::Ffs` — the two are only consistent
-because the hook's author chose them to match. `VolumeWriter::open` does not
-cross-check the geometry it is handed against the dostype the image's own
-bootblock declares, so a caller that passed a geometry for one filesystem
-against an image formatted as another would not be refused at the boundary
-that is supposed to catch exactly that. No test exercises the disagreement
-because nothing in the suite constructs one. Needs a guard in
-`VolumeWriter::open` and a fixture that deliberately mismatches geometry and
-bootblock.
-
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 
@@ -439,6 +381,78 @@ partition) — no test covers it today, which is why it survived this long.
 ---
 
 ## Fixed
+
+### The open-list sweep (2026-08-13)
+
+Four of the open entries closed in one pass, chosen because none of them needed
+a decision first — the ones that do are still open and say so.
+
+**ART-070** 🔵 **`refresh(side)` moved keyboard focus to the pane it refreshed** — *fixed 2026-08-13*
+`src/pages/FileManager.tsx` · `openLocal`, `openAdf`, `openHdf` and
+`openVolume` each end with `setFocused(side)`, and `refresh(side)` calls
+whichever matches the pane's kind. F5's copy path refreshes the **destination**
+once the job result arrives, so focus jumped silently out of the pane the user
+was working in and the next F-key press landed on the pane they were not
+looking at. Total Commander leaves focus on the source.
+
+→ `refresh` reads the focused side from a ref before re-opening and puts the
+keyboard back afterwards. A ref rather than a dependency: taking `focused` as
+one would rebuild every callback downstream of it on each Tab. Fixed once in
+`refresh` rather than teaching six `open*` functions a flag — *opening* is the
+user's instruction and should move focus; *refreshing* is ART's own and should
+not. `FileManagerFocus.test.tsx` pins all three cases, the last of them by
+running the harness with the old behaviour and asserting the bug.
+
+**ART-068** 🔵 **The filter box told "empty" from "no match" by comparing entry counts** — *fixed 2026-08-13*
+`src/lib/mask.ts` · `src/pages/FileManager.tsx` · The message picked between
+`files.pane.filterNoMatch` and `files.pane.empty` with `filter.trim() !== "" &&
+state.entries.length > 0` — correct only because `filterEntries` never changes
+the unfiltered count, which is a property of *that* module the call site had no
+way to depend on. Showing "this folder is empty" for a folder that only looks
+empty because of a mask reads as ART having failed to open the disk.
+
+→ `filterEntriesReporting` returns `{ entries, hidEverything }`, answered by the
+code that did the removing, from the list it removed from; `filterEntries` stays
+as a wrapper for the callers that do not need the reason. Five cases in
+`mask.test.ts`, including the one the two counts could not tell apart: an empty
+folder with an active mask is still an empty folder.
+
+**ART-067** 🔵 **A batch archive install could not be stopped mid-archive** — *fixed 2026-08-13*
+`commands/archives.rs::prepare_archives` · Unpacking used `&NoProgress`, so
+`is_cancelled()` answered `false` all the way down and Stop was honoured
+*between* archives but not during one: a batch of five whose third is large
+left Stop unresponsive for the whole of that extraction.
+
+→ A `BatchStep` sink forwards the real cancel flag and keeps the batch's own
+counts. Forwarding the sink raw would have let the extractor's per-entry counts
+(142 of 2000 files) overwrite the per-archive ones (3 of 5), so the bar would
+leap inside an archive and fall back at each boundary; the message keeps its
+`"Unpacking …"` prefix because
+`cancelling_during_the_copy_phase_writes_nothing` tells the phases apart by it.
+§54 is not weakened: what a cancelled unpack leaves half-finished is a scratch
+directory ART owns and drops, and nothing reaches the volume until every archive
+is staged. `stop_is_heard_inside_an_archive_not_only_between_them` uses **one**
+archive on purpose — with no second iteration to reach, the only way it can come
+back `Cancelled` is if the cancellation travelled into the unpack.
+Mutation-checked against `&NoProgress`.
+
+**ART-049** 🟡 **`create.rs`'s oracle hook and `VolumeWriter::open` agreed by hand, not by a check** — *fixed 2026-08-13*
+`core/volume/write/mod.rs::VolumeWriter::open` · The oracle export hook formats
+with `FileSystemType::Ffs` and then names `DOS\x01` geometry by hand, and the
+two agreed only because whoever wrote it chose them to. Nothing at the writer's
+boundary cross-checked the geometry it was handed against the dostype the
+image's own bootblock declares — and the flavour byte decides whether data
+blocks carry OFS's 24-byte header and whether names hash in international mode,
+so a writer told the wrong one produces a disk that is internally coherent and
+unreadable to the machine it was made for.
+
+→ `open` reads block 0 and refuses (`ART-SAFETY-REFUSED`) when the bootblock
+carries a **real** DOS signature that differs from the geometry's. A blank
+bootblock is deliberately not a contradiction: an unformatted volume is a
+different complaint with its own failure further in, and refusing it here would
+swap a confusing error for a confusing refusal. Two tests, one for each half;
+the refusal also proves the image is left byte-for-byte unchanged. No existing
+caller was refused, which is the evidence that everything already agreed.
 
 ### Phase 2b, the PiStorm rebuild and the first real cards (2026-08-12 → 08-13)
 

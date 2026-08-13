@@ -22,7 +22,7 @@ Update it at the end of any session that changes what works.
 | **Version** | 0.1.0 (unreleased) |
 | **Current stage** | **SD-1 in progress** — G4 (RDB filesystem embedding) done both ways; G2, G7, G15, G8 owed. Reading a real card is done ahead of it ([ART-095](ISSUES.md), [ART-097](ISSUES.md)) but has no screen yet |
 | **Build** | PASS |
-| **Tests** | 1060 Rust passed, 0 failed; 410 frontend passed, 0 failed |
+| **Tests** | 1063 Rust passed, 0 failed; 419 frontend passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
 | **amitools oracle** | 53 checks, both directions — now including a filesystem driver ART embedded in an RDB and `rdbtool` extracted back out byte-for-byte |
@@ -816,8 +816,9 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
 
 ## Picking up next session
 
-**Nothing is half-done on disk.** The tree is green (1060 Rust, 410 frontend,
-clippy clean, oracle 53 both ways). ART-096 and ART-085 are both closed.
+**Nothing is half-done on disk.** The tree is green (1063 Rust, 419 frontend,
+clippy clean, oracle 53 both ways). ART-096, ART-085 and the four-issue sweep
+(ART-049/067/068/070) are all closed; sixteen entries remain open.
 
 **In order:** wiring `core/card.rs` into the
 Hard Disk studio, which reads real PiStorm cards today but has no screen;
@@ -864,6 +865,7 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-13 | **Four off the open list, the four that needed no decision first.** ART-070: refreshing a pane moved the keyboard into it, so after F5 the next key acted on the pane the user was not looking at — `refresh` puts focus back, and the harness test proves the old behaviour too by running with it. ART-067: Stop was heard between archives but not inside one, because the unpack was handed `NoProgress`; a `BatchStep` sink forwards the cancel flag while keeping the batch's own counts, since forwarding it raw would make the progress bar leap and fall back at every archive. ART-068: the pane inferred "your mask matches nothing" from two counts matching a shape; `filterEntriesReporting` answers it where the removing happens. ART-049: `VolumeWriter::open` now refuses a geometry that contradicts the bootblock's dostype — no existing caller was refused, which is the evidence they all already agreed | 1063 Rust / 419 frontend |
 | 2026-08-13 | **ART-085 closed: what ART has open now outlives the screen.** Six studios each held their open file in a `useState`, so leaving the screen threw it away while the Dashboard's Recent list still named it a second later. `useOpenObject(kind)` — one small store, nine slots — is a drop-in for all six. **Session-scoped by the user's decision**: it never reaches `settings.json`, because a path that outlives the run can name a file since deleted or unplugged, and that is a bigger design than this asked for. Only the path is held; a studio re-reads its file on the way back, so nothing comes back stale. Router state still wins. Caught on the way past: ADF Studio's `loadDisk` reset the hex panel on every run, which on a reopen would have switched off a remembered choice — a setting changing without the user changing it. Mutation-checked: the harness back on `useState` fails two of five cases | 1060 Rust / 410 frontend |
 | 2026-08-13 | **ART-096 closed.** The RDB half had landed; what was left was the half that decides what a *user* gets. `HardDiskStudio.tsx` hard-coded `num_buffers: 100` in three places, so the core's measured 600 reached nothing anybody created through the UI — a literal in a component quietly outvoting the engine. The three are gone and the field is now `#[serde(default)]` / optional in `hdf.ts`: absent and zero both mean "the core decides", because a screen that never asks for a buffer count has no business stating one. Three tests, mutation-checked in both directions — restoring either old value fails them. Docs: CLAUDE.md gained the network layer, the two-catalogue string rule and the Vitest jsdom trap; CONTRIBUTING's "branch from `master`" is gone, published months ago | 1060 Rust / 401 frontend |
 | 2026-08-13 | ART-096 half done (RDB `MaxTransfer`, `Mask`, 600 buffers written and read back); ART-100 (the PiStorm screen said "choose a card first" only by being grey); ART-099 reopened after two bad fixes were reverted; docs swept — seventeen fixed entries moved out of ISSUES' Open section, fifteen stale `#open` anchors corrected, CLAUDE.md's dead branch name and missing CI step fixed | 1057 Rust / 401 frontend |

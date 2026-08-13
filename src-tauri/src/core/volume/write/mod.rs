@@ -51,7 +51,7 @@ use std::path::{Path, PathBuf};
 use crate::core::adf::bcpl::AmigaDate;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::volume::journal::Journalled;
-use crate::core::volume::{BlockDevice, BlockDeviceMut, VolumeGeometry};
+use crate::core::volume::{BlockDevice, BlockDeviceMut, DosType, VolumeGeometry};
 
 use bitmap::Allocator;
 use layout::{get_u32, BlockSet, CHECKSUM_OFFSET};
@@ -209,6 +209,34 @@ impl<'a> VolumeWriter<'a> {
                     device.total_blocks()
                 ),
             });
+        }
+
+        // ART-049: the geometry and the disk must agree about the filesystem.
+        //
+        // Everything downstream reads the flavour off `geometry.dos_type` —
+        // OFS data blocks carry a 24-byte header and FFS ones do not, and
+        // `is_international()` decides how every name hashes. A caller that
+        // handed in a geometry for one filesystem against an image formatted
+        // as another would have written a disk that is internally coherent and
+        // wrong, and nothing at this boundary said so. `core/adf/create.rs`'s
+        // oracle hook is the live example: it formats with `FileSystemType::Ffs`
+        // and then names `DOS\x01` by hand, and the two agree only because
+        // whoever wrote it chose them to.
+        //
+        // Only a **real** signature counts. A bootblock of zeroes is an
+        // unformatted volume, which is a different complaint with its own
+        // failure further in; refusing it here would turn a confusing error
+        // into a confusing refusal without telling anybody more.
+        let mut boot = vec![0u8; geometry.block_size];
+        device.read_block(0, &mut boot)?;
+        let on_disk = DosType::new([boot[0], boot[1], boot[2], boot[3]]);
+        if on_disk.is_dos() && on_disk != geometry.dos_type {
+            return Err(CoreError::SafetyRefused(format!(
+                "this volume is formatted {} but the write was set up for {} — \
+                 refusing rather than writing blocks in the wrong layout",
+                on_disk.label(),
+                geometry.dos_type.label()
+            )));
         }
 
         Ok(Self {
@@ -1070,6 +1098,62 @@ mod tests {
 
     fn floppy(name: &str) -> Disk {
         Disk::new(name, 1760, *b"DOS\x01")
+    }
+
+    /// ART-049. The geometry a writer is opened with and the filesystem the
+    /// image is actually formatted as have to be the same answer.
+    ///
+    /// Nothing constructed the disagreement before this test, which is why
+    /// nothing caught it. It is not academic: the flavour byte decides whether
+    /// data blocks carry OFS's 24-byte header and whether names hash in
+    /// international mode, so a writer told the wrong one produces a disk that
+    /// is internally consistent and unreadable to the machine it was made for.
+    #[test]
+    fn a_geometry_that_contradicts_the_bootblock_is_refused() {
+        // Formatted FFS…
+        let disk = floppy("dostype-mismatch");
+        let before = disk.bytes();
+
+        // …opened as OFS. Same size, same layout, one byte of difference.
+        let mut lying = disk.geometry;
+        lying.dos_type = DosType::new(*b"DOS\x00");
+
+        let mut device = disk.device();
+        // `let Err(..) else` rather than `expect_err`: the Ok side is a live
+        // writer holding the device, and it is not `Debug`.
+        let Err(err) = VolumeWriter::open(&mut device, lying, &disk.path, 0) else {
+            panic!("a writer must not open a volume it disagrees with about the filesystem");
+        };
+        assert_eq!(err.code(), "ART-SAFETY-REFUSED", "{err}");
+
+        drop(device);
+        assert_eq!(
+            disk.bytes(),
+            before,
+            "a refused open must leave the image byte-for-byte unchanged"
+        );
+    }
+
+    /// The other half of the same guard: an unformatted volume is **not** what
+    /// it is for. A bootblock of zeroes carries no signature to contradict, and
+    /// refusing it here would replace a confusing error further in with a
+    /// confusing refusal at the door.
+    #[test]
+    fn a_blank_bootblock_is_not_treated_as_a_contradiction() {
+        let dir = scratch("dostype-blank");
+        let path = dir.join("blank.adf");
+        let geometry = VolumeGeometry::floppy_dd(DosType::new(*b"DOS\x01"));
+        std::fs::write(&path, vec![0u8; geometry.total_bytes() as usize]).unwrap();
+
+        let mut device =
+            FileRegionMut::open(&path, 0, geometry.total_bytes(), geometry.block_size).unwrap();
+        assert!(
+            VolumeWriter::open(&mut device, geometry, &path, 0).is_ok(),
+            "an unformatted volume is a different complaint, not this one"
+        );
+
+        drop(device);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// `all_bytes()` is only sound for a volume small enough to hold entirely
