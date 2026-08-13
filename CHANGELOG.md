@@ -7,9 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Four from the open list (2026-08-13)
+### Six from the open list (2026-08-13)
 
 #### Fixed
+- **Planning a batch of `.lha` archives no longer freezes the window.** ART has
+  to unpack every archive to tell you what each one will create, and it used to
+  do that with the interface stopped dead — no progress, no Stop, in the very
+  step that exists so you can change your mind. It runs as a job now, with a
+  bar and a Stop button like everything else.
+- **Cancelling a copy into a large hard disk image says how many files already
+  landed**, instead of just "cancelled". They are correctly still there: a large
+  image is written file by file, each one finished before the next starts, so
+  stopping cannot take back what is done. A small image is written whole and
+  cancelling really does leave nothing — that still says plain "cancelled".
 - **After a copy, the keyboard stayed where you were.** F5 refreshes the
   destination pane when the job finishes, and that used to move the keyboard
   there — so the next F-key press acted on the pane you were not looking at.

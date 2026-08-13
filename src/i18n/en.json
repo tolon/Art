@@ -157,6 +157,8 @@
         "running": "Running",
         "done": "Done",
         "cancelled": "Cancelled",
+        "cancelledPartway_one": "Cancelled — {{count}} file was already written and is still there",
+        "cancelledPartway_other": "Cancelled — {{count}} files were already written and are still there",
         "failed": "Failed ({{code}})"
       }
     },

@@ -45,7 +45,7 @@ use tauri::{AppHandle, Emitter, State};
 use super::jobs::{spawn_job, JobRegistry};
 use super::oplog::{user_operation, write_to_path};
 use crate::core::error::{CoreError, CoreResult};
-use crate::core::jobs::{JobId, NoProgress, ProgressSink};
+use crate::core::jobs::{JobId, ProgressSink};
 use crate::core::lha::OverwritePolicy;
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::core::security::safe_join;
@@ -99,19 +99,52 @@ pub struct ArchivesPlan {
     pub cost: CopyPlan,
 }
 
+/// The event a finished plan arrives on. One per `archives_plan_install` job.
+pub const ARCHIVES_PLAN_EVENT: &str = "archives-plan-result";
+
+/// A plan, tied back to the job that produced it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ArchivesPlanResult {
+    pub job_id: JobId,
+    pub plan: ArchivesPlan,
+}
+
 /// What installing `archives` into a volume would do. Writes nothing.
+/// Returns a job id (§54, §55).
+///
+/// **A job, not a plain command** (ART-066). Planning here is not the cheap
+/// arithmetic every other plan in ART does: it has to *unpack every archive in
+/// the batch* to know what each one contains, and it used to do that straight
+/// on the Tauri command thread — several large archives meant a frozen window,
+/// no progress, and no way to stop, in the one step whose whole purpose is to
+/// let the user change their mind before anything is written. Everything else
+/// in this module already runs through `spawn_job`.
 #[tauri::command]
 pub fn archives_plan_install(
     archives: Vec<String>,
     image: String,
     volume_index: usize,
     dir_block: Option<u32>,
-) -> AppResult<ArchivesPlan> {
+    app: AppHandle,
+    registry: State<'_, Arc<JobRegistry>>,
+) -> AppResult<JobId> {
     let archives = normalize_archives(&archives)?;
     let image_path = PathBuf::from(image.trim());
     let parent = dir_block.unwrap_or(0);
 
-    Ok(build_plan(&archives, &image_path, volume_index, parent)?)
+    let registry = Arc::clone(&registry);
+    let emit_app = app.clone();
+    let title = format!("Planning {} archives", archives.len());
+
+    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+        let plan = build_plan(&archives, &image_path, volume_index, parent, progress)?;
+        // Nothing is logged: §53 is about operations that change user data, and
+        // this one writes nothing at all.
+        let _ = emit_app.emit(ARCHIVES_PLAN_EVENT, ArchivesPlanResult { job_id, plan });
+        Ok(())
+    });
+
+    Ok(id)
 }
 
 fn build_plan(
@@ -119,9 +152,10 @@ fn build_plan(
     image: &Path,
     volume_index: usize,
     parent: u32,
+    progress: &dyn ProgressSink,
 ) -> CoreResult<ArchivesPlan> {
     let staging = Staging::new()?;
-    let (drawers, roots) = prepare_archives(archives, staging.path(), &NoProgress)?;
+    let (drawers, roots) = prepare_archives(archives, staging.path(), progress)?;
 
     // These roots are ART's own unpacked staging tree, not a folder the user
     // picked — the sidecar option (§4.2) is about copies from a real host
@@ -554,6 +588,9 @@ impl Drop for Staging {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // `NoProgress` is a test-only import since ART-066: every caller in the
+    // application now runs on a job with a real sink.
+    use crate::core::jobs::NoProgress;
     use crate::core::lha::tests::make_lha_with;
     use crate::core::volume::fixture::ffs_volume;
     use crate::core::volume::mount::mount;
@@ -701,7 +738,7 @@ mod tests {
         let image = disk(&dir, "disk.adf");
         let archives = vec![a, b, c];
 
-        let plan = build_plan(&archives, &image, 0, 0).unwrap();
+        let plan = build_plan(&archives, &image, 0, 0, &NoProgress).unwrap();
         assert_eq!(plan.drawers.len(), 3);
         assert_eq!(plan.drawers[0].drawer, "Turrican");
         assert_eq!(plan.drawers[1].drawer, "Xenon2");
@@ -750,7 +787,7 @@ mod tests {
         let before = std::fs::read(&image).unwrap();
         let archives = vec![a.clone(), b.clone()];
 
-        let err = build_plan(&archives, &image, 0, 0).unwrap_err();
+        let err = build_plan(&archives, &image, 0, 0, &NoProgress).unwrap_err();
         let message = err.to_string();
         assert!(message.contains("Turrican"), "{message}");
         assert!(message.contains("release-a.lha"), "{message}");
@@ -785,7 +822,7 @@ mod tests {
         let before = std::fs::read(&image).unwrap();
         let archives = vec![a, b];
 
-        let plan = build_plan(&archives, &image, 0, 0).unwrap();
+        let plan = build_plan(&archives, &image, 0, 0, &NoProgress).unwrap();
         assert!(!plan.cost.fits(), "a batch this large must not fit");
         let refusal = plan
             .cost
@@ -939,6 +976,41 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ART-066. Planning a batch has to unpack every archive to know what is
+    /// in it, and it used to do that on the Tauri command thread: several
+    /// large archives froze the window with no progress and no way to stop —
+    /// in the one step that exists so the user can change their mind before
+    /// anything is written.
+    ///
+    /// It runs on a job now, which means the sink reaches all the way down and
+    /// Stop is answered. This is the engine half of that; the command itself
+    /// is `spawn_job` plus an event, neither of which a unit test can host.
+    #[test]
+    fn planning_answers_stop() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct StopAtOnce(AtomicBool);
+        impl ProgressSink for StopAtOnce {
+            fn report(&self, _done: u64, _total: Option<u64>, _message: &str) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+            fn is_cancelled(&self) -> bool {
+                self.0.load(Ordering::SeqCst)
+            }
+        }
+
+        let dir = scratch("plan-cancel");
+        let archives = five_archives(&dir);
+        let image = disk(&dir, "disk.adf");
+
+        let sink = StopAtOnce(AtomicBool::new(false));
+        let err = build_plan(&archives, &image, 0, 0, &sink)
+            .expect_err("a cancelled plan must not come back as a plan");
+        assert_eq!(err.code(), "ART-CANCELLED", "{err}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Cancelling once the batch is actually being copied into the volume —
     /// the failure mode the brief names by name ("cancelling after two of
     /// five archives") — must still leave the image byte-for-byte unchanged,
@@ -1074,7 +1146,7 @@ mod tests {
 
         let image = disk(&dir, "disk.adf");
 
-        let plan = build_plan(&[a, b], &image, 0, 0).unwrap();
+        let plan = build_plan(&[a, b], &image, 0, 0, &NoProgress).unwrap();
         assert!(!plan.cost.fits(), "this batch must be refused");
 
         let _ = std::fs::remove_dir_all(&dir);

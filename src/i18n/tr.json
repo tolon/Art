@@ -157,6 +157,8 @@
         "running": "Çalışıyor",
         "done": "Tamamlandı",
         "cancelled": "İptal edildi",
+        "cancelledPartway_one": "İptal edildi — {{count}} dosya çoktan yazılmıştı ve diskte duruyor",
+        "cancelledPartway_other": "İptal edildi — {{count}} dosya çoktan yazılmıştı ve diskte duruyor",
         "failed": "Başarısız ({{code}})"
       }
     },

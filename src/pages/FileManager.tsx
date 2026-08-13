@@ -72,6 +72,7 @@ import {
   archivesInstall,
   archivesPlanInstall,
   isArchivePath,
+  onArchivesPlanResult,
   type ArchiveDrawer,
 } from "@/lib/archives";
 import { checkoutEdit, checkoutOpen, volumeIconFor } from "@/lib/checkout";
@@ -722,6 +723,25 @@ export function FileManager() {
   // re-subscribing on every id change would race with the async unlisten.
   const pendingCopy = useRef<number | null>(null);
   const copyDestination = useRef<Side | null>(null);
+
+  /**
+   * The archive plan this screen is waiting on, and what it was asked about.
+   *
+   * Planning a batch of archives became a job (ART-066), so the plan arrives
+   * on an event rather than as the call's return value — and the sources, the
+   * names and the destination side have to survive until it does.
+   *
+   * Set **before** the call, not after: the job runs on its own thread and a
+   * small batch can finish before `invoke` has even resolved with the id. The
+   * listener therefore accepts a result while `jobId` is still null; only one
+   * plan can be in flight, since the screen is busy while it runs.
+   */
+  const pendingPlan = useRef<{
+    jobId: number | null;
+    sources: string[];
+    names: string[];
+    side: Side;
+  } | null>(null);
 
   const setPane = useCallback(
     (side: Side, next: PaneState) => (side === "left" ? setLeft(next) : setRight(next)),
@@ -1756,12 +1776,51 @@ export function FileManager() {
     };
   }, [refresh, t]);
 
-  // A job that fails or is cancelled emits no result, so the listener above
+  // An archive plan's result (ART-066). Planning a batch is a job now, so the
+  // plan comes back here rather than from the call — with the sources and
+  // names the request was made about, kept in `pendingPlan` meanwhile.
+  useEffect(() => {
+    const unlisten = onArchivesPlanResult((result) => {
+      const waiting = pendingPlan.current;
+      // `jobId === null` while `invoke` has not resolved yet: a small batch
+      // can be planned before it does, and only one plan is ever in flight.
+      if (!waiting || (waiting.jobId !== null && waiting.jobId !== result.job_id)) return;
+
+      pendingPlan.current = null;
+      setBusy(null);
+      setPlan({
+        plan: result.plan.cost,
+        sources: waiting.sources,
+        names: waiting.names,
+        side: waiting.side,
+        drawers: result.plan.drawers,
+      });
+    });
+
+    return () => {
+      void unlisten.then((off) => off());
+    };
+  }, []);
+
+  // A job that fails or is cancelled emits no result, so the listeners above
   // alone would leave this screen waiting forever. The job's own terminal
   // state is what says "stop waiting", and it carries the error id (§68).
   useEffect(() => {
     const unlisten = onJobProgress((job) => {
       if (job.state.state === "running") return;
+
+      // A plan job that ended without a plan: cancelled, or failed. Nothing to
+      // refresh — planning writes nothing — so this only stops the waiting.
+      const waitingPlan = pendingPlan.current;
+      if (waitingPlan && waitingPlan.jobId === job.id) {
+        pendingPlan.current = null;
+        setBusy(null);
+        if (job.state.state === "failed") {
+          setError(`${job.state.message} (${job.state.error_code})`);
+        }
+        return;
+      }
+
       if (job.id !== pendingCopy.current) return;
 
       pendingCopy.current = null;
@@ -2291,36 +2350,45 @@ export function FileManager() {
       );
       try {
         if (archiveCount > 0) {
-          const found = await archivesPlanInstall(
+          // A job now (ART-066): unpacking the batch to see what is in it can
+          // take a while, and doing it on the command thread froze the window.
+          // The plan arrives on `onArchivesPlanResult` below; `busy` stays set
+          // until it does, or until the job ends some other way.
+          pendingPlan.current = {
+            jobId: null,
+            sources: paths,
+            names: entries.map((entry) => entry.name),
+            side: to,
+          };
+          const jobId = await archivesPlanInstall(
             paths,
             destination.path,
             destination.volumeIndex,
             destination.dirBlock
           );
-          setPlan({
-            plan: found.cost,
-            sources: paths,
-            names: entries.map((entry) => entry.name),
-            side: to,
-            drawers: found.drawers,
-          });
-        } else {
-          const found = await volumePlanCopyMany(
-            destination.path,
-            destination.volumeIndex,
-            destination.dirBlock,
-            paths
-          );
-          setPlan({
-            plan: found,
-            sources: paths,
-            names: entries.map((entry) => entry.name),
-            side: to,
-          });
+          if (pendingPlan.current) pendingPlan.current.jobId = jobId;
+          // Deliberately no `setBusy(null)` on this path: the work has only
+          // just started. The listener clears it when the plan lands, and the
+          // job-progress listener clears it if the job is cancelled or fails.
+          return;
         }
+
+        const found = await volumePlanCopyMany(
+          destination.path,
+          destination.volumeIndex,
+          destination.dirBlock,
+          paths
+        );
+        setPlan({
+          plan: found,
+          sources: paths,
+          names: entries.map((entry) => entry.name),
+          side: to,
+        });
+        setBusy(null);
       } catch (e) {
+        pendingPlan.current = null;
         setError(String(e));
-      } finally {
         setBusy(null);
       }
       return;

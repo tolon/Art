@@ -1307,7 +1307,19 @@ pub fn run_copy_in_folder_with(
                 // Synced first, deliberately: the files that did land are
                 // complete, journalled operations and belong on disk. What is
                 // refused is calling this a success.
-                return Err(CoreError::Cancelled);
+                //
+                // And it says how many (ART-058). Cancelling here is not the
+                // same event as cancelling a whole-file write, where nothing
+                // survives at all, and telling the user the same word for both
+                // undersells what happened to their volume. Zero landed is the
+                // plain cancellation it has always been.
+                return Err(if report.files_copied > 0 {
+                    CoreError::CancelledPartway {
+                        files: report.files_copied as u64,
+                    }
+                } else {
+                    CoreError::Cancelled
+                });
             }
             Ok((report, None))
         }
@@ -2988,5 +3000,129 @@ mod tests {
         assert!(!dest.parent().unwrap().join("Escaped").exists());
 
         let _ = std::fs::remove_dir_all(&dest);
+    }
+
+    /// ART-058. Cancelling a copy into an image too large to hold in memory
+    /// leaves the files that already landed on the volume — correctly, since
+    /// each one is its own committed, journalled, verified operation — and the
+    /// user has to be told so. Both cases used to come back as plain
+    /// `Cancelled`, which reads as "nothing happened".
+    ///
+    /// The image is deliberately one block over
+    /// [`WHOLE_FILE_LIMIT_BYTES`](crate::core::volume::WHOLE_FILE_LIMIT_BYTES):
+    /// this behaviour belongs to the block-journal strategy, and the whole-file
+    /// one below must keep saying plain `Cancelled` because it really does
+    /// leave nothing behind.
+    #[test]
+    fn cancelling_a_large_copy_says_how_many_files_landed() {
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+        /// Cancels on the **second** report. The loop checks the flag, then
+        /// reports, then copies — so by the time the third entry's check runs,
+        /// two files are already on the volume. Anything landing at all is
+        /// what this test is about; the exact count is asserted as ">= 1".
+        struct StopAfterTwo {
+            reports: AtomicU64,
+            cancelled: AtomicBool,
+        }
+        impl ProgressSink for StopAfterTwo {
+            fn report(&self, _done: u64, _total: Option<u64>, _message: &str) {
+                if self.reports.fetch_add(1, Ordering::SeqCst) + 1 >= 2 {
+                    self.cancelled.store(true, Ordering::SeqCst);
+                }
+            }
+            fn is_cancelled(&self) -> bool {
+                self.cancelled.load(Ordering::SeqCst)
+            }
+        }
+
+        // 34 000 blocks × 512 = ~17.4 MB, past the 16 MiB whole-file limit.
+        let image = Image::new("cancel-partway", 34_000);
+
+        let source = image.dir.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        for index in 0..5 {
+            std::fs::write(source.join(format!("File{index}")), vec![b'x'; 64]).unwrap();
+        }
+
+        let sink = StopAfterTwo {
+            reports: AtomicU64::new(0),
+            cancelled: AtomicBool::new(false),
+        };
+        let folder = HostFolder::new(&source, false);
+        let err = run_copy_in_folder_with(
+            &image.path,
+            0,
+            0,
+            &folder,
+            OverwritePolicy::Skip,
+            OnCancel::Abandon,
+            &sink,
+        )
+        .expect_err("a cancelled copy must not come back as a success");
+
+        match err {
+            CoreError::CancelledPartway { files } => {
+                assert!(files >= 1, "at least one file had landed, not {files}");
+                // And it is on the volume, which is what the message claims.
+                assert_eq!(
+                    image.listing().len() as u64,
+                    files,
+                    "the count must be what is actually there"
+                );
+            }
+            other => panic!(
+                "expected CancelledPartway, got {other:?} ({})",
+                other.code()
+            ),
+        }
+    }
+
+    /// The other half: a small image is written whole and cancelling it leaves
+    /// **nothing**, so it must keep saying plain `Cancelled`. Claiming files
+    /// landed on a volume that is byte-for-byte what it was would be the same
+    /// defect pointing the other way.
+    #[test]
+    fn cancelling_a_small_copy_still_says_plain_cancelled() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct StopAtOnce(AtomicBool);
+        impl ProgressSink for StopAtOnce {
+            fn report(&self, _done: u64, _total: Option<u64>, _message: &str) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+            fn is_cancelled(&self) -> bool {
+                self.0.load(Ordering::SeqCst)
+            }
+        }
+
+        let image = Image::new("cancel-small", 1760);
+        let before = image.bytes();
+
+        let source = image.dir.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        for index in 0..3 {
+            std::fs::write(source.join(format!("File{index}")), vec![b'x'; 64]).unwrap();
+        }
+
+        let sink = StopAtOnce(AtomicBool::new(false));
+        let folder = HostFolder::new(&source, false);
+        let err = run_copy_in_folder_with(
+            &image.path,
+            0,
+            0,
+            &folder,
+            OverwritePolicy::Skip,
+            OnCancel::Abandon,
+            &sink,
+        )
+        .expect_err("a cancelled copy must not come back as a success");
+
+        assert_eq!(err.code(), "ART-CANCELLED", "{err}");
+        assert_eq!(
+            image.bytes(),
+            before,
+            "the whole-file strategy must leave the image exactly as it was"
+        );
     }
 }

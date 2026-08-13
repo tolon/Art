@@ -31,7 +31,15 @@ pub enum JobState {
     /// Finished normally.
     Finished,
     /// Stopped because the user asked.
-    Cancelled,
+    ///
+    /// `files_landed` is how many files were already written and left in place
+    /// when it stopped, or `None` when nothing was — which is the usual case
+    /// and the only one the whole-file write strategy can produce. It is a
+    /// number rather than a sentence because the sentence belongs to the UI's
+    /// catalogue, in the user's language (ART-058, §68).
+    Cancelled {
+        files_landed: Option<u64>,
+    },
     /// Stopped because it failed. `error_code` is a `ART-*` identifier (§68).
     Failed {
         error_code: String,
@@ -209,7 +217,7 @@ mod tests {
     fn only_running_is_non_terminal() {
         assert!(!JobState::Running.is_terminal());
         assert!(JobState::Finished.is_terminal());
-        assert!(JobState::Cancelled.is_terminal());
+        assert!(JobState::Cancelled { files_landed: None }.is_terminal());
         assert!(JobState::Failed {
             error_code: "ART-IO".into(),
             message: "x".into()

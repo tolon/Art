@@ -10,6 +10,7 @@
 // before a single block is written (§92). Only then `archivesInstall`.
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type { OverwritePolicy } from "@/lib/sources";
 import type { CopyPlan } from "@/lib/volumeWrite";
@@ -58,19 +59,45 @@ export function isArchivePath(path: string): boolean {
   return path.toLowerCase().endsWith(".lha");
 }
 
-/** What installing `archives` into a volume would do. Writes nothing. */
+/** A finished plan, tied back to the job that produced it. */
+export interface ArchivesPlanResult {
+  job_id: number;
+  plan: ArchivesPlan;
+}
+
+export const ARCHIVES_PLAN_EVENT = "archives-plan-result";
+
+/**
+ * What installing `archives` into a volume would do. Writes nothing.
+ * Returns a **job id** (§54).
+ *
+ * Planning a batch of archives is not the cheap arithmetic every other plan in
+ * ART is: it has to unpack every archive to know what is in it. That used to
+ * happen on the command thread, so several large archives froze the window
+ * with no progress and no way to stop — in the one step that exists to let the
+ * user change their mind (ART-066). The plan itself arrives on
+ * `ARCHIVES_PLAN_EVENT`; a cancelled or failed job simply never sends one, and
+ * its terminal state comes through `onJobProgress` like any other job's.
+ */
 export async function archivesPlanInstall(
   archives: string[],
   image: string,
   volumeIndex: number,
   dirBlock: number | null
-): Promise<ArchivesPlan> {
-  return invoke<ArchivesPlan>("archives_plan_install", {
+): Promise<number> {
+  return invoke<number>("archives_plan_install", {
     archives,
     image,
     volumeIndex,
     dirBlock,
   });
+}
+
+/** Subscribe to finished plans. Returns an unlisten function. */
+export async function onArchivesPlanResult(
+  handler: (result: ArchivesPlanResult) => void
+): Promise<UnlistenFn> {
+  return listen<ArchivesPlanResult>(ARCHIVES_PLAN_EVENT, (event) => handler(event.payload));
 }
 
 /**

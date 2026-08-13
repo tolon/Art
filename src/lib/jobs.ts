@@ -9,7 +9,17 @@ import type { Phrase } from "@/lib/phrase";
 export type JobState =
   | { state: "running" }
   | { state: "finished" }
-  | { state: "cancelled" }
+  /**
+   * `files_landed` is how many files were already written and left in place
+   * when the job stopped, `null` when nothing was (ART-058).
+   *
+   * A large image is written file by file, each one committed and journalled
+   * before the next starts, so cancelling cannot take back what already
+   * landed — and saying only "cancelled" for that undersells what happened to
+   * the volume. A small image is written whole and cancelling leaves nothing,
+   * which is the `null` case and the common one.
+   */
+  | { state: "cancelled"; files_landed: number | null }
   | { state: "failed"; error_code: string; message: string };
 
 export interface JobProgress {
@@ -64,7 +74,14 @@ export function jobStatusLabel(job: JobProgress): Phrase {
     case "finished":
       return { key: "components.jobBar.status.done" };
     case "cancelled":
-      return { key: "components.jobBar.status.cancelled" };
+      // `count` is not decoration: i18next only pluralises when it is passed
+      // under that name, which is the half ART-061 was missing.
+      return job.state.files_landed === null
+        ? { key: "components.jobBar.status.cancelled" }
+        : {
+            key: "components.jobBar.status.cancelledPartway",
+            params: { count: job.state.files_landed },
+          };
     case "failed":
       return { key: "components.jobBar.status.failed", params: { code: job.state.error_code } };
   }

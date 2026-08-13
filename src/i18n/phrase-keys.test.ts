@@ -196,12 +196,19 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     const jobs: JobProgress[] = [
       { ...base, state: { state: "running" } },
       { ...base, state: { state: "finished" } },
-      { ...base, state: { state: "cancelled" } },
+      { ...base, state: { state: "cancelled", files_landed: null } },
+      // Both branches of the cancelled case (ART-058): nothing landed, and
+      // some did. The second resolves through i18next's plural suffixes, so
+      // `isLeafKey` is asked about `…_one`/`…_other` rather than the bare key.
+      { ...base, state: { state: "cancelled", files_landed: 1 } },
+      { ...base, state: { state: "cancelled", files_landed: 12 } },
       { ...base, state: { state: "failed", error_code: "ART-001", message: "x" } },
     ];
     for (const job of jobs) {
       const phrase = jobStatusLabel(job);
-      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+      // `resolvesAtRuntime`, not `isLeafKey`: the partway case carries a
+      // `{{count}}` and lives in the catalogue only as `_one`/`_other`.
+      expect(resolvesAtRuntime(phrase.key), phrase.key).toBe(true);
     }
   });
 

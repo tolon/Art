@@ -180,7 +180,14 @@ where
 
         let state = match result {
             Ok(()) => JobState::Finished,
-            Err(CoreError::Cancelled) => JobState::Cancelled,
+            Err(CoreError::Cancelled) => JobState::Cancelled { files_landed: None },
+            // Cancelled, with work already durable on disk (ART-058). Still a
+            // cancellation and not a failure — the job bar must not go red for
+            // something the user asked for — but the count travels with it so
+            // the UI can say what is on the volume.
+            Err(CoreError::CancelledPartway { files }) => JobState::Cancelled {
+                files_landed: Some(files),
+            },
             Err(e) => JobState::Failed {
                 error_code: e.code().to_string(),
                 message: e.to_string(),
@@ -270,7 +277,7 @@ mod tests {
         let registry = JobRegistry::new();
         let (done, _) = registry.open("Done");
         let (_running, _) = registry.open("Running");
-        registry.finish(done, JobState::Cancelled);
+        registry.finish(done, JobState::Cancelled { files_landed: None });
 
         registry.clear_finished();
 

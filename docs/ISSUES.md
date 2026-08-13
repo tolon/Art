@@ -217,22 +217,6 @@ this needs either a mock of the Tauri IPC surface (`@tauri-apps/api/core`'s
 in a test, or splitting `FileManager.tsx` into smaller components each
 small enough to mock individually — a real task, not a quick fix.
 
-**ART-066** 🟡 **`archives_plan_install` unpacks the whole batch on the Tauri command thread**
-`commands/archives.rs::archives_plan_install` (line ~104) · Every other
-multi-step operation in this module runs through [`spawn_job`](../src-tauri/src/commands/jobs.rs)
-so it can report progress and be cancelled (§54, §55) — `archives_install`
-does. `archives_plan_install` is a plain `#[tauri::command]`: it calls
-`build_plan` → `prepare_archives(archives, staging.path(), &NoProgress)`
-straight in the command handler, which extracts every archive in the
-selection before returning. A plan over several large archives blocks the
-Tauri command thread for the whole unpack, with no progress and no way to
-stop it, where the read-only plan step for every other batched operation in
-this file manager returns as soon as the (much cheaper) cost is computed.
-Not data-unsafe — nothing is written — just unresponsive. Needs the same
-`spawn_job` treatment `archives_install` already has, returning a job id the
-UI awaits the way it awaits every other plan today would be a larger change
-than this note; recorded here rather than fixed under Task 8's scope.
-
 **ART-065** 🟡 **Volume→local multi-select is several concurrent operations, not one**
 `src/pages/FileManager.tsx::copySelectionTo` (line ~1090) · When the source
 pane is a volume and more than one entry is selected for extraction to a
@@ -317,22 +301,6 @@ some phrasing decisions between Rust and the JSON catalogues. The second keeps
 the sentence and its translation next to each other but adds a resource-lookup
 concept to a crate that currently has none. Neither is decided here.
 
-**ART-058** 🔵 **A cancelled block-journal copy doesn't tell the user files already landed**
-`commands/volume_write.rs::run_copy_in_folder_with` (`WriteStrategy::BlockJournal` branch,
-also reached through `run_install`'s `with_volume` closure in `commands/whdload.rs`) · Above
-the whole-file limit (16 MiB) each file a copy or install writes is its own committed,
-journalled operation, already durable on disk before the next one starts. Cancelling there is
-honest about that on purpose — `device.sync()?` runs before the cancellation check, and the
-files that landed are correctly left in place rather than rolled back, unlike the whole-file
-strategy where cancelling leaves nothing at all. What the user is told is only
-`CoreError::Cancelled`'s message, `"operation cancelled"` (`core::error::CoreError`,
-`ART-CANCELLED`) — nothing distinguishes that from the whole-file case, so someone who cancels
-a large HDF install partway through has no way to learn from the UI that some files are already
-on the volume. Not a data-safety defect — nothing here is wrong or at risk — just a message
-that undersells what happened. Needs the block-journal branch to carry how much landed (files
-copied so far) into a distinct message or a `Cancelled` variant that names it, and a UI string
-for that case.
-
 **ART-050** 🟡 **The §92 pre-flight gate does not check bitmap consistency or hash-chain integrity**
 `core/adf/validate.rs::validate_image` · `commit_whole_file` (ART-042) refuses
 a write when `validate_image` finds a `Problem`, but `validate_image` only
@@ -384,8 +352,49 @@ partition) — no test covers it today, which is why it survived this long.
 
 ### The open-list sweep (2026-08-13)
 
-Four of the open entries closed in one pass, chosen because none of them needed
-a decision first — the ones that do are still open and say so.
+Six of the open entries closed in two passes, chosen because none of them
+needed a decision first — the ones that do are still open and say so.
+
+**ART-066** 🟡 **`archives_plan_install` unpacked the whole batch on the Tauri command thread** — *fixed 2026-08-13*
+`commands/archives.rs` · `src/lib/archives.ts` · `src/pages/FileManager.tsx` ·
+Planning a batch of archives is not the cheap arithmetic every other plan in
+ART is: it has to **unpack every archive** to know what each one contains. It
+did that straight in the command handler, so a plan over several large archives
+froze the window with no progress and no way to stop it — in the one step whose
+whole purpose is to let the user change their mind before anything is written.
+Every other multi-step operation in the module already ran through `spawn_job`.
+
+→ It is a job now, returning a job id; the plan arrives on a new
+`archives-plan-result` event carrying its `job_id`. `FileManager` keeps the
+sources, names and destination side in `pendingPlan` until it lands, and
+`busy` stays set until the plan arrives *or* the job ends some other way — the
+job-progress listener answers a cancelled or failed plan, which is the case the
+old code could not have at all. The pending state is set **before** the call,
+because a small batch can finish before `invoke` resolves with the id; only one
+plan is ever in flight, so a result arriving early is still unambiguous.
+`planning_answers_stop` covers the engine half. `NoProgress` is now a test-only
+import in that module — every caller in the application runs on a real sink.
+
+**ART-058** 🔵 **A cancelled block-journal copy did not tell the user files had already landed** — *fixed 2026-08-13*
+`core/error.rs` · `core/jobs/mod.rs` · `commands/volume_write.rs` ·
+`src/lib/jobs.ts` · Above the whole-file limit (16 MiB) each file a copy or
+install writes is its own committed, journalled, verified operation, durable
+before the next one starts, and cancelling correctly leaves them in place. Both
+strategies came back as plain `Cancelled`, so somebody who stopped a large HDF
+install part way through had no way to learn that some of it is on the volume —
+while the whole-file strategy really does leave nothing at all.
+
+→ `CoreError::CancelledPartway { files }` (`ART-CANCELLED-PARTWAY`), mapped by
+the job runner to `JobState::Cancelled { files_landed: Some(n) }` — still a
+cancellation, never a failure: the job bar must not go red for something the
+user asked for. The count travels as a **number**, not inside the sentence,
+because the sentence is English and the UI's is not (§68); `jobStatusLabel`
+picks `cancelledPartway` and passes it as `count`, which is the half that makes
+i18next actually pluralise (the ART-061 lesson). Zero landed is still plain
+`Cancelled`. Four tests: both strategies end-to-end in Rust — the large one
+asserts the count matches what is actually in the volume's listing, the small
+one that the image is byte-for-byte unchanged — and the label's two branches in
+`jobs.test.ts`.
 
 **ART-070** 🔵 **`refresh(side)` moved keyboard focus to the pane it refreshed** — *fixed 2026-08-13*
 `src/pages/FileManager.tsx` · `openLocal`, `openAdf`, `openHdf` and
