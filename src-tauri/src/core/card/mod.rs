@@ -15,6 +15,7 @@
 //! (spec §56).
 
 pub mod build;
+pub mod payload;
 
 use std::path::Path;
 

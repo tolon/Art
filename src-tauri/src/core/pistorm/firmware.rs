@@ -75,6 +75,14 @@ pub struct FirmwareConfig {
     pub display: DisplayMode,
     /// `None` unless the user has deliberately turned it on.
     pub overclock: Option<Overclock>,
+    /// The kernel the `kernel=` line points at.
+    ///
+    /// **Whatever is actually on the card**, never a constant (ART-103). The
+    /// Emu68 archive ships `Emu68-pistorm.gz` and says so in its own
+    /// `config.txt`; ART used to rewrite that line to `Emu68.img`, which is a
+    /// file the card does not have. `emu68_payload` sets this to the kernel it
+    /// placed, and the reading side leaves it at [`KERNEL_IMAGE`].
+    pub kernel_file: String,
     /// `dtoverlay=disable-bt`.
     ///
     /// An option rather than something ART adds on its own. Earlier versions
@@ -88,6 +96,7 @@ impl Default for FirmwareConfig {
     fn default() -> Self {
         Self {
             kickstart_file: "kick.rom".into(),
+            kernel_file: KERNEL_IMAGE.into(),
             display: DisplayMode::Auto,
             overclock: None,
             disable_bluetooth: false,
@@ -114,7 +123,15 @@ const MANAGED_KEYS: &[&str] = &[
     "framebuffer_depth",
 ];
 
-/// The Emu68 kernel image, as its own release names it.
+/// The name ART looks for when *reading* a card it did not build.
+///
+/// **Not what a release ships.** `Emu68-pistorm.zip` carries
+/// `Emu68-pistorm.gz` and its own `config.txt` points straight at that; a real
+/// CaffeineOS card keeps three kernels in a `KERNEL/` folder with no extension
+/// at all. This is a name from older material, kept because it is still what
+/// some cards use and it costs nothing to look for — but writing it into a
+/// `config.txt` over the release's own line is what ART-103 was, and a card
+/// that names a kernel it does not carry does not boot.
 pub const KERNEL_IMAGE: &str = "Emu68.img";
 
 /// The largest `Emu68.img` ART will read to look for a version.
@@ -189,7 +206,7 @@ pub fn read_kernel(path: &std::path::Path) -> Option<KernelInfo> {
 fn managed_lines(config: &FirmwareConfig) -> Vec<(&'static str, String)> {
     let mut lines = vec![
         ("arm_64bit", "1".to_string()),
-        ("kernel", KERNEL_IMAGE.to_string()),
+        ("kernel", config.kernel_file.clone()),
     ];
 
     if let Some((group, mode)) = config.display.group_and_mode() {
@@ -349,6 +366,10 @@ pub fn parse_config_txt(existing: &str) -> FirmwareConfig {
             continue;
         };
         match key.trim() {
+            // Read back rather than assumed (ART-103). What a card boots is
+            // whatever its own `config.txt` says, and a release that names its
+            // kernel `Emu68-pistorm.gz` must not come back as `Emu68.img`.
+            "kernel" if !value.trim().is_empty() => config.kernel_file = value.trim().to_string(),
             "hdmi_group" => group = value.trim().parse().ok(),
             "hdmi_mode" => mode = value.trim().parse().ok(),
             "arm_freq" => arm_freq = value.trim().parse().ok(),
@@ -530,6 +551,7 @@ gpu_mem=64
     fn the_firmware_settings_survive_a_round_trip() {
         let config = FirmwareConfig {
             kickstart_file: "kick31.rom".into(),
+            kernel_file: "Emu68-pistorm.gz".into(),
             display: DisplayMode::Cea1080p50,
             overclock: Some(Overclock {
                 arm_freq_mhz: 1400,

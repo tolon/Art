@@ -126,6 +126,7 @@ impl<T: Read + Write + Seek> Seek for Region<T> {
 }
 
 /// A file to put on the boot partition.
+#[derive(Debug, Clone)]
 pub struct BootFile {
     /// The name as it will appear — `Emu68.img`, `config_caffeineos.txt`.
     pub name: String,

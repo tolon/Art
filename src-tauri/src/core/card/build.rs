@@ -352,25 +352,30 @@ mod tests {
 
     /// Build a card from **real** material, for a human to look at.
     ///
-    /// Every test above uses bytes ART made up. This one takes a folder — an
-    /// unpacked `Emu68-pistorm.zip`, a Kickstart named `kick.rom`, a
-    /// `config.txt` — and lays it on a real card image, because the question
+    /// Every test above uses bytes ART made up. This one takes the user's own
+    /// `Emu68-pistorm.zip` and their Kickstart and does the whole of it —
+    /// checking the archive against the board, unpacking it, merging the Pi's
+    /// `config.txt`, naming the ROM, laying the card out — because the question
     /// "will a Raspberry Pi boot this" is not one a synthetic fixture can even
     /// be asked. The same reason `export_adf_for_oracle_when_asked` exists.
     ///
     /// ```text
-    /// ART_CARD_PAYLOAD=E:\amiga\ProjeART\emu68  ART_CARD_OUT=E:\amiga\ProjeART\card.img \
-    ///   cargo test build_real_card_when_asked -- --nocapture
+    /// ART_CARD_ZIP=E:miga\Amigatolon\Emu68\Emu68-pistorm.zip     /// ART_CARD_ROM="E:miga\Amigatolon\kickstart\Kickstart v3.1 ... (A1200).rom"     /// ART_CARD_OUT=E:miga\ProjeART\card.img     ///   cargo test build_real_card_when_asked -- --nocapture
     /// ```
     ///
     /// `ART_CARD_GB` sets the size; it defaults to 2, which is the smallest
     /// card that holds the 1.10 GiB boot partition and an Amiga disk after it.
     #[test]
     fn build_real_card_when_asked() {
-        let (Ok(payload), Ok(dest)) = (
-            std::env::var("ART_CARD_PAYLOAD"),
-            std::env::var("ART_CARD_OUT"),
-        ) else {
+        use crate::core::card::payload::{emu68_payload, PayloadSpec};
+        use crate::core::pistorm::firmware::FirmwareConfig;
+        use crate::core::pistorm::hardware::{
+            AmigaTarget, Emu68Line, PiModel, PistormHardware, PistormVariant,
+        };
+        use crate::core::pistorm::options::Emu68Options;
+
+        let (Ok(zip), Ok(dest)) = (std::env::var("ART_CARD_ZIP"), std::env::var("ART_CARD_OUT"))
+        else {
             return;
         };
         let size_gb: u64 = std::env::var("ART_CARD_GB")
@@ -378,29 +383,28 @@ mod tests {
             .and_then(|value| value.parse().ok())
             .unwrap_or(2);
 
-        // Every file under the payload folder, with its path relative to it —
-        // `overlays/emu68.dtbo` stays `overlays/emu68.dtbo`.
-        fn collect(root: &Path, at: &Path, into: &mut Vec<BootFile>) {
-            for entry in std::fs::read_dir(at).unwrap() {
-                let entry = entry.unwrap();
-                let path = entry.path();
-                if path.is_dir() {
-                    collect(root, &path, into);
-                } else {
-                    into.push(BootFile {
-                        name: path
-                            .strip_prefix(root)
-                            .unwrap()
-                            .to_string_lossy()
-                            .replace('\\', "/"),
-                        bytes: std::fs::read(&path).unwrap(),
-                    });
-                }
-            }
-        }
+        // The hardware this project is developed against and verified on: an
+        // A500 with a classic PiStorm on a Pi 3A+.
+        let hardware = PistormHardware {
+            amiga: AmigaTarget::A500,
+            variant: PistormVariant::Classic,
+            pi: PiModel::Pi3APlus,
+        };
 
-        let mut boot_files = Vec::new();
-        collect(Path::new(&payload), Path::new(&payload), &mut boot_files);
+        let boot_files = emu68_payload(
+            Path::new(&zip),
+            &PayloadSpec {
+                hardware,
+                line: Emu68Line::Stable,
+                firmware: FirmwareConfig::default(),
+                options: Emu68Options::default(),
+                kickstart: std::env::var("ART_CARD_ROM")
+                    .ok()
+                    .map(|rom| std::fs::read(rom).unwrap()),
+            },
+        )
+        .unwrap();
+
         println!("payload: {} files", boot_files.len());
         for file in &boot_files {
             println!("  {} ({} bytes)", file.name, file.bytes.len());

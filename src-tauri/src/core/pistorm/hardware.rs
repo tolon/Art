@@ -117,6 +117,15 @@ pub enum Emu68Line {
 
 impl Emu68Line {
     pub const ALL: &'static [Self] = &[Self::Stable, Self::Alpha11];
+
+    /// How to name it in a sentence. The line is half of what an archive's
+    /// name means (ART-091), so a refusal that mentions one has to say which.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Alpha11 => "1.1 alpha",
+        }
+    }
 }
 
 /// What the kernel archive for a board is called — or why there is no answer.

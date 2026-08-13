@@ -390,6 +390,36 @@ re-audits them without reason:
 
 ### SD-1 · G2 (2026-08-13/14)
 
+**ART-103** 🟠 **ART wrote `kernel=Emu68.img` over the release's own line, and the card would not boot** — *fixed 2026-08-14*
+`core/pistorm/firmware.rs` · `core/card/payload.rs` · `merge_config_txt` had
+`kernel` among the keys it manages and wrote `KERNEL_IMAGE` — the constant
+`"Emu68.img"` — into every `config.txt` it touched. The real
+`Emu68-pistorm.zip` carries **`Emu68-pistorm.gz`** and its own `config.txt`
+says `kernel=Emu68-pistorm.gz`; the Raspberry Pi's firmware decompresses a
+gzipped kernel itself, which is why the release ships one and points straight
+at it. No release has ever contained a file called `Emu68.img`, and the real
+CaffeineOS card keeps three kernels in a `KERNEL/` folder with no extension at
+all.
+
+So a card ART built carried the right kernel under its right name and a
+`config.txt` telling the firmware to load a file that was not there. **It would
+not have booted**, and the failure would have appeared on the Amiga rather than
+anywhere ART could see it.
+
+Found by driving the real archive through `emu68_payload` and reading the
+`config.txt` off the card that came out — the same way ART-090 and ART-091 were
+found, which is to say by looking at what the real thing says rather than at
+what ART believes.
+
+→ The kernel's name is a **field**, not a constant: `FirmwareConfig.kernel_file`,
+set by `emu68_payload` to what the archive's own `config.txt` names, and
+verified to exist among the files being placed — an archive whose config points
+at a kernel it does not carry is refused before a card is written rather than
+after it fails to boot. `parse_config_txt` reads the line back, so the round
+trip is honest. `KERNEL_IMAGE` survives as what the *reading* side looks for on
+a card it did not build, and says in its own doc comment that it is not what a
+release ships.
+
 **ART-102** 🟡 **`fatfs` writes two things wrong in every directory it creates** — *worked around 2026-08-14*
 `core/fat32.rs::repair_directories` · Found by pointing 7-Zip at a boot
 partition ART had just written: any image with a folder in it came back
