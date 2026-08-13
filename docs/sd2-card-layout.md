@@ -29,6 +29,34 @@ boot partition Emu68 reads `config.txt`, `cmdline.txt` and the Kickstart from.
 Type **`0x76`** is what both use for an Amiga area. Each one starts with its own
 `RDSK` at block 0 *of that area*.
 
+### What the two tables disagree about, and why that is useful
+
+Read byte by byte on 2026-08-13, while writing ART's own MBR writer (G2). Both
+cards boot, so **anything they disagree about is not load-bearing** — which is
+a far better licence for a design decision than a specification is:
+
+| Field | CaffeineOS | MultibootOS |
+|---|---|---|
+| Boot flag (`0x80`) | on nothing | on the FAT32 partition |
+| CHS start / end | real-looking (`20 21 00`, `49 3B 8F`) on the first two fields | the LBA sentinel (`00 02 00` / `FE FF FF`) on all six |
+
+So ART writes the sentinel in every CHS field and sets the boot flag on FAT32:
+the first because a 128 GB card is far past anything CHS can address and one
+working card already says so in every field, the second because "the Pi boots
+from this one" is true and reads better in whatever tool the user opens the
+card with next.
+
+What they **agree** on is the whole front of the card, to the sector: LBA 2048,
+2 299 904 sectors of FAT32, first Amiga area at LBA 2 301 952. That is where
+ART's defaults come from — and note that it is **1.10 GiB**, not the "~200 MB"
+the SD-0 research estimated. A gigabyte is what a multiboot card needs: several
+Kickstarts, more than one Emu68 release, a `config_*.txt` per distribution.
+
+One thing ART does differently, deliberately: asked for "the rest", it gives the
+last Amiga area all of it, where MultibootOS leaves about 6 GiB of the card
+unallocated at the end. Nothing needs that space — it is what a tool leaves
+when it was told a size rather than "the rest".
+
 **This is what ART could not read.** `find_rdb_location` scans the first 16
 blocks **of the file**, and on a real card those are the MBR and the start of
 the FAT32 partition — so ART found no RDB on either image. Filed as
