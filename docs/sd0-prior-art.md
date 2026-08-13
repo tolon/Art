@@ -368,7 +368,7 @@ Every step succeeded. The copy reported `1 directory, 2 files, 36 B`.
 
 This is the single most useful thing the test produced, because it is an
 independent, shipping implementation refusing to do **exactly what ART's New
-HDF wizard does today** ([ART-084](../ISSUES.md#open)): write a PDS3 partition
+HDF wizard does today** ([ART-084](../ISSUES.md)): write a PDS3 partition
 with no FSHD/LSEG behind it. ART is not being conservative in calling that a
 defect; it is being late.
 

@@ -62,9 +62,19 @@ still opens.
 Two directions a multi-selection cannot yet move in: image-to-image (copy
 one at a time instead) and, when copying a selection out of an image, as one
 atomic operation rather than several running together — see
-[docs/ISSUES.md](docs/ISSUES.md) (ART-064, ART-065). The restyled Files
-screen is covered by automated tests only; nobody has opened it in a running
-window yet.
+[docs/ISSUES.md](docs/ISSUES.md) (ART-064, ART-065).
+
+**A real PiStorm SD card can be read** — an MBR with a FAT32 partition and up
+to three Amiga areas, each carrying its own RDB at a byte offset inside the
+card, verified against CaffeineOS and MultibootOS images. That is the core;
+the Hard Disk screen still asks a single RDB, so the card has no window of its
+own yet. Building such a card is SD-1, and it is the largest thing not yet
+built.
+
+**Application Size** (Ctrl +/-/0, or Settings) scales the whole interface from
+70 % to 250 % and is remembered — as is every other choice ART offers. Above
+100 % the right-hand edge is still clipped
+([ART-099](docs/ISSUES.md#open)).
 
 ### Verified how, exactly
 

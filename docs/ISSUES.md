@@ -23,23 +23,6 @@ what fixed it (with the test that proves it).
 
 ## Open
 
-_(ART-075 was open here; it is fixed — see [Phase 2a](#phase-2a) below.)_
-
-**ART-100** 🟡 **The PiStorm screen went grey without saying why** — *fixed 2026-08-13*
-`src/pages/PistormStudio.tsx` · Every control on that screen edits files on a
-card, so every one of them is disabled until a card folder is chosen — the ROM
-picker, the preview, the save. They said so **only by being grey**, which reads
-as a broken screen rather than as a first step. The user's words on finding it:
-the button is there but it does not work.
-
-Fixed by saying it, once where the folder is chosen and again on each disabled
-button's tooltip. The prerequisite was always right; it was simply never
-spoken.
-
-Worth generalising: a disabled control with no explanation is a defect of the
-same kind as a control that does nothing (ART-090), and the screen had four of
-them.
-
 **ART-099** 🟠 **Application Size cut the right-hand edge off every screen** — *open*
 `src/components/layout/layout.css` · The Application Size feature applies CSS
 `zoom` to `.app-shell`, and `zoom` does not scale viewport units — so the shell
@@ -80,6 +63,455 @@ regressions and no fix.
 The next attempt needs the computed widths read out of the running page rather
 than measured off a picture.
 
+**ART-096** 🟡 **ART writes `MaxTransfer` and `Mask` as zero, and 100 buffers**
+`core/rdb.rs::create_rdb_layout` · The DosEnvec's `MaxTransfer` (longword 45)
+and `Mask` (longword 46) are left at zero, with a comment saying so. Every
+partition on both real cards — seventeen of them across three RDBs, without
+exception — carries:
+
+```
+maxtransfer = 0x0001FE00    mask = 0x7FFFFFFE    buffers = 600
+```
+
+A mask of zero says no memory is acceptable for a transfer, which is not what
+anybody means by it; ART's default of 100 buffers against the field's 600 is a
+performance choice made by not making one. Neither is dangerous — Emu68 is
+forgiving — but they are the fields that are cheap to get right and very hard
+to diagnose when wrong, and ART now has measured values rather than a guess.
+
+Also worth matching: real cards name their partitions `SDH0`/`SDH1`, not `DH0`.
+On a machine with an IDE drive `DH0` is already taken.
+
+Found 2026-08-13 while reading two real cards. See
+[sd2-card-layout.md](sd2-card-layout.md).
+
+**Half fixed, 2026-08-13.** `core/rdb.rs` writes both fields and defaults to
+600 buffers; `ParsedPartition` reads them back. Still open, and the reason this
+entry is not closed:
+
+- No test of its own — `dosenv_offsets_match_the_amiga_layout` pins the
+  offsets, which is not the same as pinning the intent.
+- `HardDiskStudio.tsx` hard-codes `num_buffers: 100` in three places, so a
+  partition created through the UI still gets 100. The new default only reaches
+  callers that pass zero.
+
+`SDH0` naming is deliberately **not** part of this. It is a card convention,
+and an HDF that WinUAE mounts wants `DH0`; it belongs to SD-1, where the card
+is built.
+
+**ART-093** 🟡 **ART cannot fetch an Emu68 kernel update; it can only tell you which one you need**
+`core/pistorm/` · `net/` · The fix round's F4 asked for two things. The reading
+half is built: the card's `Emu68.img` is identified from the `$VER:` string its
+own build compiles in, and the hardware matrix names the archive that belongs on
+it. The **fetching** half is not.
+
+Not built rather than half-built, and the screen offers no button for it — the
+same rule the WiFi panel follows. Three things make it more than an afternoon,
+and each is a decision worth making deliberately:
+
+- **The host policy.** `net/http_mirror.rs` refuses cross-host redirects on
+  purpose (§41.5.7): a followed redirect is a fetch the user never configured.
+  A GitHub release asset redirects to `objects.githubusercontent.com`, so this
+  needs its own client with its own stated policy, not a relaxation of that one.
+- **Which release.** The archive name depends on the release line, and one name
+  means a different board in each ([ART-091](#open)). A fetch that resolves
+  "latest" without the line would be the same defect with a network connection.
+- **Writing it.** Unpacking an archive onto a card that boots somebody's machine
+  is a multi-file write and wants the same preview → backup → verify every other
+  write in ART has, per file.
+
+Until then the screen tells the user exactly which archive to download and from
+which release line, which is the part they cannot work out for themselves.
+
+Recorded 2026-08-13 as owed work, not a defect.
+
+**ART-087** 🔵 **Space marks a row but does not compute a directory's size**
+`src/pages/FileManager.tsx` · `src/lib/selection.ts::spaceToggle` · The brief
+(§3.2) asks for Total Commander's `CountSpace=1`: Space on a **directory**
+marks it *and* walks it, replacing the `<DIR>` in the Size column with the real
+total. ART marks; it does not count.
+
+The reason is the phase's own rule. There is no primitive to count with:
+`panel_list_local` lists one level, `scan_collection_directory` looks for Amiga
+files rather than totalling bytes, and `volume_plan_copy` computes a size only
+against a destination volume. A recursive walk is new engine capability — small
+and read-only, but new — and phase 2b's plan says a gap found on the way is
+filed rather than smuggled in.
+
+Fixing it means one command per side of the fence: a depth-limited local walk
+(the same guards `scan_collection_directory` already has — bounded depth, no
+symlink following) and a volume-side directory total, both as jobs, because a
+directory of forty thousand files must not block the command thread and must
+be stoppable. The Size column then needs a third state — not just a number or
+`<DIR>`, but "counting…".
+
+Found while building phase 2b task 5.
+
+**ART-085** 🟡 **A studio forgets the image it had open the moment you leave the screen**
+`src/pages/AdfBrowser.tsx`, `HardDiskStudio.tsx`, and every other studio ·
+Each holds its open file in a local `useState`. Navigating away unmounts the
+component and the state goes with it, so coming back gives the empty
+"open an .adf to begin" page again — while the Dashboard's Recent list, which
+*is* persisted (SQLite `recent_files`), still shows the file that was open a
+second ago. That contrast is what makes it read as a fault rather than as a
+design.
+
+What is missing is a notion of **the object ART currently has open**, shared
+across screens: the Files panes, the studios and the workflow engine all
+address the same kinds of thing and none of them can tell the others what it
+is looking at. Phase 2b task 6 already has to persist per-pane paths for
+session restore, and this is the same question asked once for the whole
+application rather than once per screen — worth designing together rather than
+bolting a `useRef` onto each studio.
+
+Found by the user in the running application, 2026-08-12.
+
+**ART-081** 🟡 **A single file cannot be moved between two images, because the primitive underneath addresses a directory**
+`src-tauri/src/commands/volume_write.rs::volume_copy_between` ·
+`src/lib/movePlan.ts` · The command takes a *directory* block at both ends and
+copies that directory's tree. F5 on a lone file between two images already
+passes the pane's own `dirBlock` and therefore copies the whole folder the file
+happens to be in — noisy, but harmless, because F5 deletes nothing. F6 (Move)
+cannot use that: it would copy twenty files, delete the one that was marked, and
+report a move.
+
+So `planMove` refuses it by name (`files.move.refuseFileBetweenImages`), and
+the test `refuses a lone file between two images` pins the refusal. Folders
+move between images; files move out to a host folder; a file between two images
+is copied with F5 for now.
+
+Fixing it means a command that stages one *entry* — extract to a scratch path,
+then `put_file` into the destination volume, inside one write session at each
+end so the backup and journal guarantees hold — which is the same missing
+primitive ART-064 needs for batching, and it should be built once for both.
+The F5 whole-folder surprise above is worth fixing in the same pass.
+
+Found while building F6 in phase 2b task 3; recorded rather than smuggled into
+a UI task, which is what that task's plan requires.
+
+**ART-080** 🔵 **ART cannot delete a file on the user's own disk, so nothing can be moved *off* a host folder**
+`src/lib/movePlan.ts` · `src-tauri/src/commands/panel.rs` · Every delete ART
+owns goes *into* a disk image through `core/volume/write`; there is no command
+that removes a file from the user's own filesystem, and that is deliberate —
+Explorer does that job and a two-pane commander that can silently delete host
+files is a much larger safety surface than one that cannot.
+
+The consequence, once F6 became Move: the most obvious move of all — drag a
+game off `D:\downloads` and onto a floppy image — is a copy, and the original
+stays. F6 says so (`files.move.refuseLocalSource`) instead of being disabled
+with no explanation, and points at F5.
+
+Fixing it is not a line of code but a decision: a host-side delete needs its own
+`Safety` class, its own confirmation, its own oplog entry, and a policy on
+recycle bin versus unlink. Worth doing deliberately, if at all.
+
+Found while building F6 in phase 2b task 3.
+
+**ART-078** 🟡 **An AmigaOS CD's protection bits and file comments are lost, because Rock Ridge and the Amiga `AS` entry are not read**
+`core/iso/` · ART reads ISO9660 and prefers Joliet when a disc carries it.
+Neither carries what an Amiga CD actually says about its files: protection bits
+(`HSPARWED`) and the file comment live in the **Amiga `AS` System Use entry**, a
+Rock Ridge-style extension, and ART reads no System Use area at all. Two
+consequences, both quiet:
+
+- **A WHDLoad-era disc loses its slave's `S` and `P` bits on the way out.** A
+  game copied off a CD onto an HDF can arrive with the right bytes and the
+  wrong protection, which is a game that starts and then does not work — the
+  same class of failure §7.2 records for archives, where ART *does* carry the
+  bits through `.uaem` sidecars.
+- **A Unix-mastered disc with no Joliet descriptor falls back to uppercase
+  8.3 names.** Rock Ridge is where its real names are, so `MyGame.info`
+  becomes `MYGAME.INF` and the icon stops matching the drawer.
+
+Neither is a regression: nothing ever claimed to read them, `FEATURES.md` and
+`format-support-matrix.md` both say so, and the disc still copies. Fixing it
+means reading the System Use area after each directory record, handling the
+`SP`/`CE`/`NM` continuation entries, and mapping `AS` onto the same
+`Protection` type `core/volume/write` already has — at which point the
+existing `.uaem` writer carries the bits out to a folder for free.
+
+Found while closing Phase 2a; recorded rather than fixed because it is a
+format layer of its own, not an omission in the one that landed.
+
+**ART-073** 🟡 **`delete_many`'s all-or-nothing guarantee only holds for the whole-file strategy**
+`src-tauri/src/commands/volume_write.rs::delete_many` (line ~505) · The
+pre-check (`check_batch_deletable`) runs once, against a read-only listing,
+before the writer session opens — for a floppy-sized image (the whole-file
+strategy) that is enough: nothing is written until the whole in-memory
+result validates, so a batch that cannot fully succeed leaves the file
+untouched, and every test in this module exercises that path. On a
+block-journal image (a large HDF) each `writer.delete(...)` inside the
+session's loop is its own committed, journalled operation, already durable
+in the file the instant it returns — there is no whole-image commit step to
+refuse at. An error partway through the loop after the pre-check passed
+(a name resolving differently a moment later, say) leaves the earlier
+deletes in the batch standing rather than none of them, breaking the
+all-or-nothing promise the doc comment now qualifies. Reachable in
+principle whenever a batch delete runs against an HDF rather than an ADF.
+Not reachable through the case-different-name path any more —
+`dedupe_case_insensitive` (added in the same pass that found this) closes
+that specific trigger — but the underlying strategy gap is still open. Fix
+would need the block-journal strategy to buffer its own generation of
+deletes behind one commit point the way the whole-file strategy already
+does, which is a real design change, not a one-line fix.
+
+**ART-070** 🔵 **`refresh(side)` moves keyboard focus to the pane it refreshed**
+`src/pages/FileManager.tsx` — `openLocal`, `openAdf`, `openHdf` and
+`openVolume` (lines 552, 585, 600, 638) each end with `resetSelection(side);
+setFocused(side);`, and `refresh(side)` (line ~723) calls whichever of them
+matches the pane's kind. F5's copy-in path calls `refresh(to)` on the
+*destination* pane once the job result arrives, so after a copy, keyboard
+focus silently jumps from the source pane (where the user was working) to
+the destination — Total Commander leaves focus on the source. Cosmetic, not
+a safety issue: nothing is acted on incorrectly, the next F-key press just
+lands on the pane the user was not looking at. Fix would need `refresh` to
+take an explicit "keep focus here" flag, or for its callers to restore
+`focused` afterward rather than trusting the open-pane functions' own
+default.
+
+**ART-069** 🔵 **No frontend test renders `FileManager.tsx`**
+`src/pages/FileManager.tsx` · It calls Tauri commands (`onVolumeWriteResult`,
+`onJobProgress`, panel listing, …) on mount, which is why every phase-1a
+frontend test extracts a pure function or hook instead of rendering the
+page — `@/lib/selection`, `@/lib/functionKeyPlan` (added closing finding 4
+of the phase-1a whole-branch review), `usePaneTab`/`isShortcutBlocked` in
+`FunctionKeys.tsx`, and so on. Each extraction is real, tested logic, but
+none of them proves the page actually *wires* the extracted piece
+correctly — that an F-key's `run` reads the same `target` its `enabled`
+was computed from, that a click handler calls the selection function it
+looks like it calls, that the two `useEffect` result listeners registered
+at mount really are registered before any button can start a job. Closing
+this needs either a mock of the Tauri IPC surface (`@tauri-apps/api/core`'s
+`invoke`, `@tauri-apps/api/event`'s `listen`) sufficient to render the page
+in a test, or splitting `FileManager.tsx` into smaller components each
+small enough to mock individually — a real task, not a quick fix.
+
+**ART-068** 🔵 **The filter box tells "empty" from "no match" by comparing entry counts, not a dedicated flag**
+`src/pages/FileManager.tsx` (~line 2260) · The "a mask matching nothing says so"
+message picks between `files.pane.filterNoMatch` and `files.pane.empty` with
+`filter.trim() !== "" && state.entries.length > 0` — a mask is active *and*
+the pane's unfiltered listing was non-empty. That reads correctly today
+because `filterEntries` (`src/lib/mask.ts`) never changes the unfiltered
+count and the mask resets on navigation, but the distinction the UI actually
+wants — "did the mask remove everything?" — is being inferred from two
+numbers matching a shape, not read off a value that says so directly. A
+future change to either side (a mask that also hid something for a different
+reason, a pane whose unfiltered count is not `state.entries` any more) could
+silently start showing "this folder is empty" for a folder that only looks
+empty because of the filter, which reads as ART having failed to open the
+disk. No test exercises the two counts diverging from what the boolean they
+stand in for would say. Fix is mechanical: have `filterEntries` (or a sibling)
+return whether it removed anything, and key the message off that instead of
+re-deriving it at the call site.
+
+**ART-067** 🔵 **A batch archive install can't be stopped mid-archive**
+`commands/archives.rs::prepare_archives` (line ~316) · `unpack_for_install(archive, &NoProgress)`
+is called with `&NoProgress` regardless of which caller is running — including
+`install_archives`, which is on a real job with a real `ProgressSink` one
+call up the stack. `is_cancelled()` is checked once per archive, at the top
+of the loop (line ~310), so Stop is honoured *between* archives but not
+during one — a batch of five archives where the third is large leaves Stop
+unresponsive for however long that one extraction takes. Not a data-safety
+issue (§54's "never mid-write" is still honoured: nothing is written to the
+volume until every archive is unpacked and staged), just a slower response
+to Stop than the rest of the job queue gives. Fix is to thread the real
+`progress` sink into `unpack_for_install` instead of a fixed `NoProgress`.
+
+**ART-066** 🟡 **`archives_plan_install` unpacks the whole batch on the Tauri command thread**
+`commands/archives.rs::archives_plan_install` (line ~104) · Every other
+multi-step operation in this module runs through [`spawn_job`](../src-tauri/src/commands/jobs.rs)
+so it can report progress and be cancelled (§54, §55) — `archives_install`
+does. `archives_plan_install` is a plain `#[tauri::command]`: it calls
+`build_plan` → `prepare_archives(archives, staging.path(), &NoProgress)`
+straight in the command handler, which extracts every archive in the
+selection before returning. A plan over several large archives blocks the
+Tauri command thread for the whole unpack, with no progress and no way to
+stop it, where the read-only plan step for every other batched operation in
+this file manager returns as soon as the (much cheaper) cost is computed.
+Not data-unsafe — nothing is written — just unresponsive. Needs the same
+`spawn_job` treatment `archives_install` already has, returning a job id the
+UI awaits the way it awaits every other plan today would be a larger change
+than this note; recorded here rather than fixed under Task 8's scope.
+
+**ART-065** 🟡 **Volume→local multi-select is several concurrent operations, not one**
+`src/pages/FileManager.tsx::copySelectionTo` (line ~1090) · When the source
+pane is a volume and more than one entry is selected for extraction to a
+local folder, each entry becomes its own concurrent operation inside a
+single `Promise.all` — a subdirectory goes through its own `volumeCopyOut`
+job (awaited individually inside the map callback), a plain file through its
+own direct `volumeExtractTo` call — rather than the one atomic, one-job
+operation `volumeCopyInMany` (local→volume) and `volumeCopyBetween`
+(volume→volume, staged) both give their directions. Each individual
+extraction is still safe on its own — every write is the same
+backup-and-validate pipeline as ever — but the *batch* has none of the
+all-or-nothing guarantee the other two directions do: a selection of ten
+entries where the seventh fails to extract leaves the first six on disk and
+the last three silently never attempted, with no report tying the partial
+result back to "this was one selection." Needs a batched extract primitive
+(`volume_extract_many`, mirroring `volume_copy_in_many`'s shape) rather than
+fixing the concurrency at the call site.
+
+**ART-064** 🟡 **Volume→volume multi-select refuses rather than batching**
+`src/pages/FileManager.tsx::copySelectionTo` (line ~1124) · "Two volumes and
+more than one entry: not supported yet" — `setError(t("files.err.batchBetweenVolumes"))`
+("Copying several entries between two images at once is not supported yet —
+copy them one at a time."). Not a defect in the sense of wrong behaviour: the
+refusal is explicit, immediate, and names the reason, which is exactly what
+§89 asks for when a case is not handled. It is recorded here because it is
+the one direction of the four (local→volume, volume→local, volume→volume
+single-entry, volume→volume batch) Task 8's roadmap self-review calls out by
+name as deliberately not built: there is no `volume_copy_between_many`
+primitive to build a batch on top of — `volume_copy_between` (the command
+`e3035cf` added end-to-end coverage for) stages exactly one directory tree
+through a temp folder per call, and doing several would mean either several
+separate stage-and-insert round trips (no shared atomicity, the same
+weakness as ART-065) or a `HostSelection`-shaped staging step that does not
+exist yet on the extract side. Needs its own task, not a quick fix — see
+`ART-065` for the sibling gap it would need to close at the same time.
+
+**ART-062** 🔵 **No language has been checked on screen**
+`src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
+was verified by `pnpm test`'s key-parity check and by reading the JSON — never
+by opening the running application and looking at a screen. Several Turkish
+strings are substantially longer than their English originals and sit in tight
+controls, so the check that remains is visual, not automatable:
+
+| Key | English | Turkish | Growth |
+|---|---|---|---|
+| `pistorm.saveSync` | "Save & Sync PiStorm SD" | "PiStorm SD'yi Kaydet ve Eşitle" | +36% |
+| `hardDisk.bootablePri` | "Bootable (Pri {{n}})" | "Önyüklenebilir (Öncelik {{n}})" | +50% |
+| `pistorm.profile.classic.badge` | "Cycle-Exact & Demos" | "Çevrim Hassasiyetli ve Demolar" | +58% |
+| FileManager function-key label | "View" | "Görüntüle" | 4 → 9 characters |
+| FileManager function-key label | "Grid" | "Izgara" | +50% |
+| job status | "Done" | "Tamamlandı" | +150% |
+| job status | "Failed" | "Başarısız" | +50% |
+
+The function-key bar (`src/components/files/FunctionKeys.tsx`) was inspected
+in source rather than run: its container carries `flexWrap: "wrap"` and each
+button `flex: "1 1 90px"`, and `.btn` in `src/styles/global.css` carries no
+`text-overflow` rule (only `.file-row-name` does), so the bar should wrap
+rather than clip. That makes it the most likely of the rows above to look
+merely cramped rather than the most likely to break outright — but nobody has
+looked at it in Turkish. Needs an actual run of `pnpm tauri dev` with the
+language switched to Turkish, working through PiStorm, the hard disk screen,
+and the Files function-key bar at a few window widths.
+
+**ART-060** 🔵 **Rust-side error sentences do not translate**
+`core/error.rs::CoreError`, `commands/whdload.rs::WhdloadRefusal` · Every
+`CoreError` variant's `Display` implementation, and `WhdloadRefusal { reason,
+suggestion }`'s two fields, are English sentences written in `core/` and
+`commands/`, reaching the UI verbatim regardless of the language chosen in
+Settings. `CoreError::user_message()` appends the stable `ART-*` id from
+`code()` to the English sentence for exactly this reason (§68) — the id was
+always meant to be the stable, quotable part — but nothing today keys off it
+to show a translated sentence instead. This is a design question worth
+recording, not answering here: `core/` may not depend on the frontend's
+`react-i18next` catalogue (CLAUDE.md's core-independence rule), so there are at
+least two ways forward — move the sentences into the frontend catalogue, keyed
+by `CoreError::code()` / a `WhdloadRefusal` reason code, and have the UI look
+them up instead of rendering the string Rust sent; or give `core/` its own
+minimal, dependency-free catalogue and have `Display` consult it. The first
+keeps `core/` exactly as independent as it is today but means every error path
+has to carry a stable key instead of (or alongside) a sentence, and duplicates
+some phrasing decisions between Rust and the JSON catalogues. The second keeps
+the sentence and its translation next to each other but adds a resource-lookup
+concept to a crate that currently has none. Neither is decided here.
+
+**ART-058** 🔵 **A cancelled block-journal copy doesn't tell the user files already landed**
+`commands/volume_write.rs::run_copy_in_folder_with` (`WriteStrategy::BlockJournal` branch,
+also reached through `run_install`'s `with_volume` closure in `commands/whdload.rs`) · Above
+the whole-file limit (16 MiB) each file a copy or install writes is its own committed,
+journalled operation, already durable on disk before the next one starts. Cancelling there is
+honest about that on purpose — `device.sync()?` runs before the cancellation check, and the
+files that landed are correctly left in place rather than rolled back, unlike the whole-file
+strategy where cancelling leaves nothing at all. What the user is told is only
+`CoreError::Cancelled`'s message, `"operation cancelled"` (`core::error::CoreError`,
+`ART-CANCELLED`) — nothing distinguishes that from the whole-file case, so someone who cancels
+a large HDF install partway through has no way to learn from the UI that some files are already
+on the volume. Not a data-safety defect — nothing here is wrong or at risk — just a message
+that undersells what happened. Needs the block-journal branch to carry how much landed (files
+copied so far) into a distinct message or a `Cancelled` variant that names it, and a UI string
+for that case.
+
+**ART-050** 🟡 **The §92 pre-flight gate does not check bitmap consistency or hash-chain integrity**
+`core/adf/validate.rs::validate_image` · `commit_whole_file` (ART-042) refuses
+a write when `validate_image` finds a `Problem`, but `validate_image` only
+covers the bootblock signature, its checksum, the block count and the root
+block's type. It does not walk the bitmap against what is actually allocated
+and does not walk a hash chain for consistency, so an operation that leaves
+two files owning the same block, or an entry linked into the wrong bucket,
+still passes the gate and commits. `CHANGELOG.md`'s entry for ART-042 was
+corrected in this pass to stop implying broader coverage than this. Deepening
+`validate_image` to catch these is real work, not a flag to flip.
+
+**ART-049** 🟡 **`create.rs`'s oracle hook and `VolumeWriter::open` agree by hand, not by a check**
+`core/adf/create.rs` (`oracle_export`), `core/volume/write/mod.rs`
+(`VolumeWriter::open`) · The oracle export hook hardcodes `DOS\x01` geometry
+while formatting with `FileSystemType::Ffs` — the two are only consistent
+because the hook's author chose them to match. `VolumeWriter::open` does not
+cross-check the geometry it is handed against the dostype the image's own
+bootblock declares, so a caller that passed a geometry for one filesystem
+against an image formatted as another would not be refused at the boundary
+that is supposed to catch exactly that. No test exercises the disagreement
+because nothing in the suite constructs one. Needs a guard in
+`VolumeWriter::open` and a fixture that deliberately mismatches geometry and
+bootblock.
+
+Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
+not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
+
+Every module with working logic has now been audited. The remaining `core`
+modules are stubs that only return `NotImplemented` (`recovery.rs`,
+`conversion.rs`, `binary.rs`, `validation.rs`) or hold types with no logic
+(`compatibility.rs`) — see [FEATURES.md](FEATURES.md) for their planned state.
+
+Two areas were reviewed and found sound, and are recorded here so nobody
+re-audits them without reason:
+
+- `core/analysis.rs` — the hex reader clamps both offset and length, and the
+  signature scan guards its window.
+- `core/profile.rs` — preset data only, no parsing of untrusted input.
+
+---
+
+**ART-043** 🟠 **A partition inside a small image is written at the wrong offset**
+`commands/volume_write.rs` · The whole-file strategy is chosen by the *file's*
+size, but it then builds its `VecDevice` from the whole file and opens the
+writer at offset `0`, while the geometry it was given describes a **partition**
+that may start megabytes into that file. For any RDB image of 16 MiB or less
+this reads and writes volume-relative block numbers as if they were
+file-absolute ones: the root block lands in the middle of the partition's data.
+In practice the first read then fails with something unhelpful ("block N is not
+a directory") rather than corrupting anything, and — since ART-042 — a result
+that did somehow get written is refused by the whole-image gate before it
+reaches the file. So the user's data is not at risk today; the strategy choice
+is simply wrong. The fix is to pick the block-journal strategy whenever the
+volume does not start at byte 0 and cover the whole file, or to give the
+whole-file branch the partition's slice and write it back at its offset. Needs
+its own task and its own fixture (a small RDB image with a formatted
+partition) — no test covers it today, which is why it survived this long.
+
+---
+
+## Fixed
+
+### Phase 2b, the PiStorm rebuild and the first real cards (2026-08-12 → 08-13)
+
+**ART-100** 🟡 **The PiStorm screen went grey without saying why** — *fixed 2026-08-13*
+`src/pages/PistormStudio.tsx` · Every control on that screen edits files on a
+card, so every one of them is disabled until a card folder is chosen — the ROM
+picker, the preview, the save. They said so **only by being grey**, which reads
+as a broken screen rather than as a first step. The user's words on finding it:
+the button is there but it does not work.
+
+Fixed by saying it, once where the folder is chosen and again on each disabled
+button's tooltip. The prerequisite was always right; it was simply never
+spoken.
+
+Worth generalising: a disabled control with no explanation is a defect of the
+same kind as a control that does nothing (ART-090), and the screen had four of
+them.
+
 **ART-098** 🟠 **CI's licence gate could never pass, and the build and the installer never ran** — *fixed 2026-08-13*
 `.github/workflows/ci.yml` · The `Dependency licences & advisories` step used
 `EmbarkStudios/cargo-deny-action@v2`. That is a **container** action, container
@@ -110,6 +542,34 @@ Two things worth naming beyond the fix:
 Fixed by installing `cargo-deny` and running the binary, and by adding a
 `Frontend tests` step. Found while pushing 28 commits of `main` that had never
 reached the remote.
+
+**ART-097** 🟡 **A card may carry several RDBs, and ART models one — so it would report fifteen working partitions as broken** — *fixed 2026-08-13*
+`core/rdb.rs` · `@/lib/rdbDrivers` · MultibootOS 2.2 has **two** `0x76` areas,
+each with its own `RDSK`, its own geometry and its own partition list. ART
+returns `Option<usize>` from `find_rdb_location` and stops at the first.
+
+The consequence is worse than a missing half. That card's **second** RDB carries
+a `DOS` driver at version 45.16 and **no PFS3** — while all fifteen of its
+partitions are `PDS`. The card works, because the drivers a partition may use
+are the **union across every RDB on the disk**. `partitionsMissingDriver` looks
+at one RDB, so on this card it would name fifteen partitions as unmountable when
+none of them is — the same false confidence in reverse that ART-084 was.
+
+Fix: model a card as a list of Amiga areas, and take the driver set as the union
+before deciding anything is missing. Depends on [ART-095](#open).
+
+**Fixed 2026-08-13** with it. `CardImage::partitions_missing_driver` asks the
+whole card, and on the real MultibootOS image reports **nothing** where the
+per-area question would have named fifteen. The guard against over-correcting is
+`a_partition_with_no_driver_anywhere_is_still_reported`: the union must not turn
+ART-084's real finding into silence.
+
+Still owed: the Hard Disk studio and `@/lib/rdbDrivers` ask the old question
+against a single RDB. They keep working on HDFs, which is what they are pointed
+at today; moving them onto `CardImage` is the follow-up that makes a card
+openable from the UI rather than only from the core.
+
+Found 2026-08-13. See [sd2-card-layout.md](sd2-card-layout.md).
 
 **ART-095** 🟠 **ART cannot open a real PiStorm card image at all** — *fixed 2026-08-13*
 `core/rdb.rs::find_rdb_location` · `core/hdf.rs` · `find_rdb_location` scans the
@@ -155,56 +615,6 @@ MultibootOS 2.2   2 areas                SDH0/SDH1 + 15    2 drivers
 Every number agrees with an independent hand-decode of the same bytes, and with
 what the distributions' own documentation says about themselves.
 
-**ART-096** 🟡 **ART writes `MaxTransfer` and `Mask` as zero, and 100 buffers**
-`core/rdb.rs::create_rdb_layout` · The DosEnvec's `MaxTransfer` (longword 45)
-and `Mask` (longword 46) are left at zero, with a comment saying so. Every
-partition on both real cards — seventeen of them across three RDBs, without
-exception — carries:
-
-```
-maxtransfer = 0x0001FE00    mask = 0x7FFFFFFE    buffers = 600
-```
-
-A mask of zero says no memory is acceptable for a transfer, which is not what
-anybody means by it; ART's default of 100 buffers against the field's 600 is a
-performance choice made by not making one. Neither is dangerous — Emu68 is
-forgiving — but they are the fields that are cheap to get right and very hard
-to diagnose when wrong, and ART now has measured values rather than a guess.
-
-Also worth matching: real cards name their partitions `SDH0`/`SDH1`, not `DH0`.
-On a machine with an IDE drive `DH0` is already taken.
-
-Found 2026-08-13 while reading two real cards. See
-[sd2-card-layout.md](sd2-card-layout.md).
-
-**ART-097** 🟡 **A card may carry several RDBs, and ART models one — so it would report fifteen working partitions as broken** — *fixed 2026-08-13*
-`core/rdb.rs` · `@/lib/rdbDrivers` · MultibootOS 2.2 has **two** `0x76` areas,
-each with its own `RDSK`, its own geometry and its own partition list. ART
-returns `Option<usize>` from `find_rdb_location` and stops at the first.
-
-The consequence is worse than a missing half. That card's **second** RDB carries
-a `DOS` driver at version 45.16 and **no PFS3** — while all fifteen of its
-partitions are `PDS`. The card works, because the drivers a partition may use
-are the **union across every RDB on the disk**. `partitionsMissingDriver` looks
-at one RDB, so on this card it would name fifteen partitions as unmountable when
-none of them is — the same false confidence in reverse that ART-084 was.
-
-Fix: model a card as a list of Amiga areas, and take the driver set as the union
-before deciding anything is missing. Depends on [ART-095](#open).
-
-**Fixed 2026-08-13** with it. `CardImage::partitions_missing_driver` asks the
-whole card, and on the real MultibootOS image reports **nothing** where the
-per-area question would have named fifteen. The guard against over-correcting is
-`a_partition_with_no_driver_anywhere_is_still_reported`: the union must not turn
-ART-084's real finding into silence.
-
-Still owed: the Hard Disk studio and `@/lib/rdbDrivers` ask the old question
-against a single RDB. They keep working on HDFs, which is what they are pointed
-at today; moving them onto `CardImage` is the follow-up that makes a card
-openable from the UI rather than only from the core.
-
-Found 2026-08-13. See [sd2-card-layout.md](sd2-card-layout.md).
-
 **ART-094** 🟡 **Overwriting a write-protected file is not checked either** — *fixed 2026-08-13*
 `core/volume/write/mod.rs` · `commands/volume_write.rs::replace_file` · The
 delete half of [ART-088](#open) is fixed: the writer honours the `d` bit and
@@ -245,32 +655,6 @@ Adding it to the copy dialog, beside the collision question it already asks, is
 the follow-up.
 
 Split out of ART-088 on 2026-08-13 rather than left as a sentence inside it.
-
-**ART-093** 🟡 **ART cannot fetch an Emu68 kernel update; it can only tell you which one you need**
-`core/pistorm/` · `net/` · The fix round's F4 asked for two things. The reading
-half is built: the card's `Emu68.img` is identified from the `$VER:` string its
-own build compiles in, and the hardware matrix names the archive that belongs on
-it. The **fetching** half is not.
-
-Not built rather than half-built, and the screen offers no button for it — the
-same rule the WiFi panel follows. Three things make it more than an afternoon,
-and each is a decision worth making deliberately:
-
-- **The host policy.** `net/http_mirror.rs` refuses cross-host redirects on
-  purpose (§41.5.7): a followed redirect is a fetch the user never configured.
-  A GitHub release asset redirects to `objects.githubusercontent.com`, so this
-  needs its own client with its own stated policy, not a relaxation of that one.
-- **Which release.** The archive name depends on the release line, and one name
-  means a different board in each ([ART-091](#open)). A fetch that resolves
-  "latest" without the line would be the same defect with a network connection.
-- **Writing it.** Unpacking an archive onto a card that boots somebody's machine
-  is a multi-file write and wants the same preview → backup → verify every other
-  write in ART has, per file.
-
-Until then the screen tells the user exactly which archive to download and from
-which release line, which is the part they cannot work out for themselves.
-
-Recorded 2026-08-13 as owed work, not a defect.
 
 **ART-092** 🔵 **A named PiStorm firmware set cannot be deleted from ART** — *fixed 2026-08-13*
 `core/pistorm/mod.rs` · `src/pages/PistormStudio.tsx` · Named sets can be
@@ -505,28 +889,6 @@ protected one.
 Found while auditing the brief's §3.4 confirmations against what ART actually
 does.
 
-**ART-087** 🔵 **Space marks a row but does not compute a directory's size**
-`src/pages/FileManager.tsx` · `src/lib/selection.ts::spaceToggle` · The brief
-(§3.2) asks for Total Commander's `CountSpace=1`: Space on a **directory**
-marks it *and* walks it, replacing the `<DIR>` in the Size column with the real
-total. ART marks; it does not count.
-
-The reason is the phase's own rule. There is no primitive to count with:
-`panel_list_local` lists one level, `scan_collection_directory` looks for Amiga
-files rather than totalling bytes, and `volume_plan_copy` computes a size only
-against a destination volume. A recursive walk is new engine capability — small
-and read-only, but new — and phase 2b's plan says a gap found on the way is
-filed rather than smuggled in.
-
-Fixing it means one command per side of the fence: a depth-limited local walk
-(the same guards `scan_collection_directory` already has — bounded depth, no
-symlink following) and a volume-side directory total, both as jobs, because a
-directory of forty thousand files must not block the command thread and must
-be stoppable. The Size column then needs a third state — not just a number or
-`<DIR>`, but "counting…".
-
-Found while building phase 2b task 5.
-
 **ART-086** 🔵 **Every path in Settings had to be typed by hand** — *fixed 2026-08-12*
 `src/pages/Settings.tsx` · "WinUAE Path" and "Collection Directory" were plain
 `<input>`s with a placeholder. ART already opens native pickers everywhere else
@@ -544,25 +906,6 @@ which is what every caller's `?? fallback` already assumed.
 The same component now serves the two **default folders** the Files screen
 opens in, which is what made the fix worth doing today rather than eventually:
 a setting the user is expected to fill in is a setting that needs a picker.
-
-Found by the user in the running application, 2026-08-12.
-
-**ART-085** 🟡 **A studio forgets the image it had open the moment you leave the screen**
-`src/pages/AdfBrowser.tsx`, `HardDiskStudio.tsx`, and every other studio ·
-Each holds its open file in a local `useState`. Navigating away unmounts the
-component and the state goes with it, so coming back gives the empty
-"open an .adf to begin" page again — while the Dashboard's Recent list, which
-*is* persisted (SQLite `recent_files`), still shows the file that was open a
-second ago. That contrast is what makes it read as a fault rather than as a
-design.
-
-What is missing is a notion of **the object ART currently has open**, shared
-across screens: the Files panes, the studios and the workflow engine all
-address the same kinds of thing and none of them can tell the others what it
-is looking at. Phase 2b task 6 already has to persist per-pane paths for
-session restore, and this is the same question asked once for the whole
-application rather than once per screen — worth designing together rather than
-bolting a `useRef` onto each studio.
 
 Found by the user in the running application, 2026-08-12.
 
@@ -685,95 +1028,6 @@ actually cost. Two tasks' worth of layout work went in green on 178 frontend
 tests, and the first human look at the running screen found this in seconds.
 Nothing in a jsdom test has a viewport height.
 
-**ART-081** 🟡 **A single file cannot be moved between two images, because the primitive underneath addresses a directory**
-`src-tauri/src/commands/volume_write.rs::volume_copy_between` ·
-`src/lib/movePlan.ts` · The command takes a *directory* block at both ends and
-copies that directory's tree. F5 on a lone file between two images already
-passes the pane's own `dirBlock` and therefore copies the whole folder the file
-happens to be in — noisy, but harmless, because F5 deletes nothing. F6 (Move)
-cannot use that: it would copy twenty files, delete the one that was marked, and
-report a move.
-
-So `planMove` refuses it by name (`files.move.refuseFileBetweenImages`), and
-the test `refuses a lone file between two images` pins the refusal. Folders
-move between images; files move out to a host folder; a file between two images
-is copied with F5 for now.
-
-Fixing it means a command that stages one *entry* — extract to a scratch path,
-then `put_file` into the destination volume, inside one write session at each
-end so the backup and journal guarantees hold — which is the same missing
-primitive ART-064 needs for batching, and it should be built once for both.
-The F5 whole-folder surprise above is worth fixing in the same pass.
-
-Found while building F6 in phase 2b task 3; recorded rather than smuggled into
-a UI task, which is what that task's plan requires.
-
-**ART-080** 🔵 **ART cannot delete a file on the user's own disk, so nothing can be moved *off* a host folder**
-`src/lib/movePlan.ts` · `src-tauri/src/commands/panel.rs` · Every delete ART
-owns goes *into* a disk image through `core/volume/write`; there is no command
-that removes a file from the user's own filesystem, and that is deliberate —
-Explorer does that job and a two-pane commander that can silently delete host
-files is a much larger safety surface than one that cannot.
-
-The consequence, once F6 became Move: the most obvious move of all — drag a
-game off `D:\downloads` and onto a floppy image — is a copy, and the original
-stays. F6 says so (`files.move.refuseLocalSource`) instead of being disabled
-with no explanation, and points at F5.
-
-Fixing it is not a line of code but a decision: a host-side delete needs its own
-`Safety` class, its own confirmation, its own oplog entry, and a policy on
-recycle bin versus unlink. Worth doing deliberately, if at all.
-
-Found while building F6 in phase 2b task 3.
-
-**ART-078** 🟡 **An AmigaOS CD's protection bits and file comments are lost, because Rock Ridge and the Amiga `AS` entry are not read**
-`core/iso/` · ART reads ISO9660 and prefers Joliet when a disc carries it.
-Neither carries what an Amiga CD actually says about its files: protection bits
-(`HSPARWED`) and the file comment live in the **Amiga `AS` System Use entry**, a
-Rock Ridge-style extension, and ART reads no System Use area at all. Two
-consequences, both quiet:
-
-- **A WHDLoad-era disc loses its slave's `S` and `P` bits on the way out.** A
-  game copied off a CD onto an HDF can arrive with the right bytes and the
-  wrong protection, which is a game that starts and then does not work — the
-  same class of failure §7.2 records for archives, where ART *does* carry the
-  bits through `.uaem` sidecars.
-- **A Unix-mastered disc with no Joliet descriptor falls back to uppercase
-  8.3 names.** Rock Ridge is where its real names are, so `MyGame.info`
-  becomes `MYGAME.INF` and the icon stops matching the drawer.
-
-Neither is a regression: nothing ever claimed to read them, `FEATURES.md` and
-`format-support-matrix.md` both say so, and the disc still copies. Fixing it
-means reading the System Use area after each directory record, handling the
-`SP`/`CE`/`NM` continuation entries, and mapping `AS` onto the same
-`Protection` type `core/volume/write` already has — at which point the
-existing `.uaem` writer carries the bits out to a folder for free.
-
-Found while closing Phase 2a; recorded rather than fixed because it is a
-format layer of its own, not an omission in the one that landed.
-
-**ART-073** 🟡 **`delete_many`'s all-or-nothing guarantee only holds for the whole-file strategy**
-`src-tauri/src/commands/volume_write.rs::delete_many` (line ~505) · The
-pre-check (`check_batch_deletable`) runs once, against a read-only listing,
-before the writer session opens — for a floppy-sized image (the whole-file
-strategy) that is enough: nothing is written until the whole in-memory
-result validates, so a batch that cannot fully succeed leaves the file
-untouched, and every test in this module exercises that path. On a
-block-journal image (a large HDF) each `writer.delete(...)` inside the
-session's loop is its own committed, journalled operation, already durable
-in the file the instant it returns — there is no whole-image commit step to
-refuse at. An error partway through the loop after the pre-check passed
-(a name resolving differently a moment later, say) leaves the earlier
-deletes in the batch standing rather than none of them, breaking the
-all-or-nothing promise the doc comment now qualifies. Reachable in
-principle whenever a batch delete runs against an HDF rather than an ADF.
-Not reachable through the case-different-name path any more —
-`dedupe_case_insensitive` (added in the same pass that found this) closes
-that specific trigger — but the underlying strategy gap is still open. Fix
-would need the block-journal strategy to buffer its own generation of
-deletes behind one commit point the way the whole-file strategy already
-does, which is a real design change, not a one-line fix.
-
 **ART-072** 🟡 **Selection collision checks compare names case-sensitively, so `Docs` and `docs` are not caught** — *fixed 2026-08-13*
 `src-tauri/src/core/volume/write/copy.rs::HostSelection::check_for_name_collisions`
 (line ~489) and `src-tauri/src/commands/archives.rs::prepare_archives`
@@ -821,147 +1075,6 @@ source is affected. Tests:
 `a_selection_of_nothing_but_shortcuts_says_so_rather_than_reporting_success`
 and `a_selection_of_ordinary_files_declines_nothing`.
 
-**ART-070** 🔵 **`refresh(side)` moves keyboard focus to the pane it refreshed**
-`src/pages/FileManager.tsx` — `openLocal`, `openAdf`, `openHdf` and
-`openVolume` (lines 552, 585, 600, 638) each end with `resetSelection(side);
-setFocused(side);`, and `refresh(side)` (line ~723) calls whichever of them
-matches the pane's kind. F5's copy-in path calls `refresh(to)` on the
-*destination* pane once the job result arrives, so after a copy, keyboard
-focus silently jumps from the source pane (where the user was working) to
-the destination — Total Commander leaves focus on the source. Cosmetic, not
-a safety issue: nothing is acted on incorrectly, the next F-key press just
-lands on the pane the user was not looking at. Fix would need `refresh` to
-take an explicit "keep focus here" flag, or for its callers to restore
-`focused` afterward rather than trusting the open-pane functions' own
-default.
-
-**ART-069** 🔵 **No frontend test renders `FileManager.tsx`**
-`src/pages/FileManager.tsx` · It calls Tauri commands (`onVolumeWriteResult`,
-`onJobProgress`, panel listing, …) on mount, which is why every phase-1a
-frontend test extracts a pure function or hook instead of rendering the
-page — `@/lib/selection`, `@/lib/functionKeyPlan` (added closing finding 4
-of the phase-1a whole-branch review), `usePaneTab`/`isShortcutBlocked` in
-`FunctionKeys.tsx`, and so on. Each extraction is real, tested logic, but
-none of them proves the page actually *wires* the extracted piece
-correctly — that an F-key's `run` reads the same `target` its `enabled`
-was computed from, that a click handler calls the selection function it
-looks like it calls, that the two `useEffect` result listeners registered
-at mount really are registered before any button can start a job. Closing
-this needs either a mock of the Tauri IPC surface (`@tauri-apps/api/core`'s
-`invoke`, `@tauri-apps/api/event`'s `listen`) sufficient to render the page
-in a test, or splitting `FileManager.tsx` into smaller components each
-small enough to mock individually — a real task, not a quick fix.
-
-**ART-068** 🔵 **The filter box tells "empty" from "no match" by comparing entry counts, not a dedicated flag**
-`src/pages/FileManager.tsx` (~line 2260) · The "a mask matching nothing says so"
-message picks between `files.pane.filterNoMatch` and `files.pane.empty` with
-`filter.trim() !== "" && state.entries.length > 0` — a mask is active *and*
-the pane's unfiltered listing was non-empty. That reads correctly today
-because `filterEntries` (`src/lib/mask.ts`) never changes the unfiltered
-count and the mask resets on navigation, but the distinction the UI actually
-wants — "did the mask remove everything?" — is being inferred from two
-numbers matching a shape, not read off a value that says so directly. A
-future change to either side (a mask that also hid something for a different
-reason, a pane whose unfiltered count is not `state.entries` any more) could
-silently start showing "this folder is empty" for a folder that only looks
-empty because of the filter, which reads as ART having failed to open the
-disk. No test exercises the two counts diverging from what the boolean they
-stand in for would say. Fix is mechanical: have `filterEntries` (or a sibling)
-return whether it removed anything, and key the message off that instead of
-re-deriving it at the call site.
-
-**ART-067** 🔵 **A batch archive install can't be stopped mid-archive**
-`commands/archives.rs::prepare_archives` (line ~316) · `unpack_for_install(archive, &NoProgress)`
-is called with `&NoProgress` regardless of which caller is running — including
-`install_archives`, which is on a real job with a real `ProgressSink` one
-call up the stack. `is_cancelled()` is checked once per archive, at the top
-of the loop (line ~310), so Stop is honoured *between* archives but not
-during one — a batch of five archives where the third is large leaves Stop
-unresponsive for however long that one extraction takes. Not a data-safety
-issue (§54's "never mid-write" is still honoured: nothing is written to the
-volume until every archive is unpacked and staged), just a slower response
-to Stop than the rest of the job queue gives. Fix is to thread the real
-`progress` sink into `unpack_for_install` instead of a fixed `NoProgress`.
-
-**ART-066** 🟡 **`archives_plan_install` unpacks the whole batch on the Tauri command thread**
-`commands/archives.rs::archives_plan_install` (line ~104) · Every other
-multi-step operation in this module runs through [`spawn_job`](../src-tauri/src/commands/jobs.rs)
-so it can report progress and be cancelled (§54, §55) — `archives_install`
-does. `archives_plan_install` is a plain `#[tauri::command]`: it calls
-`build_plan` → `prepare_archives(archives, staging.path(), &NoProgress)`
-straight in the command handler, which extracts every archive in the
-selection before returning. A plan over several large archives blocks the
-Tauri command thread for the whole unpack, with no progress and no way to
-stop it, where the read-only plan step for every other batched operation in
-this file manager returns as soon as the (much cheaper) cost is computed.
-Not data-unsafe — nothing is written — just unresponsive. Needs the same
-`spawn_job` treatment `archives_install` already has, returning a job id the
-UI awaits the way it awaits every other plan today would be a larger change
-than this note; recorded here rather than fixed under Task 8's scope.
-
-**ART-065** 🟡 **Volume→local multi-select is several concurrent operations, not one**
-`src/pages/FileManager.tsx::copySelectionTo` (line ~1090) · When the source
-pane is a volume and more than one entry is selected for extraction to a
-local folder, each entry becomes its own concurrent operation inside a
-single `Promise.all` — a subdirectory goes through its own `volumeCopyOut`
-job (awaited individually inside the map callback), a plain file through its
-own direct `volumeExtractTo` call — rather than the one atomic, one-job
-operation `volumeCopyInMany` (local→volume) and `volumeCopyBetween`
-(volume→volume, staged) both give their directions. Each individual
-extraction is still safe on its own — every write is the same
-backup-and-validate pipeline as ever — but the *batch* has none of the
-all-or-nothing guarantee the other two directions do: a selection of ten
-entries where the seventh fails to extract leaves the first six on disk and
-the last three silently never attempted, with no report tying the partial
-result back to "this was one selection." Needs a batched extract primitive
-(`volume_extract_many`, mirroring `volume_copy_in_many`'s shape) rather than
-fixing the concurrency at the call site.
-
-**ART-064** 🟡 **Volume→volume multi-select refuses rather than batching**
-`src/pages/FileManager.tsx::copySelectionTo` (line ~1124) · "Two volumes and
-more than one entry: not supported yet" — `setError(t("files.err.batchBetweenVolumes"))`
-("Copying several entries between two images at once is not supported yet —
-copy them one at a time."). Not a defect in the sense of wrong behaviour: the
-refusal is explicit, immediate, and names the reason, which is exactly what
-§89 asks for when a case is not handled. It is recorded here because it is
-the one direction of the four (local→volume, volume→local, volume→volume
-single-entry, volume→volume batch) Task 8's roadmap self-review calls out by
-name as deliberately not built: there is no `volume_copy_between_many`
-primitive to build a batch on top of — `volume_copy_between` (the command
-`e3035cf` added end-to-end coverage for) stages exactly one directory tree
-through a temp folder per call, and doing several would mean either several
-separate stage-and-insert round trips (no shared atomicity, the same
-weakness as ART-065) or a `HostSelection`-shaped staging step that does not
-exist yet on the extract side. Needs its own task, not a quick fix — see
-`ART-065` for the sibling gap it would need to close at the same time.
-
-**ART-062** 🔵 **No language has been checked on screen**
-`src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
-was verified by `pnpm test`'s key-parity check and by reading the JSON — never
-by opening the running application and looking at a screen. Several Turkish
-strings are substantially longer than their English originals and sit in tight
-controls, so the check that remains is visual, not automatable:
-
-| Key | English | Turkish | Growth |
-|---|---|---|---|
-| `pistorm.saveSync` | "Save & Sync PiStorm SD" | "PiStorm SD'yi Kaydet ve Eşitle" | +36% |
-| `hardDisk.bootablePri` | "Bootable (Pri {{n}})" | "Önyüklenebilir (Öncelik {{n}})" | +50% |
-| `pistorm.profile.classic.badge` | "Cycle-Exact & Demos" | "Çevrim Hassasiyetli ve Demolar" | +58% |
-| FileManager function-key label | "View" | "Görüntüle" | 4 → 9 characters |
-| FileManager function-key label | "Grid" | "Izgara" | +50% |
-| job status | "Done" | "Tamamlandı" | +150% |
-| job status | "Failed" | "Başarısız" | +50% |
-
-The function-key bar (`src/components/files/FunctionKeys.tsx`) was inspected
-in source rather than run: its container carries `flexWrap: "wrap"` and each
-button `flex: "1 1 90px"`, and `.btn` in `src/styles/global.css` carries no
-`text-overflow` rule (only `.file-row-name` does), so the bar should wrap
-rather than clip. That makes it the most likely of the rows above to look
-merely cramped rather than the most likely to break outright — but nobody has
-looked at it in Turkish. Needs an actual run of `pnpm tauri dev` with the
-language switched to Turkish, working through PiStorm, the hard disk screen,
-and the Files function-key bar at a few window widths.
-
 **ART-061** 🟡 **`formatAge` is always plural in English** — *fixed 2026-08-13*
 `src/lib/sources.ts::formatAge` · Returns `{ key: "aminet.age.weeksAgo", params:
 { n } }` (and the `monthsAgo` sibling) for any `n`, and `aminet.age.weeksAgo`'s
@@ -983,103 +1096,6 @@ would have rendered the `_other` form at every number — the same bug with more
 keys. `yearsAgo` is left alone deliberately: it carries a decimal, and "1.0
 year ago" is worse English than what it replaces. Both catalogues carry the
 pair; the two Turkish forms are identical to each other, which is correct.
-
-**ART-060** 🔵 **Rust-side error sentences do not translate**
-`core/error.rs::CoreError`, `commands/whdload.rs::WhdloadRefusal` · Every
-`CoreError` variant's `Display` implementation, and `WhdloadRefusal { reason,
-suggestion }`'s two fields, are English sentences written in `core/` and
-`commands/`, reaching the UI verbatim regardless of the language chosen in
-Settings. `CoreError::user_message()` appends the stable `ART-*` id from
-`code()` to the English sentence for exactly this reason (§68) — the id was
-always meant to be the stable, quotable part — but nothing today keys off it
-to show a translated sentence instead. This is a design question worth
-recording, not answering here: `core/` may not depend on the frontend's
-`react-i18next` catalogue (CLAUDE.md's core-independence rule), so there are at
-least two ways forward — move the sentences into the frontend catalogue, keyed
-by `CoreError::code()` / a `WhdloadRefusal` reason code, and have the UI look
-them up instead of rendering the string Rust sent; or give `core/` its own
-minimal, dependency-free catalogue and have `Display` consult it. The first
-keeps `core/` exactly as independent as it is today but means every error path
-has to carry a stable key instead of (or alongside) a sentence, and duplicates
-some phrasing decisions between Rust and the JSON catalogues. The second keeps
-the sentence and its translation next to each other but adds a resource-lookup
-concept to a crate that currently has none. Neither is decided here.
-
-**ART-058** 🔵 **A cancelled block-journal copy doesn't tell the user files already landed**
-`commands/volume_write.rs::run_copy_in_folder_with` (`WriteStrategy::BlockJournal` branch,
-also reached through `run_install`'s `with_volume` closure in `commands/whdload.rs`) · Above
-the whole-file limit (16 MiB) each file a copy or install writes is its own committed,
-journalled operation, already durable on disk before the next one starts. Cancelling there is
-honest about that on purpose — `device.sync()?` runs before the cancellation check, and the
-files that landed are correctly left in place rather than rolled back, unlike the whole-file
-strategy where cancelling leaves nothing at all. What the user is told is only
-`CoreError::Cancelled`'s message, `"operation cancelled"` (`core::error::CoreError`,
-`ART-CANCELLED`) — nothing distinguishes that from the whole-file case, so someone who cancels
-a large HDF install partway through has no way to learn from the UI that some files are already
-on the volume. Not a data-safety defect — nothing here is wrong or at risk — just a message
-that undersells what happened. Needs the block-journal branch to carry how much landed (files
-copied so far) into a distinct message or a `Cancelled` variant that names it, and a UI string
-for that case.
-
-**ART-043** 🟠 **A partition inside a small image is written at the wrong offset**
-`commands/volume_write.rs` · The whole-file strategy is chosen by the *file's*
-size, but it then builds its `VecDevice` from the whole file and opens the
-writer at offset `0`, while the geometry it was given describes a **partition**
-that may start megabytes into that file. For any RDB image of 16 MiB or less
-this reads and writes volume-relative block numbers as if they were
-file-absolute ones: the root block lands in the middle of the partition's data.
-In practice the first read then fails with something unhelpful ("block N is not
-a directory") rather than corrupting anything, and — since ART-042 — a result
-that did somehow get written is refused by the whole-image gate before it
-reaches the file. So the user's data is not at risk today; the strategy choice
-is simply wrong. The fix is to pick the block-journal strategy whenever the
-volume does not start at byte 0 and cover the whole file, or to give the
-whole-file branch the partition's slice and write it back at its offset. Needs
-its own task and its own fixture (a small RDB image with a formatted
-partition) — no test covers it today, which is why it survived this long.
-
-**ART-050** 🟡 **The §92 pre-flight gate does not check bitmap consistency or hash-chain integrity**
-`core/adf/validate.rs::validate_image` · `commit_whole_file` (ART-042) refuses
-a write when `validate_image` finds a `Problem`, but `validate_image` only
-covers the bootblock signature, its checksum, the block count and the root
-block's type. It does not walk the bitmap against what is actually allocated
-and does not walk a hash chain for consistency, so an operation that leaves
-two files owning the same block, or an entry linked into the wrong bucket,
-still passes the gate and commits. `CHANGELOG.md`'s entry for ART-042 was
-corrected in this pass to stop implying broader coverage than this. Deepening
-`validate_image` to catch these is real work, not a flag to flip.
-
-**ART-049** 🟡 **`create.rs`'s oracle hook and `VolumeWriter::open` agree by hand, not by a check**
-`core/adf/create.rs` (`oracle_export`), `core/volume/write/mod.rs`
-(`VolumeWriter::open`) · The oracle export hook hardcodes `DOS\x01` geometry
-while formatting with `FileSystemType::Ffs` — the two are only consistent
-because the hook's author chose them to match. `VolumeWriter::open` does not
-cross-check the geometry it is handed against the dostype the image's own
-bootblock declares, so a caller that passed a geometry for one filesystem
-against an image formatted as another would not be refused at the boundary
-that is supposed to catch exactly that. No test exercises the disagreement
-because nothing in the suite constructs one. Needs a guard in
-`VolumeWriter::open` and a fixture that deliberately mismatches geometry and
-bootblock.
-
-Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
-not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
-
-Every module with working logic has now been audited. The remaining `core`
-modules are stubs that only return `NotImplemented` (`recovery.rs`,
-`conversion.rs`, `binary.rs`, `validation.rs`) or hold types with no logic
-(`compatibility.rs`) — see [FEATURES.md](FEATURES.md) for their planned state.
-
-Two areas were reviewed and found sound, and are recorded here so nobody
-re-audits them without reason:
-
-- `core/analysis.rs` — the hex reader clamps both offset and length, and the
-  signature scan guards its window.
-- `core/profile.rs` — preset data only, no parsing of untrusted input.
-
----
-
-## Fixed
 
 ### Phase 2a
 

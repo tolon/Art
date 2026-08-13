@@ -32,7 +32,7 @@ Type **`0x76`** is what both use for an Amiga area. Each one starts with its own
 **This is what ART could not read.** `find_rdb_location` scans the first 16
 blocks **of the file**, and on a real card those are the MBR and the start of
 the FAT32 partition — so ART found no RDB on either image. Filed as
-[ART-095](ISSUES.md#open); it is the single thing that blocked SD-2a, and it is
+[ART-095](ISSUES.md); it is the single thing that blocked SD-2a, and it is
 not a distribution quirk but how every PiStorm card is laid out.
 
 ## 2. Geometry is not standardised — do not assume it
@@ -79,7 +79,7 @@ fifteen of its partitions are `PDS\3`. That card works. So the drivers a
 partition can use are the **union across every RDB on the disk**, not the ones
 in its own. ART's `partitionsMissingDriver` looks at one RDB, so on this card it
 would report fifteen partitions as unmountable when none of them is. Filed as
-[ART-097](ISSUES.md#open) together with the multiple-RDB question.
+[ART-097](ISSUES.md) together with the multiple-RDB question.
 
 ## 5. How MultibootOS actually multiboots
 
@@ -101,10 +101,10 @@ on the FAT32 side. ART implements that one already.
 Derived from the above, in the order the work has to happen:
 
 1. **Read an MBR** and find the `0x76` areas. Without this nothing else starts
-   ([ART-095](ISSUES.md#open)).
+   ([ART-095](ISSUES.md)).
 2. **One RDB per area**, each with its own geometry read from the disk.
 3. **Union the filesystem drivers** across areas before deciding a partition
-   cannot mount ([ART-097](ISSUES.md#open)).
+   cannot mount ([ART-097](ISSUES.md)).
 4. **Write `maxtransfer`, `mask` and `buffers`** as the field does
    ([ART-096](ISSUES.md#open)).
 5. **Adapt, do not regenerate**: the FAT32 side is `config.txt` and

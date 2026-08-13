@@ -50,7 +50,7 @@ have to get right when it places files rather than describing them:
   LIBS:Picasso96/`. Older material calls it `emu68-vc4.card`; newer Emu68-tools
   releases call it `videocore.card`. **Check the name in the release actually
   being installed**, exactly as the kernel archive turned out to need
-  ([ART-091](ISSUES.md#open)).
+  ([ART-091](ISSUES.md)).
 - `emu68-vc4.card` does not reconfigure the HDMI port; the VPU does that once,
   at power-on. A machine started with nothing plugged into HDMI has no RTG that
   session. That is a first-boot note for the user, not something ART can fix.

@@ -272,8 +272,11 @@ checks the image comes back byte for byte.
 | Universal Drag & Drop | §4 | ✅ | one global listener, `lib/dnd.ts` |
 | "What can I do?" panel | §46, §91 | ✅ | driven by the engine's plan |
 | Dashboard, recent files | §62 | ✅ | |
-| Settings (theme, paths, language) | §59 | ✅ | |
-| i18n architecture | — | 🟡 | English and Turkish, 939 keys each, chosen in Settings and remembered; `CoreError` and `WhdloadRefusal` sentences from Rust still reach the UI in English regardless of the chosen language ([ART-060](ISSUES.md#open)) |
+| Settings (theme, paths, language) | §59 | ✅ | Every path has a Browse button beside the box (ART-086); the Aminet download folder is one of them |
+| Every choice remembered | user rule | ✅ | `src/lib/remembered.ts` — a persisted value is read back **through a guard**, so a stale or hand-edited settings file falls back to the default rather than putting a bad value on screen. `settingsStore` refuses to let a late-landing read overwrite a key the user has already touched this run (the other half of ART-089) |
+| Application Size (Ctrl +/-/0) | §64 | ✅ | `src/lib/appZoom.ts` — 70–250 % in tens, set from Settings or the keyboard, remembered. Most of the people using ART are over fifty; this is a first-class setting, not an accessibility afterthought. **Above 100 % the right edge is still cut** ([ART-099](ISSUES.md#open)) |
+| About: author, licence, source | §67 | ✅ | Settings → About — the logo, name and version, author (tolon), the GitHub address, GPL-3.0-or-later with the warranty notice and where the licence text lives. No email anywhere, deliberately |
+| i18n architecture | — | 🟡 | English and Turkish, 1129 keys each, chosen in Settings and remembered; `CoreError` and `WhdloadRefusal` sentences from Rust still reach the UI in English regardless of the chosen language ([ART-060](ISSUES.md#open)) |
 | Dark / light theme | §61 | ✅ | |
 | Beginner / Power User mode | §47, §48 | ✅ | `lib/uxmode.ts`; hides advanced studios, actions and block detail |
 | Operation history + export | §53 | ✅ | Settings → Operation Log |

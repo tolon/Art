@@ -91,7 +91,7 @@ licence or a known advisory fails the build rather than reaching a release
 (spec §67).
 
 **It did not, from the day the step was added until 2026-08-13**
-([ART-098](ISSUES.md#open)). The workflow used a container action on a Windows
+([ART-098](ISSUES.md)). The workflow used a container action on a Windows
 runner, which cannot run at all, so the step failed every time — and this page
 went on claiming otherwise. Kept here rather than quietly corrected: a document
 that says a check runs is worth exactly as much as the check, and this one was
