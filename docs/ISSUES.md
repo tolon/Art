@@ -388,6 +388,42 @@ re-audits them without reason:
 
 ## Fixed
 
+### SD-1 · G2 (2026-08-13/14)
+
+**ART-102** 🟡 **`fatfs` writes two things wrong in every directory it creates** — *worked around 2026-08-14*
+`core/fat32.rs::repair_directories` · Found by pointing 7-Zip at a boot
+partition ART had just written: any image with a folder in it came back
+`Headers Error`. Isolated by editing a copy of the image by hand and watching
+the complaint go away — the size was not the cause and neither was the payload;
+one directory was enough.
+
+The crate (`fatfs` 0.3.6) gets two things wrong in every directory:
+
+1. **`.` and `..` are given long-filename entries.** They are 8.3 names by
+   definition and must never carry one. This is what 7-Zip reports.
+2. **`..` points at the root's own cluster** — 2 — where the format says a
+   directory whose parent is the root writes **0**. 7-Zip does not check this
+   one; the format is still the format.
+
+Neither stops `fatfs` reading its own output, which is the exact shape of
+ART-032..035: a writer and a reader that agree with each other and with nothing
+else. This one matters because the partition is read by the **Raspberry Pi's
+firmware**, which nobody here can interrogate, and because the Emu68 payload
+lives partly in `overlays/` — a folder the firmware does read.
+
+→ `repair_directories` walks the finished filesystem and fixes both: the
+spurious long-filename entries are marked deleted (`0xE5`, which is what FAT
+has always meant by an ignored slot — and is exactly the edit 7-Zip accepted
+when it was made by hand), and `..` is set to 0 where the parent is the root.
+`a_directory_is_written_the_way_the_format_says` checks the bytes rather than
+asking a reader that would share the defect, and the oracle
+(`scripts/fat-oracle-check.py`) now writes a folder for the same reason: without
+one it would have gone on passing while the card carried the fault.
+
+**Revisit when `fatfs` is upgraded.** If a later release writes directories
+correctly, `repair_directories` becomes dead weight — and the way to find out is
+to delete it and run the oracle.
+
 ### The open-list sweep (2026-08-13)
 
 **ART-043** 🟠 **A partition inside a small image was written at the wrong offset** — *fixed 2026-08-13*

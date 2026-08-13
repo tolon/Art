@@ -15,8 +15,11 @@ What is checked:
                                      boot from
     512-byte sectors, 4 KiB clusters the geometry both real cards carry
     the volume label                 what ART said it was
-    every file is there              by name, long names included
+    every file is there              by name, long names and a folder included
     every file's bytes come back     compared, not counted
+    no headers complaint             `fatfs` writes two things wrong in every
+                                     directory it creates, and this is what
+                                     found them — see `repair_directories`
 
 Usage:
 
@@ -55,6 +58,12 @@ EXPECTED = {
     "config.txt": b"initramfs kick.rom\narm_64bit=1\n",
     "cmdline.txt": b"sd.unit0=ro\n",
     "config_caffeineos.txt": b"a long name, for the oracle\n",
+    # A file in a folder, and the entry that earns this whole script its keep:
+    # `fatfs` 0.3.6 writes long-filename entries for `.` and `..`, which the
+    # format forbids, and 7-Zip reported `Headers Error` on every image with a
+    # directory in it until `repair_directories` was written. Without a folder
+    # here the oracle would have gone on passing while the card carried it.
+    "overlays/emu68.dtbo": b"an overlay, in a folder",
 }
 EXPECTED_LABEL = "ART CARD"
 
@@ -118,6 +127,10 @@ def main() -> int:
             checks.append((ok, what))
 
         text = listing.stdout
+        check(
+            "Headers Error" not in text,
+            "no reader complains about the headers (see `repair_directories`)",
+        )
         check("File System = FAT32" in text, "it is FAT32, which is what the Pi boots from")
         check("Sector Size = 512" in text, "512-byte sectors")
         check("Cluster Size = 4096" in text, "4 KiB clusters, as on both real cards")

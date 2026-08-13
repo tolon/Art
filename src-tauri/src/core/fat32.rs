@@ -148,10 +148,11 @@ const SECTORS_PER_CLUSTER: u8 = 8;
 /// `core::mbr::plan_card` put in the partition table, and the caller is
 /// expected to pass exactly those rather than work them out a second way.
 ///
-/// Names go through [`bare_name`], which is **stricter than `safe_join`** on
-/// purpose: that gate asks "does this stay inside the root", and `Sub/dir.txt`
-/// does. Here a name is a name — the boot partition's root is flat, and a
-/// separator in it would be a directory nobody asked for.
+/// A file's name may be a **relative path** — `overlays/emu68.dtbo` — and the
+/// directories in it are created as needed. That is not a convenience: the
+/// Emu68 release carries an `overlays/` folder, and a real card's boot
+/// partition has eighteen of them. Every path goes through [`checked_path`],
+/// which refuses what `safe_join` refuses for an archive entry.
 pub fn create_boot_partition<T: Read + Write + Seek>(
     image: T,
     start: u64,
@@ -185,11 +186,36 @@ pub fn create_boot_partition<T: Read + Write + Seek>(
     {
         let root = fs.root_dir();
         for file in files {
-            let name = bare_name(&file.name)?;
-            let mut handle = root.create_file(name).map_err(|err| CoreError::Malformed {
-                format: "FAT32".into(),
-                detail: format!("'{name}' could not be created on the boot partition: {err}"),
-            })?;
+            let name = checked_path(&file.name)?;
+
+            // Parents first: `fatfs` will not create a file in a directory
+            // that is not there, and `Emu68-pistorm.zip`'s `overlays/` is a
+            // directory before it is a file. `create_dir` opens an existing
+            // one rather than failing, so several files in the same folder
+            // cost nothing extra.
+            if let Some((parents, _)) = name.rsplit_once('/') {
+                let mut walked = String::new();
+                for part in parents.split('/') {
+                    if !walked.is_empty() {
+                        walked.push('/');
+                    }
+                    walked.push_str(part);
+                    root.create_dir(&walked)
+                        .map_err(|err| CoreError::Malformed {
+                            format: "FAT32".into(),
+                            detail: format!(
+                                "'{walked}' could not be created on the boot partition: {err}"
+                            ),
+                        })?;
+                }
+            }
+
+            let mut handle = root
+                .create_file(&name)
+                .map_err(|err| CoreError::Malformed {
+                    format: "FAT32".into(),
+                    detail: format!("'{name}' could not be created on the boot partition: {err}"),
+                })?;
             handle
                 .write_all(&file.bytes)
                 .and_then(|()| handle.flush())
@@ -205,41 +231,270 @@ pub fn create_boot_partition<T: Read + Write + Seek>(
         detail: format!("the boot partition could not be closed cleanly: {err}"),
     })?;
 
+    // Two defects `fatfs` 0.3.6 leaves in every directory it creates. See
+    // `repair_directories` — they were found by an independent reader, which
+    // is the only way a writer's own mistakes ever are.
+    repair_directories(&mut region)?;
+
     Ok(())
 }
 
-/// A file name, and nothing that is secretly a path.
+/// A relative path on the boot partition, checked the way an archive entry is.
 ///
-/// Stricter than `core::security::safe_join`, and for a different question.
-/// That one asks whether an archive entry stays inside a root, and
-/// `Sub/dir.txt` legitimately does. The boot partition's root is flat: every
-/// name here comes from a list ART or the user wrote, and a separator, a drive
-/// letter or a `..` in one is a mistake or an attempt, never an intention.
-fn bare_name(name: &str) -> CoreResult<&str> {
+/// **The boot partition is not flat, and finding that out was worth the
+/// trouble.** `Emu68-pistorm.zip` carries an `overlays/` directory, and the
+/// FAT32 of a real CaffeineOS card holds eighteen folders nested four deep. A
+/// writer that only placed root-level names could not lay down the Emu68
+/// payload at all.
+///
+/// So a path here may carry `/`, and everything that makes one dangerous is
+/// refused on the same grounds `core::security::safe_join` refuses it for an
+/// archive entry: absolute paths, `..`, drive letters, empty components. The
+/// only difference is that there is no host filesystem to join against — the
+/// question is the same one.
+///
+/// Returns the path with separators normalised to `/`, which is what `fatfs`
+/// takes.
+fn checked_path(name: &str) -> CoreResult<String> {
     let refused = |why: &str| {
-        CoreError::SafetyRefused(format!(
-            "'{name}' cannot be a file on the boot partition: {why}"
-        ))
+        CoreError::SafetyRefused(format!("'{name}' cannot go on the boot partition: {why}"))
     };
 
     if name.is_empty() {
         return Err(refused("it has no name"));
     }
-    if name.contains(['/', '\\']) {
-        return Err(refused(
-            "a name on the boot partition cannot contain a path",
-        ));
-    }
     if name.contains(':') {
-        return Err(refused("a name cannot carry a drive or a stream"));
-    }
-    if name == "." || name == ".." {
-        return Err(refused("that is a directory, not a file"));
+        return Err(refused("a path cannot carry a drive or a stream"));
     }
     if name.chars().any(|c| c.is_control()) {
         return Err(refused("it contains a control character"));
     }
-    Ok(name)
+
+    let normalised = name.replace('\\', "/");
+    if normalised.starts_with('/') {
+        return Err(refused("it is an absolute path"));
+    }
+    for part in normalised.split('/') {
+        if part.is_empty() {
+            return Err(refused("it has an empty part"));
+        }
+        if part == "." || part == ".." {
+            return Err(refused("it walks the directory tree"));
+        }
+    }
+
+    Ok(normalised)
+}
+
+// ---------------------------------------------------------------------------
+// Repairing what `fatfs` 0.3.6 gets wrong about a directory
+// ---------------------------------------------------------------------------
+
+/// Two defects in every directory `fatfs` 0.3.6 creates, found by pointing
+/// 7-Zip at what ART wrote (`scripts/fat-oracle-check.py`).
+///
+/// 1. **`.` and `..` are given long-filename entries.** They are 8.3 names by
+///    definition and must never carry one. This is what 7-Zip reports as
+///    `Headers Error`, and it was isolated by deleting exactly those two
+///    entries in a copy of the image and watching the complaint go away.
+/// 2. **`..` points at the root's own cluster** — 2 — where the format says a
+///    directory whose parent is the root must write **0**. 7-Zip does not
+///    check this one; the specification is still the specification.
+///
+/// Neither stops `fatfs` reading its own output, which is exactly the shape of
+/// ART-032..035: a writer and a reader that agree with each other and with
+/// nothing else. The card's boot partition is read by the Raspberry Pi's
+/// firmware, which nobody here can interrogate, so a defect a strict reader
+/// objects to is not one to ship and hope about.
+///
+/// This runs after the filesystem is closed and touches nothing but the two
+/// entries at the front of each directory.
+fn repair_directories<T: Read + Write + Seek>(region: &mut Region<T>) -> CoreResult<()> {
+    let bpb = Bpb::read(region)?;
+
+    // Directories to visit, starting with the root. Bounded: a card's boot
+    // partition holds tens of folders, and a chain that loops must not become
+    // an infinite walk (the same rule every chain walk in ART follows).
+    const MAX_DIRECTORIES: usize = 4096;
+    let mut queue = vec![bpb.root_cluster];
+    let mut visited = 0usize;
+
+    while let Some(first_cluster) = queue.pop() {
+        visited += 1;
+        if visited > MAX_DIRECTORIES {
+            return Err(CoreError::Malformed {
+                format: "FAT32".into(),
+                detail: "this boot partition has more directories than ART will walk".into(),
+            });
+        }
+
+        for cluster in bpb.chain(region, first_cluster)? {
+            let offset = bpb.cluster_offset(cluster);
+            let mut bytes = vec![0u8; bpb.cluster_bytes()];
+            region.seek(SeekFrom::Start(offset))?;
+            region.read_exact(&mut bytes)?;
+
+            let mut changed = false;
+            let entries = bytes.len() / DIR_ENTRY_BYTES;
+            for index in 0..entries {
+                let at = index * DIR_ENTRY_BYTES;
+                // Copied rather than borrowed: the fixes below write into
+                // `bytes`, and one cannot hold a slice of it while doing so.
+                let mut entry = [0u8; DIR_ENTRY_BYTES];
+                entry.copy_from_slice(&bytes[at..at + DIR_ENTRY_BYTES]);
+
+                if entry[0] == 0x00 {
+                    break; // no entry here or after it
+                }
+                if entry[0] == 0xE5 || entry[ATTR] == ATTR_LFN {
+                    continue;
+                }
+
+                let is_dot = &entry[..11] == b".          ";
+                let is_dotdot = &entry[..11] == b"..         ";
+
+                if entry[ATTR] & ATTR_DIRECTORY != 0 && !is_dot && !is_dotdot {
+                    // A directory of its own. Its `.` and `..` need the same
+                    // repair, however deep the payload nests.
+                    queue.push(entry_cluster(&entry));
+                }
+
+                if !(is_dot || is_dotdot) {
+                    continue;
+                }
+
+                // Defect 1: mark every long-filename entry immediately before
+                // this one as deleted. `0xE5` in the first byte is what FAT
+                // has always meant by "ignore this slot".
+                let mut before = index;
+                while before > 0 {
+                    let prev = (before - 1) * DIR_ENTRY_BYTES;
+                    if bytes[prev + ATTR] != ATTR_LFN || bytes[prev] == 0xE5 {
+                        break;
+                    }
+                    bytes[prev] = 0xE5;
+                    changed = true;
+                    before -= 1;
+                }
+
+                // Defect 2: `..` in a directory whose parent is the root.
+                if is_dotdot && entry_cluster(&entry) == bpb.root_cluster {
+                    bytes[at + 20..at + 22].copy_from_slice(&0u16.to_le_bytes());
+                    bytes[at + 26..at + 28].copy_from_slice(&0u16.to_le_bytes());
+                    changed = true;
+                }
+            }
+
+            if changed {
+                region.seek(SeekFrom::Start(offset))?;
+                region.write_all(&bytes)?;
+            }
+        }
+    }
+
+    region.flush()?;
+    Ok(())
+}
+
+/// Offset of the attribute byte in a directory entry.
+const ATTR: usize = 11;
+const ATTR_LFN: u8 = 0x0F;
+const ATTR_DIRECTORY: u8 = 0x10;
+const DIR_ENTRY_BYTES: usize = 32;
+
+/// The cluster a directory entry points at: high word at 20, low word at 26.
+fn entry_cluster(entry: &[u8]) -> u32 {
+    let high = u16::from_le_bytes([entry[20], entry[21]]) as u32;
+    let low = u16::from_le_bytes([entry[26], entry[27]]) as u32;
+    (high << 16) | low
+}
+
+/// The handful of BPB fields needed to find a cluster.
+struct Bpb {
+    bytes_per_sector: u32,
+    sectors_per_cluster: u32,
+    data_start: u64,
+    fat_start: u64,
+    root_cluster: u32,
+    total_clusters: u32,
+}
+
+impl Bpb {
+    fn read<T: Read + Write + Seek>(region: &mut Region<T>) -> CoreResult<Self> {
+        let mut boot = [0u8; 512];
+        region.seek(SeekFrom::Start(0))?;
+        region.read_exact(&mut boot)?;
+
+        let malformed = |what: &str| CoreError::Malformed {
+            format: "FAT32".into(),
+            detail: format!("the boot partition ART just wrote has {what}"),
+        };
+
+        let bytes_per_sector = u16::from_le_bytes([boot[11], boot[12]]) as u32;
+        let sectors_per_cluster = boot[13] as u32;
+        let reserved = u16::from_le_bytes([boot[14], boot[15]]) as u32;
+        let fats = boot[16] as u32;
+        let fat_size = u32::from_le_bytes([boot[36], boot[37], boot[38], boot[39]]);
+        let total_sectors = u32::from_le_bytes([boot[32], boot[33], boot[34], boot[35]]);
+        let root_cluster = u32::from_le_bytes([boot[44], boot[45], boot[46], boot[47]]);
+
+        if bytes_per_sector == 0 || sectors_per_cluster == 0 || fats == 0 || fat_size == 0 {
+            return Err(malformed("no geometry"));
+        }
+
+        let fat_start = reserved as u64 * bytes_per_sector as u64;
+        let first_data_sector = reserved + fats * fat_size;
+        let data_start = first_data_sector as u64 * bytes_per_sector as u64;
+        let total_clusters = total_sectors
+            .saturating_sub(first_data_sector)
+            .checked_div(sectors_per_cluster)
+            .ok_or_else(|| malformed("no clusters"))?;
+
+        Ok(Self {
+            bytes_per_sector,
+            sectors_per_cluster,
+            data_start,
+            fat_start,
+            root_cluster,
+            total_clusters,
+        })
+    }
+
+    fn cluster_bytes(&self) -> usize {
+        (self.bytes_per_sector * self.sectors_per_cluster) as usize
+    }
+
+    fn cluster_offset(&self, cluster: u32) -> u64 {
+        self.data_start + (cluster as u64 - 2) * self.cluster_bytes() as u64
+    }
+
+    /// Every cluster of one chain, bounded by the number the volume has.
+    fn chain<T: Read + Write + Seek>(
+        &self,
+        region: &mut Region<T>,
+        first: u32,
+    ) -> CoreResult<Vec<u32>> {
+        let mut out = Vec::new();
+        let mut cluster = first;
+
+        // Below 2 is reserved; 0x0FFFFFF8 and up is the end-of-chain marker.
+        while (2..0x0FFF_FFF8).contains(&cluster) {
+            if out.len() as u32 > self.total_clusters {
+                return Err(CoreError::Malformed {
+                    format: "FAT32".into(),
+                    detail: "a directory's cluster chain loops".into(),
+                });
+            }
+            out.push(cluster);
+
+            let mut next = [0u8; 4];
+            region.seek(SeekFrom::Start(self.fat_start + cluster as u64 * 4))?;
+            region.read_exact(&mut next)?;
+            cluster = u32::from_le_bytes(next) & 0x0FFF_FFFF;
+        }
+
+        Ok(out)
+    }
 }
 
 /// A FAT volume label is eleven bytes, space-padded, upper case.
@@ -399,12 +654,166 @@ mod tests {
         );
     }
 
-    /// A name is a name, not a path. Anything that would place a file
-    /// somewhere the caller did not ask for is refused at the door — the same
-    /// rule `safe_join` applies to archive entries.
+    /// **The Emu68 payload is not flat**, and this is what made that clear:
+    /// `Emu68-pistorm.zip` carries `overlays/emu68.dtbo`, and a real card's
+    /// boot partition has eighteen folders in it. A writer that could only
+    /// place root-level names could not lay the payload down at all.
     #[test]
-    fn a_name_that_is_really_a_path_is_refused() {
-        for hostile in ["../escape.txt", "sub/dir.txt", "C:\\absolute.txt"] {
+    fn a_file_in_a_subdirectory_lands_in_it() {
+        let mut image = blank_image();
+        create_boot_partition(
+            &mut image,
+            START,
+            PARTITION,
+            DEFAULT_LABEL,
+            &[
+                file("overlays/emu68.dtbo", b"overlay"),
+                // A second file in the same folder, and one nested deeper: the
+                // folder is opened rather than created twice, and every level
+                // of a new path is made.
+                file("overlays/unicam.dtbo", b"another"),
+                file("USER/WinUAE/Configurations/card.uae", b"deep"),
+            ],
+        )
+        .unwrap();
+
+        let mut region = Region::new(&mut image, START, PARTITION);
+        let fs = fatfs::FileSystem::new(&mut region, fatfs::FsOptions::new()).unwrap();
+
+        let mut read = Vec::new();
+        fs.root_dir()
+            .open_file("overlays/emu68.dtbo")
+            .unwrap()
+            .read_to_end(&mut read)
+            .unwrap();
+        assert_eq!(read, b"overlay");
+
+        read.clear();
+        fs.root_dir()
+            .open_file("USER/WinUAE/Configurations/card.uae")
+            .unwrap()
+            .read_to_end(&mut read)
+            .unwrap();
+        assert_eq!(read, b"deep");
+
+        let overlays: Vec<String> = fs
+            .root_dir()
+            .open_dir("overlays")
+            .unwrap()
+            .iter()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name != "." && name != "..")
+            .collect();
+        assert_eq!(overlays.len(), 2, "{overlays:?}");
+    }
+
+    /// The two defects `fatfs` 0.3.6 leaves in every directory, checked in the
+    /// bytes rather than through a reader that shares them.
+    ///
+    /// Found by pointing 7-Zip at what ART wrote: it reported `Headers Error`
+    /// on any image with a folder in it, and deleting exactly the two
+    /// long-filename entries in a copy made the complaint go away. The `..`
+    /// cluster is the second defect and 7-Zip does not check it — the format
+    /// is still the format.
+    #[test]
+    fn a_directory_is_written_the_way_the_format_says() {
+        let mut image = blank_image();
+        create_boot_partition(
+            &mut image,
+            START,
+            PARTITION,
+            DEFAULT_LABEL,
+            &[BootFile {
+                name: "overlays/emu68.dtbo".into(),
+                bytes: b"overlay".to_vec(),
+            }],
+        )
+        .unwrap();
+
+        let bytes = image.into_inner();
+        let fat = &bytes[START as usize..];
+
+        // Walk to the directory the way `repair_directories` does.
+        let bps = u16::from_le_bytes([fat[11], fat[12]]) as usize;
+        let spc = fat[13] as usize;
+        let reserved = u16::from_le_bytes([fat[14], fat[15]]) as usize;
+        let fats = fat[16] as usize;
+        let fat_size = u32::from_le_bytes([fat[36], fat[37], fat[38], fat[39]]) as usize;
+        let root_cluster = u32::from_le_bytes([fat[44], fat[45], fat[46], fat[47]]);
+        let data = (reserved + fats * fat_size) * bps;
+        let cluster_at = |n: u32| data + (n as usize - 2) * bps * spc;
+
+        // Find the folder in the root.
+        let root = &fat[cluster_at(root_cluster)..][..bps * spc];
+        let mut folder = None;
+        for chunk in root.chunks_exact(32) {
+            if chunk[0] == 0 {
+                break;
+            }
+            if chunk[11] & 0x10 != 0 && chunk[11] != 0x0F && chunk[0] != 0xE5 {
+                folder = Some(
+                    ((u16::from_le_bytes([chunk[20], chunk[21]]) as u32) << 16)
+                        | u16::from_le_bytes([chunk[26], chunk[27]]) as u32,
+                );
+            }
+        }
+        let folder = folder.expect("the folder is in the root");
+        let inside = &fat[cluster_at(folder)..][..bps * spc];
+
+        // The repair marks the spurious entries deleted (`0xE5`) and leaves the
+        // slots where they are, which is what a deleted entry has always been
+        // in FAT — and is exactly the edit 7-Zip accepted when it was made by
+        // hand in a copy of the image.
+        let mut dot = None;
+        let mut dotdot = None;
+        for (index, chunk) in inside.chunks_exact(32).enumerate() {
+            if chunk[0] == 0 {
+                break;
+            }
+            if chunk[0] == 0xE5 {
+                continue; // a deleted slot, live to nobody
+            }
+            if &chunk[..11] == b".          " {
+                dot = Some(index);
+            }
+            if &chunk[..11] == b"..         " {
+                dotdot = Some(index);
+            }
+        }
+        let dot = dot.expect("every directory has a `.`");
+        let dotdot = dotdot.expect("every directory has a `..`");
+
+        // Neither is preceded by a **live** long-filename entry.
+        for entry in [dot, dotdot] {
+            let previous = &inside[(entry - 1) * 32..entry * 32];
+            assert!(
+                previous[0] == 0xE5 || previous[11] != 0x0F,
+                "`.`/`..` must carry no long-filename entry"
+            );
+        }
+
+        // `..` in a directory whose parent is the root points at cluster 0.
+        let at = dotdot * 32;
+        let parent = ((u16::from_le_bytes([inside[at + 20], inside[at + 21]]) as u32) << 16)
+            | u16::from_le_bytes([inside[at + 26], inside[at + 27]]) as u32;
+        assert_eq!(
+            parent, 0,
+            "the root is written as 0, not as its own cluster"
+        );
+    }
+
+    /// A subdirectory is legitimate; leaving the partition is not. The same
+    /// question `safe_join` asks of an archive entry, asked where there is no
+    /// host filesystem to join against.
+    #[test]
+    fn a_path_that_would_escape_the_partition_is_refused() {
+        for hostile in [
+            "../escape.txt",
+            "sub/../../escape.txt",
+            "/absolute.txt",
+            "C:\\absolute.txt",
+            "sub//empty.txt",
+        ] {
             let mut image = blank_image();
             let err = create_boot_partition(
                 &mut image,
@@ -448,17 +857,30 @@ mod tests {
             return;
         };
 
-        let mut image = Cursor::new(vec![0u8; PARTITION as usize]);
+        // `ART_FAT_MB` sizes the partition. The default is the small one;
+        // 1150 is the 1.10 GiB a real card carries, which is the size worth
+        // pointing an independent reader at.
+        let size = std::env::var("ART_FAT_MB")
+            .ok()
+            .and_then(|mb| mb.parse::<u64>().ok())
+            .map(|mb| mb * 1024 * 1024)
+            .unwrap_or(PARTITION);
+
+        let mut image = Cursor::new(vec![0u8; size as usize]);
         create_boot_partition(
             &mut image,
             0,
-            PARTITION,
+            size,
             DEFAULT_LABEL,
             &[
                 file("Emu68.img", b"kernel bytes, for the oracle"),
                 file("config.txt", b"initramfs kick.rom\narm_64bit=1\n"),
                 file("cmdline.txt", b"sd.unit0=ro\n"),
                 file("config_caffeineos.txt", b"a long name, for the oracle\n"),
+                // A folder, because the Emu68 payload has one and because a
+                // directory is the part of FAT a reader is most likely to
+                // disagree about.
+                file("overlays/emu68.dtbo", b"an overlay, in a folder"),
             ],
         )
         .unwrap();

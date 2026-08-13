@@ -14,6 +14,8 @@
 //! gigabytes; nothing here reads more than a window at each area's start
 //! (spec §56).
 
+pub mod build;
+
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
