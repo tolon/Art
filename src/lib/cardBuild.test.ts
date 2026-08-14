@@ -5,10 +5,12 @@ import {
   defaultPartition,
   findingPhrase,
   healthVerdict,
+  intakeFills,
   payloadBytes,
   warningPhrase,
   type CardBuildPlan,
   type CardBuildRequest,
+  type CardIntakeItem,
   type HealthItem,
 } from "@/lib/cardBuild";
 import type { MbrPartition } from "@/lib/card";
@@ -138,6 +140,43 @@ describe("findingPhrase", () => {
     const phrase = findingPhrase({ kind: "rdb-changed", area: 0 });
     expect(phrase.key).toBe("cardBuilder.manifest.finding.rdbChanged");
     expect(phrase.params).toEqual({ n: 1 });
+  });
+});
+
+describe("intakeFills", () => {
+  const item = (name: string, role: CardIntakeItem["role"]): CardIntakeItem => ({
+    path: `E:\\drop\\${name}`,
+    name,
+    role,
+    rom: null,
+  });
+
+  it("an Emu68 archive fills the archive field and a ROM fills the ROM field", () => {
+    const fills = intakeFills([
+      item("Emu68-pistorm.zip", { kind: "emu68-archive", means: [] }),
+      item("kick.rom", { kind: "kickstart" }),
+    ]);
+    expect(fills.archive).toBe("E:\\drop\\Emu68-pistorm.zip");
+    expect(fills.kickstart).toBe("E:\\drop\\kick.rom");
+  });
+
+  // Dropping a second archive says "this one now". The rule is written down
+  // rather than left to whatever the loop happened to do.
+  it("the last archive dropped is the one chosen", () => {
+    const fills = intakeFills([
+      item("Emu68-pistorm.zip", { kind: "emu68-archive", means: [] }),
+      item("Emu68-pistorm-classic.zip", { kind: "emu68-archive", means: [] }),
+    ]);
+    expect(fills.archive).toBe("E:\\drop\\Emu68-pistorm-classic.zip");
+  });
+
+  // The answer SD-1 owes most often: the file is fine, the card is not ready.
+  it("Amiga content changes nothing on the form", () => {
+    const fills = intakeFills([
+      item("Turrican.lha", { kind: "for-an-amiga-volume", what: "archive" }),
+      item("elite.d64", { kind: "no-place-on-a-card", what: "commodore-8bit" }),
+    ]);
+    expect(fills).toEqual({});
   });
 });
 

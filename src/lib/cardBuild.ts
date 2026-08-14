@@ -401,3 +401,80 @@ export function buildBlocker(
   if (plan.dest_exists) return { key: "cardBuilder.blocked.destExists" };
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// What does this file become in *this* card? (SD-1 · G15)
+// ---------------------------------------------------------------------------
+
+/** Which board and release line an Emu68 archive's *name* implies. */
+export interface ArchiveNameMeans {
+  variant: string;
+  line: Emu68Line;
+}
+
+/** What a dropped file would become on the card being built. */
+export type CardRole =
+  | { kind: "emu68-archive"; means: ArchiveNameMeans[] }
+  | { kind: "kickstart" }
+  | { kind: "distro-config"; name: string }
+  | { kind: "for-an-amiga-volume"; what: string }
+  | { kind: "no-place-on-a-card"; what: string };
+
+export interface CardIntakeItem {
+  path: string;
+  name: string;
+  role: CardRole;
+  /** Filled when the role is a Kickstart. */
+  rom: PlannedRom | null;
+}
+
+/** Ask what each of these files would become on a card. */
+export async function cardIntake(paths: string[]): Promise<CardIntakeItem[]> {
+  return invoke<CardIntakeItem[]>("card_intake", { paths });
+}
+
+/**
+ * The sentence for what a dropped file becomes.
+ *
+ * `for-an-amiga-volume` is the answer SD-1 owes most often and the one worth
+ * getting right: the file is fine, the card is not ready for it yet.
+ */
+export function rolePhrase(role: CardRole): Phrase {
+  switch (role.kind) {
+    case "emu68-archive":
+      return {
+        key: "cardBuilder.intake.role.emu68Archive",
+        params: { boards: role.means.map((m) => `${m.variant} · ${m.line}`).join(", ") },
+      };
+    case "kickstart":
+      return { key: "cardBuilder.intake.role.kickstart" };
+    case "distro-config":
+      return { key: "cardBuilder.intake.role.distroConfig", params: { name: role.name } };
+    case "for-an-amiga-volume":
+      return { key: "cardBuilder.intake.role.forAnAmigaVolume" };
+    case "no-place-on-a-card":
+      return { key: "cardBuilder.intake.role.noPlace" };
+  }
+}
+
+/**
+ * What a drop changes about the form.
+ *
+ * Pure, so the rule that an archive fills the archive field and a ROM fills
+ * the ROM field is testable without a screen — and so a second dropped
+ * archive replacing the first is a decision written down rather than whatever
+ * the loop happened to do.
+ */
+export function intakeFills(items: CardIntakeItem[]): {
+  archive?: string;
+  kickstart?: string;
+} {
+  const fills: { archive?: string; kickstart?: string } = {};
+  for (const item of items) {
+    // The last one wins: dropping two archives means the second is the one
+    // just chosen, which is what dropping it says.
+    if (item.role.kind === "emu68-archive") fills.archive = item.path;
+    if (item.role.kind === "kickstart") fills.kickstart = item.path;
+  }
+  return fills;
+}

@@ -1564,6 +1564,16 @@
     "heading": "Sadece önyükleme kartı",
     "intro": "ART imaj dosyasını oluşturur; onu karta yazmayı elindeki imaj aracıyla sen yaparsın. ART hiçbir zaman karta doğrudan yazmaz.",
     "scope": "Çıkan şey, Amiga'nın görebildiği bir bölüm tablosuyla açılan bir karttır; birimlerini Amiga biçimlendirmeyi teklif eder. Üzerlerine AmigaOS kurmak henüz yapılmadı.",
+    "intake": {
+      "heading": "Bu ekrana bırakılanlar",
+      "role": {
+        "emu68Archive": "Emu68 sürümü — {{boards}}",
+        "kickstart": "önyükleme bölümünün Kickstart'ı",
+        "distroConfig": "bir dağıtımın Pi yapılandırması ({{name}}) — tanındı, ama dağıtımlar arasında seçim henüz yapılmadı",
+        "forAnAmigaVolume": "bir Amiga biriminde yaşar, bu kartta henüz biçimlendirilmiş birim yok",
+        "noPlace": "PiStorm kartında yeri yok"
+      }
+    },
     "archive": {
       "label": "Emu68 sürüm arşivi",
       "chooseTitle": "İndirdiğin Emu68 sürümünü seç",

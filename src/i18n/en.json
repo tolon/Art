@@ -1564,6 +1564,16 @@
     "heading": "Boot-only card",
     "intro": "ART builds the image file; you flash it with whichever imager you already have. It never writes to a card itself.",
     "scope": "What comes out is a card an Amiga boots into a partition table it can see, with volumes it will offer to format. Installing AmigaOS onto them is not built yet.",
+    "intake": {
+      "heading": "Dropped on this screen",
+      "role": {
+        "emu68Archive": "the Emu68 release — {{boards}}",
+        "kickstart": "the Kickstart for the boot partition",
+        "distroConfig": "a distribution's Pi config ({{name}}) — recognised, but choosing between distributions is not built yet",
+        "forAnAmigaVolume": "belongs on an Amiga volume, and this card has none formatted yet",
+        "noPlace": "has no place on a PiStorm card"
+      }
+    },
     "archive": {
       "label": "Emu68 release archive",
       "chooseTitle": "Choose the Emu68 release you downloaded",

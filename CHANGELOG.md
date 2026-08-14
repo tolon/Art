@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Drag your files onto the card builder (2026-08-15)
+
+#### Added
+- **Drop the Emu68 archive and your Kickstart on the screen and the form
+  fills itself.** The archive's name says which PiStorm board and which
+  release line it is for, and ART says so back rather than guessing.
+- **Everything else gets an answer too.** A game, a disk image, an AmigaOS CD
+  or a folder is told it belongs on an Amiga volume — and that this card has
+  none formatted yet. A `config_<name>.txt` is recognised as a distribution's
+  Pi config and declared not-yet-used. A Commodore disk is told plainly it has
+  no place on a PiStorm card.
+
 ### Check the card before you flash it (2026-08-15)
 
 #### Added

@@ -19,11 +19,13 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::core::card::build::{build_card, AreaSpec, CardSpec};
 use crate::core::card::health::{check_image, HealthReport};
+use crate::core::card::intake::{role_for, CardRole};
 use crate::core::card::manifest::{
     describe_card, manifest_path_for, read_manifest, render_manifest, ManifestFile, SourceFacts,
 };
 use crate::core::card::payload::{emu68_payload, PayloadSpec};
 use crate::core::card::{read_card, CardImage};
+use crate::core::detect::detect;
 use crate::core::error::CoreResult;
 use crate::core::hashing::{sha256_bytes, sha256_file};
 use crate::core::jobs::{JobId, ProgressSink};
@@ -379,6 +381,54 @@ struct BuiltRequestedCard {
     layout: CardLayout,
     verified: CardReport,
     manifest_path: String,
+}
+
+/// One dropped file, and what it becomes on the card being built.
+#[derive(Debug, Clone, Serialize)]
+pub struct CardIntakeItem {
+    pub path: String,
+    pub name: String,
+    pub role: CardRole,
+    /// Filled when the role is a Kickstart, so the screen can say *which*
+    /// ROM was dropped rather than only that one was.
+    pub rom: Option<RomInfo>,
+}
+
+/// What each of these files would become on a card (SD-1 · G15).
+///
+/// **It detects rather than being told.** The drop pipeline has already
+/// produced a `Detection` for each path and the frontend is holding it, but an
+/// answer about what goes on somebody's card must not rest on a category a
+/// caller supplied — `detect` reads a header, and one truth is worth the read.
+#[tauri::command]
+pub fn card_intake(paths: Vec<String>) -> AppResult<Vec<CardIntakeItem>> {
+    let mut out = Vec::with_capacity(paths.len());
+
+    for given in paths {
+        let path = PathBuf::from(given.trim());
+        let detection = detect(&path)?;
+        let role = role_for(&path, detection.category);
+
+        // An unreadable ROM is still a ROM the user meant to use; the screen
+        // says "a Kickstart" and leaves the detail out rather than failing the
+        // whole drop.
+        let rom = match role {
+            CardRole::Kickstart => identify_rom(&path).ok(),
+            _ => None,
+        };
+
+        out.push(CardIntakeItem {
+            name: path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            path: path.display().to_string(),
+            role,
+            rom,
+        });
+    }
+
+    Ok(out)
 }
 
 /// Check a built image — the last gate before the file is handed over

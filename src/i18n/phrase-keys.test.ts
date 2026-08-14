@@ -39,12 +39,14 @@ import {
   healthCheckPhrase,
   healthVerdict,
   manualStepPhrase,
+  rolePhrase,
   warningPhrase,
   type CardBuildPlan,
   type CardBuildRequest,
   type CardBuildWarning,
   type HealthCheck,
   type ManifestFinding,
+  type CardRole,
   type ManualStep,
 } from "@/lib/cardBuild";
 import {
@@ -478,6 +480,20 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     for (const items of [[pass], [pass, gap], [bad]]) {
       const verdict = healthVerdict({ items: [...items], by_hand: [] });
       expect(resolvesAtRuntime(verdict.key), verdict.key).toBe(true);
+    }
+  });
+
+  it("rolePhrase: every CardRole variant resolves", () => {
+    const roles: CardRole[] = [
+      { kind: "emu68-archive", means: [{ variant: "classic", line: "stable" }] },
+      { kind: "kickstart" },
+      { kind: "distro-config", name: "caffeineos" },
+      { kind: "for-an-amiga-volume", what: "archive" },
+      { kind: "no-place-on-a-card", what: "commodore-8bit" },
+    ];
+    for (const role of roles) {
+      const phrase = rolePhrase(role);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
     }
   });
 
