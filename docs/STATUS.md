@@ -821,8 +821,10 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
 
 ## Picking up next session
 
-**Nothing is half-done on disk.** The tree is green (1068 Rust, 432 frontend,
-clippy clean, oracle 53 both ways). ART-096, ART-085 and the six-issue sweep
+**Nothing is half-done on disk, and everything is pushed.** The tree is green
+(1106 Rust, 432 frontend, clippy clean, `cargo deny` clean, amitools oracle 53
+both ways, the FAT32 oracle clean) and `sd-1` is level with `origin/sd-1` as of
+2026-08-14. ART-096, ART-085 and the six-issue sweep
 (ART-049/058/066/067/068/070) are all closed, and so are ART-043, ART-102 and
 ART-103; **fourteen** entries remain open — ART-101 came out of measuring
 ART-099 — and three of those are waiting on a decision rather than on work.
@@ -861,22 +863,48 @@ Consequences that are now facts instead of parameters: the kernel archive is
 ART-091), the SD driver is `brcm-sdhc.device`, and `genet.device` is irrelevant
 (the 3A+ has no ethernet; its WiFi is `wifipi.device`).
 
-**Materials: less missing than it looked.** The user's collection at
+**Materials: the software side is complete.** The collection at
 `E:\amiga\Amigatolon` was inventoried on 2026-08-13 and **nothing copyrighted
-is absent** — A1200 Kickstarts in both families (3.1 rev 40.68, 3.2's
+is missing** — A1200 Kickstarts in both families (3.1 rev 40.68, 3.2's
 `kicka1200.rom`, 3.2.1's `A1200.47.102.rom`), the full AmigaOS 3.2 ADF set plus
 its CD and the 3.2.1/3.2.2 updates, the 3.9 ISO with both BoingBags, every
 release from 1.0 to 3.1 as ADFs, and both real PiStorm distributions
 (CaffeineOS 9317, MultibootOS 2.2) as images. WinUAE, 7-Zip and amitools are
 installed.
 
-What is still to be fetched is free and small, and only the first item is on
-the critical path: **`Emu68-pistorm.zip`** (stable line — *not* the same file
-on 1.1 alpha, ART-091), an **SD card and reader**, then `pfs3aio.lha`, Aminet
-Picasso96, `videocore.card`, `wifipi.device`, and `hst-imager` for SD-0's exit
-test. The full list, with what each one unblocks, is `../eksik malzemeler.md`
-(Turkish, kept outside the repository since it is the user's own shopping
-list).
+**Everything on the software side arrived by 2026-08-14**, and the card was
+built from it: `Emu68-pistorm.zip` (with the 1.1 alpha and `-raspi` ones, which
+are *not* the card's), `VideoCore.card` — the name that needed checking, and it
+is capitalised — `pfs3aio.lha`, Picasso96, `Emu68-WiFi.zip`, and
+`hst.imager.exe` with its scripts. The full list, with what each one unblocks,
+is `../eksik malzemeler.md` (Turkish, kept outside the repository since it is
+the user's own shopping list).
+
+**Only physical items are unaccounted for**: a microSD card, a USB reader and
+an HDMI cable — and the card must be started with HDMI *already plugged in*, or
+the VPU never configures the port and there is no RTG that session.
+
+### Where things are, for a fresh session
+
+- `E:\amiga\Amigatolon` — the user's material. **Read from, never written to.**
+- `E:\amiga\ProjeART` — where trial output goes. **Not C:, not D:** (the user
+  said so on 2026-08-14), and not F: either, which turned out to be a 499 MB
+  drive a 300 MB oracle image would not fit on. `ART_SCRATCH` overrides it in
+  the scripts. A card ART built from the real release is sitting there as
+  `card.img`.
+- Rebuilding that card is the fastest way to see the whole engine work at once:
+
+  ```bash
+  cd src-tauri
+  ART_CARD_ZIP="E:\amiga\Amigatolon\Emu68\Emu68-pistorm.zip" \
+  ART_CARD_ROM="E:\amiga\Amigatolon\kickstart\Kickstart v3.1 rev 40.68 (1993)(Commodore)(A1200).rom" \
+  ART_CARD_OUT="E:\amiga\ProjeART\card.img" \
+    cargo test build_real_card_when_asked -- --nocapture
+  ```
+
+  It prints the payload it chose, where each partition landed, and reads the
+  finished card back. Delete `card.img` first — `build_card` refuses to write
+  over one that is already there.
 
 ## Session log
 
@@ -884,6 +912,7 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-14 | **Docs swept and the branch pushed.** Every claim about *now* checked against what is now true: the snapshot still said G2 was owed and that reading a card had no screen; FEATURES still described three fixed defects as live, including Application Size cutting the right edge — which measurement had disproved; README carried two paragraphs that contradicted each other and each other's dates. History kept its own wording; only the present tense was corrected. `sd-1` pushed to origin, fourteen commits, level as of this line | 1106 Rust / 432 frontend |
 | 2026-08-14 | **The payload chooses itself, and doing it against the real archive found a card that would not have booted.** `core/card/payload.rs` takes the user's `Emu68-pistorm.zip` and their Kickstart and produces everything the boot partition needs: the archive is checked against their board *and release line* before a byte of it is read (ART-091's lesson — the same file name means a different board in the two lines), `Emu68-raspi.zip` is refused for what it is rather than as "wrong", the Pi's own `config.txt` is merged rather than regenerated (§39/§40), `cmdline.txt` is written from nothing because the release has none, and the ROM goes on under the name the config points at. Then **[ART-103](ISSUES.md)**: `merge_config_txt` managed the `kernel=` key and wrote `Emu68.img` over the release's own `kernel=Emu68-pistorm.gz` — a name no release has ever shipped, pointing at a file the card does not carry. The card would have failed on the Amiga, where nobody could see why. The kernel's name is a field now, taken from the archive's own config and **verified to be among the files being placed**, so an archive that names a kernel it does not carry is refused before a card is written. Found the same way ART-090 and ART-091 were: by reading what the real thing says instead of what ART believed | 1106 Rust / 432 frontend |
 | 2026-08-14 | **ART built a PiStorm card, from the real Emu68 release.** `core/card/build.rs` puts the four pieces in one file in the right order: a sparse image, the partition table, the formatted boot partition with its payload, and **an RDB at the start of every Amiga area** — each with block numbers relative to its own offset, which is the mirror of ART-043 on the writing side. It then reads the file back with the same reader that opens CaffeineOS and MultibootOS, because a build that cannot be read is not a build. Driven against real material through `build_real_card_when_asked`: the complete `Emu68-pistorm.zip` (20 files, `overlays/` included) plus a Kickstart, laid on a 2 GiB card whose first Amiga disk lands at 1 178 599 424 — the same offset both real cards use. Two findings from reading the real payload rather than the specification: **the boot partition is not flat** (the Emu68 release has an `overlays/` folder and CaffeineOS's card has eighteen folders, so `create_boot_partition` creates directories now), and **`fatfs` writes two things wrong in every directory it makes** ([ART-102](ISSUES.md)) — long-filename entries on `.` and `..`, which the format forbids and 7-Zip reports, and `..` pointing at the root's own cluster instead of 0. Both repaired, both pinned by a test that reads the bytes, and the oracle now writes a folder so it cannot pass while the fault is there. `SAFE_CREATE`: an existing card image is refused, never built over | 1097 Rust / 432 frontend |
 | 2026-08-13 | **The card's boot partition, and the first filesystem ART writes that is not an Amiga one.** `core/fat32.rs` creates the FAT32 the Raspberry Pi boots from and puts files in it — `fatfs` rather than a formatter of ART's own, which is what the gap analysis asked for and the right call for a filesystem whose entire job is to be read by somebody else's firmware. Three decisions worth keeping: **FAT32 is forced**, because `fatfs` picks a width from the size and a small partition would silently come out FAT16 and not boot; **`chrono` is off**, so files carry no timestamps and a build produces the same bytes twice, which is what a manifest can describe (G7); and **every write is bounded to the partition** by `Region`, because the Amiga's first RDB begins where this partition ends — a formatter that ran past its end would take it, so a write past the end is refused rather than shortened, and a test watches the bytes on both sides. Cross-checked against **7-Zip** (`scripts/fat-oracle-check.py`): `File System = FAT32`, 512-byte sectors, 4 KiB clusters, the label, and every file's bytes back byte-for-byte, long names included. `cargo deny` clean with the new crate; `THIRD_PARTY_LICENSES.md` and CLAUDE.md's core-dependency list both updated in the same commit | 1089 Rust / 432 frontend |
