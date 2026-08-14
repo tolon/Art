@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """Cross-check ART's FAT32 boot partition against 7-Zip's reader.
 
+Two modes:
+
+    python scripts/fat-oracle-check.py                  # the self-check below
+    python scripts/fat-oracle-check.py path/to/card.img # a card vs its manifest
+
+The second is the half ART cannot do itself (SD-1 · G7): `core/fat32` writes a
+FAT32 and does not read one, so a card's own verification reports its boot
+files as unchecked and records their hashes. 7-Zip answers them.
+
 The card's boot partition is the one filesystem ART writes that ART does not
 read: the Raspberry Pi's firmware does. ART's own tests cannot catch a mistake
 its writer and a reader of its own would share — that is what ART-032..035 were
@@ -32,6 +41,8 @@ CI has no 7-Zip. Run it when the FAT32 writer changes.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import shutil
@@ -84,8 +95,89 @@ def find_7z() -> str:
     sys.exit(2)
 
 
+def check_card_against_manifest(seven_zip: str, image: Path) -> int:
+    """Check a built card's boot partition against the manifest beside it.
+
+    **This is the half ART cannot check itself** (SD-1 · G7). `core/fat32`
+    writes a FAT32 and does not read one, so `verify_against_image` reports the
+    boot partition's files as unchecked and records their hashes instead. Here
+    7-Zip opens the partition and every one of those hashes is answered — by an
+    implementation that shares no code with ART, which is this project's rule
+    for a card in the first place.
+    """
+    manifest_path = Path(str(image) + ".manifest.json")
+    if not manifest_path.exists():
+        print(f"No manifest beside {image.name} — expected {manifest_path.name}.")
+        return 1
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    expected = {entry["name"]: entry for entry in manifest["boot_files"]}
+    print(f"{image.name}: {len(expected)} file(s) recorded in the manifest\n")
+
+    checks: list[tuple[bool, str]] = []
+    parent = SCRATCH if SCRATCH.is_dir() else None
+    with tempfile.TemporaryDirectory(prefix="art-manifest-", dir=parent) as work:
+        work_dir = Path(work)
+
+        # Only the FAT partition by name. The Amiga area beside it is tens of
+        # gigabytes and there is nothing in it a manifest records file by file.
+        pulled = subprocess.run(
+            [seven_zip, "x", str(image), "-tmbr", "0.fat", f"-o{work_dir}", "-y"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        boot = work_dir / "0.fat"
+        if pulled.returncode != 0 or not boot.exists():
+            print("7-Zip could not pull the boot partition out of the card.")
+            print(pulled.stdout[-2000:])
+            return 1
+        checks.append((True, "7-Zip finds a FAT partition in the card's table"))
+
+        out = work_dir / "files"
+        extracted = subprocess.run(
+            [seven_zip, "x", str(boot), f"-o{out}", "-y"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        checks.append((extracted.returncode == 0, "7-Zip extracts it without complaint"))
+
+        for name, entry in sorted(expected.items()):
+            path = out / name
+            if not path.exists():
+                checks.append((False, f"{name} is on the card"))
+                continue
+            data = path.read_bytes()
+            checks.append((len(data) == entry["bytes"], f"{name} is {entry['bytes']} bytes"))
+            checks.append(
+                (
+                    hashlib.sha256(data).hexdigest() == entry["sha256"],
+                    f"{name} hashes to what the manifest recorded",
+                )
+            )
+
+    for ok, what in checks:
+        print(f"  {'ok  ' if ok else 'FAIL'} {what}")
+
+    failed = [what for ok, what in checks if not ok]
+    if failed:
+        print(f"\n{len(failed)} check(s) failed.")
+        return 1
+
+    print("\nThe card's boot partition is what its manifest says it is.")
+    return 0
+
+
 def main() -> int:
     seven_zip = find_7z()
+
+    # Given a card, check it against its own manifest. Given nothing, run the
+    # self-check below, which is what CI-adjacent use wants.
+    if len(sys.argv) > 1:
+        return check_card_against_manifest(seven_zip, Path(sys.argv[1]))
 
     parent = SCRATCH if SCRATCH.is_dir() else None
     with tempfile.TemporaryDirectory(prefix="art-fat-oracle-", dir=parent) as work:

@@ -52,6 +52,10 @@ export interface CardBuildRequest {
   line: Emu68Line;
   firmware: FirmwareConfig;
   options: Emu68Options;
+  /** When the build happened, for the manifest (G7). The screen's own clock —
+   *  `core` has none, and the caller already knows the user's locale. Absent
+   *  when planning: a plan writes nothing and has no date. */
+  built_at?: string;
   /** The partitions of the card's one Amiga disk. */
   partitions: PartitionSpec[];
 }
@@ -101,6 +105,8 @@ export interface CardBuildResult {
   job_id: number;
   dest: string;
   layout: CardLayout;
+  /** Where the build manifest was written (G7): beside the image. */
+  manifest_path: string;
   /** The card read back out of the file that was just written, through the
    *  same reader the Hard Disk studio uses for somebody else's card. */
   verified: CardReport;
@@ -108,6 +114,113 @@ export interface CardBuildResult {
 
 /** The event a finished build arrives on. */
 export const CARD_BUILD_EVENT = "card-build-result";
+
+// ---------------------------------------------------------------------------
+// The build manifest (SD-1 · G7)
+// ---------------------------------------------------------------------------
+
+/** Something on the card that does not match its manifest. */
+export type ManifestFinding =
+  | { kind: "schema-too-new"; found: number; understood: number }
+  | { kind: "size-changed"; expected: number; found: number }
+  | { kind: "partition-table-changed" }
+  | { kind: "area-count-changed"; expected: number; found: number }
+  | { kind: "area-moved"; area: number; expected: number; found: number }
+  | { kind: "area-resized"; area: number; expected: number; found: number }
+  | { kind: "rdb-changed"; area: number }
+  | { kind: "partition-count-changed"; area: number; expected: number; found: number }
+  | { kind: "partition-changed"; area: number; name: string };
+
+/** Something the check deliberately did not look at. */
+export type NotChecked = { kind: "boot-partition-files"; count: number };
+
+export interface ManifestReport {
+  findings: ManifestFinding[];
+  not_checked: NotChecked[];
+}
+
+/** Check a card against the manifest ART wrote beside it. */
+export async function cardVerifyManifest(
+  image: string,
+  manifest?: string
+): Promise<ManifestReport> {
+  return invoke<ManifestReport>("card_verify_manifest", { image, manifest });
+}
+
+/**
+ * The one-line answer.
+ *
+ * **"Matches" always carries what was *not* checked.** ART writes FAT32 and
+ * cannot read one, so the boot partition's files are recorded and left
+ * unverified; a verdict that said "everything is fine" while twenty-one files
+ * went unlooked-at is the claim §89 forbids.
+ */
+export function manifestVerdict(report: ManifestReport): Phrase {
+  if (report.findings.length > 0) {
+    return {
+      key: "cardBuilder.manifest.mismatch",
+      params: { count: report.findings.length },
+    };
+  }
+  const unchecked = report.not_checked.reduce((total, item) => total + item.count, 0);
+  return { key: "cardBuilder.manifest.matches", params: { unchecked } };
+}
+
+/** The sentence for one finding. Areas are numbered from one on screen. */
+export function findingPhrase(finding: ManifestFinding): Phrase {
+  switch (finding.kind) {
+    case "schema-too-new":
+      return {
+        key: "cardBuilder.manifest.finding.schemaTooNew",
+        params: { found: finding.found, understood: finding.understood },
+      };
+    case "size-changed":
+      return {
+        key: "cardBuilder.manifest.finding.sizeChanged",
+        params: { expected: finding.expected, found: finding.found },
+      };
+    case "partition-table-changed":
+      return { key: "cardBuilder.manifest.finding.partitionTableChanged" };
+    case "area-count-changed":
+      return {
+        key: "cardBuilder.manifest.finding.areaCountChanged",
+        params: { expected: finding.expected, found: finding.found },
+      };
+    case "area-moved":
+      return {
+        key: "cardBuilder.manifest.finding.areaMoved",
+        params: { n: finding.area + 1, expected: finding.expected, found: finding.found },
+      };
+    case "area-resized":
+      return {
+        key: "cardBuilder.manifest.finding.areaResized",
+        params: { n: finding.area + 1, expected: finding.expected, found: finding.found },
+      };
+    case "rdb-changed":
+      return {
+        key: "cardBuilder.manifest.finding.rdbChanged",
+        params: { n: finding.area + 1 },
+      };
+    case "partition-count-changed":
+      return {
+        key: "cardBuilder.manifest.finding.partitionCountChanged",
+        params: { n: finding.area + 1, expected: finding.expected, found: finding.found },
+      };
+    case "partition-changed":
+      return {
+        key: "cardBuilder.manifest.finding.partitionChanged",
+        params: { n: finding.area + 1, name: finding.name },
+      };
+  }
+}
+
+/** The sentence for something left unchecked. */
+export function notCheckedPhrase(item: NotChecked): Phrase {
+  return {
+    key: "cardBuilder.manifest.notChecked.bootFiles",
+    params: { count: item.count },
+  };
+}
 
 /** What building this card would do. Writes nothing. */
 export async function cardPlanBuild(request: CardBuildRequest): Promise<CardBuildPlan> {

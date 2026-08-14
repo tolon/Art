@@ -21,7 +21,10 @@ import {
   buildBlocker,
   cardBuild,
   cardPlanBuild,
+  cardVerifyManifest,
   defaultPartition,
+  findingPhrase,
+  manifestVerdict,
   onCardBuildResult,
   payloadBytes,
   warningPhrase,
@@ -29,6 +32,7 @@ import {
   type CardBuildPlan,
   type CardBuildRequest,
   type CardBuildResult,
+  type ManifestReport,
 } from "@/lib/cardBuild";
 import type { AmigaHardDiskFs, PartitionSpec } from "@/lib/hdf";
 import {
@@ -154,6 +158,8 @@ export function CardBuilder() {
   const [result, setResult] = useState<CardBuildResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [report, setReport] = useState<ManifestReport | null>(null);
+  const [checking, setChecking] = useState(false);
 
   const partitions: PartitionSpec[] = [
     {
@@ -178,6 +184,10 @@ export function CardBuilder() {
     options,
     partitions,
   };
+  // `built_at` is deliberately **not** part of `request`: the fingerprint
+  // below is `JSON.stringify(request)`, and a clock in it would change on
+  // every render and throw the plan away each time. It belongs to the build,
+  // not to the plan, and is stamped at the call site.
 
   // A plan describes the request that produced it. Change any of the request
   // and the plan on screen stops being true — so it goes, rather than sitting
@@ -195,6 +205,9 @@ export function CardBuilder() {
     void onCardBuildResult((built) => {
       setResult(built);
       setBusy(false);
+      // A report describes the card it was run against, and this is a new
+      // one. It goes with the old result rather than sitting under a new card.
+      setReport(null);
       // The card is there now; the plan that described it no longer applies.
       setPlan(null);
     }).then((fn) => {
@@ -250,12 +263,26 @@ export function CardBuilder() {
     setBusy(true);
     setError(null);
     try {
-      await cardBuild(request);
+      await cardBuild({ ...request, built_at: new Date().toISOString() });
       // `busy` is cleared by the result event, or here if the job never
       // starts. A cancelled or failed job is the job bar's to report.
     } catch (e) {
       setError(String(e));
       setBusy(false);
+    }
+  }
+
+  async function verify() {
+    if (!result) return;
+    setChecking(true);
+    setError(null);
+    try {
+      setReport(await cardVerifyManifest(result.dest, result.manifest_path));
+    } catch (e) {
+      setReport(null);
+      setError(String(e));
+    } finally {
+      setChecking(false);
     }
   }
 
@@ -537,6 +564,38 @@ export function CardBuilder() {
           <p className="faint" style={{ fontSize: 11, margin: "8px 0 0" }}>
             {t("cardBuilder.result.nextStep")}
           </p>
+
+          {/* G7. The manifest is the record of what this card was built from,
+              and the button is §92's VERIFY made available after the fact —
+              a card can be checked against it any time, not only now. */}
+          <div style={{ marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+            <h3 style={{ fontSize: 14, margin: "0 0 4px" }}>
+              {t("cardBuilder.manifest.heading")}
+            </h3>
+            <p className="faint" style={{ fontSize: 11, margin: "0 0 8px", wordBreak: "break-all" }}>
+              {t("cardBuilder.manifest.path")} <code>{result.manifest_path}</code>
+            </p>
+            <button className="btn" onClick={() => void verify()} disabled={checking}>
+              {t(checking ? "cardBuilder.manifest.verifying" : "cardBuilder.manifest.verify")}
+            </button>
+
+            {report && (
+              <div style={{ marginTop: 10 }}>
+                <p
+                  className={`badge ${report.findings.length === 0 ? "badge-ok" : "badge-warn"}`}
+                  style={{ display: "block", padding: "6px 12px", fontSize: 11, margin: 0 }}
+                >
+                  {t(manifestVerdict(report).key, manifestVerdict(report).params)}
+                </p>
+                <ul className="muted" style={{ fontSize: 11, margin: "8px 0 0", paddingLeft: 18 }}>
+                  {report.findings.map((finding, index) => {
+                    const phrase = findingPhrase(finding);
+                    return <li key={index}>{t(phrase.key, phrase.params)}</li>;
+                  })}
+                </ul>
+              </div>
+            )}
+          </div>
         </section>
       )}
     </>

@@ -18,9 +18,14 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::core::card::build::{build_card, AreaSpec, CardSpec};
+use crate::core::card::manifest::{
+    describe_card, manifest_path_for, read_manifest, render_manifest, verify_against_image,
+    ManifestFile, ManifestReport, SourceFacts,
+};
 use crate::core::card::payload::{emu68_payload, PayloadSpec};
 use crate::core::card::{read_card, CardImage};
 use crate::core::error::CoreResult;
+use crate::core::hashing::{sha256_bytes, sha256_file};
 use crate::core::jobs::{JobId, ProgressSink};
 use crate::core::mbr::{plan_card, CardLayout};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
@@ -30,6 +35,7 @@ use crate::core::pistorm::options::Emu68Options;
 use crate::core::pistorm::rom_suits;
 use crate::core::rdb::{ParsedFileSystem, PartitionSpec};
 use crate::core::rom::{identify_rom, RomInfo};
+use crate::core::safety::atomic::atomic_write;
 use crate::error::AppResult;
 
 use super::jobs::{spawn_job, JobRegistry};
@@ -118,6 +124,11 @@ pub struct CardBuildRequest {
     pub firmware: FirmwareConfig,
     #[serde(default)]
     pub options: Emu68Options,
+    /// When the build happened, for the manifest. **The caller's**, because
+    /// `core` has no clock and this command layer has no business inventing a
+    /// date format the user's own screen already knows how to make.
+    #[serde(default)]
+    pub built_at: Option<String>,
     /// The partitions of the card's one Amiga disk.
     ///
     /// One disk, taking whatever is left after the boot partition. Two and
@@ -181,6 +192,8 @@ pub struct CardBuildResult {
     pub job_id: JobId,
     pub dest: String,
     pub layout: CardLayout,
+    /// Where the build manifest was written (G7).
+    pub manifest_path: String,
     /// The card **read back out of the file that was just written**, through
     /// the same reader and the same report the Hard Disk studio shows for
     /// somebody else's card. A build that cannot be read is not a build.
@@ -296,18 +309,93 @@ fn build_requested_card(
     progress: &dyn ProgressSink,
 ) -> CoreResult<BuiltRequestedCard> {
     let payload = payload_for(request)?;
+
+    // Hashed here, from the bytes about to be written — the only place they
+    // exist to be hashed, since ART writes FAT32 and cannot read one back.
+    let boot_files: Vec<ManifestFile> = payload
+        .files
+        .iter()
+        .map(|file| ManifestFile {
+            name: file.name.clone(),
+            bytes: file.bytes.len() as u64,
+            sha256: sha256_bytes(&file.bytes),
+        })
+        .collect();
+    let kernel_file = payload.kernel_file.clone();
+
+    let image = Path::new(request.dest.trim());
     let spec = card_spec(request, payload.files);
-    let built = build_card(Path::new(request.dest.trim()), &spec, progress)?;
+    let built = build_card(image, &spec, progress)?;
+
+    // G7: the manifest is written from the *finished* card, so it records what
+    // is there rather than what the builder meant. Beside the image, through
+    // `core/safety` like every other write.
+    let manifest = describe_card(
+        image,
+        source_facts(request, &kernel_file)?,
+        boot_files,
+        request.built_at.clone(),
+    )?;
+    let manifest_path = manifest_path_for(image);
+    atomic_write(&manifest_path, render_manifest(&manifest)?.as_bytes())?;
 
     Ok(BuiltRequestedCard {
         layout: built.layout,
         verified: report_for(built.verified),
+        manifest_path: manifest_path.display().to_string(),
     })
+}
+
+/// What the image cannot say about itself: which files on the user's disk it
+/// was built from, and what they hashed to.
+///
+/// Names only, never paths — a manifest is shareable, and where somebody keeps
+/// their downloads is not part of what the card is.
+fn source_facts(request: &CardBuildRequest, kernel_file: &str) -> CoreResult<SourceFacts> {
+    let archive = Path::new(request.archive.trim());
+    let kickstart = request.kickstart.as_ref().map(|p| PathBuf::from(p.trim()));
+
+    Ok(SourceFacts {
+        archive_name: file_name_of(archive),
+        archive_sha256: sha256_file(archive)?,
+        kickstart_name: kickstart.as_deref().map(file_name_of),
+        kickstart_sha256: match &kickstart {
+            Some(path) => Some(sha256_file(path)?),
+            None => None,
+        },
+        hardware: request.hardware,
+        line: request.line,
+        kernel_file: kernel_file.to_string(),
+    })
+}
+
+fn file_name_of(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 struct BuiltRequestedCard {
     layout: CardLayout,
     verified: CardReport,
+    manifest_path: String,
+}
+
+/// Check a card against the manifest ART wrote beside it (§92's VERIFY, G7).
+///
+/// `manifest` defaults to the image's own — the file `card_build` wrote — so
+/// the ordinary case needs no second path.
+#[tauri::command]
+pub fn card_verify_manifest(image: String, manifest: Option<String>) -> AppResult<ManifestReport> {
+    let image = PathBuf::from(image.trim());
+    let manifest_path = manifest
+        .map(|given| PathBuf::from(given.trim()))
+        .unwrap_or_else(|| manifest_path_for(&image));
+
+    Ok(verify_against_image(
+        &read_manifest(&manifest_path)?,
+        &image,
+    )?)
 }
 
 /// Build a card image. Returns a job id (§54, §55).
@@ -359,6 +447,7 @@ pub fn card_build(
                 job_id,
                 dest,
                 layout: built.layout,
+                manifest_path: built.manifest_path,
                 verified: built.verified,
             },
         );
@@ -513,6 +602,7 @@ mod tests {
             line: Emu68Line::Stable,
             firmware: FirmwareConfig::default(),
             options: Emu68Options::default(),
+            built_at: None,
             partitions: vec![PartitionSpec {
                 drive_name: "SDH0".into(),
                 fs_type: AmigaHardDiskFs::FfsStandard,
@@ -602,6 +692,54 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// G7, end to end: a build leaves a manifest beside the image, and that
+    /// manifest verifies the card it was written from.
+    ///
+    /// It also pins the two things only this layer can get wrong — the source
+    /// facts, which no image can say about itself, and the boot files' hashes,
+    /// which are taken from the bytes on their way in because ART writes FAT32
+    /// and cannot read one back.
+    #[test]
+    fn a_build_leaves_a_manifest_that_verifies_the_card() {
+        use crate::core::card::manifest::{manifest_path_for, read_manifest, verify_against_image};
+        use crate::core::jobs::NoProgress;
+
+        let dir = scratch("manifest");
+        let archive = emu68_zip(&dir);
+        let dest = dir.join("card.img");
+        let mut req = request(&archive, &dest);
+        req.built_at = Some("2026-08-14T18:00:00Z".into());
+
+        build_requested_card(&req, &NoProgress).unwrap();
+
+        let manifest = read_manifest(&manifest_path_for(&dest)).unwrap();
+        assert_eq!(manifest.source.archive_name, "Emu68-pistorm.zip");
+        assert_eq!(
+            manifest.source.archive_sha256.len(),
+            64,
+            "the archive is hashed, not just named"
+        );
+        assert!(
+            manifest.source.kickstart_name.is_none(),
+            "this request supplies no ROM, and the manifest says so"
+        );
+        assert_eq!(manifest.source.kernel_file, "Emu68-pistorm.gz");
+        assert_eq!(manifest.built_at.as_deref(), Some("2026-08-14T18:00:00Z"));
+        assert!(
+            manifest
+                .boot_files
+                .iter()
+                .any(|f| f.name == "config.txt" && f.sha256.len() == 64),
+            "{:?}",
+            manifest.boot_files
+        );
+
+        let report = verify_against_image(&manifest, &dest).unwrap();
+        assert!(report.matches(), "{:?}", report.findings);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The adapter, against the user's own release rather than a zip ART made
     /// up — the same reason `build_real_card_when_asked` exists one layer down.
     /// A synthetic fixture cannot be asked whether the plan a screen shows is
@@ -639,6 +777,60 @@ mod tests {
         assert!(!plan.dest_exists);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The whole adapter against the user's own material, manifest included —
+    /// and the file `scripts/fat-oracle-check.py <card.img>` is pointed at.
+    ///
+    /// ```text
+    /// ART_CARD_ZIP=…\Emu68-pistorm.zip ART_CARD_ROM=…\A1200.rom \
+    /// ART_CARD_OUT=E:\amiga\ProjeART\g7card.img ART_CARD_GB=8 \
+    ///   cargo test build_real_card_with_manifest_when_asked -- --nocapture
+    /// ```
+    #[test]
+    fn build_real_card_with_manifest_when_asked() {
+        use crate::core::card::manifest::{manifest_path_for, read_manifest, verify_against_image};
+        use crate::core::jobs::NoProgress;
+
+        let (Ok(zip), Ok(out)) = (std::env::var("ART_CARD_ZIP"), std::env::var("ART_CARD_OUT"))
+        else {
+            return;
+        };
+        let size_gb: u64 = std::env::var("ART_CARD_GB")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(8);
+
+        let dest = std::path::PathBuf::from(&out);
+        let mut req = request(std::path::Path::new(&zip), &dest);
+        req.kickstart = std::env::var("ART_CARD_ROM").ok();
+        req.total_bytes = size_gb * GIB;
+        req.built_at = Some("2026-08-15T00:00:00Z".into());
+
+        let built = build_requested_card(&req, &NoProgress).unwrap();
+        println!(
+            "card: {} Amiga disk(s); manifest at {}",
+            built.verified.card.areas.len(),
+            built.manifest_path
+        );
+
+        let manifest = read_manifest(&manifest_path_for(&dest)).unwrap();
+        println!(
+            "manifest: archive {} ({}), kernel {}, {} boot file(s)",
+            manifest.source.archive_name,
+            &manifest.source.archive_sha256[..16],
+            manifest.source.kernel_file,
+            manifest.boot_files.len()
+        );
+
+        let report = verify_against_image(&manifest, &dest).unwrap();
+        for finding in &report.findings {
+            println!("  finding: {finding:?}");
+        }
+        for item in &report.not_checked {
+            println!("  not checked: {item:?}");
+        }
+        assert!(report.matches(), "{:?}", report.findings);
     }
 
     /// The one that matters: the plan the user approved is the card that gets

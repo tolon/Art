@@ -158,6 +158,10 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // enums, and putting their sentences on this side is what keeps them in
     // the user's language (ART-060). Every variant of both mappers is
     // enumerated in `phrase-keys.test.ts`.
-    expect(dynamicCalls).toBe(64);
+    // 64 → 67 (G7's manifest): the verdict line and each finding are
+    // `Phrase`s from `@/lib/cardBuild`, mapped from Rust enums for the same
+    // reason the build warnings are — `phrase-keys.test.ts` enumerates every
+    // variant of both.
+    expect(dynamicCalls).toBe(67);
   });
 });

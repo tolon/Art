@@ -1538,79 +1538,101 @@
       "installedNoIcon": "{{drawer}} konumuna kuruldu: {{files}}, {{verified}} — simge olmadan, bu yüzden Workbench'te görünmeyecek"
     }
   },
-    "cardBuilder": {
-      "heading": "Sadece önyükleme kartı",
-      "intro": "ART imaj dosyasını oluşturur; onu karta yazmayı elindeki imaj aracıyla sen yaparsın. ART hiçbir zaman karta doğrudan yazmaz.",
-      "scope": "Çıkan şey, Amiga'nın görebildiği bir bölüm tablosuyla açılan bir karttır; birimlerini Amiga biçimlendirmeyi teklif eder. Üzerlerine AmigaOS kurmak henüz yapılmadı.",
-      "archive": {
-        "label": "Emu68 sürüm arşivi",
-        "chooseTitle": "İndirdiğin Emu68 sürümünü seç",
-        "none": "Arşiv seçilmedi",
-        "hint": "Kendi anakartına ait arşiv, Emu68 projesinin kendi sürümlerinden. ART, tek bir baytını okumadan önce adını aşağıdaki anakart ve sürüm hattıyla karşılaştırır."
+  "cardBuilder": {
+    "heading": "Sadece önyükleme kartı",
+    "intro": "ART imaj dosyasını oluşturur; onu karta yazmayı elindeki imaj aracıyla sen yaparsın. ART hiçbir zaman karta doğrudan yazmaz.",
+    "scope": "Çıkan şey, Amiga'nın görebildiği bir bölüm tablosuyla açılan bir karttır; birimlerini Amiga biçimlendirmeyi teklif eder. Üzerlerine AmigaOS kurmak henüz yapılmadı.",
+    "archive": {
+      "label": "Emu68 sürüm arşivi",
+      "chooseTitle": "İndirdiğin Emu68 sürümünü seç",
+      "none": "Arşiv seçilmedi",
+      "hint": "Kendi anakartına ait arşiv, Emu68 projesinin kendi sürümlerinden. ART, tek bir baytını okumadan önce adını aşağıdaki anakart ve sürüm hattıyla karşılaştırır."
+    },
+    "kickstart": {
+      "label": "Kickstart ROM",
+      "chooseTitle": "Bir Kickstart ROM seç",
+      "none": "ROM seçilmedi",
+      "hint": "Kendi Kickstart'ın. ART ROM indirmez, ROM dağıtmaz. ROM olmadan kart kurulur ama açılmaz."
+    },
+    "size": {
+      "label": "Kart boyutu"
+    },
+    "dest": {
+      "label": "İmaj nereye yazılsın",
+      "chooseTitle": "Kart imajı nereye yazılsın",
+      "none": "Hedef seçilmedi",
+      "hint": "Seyrek dosya: 128 GB'lık bir kart yalnızca gerçekten yapı olan birkaç megabayt yer kaplar. Var olan bir dosya reddedilir, üzerine asla yazılmaz."
+    },
+    "advanced": {
+      "heading": "Gelişmiş",
+      "amiga": "Amiga",
+      "variant": "PiStorm anakartı",
+      "pi": "Raspberry Pi",
+      "line": "Emu68 sürüm hattı",
+      "sharedWithPistorm": "Bu dördü PiStorm stüdyosunun kullandığı ayarların ta kendisi. Burada değiştirirsen orada da değişir.",
+      "label": "FAT32 etiketi",
+      "bootMib": "Önyükleme bölümü (MB)",
+      "bootMibDefault": "0, iki gerçek kartın da taşıdığı 1,10 GiB'ı kullanır.",
+      "driveName": "Sürücü adı",
+      "partitionMb": "Bölüm boyutu (MB)",
+      "fsType": "Dosya sistemi",
+      "oneDisk": "Önyükleme bölümünden geriye kalanı alan tek bir Amiga diski. Önyükleme menüsüyle birden çok disk çoklu önyüklemedir ve henüz yapılmadı. Yalnızca Kickstart'ın kendi taşıdığı dosya sistemleri sunulur: sürücüsü kartta olmayan bir PFS3 bölümünü Amiga sessizce yok sayar."
+    },
+    "actions": {
+      "preview": "Önizle",
+      "build": "Kartı oluştur"
+    },
+    "plan": {
+      "heading": "Ne yazılacak",
+      "bootPartition": "Önyükleme bölümü",
+      "amigaDisk": "Amiga diski {{n}}",
+      "atGb": "{{size}} GB, {{at}}. bayttan itibaren",
+      "kernel": "Kartın açtığı dosya",
+      "kickstartAs": "Kickstart şu adla yazılır",
+      "rom": "ROM",
+      "files": "Önyükleme bölümündekiler",
+      "filesTotal": "{{count}} dosya, {{mib}} MB",
+      "fileList": "Bütün dosyalar"
+    },
+    "warning": {
+      "noKickstart": "Kickstart seçilmedi. Kart oluşturulur, ama üzerine bir ROM konana kadar açılmaz.",
+      "romUnrecognised": "ART bu ROM'u tanımıyor. Yine de doğru ROM olabilir.",
+      "romWrongMachine": "{{rom}}, seçtiğin Amiga'ya ait bir ROM değil. Bu genellikle açılmayan bir makine demektir ve ekranda bunu açıklayan bir şey olmaz — ama ne yaptığını biliyorsan devam et.",
+      "volumesUnformatted": "Bu karttaki Amiga birimleri biçimlendirilmemiştir. Amiga onları görür ve biçimlendirmeyi teklif eder; üzerlerine sistem kurmak henüz yapılmadı."
+    },
+    "blocked": {
+      "noArchive": "Önce Emu68 sürüm arşivini seç.",
+      "noDestination": "İmajın nereye yazılacağını seç.",
+      "noPartitions": "Amiga diskinde en az bir bölüm olmalı.",
+      "notPlanned": "Önce önizle — ne yazılacağını görmeden hiçbir şey yazılmaz.",
+      "destExists": "O dosya zaten var. ART üzerine yazmaz; başka bir ad seç."
+    },
+      "manifest": {
+        "heading": "Kurulum künyesi",
+        "path": "İmajın yanına yazıldı:",
+        "verify": "Kartı künyeye karşı denetle",
+        "verifying": "Denetleniyor…",
+        "matches": "ART'ın denetleyebildiği her şey künyeyle uyuşuyor. Önyükleme bölümündeki {{unchecked}} dosya geri okunmadı — ART FAT32 yazar, okumaz; onları scripts/fat-oracle-check.py 7-Zip ile denetliyor.",
+        "mismatch": "Bu kartta künyesiyle uyuşmayan {{count}} şey var.",
+        "finding": {
+          "schemaTooNew": "Bu künyeyi daha yeni bir ART yazmış (şema {{found}}; bu sürüm {{understood}} anlıyor). Hiçbir şey denetlenmedi — bilmediği alanlar zaten denetleyemeyeceği alanlar.",
+          "sizeChanged": "İmaj {{found}} bayt, künye {{expected}} diyor.",
+          "partitionTableChanged": "Bölüm tablosu yazılan tablo değil.",
+          "areaMoved": "{{n}}. Amiga diski {{found}}. bayttan başlıyor; künye {{expected}} diyor.",
+          "areaCountChanged": "Künye {{expected}} Amiga diski anlatıyor, kartta {{found}} var.",
+          "areaResized": "{{n}}. Amiga diski {{found}} bayt; künye {{expected}} diyor.",
+          "rdbChanged": "{{n}}. Amiga diskinin bölüm tablosu yazılan tablo değil.",
+          "partitionCountChanged": "{{n}}. Amiga diskinde {{found}} bölüm var; künye {{expected}} diyor.",
+          "partitionChanged": "{{n}}. Amiga diskindeki {{name}} bölümü künyenin anlattığı gibi değil."
+        },
+        "notChecked": {
+          "bootFiles": "Önyükleme bölümündeki {{count}} dosya geri okunmadı. ART FAT32 yazar, okumaz; özetleri künyede duruyor ve 7-Zip onları denetleyebilir."
+        }
       },
-      "kickstart": {
-        "label": "Kickstart ROM",
-        "chooseTitle": "Bir Kickstart ROM seç",
-        "none": "ROM seçilmedi",
-        "hint": "Kendi Kickstart'ın. ART ROM indirmez, ROM dağıtmaz. ROM olmadan kart kurulur ama açılmaz."
-      },
-      "size": {
-        "label": "Kart boyutu"
-      },
-      "dest": {
-        "label": "İmaj nereye yazılsın",
-        "chooseTitle": "Kart imajı nereye yazılsın",
-        "none": "Hedef seçilmedi",
-        "hint": "Seyrek dosya: 128 GB'lık bir kart yalnızca gerçekten yapı olan birkaç megabayt yer kaplar. Var olan bir dosya reddedilir, üzerine asla yazılmaz."
-      },
-      "advanced": {
-        "heading": "Gelişmiş",
-        "amiga": "Amiga",
-        "variant": "PiStorm anakartı",
-        "pi": "Raspberry Pi",
-        "line": "Emu68 sürüm hattı",
-        "sharedWithPistorm": "Bu dördü PiStorm stüdyosunun kullandığı ayarların ta kendisi. Burada değiştirirsen orada da değişir.",
-        "label": "FAT32 etiketi",
-        "bootMib": "Önyükleme bölümü (MB)",
-        "bootMibDefault": "0, iki gerçek kartın da taşıdığı 1,10 GiB'ı kullanır.",
-        "driveName": "Sürücü adı",
-        "partitionMb": "Bölüm boyutu (MB)",
-        "fsType": "Dosya sistemi",
-        "oneDisk": "Önyükleme bölümünden geriye kalanı alan tek bir Amiga diski. Önyükleme menüsüyle birden çok disk çoklu önyüklemedir ve henüz yapılmadı. Yalnızca Kickstart'ın kendi taşıdığı dosya sistemleri sunulur: sürücüsü kartta olmayan bir PFS3 bölümünü Amiga sessizce yok sayar."
-      },
-      "actions": {
-        "preview": "Önizle",
-        "build": "Kartı oluştur"
-      },
-      "plan": {
-        "heading": "Ne yazılacak",
-        "bootPartition": "Önyükleme bölümü",
-        "amigaDisk": "Amiga diski {{n}}",
-        "atGb": "{{size}} GB, {{at}}. bayttan itibaren",
-        "kernel": "Kartın açtığı dosya",
-        "kickstartAs": "Kickstart şu adla yazılır",
-        "rom": "ROM",
-        "files": "Önyükleme bölümündekiler",
-        "filesTotal": "{{count}} dosya, {{mib}} MB",
-        "fileList": "Bütün dosyalar"
-      },
-      "warning": {
-        "noKickstart": "Kickstart seçilmedi. Kart oluşturulur, ama üzerine bir ROM konana kadar açılmaz.",
-        "romUnrecognised": "ART bu ROM'u tanımıyor. Yine de doğru ROM olabilir.",
-        "romWrongMachine": "{{rom}}, seçtiğin Amiga'ya ait bir ROM değil. Bu genellikle açılmayan bir makine demektir ve ekranda bunu açıklayan bir şey olmaz — ama ne yaptığını biliyorsan devam et.",
-        "volumesUnformatted": "Bu karttaki Amiga birimleri biçimlendirilmemiştir. Amiga onları görür ve biçimlendirmeyi teklif eder; üzerlerine sistem kurmak henüz yapılmadı."
-      },
-      "blocked": {
-        "noArchive": "Önce Emu68 sürüm arşivini seç.",
-        "noDestination": "İmajın nereye yazılacağını seç.",
-        "noPartitions": "Amiga diskinde en az bir bölüm olmalı.",
-        "notPlanned": "Önce önizle — ne yazılacağını görmeden hiçbir şey yazılmaz.",
-        "destExists": "O dosya zaten var. ART üzerine yazmaz; başka bir ad seç."
-      },
-      "result": {
-        "heading": "Kart oluşturuldu",
-        "readBack": "ART'ın kendi kart okuyucusuyla geri okundu: {{disks}} Amiga diski, {{partitions}} bölüm.",
-        "nextStep": "Alışık olduğun imaj aracıyla microSD karta yaz, sonra Amiga'yı açmadan önce HDMI'ı tak — VPU portu yalnızca açılışta yapılandırır."
-      }
+    "result": {
+      "heading": "Kart oluşturuldu",
+      "readBack": "ART'ın kendi kart okuyucusuyla geri okundu: {{disks}} Amiga diski, {{partitions}} bölüm.",
+      "nextStep": "Alışık olduğun imaj aracıyla microSD karta yaz, sonra Amiga'yı açmadan önce HDMI'ı tak — VPU portu yalnızca açılışta yapılandırır."
     }
+  }
 }

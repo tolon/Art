@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### A card says what it was built from (2026-08-15)
+
+#### Added
+- **Every card comes with a build manifest.** `card.img` now has a
+  `card.img.manifest.json` beside it, recording which Emu68 archive and which
+  Kickstart went in — with their checksums — where every partition landed, and
+  a checksum for each of the files on the boot partition.
+- **Check a card against its manifest, any time.** A button on the result panel
+  re-reads the card and says whether it is still what was built. It also says
+  plainly what it did *not* look at: ART writes the Pi's FAT32 partition but
+  cannot read one back, so those files are recorded rather than re-checked.
+  `python scripts/fat-oracle-check.py your-card.img` checks exactly those, with
+  7-Zip.
+
+#### Known
+- Rebuilding a card *from* a manifest is not built. The manifest names the
+  files it was made from; putting them back together is a later step.
+
 ### You can ask for a PiStorm card (2026-08-14)
 
 #### Added

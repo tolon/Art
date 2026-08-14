@@ -22,7 +22,7 @@ Update it at the end of any session that changes what works.
 | **Version** | 0.1.0 (unreleased) |
 | **Current stage** | **SD-1 in progress** — **G2 and G4 done, engine *and* screen**: the OS Builder asks for a boot-only card and `card_plan_build` / `card_build` deliver one (MBR, FAT32 boot partition, an RDB per Amiga area) from the user's own Emu68 release, previewed before it is written and read back after. G7, G15 and G8 owed. Reading a real card has a screen ([ART-095](ISSUES.md), [ART-097](ISSUES.md)); **no card ART built has been flashed or booted** |
 | **Build** | PASS |
-| **Tests** | 1114 Rust passed, 0 failed; 443 frontend passed, 0 failed |
+| **Tests** | 1124 Rust passed, 0 failed; 449 frontend passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
 | **amitools oracle** | 53 checks, both directions — now including a filesystem driver ART embedded in an RDB and `rdbtool` extracted back out byte-for-byte |
@@ -30,7 +30,7 @@ Update it at the end of any session that changes what works.
 | **7-Zip disc oracle** | 4 fixtures — Joliet, ISO9660-only, raw Mode 1, raw Mode 2/XA — names, sizes and every file's SHA-256 |
 | **cargo-deny** | advisories, bans, licences, sources — all ok |
 | **MSRV** | 1.93 (raised from 1.77 on 2026-08-12, for a maintained 7z decoder) |
-| **i18n** | `en.json` and `tr.json`, 1208 leaf keys each, parity enforced by `pnpm test` |
+| **i18n** | `en.json` and `tr.json`, 1224 leaf keys each, parity enforced by `pnpm test` |
 | **Release bundle** | rebuilt 2026-08-12 — MSI and NSIS, and the application was launched and answered |
 | **Published** | <https://github.com/tolon/Art> — public, `main`, **GPL-3.0-or-later**. Work lands on `sd-1` and merges to `main` at the phase's
 end; the licence *inventory* still said MIT until 2026-08-13, months after the
@@ -661,7 +661,7 @@ one machine, not the line.
 | Phase | Contents |
 |---|---|
 | **SD-0** | ✅ **Done 2026-08-12** — prior-art teardown, written up as [sd0-prior-art.md](sd0-prior-art.md). One exit test still owed (drive `hst-imager` end to end on a scratch image) |
-| **SD-1** | The image has a shape: MBR + FAT32 boot partition (**G2 — done 2026-08-13/14, engine and screen**), RDB filesystem embedding FSHD/LSEG (**G4 — done**, also closed ART-084), build manifest (G7), a build as a drop target (G15), image validation (G8) |
+| **SD-1** | The image has a shape: MBR + FAT32 boot partition (**G2 — done 2026-08-13/14, engine and screen**), RDB filesystem embedding FSHD/LSEG (**G4 — done**, also closed ART-084), build manifest (**G7 — done 2026-08-15**, with 7-Zip answering the half ART cannot check), a build as a drop target (G15), image validation (G8) |
 | **SD-2** | Content, preloaded: PFS3 via a scripted WinUAE session (G3 route D), OS install engine (G5), ROM pairing (G9), launcher metadata export (G10), layout policy (G11) |
 | **SD-3** | It is *mine*: wallpaper, WiFi, prefs and Startup-Sequence, each edited in place (G14); multiboot as several complete environments and a boot menu (G16) |
 | **SD-4** | The flagship: native PFS3 write in ART (G3 route B) — its own brief; route D's harness becomes its oracle |
@@ -839,8 +839,17 @@ oluşturuldu — 1 Amiga diski, 1 bölüm"*. 7-Zip reads the result independentl
 `0.fat` 1 177 550 848 bytes (FAT32-LBA, the measured 1.10 GiB) and `1.img`
 67 540 877 312 bytes. **Still not flashed, still not booted.**
 
-**In order:** G7 (build manifest), G15 (a build as a drop target) and G8 (image
-validation) — then flash `denemecard.img` and boot it.
+**G7 landed on 2026-08-15.** Every build now leaves a
+`<card>.manifest.json` beside the image, read back off the finished card
+rather than remembered from the build. `card_verify_manifest` checks the table,
+the areas and the RDBs and **reports the boot partition's files as not
+checked**, because ART writes FAT32 and cannot read one — and
+`python scripts/fat-oracle-check.py <card.img>` answers exactly those with
+7-Zip. Run against the real release on an 8 GB card: 21 of 21 files, byte
+count and SHA-256 each.
+
+**In order:** G15 (a build as a drop target) and G8 (image validation) — then
+flash a card and boot it.
 
 **Then the thing no test can answer: flash a card and boot it.** Every piece is
 verified against an independent reader and against the two real cards, and none
@@ -914,6 +923,7 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-15 | **SD-1 G7: a card now says what it was built from, and something that is not ART checks half of it.** `core/card/manifest.rs` writes `<card>.manifest.json` beside the image — the archive's and the ROM's SHA-256, the partition table's, every boot file's, and a 256 KiB window at each RDB. Two decisions carry it: the manifest is **read off the finished card** rather than remembered from the build, so a card ART wrote wrongly cannot be described rightly; and it lives **beside** the image, because a manifest carrying the boot partition's checksums *inside* the boot partition cannot be right about itself. `card_verify_manifest` checks the table, the areas and the RDBs — and **reports what it did not look at**: ART writes FAT32 and does not read one, so the boot files are recorded and left unverified rather than passed over. `scripts/fat-oracle-check.py <card.img>` closes that half with 7-Zip. Driven against the real `Emu68-pistorm.zip` on an 8 GB card: ART's own check clean, 7-Zip clean on 21 of 21 files. Mutation-checked in three places, and the third mutation **found a missing test** — nothing exercised the RDB window, so a byte written into the reserved area (which leaves every parsed field identical) would have passed | 1124 Rust / 449 frontend |
 | 2026-08-14 | **A card was built from the screen, and looking at the screen closed one issue and reopened my own mistake.** The OS Builder's boot-only card was driven in the running application with the user's own material and produced a 64 GB `denemecard.img`; 7-Zip reads its table back independently. On the way there I screenshotted the window, read text as clipped at the right edge, and **committed a wrong diagnosis onto [ART-099](ISSUES.md)** — the capture was made by a DPI-unaware process on a 150 %-scaled 3840-wide display and returned the left *two thirds* of the window. An overlay that printed the page's own rects settled it in one shot: `scroll == client` at every level, `.app-shell` exactly one window wide, the left strip is `max-width: 1180px; margin-inline: auto` doing its job. **ART-099 closes with the shell exonerated**, and with a second half to its lesson: a screenshot is not a measurement, and check the instrument before believing the picture. Also read the Emu68 Imager at source level ([sd0-prior-art.md §4.1](sd0-prior-art.md)) — it settles ART-104 in data (several MD5s per Kickstart revision, and the 524 299-byte Amiga Forever header ART rejects outright), hands SD-2 the `hst-imager` command surface verbatim, and confirms ART's no-physical-media scope as the same tool minus an Administrator requirement | 1114 Rust / 443 frontend |
 | 2026-08-14 | **The application can ask for a card.** `card_plan_build` and `card_build` are the adapter the engine had been waiting for, and the OS Builder leads with a **boot-only card** — the one thing on that screen that produces a file, sitting above the distributions that are all still Coming Later. Four questions (archive, ROM, size, destination) and an `Advanced` panel for everything with a defaulted answer; the hardware half of it writes the *same* `settings.json` keys the PiStorm studio uses, so an answer means one thing in both places. Three decisions worth keeping: **one request type and one `card_spec` for the plan and the build**, so a screen cannot show one card and write another; **`SAFE_CREATE` is answered by the plan**, before the button rather than by a job that fails; and **warnings are a typed enum, not sentences** — `CoreError`'s strings still reach the UI in English (ART-060) and there was no reason to add four more. Two things came out of using real material rather than fixtures: `emu68_payload` had no *total* ceiling — twenty entries under the per-file 64 MB is a gigabyte and a quarter held in memory, so there is a 256 MB budget on the running total now — and **[ART-104](ISSUES.md)**, the user's own A1200 3.1 ROM hashing to a dump `KNOWN_ROMS` does not carry, so every card built with it is warned about a ROM that is very probably right. Filed rather than patched: the fix is to identify a ROM by its own header and treat the checksum as confirmation, which is a change to how ROMs are identified. Driven against the real `Emu68-pistorm.zip`: 21 files, booting `Emu68-pistorm.gz` | 1114 Rust / 443 frontend |
 | 2026-08-14 | **Docs swept and the branch pushed.** Every claim about *now* checked against what is now true: the snapshot still said G2 was owed and that reading a card had no screen; FEATURES still described three fixed defects as live, including Application Size cutting the right edge — which measurement had disproved; README carried two paragraphs that contradicted each other and each other's dates. History kept its own wording; only the present tense was corrected. `sd-1` pushed to origin, fourteen commits, level as of this line | 1106 Rust / 432 frontend |

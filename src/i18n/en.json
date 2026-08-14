@@ -1538,79 +1538,101 @@
       "installedNoIcon": "Installed to {{drawer}}: {{files}}, {{verified}} — without an icon, so it will not show up on Workbench"
     }
   },
-    "cardBuilder": {
-      "heading": "Boot-only card",
-      "intro": "ART builds the image file; you flash it with whichever imager you already have. It never writes to a card itself.",
-      "scope": "What comes out is a card an Amiga boots into a partition table it can see, with volumes it will offer to format. Installing AmigaOS onto them is not built yet.",
-      "archive": {
-        "label": "Emu68 release archive",
-        "chooseTitle": "Choose the Emu68 release you downloaded",
-        "none": "No archive chosen",
-        "hint": "The archive for your board, from the Emu68 project's own releases. ART checks its name against the board and release line below before it reads a byte of it."
+  "cardBuilder": {
+    "heading": "Boot-only card",
+    "intro": "ART builds the image file; you flash it with whichever imager you already have. It never writes to a card itself.",
+    "scope": "What comes out is a card an Amiga boots into a partition table it can see, with volumes it will offer to format. Installing AmigaOS onto them is not built yet.",
+    "archive": {
+      "label": "Emu68 release archive",
+      "chooseTitle": "Choose the Emu68 release you downloaded",
+      "none": "No archive chosen",
+      "hint": "The archive for your board, from the Emu68 project's own releases. ART checks its name against the board and release line below before it reads a byte of it."
+    },
+    "kickstart": {
+      "label": "Kickstart ROM",
+      "chooseTitle": "Choose a Kickstart ROM",
+      "none": "No ROM chosen",
+      "hint": "Your own Kickstart. ART neither fetches nor bundles one. Without it the card is built and will not boot."
+    },
+    "size": {
+      "label": "Card size"
+    },
+    "dest": {
+      "label": "Where the image goes",
+      "chooseTitle": "Where to write the card image",
+      "none": "No destination chosen",
+      "hint": "A sparse file: a 128 GB card costs the few megabytes that are actually structure. An existing file is refused, never built over."
+    },
+    "advanced": {
+      "heading": "Advanced",
+      "amiga": "Amiga",
+      "variant": "PiStorm board",
+      "pi": "Raspberry Pi",
+      "line": "Emu68 release line",
+      "sharedWithPistorm": "These four are the same settings the PiStorm studio uses. Changing them here changes them there.",
+      "label": "FAT32 label",
+      "bootMib": "Boot partition (MB)",
+      "bootMibDefault": "0 uses the 1.10 GiB both real cards carry.",
+      "driveName": "Drive name",
+      "partitionMb": "Partition size (MB)",
+      "fsType": "Filesystem",
+      "oneDisk": "One Amiga disk, taking whatever is left after the boot partition. Several disks with a boot menu is multiboot, which is not built yet. Only the filesystems Kickstart carries are offered: a PFS3 partition with no driver on the card is one an Amiga ignores in silence."
+    },
+    "actions": {
+      "preview": "Preview",
+      "build": "Build the card"
+    },
+    "plan": {
+      "heading": "What would be written",
+      "bootPartition": "Boot partition",
+      "amigaDisk": "Amiga disk {{n}}",
+      "atGb": "{{size}} GB, at byte {{at}}",
+      "kernel": "The card boots",
+      "kickstartAs": "Kickstart written as",
+      "rom": "ROM",
+      "files": "Boot partition holds",
+      "filesTotal": "{{count}} files, {{mib}} MB",
+      "fileList": "Every file"
+    },
+    "warning": {
+      "noKickstart": "No Kickstart was chosen. The card will be built, and it will not boot until a ROM is on it.",
+      "romUnrecognised": "ART does not recognise this ROM. It may still be the right one.",
+      "romWrongMachine": "{{rom}} is not a ROM for the Amiga you chose. Usually that means a machine that does not come up, with nothing on screen to explain it — but if you know what you are doing, carry on.",
+      "volumesUnformatted": "The Amiga volumes on this card are not formatted. The Amiga will see them and offer to format them; putting a system on them is not built yet."
+    },
+    "blocked": {
+      "noArchive": "Choose the Emu68 release archive first.",
+      "noDestination": "Choose where the image goes.",
+      "noPartitions": "The Amiga disk needs at least one partition.",
+      "notPlanned": "Preview it first — nothing is written before you have seen what would be.",
+      "destExists": "That file is already there. ART will not build over it; choose another name."
+    },
+      "manifest": {
+        "heading": "Build manifest",
+        "path": "Written beside the image:",
+        "verify": "Check the card against it",
+        "verifying": "Checking…",
+        "matches": "Everything ART can check matches the manifest. {{unchecked}} file(s) on the boot partition were not re-read — ART writes FAT32 and cannot read one; scripts/fat-oracle-check.py checks those with 7-Zip.",
+        "mismatch": "{{count}} thing(s) on this card do not match its manifest.",
+        "finding": {
+          "schemaTooNew": "This manifest was written by a newer ART (schema {{found}}; this one understands {{understood}}). Nothing was checked — the fields it does not know are the ones it cannot check.",
+          "sizeChanged": "The image is {{found}} bytes and the manifest says {{expected}}.",
+          "partitionTableChanged": "The partition table is not the one that was written.",
+          "areaCountChanged": "The manifest describes {{expected}} Amiga disk(s) and the card has {{found}}.",
+          "areaMoved": "Amiga disk {{n}} starts at byte {{found}}; the manifest says {{expected}}.",
+          "areaResized": "Amiga disk {{n}} is {{found}} bytes; the manifest says {{expected}}.",
+          "rdbChanged": "Amiga disk {{n}}'s partition table is not the one that was written.",
+          "partitionCountChanged": "Amiga disk {{n}} has {{found}} partition(s); the manifest says {{expected}}.",
+          "partitionChanged": "Partition {{name}} on Amiga disk {{n}} is not as the manifest describes it."
+        },
+        "notChecked": {
+          "bootFiles": "{{count}} file(s) on the boot partition were not re-read. ART writes FAT32 and does not read one; their checksums are in the manifest and 7-Zip can check them."
+        }
       },
-      "kickstart": {
-        "label": "Kickstart ROM",
-        "chooseTitle": "Choose a Kickstart ROM",
-        "none": "No ROM chosen",
-        "hint": "Your own Kickstart. ART neither fetches nor bundles one. Without it the card is built and will not boot."
-      },
-      "size": {
-        "label": "Card size"
-      },
-      "dest": {
-        "label": "Where the image goes",
-        "chooseTitle": "Where to write the card image",
-        "none": "No destination chosen",
-        "hint": "A sparse file: a 128 GB card costs the few megabytes that are actually structure. An existing file is refused, never built over."
-      },
-      "advanced": {
-        "heading": "Advanced",
-        "amiga": "Amiga",
-        "variant": "PiStorm board",
-        "pi": "Raspberry Pi",
-        "line": "Emu68 release line",
-        "sharedWithPistorm": "These four are the same settings the PiStorm studio uses. Changing them here changes them there.",
-        "label": "FAT32 label",
-        "bootMib": "Boot partition (MB)",
-        "bootMibDefault": "0 uses the 1.10 GiB both real cards carry.",
-        "driveName": "Drive name",
-        "partitionMb": "Partition size (MB)",
-        "fsType": "Filesystem",
-        "oneDisk": "One Amiga disk, taking whatever is left after the boot partition. Several disks with a boot menu is multiboot, which is not built yet. Only the filesystems Kickstart carries are offered: a PFS3 partition with no driver on the card is one an Amiga ignores in silence."
-      },
-      "actions": {
-        "preview": "Preview",
-        "build": "Build the card"
-      },
-      "plan": {
-        "heading": "What would be written",
-        "bootPartition": "Boot partition",
-        "amigaDisk": "Amiga disk {{n}}",
-        "atGb": "{{size}} GB, at byte {{at}}",
-        "kernel": "The card boots",
-        "kickstartAs": "Kickstart written as",
-        "rom": "ROM",
-        "files": "Boot partition holds",
-        "filesTotal": "{{count}} files, {{mib}} MB",
-        "fileList": "Every file"
-      },
-      "warning": {
-        "noKickstart": "No Kickstart was chosen. The card will be built, and it will not boot until a ROM is on it.",
-        "romUnrecognised": "ART does not recognise this ROM. It may still be the right one.",
-        "romWrongMachine": "{{rom}} is not a ROM for the Amiga you chose. Usually that means a machine that does not come up, with nothing on screen to explain it — but if you know what you are doing, carry on.",
-        "volumesUnformatted": "The Amiga volumes on this card are not formatted. The Amiga will see them and offer to format them; putting a system on them is not built yet."
-      },
-      "blocked": {
-        "noArchive": "Choose the Emu68 release archive first.",
-        "noDestination": "Choose where the image goes.",
-        "noPartitions": "The Amiga disk needs at least one partition.",
-        "notPlanned": "Preview it first — nothing is written before you have seen what would be.",
-        "destExists": "That file is already there. ART will not build over it; choose another name."
-      },
-      "result": {
-        "heading": "The card is built",
-        "readBack": "Read back by ART's own card reader: {{disks}} Amiga disk(s), {{partitions}} partition(s).",
-        "nextStep": "Flash it to a microSD card with your usual imager, then plug HDMI in before powering the Amiga on — the VPU only configures the port at boot."
-      }
+    "result": {
+      "heading": "The card is built",
+      "readBack": "Read back by ART's own card reader: {{disks}} Amiga disk(s), {{partitions}} partition(s).",
+      "nextStep": "Flash it to a microSD card with your usual imager, then plug HDMI in before powering the Amiga on — the VPU only configures the port at boot."
     }
+  }
 }

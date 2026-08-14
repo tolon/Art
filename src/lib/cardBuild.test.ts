@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildBlocker,
   defaultPartition,
+  findingPhrase,
+  manifestVerdict,
   payloadBytes,
   warningPhrase,
   type CardBuildPlan,
@@ -94,6 +96,43 @@ describe("warningPhrase", () => {
     const phrase = warningPhrase({ kind: "rom-wrong-machine", rom: "Kickstart 3.1 (A600)" });
     expect(phrase.key).toBe("cardBuilder.warning.romWrongMachine");
     expect(phrase.params).toEqual({ rom: "Kickstart 3.1 (A600)" });
+  });
+});
+
+describe("manifestVerdict", () => {
+  it("says the card matches when nothing was found", () => {
+    const verdict = manifestVerdict({
+      findings: [],
+      not_checked: [{ kind: "boot-partition-files", count: 21 }],
+    });
+    expect(verdict.key).toBe("cardBuilder.manifest.matches");
+  });
+
+  // A verdict that said "matches" while 21 files went unchecked would be the
+  // claim §89 forbids. The count travels into the sentence.
+  it("carries how much was left unchecked into the sentence", () => {
+    const verdict = manifestVerdict({
+      findings: [],
+      not_checked: [{ kind: "boot-partition-files", count: 21 }],
+    });
+    expect(verdict.params).toEqual({ unchecked: 21 });
+  });
+
+  it("counts the findings when something disagrees", () => {
+    const verdict = manifestVerdict({
+      findings: [{ kind: "partition-table-changed" }, { kind: "rdb-changed", area: 0 }],
+      not_checked: [],
+    });
+    expect(verdict.key).toBe("cardBuilder.manifest.mismatch");
+    expect(verdict.params).toEqual({ count: 2 });
+  });
+});
+
+describe("findingPhrase", () => {
+  it("names the area whose RDB changed, counting from one", () => {
+    const phrase = findingPhrase({ kind: "rdb-changed", area: 0 });
+    expect(phrase.key).toBe("cardBuilder.manifest.finding.rdbChanged");
+    expect(phrase.params).toEqual({ n: 1 });
   });
 });
 

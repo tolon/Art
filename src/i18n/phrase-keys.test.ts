@@ -35,10 +35,14 @@ import { describeVerdict, describeOutcome, type WhdloadOutcome, type WhdloadVerd
 import {
   buildBlocker,
   defaultPartition,
+  findingPhrase,
+  manifestVerdict,
+  notCheckedPhrase,
   warningPhrase,
   type CardBuildPlan,
   type CardBuildRequest,
   type CardBuildWarning,
+  type ManifestFinding,
 } from "@/lib/cardBuild";
 import {
   DEFAULT_EMU68_OPTIONS,
@@ -412,6 +416,38 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       const phrase = warningPhrase(warning);
       expect(isLeafKey(phrase.key), phrase.key).toBe(true);
     }
+  });
+
+  it("findingPhrase: every ManifestFinding variant resolves", () => {
+    const findings: ManifestFinding[] = [
+      { kind: "schema-too-new", found: 2, understood: 1 },
+      { kind: "size-changed", expected: 1, found: 2 },
+      { kind: "partition-table-changed" },
+      { kind: "area-count-changed", expected: 1, found: 2 },
+      { kind: "area-moved", area: 0, expected: 1, found: 2 },
+      { kind: "area-resized", area: 0, expected: 1, found: 2 },
+      { kind: "rdb-changed", area: 0 },
+      { kind: "partition-count-changed", area: 0, expected: 1, found: 2 },
+      { kind: "partition-changed", area: 0, name: "SDH0" },
+    ];
+    for (const finding of findings) {
+      const phrase = findingPhrase(finding);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("notCheckedPhrase and manifestVerdict resolve", () => {
+    expect(
+      resolvesAtRuntime(notCheckedPhrase({ kind: "boot-partition-files", count: 3 }).key)
+    ).toBe(true);
+    expect(
+      resolvesAtRuntime(manifestVerdict({ findings: [], not_checked: [] }).key)
+    ).toBe(true);
+    expect(
+      resolvesAtRuntime(
+        manifestVerdict({ findings: [{ kind: "partition-table-changed" }], not_checked: [] }).key
+      )
+    ).toBe(true);
   });
 
   it("buildBlocker: every reason a card cannot be built resolves", () => {
