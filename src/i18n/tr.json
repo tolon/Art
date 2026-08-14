@@ -691,7 +691,7 @@
   },
   "osBuilder": {
     "intro": "PiStorm üzerinde çalışan AmigaOS dağıtımları, her birinin sizden ne istediği ve elinizdekinin uyup uymadığı. ART hiçbir dağıtımı indirmez — siz indirir, ART'a dosyayı gösterirsiniz.",
-    "notBuiltYet": "ART henüz kart yazamıyor. Bu ekran bir dağıtımın neye ihtiyaç duyduğunu söyler ve elinizdeki ROM ile kartı buna göre denetler; kartın hazırlanması yapılmadı — sebebi, yerleşiminin tahmin edilmek yerine gerçek bir indirme üzerinde incelenmesi gerekmesi.",
+    "notBuiltYet": "ART henüz dağıtım kartı yazamıyor. Bu ekran bir dağıtımın neye ihtiyaç duyduğunu söyler ve elinizdeki ROM ile kartı buna göre denetler.",
     "what": {
       "heading": "Ne kuruyorsun?",
       "bootCard": "Sadece önyükleme kartı",
@@ -729,12 +729,12 @@
     },
     "prepare": {
       "heading": "Kartı hazırla",
-      "explain": "İmajın yazılması, ART'ın zaten bildiği donanım ayarlarıyla PiStorm'unuza uyarlanması, Kickstart'ınızın yerleştirilmesi, multiboot setinin oluşturulması ve sonucun doğrulanması. Hiçbiri yapılmadı. Başladığı nokta — gerçek bir dağıtım kartının nasıl göründüğü — önce gerçek bir indirmeden okunmalı; bunu tahmin etmek, bir aracın sessizce açılmayan bir kart yazmasıyla biten yoldur."
+      "explain": "İmajın yazılması, ART'ın zaten bildiği donanım ayarlarıyla PiStorm'unuza uyarlanması, Kickstart'ınızın yerleştirilmesi, multiboot setinin oluşturulması ve sonucun doğrulanması. Hiçbiri henüz yapılmadı."
     }
   },
   "distro": {
     "licence": {
-      "freeGrey": "{{name}}, yapanlar tarafından ücretsiz dağıtılıyor ve lisanslayamayacakları AmigaOS içeriği taşıyor. ART sizin kopyanızı denetlemez, indirmez de. Bunun için birine para ödediyseniz paranızı geri isteyin.",
+      "freeGrey": "{{name}}, yapanlar tarafından ücretsiz dağıtılıyor ve lisanslayamayacakları AmigaOS içeriği taşıyor. ART sizin kopyanızı denetlemez, indirmez de.",
       "userLicensed": "{{name}}, sahip olmanız gereken bir AmigaOS üzerine kurulu ticari bir ürün. ART, ürününün beklediği kartı hazırlar; onların işini yeniden üretmez.",
       "artBaseline": "ART tarafından sizin lisanslı medyanızdan kurulur. Tarif olarak paylaşılabilir — imaj olarak asla."
     },
@@ -756,10 +756,10 @@
       },
       "coffinos": {
         "romFamily": "CoffinOS, Hyperion'un 3.1.4 ve 3.2 Kickstart'larının kendisini bozduğunu belirtiyor. Klasik bir 3.1 ROM istiyor.",
-        "demoware": "Roadshow ve iBrowse'un demo sürümleriyle geliyor. Kullanıyorsanız tam sürümlerini yazarlarından satın alın."
+        "demoware": "Roadshow ve iBrowse'un demo sürümleriyle geliyor."
       },
       "amikit": {
-        "ownIt": "AmiKit'i satın alır, kendi AmigaOS 3.2 ve P96'nızı sağlarsınız; onlar yalnızca kendi katmanlarını dağıtıyor.",
+        "ownIt": "AmiKit ticari bir üründür. AmigaOS 3.2 ve P96'yı siz sağlarsınız; onlar yalnızca kendi katmanlarını dağıtır.",
         "adaptOnly": "ART, ürünün beklediği kartı hazırlar. AmiKit'i yeniden kurmaz."
       },
       "baseline": {
@@ -767,8 +767,7 @@
         "yourMedia": "Hiçbir şey birlikte dağıtılmıyor. Sizin işletim sisteminiz, sizin ROM'unuz, sizin lisanslarınız.",
         "boingBags": "BoingBag 1 ve 2 her zaman ücretsiz indirmelerdi; ART isterseniz onları getirebilir.",
         "romFamily": "3.9 sistemi klasik bir 3.1 ROM ister; Hyperion 3.1.4 ya da 3.2 değil."
-      },
-      "paidIsARefund": "Bunu eBay, Etsy ya da başka bir yerden satın aldıysanız paranızı geri isteyin. Bu ekran zaten kartı kendiniz oluşturmanız için var."
+      }
     }
   },
   "pistorm": {
@@ -945,7 +944,7 @@
     },
     "wifi": {
       "heading": "WiFi & ağ",
-      "explain": "PiStorm'da WiFi bir açılış seçeneği değil, Amiga tarafının işidir: Roadshow ile wifipi.device, sistem birimindeki DEVS:NetInterfaces altında yapılandırılır. Bu, birimleri oluşturmaya ait bir iş ve ART henüz bunu yapamıyor — bu yüzden burada hiçbir yere yazmayacak bir form yerine hiçbir şey yok."
+      "explain": "PiStorm'da WiFi bir açılış seçeneği değil, Amiga tarafının işidir: Roadshow ile wifipi.device, sistem birimindeki DEVS:NetInterfaces içinde yapılandırılır. Birimlerin kurulmasına aittir ve ART bunu henüz yapamıyor."
     },
     "line": {
       "stable": "En son kararlı (1.0.x)",

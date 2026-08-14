@@ -691,7 +691,7 @@
   },
   "osBuilder": {
     "intro": "The AmigaOS distributions that run on a PiStorm, what each one needs from you, and whether what you have suits it. ART never downloads a distribution — you fetch it yourself and point ART at the file.",
-    "notBuiltYet": "ART cannot write a card yet. This screen tells you what a distribution requires and checks the ROM and card you have against it; preparing the card itself is not built, and the reason is that its layout has to be inspected on a real download first rather than guessed at.",
+    "notBuiltYet": "ART cannot write a distribution card yet. This screen tells you what a distribution requires and checks the ROM and card you have against it.",
     "what": {
       "heading": "What are you building?",
       "bootCard": "A boot-only card",
@@ -729,12 +729,12 @@
     },
     "prepare": {
       "heading": "Prepare the card",
-      "explain": "Writing the image, adapting it to your PiStorm through the hardware settings ART already knows, placing your Kickstart, creating the multiboot set and verifying the result. None of it is built. The step it starts from — what a real distribution's card actually looks like — has to be read off a genuine download first; guessing at it is how a tool ends up writing a card that quietly does not boot."
+      "explain": "Writing the image, adapting it to your PiStorm through the hardware settings ART already knows, placing your Kickstart, creating the multiboot set and verifying the result. None of it is built yet."
     }
   },
   "distro": {
     "licence": {
-      "freeGrey": "{{name}} is given away free by the people who make it, and carries AmigaOS material they cannot license. ART does not police your copy and does not fetch it either. If you paid somebody for this, ask for your money back.",
+      "freeGrey": "{{name}} is given away free by the people who make it, and carries AmigaOS material they cannot license. ART does not police your copy and does not fetch it either.",
       "userLicensed": "{{name}} is a commercial product built on an AmigaOS you must own. ART prepares the card their product expects; it does not reproduce their work.",
       "artBaseline": "Built by ART from your own licensed media. Shareable as a recipe — never as an image."
     },
@@ -756,10 +756,10 @@
       },
       "coffinos": {
         "romFamily": "CoffinOS states that Hyperion's 3.1.4 and 3.2 Kickstarts break it. It wants a classic 3.1 ROM.",
-        "demoware": "Ships demo versions of Roadshow and iBrowse. Buy the full ones from their authors if you use them."
+        "demoware": "Ships demo versions of Roadshow and iBrowse."
       },
       "amikit": {
-        "ownIt": "You buy AmiKit and supply your own AmigaOS 3.2 and P96; they ship only their own layer.",
+        "ownIt": "AmiKit is a commercial product. You supply your own AmigaOS 3.2 and P96; they ship only their own layer.",
         "adaptOnly": "ART prepares the card their product expects. It does not rebuild AmiKit."
       },
       "baseline": {
@@ -767,8 +767,7 @@
         "yourMedia": "Nothing is bundled. Your OS, your ROM, your licences.",
         "boingBags": "BoingBag 1 and 2 were always free downloads and ART can fetch them on request.",
         "romFamily": "A 3.9 system wants a classic 3.1 ROM, not a Hyperion 3.1.4 or 3.2 one."
-      },
-      "paidIsARefund": "If you bought this on eBay, Etsy or anywhere else, ask for your money back. Building the card yourself is what this screen is for."
+      }
     }
   },
   "pistorm": {
@@ -945,7 +944,7 @@
     },
     "wifi": {
       "heading": "WiFi & network",
-      "explain": "WiFi on a PiStorm is an Amiga-side matter, not a boot option: wifipi.device with Roadshow, configured in DEVS:NetInterfaces on the system volume. It belongs to building the volumes, which ART cannot do yet — so there is nothing here to fill in rather than a form that would write nowhere."
+      "explain": "WiFi on a PiStorm is an Amiga-side matter, not a boot option: wifipi.device with Roadshow, configured in DEVS:NetInterfaces on the system volume. It belongs to building the volumes, which ART cannot do yet."
     },
     "line": {
       "stable": "Latest stable (1.0.x)",

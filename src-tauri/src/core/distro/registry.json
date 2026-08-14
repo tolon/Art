@@ -28,15 +28,17 @@
         "family": "3.1",
         "drop_name": "kick.rom"
       },
-      "default_cmdline_tokens": ["enable_cache", "copy_rom=512"],
+      "default_cmdline_tokens": [
+        "enable_cache",
+        "copy_rom=512"
+      ],
       "multiboot": {
         "config_set_name": "caffeineos"
       },
       "packages": [],
       "post_install_notes": [
         "distro.note.caffeineos.download",
-        "distro.note.caffeineos.network",
-        "distro.note.paidIsARefund"
+        "distro.note.caffeineos.network"
       ],
       "available": false
     },
@@ -53,15 +55,17 @@
         "family": "3.1",
         "drop_name": "kick.rom"
       },
-      "default_cmdline_tokens": ["enable_cache", "copy_rom=512"],
+      "default_cmdline_tokens": [
+        "enable_cache",
+        "copy_rom=512"
+      ],
       "multiboot": {
         "config_set_name": "coffinos"
       },
       "packages": [],
       "post_install_notes": [
         "distro.note.coffinos.romFamily",
-        "distro.note.coffinos.demoware",
-        "distro.note.paidIsARefund"
+        "distro.note.coffinos.demoware"
       ],
       "available": false
     },
@@ -78,12 +82,18 @@
         "family": "3.2",
         "drop_name": "kick.rom"
       },
-      "default_cmdline_tokens": ["enable_cache", "copy_rom=512"],
+      "default_cmdline_tokens": [
+        "enable_cache",
+        "copy_rom=512"
+      ],
       "multiboot": {
         "config_set_name": "amikit"
       },
       "packages": [],
-      "post_install_notes": ["distro.note.amikit.ownIt", "distro.note.amikit.adaptOnly"],
+      "post_install_notes": [
+        "distro.note.amikit.ownIt",
+        "distro.note.amikit.adaptOnly"
+      ],
       "available": false
     },
     {
@@ -99,12 +109,20 @@
         "family": "3.2",
         "drop_name": "kick.rom"
       },
-      "default_cmdline_tokens": ["enable_cache", "copy_rom=512"],
+      "default_cmdline_tokens": [
+        "enable_cache",
+        "copy_rom=512"
+      ],
       "multiboot": {
         "config_set_name": "artbaseline32"
       },
-      "packages": ["classicwb-lite"],
-      "post_install_notes": ["distro.note.baseline.recipe", "distro.note.baseline.yourMedia"],
+      "packages": [
+        "classicwb-lite"
+      ],
+      "post_install_notes": [
+        "distro.note.baseline.recipe",
+        "distro.note.baseline.yourMedia"
+      ],
       "available": false
     },
     {
@@ -120,11 +138,16 @@
         "family": "3.1",
         "drop_name": "kick.rom"
       },
-      "default_cmdline_tokens": ["enable_cache", "copy_rom=512"],
+      "default_cmdline_tokens": [
+        "enable_cache",
+        "copy_rom=512"
+      ],
       "multiboot": {
         "config_set_name": "artbaseline39"
       },
-      "packages": ["classicwb-os39"],
+      "packages": [
+        "classicwb-os39"
+      ],
       "post_install_notes": [
         "distro.note.baseline.recipe",
         "distro.note.baseline.yourMedia",
