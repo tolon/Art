@@ -930,7 +930,7 @@ merely being nice to know.
   there is more than one machine to prove things on.
 - **The user has written two Amiga-side programs, and both are meant to ship
   in ART-built distributions**: **tolunnet**, a TCP/IP stack to take Roadshow's
-  place, and **tolunwifi**, a WiFi suite. Source at `D:\Projeler	olunnet`.
+  place, and **tolunwifi**, a WiFi suite. Source at `D:\Projeler\tolunnet`.
 
   This last one is a real change to SD-2 and SD-3. SD-0 found that the
   community-standard package set is full of demo and conditionally
