@@ -133,7 +133,7 @@ pub fn run() {
             commands::card::card_open,
             commands::card::card_plan_build,
             commands::card::card_build,
-            commands::card::card_verify_manifest,
+            commands::card::card_check_image,
             commands::gotek::gotek_scan,
             commands::gotek::gotek_save,
             commands::distro::distro_profiles,

@@ -131,39 +131,132 @@ export type ManifestFinding =
   | { kind: "partition-count-changed"; area: number; expected: number; found: number }
   | { kind: "partition-changed"; area: number; name: string };
 
-/** Something the check deliberately did not look at. */
-export type NotChecked = { kind: "boot-partition-files"; count: number };
+// ---------------------------------------------------------------------------
+// Is this image a card that will boot? (SD-1 · G8)
+// ---------------------------------------------------------------------------
 
-export interface ManifestReport {
-  findings: ManifestFinding[];
-  not_checked: NotChecked[];
+/** Which file on the boot partition a check is about. */
+export type BootFileRole = "config" | "cmdline" | "kernel" | "kickstart";
+
+/** One thing the health check looked at, or could not. */
+export type HealthCheck =
+  | { kind: "boot-partition-first" }
+  | { kind: "boot-partition-aligned"; lba: number }
+  | { kind: "amiga-area-count"; count: number }
+  | { kind: "areas-aligned" }
+  | { kind: "nothing-overlaps" }
+  | { kind: "everything-inside-the-image" }
+  | { kind: "area-has-rdb"; area: number }
+  | { kind: "area-rdb-checksum"; area: number }
+  | { kind: "every-partition-can-mount"; unmountable: number }
+  | { kind: "manifest-agrees"; findings: ManifestFinding[] }
+  | { kind: "boot-file"; role: BootFileRole; name: string };
+
+/** `not-checked` is never a pass. It is what the report exists to say. */
+export type CheckState = "pass" | "fail" | "not-checked";
+
+export interface HealthItem {
+  check: HealthCheck;
+  state: CheckState;
 }
 
-/** Check a card against the manifest ART wrote beside it. */
-export async function cardVerifyManifest(
-  image: string,
-  manifest?: string
-): Promise<ManifestReport> {
-  return invoke<ManifestReport>("card_verify_manifest", { image, manifest });
+/** Something only the person at the machine can do or confirm. */
+export type ManualStep =
+  | { kind: "flash-the-card" }
+  | { kind: "hdmi-before-power" }
+  | { kind: "pi-model-matches"; pi: string }
+  | { kind: "volumes-need-formatting"; count: number };
+
+export interface HealthReport {
+  items: HealthItem[];
+  by_hand: ManualStep[];
 }
 
 /**
- * The one-line answer.
+ * Check a built image — the last gate before the file is handed over.
  *
- * **"Matches" always carries what was *not* checked.** ART writes FAT32 and
- * cannot read one, so the boot partition's files are recorded and left
- * unverified; a verdict that said "everything is fine" while twenty-one files
- * went unlooked-at is the claim §89 forbids.
+ * The manifest comparison is a section of this, not a separate call: somebody
+ * asking "is this card right" is asking one question.
  */
-export function manifestVerdict(report: ManifestReport): Phrase {
-  if (report.findings.length > 0) {
-    return {
-      key: "cardBuilder.manifest.mismatch",
-      params: { count: report.findings.length },
-    };
+export async function cardCheckImage(
+  image: string,
+  manifest?: string,
+  pi?: string
+): Promise<HealthReport> {
+  return invoke<HealthReport>("card_check_image", { image, manifest, pi });
+}
+
+/** How many checks came back wrong. `not-checked` is not among them. */
+export function healthFailures(report: HealthReport): number {
+  return report.items.filter((item) => item.state === "fail").length;
+}
+
+/** How many questions ART could not answer at all. */
+export function healthUnanswered(report: HealthReport): number {
+  return report.items.filter((item) => item.state === "not-checked").length;
+}
+
+/**
+ * The one-line answer — and it never says "fine" without saying how much went
+ * unanswered. A tick that means "ART did not look" reading like one that means
+ * "ART looked and it is right" is the claim §89 forbids.
+ */
+export function healthVerdict(report: HealthReport): Phrase {
+  const failed = healthFailures(report);
+  if (failed > 0) return { key: "cardBuilder.health.failed", params: { count: failed } };
+  const unanswered = healthUnanswered(report);
+  if (unanswered > 0) {
+    return { key: "cardBuilder.health.passedWithGaps", params: { unanswered } };
   }
-  const unchecked = report.not_checked.reduce((total, item) => total + item.count, 0);
-  return { key: "cardBuilder.manifest.matches", params: { unchecked } };
+  return { key: "cardBuilder.health.passed" };
+}
+
+/** The sentence for one check. Areas and disks are numbered from one. */
+export function healthCheckPhrase(check: HealthCheck): Phrase {
+  switch (check.kind) {
+    case "boot-partition-first":
+      return { key: "cardBuilder.health.check.bootFirst" };
+    case "boot-partition-aligned":
+      return { key: "cardBuilder.health.check.bootAligned", params: { lba: check.lba } };
+    case "amiga-area-count":
+      return { key: "cardBuilder.health.check.areaCount", params: { count: check.count } };
+    case "areas-aligned":
+      return { key: "cardBuilder.health.check.areasAligned" };
+    case "nothing-overlaps":
+      return { key: "cardBuilder.health.check.noOverlap" };
+    case "everything-inside-the-image":
+      return { key: "cardBuilder.health.check.insideImage" };
+    case "area-has-rdb":
+      return { key: "cardBuilder.health.check.hasRdb", params: { n: check.area + 1 } };
+    case "area-rdb-checksum":
+      return { key: "cardBuilder.health.check.rdbChecksum", params: { n: check.area + 1 } };
+    case "every-partition-can-mount":
+      return {
+        key: "cardBuilder.health.check.canMount",
+        params: { unmountable: check.unmountable },
+      };
+    case "manifest-agrees":
+      return { key: "cardBuilder.health.check.manifest" };
+    case "boot-file":
+      return {
+        key: `cardBuilder.health.check.bootFile.${check.role}`,
+        params: { name: check.name },
+      };
+  }
+}
+
+/** The sentence for a step only the user can take. */
+export function manualStepPhrase(step: ManualStep): Phrase {
+  switch (step.kind) {
+    case "flash-the-card":
+      return { key: "cardBuilder.health.byHand.flash" };
+    case "hdmi-before-power":
+      return { key: "cardBuilder.health.byHand.hdmi" };
+    case "pi-model-matches":
+      return { key: "cardBuilder.health.byHand.pi", params: { pi: step.pi } };
+    case "volumes-need-formatting":
+      return { key: "cardBuilder.health.byHand.format", params: { count: step.count } };
+  }
 }
 
 /** The sentence for one finding. Areas are numbered from one on screen. */
@@ -212,14 +305,6 @@ export function findingPhrase(finding: ManifestFinding): Phrase {
         params: { n: finding.area + 1, name: finding.name },
       };
   }
-}
-
-/** The sentence for something left unchecked. */
-export function notCheckedPhrase(item: NotChecked): Phrase {
-  return {
-    key: "cardBuilder.manifest.notChecked.bootFiles",
-    params: { count: item.count },
-  };
 }
 
 /** What building this card would do. Writes nothing. */

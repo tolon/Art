@@ -18,9 +18,9 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::core::card::build::{build_card, AreaSpec, CardSpec};
+use crate::core::card::health::{check_image, HealthReport};
 use crate::core::card::manifest::{
-    describe_card, manifest_path_for, read_manifest, render_manifest, verify_against_image,
-    ManifestFile, ManifestReport, SourceFacts,
+    describe_card, manifest_path_for, read_manifest, render_manifest, ManifestFile, SourceFacts,
 };
 use crate::core::card::payload::{emu68_payload, PayloadSpec};
 use crate::core::card::{read_card, CardImage};
@@ -381,20 +381,38 @@ struct BuiltRequestedCard {
     manifest_path: String,
 }
 
-/// Check a card against the manifest ART wrote beside it (§92's VERIFY, G7).
+/// Check a built image — the last gate before the file is handed over
+/// (§92's VERIFY, SD-1 · G8).
 ///
-/// `manifest` defaults to the image's own — the file `card_build` wrote — so
-/// the ordinary case needs no second path.
+/// One command rather than two: the manifest comparison (G7) is a section of
+/// this report rather than a separate button, because a user asking "is this
+/// card right" is asking one question.
+///
+/// `manifest` defaults to the image's own. A card ART did not build has none,
+/// and that is answered as **not checked** rather than as a failure — so this
+/// works on somebody else's card too, reporting less.
 #[tauri::command]
-pub fn card_verify_manifest(image: String, manifest: Option<String>) -> AppResult<ManifestReport> {
+pub fn card_check_image(
+    image: String,
+    manifest: Option<String>,
+    pi: Option<String>,
+) -> AppResult<HealthReport> {
     let image = PathBuf::from(image.trim());
     let manifest_path = manifest
         .map(|given| PathBuf::from(given.trim()))
         .unwrap_or_else(|| manifest_path_for(&image));
 
-    Ok(verify_against_image(
-        &read_manifest(&manifest_path)?,
+    // Absent is not an error: `read_manifest` would fail on a card nobody
+    // wrote a manifest for, and that card is still worth checking.
+    let manifest = match manifest_path.is_file() {
+        true => Some(read_manifest(&manifest_path)?),
+        false => None,
+    };
+
+    Ok(check_image(
         &image,
+        manifest.as_ref(),
+        pi.as_deref().unwrap_or_default(),
     )?)
 }
 
@@ -825,12 +843,25 @@ mod tests {
 
         let report = verify_against_image(&manifest, &dest).unwrap();
         for finding in &report.findings {
-            println!("  finding: {finding:?}");
-        }
-        for item in &report.not_checked {
-            println!("  not checked: {item:?}");
+            println!("  manifest finding: {finding:?}");
         }
         assert!(report.matches(), "{:?}", report.findings);
+
+        // G8, on the same real card: the gate the file goes through before it
+        // is handed over.
+        let health = crate::core::card::health::check_image(
+            &dest,
+            Some(&manifest),
+            &format!("{:?}", req.hardware.pi),
+        )
+        .unwrap();
+        for item in &health.items {
+            println!("  {:?} {:?}", item.state, item.check);
+        }
+        for step in &health.by_hand {
+            println!("  by hand: {step:?}");
+        }
+        assert!(health.ok(), "{:?}", health.items);
     }
 
     /// The one that matters: the plan the user approved is the card that gets

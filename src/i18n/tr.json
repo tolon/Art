@@ -69,7 +69,6 @@
     "launchInWinuae": "WinUAE'de Başlat",
     "browse": "Gözat…",
     "clear": "Temizle"
-
   },
   "components": {
     "copyPlan": {
@@ -136,14 +135,38 @@
       "apply": "Uygula",
       "reset": "Sıfırla",
       "bits": {
-        "hold": { "name": "Tut", "explanation": "Çalıştıktan sonra bellekte tutulur. Nadiren kullanılır." },
-        "script": { "name": "Betik", "explanation": "Bir kabuk betiği olarak çalışır. WHDLoad kurulumcuları buna dayanır." },
-        "pure": { "name": "Saf", "explanation": "Yeniden girilebilir, bu yüzden bellekte tutulabilir. Slave dosyaları bunu kullanır." },
-        "archived": { "name": "Arşivlendi", "explanation": "Son yedeklemeden bu yana değişmedi." },
-        "read": { "name": "Okuma", "explanation": "Dosya okunabilir." },
-        "write": { "name": "Yazma", "explanation": "Dosya değiştirilebilir." },
-        "execute": { "name": "Çalıştırma", "explanation": "Dosya çalıştırılabilir." },
-        "delete": { "name": "Silme", "explanation": "Dosya silinebilir." }
+        "hold": {
+          "name": "Tut",
+          "explanation": "Çalıştıktan sonra bellekte tutulur. Nadiren kullanılır."
+        },
+        "script": {
+          "name": "Betik",
+          "explanation": "Bir kabuk betiği olarak çalışır. WHDLoad kurulumcuları buna dayanır."
+        },
+        "pure": {
+          "name": "Saf",
+          "explanation": "Yeniden girilebilir, bu yüzden bellekte tutulabilir. Slave dosyaları bunu kullanır."
+        },
+        "archived": {
+          "name": "Arşivlendi",
+          "explanation": "Son yedeklemeden bu yana değişmedi."
+        },
+        "read": {
+          "name": "Okuma",
+          "explanation": "Dosya okunabilir."
+        },
+        "write": {
+          "name": "Yazma",
+          "explanation": "Dosya değiştirilebilir."
+        },
+        "execute": {
+          "name": "Çalıştırma",
+          "explanation": "Dosya çalıştırılabilir."
+        },
+        "delete": {
+          "name": "Silme",
+          "explanation": "Dosya silinebilir."
+        }
       }
     },
     "fnKeys": {
@@ -323,9 +346,9 @@
       "capped": "19 yıl veya daha eski",
       "thisWeek": "bu hafta",
       "weeksAgo_one": "{{count}} hafta önce",
-        "weeksAgo_other": "{{count}} hafta önce",
+      "weeksAgo_other": "{{count}} hafta önce",
       "monthsAgo_one": "{{count}} ay önce",
-        "monthsAgo_other": "{{count}} ay önce",
+      "monthsAgo_other": "{{count}} ay önce",
       "yearsAgo": "{{n}} yıl önce"
     },
     "size": {
@@ -780,7 +803,7 @@
       "heading": "Kart",
       "choose": "Klasör seç…",
       "none": "Klasör seçilmedi",
-        "needed": "Bu ekrandaki her şey bir kart üzerindeki dosyaları düzenler. Açılış klasörünü seçin — yazdığınız bir kartın FAT32 bölümü ya da bir tanesini hazırladığınız klasör — gerisi kullanılabilir hale gelsin.",
+      "needed": "Bu ekrandaki her şey bir kart üzerindeki dosyaları düzenler. Açılış klasörünü seçin — yazdığınız bir kartın FAT32 bölümü ya da bir tanesini hazırladığınız klasör — gerisi kullanılabilir hale gelsin.",
       "kernelFound": "Kartta Emu68.img var.",
       "kernelMissing": "Emu68.img yok — çekirdek karta konulana kadar kart açılmaz.",
       "kickstartsFound": "Bulunan Kickstart dosyaları: {{list}}",
@@ -799,7 +822,7 @@
       "onTheCard": "Kartta",
       "fileName": "config.txt'e yazılacak dosya adı",
       "choose": "ROM dosyası seç…",
-        "needsCard": "Önce kartın klasörünü seçin — ROM oraya kopyalanıyor.",
+      "needsCard": "Önce kartın klasörünü seçin — ROM oraya kopyalanıyor.",
       "chooseTitle": "Bir Kickstart ROM seçin",
       "copyTitle": "Bu Kickstart karta kopyalansın mı",
       "picked": "{{rom}} ({{revision}}) — {{models}} için",
@@ -957,10 +980,10 @@
       "activatedWithBackup": "Etkin config.txt artık '{{name}}'. Önceki dosya {{path}} konumunda.",
       "renamed": "'{{from}}' artık '{{to}}' adını taşıyor.",
       "delete": "Sil",
-        "confirmDelete": "'{{name}}' seti silinsin mi? ART bir kopyasını saklar, yani geri alınabilir — ama set listeden çıkar.",
-        "deleted": "'{{name}}' seti silindi.",
-        "deletedWithBackup": "'{{name}}' seti silindi. Bir kopyası {{path}} konumunda.",
-        "deleteKeeps": "Bir seti silmek kopyasını saklar. Kartın çalıştırdığı set silinemez — önce başka birini etkin yapın."
+      "confirmDelete": "'{{name}}' seti silinsin mi? ART bir kopyasını saklar, yani geri alınabilir — ama set listeden çıkar.",
+      "deleted": "'{{name}}' seti silindi.",
+      "deletedWithBackup": "'{{name}}' seti silindi. Bir kopyası {{path}} konumunda.",
+      "deleteKeeps": "Bir seti silmek kopyasını saklar. Kartın çalıştırdığı set silinemez — önce başka birini etkin yapın."
     }
   },
   "gotek": {
@@ -1207,9 +1230,8 @@
       "default": "ART bu birime yazamıyor",
       "iso": "Bu bölme bir disk (CD/DVD) içeriyor — diskler salt okunurdur",
       "archive": "Bu bölme bir arşiv içeriyor — ART arşivleri okur, onlara yazmaz",
-      "c64": "Bu bölme bir Commodore disketi veya kaseti içeriyor — ART bunları okur, onlara yazmaz",
-      "c64ToVolume": "Önce bir klasöre kopyalayın, sonra birime — ART Commodore dosyalarını doğrudan bir Amiga diskine koymaz",
-      "c64": "C64..."
+      "c64": "C64...",
+      "c64ToVolume": "Önce bir klasöre kopyalayın, sonra birime — ART Commodore dosyalarını doğrudan bir Amiga diskine koymaz"
     },
     "archive": {
       "unusableNames": "{{count}} girdi gösterilmiyor: adları, ART'ın bir klasörün içine yerleştirebileceği yollar değil"
@@ -1607,28 +1629,58 @@
       "notPlanned": "Önce önizle — ne yazılacağını görmeden hiçbir şey yazılmaz.",
       "destExists": "O dosya zaten var. ART üzerine yazmaz; başka bir ad seç."
     },
-      "manifest": {
-        "heading": "Kurulum künyesi",
-        "path": "İmajın yanına yazıldı:",
-        "verify": "Kartı künyeye karşı denetle",
-        "verifying": "Denetleniyor…",
-        "matches": "ART'ın denetleyebildiği her şey künyeyle uyuşuyor. Önyükleme bölümündeki {{unchecked}} dosya geri okunmadı — ART FAT32 yazar, okumaz; onları scripts/fat-oracle-check.py 7-Zip ile denetliyor.",
-        "mismatch": "Bu kartta künyesiyle uyuşmayan {{count}} şey var.",
-        "finding": {
-          "schemaTooNew": "Bu künyeyi daha yeni bir ART yazmış (şema {{found}}; bu sürüm {{understood}} anlıyor). Hiçbir şey denetlenmedi — bilmediği alanlar zaten denetleyemeyeceği alanlar.",
-          "sizeChanged": "İmaj {{found}} bayt, künye {{expected}} diyor.",
-          "partitionTableChanged": "Bölüm tablosu yazılan tablo değil.",
-          "areaMoved": "{{n}}. Amiga diski {{found}}. bayttan başlıyor; künye {{expected}} diyor.",
-          "areaCountChanged": "Künye {{expected}} Amiga diski anlatıyor, kartta {{found}} var.",
-          "areaResized": "{{n}}. Amiga diski {{found}} bayt; künye {{expected}} diyor.",
-          "rdbChanged": "{{n}}. Amiga diskinin bölüm tablosu yazılan tablo değil.",
-          "partitionCountChanged": "{{n}}. Amiga diskinde {{found}} bölüm var; künye {{expected}} diyor.",
-          "partitionChanged": "{{n}}. Amiga diskindeki {{name}} bölümü künyenin anlattığı gibi değil."
-        },
-        "notChecked": {
-          "bootFiles": "Önyükleme bölümündeki {{count}} dosya geri okunmadı. ART FAT32 yazar, okumaz; özetleri künyede duruyor ve 7-Zip onları denetleyebilir."
+    "manifest": {
+      "finding": {
+        "schemaTooNew": "Bu künyeyi daha yeni bir ART yazmış (şema {{found}}; bu sürüm {{understood}} anlıyor). Hiçbir şey denetlenmedi — bilmediği alanlar zaten denetleyemeyeceği alanlar.",
+        "sizeChanged": "İmaj {{found}} bayt, künye {{expected}} diyor.",
+        "partitionTableChanged": "Bölüm tablosu yazılan tablo değil.",
+        "areaMoved": "{{n}}. Amiga diski {{found}}. bayttan başlıyor; künye {{expected}} diyor.",
+        "areaCountChanged": "Künye {{expected}} Amiga diski anlatıyor, kartta {{found}} var.",
+        "areaResized": "{{n}}. Amiga diski {{found}} bayt; künye {{expected}} diyor.",
+        "rdbChanged": "{{n}}. Amiga diskinin bölüm tablosu yazılan tablo değil.",
+        "partitionCountChanged": "{{n}}. Amiga diskinde {{found}} bölüm var; künye {{expected}} diyor.",
+        "partitionChanged": "{{n}}. Amiga diskindeki {{name}} bölümü künyenin anlattığı gibi değil."
+      }
+    },
+    "health": {
+      "heading": "Kartı denetle",
+      "run": "Denetle",
+      "running": "Denetleniyor…",
+      "passed": "ART'ın denetleyebildiği her şey doğru.",
+      "passedWithGaps": "ART'ın denetleyebildiklerinde bir sorun yok — ve hiç cevaplayamadığı {{unanswered}} soru var. Aşağıda listeli.",
+      "failed": "{{count}} denetim başarısız. Bu kart karta yazılmaya hazır değil.",
+      "manifestPath": "Kurulum künyesi:",
+      "byHandHeading": "Bunları sadece sen yapabilirsin",
+      "check": {
+        "bootFirst": "Pi'nin önyükleme bölümü kartın en başında",
+        "bootAligned": "Önyükleme bölümü {{lba}}. sektörden başlıyor",
+        "areaCount": "{{count}} Amiga diski — bir ile üç arasında",
+        "areasAligned": "Her Amiga diski 4 MiB sınırında başlıyor",
+        "noOverlap": "Hiçbir iki bölüm aynı sektörü paylaşmıyor",
+        "insideImage": "Hiçbir şey imajın sonunu aşmıyor",
+        "hasRdb": "{{n}}. Amiga diskinin bölüm tablosu var",
+        "rdbChecksum": "{{n}}. Amiga diskinin bölüm tablosu checksum'ı doğru",
+        "canMount": "Her bölüm kartın taşıdığı bir dosya sistemi adlandırıyor ({{unmountable}} tanesi adlandırmıyor)",
+        "manifest": "Kart hâlâ birlikte kurulduğu künyeyle uyuşuyor",
+        "bootFile": {
+          "config": "config.txt önyükleme bölümünde",
+          "cmdline": "cmdline.txt önyükleme bölümünde",
+          "kernel": "config.txt'nin açtığı çekirdek — {{name}} — önyükleme bölümünde",
+          "kickstart": "Kickstart önyükleme bölümünde, {{name}} adıyla"
         }
       },
+      "state": {
+        "pass": "tamam",
+        "fail": "başarısız",
+        "notChecked": "denetlenmedi"
+      },
+      "byHand": {
+        "flash": "İmajı microSD karta yaz. ART dosyayı oluşturur, karta hiçbir zaman kendisi dokunmaz.",
+        "hdmi": "HDMI'ı Amiga'yı açmadan **önce** tak — VPU portu yalnızca açılışta yapılandırır, sonra değil.",
+        "pi": "Bu kart {{pi}} için kuruldu. Makinedeki Pi'nin o olduğunu doğrula.",
+        "format": "Amiga {{count}} birimi biçimlendirmeyi teklif edecek. Bu beklenen: ART şekli kurar, sistemi değil."
+      }
+    },
     "result": {
       "heading": "Kart oluşturuldu",
       "readBack": "ART'ın kendi kart okuyucusuyla geri okundu: {{disks}} Amiga diski, {{partitions}} bölüm.",

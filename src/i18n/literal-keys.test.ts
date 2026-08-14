@@ -158,10 +158,13 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // enums, and putting their sentences on this side is what keeps them in
     // the user's language (ART-060). Every variant of both mappers is
     // enumerated in `phrase-keys.test.ts`.
-    // 64 → 67 (G7's manifest): the verdict line and each finding are
-    // `Phrase`s from `@/lib/cardBuild`, mapped from Rust enums for the same
-    // reason the build warnings are — `phrase-keys.test.ts` enumerates every
-    // variant of both.
-    expect(dynamicCalls).toBe(67);
+    // 64 → 70 (G7's manifest, then G8's health report): the verdict line,
+    // every check, every manifest finding under it, and each step only the
+    // user can take are `Phrase`s from `@/lib/cardBuild`, mapped from Rust
+    // enums for the same reason the build warnings are.
+    // `phrase-keys.test.ts` enumerates every variant of all four mappers.
+    // The state word beside each check (`…state.pass`) is the one genuinely
+    // computed key here, and its three values are a closed TypeScript union.
+    expect(dynamicCalls).toBe(70);
   });
 });

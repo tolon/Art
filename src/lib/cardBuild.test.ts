@@ -4,11 +4,12 @@ import {
   buildBlocker,
   defaultPartition,
   findingPhrase,
-  manifestVerdict,
+  healthVerdict,
   payloadBytes,
   warningPhrase,
   type CardBuildPlan,
   type CardBuildRequest,
+  type HealthItem,
 } from "@/lib/cardBuild";
 import type { MbrPartition } from "@/lib/card";
 import { DEFAULT_EMU68_OPTIONS, DEFAULT_FIRMWARE_CONFIG } from "@/lib/pistorm";
@@ -99,32 +100,36 @@ describe("warningPhrase", () => {
   });
 });
 
-describe("manifestVerdict", () => {
-  it("says the card matches when nothing was found", () => {
-    const verdict = manifestVerdict({
-      findings: [],
-      not_checked: [{ kind: "boot-partition-files", count: 21 }],
-    });
-    expect(verdict.key).toBe("cardBuilder.manifest.matches");
+describe("healthVerdict", () => {
+  const item = (state: "pass" | "fail" | "not-checked"): HealthItem => ({
+    check: { kind: "nothing-overlaps" },
+    state,
   });
 
-  // A verdict that said "matches" while 21 files went unchecked would be the
-  // claim §89 forbids. The count travels into the sentence.
-  it("carries how much was left unchecked into the sentence", () => {
-    const verdict = manifestVerdict({
-      findings: [],
-      not_checked: [{ kind: "boot-partition-files", count: 21 }],
-    });
-    expect(verdict.params).toEqual({ unchecked: 21 });
+  it("says it passed when every check answered and answered well", () => {
+    expect(healthVerdict({ items: [item("pass")], by_hand: [] }).key).toBe(
+      "cardBuilder.health.passed"
+    );
   });
 
-  it("counts the findings when something disagrees", () => {
-    const verdict = manifestVerdict({
-      findings: [{ kind: "partition-table-changed" }, { kind: "rdb-changed", area: 0 }],
-      not_checked: [],
+  // A tick meaning "ART did not look" must not read like one meaning "ART
+  // looked and it is right" (§89).
+  it("never says it passed without saying how much went unanswered", () => {
+    const verdict = healthVerdict({
+      items: [item("pass"), item("not-checked"), item("not-checked")],
+      by_hand: [],
     });
-    expect(verdict.key).toBe("cardBuilder.manifest.mismatch");
-    expect(verdict.params).toEqual({ count: 2 });
+    expect(verdict.key).toBe("cardBuilder.health.passedWithGaps");
+    expect(verdict.params).toEqual({ unanswered: 2 });
+  });
+
+  it("a failure outranks anything unanswered", () => {
+    const verdict = healthVerdict({
+      items: [item("fail"), item("not-checked")],
+      by_hand: [],
+    });
+    expect(verdict.key).toBe("cardBuilder.health.failed");
+    expect(verdict.params).toEqual({ count: 1 });
   });
 });
 

@@ -21,10 +21,12 @@ import {
   buildBlocker,
   cardBuild,
   cardPlanBuild,
-  cardVerifyManifest,
+  cardCheckImage,
   defaultPartition,
   findingPhrase,
-  manifestVerdict,
+  healthCheckPhrase,
+  healthVerdict,
+  manualStepPhrase,
   onCardBuildResult,
   payloadBytes,
   warningPhrase,
@@ -32,7 +34,7 @@ import {
   type CardBuildPlan,
   type CardBuildRequest,
   type CardBuildResult,
-  type ManifestReport,
+  type HealthReport,
 } from "@/lib/cardBuild";
 import type { AmigaHardDiskFs, PartitionSpec } from "@/lib/hdf";
 import {
@@ -158,7 +160,7 @@ export function CardBuilder() {
   const [result, setResult] = useState<CardBuildResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [report, setReport] = useState<ManifestReport | null>(null);
+  const [report, setReport] = useState<HealthReport | null>(null);
   const [checking, setChecking] = useState(false);
 
   const partitions: PartitionSpec[] = [
@@ -277,7 +279,7 @@ export function CardBuilder() {
     setChecking(true);
     setError(null);
     try {
-      setReport(await cardVerifyManifest(result.dest, result.manifest_path));
+      setReport(await cardCheckImage(result.dest, result.manifest_path, hardware.pi));
     } catch (e) {
       setReport(null);
       setError(String(e));
@@ -565,40 +567,99 @@ export function CardBuilder() {
             {t("cardBuilder.result.nextStep")}
           </p>
 
-          {/* G7. The manifest is the record of what this card was built from,
-              and the button is §92's VERIFY made available after the fact —
-              a card can be checked against it any time, not only now. */}
+          {/* G8, the last gate before the file is handed over — and G7's
+              manifest comparison is a section of it rather than a second
+              button. It runs any time, not only just after a build. */}
           <div style={{ marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
             <h3 style={{ fontSize: 14, margin: "0 0 4px" }}>
-              {t("cardBuilder.manifest.heading")}
+              {t("cardBuilder.health.heading")}
             </h3>
             <p className="faint" style={{ fontSize: 11, margin: "0 0 8px", wordBreak: "break-all" }}>
-              {t("cardBuilder.manifest.path")} <code>{result.manifest_path}</code>
+              {t("cardBuilder.health.manifestPath")} <code>{result.manifest_path}</code>
             </p>
             <button className="btn" onClick={() => void verify()} disabled={checking}>
-              {t(checking ? "cardBuilder.manifest.verifying" : "cardBuilder.manifest.verify")}
+              {t(checking ? "cardBuilder.health.running" : "cardBuilder.health.run")}
             </button>
 
-            {report && (
-              <div style={{ marginTop: 10 }}>
-                <p
-                  className={`badge ${report.findings.length === 0 ? "badge-ok" : "badge-warn"}`}
-                  style={{ display: "block", padding: "6px 12px", fontSize: 11, margin: 0 }}
-                >
-                  {t(manifestVerdict(report).key, manifestVerdict(report).params)}
-                </p>
-                <ul className="muted" style={{ fontSize: 11, margin: "8px 0 0", paddingLeft: 18 }}>
-                  {report.findings.map((finding, index) => {
-                    const phrase = findingPhrase(finding);
-                    return <li key={index}>{t(phrase.key, phrase.params)}</li>;
-                  })}
-                </ul>
-              </div>
-            )}
+            {report && <HealthPanel report={report} />}
           </div>
         </section>
       )}
     </>
+  );
+}
+
+/**
+ * The checklist (§50), in three parts that must not look like each other:
+ * what passed, what failed, and **what ART could not answer** — plus the steps
+ * only the person at the machine can take. A tick that means "ART did not
+ * look" reading like one that means "ART looked and it is right" is the claim
+ * §89 forbids, so the third state gets its own mark and its own colour.
+ */
+function HealthPanel({ report }: { report: HealthReport }) {
+  const { t } = useTranslation();
+  const verdict = healthVerdict(report);
+  const failed = report.items.some((item) => item.state === "fail");
+
+  const mark: Record<HealthReport["items"][number]["state"], string> = {
+    pass: "✓",
+    fail: "✕",
+    "not-checked": "–",
+  };
+  const colour: Record<HealthReport["items"][number]["state"], string> = {
+    pass: "var(--ok, #4caf50)",
+    fail: "var(--err, #ff5252)",
+    "not-checked": "var(--text-faint, #888)",
+  };
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <p
+        className={`badge ${failed ? "badge-err" : "badge-ok"}`}
+        style={{ display: "block", padding: "6px 12px", fontSize: 11, margin: 0 }}
+      >
+        {t(verdict.key, verdict.params)}
+      </p>
+
+      <ul style={{ fontSize: 11, margin: "10px 0 0", paddingLeft: 0, listStyle: "none" }}>
+        {report.items.map((item, index) => {
+          const phrase = healthCheckPhrase(item.check);
+          return (
+            <li key={index} style={{ padding: "2px 0" }}>
+              <span
+                style={{ color: colour[item.state], fontWeight: 700, marginRight: 8 }}
+                title={t(`cardBuilder.health.state.${item.state === "not-checked" ? "notChecked" : item.state}`)}
+              >
+                {mark[item.state]}
+              </span>
+              <span className={item.state === "not-checked" ? "faint" : "muted"}>
+                {t(phrase.key, phrase.params)}
+              </span>
+              {/* When the manifest disagrees, *what* disagrees — "one finding"
+                  is not something anybody can act on. */}
+              {item.check.kind === "manifest-agrees" && item.check.findings.length > 0 && (
+                <ul className="faint" style={{ margin: "4px 0 0", paddingLeft: 24 }}>
+                  {item.check.findings.map((finding, at) => {
+                    const detail = findingPhrase(finding);
+                    return <li key={at}>{t(detail.key, detail.params)}</li>;
+                  })}
+                </ul>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+
+      <h4 style={{ fontSize: 12, margin: "14px 0 4px" }}>
+        {t("cardBuilder.health.byHandHeading")}
+      </h4>
+      <ul className="muted" style={{ fontSize: 11, margin: 0, paddingLeft: 18 }}>
+        {report.by_hand.map((step, index) => {
+          const phrase = manualStepPhrase(step);
+          return <li key={index}>{t(phrase.key, phrase.params)}</li>;
+        })}
+      </ul>
+    </div>
   );
 }
 

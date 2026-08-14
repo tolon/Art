@@ -36,13 +36,16 @@ import {
   buildBlocker,
   defaultPartition,
   findingPhrase,
-  manifestVerdict,
-  notCheckedPhrase,
+  healthCheckPhrase,
+  healthVerdict,
+  manualStepPhrase,
   warningPhrase,
   type CardBuildPlan,
   type CardBuildRequest,
   type CardBuildWarning,
+  type HealthCheck,
   type ManifestFinding,
+  type ManualStep,
 } from "@/lib/cardBuild";
 import {
   DEFAULT_EMU68_OPTIONS,
@@ -436,18 +439,46 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     }
   });
 
-  it("notCheckedPhrase and manifestVerdict resolve", () => {
-    expect(
-      resolvesAtRuntime(notCheckedPhrase({ kind: "boot-partition-files", count: 3 }).key)
-    ).toBe(true);
-    expect(
-      resolvesAtRuntime(manifestVerdict({ findings: [], not_checked: [] }).key)
-    ).toBe(true);
-    expect(
-      resolvesAtRuntime(
-        manifestVerdict({ findings: [{ kind: "partition-table-changed" }], not_checked: [] }).key
-      )
-    ).toBe(true);
+  it("healthCheckPhrase: every HealthCheck variant resolves", () => {
+    const checks: HealthCheck[] = [
+      { kind: "boot-partition-first" },
+      { kind: "boot-partition-aligned", lba: 2048 },
+      { kind: "amiga-area-count", count: 1 },
+      { kind: "areas-aligned" },
+      { kind: "nothing-overlaps" },
+      { kind: "everything-inside-the-image" },
+      { kind: "area-has-rdb", area: 0 },
+      { kind: "area-rdb-checksum", area: 0 },
+      { kind: "every-partition-can-mount", unmountable: 0 },
+      { kind: "manifest-agrees", findings: [] },
+      { kind: "boot-file", role: "config", name: "config.txt" },
+      { kind: "boot-file", role: "cmdline", name: "cmdline.txt" },
+      { kind: "boot-file", role: "kernel", name: "Emu68-pistorm.gz" },
+      { kind: "boot-file", role: "kickstart", name: "kick.rom" },
+    ];
+    for (const check of checks) {
+      const phrase = healthCheckPhrase(check);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("manualStepPhrase and healthVerdict resolve", () => {
+    const steps: ManualStep[] = [
+      { kind: "flash-the-card" },
+      { kind: "hdmi-before-power" },
+      { kind: "pi-model-matches", pi: "pi3-a-plus" },
+      { kind: "volumes-need-formatting", count: 1 },
+    ];
+    for (const step of steps) {
+      expect(resolvesAtRuntime(manualStepPhrase(step).key), step.kind).toBe(true);
+    }
+    const pass = { check: { kind: "areas-aligned" }, state: "pass" } as const;
+    const gap = { check: { kind: "areas-aligned" }, state: "not-checked" } as const;
+    const bad = { check: { kind: "areas-aligned" }, state: "fail" } as const;
+    for (const items of [[pass], [pass, gap], [bad]]) {
+      const verdict = healthVerdict({ items: [...items], by_hand: [] });
+      expect(resolvesAtRuntime(verdict.key), verdict.key).toBe(true);
+    }
   });
 
   it("buildBlocker: every reason a card cannot be built resolves", () => {

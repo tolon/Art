@@ -69,7 +69,6 @@
     "launchInWinuae": "Launch in WinUAE",
     "browse": "Browse…",
     "clear": "Clear"
-
   },
   "components": {
     "copyPlan": {
@@ -136,14 +135,38 @@
       "apply": "Apply",
       "reset": "Reset",
       "bits": {
-        "hold": { "name": "Hold", "explanation": "Keep resident after running. Rarely used." },
-        "script": { "name": "Script", "explanation": "Run as a shell script. WHDLoad installers rely on this." },
-        "pure": { "name": "Pure", "explanation": "Re-entrant, so it can be made resident. Slaves use it." },
-        "archived": { "name": "Archived", "explanation": "Unchanged since the last backup." },
-        "read": { "name": "Read", "explanation": "The file can be read." },
-        "write": { "name": "Write", "explanation": "The file can be changed." },
-        "execute": { "name": "Execute", "explanation": "The file can be run." },
-        "delete": { "name": "Delete", "explanation": "The file can be deleted." }
+        "hold": {
+          "name": "Hold",
+          "explanation": "Keep resident after running. Rarely used."
+        },
+        "script": {
+          "name": "Script",
+          "explanation": "Run as a shell script. WHDLoad installers rely on this."
+        },
+        "pure": {
+          "name": "Pure",
+          "explanation": "Re-entrant, so it can be made resident. Slaves use it."
+        },
+        "archived": {
+          "name": "Archived",
+          "explanation": "Unchanged since the last backup."
+        },
+        "read": {
+          "name": "Read",
+          "explanation": "The file can be read."
+        },
+        "write": {
+          "name": "Write",
+          "explanation": "The file can be changed."
+        },
+        "execute": {
+          "name": "Execute",
+          "explanation": "The file can be run."
+        },
+        "delete": {
+          "name": "Delete",
+          "explanation": "The file can be deleted."
+        }
       }
     },
     "fnKeys": {
@@ -323,9 +346,9 @@
       "capped": "19 years or older",
       "thisWeek": "this week",
       "weeksAgo_one": "{{count}} week ago",
-        "weeksAgo_other": "{{count}} weeks ago",
+      "weeksAgo_other": "{{count}} weeks ago",
       "monthsAgo_one": "{{count}} month ago",
-        "monthsAgo_other": "{{count}} months ago",
+      "monthsAgo_other": "{{count}} months ago",
       "yearsAgo": "{{n}} years ago"
     },
     "size": {
@@ -780,7 +803,7 @@
       "heading": "The card",
       "choose": "Choose folder…",
       "none": "No folder chosen",
-        "needed": "Everything on this screen edits files on a card. Choose its boot folder — the FAT32 partition of a card you have written, or a folder you are assembling one in — and the rest becomes available.",
+      "needed": "Everything on this screen edits files on a card. Choose its boot folder — the FAT32 partition of a card you have written, or a folder you are assembling one in — and the rest becomes available.",
       "kernelFound": "Emu68.img is on the card.",
       "kernelMissing": "No Emu68.img — the card will not start until the kernel is on it.",
       "kickstartsFound": "Kickstart images found: {{list}}",
@@ -799,7 +822,7 @@
       "onTheCard": "On the card",
       "fileName": "File name written to config.txt",
       "choose": "Choose ROM file…",
-        "needsCard": "Choose the card’s folder first — the ROM is copied onto it.",
+      "needsCard": "Choose the card’s folder first — the ROM is copied onto it.",
       "chooseTitle": "Choose a Kickstart ROM",
       "copyTitle": "Copy this Kickstart onto the card",
       "picked": "{{rom}} ({{revision}}) — for {{models}}",
@@ -957,10 +980,10 @@
       "activatedWithBackup": "'{{name}}' is now the active config.txt. The previous one is at {{path}}.",
       "renamed": "'{{from}}' is now called '{{to}}'.",
       "delete": "Delete",
-        "confirmDelete": "Delete the '{{name}}' set? ART keeps a copy, so this can be undone — but the set stops being in the list.",
-        "deleted": "Set '{{name}}' deleted.",
-        "deletedWithBackup": "Set '{{name}}' deleted. A copy is kept at {{path}}.",
-        "deleteKeeps": "Deleting a set keeps a copy of it. The set the card is running cannot be deleted — make another one active first."
+      "confirmDelete": "Delete the '{{name}}' set? ART keeps a copy, so this can be undone — but the set stops being in the list.",
+      "deleted": "Set '{{name}}' deleted.",
+      "deletedWithBackup": "Set '{{name}}' deleted. A copy is kept at {{path}}.",
+      "deleteKeeps": "Deleting a set keeps a copy of it. The set the card is running cannot be deleted — make another one active first."
     }
   },
   "gotek": {
@@ -1207,9 +1230,8 @@
       "default": "ART cannot write to this volume",
       "iso": "This pane holds a disc — discs are read-only",
       "archive": "This pane holds an archive — ART reads archives, it does not write them",
-      "c64": "This pane holds a Commodore disk or tape — ART reads these, it does not write them",
-      "c64ToVolume": "Copy it to a folder first, then into the volume — ART does not put Commodore files straight onto an Amiga disk",
-      "c64": "C64..."
+      "c64": "C64...",
+      "c64ToVolume": "Copy it to a folder first, then into the volume — ART does not put Commodore files straight onto an Amiga disk"
     },
     "archive": {
       "unusableNames": "{{count}} entries are not shown: their names are not paths ART can place inside a folder"
@@ -1607,28 +1629,58 @@
       "notPlanned": "Preview it first — nothing is written before you have seen what would be.",
       "destExists": "That file is already there. ART will not build over it; choose another name."
     },
-      "manifest": {
-        "heading": "Build manifest",
-        "path": "Written beside the image:",
-        "verify": "Check the card against it",
-        "verifying": "Checking…",
-        "matches": "Everything ART can check matches the manifest. {{unchecked}} file(s) on the boot partition were not re-read — ART writes FAT32 and cannot read one; scripts/fat-oracle-check.py checks those with 7-Zip.",
-        "mismatch": "{{count}} thing(s) on this card do not match its manifest.",
-        "finding": {
-          "schemaTooNew": "This manifest was written by a newer ART (schema {{found}}; this one understands {{understood}}). Nothing was checked — the fields it does not know are the ones it cannot check.",
-          "sizeChanged": "The image is {{found}} bytes and the manifest says {{expected}}.",
-          "partitionTableChanged": "The partition table is not the one that was written.",
-          "areaCountChanged": "The manifest describes {{expected}} Amiga disk(s) and the card has {{found}}.",
-          "areaMoved": "Amiga disk {{n}} starts at byte {{found}}; the manifest says {{expected}}.",
-          "areaResized": "Amiga disk {{n}} is {{found}} bytes; the manifest says {{expected}}.",
-          "rdbChanged": "Amiga disk {{n}}'s partition table is not the one that was written.",
-          "partitionCountChanged": "Amiga disk {{n}} has {{found}} partition(s); the manifest says {{expected}}.",
-          "partitionChanged": "Partition {{name}} on Amiga disk {{n}} is not as the manifest describes it."
-        },
-        "notChecked": {
-          "bootFiles": "{{count}} file(s) on the boot partition were not re-read. ART writes FAT32 and does not read one; their checksums are in the manifest and 7-Zip can check them."
+    "manifest": {
+      "finding": {
+        "schemaTooNew": "This manifest was written by a newer ART (schema {{found}}; this one understands {{understood}}). Nothing was checked — the fields it does not know are the ones it cannot check.",
+        "sizeChanged": "The image is {{found}} bytes and the manifest says {{expected}}.",
+        "partitionTableChanged": "The partition table is not the one that was written.",
+        "areaCountChanged": "The manifest describes {{expected}} Amiga disk(s) and the card has {{found}}.",
+        "areaMoved": "Amiga disk {{n}} starts at byte {{found}}; the manifest says {{expected}}.",
+        "areaResized": "Amiga disk {{n}} is {{found}} bytes; the manifest says {{expected}}.",
+        "rdbChanged": "Amiga disk {{n}}'s partition table is not the one that was written.",
+        "partitionCountChanged": "Amiga disk {{n}} has {{found}} partition(s); the manifest says {{expected}}.",
+        "partitionChanged": "Partition {{name}} on Amiga disk {{n}} is not as the manifest describes it."
+      }
+    },
+    "health": {
+      "heading": "Check the card",
+      "run": "Check it",
+      "running": "Checking…",
+      "passed": "Everything ART can check is right.",
+      "passedWithGaps": "Nothing is wrong with what ART could check — and {{unanswered}} question(s) it could not answer at all. They are listed below.",
+      "failed": "{{count}} check(s) failed. This card is not ready to flash.",
+      "manifestPath": "Build manifest:",
+      "byHandHeading": "Only you can do these",
+      "check": {
+        "bootFirst": "The Pi's boot partition is the first thing on the card",
+        "bootAligned": "The boot partition starts at sector {{lba}}",
+        "areaCount": "{{count}} Amiga disk(s), which is between one and three",
+        "areasAligned": "Every Amiga disk starts on a 4 MiB boundary",
+        "noOverlap": "No two partitions share a sector",
+        "insideImage": "Nothing runs past the end of the image",
+        "hasRdb": "Amiga disk {{n}} has a partition table",
+        "rdbChecksum": "Amiga disk {{n}}'s partition table checksums correctly",
+        "canMount": "Every partition names a filesystem the card carries ({{unmountable}} do not)",
+        "manifest": "The card still matches the manifest built with it",
+        "bootFile": {
+          "config": "config.txt is on the boot partition",
+          "cmdline": "cmdline.txt is on the boot partition",
+          "kernel": "The kernel config.txt boots — {{name}} — is on the boot partition",
+          "kickstart": "The Kickstart is on the boot partition as {{name}}"
         }
       },
+      "state": {
+        "pass": "ok",
+        "fail": "failed",
+        "notChecked": "not checked"
+      },
+      "byHand": {
+        "flash": "Write the image to a microSD card. ART builds the file and never touches a card itself.",
+        "hdmi": "Plug HDMI in **before** powering the Amiga on — the VPU configures the port at boot and not after.",
+        "pi": "The card was built for a {{pi}}. Check that is the Pi in the machine.",
+        "format": "The Amiga will offer to format {{count}} volume(s). That is expected: ART builds the shape, not the system."
+      }
+    },
     "result": {
       "heading": "The card is built",
       "readBack": "Read back by ART's own card reader: {{disks}} Amiga disk(s), {{partitions}} partition(s).",

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Check the card before you flash it (2026-08-15)
+
+#### Added
+- **One button that answers "is this card right".** It checks the partition
+  table, where each Amiga disk landed, every partition table inside them,
+  whether any partition names a filesystem the card does not carry, and
+  whether the card still matches the manifest built with it.
+- **It says what it could not check, and never as a tick.** ART writes the
+  Pi's boot partition but cannot read one back, so the files on it are
+  answered from the manifest — and on a card ART did not build, not at all.
+  Those show as *not checked*, in their own mark and their own colour.
+- **The steps only you can take are on the same page**: write the image to a
+  card, plug HDMI in before powering the Amiga on, check the Pi in the machine
+  is the one the card was built for, and expect the Amiga to offer to format
+  its volumes.
+
+#### Changed
+- The manifest check added earlier the same day is now part of this one report
+  rather than a separate button.
+
 ### A card says what it was built from (2026-08-15)
 
 #### Added
