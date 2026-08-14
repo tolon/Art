@@ -197,6 +197,62 @@ expectation confirmed: wallpaper/WiFi/prefs are baked at build time.
 (Exact WiFi credential file path comes from the wifipi.device docs in
 Emu68-tools — pin it during SD-2 implementation, don't guess.)
 
+## 4.1 Read at source level — 2026-08-14
+
+The teardown above was written from the Imager's documentation. Reading the
+**repository** (`github.com/mja65/Emu68-Imager-Software`, MIT) adds five things
+that change ART's decisions rather than confirm them.
+
+**It is PowerShell + WPF, and it needs Administrator.** `Emu68Imager.cmd` into
+~200 `.ps1` files; `Test-Administrator.ps1` gates the run, `Get-RemovableMedia`
+enumerates cards and `Initialize-MBRDisk` writes to them. It *also* builds
+image files (`Set-ImageLocation`, `Get-NewImageSize`, `Save Image`). So the
+scope decision ART took on 2026-08-12 — image files only, never the card — is
+the same tool minus the admin requirement and minus the largest safety surface
+either program has. That is worth stating as a divergence, not a gap.
+
+**The hst-imager command surface, verbatim** (`Get-DiskStructuresto­MBRGPT­Disk­or­Image­Commands.ps1`).
+This is the oracle command set for SD-2, and it is exactly the shape
+`core/card/build.rs` now implements natively:
+
+```text
+mbr part add "<path>" 0xb <size> --start-sector <sector>
+mbr part format "<path>" <n> <volume>
+rdb init "<path>\mbr\<n>"
+rdb filesystem add "<path>\mbr\<n>" "<fs>" <dostype>
+rdb part add "<path>\mbr\<n>" <device> <dostype> <size> \
+    --buffers <n> --max-transfer <n> --mask <n> --no-mount <bool> \
+    --bootable <bool> --boot-priority <n>
+rdb part format "<path>\mbr\<n>" <n> <volume>
+```
+
+`"<path>\mbr\<n>"` is how hst-imager addresses a partition *inside* a card —
+the same problem ART-043 and `core/card/build.rs` solved by writing each RDB at
+its own byte offset. **ART already does everything on that list except
+`rdb part format`**, which is SD-2's G3 and the one thing it borrows.
+
+**They write `0x0b` for the FAT32 partition; ART writes `0x0C`.** ART's byte was
+measured off the two real cards, so this joins the CHS-fields and boot-flag
+disagreement already recorded in §1: the field is not load-bearing, and both
+produce cards that boot. Recorded so nobody "fixes" ART's to match a tool.
+
+**Kickstart identification — and this settles [ART-104](ISSUES.md).**
+`Compare-KickstartHashes.ps1` takes **MD5**, compares it against a **CSV of
+hashes** (`Get-InputCSVs -ROMHashes`) filtered by Kickstart version, allows
+**several hashes per revision** with a `Sequence` field to pick between them,
+and accepts a file of **524 288 *or* 524 299 bytes** — the second being a 512 KiB
+ROM behind Amiga Forever's 11-byte header. ART's `KNOWN_ROMS` carries **one**
+SHA-256 per revision and one size, which is why the user's own A1200 3.1 dump
+comes back as *Generic 512KB ROM*. The fix is a list per revision plus the
+headered size, in data — not the header-parsing redesign ART-104 first
+proposed.
+
+**The per-partition fields their GUI exposes** — DosType, Mask, MaxTransfer,
+Buffers, Priority, Bootable, Mountable, device name, volume name, space at
+beginning and end — are the checklist for ART's own Advanced panel when SD-2
+gives it more than one partition to describe. ART-096 already put Mask,
+MaxTransfer and Buffers in the engine.
+
 # 5. THE DECISIVE FIND — the Stengaard stack (hst-imager + hst-amiga)
 
 **hst-amiga** (.NET library, MIT): *"Read, write and FORMAT PFS3

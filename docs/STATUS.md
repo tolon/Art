@@ -825,22 +825,22 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
 443 frontend, clippy clean, TypeScript clean, amitools oracle 53 both ways, the
 FAT32 oracle clean). ART-096, ART-085 and the six-issue sweep
 (ART-049/058/066/067/068/070) are all closed, and so are ART-043, ART-102 and
-ART-103; **fifteen** entries remain open — ART-104 came out of planning a card
-with the user's real Kickstart — and three of those are waiting on a decision
-rather than on work.
+ART-103 and now **ART-099**; **fourteen** entries remain open — ART-104 came
+out of planning a card with the user's real Kickstart, and its fix is settled
+in data — and three of those are waiting on a decision rather than on work.
 
-**The Hard Disk studio can open a card, and the OS Builder can ask for one.**
-Both real cards were read through the screen on 2026-08-13; a card was built
-from the real `Emu68-pistorm.zip` on 2026-08-14 and read back by ART's own
-reader and by 7-Zip; and the same day `card_plan_build` / `card_build` and the
-OS Builder's **boot-only card** put that behind a screen. **Nothing built has
-been flashed or booted, and nobody has driven the new screen in the running
-application** — every claim about it rests on tests plus one run of
-`plan_a_real_card_when_asked` against the real archive.
+**A 64 GB card was built from the screen, on 2026-08-14.** Both real cards
+were read through the Hard Disk studio on 2026-08-13; the engine built one from
+the real `Emu68-pistorm.zip` the next morning; and that afternoon the OS
+Builder's **boot-only card** was driven in the running application — the user's
+own `Emu68-pistorm-classic.zip` (alpha 1.1 line) and Kickstart 3.1, 64 GB, to
+`E:\amiga\ProjeART\denemecard.img`. Preview, then build, then *"Kart
+oluşturuldu — 1 Amiga diski, 1 bölüm"*. 7-Zip reads the result independently:
+`0.fat` 1 177 550 848 bytes (FAT32-LBA, the measured 1.10 GiB) and `1.img`
+67 540 877 312 bytes. **Still not flashed, still not booted.**
 
-**In order:** open it and build a card from the screen — the one step this
-work has not had. Then G7 (build manifest), G15 (a build as a drop target) and
-G8 (image validation).
+**In order:** G7 (build manifest), G15 (a build as a drop target) and G8 (image
+validation) — then flash `denemecard.img` and boot it.
 
 **Then the thing no test can answer: flash a card and boot it.** Every piece is
 verified against an independent reader and against the two real cards, and none
@@ -914,6 +914,7 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-14 | **A card was built from the screen, and looking at the screen closed one issue and reopened my own mistake.** The OS Builder's boot-only card was driven in the running application with the user's own material and produced a 64 GB `denemecard.img`; 7-Zip reads its table back independently. On the way there I screenshotted the window, read text as clipped at the right edge, and **committed a wrong diagnosis onto [ART-099](ISSUES.md)** — the capture was made by a DPI-unaware process on a 150 %-scaled 3840-wide display and returned the left *two thirds* of the window. An overlay that printed the page's own rects settled it in one shot: `scroll == client` at every level, `.app-shell` exactly one window wide, the left strip is `max-width: 1180px; margin-inline: auto` doing its job. **ART-099 closes with the shell exonerated**, and with a second half to its lesson: a screenshot is not a measurement, and check the instrument before believing the picture. Also read the Emu68 Imager at source level ([sd0-prior-art.md §4.1](sd0-prior-art.md)) — it settles ART-104 in data (several MD5s per Kickstart revision, and the 524 299-byte Amiga Forever header ART rejects outright), hands SD-2 the `hst-imager` command surface verbatim, and confirms ART's no-physical-media scope as the same tool minus an Administrator requirement | 1114 Rust / 443 frontend |
 | 2026-08-14 | **The application can ask for a card.** `card_plan_build` and `card_build` are the adapter the engine had been waiting for, and the OS Builder leads with a **boot-only card** — the one thing on that screen that produces a file, sitting above the distributions that are all still Coming Later. Four questions (archive, ROM, size, destination) and an `Advanced` panel for everything with a defaulted answer; the hardware half of it writes the *same* `settings.json` keys the PiStorm studio uses, so an answer means one thing in both places. Three decisions worth keeping: **one request type and one `card_spec` for the plan and the build**, so a screen cannot show one card and write another; **`SAFE_CREATE` is answered by the plan**, before the button rather than by a job that fails; and **warnings are a typed enum, not sentences** — `CoreError`'s strings still reach the UI in English (ART-060) and there was no reason to add four more. Two things came out of using real material rather than fixtures: `emu68_payload` had no *total* ceiling — twenty entries under the per-file 64 MB is a gigabyte and a quarter held in memory, so there is a 256 MB budget on the running total now — and **[ART-104](ISSUES.md)**, the user's own A1200 3.1 ROM hashing to a dump `KNOWN_ROMS` does not carry, so every card built with it is warned about a ROM that is very probably right. Filed rather than patched: the fix is to identify a ROM by its own header and treat the checksum as confirmation, which is a change to how ROMs are identified. Driven against the real `Emu68-pistorm.zip`: 21 files, booting `Emu68-pistorm.gz` | 1114 Rust / 443 frontend |
 | 2026-08-14 | **Docs swept and the branch pushed.** Every claim about *now* checked against what is now true: the snapshot still said G2 was owed and that reading a card had no screen; FEATURES still described three fixed defects as live, including Application Size cutting the right edge — which measurement had disproved; README carried two paragraphs that contradicted each other and each other's dates. History kept its own wording; only the present tense was corrected. `sd-1` pushed to origin, fourteen commits, level as of this line | 1106 Rust / 432 frontend |
 | 2026-08-14 | **The payload chooses itself, and doing it against the real archive found a card that would not have booted.** `core/card/payload.rs` takes the user's `Emu68-pistorm.zip` and their Kickstart and produces everything the boot partition needs: the archive is checked against their board *and release line* before a byte of it is read (ART-091's lesson — the same file name means a different board in the two lines), `Emu68-raspi.zip` is refused for what it is rather than as "wrong", the Pi's own `config.txt` is merged rather than regenerated (§39/§40), `cmdline.txt` is written from nothing because the release has none, and the ROM goes on under the name the config points at. Then **[ART-103](ISSUES.md)**: `merge_config_txt` managed the `kernel=` key and wrote `Emu68.img` over the release's own `kernel=Emu68-pistorm.gz` — a name no release has ever shipped, pointing at a file the card does not carry. The card would have failed on the Amiga, where nobody could see why. The kernel's name is a field now, taken from the archive's own config and **verified to be among the files being placed**, so an archive that names a kernel it does not carry is refused before a card is written. Found the same way ART-090 and ART-091 were: by reading what the real thing says instead of what ART believed | 1106 Rust / 432 frontend |

@@ -40,119 +40,19 @@ that part is by design — but two things are lost: the user is told ART does no
 know their ROM every time they build a card, and `rom_suits` returns `None`, so
 the *wrong machine* check can never fire for this file at all.
 
-**Not fixed here**, because the fix is a decision rather than a line: either
-`KNOWN_ROMS` carries every known dump per revision (a list of hashes, not one),
-or ART reads the version out of the ROM's own header the way `pistorm_kernel`
-reads `$VER:` and treats the checksum as confirmation rather than as
-identification. The second is the better answer and is a change to how ROMs are
-identified, not a data addition. Reproduced by
-`plan_a_real_card_when_asked` with `ART_CARD_ROM` set.
+**The fix, settled the same day by prior art** ([sd0-prior-art.md §4.1](sd0-prior-art.md)).
+The Emu68 Imager answers this with data rather than with code:
+`Compare-KickstartHashes.ps1` compares against a **CSV carrying several hashes
+per Kickstart revision**, with a `Sequence` field to choose between them, and
+accepts a file of **524 288 *or* 524 299 bytes** — the second being a 512 KiB
+ROM behind Amiga Forever's 11-byte header, which ART's size check rejects
+outright today.
 
-**ART-099** 🟠 **Application Size cut the right-hand edge off every screen** — *the real window was finally looked at on 2026-08-14, and it does clip; the mechanism is still not established*
-
-**2026-08-14 — the check this entry was left open for, and it did not come back
-clean.** The running application, maximised on a 2560×1440 display at 150 %
-Windows scaling, with `appZoom: 130` in `settings.json`: the content column is
-offset to the right by roughly 410 CSS px, and the text on the right-hand side
-of every card runs off the window and is cut mid-word — *"ART hiçbir dağıtımı
-indirmez — siz indirir, ART'a…"*. Both halves are the same fact: `.app-content
-> *` is `max-width: 1180px; margin-inline: auto`, so a column the browser
-believes is much wider than the window centres its child, showing the left
-margin and pushing the right one off the edge.
-
-**And `scripts/zoom-check.py` does not reproduce it.** Eight routes, three
-Application Sizes, at the window size this entry was opened with (2575) *and*
-at the narrower one a 150 % display suggests (1471): `over=0` and
-`offscreen=none` every time, with `.app-shell` exactly one window wide. Both
-engines are Chromium 151 (Chrome 151.0.7922.138, WebView2 151.0.4129.78), so
-the obvious explanation — legacy versus standardised `zoom` semantics — is not
-available.
-
-So what is recorded here is an observation and a screenshot, not a diagnosis.
-**No fix should be attempted from this entry until the difference between the
-two engines is measured rather than reasoned about** — that is the mistake this
-entry already documents twice, and guessing a third time would be the same
-mistake. The next step is to make the *real* window report its own numbers
-(`.app-shell` and `.app-content` rects, `devicePixelRatio`, the computed
-`zoom`) rather than to infer them from a screenshot.
-
-The text below is what was true before that look.
-`src/components/layout/layout.css` · The Application Size feature applies CSS
-`zoom` to `.app-shell`, and `zoom` does not scale viewport units — so the shell
-divides first: `height: calc(100vh / var(--app-zoom))`, rendered back to exactly
-one viewport by the zoom.
-
-**The width was never given the same treatment.** A block-level shell takes its
-parent's width, and `zoom` then renders it `z` times wider than the window. At
-100 % nothing showed. At the 130 % this machine was actually set to, every
-screen lost its right-hand edge: the Settings cards' input fields and the
-Operation Log's rows ran off the side of the window with no scrollbar to reach
-them, because `.app-shell` is `overflow: hidden` by design.
-
-Found by screenshotting the running application to check something else — the
-same way [ART-082](#fixed) was, and for the same reason: the tests were all
-green, and no test looks at a window.
-
-**Two attempted fixes, both wrong, and the second one shipped for an hour.**
-
-- `width: calc(100% / z)` left the shell at `1/z` of the window — a dead strip
-  down the right-hand side with the scrollbar stranded in the middle of the
-  glass. That is what the user saw and reported.
-- `width: calc(100vw / z)`, by symmetry with the height, did not correct the
-  overflow either.
-
-Both are reverted; the width rule is gone and the shell is back to the
-behaviour it had before this entry was opened.
-
-What went wrong in the diagnosis is worth keeping: the first screenshot showed
-content running off the right edge, and I read that as a CSS bug without first
-establishing that the window was on the screen at all. It was not —
-`FindWindow` never located it, and the geometry only came out later
-(2575×1407 at −7,−7, i.e. maximised). Editing one line and taking another
-screenshot is not a reproduction, and three rounds of it produced two
-regressions and no fix.
-
-**Measured at last, 2026-08-13** — `scripts/zoom-check.py`, which drives the
-running application in headless Chrome and reads the numbers out of the page.
-Seven screens, three sizes, in a window the size of the user's own:
-
-```
-#/settings  z=1    window=2538  shell=2538  client=2299  scroll=2299  over=0
-#/settings  z=1.3  window=2538  shell=2538  client=1717  scroll=1717  over=0
-#/settings  z=2    window=2538  shell=2538  client=1038  scroll=1038  over=0
-```
-
-Two things follow, and the first one **disproves this entry's own diagnosis**:
-
-- **`.app-shell` renders exactly one window wide at every size.** It is not
-  drawn `z` times too wide and never was. `width: auto` resolves against
-  `#root` in the parent's coordinate space, and the zoom applies to both alike;
-  only `100vh` needed dividing, because viewport units are real pixels no
-  coordinate space touches. That is why `calc(100% / z)` produced a shell at
-  `1/z` with a dead strip, and why `calc(100vw / z)` changed nothing: both were
-  corrections to something that was not happening.
-- **Nothing on any of the seven screens overflows its column at 130 %**, at
-  2538 px or at 1258. `scroll == client` everywhere. The reported symptom does
-  not reproduce on the code as it stands — which, given that the first
-  screenshot may not have been of the running window at all, is the likeliest
-  reading of how it arose.
-
-**What was real, and is fixed:** `.app-content` carried `overflow-x: hidden`.
-Zoom buys size by spending width — the column measures 2299 CSS px at 100 %,
-1717 at 130 % and 1038 at 200 % — so anything that *did* exceed it would be
-clipped with **no way for the user to reach it**. Not merely invisible: in the
-reproduction the box could still be scrolled by script (`scrollLeft` moved to
-396) while offering no scrollbar, no wheel and no drag. That is precisely the
-shape of the original report, and it is one character to fix. `.app-content`
-scrolls sideways now when it has to, and `.scroll-x` still carries the cases
-that are *meant* to (a hex dump row, a block table).
-
-**Left open on purpose**, and only for this: everything above was measured in
-Chrome against the dev server, and the application ships in **WebView2** with
-real data — long paths, real log rows — that a dev server cannot produce. The
-one check that remains is the user's own window at 130 %. If it is clean, this
-closes; if it is not, `scripts/zoom-check.py` is where the numbers come from,
-not another screenshot.
+So: `KNOWN_ROMS` gains a **list** of hashes per entry rather than one, and the
+headered size is accepted with the header skipped before hashing. Not the
+header-parsing redesign this entry first proposed — that was a guess, and the
+cheaper answer turned out to be the one a tool in the field already ships.
+Reproduced by `plan_a_real_card_when_asked` with `ART_CARD_ROM` set.
 
 **ART-101** 🔵 **The sidebar's collapse never fires under Application Size** — *open*
 `src/components/layout/layout.css` · `@media (max-width: 1000px)` collapses the
@@ -440,6 +340,121 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-099** ✅ **Application Size cut the right-hand edge off every screen** — *closed 2026-08-14: the real window was measured and nothing is clipped. The third wrong diagnosis was mine, and it lasted an hour.*
+
+**2026-08-14, morning: a fourth wrong diagnosis, recorded because the pattern
+is the point.** I screenshotted the running window, read text as cut off at
+the right edge and a dead strip on the left, and committed an entry saying the
+real window "does clip". It does not. The capture was made by a
+**DPI-unaware** process on a 3840×2160 display at 150 % scaling, so
+`CopyFromScreen` returned the left **two thirds** of the window and nothing
+said so. The "cut" text was the edge of my picture.
+
+**2026-08-14, afternoon: measured, in the real window, by the window.** An
+overlay printed its own rects into the page:
+
+```
+inner 2560x1370  dpr 1.5   --app-zoom "1.3"   shell zoom "1.3"
+shell   L0   R2560 W2560 H1370 | client 1969x1054 scroll 1969x1054
+main    L291 R2560 W2269 H1370 | client 1745x1054 scroll 1745x1054
+content L291 R2560 W2269 H1308 | client 1733x1006 scroll 1733x1182
+kid     L651 R2185 W1534 H1454 | client 1180x1118 scroll 1180x1118
+```
+
+`scroll == client` horizontally at every level: **nothing overflows.**
+`.app-shell` is exactly one window wide, which is what the CSS comment claims
+and what `scripts/zoom-check.py` measured all along. The left-hand strip is
+`.app-content > *`'s `max-width: 1180px; margin-inline: auto` — the design,
+doing its job, with an equal strip on the right that my truncated capture
+never showed.
+
+**So the entry closes with the shell exonerated.** Its one real defect —
+`overflow-x: hidden` making anything genuinely too wide unreachable — was
+fixed on 2026-08-13 and stands. What is worth keeping is the method, now
+proved four times over: **a screenshot is not a measurement.** Three attempts
+were reasoned from pictures and all three were wrong; both times the answer
+came in minutes once something was asked to report its own numbers. The tool
+that does it lives on in `scripts/zoom-check.py`, and the lesson has a second
+half now — *check the instrument before believing the picture it produces*.
+
+The text below is what was written while the diagnosis was still open.
+`src/components/layout/layout.css` · The Application Size feature applies CSS
+`zoom` to `.app-shell`, and `zoom` does not scale viewport units — so the shell
+divides first: `height: calc(100vh / var(--app-zoom))`, rendered back to exactly
+one viewport by the zoom.
+
+**The width was never given the same treatment.** A block-level shell takes its
+parent's width, and `zoom` then renders it `z` times wider than the window. At
+100 % nothing showed. At the 130 % this machine was actually set to, every
+screen lost its right-hand edge: the Settings cards' input fields and the
+Operation Log's rows ran off the side of the window with no scrollbar to reach
+them, because `.app-shell` is `overflow: hidden` by design.
+
+Found by screenshotting the running application to check something else — the
+same way [ART-082](#fixed) was, and for the same reason: the tests were all
+green, and no test looks at a window.
+
+**Two attempted fixes, both wrong, and the second one shipped for an hour.**
+
+- `width: calc(100% / z)` left the shell at `1/z` of the window — a dead strip
+  down the right-hand side with the scrollbar stranded in the middle of the
+  glass. That is what the user saw and reported.
+- `width: calc(100vw / z)`, by symmetry with the height, did not correct the
+  overflow either.
+
+Both are reverted; the width rule is gone and the shell is back to the
+behaviour it had before this entry was opened.
+
+What went wrong in the diagnosis is worth keeping: the first screenshot showed
+content running off the right edge, and I read that as a CSS bug without first
+establishing that the window was on the screen at all. It was not —
+`FindWindow` never located it, and the geometry only came out later
+(2575×1407 at −7,−7, i.e. maximised). Editing one line and taking another
+screenshot is not a reproduction, and three rounds of it produced two
+regressions and no fix.
+
+**Measured at last, 2026-08-13** — `scripts/zoom-check.py`, which drives the
+running application in headless Chrome and reads the numbers out of the page.
+Seven screens, three sizes, in a window the size of the user's own:
+
+```
+#/settings  z=1    window=2538  shell=2538  client=2299  scroll=2299  over=0
+#/settings  z=1.3  window=2538  shell=2538  client=1717  scroll=1717  over=0
+#/settings  z=2    window=2538  shell=2538  client=1038  scroll=1038  over=0
+```
+
+Two things follow, and the first one **disproves this entry's own diagnosis**:
+
+- **`.app-shell` renders exactly one window wide at every size.** It is not
+  drawn `z` times too wide and never was. `width: auto` resolves against
+  `#root` in the parent's coordinate space, and the zoom applies to both alike;
+  only `100vh` needed dividing, because viewport units are real pixels no
+  coordinate space touches. That is why `calc(100% / z)` produced a shell at
+  `1/z` with a dead strip, and why `calc(100vw / z)` changed nothing: both were
+  corrections to something that was not happening.
+- **Nothing on any of the seven screens overflows its column at 130 %**, at
+  2538 px or at 1258. `scroll == client` everywhere. The reported symptom does
+  not reproduce on the code as it stands — which, given that the first
+  screenshot may not have been of the running window at all, is the likeliest
+  reading of how it arose.
+
+**What was real, and is fixed:** `.app-content` carried `overflow-x: hidden`.
+Zoom buys size by spending width — the column measures 2299 CSS px at 100 %,
+1717 at 130 % and 1038 at 200 % — so anything that *did* exceed it would be
+clipped with **no way for the user to reach it**. Not merely invisible: in the
+reproduction the box could still be scrolled by script (`scrollLeft` moved to
+396) while offering no scrollbar, no wheel and no drag. That is precisely the
+shape of the original report, and it is one character to fix. `.app-content`
+scrolls sideways now when it has to, and `.scroll-x` still carries the cases
+that are *meant* to (a hex dump row, a block table).
+
+**Left open on purpose**, and only for this: everything above was measured in
+Chrome against the dev server, and the application ships in **WebView2** with
+real data — long paths, real log rows — that a dev server cannot produce. The
+one check that remains is the user's own window at 130 %. If it is clean, this
+closes; if it is not, `scripts/zoom-check.py` is where the numbers come from,
+not another screenshot.
 
 ### SD-1 · G2 (2026-08-13/14)
 
