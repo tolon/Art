@@ -811,7 +811,7 @@ Found by reading the two images the user supplied — the inspection
 **Fixed 2026-08-13.** `core/mbr.rs` reads the partition table — four primary
 entries and deliberately nothing else, since a PiStorm card has never needed
 extended partitions or GPT and a parser with untested branches is worse than a
-narrow one. `core/card.rs` turns a file into the Amiga disks in it, and answers
+narrow one. `core/card/mod.rs` turns a file into the Amiga disks in it, and answers
 for a plain HDF too: no MBR means one disk at offset zero, so callers do not
 branch on what kind of file they were handed.
 

@@ -18,9 +18,9 @@ Update it at the end of any session that changes what works.
 
 | | |
 |---|---|
-| **Last updated** | 2026-08-13 |
+| **Last updated** | 2026-08-14 |
 | **Version** | 0.1.0 (unreleased) |
-| **Current stage** | **SD-1 in progress** — G4 (RDB filesystem embedding) done both ways; G2, G7, G15, G8 owed. Reading a real card is done ahead of it ([ART-095](ISSUES.md), [ART-097](ISSUES.md)) but has no screen yet |
+| **Current stage** | **SD-1 in progress** — **G2 and G4 done in the engine**: ART builds a card image (MBR, FAT32 boot partition, an RDB per Amiga area) from the user's own Emu68 release, and reads one back. G7, G15 and G8 owed, and so are a command and a screen to ask for a build. Reading a real card has a screen ([ART-095](ISSUES.md), [ART-097](ISSUES.md)); **no card ART built has been flashed or booted** |
 | **Build** | PASS |
 | **Tests** | 1106 Rust passed, 0 failed; 432 frontend passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
@@ -48,6 +48,8 @@ cd src-tauri && cargo clippy --all-targets -- -D warnings
 cd src-tauri && cargo test                             # unit + integration (twice — ART-059)
 pip install amitools && python scripts/oracle-check.py # independent cross-check
 python scripts/iso-oracle-check.py                     # the disc reader vs 7-Zip (needs 7z; not in CI)
+python scripts/fat-oracle-check.py                     # the card's boot partition vs 7-Zip (needs 7z; not in CI)
+python scripts/zoom-check.py                           # the shell's widths, in a real browser (needs `pnpm dev`)
 cd src-tauri && cargo deny check                       # licences and advisories
 pnpm tauri build                                       # full bundle (slow)
 ```
@@ -601,8 +603,10 @@ research). Three of its findings change what gets built, not merely how:
   primaries, each of which the m68k side sees as a separate hard drive — and
   **the RDB sits at a byte offset inside one of those**, not at offset 0. So G4
   is bigger than "write FSHD/LSEG": ART's RDB writer has to work at an offset,
-  which is the same shape as [ART-043](ISSUES.md#open). One coherent fix, with
-  tests at both offsets.
+  which is the same shape as [ART-043](ISSUES.md). **Both halves are done**
+  (2026-08-13/14) — writing *into* a volume that starts at an offset was
+  ART-043, and laying an RDB *at* one is `core/card/build.rs` — each with tests
+  at both offsets.
 - **PC-side PFS3 write is already solved and MIT-licensed.** `hst-amiga` /
   `hst-imager` read, write *and format* PFS3 and FFS with no emulator, and both
   existing imagers stand on them. G3 gains a Route E that is proven rather than
@@ -657,7 +661,7 @@ one machine, not the line.
 | Phase | Contents |
 |---|---|
 | **SD-0** | ✅ **Done 2026-08-12** — prior-art teardown, written up as [sd0-prior-art.md](sd0-prior-art.md). One exit test still owed (drive `hst-imager` end to end on a scratch image) |
-| **SD-1** | The image has a shape: MBR + FAT32 boot partition (G2), RDB filesystem embedding FSHD/LSEG (G4 — also closes ART-084), build manifest (G7), a build as a drop target (G15), image validation (G8) |
+| **SD-1** | The image has a shape: MBR + FAT32 boot partition (**G2 — done in the engine 2026-08-13/14**), RDB filesystem embedding FSHD/LSEG (**G4 — done**, also closed ART-084), build manifest (G7), a build as a drop target (G15), image validation (G8). What G2 still lacks is a command and a screen, not engine |
 | **SD-2** | Content, preloaded: PFS3 via a scripted WinUAE session (G3 route D), OS install engine (G5), ROM pairing (G9), launcher metadata export (G10), layout policy (G11) |
 | **SD-3** | It is *mine*: wallpaper, WiFi, prefs and Startup-Sequence, each edited in place (G14); multiboot as several complete environments and a boot menu (G16) |
 | **SD-4** | The flagship: native PFS3 write in ART (G3 route B) — its own brief; route D's harness becomes its oracle |
@@ -819,12 +823,14 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
 
 **Nothing is half-done on disk.** The tree is green (1068 Rust, 432 frontend,
 clippy clean, oracle 53 both ways). ART-096, ART-085 and the six-issue sweep
-(ART-049/058/066/067/068/070) are all closed, and so is ART-043; **fourteen**
-entries remain open — ART-101 came out of measuring ART-099 — and three of
-those are waiting on a decision rather than on work.
+(ART-049/058/066/067/068/070) are all closed, and so are ART-043, ART-102 and
+ART-103; **fourteen** entries remain open — ART-101 came out of measuring
+ART-099 — and three of those are waiting on a decision rather than on work.
 
-**The Hard Disk studio can open a card now** — the last thing between
-`core/card.rs` and a user. Both real cards were read through it on 2026-08-13.
+**The Hard Disk studio can open a card**, and the engine can build one. Both
+real cards were read through the screen on 2026-08-13, and a card was built
+from the real `Emu68-pistorm.zip` on 2026-08-14 — read back by ART's own
+reader and by 7-Zip. **Nothing built has been flashed or booted.**
 
 **In order:** a **command and a screen** for what the engine can already do.
 `emu68_payload` + `build_card` take the user's `Emu68-pistorm.zip` and their
@@ -891,7 +897,7 @@ Newest first. One line per session that changed what works.
 | 2026-08-13 | **ART-096 closed.** The RDB half had landed; what was left was the half that decides what a *user* gets. `HardDiskStudio.tsx` hard-coded `num_buffers: 100` in three places, so the core's measured 600 reached nothing anybody created through the UI — a literal in a component quietly outvoting the engine. The three are gone and the field is now `#[serde(default)]` / optional in `hdf.ts`: absent and zero both mean "the core decides", because a screen that never asks for a buffer count has no business stating one. Three tests, mutation-checked in both directions — restoring either old value fails them. Docs: CLAUDE.md gained the network layer, the two-catalogue string rule and the Vitest jsdom trap; CONTRIBUTING's "branch from `master`" is gone, published months ago | 1060 Rust / 401 frontend |
 | 2026-08-13 | ART-096 half done (RDB `MaxTransfer`, `Mask`, 600 buffers written and read back); ART-100 (the PiStorm screen said "choose a card first" only by being grey); ART-099 reopened after two bad fixes were reverted; docs swept — seventeen fixed entries moved out of ISSUES' Open section, fifteen stale `#open` anchors corrected, CLAUDE.md's dead branch name and missing CI step fixed | 1057 Rust / 401 frontend |
 | 2026-08-13 | **GitHub caught up, and CI turned out to be broken.** 28 commits of `main`, 15 of `phase-2b` and the whole `sd-1` branch had never reached the remote. Pushing them showed the last three runs on `main` red — and the reason was never in the code: the licence gate used a **container** action on a **Windows** runner, which cannot run, so it failed on every push since it was added and took `Build application` and the MSI artifact down with it ([ART-098](ISSUES.md)). `docs/licenses.md` had been claiming that check ran the whole time. The frontend tests were never in CI at all — four hundred of them, including the i18n parity check. Both fixed | 1057 Rust / 401 frontend |
-| 2026-08-13 | **ART can read a real PiStorm card — the thing that blocked SD-2a.** Two real distributions arrived (CaffeineOS 9317, MultibootOS 2.2) and reading them found that ART could not open either: `find_rdb_location` looked in the first 16 blocks of the file, and on every card those are the MBR and the FAT32 partition, with the Amiga's RDB about 1.1 GB in ([ART-095](ISSUES.md)). `core/mbr.rs` + `core/card.rs` fix it, and a card is a **list** of Amiga disks: MultibootOS has two, with different geometries, and its second RDB carries no PFS3 while all fifteen of its partitions are PFS3 — so drivers are the card's, not the area's, or ART would name fifteen working partitions as broken ([ART-097](ISSUES.md)). Both verified against the real files. Also filed: [ART-096](ISSUES.md#open), ART writes `MaxTransfer` and `Mask` as zero where every partition on both cards uses `0x1FE00` / `0x7FFFFFFE`. The layout is written up in [sd2-card-layout.md](sd2-card-layout.md) | 1057 Rust / 401 frontend |
+| 2026-08-13 | **ART can read a real PiStorm card — the thing that blocked SD-2a.** Two real distributions arrived (CaffeineOS 9317, MultibootOS 2.2) and reading them found that ART could not open either: `find_rdb_location` looked in the first 16 blocks of the file, and on every card those are the MBR and the FAT32 partition, with the Amiga's RDB about 1.1 GB in ([ART-095](ISSUES.md)). `core/mbr.rs` + `core/card.rs` fix it, and a card is a **list** of Amiga disks: MultibootOS has two, with different geometries, and its second RDB carries no PFS3 while all fifteen of its partitions are PFS3 — so drivers are the card's, not the area's, or ART would name fifteen working partitions as broken ([ART-097](ISSUES.md)). Both verified against the real files. Also filed: [ART-096](ISSUES.md), ART writes `MaxTransfer` and `Mask` as zero where every partition on both cards uses `0x1FE00` / `0x7FFFFFFE`. The layout is written up in [sd2-card-layout.md](sd2-card-layout.md) | 1057 Rust / 401 frontend |
 | 2026-08-13 | **The two things left owed from the previous rounds.** ART-094: the `w` bit is checked before an overwrite, at all three paths — and it caught a side effect of the fix that created it, since ART-088 had made every overwrite path ask the *deletion* question by going through `delete`. Two bits, two guards, `a_delete_protected_file_may_still_be_overwritten` keeping them apart. ART-092: a named firmware set can be deleted, backed up first so it stays recoverable, and never the one the card is currently running. Still owed and named: the copy dialog's own write-protection question, and [ART-093](ISSUES.md#open) (fetching a kernel) | 1038 Rust / 401 frontend |
 | 2026-08-13 | **Four from the open list, while the card is being prepared.** ART-088: the *writer* honours the delete-protection bit now, not just a dialog — `delete` refuses and names the entry, `delete_with(.., Override)` is the way past it, and the Files screen sends the answer only where it has shown the question. Move asks before the copy half rather than after, so a refusal cannot leave a duplicate behind. ART-072: `Docs` and `docs` are one drawer on an Amiga, so both collision checks compare without case — the clean refusal fires where it used to become a pile of unexplained skips. ART-071: a selection of nothing but shortcuts said it had copied everything; the report carries the declined roots now. ART-061: "1 weeks ago" — fixed with `_one`/`_other`, and with `count`, which is the half that makes i18next actually pluralise. The `w`-bit question is split out as ART-094 rather than left inside ART-088 | 1031 Rust / 401 frontend |
 | 2026-08-13 | **The OS Builder knows the distributions.** `core/distro/` is a registry of real AmigaOS distros as data — CaffeineOS, CoffinOS, AmiKit, two ART Baseline entries — with the licence model each one obliges the user to, the Kickstart family its base wants, and the card it needs. The `/os-builder` screen leads with the licence, checks the ROM family and the card size, and says plainly that ART cannot write a card yet: the adapter is blocked on reading a real distribution's layout by hand (research §8.2) rather than guessing at it. Two open questions closed with evidence in [sd2-distro-decisions.md](sd2-distro-decisions.md) — the **free Aminet Picasso96 is enough** (so ART Baseline is reproducible without a paid component), and the HstWB package format, whose `Install` turns out to be 26 KB of Amiga script only an Amiga can run | 1024 Rust / 400 frontend |

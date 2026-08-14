@@ -44,12 +44,12 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # Where the 300 MB image is built.
 #
-# **The user's own scratch folder**, not the system temp: the image is a third
-# of a gigabyte and the system temp is on the C: drive, which is the one drive
-# this project does not put trial output on. Falls back to a temporary
-# directory anywhere the folder does not exist — on somebody else's machine it
-# will not.
-SCRATCH = Path(r"E:\amiga\ProjeART")
+# Not the system temp when there is somewhere better: the image is a third of a
+# gigabyte, and on this project's machine the system temp sits on the drive
+# trial output is deliberately kept off. `ART_SCRATCH` names the folder;
+# failing that, the one this project uses; failing that, wherever `tempfile`
+# would have put it anyway — which is what happens on anybody else's machine.
+SCRATCH = Path(os.environ.get("ART_SCRATCH") or r"E:\amiga\ProjeART")
 
 # What the export hook in `core/fat32.rs` writes. Kept in step with it by hand,
 # which is safe because a mismatch fails loudly here rather than quietly.

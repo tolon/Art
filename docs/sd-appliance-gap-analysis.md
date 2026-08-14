@@ -181,11 +181,21 @@ The half that survives is the half that was always the point: **build
 everything into a sparse image file through the existing, tested paths.** That
 was this gap's own recommendation; it is now the whole of it.
 
-## G2 🟥 Hybrid SD layout: MBR + FAT32 boot partition + Amiga RDB
+## G2 ✅ Hybrid SD layout: MBR + FAT32 boot partition + Amiga RDB
+
+> **Done in the engine, 2026-08-13/14.** ART writes a partition table
+> (`core/mbr.rs::plan_card`/`write_mbr`), creates and fills the FAT32 boot
+> partition (`core/fat32.rs`, `fatfs`), chooses the payload from the user's own
+> Emu68 archive (`core/card/payload.rs`) and lays an RDB at the start of every
+> Amiga area (`core/card/build.rs`). Verified against the two real cards, an
+> independent FAT reader (7-Zip) and the real `Emu68-pistorm.zip`. What is left
+> is a command and a screen — and, the part no test answers, flashing a card and
+> booting it. Three things below turned out differently from what this section
+> assumed; they are marked where they appear.
 
 A PiStorm/Emu68 card is not a pure Amiga disk. The Pi boots from a **FAT32
 partition** (Emu68 kernel, Kickstart ROM images, `config.txt`/`cmdline.txt`),
-and the Amiga side lives in the remaining space as RDB. ART has:
+and the Amiga side lives in the remaining space as RDB. ART had:
 
 - no MBR partition table writer,
 - no FAT32 formatter/file writer,
