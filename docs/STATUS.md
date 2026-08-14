@@ -915,6 +915,37 @@ the user's own shopping list).
 an HDMI cable — and the card must be started with HDMI *already plugged in*, or
 the VPU never configures the port and there is no RTG that session.
 
+### What the user brings, and what it settles
+
+Recorded 2026-08-15, because each of these changes a decision rather than
+merely being nice to know.
+
+- **Licensed Amiga Forever, desktop and mobile.** There is no Kickstart licence
+  problem to design around, and the Cloanto-headered dumps are available —
+  which `core/rom` already strips (`AMIROMTYPE1`). It is also why
+  [ART-104](ISSUES.md) mattered: a licensed collection carries dumps whose
+  checksums are not the ones a table copied from anywhere else will hold.
+- **Four real Amigas.** Hardware verification is not limited to one witness.
+  The rule stands unchanged — a claim records *which* machine proved it — but
+  there is more than one machine to prove things on.
+- **The user has written two Amiga-side programs, and both are meant to ship
+  in ART-built distributions**: **tolunnet**, a TCP/IP stack to take Roadshow's
+  place, and **tolunwifi**, a WiFi suite. Source at `D:\Projeler	olunnet`.
+
+  This last one is a real change to SD-2 and SD-3. SD-0 found that the
+  community-standard package set is full of demo and conditionally
+  redistributable software, and concluded that anything not clearly
+  redistributable has to ship as a *fetch task* through the Aminet engine
+  rather than as bundled bytes. A networking stack the user wrote themselves is
+  theirs to distribute, so ART Baseline can carry one outright. And G14's WiFi
+  pre-seeding changes shape: the configuration format belongs to their own
+  program, so ART can write it directly instead of reverse-engineering
+  somebody else's.
+
+  **Not yet designed.** When SD-2 reaches its package manifest, the licence
+  column has an easy row — and Roadshow should not be assumed as the default
+  stack without asking.
+
 ### Where things are, for a fresh session
 
 - `E:\amiga\Amigatolon` — the user's material. **Read from, never written to.**
