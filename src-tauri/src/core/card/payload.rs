@@ -42,6 +42,20 @@ use crate::core::pistorm::options::{merge_cmdline, Emu68Options};
 /// times larger without being a number that lets an archive exhaust memory.
 const MAX_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
 
+/// The most a whole archive may expand to on its way to the card.
+///
+/// `MAX_ENTRY_BYTES` bounds one file; twenty files each just under it is a
+/// gigabyte and a quarter, and the payload is held whole in memory before any
+/// of it is written. A zip that compresses to nothing and expands to everything
+/// is the oldest hostile archive there is, and `core/archive`'s gate does not
+/// cover this path — that one is about extraction to *disk*, and nothing here
+/// touches disk.
+///
+/// The real Emu68 release is about ten megabytes across twenty files, so this
+/// is generous by a factor of twenty-five. The user's Kickstart is not counted:
+/// it is a file on their own disk rather than something an archive can inflate.
+const MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
+
 /// The archive nobody wants and everybody downloads once.
 const RASPI_ARCHIVE: &str = "emu68-raspi.zip";
 
@@ -62,8 +76,32 @@ pub struct PayloadSpec {
     pub kickstart: Option<Vec<u8>>,
 }
 
+/// Everything that goes on the boot partition, and what the card will boot.
+#[derive(Debug)]
+pub struct Emu68Payload {
+    /// The files, in the order they will be written.
+    pub files: Vec<BootFile>,
+    /// The file `config.txt` points the Pi's firmware at.
+    ///
+    /// Out here rather than left inside the config, because it is the answer
+    /// ART-103 got wrong: a screen can show it before a card is written, and a
+    /// name that is not among `files` is a card that fails on the Amiga where
+    /// nobody can see why.
+    pub kernel_file: String,
+}
+
 /// Everything that goes on the boot partition, in the order it will be written.
-pub fn emu68_payload(archive_path: &Path, spec: &PayloadSpec) -> CoreResult<Vec<BootFile>> {
+pub fn emu68_payload(archive_path: &Path, spec: &PayloadSpec) -> CoreResult<Emu68Payload> {
+    payload_within(archive_path, spec, MAX_TOTAL_BYTES)
+}
+
+/// [`emu68_payload`] with the ceiling as a parameter, so a test can prove the
+/// refusal without allocating a quarter of a gigabyte to do it.
+fn payload_within(
+    archive_path: &Path,
+    spec: &PayloadSpec,
+    max_total: u64,
+) -> CoreResult<Emu68Payload> {
     check_archive_is_for_this_board(archive_path, spec)?;
 
     let mut backend = archive::open(archive_path)?;
@@ -71,6 +109,7 @@ pub fn emu68_payload(archive_path: &Path, spec: &PayloadSpec) -> CoreResult<Vec<
 
     let mut files: Vec<BootFile> = Vec::with_capacity(entries.len() + 3);
     let mut existing_config: Option<String> = None;
+    let mut total: u64 = 0;
 
     for (index, entry) in entries.iter().enumerate() {
         if entry.is_dir {
@@ -81,6 +120,16 @@ pub fn emu68_payload(archive_path: &Path, spec: &PayloadSpec) -> CoreResult<Vec<
         }
 
         let bytes = backend.read(index, MAX_ENTRY_BYTES)?;
+
+        // On the running total of what was actually read, never on what the
+        // archive declares — a declared length is the attacker's field.
+        total = total
+            .checked_add(bytes.len() as u64)
+            .ok_or_else(|| too_big(archive_path, max_total))?;
+        if total > max_total {
+            return Err(too_big(archive_path, max_total));
+        }
+
         let name = entry.name.replace('\\', "/");
 
         // The archive's own `config.txt` is not placed as it stands: it is what
@@ -153,7 +202,21 @@ pub fn emu68_payload(archive_path: &Path, spec: &PayloadSpec) -> CoreResult<Vec<
         });
     }
 
-    Ok(files)
+    Ok(Emu68Payload {
+        files,
+        kernel_file: firmware.kernel_file,
+    })
+}
+
+fn too_big(archive_path: &Path, max_total: u64) -> CoreError {
+    CoreError::Malformed {
+        format: "Emu68 archive".into(),
+        detail: format!(
+            "'{}' expands to more than {max_total} bytes, which is far more than any Emu68 \
+             release — ART will not hold that much of an archive in memory",
+            archive_path.display()
+        ),
+    }
 }
 
 /// The kernel the archive's own `config.txt` names, if it names one.
@@ -297,7 +360,9 @@ mod tests {
         let dir = scratch("all-files");
         let archive = emu68_zip(&dir, "Emu68-pistorm.zip");
 
-        let files = emu68_payload(&archive, &spec(classic(), Emu68Line::Stable)).unwrap();
+        let files = emu68_payload(&archive, &spec(classic(), Emu68Line::Stable))
+            .unwrap()
+            .files;
         let names: Vec<&str> = files.iter().map(|f| f.name.as_str()).collect();
 
         assert!(names.contains(&"Emu68-pistorm.gz"), "{names:?}");
@@ -320,7 +385,9 @@ mod tests {
         let dir = scratch("config-merge");
         let archive = emu68_zip(&dir, "Emu68-pistorm.zip");
 
-        let files = emu68_payload(&archive, &spec(classic(), Emu68Line::Stable)).unwrap();
+        let files = emu68_payload(&archive, &spec(classic(), Emu68Line::Stable))
+            .unwrap()
+            .files;
         let config = files.iter().find(|f| f.name == "config.txt").unwrap();
         let text = String::from_utf8(config.bytes.clone()).unwrap();
 
@@ -334,6 +401,59 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **Which file the card boots is an answer, not a detail.** ART-103 was
+    /// ART writing a kernel name no release has ever shipped, and the card
+    /// failed on the Amiga where nobody could see why — so the name the payload
+    /// settled on comes back out where a screen can put it in front of the user
+    /// before the card is written.
+    #[test]
+    fn the_payload_says_which_file_the_card_boots() {
+        let dir = scratch("kernel-answer");
+        let archive = emu68_zip(&dir, "Emu68-pistorm.zip");
+
+        let payload = emu68_payload(&archive, &spec(classic(), Emu68Line::Stable)).unwrap();
+
+        assert_eq!(payload.kernel_file, "Emu68-pistorm.gz");
+        assert!(
+            payload.files.iter().any(|f| f.name == payload.kernel_file),
+            "and it is one of the files being placed"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A payload is held whole in memory before it reaches the card, so the
+    /// archive needs a **total** ceiling and not only a per-file one: twenty
+    /// entries each just under `MAX_ENTRY_BYTES` is a gigabyte and a quarter,
+    /// and a zip that compresses to nothing and expands to everything is the
+    /// oldest hostile archive there is.
+    ///
+    /// Driven through the internal entry point with a small budget so the test
+    /// costs kilobytes rather than a quarter of a gigabyte; the public
+    /// [`emu68_payload`] passes [`MAX_TOTAL_BYTES`], which the next test pins.
+    #[test]
+    fn an_archive_that_expands_past_the_budget_is_refused() {
+        let dir = scratch("budget");
+        let archive = emu68_zip(&dir, "Emu68-pistorm.zip");
+
+        let err = payload_within(&archive, &spec(classic(), Emu68Line::Stable), 8).unwrap_err();
+
+        assert_eq!(err.code(), "ART-FORMAT-MALFORMED", "{err}");
+        assert!(
+            err.to_string().contains("8 bytes"),
+            "the ceiling it broke has to be in the sentence: {err}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The budget the real entry point uses. A release of about ten megabytes
+    /// has to fit with room to spare, and a card's worth of anything must not.
+    #[test]
+    fn the_payload_budget_is_generous_and_finite() {
+        assert_eq!(MAX_TOTAL_BYTES, 256 * 1024 * 1024);
     }
 
     /// ART-103, at the point where it would cost a card that does not boot.
@@ -361,7 +481,9 @@ mod tests {
         }
         zip.finish().unwrap();
 
-        let files = emu68_payload(&path, &spec(classic(), Emu68Line::Stable)).unwrap();
+        let files = emu68_payload(&path, &spec(classic(), Emu68Line::Stable))
+            .unwrap()
+            .files;
         let config = files.iter().find(|f| f.name == "config.txt").unwrap();
         let text = String::from_utf8(config.bytes.clone()).unwrap();
 
@@ -418,7 +540,7 @@ mod tests {
         let mut wanted = spec(classic(), Emu68Line::Stable);
         wanted.firmware.kickstart_file = "kick31.rom".into();
 
-        let files = emu68_payload(&archive, &wanted).unwrap();
+        let files = emu68_payload(&archive, &wanted).unwrap().files;
         let rom = files.iter().find(|f| f.name == "kick31.rom").unwrap();
         assert_eq!(rom.bytes.len(), 512 * 1024);
 
@@ -491,7 +613,7 @@ mod tests {
         let mut wanted = spec(classic(), Emu68Line::Stable);
         wanted.kickstart = None;
 
-        let files = emu68_payload(&archive, &wanted).unwrap();
+        let files = emu68_payload(&archive, &wanted).unwrap().files;
         assert!(!files.iter().any(|f| f.name == "kick.rom"));
 
         let _ = std::fs::remove_dir_all(&dir);

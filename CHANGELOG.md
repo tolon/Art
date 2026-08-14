@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### You can ask for a PiStorm card (2026-08-14)
+
+#### Added
+- **The OS Builder can build a boot-only card.** Point ART at the Emu68 release
+  you downloaded and at your own Kickstart, choose a size and where the image
+  goes, and it produces a card image: the Raspberry Pi's boot partition with
+  the firmware and your ROM on it, and a partition table an Amiga can see. The
+  engine could do this since the day before; nothing in the application could
+  ask for it.
+- **Preview before build.** The card is described first — where the boot
+  partition and the Amiga disk land, which file the card boots, what your ROM
+  is, and every file going onto the boot partition with its size. Nothing is
+  written until you have seen that.
+- **A destination that already exists is refused before the button**, not by a
+  build that fails halfway.
+- **Advanced settings on the same screen**: the board, the Emu68 release line,
+  the FAT32 label, the boot partition's size and the Amiga disk's partition.
+  The first four are the same settings the PiStorm studio uses — change them in
+  either place and both agree.
+
+#### Known
+- The Amiga volumes on the card are **not formatted**. The Amiga sees them and
+  offers to format them; installing AmigaOS onto them is not built yet, and the
+  screen says so rather than leaving it to be discovered.
+- One Amiga disk per card. Several disks with a boot menu is multiboot, which
+  is not built yet.
+- **No card ART has built has been flashed or booted.**
+
 ### Writing into a partition of a small hard disk image (2026-08-13)
 
 #### Fixed

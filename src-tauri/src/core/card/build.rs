@@ -391,7 +391,7 @@ mod tests {
             pi: PiModel::Pi3APlus,
         };
 
-        let boot_files = emu68_payload(
+        let payload = emu68_payload(
             Path::new(&zip),
             &PayloadSpec {
                 hardware,
@@ -405,8 +405,12 @@ mod tests {
         )
         .unwrap();
 
-        println!("payload: {} files", boot_files.len());
-        for file in &boot_files {
+        println!(
+            "payload: {} files, booting {}",
+            payload.files.len(),
+            payload.kernel_file
+        );
+        for file in &payload.files {
             println!("  {} ({} bytes)", file.name, file.bytes.len());
         }
 
@@ -416,7 +420,7 @@ mod tests {
                 total_bytes: size_gb * GIB,
                 boot_bytes: 0,
                 label: "ART CARD".into(),
-                boot_files,
+                boot_files: payload.files,
                 areas: vec![AreaSpec {
                     size_bytes: 0,
                     partitions: vec![work_partition("SDH0", 512)],

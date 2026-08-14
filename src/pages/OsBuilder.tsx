@@ -35,14 +35,31 @@ import {
   whatYouSupply,
 } from "@/lib/osBuilder";
 import { pistormIdentifyRom, type RomInfo } from "@/lib/pistorm";
-import { isTextOrNothing, isWholeNumberBetween } from "@/lib/remembered";
+import { isOneOf, isTextOrNothing, isWholeNumberBetween } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
+import { CardBuilder } from "@/components/osbuilder/CardBuilder";
+
+/**
+ * What the screen is being asked for.
+ *
+ * `boot-card` is the one ART can actually write today: a card with the Pi's
+ * firmware, a Kickstart and a partition table, and no AmigaOS on it. Every
+ * distribution is still Coming Later, and the two live side by side rather
+ * than the working one being hidden behind the ones that are not (§96).
+ */
+type BuildKind = "distro" | "boot-card";
 
 /** Card sizes people actually buy. Typed sizes are allowed too. */
 const CARD_SIZES_GB = [16, 32, 64, 128, 256];
 
 export function OsBuilder() {
   const { t } = useTranslation();
+
+  const [kind, setKind] = useRemembered<BuildKind>(
+    "osBuilder.kind",
+    isOneOf<BuildKind>("distro", "boot-card"),
+    "boot-card"
+  );
 
   const [profiles, setProfiles] = useState<DistroProfile[]>([]);
   const [selectedId, setSelectedId] = useRemembered<string | null>(
@@ -153,6 +170,31 @@ export function OsBuilder() {
         </div>
       )}
 
+      {/* Which of the two things this screen does. The working one is first,
+          because it is the one that produces a file. */}
+      <section className="card" style={{ marginBottom: 16 }}>
+        <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("osBuilder.what.heading")}</h2>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+          <KindChoice
+            chosen={kind === "boot-card"}
+            onChoose={() => setKind("boot-card")}
+            title={t("osBuilder.what.bootCard")}
+            hint={t("osBuilder.what.bootCardHint")}
+          />
+          <KindChoice
+            chosen={kind === "distro"}
+            onChoose={() => setKind("distro")}
+            title={t("osBuilder.what.distro")}
+            hint={t("osBuilder.what.distroHint")}
+            comingLater={t("common.comingLater")}
+          />
+        </div>
+      </section>
+
+      {kind === "boot-card" && <CardBuilder />}
+
+      {kind === "distro" && (
+        <>
       {/* The state of the whole screen, said once and at the top rather than
           discovered at the bottom. */}
       <div
@@ -349,6 +391,47 @@ export function OsBuilder() {
           {t("osBuilder.prepare.explain")}
         </p>
       </section>
+        </>
+      )}
+    </div>
+  );
+}
+
+function KindChoice({
+  chosen,
+  onChoose,
+  title,
+  hint,
+  comingLater,
+}: {
+  chosen: boolean;
+  onChoose: () => void;
+  title: string;
+  hint: string;
+  comingLater?: string;
+}) {
+  return (
+    <div
+      onClick={onChoose}
+      style={{
+        padding: "10px 12px",
+        borderRadius: 4,
+        border: chosen ? "1px solid var(--accent)" : "1px solid var(--border)",
+        background: chosen ? "var(--bg-hover)" : "var(--bg)",
+        cursor: "pointer",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+        <strong style={{ fontSize: 13 }}>{title}</strong>
+        {comingLater && (
+          <span className="badge badge-muted" style={{ fontSize: 10 }}>
+            {comingLater}
+          </span>
+        )}
+      </div>
+      <p className="muted" style={{ margin: "4px 0 0", fontSize: 11 }}>
+        {hint}
+      </p>
     </div>
   );
 }

@@ -61,12 +61,13 @@ import {
   type VariantChoice,
 } from "@/lib/pistorm";
 import { usePowerMode } from "@/lib/uxmode";
-import { isOneOf, isTextOrNothing } from "@/lib/remembered";
+import { isTextOrNothing } from "@/lib/remembered";
 import { useRemembered, useRememberedShape } from "@/lib/useRemembered";
 import {
   EMU68_OPTION_SPEC,
   FIRMWARE_SPEC,
   HARDWARE_SPEC,
+  isEmu68Line,
   visibleOptionGroups,
   type OptionGroup,
 } from "@/lib/pistormOptions";
@@ -80,7 +81,6 @@ import {
 const PROFILES: Emu68Profile[] = ["performance", "daily", "compatibility", "diagnostics"];
 
 const EMU68_LINES: Emu68Line[] = ["stable", "alpha11"];
-const isEmu68Line = isOneOf<Emu68Line>("stable", "alpha11");
 
 const DISPLAY_MODES: Array<{ id: string; mode: DisplayMode; tokens: string }> = [
   { id: "auto", mode: "auto", tokens: "—" },

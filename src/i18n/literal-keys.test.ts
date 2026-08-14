@@ -153,6 +153,11 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // first three is enumerated in `osBuilder.test.ts`, and the notes are
     // checked against both catalogues by `distro-registry-keys.test.ts`, which
     // is the check this scan cannot make.
-    expect(dynamicCalls).toBe(61);
+    // 61 → 64 (the card builder): a build's warnings and the reason the Build
+    // button is off are `Phrase`s from `@/lib/cardBuild` — the kinds are Rust
+    // enums, and putting their sentences on this side is what keeps them in
+    // the user's language (ART-060). Every variant of both mappers is
+    // enumerated in `phrase-keys.test.ts`.
+    expect(dynamicCalls).toBe(64);
   });
 });

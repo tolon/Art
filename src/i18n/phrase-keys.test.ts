@@ -32,6 +32,19 @@ import {
   type CopyReport,
 } from "@/lib/volumeWrite";
 import { describeVerdict, describeOutcome, type WhdloadOutcome, type WhdloadVerdict } from "@/lib/whdload";
+import {
+  buildBlocker,
+  defaultPartition,
+  warningPhrase,
+  type CardBuildPlan,
+  type CardBuildRequest,
+  type CardBuildWarning,
+} from "@/lib/cardBuild";
+import {
+  DEFAULT_EMU68_OPTIONS,
+  DEFAULT_FIRMWARE_CONFIG,
+  DEFAULT_HARDWARE,
+} from "@/lib/pistorm";
 
 /** Whether `dotted` (e.g. "whdload.outcome.installed") names a string leaf. */
 function isLeafKey(dotted: string): boolean {
@@ -386,5 +399,56 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     const short = planShortfall({ ...base, blocks_needed: 30 });
     expect(short).not.toBeNull();
     expect(isLeafKey(short!.key), short!.key).toBe(true);
+  });
+
+  it("warningPhrase: every CardBuildWarning variant resolves", () => {
+    const warnings: CardBuildWarning[] = [
+      { kind: "no-kickstart" },
+      { kind: "rom-unrecognised" },
+      { kind: "rom-wrong-machine", rom: "Kickstart 3.1 (A600)" },
+      { kind: "volumes-unformatted" },
+    ];
+    for (const warning of warnings) {
+      const phrase = warningPhrase(warning);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("buildBlocker: every reason a card cannot be built resolves", () => {
+    const request: CardBuildRequest = {
+      archive: "Emu68-pistorm.zip",
+      kickstart: null,
+      dest: "card.img",
+      total_bytes: 2 * 1024 * 1024 * 1024,
+      boot_bytes: 0,
+      label: "ART CARD",
+      hardware: DEFAULT_HARDWARE,
+      line: "stable",
+      firmware: DEFAULT_FIRMWARE_CONFIG,
+      options: DEFAULT_EMU68_OPTIONS,
+      partitions: [defaultPartition()],
+    };
+    const plan = {
+      layout: { total_sectors: 0, boot: {}, areas: [] },
+      boot_files: [],
+      kernel_file: "Emu68-pistorm.gz",
+      kickstart_file: null,
+      rom: null,
+      warnings: [],
+      dest_exists: false,
+    } as unknown as CardBuildPlan;
+
+    const blockers = [
+      buildBlocker({ ...request, archive: "" }, plan),
+      buildBlocker({ ...request, dest: "" }, plan),
+      buildBlocker({ ...request, partitions: [] }, plan),
+      buildBlocker(request, null),
+      buildBlocker(request, { ...plan, dest_exists: true }),
+    ];
+    for (const blocker of blockers) {
+      expect(blocker).not.toBeNull();
+      expect(isLeafKey(blocker!.key), blocker!.key).toBe(true);
+    }
+    expect(buildBlocker(request, plan)).toBeNull();
   });
 });

@@ -11,13 +11,29 @@
 //! isolation would report fifteen working partitions as broken (ART-097). The
 //! rule lives in `core/`, where a test pins it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, State};
 
+use crate::core::card::build::{build_card, AreaSpec, CardSpec};
+use crate::core::card::payload::{emu68_payload, PayloadSpec};
 use crate::core::card::{read_card, CardImage};
-use crate::core::rdb::ParsedFileSystem;
+use crate::core::error::CoreResult;
+use crate::core::jobs::{JobId, ProgressSink};
+use crate::core::mbr::{plan_card, CardLayout};
+use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
+use crate::core::pistorm::firmware::FirmwareConfig;
+use crate::core::pistorm::hardware::{Emu68Line, PistormHardware};
+use crate::core::pistorm::options::Emu68Options;
+use crate::core::pistorm::rom_suits;
+use crate::core::rdb::{ParsedFileSystem, PartitionSpec};
+use crate::core::rom::{identify_rom, RomInfo};
 use crate::error::AppResult;
+
+use super::jobs::{spawn_job, JobRegistry};
+use super::oplog::{user_operation, write_to_path};
 
 /// A partition naming a filesystem **no** area on the card carries.
 ///
@@ -48,8 +64,11 @@ pub struct CardReport {
 /// and twenty gigabytes in between (§56).
 #[tauri::command]
 pub fn card_open(path: String) -> AppResult<CardReport> {
-    let card = read_card(&PathBuf::from(path.trim()))?;
+    Ok(report_for(read_card(&PathBuf::from(path.trim()))?))
+}
 
+/// The two derived answers, in the one place that knows the rule.
+fn report_for(card: CardImage) -> CardReport {
     let file_systems = card.file_systems();
     let unmountable = card
         .partitions_missing_driver()
@@ -61,11 +80,292 @@ pub fn card_open(path: String) -> AppResult<CardReport> {
         })
         .collect();
 
-    Ok(CardReport {
+    CardReport {
         card,
         file_systems,
         unmountable,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Building one (SD-1 · G2)
+// ---------------------------------------------------------------------------
+
+/// What a screen asks for when it wants a card.
+///
+/// One request type for **both** the plan and the build, and one function that
+/// turns it into a [`CardSpec`], so there is no way for a screen to show the
+/// user one card and write another.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CardBuildRequest {
+    /// The user's own Emu68 release archive. ART never downloads it (§2).
+    pub archive: String,
+    /// Their Kickstart. `None` builds a card with no ROM on it, which will not
+    /// boot — allowed and warned about, never substituted for.
+    pub kickstart: Option<String>,
+    /// Where the image goes. `SAFE_CREATE`: an existing file is refused.
+    pub dest: String,
+    pub total_bytes: u64,
+    /// `0` for the 1.10 GiB measured off both real cards.
+    #[serde(default)]
+    pub boot_bytes: u64,
+    pub label: String,
+    pub hardware: PistormHardware,
+    /// Which Emu68 release line the archive came from. It decides what the
+    /// archive's *name* means, and ART cannot tell from the bytes (ART-091).
+    pub line: Emu68Line,
+    #[serde(default)]
+    pub firmware: FirmwareConfig,
+    #[serde(default)]
+    pub options: Emu68Options,
+    /// The partitions of the card's one Amiga disk.
+    ///
+    /// One disk, taking whatever is left after the boot partition. Two and
+    /// three disks are multiboot — SD-3's G16 — and are not offered here
+    /// rather than half-built (§96).
+    pub partitions: Vec<PartitionSpec>,
+}
+
+/// A file on its way to the boot partition: its name and its size, never its
+/// bytes. A payload is megabytes and a screen needs a list.
+#[derive(Debug, Clone, Serialize)]
+pub struct PlacedFile {
+    pub name: String,
+    pub bytes: u64,
+}
+
+/// Something true about this card that the user would otherwise find out from
+/// an Amiga that does not come up.
+///
+/// A typed value rather than a sentence: `CoreError`'s English strings reach
+/// the UI untranslated (ART-060) and this is a screen's own text, so the kind
+/// travels and the words are the interface's, in the user's language.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum CardBuildWarning {
+    /// No Kickstart was chosen. The card is built and it will not boot.
+    NoKickstart,
+    /// A ROM was chosen and ART does not recognise it. A label, never a
+    /// refusal — an unknown ROM may still be the right one.
+    RomUnrecognised,
+    /// The ROM is one ART knows and it is not for this Amiga.
+    RomWrongMachine { rom: String },
+    /// **What SD-1 builds.** The Amiga sees a partition table it understands
+    /// and volumes it will offer to format; putting a system on them is SD-2's
+    /// work. Said plainly rather than left to be discovered (§10, §89).
+    VolumesUnformatted,
+}
+
+/// What building this request would produce. Writes nothing.
+#[derive(Debug, Clone, Serialize)]
+pub struct CardBuildPlan {
+    /// Where every part of the card lands, to the sector.
+    pub layout: CardLayout,
+    pub boot_files: Vec<PlacedFile>,
+    /// The file `config.txt` points the Pi's firmware at — the release's own
+    /// answer, not ART's (ART-103).
+    pub kernel_file: String,
+    /// The name the Kickstart is written under, if there is one.
+    pub kickstart_file: Option<String>,
+    /// The ROM as ART identifies it, so the user confirms what they picked.
+    pub rom: Option<RomInfo>,
+    pub warnings: Vec<CardBuildWarning>,
+    /// `SAFE_CREATE` would refuse. Said here so the screen can, before the
+    /// button rather than after it.
+    pub dest_exists: bool,
+}
+
+/// What a finished build produced.
+#[derive(Debug, Clone, Serialize)]
+pub struct CardBuildResult {
+    pub job_id: JobId,
+    pub dest: String,
+    pub layout: CardLayout,
+    /// The card **read back out of the file that was just written**, through
+    /// the same reader and the same report the Hard Disk studio shows for
+    /// somebody else's card. A build that cannot be read is not a build.
+    pub verified: CardReport,
+}
+
+/// The event a finished build arrives on.
+pub const CARD_BUILD_EVENT: &str = "card-build-result";
+
+/// The request as a card, without the payload. The one mapping both the plan
+/// and the build go through.
+fn card_spec(
+    request: &CardBuildRequest,
+    boot_files: Vec<crate::core::fat32::BootFile>,
+) -> CardSpec {
+    CardSpec {
+        total_bytes: request.total_bytes,
+        boot_bytes: request.boot_bytes,
+        label: request.label.clone(),
+        boot_files,
+        areas: vec![AreaSpec {
+            // Whatever is left after the boot partition.
+            size_bytes: 0,
+            partitions: request.partitions.clone(),
+            // No driver is embedded: SD-1 writes FFS partitions, which
+            // Kickstart mounts itself. A PFS3 card needs `create_rdb_layout`'s
+            // driver embedding and a driver to embed — SD-2 (ART-084).
+            file_systems: Vec::new(),
+        }],
+    }
+}
+
+/// The payload the request asks for, with the Kickstart read off disk.
+fn payload_for(request: &CardBuildRequest) -> CoreResult<crate::core::card::payload::Emu68Payload> {
+    let kickstart = match &request.kickstart {
+        Some(path) => Some(std::fs::read(Path::new(path.trim()))?),
+        None => None,
+    };
+
+    emu68_payload(
+        Path::new(request.archive.trim()),
+        &PayloadSpec {
+            hardware: request.hardware,
+            line: request.line,
+            firmware: request.firmware.clone(),
+            options: request.options.clone(),
+            kickstart,
+        },
+    )
+}
+
+/// What building this card would do. Writes nothing (§92's PREVIEW step).
+///
+/// Unpacking the release archive is what this costs, and it is one small
+/// archive with a total ceiling on it — not ART-066's shape, where planning
+/// meant unpacking a batch of the user's own archives on the command thread.
+#[tauri::command]
+pub fn card_plan_build(request: CardBuildRequest) -> AppResult<CardBuildPlan> {
+    let payload = payload_for(&request)?;
+    let spec = card_spec(&request, Vec::new());
+    let layout = plan_card(spec.total_bytes, spec.boot_bytes, &[0])?;
+
+    let mut warnings = vec![CardBuildWarning::VolumesUnformatted];
+
+    let rom = match &request.kickstart {
+        None => {
+            warnings.push(CardBuildWarning::NoKickstart);
+            None
+        }
+        Some(path) => match identify_rom(Path::new(path.trim())) {
+            Ok(info) => {
+                match rom_suits(&info, request.hardware.amiga) {
+                    // Recognised and wrong for this machine. A note, never a
+                    // block — the user may know something ART does not.
+                    Some(false) => warnings.push(CardBuildWarning::RomWrongMachine {
+                        rom: info.name.clone(),
+                    }),
+                    None => warnings.push(CardBuildWarning::RomUnrecognised),
+                    Some(true) => {}
+                }
+                Some(info)
+            }
+            // Unreadable is a real failure; unrecognised is not.
+            Err(err) => return Err(err.into()),
+        },
+    };
+
+    Ok(CardBuildPlan {
+        layout,
+        boot_files: payload
+            .files
+            .iter()
+            .map(|file| PlacedFile {
+                name: file.name.clone(),
+                bytes: file.bytes.len() as u64,
+            })
+            .collect(),
+        kernel_file: payload.kernel_file,
+        kickstart_file: request
+            .kickstart
+            .as_ref()
+            .map(|_| request.firmware.kickstart_file.clone()),
+        rom,
+        warnings,
+        dest_exists: Path::new(request.dest.trim()).exists(),
     })
+}
+
+/// Build the requested card. The half a unit test can host — `card_build` adds
+/// the job, the event and the log around it.
+fn build_requested_card(
+    request: &CardBuildRequest,
+    progress: &dyn ProgressSink,
+) -> CoreResult<BuiltRequestedCard> {
+    let payload = payload_for(request)?;
+    let spec = card_spec(request, payload.files);
+    let built = build_card(Path::new(request.dest.trim()), &spec, progress)?;
+
+    Ok(BuiltRequestedCard {
+        layout: built.layout,
+        verified: report_for(built.verified),
+    })
+}
+
+struct BuiltRequestedCard {
+    layout: CardLayout,
+    verified: CardReport,
+}
+
+/// Build a card image. Returns a job id (§54, §55).
+///
+/// Long by nature — a payload to unpack and a partition table, a filesystem
+/// and one to three RDBs to write — so it never runs on the command thread.
+/// Cancelling is safe by construction: `build_card` checks between whole units
+/// of work and removes the half-built file, which never existed a moment ago.
+#[tauri::command]
+pub fn card_build(
+    request: CardBuildRequest,
+    app: AppHandle,
+    registry: State<'_, Arc<JobRegistry>>,
+    oplog: State<'_, JsonlOperationLog>,
+) -> AppResult<JobId> {
+    let log_path = oplog.path().to_path_buf();
+    let registry = Arc::clone(&registry);
+    let emit_app = app.clone();
+    let dest = request.dest.trim().to_string();
+    let title = format!("Building {dest}");
+
+    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+        let outcome = build_requested_card(&request, progress);
+
+        // §53: a card is user data the moment it exists, and where it came
+        // from is the thing a manifest will later be built out of (G7).
+        let record = user_operation("Build a PiStorm card image")
+            .source(&request.archive)
+            .destination(&dest)
+            .detail("Card size", request.total_bytes.to_string())
+            .detail(
+                "Kickstart",
+                request.kickstart.clone().unwrap_or_else(|| "none".into()),
+            );
+        let record = match &outcome {
+            Ok(built) => record
+                .detail("Amiga disks", built.verified.card.areas.len().to_string())
+                .outcome(OperationOutcome::verified(
+                    !built.verified.card.areas.is_empty(),
+                )),
+            Err(err) => record.failure(err.code(), err.to_string()),
+        };
+        write_to_path(&log_path, &record);
+
+        let built = outcome?;
+        let _ = emit_app.emit(
+            CARD_BUILD_EVENT,
+            CardBuildResult {
+                job_id,
+                dest,
+                layout: built.layout,
+                verified: built.verified,
+            },
+        );
+        Ok(())
+    });
+
+    Ok(id)
 }
 
 #[cfg(test)]
@@ -155,6 +455,217 @@ mod tests {
         assert_eq!(report.unmountable.len(), 1);
         assert_eq!(report.unmountable[0].area, 0);
         assert_eq!(report.unmountable[0].drive_name, "DH0");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // -----------------------------------------------------------------------
+    // Building one
+    // -----------------------------------------------------------------------
+
+    use crate::core::pistorm::hardware::{AmigaTarget, PiModel, PistormVariant};
+    use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("art-card-build-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A zip shaped like the real Emu68 release: files at the root, a folder,
+    /// and the Pi's own `config.txt` naming the kernel it boots.
+    fn emu68_zip(dir: &std::path::Path) -> std::path::PathBuf {
+        use std::io::Write as _;
+        let path = dir.join("Emu68-pistorm.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        let options: zip::write::FileOptions<'_, ()> =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (entry, contents) in [
+            ("Emu68-pistorm.gz", &b"kernel"[..]),
+            ("start.elf", b"firmware"),
+            ("overlays/emu68.dtbo", b"overlay"),
+            ("config.txt", b"kernel=Emu68-pistorm.gz\narm_64bit=1\n"),
+        ] {
+            zip.start_file(entry, options).unwrap();
+            zip.write_all(contents).unwrap();
+        }
+        zip.finish().unwrap();
+        path
+    }
+
+    fn request(archive: &std::path::Path, dest: &std::path::Path) -> CardBuildRequest {
+        CardBuildRequest {
+            archive: archive.display().to_string(),
+            kickstart: None,
+            dest: dest.display().to_string(),
+            total_bytes: 2 * GIB,
+            boot_bytes: 0,
+            label: "ART CARD".into(),
+            hardware: PistormHardware {
+                amiga: AmigaTarget::A500,
+                variant: PistormVariant::Classic,
+                pi: PiModel::Pi3APlus,
+            },
+            line: Emu68Line::Stable,
+            firmware: FirmwareConfig::default(),
+            options: Emu68Options::default(),
+            partitions: vec![PartitionSpec {
+                drive_name: "SDH0".into(),
+                fs_type: AmigaHardDiskFs::FfsStandard,
+                size_mb: 512,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 0,
+            }],
+        }
+    }
+
+    /// The screen asks for a card; this is the shape that comes out. **One
+    /// Amiga disk taking whatever is left** — two and three disks are
+    /// multiboot, which is SD-3's G16 and is not pretended at here.
+    #[test]
+    fn a_request_becomes_the_card_the_screen_asked_for() {
+        let dir = scratch("spec");
+        let archive = emu68_zip(&dir);
+        let req = request(&archive, &dir.join("card.img"));
+
+        let spec = card_spec(&req, Vec::new());
+
+        assert_eq!(spec.total_bytes, 2 * GIB);
+        assert_eq!(spec.boot_bytes, 0, "0 means the measured 1.10 GiB default");
+        assert_eq!(spec.label, "ART CARD");
+        assert_eq!(spec.areas.len(), 1);
+        assert_eq!(
+            spec.areas[0].size_bytes, 0,
+            "the one Amiga disk takes the rest of the card"
+        );
+        assert_eq!(spec.areas[0].partitions.len(), 1);
+        assert_eq!(spec.areas[0].partitions[0].drive_name, "SDH0");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `SAFE_CREATE` is the build's answer, and it is a bad one to discover
+    /// after pressing the button: the plan says it, so the screen can.
+    #[test]
+    fn the_plan_says_the_destination_is_there_rather_than_refusing() {
+        let dir = scratch("exists");
+        let archive = emu68_zip(&dir);
+        let dest = dir.join("card.img");
+        std::fs::write(&dest, b"somebody's afternoon").unwrap();
+
+        let plan = card_plan_build(request(&archive, &dest)).unwrap();
+
+        assert!(plan.dest_exists, "and it is a plan, not a failure");
+        assert_eq!(
+            std::fs::read(&dest).unwrap(),
+            b"somebody's afternoon",
+            "planning writes nothing"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What the plan is for: the files, the kernel the release names (ART-103),
+    /// and the two things about this card that would otherwise be a surprise —
+    /// no ROM means no boot, and SD-1 builds a shape rather than a system.
+    #[test]
+    fn a_card_with_no_kickstart_is_planned_and_said_so() {
+        let dir = scratch("no-rom");
+        let archive = emu68_zip(&dir);
+
+        let plan = card_plan_build(request(&archive, &dir.join("card.img"))).unwrap();
+
+        assert_eq!(plan.kernel_file, "Emu68-pistorm.gz");
+        assert!(
+            plan.boot_files.iter().any(|f| f.name == "config.txt"),
+            "{:?}",
+            plan.boot_files
+        );
+        assert!(
+            plan.warnings.contains(&CardBuildWarning::NoKickstart),
+            "{:?}",
+            plan.warnings
+        );
+        assert!(
+            plan.warnings
+                .contains(&CardBuildWarning::VolumesUnformatted),
+            "SD-1 builds a partition table, not a system: {:?}",
+            plan.warnings
+        );
+        assert!(!plan.dest_exists);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The adapter, against the user's own release rather than a zip ART made
+    /// up — the same reason `build_real_card_when_asked` exists one layer down.
+    /// A synthetic fixture cannot be asked whether the plan a screen shows is
+    /// the plan a real Emu68 archive produces.
+    ///
+    /// ```text
+    /// ART_CARD_ZIP=…\Emu68-pistorm.zip ART_CARD_ROM=…\A1200.rom \
+    ///   cargo test plan_a_real_card_when_asked -- --nocapture
+    /// ```
+    #[test]
+    fn plan_a_real_card_when_asked() {
+        let Ok(zip) = std::env::var("ART_CARD_ZIP") else {
+            return;
+        };
+        let dir = scratch("real-plan");
+
+        let mut req = request(std::path::Path::new(&zip), &dir.join("card.img"));
+        req.kickstart = std::env::var("ART_CARD_ROM").ok();
+
+        let plan = card_plan_build(req).unwrap();
+
+        println!(
+            "plan: {} files, booting {}, ROM {:?}",
+            plan.boot_files.len(),
+            plan.kernel_file,
+            plan.rom.as_ref().map(|rom| rom.name.clone())
+        );
+        for warning in &plan.warnings {
+            println!("  warning: {warning:?}");
+        }
+        assert!(
+            plan.boot_files.iter().any(|f| f.name == plan.kernel_file),
+            "the kernel the config names has to be among the files"
+        );
+        assert!(!plan.dest_exists);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The one that matters: the plan the user approved is the card that gets
+    /// built. Both go through the same spec, so a screen cannot show one card
+    /// and write another.
+    #[test]
+    fn the_plan_describes_the_card_the_build_produces() {
+        use crate::core::jobs::NoProgress;
+
+        let dir = scratch("agree");
+        let archive = emu68_zip(&dir);
+        let dest = dir.join("card.img");
+        let req = request(&archive, &dest);
+
+        let plan = card_plan_build(req.clone()).unwrap();
+        let built = build_requested_card(&req, &NoProgress).unwrap();
+
+        assert_eq!(
+            plan.layout, built.layout,
+            "the card that was written is the one that was described"
+        );
+        assert_eq!(built.verified.card.areas.len(), 1);
+        assert_eq!(
+            built.verified.card.areas[0].offset_bytes,
+            plan.layout.areas[0].start_bytes(),
+            "and the Amiga disk is where the plan put it"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

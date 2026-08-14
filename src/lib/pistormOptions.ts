@@ -23,6 +23,7 @@ import type {
   AmigaChoice,
   AmigaTarget,
   DisplayMode,
+  Emu68Line,
   Emu68Options,
   FirmwareConfig,
   Overclock,
@@ -37,6 +38,9 @@ import type {
 export function nullOr<T>(guard: Guard<T>): Guard<T | null> {
   return (value: unknown): value is T | null => value === null || guard(value);
 }
+
+/** Which Emu68 release line a downloaded archive came from. */
+export const isEmu68Line = isOneOf<Emu68Line>("stable", "alpha11");
 
 export const HARDWARE_SPEC: { [K in keyof PistormHardware]: Guard<PistormHardware[K]> } = {
   amiga: isOneOf<AmigaTarget>("a500", "a1000", "a2000", "a600", "a1200"),

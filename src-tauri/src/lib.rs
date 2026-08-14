@@ -131,6 +131,8 @@ pub fn run() {
             commands::hdf::hdf_open,
             commands::hdf::hdf_create,
             commands::card::card_open,
+            commands::card::card_plan_build,
+            commands::card::card_build,
             commands::gotek::gotek_scan,
             commands::gotek::gotek_save,
             commands::distro::distro_profiles,

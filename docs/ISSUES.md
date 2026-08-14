@@ -23,6 +23,31 @@ what fixed it (with the test that proves it).
 
 ## Open
 
+**ART-104** 🟡 **The user's own A1200 Kickstart is not in the ROM database** —
+*found 2026-08-14, planning a card with the real material*
+`src-tauri/src/core/rom.rs` · `KNOWN_ROMS` holds one SHA-256 per ROM, and the
+3.1 (40.068) A1200 entry is
+`e40a5dfb3d017ba335127d85ea15c34cb27a2444230e963b7b6a1e378774d9b4`. The file the
+project's own material list names —
+`Kickstart v3.1 rev 40.68 (1993)(Commodore)(A1200).rom`, 524 288 bytes — hashes
+to `6d43840d4099a74170ea0f0425b6257c3891ebcaa39c4d1840075a9ab22b5707`. Same ROM,
+a different dump; there are several in circulation.
+
+So `identify_rom` falls back to size and answers *Generic Amiga 512KB ROM
+(Kickstart 2.x/3.x)*, and `card_plan_build` warns `RomUnrecognised` for the ROM
+that is very probably right. Nothing is refused and nothing is substituted —
+that part is by design — but two things are lost: the user is told ART does not
+know their ROM every time they build a card, and `rom_suits` returns `None`, so
+the *wrong machine* check can never fire for this file at all.
+
+**Not fixed here**, because the fix is a decision rather than a line: either
+`KNOWN_ROMS` carries every known dump per revision (a list of hashes, not one),
+or ART reads the version out of the ROM's own header the way `pistorm_kernel`
+reads `$VER:` and treats the checksum as confirmation rather than as
+identification. The second is the better answer and is a change to how ROMs are
+identified, not a data addition. Reproduced by
+`plan_a_real_card_when_asked` with `ART_CARD_ROM` set.
+
 **ART-099** 🟠 **Application Size cut the right-hand edge off every screen** — *diagnosis disproved by measurement; the clipping hazard fixed 2026-08-13; open only for a check on the real window*
 `src/components/layout/layout.css` · The Application Size feature applies CSS
 `zoom` to `.app-shell`, and `zoom` does not scale viewport units — so the shell
