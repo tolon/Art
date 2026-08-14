@@ -1629,6 +1629,7 @@
     "warning": {
       "noKickstart": "Kickstart seçilmedi. Kart oluşturulur, ama üzerine bir ROM konana kadar açılmaz.",
       "romUnrecognised": "ART bu ROM'u tanımıyor. Yine de doğru ROM olabilir.",
+      "romMachineUnknown": "{{rom}} — ART bu Kickstart'ın hangisi olduğunu biliyor, ama hangi Amiga için üretildiğini bilmiyor: birden çok makine aynı revizyonu paylaşıyor ve onları yalnızca tam sağlama ayırt ediyor. Makinene ait olan bu mu, kontrol et.",
       "romWrongMachine": "{{rom}}, seçtiğin Amiga'ya ait bir ROM değil. Bu genellikle açılmayan bir makine demektir ve ekranda bunu açıklayan bir şey olmaz — ama ne yaptığını biliyorsan devam et.",
       "volumesUnformatted": "Bu karttaki Amiga birimleri biçimlendirilmemiştir. Amiga onları görür ve biçimlendirmeyi teklif eder; üzerlerine sistem kurmak henüz yapılmadı."
     },

@@ -864,9 +864,12 @@ Amiga is told it needs a volume this card has not got.
 it.** Every piece is checked against an independent reader, against two real
 cards, and against real material — and none of that is an A500 coming up.
 
-**Not seen on a screen**: the health panel (G8) and the drop list (G15). Their
-engines have been, against real material; the panels have not. That is
-ART-062's shape and it is named rather than assumed.
+**Both new panels were walked on the running screen** on 2026-08-15, by the
+user, and both work: the health report on an existing card, and — the half
+nothing here could drive — **a real drag & drop**, which filled the archive
+field from `Emu68-pistorm.zip` and told a `.lha` it belongs on a volume this
+card has not got. Recorded because the previous line said the opposite and
+because ART-062 is what happens when nobody looks.
 
 **Then the thing no test can answer: flash a card and boot it.** Every piece is
 verified against an independent reader and against the two real cards, and none

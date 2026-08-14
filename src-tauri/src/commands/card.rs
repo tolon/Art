@@ -158,9 +158,16 @@ pub struct PlacedFile {
 pub enum CardBuildWarning {
     /// No Kickstart was chosen. The card is built and it will not boot.
     NoKickstart,
-    /// A ROM was chosen and ART does not recognise it. A label, never a
-    /// refusal — an unknown ROM may still be the right one.
+    /// A ROM was chosen and ART cannot say anything about it. A label, never
+    /// a refusal — an unknown ROM may still be the right one.
     RomUnrecognised,
+    /// **ART knows what the ROM is and not which machine it is for.** A
+    /// Kickstart states its version and revision in its own header, and three
+    /// real 3.1 dumps state `40.68` while claiming three different machines —
+    /// so the revision names the ROM and only the checksum names the machine
+    /// (ART-104). Saying "I do not recognise this" about a ROM ART has just
+    /// named would be the wrong sentence.
+    RomMachineUnknown { rom: String },
     /// The ROM is one ART knows and it is not for this Amiga.
     RomWrongMachine { rom: String },
     /// **What SD-1 builds.** The Amiga sees a partition table it understands
@@ -273,7 +280,15 @@ pub fn card_plan_build(request: CardBuildRequest) -> AppResult<CardBuildPlan> {
                     Some(false) => warnings.push(CardBuildWarning::RomWrongMachine {
                         rom: info.name.clone(),
                     }),
-                    None => warnings.push(CardBuildWarning::RomUnrecognised),
+                    // Nothing to compare against. Which of the two sentences
+                    // that deserves depends on whether ART named the ROM at
+                    // all — `version` is `Custom` only when it could not.
+                    None if info.version == "Custom" => {
+                        warnings.push(CardBuildWarning::RomUnrecognised)
+                    }
+                    None => warnings.push(CardBuildWarning::RomMachineUnknown {
+                        rom: info.name.clone(),
+                    }),
                     Some(true) => {}
                 }
                 Some(info)
@@ -806,6 +821,45 @@ mod tests {
         assert!(report.matches(), "{:?}", report.findings);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ART-104, against the ROMs on this machine rather than a synthetic one.
+    ///
+    /// ```text
+    /// ART_ROM_DIR="E:\amiga\Amigatolon\kickstart"     ///   cargo test identify_real_roms_when_asked -- --nocapture
+    /// ```
+    #[test]
+    fn identify_real_roms_when_asked() {
+        let Ok(dir) = std::env::var("ART_ROM_DIR") else {
+            return;
+        };
+        let mut entries: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("rom")))
+            .collect();
+        entries.sort();
+
+        let mut generic = 0;
+        for path in &entries {
+            match identify_rom(path) {
+                Ok(info) => {
+                    if info.version == "Custom" {
+                        generic += 1;
+                    }
+                    println!(
+                        "  {:<10} {:<8} {:<44} {}",
+                        info.version,
+                        info.revision,
+                        info.name,
+                        path.file_name().unwrap().to_string_lossy()
+                    );
+                }
+                Err(err) => println!("  FAILED {err}  {}", path.display()),
+            }
+        }
+        println!("{} of {} still unnamed", generic, entries.len());
     }
 
     /// The adapter, against the user's own release rather than a zip ART made

@@ -1629,6 +1629,7 @@
     "warning": {
       "noKickstart": "No Kickstart was chosen. The card will be built, and it will not boot until a ROM is on it.",
       "romUnrecognised": "ART does not recognise this ROM. It may still be the right one.",
+      "romMachineUnknown": "{{rom}} — ART knows which Kickstart this is, but not which Amiga it was built for: several machines share a revision and only the exact checksum tells them apart. Check it is the one for your machine.",
       "romWrongMachine": "{{rom}} is not a ROM for the Amiga you chose. Usually that means a machine that does not come up, with nothing on screen to explain it — but if you know what you are doing, carry on.",
       "volumesUnformatted": "The Amiga volumes on this card are not formatted. The Amiga will see them and offer to format them; putting a system on them is not built yet."
     },

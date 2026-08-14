@@ -414,6 +414,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     const warnings: CardBuildWarning[] = [
       { kind: "no-kickstart" },
       { kind: "rom-unrecognised" },
+      { kind: "rom-machine-unknown", rom: "Kickstart 3.1 (40.068)" },
       { kind: "rom-wrong-machine", rom: "Kickstart 3.1 (A600)" },
       { kind: "volumes-unformatted" },
     ];

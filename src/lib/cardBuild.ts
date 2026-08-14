@@ -72,6 +72,7 @@ export interface PlacedFile {
 export type CardBuildWarning =
   | { kind: "no-kickstart" }
   | { kind: "rom-unrecognised" }
+  | { kind: "rom-machine-unknown"; rom: string }
   | { kind: "rom-wrong-machine"; rom: string }
   | { kind: "volumes-unformatted" };
 
@@ -376,6 +377,11 @@ export function warningPhrase(warning: CardBuildWarning): Phrase {
       return { key: "cardBuilder.warning.noKickstart" };
     case "rom-unrecognised":
       return { key: "cardBuilder.warning.romUnrecognised" };
+    case "rom-machine-unknown":
+      return {
+        key: "cardBuilder.warning.romMachineUnknown",
+        params: { rom: warning.rom },
+      };
     case "rom-wrong-machine":
       return { key: "cardBuilder.warning.romWrongMachine", params: { rom: warning.rom } };
     case "volumes-unformatted":
