@@ -167,6 +167,9 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // computed key here, and its three values are a closed TypeScript union.
     // 70 → 71 (G15): what a dropped file becomes on this card is a `Phrase`
     // too, and `phrase-keys.test.ts` enumerates its five variants.
-    expect(dynamicCalls).toBe(71);
+    // 71 → 72: the health section's second button reads one of two literal
+    // keys depending on whether a check is running, the same shape the
+    // sidebar toggle uses.
+    expect(dynamicCalls).toBe(72);
   });
 });

@@ -1656,6 +1656,8 @@
       "heading": "Kartı denetle",
       "run": "Denetle",
       "running": "Denetleniyor…",
+      "chooseOther": "Başka bir kartı denetle…",
+      "chooseTitle": "Denetlenecek kart imajını seç",
       "passed": "ART'ın denetleyebildiği her şey doğru.",
       "passedWithGaps": "ART'ın denetleyebildiklerinde bir sorun yok — ve hiç cevaplayamadığı {{unanswered}} soru var. Aşağıda listeli.",
       "failed": "{{count}} denetim başarısız. Bu kart karta yazılmaya hazır değil.",

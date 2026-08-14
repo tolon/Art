@@ -1656,6 +1656,8 @@
       "heading": "Check the card",
       "run": "Check it",
       "running": "Checking…",
+      "chooseOther": "Check another card…",
+      "chooseTitle": "Choose a card image to check",
       "passed": "Everything ART can check is right.",
       "passedWithGaps": "Nothing is wrong with what ART could check — and {{unanswered}} question(s) it could not answer at all. They are listed below.",
       "failed": "{{count}} check(s) failed. This card is not ready to flash.",
