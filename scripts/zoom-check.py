@@ -47,7 +47,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # Every screen that is a plain page. The Files screen opts out of the centred
 # column (`.app-content-wide`) and is measured by its own pane rules, so it is
 # not part of this question.
-ROUTES = ["#/", "#/settings", "#/hard-disk", "#/pistorm", "#/aminet", "#/rom", "#/collection"]
+ROUTES = ["#/", "#/settings", "#/hard-disk", "#/pistorm", "#/aminet", "#/rom", "#/collection", "#/os-builder"]
 ZOOMS = [1, 1.3, 2]
 
 # The user's own window, maximised, from ART-099. Measuring at a small default

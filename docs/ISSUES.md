@@ -48,7 +48,35 @@ identification. The second is the better answer and is a change to how ROMs are
 identified, not a data addition. Reproduced by
 `plan_a_real_card_when_asked` with `ART_CARD_ROM` set.
 
-**ART-099** 🟠 **Application Size cut the right-hand edge off every screen** — *diagnosis disproved by measurement; the clipping hazard fixed 2026-08-13; open only for a check on the real window*
+**ART-099** 🟠 **Application Size cut the right-hand edge off every screen** — *the real window was finally looked at on 2026-08-14, and it does clip; the mechanism is still not established*
+
+**2026-08-14 — the check this entry was left open for, and it did not come back
+clean.** The running application, maximised on a 2560×1440 display at 150 %
+Windows scaling, with `appZoom: 130` in `settings.json`: the content column is
+offset to the right by roughly 410 CSS px, and the text on the right-hand side
+of every card runs off the window and is cut mid-word — *"ART hiçbir dağıtımı
+indirmez — siz indirir, ART'a…"*. Both halves are the same fact: `.app-content
+> *` is `max-width: 1180px; margin-inline: auto`, so a column the browser
+believes is much wider than the window centres its child, showing the left
+margin and pushing the right one off the edge.
+
+**And `scripts/zoom-check.py` does not reproduce it.** Eight routes, three
+Application Sizes, at the window size this entry was opened with (2575) *and*
+at the narrower one a 150 % display suggests (1471): `over=0` and
+`offscreen=none` every time, with `.app-shell` exactly one window wide. Both
+engines are Chromium 151 (Chrome 151.0.7922.138, WebView2 151.0.4129.78), so
+the obvious explanation — legacy versus standardised `zoom` semantics — is not
+available.
+
+So what is recorded here is an observation and a screenshot, not a diagnosis.
+**No fix should be attempted from this entry until the difference between the
+two engines is measured rather than reasoned about** — that is the mistake this
+entry already documents twice, and guessing a third time would be the same
+mistake. The next step is to make the *real* window report its own numbers
+(`.app-shell` and `.app-content` rects, `devicePixelRatio`, the computed
+`zoom`) rather than to infer them from a screenshot.
+
+The text below is what was true before that look.
 `src/components/layout/layout.css` · The Application Size feature applies CSS
 `zoom` to `.app-shell`, and `zoom` does not scale viewport units — so the shell
 divides first: `height: calc(100vh / var(--app-zoom))`, rendered back to exactly
