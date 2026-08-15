@@ -11,6 +11,21 @@
 //! So the unit of choice is a named set of [`PathRule`]s, and the recipe says
 //! which paths on which media are actually wanted.
 //!
+//! ## The one genuine file collision: `C/LoadModule`
+//!
+//! `Storage3.2` and `ModulesA1200_3.2` both carry a file at `C/LoadModule` —
+//! the only place two components in the shipped recipe actually write the
+//! same file (everything else two or more components touch is a `Subtree`
+//! merge point, like `Devs/` or `Locale/Languages`, not a collision — see
+//! the doc comment on `recipe::tests::no_two_components_claim_one_destination_without_declaring_it`).
+//! The two copies are measured **byte-identical**: SHA-256
+//! `35acfea734816965d271352f59c3643963f69c7e4b2469e3473c5f5a8a60fc14` for
+//! both. So the direction can't break anything either way; the recipe has
+//! `modules-a1200` declare the override, because the Modules disk is the one
+//! that ships `LoadModule` *beside the modules it exists to load* — the
+//! command belongs with that disk's own purpose, not with the general
+//! toolkit disk that happens to also carry a copy.
+//!
 //! Only `recipe` exists so far — the module tree this doc comment describes
 //! (`apply`, `plan`, `scan`, `source`, `startup`, `verify`) lands one task at
 //! a time, each adding its own `pub mod` line, so the crate compiles at the

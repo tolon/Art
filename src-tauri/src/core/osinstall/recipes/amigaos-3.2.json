@@ -39,24 +39,123 @@
       ]
     },
     {
+      "id": "locale-de",
+      "media": "Locale-DE",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-dk",
+      "media": "Locale-DK",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
       "id": "locale-en",
       "media": "Locale-EN",
       "rules": [
         { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
         { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
-      ],
-      "overrides": ["locale-base"]
+      ]
     },
     {
-      "id": "modules-a1200",
-      "media": "ModulesA1200_3.2",
-      "condition": { "condition": "rom-older-than", "major": 47 },
-      "exclusive_group": "modules",
+      "id": "locale-es",
+      "media": "Locale-ES",
       "rules": [
-        { "from": "C/LoadModule", "to": "C/LoadModule", "kind": "file" },
-        { "from": "LIBS/Modules", "to": "Libs/Modules", "kind": "subtree" },
-        { "from": "DEVS/A1200", "to": "Devs/A1200", "kind": "subtree" },
-        { "from": "LIBS/A1200", "to": "Libs/A1200", "kind": "subtree" }
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-fr",
+      "media": "Locale-FR",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-gr",
+      "media": "Locale-GR",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-it",
+      "media": "Locale-IT",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-nl",
+      "media": "Locale-NL",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-no",
+      "media": "Locale-NO",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-pl",
+      "media": "Locale-PL",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-pt",
+      "media": "Locale-PT",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-ru",
+      "media": "Locale-RU",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-se",
+      "media": "Locale-SE",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-tr",
+      "media": "Locale-TR",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-uk",
+      "media": "Locale-UK",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
       ]
     },
     {
@@ -91,7 +190,7 @@
         { "from": "System", "to": "System", "kind": "subtree" },
         { "from": "Tools", "to": "Tools", "kind": "subtree" }
       ],
-      "overrides": ["workbench-base", "extras", "storage", "classes"]
+      "overrides": ["workbench-base", "extras", "storage"]
     },
     {
       "id": "backdrops",
@@ -125,14 +224,14 @@
         { "from": "C/MuScan", "to": "C/MuScan", "kind": "file" },
         { "from": "C/MuSetCacheMode", "to": "C/MuSetCacheMode", "kind": "file" },
         { "from": "C/OmniScsiPatch", "to": "C/OmniScsiPatch", "kind": "file" },
-        { "from": "LIBS/68020.library", "to": "Libs/68020.library", "kind": "file" },
-        { "from": "LIBS/68030.library", "to": "Libs/68030.library", "kind": "file" },
-        { "from": "LIBS/68040.library", "to": "Libs/68040.library", "kind": "file" },
-        { "from": "LIBS/68060.library", "to": "Libs/68060.library", "kind": "file" },
-        { "from": "LIBS/680x0.library", "to": "Libs/680x0.library", "kind": "file" },
-        { "from": "LIBS/mmu.library", "to": "Libs/mmu.library", "kind": "file" },
-        { "from": "LIBS/memory.library", "to": "Libs/memory.library", "kind": "file" },
-        { "from": "LIBS/disassembler.library", "to": "Libs/disassembler.library", "kind": "file" }
+        { "from": "Libs/68020.library", "to": "Libs/68020.library", "kind": "file" },
+        { "from": "Libs/68030.library", "to": "Libs/68030.library", "kind": "file" },
+        { "from": "Libs/68040.library", "to": "Libs/68040.library", "kind": "file" },
+        { "from": "Libs/68060.library", "to": "Libs/68060.library", "kind": "file" },
+        { "from": "Libs/680x0.library", "to": "Libs/680x0.library", "kind": "file" },
+        { "from": "Libs/mmu.library", "to": "Libs/mmu.library", "kind": "file" },
+        { "from": "Libs/memory.library", "to": "Libs/memory.library", "kind": "file" },
+        { "from": "Libs/disassembler.library", "to": "Libs/disassembler.library", "kind": "file" }
       ]
     },
     {
@@ -169,8 +268,20 @@
         { "from": "Storage/Presets", "to": "Storage/Presets", "kind": "subtree" },
         { "from": "Storage/DefIcons", "to": "Storage/DefIcons", "kind": "subtree" },
         { "from": "Storage/Env-Archive", "to": "Storage/Env-Archive", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "modules-a1200",
+      "media": "ModulesA1200_3.2",
+      "condition": { "condition": "rom-older-than", "major": 47 },
+      "exclusive_group": "modules",
+      "rules": [
+        { "from": "C/LoadModule", "to": "C/LoadModule", "kind": "file" },
+        { "from": "LIBS/Modules", "to": "Libs/Modules", "kind": "subtree" },
+        { "from": "DEVS/A1200", "to": "Devs/A1200", "kind": "subtree" },
+        { "from": "LIBS/A1200", "to": "Libs/A1200", "kind": "subtree" }
       ],
-      "overrides": ["modules-a1200"]
+      "overrides": ["storage"]
     }
   ]
 }

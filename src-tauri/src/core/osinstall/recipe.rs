@@ -149,16 +149,27 @@ mod tests {
         }
     }
 
+    /// Only `File` rules are checked here. A `Subtree` destination is a
+    /// merge point, not a claim: Workbench, Extras and Classes all
+    /// legitimately contribute to `Devs/`, and every language disk
+    /// contributes a different `.language` file to `Locale/Languages` —
+    /// nothing is being overwritten, so nothing needs an `overrides`
+    /// declaration. What this test actually guards against is two
+    /// components writing the same **file**, which is exactly what taking
+    /// `ModulesA1200`'s whole `C/` would have done. The expanded, file-level
+    /// check over the media a real install folder actually has belongs to
+    /// `plan()` (a later task) — this one only proves the shipped recipe is
+    /// internally consistent about the files it names.
     #[test]
     fn no_two_components_claim_one_destination_without_declaring_it() {
         let recipe = recipe();
         let mut owner: HashMap<&str, &str> = HashMap::new();
         for component in &recipe.components {
-            for rule in &component.rules {
+            for rule in component.rules.iter().filter(|r| r.kind == RuleKind::File) {
                 if let Some(first) = owner.insert(rule.to.as_str(), component.id.as_str()) {
                     assert!(
                         component.overrides.iter().any(|o| o == first),
-                        "'{}' and '{}' both write '{}' and neither declared an override",
+                        "'{}' and '{}' both write the file '{}' and neither declared an override",
                         first,
                         component.id,
                         rule.to
