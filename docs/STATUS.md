@@ -821,12 +821,13 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
 
 ## Picking up next session
 
-*Last session: 2026-08-15. Nothing is half-done on disk; `sd-1` carries the
-preload screen's commits ahead of `origin/sd-1`.*
+*Last session: 2026-08-15. Nothing is half-done on disk and the working tree is
+clean; `sd-1` carries **21 commits ahead of `origin/sd-1`** — the preload screen
+and the whole of G11. Not pushed.*
 
-**The tree is green**: 1167 Rust (run twice), 474 frontend, clippy clean at
-`-D warnings`, TypeScript clean, amitools oracle 53 both ways, the 7-Zip FAT32
-oracle clean on a real card's 21 boot files.
+**The tree is green**: 1203 Rust (run twice), 490 frontend across 43 files,
+clippy clean at `-D warnings`, TypeScript clean, amitools oracle 53 both ways,
+the 7-Zip FAT32 oracle clean on a real card's 21 boot files.
 
 ### Where the phases stand
 
@@ -838,36 +839,60 @@ read it back independently. **What is left in SD-1 is not code: flash a card
 and boot an A500.** The materials are all here bar a microSD card, a USB reader
 and an HDMI cable.
 
-**SD-2 has opened.** G3 route E is built, proven and now on a screen:
-`core/preload/` plans and runs a preload, `tools/hst_imager.rs` drives
-`hst-imager`, `core/` still launches nothing — the boundary is a trait — and
-the OS Builder's third kind asks for it. Run for real on 2026-08-15: `DH0`
-formatted as `Work` on a card ART built, a tree copied in, and the tool listed
-it back as 1 directory, 2 files, 20 B with `----RWED` on each.
+**SD-2 is half built.** Two of its five gaps are done, engine and screen:
 
-**What the screen has and has not been through.** It was mounted and driven in
-a real browser against the real bundle — the third kind clicked, every string
-resolved, no raw key and no `{{variable}}` on screen, nothing overflowing. It
-has **not** been driven against a real card through Tauri: the engine has, the
-screen in front of it has not, and that is the same rung `test/README.md`
-keeps for everything else.
+- **G3 route E** — `core/preload/` plans and runs a preload, `tools/hst_imager.rs`
+  drives `hst-imager`, `core/` still launches nothing (the boundary is a trait),
+  and the OS Builder's third kind asks for it. Run for real on 2026-08-15: `DH0`
+  formatted as `Work` on a card ART built, a tree copied in, and the tool listed
+  it back as 1 directory, 2 files, 20 B with `----RWED` on each.
+- **G11** — `core/layout/` and its own `/layout` screen, a peer of the OS Builder
+  rather than a page inside it. Design: [content-layout](superpowers/specs/2026-08-15-content-layout-design.md),
+  plan: [content-layout](superpowers/plans/2026-08-15-content-layout.md).
+
+**G5, G9 and G10 are owed**, and G5 is the big one.
+
+**What the two screens have and have not been through.** Both were mounted and
+driven in a real browser against the real bundle — every string resolved, no raw
+key and no `{{variable}}`, and for G11 that browser pass caught a bug the tests
+could not (the drawer dropdown leaking a policy field's value). **Neither has
+been driven in `pnpm tauri dev` against real material**, and **no staging tree
+G11 builds has been carried onto a card**. The preload *engine* has been through
+the real tool; the screen in front of it has not. That is the same rung
+`test/README.md` keeps for everything else.
 
 ### What to pick up
 
-- **Drive the preload screen against the real card**, in `pnpm tauri dev`, with
-  `E:\amiga\ProjeART\card.img` and `E:\amiga\Amigatolon\hstimager\hst.imager.exe`.
-  The engine has been through it; the screen has not.
-- **G9 (ROM pairing)** — pure bookkeeping, and ART-104 made ROM identification
-  sound first.
-- **G5 (OS install)** — now unblocked, because there is a formatted volume to
-  install onto.
-- **G11 (what goes where)** — turns G15's *"belongs on an Amiga volume"* into a
-  real answer.
+Two of these are the same shape — a built screen that no human has driven — and
+doing them together is one session with the application open.
+
+- **Drive both new screens in `pnpm tauri dev` against real material.** For
+  preload: `E:\amiga\ProjeART\screen-test.img` (a copy of the built card, made
+  for exactly this) with `E:\amiga\Amigatolon\hstimager\hst.imager.exe`, and the
+  content tree at `E:\amiga\ProjeART\preload-tree\`. Expect two plan steps —
+  format `SDH0` as `Work`, then copy — and **no** driver-embed step, since the
+  partition is FFS and Kickstart carries it. For layout: drop a folder of real
+  Amiga files on `/layout`, retarget a row, and check the staging tree it
+  builds. Afterwards the tool's own `fs dir` is the independent read-back, and
+  Settings → Operation Log should carry both runs with `verified: false`.
+- **G5 (OS install)** — the largest thing left in SD-2, and now unblocked twice
+  over: there is a formatted volume to install onto and a staging tree to fill
+  it from. Wants its own design round; extracting AmigaOS 3.2/3.9 media without
+  running the Amiga Installer is not a patch.
+- **G9 (ROM pairing)** — smaller than it looks. Half of it is already done by
+  `CardBuilder` (the ROM is placed on FAT32 under the name the config points
+  at); the half that remains is pairing a ROM with an *OS volume*, which wants
+  G5 first.
+- **G10 (launcher metadata export)** — iGame/AGS metadata onto a GAMES: volume.
+  Pairs naturally with G11, which is what puts games there.
 - **tolunnet / tolunwifi**: decided as ART Baseline's default network stack and
   WiFi suite, and **not yet coded anywhere**. They belong beside SD-2's package
   manifest, which sits next to G5.
+- **Six issues G11 opened and did not fix**: [ART-105 … ART-110](ISSUES.md).
+  ART-106 is the one worth reading first — the plan never considers where a
+  WHDLoad icon lands, so §82 can fail from the other side.
 
-### Three things this project keeps re-learning
+### Four things this project keeps re-learning
 
 Every one of them cost a wrong turn on 2026-08-15 alone, and every one would
 have shipped behind green tests:
@@ -884,11 +909,23 @@ have shipped behind green tests:
 3. **A doc comment that promises the opposite of the code is a trap with a
    fuse.** `MbrPartition::index` claimed to be the number everybody writes down
    and was zero-based; it cost a failed run before `slot_number()` existed.
+4. **A guarantee that holds is not the same as a goal that works.** G11's
+   layout screen set a `stale` flag on every retarget so an unverified collision
+   list could never gate Apply — and it held, on every path. What nobody asked
+   was whether the user could then *apply*: the only thing that cleared the flag
+   was a fresh preview, which rebuilds the plan from policy and throws the edit
+   away. The editable preview, which is the entire answer to "ART cannot tell a
+   demo from a game", could not be used at all, and `FEATURES.md` already claimed
+   it. Seven per-task reviews passed it; the whole-branch review caught it. When
+   a rule is added to protect something, the next question is what the rule costs
+   the thing it protects.
 
 ### Open issues
 
-Fourteen entries remain open ([ISSUES.md](ISSUES.md)); three are waiting on a
-decision rather than on work. ART-099 and ART-104 closed on 2026-08-15.
+Twenty entries remain open ([ISSUES.md](ISSUES.md)); three are waiting on a
+decision rather than on work. ART-099 and ART-104 closed on 2026-08-15, and
+ART-105 … ART-110 opened the same day out of G11's whole-branch review — all six
+in code that landed that day, none in anything older.
 
 **Both of SD-1's open decisions are answered** (2026-08-13), and by hardware
 rather than by preference — the user has an **A500 with a classic PiStorm on a
@@ -966,6 +1003,13 @@ merely being nice to know.
   drive a 300 MB oracle image would not fit on. `ART_SCRATCH` overrides it in
   the scripts. A card ART built from the real release is sitting there as
   `card.img`.
+- **Staged on 2026-08-15 for the screen run that has not happened yet**, both in
+  `E:\amiga\ProjeART`: `screen-test.img`, a byte copy of `card.img` so the
+  original survives being formatted, and `preload-tree\` holding `Readme` and
+  `S\Startup-Sequence` for the copy step. That card's one Amiga partition is
+  `SDH0`, FFS, 0.90 GiB, in MBR slot 2 — so a correct preload plan has **two**
+  steps and no driver-embed step, because Kickstart carries FFS. If the plan
+  shows three, something is wrong before anything is formatted.
 - Rebuilding that card is the fastest way to see the whole engine work at once:
 
   ```bash
