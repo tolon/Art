@@ -126,15 +126,52 @@ impl AdfSource {
         Ok(Some(current))
     }
 
+    /// The media's own root, as a [`MediaEntry`] — never read off the root
+    /// block itself.
+    ///
+    /// The root block reuses `PROTECT_OFFSET`/`BYTE_SIZE_OFFSET`/
+    /// `COMMENT_OFFSET` for its bitmap-page table: those bytes are real
+    /// block pointers, not protection bits or a comment, on every root block
+    /// that has ever been formatted. Reading them anyway is worse than an
+    /// error, because the result is bounds-safe and plausible-looking — a
+    /// `MediaEntry` an `apply` step could carry straight into a `.uaem`
+    /// sidecar and never notice it was never AmigaDOS metadata at all. So the
+    /// root is its own case, not a block read: `protection: 0` (`----rwed`)
+    /// and an empty `date`/`comment` are **declared defaults**, not a
+    /// reading — the only field `RootBlock::parse` actually reads correctly
+    /// off the root (its `rDate`, at the same `DAYS_OFFSET`/`MINS_OFFSET`/
+    /// `TICKS_OFFSET` this type otherwise reads for a file or directory) is
+    /// deliberately left unused here too, so a `MediaEntry` never mixes one
+    /// genuinely-read field with two fabricated ones.
+    ///
+    /// `path` is `""`, matching what [`Self::normalized`] already collapses
+    /// an all-slashes path to, and matching a `Subtree` rule's own
+    /// `from: ""` — the only rule shape that ever names the root.
+    fn root_entry(&self) -> MediaEntry {
+        MediaEntry {
+            path: String::new(),
+            is_dir: true,
+            size: 0,
+            protection: 0,
+            date: AmigaDate {
+                days: 0,
+                mins: 0,
+                ticks: 0,
+            },
+            comment: String::new(),
+        }
+    }
+
     /// Build a [`MediaEntry`] for `block`, already known to sit at `path`.
     ///
     /// Reads the protection, comment and date fields straight off the header
     /// block rather than through `VolumeWriter::attributes` — the same
     /// fields, at the same offsets, without needing a `BlockDeviceMut`. Only
-    /// meaningful for a real file or directory header; `walk`'s recursion
-    /// never calls this for the root itself (root entries come from
-    /// `dir::entries_in`, which never yields the directory it was asked
-    /// about), so the root's differently-shaped block never reaches it.
+    /// ever called with a real file or directory header: `walk`'s recursion
+    /// reaches this through `dir::entries_in`, which yields a directory's
+    /// *children*, never the directory being asked about, and `entry`
+    /// special-cases the root itself ([`Self::root_entry`]) before this is
+    /// reached at all. Never call this with `self.geometry.root_block`.
     fn entry_at(&self, path: &str, block: u32) -> CoreResult<MediaEntry> {
         if block >= self.geometry.total_blocks {
             return Err(CoreError::Malformed {
@@ -218,10 +255,14 @@ impl MediaSource for AdfSource {
     }
 
     fn entry(&mut self, path: &str) -> CoreResult<Option<MediaEntry>> {
+        let normalized = Self::normalized(path);
+        if normalized.is_empty() {
+            return Ok(Some(self.root_entry()));
+        }
         let Some(block) = self.resolve(path)? else {
             return Ok(None);
         };
-        Ok(Some(self.entry_at(&Self::normalized(path), block)?))
+        Ok(Some(self.entry_at(&normalized, block)?))
     }
 
     fn walk(&mut self, path: &str) -> CoreResult<Vec<MediaEntry>> {
@@ -359,6 +400,51 @@ mod tests {
         let entry = source.entry("").unwrap().unwrap();
         assert!(entry.is_dir);
         assert_eq!(entry.path, "");
+    }
+
+    /// The defect the coordinator caught in review: `PROTECT_OFFSET` and
+    /// `COMMENT_OFFSET` are real offsets into the root block, but they hold
+    /// its bitmap-page table there, not protection bits or a comment. Before
+    /// [`AdfSource::root_entry`] existed, `entry("")` read straight through
+    /// to whatever was in that table — bounds-safe, and completely invented.
+    /// This splices something a bug would read back verbatim, and pins that
+    /// it does not: it fails against the block-read version of `entry_at`
+    /// this test used to go through.
+    #[test]
+    fn an_empty_path_entry_does_not_read_the_root_blocks_bitmap_table_as_protection() {
+        let dir = super::super::fixtures::scratch("source-root-no-fabrication");
+        let image = fixture(&dir, "Workbench3.2");
+
+        let geometry = crate::core::volume::VolumeGeometry::floppy_dd(
+            crate::core::volume::DosType::new(*b"DOS\x01"),
+        );
+        let root_offset = geometry.root_block as usize * geometry.block_size;
+
+        let mut raw = std::fs::read(&image).unwrap();
+        // `PROTECT_OFFSET`: a bitmap-page pointer that would read back as a
+        // very real-looking, very wrong, protection value if it were ever
+        // treated as one.
+        let protect_slot = root_offset + layout::PROTECT_OFFSET;
+        raw[protect_slot..protect_slot + 4].copy_from_slice(&0xFFFF_FFFFu32.to_be_bytes());
+        // `COMMENT_OFFSET`: a BSTR claiming 20 bytes of text that is not a
+        // comment — it is more of the same bitmap table.
+        let comment_slot = root_offset + layout::COMMENT_OFFSET;
+        raw[comment_slot] = 20;
+        raw[comment_slot + 1..comment_slot + 21].copy_from_slice(b"not really a comment");
+        std::fs::write(&image, &raw).unwrap();
+
+        let mut source = AdfSource::open(&image).unwrap();
+        let entry = source.entry("").unwrap().unwrap();
+
+        assert!(entry.is_dir);
+        assert_eq!(
+            entry.protection, 0,
+            "the root's bitmap-page table must never be read as protection bits"
+        );
+        assert_eq!(
+            entry.comment, "",
+            "the root's bitmap-page table must never be read as a comment"
+        );
     }
 
     // ---- decision 4: a chain walk needs a step limit ----
