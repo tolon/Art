@@ -134,20 +134,20 @@ pub(crate) mod fixtures {
     /// A media folder plus a plan over it, so a test states only what it
     /// varies. `present` lists the volume names to create.
     pub fn planned_with(chosen: &[&str], present: &[&str], rom_major: Option<u16>)
-        -> (crate::core::osinstall::plan::InstallPlan, tempfile::TempDir)
+        -> (crate::core::osinstall::plan::InstallPlan, PathBuf)
     {
-        let dir = tempfile::tempdir().unwrap();
-        let folder = dir.path().join("media");
+        let dir = fixtures::scratch("<tag>");   // returns PathBuf, not a TempDir
+        let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
         for volume in present {
             media(&folder, volume, &format!("{volume}.adf"), default_entries_for(volume));
         }
-        let rom = rom_major.map(|major| fake_rom(dir.path(), major));
+        let rom = rom_major.map(|major| fake_rom(&dir, major));
         let request = InstallRequest {
             media_folder: folder,
             rom,
             chosen: chosen.iter().map(|s| s.to_string()).collect(),
-            destination: dir.path().join("dist"),
+            destination: dir.join("dist"),
         };
         (plan(&request, &recipe::amigaos_32().unwrap()).unwrap(), dir)
     }
@@ -744,10 +744,10 @@ mod tests {
 
     #[test]
     fn a_source_reports_the_volume_name_from_inside_the_image() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = fixtures::scratch("<tag>");   // returns PathBuf, not a TempDir
         // Deliberately a filename that says nothing.
-        let image = fixture(dir.path(), "ModulesA1200_3.2");
-        let renamed = dir.path().join("disk07.dat");
+        let image = fixture(&dir, "ModulesA1200_3.2");
+        let renamed = dir.join("disk07.dat");
         std::fs::rename(&image, &renamed).unwrap();
 
         let source = AdfSource::open(&renamed).unwrap();
@@ -756,8 +756,8 @@ mod tests {
 
     #[test]
     fn an_entry_carries_the_protection_bits_the_media_holds() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut source = AdfSource::open(&fixture(dir.path(), "Workbench3.2")).unwrap();
+        let dir = fixtures::scratch("<tag>");   // returns PathBuf, not a TempDir
+        let mut source = AdfSource::open(&fixture(&dir, "Workbench3.2")).unwrap();
 
         let entry = source.entry("C/LoadModule").unwrap().unwrap();
         assert!(!entry.is_dir);
@@ -771,23 +771,23 @@ mod tests {
 
     #[test]
     fn a_missing_path_is_none_rather_than_an_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut source = AdfSource::open(&fixture(dir.path(), "Workbench3.2")).unwrap();
+        let dir = fixtures::scratch("<tag>");   // returns PathBuf, not a TempDir
+        let mut source = AdfSource::open(&fixture(&dir, "Workbench3.2")).unwrap();
         assert!(source.entry("LIBS/Modules").unwrap().is_none());
     }
 
     #[test]
     fn walk_returns_a_subtree_with_paths_relative_to_the_media_root() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut source = AdfSource::open(&fixture(dir.path(), "Workbench3.2")).unwrap();
+        let dir = fixtures::scratch("<tag>");   // returns PathBuf, not a TempDir
+        let mut source = AdfSource::open(&fixture(&dir, "Workbench3.2")).unwrap();
         let found = source.walk("C").unwrap();
         assert!(found.iter().any(|e| e.path == "C/LoadModule"));
     }
 
     #[test]
     fn read_returns_the_bytes() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut source = AdfSource::open(&fixture(dir.path(), "Workbench3.2")).unwrap();
+        let dir = fixtures::scratch("<tag>");   // returns PathBuf, not a TempDir
+        let mut source = AdfSource::open(&fixture(&dir, "Workbench3.2")).unwrap();
         assert_eq!(source.read("S/Startup-sequence").unwrap(), b"; test\n");
     }
 }
@@ -853,21 +853,21 @@ mod tests {
 
     #[test]
     fn media_is_found_by_its_volume_name_not_its_filename() {
-        let dir = tempfile::tempdir().unwrap();
-        make_adf(dir.path(), "Workbench3.2", "wb.adf");
-        make_adf(dir.path(), "Extras3.2", "totally-unrelated-name.bin");
+        let dir = fixtures::scratch("<tag>");   // returns PathBuf, not a TempDir
+        make_adf(&dir, "Workbench3.2", "wb.adf");
+        make_adf(&dir, "Extras3.2", "totally-unrelated-name.bin");
 
-        let found = find_media(dir.path()).unwrap();
+        let found = find_media(&dir).unwrap();
         assert!(media_for(&found, "Extras3.2").is_some());
     }
 
     #[test]
     fn a_file_that_is_not_an_amiga_image_is_skipped_not_an_error() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("readme.txt"), b"hello").unwrap();
-        make_adf(dir.path(), "Workbench3.2", "wb.adf");
+        let dir = fixtures::scratch("<tag>");   // returns PathBuf, not a TempDir
+        std::fs::write(dir.join("readme.txt"), b"hello").unwrap();
+        make_adf(&dir, "Workbench3.2", "wb.adf");
 
-        let found = find_media(dir.path()).unwrap();
+        let found = find_media(&dir).unwrap();
         assert_eq!(found.len(), 1);
     }
 
@@ -875,12 +875,12 @@ mod tests {
     /// images into memory to learn 36 names.
     #[test]
     fn the_scan_is_not_recursive_and_does_not_follow_symlinks() {
-        let dir = tempfile::tempdir().unwrap();
-        let nested = dir.path().join("sub");
+        let dir = fixtures::scratch("<tag>");   // returns PathBuf, not a TempDir
+        let nested = dir.join("sub");
         std::fs::create_dir(&nested).unwrap();
         make_adf(&nested, "Workbench3.2", "wb.adf");
 
-        assert!(find_media(dir.path()).unwrap().is_empty());
+        assert!(find_media(&dir).unwrap().is_empty());
     }
 }
 ```
@@ -962,8 +962,8 @@ mod condition_tests {
     /// is not in that table (ART-104) and is still a perfectly good 3.1 ROM.
     #[test]
     fn the_major_comes_from_the_roms_own_header() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("fake.rom");
+        let dir = fixtures::scratch("<tag>");   // returns PathBuf, not a TempDir
+        let path = dir.join("fake.rom");
         let mut bytes = vec![0u8; 512 * 1024];
         bytes[12..14].copy_from_slice(&40u16.to_be_bytes());
         bytes[14..16].copy_from_slice(&68u16.to_be_bytes());
@@ -1155,7 +1155,7 @@ mod tests {
     #[test]
     fn the_tree_carries_a_uaem_sidecar_for_every_file_with_something_to_say() {
         let (plan, dir) = planned();
-        let root = dir.path().join("dist");
+        let root = dir.join("dist");
         apply(&plan, &root, &NoProgress).unwrap();
 
         let sidecar = root.join("C").join("LoadModule.uaem");
@@ -1166,7 +1166,7 @@ mod tests {
     #[test]
     fn the_manifest_says_which_component_and_which_media_each_file_came_from() {
         let (plan, dir) = planned();
-        let root = dir.path().join("dist");
+        let root = dir.join("dist");
         apply(&plan, &root, &NoProgress).unwrap();
 
         let manifest: DistributionManifest =
@@ -1181,7 +1181,7 @@ mod tests {
     #[test]
     fn an_existing_destination_is_refused_never_written_into() {
         let (plan, dir) = planned();
-        let root = dir.path().join("dist");
+        let root = dir.join("dist");
         std::fs::create_dir_all(&root).unwrap();
         assert!(apply(&plan, &root, &NoProgress).is_err());
     }
@@ -1192,16 +1192,16 @@ mod tests {
     fn a_destination_that_climbs_out_of_the_root_is_refused() {
         let (mut plan, dir) = planned();
         plan.items[0].to = "../escaped".into();
-        let root = dir.path().join("dist");
+        let root = dir.join("dist");
         assert!(apply(&plan, &root, &NoProgress).is_err());
-        assert!(!dir.path().join("escaped").exists());
+        assert!(!dir.join("escaped").exists());
     }
 
     #[test]
     fn the_media_is_byte_for_byte_unchanged_afterwards() {
         let (plan, dir) = planned();
         let before = digest_of_folder(&media_folder(&dir));
-        apply(&plan, &dir.path().join("dist"), &NoProgress).unwrap();
+        apply(&plan, &dir.join("dist"), &NoProgress).unwrap();
         assert_eq!(digest_of_folder(&media_folder(&dir)), before);
     }
 
@@ -1209,7 +1209,7 @@ mod tests {
     fn a_cancelled_apply_stops_between_files_and_says_how_many_landed() {
         let (plan, dir) = planned();
         let sink = CancelAfter::new(1);
-        let err = apply(&plan, &dir.path().join("dist"), &sink).unwrap_err();
+        let err = apply(&plan, &dir.join("dist"), &sink).unwrap_err();
         assert!(matches!(err, CoreError::Cancelled));
     }
 }
@@ -1505,12 +1505,12 @@ mod tests {
     #[test]
     fn copy_in_carries_the_protection_bits_out_of_the_uaem_sidecars() {
         let image = formatted_pds3_image();
-        let tree = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tree.path().join("C")).unwrap();
-        std::fs::write(tree.path().join("C/Assign"), b"x").unwrap();
-        std::fs::write(tree.path().join("C/Assign.uaem"), "--p-rwed 2021-04-13 02:43:13.68 \n").unwrap();
+        let tree = fixtures::scratch("<tag>");
+        std::fs::create_dir_all(tree.join("C")).unwrap();
+        std::fs::write(tree.join("C/Assign"), b"x").unwrap();
+        std::fs::write(tree.join("C/Assign.uaem"), "--p-rwed 2021-04-13 02:43:13.68 \n").unwrap();
 
-        NativeFormatter.copy_in(&image, None, "DH0", tree.path(), &NoProgress).unwrap();
+        NativeFormatter.copy_in(&image, None, "DH0", &tree, &NoProgress).unwrap();
 
         let mut vol = libpfs3::volume::Volume::open(&image, partition_offset(&image)).unwrap();
         let entry = vol.list_dir("C").unwrap().into_iter().find(|e| e.name == "Assign").unwrap();
@@ -1525,14 +1525,14 @@ mod tests {
 
     #[test]
     fn copy_in_reports_what_it_moved() {
-        let summary = NativeFormatter.copy_in(&image, None, "DH0", tree.path(), &NoProgress).unwrap();
+        let summary = NativeFormatter.copy_in(&image, None, "DH0", &tree, &NoProgress).unwrap();
         assert_eq!(summary.files, 1);
         assert_eq!(summary.directories, 1);
     }
 
     #[test]
     fn it_stops_between_files_when_cancelled() {
-        let err = NativeFormatter.copy_in(&image, None, "DH0", tree.path(), &CancelAfter::new(1)).unwrap_err();
+        let err = NativeFormatter.copy_in(&image, None, "DH0", &tree, &CancelAfter::new(1)).unwrap_err();
         assert!(matches!(err, CoreError::Cancelled));
     }
 
@@ -1545,7 +1545,7 @@ mod tests {
         let tree = tree_of_bytes(8 * 1024 * 1024);
         let before = std::fs::read(&image).unwrap();
 
-        let err = NativeFormatter.copy_in(&image, None, "DH0", tree.path(), &NoProgress).unwrap_err();
+        let err = NativeFormatter.copy_in(&image, None, "DH0", &tree, &NoProgress).unwrap_err();
         assert!(format!("{err}").contains("8"), "the refusal carries the real numbers");
         assert_eq!(std::fs::read(&image).unwrap(), before, "nothing was written");
     }
