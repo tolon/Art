@@ -821,62 +821,65 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
 
 ## Picking up next session
 
-**Nothing is half-done on disk.** The tree is green (1114 Rust — run twice —
-443 frontend, clippy clean, TypeScript clean, amitools oracle 53 both ways, the
-FAT32 oracle clean). ART-096, ART-085 and the six-issue sweep
-(ART-049/058/066/067/068/070) are all closed, and so are ART-043, ART-102 and
-ART-103 and now **ART-099**; **fourteen** entries remain open — ART-104 came
-out of planning a card with the user's real Kickstart, and its fix is settled
-in data — and three of those are waiting on a decision rather than on work.
+*Last session: 2026-08-15. Nothing is half-done on disk and `sd-1` is level
+with `origin/sd-1`.*
 
-**A 64 GB card was built from the screen, on 2026-08-14.** Both real cards
-were read through the Hard Disk studio on 2026-08-13; the engine built one from
-the real `Emu68-pistorm.zip` the next morning; and that afternoon the OS
-Builder's **boot-only card** was driven in the running application — the user's
-own `Emu68-pistorm-classic.zip` (alpha 1.1 line) and Kickstart 3.1, 64 GB, to
-`E:\amiga\ProjeART\denemecard.img`. Preview, then build, then *"Kart
-oluşturuldu — 1 Amiga diski, 1 bölüm"*. 7-Zip reads the result independently:
-`0.fat` 1 177 550 848 bytes (FAT32-LBA, the measured 1.10 GiB) and `1.img`
-67 540 877 312 bytes. **Still not flashed, still not booted.**
+**The tree is green**: 1166 Rust (run twice), 454 frontend, clippy clean at
+`-D warnings`, TypeScript clean, amitools oracle 53 both ways, the 7-Zip FAT32
+oracle clean on a real card's 21 boot files.
 
-**G7 landed on 2026-08-15.** Every build now leaves a
-`<card>.manifest.json` beside the image, read back off the finished card
-rather than remembered from the build. `card_verify_manifest` checks the table,
-the areas and the RDBs and **reports the boot partition's files as not
-checked**, because ART writes FAT32 and cannot read one — and
-`python scripts/fat-oracle-check.py <card.img>` answers exactly those with
-7-Zip. Run against the real release on an 8 GB card: 21 of 21 files, byte
-count and SHA-256 each.
+### Where the phases stand
 
-**G8 landed the same day.** `card_check_image` is the gate the file goes
-through before it is handed over: fourteen checks on a card ART built, and a
-report that keeps *pass*, *fail* and **not checked** apart rather than letting
-the third read like the first. What ART cannot check at all — flash it, HDMI
-before power, is that the right Pi — is listed as steps for the machine (§50).
-Run against the real 8 GB card: fourteen passes, four manual steps.
+**SD-1 is complete.** Every gap it names is built — G2 (the card's shape,
+engine and screen), G4 (RDB filesystem embedding), G7 (build manifest), G8
+(image health check), G15 (a build as a drop target). A 64 GB card was built
+from the running screen on 2026-08-14 with the user's own material, and 7-Zip
+read it back independently. **What is left in SD-1 is not code: flash a card
+and boot an A500.** The materials are all here bar a microSD card, a USB reader
+and an HDMI cable.
 
-**G15 closed the same day, and with it every gap SD-1 names.** The one drop
-pipeline now answers the builder's question as well as the dashboard's: drop
-the Emu68 archive and the Kickstart and the form fills itself, and everything
-Amiga is told it needs a volume this card has not got.
+**SD-2 has opened.** G3 route E is built and proven: `core/preload/` plans and
+runs a preload, `tools/hst_imager.rs` drives `hst-imager`, and `core/` still
+launches nothing — the boundary is a trait. Run for real on 2026-08-15: `DH0`
+formatted as `Work` on a card ART built, a tree copied in, and the tool listed
+it back as 1 directory, 2 files, 20 B with `----RWED` on each.
 
-**So SD-1's engine is complete and one thing is left: flash a card and boot
-it.** Every piece is checked against an independent reader, against two real
-cards, and against real material — and none of that is an A500 coming up.
+### What to pick up
 
-**Both new panels were walked on the running screen** on 2026-08-15, by the
-user, and both work: the health report on an existing card, and — the half
-nothing here could drive — **a real drag & drop**, which filled the archive
-field from `Emu68-pistorm.zip` and told a `.lha` it belongs on a volume this
-card has not got. Recorded because the previous line said the opposite and
-because ART-062 is what happens when nobody looks.
+- **A screen for the preload engine.** It has none. §92's preview → confirm →
+  run, and formatting is `Destructive`.
+- **G9 (ROM pairing)** — pure bookkeeping, and ART-104 made ROM identification
+  sound first.
+- **G5 (OS install)** — now unblocked, because there is a formatted volume to
+  install onto.
+- **G11 (what goes where)** — turns G15's *"belongs on an Amiga volume"* into a
+  real answer.
+- **tolunnet / tolunwifi**: decided as ART Baseline's default network stack and
+  WiFi suite, and **not yet coded anywhere**. They belong beside SD-2's package
+  manifest, which sits next to G5.
 
-**Then the thing no test can answer: flash a card and boot it.** Every piece is
-verified against an independent reader and against the two real cards, and none
-of that is the same as an A500 coming up. The materials are all here.
+### Three things this project keeps re-learning
 
-ART-099 needs one thing only, and it is not code: open the real window at 130 %
-and look. Everything else about it has been measured (`scripts/zoom-check.py`).
+Every one of them cost a wrong turn on 2026-08-15 alone, and every one would
+have shipped behind green tests:
+
+1. **Running it against real material beats reading about it.** Identifying a
+   ROM by revision looked right until 55 real ROMs showed three different files
+   all stating `40.68`. `hst-imager`'s command set looked right until it met a
+   card whose RDB is not at byte zero. A log parser looked right until the
+   command turned out to print no summary at all.
+2. **A screenshot is not a measurement** (ART-099, closed). Ask the thing to
+   report its own numbers, and check the instrument before believing the
+   picture — a DPI-unaware capture returned two thirds of the window and said
+   nothing about it.
+3. **A doc comment that promises the opposite of the code is a trap with a
+   fuse.** `MbrPartition::index` claimed to be the number everybody writes down
+   and was zero-based; it cost a failed run before `slot_number()` existed.
+
+### Open issues
+
+Fourteen entries remain open ([ISSUES.md](ISSUES.md)); three are waiting on a
+decision rather than on work. ART-099 and ART-104 closed on 2026-08-15.
 
 **Both of SD-1's open decisions are answered** (2026-08-13), and by hardware
 rather than by preference — the user has an **A500 with a classic PiStorm on a
