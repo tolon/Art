@@ -35,6 +35,8 @@ pub mod recipe;
 pub mod scan;
 pub mod source;
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 /// Whether a rule takes one file or a whole subtree.
@@ -133,6 +135,19 @@ pub enum RefusalReason {
     DestinationCollision {
         path: String,
         components: Vec<String>,
+    },
+    /// More than one file in the media folder carries this component's
+    /// volume name. `scan::find_media`/`scan::media_for` report every
+    /// match rather than guessing at one, so a folder with a stray backup
+    /// copy of a disk nobody selected still installs everything else — this
+    /// only fires for the component that actually names the ambiguous
+    /// volume, at plan time, never as a whole-folder scan failure. `paths`
+    /// carries every file that claimed the name, because the user's next
+    /// question is always "which two files?".
+    MediaAmbiguous {
+        component: String,
+        volume_name: String,
+        paths: Vec<PathBuf>,
     },
 }
 

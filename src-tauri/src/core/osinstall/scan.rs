@@ -15,7 +15,10 @@
 //! folder directly. `std::fs::symlink_metadata` — never `metadata`, which
 //! would follow the link — is what makes both of those `false` in one check:
 //! a symlink is never `is_file()`, whatever it points at, and neither is a
-//! subdirectory.
+//! subdirectory. This is the same, undemonstrated-by-a-test choice
+//! `core::layout::scan` and `core::collection` already make for the same
+//! reason: creating a symlink to prove it is skipped needs privileges CI
+//! does not have on this project's own Windows runner.
 //!
 //! ## Skipped, not an error
 //!
@@ -34,39 +37,41 @@
 //! looks. `core::volume::mount::scan_image` reads `min(1 MiB, file_len)`
 //! bytes looking for a signature, and every ADF this project writes is
 //! under 1 MiB (880 KB, DD), so that "window" *is* the whole file for a
-//! floppy image — `open` was never going to avoid the read for this case,
-//! only for something bigger, and install media never is. Scanning the
-//! user's real 36-disk folder therefore reads roughly 36 x 880 KB, about
-//! 31 MB, off disk — a few milliseconds of sequential I/O on any storage
-//! this runs on, not the multi-second scan the task's warning was
-//! watching for. Said plainly because the alternative (assuming "windowed"
-//! meant "cheap" without checking) is exactly the kind of thing that turns
-//! into a real complaint the first time someone points ART at a folder of
-//! larger images.
+//! floppy image — opening one was never going to avoid the read for this
+//! case, only for something bigger, and install media never is. Scanning
+//! the user's real 36-disk folder therefore reads roughly 36 x 880 KB,
+//! about 31 MB, off disk — a few milliseconds of sequential I/O on any
+//! storage this runs on, not the multi-second scan a first guess might
+//! fear. Said plainly, and checked rather than assumed, because the
+//! alternative — trusting that "windowed" means "cheap" without reading
+//! `scan_image` — is exactly the kind of thing that turns into a real
+//! complaint the first time someone points ART at a folder of images
+//! bigger than a floppy.
 //!
-//! ## Duplicate volume names are refused, not resolved
+//! ## Duplicate volume names are data, not a scan failure
 //!
-//! Two files in one folder can carry the same volume name: a plain copy, or
-//! two different revisions of "the same" disk that happen to share a label.
-//! `media_for` is what Task 5's `apply` step calls to answer "which file
-//! holds volume X" before copying bytes onto the user's system — a wrong
-//! answer there installs the wrong disk under the right name, silently.
-//! Picking "the first one found" would make that decision depend on
-//! directory read order, which is not guaranteed by any filesystem this
-//! runs on and is exactly the kind of thing that works on the developer's
-//! machine and not the user's. So `find_media` refuses outright the moment
-//! a second file claims a name already seen, whether or not the two files
-//! are byte-identical: proving they are identical would mean hashing every
-//! duplicate pair, for a benefit that does not matter to the caller (it
-//! still only gets to keep one path), and does not generalise to the case
-//! that actually matters — two *different* revisions sharing a label. A
-//! human deciding which file is the real `Workbench3.2` is a five-second
-//! question; ART guessing wrong is a corrupted install nobody asked for.
+//! Two files in one folder can carry the same volume name: a stray backup
+//! copy of one disk, or two different revisions of "the same" disk that
+//! happen to share a label. Silently keeping the first one found is the
+//! wrong call — [`media_for`] is what `apply` (a later task) calls to
+//! answer "which file holds volume X" before copying bytes onto the user's
+//! system, and a wrong guess there installs the wrong disk under the right
+//! name. But failing the *whole folder scan* over one duplicate is too
+//! blunt: a user with a stray copy of a Locale disk they will never select
+//! could not install anything at all, not even an English-only run that
+//! never touches it. So the ambiguity is reported as data, not raised as an
+//! error here — [`find_media`] keeps every match, and [`media_for`] returns
+//! [`MediaMatch::Ambiguous`] carrying every path that claimed the name. It
+//! is the caller's job (`apply`, matching a component against its own
+//! `Component::media`) to turn that into
+//! [`super::RefusalReason::MediaAmbiguous`] for the one component actually
+//! affected — the same shape `MediaMissing` and `MediaPathMissing` already
+//! use, a named refusal for the thing that is actually broken, not a
+//! blanket failure for the whole folder.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::core::error::{CoreError, CoreResult};
+use crate::core::error::CoreResult;
 
 use super::source::{AdfSource, MediaSource};
 
@@ -79,25 +84,26 @@ pub struct FoundMedia {
     pub volume_name: String,
 }
 
-/// Every install disk found directly inside `folder`.
+/// Every install disk found directly inside `folder`, duplicates included.
 ///
 /// Opens each regular file one directory level deep (no recursion, no
 /// symlinks followed) and keeps the ones that open as a single bare
 /// AmigaDOS volume; anything else in the folder is skipped, not reported as
-/// an error — see the module doc. Refuses the whole scan, rather than
-/// picking one, the moment two files carry the same volume name.
+/// an error — see the module doc. Two files sharing a volume name are both
+/// kept: resolving the ambiguity, or refusing over it, is [`media_for`]'s
+/// and its caller's job, not this function's — a folder-wide failure here
+/// would refuse an install that never touches the duplicated disk.
 pub fn find_media(folder: &Path) -> CoreResult<Vec<FoundMedia>> {
     let mut entries: Vec<PathBuf> = std::fs::read_dir(folder)?
         .map(|entry| entry.map(|e| e.path()))
         .collect::<std::io::Result<_>>()?;
-    // Deterministic order: a directory listing's own order is not guaranteed
-    // by any filesystem this runs on, and the duplicate-name refusal below
-    // should not depend on it either — sorted by path, so which file is
-    // named "existing" in that error is stable from run to run.
+    // Deterministic order: a directory listing's own order is not
+    // guaranteed by any filesystem this runs on, and `MediaMatch::Ambiguous`
+    // should not depend on it either — sorted by path, so the paths a
+    // caller reports for an ambiguous name are stable from run to run.
     entries.sort();
 
     let mut found: Vec<FoundMedia> = Vec::new();
-    let mut by_name: HashMap<String, PathBuf> = HashMap::new();
 
     for path in entries {
         // `symlink_metadata`, not `metadata`: a symlink must never be
@@ -116,30 +122,44 @@ pub fn find_media(folder: &Path) -> CoreResult<Vec<FoundMedia>> {
             continue;
         };
         let volume_name = source.volume_name().to_string();
-
-        if let Some(existing) = by_name.get(&volume_name) {
-            return Err(CoreError::InvalidInput(format!(
-                "'{}' and '{}' in '{}' both carry the volume name '{volume_name}' — \
-                 ART cannot tell which one a component naming '{volume_name}' should \
-                 read from",
-                existing.display(),
-                path.display(),
-                folder.display(),
-            )));
-        }
-        by_name.insert(volume_name.clone(), path.clone());
         found.push(FoundMedia { path, volume_name });
     }
 
     Ok(found)
 }
 
-/// The file in `found` that carries `volume_name`, or `None` when none does.
+/// What resolving a volume name against a scanned folder found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MediaMatch<'a> {
+    /// No file in `found` carries this volume name.
+    Missing,
+    /// Exactly one file does — the ordinary case.
+    Found(&'a FoundMedia),
+    /// More than one file claims this volume name, in `find_media`'s own
+    /// (sorted-path) order. The caller decides what to do — typically
+    /// [`super::RefusalReason::MediaAmbiguous`] for the one component that
+    /// actually names this volume.
+    Ambiguous(Vec<&'a FoundMedia>),
+}
+
+/// Resolve `volume_name` against `found`.
 ///
-/// `find_media` already refuses a folder where two files claim the same
-/// name, so the first (and only) match is the only one there can be.
-pub fn media_for<'a>(found: &'a [FoundMedia], volume_name: &str) -> Option<&'a FoundMedia> {
-    found.iter().find(|f| f.volume_name == volume_name)
+/// Returns an enum rather than an `Option` so ambiguity cannot collapse
+/// into an arbitrary "first match": a caller that only wanted `Option`'s
+/// `Some`/`None` shape would still have to decide what to do when there are
+/// two, and matching on [`MediaMatch`] forces that decision to be made
+/// explicitly at the call site instead of being made implicitly, once, in
+/// here.
+pub fn media_for<'a>(found: &'a [FoundMedia], volume_name: &str) -> MediaMatch<'a> {
+    let matches: Vec<&FoundMedia> = found
+        .iter()
+        .filter(|f| f.volume_name == volume_name)
+        .collect();
+    match matches.len() {
+        0 => MediaMatch::Missing,
+        1 => MediaMatch::Found(matches[0]),
+        _ => MediaMatch::Ambiguous(matches),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -158,8 +178,14 @@ mod tests {
         media(&dir, "Extras3.2", "totally-unrelated-name.bin", &[]);
 
         let found = find_media(&dir).unwrap();
-        assert!(media_for(&found, "Extras3.2").is_some());
-        assert!(media_for(&found, "Workbench3.2").is_some());
+        assert!(matches!(
+            media_for(&found, "Extras3.2"),
+            MediaMatch::Found(_)
+        ));
+        assert!(matches!(
+            media_for(&found, "Workbench3.2"),
+            MediaMatch::Found(_)
+        ));
     }
 
     #[test]
@@ -174,7 +200,8 @@ mod tests {
     }
 
     /// The user's own 3.2 folder holds 36 ADFs; a scan must not descend into
-    /// a subdirectory looking for more, nor follow a symlink into one.
+    /// a subdirectory looking for more, nor follow a symlink into one (the
+    /// symlink half is documented, not tested here — see the module doc).
     #[test]
     fn the_scan_is_not_recursive() {
         let dir = scratch("scan-not-recursive");
@@ -185,25 +212,45 @@ mod tests {
         assert!(find_media(&dir).unwrap().is_empty());
     }
 
+    /// Two files sharing a volume name must both come back from
+    /// `find_media` — neither silently dropped — and `media_for` must
+    /// report the ambiguity rather than picking one.
     #[test]
-    fn duplicate_volume_names_are_refused_not_silently_resolved() {
+    fn two_same_named_files_are_both_reported_and_neither_is_silently_dropped() {
         let dir = scratch("scan-duplicate-names");
-        media(&dir, "Workbench3.2", "wb-copy-1.adf", &[]);
-        media(&dir, "Workbench3.2", "wb-copy-2.adf", &[]);
+        let first = media(&dir, "Workbench3.2", "wb-copy-1.adf", &[]);
+        let second = media(&dir, "Workbench3.2", "wb-copy-2.adf", &[]);
 
-        let err = find_media(&dir).unwrap_err();
-        assert!(
-            err.to_string().contains("Workbench3.2"),
-            "expected the shared volume name in the refusal: {err}"
+        let found = find_media(&dir).unwrap();
+        let matching: Vec<&PathBuf> = found
+            .iter()
+            .filter(|f| f.volume_name == "Workbench3.2")
+            .map(|f| &f.path)
+            .collect();
+        assert_eq!(
+            matching,
+            vec![&first, &second],
+            "both copies must survive the scan"
         );
+
+        match media_for(&found, "Workbench3.2") {
+            MediaMatch::Ambiguous(paths) => {
+                assert_eq!(
+                    paths.len(),
+                    2,
+                    "both candidates must be reported: {paths:?}"
+                );
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
     }
 
     #[test]
-    fn media_for_returns_none_when_no_file_carries_the_name() {
+    fn media_for_returns_missing_when_no_file_carries_the_name() {
         let dir = scratch("scan-media-for-missing");
         media(&dir, "Workbench3.2", "wb.adf", &[]);
 
         let found = find_media(&dir).unwrap();
-        assert!(media_for(&found, "Extras3.2").is_none());
+        assert_eq!(media_for(&found, "Extras3.2"), MediaMatch::Missing);
     }
 }
