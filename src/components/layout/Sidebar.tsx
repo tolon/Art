@@ -21,6 +21,7 @@ const NAV: Array<{ to: string; key: string; icon: string; powerOnly?: boolean }>
   { to: "/winuae", key: "nav.winuae", icon: "🖥" },
   { to: "/pistorm", key: "nav.pistorm", icon: "⚡", powerOnly: true },
   { to: "/os-builder", key: "nav.osBuilder", icon: "🧱" },
+  { to: "/layout", key: "nav.layout", icon: "🗃" },
   { to: "/collection", key: "nav.collection", icon: "📚" },
   { to: "/aminet", key: "nav.aminet", icon: "🌐" },
   { to: "/tools", key: "nav.tools", icon: "🔧", powerOnly: true },

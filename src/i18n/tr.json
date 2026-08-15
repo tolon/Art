@@ -13,6 +13,7 @@
     "winuae": "WinUAE",
     "pistorm": "PiStorm",
     "osBuilder": "İşletim Sistemi Kurucusu",
+    "layout": "İçerik Düzeni",
     "collection": "Koleksiyon",
     "tools": "Araçlar",
     "settings": "Ayarlar",
@@ -1780,11 +1781,62 @@
     }
   },
   "layout": {
+    "heading": "İçeriği yerleştir",
+    "intro": "Bir yığın Amiga dosyasını bu bilgisayarda düzenli bir hazırlık ağacına dönüştürür — Games, Floppies, HardDisks, CDs, Unsorted. ART her şeyin nereye gideceğini önerir; hiçbir şey kopyalanmadan önce istediğini taşıyabilirsin.",
+    "scope": "Bu, bir karta değil bu bilgisayardaki bir klasöre yazar. Gerçek bir PiStorm kartı PFS3'tür ve ART onu doğrudan yazamaz — önce bu klasörü hazırla, sonra kart hazırlama ekranıyla kartın birimlerine kopyala.",
+    "root": {
+      "label": "Hazırlık klasörü",
+      "none": "Hazırlık klasörü seçilmedi",
+      "chooseTitle": "Hazırlık klasörünü seç (ya da oluştur)"
+    },
+    "sources": {
+      "heading": "Ne yerleştirilecek",
+      "intro": "Düzenlenecek dosya ve klasörleri ekle. Doğrudan bir .slave taşıyan klasör tek bir WHDLoad klasörü olarak kabul edilir ve olduğu gibi kopyalanır.",
+      "addFiles": "Dosya ekle…",
+      "addFilesTitle": "Yerleştirilecek dosyaları seç",
+      "addFolder": "Klasör ekle…",
+      "addFolderTitle": "Yerleştirilecek klasörü seç",
+      "none": "Henüz bir şey eklenmedi.",
+      "remove": "Kaldır"
+    },
+    "preview": {
+      "run": "Önizle",
+      "running": "Ne olacağı hesaplanıyor…"
+    },
+    "plan": {
+      "heading": "Ne yerleştirilecek",
+      "total": "Toplam {{bytes}}"
+    },
+    "table": {
+      "selectAll": "Tümünü seç",
+      "kind": "Ne",
+      "source": "Nereden",
+      "destination": "Nereye",
+      "size": "Boyut",
+      "none": "Yerleştirilecek bir şey yok."
+    },
+    "retarget": {
+      "label": "İşaretli satırları şuraya taşı",
+      "custom": "Başka klasör…",
+      "customPlaceholder": "Klasör adı",
+      "apply": "Taşı",
+      "hint": "Taşınan her satır kendi adını korur; yalnızca klasörü değişir."
+    },
+    "collisions": {
+      "heading": "Çakışmalar",
+      "intro": "Bu hedefler birden fazla kez isteniyor ya da hazırlık klasöründe zaten var. Her biri çözülene kadar hiçbir şey kopyalanmaz.",
+      "entry": "{{destination}} — {{sources}}"
+    },
+    "refusals": {
+      "heading": "Dahil edilmeyenler",
+      "intro": "Bunların bir Amiga hazırlık ağacında yeri yok, dışarıda bırakıldı:"
+    },
     "blocked": {
       "noRoot": "Önce bir hazırlık klasörü seç.",
       "nothingToPlace": "Yerleştirilecek bir şey yok — önce birkaç dosya ya da klasör bırak.",
       "notPlanned": "Önce önizle — ne olacağını görmeden hiçbir şey kopyalanmaz.",
-      "collisions": "Önce çakışma(ları) çöz — iki şey aynı adı isterken hiçbir şey kopyalanmaz."
+      "collisions": "Önce çakışma(ları) çöz — iki şey aynı adı isterken hiçbir şey kopyalanmaz.",
+      "staleAfterRetarget": "Önce yeniden önizle — son önizlemeden bu yana satırlar taşındı, yeni hedeflerin hazırlık klasöründe zaten olanlarla çakışıp çakışmadığı henüz kontrol edilmedi."
     },
     "refusal": {
       "belongsOnBootPartition": "Bu bir Kickstart — Pi donanım yazılımı onu bir Amiga biriminden değil, FAT32 önyükleme bölümünden okur.",
@@ -1800,6 +1852,17 @@
       "unknown": "Bilinmiyor",
       "rom": "ROM",
       "commodore8Bit": "Commodore 8-bit"
+    },
+    "apply": {
+      "run": "Yerleştir",
+      "running": "Kopyalanıyor…"
+    },
+    "result": {
+      "heading": "Yerleştirildi",
+      "placed_one": "{{count}} öge yerleştirildi, toplam {{bytes}}.",
+      "placed_other": "{{count}} öge yerleştirildi, toplam {{bytes}}.",
+      "root": "Hazırlık klasörü: {{root}}",
+      "nextStep": "Bunu bir karta kopyalamak için OS Builder → Amiga birimlerini hazırla ekranını bu klasöre yönlendir."
     }
   }
 }

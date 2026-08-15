@@ -177,6 +177,14 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // (probing, previewing, running, and "no card yet" vs "this card has no
     // Amiga partition"), the same shape the sidebar toggle and the health
     // section's button already use.
-    expect(dynamicCalls).toBe(78);
+    // 78 → 84 (SD-2 G11's layout screen, Task 7): a row's `kindPhrase` and a
+    // refusal's `refusalPhrase`, both `Phrase` reads from `@/lib/layout` and
+    // both enumerated in `phrase-keys.test.ts` — plus `layoutBlocker`'s
+    // `Phrase`, read twice (the disabled Apply button's `title` and the
+    // sentence beside it, the same double-read `buildBlocker` already uses in
+    // `CardBuilder.tsx`) — plus two one-of-two-literal-keys ternaries
+    // (Preview running/idle, Apply running/idle), the same shape every other
+    // busy-button on this list already uses.
+    expect(dynamicCalls).toBe(84);
   });
 });

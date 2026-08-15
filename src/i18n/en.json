@@ -13,6 +13,7 @@
     "winuae": "WinUAE",
     "pistorm": "PiStorm",
     "osBuilder": "OS Builder",
+    "layout": "Content Layout",
     "collection": "Collection",
     "tools": "Tools",
     "settings": "Settings",
@@ -1780,11 +1781,62 @@
     }
   },
   "layout": {
+    "heading": "Lay content out",
+    "intro": "Turn a pile of Amiga files into an organised staging tree on this PC — Games, Floppies, HardDisks, CDs, Unsorted. ART proposes where each thing goes; you can move any of it before anything is copied.",
+    "scope": "This writes to a folder on this PC, not to a card. A real PiStorm card is PFS3, which ART cannot write directly — prepare this folder, then use the card preparation screen to copy it onto the card's volumes.",
+    "root": {
+      "label": "Staging folder",
+      "none": "No staging folder chosen",
+      "chooseTitle": "Choose (or create) the staging folder"
+    },
+    "sources": {
+      "heading": "What to lay out",
+      "intro": "Add the files and folders to organise. A folder that directly holds a .slave is treated as one WHDLoad drawer and copied whole.",
+      "addFiles": "Add files…",
+      "addFilesTitle": "Choose files to lay out",
+      "addFolder": "Add a folder…",
+      "addFolderTitle": "Choose a folder to lay out",
+      "none": "Nothing added yet.",
+      "remove": "Remove"
+    },
+    "preview": {
+      "run": "Preview",
+      "running": "Working out what would happen…"
+    },
+    "plan": {
+      "heading": "What would be laid out",
+      "total": "{{bytes}} total"
+    },
+    "table": {
+      "selectAll": "Select all",
+      "kind": "What",
+      "source": "From",
+      "destination": "To",
+      "size": "Size",
+      "none": "Nothing to place."
+    },
+    "retarget": {
+      "label": "Move the checked rows to",
+      "custom": "Other drawer…",
+      "customPlaceholder": "Drawer name",
+      "apply": "Move",
+      "hint": "Each moved row keeps its own name; only the drawer changes."
+    },
+    "collisions": {
+      "heading": "Collisions",
+      "intro": "These destinations are wanted more than once, or already exist in the staging folder. Nothing is copied until each is resolved.",
+      "entry": "{{destination}} — {{sources}}"
+    },
+    "refusals": {
+      "heading": "Not included",
+      "intro": "These have no place in an Amiga staging tree and were left out:"
+    },
     "blocked": {
       "noRoot": "Choose a staging folder first.",
       "nothingToPlace": "Nothing to lay out — drop some files or folders in first.",
       "notPlanned": "Preview it first — nothing is copied before you have seen what would be.",
-      "collisions": "Resolve the collision(s) first — nothing is copied while two things want the same name."
+      "collisions": "Resolve the collision(s) first — nothing is copied while two things want the same name.",
+      "staleAfterRetarget": "Preview again first — rows were moved since the last preview, so ART has not checked the new destinations against what is already in the staging folder."
     },
     "refusal": {
       "belongsOnBootPartition": "This is a Kickstart — the Pi firmware reads it off the FAT32 boot partition, not off an Amiga volume.",
@@ -1800,6 +1852,17 @@
       "unknown": "Unknown",
       "rom": "ROM",
       "commodore8Bit": "Commodore 8-bit"
+    },
+    "apply": {
+      "run": "Lay it out",
+      "running": "Copying…"
+    },
+    "result": {
+      "heading": "Laid out",
+      "placed_one": "{{count}} item placed, {{bytes}} total.",
+      "placed_other": "{{count}} items placed, {{bytes}} total.",
+      "root": "Staging folder: {{root}}",
+      "nextStep": "Point the card preparation screen (OS Builder → Prepare Amiga volumes) at this folder to copy it onto a card."
     }
   }
 }

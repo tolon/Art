@@ -12,6 +12,7 @@ import { HardDiskStudio } from "@/pages/HardDiskStudio";
 import { GotekStudio } from "@/pages/GotekStudio";
 import { PistormStudio } from "@/pages/PistormStudio";
 import { OsBuilder } from "@/pages/OsBuilder";
+import { ContentLayout } from "@/pages/ContentLayout";
 import { HexTools } from "@/pages/HexTools";
 import { CollectionStudio } from "@/pages/CollectionStudio";
 import { AminetStudio } from "@/pages/AminetStudio";
@@ -71,6 +72,7 @@ export default function App() {
           {/* Phase 6 & 7 — PiStorm & Forensic Hex Tools */}
           <Route path="pistorm" element={<PistormStudio />} />
           <Route path="os-builder" element={<OsBuilder />} />
+          <Route path="layout" element={<ContentLayout />} />
           <Route path="tools" element={<HexTools />} />
           {/* Phase 8 — Collection Studio */}
           <Route path="collection" element={<CollectionStudio />} />
