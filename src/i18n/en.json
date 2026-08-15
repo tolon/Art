@@ -1778,5 +1778,28 @@
       "tool": "By {{version}}.",
       "notVerified": "ART cannot read this volume back. It has no PFS3 reader, so what is inside is the tool's word and not ART's — verify it on the Amiga, or with something that is not ART."
     }
+  },
+  "layout": {
+    "blocked": {
+      "noRoot": "Choose a staging folder first.",
+      "nothingToPlace": "Nothing to lay out — drop some files or folders in first.",
+      "notPlanned": "Preview it first — nothing is copied before you have seen what would be.",
+      "collisions": "Resolve the collision(s) first — nothing is copied while two things want the same name."
+    },
+    "refusal": {
+      "belongsOnBootPartition": "This is a Kickstart — the Pi firmware reads it off the FAT32 boot partition, not off an Amiga volume.",
+      "noPlaceOnAnAmigaVolume": "This has no place on an Amiga volume — a Commodore 8-bit disk, tape or cartridge image does not run on an Amiga."
+    },
+    "kind": {
+      "whdloadArchive": "{{name}} (WHDLoad pack)",
+      "whdloadDrawer": "{{name}} (WHDLoad drawer)",
+      "floppyImage": "Floppy image",
+      "hardDiskImage": "Hard disk image",
+      "opticalImage": "Optical disc image",
+      "archive": "Archive",
+      "unknown": "Unknown",
+      "rom": "ROM",
+      "commodore8Bit": "Commodore 8-bit"
+    }
   }
 }

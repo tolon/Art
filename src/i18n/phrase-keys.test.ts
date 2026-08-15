@@ -58,6 +58,14 @@ import {
   type PreloadStep,
 } from "@/lib/preload";
 import {
+  kindPhrase,
+  layoutBlocker,
+  refusalPhrase,
+  type ItemKind,
+  type LayoutPlan,
+  type RefusalReason,
+} from "@/lib/layout";
+import {
   DEFAULT_EMU68_OPTIONS,
   DEFAULT_FIRMWARE_CONFIG,
   DEFAULT_HARDWARE,
@@ -593,5 +601,64 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       expect(isLeafKey(blocker!.key), blocker!.key).toBe(true);
     }
     expect(preloadBlocker(ready)).toBeNull();
+  });
+
+  it("kindPhrase: every ItemKind variant resolves", () => {
+    const kinds: ItemKind[] = [
+      { kind: "whdload-archive", name: "Turrican" },
+      { kind: "whdload-drawer", name: "Turrican" },
+      { kind: "floppy-image" },
+      { kind: "hard-disk-image" },
+      { kind: "optical-image" },
+      { kind: "archive" },
+      { kind: "unknown" },
+      { kind: "rom" },
+      { kind: "commodore8-bit" },
+    ];
+    for (const kind of kinds) {
+      expect(resolvesAtRuntime(kindPhrase(kind).key), kind.kind).toBe(true);
+    }
+  });
+
+  it("refusalPhrase: every RefusalReason variant resolves", () => {
+    const reasons: RefusalReason[] = ["belongs-on-boot-partition", "no-place-on-an-amiga-volume"];
+    for (const reason of reasons) {
+      expect(resolvesAtRuntime(refusalPhrase(reason).key), reason).toBe(true);
+    }
+  });
+
+  it("layoutBlocker: every reason a layout cannot be applied resolves", () => {
+    const plan: LayoutPlan = {
+      root: "E:\\staging",
+      items: [
+        {
+          source: "E:\\a\\Turrican.lha",
+          kind: { kind: "whdload-archive", name: "Turrican" },
+          destination: "Games/Turrican",
+          placement: "unpack-whdload",
+          bytes: 100,
+        },
+      ],
+      refused: [],
+      collisions: [],
+      bytes: 100,
+    };
+    const ready = { root: "E:\\staging", paths: ["E:\\a"], plan };
+
+    const blockers = [
+      layoutBlocker({ ...ready, root: null }),
+      layoutBlocker({ ...ready, paths: [] }),
+      layoutBlocker({ ...ready, plan: null }),
+      layoutBlocker({ ...ready, plan: { ...plan, items: [] } }),
+      layoutBlocker({
+        ...ready,
+        plan: { ...plan, collisions: [{ destination: "Games/Turrican", sources: ["a", "b"] }] },
+      }),
+    ];
+    for (const blocker of blockers) {
+      expect(blocker).not.toBeNull();
+      expect(isLeafKey(blocker!.key), blocker!.key).toBe(true);
+    }
+    expect(layoutBlocker(ready)).toBeNull();
   });
 });

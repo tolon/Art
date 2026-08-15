@@ -139,6 +139,8 @@ pub fn run() {
             commands::preload::preload_probe,
             commands::preload::preload_plan,
             commands::preload::preload_run,
+            commands::layout::layout_plan,
+            commands::layout::layout_apply,
             commands::gotek::gotek_scan,
             commands::gotek::gotek_save,
             commands::distro::distro_profiles,

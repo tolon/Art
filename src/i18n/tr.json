@@ -1778,5 +1778,28 @@
       "tool": "{{version}} ile.",
       "notVerified": "ART bu birimi geri okuyamaz. PFS3 okuyucusu yok, yani içeridekiler aracın sözü, ART'ın değil — Amiga'da ya da ART olmayan bir şeyle doğrula."
     }
+  },
+  "layout": {
+    "blocked": {
+      "noRoot": "Önce bir hazırlık klasörü seç.",
+      "nothingToPlace": "Yerleştirilecek bir şey yok — önce birkaç dosya ya da klasör bırak.",
+      "notPlanned": "Önce önizle — ne olacağını görmeden hiçbir şey kopyalanmaz.",
+      "collisions": "Önce çakışma(ları) çöz — iki şey aynı adı isterken hiçbir şey kopyalanmaz."
+    },
+    "refusal": {
+      "belongsOnBootPartition": "Bu bir Kickstart — Pi donanım yazılımı onu bir Amiga biriminden değil, FAT32 önyükleme bölümünden okur.",
+      "noPlaceOnAnAmigaVolume": "Bunun bir Amiga biriminde yeri yok — bir Commodore 8-bit disk, teyp ya da kartuş imajı Amiga'da çalışmaz."
+    },
+    "kind": {
+      "whdloadArchive": "{{name}} (WHDLoad paketi)",
+      "whdloadDrawer": "{{name}} (WHDLoad klasörü)",
+      "floppyImage": "Disket imajı",
+      "hardDiskImage": "Sabit disk imajı",
+      "opticalImage": "Optik disk imajı",
+      "archive": "Arşiv",
+      "unknown": "Bilinmiyor",
+      "rom": "ROM",
+      "commodore8Bit": "Commodore 8-bit"
+    }
   }
 }

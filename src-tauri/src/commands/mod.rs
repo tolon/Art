@@ -17,6 +17,7 @@ pub mod gotek;
 pub mod hdf;
 pub mod iso;
 pub mod jobs;
+pub mod layout;
 pub mod lha;
 pub mod oplog;
 pub mod panel;
