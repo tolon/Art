@@ -136,6 +136,28 @@ Component {
 PathRule { from: String, to: String, kind: File | Subtree }
 ```
 
+`from: ""` means the media's own root, which two disks need: `Fonts.adf` and
+`Backdrops3.2.adf` are flat — the whole disk *is* the drawer.
+
+### The rule that generalises the ModulesA1200 lesson
+
+Measuring the rest of the set showed the same shape everywhere. `DiskDoctor`,
+`HDSetup3.2`, `MMULibs` and `Storage3.2` each carry a `C/` that mostly repeats
+`Workbench3.2`'s own commands. So the recipe is built by **diffing against the
+base**, and the result is both meaningful and small:
+
+| Component | What is actually new in its `C/` |
+|---|---|
+| `diskdoctor` | `DAControl`, `DiskDoctor`, `FixROMLibs` |
+| `mmulibs` | `FPU`, `MuFastRom`, `MuMapRom`, `MuScan`, … plus `Libs/680x0.library`, `Libs/mmu.library` |
+| `hdtools` | `ExtractKickstart`, `NSDPatch`, `UpdateWBFiles`, `Prod_Prep`, and the `HDTools/` drawer |
+| `storage` | `DefIcons`, `LoadModule`, `MD5Sum`, `MountInfo`, `Reboot`, … |
+
+This is enforced rather than trusted: **no component may claim a destination
+`workbench-base` also claims unless it declares an override.** A test asserts
+it over the shipped recipe, so a future component that lazily takes a whole
+drawer fails the build rather than downgrading somebody's `C:`.
+
 Recipes are **data**, in `core/osinstall/recipes/amigaos-3.2.json`, following
 the pattern `core/distro/registry.json` set. Adding AmigaOS 3.9 or CaffeineOS
 later adds a file, not a code path.
@@ -243,8 +265,8 @@ Measured against the user's own 3.2 set (36 ADFs).
 | `storage` | `Storage3.2` | |
 | `locale-base` | `Locale` | required with any language: this disk is `Catalogs`, **`Countries`** and `Support`, and carries no `Languages` at all |
 | `locale-<XX>` | `Locale-<XX>` | multi-select; these carry `Catalogs`, `Help` and `Languages`. 15 present, `Locale-TR` among them |
-| `glowicons` | `GlowIcons3.2` | |
-| `backdrops` | `Backdrops3.2` | |
+| `glowicons` | `GlowIcons3.2` | overrides `workbench-base` — it is icons for drawers the base created |
+| `backdrops` | `Backdrops3.2` | flat disk, `from: ""`. **Where the real installer puts these has not been established**, and this project does not guess at destinations — so it ships `available: false` until it is read off the Installer script or a real installed 3.2 |
 | `diskdoctor` | `DiskDoctor` | |
 | `mmulibs` | `MMULibs` | |
 | `hdtools` | `HDSetup3.2` | |
@@ -330,9 +352,18 @@ is the pattern.
 | `MediaMissing { component, volume_name }` | No ADF in the folder has volume `Extras3.2` and `extras` needs it. Which one, not "something is missing" |
 | `MediaPathMissing { component, path, media }` | The recipe expects `LIBS/Modules` on `ModulesA1200_3.2` and it is not there — **the recipe is wrong about this media**. A silently skipped path is a system missing a library |
 | `RomUnknown` | The ROM was not identified, so the Modules condition cannot be decided. Guessing wastes 800 KB or produces a system that quits at boot |
-| `DoesNotFit { needed, available }` | Real block numbers, before anything is touched |
 | `DestinationCollision { path, components }` | Two components, one path, no declared override — a recipe defect |
-| `NameNotStorable { name }` | Via the existing `check_name`, asked before the write rather than discovered during it |
+
+Two refusals were dropped from this list during the plan's self-review, because
+neither has a home in a module that produces a tree:
+
+- **`DoesNotFit`** cannot be answered here. The tree carries no volume name by
+  Decision 1, so "does it fit" is a question only the write step can ask. It is
+  answered in `native.rs::copy_in`, with real numbers, before the first byte.
+- **`NameNotStorable`** cannot arise. Destinations are checked against
+  `check_name` when the recipe *loads*, and source names come off an Amiga
+  volume, where they were already storable. Declaring a variant nothing
+  constructs is dead API.
 
 One case is deliberately **not** a refusal: turning Modules off on a pre-V47
 ROM is a confirmed warning. It is the user's machine.
@@ -368,6 +399,8 @@ core/osinstall/
   scan.rs       identify media in a folder by volume name
   plan.rs       components + media + ROM -> InstallPlan (pure, no I/O beyond reads)
   apply.rs      plan -> distribution tree + distribution.json (job, cancellable)
+  startup.rs    S:User-Startup, edited in place between ;BEGIN/;END markers
+  verify.rs     a written volume, read back and checked against the manifest
 core/preload/
   native.rs     VolumeFormatter over libpfs3 + core/volume/write
   pfs3dev.rs    the BlockDevice adapter
