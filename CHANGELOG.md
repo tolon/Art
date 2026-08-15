@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Drop a pile of files, get an organised staging tree (2026-08-15)
+
+#### Added
+- **A new screen, `layout`, that answers "what goes where".** Drop files or
+  folders on it and each one gets a proposed destination — `Games`,
+  `Floppies`, `HardDisks`, `CDs`, `Unsorted` — in a tree on your PC that the
+  OS Builder's preload screen then copies onto a card's Amiga volume.
+- **A WHDLoad drawer is placed whole, not scattered.** Drop a folder holding
+  fifty games and each one's drawer travels intact, with its icon placed
+  beside the drawer rather than inside it — inside, the game would be on the
+  disk and invisible on Workbench.
+- **A ROM and a Commodore disk are refused, with a reason, rather than
+  placed.** A ROM belongs on the card's boot partition, not an Amiga volume;
+  a C64 disk has no business on one at all.
+- **The preview is a table you can edit, not a rule ART enforces.** ART
+  cannot tell a demo from a game — nothing in what it can detect says so —
+  so it proposes only what it can justify, and you retarget one row or many
+  before anything is written. Nothing overwrites, nothing touches the
+  source, and stopping partway reports how much landed.
+
+#### Known
+- **Not yet driven against real material in the running application** — only
+  in a headless browser against the built bundle.
+- **No staging tree this builds has been carried onto a card.** The folder it
+  produces is pointed at by hand from the preload screen; there is no
+  automatic chaining between the two yet.
+
 ### Prepare a card's Amiga volumes, from the OS Builder (2026-08-15)
 
 #### Added
