@@ -1820,7 +1820,9 @@
       "custom": "Other drawer…",
       "customPlaceholder": "Drawer name",
       "apply": "Move",
-      "hint": "Each moved row keeps its own name; only the drawer changes."
+      "hint": "Each moved row keeps its own name; only the drawer changes.",
+      "blockedNoSelection": "Check at least one row first.",
+      "blockedNoDrawerName": "Type a drawer name first."
     },
     "collisions": {
       "heading": "Collisions",

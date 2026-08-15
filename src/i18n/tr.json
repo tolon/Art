@@ -1804,7 +1804,7 @@
       "running": "Ne olacağı hesaplanıyor…"
     },
     "plan": {
-      "heading": "Ne yerleştirilecek",
+      "heading": "Neler nereye gidecek",
       "total": "Toplam {{bytes}}"
     },
     "table": {
@@ -1820,7 +1820,9 @@
       "custom": "Başka klasör…",
       "customPlaceholder": "Klasör adı",
       "apply": "Taşı",
-      "hint": "Taşınan her satır kendi adını korur; yalnızca klasörü değişir."
+      "hint": "Taşınan her satır kendi adını korur; yalnızca klasörü değişir.",
+      "blockedNoSelection": "Önce en az bir satır işaretle.",
+      "blockedNoDrawerName": "Önce bir klasör adı yaz."
     },
     "collisions": {
       "heading": "Çakışmalar",

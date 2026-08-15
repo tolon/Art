@@ -221,9 +221,19 @@ export function ContentLayout() {
     setChecked(on ? new Set(plan.items.map((_, index) => index)) : new Set());
   }
 
+  /** The typed drawer, with the slashes a user might type around it (`Demos/`,
+   *  `/Demos`) stripped. `retarget` builds `${drawer}/${leaf}` verbatim, so a
+   *  trailing slash would show as `Demos//Turrican` on screen until
+   *  `safe_join` normalises it at Apply time — display-only, but it looks
+   *  like a bug. This is a screen-input concern, not `retarget`'s: that
+   *  function is shipped and tested as it is. */
+  function normalizedCustomDrawer(): string {
+    return customDrawer.trim().replace(/^\/+/, "").replace(/\/+$/, "");
+  }
+
   function moveChecked() {
     if (!plan || checked.size === 0) return;
-    const target = drawerChoice === CUSTOM_DRAWER ? customDrawer.trim() : drawerChoice;
+    const target = drawerChoice === CUSTOM_DRAWER ? normalizedCustomDrawer() : drawerChoice;
     if (!target) return;
     setPlan(retarget(plan, [...checked], target));
     setChecked(new Set());
@@ -235,7 +245,14 @@ export function ContentLayout() {
     (stale ? { key: "layout.blocked.staleAfterRetarget" } : null);
 
   const moveDisabled =
-    checked.size === 0 || (drawerChoice === CUSTOM_DRAWER && !customDrawer.trim());
+    checked.size === 0 || (drawerChoice === CUSTOM_DRAWER && !normalizedCustomDrawer());
+  // ART-100: a disabled control says why, and the Apply button four lines
+  // down already does — this covers the Move button's own two reasons.
+  const moveTitle = !moveDisabled
+    ? undefined
+    : checked.size === 0
+      ? t("layout.retarget.blockedNoSelection")
+      : t("layout.retarget.blockedNoDrawerName");
 
   return (
     <div>
@@ -367,7 +384,12 @@ export function ContentLayout() {
                     style={{ maxWidth: "14em" }}
                   />
                 )}
-                <button className="btn" onClick={moveChecked} disabled={moveDisabled}>
+                <button
+                  className="btn"
+                  onClick={moveChecked}
+                  disabled={moveDisabled}
+                  title={moveTitle}
+                >
                   {t("layout.retarget.apply")}
                 </button>
                 <span className="faint" style={{ fontSize: 11 }}>
