@@ -245,4 +245,51 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// A directory tree deeper than the scan limit stops cleanly rather than
+    /// recursing until the stack overflows (which aborts the process, since
+    /// the release profile sets `panic = "abort"`). Mirrors
+    /// `core::collection`'s `scanning_stops_at_the_depth_limit`.
+    #[test]
+    fn scanning_stops_at_the_depth_limit() {
+        let root = scratch("deep");
+
+        // Build a tree twice as deep as the limit, with a file at the bottom.
+        let mut deep = root.clone();
+        for i in 0..(MAX_SCAN_DEPTH * 2) {
+            deep = deep.join(format!("d{i}"));
+        }
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("buried.adf"), b"x").unwrap();
+
+        let found = gather(std::slice::from_ref(&root)).unwrap();
+
+        // The point is that it returned at all; the buried file is out of reach.
+        assert!(found.is_empty(), "found {found:?}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A drawer nested two folders down is still returned whole — the walk
+    /// keeps recursing through plain directories until it meets one.
+    #[test]
+    fn a_drawer_nested_two_levels_down_is_still_returned_whole() {
+        let root = scratch("nested-drawer");
+        let game = root.join("Games").join("TurricanII");
+        std::fs::create_dir_all(game.join("data")).unwrap();
+        std::fs::write(game.join("TurricanII.slave"), vec![0u8; 4]).unwrap();
+        std::fs::write(game.join("data").join("level1"), vec![0u8; 6]).unwrap();
+
+        let found = gather(std::slice::from_ref(&root)).unwrap();
+
+        assert_eq!(found.len(), 1, "the drawer is one thing: {found:?}");
+        assert_eq!(found[0].path, game);
+        assert!(found[0].is_dir);
+        assert!(
+            !found.iter().any(|f| f.path.ends_with("level1")),
+            "the file inside the drawer must not come back as its own entry: {found:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
