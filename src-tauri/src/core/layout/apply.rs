@@ -93,7 +93,27 @@ fn unpack_whdload(archive: &Path, target: &Path) -> CoreResult<u64> {
     use crate::core::jobs::NoProgress;
     use crate::core::whdload::analyse;
 
-    let scratch = target.with_extension("art-unpack");
+    // Unique per call, not just per destination: `target.with_extension(...)`
+    // alone is deterministic, so a process that dies mid-unpack would leave a
+    // directory that permanently blocks every later retry to this same
+    // destination. The pid plus a counter rules that out — two unpacks in the
+    // same process cannot collide, and neither can two processes.
+    //
+    // This is the same idea as `core::sources::install::Scratch`, deliberately
+    // not that type: `Scratch` lives under `std::env::temp_dir()`, which is
+    // very likely a different volume from the staging tree, turning every
+    // drawer copy that follows into a cross-volume one for a multi-gigabyte
+    // game. Staying beside `target` keeps the unpack and the copy on the same
+    // disk.
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let scratch = target.with_extension(format!(
+        "art-unpack-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    // With a unique name this should be unreachable — kept as the guard it
+    // always was, in case something else really is sitting there.
     if scratch.exists() {
         return Err(CoreError::InvalidInput(format!(
             "'{}' is in the way of unpacking",
@@ -552,6 +572,25 @@ mod tests {
     // UnpackWhdload
     // -----------------------------------------------------------------
 
+    /// Asserts nothing under `parent` looks like a leftover unpack scratch
+    /// directory. The scratch name is unique per call (pid + a counter), so
+    /// this checks by substring rather than an exact path — a leaked one next
+    /// to the staging tree is litter that looks like content, and is exactly
+    /// as user-facing whatever its generated suffix happens to be.
+    fn no_leftover_scratch_directory(parent: &Path) {
+        if !parent.exists() {
+            return;
+        }
+        for entry in std::fs::read_dir(parent).unwrap() {
+            let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+            assert!(
+                !name.contains("art-unpack"),
+                "'{name}' under {} looks like a leftover unpack scratch directory",
+                parent.display()
+            );
+        }
+    }
+
     /// Build a zip holding `Turrican/Turrican.slave`, `Turrican/data/level1`
     /// and `Turrican.info` beside the drawer — the shape a real WHDLoad
     /// archive has.
@@ -637,6 +676,7 @@ mod tests {
         );
 
         assert!(archive.exists(), "the archive is never consumed");
+        no_leftover_scratch_directory(&games);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -690,6 +730,7 @@ mod tests {
         );
 
         assert!(archive.exists(), "the archive is never consumed");
+        no_leftover_scratch_directory(&games);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -725,7 +766,9 @@ mod tests {
         );
 
         assert!(apply(&plan, &NoProgress).is_err());
-        assert!(!root.join("Games").join("Plain").exists());
+        let games = root.join("Games");
+        assert!(!games.join("Plain").exists());
+        no_leftover_scratch_directory(&games);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
