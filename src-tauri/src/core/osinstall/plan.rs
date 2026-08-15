@@ -132,20 +132,44 @@ mod condition_tests {
         assert_eq!(rom_facts(&path).unwrap().major, 40);
     }
 
-    /// Exercises the shared `fake_rom` fixture end to end, the same way
-    /// Task 5 will: build a synthetic ROM, then read it back through
-    /// `rom_facts` rather than constructing `RomFacts` by hand.
+    /// The user has licensed Amiga Forever (desktop and mobile — see
+    /// `docs/STATUS.md`), so a Cloanto-headered dump is ordinary input on
+    /// this machine, not an edge case. Without the strip, `rom_facts` would
+    /// read bytes 12..16 eleven bytes early, land outside the plausible
+    /// major range, and refuse a perfectly good ROM — ART-104's exact shape,
+    /// surfacing at the user's Amiga instead of in CI. `fake_rom` alone
+    /// cannot express this: it never carries the `AMIROMTYPE1` prefix, so
+    /// this test builds one by hand, the one byte-for-byte thing `fake_rom`
+    /// does not do.
     #[test]
-    fn rom_facts_reads_what_fake_rom_wrote() {
-        let dir = super::super::fixtures::scratch("plan-rom-facts");
-        let rom = super::super::fixtures::fake_rom(&dir, 45);
-        assert_eq!(rom_facts(&rom).unwrap().major, 45);
+    fn a_cloanto_headered_dump_still_reads_its_stated_major() {
+        let dir = super::super::fixtures::scratch("plan-rom-cloanto");
+        let path = dir.join("cloanto.rom");
+
+        let mut bytes = b"AMIROMTYPE1".to_vec();
+        let mut body = vec![0u8; 512 * 1024];
+        body[12..14].copy_from_slice(&40u16.to_be_bytes());
+        body[14..16].copy_from_slice(&68u16.to_be_bytes());
+        bytes.extend_from_slice(&body);
+        std::fs::write(&path, &bytes).unwrap();
+
+        assert_eq!(rom_facts(&path).unwrap().major, 40);
     }
 
+    /// A file that exists and reads fine but is not a ROM at all — plain
+    /// text, far too short to carry a version field. This is the case
+    /// `an_unreadable_rom_is_a_core_error_not_a_panic` (a *missing* file)
+    /// could not pin: that test's `is_err()` would pass for an I/O failure
+    /// just as readily as for a content problem, so it never proved
+    /// `rom_facts` actually rejects bad content rather than merely
+    /// propagating `std::fs::read`'s own error. This one names the exact
+    /// variant.
     #[test]
-    fn an_unreadable_rom_is_a_core_error_not_a_panic() {
-        let dir = super::super::fixtures::scratch("plan-rom-missing");
-        let missing = dir.join("does-not-exist.rom");
-        assert!(rom_facts(&missing).is_err());
+    fn content_that_is_not_a_rom_is_refused_as_invalid_input() {
+        let dir = super::super::fixtures::scratch("plan-rom-not-a-rom");
+        let path = dir.join("readme.txt");
+        std::fs::write(&path, b"this is not a Kickstart image").unwrap();
+
+        assert!(matches!(rom_facts(&path), Err(CoreError::InvalidInput(_))));
     }
 }
