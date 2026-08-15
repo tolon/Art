@@ -28,6 +28,7 @@ pub mod layout;
 pub mod lha;
 pub mod mbr;
 pub mod oplog;
+pub mod osinstall;
 pub mod pistorm;
 pub mod preload;
 pub mod profile;
