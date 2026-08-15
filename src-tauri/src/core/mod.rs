@@ -24,6 +24,7 @@ pub mod hashing;
 pub mod hdf;
 pub mod iso;
 pub mod jobs;
+pub mod layout;
 pub mod lha;
 pub mod mbr;
 pub mod oplog;
