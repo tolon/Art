@@ -45,6 +45,18 @@
 //! the request alone would miss exactly the case a `Condition` exists to
 //! create.
 //!
+//! ## A rule whose `kind` disagrees with the media is refused, not emitted wrong
+//!
+//! Recipes are data — a future release arrives as a new JSON file, not new
+//! code — so `plan()` is the only place a `File` rule that actually
+//! resolves to a directory (or a `Subtree` rule over a plain file) can be
+//! caught: `recipe.rs`'s `validate` has no media to resolve a path
+//! against. Emitting it anyway would be silently wrong in two different
+//! ways depending on direction — a `File`-over-directory item would carry
+//! `is_dir: true` and slip past `detect_collisions`, which only looks at
+//! files; a `Subtree`-over-file item would carry `bytes: 0` and be quietly
+//! short. `RefusalReason::RuleKindMismatch` names the rule instead.
+//!
 //! ## The ROM's own header, never `KNOWN_ROMS`
 //!
 //! `Condition::RomOlderThan` exists because `Workbench3.2.adf:S/Startup-sequence`
@@ -342,9 +354,10 @@ fn detect_collisions(items: &[PlanItem], recipe: &Recipe) -> Vec<RefusalReason> 
 ///
 /// Order: read the ROM once, decide which components are on, check that
 /// resolved set for `exclusive_group` conflicts, resolve each on
-/// component's media by volume name, resolve every one of its rules
-/// against that media (expanding `Subtree` rules with
-/// [`MediaSource::walk`]), check the whole walked-out item list for
+/// component's media by volume name, resolve every one of its rules against
+/// that media — refusing a `RuleKindMismatch` rather than emitting an item
+/// of the wrong shape — and expand every rule that does match with
+/// [`MediaSource::walk`]. Then check the whole walked-out item list for
 /// file-level collisions, and sum. See the module doc comment for why
 /// refusals never stop the walk and why any refusal empties `items`.
 pub fn plan(request: &InstallRequest, recipe: &Recipe) -> CoreResult<InstallPlan> {
@@ -374,9 +387,15 @@ pub fn plan(request: &InstallRequest, recipe: &Recipe) -> CoreResult<InstallPlan
     let mut items: Vec<PlanItem> = Vec::new();
 
     for component_id in &components_on {
-        let component = recipe.component(component_id).expect(
-            "components_on only ever names ids resolve_components_on read from this same recipe",
-        );
+        // `components_on` only ever names ids `resolve_components_on` read
+        // from this same `recipe`, so this is provably unreachable — but
+        // the release profile's `panic = "abort"` turns an `expect` here
+        // into the whole application going down over a case that cannot
+        // actually happen, which is a worse failure than silently skipping
+        // an id that isn't there. See CLAUDE.md's bounds-checking rule.
+        let Some(component) = recipe.component(component_id) else {
+            continue;
+        };
 
         // Never `if let MediaMatch::Found(..)` — see the module doc comment.
         let media_path = match media_for(&found, &component.media) {
@@ -418,14 +437,41 @@ pub fn plan(request: &InstallRequest, recipe: &Recipe) -> CoreResult<InstallPlan
             };
 
             match rule.kind {
+                RuleKind::File if entry.is_dir => {
+                    // A `File` rule resolving to a directory: emitting it
+                    // anyway would carry `is_dir: true`, which
+                    // `detect_collisions` filters out entirely (it only
+                    // looks at files) — a wrong recipe would silently
+                    // escape the one check meant to catch it. Refused by
+                    // name instead; see the `RuleKindMismatch` doc comment.
+                    refusals.push(RefusalReason::RuleKindMismatch {
+                        component: component.id.clone(),
+                        from: rule.from.clone(),
+                        expected: RuleKind::File,
+                        found: RuleKind::Subtree,
+                    });
+                }
                 RuleKind::File => {
                     items.push(PlanItem {
                         component: component.id.clone(),
                         media: component.media.clone(),
                         from: rule.from.clone(),
                         to: rule.to.clone(),
-                        is_dir: entry.is_dir,
+                        is_dir: false,
                         bytes: entry.size,
+                    });
+                }
+                RuleKind::Subtree if !entry.is_dir => {
+                    // A `Subtree` rule resolving to a file: `source.walk`
+                    // would refuse this itself (it only walks a directory
+                    // block), but the wrong-shape rule deserves a typed
+                    // refusal naming it, not the `CoreError` `walk` would
+                    // raise on the way there.
+                    refusals.push(RefusalReason::RuleKindMismatch {
+                        component: component.id.clone(),
+                        from: rule.from.clone(),
+                        expected: RuleKind::Subtree,
+                        found: RuleKind::File,
                     });
                 }
                 RuleKind::Subtree => {
@@ -437,7 +483,7 @@ pub fn plan(request: &InstallRequest, recipe: &Recipe) -> CoreResult<InstallPlan
                         media: component.media.clone(),
                         from: rule.from.clone(),
                         to: rule.to.clone(),
-                        is_dir: entry.is_dir,
+                        is_dir: true,
                         bytes: 0,
                     });
                     for walked in source.walk(&rule.from)? {
@@ -629,6 +675,154 @@ mod plan_tests {
         plan(&request, &recipe).unwrap()
     }
 
+    /// Carried item 4, made falsifiable: the collision `recipe.rs`'s own
+    /// static check cannot see at all, because it only exists once a
+    /// `Subtree` rule has been walked into a real file. `subtree-owner`
+    /// claims the whole `D` drawer (`Subtree "D" -> "D"`) from media that
+    /// genuinely holds `D/x`; `file-writer` writes a `File` rule straight
+    /// at `x -> D/x` from different media. Neither declares an `overrides`.
+    /// `plan_with_colliding_recipe` (`File` vs `File`) is the shape
+    /// `recipe.rs` already covers statically; this is the shape only
+    /// `plan()` — after `walk` — can see.
+    fn plan_with_a_walked_file_colliding_with_a_direct_file() -> InstallPlan {
+        let dir = crate::core::osinstall::fixtures::scratch("plan-walked-collision");
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        crate::core::osinstall::fixtures::media(
+            &folder,
+            "Owner",
+            "owner.adf",
+            &[("D/x", b"one", 0)],
+        );
+        crate::core::osinstall::fixtures::media(
+            &folder,
+            "Writer",
+            "writer.adf",
+            &[("x", b"two", 0)],
+        );
+
+        let recipe = Recipe {
+            release: "Test".to_string(),
+            components: vec![
+                Component {
+                    id: "subtree-owner".to_string(),
+                    media: "Owner".to_string(),
+                    rules: vec![PathRule {
+                        from: "D".to_string(),
+                        to: "D".to_string(),
+                        kind: RuleKind::Subtree,
+                    }],
+                    required: false,
+                    condition: None,
+                    overrides: vec![],
+                    user_startup: vec![],
+                    exclusive_group: None,
+                    available: true,
+                },
+                Component {
+                    id: "file-writer".to_string(),
+                    media: "Writer".to_string(),
+                    rules: vec![PathRule {
+                        from: "x".to_string(),
+                        to: "D/x".to_string(),
+                        kind: RuleKind::File,
+                    }],
+                    required: false,
+                    condition: None,
+                    overrides: vec![],
+                    user_startup: vec![],
+                    exclusive_group: None,
+                    available: true,
+                },
+            ],
+        };
+
+        let request = InstallRequest {
+            media_folder: folder,
+            rom: None,
+            chosen: vec!["subtree-owner".to_string(), "file-writer".to_string()],
+            destination: dir.join("dist"),
+        };
+        plan(&request, &recipe).unwrap()
+    }
+
+    /// A single-component recipe whose one rule declares `kind: "file"`
+    /// against `C`, a path that is actually a directory on its own media
+    /// (it holds `C/inner`). Neither the shipped recipe nor `recipe.rs`'s
+    /// `validate` can produce or catch this — `validate` has no media to
+    /// resolve `C` against, and a real Workbench disk's `C` genuinely is a
+    /// directory. Only a hand-built, deliberately wrong recipe can put a
+    /// `File` rule over a directory in front of `plan()`.
+    fn plan_with_a_file_rule_over_a_directory() -> InstallPlan {
+        let dir = crate::core::osinstall::fixtures::scratch("plan-kind-file-over-dir");
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        crate::core::osinstall::fixtures::media(&folder, "M", "m.adf", &[("C/inner", b"x", 0)]);
+
+        let recipe = Recipe {
+            release: "Test".to_string(),
+            components: vec![Component {
+                id: "a".to_string(),
+                media: "M".to_string(),
+                rules: vec![PathRule {
+                    from: "C".to_string(),
+                    to: "C".to_string(),
+                    kind: RuleKind::File,
+                }],
+                required: false,
+                condition: None,
+                overrides: vec![],
+                user_startup: vec![],
+                exclusive_group: None,
+                available: true,
+            }],
+        };
+
+        let request = InstallRequest {
+            media_folder: folder,
+            rom: None,
+            chosen: vec!["a".to_string()],
+            destination: dir.join("dist"),
+        };
+        plan(&request, &recipe).unwrap()
+    }
+
+    /// The other direction: `kind: "subtree"` against `readme`, a path that
+    /// is actually a plain file on its own media.
+    fn plan_with_a_subtree_rule_over_a_file() -> InstallPlan {
+        let dir = crate::core::osinstall::fixtures::scratch("plan-kind-subtree-over-file");
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        crate::core::osinstall::fixtures::media(&folder, "M", "m.adf", &[("readme", b"x", 0)]);
+
+        let recipe = Recipe {
+            release: "Test".to_string(),
+            components: vec![Component {
+                id: "a".to_string(),
+                media: "M".to_string(),
+                rules: vec![PathRule {
+                    from: "readme".to_string(),
+                    to: "readme".to_string(),
+                    kind: RuleKind::Subtree,
+                }],
+                required: false,
+                condition: None,
+                overrides: vec![],
+                user_startup: vec![],
+                exclusive_group: None,
+                available: true,
+            }],
+        };
+
+        let request = InstallRequest {
+            media_folder: folder,
+            rom: None,
+            chosen: vec!["a".to_string()],
+            destination: dir.join("dist"),
+        };
+        plan(&request, &recipe).unwrap()
+    }
+
     /// A recipe built by hand, not the shipped one: two components with no
     /// declared `overrides` both write `C/Assign`. The shipped recipe's own
     /// `no_two_components_claim_one_destination_without_declaring_it` test
@@ -740,6 +934,7 @@ mod plan_tests {
             component: "extras".into(),
             volume_name: "Extras3.2".into(),
         }));
+        assert!(plan.items.is_empty());
     }
 
     /// The media is here and the path is not — the recipe is wrong about this
@@ -766,6 +961,66 @@ mod plan_tests {
             [RefusalReason::DestinationCollision { path, components }]
                 if path == "C/Assign" && components.len() == 2
         ));
+        assert!(plan.items.is_empty());
+    }
+
+    /// Carried item 4, closed: the shape above is `File` vs `File`, which
+    /// `recipe.rs`'s own static check already covers, so it does not prove
+    /// `detect_collisions` looks at *walked* items at all. This is the test
+    /// the coordinator's review named directly — a file a `Subtree` rule
+    /// walks out of one component's media colliding with a file a plain
+    /// `File` rule writes from another's. Falsification: with the walk
+    /// output excluded from the collision check's input (kept in `items`
+    /// otherwise, exactly the mutation the reviewer proposed), this is the
+    /// one test in the module that fails — see the report for the
+    /// before/after run.
+    #[test]
+    fn a_walked_file_colliding_with_a_directly_written_file_is_a_collision() {
+        let plan = plan_with_a_walked_file_colliding_with_a_direct_file();
+        assert!(matches!(
+            plan.refusals.as_slice(),
+            [RefusalReason::DestinationCollision { path, components }]
+                if path == "D/x" && components.len() == 2
+        ));
+        assert!(plan.items.is_empty());
+    }
+
+    /// Promoted from Minor after review: a `File` rule that actually
+    /// resolves to a directory used to be emitted anyway, with
+    /// `is_dir: true` — which `detect_collisions` filters out entirely, so
+    /// a wrong recipe would escape the one check meant to catch a bad
+    /// destination. Unreachable from the shipped recipe (which is why it
+    /// was Minor), but recipes are data, and this is the only place a
+    /// future release's recipe file can have this checked at all.
+    #[test]
+    fn a_file_rule_over_a_directory_is_a_kind_mismatch() {
+        let plan = plan_with_a_file_rule_over_a_directory();
+        assert!(matches!(
+            plan.refusals.as_slice(),
+            [RefusalReason::RuleKindMismatch { component, from, expected, found }]
+                if component == "a"
+                    && from == "C"
+                    && *expected == RuleKind::File
+                    && *found == RuleKind::Subtree
+        ));
+        assert!(plan.items.is_empty());
+    }
+
+    /// The other direction: a `Subtree` rule over a plain file would
+    /// otherwise carry `bytes: 0` and be silently short, rather than
+    /// refused by name.
+    #[test]
+    fn a_subtree_rule_over_a_file_is_a_kind_mismatch() {
+        let plan = plan_with_a_subtree_rule_over_a_file();
+        assert!(matches!(
+            plan.refusals.as_slice(),
+            [RefusalReason::RuleKindMismatch { component, from, expected, found }]
+                if component == "a"
+                    && from == "readme"
+                    && *expected == RuleKind::Subtree
+                    && *found == RuleKind::File
+        ));
+        assert!(plan.items.is_empty());
     }
 
     /// The change the coordinator asked for after review: `exclusive_group`
@@ -813,6 +1068,13 @@ mod plan_tests {
     /// before the on-path is actually exercised. This one gives
     /// `ModulesA1200_3.2` too, so the on-path resolves end to end: no
     /// refusal, and `modules-a1200`'s own file genuinely lands in `items`.
+    ///
+    /// All four of `modules-a1200`'s rules are checked, not just its one
+    /// `File` rule (`C/LoadModule`) — the review that asked for this test
+    /// pointed out that the destination for none of its three `Subtree`
+    /// rules (`Libs/Modules`, `Devs/A1200`, `Libs/A1200`) was asserted, so
+    /// a bug in the subtree destination mapping specifically would not have
+    /// shown on the one path that runs on real hardware.
     #[test]
     fn the_modules_component_resolves_its_own_media_when_its_condition_is_on() {
         let (plan, _dir) = crate::core::osinstall::fixtures::planned_with(
@@ -825,6 +1087,19 @@ mod plan_tests {
             .items
             .iter()
             .any(|item| item.component == "modules-a1200" && item.to == "C/LoadModule"));
+        for expected in [
+            "Libs/Modules/placeholder",
+            "Devs/A1200/placeholder",
+            "Libs/A1200/placeholder",
+        ] {
+            assert!(
+                plan.items
+                    .iter()
+                    .any(|item| item.component == "modules-a1200" && item.to == expected),
+                "missing '{expected}' from modules-a1200's items: {:#?}",
+                plan.items
+            );
+        }
     }
 
     #[test]

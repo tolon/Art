@@ -170,6 +170,26 @@ pub enum RefusalReason {
         group: String,
         components: Vec<String>,
     },
+    /// A rule's `kind` disagrees with what the media actually holds at
+    /// `from` — a `File` rule resolving to a directory, or a `Subtree` rule
+    /// resolving to a file. Recipes are **data**: this whole design's
+    /// promise is that a future release (AmigaOS 3.9, CaffeineOS) arrives
+    /// as a new JSON file, not new code, and `recipe.rs`'s own `validate`
+    /// cannot catch this — it has no media to resolve a path against. This
+    /// is the only place a wrong `kind` can be caught, which is why it is
+    /// refused rather than silently emitted with the wrong shape (a `File`
+    /// rule over a directory would otherwise carry `is_dir: true` and
+    /// escape `detect_collisions`, which only looks at files; a `Subtree`
+    /// rule over a file would otherwise carry `bytes: 0` and be silently
+    /// short). `expected` is what the rule declared; `found` is what the
+    /// media actually holds — a recipe author's next question is always
+    /// "which rule?".
+    RuleKindMismatch {
+        component: String,
+        from: String,
+        expected: RuleKind,
+        found: RuleKind,
+    },
 }
 
 // ---------------------------------------------------------------------------
