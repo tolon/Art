@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
+use crate::core::layout::scan::MAX_SCAN_DEPTH;
 use crate::core::layout::{LayoutItem, LayoutPlan, Placement};
 use crate::core::security::path::safe_join;
 
@@ -30,7 +31,17 @@ pub fn apply(plan: &LayoutPlan, sink: &dyn ProgressSink) -> CoreResult<ApplyOutc
 
     for (done, item) in plan.items.iter().enumerate() {
         if sink.is_cancelled() {
-            return Err(CoreError::Cancelled);
+            // Every item already handled is durably on disk before the next
+            // is considered (§54), so a stop partway through has a real count
+            // to report — bare `Cancelled` would say nothing landed when it
+            // did (ART-058).
+            return Err(if outcome.placed > 0 {
+                CoreError::CancelledPartway {
+                    files: outcome.placed as u64,
+                }
+            } else {
+                CoreError::Cancelled
+            });
         }
         sink.report(done as u64, Some(total), &item.destination);
 
@@ -62,7 +73,7 @@ fn place(root: &Path, item: &LayoutItem) -> CoreResult<u64> {
 
     match item.placement {
         Placement::CopyFile => Ok(std::fs::copy(&item.source, &target)?),
-        Placement::CopyTree => copy_tree(&item.source, &target),
+        Placement::CopyTree => copy_tree(&item.source, &target, 0),
         Placement::UnpackWhdload => Err(CoreError::InvalidInput(
             "unpacking a WHDLoad archive is not implemented yet".into(),
         )),
@@ -70,7 +81,21 @@ fn place(root: &Path, item: &LayoutItem) -> CoreResult<u64> {
 }
 
 /// Copy `from` to `to` recursively, creating nothing that is already there.
-fn copy_tree(from: &Path, to: &Path) -> CoreResult<u64> {
+///
+/// Bounded by the same `MAX_SCAN_DEPTH` as `scan.rs`, and for the same
+/// reason: unbounded recursion overflows the stack, and with `panic =
+/// "abort"` that takes the whole application down. `scan::tree_bytes`
+/// answers the same question by returning `0` past the cap, which only makes
+/// a displayed number wrong; silently stopping a *copy* would leave a game on
+/// the card that looks placed but is missing everything below the cut, so
+/// this refuses instead.
+fn copy_tree(from: &Path, to: &Path, depth: usize) -> CoreResult<u64> {
+    if depth >= MAX_SCAN_DEPTH {
+        return Err(CoreError::InvalidInput(format!(
+            "'{}' is nested deeper than ART will copy (limit {MAX_SCAN_DEPTH})",
+            from.display()
+        )));
+    }
     std::fs::create_dir_all(to)?;
     let mut bytes = 0;
     for entry in std::fs::read_dir(from)? {
@@ -84,7 +109,7 @@ fn copy_tree(from: &Path, to: &Path) -> CoreResult<u64> {
         }
         let target: PathBuf = to.join(entry.file_name());
         if source.is_dir() {
-            bytes += copy_tree(&source, &target)?;
+            bytes += copy_tree(&source, &target, depth + 1)?;
         } else {
             bytes += std::fs::copy(&source, &target)?;
         }
@@ -130,14 +155,21 @@ mod tests {
                 kind: ItemKind::FloppyImage,
                 destination: "Floppies/Disk.adf".into(),
                 placement: Placement::CopyFile,
-                bytes: 10,
+                // Deliberately wrong: the plan's estimate. `ApplyOutcome.bytes`
+                // is what was actually written, never an echo of this figure —
+                // if the applier only forwarded `bytes`, this test would still
+                // pass at 999, so it must measure the real copy instead.
+                bytes: 999,
             }],
         );
 
         let outcome = apply(&plan, &NoProgress).unwrap();
 
         assert_eq!(outcome.placed, 1);
-        assert_eq!(outcome.bytes, 10);
+        assert_eq!(
+            outcome.bytes, 10,
+            "the real size copied, not the plan's estimate"
+        );
         assert_eq!(
             std::fs::read(root.join("Floppies").join("Disk.adf")).unwrap(),
             b"disk bytes"
@@ -182,6 +214,47 @@ mod tests {
         assert_eq!(
             std::fs::read(root.join("Games").join("Zool").join("data").join("level1")).unwrap(),
             b"level"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A tree deeper than `MAX_SCAN_DEPTH` is refused, not silently truncated.
+    /// `scan::tree_bytes` returning `0` past the cap only makes a displayed
+    /// number wrong; a copy that quietly stopped partway would leave a game
+    /// on the card that looks placed but is missing everything below the cut
+    /// — the exact failure this module exists to prevent.
+    #[test]
+    fn a_tree_deeper_than_the_scan_limit_is_refused_not_truncated() {
+        let dir = scratch("too-deep");
+        let root = dir.join("staging");
+        let game = dir.join("Deep");
+        std::fs::create_dir_all(&game).unwrap();
+
+        let mut deep = game.clone();
+        for i in 0..(MAX_SCAN_DEPTH + 2) {
+            deep = deep.join(format!("d{i}"));
+        }
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("buried.adf"), b"x").unwrap();
+
+        let plan = plan_of(
+            &root,
+            vec![LayoutItem {
+                source: game.clone(),
+                kind: ItemKind::WhdloadDrawer {
+                    name: "Deep".into(),
+                },
+                destination: "Games/Deep".into(),
+                placement: Placement::CopyTree,
+                bytes: 0,
+            }],
+        );
+
+        let err = apply(&plan, &NoProgress).unwrap_err();
+        assert!(
+            err.to_string().contains(&game.display().to_string()),
+            "the error should name the offending path: {err}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -266,18 +339,12 @@ mod tests {
         }
     }
 
-    /// **Cancelling leaves whole files, never half of one** (§54). The check
-    /// sits between items, so the first is complete and the second was never
-    /// begun.
-    #[test]
-    fn stopping_leaves_the_finished_item_whole_and_the_next_one_absent() {
-        let dir = scratch("cancel");
-        let root = dir.join("staging");
+    fn two_item_plan(dir: &Path, root: &Path) -> LayoutPlan {
         std::fs::write(dir.join("A.adf"), b"first").unwrap();
         std::fs::write(dir.join("B.adf"), b"second").unwrap();
 
-        let plan = plan_of(
-            &root,
+        plan_of(
+            root,
             vec![
                 LayoutItem {
                     source: dir.join("A.adf"),
@@ -294,7 +361,20 @@ mod tests {
                     bytes: 6,
                 },
             ],
-        );
+        )
+    }
+
+    /// **Cancelling leaves whole files, never half of one** (§54). The check
+    /// sits between items, so the first is complete and the second was never
+    /// begun. Every item already handled is durable on disk before the next
+    /// is considered, so the count is not an estimate — `CancelledPartway`
+    /// carries it (ART-058) rather than the bare `Cancelled` that would say
+    /// nothing landed when one file did.
+    #[test]
+    fn stopping_leaves_the_finished_item_whole_and_reports_how_many_landed() {
+        let dir = scratch("cancel-partway");
+        let root = dir.join("staging");
+        let plan = two_item_plan(&dir, &root);
 
         // Not cancelled for item 0, cancelled by the time item 1 is reached.
         let sink = StopAfter {
@@ -303,7 +383,8 @@ mod tests {
         };
         let err = apply(&plan, &sink).unwrap_err();
 
-        assert_eq!(err.code(), "ART-CANCELLED", "{err}");
+        assert_eq!(err.code(), "ART-CANCELLED-PARTWAY", "{err}");
+        assert!(err.to_string().contains('1'), "{err}");
         assert_eq!(
             std::fs::read(root.join("Floppies").join("A.adf")).unwrap(),
             b"first",
@@ -312,6 +393,31 @@ mod tests {
         assert!(
             !root.join("Floppies").join("B.adf").exists(),
             "the next item was never begun"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other half: cancelled before the first item is even considered,
+    /// nothing has landed, and the plain `ART-CANCELLED` code is still right
+    /// — there is no count to report.
+    #[test]
+    fn stopping_before_the_first_item_reports_plain_cancelled() {
+        let dir = scratch("cancel-before-any");
+        let root = dir.join("staging");
+        let plan = two_item_plan(&dir, &root);
+
+        // Cancelled from the very first check, before anything is copied.
+        let sink = StopAfter {
+            seen: std::sync::atomic::AtomicU64::new(0),
+            after: 0,
+        };
+        let err = apply(&plan, &sink).unwrap_err();
+
+        assert_eq!(err.code(), "ART-CANCELLED", "{err}");
+        assert!(
+            !root.join("Floppies").join("A.adf").exists(),
+            "nothing was begun"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
