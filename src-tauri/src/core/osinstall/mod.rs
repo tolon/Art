@@ -26,12 +26,13 @@
 //! command belongs with that disk's own purpose, not with the general
 //! toolkit disk that happens to also carry a copy.
 //!
-//! Only `recipe` exists so far — the module tree this doc comment describes
-//! (`apply`, `plan`, `scan`, `source`, `startup`, `verify`) lands one task at
+//! `recipe` and `source` exist so far — the module tree this doc comment
+//! describes (`apply`, `plan`, `scan`, `startup`, `verify`) lands one task at
 //! a time, each adding its own `pub mod` line, so the crate compiles at the
 //! end of every task rather than only at the end of the feature.
 
 pub mod recipe;
+pub mod source;
 
 use serde::{Deserialize, Serialize};
 
