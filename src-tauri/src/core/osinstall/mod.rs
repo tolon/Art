@@ -26,11 +26,13 @@
 //! command belongs with that disk's own purpose, not with the general
 //! toolkit disk that happens to also carry a copy.
 //!
-//! `recipe`, `source`, `scan` and `plan` (its ROM half only — the planning
-//! proper is Task 5) exist so far — the module tree this doc comment
-//! describes (`apply`, `startup`, `verify`) lands one task at a time, each
-//! adding its own `pub mod` line, so the crate compiles at the end of every
-//! task rather than only at the end of the feature.
+//! `recipe`, `source`, `scan` and `plan` (the ROM condition, and now
+//! [`plan::plan`] itself — components, media and ROM resolved into an
+//! [`plan::InstallPlan`] or a collected list of [`RefusalReason`]s) exist so
+//! far — the module tree this doc comment describes (`apply`, `startup`,
+//! `verify`) lands one task at a time, each adding its own `pub mod` line,
+//! so the crate compiles at the end of every task rather than only at the
+//! end of the feature.
 
 pub mod plan;
 pub mod recipe;
@@ -162,11 +164,12 @@ pub enum RefusalReason {
 // ---------------------------------------------------------------------------
 // Shared test fixtures (plan doc "Shared test fixtures" section).
 //
-// Grown one task at a time rather than landing whole here: this task adds
+// Grown one task at a time rather than landing whole here: Task 1 added
 // `scratch`, `media`, `workbench`, `CancelAfter`, `digest_of_folder` and
-// `fake_rom`. `planned_with`, `rdb_image` and `partition_offset` reference
-// types (`InstallRequest`, `plan()`, `core/card/build.rs`) that later tasks
-// create, so they are not written yet.
+// `fake_rom`. Task 5 adds `entries_for` and `planned_with`, now that
+// `InstallRequest` and `plan()` exist to build them against. `rdb_image` and
+// `partition_offset` reference `core/card/build.rs`, which is still a later
+// task, so they are not written yet.
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -364,9 +367,84 @@ pub(crate) mod fixtures {
         path
     }
 
-    /// Tasks 2 through 10 build their evidence on these six helpers, so the
+    /// Every entry a component's own rules need present so `plan()` finds
+    /// nothing missing: one placeholder file inside the drawer each
+    /// `Subtree` rule names, and the literal file each `File` rule names.
+    /// Built from the recipe actually passed in, not hand-copied from the
+    /// JSON — so a rule added to `amigaos-3.2.json` later is automatically
+    /// covered here too, and a test that wants *broken* media (Task 5's
+    /// `plan_where_extras_has_no_l`) starts from this and removes the one
+    /// entry it means to break, rather than drifting from what the shipped
+    /// recipe actually asks for.
+    pub fn entries_for(recipe: &super::Recipe, volume: &str) -> Vec<(String, Vec<u8>, u32)> {
+        let mut entries = Vec::new();
+        for component in recipe.components.iter().filter(|c| c.media == volume) {
+            for rule in &component.rules {
+                match rule.kind {
+                    super::RuleKind::File => entries.push((rule.from.clone(), b"data".to_vec(), 0)),
+                    super::RuleKind::Subtree if !rule.from.is_empty() => {
+                        entries.push((format!("{}/placeholder", rule.from), b"data".to_vec(), 0));
+                    }
+                    // `from: ""` means the media's own root (`fonts`,
+                    // `backdrops`) — `AdfSource::entry("")` always resolves
+                    // to the root itself, so no placeholder is needed to
+                    // make that rule satisfiable.
+                    super::RuleKind::Subtree => {}
+                }
+            }
+        }
+        entries
+    }
+
+    /// A media folder plus a plan over it, so a test states only what it
+    /// varies. `present` lists the volume names to create, each built with
+    /// exactly the content its own component(s) in the shipped recipe need
+    /// (via [`entries_for`]) — a test naming `"Workbench3.2"` gets media
+    /// that satisfies every one of `workbench-base`'s rules, so nothing
+    /// trips `MediaPathMissing` by accident. A fresh scratch directory every
+    /// call (an atomic counter, not the caller's own tag) — this is called
+    /// from many different tests, several of which run in parallel threads
+    /// of the same process, and a shared tag would let two calls race over
+    /// the same directory.
+    pub fn planned_with(
+        chosen: &[&str],
+        present: &[&str],
+        rom_major: Option<u16>,
+    ) -> (crate::core::osinstall::plan::InstallPlan, PathBuf) {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = scratch(&format!("planned-with-{n}"));
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+
+        let recipe = crate::core::osinstall::recipe::amigaos_32().unwrap();
+        for volume in present {
+            let owned = entries_for(&recipe, volume);
+            let refs: Vec<(&str, &[u8], u32)> = owned
+                .iter()
+                .map(|(path, bytes, protection)| (path.as_str(), bytes.as_slice(), *protection))
+                .collect();
+            media(&folder, volume, &format!("{volume}.adf"), &refs);
+        }
+
+        let rom = rom_major.map(|major| fake_rom(&dir, major));
+        let request = crate::core::osinstall::plan::InstallRequest {
+            media_folder: folder,
+            rom,
+            chosen: chosen.iter().map(|s| s.to_string()).collect(),
+            destination: dir.join("dist"),
+        };
+
+        let plan = crate::core::osinstall::plan::plan(&request, &recipe).unwrap();
+        (plan, dir)
+    }
+
+    /// Tasks 2 through 10 build their evidence on these helpers, so the
     /// helpers get their own coverage rather than trusting a one-off
-    /// exercise that was run once by hand and then deleted.
+    /// exercise that was run once by hand and then deleted. `entries_for`
+    /// and `planned_with` are exercised indirectly, by every `plan_tests`
+    /// test that calls them — a dedicated test here would only restate the
+    /// shipped recipe's own shape.
     #[cfg(test)]
     mod tests {
         use super::*;
