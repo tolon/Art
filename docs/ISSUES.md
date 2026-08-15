@@ -23,6 +23,98 @@ what fixed it (with the test that proves it).
 
 ## Open
 
+**ART-110** 🔵 **A partial layout apply cannot be resumed, and the screen stays
+busy** — *found 2026-08-15, the whole-branch review of SD-2 G11*
+`src-tauri/src/core/layout/apply.rs` · `src/pages/ContentLayout.tsx` · Any
+mid-run failure — item 5 of 10, or a `copy_tree` that hits the depth cap partway
+down a tree — leaves what already landed on disk. `copy_tree_excluding` creates
+the destination and then iterates, and files sort in with directories, so the
+residue is real files and not merely empty folders. The next preview reports all
+of it as ordinary collisions with nothing saying it is the wreckage of a failed
+run, and there is no skip-existing and no resume: the only way forward is the
+file manager.
+
+Compounded on the screen, where `busy` is never cleared when a job fails or is
+cancelled — the comment says "a cancelled or failed job is the job bar's to
+report", but nothing clears the flag, so Preview and Apply both stay disabled
+until the user navigates away and back. That half is inherited verbatim from
+`VolumePreload.tsx` and is a pre-existing pattern rather than a new mistake, but
+this is the screen where it bites, because this is the screen you need to re-run
+after a failure.
+
+Nothing is destroyed — `place()` refuses to overwrite, so a retry fails loudly
+rather than replacing anything. Fixing it means deciding what a re-preview should
+say about a destination that already holds exactly what this plan would put
+there, which is a design question and not a patch.
+
+**ART-109** 🔵 **`core/layout`'s WHDLoad tests never use LHA, and its `outside`
+test does not discriminate** — *found 2026-08-15, the whole-branch review of
+SD-2 G11*
+`src-tauri/src/core/layout/{mod,apply}.rs` · Every WHDLoad fixture in the module
+is a ZIP built at runtime; real packs are `.lha`. That is more than a fixture
+nit, because the drawer's name is derived **twice, from two sources**:
+`plan()` reads the archive's entry names through `archive::open`, and `apply()`
+re-runs `analyse` over the *extracted* tree. They must agree, because the drawer
+lands at the destination's leaf while the icon lands at
+`parent.join(layout.icon_name())` — from the second answer. If the two ever
+diverge for a backend, the icon lands under a name that does not match the
+drawer and §82 fails silently, which is the one outcome that function exists to
+prevent. One `.lha` fixture driven through `plan` → `apply` would pin it.
+
+Separately, `a_file_outside_the_pack_is_dropped_rather_than_landing_in_the_drawer`
+passes against the pre-fix code: the wrapped case never walked those paths and
+the wrapper-less case always gets an empty `outside`, so the unification it was
+written for has no observable behaviour to catch. The test documents real
+behaviour and is not worthless, but it must not be counted as covering that
+change.
+
+**ART-108** 🔵 **Nothing you drop can reach the layout screen** — *found
+2026-08-15, the whole-branch review of SD-2 G11*
+`src-tauri/src/core/workflow/builtin.rs` · The module's own framing is "drop four
+hundred files, get an organised card", and the only ways in are the sidebar and
+a file dialog: the workflow catalogue has no entry pointing at `/layout`, so
+ART's one drop pipeline cannot route anything there. The design doc does not
+require it and `Navigate { route: "/layout" }` for a dropped `Directory` is its
+own decision — filed because the gap is written down nowhere else.
+
+**ART-107** 🔵 **`scan::gather` drops silently at the depth cap, and counts an
+overlapping input twice** — *found 2026-08-15, the whole-branch review of SD-2
+G11*
+`src-tauri/src/core/layout/scan.rs` · Two ways the plan can quietly not describe
+what the user dropped. `walk` returns `Ok(())` past `MAX_SCAN_DEPTH` and
+`tree_bytes` returns `0`, so files below the cap are absent from the plan with
+nothing on screen saying so, and a drawer's size can read low. The copy path
+does this correctly — `copy_tree` **refuses** past the cap rather than
+truncating — and the scan should at least count what it did not look at, so the
+plan can say "n items were deeper than ART will look".
+
+And `gather` does not dedupe: adding `E:\Games` and then
+`E:\Games\Turrican.lha`, both of which the screen allows, yields the same file
+twice and a self-collision the user can only resolve by removing a source.
+
+**ART-106** 🔵 **A WHDLoad icon's destination is invisible to collision
+analysis** — *found 2026-08-15, the whole-branch review of SD-2 G11*
+`src-tauri/src/core/layout/mod.rs` · `collisions_in` walks `item.destination`
+only, but applying an `UnpackWhdload` item also writes
+`<parent>/<name>.info` beside the drawer (§82). So the preview can report no
+collisions for a staging tree that already holds `Games/Turrican.info`; the
+apply then silently no-ops the icon — `if !to.exists()` — and places a drawer
+Workbench cannot see, which is the exact failure §82 exists to prevent, reached
+from the other side.
+
+The no-op is not the bug and does not need changing on its own: `place()`
+already refuses when the *drawer's* destination exists, so an existing icon
+beside a free drawer is a state only a previous partial run can produce. What is
+missing is that the plan never considers the icon's path at all.
+
+**ART-105** 🔵 **`size()` is written three times** — *found 2026-08-15, the
+whole-branch review of SD-2 G11*
+`src/pages/ContentLayout.tsx` · `src/components/osbuilder/VolumePreload.tsx` ·
+`src/components/osbuilder/CardBuilder.tsx` · The same five-line `GIB` constant
+and `size()` byte formatter, now in three screens and identical in all three.
+Two copies was a judgement call; three is where it stops being one. One
+`src/lib/size.ts` is smaller than the next reviewer noticing again.
+
 **ART-104** 🟡 **The user's own A1200 Kickstart is not in the ROM database** —
 *found 2026-08-14, planning a card with the real material*
 `src-tauri/src/core/rom.rs` · `KNOWN_ROMS` holds one SHA-256 per ROM, and the
