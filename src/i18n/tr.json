@@ -1837,7 +1837,8 @@
       "noRoot": "Önce bir hazırlık klasörü seç.",
       "nothingToPlace": "Yerleştirilecek bir şey yok — önce birkaç dosya ya da klasör bırak.",
       "notPlanned": "Önce önizle — ne olacağını görmeden hiçbir şey kopyalanmaz.",
-      "collisions": "Önce çakışma(ları) çöz — iki şey aynı adı isterken hiçbir şey kopyalanmaz."
+      "collisions": "Önce çakışma(ları) çöz — iki şey aynı adı isterken hiçbir şey kopyalanmaz.",
+      "couldNotRecheck": "ART bu hedeflerin boş olup olmadığını kontrol edemedi — uygulamadan önce yeniden önizle."
     },
     "refusal": {
       "belongsOnBootPartition": "Bu bir Kickstart — Pi donanım yazılımı onu bir Amiga biriminden değil, FAT32 önyükleme bölümünden okur.",

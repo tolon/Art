@@ -96,6 +96,18 @@ export function ContentLayout() {
    * the user changes it" into a hazard rather than a comfort.
    */
   const [checked, setChecked] = useState<Set<number>>(new Set());
+  /**
+   * True when `plan.collisions` is `retarget`'s in-plan-only list and a
+   * `layoutRecheck` to verify it against disk has been tried and failed.
+   *
+   * Not the old `stale` flag: `stale` blocked on a question nobody had
+   * asked, and its only exit destroyed the user's edit. This blocks on a
+   * question that **was** asked and failed — previewing again is a genuine
+   * remedy, and Apply must not read an unverified list as an all-clear
+   * (§89). Cleared by anything that gives `plan.collisions` a real answer
+   * again: a successful recheck, or a fresh preview.
+   */
+  const [collisionsUnknown, setCollisionsUnknown] = useState(false);
   const [drawerChoice, setDrawerChoice] = useState<string>(DEFAULT_POLICY.games);
   const [customDrawer, setCustomDrawer] = useState("");
   const [busy, setBusy] = useState(false);
@@ -122,6 +134,7 @@ export function ContentLayout() {
     if (lastPlanned.current !== null && lastPlanned.current !== fingerprint) {
       setPlan(null);
       setChecked(new Set());
+      setCollisionsUnknown(false);
     }
   }, [fingerprint]);
 
@@ -133,6 +146,7 @@ export function ContentLayout() {
       // It has been laid out. A second run needs a second preview.
       setPlan(null);
       setChecked(new Set());
+      setCollisionsUnknown(false);
     }).then((fn) => {
       unlisten = fn;
     });
@@ -178,6 +192,7 @@ export function ContentLayout() {
       const made = await layoutPlan(request);
       setPlan(made);
       setChecked(new Set());
+      setCollisionsUnknown(false);
       lastPlanned.current = fingerprint;
     } catch (e) {
       setPlan(null);
@@ -240,25 +255,47 @@ export function ContentLayout() {
     setError(null);
     try {
       const collisions = await layoutRecheck(retargeted);
-      setPlan((current) => (current ? { ...current, collisions } : current));
+      // Compared by identity against `retargeted`, not just "is there a
+      // plan": if another retarget landed while this recheck was in flight,
+      // `plan` has already moved on to a different object, and this answer
+      // was computed for a plan that is no longer on screen — applying it
+      // now would splice a response into a plan it does not describe.
+      setPlan((current) => (current === retargeted ? { ...current, collisions } : current));
+      setCollisionsUnknown(false);
     } catch (e) {
       setError(String(e));
+      // The plan on screen still carries `retarget`'s in-plan-only
+      // collisions — real, but blind to the disk. Saying nothing here would
+      // let a stale, unverified list read as an all-clear to `layoutBlocker`,
+      // which is exactly the false all-clear §89 forbids. Block until a
+      // preview or a later recheck actually answers the question.
+      setCollisionsUnknown(true);
     } finally {
       setBusy(false);
     }
   }
 
-  const blocker: Phrase | null = layoutBlocker({ root, paths, plan });
+  const blocker: Phrase | null =
+    layoutBlocker({ root, paths, plan }) ??
+    (collisionsUnknown ? { key: "layout.blocked.couldNotRecheck" } : null);
 
+  // `busy` as well as the selection/drawer checks: `moveChecked` is async
+  // (it awaits `layoutRecheck`), so without this a second click while the
+  // first is still in flight could fire an overlapping recheck.
   const moveDisabled =
-    checked.size === 0 || (drawerChoice === CUSTOM_DRAWER && !normalizedCustomDrawer());
+    busy || checked.size === 0 || (drawerChoice === CUSTOM_DRAWER && !normalizedCustomDrawer());
   // ART-100: a disabled control says why, and the Apply button four lines
-  // down already does — this covers the Move button's own two reasons.
-  const moveTitle = !moveDisabled
+  // down already does — this covers the Move button's own two reasons. While
+  // busy the button is disabled for a third reason that needs no title of
+  // its own — the same convention the Preview and Apply buttons already
+  // follow, which rely on their label changing rather than a tooltip.
+  const moveTitle = busy
     ? undefined
-    : checked.size === 0
-      ? t("layout.retarget.blockedNoSelection")
-      : t("layout.retarget.blockedNoDrawerName");
+    : !moveDisabled
+      ? undefined
+      : checked.size === 0
+        ? t("layout.retarget.blockedNoSelection")
+        : t("layout.retarget.blockedNoDrawerName");
 
   return (
     <div>

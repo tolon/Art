@@ -1837,7 +1837,8 @@
       "noRoot": "Choose a staging folder first.",
       "nothingToPlace": "Nothing to lay out — drop some files or folders in first.",
       "notPlanned": "Preview it first — nothing is copied before you have seen what would be.",
-      "collisions": "Resolve the collision(s) first — nothing is copied while two things want the same name."
+      "collisions": "Resolve the collision(s) first — nothing is copied while two things want the same name.",
+      "couldNotRecheck": "ART could not check whether those destinations are free — preview again before applying."
     },
     "refusal": {
       "belongsOnBootPartition": "This is a Kickstart — the Pi firmware reads it off the FAT32 boot partition, not off an Amiga volume.",
