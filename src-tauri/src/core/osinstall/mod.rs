@@ -265,16 +265,20 @@ pub(crate) mod fixtures {
         }
     }
 
-    /// Every path under `root`, in a stable order.
-    fn walkdir_sorted(root: &Path) -> Vec<PathBuf> {
+    /// Every file and directory under `root`, in no particular order —
+    /// `digest_of_folder` does its own sorting, over the *relative* keys it
+    /// actually hashes. Does not swallow an unreadable directory: a scratch
+    /// tree this code just created should always be readable, and silently
+    /// skipping one would make "unchanged" pass over data that was never
+    /// examined.
+    fn walk_paths(root: &Path) -> Vec<PathBuf> {
         let mut found = Vec::new();
         let mut stack = vec![root.to_path_buf()];
         while let Some(dir) = stack.pop() {
-            let Ok(read) = std::fs::read_dir(&dir) else {
-                continue;
-            };
-            for entry in read.flatten() {
-                let path = entry.path();
+            let read = std::fs::read_dir(&dir)
+                .unwrap_or_else(|e| panic!("reading {}: {e}", dir.display()));
+            for entry in read {
+                let path = entry.unwrap().path();
                 if path.is_dir() {
                     stack.push(path.clone());
                 }
@@ -284,17 +288,39 @@ pub(crate) mod fixtures {
         found
     }
 
-    /// One hash over a whole folder, so "unchanged" is a single assertion.
-    /// Sorted, so it does not depend on directory order.
+    /// `path`, relative to `root`, as a `/`-joined key — never the absolute
+    /// path, and never the platform's own separator. Two identical trees
+    /// rooted at different scratch directories must hash the same, which an
+    /// absolute-path key would break by construction, and a bare
+    /// `Path::to_string_lossy` would break on the one platform this project
+    /// ships for, where the separator is `\`.
+    fn relative_key(root: &Path, path: &Path) -> String {
+        path.strip_prefix(root)
+            .unwrap()
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+
+    /// One hash over a whole folder, so "unchanged" is a single assertion,
+    /// and so that the same tree copied to a different scratch directory
+    /// still compares equal — the whole point of hashing a *copy* against
+    /// its *original* (Task 6's proof). Sorted by the relative key it
+    /// hashes, so it does not depend on directory read order.
     pub fn digest_of_folder(root: &Path) -> String {
         use sha2::{Digest, Sha256};
-        let mut names: Vec<PathBuf> = walkdir_sorted(root);
-        names.sort();
+        let mut entries: Vec<(String, PathBuf)> = walk_paths(root)
+            .into_iter()
+            .map(|path| (relative_key(root, &path), path))
+            .collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+
         let mut hasher = Sha256::new();
-        for path in names {
-            hasher.update(path.to_string_lossy().as_bytes());
+        for (key, path) in &entries {
+            hasher.update(key.as_bytes());
             if path.is_file() {
-                hasher.update(std::fs::read(&path).unwrap());
+                hasher.update(std::fs::read(path).unwrap());
             }
         }
         format!("{:x}", hasher.finalize())
@@ -311,5 +337,142 @@ pub(crate) mod fixtures {
         bytes[14..16].copy_from_slice(&68u16.to_be_bytes());
         std::fs::write(&path, &bytes).unwrap();
         path
+    }
+
+    /// Tasks 2 through 10 build their evidence on these six helpers, so the
+    /// helpers get their own coverage rather than trusting a one-off
+    /// exercise that was run once by hand and then deleted.
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn scratch_starts_empty_even_on_a_second_call_with_the_same_tag() {
+            let dir = scratch("fixture-scratch");
+            assert!(dir.is_dir());
+            assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+
+            std::fs::write(dir.join("leftover"), b"from a previous run").unwrap();
+
+            let dir_again = scratch("fixture-scratch");
+            assert_eq!(dir, dir_again, "the tag plus pid must be a stable path");
+            assert_eq!(
+                std::fs::read_dir(&dir_again).unwrap().count(),
+                0,
+                "scratch must clear whatever a previous run left behind"
+            );
+        }
+
+        /// The protection byte is the one thing a test cannot see just by
+        /// opening the file with ordinary I/O — it lives in the AmigaDOS
+        /// header block, so this proves the volume writer really stored what
+        /// `media()` was asked to store, not just that the bytes exist.
+        #[test]
+        fn media_writes_the_protection_bits_it_was_asked_for() {
+            let dir = scratch("media-protection");
+            let image = media(
+                &dir,
+                "Test",
+                "t.adf",
+                &[
+                    ("C/LoadModule", b"cmd", 0x20),
+                    ("S/Startup-sequence", b"; test\n", 0x42),
+                ],
+            );
+
+            let parsed =
+                crate::core::adf::AdfImage::from_bytes(std::fs::read(&image).unwrap()).unwrap();
+            let root = parsed.list_root().unwrap();
+
+            let c_dir = root.iter().find(|e| e.name == "C").unwrap();
+            let load_module = parsed
+                .list_dir(c_dir.header_block)
+                .unwrap()
+                .into_iter()
+                .find(|e| e.name == "LoadModule")
+                .unwrap();
+            assert_eq!(load_module.attrs, "--p-rwed");
+
+            let s_dir = root.iter().find(|e| e.name == "S").unwrap();
+            let startup = parsed
+                .list_dir(s_dir.header_block)
+                .unwrap()
+                .into_iter()
+                .find(|e| e.name == "Startup-sequence")
+                .unwrap();
+            assert_eq!(startup.attrs, "-s--rw-d");
+        }
+
+        #[test]
+        fn workbench_carries_the_two_files_every_test_in_this_plan_leans_on() {
+            let dir = scratch("workbench-fixture");
+            let image = workbench(&dir);
+
+            let parsed =
+                crate::core::adf::AdfImage::from_bytes(std::fs::read(&image).unwrap()).unwrap();
+            let root = parsed.list_root().unwrap();
+            let c_dir = root.iter().find(|e| e.name == "C").unwrap();
+            let s_dir = root.iter().find(|e| e.name == "S").unwrap();
+
+            assert!(parsed
+                .list_dir(c_dir.header_block)
+                .unwrap()
+                .iter()
+                .any(|e| e.name == "LoadModule"));
+            assert!(parsed
+                .list_dir(s_dir.header_block)
+                .unwrap()
+                .iter()
+                .any(|e| e.name == "Startup-sequence"));
+        }
+
+        #[test]
+        fn fake_rom_states_the_major_it_was_asked_for() {
+            let dir = scratch("fake-rom");
+            let rom = fake_rom(&dir, 45);
+            let bytes = std::fs::read(&rom).unwrap();
+            assert_eq!(crate::core::rom::stated_version(&bytes), Some((45, 68)));
+        }
+
+        #[test]
+        fn cancel_after_flips_on_the_nth_report_and_not_before() {
+            let sink = CancelAfter::new(3);
+            assert!(!sink.is_cancelled());
+            sink.report(0, None, "one");
+            sink.report(0, None, "two");
+            assert!(
+                !sink.is_cancelled(),
+                "the third report is the one that trips it"
+            );
+            sink.report(0, None, "three");
+            assert!(sink.is_cancelled());
+        }
+
+        /// The property Task 6 actually leans on: two copies of the same
+        /// tree, rooted at two different scratch directories, must digest
+        /// identically — and a single changed byte must not.
+        #[test]
+        fn digest_of_folder_does_not_depend_on_where_the_tree_is_rooted() {
+            let dir = scratch("digest-portable");
+            let left = dir.join("left");
+            let right = dir.join("right");
+            std::fs::create_dir_all(left.join("sub")).unwrap();
+            std::fs::create_dir_all(right.join("sub")).unwrap();
+            std::fs::write(left.join("sub").join("a.txt"), b"hello").unwrap();
+            std::fs::write(right.join("sub").join("a.txt"), b"hello").unwrap();
+
+            assert_eq!(
+                digest_of_folder(&left),
+                digest_of_folder(&right),
+                "identical trees under different roots must digest the same"
+            );
+
+            std::fs::write(right.join("sub").join("a.txt"), b"hello!").unwrap();
+            assert_ne!(
+                digest_of_folder(&left),
+                digest_of_folder(&right),
+                "a single changed byte must change the digest"
+            );
+        }
     }
 }

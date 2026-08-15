@@ -159,6 +159,19 @@
       ]
     },
     {
+      "id": "modules-a1200",
+      "media": "ModulesA1200_3.2",
+      "condition": { "condition": "rom-older-than", "major": 47 },
+      "exclusive_group": "modules",
+      "rules": [
+        { "from": "C/LoadModule", "to": "C/LoadModule", "kind": "file" },
+        { "from": "LIBS/Modules", "to": "Libs/Modules", "kind": "subtree" },
+        { "from": "DEVS/A1200", "to": "Devs/A1200", "kind": "subtree" },
+        { "from": "LIBS/A1200", "to": "Libs/A1200", "kind": "subtree" }
+      ],
+      "overrides": ["storage"]
+    },
+    {
       "id": "update-3.2.1",
       "media": "Update3.2.1",
       "available": false,
@@ -229,6 +242,7 @@
         { "from": "Libs/68040.library", "to": "Libs/68040.library", "kind": "file" },
         { "from": "Libs/68060.library", "to": "Libs/68060.library", "kind": "file" },
         { "from": "Libs/680x0.library", "to": "Libs/680x0.library", "kind": "file" },
+        { "from": "Libs/mmu", "to": "Libs/mmu", "kind": "subtree" },
         { "from": "Libs/mmu.library", "to": "Libs/mmu.library", "kind": "file" },
         { "from": "Libs/memory.library", "to": "Libs/memory.library", "kind": "file" },
         { "from": "Libs/disassembler.library", "to": "Libs/disassembler.library", "kind": "file" }
@@ -269,19 +283,6 @@
         { "from": "Storage/DefIcons", "to": "Storage/DefIcons", "kind": "subtree" },
         { "from": "Storage/Env-Archive", "to": "Storage/Env-Archive", "kind": "subtree" }
       ]
-    },
-    {
-      "id": "modules-a1200",
-      "media": "ModulesA1200_3.2",
-      "condition": { "condition": "rom-older-than", "major": 47 },
-      "exclusive_group": "modules",
-      "rules": [
-        { "from": "C/LoadModule", "to": "C/LoadModule", "kind": "file" },
-        { "from": "LIBS/Modules", "to": "Libs/Modules", "kind": "subtree" },
-        { "from": "DEVS/A1200", "to": "Devs/A1200", "kind": "subtree" },
-        { "from": "LIBS/A1200", "to": "Libs/A1200", "kind": "subtree" }
-      ],
-      "overrides": ["storage"]
     }
   ]
 }
