@@ -665,6 +665,93 @@ mod tests {
         assert!(err.to_string().contains("its own ancestor"), "{err}");
     }
 
+    /// A single bucket's own chain, made to loop by pointing one already-
+    /// written file block's `NEXT_HASH_OFFSET` at itself — the route the
+    /// coordinator's second review round identified as untouched by the
+    /// visited set (which is keyed on *directory* blocks; this loop never
+    /// recurses, since every entry in it is a file) and by the depth cap
+    /// (which never advances, for the same reason).
+    ///
+    /// Measured, not assumed: this refuses, but **not** through
+    /// `walk_dir`'s total-entry cap. `dir::entries_in` walks a bucket's
+    /// chain with its own pre-existing bound, `MAX_CHAIN_STEPS` (65,536,
+    /// `core/volume/write/dir.rs`) — a limit older than this task and far
+    /// above any floppy's own block count (1,760 on a DD disk), so it always
+    /// fires first for a same-*bucket* loop, on any volume, and returns its
+    /// own `"hash bucket {n} does not end"` before `entries_in` ever hands a
+    /// `Vec` back to `walk_dir` for the entry cap to look at. The assertion
+    /// below is that exact message, verified by running this splice and
+    /// reading back what actually came out, not assumed to be the entry cap
+    /// because the request that prompted this test named it. The entry
+    /// cap's own genuine, uncontested job — the one nothing else in this
+    /// file touches — is the *next* test: the same reused block aliased
+    /// across many distinct, never-repeated *directories*, where no single
+    /// bucket ever loops and no directory is ever revisited.
+    #[test]
+    fn a_bucket_that_loops_on_itself_is_refused_by_the_chain_step_limit() {
+        let dir = super::super::fixtures::scratch("source-bucket-loop");
+        let image = super::super::fixtures::media(
+            &dir,
+            "Bucket",
+            "bucket.adf",
+            &[("Payload.bin", b"x", 0x00)],
+        );
+        let geometry = dd_geometry();
+
+        let payload_block = {
+            let source = AdfSource::open(&image).unwrap();
+            source.resolve("Payload.bin").unwrap().unwrap()
+        };
+
+        let mut raw = std::fs::read(&image).unwrap();
+        let next_hash_slot =
+            payload_block as usize * geometry.block_size + layout::NEXT_HASH_OFFSET;
+        raw[next_hash_slot..next_hash_slot + 4].copy_from_slice(&payload_block.to_be_bytes());
+        std::fs::write(&image, &raw).unwrap();
+
+        let mut source = AdfSource::open(&image).unwrap();
+        let err = source.walk("").unwrap_err();
+        assert!(
+            err.to_string().contains("does not end"),
+            "expected dir::entries_in's own chain-step limit, got: {err}"
+        );
+    }
+
+    /// The total-entry cap's own, uncontested route: the same file block
+    /// aliased into `total_blocks`-many distinct directories, none of them
+    /// ever revisited (so the visited set never fires) and no single
+    /// directory's own hash-table bucket ever chained past one hop (so
+    /// `dir::entries_in`'s chain-step limit never fires either). That is a
+    /// real fixture — dozens of genuine directories, each one legitimate on
+    /// its own — larger than either of the other two guards' fixtures
+    /// needed to be, for a property that is otherwise obvious once stated:
+    /// no volume can legitimately hold more entries than it has blocks.
+    ///
+    /// So this proves the guard the cheap way instead: `walk_dir` is a
+    /// private method of this same module, reachable directly from here.
+    /// Seeding `out` at exactly `total_blocks` entries before calling it on
+    /// a real, ordinary directory reproduces the one fact that matters —
+    /// the cap refuses the very next legitimate entry rather than growing
+    /// `out` past what the volume could ever really hold — without needing
+    /// the large fixture that would be the only way to reach the same
+    /// check from `MediaSource::walk`.
+    #[test]
+    fn the_total_entry_cap_refuses_one_more_entry_once_out_is_already_full() {
+        let dir = super::super::fixtures::scratch("source-total-entry-cap");
+        let image = super::super::fixtures::workbench(&dir);
+        let source = AdfSource::open(&image).unwrap();
+
+        let mut out = vec![source.root_entry(); source.geometry.total_blocks as usize];
+        let mut visited = HashSet::new();
+        let err = source
+            .walk_dir(source.geometry.root_block, "", 0, &mut visited, &mut out)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("more entries than it has blocks"),
+            "{err}"
+        );
+    }
+
     /// The depth cap on its own terms, independent of the cycle guard above:
     /// a real, non-cyclic chain of distinct directories nested past
     /// `MAX_SCAN_DEPTH` must still be refused. The visited set does not fire
