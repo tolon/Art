@@ -155,6 +155,50 @@ mod tests {
         dir
     }
 
+    /// **The wire, written down.** `src/lib/preload.ts` builds this object by
+    /// hand — the request's own fields spread flat, with `tool_path` beside
+    /// them — and `#[serde(flatten)]` is the only thing making the two agree.
+    /// Nothing else in the build checks it: a renamed field would compile on
+    /// both sides and fail at the moment the user pressed Preview, which is
+    /// the worst place to find out.
+    #[test]
+    fn the_payload_the_frontend_sends_deserialises() {
+        let command: PreloadCommand = serde_json::from_str(
+            r#"{"image":"E:\\amiga\\ProjeART\\card.img",
+                "driver":null,
+                "partitions":[{"area":1,"index":1,"volume_name":"Work","content":null}],
+                "tool_path":"E:\\amiga\\hstimager\\hst.imager.exe"}"#,
+        )
+        .expect("the shape src/lib/preload.ts sends");
+
+        assert_eq!(command.tool_path, "E:\\amiga\\hstimager\\hst.imager.exe");
+        assert_eq!(command.request.driver, None);
+        assert_eq!(command.request.partitions.len(), 1);
+        assert_eq!(command.request.partitions[0].area, 1);
+        assert_eq!(command.request.partitions[0].volume_name, "Work");
+        assert_eq!(command.request.partitions[0].content, None);
+
+        // And the two the screen fills in when the user does: a driver to
+        // embed, and a folder whose tree goes in.
+        let filled: PreloadCommand = serde_json::from_str(
+            r#"{"image":"card.img",
+                "driver":"E:\\amiga\\pfs3aio.lha",
+                "partitions":[{"area":2,"index":3,"volume_name":"Games","content":"E:\\tree"}],
+                "tool_path":"hst.imager.exe"}"#,
+        )
+        .expect("the same shape with every optional filled");
+
+        assert_eq!(
+            filled.request.driver,
+            Some(std::path::PathBuf::from("E:\\amiga\\pfs3aio.lha"))
+        );
+        assert_eq!(filled.request.partitions[0].index, 3);
+        assert_eq!(
+            filled.request.partitions[0].content,
+            Some(std::path::PathBuf::from("E:\\tree"))
+        );
+    }
+
     /// The adapter is thin, and this is what it must not get wrong: the plan
     /// the screen is shown comes from the card, through the same `plan` the
     /// run recomputes.
