@@ -32,6 +32,19 @@
 //! module is the one place that resolves a component's media, so it is the
 //! one place that has to get this right.
 //!
+//! ## `exclusive_group` is enforced against what resolved, not what was asked
+//!
+//! `Component::exclusive_group` existed since Task 1 with nothing checking
+//! it — inert with the shipped recipe's one Modules disk, but a field named
+//! `exclusive_group` that no code enforces is a claim the codebase does not
+//! keep. [`detect_exclusive_group_conflicts`] checks
+//! [`InstallPlan::components_on`] — the resolved set — rather than
+//! `InstallRequest::chosen`, because a condition-satisfied component can be
+//! switched on without ever being chosen (see
+//! `a_conditional_component_is_on_without_being_chosen`); a check against
+//! the request alone would miss exactly the case a `Condition` exists to
+//! create.
+//!
 //! ## The ROM's own header, never `KNOWN_ROMS`
 //!
 //! `Condition::RomOlderThan` exists because `Workbench3.2.adf:S/Startup-sequence`
@@ -240,6 +253,45 @@ fn resolve_components_on(
     on
 }
 
+/// Every `exclusive_group` with more than one of its members in the
+/// **resolved** `components_on` set. Checked against what actually
+/// resolved on, never against `InstallRequest::chosen` directly — a
+/// condition-satisfied component can be switched on without being chosen
+/// at all (that is the entire point of
+/// `a_conditional_component_is_on_without_being_chosen`), so a check
+/// against the request alone would miss exactly the case a condition
+/// exists to create. One member of a group is the ordinary case and needs
+/// no mention here; a group is inert until a second member exists to
+/// conflict with the first (Task 1's review parked this for the same
+/// reason — with one Modules disk shipped, the field could not be
+/// violated).
+fn detect_exclusive_group_conflicts(
+    recipe: &Recipe,
+    components_on: &[String],
+) -> Vec<RefusalReason> {
+    let mut by_group: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    for id in components_on {
+        let Some(component) = recipe.component(id) else {
+            continue;
+        };
+        if let Some(group) = &component.exclusive_group {
+            by_group.entry(group.as_str()).or_default().push(id.clone());
+        }
+    }
+
+    let mut refusals = Vec::new();
+    for (group, mut components) in by_group {
+        if components.len() > 1 {
+            components.sort();
+            refusals.push(RefusalReason::ExclusiveGroupConflict {
+                group: group.to_string(),
+                components,
+            });
+        }
+    }
+    refusals
+}
+
 /// Every destination that two or more components write a **file** to
 /// without one declaring an `overrides` entry that covers all the others.
 /// `Subtree` destinations coinciding is not checked — see the module doc
@@ -288,8 +340,9 @@ fn detect_collisions(items: &[PlanItem], recipe: &Recipe) -> Vec<RefusalReason> 
 /// Turn a recipe, a media folder and (optionally) a ROM into a description
 /// of what would be written — or into every reason it cannot proceed.
 ///
-/// Order: read the ROM once, decide which components are on, resolve each
-/// on component's media by volume name, resolve every one of its rules
+/// Order: read the ROM once, decide which components are on, check that
+/// resolved set for `exclusive_group` conflicts, resolve each on
+/// component's media by volume name, resolve every one of its rules
 /// against that media (expanding `Subtree` rules with
 /// [`MediaSource::walk`]), check the whole walked-out item list for
 /// file-level collisions, and sum. See the module doc comment for why
@@ -314,6 +367,7 @@ pub fn plan(request: &InstallRequest, recipe: &Recipe) -> CoreResult<InstallPlan
 
     let components_on =
         resolve_components_on(recipe, &request.chosen, rom_facts.as_ref(), &mut refusals);
+    refusals.extend(detect_exclusive_group_conflicts(recipe, &components_on));
 
     let found = find_media(&request.media_folder)?;
     let mut media_paths: BTreeMap<String, PathBuf> = BTreeMap::new();
@@ -616,6 +670,69 @@ mod plan_tests {
         plan(&request, &recipe).unwrap()
     }
 
+    /// A recipe built by hand: two components share one `exclusive_group`,
+    /// with **different** destinations (`C/ModuleA` / `C/ModuleB`) so this
+    /// exercises the group conflict alone, not `detect_collisions` too.
+    /// `modules-b` is deliberately not in `chosen` at all — it switches on
+    /// through its own `Condition` — so this is the shape the coordinator
+    /// asked for: a conflict the *resolved* set holds that the *requested*
+    /// set never would have shown.
+    fn plan_with_exclusive_group_conflict() -> InstallPlan {
+        let dir = crate::core::osinstall::fixtures::scratch("plan-exclusive-conflict");
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        crate::core::osinstall::fixtures::media(
+            &folder,
+            "ModulesA",
+            "a.adf",
+            &[("C/LoadModule", b"x", 0)],
+        );
+        crate::core::osinstall::fixtures::media(
+            &folder,
+            "ModulesB",
+            "b.adf",
+            &[("C/LoadModule", b"x", 0)],
+        );
+
+        let make = |id: &str, media: &str, to: &str, condition: Option<Condition>| Component {
+            id: id.to_string(),
+            media: media.to_string(),
+            rules: vec![PathRule {
+                from: "C/LoadModule".to_string(),
+                to: to.to_string(),
+                kind: RuleKind::File,
+            }],
+            required: false,
+            condition,
+            overrides: vec![],
+            user_startup: vec![],
+            exclusive_group: Some("modules".to_string()),
+            available: true,
+        };
+        let recipe = Recipe {
+            release: "Test".to_string(),
+            components: vec![
+                make("modules-a", "ModulesA", "C/ModuleA", None),
+                make(
+                    "modules-b",
+                    "ModulesB",
+                    "C/ModuleB",
+                    Some(Condition::RomOlderThan { major: 47 }),
+                ),
+            ],
+        };
+
+        let request = InstallRequest {
+            media_folder: folder,
+            // major 40 < 47, so `modules-b` switches on by its own
+            // condition — never named in `chosen`.
+            rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 40)),
+            chosen: vec!["modules-a".to_string()],
+            destination: dir.join("dist"),
+        };
+        plan(&request, &recipe).unwrap()
+    }
+
     #[test]
     fn a_component_whose_media_is_absent_names_the_component_and_the_disk() {
         let plan = plan_with(&["extras"], /* media present: */ &["Workbench3.2"]);
@@ -651,6 +768,23 @@ mod plan_tests {
         ));
     }
 
+    /// The change the coordinator asked for after review: `exclusive_group`
+    /// existed since Task 1 with nothing enforcing it. `modules-b` is
+    /// switched on by its own `Condition`, never `chosen` — proving the
+    /// check reads `components_on` (the resolved set) rather than the
+    /// request, which is the one way this could be implemented wrong and
+    /// still pass a test that chose both components explicitly.
+    #[test]
+    fn two_members_of_one_exclusive_group_both_resolved_on_is_a_conflict() {
+        let plan = plan_with_exclusive_group_conflict();
+        assert!(matches!(
+            plan.refusals.as_slice(),
+            [RefusalReason::ExclusiveGroupConflict { group, components }]
+                if group == "modules" && components.len() == 2
+        ));
+        assert!(plan.items.is_empty());
+    }
+
     #[test]
     fn a_declared_override_is_not_a_collision() {
         let plan = plan_with(
@@ -667,6 +801,30 @@ mod plan_tests {
     fn a_conditional_component_is_on_without_being_chosen() {
         let plan = plan_with_rom(&["workbench-base"], 40);
         assert!(plan.components_on.iter().any(|c| c == "modules-a1200"));
+    }
+
+    /// The coordinator's own hardware runs Kickstart 3.1 rev 40.68, so
+    /// `major: 40` — Modules **on** — is the path that actually runs on a
+    /// real machine, not a hypothetical branch. Every other test in this
+    /// module defaults `plan_with` to `rom_major: Some(47)` (Modules off);
+    /// `a_conditional_component_is_on_without_being_chosen` above only
+    /// proves `modules-a1200` gets *marked* on, since it never gives that
+    /// component's own media, so its `MediaMissing` refusal empties `items`
+    /// before the on-path is actually exercised. This one gives
+    /// `ModulesA1200_3.2` too, so the on-path resolves end to end: no
+    /// refusal, and `modules-a1200`'s own file genuinely lands in `items`.
+    #[test]
+    fn the_modules_component_resolves_its_own_media_when_its_condition_is_on() {
+        let (plan, _dir) = crate::core::osinstall::fixtures::planned_with(
+            &["workbench-base"],
+            &["Workbench3.2", "ModulesA1200_3.2"],
+            Some(40),
+        );
+        assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
+        assert!(plan
+            .items
+            .iter()
+            .any(|item| item.component == "modules-a1200" && item.to == "C/LoadModule"));
     }
 
     #[test]

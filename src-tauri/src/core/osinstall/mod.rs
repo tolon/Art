@@ -159,6 +159,17 @@ pub enum RefusalReason {
         volume_name: String,
         paths: Vec<String>,
     },
+    /// Two or more components sharing an `exclusive_group` are both
+    /// switched on at once — `plan()` checks this against the **resolved**
+    /// set (`InstallPlan::components_on`), not the request, because a
+    /// condition-satisfied component can be switched on without ever being
+    /// chosen. `components` carries every conflicting id, because the
+    /// user's next question is always "which two?" — the same reasoning
+    /// `MediaAmbiguous::paths` already applies to files.
+    ExclusiveGroupConflict {
+        group: String,
+        components: Vec<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
