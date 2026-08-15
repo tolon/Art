@@ -167,15 +167,15 @@ pub fn plan(root: &Path, paths: &[PathBuf], policy: &Policy) -> CoreResult<Layou
 
     for found in gather(paths)? {
         let kind = classify(&found)?;
-        let Some(drawer) = drawer_for(&kind, policy) else {
-            refused.push(Refusal {
-                source: found.path.clone(),
-                reason: match kind {
-                    ItemKind::Rom => RefusalReason::BelongsOnBootPartition,
-                    _ => RefusalReason::NoPlaceOnAnAmigaVolume,
-                },
-            });
-            continue;
+        let drawer = match drawer_for(&kind, policy) {
+            Ok(drawer) => drawer,
+            Err(reason) => {
+                refused.push(Refusal {
+                    source: found.path.clone(),
+                    reason,
+                });
+                continue;
+            }
         };
 
         let (placement, leaf, bytes) = match (&kind, policy.whdload) {
@@ -213,16 +213,19 @@ pub fn plan(root: &Path, paths: &[PathBuf], policy: &Policy) -> CoreResult<Layou
 
 /// What an archive says it decompresses to. A claim, used only to show the
 /// user a number; the gate measures what actually arrives.
+///
+/// Folded with a checked running total, never a plain `.sum()` — a declared
+/// size is an adversarial claim (`core/archive/extract.rs` treats the same
+/// field the same way). `saturating_add` rather than `checked_add` + `?`
+/// because this total only ever reaches the screen: overflow saturates rather
+/// than erroring, since a colossal declared total is still worth showing as
+/// "colossal".
 fn declared_bytes(path: &Path) -> Option<u64> {
     let mut backend = crate::core::archive::open(path).ok()?;
-    Some(
-        backend
-            .entries()
-            .ok()?
-            .iter()
-            .map(|entry| entry.declared_bytes)
-            .sum(),
-    )
+    let total = backend.entries().ok()?.iter().fold(0u64, |total, entry| {
+        total.saturating_add(entry.declared_bytes)
+    });
+    Some(total)
 }
 
 /// Every destination two items want, and every one the tree already holds.
@@ -268,6 +271,36 @@ mod tests {
         let mut bytes = vec![0u8; 901_120];
         bytes[0..4].copy_from_slice(b"DOS\0");
         std::fs::write(path, bytes).unwrap();
+    }
+
+    /// A zip holding `Turrican/Turrican.slave` and `Turrican.info` beside the
+    /// drawer — the shape a real WHDLoad archive has.
+    fn whdload_zip(path: &Path) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options: zip::write::FileOptions<'_, ()> =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (name, body) in [
+            ("Turrican/Turrican.slave", &b"slave"[..]),
+            ("Turrican/data/level1", &b"level"[..]),
+            ("Turrican.info", &b"icon"[..]),
+        ] {
+            zip.start_file(name, options).unwrap();
+            std::io::Write::write_all(&mut zip, body).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    /// A zip with no `.slave` anywhere in it — a plain archive, not a WHDLoad
+    /// pack.
+    fn plain_zip(path: &Path) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options: zip::write::FileOptions<'_, ()> =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("readme.txt", options).unwrap();
+        std::io::Write::write_all(&mut zip, b"just a readme").unwrap();
+        zip.finish().unwrap();
     }
 
     #[test]
@@ -397,6 +430,80 @@ mod tests {
         let made = plan(&root, std::slice::from_ref(&dir), &Policy::default()).unwrap();
 
         assert_eq!(made.bytes, 901_120 * 2);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The default policy unpacks a WHDLoad archive: the destination and the
+    /// kind's name both come from the **pack**, from `whdload::analyse`
+    /// reading the archive's entry list, not from the archive's own filename.
+    #[test]
+    fn a_whdload_archive_is_unpacked_under_games_by_default() {
+        let dir = scratch("whdload-unpack");
+        let root = dir.join("staging");
+        let archive = dir.join("Turrican.zip");
+        whdload_zip(&archive);
+
+        let made = plan(&root, std::slice::from_ref(&archive), &Policy::default()).unwrap();
+
+        assert_eq!(made.items.len(), 1, "{:?}", made.items);
+        assert_eq!(
+            made.items[0].kind,
+            ItemKind::WhdloadArchive {
+                name: "Turrican".into()
+            }
+        );
+        assert_eq!(made.items[0].destination, "Games/Turrican");
+        assert_eq!(made.items[0].placement, Placement::UnpackWhdload);
+        assert!(made.refused.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With `AsArchive`, the same file is copied in as itself: the placement
+    /// is `CopyFile` and the destination keeps the archive's **own**
+    /// filename, not the pack's name.
+    #[test]
+    fn as_archive_policy_copies_the_whdload_zip_in_whole() {
+        let dir = scratch("whdload-as-archive");
+        let root = dir.join("staging");
+        let archive = dir.join("Turrican.zip");
+        whdload_zip(&archive);
+        let policy = Policy {
+            whdload: WhdloadPlacement::AsArchive,
+            ..Policy::default()
+        };
+
+        let made = plan(&root, std::slice::from_ref(&archive), &policy).unwrap();
+
+        assert_eq!(made.items.len(), 1, "{:?}", made.items);
+        assert_eq!(
+            made.items[0].kind,
+            ItemKind::WhdloadArchive {
+                name: "Turrican".into()
+            }
+        );
+        assert_eq!(made.items[0].destination, "Games/Turrican.zip");
+        assert_eq!(made.items[0].placement, Placement::CopyFile);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A zip with no `.slave` in it is a plain archive, not a WHDLoad pack —
+    /// the branch that fires when `whdload_name` comes back `None`.
+    #[test]
+    fn a_zip_with_no_slave_is_a_plain_archive_into_unsorted() {
+        let dir = scratch("plain-archive");
+        let root = dir.join("staging");
+        let archive = dir.join("stuff.zip");
+        plain_zip(&archive);
+
+        let made = plan(&root, std::slice::from_ref(&archive), &Policy::default()).unwrap();
+
+        assert_eq!(made.items.len(), 1, "{:?}", made.items);
+        assert_eq!(made.items[0].kind, ItemKind::Archive);
+        assert_eq!(made.items[0].destination, "Unsorted/stuff.zip");
+        assert_eq!(made.items[0].placement, Placement::CopyFile);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
