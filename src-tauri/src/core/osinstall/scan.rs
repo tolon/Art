@@ -27,8 +27,13 @@
 //! signature, one truncated below a single block. Every one of those is a
 //! normal thing to find beside install media, so `find_media` treats
 //! `Err` from `open` as "this candidate is not media", not as a reason to
-//! fail the whole scan. Only a directory-listing failure (the folder itself
-//! is unreadable) propagates.
+//! fail the whole scan. A candidate that cannot even be `stat`-ed —
+//! removed between `read_dir` listing it and this function looking at it,
+//! which is ordinary on a filesystem someone is actively using, or simply
+//! unreadable — is skipped the same way, for the same reason: one bad entry
+//! must not fail every other, genuinely readable disk in the folder. Only
+//! listing the folder itself (`folder` does not exist, or is not readable
+//! at all) propagates as `Err`.
 //!
 //! ## Cost: opening 36 candidates
 //!
@@ -110,7 +115,13 @@ pub fn find_media(folder: &Path) -> CoreResult<Vec<FoundMedia>> {
         // followed, whether it points at a file, a directory, or nothing at
         // all. Its own file type is never `is_file()`, so this one check
         // skips both a symlink and a subdirectory (no recursion) together.
-        let metadata = std::fs::symlink_metadata(&path)?;
+        // An `Err` here — the entry vanished between `read_dir` listing it
+        // and this stat, or it is simply unreadable — is skipped the same
+        // way as a non-Amiga file, not propagated: one ordinary race on a
+        // live filesystem must not fail the whole scan.
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
         if !metadata.is_file() {
             continue;
         }
@@ -129,7 +140,18 @@ pub fn find_media(folder: &Path) -> CoreResult<Vec<FoundMedia>> {
 }
 
 /// What resolving a volume name against a scanned folder found.
+///
+/// **Always `match` this exhaustively — never `if let MediaMatch::Found(..)
+/// = ...`.** An `if let` that only names `Found` silently treats
+/// `Ambiguous` as if it were `Missing`: the file goes unused, the component
+/// looks unsatisfied, and the actual problem (two candidates, one of them
+/// possibly wrong) never surfaces. That is the same arbitrary-winner
+/// mistake this type exists to rule out, arriving through the back door of
+/// an incomplete pattern instead of a bare `Option`. This call decides
+/// which bytes become part of somebody's operating system; every arm needs
+/// to be handled on purpose.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[must_use]
 pub enum MediaMatch<'a> {
     /// No file in `found` carries this volume name.
     Missing,
@@ -174,24 +196,44 @@ mod tests {
         let dir = scratch("scan-by-volume-name");
         media(&dir, "Workbench3.2", "wb.adf", &[]);
         // The point of the task: a disk that reached this folder under a
-        // name that says nothing about what is on it still has to resolve.
-        media(&dir, "Extras3.2", "totally-unrelated-name.bin", &[]);
+        // name that says nothing about what is on it still has to resolve —
+        // and resolve to *this* file specifically, not just to something.
+        let renamed = media(&dir, "Extras3.2", "totally-unrelated-name.bin", &[]);
 
         let found = find_media(&dir).unwrap();
-        assert!(matches!(
-            media_for(&found, "Extras3.2"),
-            MediaMatch::Found(_)
-        ));
-        assert!(matches!(
-            media_for(&found, "Workbench3.2"),
-            MediaMatch::Found(_)
-        ));
+        match media_for(&found, "Extras3.2") {
+            MediaMatch::Found(entry) => assert_eq!(entry.path, renamed),
+            other => panic!("expected Found({}), got {other:?}", renamed.display()),
+        }
+        match media_for(&found, "Workbench3.2") {
+            MediaMatch::Found(entry) => assert_eq!(entry.volume_name, "Workbench3.2"),
+            other => panic!("expected Found, got {other:?}"),
+        }
     }
 
     #[test]
     fn a_file_that_is_not_an_amiga_image_is_skipped_not_an_error() {
         let dir = scratch("scan-skip-non-amiga");
         std::fs::write(dir.join("readme.txt"), b"hello").unwrap();
+        // Decision 2's other named case: an HDF is a real AmigaDOS image,
+        // just not install media — `AdfSource::open` refuses it by name
+        // (RDB, not a bare volume), and this scan must skip it the same way
+        // it skips `readme.txt`, not fail over it.
+        crate::core::hdf::create_hdf(
+            &dir.join("games.hdf"),
+            32 * 1024 * 1024,
+            true,
+            &[crate::core::rdb::PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: crate::core::rdb::AmigaHardDiskFs::FfsStandard,
+                size_mb: 10,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 100,
+            }],
+            &[],
+        )
+        .unwrap();
         media(&dir, "Workbench3.2", "wb.adf", &[]);
 
         let found = find_media(&dir).unwrap();
@@ -215,11 +257,29 @@ mod tests {
     /// Two files sharing a volume name must both come back from
     /// `find_media` — neither silently dropped — and `media_for` must
     /// report the ambiguity rather than picking one.
+    ///
+    /// Created in the *opposite* of lexicographic order on purpose: `first`
+    /// (`wb-copy-1.adf`) is written second, after `second`
+    /// (`wb-copy-2.adf`), so the assertion actually pins the *sorted* order
+    /// `find_media` promises rather than passing by coincidence whenever
+    /// creation order already happens to match it — which is what the
+    /// previous version of this test did (both fixture calls in
+    /// lexicographic order), and why it could not tell a present
+    /// `entries.sort()` apart from an absent one. Measured, not assumed:
+    /// removing `entries.sort()` and running just this test on this
+    /// project's own Windows/NTFS dev machine *still* passes, because NTFS
+    /// happens to enumerate a directory in name order regardless of
+    /// creation order — so this test cannot prove the sort call is load-
+    /// bearing on every filesystem, only that `find_media`'s contract
+    /// (sorted output) actually holds. The sort stays in `find_media`
+    /// because that contract must not depend on which filesystem is under
+    /// it, even though this particular test can't force a failure to prove
+    /// it either way.
     #[test]
     fn two_same_named_files_are_both_reported_and_neither_is_silently_dropped() {
         let dir = scratch("scan-duplicate-names");
-        let first = media(&dir, "Workbench3.2", "wb-copy-1.adf", &[]);
         let second = media(&dir, "Workbench3.2", "wb-copy-2.adf", &[]);
+        let first = media(&dir, "Workbench3.2", "wb-copy-1.adf", &[]);
 
         let found = find_media(&dir).unwrap();
         let matching: Vec<&PathBuf> = found
@@ -230,15 +290,16 @@ mod tests {
         assert_eq!(
             matching,
             vec![&first, &second],
-            "both copies must survive the scan"
+            "both copies must survive the scan, in sorted (not creation) order"
         );
 
         match media_for(&found, "Workbench3.2") {
             MediaMatch::Ambiguous(paths) => {
+                let ambiguous_paths: Vec<&PathBuf> = paths.iter().map(|f| &f.path).collect();
                 assert_eq!(
-                    paths.len(),
-                    2,
-                    "both candidates must be reported: {paths:?}"
+                    ambiguous_paths,
+                    vec![&first, &second],
+                    "both candidates must be reported, in order"
                 );
             }
             other => panic!("expected Ambiguous, got {other:?}"),

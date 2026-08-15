@@ -35,8 +35,6 @@ pub mod recipe;
 pub mod scan;
 pub mod source;
 
-use std::path::PathBuf;
-
 use serde::{Deserialize, Serialize};
 
 /// Whether a rule takes one file or a whole subtree.
@@ -144,10 +142,18 @@ pub enum RefusalReason {
     /// volume, at plan time, never as a whole-folder scan failure. `paths`
     /// carries every file that claimed the name, because the user's next
     /// question is always "which two files?".
+    ///
+    /// `String`, not `PathBuf` — every other path-carrying field in this
+    /// enum already is (`MediaPathMissing::path`), and `RefusalReason`
+    /// derives `Serialize`: `serde`'s `PathBuf` implementation errors on a
+    /// non-UTF-8 path, which would mean a refusal built to explain a
+    /// problem could itself fail to cross the command boundary on Windows.
+    /// Rendered with `.display().to_string()`, the same conversion
+    /// `MediaPathMissing` already uses.
     MediaAmbiguous {
         component: String,
         volume_name: String,
-        paths: Vec<PathBuf>,
+        paths: Vec<String>,
     },
 }
 
