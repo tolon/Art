@@ -26,14 +26,17 @@
 //! command belongs with that disk's own purpose, not with the general
 //! toolkit disk that happens to also carry a copy.
 //!
-//! `recipe`, `source`, `scan` and `plan` (the ROM condition, and now
-//! [`plan::plan`] itself — components, media and ROM resolved into an
-//! [`plan::InstallPlan`] or a collected list of [`RefusalReason`]s) exist so
-//! far — the module tree this doc comment describes (`apply`, `startup`,
-//! `verify`) lands one task at a time, each adding its own `pub mod` line,
-//! so the crate compiles at the end of every task rather than only at the
-//! end of the feature.
+//! `recipe`, `source`, `scan`, `plan` (the ROM condition and [`plan::plan`]
+//! itself — components, media and ROM resolved into an [`plan::InstallPlan`]
+//! or a collected list of [`RefusalReason`]s) and now `apply` ([`apply::apply`]
+//! — the plan turned into a real distribution tree, with a `.uaem` sidecar
+//! beside every file that needs one and `apply::DistributionManifest`
+//! recording what built it) exist so far — the module tree this doc comment
+//! describes (`startup`, `verify`) lands one task at a time, each adding its
+//! own `pub mod` line, so the crate compiles at the end of every task rather
+//! than only at the end of the feature.
 
+pub mod apply;
 pub mod plan;
 pub mod recipe;
 pub mod scan;
