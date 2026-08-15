@@ -28,19 +28,22 @@
 //!
 //! `recipe`, `source`, `scan`, `plan` (the ROM condition and [`plan::plan`]
 //! itself — components, media and ROM resolved into an [`plan::InstallPlan`]
-//! or a collected list of [`RefusalReason`]s) and now `apply` ([`apply::apply`]
+//! or a collected list of [`RefusalReason`]s), `apply` ([`apply::apply`]
 //! — the plan turned into a real distribution tree, with a `.uaem` sidecar
 //! beside every file that needs one and `apply::DistributionManifest`
-//! recording what built it) exist so far — the module tree this doc comment
-//! describes (`startup`, `verify`) lands one task at a time, each adding its
-//! own `pub mod` line, so the crate compiles at the end of every task rather
-//! than only at the end of the feature.
+//! recording what built it) and now `startup` ([`startup::merge_user_startup`]
+//! — `apply`'s own last step, composing `S:User-Startup` from every
+//! switched-on component's own lines) exist so far — the module tree this
+//! doc comment describes (`verify`) lands one task at a time, each adding
+//! its own `pub mod` line, so the crate compiles at the end of every task
+//! rather than only at the end of the feature.
 
 pub mod apply;
 pub mod plan;
 pub mod recipe;
 pub mod scan;
 pub mod source;
+pub mod startup;
 
 use serde::{Deserialize, Serialize};
 

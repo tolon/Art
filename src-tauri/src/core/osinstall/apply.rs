@@ -61,6 +61,49 @@
 //! decide what is really there — until it exists. Writing it last, after
 //! every item has landed, is what keeps a half-built tree from claiming to
 //! be a whole one.
+//!
+//! ## `S:User-Startup`, composed after every file, before the manifest
+//!
+//! [`super::startup::merge_user_startup`] is a pure function; this is where
+//! it gets called. Three decisions, each forced by something already true
+//! about this module:
+//!
+//! **Where.** After the main loop, so every media-sourced file — including
+//! a real `S/User-Startup` a `Subtree "S"` rule may have copied off the
+//! release media itself — is already on disk to merge into. Before the
+//! manifest, so a run that stops here still leaves no `distribution.json`
+//! behind. It gets the same cancellation checkpoint as every item in the
+//! loop above: checked once, before the single atomic write that composes
+//! it, never mid-write — so cancelling here is indistinguishable, on disk,
+//! from cancelling between any two ordinary items.
+//!
+//! **What lands in the manifest.** A composed file has no one component
+//! that "put it there" the way [`FileRecord::component`] means for every
+//! other file — it can carry lines from several. Recording it once, under
+//! whichever component happened to write last, would be a lie of exactly
+//! the shape this manifest exists to prevent (a file claiming a single
+//! origin it does not have) — that is the wrong answer the brief warned
+//! was "obviously unconsidered". So `apply` records it **once per
+//! contributing component**, all four sharing the same `path`, `sha256`
+//! and `bytes` — the file has exactly one real content, and every
+//! contributor's entry describes that same content — with `media: ""`,
+//! since nothing here came off a disk image. A future "remove this
+//! component cleanly" flow can then find every component that touched
+//! `S/User-Startup` by filtering `files` on the path, the same way it
+//! would find any other file. This is also why `ApplyOutcome::files` and
+//! `manifest.files.len()` are no longer guaranteed equal — the former
+//! counts real files on disk, the latter counts *records*, and a composed
+//! file with more than one contributor now makes the second the larger of
+//! the two on purpose.
+//!
+//! **A missing `S` drawer.** Reachable whenever a component carries
+//! `user_startup` lines without `workbench-base` (or an equivalent) also
+//! being on — a hand-built plan can do this even though the shipped
+//! recipe's `workbench-base` is `required` and always creates `S`. Handled
+//! exactly the way every ordinary item in the loop above already handles a
+//! missing parent: `create_dir_all` on the target's parent before writing.
+//! Refusing here would single out one file for a rule nothing else in this
+//! function follows, over a directory that is entirely ART's own to create.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -70,6 +113,7 @@ use sha2::{Digest, Sha256};
 
 use super::plan::InstallPlan;
 use super::source::{AdfSource, MediaSource};
+use super::startup::merge_user_startup;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
 use crate::core::security::path::safe_join;
@@ -89,14 +133,22 @@ pub struct MediaRecord {
 }
 
 /// One file in the finished tree, and where it came from.
+///
+/// Ordinarily one record per `path` — but `S/User-Startup` is composed, not
+/// copied (see the module doc comment's "S:User-Startup" section), so it
+/// gets one record **per contributing component**, all sharing the one
+/// `path`, `sha256` and `bytes` the composed file actually has. `component`
+/// still names a single component for every other file; for that one path
+/// it names "one of possibly several".
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileRecord {
     /// `/`-separated, relative to the distribution root — matches
-    /// [`super::plan::PlanItem::to`] exactly.
+    /// [`super::plan::PlanItem::to`] exactly, except for `S/User-Startup`.
     pub path: String,
     pub component: String,
     /// The volume name, not the medium's filename — matches
-    /// [`super::plan::PlanItem::media`].
+    /// [`super::plan::PlanItem::media`]. Empty for `S/User-Startup`, which
+    /// came from no single medium.
     pub media: String,
     pub sha256: String,
     /// What was actually written, not [`super::plan::PlanItem::bytes`]'s
@@ -118,6 +170,11 @@ pub struct DistributionManifest {
 
 /// The manifest's own file name, at the distribution root.
 pub const MANIFEST_FILE_NAME: &str = "distribution.json";
+
+/// Where `S:User-Startup` lives in the tree, `/`-separated — the one file
+/// `apply` composes itself rather than copying from a `PlanItem`. See the
+/// module doc comment's "S:User-Startup" section.
+const USER_STARTUP_PATH: &str = "S/User-Startup";
 
 /// What one call to [`apply`] actually did.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -266,6 +323,106 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
         });
     }
 
+    // `S:User-Startup` — composed, not copied; see the module doc comment's
+    // "S:User-Startup" section for all three decisions made here. Skipped
+    // entirely when nothing has anything to add, so a plan with no
+    // `user_startup` contributions (every shipped component today) never
+    // touches the file at all.
+    if !plan.user_startup.is_empty() {
+        // Same cancellation checkpoint every item above already gets:
+        // checked once, before the one atomic write this step performs,
+        // never mid-write.
+        if sink.is_cancelled() {
+            return Err(if outcome.files > 0 {
+                CoreError::CancelledPartway {
+                    files: outcome.files,
+                }
+            } else {
+                CoreError::Cancelled
+            });
+        }
+        sink.report(total, Some(total), USER_STARTUP_PATH);
+
+        let target = safe_join(root, USER_STARTUP_PATH).map_err(|err| {
+            CoreError::SafetyRefused(format!(
+                "'{USER_STARTUP_PATH}' does not stay inside the distribution root: {err}"
+            ))
+        })?;
+
+        // A missing `S` drawer is created, exactly like every other item's
+        // missing parent above — see the module doc comment.
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        // A `Subtree "S"` rule earlier in `plan.items` may already have
+        // copied a real `S/User-Startup` off the release media — the
+        // release's own starter file. If so it is already on disk at
+        // `target`, and it is read back as the starting point rather than
+        // assumed absent, so composing the file never discards content a
+        // plan item just wrote.
+        let existing = match std::fs::read(&target) {
+            Ok(bytes) => Some(String::from_utf8(bytes).map_err(|_| {
+                CoreError::Malformed {
+                    format: "S/User-Startup".into(),
+                    detail: "existing content is not valid UTF-8 text, so it cannot be \
+                             edited in place without risking the bytes it already carries"
+                        .into(),
+                }
+            })?),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => return Err(CoreError::Io(err)),
+        };
+
+        let merged = plan
+            .user_startup
+            .iter()
+            .fold(existing, |acc, contribution| {
+                Some(merge_user_startup(
+                    acc.as_deref(),
+                    &contribution.component,
+                    &contribution.lines,
+                ))
+            });
+        // `plan.user_startup` is non-empty (checked above), so the fold ran
+        // at least once and always produces `Some`.
+        let merged = merged.expect("at least one contribution was folded");
+
+        crate::core::safety::atomic::atomic_write(&target, merged.as_bytes())?;
+
+        let merged_bytes = merged.len() as u64;
+        let merged_sha256 = hex_sha256(merged.as_bytes());
+
+        // Drop whatever record the copy loop above made for this path (a
+        // media-provided starter file, if there was one) before adding the
+        // composed file's own records — the pre-merge sha256/bytes it
+        // carried no longer describe what is actually on disk.
+        let previous_bytes = files
+            .iter()
+            .find(|f| f.path == USER_STARTUP_PATH)
+            .map(|f| f.bytes);
+        files.retain(|f| f.path != USER_STARTUP_PATH);
+        match previous_bytes {
+            Some(previous_bytes) => {
+                outcome.bytes = outcome.bytes - previous_bytes + merged_bytes;
+            }
+            None => {
+                outcome.files += 1;
+                outcome.bytes += merged_bytes;
+            }
+        }
+
+        for contribution in &plan.user_startup {
+            files.push(FileRecord {
+                path: USER_STARTUP_PATH.to_string(),
+                component: contribution.component.clone(),
+                media: String::new(),
+                sha256: merged_sha256.clone(),
+                bytes: merged_bytes,
+            });
+        }
+    }
+
     sink.report(total, Some(total), "done");
 
     // Last, deliberately — see the module doc comment. Everything above this
@@ -296,7 +453,7 @@ mod tests {
     use super::*;
     use crate::core::jobs::NoProgress;
     use crate::core::osinstall::fixtures;
-    use crate::core::osinstall::plan::PlanItem;
+    use crate::core::osinstall::plan::{PlanItem, UserStartupContribution};
 
     /// A plan `apply` can run against directly, without going through
     /// `plan()` — `apply` only ever consumes the `InstallPlan` struct, so a
@@ -364,6 +521,7 @@ mod tests {
             total_bytes,
             components_on: vec!["modules-a1200".into()],
             media_paths,
+            user_startup: Vec::new(),
         };
         (plan, dir)
     }
@@ -562,6 +720,7 @@ mod tests {
             total_bytes: 16,
             components_on: vec!["a".into()],
             media_paths,
+            user_startup: Vec::new(),
         };
 
         let root = dir.join("dist");
@@ -691,5 +850,236 @@ mod tests {
             !root.join(MANIFEST_FILE_NAME).exists(),
             "a run that was stopped partway must not claim a complete tree"
         );
+    }
+
+    // ---- Task 7: `S:User-Startup` ----
+
+    /// `planned()`'s own plan never touches `S` at all — its two items are
+    /// `C/LoadModule` and `C/Other` — so this is also the "no `S` drawer"
+    /// case (decision 3): the drawer has to be created from nothing.
+    #[test]
+    fn a_contribution_composes_the_file_and_creates_a_missing_s_drawer() {
+        let (mut plan, dir) = planned();
+        plan.user_startup = vec![UserStartupContribution {
+            component: "modules-a1200".into(),
+            lines: vec!["Assign Foo: SYS:".into()],
+        }];
+        let root = dir.join("dist");
+
+        let outcome = apply(&plan, &root, &NoProgress).unwrap();
+
+        let content = std::fs::read_to_string(root.join("S").join("User-Startup")).unwrap();
+        assert_eq!(
+            content,
+            ";BEGIN modules-a1200\nAssign Foo: SYS:\n;END modules-a1200\n"
+        );
+
+        // A real file that was not one of `plan.items` — `ApplyOutcome`
+        // must count it too, not just the copied ones.
+        assert_eq!(outcome.files, 3, "2 copied items + the composed file");
+        assert_eq!(
+            outcome.bytes,
+            3 + 4 + content.len() as u64,
+            "the composed file's real size, added once"
+        );
+    }
+
+    /// The manifest side of the same run: one record, naming the
+    /// contributing component, with `media` empty because nothing here came
+    /// off a disk image, and the real sha256/bytes of the composed file —
+    /// not the plan's `bytes` estimate, which does not exist for this file
+    /// at all (it is not a `PlanItem`).
+    #[test]
+    fn the_manifest_names_the_contributing_component_with_no_media() {
+        let (mut plan, dir) = planned();
+        plan.user_startup = vec![UserStartupContribution {
+            component: "modules-a1200".into(),
+            lines: vec!["Assign Foo: SYS:".into()],
+        }];
+        let root = dir.join("dist");
+        apply(&plan, &root, &NoProgress).unwrap();
+
+        let content = std::fs::read_to_string(root.join("S").join("User-Startup")).unwrap();
+        let manifest: DistributionManifest =
+            serde_json::from_str(&std::fs::read_to_string(root.join(MANIFEST_FILE_NAME)).unwrap())
+                .unwrap();
+        let records: Vec<_> = manifest
+            .files
+            .iter()
+            .filter(|f| f.path == "S/User-Startup")
+            .collect();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].component, "modules-a1200");
+        assert_eq!(records[0].media, "");
+        assert_eq!(records[0].sha256, hex_sha256(content.as_bytes()));
+        assert_eq!(records[0].bytes, content.len() as u64);
+    }
+
+    /// Two contributing components: both blocks land, in the order
+    /// `plan.user_startup` carries them (recipe order — `plan.rs`'s own
+    /// concern, not this one's), and the manifest carries **two** records
+    /// for the one path, both sharing the one file's real content — the
+    /// property the module doc comment's "S:User-Startup" section commits
+    /// to. Falsification: a version that pushed only the *last*
+    /// contribution's record (the "obviously unconsidered" shape the brief
+    /// warned about) would still pass every single-contribution test above,
+    /// since they only ever supply one. This is the one test that shape
+    /// fails.
+    #[test]
+    fn two_contributions_both_land_and_both_get_a_manifest_record() {
+        let (mut plan, dir) = planned();
+        plan.user_startup = vec![
+            UserStartupContribution {
+                component: "modules-a1200".into(),
+                lines: vec!["Assign Alpha: SYS:".into()],
+            },
+            UserStartupContribution {
+                component: "storage".into(),
+                lines: vec!["Assign Beta: SYS:".into()],
+            },
+        ];
+        let root = dir.join("dist");
+        apply(&plan, &root, &NoProgress).unwrap();
+
+        let content = std::fs::read_to_string(root.join("S").join("User-Startup")).unwrap();
+        assert!(content.contains(";BEGIN modules-a1200\nAssign Alpha: SYS:\n;END modules-a1200\n"));
+        assert!(content.contains(";BEGIN storage\nAssign Beta: SYS:\n;END storage\n"));
+
+        let manifest: DistributionManifest =
+            serde_json::from_str(&std::fs::read_to_string(root.join(MANIFEST_FILE_NAME)).unwrap())
+                .unwrap();
+        let records: Vec<_> = manifest
+            .files
+            .iter()
+            .filter(|f| f.path == "S/User-Startup")
+            .collect();
+        assert_eq!(records.len(), 2);
+        let components: Vec<&str> = records.iter().map(|r| r.component.as_str()).collect();
+        assert!(components.contains(&"modules-a1200"));
+        assert!(components.contains(&"storage"));
+        assert!(
+            records.iter().all(|r| r.sha256 == records[0].sha256),
+            "one real file has one real sha256, whichever component's record you read"
+        );
+    }
+
+    /// A `Subtree "S"` rule can genuinely copy a real `S/User-Startup` off
+    /// the release media before this step ever runs — the release's own
+    /// starter file. That copy must be read back and edited in place, never
+    /// treated as absent (which would silently discard it) or left as a
+    /// stale manifest record with the pre-merge sha256/bytes.
+    #[test]
+    fn a_media_provided_starter_file_is_merged_into_not_discarded() {
+        let (mut plan, dir) = planned();
+        let folder = media_folder(&dir);
+        let starter = b"; the release's own starter file\n".as_slice();
+        fixtures::media(
+            &folder,
+            "Workbench3.2",
+            "wb.adf",
+            &[("S/User-Startup", starter, 0)],
+        );
+        plan.media_paths
+            .insert("Workbench3.2".to_string(), folder.join("wb.adf"));
+        plan.items.push(PlanItem {
+            component: "workbench-base".into(),
+            media: "Workbench3.2".into(),
+            from: "S/User-Startup".into(),
+            to: "S/User-Startup".into(),
+            is_dir: false,
+            bytes: starter.len() as u64,
+        });
+        plan.user_startup = vec![UserStartupContribution {
+            component: "amissl".into(),
+            lines: vec!["Assign AmiSSL: SYS:Libs/AmiSSL".into()],
+        }];
+        let root = dir.join("dist");
+
+        let outcome = apply(&plan, &root, &NoProgress).unwrap();
+
+        let content = std::fs::read_to_string(root.join("S").join("User-Startup")).unwrap();
+        assert!(
+            content.starts_with(std::str::from_utf8(starter).unwrap()),
+            "the release's own starter text comes first and unchanged"
+        );
+        assert!(content.contains(";BEGIN amissl\nAssign AmiSSL: SYS:Libs/AmiSSL\n;END amissl\n"));
+
+        let manifest: DistributionManifest =
+            serde_json::from_str(&std::fs::read_to_string(root.join(MANIFEST_FILE_NAME)).unwrap())
+                .unwrap();
+        let records: Vec<_> = manifest
+            .files
+            .iter()
+            .filter(|f| f.path == "S/User-Startup")
+            .collect();
+        assert_eq!(
+            records.len(),
+            1,
+            "the workbench-base copy's own record must be gone, replaced by \
+             the composed file's — not left behind alongside it"
+        );
+        assert_eq!(records[0].component, "amissl");
+        assert_eq!(records[0].sha256, hex_sha256(content.as_bytes()));
+
+        // Still one real file on disk, not two — `outcome.files` counts
+        // disk reality, and must not double-count the starter copy and the
+        // composed result as though they were separate files.
+        let copied_bytes: u64 = plan
+            .items
+            .iter()
+            .filter(|i| !i.is_dir && i.to != "S/User-Startup")
+            .map(|i| i.bytes)
+            .sum();
+        assert_eq!(outcome.files, 3, "C/LoadModule, C/Other, S/User-Startup");
+        assert_eq!(outcome.bytes, copied_bytes + content.len() as u64);
+    }
+
+    /// The cancellation checkpoint this step gets is the same shape every
+    /// item in the loop above already gets: checked once, before its one
+    /// atomic write. Cancelling exactly here — after both of `planned()`'s
+    /// two items have landed, before the composed file is ever written —
+    /// must report `CancelledPartway { files: 2 }` and leave neither
+    /// `S/User-Startup` nor `distribution.json` behind.
+    #[test]
+    fn cancelling_at_the_user_startup_step_writes_nothing_and_reports_two_files() {
+        let (mut plan, dir) = planned();
+        plan.user_startup = vec![UserStartupContribution {
+            component: "modules-a1200".into(),
+            lines: vec!["Assign Foo: SYS:".into()],
+        }];
+        let root = dir.join("dist");
+        let sink = fixtures::CancelAfter::new(2);
+
+        let err = apply(&plan, &root, &sink).unwrap_err();
+
+        assert!(
+            matches!(err, CoreError::CancelledPartway { files: 2 }),
+            "{err:?}"
+        );
+        assert!(root.join("C").join("LoadModule").exists());
+        assert!(root.join("C").join("Other").exists());
+        assert!(
+            !root.join("S").join("User-Startup").exists(),
+            "the composed file is one atomic write — cancelling before it \
+             starts must leave none of it behind"
+        );
+        assert!(!root.join(MANIFEST_FILE_NAME).exists());
+    }
+
+    /// The negative control for every test above: a plan with no
+    /// `user_startup` contributions at all — the shape every shipped
+    /// component produces today — must never touch `S` in any way. Without
+    /// this, a version of `apply` that always wrote an (empty) `S/User-
+    /// Startup` regardless of `plan.user_startup` would still pass every
+    /// test above, since none of them check for the file's *absence*.
+    #[test]
+    fn no_contributions_means_the_file_is_never_touched_at_all() {
+        let (plan, dir) = planned();
+        assert!(plan.user_startup.is_empty(), "sanity");
+        let root = dir.join("dist");
+
+        apply(&plan, &root, &NoProgress).unwrap();
+
+        assert!(!root.join("S").exists());
     }
 }

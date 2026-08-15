@@ -140,6 +140,21 @@ pub fn condition_holds(
     }
 }
 
+/// One switched-on component's own contribution to `S:User-Startup` —
+/// resolved here, at plan time, from the recipe's own [`super::Component::user_startup`],
+/// for the same reason [`InstallPlan::components_on`] is resolved here
+/// rather than left for `apply` to look up again: `apply` (`startup.rs`,
+/// Task 7) only ever consumes an [`InstallPlan`], never the [`Recipe`]
+/// itself, so whatever it needs to compose the file has to travel on the
+/// plan. Carrying it also means a preview screen can show what would be
+/// added before anything is written.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserStartupContribution {
+    pub component: String,
+    pub lines: Vec<String>,
+}
+
 /// One file or directory `apply` (a later task) will place in the
 /// distribution tree.
 #[derive(Debug, Clone, Serialize)]
@@ -181,6 +196,14 @@ pub struct InstallPlan {
     /// and so the plan that was previewed is the plan that runs, even if
     /// the folder changed underneath it.
     pub media_paths: BTreeMap<String, PathBuf>,
+    /// Every member of `components_on` that carries its own `S:User-Startup`
+    /// lines, in the same recipe order `components_on` itself is built in —
+    /// which is also the order `apply` folds them into the file. Populated
+    /// alongside `components_on`, for the same reason and regardless of
+    /// whether the plan as a whole refuses: every shipped component today
+    /// carries no lines at all (see `mod.rs`'s fixtures comment), so this is
+    /// empty in practice until a future component uses the field.
+    pub user_startup: Vec<UserStartupContribution>,
 }
 
 /// What the user asked for.
@@ -504,6 +527,21 @@ pub fn plan(request: &InstallRequest, recipe: &Recipe) -> CoreResult<InstallPlan
 
     refusals.extend(detect_collisions(&items, recipe));
 
+    // Same source as `components_on` itself (`recipe.component`), and in
+    // the same order — resolved regardless of whether the plan as a whole
+    // refuses, matching `components_on`'s own rule: a component that never
+    // resolved still explains itself, and this costs nothing to compute
+    // when it does.
+    let user_startup = components_on
+        .iter()
+        .filter_map(|id| recipe.component(id))
+        .filter(|component| !component.user_startup.is_empty())
+        .map(|component| UserStartupContribution {
+            component: component.id.clone(),
+            lines: component.user_startup.clone(),
+        })
+        .collect();
+
     let (items, media_paths) = if refusals.is_empty() {
         (items, media_paths)
     } else {
@@ -518,6 +556,7 @@ pub fn plan(request: &InstallRequest, recipe: &Recipe) -> CoreResult<InstallPlan
         total_bytes,
         components_on,
         media_paths,
+        user_startup,
     })
 }
 
@@ -1195,5 +1234,98 @@ mod plan_tests {
                 if component == "workbench-base" && volume_name == "Workbench3.2" && paths.len() == 2
         )));
         assert!(plan.items.is_empty());
+    }
+
+    // ---- Task 7: `user_startup` resolved onto the plan ----
+
+    /// A hand-built recipe, since every component in the shipped
+    /// `amigaos-3.2.json` currently declares no `user_startup` lines at all
+    /// (see `mod.rs`'s fixtures comment) — this is the only way to exercise
+    /// the field until a real component uses it.
+    ///
+    /// A fresh scratch directory every call (a counter, not a fixed tag):
+    /// this helper is called from more than one test, several of which run
+    /// in parallel threads of the same test binary (same pid) — `planned()`
+    /// in `apply.rs` documents the exact race a shared tag causes here.
+    fn plan_with_user_startup_components() -> InstallPlan {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = crate::core::osinstall::fixtures::scratch(&format!("plan-user-startup-{n}"));
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        crate::core::osinstall::fixtures::media(&folder, "A", "a.adf", &[("x", b"one", 0)]);
+        crate::core::osinstall::fixtures::media(&folder, "B", "b.adf", &[("y", b"two", 0)]);
+
+        let make = |id: &str, media: &str, from: &str, lines: &[&str]| Component {
+            id: id.to_string(),
+            media: media.to_string(),
+            rules: vec![PathRule {
+                from: from.to_string(),
+                to: from.to_string(),
+                kind: RuleKind::File,
+            }],
+            required: false,
+            condition: None,
+            overrides: vec![],
+            user_startup: lines.iter().map(|s| s.to_string()).collect(),
+            exclusive_group: None,
+            available: true,
+        };
+        let recipe = Recipe {
+            release: "Test".to_string(),
+            // Declared in the reverse order they will be chosen, so a test
+            // asserting recipe order (not request order) can actually tell
+            // the two apart.
+            components: vec![
+                make("alpha", "A", "x", &["Assign Alpha: SYS:"]),
+                make("beta", "B", "y", &[]),
+            ],
+        };
+
+        let request = InstallRequest {
+            media_folder: folder,
+            rom: None,
+            chosen: vec!["beta".to_string(), "alpha".to_string()],
+            destination: dir.join("dist"),
+        };
+        plan(&request, &recipe).unwrap()
+    }
+
+    /// The property `apply` (Task 7) actually leans on: a switched-on
+    /// component that declares `user_startup` lines carries them on the
+    /// plan, under its own id.
+    #[test]
+    fn a_component_with_user_startup_lines_is_carried_on_the_plan() {
+        let plan = plan_with_user_startup_components();
+        let contribution = plan
+            .user_startup
+            .iter()
+            .find(|c| c.component == "alpha")
+            .expect("alpha declared lines and is switched on");
+        assert_eq!(contribution.lines, vec!["Assign Alpha: SYS:".to_string()]);
+    }
+
+    /// The negative half: `beta` is switched on (it is in `components_on`)
+    /// but declares no lines at all, so it must not appear in
+    /// `user_startup` — a version that carried every on-component
+    /// unconditionally, with an empty `Vec`, would still pass a test that
+    /// only checked `alpha`'s presence.
+    #[test]
+    fn a_switched_on_component_with_no_lines_contributes_nothing() {
+        let plan = plan_with_user_startup_components();
+        assert!(plan.components_on.iter().any(|id| id == "beta"));
+        assert!(!plan.user_startup.iter().any(|c| c.component == "beta"));
+    }
+
+    /// Every shipped component's `user_startup` is empty today, so
+    /// `workbench-base` — required, always on — must resolve to no
+    /// contribution at all. This is the check that would catch a
+    /// `filter(!component.user_startup.is_empty())` accidentally inverted
+    /// or dropped.
+    #[test]
+    fn the_shipped_recipe_contributes_no_user_startup_lines_yet() {
+        let plan = plan_with(&["workbench-base"], &["Workbench3.2"]);
+        assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
+        assert!(plan.user_startup.is_empty());
     }
 }
