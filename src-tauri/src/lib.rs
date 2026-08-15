@@ -12,6 +12,7 @@ mod commands;
 mod core;
 mod error;
 mod net;
+mod tools;
 
 use tauri::Manager;
 use tauri_plugin_log::{Target, TargetKind};
@@ -135,6 +136,9 @@ pub fn run() {
             commands::card::card_build,
             commands::card::card_check_image,
             commands::card::card_intake,
+            commands::preload::preload_probe,
+            commands::preload::preload_plan,
+            commands::preload::preload_run,
             commands::gotek::gotek_scan,
             commands::gotek::gotek_save,
             commands::distro::distro_profiles,

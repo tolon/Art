@@ -21,6 +21,7 @@ pub mod lha;
 pub mod oplog;
 pub mod panel;
 pub mod pistorm;
+pub mod preload;
 pub mod sources;
 pub mod system;
 pub mod volume;

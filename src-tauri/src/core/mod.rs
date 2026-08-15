@@ -28,6 +28,7 @@ pub mod lha;
 pub mod mbr;
 pub mod oplog;
 pub mod pistorm;
+pub mod preload;
 pub mod profile;
 pub mod rdb;
 pub mod recovery;

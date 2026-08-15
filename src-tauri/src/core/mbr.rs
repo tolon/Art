@@ -67,9 +67,14 @@ impl PartitionKind {
 /// One primary partition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MbrPartition {
-    /// Which of the four slots it occupies. Kept because a card's own
-    /// documentation talks about "partition 1", and a listing that renumbers
-    /// them is a listing that disagrees with the user's notes.
+    /// Which of the four table entries it occupies, **counting from zero** —
+    /// the array position, not the number anybody writes down.
+    ///
+    /// Use [`MbrPartition::slot_number`] for the number a card's own
+    /// documentation, `hst-imager` and the user's notes all use. The comment
+    /// here used to promise that number and the code produced this one, which
+    /// cost a real run: `hst.imager rdb info <img>\mbr` answered "Rigid
+    /// Disk Block not found" because the Amiga disk is slot 2.
     pub index: usize,
     pub kind: PartitionKind,
     /// The raw type byte, whatever `kind` made of it.
@@ -227,6 +232,13 @@ pub struct CardLayout {
     pub boot: MbrPartition,
     /// One to three Amiga disks, each of which gets its own RDB.
     pub areas: Vec<MbrPartition>,
+}
+
+impl MbrPartition {
+    /// The slot number as everything outside ART counts them, from one.
+    pub fn slot_number(&self) -> usize {
+        self.index + 1
+    }
 }
 
 impl CardLayout {
