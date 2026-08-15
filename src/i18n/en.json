@@ -244,6 +244,7 @@
     "uxPower": "Power User",
     "language": "Language",
     "winuaePath": "WinUAE Path",
+    "hstImagerPath": "hst.imager Path",
     "appZoom": "Application Size",
     "appZoomReset": "Reset",
     "appZoomHint": "Scales the whole program — text, search boxes, icons, buttons — on every screen. Ctrl and the mouse wheel does the same anywhere outside the file listing; Ctrl+0 puts it back.",
@@ -696,6 +697,8 @@
       "heading": "What are you building?",
       "bootCard": "A boot-only card",
       "bootCardHint": "The Pi's firmware, your Kickstart and a partition table an Amiga can see — built from your own Emu68 release. No AmigaOS on it; that comes next.",
+      "prepareVolumes": "Prepare a card's Amiga volumes",
+      "prepareVolumesHint": "Format the partitions on a card you already have and copy your content in, so it arrives ready instead of offering to format itself on first boot. Needs hst-imager, which you supply.",
       "distro": "A complete distribution",
       "distroHint": "CaffeineOS, CoffinOS, AmiKit or an ART Baseline, with the system already installed."
     },
@@ -1697,6 +1700,83 @@
       "heading": "The card is built",
       "readBack": "Read back by ART's own card reader: {{disks}} Amiga disk(s), {{partitions}} partition(s).",
       "nextStep": "Flash it to a microSD card with your usual imager, then plug HDMI in before powering the Amiga on — the VPU only configures the port at boot."
+    }
+  },
+  "preload": {
+    "heading": "Prepare the card's Amiga volumes",
+    "intro": "A card ART builds has partitions an Amiga can see and nothing inside them — the Amiga offers to format them on first boot. This formats them here instead, and copies your content in, so the card arrives ready.",
+    "scope": "ART does not write PFS3 itself. hst-imager does the formatting, the same tool both existing PiStorm imagers stand on — you supply your own copy of it.",
+    "tool": {
+      "heading": "The tool",
+      "label": "hst.imager",
+      "none": "Not set",
+      "hint": "ART does not bundle hst-imager — 137 MB beside the application is not a trade worth making. Set it once here or in Settings; it is remembered either way.",
+      "probe": "Ask it what it is",
+      "probing": "Asking…",
+      "is": "It says it is {{version}}.",
+      "untested": "ART's commands were written against {{tested}}. This is a different version — it may work perfectly, ART simply has not been run against it."
+    },
+    "card": {
+      "heading": "The card",
+      "label": "Card image",
+      "none": "No card chosen",
+      "chooseTitle": "Choose the card image to prepare",
+      "read": "{{disks}} Amiga disk(s), {{partitions}} partition(s).",
+      "noPartitions": "This image has no Amiga partition to prepare.",
+      "unreadable": "ART could not read this file as a card or a hard disk image."
+    },
+    "driver": {
+      "label": "Filesystem driver",
+      "none": "None chosen",
+      "chooseTitle": "Choose the filesystem driver to embed (pfs3aio.lha)",
+      "hint": "Needed when a partition names a filesystem the card carries no driver for — PFS3, usually. Kickstart carries FFS itself and needs nothing here. If one is needed and missing, the preview says so rather than producing a volume the Amiga ignores in silence."
+    },
+    "partitions": {
+      "heading": "Which volumes",
+      "intro": "Nothing is chosen to start with: formatting erases whatever the partition held.",
+      "none": "Choose a card and its partitions appear here.",
+      "disk": "Amiga disk {{n}} — at {{offset}}",
+      "volumeName": "Volume name",
+      "content": "Content folder",
+      "noContent": "Format only",
+      "chooseContent": "Choose a folder…",
+      "chooseContentTitle": "Choose the folder whose contents go into this volume",
+      "clearContent": "Format only",
+      "sizeAndType": "{{size}} · {{dostype}}"
+    },
+    "preview": {
+      "run": "Preview",
+      "running": "Working out what would happen…"
+    },
+    "plan": {
+      "heading": "What would happen",
+      "willErase_one": "This erases {{count}} partition. There is no backup and no undo.",
+      "willErase_other": "This erases {{count}} partitions. There is no backup and no undo.",
+      "step": {
+        "import": "Embed {{name}} in the RDB as {{dostype}}",
+        "format": "Format {{drive}} as {{volume}} — everything in it goes",
+        "copy": "Copy {{source}} into {{drive}}"
+      }
+    },
+    "confirm_one": "I understand {{count}} partition will be erased",
+    "confirm_other": "I understand {{count}} partitions will be erased",
+    "run": "Format and fill",
+    "running": "Running…",
+    "blocked": {
+      "noCard": "Choose the card image first.",
+      "noTool": "Set where hst.imager is — ART does not ship it.",
+      "nothingChosen": "Choose at least one partition to prepare.",
+      "blankName": "{{drive}} needs a volume name.",
+      "badName": "{{drive}}'s volume name contains ':' or '/', which separate paths on the Amiga and cannot appear in a name.",
+      "longName": "{{drive}}'s volume name is longer than {{max}} characters, which is where AmigaDOS names stop.",
+      "notPlanned": "Preview it first — nothing is formatted before you have seen what would be."
+    },
+    "result": {
+      "heading": "Done",
+      "formatted": "Formatted: {{volumes}}",
+      "copied": "Copied in: {{files}} file(s), {{directories}} folder(s), {{bytes}} bytes.",
+      "tool": "By {{version}}.",
+      "notVerified": "ART cannot read this volume back. It has no PFS3 reader, so what is inside is the tool's word and not ART's — verify it on the Amiga, or with something that is not ART."
     }
   }
 }

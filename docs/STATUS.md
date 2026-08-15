@@ -22,7 +22,7 @@ Update it at the end of any session that changes what works.
 | **Version** | 0.1.0 (unreleased) |
 | **Current stage** | **SD-1 in progress** — **G2 and G4 done, engine *and* screen**: the OS Builder asks for a boot-only card and `card_plan_build` / `card_build` deliver one (MBR, FAT32 boot partition, an RDB per Amiga area) from the user's own Emu68 release, previewed before it is written and read back after. G7, G15 and G8 owed. Reading a real card has a screen ([ART-095](ISSUES.md), [ART-097](ISSUES.md)); **no card ART built has been flashed or booted** |
 | **Build** | PASS |
-| **Tests** | 1166 Rust passed, 0 failed; 454 frontend passed, 0 failed |
+| **Tests** | 1166 Rust passed, 0 failed; 474 frontend passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
 | **amitools oracle** | 53 checks, both directions — now including a filesystem driver ART embedded in an RDB and `rdbtool` extracted back out byte-for-byte |
@@ -30,7 +30,7 @@ Update it at the end of any session that changes what works.
 | **7-Zip disc oracle** | 4 fixtures — Joliet, ISO9660-only, raw Mode 1, raw Mode 2/XA — names, sizes and every file's SHA-256 |
 | **cargo-deny** | advisories, bans, licences, sources — all ok |
 | **MSRV** | 1.93 (raised from 1.77 on 2026-08-12, for a maintained 7z decoder) |
-| **i18n** | `en.json` and `tr.json`, 1252 leaf keys each, parity enforced by `pnpm test` |
+| **i18n** | `en.json` and `tr.json`, 1314 leaf keys each, parity enforced by `pnpm test` |
 | **Release bundle** | rebuilt 2026-08-12 — MSI and NSIS, and the application was launched and answered |
 | **Published** | <https://github.com/tolon/Art> — public, `main`, **GPL-3.0-or-later**. Work lands on `sd-1` and merges to `main` at the phase's
 end; the licence *inventory* still said MIT until 2026-08-13, months after the
@@ -662,7 +662,7 @@ one machine, not the line.
 |---|---|
 | **SD-0** | ✅ **Done 2026-08-12** — prior-art teardown, written up as [sd0-prior-art.md](sd0-prior-art.md). One exit test still owed (drive `hst-imager` end to end on a scratch image) |
 | **SD-1** | The image has a shape: MBR + FAT32 boot partition (**G2 — done 2026-08-13/14, engine and screen**), RDB filesystem embedding FSHD/LSEG (**G4 — done**, also closed ART-084), build manifest (**G7 — done 2026-08-15**, with 7-Zip answering the half ART cannot check), image validation (**G8 — done 2026-08-15**), a build as a drop target (**G15 — done 2026-08-15**). **Every gap in SD-1 is built; what is left is a card flashed and booted** |
-| **SD-2** | Content, preloaded: PFS3 via `hst-imager` (**G3 route E — engine done 2026-08-15**, route D dropped: E was already proven and needs no Kickstart), OS install engine (G5), ROM pairing (G9), launcher metadata export (G10), layout policy (G11) |
+| **SD-2** | Content, preloaded: PFS3 via `hst-imager` (**G3 route E — done 2026-08-15, engine *and* screen**; route D dropped: E was already proven and needs no Kickstart), OS install engine (G5), ROM pairing (G9), launcher metadata export (G10), layout policy (G11) |
 | **SD-3** | It is *mine*: wallpaper, WiFi, prefs and Startup-Sequence, each edited in place (G14); multiboot as several complete environments and a boot menu (G16) |
 | **SD-4** | The flagship: native PFS3 write in ART (G3 route B) — its own brief; route D's harness becomes its oracle |
 | **SD-5** | Comfort: capacity planner and build profiles (G13) |
@@ -821,12 +821,14 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
 
 ## Picking up next session
 
-*Last session: 2026-08-15. Nothing is half-done on disk and `sd-1` is level
-with `origin/sd-1`.*
+*Last session: 2026-08-15. Nothing is half-done on disk; `sd-1` carries the
+preload screen's commits ahead of `origin/sd-1`.*
 
-**The tree is green**: 1166 Rust (run twice), 454 frontend, clippy clean at
+**The tree is green**: 1166 Rust, 474 frontend, clippy clean at
 `-D warnings`, TypeScript clean, amitools oracle 53 both ways, the 7-Zip FAT32
-oracle clean on a real card's 21 boot files.
+oracle clean on a real card's 21 boot files. The Rust suite was not re-run in
+the preload-screen session and did not need to be — `git status src-tauri/`
+was empty for the whole of it.
 
 ### Where the phases stand
 
@@ -838,16 +840,25 @@ read it back independently. **What is left in SD-1 is not code: flash a card
 and boot an A500.** The materials are all here bar a microSD card, a USB reader
 and an HDMI cable.
 
-**SD-2 has opened.** G3 route E is built and proven: `core/preload/` plans and
-runs a preload, `tools/hst_imager.rs` drives `hst-imager`, and `core/` still
-launches nothing — the boundary is a trait. Run for real on 2026-08-15: `DH0`
+**SD-2 has opened.** G3 route E is built, proven and now on a screen:
+`core/preload/` plans and runs a preload, `tools/hst_imager.rs` drives
+`hst-imager`, `core/` still launches nothing — the boundary is a trait — and
+the OS Builder's third kind asks for it. Run for real on 2026-08-15: `DH0`
 formatted as `Work` on a card ART built, a tree copied in, and the tool listed
 it back as 1 directory, 2 files, 20 B with `----RWED` on each.
 
+**What the screen has and has not been through.** It was mounted and driven in
+a real browser against the real bundle — the third kind clicked, every string
+resolved, no raw key and no `{{variable}}` on screen, nothing overflowing. It
+has **not** been driven against a real card through Tauri: the engine has, the
+screen in front of it has not, and that is the same rung `test/README.md`
+keeps for everything else.
+
 ### What to pick up
 
-- **A screen for the preload engine.** It has none. §92's preview → confirm →
-  run, and formatting is `Destructive`.
+- **Drive the preload screen against the real card**, in `pnpm tauri dev`, with
+  `E:\amiga\ProjeART\card.img` and `E:\amiga\Amigatolon\hstimager\hst.imager.exe`.
+  The engine has been through it; the screen has not.
 - **G9 (ROM pairing)** — pure bookkeeping, and ART-104 made ROM identification
   sound first.
 - **G5 (OS install)** — now unblocked, because there is a formatted volume to
@@ -977,6 +988,7 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-15 | **The preload engine gets a screen — the OS Builder's third kind.** `src/lib/preload.ts` and `components/osbuilder/VolumePreload.tsx`: read the card, tick the partitions to prepare, name each volume, optionally give it a folder, preview, confirm the count, run as a job, report. **No Rust changed at all** — the three commands had been registered since the morning and nothing above them existed. Three decisions carry it. **The ticks are not remembered**, alone among this screen's choices: the card and the paths come back the way the user left them, but a screen returning already armed to format two partitions is ART's own remembering rule turned into a hazard, and it is written down as that rather than left to look like an oversight. **The volume-name rules are `check_name`'s** — no `:` or `/`, thirty characters counted as characters — asked before the format instead of discovered during it; the engine never checked them and `hst-imager`'s answer would have arrived after the first partition was gone. And **the result panel says ART cannot read the volume back**: there is no PFS3 reader here, so what is inside is the tool's word, said as the tool's word (§89). `hst.imager`'s path became a setting beside `winuaePath`, since ART does not ship it. Four mutations, four caught. Driven in a real browser against the real bundle: mounts, every string resolves, no raw key and no `{{variable}}` on screen — **not** yet driven against a real card through Tauri, which is the rung it still owes | 1166 Rust / 474 frontend |
 | 2026-08-15 | **SD-2 opens: a card's Amiga volume is formatted and filled from Windows.** `core/preload/` plans it and runs it, `tools/hst_imager.rs` does the work, and `core/` still launches nothing — the boundary is a trait, the way `MirrorClient` is for the network, so route B replaces one file when it comes. **Route E over route D**: SD-0 had already run E end to end, it needs no Kickstart and no unattended emulator session, and the tool was already on this machine. **Running it corrected the design twice.** First: `hst-imager` answered *"Rigid Disk Block not found"* on a card ART built — of course it did, byte zero of a card is a partition table and the Amiga disk begins 1.1 GB in. That is ART-095 from the other side, and the Emu68 Imager's own command set had the answer all along (`<image>\mbr\<slot>`), which also meant a partition is two numbers — which disk, then which partition in *its* RDB — not one flattened index. Second: `fs copy` prints no summary at all, so the parser that read one was reporting numbers it had matched in a different sentence; the count comes from asking the volume afterwards, which makes it the tool's reading rather than ART's guess. Found on the way: `MbrPartition::index` is zero-based while its own comment promised the number everybody else writes down — `slot_number()` now exists and the comment tells the truth. Real run: RDB embedded, `DH0` formatted as `Work`, a tree copied, and the tool listed it back as 1 directory, 2 files, 20 B with `----RWED` on each | 1166 Rust / 454 frontend |
 | 2026-08-15 | **SD-1 G15, and with it every gap the phase names.** The drop pipeline has been architectural since Stage 2 and answers one question — *what can I do with this file*. `core/card/intake.rs` asks the other one: *what does it become in this card*. An Emu68 archive and a Kickstart fill their fields; a `config_<name>.txt` is recognised and declared not-yet-used (G16); everything Amiga — a game, an ADF, an OS CD, a folder — is told it **needs a volume this card has not got**, which is the answer SD-1 owes most often and the one worth not swallowing. Two decisions: the archive is matched **by name and deliberately so** — its bytes say "zip", and which board and which release line it is for lives only in the name, which is what ART-091 was — so the answer carries *every* reading rather than picking one, and `emu68_payload` still refuses if it disagrees with the user's setting; and `intakeFills` is pure, so "the last archive dropped is the one chosen" is a rule with a test rather than whatever the loop happened to do. Four mutations, four caught | 1140 Rust / 454 frontend |
 | 2026-08-15 | **SD-1 G8: the gate before the file is handed over.** `core/card/health.rs` answers "is this a card that will boot" in fourteen checks — the boot partition first (SD-0's unit-0 rule, now a check rather than only an impossibility) and at sector 2048, areas 4 MiB aligned, nothing overlapping or past the end, every RDB read and checksummed, no partition naming a filesystem the card lacks (ART-084 as a gate), the manifest still agreeing, and the four files the firmware needs present. **The design decision is the three states.** `pass`, `fail` and `not-checked` are kept apart and the third never renders as a tick: ART writes FAT32 and cannot read one, so the boot files are answered *from the manifest* and a card with no manifest answers nothing — a green mark meaning "ART did not look" is the claim §89 forbids. The verdict says it out loud: *"nothing is wrong with what ART could check — and N questions it could not answer at all"*. What ART cannot check at all is a separate list, for the machine (§50). G7's manifest button became a section of this one report rather than a second door. Four mutations, four caught. Real 8 GB card: fourteen passes, and 7-Zip still clean on all 21 boot files | 1131 Rust / 450 frontend |

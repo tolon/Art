@@ -60,6 +60,7 @@ import {
 import { isOneOf, isText, isTextOrNothing, isWholeNumberBetween } from "@/lib/remembered";
 import { useRemembered, useRememberedShape } from "@/lib/useRemembered";
 import { usePowerMode } from "@/lib/uxmode";
+import { Field } from "@/components/osbuilder/Field";
 
 const GIB = 1024 * 1024 * 1024;
 
@@ -791,50 +792,6 @@ function Row({ name, value }: { name: string; value: string }) {
       </td>
       <td style={{ padding: "2px 0" }}>{value}</td>
     </tr>
-  );
-}
-
-function Field({
-  label,
-  value,
-  empty,
-  choose,
-  onChoose,
-  hint,
-  clear,
-  onClear,
-}: {
-  label: string;
-  value: string | null;
-  empty: string;
-  choose: string;
-  onChoose: () => void;
-  hint?: string;
-  clear?: string;
-  onClear?: () => void;
-}) {
-  return (
-    <div style={{ marginBottom: 12 }}>
-      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
-        {label}
-      </div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <button className="btn" onClick={onChoose}>
-          {choose}
-        </button>
-        <span style={{ fontSize: 12, wordBreak: "break-all" }}>{value ?? empty}</span>
-        {onClear && (
-          <button className="btn" onClick={onClear}>
-            {clear}
-          </button>
-        )}
-      </div>
-      {hint && (
-        <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
-          {hint}
-        </p>
-      )}
-    </div>
   );
 }
 

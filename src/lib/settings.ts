@@ -36,6 +36,15 @@ export interface AppSettings {
   language: string;
   lastCollectionDir: string | null;
   winuaePath: string | null;
+  /**
+   * Where `hst.imager` is (SD-2 · G3, route E).
+   *
+   * ART does not ship it — 137 MB beside a Tauri app is not a trade worth
+   * making — so the path is the user's, set once and remembered, the same
+   * shape `winuaePath` above already has for the other external program ART
+   * drives.
+   */
+  hstImagerPath: string | null;
   /** Download folder for Aminet packages. The Rust side holds it only for the
    *  lifetime of the process, so it is remembered here (§41.5.6). */
   aminetRoot: string | null;
@@ -192,6 +201,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   language: "en",
   lastCollectionDir: null,
   winuaePath: null,
+  hstImagerPath: null,
   aminetRoot: null,
   aminetMirrors: null,
   sidebarCollapsed: false,
@@ -241,6 +251,8 @@ export async function getSettings(): Promise<AppSettings> {
       lastCollectionDir:
         (await s.get<string>("lastCollectionDir")) ?? DEFAULT_SETTINGS.lastCollectionDir,
       winuaePath: (await s.get<string>("winuaePath")) ?? DEFAULT_SETTINGS.winuaePath,
+      hstImagerPath:
+        (await s.get<string>("hstImagerPath")) ?? DEFAULT_SETTINGS.hstImagerPath,
       aminetRoot: (await s.get<string>("aminetRoot")) ?? DEFAULT_SETTINGS.aminetRoot,
       aminetMirrors:
         (await s.get<StoredMirror[]>("aminetMirrors")) ?? DEFAULT_SETTINGS.aminetMirrors,

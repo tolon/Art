@@ -38,16 +38,19 @@ import { pistormIdentifyRom, type RomInfo } from "@/lib/pistorm";
 import { isOneOf, isTextOrNothing, isWholeNumberBetween } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { CardBuilder } from "@/components/osbuilder/CardBuilder";
+import { VolumePreload } from "@/components/osbuilder/VolumePreload";
 
 /**
  * What the screen is being asked for.
  *
- * `boot-card` is the one ART can actually write today: a card with the Pi's
- * firmware, a Kickstart and a partition table, and no AmigaOS on it. Every
- * distribution is still Coming Later, and the two live side by side rather
- * than the working one being hidden behind the ones that are not (§96).
+ * Two of the three work today, and they are the two steps of the same story:
+ * `boot-card` writes a card with the Pi's firmware, a Kickstart and a
+ * partition table an Amiga can see, and `prepare-volumes` puts a filesystem
+ * into those partitions and fills them (SD-2 · G3). Every distribution is
+ * still Coming Later, and all three live side by side rather than the working
+ * ones being hidden behind the one that is not (§96).
  */
-type BuildKind = "distro" | "boot-card";
+type BuildKind = "distro" | "boot-card" | "prepare-volumes";
 
 /** Card sizes people actually buy. Typed sizes are allowed too. */
 const CARD_SIZES_GB = [16, 32, 64, 128, 256];
@@ -57,7 +60,7 @@ export function OsBuilder() {
 
   const [kind, setKind] = useRemembered<BuildKind>(
     "osBuilder.kind",
-    isOneOf<BuildKind>("distro", "boot-card"),
+    isOneOf<BuildKind>("distro", "boot-card", "prepare-volumes"),
     "boot-card"
   );
 
@@ -182,6 +185,12 @@ export function OsBuilder() {
             hint={t("osBuilder.what.bootCardHint")}
           />
           <KindChoice
+            chosen={kind === "prepare-volumes"}
+            onChoose={() => setKind("prepare-volumes")}
+            title={t("osBuilder.what.prepareVolumes")}
+            hint={t("osBuilder.what.prepareVolumesHint")}
+          />
+          <KindChoice
             chosen={kind === "distro"}
             onChoose={() => setKind("distro")}
             title={t("osBuilder.what.distro")}
@@ -192,6 +201,8 @@ export function OsBuilder() {
       </section>
 
       {kind === "boot-card" && <CardBuilder />}
+
+      {kind === "prepare-volumes" && <VolumePreload />}
 
       {kind === "distro" && (
         <>

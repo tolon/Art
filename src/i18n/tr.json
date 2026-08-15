@@ -244,6 +244,7 @@
     "uxPower": "İleri Kullanıcı",
     "language": "Dil",
     "winuaePath": "WinUAE Yolu",
+    "hstImagerPath": "hst.imager Yolu",
     "appZoom": "Uygulama Boyutu",
     "appZoomReset": "Sıfırla",
     "appZoomHint": "Programın tamamını ölçekler — yazılar, arama kutuları, ikonlar, düğmeler — her ekranda. Dosya listesinin dışında Ctrl + fare tekerleği de aynı işi yapar; Ctrl+0 eski haline döndürür.",
@@ -696,6 +697,8 @@
       "heading": "Ne kuruyorsun?",
       "bootCard": "Sadece önyükleme kartı",
       "bootCardHint": "Pi'nin ürün yazılımı, senin Kickstart'ın ve Amiga'nın görebileceği bir bölüm tablosu — kendi Emu68 sürümünden kurulur. Üzerinde AmigaOS yok; o bir sonraki adım.",
+      "prepareVolumes": "Bir kartın Amiga birimlerini hazırla",
+      "prepareVolumesHint": "Elindeki kartın bölümlerini biçimlendir ve içeriğini kopyala; kart ilk açılışta kendini biçimlendirmeyi önermek yerine hazır gelsin. hst-imager gerekir, onu sen sağlıyorsun.",
       "distro": "Tam bir dağıtım",
       "distroHint": "CaffeineOS, CoffinOS, AmiKit ya da bir ART Baseline — sistemi kurulu gelir."
     },
@@ -1697,6 +1700,83 @@
       "heading": "Kart oluşturuldu",
       "readBack": "ART'ın kendi kart okuyucusuyla geri okundu: {{disks}} Amiga diski, {{partitions}} bölüm.",
       "nextStep": "Alışık olduğun imaj aracıyla microSD karta yaz, sonra Amiga'yı açmadan önce HDMI'ı tak — VPU portu yalnızca açılışta yapılandırır."
+    }
+  },
+  "preload": {
+    "heading": "Kartın Amiga birimlerini hazırla",
+    "intro": "ART'ın oluşturduğu kartta Amiga'nın gördüğü bölümler var ama içleri boş — Amiga ilk açılışta onları biçimlendirmeyi önerir. Bu ekran onları burada biçimlendirir ve içeriğini kopyalar, böylece kart hazır gelir.",
+    "scope": "PFS3'ü yazan ART değil. Biçimlendirmeyi hst-imager yapıyor; mevcut iki PiStorm imaj aracının da dayandığı araç. ART onu paketlemiyor, kendi kopyanı gösteriyorsun.",
+    "tool": {
+      "heading": "Araç",
+      "label": "hst.imager",
+      "none": "Ayarlanmadı",
+      "hint": "ART hst-imager'ı paketlemiyor — uygulamanın yanında 137 MB değecek bir takas değil. Buradan ya da Ayarlar'dan bir kez ayarla; her iki durumda da hatırlanır.",
+      "probe": "Kendini tanıtsın",
+      "probing": "Soruluyor…",
+      "is": "Kendini {{version}} olarak tanıtıyor.",
+      "untested": "ART'ın komutları {{tested}} sürümüne göre yazıldı. Bu farklı bir sürüm — gayet iyi çalışabilir, ART yalnızca onunla denenmedi."
+    },
+    "card": {
+      "heading": "Kart",
+      "label": "Kart imajı",
+      "none": "Kart seçilmedi",
+      "chooseTitle": "Hazırlanacak kart imajını seç",
+      "read": "{{disks}} Amiga diski, {{partitions}} bölüm.",
+      "noPartitions": "Bu imajda hazırlanacak Amiga bölümü yok.",
+      "unreadable": "ART bu dosyayı kart ya da sabit disk imajı olarak okuyamadı."
+    },
+    "driver": {
+      "label": "Dosya sistemi sürücüsü",
+      "none": "Seçilmedi",
+      "chooseTitle": "Gömülecek dosya sistemi sürücüsünü seç (pfs3aio.lha)",
+      "hint": "Bir bölüm, kartın sürücüsünü taşımadığı bir dosya sistemi adlandırıyorsa gerekir — genellikle PFS3. FFS'i Kickstart'ın kendisi taşır, onun için bir şey gerekmez. Gerekliyken eksikse önizleme bunu söyler; Amiga'nın sessizce yok sayacağı bir birim üretmez."
+    },
+    "partitions": {
+      "heading": "Hangi birimler",
+      "intro": "Başlangıçta hiçbiri seçili değil: biçimlendirme, bölümde ne varsa siler.",
+      "none": "Bir kart seç, bölümleri burada görünsün.",
+      "disk": "Amiga diski {{n}} — {{offset}} konumunda",
+      "volumeName": "Birim adı",
+      "content": "İçerik klasörü",
+      "noContent": "Yalnızca biçimlendir",
+      "chooseContent": "Klasör seç…",
+      "chooseContentTitle": "İçeriği bu birime gidecek klasörü seç",
+      "clearContent": "Yalnızca biçimlendir",
+      "sizeAndType": "{{size}} · {{dostype}}"
+    },
+    "preview": {
+      "run": "Önizle",
+      "running": "Ne olacağı hesaplanıyor…"
+    },
+    "plan": {
+      "heading": "Ne olacak",
+      "willErase_one": "Bu, {{count}} bölümü siler. Yedek yok, geri alma yok.",
+      "willErase_other": "Bu, {{count}} bölümü siler. Yedek yok, geri alma yok.",
+      "step": {
+        "import": "{{name}} sürücüsünü RDB'ye {{dostype}} olarak göm",
+        "format": "{{drive}} bölümünü {{volume}} adıyla biçimlendir — içindeki her şey gider",
+        "copy": "{{source}} içeriğini {{drive}} bölümüne kopyala"
+      }
+    },
+    "confirm_one": "{{count}} bölümün silineceğini anlıyorum",
+    "confirm_other": "{{count}} bölümün silineceğini anlıyorum",
+    "run": "Biçimlendir ve doldur",
+    "running": "Çalışıyor…",
+    "blocked": {
+      "noCard": "Önce kart imajını seç.",
+      "noTool": "hst.imager'ın nerede olduğunu ayarla — ART onu paketlemiyor.",
+      "nothingChosen": "Hazırlanacak en az bir bölüm seç.",
+      "blankName": "{{drive}} için bir birim adı gerekiyor.",
+      "badName": "{{drive}} biriminin adında ':' veya '/' var; bunlar Amiga'da yol ayırıcıdır ve bir adın içinde yer alamaz.",
+      "longName": "{{drive}} biriminin adı {{max}} karakterden uzun; AmigaDOS adları orada biter.",
+      "notPlanned": "Önce önizle — ne biçimlendirileceğini görmeden hiçbir şey biçimlendirilmez."
+    },
+    "result": {
+      "heading": "Bitti",
+      "formatted": "Biçimlendirilen: {{volumes}}",
+      "copied": "Kopyalanan: {{files}} dosya, {{directories}} klasör, {{bytes}} bayt.",
+      "tool": "{{version}} ile.",
+      "notVerified": "ART bu birimi geri okuyamaz. PFS3 okuyucusu yok, yani içeridekiler aracın sözü, ART'ın değil — Amiga'da ya da ART olmayan bir şeyle doğrula."
     }
   }
 }

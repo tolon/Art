@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Prepare a card's Amiga volumes, from the OS Builder (2026-08-15)
+
+#### Added
+- **The step after the card exists has a screen.** OS Builder's third choice:
+  point ART at a card, tick the partitions to prepare, name each volume and
+  optionally give it a folder of content, then preview what would happen
+  before any of it does.
+- **Nothing is ticked to start with, and the ticks are not remembered.** The
+  card and the paths come back the way you left them, the way everything in
+  ART does. What gets erased does not — coming back to a screen already armed
+  to format two partitions is not the same kind of convenience.
+- **Volume names are checked before the format, not during it.** The two rules
+  AmigaDOS itself has: no `:` or `/`, and thirty characters, counted as
+  characters.
+- **It says what it cannot check.** Once a volume is formatted and filled, ART
+  has no PFS3 reader to look inside it — so the result panel reports the tool's
+  word as the tool's word, and points you at the Amiga.
+- **`hst.imager`'s path is a setting**, beside the WinUAE path. ART does not
+  ship the tool; you point it at your own copy, from Settings or from the
+  screen itself, and it can be asked to say which version it is.
+
 ### Drag your files onto the card builder (2026-08-15)
 
 #### Added

@@ -170,6 +170,13 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // 71 → 72: the health section's second button reads one of two literal
     // keys depending on whether a check is running, the same shape the
     // sidebar toggle uses.
-    expect(dynamicCalls).toBe(72);
+    // 72 → 78 (SD-2 G3's preload screen): two `Phrase` reads — the reason the
+    // preload cannot run yet and the sentence for each planned step, both
+    // mapped from Rust shapes in `@/lib/preload` and both enumerated in
+    // `phrase-keys.test.ts` — plus four one-of-two-literal-keys ternaries
+    // (probing, previewing, running, and "no card yet" vs "this card has no
+    // Amiga partition"), the same shape the sidebar toggle and the health
+    // section's button already use.
+    expect(dynamicCalls).toBe(78);
   });
 });

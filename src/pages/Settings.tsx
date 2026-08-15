@@ -282,6 +282,13 @@ export function SettingsPage() {
           onChange={(next) => void update({ winuaePath: next })}
         />
         <PathField
+          label={t("settings.hstImagerPath")}
+          placeholder="E:\\amiga\\hstimager\\hst.imager.exe"
+          value={settings.hstImagerPath}
+          pick="file"
+          onChange={(next) => void update({ hstImagerPath: next })}
+        />
+        <PathField
           label={t("settings.collectionDir")}
           placeholder="D:\\Amiga"
           value={settings.lastCollectionDir}

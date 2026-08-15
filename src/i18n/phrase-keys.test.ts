@@ -50,6 +50,14 @@ import {
   type ManualStep,
 } from "@/lib/cardBuild";
 import {
+  formatCount,
+  preloadBlocker,
+  stepPhrase,
+  type PartitionPick,
+  type PreloadPlan,
+  type PreloadStep,
+} from "@/lib/preload";
+import {
   DEFAULT_EMU68_OPTIONS,
   DEFAULT_FIRMWARE_CONFIG,
   DEFAULT_HARDWARE,
@@ -534,5 +542,56 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       expect(isLeafKey(blocker!.key), blocker!.key).toBe(true);
     }
     expect(buildBlocker(request, plan)).toBeNull();
+  });
+
+  it("stepPhrase: every PreloadStep variant resolves", () => {
+    const steps: PreloadStep[] = [
+      {
+        step: "import-filesystem",
+        slot: 2,
+        driver: "pfs3aio.lha",
+        dostype: "PDS3",
+        name: "pfs3aio",
+      },
+      { step: "format-partition", slot: 2, index: 1, drive_name: "DH0", volume_name: "Work" },
+      { step: "copy-in", slot: 2, drive_name: "DH0", source: "E:\\tree" },
+    ];
+    for (const step of steps) {
+      expect(resolvesAtRuntime(stepPhrase(step).key), step.step).toBe(true);
+    }
+    expect(formatCount({ image: "card.img", steps })).toBe(1);
+  });
+
+  it("preloadBlocker: every reason a preload cannot run resolves", () => {
+    const pick: PartitionPick = {
+      area: 1,
+      index: 1,
+      driveName: "DH0",
+      chosen: true,
+      volumeName: "Work",
+      content: null,
+    };
+    const plan: PreloadPlan = {
+      image: "card.img",
+      steps: [
+        { step: "format-partition", slot: 2, index: 1, drive_name: "DH0", volume_name: "Work" },
+      ],
+    };
+    const ready = { image: "card.img", toolPath: "hst.imager.exe", picks: [pick], plan };
+
+    const blockers = [
+      preloadBlocker({ ...ready, image: null }),
+      preloadBlocker({ ...ready, toolPath: null }),
+      preloadBlocker({ ...ready, picks: [{ ...pick, chosen: false }] }),
+      preloadBlocker({ ...ready, picks: [{ ...pick, volumeName: " " }] }),
+      preloadBlocker({ ...ready, picks: [{ ...pick, volumeName: "Work:" }] }),
+      preloadBlocker({ ...ready, picks: [{ ...pick, volumeName: "W".repeat(31) }] }),
+      preloadBlocker({ ...ready, plan: null }),
+    ];
+    for (const blocker of blockers) {
+      expect(blocker).not.toBeNull();
+      expect(isLeafKey(blocker!.key), blocker!.key).toBe(true);
+    }
+    expect(preloadBlocker(ready)).toBeNull();
   });
 });
