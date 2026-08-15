@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::archive::extract::ExtractOutcome;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
 use crate::core::layout::scan::MAX_SCAN_DEPTH;
@@ -124,10 +125,55 @@ fn unpack_whdload(archive: &Path, target: &Path) -> CoreResult<u64> {
 
     let unpacked = (|| -> CoreResult<u64> {
         let mut backend = open(archive)?;
-        extract_with_backend(&mut *backend, &scratch, OverwritePolicy::Skip, &NoProgress)?;
+        let extract_outcome =
+            extract_with_backend(&mut *backend, &scratch, OverwritePolicy::Skip, &NoProgress)?;
+
+        // The gate's own verdict, not just its side effects. `aborted` means
+        // the running declared total passed `MAX_TOTAL_OUTPUT` partway
+        // through — everything after that point was never written, so what
+        // landed in `scratch` is a truncated archive, not a truncated game
+        // that happens to still work. Placing it would be exactly the
+        // silent-truncation failure `apply.rs`'s own module doc rules out.
+        if extract_outcome.aborted {
+            return Err(CoreError::SafetyRefused(
+                extract_outcome
+                    .abort_reason
+                    .unwrap_or_else(|| "the archive was refused".into()),
+            ));
+        }
 
         let entries = walk_entries(&scratch, "", 0)?;
         let layout = analyse(&entries)?;
+
+        // ART is not an Amiga and cannot run an `Install` script. An archive
+        // that needs one is a source pack, not an installed game — placing
+        // it as a drawer would put raw disk images on the card and call it
+        // played, which is worse than saying so up front. `commands/whdload.rs`
+        // refuses the same shape for its HDF install path; this is that
+        // refusal's other half.
+        if layout.needs_installer {
+            return Err(CoreError::SafetyRefused(
+                "this archive holds an Install script, which means the game has not been \
+                 installed yet — ART cannot run an Amiga script. Install it in WinUAE first, \
+                 then bring the finished drawer back here."
+                    .into(),
+            ));
+        }
+
+        // An entry the extraction gate refused (a traversal attempt, or one
+        // past the per-entry cap) never reached `scratch`, so it is invisible
+        // to `walk_entries`/`analyse` above. If it would have landed *inside*
+        // the pack, the drawer on disk is missing part of the game — refusing
+        // beats placing something that looks installed and is not. A refusal
+        // *outside* the pack (a readme past the cap, say) does not block:
+        // `layout.outside` already says those files are left behind on
+        // purpose, so one that never arrived changes nothing the user sees.
+        if let Some(missing) = refused_entry_inside_pack(&extract_outcome, &layout.root) {
+            return Err(CoreError::SafetyRefused(format!(
+                "'{missing}' could not be extracted safely, so the pack is incomplete and \
+                 was not placed"
+            )));
+        }
 
         // The drawer. `layout.root` is empty when the archive's own root is
         // the pack, in which case the scratch directory itself is the
@@ -140,16 +186,25 @@ fn unpack_whdload(archive: &Path, target: &Path) -> CoreResult<u64> {
         } else {
             safe_join_in_scratch(&scratch, &layout.root)?
         };
-        let skip_from_drawer = if layout.root.is_empty() {
-            layout
-                .icon
-                .as_ref()
-                .map(|icon| safe_join_in_scratch(&scratch, icon))
-                .transpose()?
-        } else {
-            None
-        };
-        let mut bytes = copy_tree_excluding(&drawer, target, skip_from_drawer.as_deref(), 0)?;
+
+        // Anything `analyse` marked `outside` the pack is left out of the
+        // copy in **both** shapes, from the same field, rather than the
+        // wrapped case excluding it by directory boundary alone (incidental)
+        // and the wrapper-less case having no signal for it at all. When
+        // there is no wrapper, `layout.outside` is always empty by that
+        // function's own definition — the whole archive root is the pack —
+        // so this changes nothing observable there; what it removes is two
+        // different mechanisms doing what should be one rule: the pack is
+        // what the user asked for, nothing else rides along.
+        let mut skip_from_drawer: Vec<PathBuf> = layout
+            .outside
+            .iter()
+            .map(|name| safe_join_in_scratch(&scratch, name))
+            .collect::<CoreResult<_>>()?;
+        if let Some(icon) = layout.icon.as_ref().filter(|_| layout.root.is_empty()) {
+            skip_from_drawer.push(safe_join_in_scratch(&scratch, icon)?);
+        }
+        let mut bytes = copy_tree_excluding(&drawer, target, &skip_from_drawer, 0)?;
 
         // §82: beside the drawer, never inside it.
         if let Some(icon) = &layout.icon {
@@ -166,6 +221,26 @@ fn unpack_whdload(archive: &Path, target: &Path) -> CoreResult<u64> {
 
     let _ = std::fs::remove_dir_all(&scratch);
     unpacked
+}
+
+/// The archive-entry name of an extraction-gate refusal that would have
+/// landed inside `root` (the pack's own drawer, `""` meaning the whole
+/// archive), or `None` if every refusal was outside it — or there were none.
+///
+/// Compares against the entry's own name as the gate saw it, which is the
+/// same string shape `core/whdload::analyse`'s `is_inside` compares against
+/// (`/`-separated, relative to the archive root) — normalised for `\` here
+/// since a Windows-built archive can use either.
+fn refused_entry_inside_pack(outcome: &ExtractOutcome, root: &str) -> Option<String> {
+    outcome
+        .extracted
+        .iter()
+        .filter(|entry| entry.skipped && !entry.is_dir)
+        .find(|entry| {
+            let normalized = entry.source_path.replace('\\', "/");
+            root.is_empty() || normalized == root || normalized.starts_with(&format!("{root}/"))
+        })
+        .map(|entry| entry.source_path.clone())
 }
 
 /// `safe_join`, with the entry name that failed folded into the error — the
@@ -219,19 +294,14 @@ fn walk_entries(base: &Path, relative: &str, depth: usize) -> CoreResult<Vec<Ent
 /// the card that looks placed but is missing everything below the cut, so
 /// this refuses instead.
 fn copy_tree(from: &Path, to: &Path, depth: usize) -> CoreResult<u64> {
-    copy_tree_excluding(from, to, None, depth)
+    copy_tree_excluding(from, to, &[], depth)
 }
 
-/// `copy_tree`, but a single path under `from` — the icon file that lives
-/// beside a wrapper-less WHDLoad pack's drawer, when the drawer *is* `from`
-/// — is left out of the copy rather than swept in with everything else
-/// (§82: that file is placed beside the drawer separately, never inside it).
-fn copy_tree_excluding(
-    from: &Path,
-    to: &Path,
-    skip: Option<&Path>,
-    depth: usize,
-) -> CoreResult<u64> {
+/// `copy_tree`, but any path under `from` named in `skip` is left out of the
+/// copy rather than swept in with everything else — the icon file beside a
+/// wrapper-less WHDLoad pack's drawer (§82: placed separately, never inside
+/// it), and anything `core::whdload::analyse` marked outside the pack.
+fn copy_tree_excluding(from: &Path, to: &Path, skip: &[PathBuf], depth: usize) -> CoreResult<u64> {
     if depth >= MAX_SCAN_DEPTH {
         return Err(CoreError::InvalidInput(format!(
             "'{}' is nested deeper than ART will copy (limit {MAX_SCAN_DEPTH})",
@@ -243,7 +313,7 @@ fn copy_tree_excluding(
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
         let source = entry.path();
-        if Some(source.as_path()) == skip {
+        if skip.iter().any(|p| p == &source) {
             continue;
         }
         if std::fs::symlink_metadata(&source)
@@ -811,6 +881,207 @@ mod tests {
         let _ = apply(&plan, &NoProgress);
         assert!(!dir.join("escaped.txt").exists());
         assert!(!std::env::temp_dir().join("escaped.txt").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A hostile entry inside the drawer refuses the whole pack, not just
+    /// that entry.** The traversal attempt is refused by `safe_join` during
+    /// extraction — same as the test above — but here the *rest* of the
+    /// entry's name still names a path inside the pack's own drawer, so a
+    /// version of this code that only looked at what landed in `scratch`
+    /// would place a `Turrican` drawer missing whatever that entry was and
+    /// call it a success. It must not.
+    #[test]
+    fn a_refused_entry_inside_the_drawer_blocks_the_whole_pack() {
+        let dir = scratch("hostile-inside");
+        let root = dir.join("staging");
+        let archive = dir.join("Turrican.zip");
+        {
+            let file = std::fs::File::create(&archive).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            for name in ["Turrican/Turrican.slave", "Turrican/../../escaped.txt"] {
+                zip.start_file(name, options).unwrap();
+                std::io::Write::write_all(&mut zip, b"x").unwrap();
+            }
+            zip.finish().unwrap();
+        }
+
+        let plan = plan_of(
+            &root,
+            vec![LayoutItem {
+                source: archive,
+                kind: ItemKind::WhdloadArchive {
+                    name: "Turrican".into(),
+                },
+                destination: "Games/Turrican".into(),
+                placement: Placement::UnpackWhdload,
+                bytes: 2,
+            }],
+        );
+
+        let err = apply(&plan, &NoProgress).unwrap_err();
+        assert!(err.to_string().contains("incomplete"), "{err}");
+        let games = root.join("Games");
+        assert!(
+            !games.join("Turrican").exists(),
+            "a pack missing an entry must not be reported as placed"
+        );
+        assert!(!dir.join("escaped.txt").exists());
+        no_leftover_scratch_directory(&games);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **An uninstalled source pack is refused, not placed as a game.**
+    /// `commands/whdload.rs` already refuses this shape for its HDF install
+    /// path (ART cannot run an Amiga `Install` script); this is the same
+    /// refusal on the layout path, so the two do not disagree about the same
+    /// archive.
+    #[test]
+    fn an_archive_needing_an_installer_is_refused_not_placed_as_a_game() {
+        let dir = scratch("needs-installer");
+        let root = dir.join("staging");
+        let archive = dir.join("Game.zip");
+        {
+            let file = std::fs::File::create(&archive).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            for (name, body) in [
+                ("Game/Game.slave", &b"slave"[..]),
+                ("Game/Install", &b"script"[..]),
+            ] {
+                zip.start_file(name, options).unwrap();
+                std::io::Write::write_all(&mut zip, body).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+
+        let plan = plan_of(
+            &root,
+            vec![LayoutItem {
+                source: archive.clone(),
+                kind: ItemKind::WhdloadArchive {
+                    name: "Game".into(),
+                },
+                destination: "Games/Game".into(),
+                placement: Placement::UnpackWhdload,
+                bytes: 11,
+            }],
+        );
+
+        let err = apply(&plan, &NoProgress).unwrap_err();
+        assert!(err.to_string().contains("Install"), "{err}");
+        let games = root.join("Games");
+        assert!(
+            !games.join("Game").exists(),
+            "a source pack with no game installed must not be placed"
+        );
+        assert!(archive.exists(), "the archive is never consumed");
+        no_leftover_scratch_directory(&games);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A cut-short extraction is refused, never placed as a partial
+    /// success.** More entries than `core::archive::extract::MAX_ENTRIES`
+    /// aborts the whole extraction (nothing survives phase 1), the same cap
+    /// exercised in `core/archive/extract.rs`'s own tests — the discarded
+    /// `ExtractOutcome` this test guards against was the bug: before this
+    /// fix, `apply.rs` never looked at `aborted` at all.
+    #[test]
+    fn an_aborted_extraction_is_refused_not_placed_as_a_success() {
+        let dir = scratch("aborted");
+        let root = dir.join("staging");
+        let archive = dir.join("Big.zip");
+        {
+            let file = std::fs::File::create(&archive).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            for i in 0..(crate::core::archive::extract::MAX_ENTRIES + 1) {
+                zip.start_file(format!("f{i}"), options).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+
+        let plan = plan_of(
+            &root,
+            vec![LayoutItem {
+                source: archive,
+                kind: ItemKind::WhdloadArchive { name: "Big".into() },
+                destination: "Games/Big".into(),
+                placement: Placement::UnpackWhdload,
+                bytes: 0,
+            }],
+        );
+
+        let err = apply(&plan, &NoProgress).unwrap_err();
+        assert_eq!(err.code(), "ART-SAFETY-REFUSED", "{err}");
+        let games = root.join("Games");
+        assert!(
+            !games.join("Big").exists(),
+            "an aborted extraction must not be reported as placed"
+        );
+        no_leftover_scratch_directory(&games);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **The wrapped and wrapper-less shapes drop the same kind of file the
+    /// same way.** A file `analyse` marks `outside` the pack never lands
+    /// anywhere in the staging tree — not inside the drawer, not beside it —
+    /// because both branches now exclude from the one field rather than the
+    /// wrapped case relying on a directory boundary that happens to also
+    /// exclude it.
+    #[test]
+    fn a_file_outside_the_pack_is_dropped_rather_than_landing_in_the_drawer() {
+        let dir = scratch("outside");
+        let root = dir.join("staging");
+        let archive = dir.join("Turrican.zip");
+        {
+            let file = std::fs::File::create(&archive).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            for (name, body) in [
+                ("Turrican/Turrican.slave", &b"slave"[..]),
+                ("Turrican.info", &b"icon"[..]),
+                ("Turrican.readme", &b"not part of the pack"[..]),
+            ] {
+                zip.start_file(name, options).unwrap();
+                std::io::Write::write_all(&mut zip, body).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+
+        let plan = plan_of(
+            &root,
+            vec![LayoutItem {
+                source: archive,
+                kind: ItemKind::WhdloadArchive {
+                    name: "Turrican".into(),
+                },
+                destination: "Games/Turrican".into(),
+                placement: Placement::UnpackWhdload,
+                bytes: 25,
+            }],
+        );
+
+        apply(&plan, &NoProgress).unwrap();
+
+        let games = root.join("Games");
+        assert!(
+            !games.join("Turrican").join("Turrican.readme").exists(),
+            "not part of the pack, so not inside the drawer"
+        );
+        assert!(
+            !games.join("Turrican.readme").exists(),
+            "the pack is what the user asked for — left out, not placed beside it either"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

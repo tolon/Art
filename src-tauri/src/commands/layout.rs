@@ -16,7 +16,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::core::layout::apply::apply;
 use crate::core::layout::policy::Policy;
-use crate::core::layout::{plan, LayoutPlan};
+use crate::core::layout::{collisions_in, plan, Collision, LayoutPlan};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::error::AppResult;
 
@@ -34,6 +34,20 @@ pub struct LayoutRequest {
 #[tauri::command]
 pub fn layout_plan(request: LayoutRequest) -> AppResult<LayoutPlan> {
     Ok(plan(&request.root, &request.paths, &request.policy)?)
+}
+
+/// Recompute collisions for `plan`'s **current** destinations against disk.
+///
+/// Not a replan: no walking, no classifying, no policy — exactly the check
+/// `plan()` runs at the end (`core::layout::collisions_in`), re-asked after
+/// the screen retargets a row. `retarget` (`src/lib/layout.ts`) can only
+/// recompute the collisions *within* the plan; whether a new destination
+/// already exists on disk is a fact only this command has looked at, so the
+/// screen calls it after every retarget rather than blocking Apply on
+/// staleness it cannot itself resolve.
+#[tauri::command]
+pub fn layout_recheck(plan: LayoutPlan) -> AppResult<Vec<Collision>> {
+    Ok(collisions_in(&plan.root, &plan.items))
 }
 
 pub const LAYOUT_EVENT: &str = "layout-result";
@@ -115,5 +129,40 @@ mod tests {
             request.policy.whdload,
             crate::core::layout::policy::WhdloadPlacement::Unpack
         );
+    }
+
+    /// `layout_recheck` answers with a fresh on-disk collision, without
+    /// touching anything the caller did not ask about — the whole point of
+    /// re-asking rather than replanning.
+    #[test]
+    fn layout_recheck_finds_a_destination_that_now_exists_on_disk() {
+        use crate::core::layout::{ItemKind, LayoutItem, Placement};
+
+        let dir = std::env::temp_dir().join(format!("art-layout-recheck-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.join("staging");
+        std::fs::create_dir_all(root.join("Floppies")).unwrap();
+        std::fs::write(root.join("Floppies").join("Disk.adf"), b"already here").unwrap();
+
+        let plan = LayoutPlan {
+            root: root.clone(),
+            items: vec![LayoutItem {
+                source: dir.join("Disk.adf"),
+                kind: ItemKind::FloppyImage,
+                destination: "Floppies/Disk.adf".into(),
+                placement: Placement::CopyFile,
+                bytes: 10,
+            }],
+            refused: Vec::new(),
+            collisions: Vec::new(),
+            bytes: 10,
+        };
+
+        let collisions = layout_recheck(plan).unwrap();
+
+        assert_eq!(collisions.len(), 1, "{collisions:?}");
+        assert_eq!(collisions[0].destination, "Floppies/Disk.adf");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

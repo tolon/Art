@@ -47,6 +47,23 @@ describe("retarget", () => {
   it("leaves the plan alone when no row was chosen", () => {
     expect(retarget(PLAN, [], "Demos")).toEqual(PLAN);
   });
+
+  it("drops a single-source on-disk collision, which is why the screen must re-ask", () => {
+    // A single-source collision (one row, one source) only ever comes from
+    // the engine having found that destination already on disk — `retarget`
+    // itself never produces one, since a collision it computes always has
+    // two or more sources. Retargeting a *different*, unrelated row must not
+    // silently make this collision vanish from the plan the screen trusts;
+    // it is not resolved, ART simply has not asked the engine again yet.
+    const plan: LayoutPlan = {
+      ...PLAN,
+      collisions: [{ destination: "Unsorted/Mega.lha", sources: ["E:\\a\\Mega.lha"] }],
+    };
+
+    const next = retarget(plan, [0], "Floppies");
+
+    expect(next.collisions).toEqual([]);
+  });
 });
 
 describe("layoutBlocker", () => {

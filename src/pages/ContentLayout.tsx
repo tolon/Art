@@ -7,18 +7,18 @@
 // `retarget`. That editable table is the feature; a cleverer rule engine is
 // not what this screen is trying to be.
 //
-// **Collisions and staleness.** `retarget` recomputes only the collisions
+// **Collisions after a retarget.** `retarget` recomputes only the collisions
 // *within* the plan — a destination the staging tree already holds is a fact
-// about the disk, and only the engine (`layoutPlan`) has looked at the disk.
-// So the moment a row is retargeted, whatever on-disk collisions the last
-// preview found are no longer trustworthy: they came from `layoutPlan`, and
-// `retarget` did not re-ask it. Re-running `layoutPlan` here would fix that,
-// but it would also throw away every edit the user just made — it recomputes
-// the whole tree from the policy, not from what is on screen, which is
-// exactly the "opposite of preload" note in `src/lib/layout.ts`. So instead:
-// a retarget marks the on-disk collision picture stale, Apply is blocked
-// while it is, and the screen says so — nothing about it just quietly
-// disappears from the badge.
+// about the disk, and only the engine has looked at the disk. Re-running
+// `layoutPlan` here would answer that, but it would also throw away every
+// edit the user just made — it recomputes the whole tree from the policy, not
+// from what is on screen, which is exactly the "opposite of preload" note in
+// `src/lib/layout.ts`. So instead: every retarget is followed by
+// `layoutRecheck`, which re-asks the engine for collisions against the plan's
+// *current* destinations without walking or reclassifying anything, and its
+// answer replaces `plan.collisions` outright. Apply is blocked by whatever
+// that answer says and nothing else — there is no separate "stale" state to
+// fall out of step with it.
 //
 // **The staging seam.** This writes to a folder on the PC, never to a card —
 // a real PiStorm card is PFS3 and ART cannot write PFS3, so the OS Builder's
@@ -36,6 +36,7 @@ import {
   layoutApply,
   layoutBlocker,
   layoutPlan,
+  layoutRecheck,
   onLayoutResult,
   refusalPhrase,
   retarget,
@@ -95,10 +96,6 @@ export function ContentLayout() {
    * the user changes it" into a hazard rather than a comfort.
    */
   const [checked, setChecked] = useState<Set<number>>(new Set());
-  /** See the file header: set on every retarget, cleared on every fresh
-   *  preview. While true, Apply is blocked regardless of what `plan.collisions`
-   *  currently says. */
-  const [stale, setStale] = useState(false);
   const [drawerChoice, setDrawerChoice] = useState<string>(DEFAULT_POLICY.games);
   const [customDrawer, setCustomDrawer] = useState("");
   const [busy, setBusy] = useState(false);
@@ -118,14 +115,13 @@ export function ContentLayout() {
 
   // A plan describes the request that produced it. Change any of the request
   // and the plan on screen stops being true — so it goes, and the selection
-  // and staleness go with it.
+  // goes with it.
   const fingerprint = JSON.stringify(request);
   const lastPlanned = useRef<string | null>(null);
   useEffect(() => {
     if (lastPlanned.current !== null && lastPlanned.current !== fingerprint) {
       setPlan(null);
       setChecked(new Set());
-      setStale(false);
     }
   }, [fingerprint]);
 
@@ -137,7 +133,6 @@ export function ContentLayout() {
       // It has been laid out. A second run needs a second preview.
       setPlan(null);
       setChecked(new Set());
-      setStale(false);
     }).then((fn) => {
       unlisten = fn;
     });
@@ -183,7 +178,6 @@ export function ContentLayout() {
       const made = await layoutPlan(request);
       setPlan(made);
       setChecked(new Set());
-      setStale(false);
       lastPlanned.current = fingerprint;
     } catch (e) {
       setPlan(null);
@@ -231,18 +225,30 @@ export function ContentLayout() {
     return customDrawer.trim().replace(/^\/+/, "").replace(/\/+$/, "");
   }
 
-  function moveChecked() {
+  async function moveChecked() {
     if (!plan || checked.size === 0) return;
     const target = drawerChoice === CUSTOM_DRAWER ? normalizedCustomDrawer() : drawerChoice;
     if (!target) return;
-    setPlan(retarget(plan, [...checked], target));
+    const retargeted = retarget(plan, [...checked], target);
+    setPlan(retargeted);
     setChecked(new Set());
-    setStale(true);
+    // `retarget` only knows about collisions within the plan; whether either
+    // new destination already exists on disk is a fact only the engine has
+    // looked at, so it is re-asked here rather than left for a "stale" flag
+    // to gate Apply on. See `retarget`'s doc comment in `src/lib/layout.ts`.
+    setBusy(true);
+    setError(null);
+    try {
+      const collisions = await layoutRecheck(retargeted);
+      setPlan((current) => (current ? { ...current, collisions } : current));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
-  const blocker: Phrase | null =
-    layoutBlocker({ root, paths, plan }) ??
-    (stale ? { key: "layout.blocked.staleAfterRetarget" } : null);
+  const blocker: Phrase | null = layoutBlocker({ root, paths, plan });
 
   const moveDisabled =
     checked.size === 0 || (drawerChoice === CUSTOM_DRAWER && !normalizedCustomDrawer());
@@ -386,7 +392,7 @@ export function ContentLayout() {
                 )}
                 <button
                   className="btn"
-                  onClick={moveChecked}
+                  onClick={() => void moveChecked()}
                   disabled={moveDisabled}
                   title={moveTitle}
                 >

@@ -19,6 +19,7 @@ use crate::core::detect::{detect, FormatCategory};
 use crate::core::error::CoreResult;
 use crate::core::layout::policy::{drawer_for, Policy, WhdloadPlacement};
 use crate::core::layout::scan::{gather, Found};
+use crate::core::security::path::safe_join;
 
 /// What ART can justify saying about one thing on disk.
 ///
@@ -48,6 +49,15 @@ pub enum ItemKind {
     /// Belongs on the FAT32 boot partition. Refused here.
     Rom,
     /// No business on an Amiga volume at all. Refused here.
+    ///
+    /// Serialises as `"commodore8-bit"` — serde's `kebab-case` splits before
+    /// `Bit` but not before the digit, so `Commodore8Bit` becomes
+    /// `commodore8-bit` rather than `commodore-8-bit`. This is deliberately
+    /// **not** the same string `FormatCategory::Commodore8Bit` uses
+    /// (`"commodore-8bit"`, from an explicit `#[serde(rename = …)]` in
+    /// `core/detect.rs`): the two enums are independent wire formats, each
+    /// stable in its own right, and neither is required to spell the word
+    /// the way the other does.
     Commodore8Bit,
 }
 
@@ -200,7 +210,12 @@ pub fn plan(root: &Path, paths: &[PathBuf], policy: &Policy) -> CoreResult<Layou
     }
 
     let collisions = collisions_in(root, &items);
-    let bytes = items.iter().map(|item| item.bytes).sum();
+    // Folded with a checked running total, never a plain `.sum()`, for the
+    // same reason `declared_bytes` below is: an item's `bytes` can come from
+    // an archive's own declared size, which is an adversarial claim.
+    let bytes = items
+        .iter()
+        .fold(0u64, |total, item| total.saturating_add(item.bytes));
 
     Ok(LayoutPlan {
         root: root.to_path_buf(),
@@ -229,7 +244,11 @@ fn declared_bytes(path: &Path) -> Option<u64> {
 }
 
 /// Every destination two items want, and every one the tree already holds.
-fn collisions_in(root: &Path, items: &[LayoutItem]) -> Vec<Collision> {
+///
+/// `pub` so `commands/layout.rs::layout_recheck` can re-ask this exact
+/// question after the user retargets a row on screen, without re-walking or
+/// re-classifying anything — see that command's own doc comment.
+pub fn collisions_in(root: &Path, items: &[LayoutItem]) -> Vec<Collision> {
     let mut by_destination: BTreeMap<&str, Vec<PathBuf>> = BTreeMap::new();
     for item in items {
         by_destination
@@ -241,8 +260,16 @@ fn collisions_in(root: &Path, items: &[LayoutItem]) -> Vec<Collision> {
     by_destination
         .into_iter()
         .filter_map(|(destination, sources)| {
-            let on_disk = root.join(destination.replace('/', std::path::MAIN_SEPARATOR_STR));
-            if sources.len() > 1 || on_disk.exists() {
+            // Untrusted like an archive entry name: the destination can be
+            // typed by hand (the retarget drawer box), so this goes through
+            // the same gate `apply.rs` uses rather than a bare `root.join`.
+            // A destination `safe_join` refuses is not reported as a
+            // collision here — `apply()` will refuse it on its own, with a
+            // clearer reason than "this name is taken".
+            let on_disk = safe_join(root, destination)
+                .map(|p| p.exists())
+                .unwrap_or(false);
+            if sources.len() > 1 || on_disk {
                 Some(Collision {
                     destination: destination.to_string(),
                     sources,

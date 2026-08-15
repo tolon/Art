@@ -118,6 +118,18 @@ export async function layoutPlan(request: LayoutRequest): Promise<LayoutPlan> {
 }
 
 /**
+ * Ask the engine which of `plan`'s **current** destinations collide, on disk
+ * or with each other. Not a replan — no walking, no classifying, no policy —
+ * just `core::layout::collisions_in` re-run over the plan exactly as it
+ * stands, which is the one question `retarget` cannot answer on its own: it
+ * only knows the plan in front of it, and whether a new destination already
+ * exists on disk is a fact only the engine has looked at.
+ */
+export async function layoutRecheck(plan: LayoutPlan): Promise<Collision[]> {
+  return invoke<Collision[]>("layout_recheck", { plan });
+}
+
+/**
  * Build the staging tree. Returns a job id (§54).
  *
  * Takes the plan as the user edited it — see the module note above for why
@@ -139,7 +151,18 @@ export async function onLayoutResult(
 // What the screen holds, and the rules over it
 // ---------------------------------------------------------------------------
 
-/** Move the chosen rows into `drawer`, keeping each one's own leaf name. */
+/**
+ * Move the chosen rows into `drawer`, keeping each one's own leaf name.
+ *
+ * The collisions this leaves on the plan are **only the ones inside it** —
+ * two rows now wanting the same name. Whether either new destination already
+ * exists on disk is a fact only the engine has looked at, and `retarget`
+ * cannot answer it from the plan alone: the caller must follow this with
+ * `layoutRecheck` and fold its answer back in before trusting the plan's
+ * `collisions` again. `ContentLayout.tsx` does exactly that after every
+ * retarget, which is why there is no "stale" flag on the screen — the
+ * question `retarget` cannot answer here gets asked, not deferred.
+ */
 export function retarget(plan: LayoutPlan, indices: number[], drawer: string): LayoutPlan {
   if (indices.length === 0) return plan;
   const chosen = new Set(indices);
@@ -152,12 +175,13 @@ export function retarget(plan: LayoutPlan, indices: number[], drawer: string): L
 }
 
 /**
- * Destinations two rows want.
+ * Destinations two rows want, **within this plan only**.
  *
- * **Only the ones inside this plan.** A destination the staging tree already
- * holds is a fact about the disk, and only the engine has looked at the disk —
- * so those survive from the last `layoutPlan` and are recomputed when the
- * user previews again.
+ * A destination the staging tree already holds on disk is not decided here —
+ * only the engine has looked at the disk, so an on-disk collision from the
+ * last `layoutPlan` (or `layoutRecheck`) does **not** survive a `retarget`
+ * that never touched it. That is exactly why `retarget` cannot be the last
+ * word on `plan.collisions`: see this function's callers.
  */
 function collisionsIn(items: LayoutItem[]): Collision[] {
   const by = new Map<string, string[]>();
