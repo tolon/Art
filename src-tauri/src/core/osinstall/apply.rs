@@ -153,6 +153,20 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
         )));
     }
 
+    // A refused plan is not a smaller plan — `plan()` empties `items` and
+    // `media_paths` the moment any refusal exists (see its own module doc),
+    // so building one anyway would create `root` and write a
+    // `distribution.json` with empty `files` and `built_from`: a manifest
+    // asserting a complete, empty tree. That is requirement 5's failure —
+    // a manifest lying about what it describes — arriving through a
+    // different door, so it is refused here by the same rule.
+    if !plan.refusals.is_empty() {
+        return Err(CoreError::InvalidInput(format!(
+            "this plan has {} unresolved refusal(s) and cannot be built",
+            plan.refusals.len()
+        )));
+    }
+
     // Every medium the plan resolved, opened once — read-only, per
     // `source.rs`'s own module doc — and hashed whole from its raw bytes, so
     // `distribution.json` can say exactly which physical image each
@@ -226,9 +240,12 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
 
         // Only when there is something worth recording — see `sidecar_for`'s
         // own doc comment. Never itself copied as a file: it is written
-        // beside `target`, under a name no `PlanItem::to` will ever collide
-        // with (`uaem::sidecar_path` appends `.uaem`, never replaces the
-        // extension).
+        // beside `target`, under a name `uaem::sidecar_path` builds by
+        // appending `.uaem` rather than replacing the extension. A medium
+        // that genuinely carried a file literally called `X.uaem` next to
+        // `X` would still collide with `X`'s own sidecar — vanishingly
+        // unlikely on real Amiga media, but the code does not rule it out,
+        // so this comment shouldn't claim more than it does.
         if let Some(sidecar) = sidecar_for(entry.protection, entry.date, &entry.comment) {
             crate::core::safety::atomic::atomic_write(
                 &sidecar_path(&target),
@@ -384,17 +401,15 @@ mod tests {
             .unwrap();
         assert_eq!(record.component, "modules-a1200");
         assert_eq!(record.media, "ModulesA1200_3.2");
-        assert_eq!(record.sha256.len(), 64);
-        // Decision 2: the real size written, never the plan's own estimate —
-        // `planned()` deliberately gives this item a wrong `bytes: 3`
-        // matching the true length by coincidence for `LoadModule`, so this
-        // pins it against `C/Other`'s deliberately wrong estimate instead.
-        let other = manifest.files.iter().find(|f| f.path == "C/Other").unwrap();
-        assert_eq!(
-            other.bytes, 4,
-            "b\"more\" is 4 bytes; the plan item claims 4 too by coincidence — \
-             see the mismatch test below for the case that actually falsifies this"
-        );
+        // The actual digest of the known content, not merely its length — a
+        // hash of the path, the sidecar text, or a placeholder string would
+        // also happen to be 64 hex characters long. `FileRecord::bytes` is
+        // covered on its own by `the_manifest_records_the_real_size_written_
+        // not_the_plans_estimate` below, which is the one that can actually
+        // fail for a wrong size (`plan.items[0].bytes` here is 3, which
+        // happens to already be correct, so asserting it here again would
+        // not prove anything that test doesn't already prove better).
+        assert_eq!(record.sha256, hex_sha256(b"cmd"));
 
         assert_eq!(manifest.release, "AmigaOS 3.2");
         let media_record = manifest
@@ -407,6 +422,85 @@ mod tests {
             hex_sha256(&raw)
         };
         assert_eq!(media_record.sha256, expected_media_hash);
+    }
+
+    /// The `plan()` → `apply()` seam, exercised for real. Every other test
+    /// in this module hand-builds an `InstallPlan` (see `planned()`'s own
+    /// doc comment for why), and every one of those hand-built plans sets
+    /// `is_dir: false` throughout — so none of them ever walked `apply`'s
+    /// directory branch (`create_dir_all` + `outcome.directories += 1`) at
+    /// all. That branch is the one a real plan hits *first*, on almost
+    /// every component: `workbench-base`'s own rules are all `Subtree`, and
+    /// `plan()` always emits a `Subtree` rule's own root directory before
+    /// anything inside it (see `plan.rs`'s comment: "the subtree's own
+    /// root, so an empty drawer still gets created"). This test runs the
+    /// real `plan()` — via `fixtures::planned_with`, the same helper
+    /// `plan.rs`'s own tests use — over the shipped recipe's
+    /// `workbench-base` component, and checks the two things nothing else
+    /// in this module checked: `ApplyOutcome` itself, and that the manifest
+    /// agrees with it.
+    #[test]
+    fn a_real_plan_builds_a_tree_that_matches_the_plan_including_its_directories() {
+        let (plan, dir) = fixtures::planned_with(&["workbench-base"], &["Workbench3.2"], Some(47));
+        assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
+        let root = dir.join("dist");
+
+        let outcome = apply(&plan, &root, &NoProgress).unwrap();
+
+        let expected_files = plan.items.iter().filter(|i| !i.is_dir).count() as u64;
+        let expected_dirs = plan.items.iter().filter(|i| i.is_dir).count() as u64;
+        assert_eq!(outcome.files, expected_files);
+        assert_eq!(outcome.directories, expected_dirs);
+        assert!(
+            outcome.directories > 0,
+            "workbench-base's rules are all Subtree — this plan must have \
+             produced at least one directory item, or this test is not \
+             exercising the branch it claims to"
+        );
+
+        // Every item lands, and as the right kind — proves the directory
+        // branch actually created directories rather than, say, silently
+        // treating every item as a file.
+        for item in &plan.items {
+            let target = root.join(&item.to);
+            assert!(target.exists(), "'{}' was never created", item.to);
+            assert_eq!(
+                target.is_dir(),
+                item.is_dir,
+                "'{}' landed as the wrong kind",
+                item.to
+            );
+        }
+
+        let manifest: DistributionManifest =
+            serde_json::from_str(&std::fs::read_to_string(root.join(MANIFEST_FILE_NAME)).unwrap())
+                .unwrap();
+        assert_eq!(
+            manifest.files.len() as u64,
+            outcome.files,
+            "the manifest must name exactly the files ApplyOutcome counted"
+        );
+    }
+
+    /// Requirement 5's failure arriving through a different door: a plan
+    /// `plan()` itself refused (empty `items`/`media_paths`, per its own
+    /// module doc) must not be silently "built" into an empty tree with a
+    /// manifest that claims completeness. `extras`'s media is deliberately
+    /// absent, so `plan()` returns a real `MediaMissing` refusal.
+    #[test]
+    fn a_plan_with_refusals_is_refused_not_silently_built_empty() {
+        let (plan, dir) = fixtures::planned_with(&["extras"], &["Workbench3.2"], Some(47));
+        assert!(
+            !plan.refusals.is_empty(),
+            "sanity: this plan should have refused (extras's media is absent)"
+        );
+        let root = dir.join("dist");
+
+        assert!(apply(&plan, &root, &NoProgress).is_err());
+        assert!(
+            !root.exists(),
+            "nothing is built from a plan that never resolved"
+        );
     }
 
     /// The negative half of "only when there is something worth recording":
