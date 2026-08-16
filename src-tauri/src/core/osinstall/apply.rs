@@ -703,6 +703,85 @@ mod tests {
         );
     }
 
+    /// The coordinator's review, Critical 1, closed end to end. Before this
+    /// fix, exclusion was applied by editing the `InstallPlan` *object* on
+    /// the frontend — which left `plan.media_paths` untouched, so a
+    /// component the user excluded was still opened by `apply` and still
+    /// recorded in `distribution.json`'s `built_from`, a manifest whose own
+    /// doc comment calls it "the only record… because the media itself is
+    /// gone by then". Now `InstallRequest::excluded` is subtracted inside
+    /// `resolve_components_on`, so `plan()` itself never adds the excluded
+    /// component's media to `media_paths` in the first place.
+    ///
+    /// Proved here through the real `plan()` → `apply()` seam, not by
+    /// inspecting the plan alone: `ModulesA1200_3.2`'s media is built as a
+    /// normal, valid disk and then **deleted from disk** before `apply`
+    /// runs. Under the old, client-filtered shape this would have failed
+    /// `apply` outright — reading a file that just moved is exactly the
+    /// review's "a disk that moved between plan and build fails a job over
+    /// a component the user turned off". Succeeding here proves `apply`
+    /// never reached for it at all.
+    #[test]
+    fn excluding_a_component_means_apply_never_opens_or_records_its_media() {
+        let dir = fixtures::scratch("apply-excluded-media-untouched");
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+
+        let recipe = crate::core::osinstall::recipe::amigaos_32().unwrap();
+        let wb = fixtures::entries_for(&recipe, "Workbench3.2");
+        let wb_refs: Vec<(&str, &[u8], u32)> = wb
+            .iter()
+            .map(|(path, bytes, protection)| (path.as_str(), bytes.as_slice(), *protection))
+            .collect();
+        fixtures::media(&folder, "Workbench3.2", "wb.adf", &wb_refs);
+
+        let modules = fixtures::entries_for(&recipe, "ModulesA1200_3.2");
+        let modules_refs: Vec<(&str, &[u8], u32)> = modules
+            .iter()
+            .map(|(path, bytes, protection)| (path.as_str(), bytes.as_slice(), *protection))
+            .collect();
+        let modules_path =
+            fixtures::media(&folder, "ModulesA1200_3.2", "modules.adf", &modules_refs);
+
+        let request = crate::core::osinstall::plan::InstallRequest {
+            media_folder: folder,
+            rom: Some(fixtures::fake_rom(&dir, 40)), // pre-V47: the condition holds
+            chosen: vec!["workbench-base".to_string()],
+            excluded: vec!["modules-a1200".to_string()],
+            destination: dir.join("dist"),
+        };
+        let built_plan = crate::core::osinstall::plan::plan(&request, &recipe).unwrap();
+        assert!(built_plan.refusals.is_empty(), "{:?}", built_plan.refusals);
+        assert!(!built_plan
+            .components_on
+            .iter()
+            .any(|c| c == "modules-a1200"));
+        assert!(
+            !built_plan.media_paths.contains_key("ModulesA1200_3.2"),
+            "the excluded component's media must never enter media_paths: {:?}",
+            built_plan.media_paths
+        );
+
+        std::fs::remove_file(&modules_path).unwrap();
+
+        let root = dir.join("dist");
+        let outcome = apply(&built_plan, &root, &NoProgress).unwrap();
+        assert!(outcome.files > 0);
+
+        let manifest: DistributionManifest =
+            serde_json::from_str(&std::fs::read_to_string(root.join(MANIFEST_FILE_NAME)).unwrap())
+                .unwrap();
+        assert!(
+            !manifest
+                .built_from
+                .iter()
+                .any(|m| m.volume_name == "ModulesA1200_3.2"),
+            "the excluded component's media must not be recorded as something \
+             this tree was built from: {:?}",
+            manifest.built_from
+        );
+    }
+
     /// Requirement 5's failure arriving through a different door: a plan
     /// `plan()` itself refused (empty `items`/`media_paths`, per its own
     /// module doc) must not be silently "built" into an empty tree with a

@@ -224,6 +224,19 @@ pub struct InstallRequest {
     /// condition-satisfied ones are added on top of this, not instead of
     /// it — see [`InstallPlan::components_on`].
     pub chosen: Vec<String>,
+    /// Condition-satisfied component ids the user has explicitly turned off,
+    /// despite the condition holding (spec requirement 2 — "turning Modules
+    /// off is a confirmation, not a refusal", never `required`'s to give).
+    /// Subtracted inside [`resolve_components_on`], **before** anything else
+    /// in `plan()` looks at `components_on` — media resolution, collision
+    /// detection and `media_paths` all skip an excluded component entirely,
+    /// so its media is never opened, never recorded in `media_paths` (and so
+    /// never in `apply()`'s manifest `built_from`), and never a source of a
+    /// `MediaMissing`/`MediaAmbiguous` refusal. A component the caller both
+    /// `chose` and `excluded` is off — exclusion always wins over `chosen`,
+    /// the same way a satisfied `Condition` always wins over neither; only
+    /// `required` cannot be excluded.
+    pub excluded: Vec<String>,
     pub destination: PathBuf,
 }
 
@@ -262,17 +275,33 @@ fn destination_for(to: &str, relative: &str) -> String {
 /// reported at most once, however many conditional components share the
 /// same unreadable ROM, so the refusal list names one problem instead of
 /// repeating it.
+///
+/// `excluded` is subtracted **before** a conditional component's own
+/// [`Condition`] is even evaluated, not just before it is added to the
+/// result: a component the caller excluded is off regardless of `chosen` or
+/// the condition, and skipping the condition check for it means an excluded
+/// component's own unreadable ROM cannot report [`RefusalReason::RomUnknown`]
+/// for a component the caller does not want anyway (requirement 2's "turning
+/// Modules off is a confirmation, not a refusal" would otherwise still be a
+/// refusal — just a politer one — the moment the paired ROM could not be
+/// identified). `required` cannot be excluded; the check below is only
+/// reached for a component that is not.
 fn resolve_components_on(
     recipe: &Recipe,
     chosen: &[String],
+    excluded: &[String],
     rom_facts: Option<&RomFacts>,
     refusals: &mut Vec<RefusalReason>,
 ) -> Vec<String> {
     let chosen: HashSet<&str> = chosen.iter().map(String::as_str).collect();
+    let excluded: HashSet<&str> = excluded.iter().map(String::as_str).collect();
     let mut rom_unknown_reported = refusals.contains(&RefusalReason::RomUnknown);
     let mut on = Vec::new();
 
     for component in &recipe.components {
+        if !component.required && excluded.contains(component.id.as_str()) {
+            continue;
+        }
         let mut is_on = component.required || chosen.contains(component.id.as_str());
         if let Some(condition) = &component.condition {
             match condition_holds(condition, rom_facts) {
@@ -406,8 +435,13 @@ pub fn plan(request: &InstallRequest, recipe: &Recipe) -> CoreResult<InstallPlan
         None => None,
     };
 
-    let components_on =
-        resolve_components_on(recipe, &request.chosen, rom_facts.as_ref(), &mut refusals);
+    let components_on = resolve_components_on(
+        recipe,
+        &request.chosen,
+        &request.excluded,
+        rom_facts.as_ref(),
+        &mut refusals,
+    );
     refusals.extend(detect_exclusive_group_conflicts(recipe, &components_on));
 
     let found = find_media(&request.media_folder)?;
@@ -715,6 +749,7 @@ mod plan_tests {
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
             chosen: vec!["extras".to_string()],
             destination: dir.join("dist"),
+            excluded: Vec::new(),
         };
         plan(&request, &recipe).unwrap()
     }
@@ -786,6 +821,7 @@ mod plan_tests {
             rom: None,
             chosen: vec!["subtree-owner".to_string(), "file-writer".to_string()],
             destination: dir.join("dist"),
+            excluded: Vec::new(),
         };
         plan(&request, &recipe).unwrap()
     }
@@ -827,6 +863,7 @@ mod plan_tests {
             rom: None,
             chosen: vec!["a".to_string()],
             destination: dir.join("dist"),
+            excluded: Vec::new(),
         };
         plan(&request, &recipe).unwrap()
     }
@@ -863,6 +900,7 @@ mod plan_tests {
             rom: None,
             chosen: vec!["a".to_string()],
             destination: dir.join("dist"),
+            excluded: Vec::new(),
         };
         plan(&request, &recipe).unwrap()
     }
@@ -904,6 +942,7 @@ mod plan_tests {
             rom: None,
             chosen: vec!["a".to_string(), "b".to_string()],
             destination: dir.join("dist"),
+            excluded: Vec::new(),
         };
         plan(&request, &recipe).unwrap()
     }
@@ -967,6 +1006,7 @@ mod plan_tests {
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 40)),
             chosen: vec!["modules-a".to_string()],
             destination: dir.join("dist"),
+            excluded: Vec::new(),
         };
         plan(&request, &recipe).unwrap()
     }
@@ -1102,6 +1142,134 @@ mod plan_tests {
         assert!(plan.components_on.iter().any(|c| c == "modules-a1200"));
     }
 
+    // ---- `InstallRequest::excluded` (fix round: the coordinator's review
+    // of Task 13, Criticals 1 and 2) ----
+    //
+    // Requirement 2 ("turning Modules off is a confirmation, not a refusal")
+    // cannot be met by editing a `plan()` result after the fact: a
+    // condition-satisfied component with no media in the folder produces a
+    // `MediaMissing` refusal that empties `items`, and `osinstallBlocker`
+    // reads `refusals`, not `componentsOn` — so a client-side removal of the
+    // component's own items leaves the refusal standing and the whole
+    // install still blocked. `excluded` has to be subtracted here, inside
+    // `resolve_components_on`, before the media-resolution loop ever runs.
+
+    /// Critical 2, at the engine level. Without exclusion, a pre-V47 ROM and
+    /// no `ModulesA1200_3.2` in the folder is exactly the review's own
+    /// worked example: the confirmation says the system will not boot, and
+    /// the install is refused anyway. Excluding the component must make
+    /// that refusal not apply at all, not merely reword it.
+    #[test]
+    fn excluding_a_condition_satisfied_component_with_no_media_present_is_not_a_refusal() {
+        let unexcluded = plan_with_rom(&["workbench-base"], 40);
+        assert!(
+            unexcluded.refusals.iter().any(|r| matches!(
+                r,
+                RefusalReason::MediaMissing { component, .. } if component == "modules-a1200"
+            )),
+            "sanity: without exclusion this must be the ordinary MediaMissing \
+             case the review described, {:?}",
+            unexcluded.refusals
+        );
+
+        let dir = crate::core::osinstall::fixtures::scratch("plan-excluded-no-media");
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        let recipe = crate::core::osinstall::recipe::amigaos_32().unwrap();
+        let wb = crate::core::osinstall::fixtures::entries_for(&recipe, "Workbench3.2");
+        let wb_refs: Vec<(&str, &[u8], u32)> = wb
+            .iter()
+            .map(|(path, bytes, protection)| (path.as_str(), bytes.as_slice(), *protection))
+            .collect();
+        crate::core::osinstall::fixtures::media(&folder, "Workbench3.2", "wb.adf", &wb_refs);
+
+        let request = InstallRequest {
+            media_folder: folder,
+            rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 40)),
+            chosen: vec!["workbench-base".to_string()],
+            excluded: vec!["modules-a1200".to_string()],
+            destination: dir.join("dist"),
+        };
+        let excluded_plan = plan(&request, &recipe).unwrap();
+
+        assert!(
+            excluded_plan.refusals.is_empty(),
+            "{:?}",
+            excluded_plan.refusals
+        );
+        assert!(!excluded_plan
+            .components_on
+            .iter()
+            .any(|c| c == "modules-a1200"));
+        assert!(!excluded_plan
+            .items
+            .iter()
+            .any(|i| i.component == "modules-a1200"));
+        assert!(
+            !excluded_plan.media_paths.contains_key("ModulesA1200_3.2"),
+            "{:?}",
+            excluded_plan.media_paths
+        );
+    }
+
+    /// Exclusion wins over an explicit `chosen` entry for the same id. The
+    /// screen keeps the two mutually exclusive by construction, but the
+    /// engine must not depend on that: a request naming one component in
+    /// both `chosen` and `excluded` is off, not on.
+    #[test]
+    fn excluding_a_component_wins_over_it_also_being_chosen() {
+        let recipe = crate::core::osinstall::recipe::amigaos_32().unwrap();
+        let dir = crate::core::osinstall::fixtures::scratch("plan-excluded-over-chosen");
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        let wb = crate::core::osinstall::fixtures::entries_for(&recipe, "Workbench3.2");
+        let wb_refs: Vec<(&str, &[u8], u32)> = wb
+            .iter()
+            .map(|(path, bytes, protection)| (path.as_str(), bytes.as_slice(), *protection))
+            .collect();
+        crate::core::osinstall::fixtures::media(&folder, "Workbench3.2", "wb.adf", &wb_refs);
+
+        let request = InstallRequest {
+            media_folder: folder,
+            rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
+            chosen: vec!["workbench-base".to_string(), "extras".to_string()],
+            excluded: vec!["extras".to_string()],
+            destination: dir.join("dist"),
+        };
+        let result = plan(&request, &recipe).unwrap();
+
+        assert!(!result.components_on.iter().any(|c| c == "extras"));
+    }
+
+    /// `required` cannot be excluded — the frontend never offers the
+    /// control (the checkbox is disabled), but the engine is the one place
+    /// this actually has to hold, defensively, regardless of what a caller
+    /// sends.
+    #[test]
+    fn required_cannot_be_excluded() {
+        let recipe = crate::core::osinstall::recipe::amigaos_32().unwrap();
+        let dir = crate::core::osinstall::fixtures::scratch("plan-required-not-excludable");
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        let wb = crate::core::osinstall::fixtures::entries_for(&recipe, "Workbench3.2");
+        let wb_refs: Vec<(&str, &[u8], u32)> = wb
+            .iter()
+            .map(|(path, bytes, protection)| (path.as_str(), bytes.as_slice(), *protection))
+            .collect();
+        crate::core::osinstall::fixtures::media(&folder, "Workbench3.2", "wb.adf", &wb_refs);
+
+        let request = InstallRequest {
+            media_folder: folder,
+            rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
+            chosen: vec![],
+            excluded: vec!["workbench-base".to_string()],
+            destination: dir.join("dist"),
+        };
+        let result = plan(&request, &recipe).unwrap();
+
+        assert!(result.components_on.iter().any(|c| c == "workbench-base"));
+    }
+
     /// The coordinator's own hardware runs Kickstart 3.1 rev 40.68, so
     /// `major: 40` — Modules **on** — is the path that actually runs on a
     /// real machine, not a hypothetical branch. Every other test in this
@@ -1196,6 +1364,7 @@ mod plan_tests {
             rom: Some(bad_rom),
             chosen: vec!["workbench-base".to_string()],
             destination: dir.join("dist"),
+            excluded: Vec::new(),
         };
 
         let plan = plan(&request, &recipe).unwrap();
@@ -1230,6 +1399,7 @@ mod plan_tests {
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
             chosen: vec!["workbench-base".to_string()],
             destination: dir.join("dist"),
+            excluded: Vec::new(),
         };
         let plan = plan(&request, &recipe).unwrap();
 
@@ -1303,6 +1473,7 @@ mod plan_tests {
             // comment above.
             chosen: vec!["gamma".to_string(), "beta".to_string(), "alpha".to_string()],
             destination: dir.join("dist"),
+            excluded: Vec::new(),
         };
         plan(&request, &recipe).unwrap()
     }

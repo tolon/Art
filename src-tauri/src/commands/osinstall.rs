@@ -340,10 +340,12 @@ mod tests {
             "mediaFolder": "E:\\media",
             "rom": "E:\\kick.rom",
             "chosen": ["workbench-base", "extras"],
+            "excluded": ["modules-a1200"],
             "destination": "E:\\dist"
         }"#;
         let request: InstallRequest = serde_json::from_str(json).unwrap();
         assert_eq!(request.chosen.len(), 2);
+        assert_eq!(request.excluded, vec!["modules-a1200".to_string()]);
     }
 
     /// The wire in the other direction: the plan `osinstall_plan` hands the
@@ -427,6 +429,7 @@ mod tests {
             media_folder: missing.clone(),
             rom: None,
             chosen: vec!["workbench-base".to_string()],
+            excluded: Vec::new(),
             destination: dir.join("dist"),
         })
         .unwrap();
@@ -448,6 +451,7 @@ mod tests {
             media_folder: dir.clone(),
             rom: None,
             chosen: vec!["workbench-base".to_string()],
+            excluded: Vec::new(),
             destination: dir.join("dist"),
         })
         .unwrap();

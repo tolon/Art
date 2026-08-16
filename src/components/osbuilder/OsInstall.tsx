@@ -9,25 +9,29 @@
 //
 //   - **Every conditional tick states its reason.** A tick ART decided and
 //     did not explain is a tick the user cannot argue with. `AMIGAOS_32_COMPONENTS`
-//     below carries which components are `required` and which carry a
-//     `conditionMajor` (today, only `modules-a1200`'s "below Kickstart V47"),
-//     and the component list's own JSX prints a sentence for every state
-//     that was not the user's own click: required, condition-on,
-//     condition-off and condition-overridden all say why.
+//     (`@/lib/osinstall`) carries which components are `required` and which
+//     carry a `conditionMajor` (today, only `modules-a1200`'s "below
+//     Kickstart V47"), and `conditionalReason` decides, from primitives, one
+//     of exactly four reasons for every conditional row — never none, which
+//     is the shape a review found this screen could render in its first
+//     round (see below).
 //   - **Turning a condition-satisfied component off is a confirmation, not a
-//     refusal.** It is the user's machine. `core/osinstall/plan.rs::resolve_components_on`
-//     has no way to turn a satisfied `Condition` off through `chosen` — the
-//     OR only ever adds — so this screen does not pretend `chosen` can do
-//     it. Instead: `osinstallPlan` runs unmodified, then `withExclusions`
-//     strips the excluded component's items, `componentsOn` entry and
-//     `userStartup` contribution from the **plan object itself**, client
-//     side, before it is shown or applied. That is safe only because
-//     `osinstallApply` takes the exact plan it is handed and never
-//     recomputes it (`src/lib/osinstall.ts`'s own module note) — the same
-//     property `layoutApply` relies on. This is a real, disclosed
-//     limitation of the engine as built through Task 12, not a shortcut
-//     invented here; see the comment on `AMIGAOS_32_COMPONENTS` for the
-//     matching gap on the read side.
+//     refusal.** It is the user's machine. **This is now the engine's own
+//     job, not this screen's.** The first version filtered a returned
+//     `InstallPlan` in the browser — safe-looking, because `osinstallApply`
+//     takes the exact plan it is handed, but wrong two ways a review found:
+//     the filtered plan's `mediaPaths` still promised the excluded
+//     component's own media (so `apply()`'s manifest recorded a medium not
+//     one byte of which was installed, and a moved disk could fail a build
+//     over a component the user turned off), and a `MediaMissing` refusal
+//     `plan()` itself raised for the excluded component was never touched
+//     at all — `osinstallBlocker` reads `refusals`, so "turning Modules off"
+//     stayed a refusal, just a politer one. `core/osinstall/plan.rs`'s
+//     `InstallRequest.excluded` fixes both at the source: subtracted inside
+//     `resolve_components_on`, before the media-resolution loop, so an
+//     excluded component's media is never opened, never recorded, and never
+//     a source of a refusal. This screen keeps **two** plans for exactly
+//     this reason — see the module doc on `basePlan`/`effectivePlan` below.
 //   - **The file list is read-only.** Unlike G11's layout preview, where
 //     retargeting a row *is* the feature, every destination here comes from
 //     a recipe checked against real media — a hand-moved row would make
@@ -41,12 +45,27 @@
 // tree only ever writes a *new* folder and refuses one that already exists
 // (`SAFE_CREATE`), so there is nothing of that shape to protect against by
 // leaving a choice unremembered.
+//
+// Every function doing anything other than rendering — the exclusion state
+// machine, the reasoning behind a conditional tick, the Verify section's
+// two small parsers — lives in `@/lib/osinstall` and is unit-tested there
+// (`src/lib/osinstall.test.ts`). A review's own diagnosis of how the first
+// Critical shipped: "no test can reach [it], because it lives inside the
+// component." This screen is now the thin rendering layer that diagnosis
+// asked for.
 
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
 import {
+  AMIGAOS_32_COMPONENTS,
+  componentLabel,
+  confirmComponentOff,
+  conditionalReason,
+  conditionalToggleAction,
+  hasRomUnknownRefusal,
+  isForcedOnByCondition,
   isVerified,
   onOsInstallResult,
   osinstallApply,
@@ -54,7 +73,14 @@ import {
   osinstallPlan,
   osinstallScanMedia,
   osinstallVerify,
+  parseOptionalSlot,
+  parsePartitionIndex,
+  pruneStaleExclusions,
   refusalPhrase,
+  sanitizeChosen,
+  toggleChosen,
+  withoutExcluded,
+  type ComponentDef,
   type InstallPlan,
   type InstallRequest,
   type MediaScanResult,
@@ -73,148 +99,6 @@ const GIB = 1024 * 1024 * 1024;
 function size(bytes: number): string {
   if (bytes >= GIB) return `${Math.round((bytes / GIB) * 100) / 100} GB`;
   return `${Math.round((bytes / (1024 * 1024)) * 10) / 10} MB`;
-}
-
-interface ComponentDef {
-  id: string;
-  /** The volume name inside the image — shown as the row's own label,
-   *  unlocalized, the same way the preload screen prints a partition's
-   *  `drive_name` untranslated: this is what the Amiga side calls it, not
-   *  a sentence ART wrote. */
-  media: string;
-  required: boolean;
-  available: boolean;
-  /** `Condition::RomOlderThan { major }`, mirrored — the only condition
-   *  shape the recipe carries today. `null` for an unconditional component. */
-  conditionMajor: number | null;
-  exclusiveGroup: string | null;
-}
-
-/**
- * Mirrors `src-tauri/src/core/osinstall/recipes/amigaos-3.2.json`, component
- * by component — id, `required`, `condition` and `exclusive_group` all have
- * to agree with the shipped recipe, because this list is what turns into the
- * checkboxes below.
- *
- * **This is a disclosed limitation, not an oversight.** Tasks 1 through 12
- * built four commands over the recipe — scan, plan, apply, verify — and none
- * of them hands the recipe itself to the frontend, so there is nothing this
- * screen can ask instead of hardcoding a mirror of it. If `amigaos-3.2.json`
- * ever gains, loses or renames a component and this list is not updated in
- * the same commit, the drift is silent on both sides: a component the
- * recipe knows about simply never appears as a checkbox here, and an id
- * that no longer exists in the recipe just never resolves — `osinstallPlan`
- * treats an unrecognised id in `chosen` as nothing to add, not as an error.
- * A fifth command exposing the recipe would close this properly; that is
- * out of this task's scope (three frontend files), so it is named here
- * instead of left implicit.
- */
-const AMIGAOS_32_COMPONENTS: ComponentDef[] = [
-  {
-    id: "workbench-base",
-    media: "Workbench3.2",
-    required: true,
-    available: true,
-    conditionMajor: null,
-    exclusiveGroup: null,
-  },
-  { id: "extras", media: "Extras3.2", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-base", media: "Locale", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-de", media: "Locale-DE", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-dk", media: "Locale-DK", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-en", media: "Locale-EN", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-es", media: "Locale-ES", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-fr", media: "Locale-FR", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-gr", media: "Locale-GR", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-it", media: "Locale-IT", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-nl", media: "Locale-NL", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-no", media: "Locale-NO", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-pl", media: "Locale-PL", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-pt", media: "Locale-PT", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-ru", media: "Locale-RU", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-se", media: "Locale-SE", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-tr", media: "Locale-TR", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-uk", media: "Locale-UK", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  {
-    id: "modules-a1200",
-    media: "ModulesA1200_3.2",
-    required: false,
-    available: true,
-    conditionMajor: 47,
-    exclusiveGroup: "modules",
-  },
-  {
-    id: "update-3.2.1",
-    media: "Update3.2.1",
-    required: false,
-    available: false,
-    conditionMajor: null,
-    exclusiveGroup: null,
-  },
-  { id: "fonts", media: "Fonts", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "classes", media: "Classes3.2", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  {
-    id: "glowicons",
-    media: "GlowIcons3.2",
-    required: false,
-    available: true,
-    conditionMajor: null,
-    exclusiveGroup: null,
-  },
-  {
-    id: "backdrops",
-    media: "Backdrops3.2",
-    required: false,
-    available: false,
-    conditionMajor: null,
-    exclusiveGroup: null,
-  },
-  { id: "diskdoctor", media: "DiskDoctor", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "mmulibs", media: "MMULibs", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "hdtools", media: "HDSetup3.2", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "storage", media: "Storage3.2", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-];
-
-function componentDef(id: string): ComponentDef | undefined {
-  return AMIGAOS_32_COMPONENTS.find((c) => c.id === id);
-}
-
-function componentLabel(id: string): string {
-  return componentDef(id)?.media ?? id;
-}
-
-/**
- * Whether `id` is switched on **only** because its own `Condition` is
- * satisfied — never because it is `required` or because the user put it in
- * `chosen`. `resolve_components_on` (Rust) computes `is_on` as
- * `required || chosen.contains(id)`, then ORs in the condition — it can only
- * ever add `true`, never remove one — so if `componentsOn` carries `id` and
- * neither of the first two is true, the condition is the only thing left
- * that could have done it. Used both to render the reason text and to
- * decide, on toggle, whether unchecking needs the "this will not boot"
- * confirmation or is an ordinary, harmless un-choosing.
- */
-function isForcedOnByCondition(plan: InstallPlan | null, chosen: string[], id: string): boolean {
-  const def = componentDef(id);
-  if (!plan || !def || def.required) return false;
-  return plan.componentsOn.includes(id) && !chosen.includes(id);
-}
-
-/**
- * The plan with every excluded component's contribution removed — see the
- * module doc comment for why this exists and why it is safe to send to
- * `osinstallApply`. Only ever *removes* entries the real `plan()` already
- * produced, so it can create no collision or refusal the backend did not
- * already clear.
- */
-function withExclusions(plan: InstallPlan, excluded: string[]): InstallPlan {
-  if (excluded.length === 0) return plan;
-  const excludedSet = new Set(excluded);
-  const items = plan.items.filter((item) => !excludedSet.has(item.component));
-  const componentsOn = plan.componentsOn.filter((id) => !excludedSet.has(id));
-  const userStartup = plan.userStartup.filter((c) => !excludedSet.has(c.component));
-  const totalBytes = items.reduce((sum, item) => sum + item.bytes, 0);
-  return { ...plan, items, componentsOn, userStartup, totalBytes };
 }
 
 /** Plan items, grouped by component, in the order the plan itself already
@@ -251,9 +135,8 @@ export function OsInstall() {
   const [chosen, setChosen] = useRemembered<string[]>("osinstall.chosen", isTextList, []);
   /**
    * Condition-satisfied components the user has explicitly, with
-   * confirmation, turned off. See the module doc comment and
-   * `isForcedOnByCondition` — this is the only mechanism that can turn one
-   * off, since `chosen` cannot. Remembered, unlike the preload screen's
+   * confirmation, turned off — sent to the engine as
+   * `InstallRequest.excluded`. Remembered, unlike the preload screen's
    * partition picks: nothing here is destructive by itself (see the module
    * doc comment on the remembered set as a whole).
    */
@@ -267,7 +150,26 @@ export function OsInstall() {
   const [mediaScan, setMediaScan] = useState<MediaScanResult | null>(null);
   const [rom, setRom] = useState<RomInfo | null>(null);
   const [romError, setRomError] = useState(false);
-  const [rawPlan, setRawPlan] = useState<PlanResult | null>(null);
+  /**
+   * Two plans, requested identically except for `excluded` — both read-only
+   * previews (§92), both recomputed live on every change, neither an
+   * external-tool cost the way the preload screen's plan is.
+   *
+   * `basePlan` always asks with `excluded: []`. It exists purely to reason
+   * about a conditional component's *true* state — whether its own
+   * `Condition` is satisfied at all — because a plan requested *with* a
+   * component excluded never carries it in `componentsOn` (the engine skips
+   * it entirely), which would make "is this condition-satisfied" and "is
+   * this excluded" indistinguishable from the one plan a screen that only
+   * asked once would have.
+   *
+   * `effectivePlan` asks with the real `excludedConditional`. It is what
+   * the file list shows, what `osinstallBlocker` reads, and — unmodified —
+   * what `osinstallApply` receives. Never the other way around: applying
+   * `basePlan` would silently undo every exclusion the user confirmed.
+   */
+  const [basePlanResult, setBasePlanResult] = useState<PlanResult | null>(null);
+  const [effectivePlanResult, setEffectivePlanResult] = useState<PlanResult | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   /** The one component id currently showing the "this will not boot"
@@ -332,28 +234,42 @@ export function OsInstall() {
     };
   }, [romPath]);
 
-  // The plan: read-only (§92's PREVIEW), so it is recomputed live whenever
-  // the request changes rather than behind a separate "Preview" button —
-  // there is no external tool cost here the way there is on the preload
-  // screen, and this is also what lets the component list below explain a
-  // conditional tick immediately, not only after a manual preview step.
+  // The two plans: read-only (§92's PREVIEW), so both are recomputed live
+  // whenever the request changes rather than behind a separate "Preview"
+  // button — there is no external tool cost here the way there is on the
+  // preload screen, and this is also what lets the component list below
+  // explain a conditional tick immediately, not only after a manual preview
+  // step.
   useEffect(() => {
     if (!mediaFolder) {
-      setRawPlan(null);
+      setBasePlanResult(null);
+      setEffectivePlanResult(null);
       setPlanError(null);
       return;
     }
     let cancelled = false;
-    const request: InstallRequest = {
+
+    const sanitized = sanitizeChosen(chosen);
+    if (sanitized.length !== chosen.length) {
+      // A stale remembered id (renamed or removed since) actually clears,
+      // rather than being filtered again on every read.
+      setChosen(sanitized);
+    }
+
+    const shared = {
       mediaFolder,
       rom: romPath,
-      chosen: chosen.filter((id) => componentDef(id)?.available !== false),
+      chosen: sanitized,
       destination: destination ?? "",
     };
-    osinstallPlan(request)
-      .then((planned) => {
+    const baseRequest: InstallRequest = { ...shared, excluded: [] };
+    const effectiveRequest: InstallRequest = { ...shared, excluded: excludedConditional };
+
+    Promise.all([osinstallPlan(baseRequest), osinstallPlan(effectiveRequest)])
+      .then(([base, effective]) => {
         if (cancelled) return;
-        setRawPlan(planned);
+        setBasePlanResult(base);
+        setEffectivePlanResult(effective);
         setPlanError(null);
         // Confirming an exclusion or the whole install describes the plan
         // that was on screen at the time; once the request changes, both
@@ -362,16 +278,8 @@ export function OsInstall() {
         // the plan is always fresh rather than sometimes stale.
         setConfirmed(false);
         setPendingExclusion(null);
-        // Prune a stale exclusion: once the paired Kickstart no longer
-        // triggers a component's condition, "turned off despite the
-        // condition" has nothing left to override. Leaving it in the
-        // remembered set would silently reapply the override the moment a
-        // pre-V47 ROM came back — without the user ever confirming *that*
-        // pairing — which is exactly the "nothing changes unless the user
-        // changes it" rule read backwards.
-        if (planned.outcome === "planned") {
-          const plan = planned.plan;
-          const pruned = excludedConditional.filter((id) => isForcedOnByCondition(plan, chosen, id));
+        if (base.outcome === "planned") {
+          const pruned = pruneStaleExclusions(base.plan, sanitized, excludedConditional);
           if (pruned.length !== excludedConditional.length) {
             setExcludedConditional(pruned);
           }
@@ -379,15 +287,17 @@ export function OsInstall() {
       })
       .catch((e) => {
         if (cancelled) return;
-        setRawPlan(null);
+        setBasePlanResult(null);
+        setEffectivePlanResult(null);
         setPlanError(String(e));
       });
     return () => {
       cancelled = true;
     };
-    // `setExcludedConditional` is a stable identity from `useRemembered`.
+    // `setChosen`/`setExcludedConditional` are stable identities from
+    // `useRemembered`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mediaFolder, romPath, chosen, destination]);
+  }, [mediaFolder, romPath, chosen, destination, excludedConditional]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -402,12 +312,10 @@ export function OsInstall() {
     return () => unlisten?.();
   }, []);
 
-  const plannedOk = rawPlan?.outcome === "planned" ? rawPlan.plan : null;
-  const effectivePlan = plannedOk ? withExclusions(plannedOk, excludedConditional) : null;
-  const effectivePlanResult: PlanResult | null =
-    rawPlan?.outcome === "planned" && effectivePlan ? { outcome: "planned", plan: effectivePlan } : rawPlan;
+  const basePlan = basePlanResult?.outcome === "planned" ? basePlanResult.plan : null;
+  const effectivePlan = effectivePlanResult?.outcome === "planned" ? effectivePlanResult.plan : null;
   const blocker = osinstallBlocker({ mediaFolder, destination, plan: effectivePlanResult });
-  const romUnknown = plannedOk?.refusals.some((r) => r.refusal === "rom-unknown") ?? false;
+  const baseRomUnknown = basePlan ? hasRomUnknownRefusal(basePlan) : false;
 
   async function chooseMediaFolder() {
     const picked = await open({
@@ -436,53 +344,30 @@ export function OsInstall() {
     if (typeof picked === "string") setDestination(picked);
   }
 
-  /** Every non-conditional toggle: an ordinary opt-in/opt-out through
-   *  `chosen`, clearing any other member of the same `exclusiveGroup` on
-   *  the way in. Also the opt-in half of a conditional component's own
-   *  toggle (see `toggleConditional`) — choosing one whose condition does
-   *  not currently hold is exactly this same "add to `chosen`" path. */
-  function toggleChosen(id: string, exclusiveGroup: string | null) {
-    if (chosen.includes(id)) {
-      setChosen(chosen.filter((c) => c !== id));
-      return;
-    }
-    const withoutGroup = exclusiveGroup
-      ? chosen.filter((c) => componentDef(c)?.exclusiveGroup !== exclusiveGroup)
-      : chosen;
-    setChosen([...withoutGroup, id]);
-  }
-
   function toggleConditional(def: ComponentDef) {
-    if (excludedConditional.includes(def.id)) {
-      // Undo an earlier override — the user is switching it back on.
-      setExcludedConditional(excludedConditional.filter((id) => id !== def.id));
-      return;
+    const excluded = excludedConditional.includes(def.id);
+    const forcedOn = isForcedOnByCondition(basePlan, chosen, def.id);
+    switch (conditionalToggleAction(excluded, forcedOn)) {
+      case "undo-exclusion":
+        setExcludedConditional(withoutExcluded(excludedConditional, def.id));
+        return;
+      case "confirm-off":
+        // Turning off a condition-satisfied component is a confirmation,
+        // not a plain uncheck — see the module doc comment.
+        setPendingExclusion(def.id);
+        return;
+      case "toggle-chosen":
+        // Off, and not because of the condition: either an ordinary opt-in
+        // (the condition does not currently hold) or undoing that same
+        // opt-in.
+        setChosen(toggleChosen(chosen, def.id));
     }
-    if (isForcedOnByCondition(plannedOk, chosen, def.id)) {
-      // Turning off a condition-satisfied component is a confirmation, not
-      // a plain uncheck — see the module doc comment.
-      setPendingExclusion(def.id);
-      return;
-    }
-    // Off, and not because of the condition: either an ordinary opt-in
-    // (the condition does not currently hold) or undoing that same opt-in.
-    // Note: if this component is ever both explicitly chosen *and* its
-    // condition later starts holding too (the paired ROM changes), the
-    // first uncheck only removes the `chosen` entry — the next plan still
-    // shows it on, now correctly attributed to the condition, and a second
-    // uncheck reaches the confirmation. It never lies about which one is
-    // true at the moment it is shown; it only takes two clicks in that one
-    // combination.
-    toggleChosen(def.id, def.exclusiveGroup);
   }
 
   function confirmExclusion(id: string) {
-    if (!excludedConditional.includes(id)) {
-      setExcludedConditional([...excludedConditional, id]);
-    }
-    if (chosen.includes(id)) {
-      setChosen(chosen.filter((x) => x !== id));
-    }
+    const next = confirmComponentOff(chosen, excludedConditional, id);
+    setChosen(next.chosen);
+    setExcludedConditional(next.excluded);
     setPendingExclusion(null);
   }
 
@@ -517,26 +402,23 @@ export function OsInstall() {
     if (typeof picked === "string") setVerifyImage(picked);
   }
 
+  const verifySlot = parseOptionalSlot(verifySlotText);
+  const verifyIndex = parsePartitionIndex(verifyIndexText);
+  const verifyReady = !!verifyDistRoot && !!verifyImage && verifySlot.ok && verifyIndex !== null;
+
   async function runVerify() {
-    if (!verifyDistRoot || !verifyImage) return;
-    const index = Number.parseInt(verifyIndexText, 10);
-    if (!Number.isInteger(index) || index < 1) return;
-    const slotText = verifySlotText.trim();
-    const slot = slotText === "" ? null : Number.parseInt(slotText, 10);
+    if (!verifyDistRoot || !verifyImage || !verifySlot.ok || verifyIndex === null) return;
     setVerifying(true);
     setVerifyError(null);
     setVerifyReport(null);
     try {
-      setVerifyReport(await osinstallVerify(verifyImage, slot, index, verifyDistRoot));
+      setVerifyReport(await osinstallVerify(verifyImage, verifySlot.value, verifyIndex, verifyDistRoot));
     } catch (e) {
       setVerifyError(String(e));
     } finally {
       setVerifying(false);
     }
   }
-
-  const verifyReady =
-    !!verifyDistRoot && !!verifyImage && Number.isInteger(Number.parseInt(verifyIndexText, 10));
 
   return (
     <>
@@ -609,13 +491,12 @@ export function OsInstall() {
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {AMIGAOS_32_COMPONENTS.map((def) => {
             const excluded = excludedConditional.includes(def.id);
-            const forcedOn = isForcedOnByCondition(plannedOk, chosen, def.id);
             const checked = def.required
               ? true
               : !def.available
                 ? false
                 : def.conditionMajor !== null
-                  ? !!plannedOk?.componentsOn.includes(def.id) && !excluded
+                  ? (effectivePlan?.componentsOn.includes(def.id) ?? false)
                   : chosen.includes(def.id);
             const disabled = def.required || !def.available;
 
@@ -624,9 +505,23 @@ export function OsInstall() {
               if (def.conditionMajor !== null) {
                 toggleConditional(def);
               } else {
-                toggleChosen(def.id, def.exclusiveGroup);
+                setChosen(toggleChosen(chosen, def.id));
               }
             }
+
+            // Exactly one of four reasons, computed the same way for every
+            // conditional row — see `conditionalReason`'s own doc comment
+            // for why this can never fall through to nothing.
+            const reason =
+              def.conditionMajor !== null
+                ? conditionalReason(
+                    def.conditionMajor,
+                    isForcedOnByCondition(basePlan, chosen, def.id),
+                    excluded,
+                    baseRomUnknown,
+                    rom?.name ?? null
+                  )
+                : null;
 
             return (
               <div
@@ -659,44 +554,34 @@ export function OsInstall() {
                   </p>
                 )}
 
-                {!def.required && def.available && def.conditionMajor !== null && (
-                  <>
-                    {romUnknown && (
-                      <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
-                        {t("osinstall.components.reason.romNeeded")}
-                      </p>
-                    )}
-                    {!romUnknown && rom && excluded && (
-                      <p
-                        className="badge badge-warn"
-                        style={{ fontSize: 11, margin: "4px 0 0", display: "inline-block" }}
-                      >
-                        {t("osinstall.components.reason.conditionOverridden", { major: def.conditionMajor })}
-                      </p>
-                    )}
-                    {!romUnknown && rom && !excluded && forcedOn && (
-                      <p
-                        className="badge badge-warn"
-                        style={{ fontSize: 11, margin: "4px 0 0", display: "inline-block" }}
-                      >
-                        {t("osinstall.components.reason.conditionOn", {
-                          rom: rom.name,
-                          major: def.conditionMajor,
-                        })}
-                      </p>
-                    )}
-                    {!romUnknown && rom && !excluded && !forcedOn && (
-                      <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
-                        {t("osinstall.components.reason.conditionOff", {
-                          rom: rom.name,
-                          major: def.conditionMajor,
-                        })}
-                      </p>
-                    )}
-                  </>
+                {reason?.kind === "rom-needed" && (
+                  <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+                    {t("osinstall.components.reason.romNeeded")}
+                  </p>
+                )}
+                {reason?.kind === "condition-overridden" && (
+                  <p
+                    className="badge badge-warn"
+                    style={{ fontSize: 11, margin: "4px 0 0", display: "inline-block" }}
+                  >
+                    {t("osinstall.components.reason.conditionOverridden", { major: reason.major })}
+                  </p>
+                )}
+                {reason?.kind === "condition-on" && (
+                  <p
+                    className="badge badge-warn"
+                    style={{ fontSize: 11, margin: "4px 0 0", display: "inline-block" }}
+                  >
+                    {t("osinstall.components.reason.conditionOn", { rom: reason.rom, major: reason.major })}
+                  </p>
+                )}
+                {reason?.kind === "condition-off" && (
+                  <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+                    {t("osinstall.components.reason.conditionOff", { rom: reason.rom, major: reason.major })}
+                  </p>
                 )}
 
-                {pendingExclusion === def.id && (
+                {pendingExclusion === def.id && def.conditionMajor !== null && (
                   <div
                     className="badge badge-err"
                     style={{ display: "block", padding: "8px 10px", margin: "6px 0 0", fontSize: 11 }}
@@ -728,11 +613,11 @@ export function OsInstall() {
         </section>
       )}
 
-      {plannedOk && plannedOk.refusals.length > 0 && (
+      {effectivePlan && effectivePlan.refusals.length > 0 && (
         <section className="card" style={{ marginBottom: 16 }}>
           <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("osinstall.refusals.heading")}</h2>
           <ul className="muted" style={{ fontSize: 12, margin: 0, paddingLeft: 20 }}>
-            {plannedOk.refusals.map((r, i) => {
+            {effectivePlan.refusals.map((r, i) => {
               const phrase = refusalPhrase(r);
               return (
                 <li key={i} style={{ padding: "2px 0" }}>

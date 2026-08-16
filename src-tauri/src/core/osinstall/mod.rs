@@ -472,6 +472,7 @@ pub(crate) mod fixtures {
             media_folder: folder,
             rom,
             chosen: chosen.iter().map(|s| s.to_string()).collect(),
+            excluded: Vec::new(),
             destination: dir.join("dist"),
         };
 
