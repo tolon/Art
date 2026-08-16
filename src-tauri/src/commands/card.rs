@@ -235,10 +235,57 @@ fn card_spec(
     }
 }
 
+/// The Kickstart a card is to carry, as an Amiga would have to read it.
+///
+/// **A licensed Amiga Forever ROM is not ROM bytes yet** (ART-128). It is the
+/// image behind an `AMIROMTYPE1` header and a repeating XOR against the
+/// buyer's own `rom.key`, and this used to be a plain `std::fs::read`: the
+/// encrypted file went onto the card verbatim, Emu68 loaded eleven bytes of
+/// header and half a megabyte of ciphertext as its Kickstart, and the machine
+/// did not boot. Nothing said why — the build's only note was the same
+/// "ART does not recognise this ROM" it shows for any uncatalogued dump,
+/// which reads as *probably fine*.
+///
+/// So: decoded when the key is beside it, and **refused** when it is not.
+/// Refused rather than warned, because this is not a risk — a card built this
+/// way cannot boot, and ART-103 is the precedent for stopping at a certainty
+/// instead of writing it and hoping.
+fn kickstart_for(path: &str) -> CoreResult<Vec<u8>> {
+    let path = Path::new(path.trim());
+    let raw = std::fs::read(path)?;
+    if !raw.starts_with(b"AMIROMTYPE1") {
+        return Ok(raw);
+    }
+
+    let info = identify_rom(path)?;
+    if !info.key_available {
+        return Err(crate::core::error::CoreError::InvalidInput(format!(
+            concat!(
+                "'{}' is an encrypted Amiga Forever ROM and its 'rom.key' is ",
+                "not beside it. Written to a card as it stands, the Amiga would ",
+                "find a header and encrypted bytes where its Kickstart should ",
+                "be, and would not start. Put the 'rom.key' from the same Amiga ",
+                "Forever installation in this folder, or point ART at a ",
+                "decrypted ROM."
+            ),
+            path.display()
+        )));
+    }
+    let key = std::fs::read(
+        path.parent()
+            .map(|dir| dir.join("rom.key"))
+            .unwrap_or_else(|| Path::new("rom.key").to_path_buf()),
+    )?;
+    Ok(crate::core::rom::decode_cloanto(
+        &crate::core::rom::strip_cloanto_header(&raw),
+        &key,
+    ))
+}
+
 /// The payload the request asks for, with the Kickstart read off disk.
 fn payload_for(request: &CardBuildRequest) -> CoreResult<crate::core::card::payload::Emu68Payload> {
     let kickstart = match &request.kickstart {
-        Some(path) => Some(std::fs::read(Path::new(path.trim()))?),
+        Some(path) => Some(kickstart_for(path)?),
         None => None,
     };
 
@@ -668,6 +715,58 @@ mod tests {
         }
         zip.finish().unwrap();
         path
+    }
+
+    /// **ART-128.** An encrypted Amiga Forever ROM used to be copied onto the
+    /// card exactly as it sits on disk — header, ciphertext and all — so the
+    /// Amiga found no Kickstart where its Kickstart should be. The build is
+    /// refused now, by name and with the remedy, before anything is written.
+    #[test]
+    fn an_encrypted_rom_with_no_key_is_refused_rather_than_written_to_a_card() {
+        let dir = scratch("cloanto-no-key");
+        let mut rom = b"AMIROMTYPE1".to_vec();
+        rom.extend(std::iter::repeat_n(0xA5u8, 524_288));
+        let path = dir.join("amiga-os-310-a1200.rom");
+        std::fs::write(&path, &rom).unwrap();
+
+        let err = kickstart_for(&path.display().to_string()).unwrap_err();
+
+        assert_eq!(err.code(), "ART-INPUT-INVALID", "{err}");
+        let said = err.to_string();
+        assert!(said.contains("rom.key"), "the remedy is named: {said}");
+        assert!(
+            said.contains("would not start"),
+            "and what happens if it is not: {said}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With the key beside it, the card carries the ROM an Amiga can read —
+    /// the decoded image, not the file.
+    #[test]
+    fn an_encrypted_rom_reaches_the_card_decoded() {
+        let dir = scratch("cloanto-keyed-card");
+        let plain: Vec<u8> = (0..524_288u32).map(|i| (i % 251) as u8).collect();
+        let key = b"the buyer's own key".to_vec();
+        std::fs::write(dir.join("rom.key"), &key).unwrap();
+
+        let mut encoded = b"AMIROMTYPE1".to_vec();
+        encoded.extend(
+            plain
+                .iter()
+                .enumerate()
+                .map(|(at, byte)| byte ^ key[at % key.len()]),
+        );
+        let path = dir.join("amiga-os-310-a1200.rom");
+        std::fs::write(&path, &encoded).unwrap();
+
+        let carried = kickstart_for(&path.display().to_string()).unwrap();
+
+        assert_eq!(carried, plain, "the bytes an Amiga would have to read");
+        assert_ne!(carried, encoded, "and not the ones on disk");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn request(archive: &std::path::Path, dest: &std::path::Path) -> CardBuildRequest {

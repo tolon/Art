@@ -17,6 +17,7 @@ function info(overrides: Partial<RomInfo> = {}): RomInfo {
     sha256: "",
     crc32: "",
     is_cloanto: false,
+    key_available: false,
     is_aros: false,
     checksum_valid: true,
     compatible_models: ["A500", "A600", "A2000"],

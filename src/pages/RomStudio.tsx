@@ -163,9 +163,19 @@ export function RomStudio() {
                   ))}
                 </div>
               </div>
+              {/* A green tick for every Amiga Forever ROM was a false
+                  reassurance: stripping the header leaves the image still
+                  encrypted, and without the buyer's `rom.key` beside it ART
+                  reads nothing at all (ART-128). */}
               {selectedRom.is_cloanto && (
-                <div className="badge badge-ok">
-                  ✓ {t("rom.details.cloantoStripped")}
+                <div
+                  className={
+                    selectedRom.key_available ? "badge badge-ok" : "badge badge-warn"
+                  }
+                >
+                  {selectedRom.key_available
+                    ? `✓ ${t("rom.details.cloantoDecoded")}`
+                    : t("rom.details.cloantoNeedsKey")}
                 </div>
               )}
             </div>

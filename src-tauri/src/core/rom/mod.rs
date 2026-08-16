@@ -44,6 +44,12 @@ pub struct RomInfo {
     pub sha256: String,
     pub crc32: String,
     pub is_cloanto: bool,
+    /// Only meaningful when `is_cloanto`: whether the `rom.key` that decodes
+    /// it was found beside it. False means every other field describes what
+    /// ART could work out **without** reading the image — which is very
+    /// little, and the name says so.
+    #[serde(default)]
+    pub key_available: bool,
     pub is_aros: bool,
     pub checksum_valid: bool,
     pub compatible_models: Vec<String>,
@@ -168,11 +174,33 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
         return Err(CoreError::InvalidInput("ROM file is empty".into()));
     }
 
+    // A licensed Amiga Forever ROM is the same Kickstart behind a header and
+    // a repeating XOR. With the buyer's own key beside it, ART decodes it and
+    // everything below — the stored checksum, the hash, the version — reads
+    // the real image. Without the key there is nothing to identify, and the
+    // one honest answer is to say which file this is and stop.
     let is_cloanto = raw_bytes.starts_with(CLOANTO_HEADER);
-    let bytes = if is_cloanto {
-        strip_cloanto_header(&raw_bytes)
-    } else {
-        raw_bytes
+    let key = is_cloanto.then(|| key_beside(path)).flatten();
+    let key_available = key.is_some();
+    let bytes = match (is_cloanto, &key) {
+        (true, Some(key)) => decode_cloanto(&strip_cloanto_header(&raw_bytes), key),
+        (true, None) => {
+            return Ok(RomInfo {
+                name: "Amiga Forever ROM (encrypted, needs rom.key)".to_string(),
+                version: "Custom".to_string(),
+                revision: String::new(),
+                size_bytes: raw_bytes.len().saturating_sub(CLOANTO_HEADER.len()),
+                sha256: sha256_bytes(&raw_bytes),
+                crc32: format!("{:08X}", compute_crc32(&raw_bytes)),
+                is_cloanto,
+                key_available,
+                is_aros: false,
+                checksum_valid: false,
+                compatible_models: Vec::new(),
+                file_path: path.to_string_lossy().to_string(),
+            })
+        }
+        (false, _) => raw_bytes,
     };
 
     let size_bytes = bytes.len();
@@ -201,6 +229,7 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
             sha256,
             crc32,
             is_cloanto,
+            key_available,
             is_aros: false,
             checksum_valid,
             compatible_models: matched.models.iter().map(|s| s.to_string()).collect(),
@@ -221,6 +250,7 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
             sha256,
             crc32,
             is_cloanto,
+            key_available,
             is_aros: false,
             checksum_valid,
             compatible_models: matched.models.iter().map(|s| s.to_string()).collect(),
@@ -253,6 +283,7 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
             sha256,
             crc32,
             is_cloanto,
+            key_available,
             is_aros: false,
             checksum_valid,
             // Empty on purpose: the ROM said its version, not its machine.
@@ -273,6 +304,7 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
             sha256,
             crc32,
             is_cloanto: false,
+            key_available: false,
             is_aros: true,
             checksum_valid: true,
             compatible_models: vec!["A500".into(), "A1200".into(), "A4000".into()],
@@ -308,6 +340,7 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
         sha256,
         crc32,
         is_cloanto,
+        key_available,
         is_aros: false,
         checksum_valid,
         compatible_models: Vec::new(),
@@ -397,6 +430,34 @@ fn version_name(major: u16) -> Option<&'static str> {
         47 => "3.2.x",
         _ => return None,
     })
+}
+
+/// Undo Amiga Forever's encoding: the payload XORed with the key, repeating.
+///
+/// **Read from an implementation, not remembered** — `amitools`' own
+/// `rom.Loader` does exactly this, and it is what every emulator that accepts
+/// these files does. The key is the buyer's; ART holds none and ships none.
+pub fn decode_cloanto(payload: &[u8], key: &[u8]) -> Vec<u8> {
+    if key.is_empty() {
+        return payload.to_vec();
+    }
+    payload
+        .iter()
+        .enumerate()
+        .map(|(at, byte)| byte ^ key[at % key.len()])
+        .collect()
+}
+
+/// The `rom.key` that decodes a ROM, looked for **beside the ROM itself**.
+///
+/// That is where Amiga Forever puts it and where `amitools` looks, so a user
+/// who exports their ROMs gets a working answer with nothing to configure.
+/// A key that is not there is not an error here: the caller says so instead of
+/// guessing at the bytes.
+fn key_beside(rom: &Path) -> Option<Vec<u8>> {
+    let key = rom.parent()?.join("rom.key");
+    let bytes = std::fs::read(key).ok()?;
+    (!bytes.is_empty()).then_some(bytes)
 }
 
 pub fn strip_cloanto_header(bytes: &[u8]) -> Vec<u8> {
@@ -497,6 +558,20 @@ mod tests {
         let at = bytes.len() - 24;
         bytes[at..at + 4].copy_from_slice(&stored.to_be_bytes());
         bytes
+    }
+
+    /// The same bytes as Amiga Forever ships them: the header, then the image
+    /// XORed with the key, repeating. Matches `amitools`' own loader, which is
+    /// where this shape was read rather than remembered.
+    fn encrypted(plain: &[u8], key: &[u8]) -> Vec<u8> {
+        let mut out = CLOANTO_HEADER.to_vec();
+        out.extend(
+            plain
+                .iter()
+                .enumerate()
+                .map(|(at, byte)| byte ^ key[at % key.len()]),
+        );
+        out
     }
 
     fn write(dir: &std::path::Path, name: &str, bytes: &[u8]) -> std::path::PathBuf {
@@ -703,6 +778,79 @@ mod tests {
     /// to name machines by it too — telling the user a 256 KB CDTV extended
     /// ROM suited an A500 and an A2000. The size is kept; the machines are
     /// not, because nothing measured them.
+    /// **A licensed Amiga Forever ROM is a first-class input, not a mystery
+    /// blob.** Its bytes are the same Kickstart, kept behind an
+    /// `AMIROMTYPE1` header and a repeating XOR against the buyer's own
+    /// `rom.key`. ART reads the key from beside the ROM — the layout Amiga
+    /// Forever ships and the one `amitools`' own loader looks in — and then
+    /// identifies the image exactly as it would a bare dump.
+    ///
+    /// Built from a *synthetic* ROM and a synthetic key, because ART ships no
+    /// ROM and never will: the fixture carries the stored checksum the table
+    /// holds for `Kickstart 40.68 (A1200)`, so recovering that name proves the
+    /// decryption produced the original bytes and not merely different ones.
+    #[test]
+    fn a_cloanto_rom_is_decoded_with_the_key_beside_it_and_then_identified() {
+        let dir = scratch("cloanto-keyed");
+        let plain = rom_with_stored_checksum(0x87BA_7A3E);
+        let key = b"a rom key of no particular length".to_vec();
+        std::fs::write(dir.join("rom.key"), &key).unwrap();
+        let path = write(&dir, "amiga-os-310-a1200.rom", &encrypted(&plain, &key));
+
+        let info = identify_rom(&path).unwrap();
+
+        assert!(info.is_cloanto, "the header says what it is");
+        assert_eq!(info.name, "Kickstart 40.68 (A1200)");
+        assert_eq!(info.compatible_models, vec!["A1200".to_string()]);
+        assert_eq!(
+            info.size_bytes,
+            plain.len(),
+            "the size reported is the ROM's, not the file's — the header is not \
+             part of the image"
+        );
+        assert_eq!(
+            info.sha256,
+            crate::core::hashing::sha256_bytes(&plain),
+            "and the hash is of the decoded image, so it can be compared with \
+             a bare dump of the same ROM"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Without the key, ART says what it has rather than describing the
+    /// ciphertext. It used to call this *Generic Amiga 512KB ROM* — the same
+    /// answer it gives an unknown dump — which reads as "probably fine, just
+    /// uncatalogued" when the truth is "ART cannot read this at all, and it
+    /// will not boot anything as it stands".
+    #[test]
+    fn a_cloanto_rom_with_no_key_is_named_as_one_rather_than_guessed_at() {
+        let dir = scratch("cloanto-keyless");
+        let key = b"whatever".to_vec();
+        let path = write(
+            &dir,
+            "amiga-os-310-a1200.rom",
+            &encrypted(&rom_with_stored_checksum(0x87BA_7A3E), &key),
+        );
+
+        let info = identify_rom(&path).unwrap();
+
+        assert!(info.is_cloanto);
+        assert!(!info.key_available, "no rom.key sits beside it");
+        assert_eq!(info.name, "Amiga Forever ROM (encrypted, needs rom.key)");
+        assert!(
+            info.compatible_models.is_empty(),
+            "nothing can be claimed about bytes ART cannot read: {:?}",
+            info.compatible_models
+        );
+        assert_eq!(
+            info.version, "Custom",
+            "and it is not passed off as a version ART worked out"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_size_names_the_shape_and_not_the_machine() {
         let dir = scratch("size-only");

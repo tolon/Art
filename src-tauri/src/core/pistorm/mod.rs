@@ -810,6 +810,7 @@ mod tests {
             sha256: String::new(),
             crc32: String::new(),
             is_cloanto: false,
+            key_available: false,
             is_aros: false,
             checksum_valid: true,
             compatible_models: vec!["A500".into(), "A600".into(), "A2000".into()],

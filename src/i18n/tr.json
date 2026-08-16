@@ -1133,7 +1133,8 @@
       "crc32Label": "CRC32:",
       "sha256Label": "SHA256:",
       "modelsLabel": "Uyumlu Amiga Modelleri:",
-      "cloantoStripped": "Cloanto Şifreli Üstbilgisi Kaldırıldı"
+      "cloantoDecoded": "Amiga Forever ROM'u, yanındaki rom.key ile çözüldü",
+      "cloantoNeedsKey": "Amiga Forever ROM'u — şifreli, ve yanında rom.key bulunamadı. ART imajın içeriğini hiç okuyamıyor; bununla yapılan bir kart açılmaz."
     }
   },
   "hex": {
