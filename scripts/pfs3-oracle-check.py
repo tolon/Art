@@ -13,8 +13,8 @@ fixture ART built for itself passed.
 So this script checks ART against `hst-imager` — a C# implementation sharing
 no code with ART — in both directions:
 
-    ART writes        →  hst-imager reads     proves ART's PFS3 writer
-    hst-imager writes  →  ART reads            proves ART's PFS3 reader
+    ART writes         →  hst-imager reads     proves ART's PFS3 writer
+    hst-imager writes  →  ART reads             proves ART's PFS3 reader
 
 Both halves are needed for the same reason `oracle-check.py` needs both:
 ART's own reader and writer agreeing is not evidence of anything.
@@ -22,11 +22,17 @@ ART's own reader and writer agreeing is not evidence of anything.
 **Protection bits are part of the comparison, not an extra.** AmigaOS 3.2's
 `Startup-Sequence` runs `Resident C:Assign PURE`, and the Pure bit arriving
 correctly is the reason this whole phase exists — so both directions check
-the eight-letter `HSPARWED` attribute string, not just names and sizes. The
-second direction hashes every file's *contents* (SHA-256, not a length) —
-ART-079 gave every file exactly the right length and another file's bytes, so
-a length comparison would not have caught the bug this project already shipped
-once.
+the eight-letter `HSPARWED` attribute string, not just names and sizes.
+
+**Both directions hash file contents — SHA-256, not a length.** ART-079 gave
+every file exactly the right length and another file's bytes, so a length
+comparison alone would not have caught the bug this project already shipped
+once. In the `ART writes` direction, `hst-imager fs copy` extracts the volume
+back out to a directory on the PC and every file's extracted bytes are hashed
+against the literal ART's write hook was given — not against anything ART
+read back through its own reader, which would prove nothing new. In the
+`hst-imager writes` direction, ART's read hook hashes what it reads through
+`libpfs3` against the bytes this script handed `hst-imager`.
 
 **This is a local oracle, not a CI one** — exactly like `fat-oracle-check.py`
 and `iso-oracle-check.py`: the CI runner has no `hst.imager.exe`. Run it by
@@ -41,7 +47,8 @@ Environment:
     ART_HST_IMAGER   path to hst.imager.exe (default: the usual place below)
     ART_PFS3_DRIVER  path to a pfs3aio driver binary, for hst-imager's own
                      `format Rdb PDS3` (default: the usual place below)
-    ART_SCRATCH      where the images are built (default: E:\\amiga\\ProjeART)
+    ART_SCRATCH      where the images are built (default: E:\\amiga\\ProjeART);
+                     must already exist — see `require_scratch_dir`
 
 If either tool is missing this **skips cleanly** (exit 2) rather than crash
 or silently report nothing checked — the same contract `fat-oracle-check.py`
@@ -58,6 +65,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -66,14 +74,32 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CARGO_DIR = ROOT / "src-tauri"
 
-# Where the images are built. Not the system temp when there is somewhere
-# better — `ART_SCRATCH` names the folder, failing that the one this project
-# already uses for large scratch output, failing that wherever `tempfile`
-# would have put it anyway.
-SCRATCH = Path(os.environ.get("ART_SCRATCH") or r"E:\amiga\ProjeART")
-
+DEFAULT_SCRATCH = Path(r"E:\amiga\ProjeART")
 DEFAULT_HST_IMAGER = Path(r"E:\amiga\Amigatolon\hstimager\hst.imager.exe")
 DEFAULT_PFS3_DRIVER = Path(r"E:\amiga\ProjeART\pfs3-spike\pfs3aio\pfs3aio")
+
+
+def require_scratch_dir() -> Path:
+    """The scratch directory a 220 MB image is built in — required to already
+    exist, with **no silent fallback**.
+
+    This project's own standing rule is that C: and D: are never used for
+    scratch output. `tempfile.TemporaryDirectory(dir=None)` falls back to the
+    system temp directory, which on this machine — and on most Windows
+    installs — sits on C:. Falling back to that silently would be exactly the
+    thing the rule forbids, just spelled as a default instead of a choice, so
+    this refuses instead: `ART_SCRATCH` (or the project default) has to name
+    a folder that is already there.
+    """
+    root = Path(os.environ.get("ART_SCRATCH") or DEFAULT_SCRATCH)
+    if not root.is_dir():
+        print(f"Scratch directory '{root}' does not exist.")
+        print()
+        print("This project never writes scratch output to C: or D:, including by")
+        print("falling back to the system temp directory. Create the folder above,")
+        print("or set ART_SCRATCH to one that already exists.")
+        sys.exit(2)
+    return root
 
 
 def find_hst_imager() -> str:
@@ -140,6 +166,31 @@ def report(checks: list[tuple[bool, str]]) -> None:
         print(f"  {'ok  ' if ok else 'FAIL'} {what}")
 
 
+# `hst.imager`'s size column, e.g. `15 B`. Longest suffix first so `KB` is not
+# mistaken for a trailing `B`.
+_SIZE_SUFFIXES = (("GB", 1024**3), ("MB", 1024**2), ("KB", 1024), ("B", 1))
+
+
+def parse_size(text: str) -> int:
+    """A size cell from `fs dir`'s table, in bytes.
+
+    Every fixture in this script is well under 16 bytes, so only the `B`
+    suffix is ever actually exercised — but a size cell is parsed for real
+    units rather than assuming `B` forever, so a future, larger fixture fails
+    loudly here (a clear `RuntimeError`) instead of tripping a bare
+    `ValueError` three lines away with no context.
+    """
+    stripped = text.strip()
+    for suffix, factor in _SIZE_SUFFIXES:
+        if stripped.endswith(suffix):
+            number = stripped[: -len(suffix)].strip()
+            try:
+                return round(float(number) * factor)
+            except ValueError:
+                break
+    raise RuntimeError(f"'{text}' is not a size hst-imager's listing format ART recognises")
+
+
 def parse_dir_listing(text: str) -> dict[str, dict]:
     """`hst.imager fs dir <partition> -r`'s table, by name.
 
@@ -154,6 +205,13 @@ def parse_dir_listing(text: str) -> dict[str, dict]:
     Nested paths already use `/`, not `\\` — measured against a real run
     rather than assumed, unlike `fs copy`'s own progress log, which does use
     `\\`.
+
+    A row this cannot make sense of **raises** rather than being skipped. The
+    "nothing extra is on the volume" check downstream depends on this
+    function having seen every entry; a row silently dropped here would be
+    invisible to that check specifically, which is the one assertion that
+    actually depends on completeness (every *expected* path is looked up by
+    name and a missing one already fails loudly on its own).
     """
     lines = text.splitlines()
     header = None
@@ -169,15 +227,26 @@ def parse_dir_listing(text: str) -> dict[str, dict]:
     for line in lines[header + 2 :]:
         if not line.strip():
             break
+        if "|" not in line:
+            raise RuntimeError(f"a row in hst-imager's listing has no columns: {line!r}")
         parts = [p.strip() for p in line.split("|")]
         if len(parts) < 4:
-            continue
+            raise RuntimeError(
+                f"a row in hst-imager's listing has {len(parts)} column(s), "
+                f"expected at least 4: {line!r}"
+            )
         name, size, _date, attrs = parts[0], parts[1], parts[2], parts[3]
+        # The Comment column is real (it round-trips through `-uae
+        # UaeMetafile` for a file hst-imager itself wrote with one) but ART's
+        # PFS3 writer never sets it — `copy_in_pfs3` only ever calls
+        # `update_dir_entry_protection`, never anything that touches a
+        # comment (see `native.rs`'s own doc comment). Parsed here for
+        # completeness; deliberately never compared below.
         comment = parts[4] if len(parts) > 4 else ""
         is_dir = size == "<DIR>"
         entries[name] = {
             "kind": "dir" if is_dir else "file",
-            "size": None if is_dir else int(size.rstrip("B").strip()),
+            "size": None if is_dir else parse_size(size),
             "attributes": attrs,
             "comment": comment,
         }
@@ -190,7 +259,9 @@ def check_art_writes_hst_reads(hst: str, work: Path) -> list[tuple[bool, str]]:
     `build_pfs3_volume_for_oracle_when_asked` builds the volume through the
     same two calls G5 makes (`format_partition` then `copy_in`) and prints a
     JSON description of every entry it believes it wrote — so what is being
-    checked is that claim, not ART's opinion of itself.
+    checked is that claim, not ART's opinion of itself. Checked two ways:
+    `fs dir -r` for name, kind, size and protection, and `fs copy` extracting
+    the volume back out to disk for the file contents themselves.
     """
     checks: list[tuple[bool, str]] = []
     image = work / "art-write.hdf"
@@ -242,9 +313,9 @@ def check_art_writes_hst_reads(hst: str, work: Path) -> list[tuple[bool, str]]:
                     f"{path} is {item['size']} bytes (hst-imager says {got['size']})",
                 )
             )
-        # The point of this whole script: protection bits, not just names and
-        # sizes. `hst-imager`'s own spelling — HSPARWED, uppercase for
-        # granted — is `uaem::format_bits`'s output uppercased.
+        # Protection bits, not just names and sizes. `hst-imager`'s own
+        # spelling — HSPARWED, uppercase for granted — is
+        # `uaem::format_bits`'s output uppercased.
         checks.append(
             (
                 got["attributes"] == item["attributes"],
@@ -254,6 +325,42 @@ def check_art_writes_hst_reads(hst: str, work: Path) -> list[tuple[bool, str]]:
 
     extra = sorted(set(actual) - {item["path"] for item in expected})
     checks.append((not extra, f"nothing extra is on the volume{f': {extra}' if extra else ''}"))
+
+    # The content check: extract the whole volume back out with hst-imager
+    # and hash what comes out against the literal bytes the write hook was
+    # given — not against anything ART's own reader says, which would only
+    # prove ART agrees with itself again. `fs copy -r` refuses if the
+    # destination directory does not already exist (confirmed by hand), so
+    # it is created first.
+    extract_dir = work / "art-write-extract"
+    shutil.rmtree(extract_dir, ignore_errors=True)
+    extract_dir.mkdir(parents=True)
+    extracted = run_hst(
+        hst, ["fs", "copy", f"{image.name}\\rdb\\dh0", extract_dir.name, "-r"], work
+    )
+    if extracted.returncode != 0:
+        checks.append((False, "hst-imager extracted the volume ART wrote back to disk"))
+        print(extracted.stdout[-2000:])
+        print(extracted.stderr[-1000:])
+        return checks
+    checks.append((True, "hst-imager extracted the volume ART wrote back to disk"))
+
+    for item in expected:
+        if item["kind"] != "file":
+            continue
+        path = item["path"]
+        local = extract_dir.joinpath(*path.split("/"))
+        if not local.is_file():
+            checks.append((False, f"{path} was extracted back to disk"))
+            continue
+        got_hash = hashlib.sha256(local.read_bytes()).hexdigest()
+        checks.append(
+            (
+                got_hash == item["sha256"],
+                f"{path}'s extracted bytes hash to what NativeFormatter was given",
+            )
+        )
+
     return checks
 
 
@@ -270,8 +377,6 @@ def check_hst_writes_art_reads(
     src = work / "hst-src"
     for stale in (image, src):
         if stale.is_dir():
-            import shutil
-
             shutil.rmtree(stale, ignore_errors=True)
         elif stale.exists():
             stale.unlink()
@@ -369,18 +474,26 @@ def check_hst_writes_art_reads(
             )
         )
 
+    # Mirrors direction 1's own "nothing extra" check: `got` was built from
+    # every `entry=` line ART's read hook printed, so this depends on that
+    # walk being complete, not on the three paths this script happens to look
+    # up.
+    extra = sorted(set(got) - set(expected))
+    checks.append((not extra, f"nothing extra is on the volume{f': {extra}' if extra else ''}"))
+
     return checks
 
 
 def main() -> int:
     hst = find_hst_imager()
     driver = find_pfs3_driver()
+    scratch = require_scratch_dir()
     print(f"hst-imager: {hst}")
     print(f"pfs3 driver: {driver}")
+    print(f"scratch: {scratch}")
     print()
 
-    parent = SCRATCH if SCRATCH.is_dir() else None
-    with tempfile.TemporaryDirectory(prefix="art-pfs3-oracle-", dir=parent) as tmp:
+    with tempfile.TemporaryDirectory(prefix="art-pfs3-oracle-", dir=scratch) as tmp:
         work = Path(tmp)
 
         print("ART writes, hst-imager reads:")

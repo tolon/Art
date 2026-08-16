@@ -1559,8 +1559,13 @@ mod tests {
     /// **ART writes, `hst-imager` reads.** Builds a PFS3 volume end to end
     /// through `NativeFormatter` — the same `format_partition` then
     /// `copy_in` calls G5 makes — and prints a JSON description of every
-    /// entry so `hst-imager fs dir -r` can be checked against a claim rather
-    /// than against ART's own opinion of what it wrote.
+    /// entry so `hst-imager` can be checked against a claim rather than
+    /// against ART's own opinion of what it wrote: `fs dir -r` for name,
+    /// kind, size and protection, and `fs copy` extracting the volume back
+    /// out for the bytes themselves (the JSON's `sha256` is computed here
+    /// from the exact literal each file was written from, so what the
+    /// script hashes on the extracted side is checked against ART's write
+    /// input, not against anything ART read back through its own reader).
     ///
     /// Protection bits are the point, not an extra: `C/Assign` carries the
     /// Pure bit (`--p-rwed`) and `C/Startup-Sequence` the Script bit
@@ -1606,23 +1611,31 @@ mod tests {
             .format_partition(&image, None, 1, "Workbench", &NoProgress)
             .unwrap();
 
+        // The literal bytes are named once and reused for both the write and
+        // the JSON claim below, so a size or hash in the JSON can never drift
+        // from what was actually handed to `copy_in`.
+        let readme: &[u8] = b"hello from ART\n";
+        let assign: &[u8] = b"ASSIGN\n";
+        let startup: &[u8] = b"; a comment\n";
+        let deep: &[u8] = b"deep\n";
+
         let tree = fixtures::scratch("pfs3-oracle-write");
         std::fs::create_dir_all(tree.join("C/Extra")).unwrap();
         std::fs::create_dir_all(tree.join("S")).unwrap();
-        std::fs::write(tree.join("Readme"), b"hello from ART\n").unwrap();
-        std::fs::write(tree.join("C/Assign"), b"ASSIGN\n").unwrap();
+        std::fs::write(tree.join("Readme"), readme).unwrap();
+        std::fs::write(tree.join("C/Assign"), assign).unwrap();
         std::fs::write(
             tree.join("C/Assign.uaem"),
             "--p-rwed 2021-04-13 02:43:13.68 kept by ART\n",
         )
         .unwrap();
-        std::fs::write(tree.join("C/Startup-Sequence"), b"; a comment\n").unwrap();
+        std::fs::write(tree.join("C/Startup-Sequence"), startup).unwrap();
         std::fs::write(
             tree.join("C/Startup-Sequence.uaem"),
             "-s--rwed 2021-04-13 02:43:13.68\n",
         )
         .unwrap();
-        std::fs::write(tree.join("C/Extra/Deep.txt"), b"deep\n").unwrap();
+        std::fs::write(tree.join("C/Extra/Deep.txt"), deep).unwrap();
 
         NativeFormatter
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
@@ -1632,14 +1645,19 @@ mod tests {
         // by hand against `hst-imager 1.6.616` on this exact tree before
         // this assertion was written, not guessed at: forward slashes in
         // nested paths, `----RWED` for a file with no sidecar, `--P-RWED`
-        // for the Pure bit, `-S--RWED` for the Script bit.
+        // for the Pure bit, `-S--RWED` for the Script bit. `sha256` is only
+        // meaningful for files; directories omit it.
         let entries = serde_json::json!([
-            {"path": "Readme", "kind": "file", "size": 15, "attributes": "----RWED"},
+            {"path": "Readme", "kind": "file", "size": readme.len(), "attributes": "----RWED",
+             "sha256": crate::core::hashing::sha256_bytes(readme)},
             {"path": "C", "kind": "dir", "attributes": "----RWED"},
-            {"path": "C/Assign", "kind": "file", "size": 7, "attributes": "--P-RWED"},
-            {"path": "C/Startup-Sequence", "kind": "file", "size": 12, "attributes": "-S--RWED"},
+            {"path": "C/Assign", "kind": "file", "size": assign.len(), "attributes": "--P-RWED",
+             "sha256": crate::core::hashing::sha256_bytes(assign)},
+            {"path": "C/Startup-Sequence", "kind": "file", "size": startup.len(), "attributes": "-S--RWED",
+             "sha256": crate::core::hashing::sha256_bytes(startup)},
             {"path": "C/Extra", "kind": "dir", "attributes": "----RWED"},
-            {"path": "C/Extra/Deep.txt", "kind": "file", "size": 5, "attributes": "----RWED"},
+            {"path": "C/Extra/Deep.txt", "kind": "file", "size": deep.len(), "attributes": "----RWED",
+             "sha256": crate::core::hashing::sha256_bytes(deep)},
             {"path": "S", "kind": "dir", "attributes": "----RWED"},
         ]);
         println!("json={entries}");
