@@ -45,6 +45,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-ASCII-name figures there remain the earlier, separate measurement.
   **Since re-run** — see the entry above it.
 
+### AmigaOS 3.2 boots from a disk ART prepared (2026-08-16)
+
+#### Fixed
+- **Hard disks ART creates can now be mounted by an Amiga at all.** When ART
+  puts a filesystem driver (PFS3) onto a disk it creates, it also has to tell
+  AmigaOS to use it — and it was filling in the wrong field, so every such
+  disk ART has ever written was ignored: the drive did not appear, and trying
+  to boot one crashed the machine with a Software Failure. The driver itself
+  was always written correctly, which is why every tool that reads these
+  disks reported them as fine. Only a real Kickstart could tell the
+  difference, and now one has.
+- **The AmigaOS 3.2 system ART builds now starts Workbench.** Three things
+  were missing, each of which stopped the boot with a requester: two
+  libraries the 3.2 A1200 ROM does not contain and the Workbench floppy does
+  not carry (`icon.library` and `workbench.library`, both on the Install
+  floppy — a disk ART had not been reading at all), and the desktop
+  wallpapers, which had been left switched off until somebody could confirm
+  where they belong. The running system named the place itself.
+
+#### Verified
+- AmigaOS 3.2 boots to a clean Workbench — wallpaper and all, no error
+  requesters — from a PFS3 volume ART formatted and filled, under WinUAE with
+  a licensed Kickstart. A smaller volume ART formatted with its own writer
+  boots to an AmigaDOS prompt and runs its startup script. **These are the
+  first hard disks ART has made that an Amiga has booted.** Real hardware is
+  still untouched.
+
 ### The whole 3.2 tree reaches a volume in one run (2026-08-16)
 
 #### Fixed

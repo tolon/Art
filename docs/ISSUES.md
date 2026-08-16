@@ -614,6 +614,99 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-126** 🔴 ✅ **Every RDB filesystem ART has ever embedded was ignored by
+AmigaOS: `PatchFlags` named the wrong field** — *found and fixed 2026-08-16,
+by booting what ART built*
+`src-tauri/src/core/rdb.rs` (`create_rdb_layout`, the FSHD block) · The
+`FileSysEntry`'s `PatchFlags` says which of its fields AmigaOS copies into the
+device node — one bit per field, **in structure order**: `Type`(0), `Task`(1),
+`Lock`(2), `Handler`(3), `StackSize`(4), `Priority`(5), `Startup`(6),
+`SegListBlock`(7), `GlobalVec`(8). ART wrote `0x10`, with a comment stating
+that bit 4 was `dn_SegListBlock`. Bit 4 is `StackSize`, and the value beside
+it was zero. So every disk ART wrote asked AmigaOS to patch a stack size to
+nothing and said nothing at all about the driver it had just embedded.
+
+**The consequence is the whole of G4**: the partition mounted with no handler,
+which on a `PDS3` volume means it does not mount at all, and a *bootable* one
+sent the machine into `Software Failure 8000 0008` — a privilege violation,
+from jumping into a seg list that was never installed. [ART-084](#fixed)
+closed with the words "a PFS3 disk ART makes now mounts". It did not. Nothing
+ART built had ever been mounted by an Amiga; the claim rested on `rdbtool`
+extracting the driver back SHA-256-identical, `hst-imager` listing it, and
+ART's own parser reporting it — **none of which acts on `PatchFlags`**. It is
+the project's own recurring shape (ART-032 … 035, ART-075, ART-079) arriving
+one layer higher: every reader agreed, and the only thing that could
+contradict them was a Kickstart.
+
+Fixed to `0x180` — `SegListBlock` and `GlobalVec`, and nothing ART has no
+opinion about. Not a guess: both of the user's real, booting PiStorm cards
+were read for it. CaffeineOS 9317 writes `0x180` with `StackSize` unpatched;
+MultibootOS 2.2 writes `0x190` for its PFS3 (the same two bits plus a
+2048-byte stack) and `0x180` for its FFS.
+
+Proved by the thing that found it — WinUAE, licensed Kickstart, the user's own
+material, one variable changed at a time:
+
+| Run | Kickstart | What happened |
+|---|---|---|
+| before the fix, booting the volume | 3.1 (V40) | `Software Failure 8000 0008` |
+| before the fix, mounted beside a boot floppy | 3.1 (V40) | no volume icon — it never mounted |
+| after the fix, same floppy | 3.1 (V40) | the volume appears on Workbench |
+| after the fix, ART's *own* PFS3 format, booted | 3.1 (V40) | `hello from ART` at the `1>` prompt |
+
+That last one is the first hard disk ART has ever made that an Amiga booted,
+and it settles [ART-122](#fixed)'s open half as well: the real PFS3 driver
+accepts the reserved-area layout `NativeFormatter` writes, which is what
+`pfs3aio`'s own algorithm produces.
+
+Test: `the_seg_list_and_global_vec_are_the_fields_amigados_is_told_to_take`,
+which asserts the two bits are claimed *and* that `StackSize` and `Priority`
+are not — the defect was a claimed field, so an unclaimed one is what the test
+pins.
+
+**ART-127** 🟠 ✅ **The tree G5 builds could not start Workbench: two
+libraries missing, and the wallpapers left off on an assumption** — *found and
+fixed 2026-08-16, by booting the tree once ART-126 let it boot at all*
+`src-tauri/src/core/osinstall/recipes/amigaos-3.2.json` · With ART-126 fixed,
+the real AmigaOS 3.2 tree booted far enough to speak for itself, and it asked
+for three things in turn:
+
+1. *"Please insert a volume containing LIBS/icon.library in any drive."*
+   AmigaOS 3.2's A1200 ROM does not carry `icon.library`, and neither does
+   `Workbench3.2` — whose `Libs` drawer holds 23 libraries, not this one. It
+   is on `Install3.2`, a disk the recipe named **no component for at all**:
+   it had been written off as "the OS's own boot floppy, not component media"
+   when `find_media` reported 35 of 36 volumes and nobody asked what the 36th
+   held.
+2. The same, for `LIBS/workbench.library` — 185 KB, same disk, same reason.
+3. *"ERROR: can't load picture Sys:Prefs/Presets/Backdrops/default_pal.iff"*.
+   The `backdrops` component shipped `available: false` with a comment saying
+   it would stay off "until somebody measures where the real installer places
+   wallpapers". That was the right call while the answer was a guess; the
+   running system has now named the path itself.
+
+Fixed: a new required `install-libs` component takes those two libraries off
+`Install3.2` (and only those two — `iffparse`, `locale` and `version` are on
+that disk as well and `Workbench3.2` already ships them, so taking them would
+be the collision ART-112 was), and `backdrops` is available, aimed at
+`Prefs/Presets/Backdrops`. Tests:
+`the_libraries_workbench_does_not_carry_come_off_the_install_disk`,
+`backdrops_go_where_the_running_system_asked_for_them`.
+
+**The result, which is what this entry exists for**: AmigaOS 3.2 boots to a
+clean Workbench — wallpaper and all, no requesters — from a PFS3 volume ART
+prepared, under WinUAE with the user's own licensed V47 A1200 ROM. Real
+hardware is still untouched.
+
+Two things this dragged in with it, both worth keeping: the real-media hook
+had one ROM's answers hard-coded (`modules-a1200` asserted on, and one exact
+file count), so it failed the moment it was pointed at the user's *other* real
+ROM — it now asserts the rule the condition encodes (on exactly when the
+paired ROM's stated major is below 47) and pins a set of counts per ROM. And
+`fixtures::required_media` exists because eight fixtures broke at once when a
+second required component appeared: a required component's media is a
+precondition of any plan, not something a test chooses.
+
 **ART-122** 🟠 ✅ **`hst-imager` cannot write into a volume `NativeFormatter`
 just formatted — the first copy dies `ERROR_DISK_FULL`, and it dies *after*
 the destructive format has already run** — *found 2026-08-16, measuring the
@@ -1982,7 +2075,7 @@ a setting the user is expected to fill in is a setting that needs a picker.
 
 Found by the user in the running application, 2026-08-12.
 
-**ART-084** 🟠 **An HDF created as PFS3 or SFS is a DosType with no filesystem behind it, and an Amiga cannot mount it** — *fixed 2026-08-12*
+**ART-084** 🟠 **An HDF created as PFS3 or SFS is a DosType with no filesystem behind it, and an Amiga cannot mount it** — *fixed 2026-08-12; **the fix was half a fix and nobody knew until 2026-08-16** — the driver was embedded correctly and then advertised with the wrong `PatchFlags`, so AmigaOS ignored it and the disk still did not mount. See [ART-126](#fixed): this entry's closing claim was verified only by tools that do not read that field.*
 `core/hdf.rs::create_hdf` · `core/rdb.rs::create_rdb_layout` ·
 `src/pages/HardDiskStudio.tsx` · The New HDF wizard's third step is "Choose
 Amiga Filesystem", and it offers **PFS3-AIO as the default, badged
