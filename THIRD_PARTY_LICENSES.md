@@ -38,6 +38,12 @@ ART is built on the following open-source projects:
   carry no timestamps — a build that produces the same bytes twice is one a
   manifest can describe
 - **ureq** — HTTP client used by the Aminet repository mirror (§41.5.3) (MIT / Apache-2.0)
+- **libpfs3** — PFS3 (Professional File System III) reading and writing, the
+  filesystem a real PiStorm card uses (LGPL-3.0-or-later), with `byteorder`
+  (MIT / Unlicense) and `thiserror` (MIT / Apache-2.0) beneath it. The one
+  weak-copyleft dependency inside `core/`, accepted deliberately in place of a
+  second filesystem writer of ART's own — see `deny.toml`'s allow list for the
+  reasoning and its cost
 - **i18next / react-i18next** — internationalization (MIT)
 - **zustand** — state management (MIT)
 - **react-router-dom** — routing (MIT)

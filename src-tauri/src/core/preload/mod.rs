@@ -29,6 +29,8 @@
 //! file inside the volume. That is a `not-checked` in G8's report and a job for
 //! something that is not ART, exactly as the FAT32 side already is.
 
+pub mod pfs3dev;
+
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
