@@ -1740,13 +1740,25 @@ mod tests {
     /// observed consequence worth naming in the report, not a defect this
     /// hook works around.
     ///
+    /// **`SAFE_CREATE`**, same as `core/card/build.rs`'s own `write_card`:
+    /// `ART_CARD_OUT` is refused if it already exists rather than replaced —
+    /// a test hook is not exempt from the convention it exercises, and
+    /// silently deleting whatever an env var happens to name was review
+    /// fix round 1's finding here.
+    ///
     /// ```text
-    /// ART_OSINSTALL_DEST="E:\amiga\ProjeART\dist-3.2" ^
-    /// ART_CARD_OUT="E:\amiga\ProjeART\dist-3.2-card.hdf" ^
+    /// ART_OSINSTALL_DEST="E:\amiga\ProjeART\dist-3.2-witness" \
+    /// ART_CARD_OUT="E:\amiga\ProjeART\dist-3.2-witness-card.hdf" \
     /// cargo test build_the_real_dist_tree_onto_a_card_when_asked -- --nocapture --ignored
     /// ```
+    ///
+    /// `dist-3.2-witness` — not `dist-3.2` itself — because [ART-113](../../../../docs/ISSUES.md)
+    /// blocks the full tree (point this at `dist-3.2` directly to reproduce
+    /// that failure). The reduced tree was built by a one-off pass, not a
+    /// committed script — see ART-113's own entry for the method — so it
+    /// must already exist on disk before this test can put it on a card.
     #[test]
-    #[ignore = "touches the real dist-3.2 tree on disk and writes a multi-MB image; run explicitly"]
+    #[ignore = "touches a real dist tree on disk and writes a multi-MB image; run explicitly"]
     fn build_the_real_dist_tree_onto_a_card_when_asked() {
         let (Ok(dist), Ok(card_out)) = (
             std::env::var("ART_OSINSTALL_DEST"),
@@ -1759,12 +1771,19 @@ mod tests {
         if let Some(parent) = image.parent() {
             std::fs::create_dir_all(parent).ok();
         }
-        let _ = std::fs::remove_file(&image);
+        assert!(
+            !image.exists(),
+            "'{}' already exists — SAFE_CREATE: remove it yourself first, \
+             or point ART_CARD_OUT somewhere new",
+            image.display()
+        );
 
-        // 128 MB total / 100 MB partition: the real tree measured
-        // ~12.3 MB on disk (`total_bytes` in the run above), comfortably
-        // inside a 100 MB PFS3 partition with room for anode/bitmap
-        // overhead and future growth without re-measuring this number.
+        // 128 MB total / 100 MB partition: the real (unreduced) tree
+        // measured ~12.3 MB on disk (`total_bytes` in
+        // `run_the_real_engine_against_the_users_own_media_when_asked`),
+        // comfortably inside a 100 MB PFS3 partition with room for
+        // anode/bitmap overhead and future growth without re-measuring
+        // this number.
         crate::core::hdf::create_hdf(
             &image,
             128 * 1024 * 1024,
@@ -1789,6 +1808,10 @@ mod tests {
             .copy_in(&image, None, "DH0", &dist_root, &NoProgress)
             .unwrap();
 
+        // Machine-readable (`key=value`), the same convention the two PFS3
+        // oracle hooks above use for their own `json=`/`volume=`/`entry=`
+        // lines — a human or a future script can parse this rather than
+        // re-deriving or hard-coding the counts.
         println!(
             "card={} files={} directories={} bytes={}",
             image.display(),

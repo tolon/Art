@@ -23,6 +23,35 @@ what fixed it (with the test that proves it).
 
 ## Open
 
+**ART-119** 🔵 **Five minors deferred from Task 13's review, folded into one
+entry** — *found 2026-08-15/16, Task 13's fix round, filed at Task 14*
+`src/lib/osinstall.ts`, `src/components/osbuilder/OsInstall.tsx`,
+`src-tauri/src/core/osinstall/plan.rs` · None promoted during Task 13's own
+round because each is one line, harmless today, or both:
+
+1. The two-plan design (`osinstall_plan` called once for the base plan and
+   once more for `excludedConditional`) doubles the work even when
+   `excludedConditional` is empty and the two requests are byte-identical.
+2. The JSX renders four `conditionalReason` kinds as independent guards
+   rather than an exhaustive `switch`, so a fifth kind would render no reason
+   at all. All four shipped kinds are covered today.
+3. The recipe-parity test (`src/lib/osinstall.test.ts`) does not assert a
+   `Condition`'s **kind** string, only its `major` — a future condition
+   variant other than `rom-older-than` carrying a `major` field would pass
+   the parity test while the screen still said "below Kickstart V47".
+4. The reason block lost its `!def.required && def.available` gate during a
+   fix round; unreachable against the shipped recipe (nothing both
+   `available: false` and non-required needs a reason shown), so not acted
+   on, but the gate's absence is not provably safe against a future recipe.
+5. *(Pre-existing, not introduced by Task 13.)* The base plan can hard-error
+   on `AdfSource::open` for an **excluded** component's damaged or vanished
+   disk, blanking both plans — `osinstall_plan` should probably treat a
+   missing/corrupt medium for a component the caller excluded the same way
+   `MediaMissing`/`MediaPathMissing` already treat one for a component the
+   caller never asked about.
+Not fixed — none is data-unsafe; each is a real, small gap worth someone's
+attention before the recipe or the screen grows past what today's tests cover.
+
 **ART-118** 🟠 **The OS Builder's install screen has not been seen rendering
 beyond its headings** — *found 2026-08-15/16, Task 13's browser pass and
 Task 14's real run*
@@ -134,7 +163,7 @@ UTF-8 bytes for `ñ` (`0xC3 0xB1`) and reads back mis-decoded, so
 `NativeFormatter::copy_in`'s own "was created and is not listed back" sanity
 check (`native.rs:742`, `.find(|e| e.name.eq_ignore_ascii_case(name))`) fires
 and the whole copy aborts loudly — never silent corruption, but a hard stop.
-Found via the real `dist-3.2` tree: 24 files/directories across
+Found via the real `dist-3.2` tree: 24 **directories** across
 `Locale/Catalogs`, `Locale/Countries`, `Locale/Help` and `Locale/Languages`
 carry accented AmigaDOS names — `español`, `français`, `português`, `türkçe`,
 `österreich`, `canada_français` — real content from `Locale-ES/-FR/-PT/-TR`
@@ -144,38 +173,23 @@ fixture in Tasks 1–13 used a non-ASCII name, so nothing caught this before rea
 media did. Not fixed — `libpfs3` is pinned and exposes no name-encoding option;
 a fix means either an upstream patch or ART pre-encoding names itself before
 calling into it, which is a real change to `core/preload/native.rs` this task
-did not make. Task 14's Step 2 volume build used a reduced tree with these 24
-entries excluded (documented in the STATUS.md session line and the report) to
-demonstrate the rest of the pipeline while this stays open.
+did not make.
 
-**ART-119** 🔵 **Five minors deferred from Task 13's review, folded into one
-entry** — *found 2026-08-15/16, Task 13's fix round, filed at Task 14*
-`src/lib/osinstall.ts`, `src/components/osbuilder/OsInstall.tsx`,
-`src-tauri/src/core/osinstall/plan.rs` · None promoted during Task 13's own
-round because each is one line, harmless today, or both:
-
-1. The two-plan design (`osinstall_plan` called once for the base plan and
-   once more for `excludedConditional`) doubles the work even when
-   `excludedConditional` is empty and the two requests are byte-identical.
-2. The JSX renders four `conditionalReason` kinds as independent guards
-   rather than an exhaustive `switch`, so a fifth kind would render no reason
-   at all. All four shipped kinds are covered today.
-3. The recipe-parity test (`src/lib/osinstall.test.ts`) does not assert a
-   `Condition`'s **kind** string, only its `major` — a future condition
-   variant other than `rom-older-than` carrying a `major` field would pass
-   the parity test while the screen still said "below Kickstart V47".
-4. The reason block lost its `!def.required && def.available` gate during a
-   fix round; unreachable against the shipped recipe (nothing both
-   `available: false` and non-required needs a reason shown), so not acted
-   on, but the gate's absence is not provably safe against a future recipe.
-5. *(Pre-existing, not introduced by Task 13.)* The base plan can hard-error
-   on `AdfSource::open` for an **excluded** component's damaged or vanished
-   disk, blanking both plans — `osinstall_plan` should probably treat a
-   missing/corrupt medium for a component the caller excluded the same way
-   `MediaMissing`/`MediaPathMissing` already treat one for a component the
-   caller never asked about.
-Not fixed — none is data-unsafe; each is a real, small gap worth someone's
-attention before the recipe or the screen grows past what today's tests cover.
+**The 24 named entries are directories, and excluding a directory excludes
+its whole subtree — state the real cost, not the count of what was named.**
+Task 14's Step 2 volume build used a reduced tree with those 24 directories
+(and everything under them) excluded, which removed **969 of 4030 files and
+106 of 330 directories — about a quarter of the whole tree** — not "24
+files/directories" as an earlier draft of this entry and the session log
+both said. Method: a one-off Python pass walked `dist-3.2`, copied every
+entry whose name encodes as pure ASCII into a sibling folder and skipped
+(printing) the rest, then `build_the_real_dist_tree_onto_a_card_when_asked`
+(`core/preload/native.rs`) copied that reduced folder onto a fresh PFS3
+`.hdf` and `hst.imager fs copy` extracted it back for a SHA-256 comparison
+against the reduced folder. **Not committed as a script**, so the 969/106
+and the 3059/3061 hash-match figures below are this session's own
+one-off measurement, not a command a later session can re-run to reproduce
+them — recorded here rather than left silently unreproducible.
 
 **ART-110** 🔵 **A partial layout apply cannot be resumed, and the screen stays
 busy** — *found 2026-08-15, the whole-branch review of SD-2 G11*

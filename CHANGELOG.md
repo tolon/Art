@@ -22,10 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with which component put it there, which disk it came from, its SHA-256
   and its AmigaDOS protection bits — the only record of what an install did,
   since the original floppy images are not kept around afterwards.
-- **The tree can be put onto a real PFS3 or FFS volume and read back
-  independently.** Verification tells "ART did not check this" apart from
-  "ART checked this and it's fine" — a filesystem ART cannot yet verify
-  reports honestly rather than showing a false pass.
+- **The tree can be put onto a real PFS3 volume — a 128 MB `.hdf` file built
+  by ART itself, not physical hardware — and read back independently.**
+  Verification tells "ART did not check this" apart from "ART checked this
+  and it's fine" — a filesystem ART cannot yet verify reports honestly
+  rather than showing a false pass. (FFS volumes are also supported by the
+  same code path but were not part of this run.)
 - **Run for the first time against the user's own real 3.2 media** (36
   floppy images, a real Kickstart v3.1 rev 40.68): 26 components, 4030 files,
   11.9 MB, and the pre-V47 Modules component switching itself on exactly as
@@ -37,8 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   language.** A dependency this feature relies on mishandles any AmigaDOS
   filename outside plain ASCII, which is real content on the Spanish,
   French, Portuguese and Turkish locale disks (and the base Locale disk's
-  own country list). The copy refuses loudly rather than writing anything
-  wrong; it does not yet succeed for those files.
+  own country list) — 24 directories, but excluding a directory excludes
+  everything under it: **about a quarter of the whole tree** (969 of 4030
+  files, 106 of 330 directories) does not yet reach a volume. The copy
+  refuses loudly rather than writing anything wrong; it just does not yet
+  succeed for those files.
 - **No Amiga, real or emulated, has booted anything this feature has built.**
   The distribution tree and the volume it produces are proven independently
   of ART — but the WinUAE rung and the real-hardware rung are both still

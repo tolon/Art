@@ -1427,12 +1427,28 @@ mod tests {
              this run to surface if it happens"
         );
 
+        // Review fix round 1: these were printed, never asserted, so none of
+        // them could regress. The real 36-ADF media set is fixed (it is the
+        // user's own material, not expected to change), so the exact counts
+        // are asserted rather than left as text a reader has to trust — if
+        // this ever fails because the media folder genuinely changed, that
+        // is itself worth knowing, not a flaky test to work around.
+        assert_eq!(
+            planned.components_on.len(),
+            26,
+            "components_on={:?}",
+            planned.components_on
+        );
+
         let root = PathBuf::from(&dest);
         let outcome = apply(&planned, &root, &NoProgress).unwrap();
         println!(
             "apply: files={} directories={} bytes={}",
             outcome.files, outcome.directories, outcome.bytes
         );
+        assert_eq!(outcome.files, 4030);
+        assert_eq!(outcome.directories, 330);
+        assert_eq!(outcome.bytes, 11_930_254);
 
         let manifest_text = std::fs::read_to_string(root.join(MANIFEST_FILE_NAME)).unwrap();
         let manifest: DistributionManifest = serde_json::from_str(&manifest_text).unwrap();
@@ -1441,6 +1457,8 @@ mod tests {
             manifest.files.len(),
             manifest.built_from.len()
         );
+        assert_eq!(manifest.files.len(), 4030);
+        assert_eq!(manifest.built_from.len(), 26);
     }
 
     /// Throwaway diagnostic, not part of the suite's real coverage — lists
