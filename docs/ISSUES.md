@@ -19,6 +19,9 @@ what fixed it (with the test that proves it).
 | 🟡 **Medium** | Incorrect behaviour with limited blast radius. |
 | 🔵 **Low** | Hygiene, dead code, developer-facing friction. |
 
+A ✅ beside the severity marks an entry found and fixed within the same
+pass — filed and closed together rather than sitting in Open in between.
+
 ---
 
 ## Open
@@ -566,7 +569,7 @@ re-audits them without reason:
 
 ## Fixed
 
-**ART-121** ✅ **ART-120's own fix wave, reviewed — four findings, folded
+**ART-121** 🟡 ✅ **ART-120's own fix wave, reviewed — four findings, folded
 into one entry** — *found 2026-08-16 in review of ART-120; fixed 2026-08-16*
 `src/i18n/en.json`, `src/i18n/tr.json`, `src/lib/preload.ts`,
 `src/components/osbuilder/VolumePreload.tsx`,
@@ -651,7 +654,7 @@ untouched by the fallback choice. `is_windows_reserved_component`
 so there is nothing this check is failing to catch on the data ART actually
 handles.
 
-**ART-120** ✅ **`NativeFormatter` was unreachable from the application —
+**ART-120** 🟠 ✅ **`NativeFormatter` was unreachable from the application —
 every preload a user ran still shelled out to `hst-imager`** — *found
 2026-08-16, after G5 merged; fixed 2026-08-16*
 `src-tauri/src/commands/preload.rs` · SD-2's Phase B was built so that ART
@@ -759,7 +762,7 @@ confirmed the script reports it as `1 file(s) skipped … not a failure` rather
 than an unexplained shortfall, with every other check (names, sizes, hashes,
 protection bits, both directions) passing.
 
-**ART-116** ✅ **ART's PFS3 writer carries protection bits but drops a
+**ART-116** 🔵 ✅ **ART's PFS3 writer carries protection bits but drops a
 `.uaem`'s comment and date; the FFS branch keeps both** — *found 2026-08-16
 (Task 11), named for filing at Task 14, made visible 2026-08-16*
 `src-tauri/src/core/preload/native.rs` (`copy_in_pfs3` vs `copy_in_ffs`) ·
@@ -798,7 +801,7 @@ mentioning" gate) fails the negative control; temporarily adding the same
 counting to `copy_in_ffs` fails `copy_in_ffs_never_counts_anything_lost` —
 both reverted afterwards.
 
-**ART-113** ✅ **`libpfs3` 0.1.3 writes an entry's name as UTF-8 and reads it
+**ART-113** 🟠 ✅ **`libpfs3` 0.1.3 writes an entry's name as UTF-8 and reads it
 back as Latin-1 — any non-ASCII AmigaDOS name fails to copy in** — *found
 2026-08-16, Task 14's real run; refused by name 2026-08-16*
 Vendored dependency (`libpfs3 = "=0.1.3"`), not ART code, but it blocked real
@@ -850,7 +853,7 @@ checked by hand: filtering only files (not directories) out of
 the bound by one off fails the "more" count test; running the same check on
 `copy_in_ffs` fails the FFS test — each reverted afterwards.
 
-**ART-114** ✅ **`hst-imager`'s `fs copy` extraction silently drops any entry
+**ART-114** 🔵 ✅ **`hst-imager`'s `fs copy` extraction silently drops any entry
 whose name matches a Windows/MS-DOS reserved device basename, and the oracle
 that depends on it reported the drop as an unexplained shortfall** — *found
 2026-08-16, Task 14's real run; oracle fixed 2026-08-16*
@@ -900,7 +903,7 @@ reserved name so the oracle's own run exercises the skip path was not done —
 that fixture lives in `core/preload/native.rs`, out of scope for this fix
 because another session is actively working in that file.
 
-**ART-112** ✅ **`glowicons` did not declare an override over `classes`, so a real
+**ART-112** 🟠 ✅ **`glowicons` did not declare an override over `classes`, so a real
 card refused to build** — *found and closed 2026-08-16, Task 14's run against
 the user's own 3.2 media*
 `src-tauri/src/core/osinstall/recipes/amigaos-3.2.json` · Both `Classes3.2.adf`
@@ -922,7 +925,7 @@ Reproduced (and now passes) by
 set) — `refusals` is empty and `classes`/`glowicons` are both in
 `components_on`.
 
-**ART-111** ✅ **The `storage` component's rules named a `Storage/` drawer the
+**ART-111** 🟡 ✅ **The `storage` component's rules named a `Storage/` drawer the
 real disk does not have** — *found and closed 2026-08-16, Task 14's run
 against the user's own 3.2 media*
 `src-tauri/src/core/osinstall/recipes/amigaos-3.2.json` · Six `Subtree` rules
@@ -949,7 +952,7 @@ unmeasured third collision surface this session did not verify — so the
 minus the one bug that made it unusable at all.
 Reproduced (and now passes) the same way as ART-112, above.
 
-**ART-099** ✅ **Application Size cut the right-hand edge off every screen** — *closed 2026-08-14: the real window was measured and nothing is clipped. The third wrong diagnosis was mine, and it lasted an hour.*
+**ART-099** 🔵 ✅ **Application Size cut the right-hand edge off every screen** — *closed 2026-08-14: the real window was measured and nothing is clipped. The third wrong diagnosis was mine, and it lasted an hour.*
 
 **2026-08-14, morning: a fourth wrong diagnosis, recorded because the pattern
 is the point.** I screenshotted the running window, read text as cut off at
@@ -2491,7 +2494,8 @@ Tests: `a_checksummed_block_sums_to_zero`,
 `checksum_all_zero_block` (which had been pinning the bug).
 
 **ART-034** 🔴 **Files ART added to a disk were zero bytes on a real Amiga**
-`core/adf/blocks.rs`, `core/adf/mutate.rs` · The file header's `byte_size` was
+`core/adf/blocks.rs`, `core/adf/mutate.rs` *(mutate.rs deleted when task 10
+retired it — fixed, not reopened; see ART-047/048)* · The file header's `byte_size` was
 read and written at longword 79, and the comment at longword 80. The real
 layout is `byte_size` at longword 81 (offset 324) and the comment at longword 82
 (offset 328) — 80 is the protection bits. Both halves of ART used the same wrong
@@ -2504,7 +2508,9 @@ need extension blocks — that is, exactly the HDF partitions Stage R adds.
 right size and `xdftool type` returns its contents.
 
 **ART-035** 🔴 **The free-space bitmap was laid out the wrong way round**
-`core/adf/blocks.rs`, `core/adf/create.rs`, `core/adf/mutate.rs` · ART recorded
+`core/adf/blocks.rs`, `core/adf/create.rs`, `core/adf/mutate.rs` *(mutate.rs
+deleted when task 10 retired it — fixed, not reopened; see ART-047/048)* ·
+ART recorded
 a block's bit at longword `block / 32`, counting from the **most** significant
 bit. AmigaDOS records it at `(block - reserved) / 32`, counting from the
 **least** significant bit — the bitmap does not describe the boot blocks at all.
