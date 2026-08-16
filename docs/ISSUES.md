@@ -26,6 +26,51 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-125** 🔵 **A fallback copy reports zero bytes, and the screen prints
+that as a fact** — *found 2026-08-16, in [ART-122](#fixed)'s own verification
+run*
+`src-tauri/src/tools/hst_imager.rs` (`parse_copy_summary`),
+`src/i18n/*.json` (`preload.result.copied`) · The real run reported
+`files=3933 directories=280 bytes=0`. The counts come from asking the volume
+afterwards — `hst-imager fs dir -r` ends with *"280 directories, 3933 files,
+12.2 MB"* — and `parse_copy_summary` reads the first two and drops the third,
+because `"12.2"` is not a `u64`. So the result panel renders "Copied in: 3933
+file(s), 280 folder(s), **0 bytes**".
+
+The number is unrecoverable rather than merely unparsed: `12.2 MB` is a
+rounded string, and turning it into a byte count would invent 12 782 141 bytes
+that nothing measured. So the fix is *not* to parse it harder — it is to say
+nothing where ART has nothing, the same rule G8's `not-checked` state follows
+(§89). That needs `CopySummary::bytes` to distinguish "zero" from "not
+answered", and a string for each. Native runs are unaffected: they count their
+own bytes exactly.
+
+**ART-124** 🟡 **`apply()` reports how many plan items it ran, not what the
+tree holds — so the headline figure for the real 3.2 install is 98 files and
+50 directories too high** — *found 2026-08-16, counting the tree the real run
+had already written*
+`src-tauri/src/core/osinstall/apply.rs` · `outcome.files += 1` fires once per
+plan item and `outcome.directories += 1` once per directory item. Neither is
+the number of entries that exist afterwards: a component that `overrides`
+another writes the same destination twice by design (that is what an override
+*is* — ART-112 was a missing one), and a directory named by two components is
+created once by `create_dir_all` and counted twice.
+
+Measured against the tree the real run produced, which has not been rebuilt
+since: `apply()` reported **4030 files / 330 directories**;
+`E:\amiga\ProjeART\dist-3.2` holds **3932 files** (plus `distribution.json`,
+which `apply` does not count) **and 280 directories**. Confirmed independently
+— `hst-imager fs dir -r`, after a full copy of that tree onto a PFS3 volume,
+counts *"280 directories, 3933 files"*, the extra one being the manifest.
+
+Nothing is missing or wrong on disk: every file the plan meant to place is
+there, and `distribution.json` records each one once. What is wrong is the
+number the run announces, which has since been quoted as the size of the tree
+in `STATUS.md`, `FEATURES.md` and three issue entries. Not fixed. The fix is
+to count destinations rather than items — and to decide, in the same pass,
+whether the manifest counts as one of the tree's files (it is written by
+`apply`, so probably yes).
+
 **ART-119** 🔵 **Five minors deferred from Task 13's review, folded into one
 entry — two closed, three still open** — *found 2026-08-15/16, Task 13's fix
 round, filed at Task 14; #3 and #4 closed 2026-08-16*
@@ -568,6 +613,145 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-122** 🟠 ✅ **`hst-imager` cannot write into a volume `NativeFormatter`
+just formatted — the first copy dies `ERROR_DISK_FULL`, and it dies *after*
+the destructive format has already run** — *found 2026-08-16, measuring the
+real AmigaOS 3.2 tree through the ART-120 fallback path; fixed 2026-08-16*
+`src-tauri/src/core/preload/native.rs` (`format_partition`, PFS3 branch),
+`src-tauri/src/commands/preload.rs` (`run_with_fallback`) · **This is the
+exact combination ART-120 built.** The native path formats every partition —
+that step never falls back — and hands the copy to `hst-imager` only when the
+tree carries a non-ASCII AmigaDOS name (ART-113). So the fallback's own
+working case is: *ART formats, `hst-imager` fills*. It does not work.
+
+Minimal reproduction, no ART process involved after the format — two files,
+15 bytes, into a **400 MB** freshly formatted PFS3 partition:
+
+```text
+# an ART-formatted PFS3 volume (any empty tree through the hook below)
+hst.imager fs copy <tree> <image>\rdb\dh0 --recursive --makedir
+  → System.IO.IOException: ERROR_DISK_FULL
+     at Hst.Amiga.FileSystems.Pfs3.Directory.NewFile(...)
+# the identical command, run a second time
+  → 1 directory, 2 files, 15 B copied
+```
+
+**The first attempt repairs what the second one needs.** Byte-diffing the
+image before and after the failed run: it changed three blocks inside the
+rootblock cluster's **reserved bitmap** — most visibly 120 bytes at the tail
+of one block, which ART's format left as `FF` (free) and the failed attempt
+zeroed. Formatting the same partition with `hst-imager` instead writes those
+same bytes as zero from the start, and it stops four bytes earlier still: the
+two implementations disagree about how much of the reserved area exists, not
+about one bit. Counted over the rootblock cluster, ART's reserved bitmap
+marks **14 684** blocks free where `hst-imager`'s marks **11 188**.
+
+**Whose arithmetic is right: settled, and it is ART's.** Parsing both
+rootblocks field by field puts the disagreement in three coupled numbers —
+`lastreserved` 29 569 vs 22 401, so `numreserved` **14 784** vs **11 200**;
+`rblkcluster` 6 vs 4; `blocksfree` 789 934 vs 797 102, the difference being
+exactly the 3 584 extra reserved blocks × 2 sectors. Both rootblocks are
+internally consistent and self-describing; neither is corrupt. The tie is
+broken by the reference implementation — `pfs3aio`'s own `format.c`, whose
+`CalcNumReserved` is:
+
+```c
+taken = 32;
+for (ULONG i = 2048; i && i / 2 < temp; i <<= 1)
+    taken += taken * (i >= 512 * 2048 ? 10 : 14) / 16;
+taken /= resblocksize / 1024;
+taken = min(MAXNUMRESERVED, taken - 1);
+taken = (taken + 31) & ~0x1f;
+```
+
+Worked through by hand for this partition (819 504 blocks, 1 KB reserved
+blocks) that yields **14 784** — ART's number, to the block. `libpfs3` 0.1.3's
+`calc_num_reserved` is a faithful port of it, and the reserved-bitmap size
+loop matches `MakeReservedBitmap` as well. So **ART's format is what the
+implementation an Amiga actually runs would have written**, and this is *not*
+the "ART agrees only with itself" shape of ART-032 … 035, ART-075 and
+ART-079 — the third implementation was consulted and it sides with ART.
+What `hst-imager` cannot do is write into a volume laid out that way; it
+writes into its own fine (checked: the same tree, the same command, into an
+`hst-imager`-formatted volume, first try).
+
+Severity is High rather than Critical because nothing is destroyed that the
+user did not already confirm losing — the format step is the `Destructive` one
+and it succeeded. But the user is left with a formatted, empty partition and
+an error, which is the worst moment for the operation to stop.
+
+**Fixed 2026-08-16 — a partition is formatted and filled by one tool.** The
+defect ART can fix is its own design: `run_with_fallback` chose per *step*, so
+a format ran natively while the copy into the volume it had just made fell
+back, which is precisely the combination that fails. It now chooses per
+**partition**. `VolumeFormatter::can_copy_in` (new, default `Ok(())`, native's
+implementation sharing `plan_copy` and `non_ascii_refusal` with `copy_in` so
+the two cannot drift) answers *before* the destructive step whether the copy
+that follows will fall back; when it will, the format goes to the fallback
+with it, reported as `FallbackReason::PairedWithFallbackCopy { drive }` rather
+than by repeating the copy's own reason against a step that reason is not
+about. When no fallback tool is configured, the run now refuses **before** the
+partition is erased instead of after.
+
+Verified on the real thing: the 3933-file / 280-directory AmigaOS 3.2 tree,
+one run, no manual retry — `hst-imager`'s own listing counts *280 directories,
+3933 files, 12.2 MB* with `türkiye.country` and its siblings by name
+(`carry_the_real_dist_tree_through_the_fallback_path_when_asked`). Unit tests:
+`a_partition_whose_copy_must_fall_back_is_formatted_by_the_same_tool`,
+`one_partitions_fallback_does_not_pull_another_partition_with_it` (the choice
+is still per partition, not per run),
+`a_partition_whose_copy_needs_a_missing_tool_is_not_formatted_first`,
+`a_copy_with_no_format_of_its_own_still_falls_back_by_itself`. Mutation-checked
+twice: disabling the pairing fails three of them, and pairing on `slot` **or**
+drive instead of both fails the per-partition one. The preview follows the same
+rule (`plannedToolPhrase` now takes the plan, so a format paired with a copy is
+labelled as conditional as that copy — ART-121's rule kept true).
+
+**What is still open, and belongs to `hst-imager` rather than to ART**: its
+PFS3 writer cannot write into a `pfs3aio`-shaped volume it did not format. ART
+no longer asks it to. Worth reporting upstream, and worth remembering if a
+future ART feature wants to fill a volume some *other* tool formatted.
+
+Two directions were considered, and the second one's investigation is what
+made the first one the *right* fix rather than a workaround:
+
+1. **One tool per partition** — taken. Once the arithmetic was settled, "never
+   mix two formatters inside one volume" stopped being a way of dodging the
+   question and became the correct rule: ART's format is right, the external
+   tool cannot fill it, so it must not be asked to.
+2. **Change ART's own PFS3 arithmetic to match `hst-imager`'s** — rejected on
+   the evidence above. It would move ART *away* from what `pfs3aio` writes, to
+   please a tool that is the fallback rather than the target. The target is an
+   Amiga.
+
+Reproduced by `commands::preload::tests::carry_the_real_dist_tree_through_the_fallback_path_when_asked`
+(`#[ignore]`d, env-gated), which is also what measured the tree. The two
+images the byte-diff above came from are kept on the scratch drive rather than
+described only in prose: `E:\amiga\ProjeART\exp-fmt-before.hdf` (the same
+partition formatted by `NativeFormatter`) and `E:\amiga\ProjeART\exp-hstfmt.hdf`
+(formatted by `hst-imager`), identical in every other respect —
+`E:\amiga\ProjeART\exp-tree` is the two-file non-ASCII tree that triggers the
+fallback in seconds.
+
+**ART-123** 🔵 ✅ **A failed `hst-imager` command reported a stack frame
+instead of what went wrong** — *found and fixed 2026-08-16, while diagnosing
+[ART-122](#open)*
+`src-tauri/src/tools/hst_imager.rs` · `last_meaningful_line` took the last
+non-empty line of the tool's output, which is right for the handled case —
+`hst-imager` prints one `[ERR] Partition 'dh9' not found` and stops — and
+wrong for an **unhandled** exception, which prints the message and then eight
+stack frames. ART showed the user
+`at Hst.Imager.ConsoleApp.CommandHandler.Execute(CommandBase command)`, which
+says nothing at all; the sentence they needed
+(`System.IO.IOException: ERROR_DISK_FULL`) was twelve lines above it. ART-122
+was invisible for two runs because of this. → Frames (`at Namespace.Method(…)`,
+matched narrowly so a message merely beginning with "at" is not swallowed) are
+skipped; a trace with no message at all still reports its last frame rather
+than nothing. Three tests, the first built from the real captured output:
+`an_unhandled_exception_reports_its_message_and_not_a_stack_frame`,
+`a_handled_error_is_still_its_last_line`,
+`a_trace_with_no_message_falls_back_to_its_last_frame`.
 
 **ART-121** 🟡 ✅ **ART-120's own fix wave, reviewed — four findings, folded
 into one entry** — *found 2026-08-16 in review of ART-120; fixed 2026-08-16*

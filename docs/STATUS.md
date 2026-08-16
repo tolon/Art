@@ -20,9 +20,9 @@ Update it at the end of any session that changes what works.
 |---|---|
 | **Last updated** | 2026-08-16 |
 | **Version** | 0.1.0 (unreleased) |
-| **Current stage** | **SD-1 complete** — every gap it names is built: the card's shape (G2), RDB filesystem embedding (G4), build manifest (G7), image health check (G8), a build as a drop target (G15), engine and screen throughout. **What is left in SD-1 is not code: a card flashed and an A500 booted.** **SD-2 in progress** — PFS3/FFS preload (G3/G5 route E and native, [ART-120](ISSUES.md): `NativeFormatter` writes both by default, `hst-imager` a named fallback for two known gaps), the layout policy (G11) and OS install (G5) have all landed, engine and screen; ROM pairing (G9) and launcher metadata export (G10) are owed. G5's engine has now been run against the user's own real AmigaOS 3.2 media end to end — a distribution tree built, and (for AmigaDOS-ASCII names) put onto a PFS3 volume and read back independently — but **no Amiga has booted anything G5 built**, and its screen is still unverified past its own headings ([ART-118](ISSUES.md)). Reading a real card has a screen ([ART-095](ISSUES.md), [ART-097](ISSUES.md)); **no card ART built has been flashed or booted** |
+| **Current stage** | **SD-1 complete** — every gap it names is built: the card's shape (G2), RDB filesystem embedding (G4), build manifest (G7), image health check (G8), a build as a drop target (G15), engine and screen throughout. **What is left in SD-1 is not code: a card flashed and an A500 booted.** **SD-2 in progress** — PFS3/FFS preload (G3/G5 route E and native, [ART-120](ISSUES.md): `NativeFormatter` writes both by default, `hst-imager` a named fallback for two known gaps), the layout policy (G11) and OS install (G5) have all landed, engine and screen; ROM pairing (G9) and launcher metadata export (G10) are owed. G5's engine has now been run against the user's own real AmigaOS 3.2 media end to end — a distribution tree built, and the **whole** of it (3933 files / 280 directories / 12.2 MB, non-ASCII names included) put onto a PFS3 volume through the native/fallback path in one unattended run and counted back independently ([ART-122](ISSUES.md) had to be fixed first: a partition is formatted and filled by one tool) — but **no Amiga has booted anything G5 built**, and its screen is still unverified past its own headings ([ART-118](ISSUES.md)). Reading a real card has a screen ([ART-095](ISSUES.md), [ART-097](ISSUES.md)); **no card ART built has been flashed or booted** |
 | **Build** | PASS |
-| **Tests** | 1399 Rust passed, 0 failed, 3 ignored (real-media hooks, env-gated — see below); 526 frontend passed, 0 failed |
+| **Tests** | 1405 Rust passed, 0 failed, 4 ignored (real-media hooks, env-gated — see below); 529 frontend passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
 | **amitools oracle** | 53 checks, both directions — now including a filesystem driver ART embedded in an RDB and `rdbtool` extracted back out byte-for-byte |
@@ -31,7 +31,7 @@ Update it at the end of any session that changes what works.
 | **hst-imager PFS3 oracle** | both directions, local only (`scripts/pfs3-oracle-check.py`, no `hst.imager.exe` in CI): ART writes a volume through `NativeFormatter` and `hst-imager fs dir -r` reads it back — names, sizes, and every protection-bit string, `hsparwed` cased as `hst-imager` spells it; `hst-imager` formats and fills a volume and ART reads it back through `libpfs3`, SHA-256 per file rather than a length (ART-079's exact shape) plus the same protection strings |
 | **cargo-deny** | advisories, bans, licences, sources — all ok |
 | **MSRV** | 1.93 (raised from 1.77 on 2026-08-12, for a maintained 7z decoder) |
-| **i18n** | `en.json` and `tr.json`, 1457 leaf keys each, parity enforced by `pnpm test` |
+| **i18n** | `en.json` and `tr.json`, 1459 leaf keys each, parity enforced by `pnpm test` |
 | **Release bundle** | rebuilt 2026-08-12 — MSI and NSIS, and the application was launched and answered |
 | **Published** | <https://github.com/tolon/Art> — public, `main`, **GPL-3.0-or-later**. Work lands on `sd-1` and merges to `main` at the phase's
 end; the licence *inventory* still said MIT until 2026-08-13, months after the
@@ -73,6 +73,20 @@ cd src-tauri && ART_OSINSTALL_MEDIA="E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.
 cd src-tauri && ART_OSINSTALL_DEST="E:\amiga\ProjeART\dist-3.2-witness" \
   ART_CARD_OUT="E:\amiga\ProjeART\dist-3.2-witness-card.hdf" \
   cargo test build_the_real_dist_tree_onto_a_card_when_asked -- --nocapture --ignored
+
+# The third hook is the one that carries the **whole** tree through the path
+# the product actually runs — `run_with_fallback`, native first — rather than
+# calling one formatter directly like the two above. It is what re-measured
+# ART-113's gap on 2026-08-16 and what found ART-122; it prints the source
+# tree's own counts beside the copy's, so the two can be compared without a
+# separate pass. `ART_HST` is optional: without it the run measures the
+# native path alone and ends on the refusal a user with no hst-imager would
+# see. Delete the output image first — SAFE_CREATE refuses an existing one.
+cd src-tauri && ART_OSINSTALL_DEST="E:\amiga\ProjeART\dist-3.2" \
+  ART_CARD_OUT="E:\amiga\ProjeART\dist-3.2-fallback.hdf" \
+  ART_PFS3="E:\amiga\Amigatolon\hstimager\pfs3aio" \
+  ART_HST="E:\amiga\Amigatolon\hstimager\hst.imager.exe" \
+  cargo test carry_the_real_dist_tree_through_the_fallback_path_when_asked -- --nocapture --ignored
 cd src-tauri && cargo deny check                       # licences and advisories
 pnpm tauri build                                       # full bundle (slow)
 ```
@@ -844,16 +858,22 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
 
 ## Picking up next session
 
-*Last touched: 2026-08-16, a docs sweep after SD-2 G5 (the OS install engine)
-merged to `main` and a fix wave closed most of what it left open. `main` is
-level with `origin/main` — `sd-1` merged in ("Merge sd-1: SD-2 G5, the AmigaOS
-install engine"), then ART-120/ART-121 and one clippy correction landed
-directly on `main`. Working tree clean, nothing half-done on disk.*
+*Last touched: 2026-08-16, re-measuring the real AmigaOS 3.2 tree through the
+native/fallback preload path — the item this section named first — and then
+fixing what the measurement found. The question is answered (the fallback
+carries the whole tree, non-ASCII names included, in one unattended run) and
+[ART-122](ISSUES.md) is closed: a partition is now formatted and filled by one
+tool, because `hst-imager` cannot write into a volume `NativeFormatter`
+formatted. [ART-123](ISSUES.md) (a stack frame reported instead of the error)
+was fixed on the way; [ART-124](ISSUES.md) (`apply()` counts plan items, not
+entries) and [ART-125](ISSUES.md) (a fallback copy reports zero bytes) are
+filed and open. Work is on `main`; the previous line of it — the G5 merge,
+ART-120/121 and a clippy correction — is level with `origin/main`.*
 
-**The tree is green, measured fresh for this sweep rather than carried
-forward**: 1399 Rust (run twice back to back, no flake), 526 frontend across
-44 files, 1457 i18n leaf keys in `en.json` and `tr.json` alike, `pnpm lint`
-clean. **CI on GitHub is confirmed green** (run `31939802790`, commit
+**The tree is green, measured fresh**: 1405 Rust (run twice back to back, no
+flake), 529 frontend across 44 files, 1459 i18n leaf keys in `en.json` and
+`tr.json` alike, `pnpm lint` clean, clippy clean at `-D warnings`.
+**CI on GitHub was confirmed green on the previous session** (run `31939802790`, commit
 `544282c`) — but it took three pushes to get there, and the reason is worth
 carrying forward rather than filing away: the merge to `main` was the first
 time any runner had ever compiled the card builder (those commits sat
@@ -905,15 +925,19 @@ have arrived.
   own condition against the real ROM, unchosen), 4030 files / 330 directories
   / 11.9 MB written to `E:\amiga\ProjeART\dist-3.2`, zero refusals — after two
   real recipe defects the run itself found and fixed
-  ([ART-111](ISSUES.md), [ART-112](ISSUES.md)). Putting that tree onto a PFS3
-  volume got three-quarters of it across — 3061 of 4030 files, 224 of 330
-  directories, matched independently by `hst-imager`'s own count and
-  byte-for-byte hashes — before ART-113's non-ASCII limitation excluded the
-  rest (24 directories, all `Locale`-related content: `español`, `türkçe`,
-  `österreich`…). **That 969/106 figure is a one-off measurement** (a manual
-  Python pass, not a committed script) **and has not been re-run since the
-  native/fallback reconciliation** — nobody has carried the real 4030-file
-  tree through the path ART-120 built.
+  ([ART-111](ISSUES.md), [ART-112](ISSUES.md)). **Re-measured 2026-08-16**,
+  which replaced that wave's own figures: the tree holds **3933 files / 280
+  directories / 12.2 MB** — `apply()`'s 4030/330 counts plan items, not
+  entries ([ART-124](ISSUES.md)) — and carried through `run_with_fallback`,
+  **all of it lands**, `hst-imager`'s own listing counting the same 280/3933
+  with `españa.country`, `österreich.country` and `türkiye.country` there by
+  name. So [ART-113](ISSUES.md)'s non-ASCII quarter is copied by the fallback
+  rather than lost, and the earlier "3061 of 4030 / 969 excluded" numbers are
+  superseded. **What the run cannot do is finish unattended**: the first
+  `hst-imager` write into a volume `NativeFormatter` has just formatted dies
+  `ERROR_DISK_FULL` ([ART-122](ISSUES.md), fixed the same day by making the
+  tool a per-*partition* choice rather than a per-step one) — the full-tree
+  figures above are from one unattended run through the fixed path.
 
 **G9 and G10 are still owed**, and both are smaller than the gap analysis
 first sized them, now that G5 exists:
@@ -953,14 +977,18 @@ someone at the machine (or the Amiga) to run what already exists.
 - **G9 and G10** — both unblocked by G5 landing, neither started. G9 wants a
   design pass on what "pairing a ROM with an OS volume" writes and where; G10
   wants the iGame/AGS metadata shape decided before it can export anything.
-- **The real 4030-file tree through the native/fallback path** — the 969/106
-  non-ASCII figure and the "3061 of 4030" figures in `FEATURES.md` both
-  predate ART-120/121 and were never re-measured against the code that now
-  ships. Re-running Task 14's own real-media hook
-  (`run_the_real_engine_against_the_users_own_media_when_asked`, `#[ignore]`d,
-  needs `ART_OSINSTALL_MEDIA`/`ART_OSINSTALL_ROM`/`ART_OSINSTALL_DEST` — see
-  the reproduce block above) is the way to find out whether the fallback
-  actually closes that gap or merely reaches it more cleanly.
+- **A WinUAE boot of a natively formatted PFS3 volume** — the one rung
+  [ART-122](ISSUES.md) could not reach. Its arithmetic question was settled
+  against `pfs3aio`'s own `format.c` (ART's reserved-area number is that
+  implementation's, to the block, and `hst-imager`'s is not), which is strong
+  evidence but not the authority: only a real PFS3 driver mounting an
+  ART-formatted volume proves it. The user has WinUAE, a licensed Kickstart
+  and `pfs3aio`; `E:\amiga\ProjeART\dist-3.2-fallback.hdf` is a 3933-file
+  volume sitting there waiting to be mounted. `info` reporting a sane free
+  count is the pass condition, and it would close this whole line of doubt.
+- **[ART-125](ISSUES.md)** — a fallback copy reports zero bytes and the panel
+  prints it as a fact. Small, and the fix is to say nothing rather than to
+  parse a rounded `12.2 MB` into an invented byte count.
 - **ART-115** — a `core::iso` test flake seen three times across the G5
   session, never diagnosed, and not reproduced by nine deliberate attempts
   since. Still open; the next sighting should save the panic output before
@@ -1089,6 +1117,7 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-16 | **The real AmigaOS 3.2 tree, measured through the path that ships — the fallback carries all of it, and cannot finish a run.** The figures the project has been quoting for the real install (*"3061 of 4030 files, 969 excluded"*) came from a one-off manual pass against code that changed underneath them, so nobody knew whether [ART-120](ISSUES.md)'s fallback closes [ART-113](ISSUES.md)'s gap or merely reaches it more cleanly. `carry_the_real_dist_tree_through_the_fallback_path_when_asked` is the committed hook that answers it: it embeds the real `pfs3aio` at create time (so the run measures the copy, not [ART-117](ISSUES.md)), plans through `plan()` and runs through `run_with_fallback` — native first, exactly as the product does — and prints the source tree's own counts beside the copy's. **Answer: the fallback carries the whole tree.** `hst-imager`'s own listing counts *280 directories, 3933 files, 12.2 MB* against a source of 3933/280, `Locale/Countries` holding `españa.country`, `österreich.country` and `türkiye.country` by name — so the non-ASCII quarter is copied, not lost. **But not unattended, and that is the session's real finding**: `hst-imager`'s *first* write into a volume `NativeFormatter` has just formatted dies `System.IO.IOException: ERROR_DISK_FULL`, and the identical command succeeds on a second attempt — reproduced down to two files and 15 bytes into a 400 MB partition, outside any ART process. Byte-diffing before and after shows the failed attempt *repairing* the reserved bitmap ART wrote (120 bytes of `FF` zeroed), and `hst-imager`'s own format writes those bytes as zero from the start: the two PFS3 implementations disagree about how much reserved area exists — ART's bitmap marks 14 684 blocks free where `hst-imager`'s marks 11 188. **Then settled, and it is ART's**: `pfs3aio`'s own `CalcNumReserved`, worked through by hand for this geometry, gives 14 784 — ART's number to the block, and `libpfs3`'s port of it is faithful. So the fix was not to change ART's arithmetic to please the fallback tool but to stop mixing the two: [ART-122](ISSUES.md) makes the tool a per-**partition** choice, asked before the destructive step through a new `VolumeFormatter::can_copy_in`, so a volume is formatted and filled by one tool or by neither — and with no fallback configured the run refuses *before* the partition is erased instead of after. The real tree then went through in **one unattended run**: 3933 files / 280 directories, counted back by `hst-imager`'s own listing. Two mutations, both caught. It was invisible for two runs because ART reported the *last* line of the tool's output, which for an unhandled .NET exception is a stack frame — `at Hst.Imager.ConsoleApp.CommandHandler.Execute(CommandBase command)` — rather than the message twelve lines above it; fixed and pinned by three tests ([ART-123](ISSUES.md)). Counting the tree also caught [ART-124](ISSUES.md): `apply()` reports plan items, not entries, so the real install's headline 4030/330 is 98 files and 50 directories more than the tree it wrote — an override writes one destination twice, a shared directory is counted twice. and [ART-125](ISSUES.md): a fallback copy reports zero bytes, because the tool's own summary rounds to `12.2 MB` and a rounded string is not a byte count worth inventing. `FEATURES.md`'s two OS-install rows and this file's own numbers now say 3933/280 | 1405 Rust / 529 frontend |
 | 2026-08-16 | **CI turns green on `main` for the first time since SD-2 G5 merged, and a docs sweep catches STATUS.md up to a session that had already finished.** The merge ("Merge sd-1: SD-2 G5, the AmigaOS install engine") was the first time any GitHub runner had ever compiled the card builder — those commits had sat unpushed on `sd-1` for days — and it failed on `clippy::question_mark` at `commands/card.rs:275`, twice (once on the merge itself, once again after the ART-121 fix wave landed on top of it). The lint is invisible on this machine: CI runs `stable` (clippy 1.97.0), this machine is pinned at 0.1.95 (rustc 1.95.0), so a green local `cargo clippy` proved nothing about CI's — the fix in `544282c` was written by reading the lint, not by reproducing it. Confirmed green on the third push: run `31939802790`, every step including `pnpm tauri build` and the amitools oracle. Measured fresh rather than carried forward: 1399 Rust (run twice, no flake), 526 frontend across 44 files, 1457 i18n leaf keys in `en.json` and `tr.json` alike — all matching what the previous wave's commits already claimed, so nothing had drifted since. **STATUS.md's "Picking up next session" section was rewritten in full** — it still described the session that ended before G5 merged (`sd-1` unpushed, G5/G9/G10 all "owed", a "Four things this project keeps re-learning" list tied to a day that had already passed) and was actively misleading about where SD-2 stands now: G3/native, G11 and G5 done, only G9 and G10 left, three specific things blocked on the user (driving both new screens in `pnpm tauri dev`, a WinUAE boot, a real A500 boot) rather than on code. `FEATURES.md`'s i18n row still read "1129 keys each" from Phase 0b; corrected to 1457. Everything else in both files checked against the code and the current `ISSUES.md` held up as written | 1399 Rust / 526 frontend |
 | 2026-08-16 | **hst-imager is no longer required to prepare a card — [ART-120](ISSUES.md) makes `NativeFormatter` reachable, native by default with `hst-imager` a named fallback, then a review round closes four findings against the string and the record.** `core/preload/native.rs`'s `NativeFormatter` (`libpfs3` for PFS3, ART's own writer for FFS, launching nothing — G5) had existed since the previous session with its own tests and its own oracle and was reachable from **nowhere in the product**: `commands/preload.rs::preload_run` constructed `HstImager::at(...)` unconditionally. `run_with_fallback` fixes that — native runs first for every step of a plan, and only reaches the configured `hst-imager` for the two known, typed capability gaps ([ART-113](ISSUES.md)'s non-ASCII PFS3 names, [ART-117](ISSUES.md)'s new `ForeignRdbEmbedNotSupported`), both refused *before* anything is written so retrying on the other tool is safe. Chosen **per step, not per run** — `import-filesystem` always needs the fallback, `format-partition` and almost every `copy-in` never do — and never silent: `StepReport { step, tool, fallback_reason }` travels on every result and is logged. **Review then found the six-commit wave had shipped the engineering but not the record**: `preload.scope` and `layout.scope` still told the user ART cannot write PFS3 itself, which stopped being true the moment this landed; `preload.result.notVerified` said "the tool's word, not ART's", which is backwards for a native run and, read against `preload_run`'s own job closure, turns out to be true for the *same* reason on both paths — neither writer's output is read back and checked within this operation, so the string now says that instead of picking a side. The preview never named which writer would run a step at all, for a `Destructive` operation whose default writer had just changed under the user without a Settings toggle (deliberately not added — the decision was "native by default", not a choice to expose); `src/lib/preload.ts::plannedToolPhrase` now labels each step before the confirmation checkbox, from the plan alone. `run_with_fallback` also set `outcome.tool = native.probe().ok()` **before the loop ran**, so a run where every step fell back still printed "By libpfs3 … (native)" against its own per-step list — fixed to reflect what actually ran, mutation-checked by forcing every step through the fallback and asserting the summary follows it. And `preload.fallback.nonAsciiPfs3Names` passed `{{count}}` with no `_one`/`_other` forms, unlike every other counted key on the same screen — split in both catalogues. Filed as [ART-121](ISSUES.md), folding all four findings and this file's own gap into one entry. **Not done here**: the real 4030-file `dist-3.2` tree was not re-run through the new fallback path end to end, so the 969/106 non-ASCII figures in `FEATURES.md` remain the prior, separate measurement, not a claim the fallback closes that gap | 1399 Rust / 526 frontend |
 | 2026-08-16 | **SD-2 G5 lands: a distribution tree was built from the user's own 3.2 media and put onto a volume; no Amiga has booted it.** Task 14 of the OS-install plan — the last task — runs the whole engine (Tasks 1–13) against the real thing for the first time: 36 ADFs at `E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ADF` and the user's real Kickstart v3.1 rev 40.68. `find_media` found 35 of the 36 (`Install3.2.adf` is the OS's own boot/installer floppy, not component media the recipe names — expected, not a defect); `plan()` switched on 26 components, `modules-a1200` among them **by its own condition, unchosen**, because the real ROM's stated major (40) is below 47 — exactly the case the confirmation UI exists for, now proven against real hardware's own ROM rather than a fixture. `apply()` wrote 4030 files / 330 directories / 11.9 MB to `E:\amiga\ProjeART\dist-3.2`, manifest included — **after the run found two real recipe defects no synthetic fixture ever could**: `storage`'s six rules named a `Storage/` drawer the real disk does not have ([ART-111](ISSUES.md)), and `glowicons` was missing `classes` from its `overrides`, so the real `Devs/DataTypes/*.info` icons both disks ship collided ([ART-112](ISSUES.md)). Both fixed; the full 26-component plan then built with zero refusals. **Putting it on a volume found a third, open defect**: `libpfs3` 0.1.3 writes an entry's name as UTF-8 and reads it back as Latin-1, so any non-ASCII AmigaDOS name — real content on `Locale-ES/-FR/-PT/-TR` and the base `Locale` disk's own country files (`español`, `türkçe`, `österreich`, 24 *directories* named) — fails `copy_in`'s own sanity check outright ([ART-113](ISSUES.md), open, external pinned crate). Excluding those 24 directories excludes their whole subtrees: **969 of 4030 files and 106 of 330 directories — about a quarter of the tree — never reached a volume**, not "24 files/directories". A reduced tree (that quarter excluded, one-off Python pass, method recorded in ART-113 rather than a committed script) went onto a fresh 128 MB PFS3 `.hdf` instead: 3061 files / 224 directories / 10.3 MB, and **`hst.imager`'s own count matched ART's exactly**; every one of 3059 extracted files hashed byte-for-byte against the source, bar two (`Storage/DOSDrivers/AUX`, `AUX.info` — a real AmigaDOS DOSDriver name colliding with a Windows-reserved device name, `hst-imager`'s own extraction blind spot, filed as [ART-114](ISSUES.md) and not an ART defect). **All of the 969/106 and 3061/3059 figures above are a one-off measurement**, not reproducible from a committed script (see ART-113). `scripts/pfs3-oracle-check.py` reran clean, both directions. Also filed at this task, as required by the plan: the `core::iso` test flake seen three times this session and never diagnosed ([ART-115](ISSUES.md)), the PFS3 writer's silent `.uaem` comment/date drop ([ART-116](ISSUES.md)), `import_filesystem`'s refusal of a foreign card's existing RDB ([ART-117](ISSUES.md)), the OS Builder install screen's unverified depth ([ART-118](ISSUES.md)), and five deferred Task 13 minors folded into one entry ([ART-119](ISSUES.md)). **The WinUAE and hardware rungs are untouched by this task and stay open** — nothing built by G5 has been opened by WinUAE or booted on any Amiga, real or emulated | 1382 Rust / 518 frontend |

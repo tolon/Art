@@ -43,6 +43,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The real ~4000-file AmigaOS 3.2 distribution tree built in the entry
   below was not re-run through this new fallback path end to end — the
   non-ASCII-name figures there remain the earlier, separate measurement.
+  **Since re-run** — see the entry above it.
+
+### The whole 3.2 tree reaches a volume in one run (2026-08-16)
+
+#### Fixed
+- **A volume is now prepared by one writer, start to finish.** Preparing a
+  PFS3 volume and filling it from a folder with non-English names used to
+  stop right after the format: ART formatted the partition itself and then
+  handed the copy to hst-imager, which reported the empty disk as full.
+  ART now decides *before* it formats anything, so whichever writer has to
+  do the copying does the formatting too. The full AmigaOS 3.2 tree — 3933
+  files, Spanish, Turkish, Austrian and French names included — now goes
+  onto a volume in one run, unattended.
+- **Nothing is erased for an operation that cannot then finish.** If the
+  copy needs hst-imager and none is configured, ART says so before the
+  partition is formatted rather than after.
+- **When an external tool fails, ART now shows what went wrong.** A tool
+  that crashes prints its message and then a page of internal call
+  locations; ART was quoting the last of those instead of the message, so a
+  failed card preparation said nothing usable at all.
+
+#### Known
+- A copy done by hst-imager reports **0 bytes** alongside its (correct) file
+  and folder counts — the tool's own summary rounds the size to "12.2 MB",
+  and ART would rather show nothing than invent an exact number from a
+  rounded one. The fix is to leave the byte count out; it is not done yet.
 
 ### Install AmigaOS 3.2 from your own media (2026-08-16)
 
