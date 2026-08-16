@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ART warns before preparing a card whose Kickstart is older than the system needs (2026-08-17)
+
+#### Added
+- **Before formatting and filling a card, ART now says whether its Kickstart
+  suits the AmigaOS about to go on it.** Some systems need a newer Kickstart
+  than others — AmigaOS 3.2 without its own compatibility modules needs
+  Kickstart 47, for instance — and putting one of those onto a card carrying
+  an older ROM used to fail silently on the Amiga, with nothing on the
+  preview screen to explain why. The confirmation now names both numbers
+  when they disagree, before the partition is erased.
+- Nothing is said when there is nothing to check: a build that carries its
+  own compatibility modules suits any Kickstart, and a card or a tree ART
+  cannot read a ROM record from is left alone rather than guessed at.
+
+#### Verified
+- Against the pairing that actually failed on real hardware emulation on
+  2026-08-16: a real AmigaOS 3.2 build requiring Kickstart 47 against a card
+  carrying a real Kickstart 40 is reported as needing 47 and finding 40. The
+  same build's own module-carrying counterpart, checked against the same
+  card, is never flagged.
+
 ### hst-imager is no longer required to prepare a card (2026-08-16)
 
 #### Changed
