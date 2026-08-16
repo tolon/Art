@@ -64,6 +64,44 @@ pub enum CoreError {
     /// [`Cancelled`]: Self::Cancelled
     #[error("operation cancelled after writing {files} file(s)")]
     CancelledPartway { files: u64 },
+
+    /// A name `libpfs3` 0.1.3 cannot round-trip: `writer.rs` writes it with
+    /// `name.as_bytes()` (UTF-8) and `ondisk/direntry.rs` reads it back with
+    /// `util::latin1_to_string` (one stored byte, one decoded char) — the two
+    /// agree only where UTF-8 and Latin-1 coincide, which is exactly the
+    /// ASCII range. Outside it the name is corrupted the moment it is read
+    /// back, on the real Amiga too, since AmigaDOS itself reads Latin-1.
+    ///
+    /// Raised by `core::preload::native::copy_in_pfs3`'s own pre-flight pass
+    /// — see that module's doc comment (ART-113) — before any of `entries`
+    /// reaches `libpfs3`, never partway through a real write. `paths` is
+    /// bounded (see `copy_in_pfs3`'s own constant) and `more` is the count of
+    /// whatever did not fit, because a refusal that only says "some names are
+    /// bad" answers nothing the user can act on. PFS3 only: ART's own FFS
+    /// writer (`core/volume/write`) encodes these names correctly, which is
+    /// why the message names FFS as the way out. Remove this the day
+    /// `libpfs3` gains a way to accept a pre-encoded byte string for a name
+    /// instead of a Rust `String`.
+    #[error("{}", non_ascii_pfs3_message(paths, *more))]
+    NonAsciiPfs3Names { paths: Vec<String>, more: usize },
+}
+
+/// The sentence for [`CoreError::NonAsciiPfs3Names`] — pulled out of the
+/// `#[error(...)]` attribute because it has to branch on whether `more` is
+/// nonzero, which a single format string cannot do cleanly.
+fn non_ascii_pfs3_message(paths: &[String], more: usize) -> String {
+    let mut msg = format!(
+        "{} non-ASCII name(s) cannot be written to a PFS3 volume by this version of libpfs3 \
+         (it writes names as UTF-8 and reads them back as Latin-1, so any non-ASCII name is \
+         corrupted): {}",
+        paths.len() + more,
+        paths.join(", ")
+    );
+    if more > 0 {
+        msg.push_str(&format!(", and {more} more"));
+    }
+    msg.push_str(". Use FFS for this volume instead.");
+    msg
 }
 
 impl CoreError {
@@ -88,6 +126,7 @@ impl CoreError {
             Self::IntegrityMismatch(_) => "ART-INTEGRITY-MISMATCH",
             Self::Cancelled => "ART-CANCELLED",
             Self::CancelledPartway { .. } => "ART-CANCELLED-PARTWAY",
+            Self::NonAsciiPfs3Names { .. } => "ART-PFS3-NON-ASCII-NAME",
         }
     }
 
@@ -121,6 +160,11 @@ mod tests {
             CoreError::MirrorUnreachable("x".into()),
             CoreError::IntegrityMismatch("x".into()),
             CoreError::Cancelled,
+            CoreError::CancelledPartway { files: 1 },
+            CoreError::NonAsciiPfs3Names {
+                paths: vec!["x".into()],
+                more: 0,
+            },
         ];
 
         let mut codes: Vec<&str> = errors.iter().map(|e| e.code()).collect();
@@ -137,5 +181,38 @@ mod tests {
         let msg = e.user_message();
         assert!(msg.contains("the original was not modified"));
         assert!(msg.contains("Error ID: ART-SAFETY-REFUSED"));
+    }
+
+    /// Every offending path named, the true total (bounded names plus the
+    /// rest), and the one piece of advice the user can act on — FFS. A
+    /// version that dropped `more` from the sentence, or reported only
+    /// `paths.len()` instead of the real total, would still pass a looser
+    /// assertion than this one.
+    #[test]
+    fn a_non_ascii_pfs3_refusal_names_every_bounded_path_and_the_rest_as_a_count() {
+        let err = CoreError::NonAsciiPfs3Names {
+            paths: vec!["Locale/Countries/türkçe".into(), "Locale/español".into()],
+            more: 22,
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("Locale/Countries/türkçe"), "{msg}");
+        assert!(msg.contains("Locale/español"), "{msg}");
+        assert!(
+            msg.contains("24"),
+            "the real total (2 named + 22 more): {msg}"
+        );
+        assert!(msg.contains("22 more"), "{msg}");
+        assert!(msg.contains("FFS"), "the actionable advice: {msg}");
+    }
+
+    /// The other half: no `more` at all must not claim there is any.
+    #[test]
+    fn a_non_ascii_pfs3_refusal_with_nothing_left_over_says_nothing_left_over() {
+        let err = CoreError::NonAsciiPfs3Names {
+            paths: vec!["français".into()],
+            more: 0,
+        };
+        let msg = format!("{err}");
+        assert!(!msg.contains("more"), "{msg}");
     }
 }

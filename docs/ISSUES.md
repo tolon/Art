@@ -122,20 +122,6 @@ first looks: embedding a PFS3 driver into a **foreign** card's existing RDB
 `hst-imager` does it; that is named in the refusal text. Not fixed — filed as
 future work, not implied to already work.
 
-**ART-116** 🟡 **ART's PFS3 writer carries protection bits but drops a
-`.uaem`'s comment and date; the FFS branch keeps both** — *found 2026-08-16
-(Task 11), named for filing at Task 14*
-`src-tauri/src/core/preload/native.rs` (`copy_in_pfs3` vs `copy_in_ffs`) ·
-`libpfs3` 0.1.3 exposes `update_dir_entry_protection` and nothing else for a
-directory entry — no setter for a comment or a date — so the PFS3 branch
-applies a sidecar's protection bits and silently drops its comment and date,
-while the FFS branch (`FileMeta`) carries all three. Protection is the
-load-bearing field (`Resident C:Assign PURE` is why this phase exists) and
-nothing is broken — G5 verified end to end on PFS3 without it — but one
-operation's two branches now diverge silently on metadata a user could have
-set by hand. Not fixed — `libpfs3` is pinned at `=0.1.3` and has no upstream
-answer; recorded so nobody reads the PFS3 branch as feature-complete with FFS.
-
 **ART-115** 🔵 **A `core::iso` test flake, seen three times across this
 session, never diagnosed** — *found 2026-08-15/16 (Tasks 3, 7, 8), filed at
 Task 14*
@@ -169,59 +155,6 @@ sighting was reported second-hand as "2 failed, both `core::iso`". **The next
 person to see it should save the panic message before re-running.** Until then
 this stays open and undiagnosed; re-running until green is exactly what this
 project's standing rule forbids.
-
-**ART-113** 🟠 **`libpfs3` 0.1.3 writes an entry's name as UTF-8 and reads it
-back as Latin-1 — any non-ASCII AmigaDOS name fails to copy in** — *found
-2026-08-16, Task 14's real run*
-Vendored dependency (`libpfs3 = "=0.1.3"`), not ART code, but it blocks real
-content on the user's own media. `writer.rs::create_dir_in`/`write_file_in`
-encode the given name with `name.as_bytes()` — UTF-8 — while
-`ondisk/direntry.rs`'s `DirEntry` decodes a stored name with
-`util::latin1_to_string`. For any name outside ASCII (where UTF-8 and Latin-1
-coincide byte-for-byte) the two disagree: a name like `español` writes as two
-UTF-8 bytes for `ñ` (`0xC3 0xB1`) and reads back mis-decoded, so
-`NativeFormatter::copy_in`'s own "was created and is not listed back" sanity
-check (`native.rs:742`, `.find(|e| e.name.eq_ignore_ascii_case(name))`) fires
-and the whole copy aborts loudly — never silent corruption, but a hard stop.
-Found via the real `dist-3.2` tree: 24 **directories** across
-`Locale/Catalogs`, `Locale/Countries`, `Locale/Help` and `Locale/Languages`
-carry accented AmigaDOS names — `español`, `français`, `português`, `türkçe`,
-`österreich`, `canada_français` — real content from `Locale-ES/-FR/-PT/-TR`
-and the base `Locale` disk (`Locale.adf`'s own `Countries` subtree, so this is
-not avoidable by simply not choosing a given language component). No synthetic
-fixture in Tasks 1–13 used a non-ASCII name, so nothing caught this before real
-media did. Not fixed — `libpfs3` is pinned and exposes no name-encoding option;
-a fix means either an upstream patch or ART pre-encoding names itself before
-calling into it, which is a real change to `core/preload/native.rs` this task
-did not make.
-
-**Intended fix, ruled during execution but not yet built.** The product
-answer is not to let the name reach `libpfs3` at all: a non-ASCII AmigaDOS
-name should be refused **by name**, on the PFS3 path specifically, before
-`copy_in` is ever called — a typed refusal that names the file and says why,
-the same shape `plan()`'s other refusals already take. Today it instead
-reaches `libpfs3`, writes, and dies on `NativeFormatter::copy_in`'s "was
-created and is not listed back" sanity check (`native.rs:742`,
-`.find(|e| e.name.eq_ignore_ascii_case(name))`) — safe and loud, never silent
-corruption, but the message that reaches the user names nothing they can act
-on. FFS is unaffected; this refusal belongs only on the PFS3 write path,
-since FFS has no such encoding mismatch to refuse in the first place.
-
-**The 24 named entries are directories, and excluding a directory excludes
-its whole subtree — state the real cost, not the count of what was named.**
-Task 14's Step 2 volume build used a reduced tree with those 24 directories
-(and everything under them) excluded, which removed **969 of 4030 files and
-106 of 330 directories — about a quarter of the whole tree** — not "24
-files/directories" as an earlier draft of this entry and the session log
-both said. Method: a one-off Python pass walked `dist-3.2`, copied every
-entry whose name encodes as pure ASCII into a sibling folder and skipped
-(printing) the rest, then `build_the_real_dist_tree_onto_a_card_when_asked`
-(`core/preload/native.rs`) copied that reduced folder onto a fresh PFS3
-`.hdf` and `hst.imager fs copy` extracted it back for a SHA-256 comparison
-against the reduced folder. **Not committed as a script**, so the 969/106
-and the 3059/3061 hash-match figures above are this session's own
-one-off measurement, not a command a later session can re-run to reproduce
-them — recorded here rather than left silently unreproducible.
 
 **ART-110** 🔵 **A partial layout apply cannot be resumed, and the screen stays
 busy** — *found 2026-08-15, the whole-branch review of SD-2 G11*
@@ -632,6 +565,97 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-116** ✅ **ART's PFS3 writer carries protection bits but drops a
+`.uaem`'s comment and date; the FFS branch keeps both** — *found 2026-08-16
+(Task 11), named for filing at Task 14, made visible 2026-08-16*
+`src-tauri/src/core/preload/native.rs` (`copy_in_pfs3` vs `copy_in_ffs`) ·
+`libpfs3` 0.1.3 exposes `update_dir_entry_protection` and nothing else for a
+directory entry — no setter for a comment or a date — so the PFS3 branch
+applies a sidecar's protection bits and silently drops its comment and date,
+while the FFS branch (`FileMeta`) carries all three. Protection is the
+load-bearing field (`Resident C:Assign PURE` is why this phase exists) and
+nothing was broken — G5 verified end to end on PFS3 without it — but one
+operation's two branches diverging silently on metadata a user could have set
+by hand is not something to leave unmarked. `libpfs3` is still pinned at
+`=0.1.3` with no upstream answer, so the loss itself is **not fixable** —
+what changed is that it is no longer silent.
+→ [`CopySummary`](../src-tauri/src/core/preload/mod.rs) gained
+`comments_lost`/`dates_lost` (`#[serde(default)]`, so an older reader still
+deserializes a summary without them). `copy_in_pfs3` counts an entry toward
+each the moment its `.uaem` sidecar carries a non-empty comment, or a date
+other than `AmigaDate::default()`, that `update_dir_entry_protection` cannot
+carry — the same "is this actually worth mentioning" rule
+`core/volume/write/copy.rs::sidecar_for` already uses to decide whether a
+sidecar is worth writing at all, so a sidecar that exists only for its
+protection bits counts as losing neither. `copy_in_ffs` never increments
+either field, because `FileMeta` genuinely keeps both. This is information
+for the caller to report, not a refusal — nothing about G5's own PFS3 path
+changed behaviour. `src/lib/preload.ts`'s `CopySummary` interface carries the
+two fields too, so a future screen reading `PreloadResult` has them on the
+wire already.
+Proved by `core::preload::native::tests::copy_in_pfs3_counts_a_dropped_comment_and_a_dropped_date`
+(a sidecar with both a real comment and a real date counts one of each),
+`copy_in_pfs3_does_not_count_a_sidecar_with_no_comment_or_date_to_lose` (the
+negative control: protection-only sidecar, nothing counted) and
+`copy_in_ffs_never_counts_anything_lost` (the identical sidecar, on FFS,
+counts nothing because FFS actually keeps it). Mutation-checked by hand:
+unconditionally incrementing both counters (dropping the "is this worth
+mentioning" gate) fails the negative control; temporarily adding the same
+counting to `copy_in_ffs` fails `copy_in_ffs_never_counts_anything_lost` —
+both reverted afterwards.
+
+**ART-113** ✅ **`libpfs3` 0.1.3 writes an entry's name as UTF-8 and reads it
+back as Latin-1 — any non-ASCII AmigaDOS name fails to copy in** — *found
+2026-08-16, Task 14's real run; refused by name 2026-08-16*
+Vendored dependency (`libpfs3 = "=0.1.3"`), not ART code, but it blocked real
+content on the user's own media. `writer.rs::create_dir_in`/`write_file_in`
+encode the given name with `name.as_bytes()` — UTF-8 — while
+`ondisk/direntry.rs`'s `DirEntry` decodes a stored name with
+`util::latin1_to_string`. For any name outside ASCII (where UTF-8 and Latin-1
+coincide byte-for-byte) the two disagree: a name like `español` writes as two
+UTF-8 bytes for `ñ` (`0xC3 0xB1`) and reads back mis-decoded, so
+`NativeFormatter::copy_in`'s own "was created and is not listed back" sanity
+check (`native.rs:742` at the time, `.find(|e| e.name.eq_ignore_ascii_case(name))`)
+fired and the whole copy aborted loudly — never silent corruption, but a hard
+stop that named nothing the user could act on. Found via the real `dist-3.2`
+tree: 24 **directories** across `Locale/Catalogs`, `Locale/Countries`,
+`Locale/Help` and `Locale/Languages` carry accented AmigaDOS names —
+`español`, `français`, `português`, `türkçe`, `österreich`,
+`canada_français` — real content from `Locale-ES/-FR/-PT/-TR` and the base
+`Locale` disk. Excluding those 24 directories to get a real card built at all
+removed **969 of 4030 files and 106 of 330 directories — about a quarter of
+the whole tree** (Task 14's own measurement; not reproducible by a committed
+script, so recorded here rather than left silently unreproducible). `libpfs3`
+is pinned and exposes no name-encoding option — a Rust `String` cannot carry
+pre-encoded Latin-1 bytes through its public API — so this can only ever be
+fixed upstream; what ART can do, and now does, is refuse by name before the
+bad byte pattern ever reaches the crate.
+→ `core::preload::native::non_ascii_entries` walks the already-flattened
+`entries` list — directories included, not only files, since a directory's
+own name goes through the identical `name.as_bytes()` write path — and
+`copy_in_pfs3` checks it **before `FileRegionMut::open`**, so a bad name is
+refused before the volume is even opened, let alone written to.
+`CoreError::NonAsciiPfs3Names { paths, more }` names up to
+`MAX_NAMED_NON_ASCII` (20) offending paths and folds the rest into `more`,
+with a message that says which crate and which two encodings disagree and
+names FFS as the way out — `core/volume/write` encodes these names
+correctly, so this check runs on the PFS3 branch only. Superseded but not
+replaced: the old "was created and is not listed back" sanity check at
+`native.rs:742` stays as the safety net for whatever else might trip it.
+Proved by `core::preload::native::tests::a_non_ascii_pfs3_file_name_is_refused_before_anything_is_written`
+(byte-for-byte image comparison, not just the error's type),
+`a_non_ascii_pfs3_directory_name_is_refused_even_when_its_contents_are_ascii`
+(the shape that actually mattered: a bad directory name with pure-ASCII
+contents), `more_offending_names_than_the_bound_are_folded_into_a_count` (25
+offending names → 20 named + `more: 5`), `the_same_non_ascii_name_copies_in_fine_on_ffs`
+(the same tree, FFS, succeeds) and two message-format tests in
+`core::error::tests` pinning the sentence itself (every bounded path named,
+the true total, "and N more", and "FFS" as the actionable advice). Mutation-
+checked by hand: filtering only files (not directories) out of
+`non_ascii_entries` fails the directory test; unconditionally incrementing
+the bound by one off fails the "more" count test; running the same check on
+`copy_in_ffs` fails the FFS test — each reverted afterwards.
 
 **ART-114** ✅ **`hst-imager`'s `fs copy` extraction silently drops any entry
 whose name matches a Windows/MS-DOS reserved device basename, and the oracle

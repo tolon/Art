@@ -33,11 +33,19 @@ export interface FormatterReport {
   tested_version: string;
 }
 
-/** How much a copy moved. */
+/** How much a copy moved.
+ *
+ * `comments_lost`/`dates_lost` (ART-116): on the PFS3 path, `libpfs3` 0.1.3
+ * has no setter for a directory entry's comment or date — only its
+ * protection bits — so these count how many entries carried one that could
+ * not be written. Always `0` for an FFS copy, whose own writer keeps both.
+ * Not a refusal; information the caller can choose to say something about. */
 export interface CopySummary {
   files: number;
   directories: number;
   bytes: number;
+  comments_lost: number;
+  dates_lost: number;
 }
 
 /**

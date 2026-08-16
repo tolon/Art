@@ -51,6 +51,42 @@
 //! matching Task 9's own test: unlike `apply`'s `CancelledPartway`, nothing
 //! here needs to say how much landed, because every file and folder already
 //! written is exactly what a subsequent `format_partition` will discard.
+//!
+//! ## A non-ASCII name is refused before `libpfs3` ever sees it (ART-113)
+//!
+//! `libpfs3` 0.1.3's `writer.rs` writes an entry's name with `name.as_bytes()`
+//! — UTF-8, because that is what a Rust `String` holds — and `ondisk/direntry.rs`
+//! reads a stored name back with `util::latin1_to_string`, which maps each
+//! stored byte to one char. The two agree only in the ASCII range, where UTF-8
+//! and Latin-1 happen to coincide byte for byte; outside it (`türkçe`,
+//! `español`, `français`) the round trip is wrong, and it would be wrong on a
+//! real Amiga too, since AmigaDOS itself reads Latin-1. This is a `libpfs3`
+//! 0.1.3 limitation, not something `core/` can repair through the crate's own
+//! public API — a Rust `String` cannot carry pre-encoded Latin-1 bytes — so it
+//! is refused by name instead: [`non_ascii_entries`] walks the already-flattened
+//! entry list before [`copy_in_pfs3`] opens the volume at all, and
+//! [`CoreError::NonAsciiPfs3Names`] carries every offending path it finds
+//! (bounded — see [`MAX_NAMED_NON_ASCII`]) plus a count of the rest. Remove
+//! this check the day `libpfs3` accepts a pre-encoded byte string for a name
+//! instead of a `String`. FFS is unaffected — ART's own writer
+//! (`core/volume/write`) encodes these names correctly — so this check runs
+//! only on the PFS3 branch.
+//!
+//! ## A comment or a date `libpfs3` cannot carry is counted, not hidden (ART-116)
+//!
+//! `libpfs3` 0.1.3 exposes `update_dir_entry_protection` and nothing else for
+//! a directory entry — no setter for a comment or a date — so [`copy_in_pfs3`]
+//! applies a sidecar's protection bits and has nowhere to put the other two.
+//! The FFS branch ([`copy_in_ffs`]) keeps all three, through `FileMeta`. Since
+//! there is no fix available (the same `libpfs3` limitation as above), the
+//! loss is made visible instead of silent: [`CopySummary::comments_lost`] and
+//! [`CopySummary::dates_lost`] count every entry whose sidecar carried a
+//! non-empty comment, or a date other than [`AmigaDate::default`], that could
+//! not be written — the same "is this actually worth mentioning" rule
+//! `core/volume/write/copy.rs::sidecar_for` already applies when it decides
+//! whether a sidecar is worth writing at all. This is information for the
+//! caller to report, not a refusal — G5 verified end to end on PFS3 without
+//! either field, and nothing here blocks that.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -579,6 +615,28 @@ fn leaf_name(relative: &str) -> &str {
     relative.rsplit_once('/').map_or(relative, |(_, name)| name)
 }
 
+/// How many offending paths [`CoreError::NonAsciiPfs3Names`] names directly
+/// before folding the rest into a count — enough to be useful on a real
+/// install (ART-113 found 24 non-ASCII directories on one real tree), never
+/// enough to make the refusal itself as large as the tree it is refusing.
+const MAX_NAMED_NON_ASCII: usize = 20;
+
+/// Every entry in `entries` — file or directory — whose own name (the final
+/// path segment, exactly what `create_dir_in`/`write_file_in` are handed) is
+/// not pure ASCII. See the module doc comment's "ART-113" section for why
+/// that name cannot round-trip through `libpfs3` 0.1.3. Directories are
+/// checked too, not only files: a directory's own name goes through the
+/// identical `name.as_bytes()` write path, so `español` the *drawer* is just
+/// as broken as `español` the file, even if every file inside it happens to
+/// be pure ASCII.
+fn non_ascii_entries(entries: &[CopyEntry]) -> Vec<&str> {
+    entries
+        .iter()
+        .filter(|entry| !leaf_name(&entry.relative).is_ascii())
+        .map(|entry| entry.relative.as_str())
+        .collect()
+}
+
 /// Flatten `source` into an ordered list: a directory always appears before
 /// anything inside it, which is what lets `copy_in` look its parent's anode
 /// or header block up in a map built as it goes, rather than re-walking the
@@ -656,6 +714,19 @@ fn copy_in_pfs3(
     entries: &[CopyEntry],
     sink: &dyn ProgressSink,
 ) -> CoreResult<CopySummary> {
+    // ART-113: refused before the volume is even opened, let alone written
+    // to — see the module doc comment and `non_ascii_entries`'s own.
+    let offending = non_ascii_entries(entries);
+    if !offending.is_empty() {
+        let more = offending.len().saturating_sub(MAX_NAMED_NON_ASCII);
+        let paths = offending
+            .into_iter()
+            .take(MAX_NAMED_NON_ASCII)
+            .map(str::to_string)
+            .collect();
+        return Err(CoreError::NonAsciiPfs3Names { paths, more });
+    }
+
     let region = FileRegionMut::open(image, offset, length, block_size)?;
     let device = ArtBlockDevice::new(region);
     let mut vol = libpfs3::volume::Volume::from_device(Box::new(device)).map_err(from_pfs3)?;
@@ -762,10 +833,21 @@ fn copy_in_pfs3(
             let text = std::fs::read_to_string(&sidecar)?;
             let parsed = uaem::parse(&text)?;
             let protection = pfs3_protection(parsed.protection)?;
-            // libpfs3 0.1.3 exposes no way to set a directory entry's date —
-            // only `update_dir_entry_protection`. The sidecar's date is
-            // therefore read and then dropped here; FFS's `FileMeta` below
-            // carries it because ART's own writer does have that setter.
+            // libpfs3 0.1.3 exposes no way to set a directory entry's date or
+            // its comment — only `update_dir_entry_protection`. Both are read
+            // here and then dropped; FFS's `FileMeta` below carries both,
+            // because ART's own writer does have those setters. ART-116:
+            // counted rather than silently lost, using the same "is this
+            // actually worth mentioning" rule `sidecar_for` already applies
+            // when deciding whether a sidecar is worth writing at all — an
+            // empty comment or the Amiga epoch itself as the date is nothing
+            // this copy could have carried over anyway.
+            if !parsed.comment.is_empty() {
+                summary.comments_lost += 1;
+            }
+            if parsed.date != AmigaDate::default() {
+                summary.dates_lost += 1;
+            }
             writer
                 .update_dir_entry_protection(parent, name, protection)
                 .map_err(from_pfs3)?;
@@ -1126,6 +1208,188 @@ mod tests {
             .unwrap();
         assert_eq!(summary.files, 1);
         assert_eq!(summary.directories, 1);
+    }
+
+    // ---- ART-113: a non-ASCII name is refused before anything is written ----
+
+    /// The exact real-world shape ART-113 found: a file whose AmigaDOS name
+    /// carries an accented character. Must refuse before the volume is
+    /// touched at all — proved here by hashing the whole image byte for
+    /// byte, not merely by checking the error's type, which a version that
+    /// refused only *after* writing something would still pass if it were
+    /// checked less strictly.
+    #[test]
+    fn a_non_ascii_pfs3_file_name_is_refused_before_anything_is_written() {
+        let image = formatted_pds3_image();
+        let before = std::fs::read(&image).unwrap();
+        let tree = fixtures::scratch("copy-in-non-ascii-file");
+        std::fs::write(tree.join("türkçe"), b"data").unwrap();
+
+        let err = NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap_err();
+
+        assert!(matches!(err, CoreError::NonAsciiPfs3Names { .. }), "{err}");
+        assert!(format!("{err}").contains("türkçe"), "{err}");
+        assert_eq!(
+            std::fs::read(&image).unwrap(),
+            before,
+            "nothing was written — the volume was never even opened"
+        );
+    }
+
+    /// The shape that actually mattered on the real tree: 24 of the 969
+    /// excluded files/directories in ART-113's own measurement were
+    /// **directories** (`Locale/Countries/türkçe`, and everything under it).
+    /// A directory's name goes through `create_dir_in`, not
+    /// `write_file_in` — a check that only ever looked at file entries would
+    /// let this one straight through to `libpfs3` and miss the exact case
+    /// that motivated the fix. The one file inside the bad directory is
+    /// itself pure ASCII, so this also proves the parent's own name is what
+    /// gets checked, not merely everything nested under it.
+    #[test]
+    fn a_non_ascii_pfs3_directory_name_is_refused_even_when_its_contents_are_ascii() {
+        let image = formatted_pds3_image();
+        let before = std::fs::read(&image).unwrap();
+        let tree = fixtures::scratch("copy-in-non-ascii-dir");
+        std::fs::create_dir_all(tree.join("español")).unwrap();
+        std::fs::write(tree.join("español").join("Readme"), b"data").unwrap();
+
+        let err = NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap_err();
+
+        let CoreError::NonAsciiPfs3Names { paths, more } = err else {
+            panic!("expected NonAsciiPfs3Names, got {err}");
+        };
+        assert_eq!(paths, vec!["español".to_string()]);
+        assert_eq!(more, 0);
+        assert_eq!(
+            std::fs::read(&image).unwrap(),
+            before,
+            "nothing was written"
+        );
+    }
+
+    /// The bound, falsified directly: more offending names than
+    /// `MAX_NAMED_NON_ASCII` must still name exactly that many and fold the
+    /// rest into `more`, rather than either naming all of them (an
+    /// unbounded, arbitrarily long refusal) or silently truncating without
+    /// saying how many were left out.
+    #[test]
+    fn more_offending_names_than_the_bound_are_folded_into_a_count() {
+        let image = formatted_pds3_image();
+        let tree = fixtures::scratch("copy-in-non-ascii-many");
+        let total = MAX_NAMED_NON_ASCII + 5;
+        for i in 0..total {
+            std::fs::write(tree.join(format!("é{i}")), b"x").unwrap();
+        }
+
+        let err = NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap_err();
+
+        let CoreError::NonAsciiPfs3Names { paths, more } = err else {
+            panic!("expected NonAsciiPfs3Names, got {err}");
+        };
+        assert_eq!(paths.len(), MAX_NAMED_NON_ASCII, "{paths:?}");
+        assert_eq!(more, 5, "the 5 that did not fit the bound");
+    }
+
+    /// FFS is unaffected — ART's own writer encodes these names correctly,
+    /// so the same tree that PFS3 refuses must copy in cleanly here. Without
+    /// this, a version of the check that (by a routing bug) also ran on the
+    /// FFS branch would still pass every PFS3-only test above.
+    #[test]
+    fn the_same_non_ascii_name_copies_in_fine_on_ffs() {
+        let image = rdb_image_with_one_dos3_partition();
+        NativeFormatter
+            .format_partition(&image, None, 1, "Work", &NoProgress)
+            .unwrap();
+        let tree = fixtures::scratch("copy-in-non-ascii-ffs");
+        std::fs::write(tree.join("türkçe"), b"data").unwrap();
+
+        let summary = NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .expect("FFS has no such encoding mismatch to refuse");
+        assert_eq!(summary.files, 1);
+    }
+
+    // ---- ART-116: a dropped comment or date is counted, not hidden ----
+
+    /// A sidecar carrying both a real comment and a real (non-epoch) date —
+    /// `libpfs3` 0.1.3 has a setter for neither, so both must be counted.
+    /// Falsification: a version that only ever set `comments_lost` (or only
+    /// `dates_lost`) would still pass a test that checked one field alone;
+    /// this checks both from the one sidecar in one assertion each.
+    #[test]
+    fn copy_in_pfs3_counts_a_dropped_comment_and_a_dropped_date() {
+        let image = formatted_pds3_image();
+        let tree = fixtures::scratch("copy-in-lost-metadata");
+        std::fs::write(tree.join("Assign"), b"x").unwrap();
+        std::fs::write(
+            tree.join("Assign.uaem"),
+            "--p-rwed 2021-04-13 02:43:13.68 a real comment\n",
+        )
+        .unwrap();
+
+        let summary = NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+
+        assert_eq!(summary.comments_lost, 1);
+        assert_eq!(summary.dates_lost, 1);
+    }
+
+    /// The negative control: a sidecar that only carries protection bits
+    /// (empty comment, the Amiga epoch as its date — `sidecar_for`'s own
+    /// "nothing worth recording" case for those two fields) must not be
+    /// counted as having lost either. Without this, a version that counted
+    /// every sidecar unconditionally would still pass the test above.
+    #[test]
+    fn copy_in_pfs3_does_not_count_a_sidecar_with_no_comment_or_date_to_lose() {
+        let image = formatted_pds3_image();
+        let tree = fixtures::scratch("copy-in-nothing-lost");
+        std::fs::write(tree.join("Assign"), b"x").unwrap();
+        std::fs::write(
+            tree.join("Assign.uaem"),
+            "--p-rwed 1978-01-01 00:00:00.00 \n",
+        )
+        .unwrap();
+
+        let summary = NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+
+        assert_eq!(summary.comments_lost, 0);
+        assert_eq!(summary.dates_lost, 0);
+    }
+
+    /// The FFS branch keeps both fields — see `FileMeta` in `copy_in_ffs` —
+    /// so it must never report either as lost, even for the exact sidecar
+    /// that trips both counters on PFS3 above. Without this, a bug that
+    /// counted on both branches (rather than only where the loss is real)
+    /// would still pass every PFS3-only test above.
+    #[test]
+    fn copy_in_ffs_never_counts_anything_lost() {
+        let image = rdb_image_with_one_dos3_partition();
+        NativeFormatter
+            .format_partition(&image, None, 1, "Work", &NoProgress)
+            .unwrap();
+        let tree = fixtures::scratch("copy-in-ffs-nothing-lost");
+        std::fs::write(tree.join("Assign"), b"x").unwrap();
+        std::fs::write(
+            tree.join("Assign.uaem"),
+            "--p-rwed 2021-04-13 02:43:13.68 a real comment\n",
+        )
+        .unwrap();
+
+        let summary = NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+
+        assert_eq!(summary.comments_lost, 0);
+        assert_eq!(summary.dates_lost, 0);
     }
 
     #[test]

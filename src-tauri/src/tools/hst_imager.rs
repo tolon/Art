@@ -365,7 +365,8 @@ mod tests {
             CopySummary {
                 files: 2,
                 directories: 1,
-                bytes: 20
+                bytes: 20,
+                ..Default::default()
             }
         );
     }

@@ -70,6 +70,17 @@ pub struct CopySummary {
     pub files: u64,
     pub directories: u64,
     pub bytes: u64,
+    /// ART-116: how many entries carried a `.uaem` comment that could not be
+    /// written. Always `0` on the FFS branch, whose own writer (`FileMeta`)
+    /// does carry a comment through; only `native::copy_in_pfs3` ever
+    /// increments this, because `libpfs3` 0.1.3 exposes no setter for one.
+    /// Not a refusal — information the caller can choose to say something
+    /// about, same as `dates_lost`.
+    #[serde(default)]
+    pub comments_lost: u64,
+    /// The same, for a `.uaem` date. See `comments_lost`.
+    #[serde(default)]
+    pub dates_lost: u64,
 }
 
 /// Formatting an Amiga volume and putting files in it.
@@ -701,6 +712,7 @@ mod tests {
                 files: 2,
                 directories: 1,
                 bytes: 36,
+                ..Default::default()
             })
         }
     }
