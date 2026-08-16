@@ -47,7 +47,8 @@
 //!
 //! **FFS/OFS** (`DOS\0`..`DOS\7` that ART writes — see `core/volume/write`'s
 //! own table for which of those). Presence, size and content are all read
-//! through `VolumeWriter::find`/`read_file`, which is a genuinely different
+//! through the free functions `core/volume/write/dir.rs::find_entry` and
+//! `core/volume/write/file.rs::read_file`, which is a genuinely different
 //! code path from the one that wrote the file: `add_file` allocates blocks
 //! from the bitmap and lays out a header and data chain; `read_file` walks
 //! that chain back from the header block it just looked up by name, with no
@@ -60,18 +61,40 @@
 //! wrong protection bit reaches `Fail`, never a silent `Pass`
 //! (`a_file_whose_protection_bits_are_wrong_is_a_fail_not_a_pass`).
 //!
+//! **Read-only, all the way down to the OS file handle.** `verify_ffs_files`
+//! opens the image through `core::volume::device::FileRegion`, never
+//! `FileRegionMut`, and reads through the same free functions
+//! `VolumeWriter` itself calls internally rather than through `VolumeWriter`
+//! — generic over `BlockDevice`, never `BlockDeviceMut`, exactly the
+//! decision `core/osinstall/source.rs` already made for install media (and
+//! that module's own doc comment states why: refusing to even *look* at a
+//! file because Windows will not hand out a write lock is a self-inflicted
+//! wound). Fix round 2 caught this the hard way: fix round 1 fixed the
+//! *symptom* — a dircache volume producing `Err` instead of a report — by
+//! moving the `write_refusal` check ahead of `VolumeWriter::open`, but
+//! `VolumeWriter::open` was still being reached for every ordinary volume,
+//! and the `FileRegionMut::open` before it opens the underlying file for
+//! writing whether or not anything ever mutates it. A write-protected image,
+//! one on read-only media, or one already open elsewhere all failed with a
+//! plain permission error — not the dircache symptom fix round 1 chased, but
+//! the same shape of bug: something ART could perfectly well have read
+//! turned into a failed run instead of a report. Proven directly by
+//! `a_read_only_image_file_still_produces_a_report`, which sets the real
+//! Windows read-only attribute on a finished volume and confirms
+//! `verify_volume` still succeeds.
+//!
 //! **Not writing is a different question from not reading.**
 //! `core/volume/write/mod.rs::write_refusal` refuses a dircache volume
 //! (`DOS\4`/`DOS\5`) and a non-512-byte-block partition for *writing*, and
 //! says so explicitly: "Read support is a separate question and stays
-//! exactly as it was." But `VolumeWriter::open` is the one gate this module
-//! has, and it refuses before either direction can happen. Treating that as
-//! a hard `Err` would mean `verify_volume` returns **no report at all** for
-//! a dircache volume — files whose presence and size ART could perfectly
-//! well have read, thrown away along with the ones it genuinely cannot.
-//! Fix round 1 caught this: `verify_ffs_files` now checks `write_refusal`
-//! itself before opening the writer, and a refusal becomes a whole-manifest
-//! `NotChecked` carrying that reason, never a failed run.
+//! exactly as it was." This module still reuses `write_refusal` as its own
+//! gate — unchanged since fix round 1 — because nothing here has verified
+//! `find_entry`/`read_file` against a real dircache-formatted fixture yet;
+//! widening what counts as checkable is a real, separate improvement this
+//! round deliberately left alone, having already spent its scope on *how*
+//! the volume is opened rather than *which* volumes it will open. A refusal
+//! still becomes a whole-manifest `NotChecked` carrying that reason, never a
+//! failed run.
 //!
 //! **PFS3** (`PFS\x`/`PDS\x`). `libpfs3::writer::Writer` and
 //! `libpfs3::volume::Volume` are the *same* third-party crate — not two
@@ -161,9 +184,10 @@ use crate::core::preload::native::{
     area_for_slot, family_of, from_pfs3, partition_by_index, partition_region, pfs3_protection,
     DosFamily,
 };
-use crate::core::volume::device::FileRegionMut;
-use crate::core::volume::write::{uaem, write_refusal, VolumeWriter};
-use crate::core::volume::{BlockDevice, DosType, VolumeGeometry};
+use crate::core::volume::device::FileRegion;
+use crate::core::volume::write::layout::{self, BlockSet, PROTECT_OFFSET};
+use crate::core::volume::write::{dir, file, uaem, write_refusal};
+use crate::core::volume::{read_block_vec, BlockDevice, DosType, VolumeGeometry};
 
 /// Whether one claim about a file was confirmed, contradicted, or never
 /// looked at. See the module doc comment — `NotChecked` is not a soft
@@ -276,6 +300,25 @@ fn hex_sha256(bytes: &[u8]) -> String {
 // FFS/OFS — ART's own reader, a genuinely different path from the writer
 // ---------------------------------------------------------------------------
 
+/// Everything here is read-only end to end, on purpose, down to the OS file
+/// handle — the exact decision `core/osinstall/source.rs` already made and
+/// this project already endorsed for install media (that module's own doc
+/// comment: "opening one means opening the underlying file **for write**
+/// (`FileRegionMut`) even though nothing here ever calls a mutating
+/// method... a user's install floppy image is exactly the kind of file that
+/// gets archived read-only, and refusing to even *look* at it because
+/// Windows will not hand out a write lock would be a self-inflicted wound").
+/// A verifier has even less business asking for write access than a media
+/// reader does — it is fundamentally a read, never a write, of an image the
+/// user may have made read-only, put on read-only media, or already have
+/// open elsewhere. `FileRegion` and the free functions `dir`/`file` are
+/// built on (the very same ones `VolumeWriter` itself calls internally) are
+/// generic over `BlockDevice`, never `BlockDeviceMut` — nothing below needs
+/// a write handle at all. Fix round 2 caught this: fix round 1 moved the
+/// `write_refusal` check ahead of `VolumeWriter::open`, which fixed a
+/// dircache volume's hard `Err`, but `VolumeWriter::open` was still being
+/// reached at all — and `FileRegionMut::open`, before it, opens the file for
+/// write whether or not anything ever calls a mutating method.
 #[allow(clippy::too_many_arguments)]
 fn verify_ffs_files(
     image: &Path,
@@ -286,22 +329,21 @@ fn verify_ffs_files(
     reserved: u32,
     manifest: &DistributionManifest,
 ) -> CoreResult<Vec<FileVerdict>> {
-    let mut region = FileRegionMut::open(image, offset, length, block_size)?;
+    let region = FileRegion::open(image, offset, length, block_size)?;
     let total_blocks = region.total_blocks();
     let geometry = VolumeGeometry::new(block_size, total_blocks, reserved, dos)?;
 
-    // Not writing to a volume is a different question from not reading it —
-    // `write_refusal`'s own callers say so directly ("Read support is a
-    // separate question and stays exactly as it was"), for a dircache
-    // volume in particular. But `VolumeWriter::open` is the one gate this
-    // module has for *either* direction, and it refuses before either can
-    // happen. Without this check, `verify_volume` would return a hard `Err`
-    // for a dircache partition or a non-512-byte-block one — no report at
-    // all, for files whose presence and size ART could perfectly well have
-    // read. So the refusal becomes a whole-manifest `NotChecked`, carrying
-    // `write_refusal`'s own reason, rather than a failed run — the same G8
-    // honesty this module applies everywhere else, applied to the one case
-    // that used to skip the report entirely.
+    // See fix round 1's own comment (module doc, Decision 1) for why a
+    // refusal becomes a whole-manifest `NotChecked` rather than a failed
+    // run. `write_refusal` is reused exactly as it stood before this round —
+    // this round only changes *how* the volume is opened (read-only, never
+    // through `VolumeWriter`), not which DosTypes a report can be produced
+    // for. Widening that — dircache reading genuinely "stays on" per
+    // CLAUDE.md's own table, unlike writing — is a real, separate
+    // improvement, deliberately left for later: nothing here has verified
+    // `dir`/`file`'s free functions against a real dircache-formatted
+    // fixture, and this round is about the file handle, not about growing
+    // what counts as checkable.
     if let Some(reason) = write_refusal(&geometry) {
         return Ok(manifest
             .files
@@ -316,22 +358,29 @@ fn verify_ffs_files(
             .collect());
     }
 
-    let writer = VolumeWriter::open(&mut region, geometry, image, offset)?;
-
+    let set = BlockSet::new(geometry.block_size);
     Ok(manifest
         .files
         .iter()
-        .map(|record| verify_ffs_one(&writer, record))
+        .map(|record| verify_ffs_one(&region, &set, &geometry, record))
         .collect())
 }
 
-/// Walk `path` one `/`-separated segment at a time from the root (block `0`
-/// in `VolumeWriter`'s own spelling), the same way `native.rs::copy_in_ffs`
-/// builds `block_of` while writing — just reading instead of creating.
-fn find_ffs_path(writer: &VolumeWriter, path: &str) -> CoreResult<Option<u32>> {
-    let mut current = 0u32;
+/// Walk `path` one `/`-separated segment at a time from the volume's own
+/// root block. Never `0` as a stand-in for it — that convenience belongs to
+/// `VolumeWriter::resolve_directory`, which nothing here calls any more;
+/// `dir::find_entry` wants a real block number, the same way
+/// `source.rs::AdfSource::resolve` already starts from `geometry.root_block`
+/// rather than `0`.
+fn find_ffs_path(
+    device: &FileRegion,
+    set: &BlockSet,
+    geometry: &VolumeGeometry,
+    path: &str,
+) -> CoreResult<Option<u32>> {
+    let mut current = geometry.root_block;
     for segment in path.split('/') {
-        match writer.find(current, segment)? {
+        match dir::find_entry(device, set, geometry, current, segment)? {
             Some(entry) => current = entry.block,
             None => return Ok(None),
         }
@@ -339,8 +388,13 @@ fn find_ffs_path(writer: &VolumeWriter, path: &str) -> CoreResult<Option<u32>> {
     Ok(Some(current))
 }
 
-fn verify_ffs_one(writer: &VolumeWriter, record: &FileRecord) -> FileVerdict {
-    let block = match find_ffs_path(writer, &record.path) {
+fn verify_ffs_one(
+    device: &FileRegion,
+    set: &BlockSet,
+    geometry: &VolumeGeometry,
+    record: &FileRecord,
+) -> FileVerdict {
+    let block = match find_ffs_path(device, set, geometry, &record.path) {
         Ok(Some(block)) => block,
         Ok(None) => {
             return fail(&record.path, "not found on the volume");
@@ -350,7 +404,7 @@ fn verify_ffs_one(writer: &VolumeWriter, record: &FileRecord) -> FileVerdict {
         }
     };
 
-    let bytes = match writer.read_file(block) {
+    let bytes = match file::read_file(device, set, geometry, block) {
         Ok(bytes) => bytes,
         Err(err) => {
             return fail(
@@ -359,8 +413,14 @@ fn verify_ffs_one(writer: &VolumeWriter, record: &FileRecord) -> FileVerdict {
             );
         }
     };
-    let attrs = match writer.attributes(block) {
-        Ok(attrs) => attrs,
+    // The same fields `source.rs::AdfSource::entry_at` reads, at the same
+    // offsets, off the same raw header block — straight through
+    // `layout::get_u32`, not `VolumeWriter::attributes`, which needs a
+    // `BlockDeviceMut` for no reason a read ever has.
+    let protection = match read_block_vec(device, block)
+        .and_then(|header| layout::get_u32(&header, PROTECT_OFFSET))
+    {
+        Ok(protection) => protection,
         Err(err) => {
             return fail(
                 &record.path,
@@ -382,10 +442,10 @@ fn verify_ffs_one(writer: &VolumeWriter, record: &FileRecord) -> FileVerdict {
         problems.push("its content does not match the manifest's sha256".to_string());
     }
     if let Some(expected) = record.protection {
-        if attrs.protection != expected {
+        if protection != expected {
             problems.push(format!(
                 "protection is {}, the manifest says {}",
-                uaem::format_bits(attrs.protection),
+                uaem::format_bits(protection),
                 uaem::format_bits(expected)
             ));
         }
@@ -644,6 +704,43 @@ mod tests {
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
         (image, manifest_for_load_module(content))
+    }
+
+    /// Fix round 2's own finding: `verify_ffs_files` used to open the image
+    /// with a write handle (`FileRegionMut`, via `VolumeWriter::open`)
+    /// regardless of fix round 1's `write_refusal` reordering — so a card
+    /// image that is write-protected on disk, on read-only media, or held
+    /// open elsewhere by something else still failed with a permission
+    /// error instead of producing a report, exactly the failure Task 2 (and
+    /// this project's endorsement of it, in `source.rs`) already ruled out
+    /// for install media. Windows honours `set_readonly` as the real
+    /// `FILE_ATTRIBUTE_READONLY` bit — the same one a user's write-protected
+    /// SD card image would carry — so this sets it on a genuinely finished
+    /// volume and confirms `verify_volume` still reports normally rather
+    /// than failing to open the file at all. The permission is restored
+    /// afterwards so the scratch directory can still be cleaned up (a
+    /// leftover read-only file would make a future `remove_dir_all` over
+    /// the same tag fail silently rather than actually clear it).
+    #[test]
+    fn a_read_only_image_file_still_produces_a_report() {
+        let (image, manifest) = written_volume();
+
+        let mut perms = std::fs::metadata(&image).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&image, perms).unwrap();
+
+        let result = verify_volume(&image, None, 1, &manifest);
+
+        // Restore write access before asserting, so a failed assertion does
+        // not also leave a read-only file behind in the scratch directory.
+        let mut perms = std::fs::metadata(&image).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        std::fs::set_permissions(&image, perms).unwrap();
+
+        let report = result.expect("a read-only image must still produce a report, not an Err");
+        assert_eq!(report.failed, 0, "{:?}", report.files);
+        assert_eq!(report.passed, manifest.files.len());
     }
 
     // ---- Step 1's given tests ----
