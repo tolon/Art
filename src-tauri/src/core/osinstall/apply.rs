@@ -128,12 +128,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use super::plan::InstallPlan;
 use super::source::{AdfSource, MediaSource};
 use super::startup::merge_user_startup;
 use crate::core::error::{CoreError, CoreResult};
+use crate::core::hashing::sha256_bytes;
 use crate::core::jobs::ProgressSink;
 use crate::core::security::path::safe_join;
 use crate::core::volume::write::copy::sidecar_for;
@@ -222,12 +222,6 @@ pub struct ApplyOutcome {
     pub bytes: u64,
 }
 
-fn hex_sha256(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
-}
-
 /// Decode raw bytes as Latin-1 — see the module doc comment's "Latin-1, not
 /// UTF-8" section. Latin-1 is exactly the first 256 Unicode code points, so
 /// this is a plain cast that can never fail, unlike `String::from_utf8`.
@@ -289,7 +283,7 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
         let raw = std::fs::read(path)?;
         built_from.push(MediaRecord {
             volume_name: volume.clone(),
-            sha256: hex_sha256(&raw),
+            sha256: sha256_bytes(&raw),
         });
         sources.insert(volume.clone(), Box::new(AdfSource::open(path)?));
     }
@@ -366,7 +360,7 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
         }
 
         let written = bytes.len() as u64;
-        let sha256 = hex_sha256(&bytes);
+        let sha256 = sha256_bytes(&bytes);
         outcome.bytes += written;
         outcome.files += 1;
         files.push(FileRecord {
@@ -451,7 +445,7 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
         sink.report(total, Some(total), USER_STARTUP_PATH);
 
         let merged_bytes = merged_disk_bytes.len() as u64;
-        let merged_sha256 = hex_sha256(&merged_disk_bytes);
+        let merged_sha256 = sha256_bytes(&merged_disk_bytes);
 
         // Drop whatever record the copy loop above made for this path (a
         // media-provided starter file, if there was one) before adding the
@@ -630,7 +624,7 @@ mod tests {
         // fail for a wrong size (`plan.items[0].bytes` here is 3, which
         // happens to already be correct, so asserting it here again would
         // not prove anything that test doesn't already prove better).
-        assert_eq!(record.sha256, hex_sha256(b"cmd"));
+        assert_eq!(record.sha256, sha256_bytes(b"cmd"));
 
         assert_eq!(manifest.release, "AmigaOS 3.2");
         let media_record = manifest
@@ -640,7 +634,7 @@ mod tests {
             .unwrap();
         let expected_media_hash = {
             let raw = std::fs::read(media_folder(&dir).join("modules.adf")).unwrap();
-            hex_sha256(&raw)
+            sha256_bytes(&raw)
         };
         assert_eq!(media_record.sha256, expected_media_hash);
     }
@@ -1053,7 +1047,7 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].component, "modules-a1200");
         assert_eq!(records[0].media, "");
-        assert_eq!(records[0].sha256, hex_sha256(content.as_bytes()));
+        assert_eq!(records[0].sha256, sha256_bytes(content.as_bytes()));
         assert_eq!(records[0].bytes, content.len() as u64);
     }
 
@@ -1175,7 +1169,7 @@ mod tests {
              the composed file's — not left behind alongside it"
         );
         assert_eq!(records[0].component, "amissl");
-        assert_eq!(records[0].sha256, hex_sha256(content.as_bytes()));
+        assert_eq!(records[0].sha256, sha256_bytes(content.as_bytes()));
 
         // Still one real file on disk, not two — `outcome.files` counts
         // disk reality, and must not double-count the starter copy and the
@@ -1302,7 +1296,7 @@ mod tests {
             .find(|f| f.path == "S/User-Startup")
             .unwrap();
         assert_eq!(record.bytes, disk_bytes.len() as u64);
-        assert_eq!(record.sha256, hex_sha256(&disk_bytes));
+        assert_eq!(record.sha256, sha256_bytes(&disk_bytes));
 
         // `ApplyOutcome::bytes` must also agree with disk reality: the sum
         // of every ordinary copied item plus the composed file's real

@@ -175,6 +175,18 @@ a fix means either an upstream patch or ART pre-encoding names itself before
 calling into it, which is a real change to `core/preload/native.rs` this task
 did not make.
 
+**Intended fix, ruled during execution but not yet built.** The product
+answer is not to let the name reach `libpfs3` at all: a non-ASCII AmigaDOS
+name should be refused **by name**, on the PFS3 path specifically, before
+`copy_in` is ever called — a typed refusal that names the file and says why,
+the same shape `plan()`'s other refusals already take. Today it instead
+reaches `libpfs3`, writes, and dies on `NativeFormatter::copy_in`'s "was
+created and is not listed back" sanity check (`native.rs:742`,
+`.find(|e| e.name.eq_ignore_ascii_case(name))`) — safe and loud, never silent
+corruption, but the message that reaches the user names nothing they can act
+on. FFS is unaffected; this refusal belongs only on the PFS3 write path,
+since FFS has no such encoding mismatch to refuse in the first place.
+
 **The 24 named entries are directories, and excluding a directory excludes
 its whole subtree — state the real cost, not the count of what was named.**
 Task 14's Step 2 volume build used a reduced tree with those 24 directories
@@ -187,7 +199,7 @@ entry whose name encodes as pure ASCII into a sibling folder and skipped
 (`core/preload/native.rs`) copied that reduced folder onto a fresh PFS3
 `.hdf` and `hst.imager fs copy` extracted it back for a SHA-256 comparison
 against the reduced folder. **Not committed as a script**, so the 969/106
-and the 3059/3061 hash-match figures below are this session's own
+and the 3059/3061 hash-match figures above are this session's own
 one-off measurement, not a command a later session can re-run to reproduce
 them — recorded here rather than left silently unreproducible.
 

@@ -175,10 +175,10 @@
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::core::card::read_card;
 use crate::core::error::CoreResult;
+use crate::core::hashing::sha256_bytes;
 use crate::core::osinstall::apply::{DistributionManifest, FileRecord};
 use crate::core::preload::native::{
     area_for_slot, family_of, from_pfs3, partition_by_index, partition_region, pfs3_protection,
@@ -302,12 +302,6 @@ fn summarize(files: Vec<FileVerdict>) -> VerifyReport {
         failed,
         not_checked,
     }
-}
-
-fn hex_sha256(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
 }
 
 // ---------------------------------------------------------------------------
@@ -451,7 +445,7 @@ fn verify_ffs_one(
             record.bytes
         ));
     }
-    let actual_sha256 = hex_sha256(&bytes);
+    let actual_sha256 = sha256_bytes(&bytes);
     if actual_sha256 != record.sha256 {
         problems.push("its content does not match the manifest's sha256".to_string());
     }
@@ -679,7 +673,7 @@ mod tests {
                 path: "C/LoadModule".into(),
                 component: "modules-a1200".into(),
                 media: "ModulesA1200_3.2".into(),
-                sha256: hex_sha256(content),
+                sha256: sha256_bytes(content),
                 bytes: content.len() as u64,
                 protection: Some(0x20), // --p-rwed: what apply() actually recorded
             }],
@@ -1095,7 +1089,7 @@ mod tests {
                 path: "S/User-Startup".into(),
                 component: "amissl".into(),
                 media: String::new(),
-                sha256: hex_sha256(content),
+                sha256: sha256_bytes(content),
                 bytes: content.len() as u64,
                 protection: None,
             }],
