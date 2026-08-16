@@ -159,7 +159,7 @@ pub struct MediaRecord {
 /// `path`, `sha256` and `bytes` the composed file actually has. `component`
 /// still names a single component for every other file; for that one path
 /// it names "one of possibly several".
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileRecord {
     /// `/`-separated, relative to the distribution root — matches
     /// [`super::plan::PlanItem::to`] exactly, except for `S/User-Startup`.

@@ -24,10 +24,24 @@
 //!
 //! ## What ART can check afterwards, and what it cannot
 //!
-//! ART has **no PFS3 reader**. After a preload it can confirm the partition
-//! table, the embedded driver and the partition's own geometry — and *not* one
-//! file inside the volume. That is a `not-checked` in G8's report and a job for
-//! something that is not ART, exactly as the FAT32 side already is.
+//! Stopped being true the moment `native::NativeFormatter` started using
+//! `libpfs3` itself (this module): ART now has *some* way to look inside a
+//! PFS3 volume, because the library that writes it also reads it back.
+//! `core/osinstall/verify.rs` is where that gets used for real, one field at
+//! a time rather than as a blanket refusal — and it is exactly *because*
+//! the reader and the writer are one and the same crate that it stops short
+//! of `Pass`: presence, size and protection reach real `Fail` on a genuine
+//! disagreement, but a PFS3 file's content is never re-hashed through the
+//! same library that placed it (`verify.rs`'s own "Decision 2" explains
+//! why), so a PFS3 record never reaches `Pass`, only `Fail` or `NotChecked`
+//! with a reason. That is still weaker evidence than FFS gets from ART's own
+//! independently-written reader, and weaker still than Task 11's
+//! `hst-imager` oracle — but "not one file inside the volume" is no longer
+//! the honest description of what this layer can do, and a claim the code
+//! has outgrown is exactly the kind of thing this project keeps finding and
+//! removing (ART-060 and others). The FAT32 side is unchanged: ART writes
+//! that filesystem with `fatfs` and has no reader for it at all, so it stays
+//! a blanket `not-checked` in G8's report.
 
 pub mod native;
 pub mod pfs3dev;

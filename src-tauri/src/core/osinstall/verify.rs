@@ -60,6 +60,19 @@
 //! wrong protection bit reaches `Fail`, never a silent `Pass`
 //! (`a_file_whose_protection_bits_are_wrong_is_a_fail_not_a_pass`).
 //!
+//! **Not writing is a different question from not reading.**
+//! `core/volume/write/mod.rs::write_refusal` refuses a dircache volume
+//! (`DOS\4`/`DOS\5`) and a non-512-byte-block partition for *writing*, and
+//! says so explicitly: "Read support is a separate question and stays
+//! exactly as it was." But `VolumeWriter::open` is the one gate this module
+//! has, and it refuses before either direction can happen. Treating that as
+//! a hard `Err` would mean `verify_volume` returns **no report at all** for
+//! a dircache volume — files whose presence and size ART could perfectly
+//! well have read, thrown away along with the ones it genuinely cannot.
+//! Fix round 1 caught this: `verify_ffs_files` now checks `write_refusal`
+//! itself before opening the writer, and a refusal becomes a whole-manifest
+//! `NotChecked` carrying that reason, never a failed run.
+//!
 //! **PFS3** (`PFS\x`/`PDS\x`). `libpfs3::writer::Writer` and
 //! `libpfs3::volume::Volume` are the *same* third-party crate — not two
 //! modules ART wrote independently, the way FFS's writer and reader are.
@@ -91,6 +104,16 @@
 //! volume. That is not the same thing as "could not be checked"; it is "the
 //! manifest made no claim", so protection is simply not part of that one
 //! file's check, and it does not by itself hold a file back from `Pass`.
+//!
+//! One more shape, PFS3-only: a manifest can carry a `protection` value that
+//! does not fit the single byte PFS3 actually stores (`pfs3_protection`'s
+//! own checked narrowing can fail). That is not the volume's fault to be
+//! blamed for with a `Fail`, but it is genuinely *not checked* either — and
+//! the `NotChecked` detail says exactly that, rather than folding it into
+//! the same "protection matched" sentence a real match gets. Fix round 1
+//! caught the original version of this saying "matched" unconditionally,
+//! including when protection was never asserted or never fit — the detail
+//! text now varies with what was actually true.
 //!
 //! ## Decision 2 — is PFS3 content worth re-hashing at all?
 //!
@@ -139,7 +162,7 @@ use crate::core::preload::native::{
     DosFamily,
 };
 use crate::core::volume::device::FileRegionMut;
-use crate::core::volume::write::{uaem, VolumeWriter};
+use crate::core::volume::write::{uaem, write_refusal, VolumeWriter};
 use crate::core::volume::{BlockDevice, DosType, VolumeGeometry};
 
 /// Whether one claim about a file was confirmed, contradicted, or never
@@ -266,6 +289,33 @@ fn verify_ffs_files(
     let mut region = FileRegionMut::open(image, offset, length, block_size)?;
     let total_blocks = region.total_blocks();
     let geometry = VolumeGeometry::new(block_size, total_blocks, reserved, dos)?;
+
+    // Not writing to a volume is a different question from not reading it —
+    // `write_refusal`'s own callers say so directly ("Read support is a
+    // separate question and stays exactly as it was"), for a dircache
+    // volume in particular. But `VolumeWriter::open` is the one gate this
+    // module has for *either* direction, and it refuses before either can
+    // happen. Without this check, `verify_volume` would return a hard `Err`
+    // for a dircache partition or a non-512-byte-block one — no report at
+    // all, for files whose presence and size ART could perfectly well have
+    // read. So the refusal becomes a whole-manifest `NotChecked`, carrying
+    // `write_refusal`'s own reason, rather than a failed run — the same G8
+    // honesty this module applies everywhere else, applied to the one case
+    // that used to skip the report entirely.
+    if let Some(reason) = write_refusal(&geometry) {
+        return Ok(manifest
+            .files
+            .iter()
+            .map(|record| FileVerdict {
+                path: record.path.clone(),
+                state: CheckState::NotChecked,
+                detail: Some(format!(
+                    "ART's own volume reader will not open this partition: {reason}"
+                )),
+            })
+            .collect());
+    }
+
     let writer = VolumeWriter::open(&mut region, geometry, image, offset)?;
 
     Ok(manifest
@@ -365,12 +415,11 @@ fn verify_pfs3_files(
         .collect())
 }
 
-/// Reason a `NotChecked` PFS3 verdict always carries — everything checkable
-/// on this family checked out, but the content bytes are the one thing this
-/// module will not claim to have confirmed. See Decision 2.
-const PFS3_CONTENT_NOT_CHECKED: &str = "presence, size and protection matched, but PFS3 has no \
-     reader in ART other than the library that wrote it — its content was not re-hashed here. \
-     See Task 11's independent hst-imager oracle.";
+/// The tail every PFS3 `NotChecked` detail carries, whatever else it says:
+/// content is never re-hashed on this family. See Decision 2.
+const PFS3_CONTENT_NOT_CHECKED_TAIL: &str = "PFS3 has no reader in ART other than the library \
+     that wrote it, so its content was not re-hashed here. See Task 11's independent \
+     hst-imager oracle.";
 
 fn verify_pfs3_one(vol: &mut libpfs3::volume::Volume, record: &FileRecord) -> FileVerdict {
     let entry = match vol.lookup(&record.path) {
@@ -382,6 +431,7 @@ fn verify_pfs3_one(vol: &mut libpfs3::volume::Volume, record: &FileRecord) -> Fi
     };
 
     let mut problems = Vec::new();
+
     if entry.file_size() != record.bytes {
         problems.push(format!(
             "size is {} bytes, the manifest says {}",
@@ -389,31 +439,49 @@ fn verify_pfs3_one(vol: &mut libpfs3::volume::Volume, record: &FileRecord) -> Fi
             record.bytes
         ));
     }
-    if let Some(expected) = record.protection {
-        match pfs3_protection(expected) {
-            Ok(expected_u8) if entry.protection != expected_u8 => {
-                problems.push(format!(
-                    "protection is {}, the manifest says {}",
-                    libpfs3::util::amiga_protection_string(entry.protection),
-                    libpfs3::util::amiga_protection_string(expected_u8)
-                ));
+
+    // What became of the protection field, kept apart from `problems` — a
+    // mismatch already fails this file below, but "matched", "not
+    // asserted" and "the manifest's own expectation does not fit a PFS3
+    // byte" are three different truths, and the `NotChecked` detail this
+    // function may still return must say which one actually happened
+    // rather than a single sentence that quietly overclaims the other two
+    // (fix round 1, item 2). `None` means "matched, nothing to add";
+    // `Some(note)` replaces "protection matched" in the final detail.
+    let protection_note: Option<String> = match record.protection {
+        None => Some("the manifest recorded no expected protection for this file".to_string()),
+        Some(expected) => match pfs3_protection(expected) {
+            Ok(expected_u8) => {
+                if entry.protection != expected_u8 {
+                    problems.push(format!(
+                        "protection is {}, the manifest says {}",
+                        libpfs3::util::amiga_protection_string(entry.protection),
+                        libpfs3::util::amiga_protection_string(expected_u8)
+                    ));
+                }
+                None
             }
-            // Fits and matches: nothing to add. Does not fit a PFS3 byte at
-            // all: the manifest's own expectation is not something this
-            // volume could ever have stored, which is not the volume's
-            // fault to be blamed for — left unasserted rather than failed.
-            Ok(_) | Err(_) => {}
-        }
-    }
+            Err(_) => Some(format!(
+                "protection was not checked — the manifest's expected protection \
+                 ({expected:#x}) does not fit the single byte PFS3 actually stores, so \
+                 there was nothing on the volume to compare it against"
+            )),
+        },
+    };
 
     if !problems.is_empty() {
         return fail(&record.path, problems.join("; "));
     }
 
+    let detail = match protection_note {
+        None => format!("presence, size and protection matched. {PFS3_CONTENT_NOT_CHECKED_TAIL}"),
+        Some(note) => format!("presence and size matched; {note}. {PFS3_CONTENT_NOT_CHECKED_TAIL}"),
+    };
+
     FileVerdict {
         path: record.path.clone(),
         state: CheckState::NotChecked,
-        detail: Some(PFS3_CONTENT_NOT_CHECKED.to_string()),
+        detail: Some(detail),
     }
 }
 
@@ -458,12 +526,21 @@ mod tests {
         fixtures::scratch(&format!("verify-{tag}-{n}"))
     }
 
-    /// A card with one partition of `fs`, sized `mb` megabytes.
+    /// A card with one partition of `fs`, sized `mb` megabytes. The backing
+    /// file is `mb` MB plus `RDB_HEADROOM_MB` — `create_rdb_layout` refuses
+    /// anything under 10 MB whole regardless of the one partition's own
+    /// size (`core/rdb.rs`: "Hard disk image size must be at least 10 MB"),
+    /// so an 8 MB partition still needs a card at least 10 MB, and the RDB's
+    /// own reserved cylinders want a little room past the partition itself.
+    /// Every caller in this file asks for 8 MB, so this stays comfortably
+    /// inside that floor without carrying an unexplained 32 MB fixed size.
+    const RDB_HEADROOM_MB: u64 = 2;
+
     fn card_with_partition(dir: &Path, fs: AmigaHardDiskFs, mb: u32) -> PathBuf {
         let path = dir.join("card.hdf");
         crate::core::hdf::create_hdf(
             &path,
-            32 * 1024 * 1024,
+            (mb as u64 + RDB_HEADROOM_MB) * 1024 * 1024,
             true,
             &[PartitionSpec {
                 drive_name: "DH0".into(),
@@ -588,7 +665,7 @@ mod tests {
             media: "Workbench3.2".into(),
             sha256: "0".repeat(64),
             bytes: 4,
-            ..Default::default()
+            protection: None,
         });
         let report = verify_volume(&image, None, 1, &manifest).unwrap();
         assert_eq!(report.failed, 1);
@@ -623,15 +700,30 @@ mod tests {
         );
     }
 
-    /// The pure bit is why this check exists at all.
+    /// The pure bit is why this check exists at all. Also checks *why* it
+    /// failed, not just that it did (fix round 1, item 5) — the sibling
+    /// content test already does this; a regression that failed this file
+    /// for the wrong reason (a bogus size mismatch, say) would otherwise
+    /// still turn this test green.
     #[test]
     fn a_file_whose_protection_bits_are_wrong_is_a_fail_not_a_pass() {
         let (image, manifest) = written_volume_with_the_pure_bit_dropped();
         let report = verify_volume(&image, None, 1, &manifest).unwrap();
-        assert!(report
+        let verdict = report
             .files
             .iter()
-            .any(|f| f.path == "C/LoadModule" && f.state == CheckState::Fail));
+            .find(|f| f.path == "C/LoadModule")
+            .expect("C/LoadModule has a verdict");
+        assert_eq!(verdict.state, CheckState::Fail);
+        assert!(
+            verdict
+                .detail
+                .as_deref()
+                .unwrap_or("")
+                .contains("protection"),
+            "{:?}",
+            verdict.detail
+        );
     }
 
     /// §89 and G8's three states. ART reads the volume, not the file's bytes
@@ -705,6 +797,167 @@ mod tests {
         assert_eq!(report.files[0].state, CheckState::Fail);
     }
 
+    /// Fix round 1, item 3: the module doc claims PFS3 reaches `Fail` on a
+    /// size disagreement too, not only on outright absence — pinned
+    /// directly rather than left asserted-but-untested.
+    #[test]
+    fn a_pfs3_file_whose_size_disagrees_with_the_manifest_is_a_fail() {
+        let dir = scratch("pfs3-wrong-size");
+        let content = b"cmd";
+        let image = formatted_pfs3_image(&dir);
+        let tree = tree_with_load_module(&dir, content, 0x20);
+        NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+        let mut manifest = manifest_for_load_module(content);
+        manifest.files[0].bytes = 999; // content is really 3 bytes
+
+        let report = verify_volume(&image, None, 1, &manifest).unwrap();
+
+        assert_eq!(report.failed, 1);
+        assert_eq!(report.not_checked, 0);
+        let verdict = &report.files[0];
+        assert_eq!(verdict.state, CheckState::Fail);
+        assert!(
+            verdict.detail.as_deref().unwrap_or("").contains("size"),
+            "{:?}",
+            verdict.detail
+        );
+    }
+
+    /// The other field the module doc claims and, before this round, never
+    /// tested for PFS3: a protection disagreement is a `Fail`, the same as
+    /// FFS's own pure-bit test — this is that test's PFS3 twin.
+    #[test]
+    fn a_pfs3_file_whose_protection_disagrees_with_the_manifest_is_a_fail() {
+        let dir = scratch("pfs3-wrong-protection");
+        let content = b"cmd";
+        let image = formatted_pfs3_image(&dir);
+        // The volume genuinely carries --p-rwed (0x20) ...
+        let tree = tree_with_load_module(&dir, content, 0x20);
+        NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+        // ... but the manifest expects the default, unprotected bits.
+        let mut manifest = manifest_for_load_module(content);
+        manifest.files[0].protection = Some(0x00);
+
+        let report = verify_volume(&image, None, 1, &manifest).unwrap();
+
+        assert_eq!(report.failed, 1);
+        assert_eq!(report.not_checked, 0);
+        let verdict = &report.files[0];
+        assert_eq!(verdict.state, CheckState::Fail);
+        assert!(
+            verdict
+                .detail
+                .as_deref()
+                .unwrap_or("")
+                .contains("protection"),
+            "{:?}",
+            verdict.detail
+        );
+    }
+
+    /// Fix round 1, item 2: an expected protection that does not fit the
+    /// single byte PFS3 actually stores must be surfaced as its own,
+    /// distinct reason — never folded into "protection matched", which
+    /// would be a straightforward lie about a field that was never
+    /// compared to anything at all.
+    #[test]
+    fn a_pfs3_expected_protection_that_does_not_fit_a_byte_is_surfaced_not_matched() {
+        let dir = scratch("pfs3-unfittable-protection");
+        let content = b"cmd";
+        let image = formatted_pfs3_image(&dir);
+        let tree = tree_with_load_module(&dir, content, 0x20);
+        NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+        let mut manifest = manifest_for_load_module(content);
+        manifest.files[0].protection = Some(0x1_0000); // does not fit a u8
+
+        let report = verify_volume(&image, None, 1, &manifest).unwrap();
+
+        assert_eq!(report.failed, 0, "{:?}", report.files);
+        assert_eq!(report.not_checked, 1);
+        let detail = report.files[0].detail.as_deref().unwrap_or("");
+        assert!(detail.contains("not checked"), "{detail}");
+        assert!(detail.contains("does not fit"), "{detail}");
+        assert!(
+            !detail.contains("protection matched"),
+            "must not claim a match for a field that was never compared: {detail}"
+        );
+    }
+
+    /// The PFS3 twin of `a_record_with_no_recorded_protection_can_still_
+    /// pass_on_ffs`, but checking the *wording* rather than the state — on
+    /// PFS3 the overall verdict is `NotChecked` either way (content is never
+    /// re-hashed), so the only thing that can regress silently here is the
+    /// detail text quietly claiming a match that was never attempted.
+    #[test]
+    fn a_pfs3_file_with_no_recorded_protection_says_so_rather_than_claiming_a_match() {
+        let dir = scratch("pfs3-no-protection-recorded");
+        let content = b"cmd";
+        let image = formatted_pfs3_image(&dir);
+        let tree = tree_with_load_module(&dir, content, 0x20);
+        NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+        let mut manifest = manifest_for_load_module(content);
+        manifest.files[0].protection = None;
+
+        let report = verify_volume(&image, None, 1, &manifest).unwrap();
+
+        assert_eq!(report.not_checked, 1);
+        let detail = report.files[0].detail.as_deref().unwrap_or("");
+        assert!(detail.contains("no expected protection"), "{detail}");
+        assert!(
+            !detail.contains("protection matched"),
+            "nothing was asserted, so nothing can have 'matched': {detail}"
+        );
+    }
+
+    /// Fix round 1, item 3's last leg: `DosFamily::Other` really does reach
+    /// `NotChecked` for every record, not just in prose. `Sfs0` is neither
+    /// `DOS` nor `PFS`/`PDS`, so it routes here without needing a formatted
+    /// volume at all — `family_of` only looks at the RDB's own DosType.
+    #[test]
+    fn an_unrecognised_filesystem_is_not_checked_for_every_file() {
+        let dir = scratch("unrecognised-fs");
+        let image = card_with_partition(&dir, AmigaHardDiskFs::Sfs0, 8);
+        let manifest = manifest_for_load_module(b"cmd");
+
+        let report = verify_volume(&image, None, 1, &manifest).unwrap();
+
+        assert_eq!(report.passed, 0);
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.not_checked, 1);
+        assert!(report.files[0].detail.is_some());
+    }
+
+    /// Fix round 1, item 1: a volume ART will not *write* to (dircache,
+    /// here) must still produce a report — `NotChecked` for every file,
+    /// with the real reason — rather than turning the whole run into a hard
+    /// `Err` that hands the caller nothing. `DOS\5` (`FFS INTL + dircache`)
+    /// has no `AmigaHardDiskFs` variant of its own in this codebase (its
+    /// `FfsDirCache` name is actually `DOS\3`, plain FFS INTL), so this
+    /// reaches for `Custom` with the real dircache flavour byte directly.
+    #[test]
+    fn a_dircache_volume_is_not_checked_rather_than_a_failed_run() {
+        let dir = scratch("dircache");
+        const DOS5_FFS_DIRCACHE: u32 = 0x444F_5305; // "DOS\5"
+        let image = card_with_partition(&dir, AmigaHardDiskFs::Custom(DOS5_FFS_DIRCACHE), 8);
+        let manifest = manifest_for_load_module(b"cmd");
+
+        let report = verify_volume(&image, None, 1, &manifest).unwrap();
+
+        assert_eq!(report.passed, 0);
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.not_checked, 1);
+        let detail = report.files[0].detail.as_deref().unwrap_or("");
+        assert!(detail.contains("dircache"), "{detail}");
+    }
+
     /// A record with no recorded protection (`S/User-Startup`'s own shape,
     /// per `apply.rs`) makes no claim to disagree with, so it does not hold
     /// an otherwise-correct FFS file back from `Pass` — "nothing asserted" is
@@ -744,34 +997,37 @@ mod tests {
     /// Decision 3: a file the volume carries that the manifest never
     /// mentioned is not this report's business, in either direction — not a
     /// `Fail` (the manifest never claimed the volume was *only* what it
-    /// wrote) and not a phantom extra verdict either.
+    /// wrote) and not a phantom extra verdict either. Fix round 1, item 6:
+    /// the previous version of this test asserted nothing about the extra
+    /// file itself (`let _ = …unwrap()`); this one names it and checks its
+    /// absence directly, so a future version of `verify_ffs_files` that
+    /// *did* start walking the whole volume — silently turning this into a
+    /// full-disk audit, exactly what Decision 3 argues against — would fail
+    /// it rather than sail through unnoticed.
     #[test]
     fn an_extra_file_on_the_volume_that_is_not_in_the_manifest_is_simply_invisible_to_the_report() {
-        let (image, manifest) = written_volume();
-        // The tree `written_volume` copied in also carries `C.uaem`'s
-        // sibling directory `C` itself, which is not a manifest record —
-        // already proves nothing crashes over a directory. Copy a second,
-        // wholly unrecorded file onto the same tree before reformatting, to
-        // prove the point with an ordinary file too.
         let dir = scratch("extra-file");
-        let image2 = formatted_ffs_image(&dir);
+        let image = formatted_ffs_image(&dir);
         let tree = tree_with_load_module(&dir, b"cmd", 0x20);
         std::fs::write(tree.join("Unlisted"), b"nobody told the manifest").unwrap();
         NativeFormatter
-            .copy_in(&image2, None, "DH0", &tree, &NoProgress)
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
-        let manifest2 = manifest_for_load_module(b"cmd");
+        let manifest = manifest_for_load_module(b"cmd");
 
-        let report = verify_volume(&image2, None, 1, &manifest2).unwrap();
+        let report = verify_volume(&image, None, 1, &manifest).unwrap();
+
         assert_eq!(
             report.files.len(),
-            manifest2.files.len(),
+            manifest.files.len(),
             "one verdict per manifest record, never one for a file the manifest never named"
+        );
+        assert!(
+            report.files.iter().all(|f| f.path != "Unlisted"),
+            "the extra file must not appear in the report at all: {:?}",
+            report.files
         );
         assert_eq!(report.passed, 1);
         assert_eq!(report.failed, 0);
-
-        // The unmodified fixture from Step 1, unaffected by any of this.
-        let _ = verify_volume(&image, None, 1, &manifest).unwrap();
     }
 }
