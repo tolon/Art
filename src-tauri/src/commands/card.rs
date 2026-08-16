@@ -272,8 +272,11 @@ pub fn card_plan_build(request: CardBuildRequest) -> AppResult<CardBuildPlan> {
             warnings.push(CardBuildWarning::NoKickstart);
             None
         }
-        Some(path) => match identify_rom(Path::new(path.trim())) {
-            Ok(info) => {
+        Some(path) => {
+            // Unreadable is a real failure; unrecognised is not — which is
+            // why this is a `?` and everything below is a warning.
+            let info = identify_rom(Path::new(path.trim()))?;
+            {
                 match rom_suits(&info, request.hardware.amiga) {
                     // Recognised and wrong for this machine. A note, never a
                     // block — the user may know something ART does not.
@@ -293,9 +296,7 @@ pub fn card_plan_build(request: CardBuildRequest) -> AppResult<CardBuildPlan> {
                 }
                 Some(info)
             }
-            // Unreadable is a real failure; unrecognised is not.
-            Err(err) => return Err(err.into()),
-        },
+        }
     };
 
     Ok(CardBuildPlan {
