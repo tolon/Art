@@ -23,39 +23,6 @@ what fixed it (with the test that proves it).
 
 ## Open
 
-**ART-120** 🟠 **`NativeFormatter` is unreachable from the application — every
-preload a user runs still shells out to `hst-imager`** — *found 2026-08-16,
-after G5 merged*
-`src-tauri/src/commands/preload.rs` · SD-2's Phase B was built so that ART
-could format an Amiga volume and copy files into it **without launching
-anything**: `core/preload/native.rs` implements the `VolumeFormatter` trait
-over `libpfs3` and ART's own FFS writer, it is covered by its own tests, it is
-checked in both directions by an independent `hst-imager` oracle, and it was
-run against the user's real AmigaOS 3.2 media. **None of that is reachable from
-the product.** `commands/preload.rs` constructs `HstImager::at(...)`
-unconditionally — the formatter is not a choice, a setting or a fallback — and
-outside its own file `NativeFormatter` appears only in test modules. So the
-headline of that phase is true of the engine and false of the application: a
-user preloading a card today still needs `hst.imager.exe` on their machine and
-its path in Settings, exactly as before.
-
-Nothing is broken and nothing claimed here is wrong in the code; what is wrong
-is that the documents describe an implementation the application cannot call.
-`docs/FEATURES.md`'s OS-install row cites `core/preload::NativeFormatter::copy_in`
-as its implementation and discloses only that the osinstall→preload handoff is
-"two separate manual steps today" — which reads as though both steps exist in
-the app. Corrected alongside this entry.
-
-Fixing it is a **design decision, not a repair**, which is why this is filed
-rather than patched: the spec deliberately keeps `hst-imager` as both a
-fallback and the oracle, so the question is whether the native path replaces
-it, becomes the default with the tool as a fallback, or becomes a user-visible
-choice. Two things make the answer non-obvious — [ART-113](#) means the native
-path cannot write non-ASCII AmigaDOS names at all while `hst-imager` can, and
-[ART-117](#) means it cannot embed a driver into a foreign card's RDB. On
-current evidence a straight replacement would be a downgrade for some real
-cards.
-
 **ART-119** 🔵 **Five minors deferred from Task 13's review, folded into one
 entry — two closed, three still open** — *found 2026-08-15/16, Task 13's fix
 round, filed at Task 14; #3 and #4 closed 2026-08-16*
@@ -598,6 +565,114 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-120** ✅ **`NativeFormatter` was unreachable from the application —
+every preload a user ran still shelled out to `hst-imager`** — *found
+2026-08-16, after G5 merged; fixed 2026-08-16*
+`src-tauri/src/commands/preload.rs` · SD-2's Phase B was built so that ART
+could format an Amiga volume and copy files into it **without launching
+anything**: `core/preload/native.rs` implements the `VolumeFormatter` trait
+over `libpfs3` and ART's own FFS writer, it is covered by its own tests, it is
+checked in both directions by an independent `hst-imager` oracle, and it was
+run against the user's real AmigaOS 3.2 media. **None of that was reachable
+from the product.** `commands/preload.rs` constructed `HstImager::at(...)`
+unconditionally — the formatter was not a choice, a setting or a fallback —
+and outside its own file `NativeFormatter` appeared only in test modules.
+
+**The decision taken: native by default, `hst-imager` a named fallback —
+chosen per step, not per run.** `commands/preload.rs::run_with_fallback` tries
+`NativeFormatter` first for every step in a plan and only reaches the
+configured `hst-imager` for the two known capability gaps, both typed values
+`core::error::CoreError` already carries: ART-113's
+`NonAsciiPfs3Names` (a `copy-in` whose source tree has a non-ASCII AmigaDOS
+name onto a PFS3 partition) and ART-117's new
+`ForeignRdbEmbedNotSupported` (`import-filesystem` — refused unconditionally,
+for every card, so this one is known before the plan even runs). Both are
+safe to retry with the other tool because both are refused **before anything
+is written** — `import_filesystem` never opens the image, and the ART-113
+check runs before `FileRegionMut::open` — so trying native first never leaves
+a half-written step behind. `FallbackReason::from_native_error`'s match is the
+whole policy; nothing else falls back, so a real failure (a full volume, a
+malformed image) surfaces as-is rather than being silently retried on another
+tool.
+
+**Per step, not per run, because the three kinds of step have different
+needs.** `import-filesystem` always needs `hst-imager`; `format-partition`
+and almost every `copy-in` run natively; only a `copy-in` whose content has a
+non-ASCII name needs the fallback too, and that is a fact about that step's
+own content. A run-level choice would have forced every step onto
+`hst-imager` because of one accented folder name elsewhere in the tree, or
+wasted the native path on everything after a driver import it could have done
+fine.
+
+**Never silent.** `StepReport { step, tool, fallback_reason }` — one per step,
+always present, a plain `"native"` reported exactly as deliberately as a
+fallback is — travels on `PreloadResult.steps`, is written into the operation
+log's `"Fallback"` detail when any step used one, and is rendered per step in
+`VolumePreload.tsx`'s result panel via `src/lib/preload.ts::fallbackPhrase`
+(new `preload.fallback.*` keys, both languages). When the fallback is needed
+and no `hst.imager.exe` is configured, `missing_tool_error` refuses before
+that step's formatter call — naming the step, that `hst-imager` is needed,
+and why — never a partial attempt. `preloadBlocker` on the frontend no longer
+requires a tool path at all except when the plan already shows an
+`import-filesystem` step (`needsExternalTool`); a `copy-in`'s non-ASCII gap is
+a fact about content the plan does not scan for, so it can only be reported
+after a run tries it, same as the in-app answer above.
+
+**`core/` stayed free of the choice**, per its own rule: `VolumeFormatter` is
+unchanged, `core::preload::run` (the single-formatter runner) is untouched,
+and `run_with_fallback` — the thing that picks between two formatters — lives
+entirely in `commands/preload.rs`. The one `core/` change is
+`CoreError::ForeignRdbEmbedNotSupported`, a dedicated variant replacing the
+generic `NotImplemented` `NativeFormatter::import_filesystem` used to return —
+needed because the fallback choice has to tell "known capability gap, safe to
+retry" apart from every other unbuilt corner of the engine that also returns
+`NotImplemented`.
+
+`docs/FEATURES.md`'s OS-install row is corrected alongside this entry: it no
+longer claims no command calls `NativeFormatter`, and says plainly that the
+969/106 non-ASCII figures from the real-media measurement were not re-proven
+against the new fallback path end to end.
+
+Mutation-checked, the three properties the fix is *for*: **native chosen by
+default** — `commands::preload::tests::native_is_chosen_by_default_over_a_configured_but_unreachable_tool`
+points the fallback at an `HstImager` whose executable does not exist, so any
+code path that used it even once for a step native can do would fail with an
+I/O error rather than pass; the same property is pinned on the frontend by
+`src/lib/preload.test.ts`'s `"does not require the tool when the plan does not
+need it"` and `phrase-keys.test.ts`'s explicit `toolPath: null` assertion.
+**The fallback fires only for the step that needs it** —
+`commands::preload::tests::a_non_ascii_source_tree_falls_back_only_for_the_step_that_needs_it`
+runs a real `NativeFormatter` against a two-step plan (one ASCII
+`format-partition`, one PFS3 `copy-in` with a `español` directory) and asserts
+the first step's report says `"native"` while only the second falls back to a
+recorder — a run-level rewrite would have failed the first assertion.
+**A missing tool refuses rather than half-running** —
+`commands::preload::tests::a_missing_fallback_tool_refuses_before_the_rest_of_the_plan_runs`
+uses a recorder that fails `import_filesystem` with
+`ForeignRdbEmbedNotSupported` and asserts both that the run errors and that
+`format`/`copy` never ran. A fourth,
+`commands::preload::tests::a_real_failure_is_not_treated_as_a_reason_to_fall_back`,
+is the negative control every one of those needs: an `Io` failure is
+surfaced as-is and the fallback recorder is never touched. `core::preload::
+native::tests::import_filesystem_refuses_rather_than_guess` now asserts the
+specific `ForeignRdbEmbedNotSupported` variant, not just its error code, so a
+regression back to the generic `NotImplemented` fails it even though the code
+string alone would not have caught that. Wire shapes are pinned in
+`commands::preload::tests::wire_shapes` (`StepReport`, `FallbackReason`,
+`PreloadResult`'s new `steps` field) the same way `commands/osinstall.rs`'s
+own `wire_shapes` module already does.
+
+Also closed in the same commit: `scripts/pfs3-oracle-check.py`'s ART-114
+skip-path (Windows-reserved basenames) had never been exercised end to end,
+because the agent that fixed ART-114 was forbidden from touching `native.rs`'s
+fixture. `build_pfs3_volume_for_oracle_when_asked` now writes a real
+`DOSDrivers/AUX` entry — `AUX` is the real case, a genuine AmigaOS serial-port
+DOSDriver name, the same one `Storage3.2.adf` and `GlowIcons3.2.adf` carry —
+and a live run against `E:\amiga\Amigatolon\hstimager\hst.imager.exe`
+confirmed the script reports it as `1 file(s) skipped … not a failure` rather
+than an unexplained shortfall, with every other check (names, sizes, hashes,
+protection bits, both directions) passing.
 
 **ART-116** ✅ **ART's PFS3 writer carries protection bits but drops a
 `.uaem`'s comment and date; the FFS branch keeps both** — *found 2026-08-16

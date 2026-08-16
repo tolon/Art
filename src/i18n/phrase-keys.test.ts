@@ -50,9 +50,11 @@ import {
   type ManualStep,
 } from "@/lib/cardBuild";
 import {
+  fallbackPhrase,
   formatCount,
   preloadBlocker,
   stepPhrase,
+  type FallbackReason,
   type PartitionPick,
   type PreloadPlan,
   type PreloadStep,
@@ -591,22 +593,58 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
         { step: "format-partition", slot: 2, index: 1, drive_name: "DH0", volume_name: "Work" },
       ],
     };
+    // ART-117 — the one case the native path always refuses, so the plan
+    // itself already shows the tool is needed.
+    const importPlan: PreloadPlan = {
+      image: "card.img",
+      steps: [
+        {
+          step: "import-filesystem",
+          slot: 2,
+          driver: "pfs3aio.lha",
+          dostype: "PDS3",
+          name: "pfs3aio",
+        },
+        { step: "format-partition", slot: 2, index: 1, drive_name: "DH0", volume_name: "Work" },
+      ],
+    };
     const ready = { image: "card.img", toolPath: "hst.imager.exe", picks: [pick], plan };
 
     const blockers = [
       preloadBlocker({ ...ready, image: null }),
-      preloadBlocker({ ...ready, toolPath: null }),
       preloadBlocker({ ...ready, picks: [{ ...pick, chosen: false }] }),
       preloadBlocker({ ...ready, picks: [{ ...pick, volumeName: " " }] }),
       preloadBlocker({ ...ready, picks: [{ ...pick, volumeName: "Work:" }] }),
       preloadBlocker({ ...ready, picks: [{ ...pick, volumeName: "W".repeat(31) }] }),
       preloadBlocker({ ...ready, plan: null }),
+      // The one case where the tool is genuinely needed (ART-117) and is
+      // not configured.
+      preloadBlocker({ ...ready, plan: importPlan, toolPath: null }),
     ];
     for (const blocker of blockers) {
       expect(blocker).not.toBeNull();
       expect(isLeafKey(blocker!.key), blocker!.key).toBe(true);
     }
     expect(preloadBlocker(ready)).toBeNull();
+    // **ART-120, mutation-checked at this layer too**: native is the
+    // default, so no tool configured is not a blocker when the plan does not
+    // need one — a regression back to "the tool is always required" would
+    // fail this specific assertion even though every other case above still
+    // passes.
+    expect(preloadBlocker({ ...ready, toolPath: null })).toBeNull();
+    expect(preloadBlocker({ ...ready, toolPath: "" })).toBeNull();
+    // A configured tool is fine even when the plan does need it.
+    expect(preloadBlocker({ ...ready, plan: importPlan })).toBeNull();
+  });
+
+  it("fallbackPhrase: every FallbackReason variant resolves", () => {
+    const reasons: FallbackReason[] = [
+      { reason: "foreign-rdb-embed" },
+      { reason: "non-ascii-pfs3-names", paths: ["Locale/español"], more: 3 },
+    ];
+    for (const reason of reasons) {
+      expect(resolvesAtRuntime(fallbackPhrase(reason).key), reason.reason).toBe(true);
+    }
   });
 
   it("kindPhrase: every ItemKind variant resolves", () => {

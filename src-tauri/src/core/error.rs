@@ -84,6 +84,28 @@ pub enum CoreError {
     /// instead of a Rust `String`.
     #[error("{}", non_ascii_pfs3_message(paths, *more))]
     NonAsciiPfs3Names { paths: Vec<String>, more: usize },
+
+    /// `NativeFormatter::import_filesystem` cannot embed a driver into an
+    /// existing card's RDB in place (ART-117) — see `core/preload/native.rs`'s
+    /// module docs for why `create_rdb_layout` cannot be reused for this.
+    ///
+    /// Deliberately its own variant rather than the generic
+    /// [`NotImplemented`](Self::NotImplemented): `commands/preload.rs`'s
+    /// formatter choice matches on this one to decide whether `hst-imager` is
+    /// a safe fallback, and it needs a signal that means *only* "this is a
+    /// known capability gap, nothing was touched, retry with the other tool"
+    /// — not "some other corner of the engine has no implementation yet",
+    /// which is what `NotImplemented` means everywhere else it is used.
+    /// `NativeFormatter::import_filesystem` returns this unconditionally, for
+    /// every card, before opening anything.
+    #[error(
+        "NativeFormatter cannot embed a filesystem driver into an existing card's RDB in \
+         place — create_rdb_layout only builds a partition table from scratch, and there is \
+         no whole-megabyte size that reproduces every existing partition's cylinder \
+         boundaries exactly. Build the card with the driver already embedded, or use \
+         hst-imager's import_filesystem."
+    )]
+    ForeignRdbEmbedNotSupported,
 }
 
 /// The sentence for [`CoreError::NonAsciiPfs3Names`] — pulled out of the
@@ -127,6 +149,7 @@ impl CoreError {
             Self::Cancelled => "ART-CANCELLED",
             Self::CancelledPartway { .. } => "ART-CANCELLED-PARTWAY",
             Self::NonAsciiPfs3Names { .. } => "ART-PFS3-NON-ASCII-NAME",
+            Self::ForeignRdbEmbedNotSupported => "ART-NATIVE-EMBED-UNSUPPORTED",
         }
     }
 
@@ -165,6 +188,7 @@ mod tests {
                 paths: vec!["x".into()],
                 more: 0,
             },
+            CoreError::ForeignRdbEmbedNotSupported,
         ];
 
         let mut codes: Vec<&str> = errors.iter().map(|e| e.code()).collect();

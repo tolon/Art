@@ -1767,19 +1767,27 @@
     "running": "Running…",
     "blocked": {
       "noCard": "Choose the card image first.",
-      "noTool": "Set where hst.imager is — ART does not ship it.",
+      "noTool": "This card needs a filesystem driver embedded into its RDB, and only hst-imager can do that safely — set where hst.imager is.",
       "nothingChosen": "Choose at least one partition to prepare.",
       "blankName": "{{drive}} needs a volume name.",
       "badName": "{{drive}}'s volume name contains ':' or '/', which separate paths on the Amiga and cannot appear in a name.",
       "longName": "{{drive}}'s volume name is longer than {{max}} characters, which is where AmigaDOS names stop.",
       "notPlanned": "Preview it first — nothing is formatted before you have seen what would be."
     },
+    "fallback": {
+      "foreignRdbEmbed": "hst-imager did this step: embedding a driver into this card's existing RDB in place means editing a partition table ART did not build, which ART's own writer cannot do safely.",
+      "nonAsciiPfs3Names": "hst-imager did this step: {{count}} name(s) are not ASCII, and this version of libpfs3 cannot write them correctly ({{paths}})."
+    },
     "result": {
       "heading": "Done",
       "formatted": "Formatted: {{volumes}}",
       "copied": "Copied in: {{files}} file(s), {{directories}} folder(s), {{bytes}} bytes.",
       "tool": "By {{version}}.",
-      "notVerified": "ART cannot read this volume back. It has no PFS3 reader, so what is inside is the tool's word and not ART's — verify it on the Amiga, or with something that is not ART."
+      "notVerified": "ART cannot read this volume back. It has no PFS3 reader, so what is inside is the tool's word and not ART's — verify it on the Amiga, or with something that is not ART.",
+      "steps": {
+        "heading": "Which tool did each step",
+        "tool": "by {{tool}}"
+      }
     }
   },
   "layout": {

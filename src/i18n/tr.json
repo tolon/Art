@@ -1767,19 +1767,27 @@
     "running": "Çalışıyor…",
     "blocked": {
       "noCard": "Önce kart imajını seç.",
-      "noTool": "hst.imager'ın nerede olduğunu ayarla — ART onu paketlemiyor.",
+      "noTool": "Bu kart, RDB'sine gömülecek bir dosya sistemi sürücüsü istiyor ve bunu güvenle yalnızca hst-imager yapabilir — hst.imager'ın nerede olduğunu ayarla.",
       "nothingChosen": "Hazırlanacak en az bir bölüm seç.",
       "blankName": "{{drive}} için bir birim adı gerekiyor.",
       "badName": "{{drive}} biriminin adında ':' veya '/' var; bunlar Amiga'da yol ayırıcıdır ve bir adın içinde yer alamaz.",
       "longName": "{{drive}} biriminin adı {{max}} karakterden uzun; AmigaDOS adları orada biter.",
       "notPlanned": "Önce önizle — ne biçimlendirileceğini görmeden hiçbir şey biçimlendirilmez."
     },
+    "fallback": {
+      "foreignRdbEmbed": "Bu adımı hst-imager yaptı: kartın mevcut RDB'sine yerinde bir sürücü gömmek, ART'ın oluşturmadığı bir bölüm tablosunu düzenlemeyi gerektirir; ART'ın kendi yazıcısı bunu güvenle yapamaz.",
+      "nonAsciiPfs3Names": "Bu adımı hst-imager yaptı: {{count}} ad ASCII değil ve libpfs3'ün bu sürümü bunları doğru yazamıyor ({{paths}})."
+    },
     "result": {
       "heading": "Bitti",
       "formatted": "Biçimlendirilen: {{volumes}}",
       "copied": "Kopyalanan: {{files}} dosya, {{directories}} klasör, {{bytes}} bayt.",
       "tool": "{{version}} ile.",
-      "notVerified": "ART bu birimi geri okuyamaz. PFS3 okuyucusu yok, yani içeridekiler aracın sözü, ART'ın değil — Amiga'da ya da ART olmayan bir şeyle doğrula."
+      "notVerified": "ART bu birimi geri okuyamaz. PFS3 okuyucusu yok, yani içeridekiler aracın sözü, ART'ın değil — Amiga'da ya da ART olmayan bir şeyle doğrula.",
+      "steps": {
+        "heading": "Hangi adımı hangi araç yaptı",
+        "tool": "{{tool}} ile"
+      }
     }
   },
   "layout": {

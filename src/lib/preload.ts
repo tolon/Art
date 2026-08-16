@@ -1,13 +1,19 @@
-// Formatting a card's Amiga volumes from Windows, and filling them
-// (SD-2 · G3, route E). Mirrors src-tauri/src/commands/preload.rs and
+// Formatting a card's Amiga volumes and filling them (SD-2 · G3/G5, route E
+// and native). Mirrors src-tauri/src/commands/preload.rs and
 // src-tauri/src/core/preload/mod.rs.
 //
-// **The tool is not ART.** `hst-imager` does the formatting — a proven MIT
-// implementation both existing PiStorm imagers stand on — and ART does not
-// ship it, so where it lives is a setting (`hstImagerPath`) beside the WinUAE
-// path rather than an assumption. `preload_probe` asks it what it is and says
-// when it is not the version ART's command set was written against; that is a
-// remark, never a refusal.
+// **ART-120: native by default, `hst-imager` a named fallback.** ART writes
+// PFS3 and FFS itself (`core::preload::native::NativeFormatter`) and no
+// longer needs `hst-imager` for an ordinary preload. The tool is kept as a
+// setting (`hstImagerPath`, beside the WinUAE path) because two real gaps
+// still need it: embedding a filesystem driver into an existing card's RDB
+// in place (ART-117), and any AmigaDOS name outside ASCII on a PFS3 volume,
+// which this version of `libpfs3` cannot write (ART-113). `preloadBlocker`
+// only requires the tool when the plan already shows the first case; the
+// second is a fact about a `copy-in` step's own content and can only be
+// known once the run tries it, which is what `StepReport.fallback_reason`
+// (and its `fallbackPhrase` translation) reports after the fact — never
+// silently.
 //
 // **What ART cannot check afterwards.** There is no PFS3 reader here, so once
 // a volume is formatted and filled ART can confirm the partition table, the
@@ -102,12 +108,35 @@ export interface PreloadOutcome {
   tool: ToolVersion | null;
 }
 
+/**
+ * Why one step ran on the fallback tool instead of natively (ART-120). A
+ * value, never a sentence (ART-060) — {@link fallbackPhrase} translates it.
+ *
+ * Exactly two variants, matching the two capability gaps
+ * `commands/preload.rs`'s own doc comment names — nothing else ever falls
+ * back.
+ */
+export type FallbackReason =
+  | { reason: "foreign-rdb-embed" }
+  | { reason: "non-ascii-pfs3-names"; paths: string[]; more: number };
+
+/** Which tool actually performed one step, and why, if it was not the
+ *  default. Present for every step the run reached — a plain `"native"` is
+ *  as much a report as a fallback is. */
+export interface StepReport {
+  step: PreloadStep;
+  /** `"native"`, or the fallback tool's own probed version string. */
+  tool: string;
+  fallback_reason: FallbackReason | null;
+}
+
 export const PRELOAD_EVENT = "preload-result";
 
 export interface PreloadResult {
   job_id: number;
   image: string;
   outcome: PreloadOutcome;
+  steps: StepReport[];
 }
 
 // ---------------------------------------------------------------------------
@@ -218,6 +247,18 @@ export function toRequest(
 export const MAX_VOLUME_NAME = 30;
 
 /**
+ * Whether this plan already shows a step the native path always refuses
+ * (ART-117 — embedding a filesystem driver into an existing card's RDB in
+ * place). The only fallback need `preloadBlocker` can know **before** a run:
+ * a non-ASCII name on a PFS3 `copy-in` (ART-113) is a fact about that step's
+ * own content, discovered only when the run tries it — see this file's own
+ * header comment.
+ */
+export function needsExternalTool(plan: PreloadPlan): boolean {
+  return plan.steps.some((step) => step.step === "import-filesystem");
+}
+
+/**
  * Why the preload cannot run yet, or null when it can.
  *
  * A reason rather than a boolean: a disabled button that does not say why is
@@ -225,6 +266,11 @@ export const MAX_VOLUME_NAME = 30;
  * `core/volume/write/dir.rs::check_name` already holds — a name AmigaDOS
  * cannot store is not a name, and finding that out after the format has begun
  * is finding it out too late.
+ *
+ * **ART-120: the tool is no longer required by default.** `NativeFormatter`
+ * runs unless the plan already shows a step it always refuses
+ * ({@link needsExternalTool}) — everything else runs without
+ * `hst.imager.exe` configured at all.
  */
 export function preloadBlocker(input: {
   image: string | null;
@@ -233,7 +279,6 @@ export function preloadBlocker(input: {
   plan: PreloadPlan | null;
 }): Phrase | null {
   if (!input.image?.trim()) return { key: "preload.blocked.noCard" };
-  if (!input.toolPath?.trim()) return { key: "preload.blocked.noTool" };
 
   const chosen = input.picks.filter((pick) => pick.chosen);
   if (chosen.length === 0) return { key: "preload.blocked.nothingChosen" };
@@ -254,7 +299,24 @@ export function preloadBlocker(input: {
   }
 
   if (!input.plan) return { key: "preload.blocked.notPlanned" };
+  if (needsExternalTool(input.plan) && !input.toolPath?.trim()) {
+    return { key: "preload.blocked.noTool" };
+  }
   return null;
+}
+
+/** The sentence for why one step ran on the fallback tool, for the result
+ *  panel to render beside it. */
+export function fallbackPhrase(reason: FallbackReason): Phrase {
+  switch (reason.reason) {
+    case "foreign-rdb-embed":
+      return { key: "preload.fallback.foreignRdbEmbed" };
+    case "non-ascii-pfs3-names":
+      return {
+        key: "preload.fallback.nonAsciiPfs3Names",
+        params: { count: reason.paths.length + reason.more, paths: reason.paths.join(", ") },
+      };
+  }
 }
 
 /** How many partitions this plan would erase. */

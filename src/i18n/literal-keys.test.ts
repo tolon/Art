@@ -193,6 +193,12 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // Verify running/idle, and the verify report's own Verified/Not
     // verified line), the same shape every other busy-button and outcome
     // badge on this list already uses.
-    expect(dynamicCalls).toBe(89);
+    // 89 → 91 (ART-120, native by default with `hst-imager` a named
+    // fallback): the preload result panel now lists every step with the
+    // tool that ran it, so `stepPhrase` is read a second time — once for the
+    // plan preview, once for the result — plus `fallbackPhrase`, a `Phrase`
+    // read from `@/lib/preload` for the step(s) where the fallback fired.
+    // Both are enumerated in `phrase-keys.test.ts`.
+    expect(dynamicCalls).toBe(91);
   });
 });

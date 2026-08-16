@@ -28,6 +28,7 @@ import { useTranslation } from "react-i18next";
 
 import { cardOpen, type CardReport } from "@/lib/card";
 import {
+  fallbackPhrase,
   formatCount,
   onPreloadResult,
   picksFor,
@@ -215,12 +216,15 @@ export function VolumePreload() {
   }
 
   async function preview() {
-    if (!imagePath || !toolPath) return;
+    // ART-120: previewing never needed the tool — `plan()` is formatter-
+    // agnostic — and now neither does most runs, so only the card is
+    // required here.
+    if (!imagePath) return;
     setBusy(true);
     setError(null);
     setResult(null);
     try {
-      const made = await preloadPlan(request, toolPath);
+      const made = await preloadPlan(request, toolPath ?? "");
       setPlan(made);
       setConfirmed(false);
       lastPlanned.current = fingerprint;
@@ -233,11 +237,14 @@ export function VolumePreload() {
   }
 
   async function apply() {
-    if (!toolPath) return;
+    // `blocker` covers this too (including the conditional tool
+    // requirement), but the button already disables on it — this guards a
+    // direct call and keeps the two checks in one place.
+    if (blocker) return;
     setBusy(true);
     setError(null);
     try {
-      await preloadRun(request, toolPath);
+      await preloadRun(request, toolPath ?? "");
       // `busy` is cleared by the result event, or here if the job never
       // starts. A cancelled or failed job is the job bar's to report.
     } catch (e) {
@@ -452,7 +459,7 @@ export function VolumePreload() {
           <button
             className="btn btn-primary"
             onClick={() => void preview()}
-            disabled={busy || !imagePath || !toolPath?.trim()}
+            disabled={busy || !imagePath}
           >
             {t(busy && !plan ? "preload.preview.running" : "preload.preview.run")}
           </button>
@@ -506,7 +513,7 @@ export function VolumePreload() {
           <button
             className="btn btn-primary"
             onClick={() => void apply()}
-            disabled={busy || !confirmed}
+            disabled={busy || !confirmed || !!blocker}
           >
             {t(busy ? "preload.running" : "preload.run")}
           </button>
@@ -532,6 +539,38 @@ export function VolumePreload() {
             <p className="faint" style={{ fontSize: 11, margin: "0 0 8px" }}>
               {t("preload.result.tool", { version: result.outcome.tool.raw })}
             </p>
+          )}
+          {/* ART-120: which tool ran which step, and why, whenever it was
+              not the default — never silent about a fallback. */}
+          {result.steps.length > 0 && (
+            <div style={{ margin: "0 0 8px" }}>
+              <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>
+                {t("preload.result.steps.heading")}
+              </div>
+              <ul style={{ fontSize: 11, margin: 0, paddingLeft: 18 }}>
+                {result.steps.map((stepReport, index) => {
+                  const phrase = stepPhrase(stepReport.step);
+                  const fallback = stepReport.fallback_reason
+                    ? fallbackPhrase(stepReport.fallback_reason)
+                    : null;
+                  return (
+                    <li key={index} style={{ padding: "2px 0" }}>
+                      {t(phrase.key, phrase.params)}
+                      {" — "}
+                      {t("preload.result.steps.tool", { tool: stepReport.tool })}
+                      {fallback && (
+                        <span
+                          className="badge badge-warn"
+                          style={{ marginLeft: 6, padding: "1px 6px" }}
+                        >
+                          {t(fallback.key, fallback.params)}
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           )}
           {/* The one thing this screen must not let a green panel imply. */}
           <p

@@ -140,14 +140,12 @@ impl VolumeFormatter for NativeFormatter {
         _name: &str,
         _sink: &dyn ProgressSink,
     ) -> CoreResult<()> {
-        Err(CoreError::NotImplemented(
-            "NativeFormatter cannot embed a filesystem driver into an existing card's RDB in \
-             place — create_rdb_layout only builds a partition table from scratch, and there is \
-             no whole-megabyte size that reproduces every existing partition's cylinder \
-             boundaries exactly. Build the card with the driver already embedded, or use \
-             hst-imager's import_filesystem."
-                .into(),
-        ))
+        // ART-117, and the hook `commands/preload.rs`'s formatter choice
+        // hangs on: a dedicated variant, not `NotImplemented`, so a caller can
+        // tell "known capability gap, safe to retry with hst-imager" apart
+        // from "nobody has built this yet". See `CoreError::
+        // ForeignRdbEmbedNotSupported`'s own doc comment.
+        Err(CoreError::ForeignRdbEmbedNotSupported)
     }
 
     fn format_partition(
@@ -1783,6 +1781,14 @@ mod tests {
 
     /// `import_filesystem` refuses by name rather than pretend — see the
     /// module docs for why `create_rdb_layout` cannot serve this case.
+    ///
+    /// **The exact variant matters, not just the code.** ART-120's fallback
+    /// choice (`commands/preload.rs::FallbackReason::from_native_error`)
+    /// matches on `CoreError::ForeignRdbEmbedNotSupported` specifically to
+    /// decide "safe to retry with hst-imager" — a regression back to the
+    /// generic `NotImplemented` would silently stop that fallback from firing
+    /// while this assertion, checking only the string `.code()` used to
+    /// return, kept passing.
     #[test]
     fn import_filesystem_refuses_rather_than_guess() {
         let image = rdb_image_with_one_pds3_partition();
@@ -1796,7 +1802,11 @@ mod tests {
                 &NoProgress,
             )
             .unwrap_err();
-        assert_eq!(err.code(), "ART-NOT-IMPLEMENTED", "{err}");
+        assert!(
+            matches!(err, CoreError::ForeignRdbEmbedNotSupported),
+            "{err:?}"
+        );
+        assert_eq!(err.code(), "ART-NATIVE-EMBED-UNSUPPORTED", "{err}");
     }
 
     /// A DosType neither family claims — ART refuses rather than guessing.
@@ -1882,10 +1892,24 @@ mod tests {
         let assign: &[u8] = b"ASSIGN\n";
         let startup: &[u8] = b"; a comment\n";
         let deep: &[u8] = b"deep\n";
+        // ART-114: a Windows/MS-DOS reserved device basename, exercised for
+        // real rather than left as an untested skip-path in the oracle
+        // script. Not invented — `AUX` is the real case: `Storage3.2.adf` and
+        // `GlowIcons3.2.adf` each carry a genuine `DOSDrivers/AUX` serial-port
+        // DOSDriver definition (see ART-113's own doc comment for where those
+        // two ADFs come from). `hst-imager fs copy` cannot extract this name
+        // back out to NTFS — that is what the oracle script's own
+        // `path_has_reserved_component` exists to recognise as a known,
+        // explained skip rather than an unexplained shortfall — but ART
+        // itself writes and lists it on the volume with nothing special
+        // about it: the reserved-name problem is Windows extraction's, not
+        // this volume's.
+        let aux: &[u8] = b"DOSDriver AUX\n";
 
         let tree = fixtures::scratch("pfs3-oracle-write");
         std::fs::create_dir_all(tree.join("C/Extra")).unwrap();
         std::fs::create_dir_all(tree.join("S")).unwrap();
+        std::fs::create_dir_all(tree.join("DOSDrivers")).unwrap();
         std::fs::write(tree.join("Readme"), readme).unwrap();
         std::fs::write(tree.join("C/Assign"), assign).unwrap();
         std::fs::write(
@@ -1900,6 +1924,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(tree.join("C/Extra/Deep.txt"), deep).unwrap();
+        std::fs::write(tree.join("DOSDrivers/AUX"), aux).unwrap();
 
         NativeFormatter
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
@@ -1923,6 +1948,9 @@ mod tests {
             {"path": "C/Extra/Deep.txt", "kind": "file", "size": deep.len(), "attributes": "----RWED",
              "sha256": crate::core::hashing::sha256_bytes(deep)},
             {"path": "S", "kind": "dir", "attributes": "----RWED"},
+            {"path": "DOSDrivers", "kind": "dir", "attributes": "----RWED"},
+            {"path": "DOSDrivers/AUX", "kind": "file", "size": aux.len(), "attributes": "----RWED",
+             "sha256": crate::core::hashing::sha256_bytes(aux)},
         ]);
         println!("json={entries}");
     }

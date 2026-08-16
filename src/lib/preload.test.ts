@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  fallbackPhrase,
   formatCount,
+  needsExternalTool,
   picksFor,
   preloadBlocker,
   stepPhrase,
@@ -65,6 +67,29 @@ const CARD: CardReport = {
 const PLAN: PreloadPlan = {
   image: "E:\\amiga\\ProjeART\\card.img",
   steps: [
+    {
+      step: "format-partition",
+      slot: 2,
+      index: 1,
+      drive_name: "DH0",
+      volume_name: "Work",
+    },
+  ],
+};
+
+/** ART-117 — the one case the native path always refuses (embedding a
+ *  driver into an existing card's RDB), so the plan itself already shows
+ *  that hst-imager is needed. */
+const IMPORT_PLAN: PreloadPlan = {
+  image: "E:\\amiga\\ProjeART\\card.img",
+  steps: [
+    {
+      step: "import-filesystem",
+      slot: 2,
+      driver: "pfs3aio.lha",
+      dostype: "PDS3",
+      name: "pfs3aio",
+    },
     {
       step: "format-partition",
       slot: 2,
@@ -156,9 +181,24 @@ describe("preloadBlocker", () => {
     expect(preloadBlocker({ ...ready, image: null })?.key).toBe("preload.blocked.noCard");
   });
 
-  it("asks for the tool, which ART does not ship", () => {
-    expect(preloadBlocker({ ...ready, toolPath: null })?.key).toBe("preload.blocked.noTool");
-    expect(preloadBlocker({ ...ready, toolPath: "  " })?.key).toBe("preload.blocked.noTool");
+  // ART-120: native is the default and needs no tool for an ordinary
+  // preload — `PLAN` here has no `import-filesystem` step.
+  it("does not require the tool when the plan does not need it", () => {
+    expect(preloadBlocker({ ...ready, toolPath: null })).toBeNull();
+    expect(preloadBlocker({ ...ready, toolPath: "  " })).toBeNull();
+    expect(preloadBlocker({ ...ready, toolPath: "" })).toBeNull();
+  });
+
+  it("asks for the tool only when the plan needs it (ART-117)", () => {
+    expect(needsExternalTool(PLAN)).toBe(false);
+    expect(needsExternalTool(IMPORT_PLAN)).toBe(true);
+
+    const withImport = { ...ready, plan: IMPORT_PLAN };
+    expect(preloadBlocker({ ...withImport, toolPath: null })?.key).toBe("preload.blocked.noTool");
+    expect(preloadBlocker({ ...withImport, toolPath: "  " })?.key).toBe(
+      "preload.blocked.noTool"
+    );
+    expect(preloadBlocker(withImport)).toBeNull();
   });
 
   it("will not run over a card with nothing chosen", () => {
@@ -235,5 +275,23 @@ describe("stepPhrase", () => {
     });
     expect(phrase.key).toBe("preload.plan.step.format");
     expect(phrase.params).toEqual({ drive: "DH0", volume: "Work" });
+  });
+});
+
+describe("fallbackPhrase", () => {
+  it("names ART-117 with no parameters", () => {
+    expect(fallbackPhrase({ reason: "foreign-rdb-embed" })).toEqual({
+      key: "preload.fallback.foreignRdbEmbed",
+    });
+  });
+
+  it("counts the bounded names plus the rest, for ART-113", () => {
+    const phrase = fallbackPhrase({
+      reason: "non-ascii-pfs3-names",
+      paths: ["Locale/español", "Locale/français"],
+      more: 22,
+    });
+    expect(phrase.key).toBe("preload.fallback.nonAsciiPfs3Names");
+    expect(phrase.params).toEqual({ count: 24, paths: "Locale/español, Locale/français" });
   });
 });

@@ -365,7 +365,11 @@ pub fn run(
     Ok(outcome)
 }
 
-fn step_label(step: &PreloadStep) -> String {
+/// `pub(crate)`: `commands/preload.rs::run_with_fallback` reuses this for its
+/// own per-step progress line rather than duplicating the match — the choice
+/// of *which tool* runs a step is a `commands/` concern (CLAUDE.md), but the
+/// step's own label is not.
+pub(crate) fn step_label(step: &PreloadStep) -> String {
     match step {
         PreloadStep::ImportFilesystem { name, .. } => format!("Embedding {name}"),
         PreloadStep::FormatPartition {
