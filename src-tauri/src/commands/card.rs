@@ -428,6 +428,14 @@ fn source_facts(request: &CardBuildRequest, kernel_file: &str) -> CoreResult<Sou
             Some(path) => Some(sha256_file(path)?),
             None => None,
         },
+        kickstart_file: kickstart
+            .as_ref()
+            .map(|_| request.firmware.kickstart_file.clone()),
+        kickstart_stated_major: match &kickstart {
+            Some(path) => crate::core::rom::stated_version(&crate::core::rom::decoded_image(path)?)
+                .map(|(major, _minor)| major),
+            None => None,
+        },
         hardware: request.hardware,
         line: request.line,
         kernel_file: kernel_file.to_string(),
