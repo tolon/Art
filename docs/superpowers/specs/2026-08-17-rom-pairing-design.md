@@ -1,7 +1,7 @@
 # ROM pairing — does this Kickstart suit this volume? (SD-2 · G9)
 
 **Date:** 2026-08-17
-**Status:** proposed
+**Status:** approved (2026-08-17)
 **Scope:** `core/osinstall` (the manifest), `core/card/manifest.rs` (read, not
 written), a new pure comparison, and the preload screen's confirmation step
 **Gap:** [sd-appliance-gap-analysis.md](../../sd-appliance-gap-analysis.md) G9
