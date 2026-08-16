@@ -85,7 +85,7 @@ pub fn amigaos_32() -> CoreResult<Recipe> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::osinstall::{Component, Condition, RuleKind};
+    use crate::core::osinstall::{Component, Condition, PathRule, RuleKind};
     use std::collections::HashMap;
 
     fn recipe() -> Recipe {
@@ -424,12 +424,95 @@ mod tests {
     #[test]
     fn backdrops_and_update_3_2_1_are_not_yet_available() {
         let recipe = recipe();
-        assert!(
-            !recipe.component("backdrops").unwrap().available,
-            "Backdrops3.2 stays off until somebody measures where the real \
-             installer places wallpapers"
-        );
         assert!(!recipe.component("update-3.2.1").unwrap().available);
+    }
+
+    /// **The destination was measured, so `backdrops` is on (ART-127).**
+    ///
+    /// It shipped `available: false` with a comment saying it would stay off
+    /// "until somebody measures where the real installer places wallpapers" —
+    /// which was the right call while the answer was a guess. Booting the
+    /// tree measured it: AmigaOS 3.2's own Preferences, running on a V47
+    /// A1200 ROM, asked for `Sys:Prefs/Presets/Backdrops/default_pal.iff` by
+    /// name. That is the OS naming its own path, not ART choosing one, and
+    /// `Backdrops3.2` carries `default_pal.iff` at its root.
+    #[test]
+    fn backdrops_go_where_the_running_system_asked_for_them() {
+        let recipe = recipe();
+        let component = recipe.component("backdrops").unwrap();
+        assert!(component.available);
+        assert_eq!(
+            component.rules,
+            vec![PathRule {
+                from: String::new(),
+                to: "Prefs/Presets/Backdrops".into(),
+                kind: RuleKind::Subtree,
+            }],
+            "the whole disk, at the path Preferences asked for"
+        );
+    }
+
+    /// **ART-127 — the two libraries without which Workbench does not start.**
+    ///
+    /// AmigaOS 3.2's A1200 ROM carries neither `icon.library` nor
+    /// `workbench.library`; the system volume has to. Neither is on
+    /// `Workbench3.2` — whose `Libs` drawer holds 23 libraries and not these
+    /// two — so the `Libs` subtree rule that looks like it would cover
+    /// everything does not cover them. They are on `Install3.2`, which the
+    /// recipe named no component for at all: the disk had been written off as
+    /// "the OS's own boot floppy, not component media".
+    ///
+    /// Found by booting what G5 built, one requester at a time: with a V47
+    /// ROM the tree reached Workbench startup and stopped on *"Please insert
+    /// a volume containing LIBS/icon.library in any drive"*, and once that
+    /// was supplied, on `LIBS/workbench.library`. No fixture could have found
+    /// either, and neither could any amount of reading the recipe — every
+    /// rule in it was correct about the disk it names.
+    ///
+    /// The other three libraries in that drawer (`iffparse`, `locale`,
+    /// `version`) are deliberately **not** taken: `Workbench3.2` ships those
+    /// itself, and a second component writing the same destination is the
+    /// collision ART-112 was.
+    #[test]
+    fn the_libraries_workbench_does_not_carry_come_off_the_install_disk() {
+        let recipe = recipe();
+        let component = recipe
+            .component("install-libs")
+            .expect("a component supplying the LIBS: the ROM does not carry");
+
+        assert_eq!(component.media, "Install3.2");
+        assert!(
+            component.required,
+            "Workbench does not start without these, so a tree built without \
+             them is not a working system and ART should say so rather than \
+             build one"
+        );
+        assert_eq!(
+            component.rules,
+            vec![
+                PathRule {
+                    from: "Libs/icon.library".into(),
+                    to: "Libs/icon.library".into(),
+                    kind: RuleKind::File,
+                },
+                PathRule {
+                    from: "Libs/workbench.library".into(),
+                    to: "Libs/workbench.library".into(),
+                    kind: RuleKind::File,
+                },
+            ]
+        );
+
+        // And the reason it has to be its own component: the disk that looks
+        // like it should carry them does not.
+        let workbench = recipe.component("workbench-base").unwrap();
+        for name in ["Libs/icon.library", "Libs/workbench.library"] {
+            assert!(
+                workbench.rules.iter().all(|rule| rule.from != name),
+                "if Workbench3.2 ever does carry {name}, this component is the \
+                 one to remove — not a second copy to add"
+            );
+        }
     }
 
     #[test]

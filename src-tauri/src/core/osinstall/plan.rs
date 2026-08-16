@@ -732,6 +732,7 @@ mod plan_tests {
             .map(|(path, bytes, protection)| (path.as_str(), bytes.as_slice(), *protection))
             .collect();
         crate::core::osinstall::fixtures::media(&folder, "Workbench3.2", "wb.adf", &wb_refs);
+        crate::core::osinstall::fixtures::required_media(&folder, &recipe, &["Workbench3.2"]);
 
         let extras: Vec<(String, Vec<u8>, u32)> =
             crate::core::osinstall::fixtures::entries_for(&recipe, "Extras3.2")
@@ -1182,6 +1183,7 @@ mod plan_tests {
             .map(|(path, bytes, protection)| (path.as_str(), bytes.as_slice(), *protection))
             .collect();
         crate::core::osinstall::fixtures::media(&folder, "Workbench3.2", "wb.adf", &wb_refs);
+        crate::core::osinstall::fixtures::required_media(&folder, &recipe, &["Workbench3.2"]);
 
         let request = InstallRequest {
             media_folder: folder,

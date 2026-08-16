@@ -18,6 +18,15 @@
       ]
     },
     {
+      "id": "install-libs",
+      "media": "Install3.2",
+      "required": true,
+      "rules": [
+        { "from": "Libs/icon.library", "to": "Libs/icon.library", "kind": "file" },
+        { "from": "Libs/workbench.library", "to": "Libs/workbench.library", "kind": "file" }
+      ]
+    },
+    {
       "id": "extras",
       "media": "Extras3.2",
       "rules": [
@@ -208,9 +217,8 @@
     {
       "id": "backdrops",
       "media": "Backdrops3.2",
-      "available": false,
       "rules": [
-        { "from": "", "to": "Backdrops", "kind": "subtree" }
+        { "from": "", "to": "Prefs/Presets/Backdrops", "kind": "subtree" }
       ]
     },
     {

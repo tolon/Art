@@ -135,9 +135,13 @@ describe("componentLabel", () => {
 
 describe("sanitizeChosen", () => {
   it("drops unknown and unavailable ids, keeps real available ones", () => {
+    // `backdrops` used to belong in this list; it became available when the
+    // running system named its own wallpaper path (ART-127), so the
+    // unavailable example is `update-3.2.1`, which is still registered and
+    // still not implemented.
     expect(
       sanitizeChosen(["workbench-base", "extras", "not-a-real-id", "update-3.2.1", "backdrops"])
-    ).toEqual(["workbench-base", "extras"]);
+    ).toEqual(["workbench-base", "extras", "backdrops"]);
   });
 });
 

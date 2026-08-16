@@ -728,6 +728,7 @@ mod tests {
             .map(|(path, bytes, protection)| (path.as_str(), bytes.as_slice(), *protection))
             .collect();
         fixtures::media(&folder, "Workbench3.2", "wb.adf", &wb_refs);
+        fixtures::required_media(&folder, &recipe, &["Workbench3.2"]);
 
         let modules = fixtures::entries_for(&recipe, "ModulesA1200_3.2");
         let modules_refs: Vec<(&str, &[u8], u32)> = modules
@@ -1335,11 +1336,14 @@ mod tests {
     /// `modules-a1200` (`condition: rom-older-than 47`), which is
     /// deliberately left **out** of `chosen` — the point of this run is to
     /// prove the condition switches it on by itself against the user's real
-    /// V40 Kickstart, not to force it on the way `chosen` would. Neither
-    /// `update-3.2.1` nor `backdrops` is included: both are
-    /// `available: false` in the recipe (registered, not implemented — see
-    /// `CLAUDE.md`'s "don't claim support that isn't implemented and
-    /// tested"), so a real screen would never offer them either.
+    /// V40 Kickstart, not to force it on the way `chosen` would.
+    /// `update-3.2.1` is left out because it is `available: false` in the
+    /// recipe (registered, not implemented — see `CLAUDE.md`'s "don't claim
+    /// support that isn't implemented and tested"), so a real screen would
+    /// never offer it. `backdrops` **is** chosen now: it stopped being a
+    /// guess when the running system named its own path (ART-127), and a
+    /// tree without it boots to a Preferences error about a missing
+    /// wallpaper.
     #[test]
     #[ignore = "touches the user's real media and E:\\amiga\\ProjeART; run explicitly, see the doc comment"]
     fn run_the_real_engine_against_the_users_own_media_when_asked() {
@@ -1376,6 +1380,7 @@ mod tests {
             "mmulibs",
             "hdtools",
             "storage",
+            "backdrops",
         ]
         .into_iter()
         .map(String::from)
@@ -1412,13 +1417,25 @@ mod tests {
             "the real plan refused: {:?}",
             planned.refusals
         );
-        assert!(
+        // **Asked of the ROM rather than assumed of it.** The hook was
+        // written against the user's 3.1 (V40) dump and asserted
+        // `modules-a1200` on, flatly — which made it fail when pointed at
+        // their 3.2 (V47) ROM, where the component is correctly *off*. Both
+        // ROMs are real material worth running against (the V47 one is what
+        // boots the tree in WinUAE), so the assertion now states the rule the
+        // condition actually encodes instead of one ROM's answer to it.
+        let rom_major = crate::core::rom::stated_version(&std::fs::read(&rom).unwrap())
+            .map(|(major, _)| major)
+            .expect("the paired Kickstart states its own version");
+        println!("rom stated major={rom_major}");
+        assert_eq!(
             modules_on,
-            "the user's real Kickstart states a major below 47 — modules-a1200 \
-             must switch on by its own condition, unchosen; if it did not, \
-             something upstream of this assertion (ROM read, Cloanto strip, \
-             condition_holds) is wrong, which is the finding the brief expects \
-             this run to surface if it happens"
+            rom_major < 47,
+            "modules-a1200 must switch on by its own condition — unchosen — \
+             exactly when the paired ROM's stated major is below 47, and stay \
+             off otherwise. The ROM here states {rom_major}. If this fails, \
+             something upstream (ROM read, Cloanto strip, condition_holds) is \
+             wrong, which is the finding the brief expects this run to surface"
         );
 
         // Review fix round 1: these were printed, never asserted, so none of
@@ -1427,9 +1444,21 @@ mod tests {
         // are asserted rather than left as text a reader has to trust — if
         // this ever fails because the media folder genuinely changed, that
         // is itself worth knowing, not a flaky test to work around.
+        // **One set of numbers per ROM, because the ROM changes the plan.**
+        // A pre-V47 machine gets `modules-a1200` (LoadModule and the module
+        // sets its own condition switched on); a V47 machine correctly does
+        // not, and its tree is that much smaller. Pinning one ROM's answer as
+        // *the* answer is what made this hook fail the first time it was
+        // pointed at the user's 3.2 ROM — the material it was written against
+        // was never the only real material.
+        let (want_components, want_files, want_dirs, want_bytes) = if rom_major < 47 {
+            (28, 4052, 331, 12_908_793)
+        } else {
+            (27, 4047, 328, 12_847_457)
+        };
         assert_eq!(
             planned.components_on.len(),
-            26,
+            want_components,
             "components_on={:?}",
             planned.components_on
         );
@@ -1440,9 +1469,9 @@ mod tests {
             "apply: files={} directories={} bytes={}",
             outcome.files, outcome.directories, outcome.bytes
         );
-        assert_eq!(outcome.files, 4030);
-        assert_eq!(outcome.directories, 330);
-        assert_eq!(outcome.bytes, 11_930_254);
+        assert_eq!(outcome.files, want_files);
+        assert_eq!(outcome.directories, want_dirs);
+        assert_eq!(outcome.bytes, want_bytes);
 
         let manifest_text = std::fs::read_to_string(root.join(MANIFEST_FILE_NAME)).unwrap();
         let manifest: DistributionManifest = serde_json::from_str(&manifest_text).unwrap();
@@ -1451,8 +1480,8 @@ mod tests {
             manifest.files.len(),
             manifest.built_from.len()
         );
-        assert_eq!(manifest.files.len(), 4030);
-        assert_eq!(manifest.built_from.len(), 26);
+        assert_eq!(manifest.files.len(), want_files as usize);
+        assert_eq!(manifest.built_from.len(), want_components);
     }
 
     /// Throwaway diagnostic, not part of the suite's real coverage — lists

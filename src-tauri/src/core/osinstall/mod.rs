@@ -446,6 +446,35 @@ pub(crate) mod fixtures {
     /// from many different tests, several of which run in parallel threads
     /// of the same process, and a shared tag would let two calls race over
     /// the same directory.
+    /// Write the media of every **required** component the caller has not
+    /// written itself.
+    ///
+    /// A required component's disk is a precondition of any plan at all, not
+    /// something a test chooses: a fixture naming `["Extras3.2"]` is stating
+    /// its own subject, not claiming the system disks are absent. This was
+    /// invisible until ART-127, when `workbench-base` stopped being the only
+    /// required component — every fixture happened to pass that one by hand,
+    /// and eight of them broke at once the moment a second appeared. Adding a
+    /// third required component should break nothing.
+    pub fn required_media(folder: &Path, recipe: &super::Recipe, already: &[&str]) {
+        for component in &recipe.components {
+            if !component.required || already.contains(&component.media.as_str()) {
+                continue;
+            }
+            let owned = entries_for(recipe, &component.media);
+            let refs: Vec<(&str, &[u8], u32)> = owned
+                .iter()
+                .map(|(path, bytes, protection)| (path.as_str(), bytes.as_slice(), *protection))
+                .collect();
+            media(
+                folder,
+                &component.media,
+                &format!("{}.adf", component.media),
+                &refs,
+            );
+        }
+    }
+
     pub fn planned_with(
         chosen: &[&str],
         present: &[&str],
@@ -458,6 +487,7 @@ pub(crate) mod fixtures {
         std::fs::create_dir(&folder).unwrap();
 
         let recipe = crate::core::osinstall::recipe::amigaos_32().unwrap();
+
         for volume in present {
             let owned = entries_for(&recipe, volume);
             let refs: Vec<(&str, &[u8], u32)> = owned
@@ -466,6 +496,7 @@ pub(crate) mod fixtures {
                 .collect();
             media(&folder, volume, &format!("{volume}.adf"), &refs);
         }
+        required_media(&folder, &recipe, present);
 
         let rom = rom_major.map(|major| fake_rom(&dir, major));
         let request = crate::core::osinstall::plan::InstallRequest {
