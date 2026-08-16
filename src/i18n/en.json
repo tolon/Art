@@ -1790,6 +1790,7 @@
       "heading": "Done",
       "formatted": "Formatted: {{volumes}}",
       "copied": "Copied in: {{files}} file(s), {{directories}} folder(s), {{bytes}} bytes.",
+      "copiedNoBytes": "Copied in: {{files}} file(s), {{directories}} folder(s). The tool that did the copying reports its total rounded (\"12.2 MB\"), so ART shows no byte count rather than an invented one.",
       "tool": "By {{version}}.",
       "notVerified": "This run did not read the volume back afterwards to check it — not for a step ART's own writer did, and not for one hst-imager did. Verify it on the Amiga, or with something that is not ART.",
       "steps": {

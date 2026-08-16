@@ -49,7 +49,12 @@ export interface FormatterReport {
 export interface CopySummary {
   files: number;
   directories: number;
-  bytes: number;
+  /** `null` when ART has no byte total, which is **not** zero (ART-125):
+   *  `hst-imager` is asked afterwards and answers in rounded units
+   *  (`12.2 MB`), and a rounded string is not a byte count worth inventing
+   *  digits from. ART's own writer counts what it writes and always answers.
+   *  One unanswered step makes the run's total unanswerable. */
+  bytes: number | null;
   comments_lost: number;
   dates_lost: number;
 }
@@ -306,6 +311,20 @@ export function preloadBlocker(input: {
     return { key: "preload.blocked.noTool" };
   }
   return null;
+}
+
+/**
+ * What a finished copy moved, for the result panel — with the byte total
+ * when there is one, and **without the clause entirely** when there is not
+ * (ART-125). Saying "0 bytes" for a twelve-megabyte copy is the shape of
+ * claim §89 forbids, and the honest alternative is to say less rather than
+ * to round a rounded number back into digits.
+ */
+export function copiedPhrase(copied: CopySummary): Phrase {
+  const params = { files: copied.files, directories: copied.directories };
+  return copied.bytes === null
+    ? { key: "preload.result.copiedNoBytes", params }
+    : { key: "preload.result.copied", params: { ...params, bytes: copied.bytes } };
 }
 
 /** The sentence for why one step ran on the fallback tool, for the result

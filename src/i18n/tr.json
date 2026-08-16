@@ -1790,6 +1790,7 @@
       "heading": "Bitti",
       "formatted": "Biçimlendirilen: {{volumes}}",
       "copied": "Kopyalanan: {{files}} dosya, {{directories}} klasör, {{bytes}} bayt.",
+      "copiedNoBytes": "Kopyalanan: {{files}} dosya, {{directories}} klasör. Kopyalamayı yapan araç toplamı yuvarlayarak bildiriyor (\"12.2 MB\"), bu yüzden ART uydurulmuş bir bayt sayısı yerine hiç göstermiyor.",
       "tool": "{{version}} ile.",
       "notVerified": "Bu çalıştırma birimi sonradan geri okuyup denetlemedi — ne ART'ın kendi yazıcısının yaptığı bir adım için, ne de hst-imager'ın yaptığı bir adım için. Amiga'da ya da ART olmayan bir şeyle doğrula.",
       "steps": {

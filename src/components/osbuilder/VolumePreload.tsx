@@ -32,6 +32,7 @@ import {
   formatCount,
   onPreloadResult,
   picksFor,
+  copiedPhrase,
   plannedToolPhrase,
   preloadBlocker,
   preloadPlan,
@@ -538,11 +539,10 @@ export function VolumePreload() {
             })}
           </p>
           <p className="muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
-            {t("preload.result.copied", {
-              files: result.outcome.copied.files,
-              directories: result.outcome.copied.directories,
-              bytes: result.outcome.copied.bytes,
-            })}
+            {(() => {
+              const phrase = copiedPhrase(result.outcome.copied);
+              return t(phrase.key, phrase.params);
+            })()}
           </p>
           {result.outcome.tool && (
             <p className="faint" style={{ fontSize: 11, margin: "0 0 8px" }}>

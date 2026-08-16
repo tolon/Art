@@ -249,13 +249,7 @@ fn apply_effect(outcome: &mut PreloadOutcome, effect: StepEffect) {
     match effect {
         StepEffect::None => {}
         StepEffect::Formatted(drive_name) => outcome.formatted.push(drive_name),
-        StepEffect::Copied(summary) => {
-            outcome.copied.files += summary.files;
-            outcome.copied.directories += summary.directories;
-            outcome.copied.bytes += summary.bytes;
-            outcome.copied.comments_lost += summary.comments_lost;
-            outcome.copied.dates_lost += summary.dates_lost;
-        }
+        StepEffect::Copied(summary) => outcome.copied.absorb(&summary),
     }
 }
 
@@ -1592,7 +1586,10 @@ mod tests {
                     "copied files={} directories={} bytes={} comments_lost={} dates_lost={}",
                     outcome.copied.files,
                     outcome.copied.directories,
-                    outcome.copied.bytes,
+                    outcome
+                        .copied
+                        .bytes
+                        .map_or("not answered".into(), |n| n.to_string()),
                     outcome.copied.comments_lost,
                     outcome.copied.dates_lost,
                 );

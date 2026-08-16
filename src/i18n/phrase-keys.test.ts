@@ -50,6 +50,7 @@ import {
   type ManualStep,
 } from "@/lib/cardBuild";
 import {
+  copiedPhrase,
   fallbackPhrase,
   formatCount,
   plannedToolPhrase,
@@ -664,6 +665,16 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     expect(preloadBlocker({ ...ready, toolPath: "" })).toBeNull();
     // A configured tool is fine even when the plan does need it.
     expect(preloadBlocker({ ...ready, plan: importPlan })).toBeNull();
+  });
+
+  it("copiedPhrase: both the with-bytes and the without-bytes sentence resolve", () => {
+    const counts = { files: 1, directories: 1, comments_lost: 0, dates_lost: 0 };
+    for (const bytes of [42, null]) {
+      expect(
+        resolvesAtRuntime(copiedPhrase({ ...counts, bytes }).key),
+        String(bytes)
+      ).toBe(true);
+    }
   });
 
   it("fallbackPhrase: every FallbackReason variant resolves", () => {

@@ -889,7 +889,7 @@ fn copy_in_pfs3(
                 .write_file_in(parent, name, &data)
                 .map_err(from_pfs3)?;
             summary.files += 1;
-            summary.bytes += data.len() as u64;
+            summary.bytes = summary.bytes.map(|n| n + data.len() as u64);
         }
 
         // Binding requirement 1: apply the sidecar, never copy it as a file
@@ -1038,7 +1038,7 @@ fn copy_in_ffs(
             };
             writer.add_file(parent, name, &data, meta)?;
             summary.files += 1;
-            summary.bytes += data.len() as u64;
+            summary.bytes = summary.bytes.map(|n| n + data.len() as u64);
         }
     }
 
@@ -2180,7 +2180,9 @@ mod tests {
             image.display(),
             summary.files,
             summary.directories,
-            summary.bytes
+            summary
+                .bytes
+                .map_or("not answered".into(), |n: u64| n.to_string())
         );
 
         assert!(summary.files > 0, "the real tree must not copy in empty");

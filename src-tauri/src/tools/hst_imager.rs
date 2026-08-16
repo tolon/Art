@@ -216,7 +216,16 @@ pub fn dir_args(image: &Path, slot: Option<usize>, drive: &str) -> Vec<String> {
 /// Absent or unreadable is **not** an error: the copy happened, and a summary
 /// ART could not parse is a summary, not a failure.
 pub fn parse_copy_summary(stdout: &str) -> CopySummary {
-    let mut summary = CopySummary::default();
+    // **Unanswered until a line answers it (ART-125).** `CopySummary`'s own
+    // default is a *known* zero, which is right for an accumulator and wrong
+    // here: this reads somebody else's sentence, and that sentence rounds
+    // (`12.2 MB`). A total ART cannot recover is left as `None` rather than
+    // reported as zero, which is what the result panel used to print against
+    // a twelve-megabyte copy.
+    let mut summary = CopySummary {
+        bytes: None,
+        ..Default::default()
+    };
     for line in stdout.lines().rev() {
         let lower = line.to_lowercase();
         if !lower.contains("file") {
@@ -233,7 +242,7 @@ pub fn parse_copy_summary(stdout: &str) -> CopySummary {
             match unit.trim() {
                 "directory" | "directories" => summary.directories = count,
                 "file" | "files" => summary.files = count,
-                "b" | "bytes" => summary.bytes = count,
+                "b" | "bytes" => summary.bytes = Some(count),
                 _ => {}
             }
         }
@@ -303,7 +312,10 @@ impl VolumeFormatter for HstImager {
         Ok(self
             .run(&dir_args(image, slot, drive), sink)
             .map(|listing| parse_copy_summary(&listing))
-            .unwrap_or_default())
+            .unwrap_or(CopySummary {
+                bytes: None,
+                ..Default::default()
+            }))
     }
 }
 
@@ -388,18 +400,59 @@ mod tests {
             CopySummary {
                 files: 2,
                 directories: 1,
-                bytes: 20,
+                bytes: Some(20),
                 ..Default::default()
             }
         );
     }
 
+    /// **ART-125 — a size ART cannot have is not zero.** `fs dir` rounds its
+    /// own total (*"280 directories, 3933 files, 12.2 MB"*), so the byte
+    /// count is unrecoverable rather than merely unparsed: turning `12.2 MB`
+    /// into 12 782 141 would invent a number nothing measured. The counts
+    /// beside it are exact and are still read. Before this, `bytes` stayed at
+    /// its `0` default and the result panel printed "0 bytes" for a copy of
+    /// twelve megabytes.
+    #[test]
+    fn a_rounded_size_is_not_answered_rather_than_answered_wrongly() {
+        let summary = parse_copy_summary(
+            "280 directories, 3933 files, 12.2 MB
+",
+        );
+        assert_eq!(summary.files, 3933);
+        assert_eq!(summary.directories, 280);
+        assert_eq!(
+            summary.bytes, None,
+            "a rounded total is not a byte count ART can report"
+        );
+    }
+
+    /// A listing ART cannot read at all answers nothing — including the
+    /// bytes, which is the case `unwrap_or_default` used to turn into zero.
+    #[test]
+    fn an_unreadable_listing_answers_no_byte_count_either() {
+        assert_eq!(
+            parse_copy_summary(
+                "done
+"
+            )
+            .bytes,
+            None
+        );
+    }
+
     /// A summary ART cannot read is not a failure — the copy still happened,
-    /// and inventing numbers would be worse than reporting none.
+    /// and inventing numbers would be worse than reporting none. Zero files
+    /// and zero directories; the byte total is *unanswered* rather than zero
+    /// (ART-125), which is the one field that differs from `default()`.
     #[test]
     fn an_unreadable_summary_is_zero_rather_than_an_error() {
-        assert_eq!(parse_copy_summary("done\n"), CopySummary::default());
-        assert_eq!(parse_copy_summary(""), CopySummary::default());
+        let unknown = CopySummary {
+            bytes: None,
+            ..Default::default()
+        };
+        assert_eq!(parse_copy_summary("done\n"), unknown);
+        assert_eq!(parse_copy_summary(""), unknown);
     }
 
     /// The progress line names the step, not the user's paths.

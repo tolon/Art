@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  copiedPhrase,
   fallbackPhrase,
   formatCount,
   needsExternalTool,
@@ -347,6 +348,34 @@ describe("plannedToolPhrase", () => {
     expect(plannedToolPhrase(copy, planOf(copy))).toEqual({
       key: "preload.plan.step.tool.nativeConditional",
     });
+  });
+});
+
+describe("copiedPhrase", () => {
+  // ART-125: the tool that does a fallback copy answers in rounded units
+  // ("12.2 MB"), so ART has no byte total for that run — and printing the
+  // 0 it used to default to told the user a twelve-megabyte copy moved
+  // nothing. The clause goes; the counts beside it are exact and stay.
+  const counts = { files: 3933, directories: 280, comments_lost: 0, dates_lost: 0 };
+
+  it("prints the byte total when there is one", () => {
+    expect(copiedPhrase({ ...counts, bytes: 12_651_178 })).toEqual({
+      key: "preload.result.copied",
+      params: { files: 3933, directories: 280, bytes: 12_651_178 },
+    });
+  });
+
+  it("says nothing about bytes when ART has no total", () => {
+    expect(copiedPhrase({ ...counts, bytes: null })).toEqual({
+      key: "preload.result.copiedNoBytes",
+      params: { files: 3933, directories: 280 },
+    });
+  });
+
+  it("keeps a real zero, which is not the same answer", () => {
+    const phrase = copiedPhrase({ ...counts, files: 0, directories: 0, bytes: 0 });
+    expect(phrase.key).toBe("preload.result.copied");
+    expect(phrase.params).toEqual({ files: 0, directories: 0, bytes: 0 });
   });
 });
 

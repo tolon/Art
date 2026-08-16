@@ -65,11 +65,19 @@ pub struct ToolVersion {
 }
 
 /// How much a copy moved.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// **`bytes` is optional, and `None` is not zero (ART-125).** ART's own
+/// writer counts every byte it writes and always answers; `hst-imager` is
+/// asked afterwards and reports a *rounded* total (`12.2 MB`), which is not a
+/// byte count — deriving one from it would invent digits nothing measured. A
+/// question ART cannot answer is left unanswered rather than answered with a
+/// zero the screen then prints as a fact (§89, the same rule G8's
+/// `not-checked` state follows).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CopySummary {
     pub files: u64,
     pub directories: u64,
-    pub bytes: u64,
+    pub bytes: Option<u64>,
     /// ART-116: how many entries carried a `.uaem` comment that could not be
     /// written. Always `0` on the FFS branch, whose own writer (`FileMeta`)
     /// does carry a comment through; only `native::copy_in_pfs3` ever
@@ -81,6 +89,39 @@ pub struct CopySummary {
     /// The same, for a `.uaem` date. See `comments_lost`.
     #[serde(default)]
     pub dates_lost: u64,
+}
+
+impl Default for CopySummary {
+    /// A copy that has moved nothing has moved a **known** zero bytes — the
+    /// accumulators start here, so `None` can keep meaning "not answered"
+    /// rather than doubling as "nothing yet".
+    fn default() -> Self {
+        Self {
+            files: 0,
+            directories: 0,
+            bytes: Some(0),
+            comments_lost: 0,
+            dates_lost: 0,
+        }
+    }
+}
+
+impl CopySummary {
+    /// Fold one step's counts into a running total.
+    ///
+    /// **Bytes survive only while every contributing step knew its own**
+    /// (ART-125): one unanswered step makes the total unanswerable, which is
+    /// the honest result — a sum missing an unknown addend is not a sum.
+    pub fn absorb(&mut self, other: &CopySummary) {
+        self.files += other.files;
+        self.directories += other.directories;
+        self.comments_lost += other.comments_lost;
+        self.dates_lost += other.dates_lost;
+        self.bytes = match (self.bytes, other.bytes) {
+            (Some(mine), Some(theirs)) => Some(mine + theirs),
+            _ => None,
+        };
+    }
 }
 
 /// Formatting an Amiga volume and putting files in it.
@@ -380,9 +421,7 @@ pub fn run(
                 source,
             } => {
                 let summary = formatter.copy_in(&plan.image, *slot, drive_name, source, sink)?;
-                outcome.copied.files += summary.files;
-                outcome.copied.directories += summary.directories;
-                outcome.copied.bytes += summary.bytes;
+                outcome.copied.absorb(&summary);
             }
         }
     }
@@ -741,7 +780,7 @@ mod tests {
             Ok(CopySummary {
                 files: 2,
                 directories: 1,
-                bytes: 36,
+                bytes: Some(36),
                 ..Default::default()
             })
         }

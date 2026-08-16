@@ -204,6 +204,11 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // which writer is expected to run it *before* the user confirms, not
     // only after the fact in the result panel. Enumerated in
     // `phrase-keys.test.ts`.
-    expect(dynamicCalls).toBe(92);
+    // 92 → 93 (ART-125): the result panel's "copied in" line is a `Phrase`
+    // now rather than one literal key, because a copy `hst-imager` performed
+    // has no byte total to print — `copiedPhrase` picks the sentence with
+    // the bytes or the one without, and both are enumerated in
+    // `phrase-keys.test.ts`.
+    expect(dynamicCalls).toBe(93);
   });
 });
