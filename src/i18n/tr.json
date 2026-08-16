@@ -1768,6 +1768,15 @@
         }
       }
     },
+    "pairing": {
+      "suitable": "Kart {{rom}} taşıyor; bu, sistemin oluşturulduğu Kickstart değil — ama onu çalıştırmaya yetecek kadar yeni.",
+      "unsuitable": "Bu sistem V{{needs}} ya da daha yeni bir Kickstart için oluşturuldu, kart ise V{{found}} olduğunu bildiren {{rom}}'u taşıyor. Amiga açılır ve \"This disk must be booted from Kickstart ROM 3.2 (V47) or from the 'Modules' disk that matches your hardware.\" mesajıyla durur. Kartı yine de hazırlamak sorun değil — ROM, hiçbir şeyi yeniden oluşturmadan sonradan değiştirilebilir.",
+      "unsuitableUnknown": "Bu sistem V{{needs}} ya da daha yeni bir Kickstart için oluşturuldu, karttaki {{rom}} ise hiçbir sürüm belirtmiyor — bu yüzden ART çalışıp çalışmayacağını söyleyemez. Amiga daha yeni bir ROM isteyip durabilir.",
+      "notChecked": {
+        "tree": "ART, kartın Kickstart'ının bu klasöre uygun olup olmadığını denetleyemez: klasör, hangi ROM'a göre oluşturulduğuna dair bir kayıt taşımıyor.",
+        "card": "ART, kartın Kickstart'ının bu sisteme uygun olup olmadığını denetleyemez: kartın yanında bir manifest yok, ya da manifest hangi dosyanın Kickstart olduğunu söylemiyor."
+      }
+    },
     "confirm_one": "{{count}} bölümün silineceğini anlıyorum",
     "confirm_other": "{{count}} bölümün silineceğini anlıyorum",
     "run": "Biçimlendir ve doldur",

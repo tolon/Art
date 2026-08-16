@@ -189,6 +189,48 @@ export async function onPreloadResult(
   return listen<PreloadResult>(PRELOAD_EVENT, (event) => handler(event.payload));
 }
 
+/** What ART can say about the ROM on a card and the tree going onto it (G9). */
+export type Pairing =
+  | { verdict: "paired" }
+  | { verdict: "suitable"; rom: string }
+  | { verdict: "unsuitable"; needs: number; found: number | null; rom: string }
+  | { verdict: "not-checked"; why: "tree-records-no-rom" | "card-records-no-rom" };
+
+/** Ask whether the card's Kickstart suits the tree. Reads two manifests. */
+export async function preloadRomPairing(image: string, content: string): Promise<Pairing> {
+  return invoke<Pairing>("preload_rom_pairing", { image, content });
+}
+
+/**
+ * The sentence for a pairing, or `null` when there is nothing to say.
+ *
+ * `paired` renders nothing on purpose: silence is the right report for "the
+ * ROM you built this for is the ROM on the card", and a tick that means
+ * "checked and fine" invites the reader to trust the *absence* of one.
+ */
+export function pairingPhrase(pairing: Pairing): Phrase | null {
+  switch (pairing.verdict) {
+    case "paired":
+      return null;
+    case "suitable":
+      return { key: "preload.pairing.suitable", params: { rom: pairing.rom } };
+    case "unsuitable":
+      return pairing.found === null
+        ? {
+            key: "preload.pairing.unsuitableUnknown",
+            params: { needs: pairing.needs, rom: pairing.rom },
+          }
+        : {
+            key: "preload.pairing.unsuitable",
+            params: { needs: pairing.needs, found: pairing.found, rom: pairing.rom },
+          };
+    case "not-checked":
+      return pairing.why === "tree-records-no-rom"
+        ? { key: "preload.pairing.notChecked.tree" }
+        : { key: "preload.pairing.notChecked.card" };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // What the screen holds, and the rules over it
 // ---------------------------------------------------------------------------

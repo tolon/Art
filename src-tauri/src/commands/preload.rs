@@ -67,15 +67,18 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
+use crate::core::card::manifest::{manifest_path_for, read_manifest};
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
+use crate::core::osinstall::apply::{DistributionManifest, MANIFEST_FILE_NAME};
 use crate::core::preload::native::NativeFormatter;
 use crate::core::preload::VolumeFormatter;
 use crate::core::preload::{
     plan, step_label, CopySummary, PreloadOutcome, PreloadPlan, PreloadRequest, PreloadStep,
     ToolVersion,
 };
+use crate::core::rom::pairing::{compare, CardRom, Pairing};
 use crate::error::AppResult;
 use crate::tools::hst_imager::{HstImager, TESTED_VERSION};
 
@@ -126,6 +129,43 @@ pub struct PreloadCommand {
 #[tauri::command]
 pub fn preload_plan(command: PreloadCommand) -> AppResult<PreloadPlan> {
     Ok(plan(&command.request)?)
+}
+
+/// Read both records and compare them (G9). Split from the command so the
+/// test can drive it without Tauri.
+///
+/// **Everything missing is `NotChecked`, never an error and never a pass.** A
+/// user pointing at a folder that is not a distribution tree, or a card ART
+/// did not build, has done nothing wrong — there is simply nothing to check.
+fn rom_pairing_for(image: &Path, content: &Path) -> CoreResult<Pairing> {
+    let tree = std::fs::read_to_string(content.join(MANIFEST_FILE_NAME))
+        .ok()
+        .and_then(|text| serde_json::from_str::<DistributionManifest>(&text).ok())
+        .and_then(|manifest| manifest.paired_rom);
+
+    let card = read_manifest(&manifest_path_for(image))
+        .ok()
+        .and_then(|card| {
+            let name = card.source.kickstart_file.clone()?;
+            let entry = card.boot_files.iter().find(|file| file.name == name)?;
+            Some(CardRom {
+                name,
+                sha256: entry.sha256.clone(),
+                stated_major: card.source.kickstart_stated_major,
+            })
+        });
+
+    Ok(compare(tree.as_ref(), card.as_ref()))
+}
+
+/// What ART can say about the ROM on this card and the tree about to go onto
+/// it. Reads two manifests; writes nothing (§92's PREVIEW).
+#[tauri::command]
+pub fn preload_rom_pairing(image: String, content: String) -> AppResult<Pairing> {
+    Ok(rom_pairing_for(
+        Path::new(image.trim()),
+        Path::new(content.trim()),
+    )?)
 }
 
 /// The event a finished preload arrives on.
@@ -606,6 +646,54 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// **G9.** The command reads both records off disk — the tree's
+    /// `distribution.json` and the card's own manifest — and answers with the
+    /// comparison. Nothing else in ART reads those two files together.
+    #[test]
+    fn the_pairing_command_reads_both_manifests() {
+        use crate::core::rom::pairing::Pairing;
+
+        let dir = scratch("pairing-command");
+        let tree = dir.join("dist");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(
+            tree.join(crate::core::osinstall::apply::MANIFEST_FILE_NAME),
+            r#"{"release":"AmigaOS 3.2","builtFrom":[],"files":[],
+                "pairedRom":{"name":"Kickstart 47.102 (A1200)","sha256":"aa",
+                "statedMajor":47,"compatibleModels":["A1200"],"requiresMajor":47}}"#,
+        )
+        .unwrap();
+
+        let image = dir.join("card.img");
+        std::fs::write(&image, b"not a card; only its manifest is read").unwrap();
+
+        // A card carrying a V40 ROM under the name config.txt points at.
+        let mut card = crate::core::card::manifest::tests_support::sample_manifest();
+        card.source.kickstart_file = Some("kick.rom".into());
+        card.source.kickstart_stated_major = Some(40);
+        card.boot_files = vec![crate::core::card::manifest::ManifestFile {
+            name: "kick.rom".into(),
+            bytes: 524_288,
+            sha256: "bb".into(),
+        }];
+        std::fs::write(
+            crate::core::card::manifest::manifest_path_for(&image),
+            crate::core::card::manifest::render_manifest(&card).unwrap(),
+        )
+        .unwrap();
+
+        let verdict = rom_pairing_for(&image, &tree).unwrap();
+
+        match verdict {
+            Pairing::Unsuitable { needs, found, .. } => {
+                assert_eq!((needs, found), (47, Some(40)));
+            }
+            other => panic!("{other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// **The wire, written down.** `src/lib/preload.ts` builds this object by

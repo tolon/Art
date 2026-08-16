@@ -5,6 +5,7 @@ import {
   fallbackPhrase,
   formatCount,
   needsExternalTool,
+  pairingPhrase,
   picksFor,
   plannedToolPhrase,
   preloadBlocker,
@@ -403,5 +404,45 @@ describe("fallbackPhrase", () => {
     });
     expect(phrase.key).toBe("preload.fallback.nonAsciiPfs3Names");
     expect(phrase.params).toEqual({ count: 24, paths: "Locale/español, Locale/français" });
+  });
+});
+
+describe("pairingPhrase", () => {
+  it("says nothing when the card carries the very ROM the tree was built for", () => {
+    expect(pairingPhrase({ verdict: "paired" })).toBeNull();
+  });
+
+  it("names the ROM when it is a different but sufficient one", () => {
+    expect(pairingPhrase({ verdict: "suitable", rom: "kick.rom" })).toEqual({
+      key: "preload.pairing.suitable",
+      params: { rom: "kick.rom" },
+    });
+  });
+
+  it("gives both versions when the card's ROM is too old", () => {
+    expect(
+      pairingPhrase({ verdict: "unsuitable", needs: 47, found: 40, rom: "kick.rom" })
+    ).toEqual({
+      key: "preload.pairing.unsuitable",
+      params: { needs: 47, found: 40, rom: "kick.rom" },
+    });
+  });
+
+  it("has a sentence for a ROM that states no version at all", () => {
+    expect(
+      pairingPhrase({ verdict: "unsuitable", needs: 47, found: null, rom: "kick.rom" })
+    ).toEqual({
+      key: "preload.pairing.unsuitableUnknown",
+      params: { needs: 47, rom: "kick.rom" },
+    });
+  });
+
+  it("says which side did not answer, and never passes", () => {
+    expect(pairingPhrase({ verdict: "not-checked", why: "tree-records-no-rom" })).toEqual({
+      key: "preload.pairing.notChecked.tree",
+    });
+    expect(pairingPhrase({ verdict: "not-checked", why: "card-records-no-rom" })).toEqual({
+      key: "preload.pairing.notChecked.card",
+    });
   });
 });

@@ -209,6 +209,11 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // has no byte total to print — `copiedPhrase` picks the sentence with
     // the bytes or the one without, and both are enumerated in
     // `phrase-keys.test.ts`.
-    expect(dynamicCalls).toBe(93);
+    // 93 → 94 (SD-2 G9): the preload screen reads `pairingPhrase` above the
+    // confirmation checkbox — whether the card's Kickstart suits the tree
+    // about to go onto it. A `Phrase` read from `@/lib/preload`, and all six
+    // `Pairing` variants (five phrases plus the deliberate `null` for
+    // `paired`) are enumerated in `phrase-keys.test.ts`.
+    expect(dynamicCalls).toBe(94);
   });
 });

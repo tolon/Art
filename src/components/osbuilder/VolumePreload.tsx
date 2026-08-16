@@ -31,17 +31,20 @@ import {
   fallbackPhrase,
   formatCount,
   onPreloadResult,
+  pairingPhrase,
   picksFor,
   copiedPhrase,
   plannedToolPhrase,
   preloadBlocker,
   preloadPlan,
   preloadProbe,
+  preloadRomPairing,
   preloadRun,
   stepPhrase,
   toRequest,
   type FormatterReport,
   type PartitionPick,
+  type Pairing,
   type PreloadPlan,
   type PreloadResult,
 } from "@/lib/preload";
@@ -91,6 +94,7 @@ export function VolumePreload() {
   const [picks, setPicks] = useState<PartitionPick[]>([]);
   const [plan, setPlan] = useState<PreloadPlan | null>(null);
   const [confirmed, setConfirmed] = useState(false);
+  const [pairing, setPairing] = useState<Pairing | null>(null);
   const [tool, setTool] = useState<FormatterReport | null>(null);
   const [probing, setProbing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -139,6 +143,31 @@ export function VolumePreload() {
       setConfirmed(false);
     }
   }, [fingerprint]);
+
+  // G9: the ROM question is about the card and the folder going onto it, so
+  // it is asked whenever either changes — and forgotten with the plan, since
+  // a stale verdict beside a fresh plan is worse than none.
+  useEffect(() => {
+    const filled = picks.find((pick) => pick.chosen && pick.content);
+    if (!imagePath || !filled?.content) {
+      setPairing(null);
+      return;
+    }
+    let cancelled = false;
+    preloadRomPairing(imagePath, filled.content)
+      .then((verdict) => {
+        if (!cancelled) setPairing(verdict);
+      })
+      .catch(() => {
+        // Not an error the user needs: the command answers `not-checked`
+        // for everything it cannot read, so a rejection here means the
+        // command itself failed, and the preview below is unaffected.
+        if (!cancelled) setPairing(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [fingerprint, imagePath]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -502,6 +531,20 @@ export function VolumePreload() {
               );
             })}
           </ol>
+
+          {pairing &&
+            (() => {
+              const phrase = pairingPhrase(pairing);
+              if (!phrase) return null;
+              return (
+                <p
+                  className={pairing.verdict === "unsuitable" ? "badge badge-warn" : "muted"}
+                  style={{ fontSize: 12, margin: "0 0 8px" }}
+                >
+                  {t(phrase.key, phrase.params)}
+                </p>
+              );
+            })()}
 
           <label
             style={{
