@@ -121,9 +121,22 @@ session (this one and ART-059) may point at something environmental — this
 machine, or `cargo test`'s default parallelism — rather than two unrelated
 defects, but that is a guess, not a finding. Task 14's own two full-suite runs
 (1382 passed, 0 failed, 3 ignored, both times) did **not** reproduce it.
-Not fixed — undiagnosed. If it recurs, worth stopping to diagnose rather than
-re-running until green, per this project's own standing rule about a suite
-that fails at random.
+**A deliberate reproduction attempt on 2026-08-16 failed to provoke it**: six
+runs of `cargo test core::iso` in isolation and three of the full parallel
+suite, all clean — nine consecutive green runs on the machine that produced
+all three sightings, on the merged tree. So it is real (three independent
+agents saw it, one of them twice in a single run) and it is rare enough that
+nine runs do not catch it, which is the worst frequency for diagnosis and the
+reason this entry records the negative result rather than quietly dropping it.
+
+What is now known, so the next attempt does not start over: it is not a
+scratch-path collision, it is not reproducible in isolation, it needs the
+full suite's parallelism, and it survived the merge to `main`. What would
+actually settle it is the failure output, which nobody has captured — every
+sighting was reported second-hand as "2 failed, both `core::iso`". **The next
+person to see it should save the panic message before re-running.** Until then
+this stays open and undiagnosed; re-running until green is exactly what this
+project's standing rule forbids.
 
 **ART-114** 🟡 **`hst-imager`'s `fs copy` extraction silently drops any entry
 whose name matches a Windows/MS-DOS reserved device basename** — *found
