@@ -602,6 +602,7 @@ mod rdb_tests {
                 boot_priority: 0,
                 num_buffers: 100,
             }],
+            &[],
         )
         .unwrap();
 

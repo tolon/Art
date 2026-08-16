@@ -2,7 +2,7 @@
 name = "amiga-retro-toolkit"
 version = "0.1.0"
 description = "ART — The Swiss Army Knife for Amiga Files"
-authors = ["ART Project"]
+authors = ["tolon"]
 edition = "2021"
 # Raised from 1.77 on 2026-08-12, deliberately and for one reason: 7z support.
 # The maintained `sevenz-rust2` requires 1.93, and the newest release that
@@ -95,6 +95,43 @@ zip = { version = "8", default-features = false, features = [
 # and an old LZMA decoder is precisely the thing not to point at files
 # strangers wrote.
 sevenz-rust2 = { version = "0.21.4", default-features = false }
+
+# FAT32, and the first filesystem ART **writes** that is not an Amiga one.
+#
+# A PiStorm card boots the Raspberry Pi from a FAT32 partition — the Emu68
+# kernel, a Kickstart image, `config.txt`, `cmdline.txt` — and the Amiga lives
+# in the rest of the card. So SD-1's G2 has to create a FAT32 filesystem and
+# put files in it. The gap analysis named this crate rather than hand-rolling
+# one, and that is the right call for a filesystem whose only job is to be read
+# by somebody else's firmware: a formatter of one's own would be correct in
+# exactly the cases one thought to test.
+#
+# `default-features = false`, and the feature list is the decision:
+#
+# - `std` for `io::Read`/`Write`/`Seek`, which is how ART hands it a region of
+#   an image file.
+# - `alloc` for long filenames. `config_caffeineos.txt` is not an 8.3 name, and
+#   a multiboot card is a folder full of names like it.
+# - **`chrono` off, deliberately.** It is the default, and it would pull a date
+#   library in to stamp every file with the moment it was written. ART wants
+#   the opposite: a build that produces the same bytes twice is a build a
+#   manifest can describe (G7), and "when was this card made" is the manifest's
+#   answer to give, not sixty timestamps scattered through a filesystem.
+fatfs = { version = "0.3.6", default-features = false, features = ["std", "alloc"] }
+
+# PFS3, so ART can write the filesystem a real PiStorm card uses. Pure Rust:
+# its whole dependency tree is `byteorder` + `thiserror`, it launches nothing
+# and declares no OS dependency, which is what lets it live inside `core/`.
+# LGPL-3.0-or-later, compatible with ART's GPL-3.0-or-later — see the note
+# beside it in `deny.toml`'s allow list for the cost that acceptance carries.
+#
+# Pinned exactly, the same way `ureq` above is: `core/preload/native.rs`'s
+# `NativeFormatter::probe()` reports this version number as which
+# implementation did the work, and a `cargo update` silently drifting that
+# past what `probe()` claims would make the report lie about itself. A test
+# in `native.rs` checks this line's string literally, so drift fails the
+# build rather than the user's trust in the report.
+libpfs3 = "=0.1.3"
 
 [dev-dependencies]
 # The 7z *encoder*, for building test fixtures only. ART ships no archives, so

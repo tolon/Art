@@ -11,8 +11,36 @@ import {
   type PartitionSpec,
   type AmigaHardDiskFs,
 } from "@/lib/hdf";
+import {
+  bootPartition,
+  cardOpen,
+  isCard,
+  partitionCount,
+  type CardReport,
+} from "@/lib/card";
 import { hdfSizeWarning, parseCustomSize, type HdfFsId } from "@/lib/hdfSize";
 import { partitionsMissingDriver } from "@/lib/rdbDrivers";
+import { driverFileName, driverRequirement, fileSystemInputsFor } from "@/lib/fsDriver";
+import {
+  isFlag,
+  isOneOf,
+  isText,
+  isTextOrNothing,
+  isWholeNumberBetween,
+} from "@/lib/remembered";
+import { useRemembered } from "@/lib/useRemembered";
+import { useOpenObject } from "@/stores/openObjectStore";
+
+/** The filesystems the wizard offers. A remembered value that is not one of
+ *  them — an older ART's, or a hand-edited file's — falls back rather than
+ *  reaching `to_dostype_u32` with something it has no branch for. */
+const isFilesystem = isOneOf<AmigaHardDiskFs>(
+  "pfs3directscsi",
+  "pfs3standard",
+  "sfs0",
+  "ffsdircache",
+  "ffsstandard"
+);
 
 interface FsChoice {
   id: AmigaHardDiskFs;
@@ -63,23 +91,61 @@ export function HardDiskStudio() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const [path, setPath] = useState<string | null>(null);
+  // The open image outlives this screen (ART-085), for the length of the run.
+  const [path, setPath] = useOpenObject("harddisk");
   const [info, setInfo] = useState<HdfInfo | null>(null);
+  /**
+   * Set instead of `info` when the file turns out to be a **card** — an MBR
+   * with a FAT32 boot partition and one to three Amiga disks inside it, each
+   * with its own RDB at its own offset.
+   *
+   * The two are exclusive on purpose: a card is not one hard disk with extra
+   * fields, and rendering it through the single-disk view is how ART came to
+   * report a working card as broken (ART-097).
+   */
+  const [card, setCard] = useState<CardReport | null>(null);
   const [selectedPart, setSelectedPart] = useState<ParsedPartition | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
-  // Wizard Modal State
+  // Wizard Modal State.
+  //
+  // Everything the wizard asks is remembered (`@/lib/useRemembered`). Somebody
+  // building a set of disks answers the same four questions the same way every
+  // time, and the driver especially: having found `pfs3aio` once, nobody should
+  // have to go and find it again.
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [createPresetSizeMb, setCreatePresetSizeMb] = useState<number>(1024); // 1 GB
-  const [createTemplate, setCreateTemplate] = useState<"single" | "split">("split");
-  const [selectedFs, setSelectedFs] = useState<AmigaHardDiskFs>("pfs3directscsi");
+  const [createPresetSizeMb, setCreatePresetSizeMb] = useRemembered(
+    "hdf.presetSizeMb",
+    isWholeNumberBetween(10, 4 * 1024 * 1024),
+    1024 // 1 GB
+  );
+  const [createTemplate, setCreateTemplate] = useRemembered<"single" | "split">(
+    "hdf.template",
+    isOneOf("single", "split"),
+    "split"
+  );
+  const [selectedFs, setSelectedFs] = useRemembered<AmigaHardDiskFs>(
+    "hdf.filesystem",
+    isFilesystem,
+    "pfs3directscsi"
+  );
   /** Whether the size is being typed rather than picked from the five
    *  presets. The presets are common answers, not the range (ART-083). */
-  const [customSize, setCustomSize] = useState(false);
-  const [customText, setCustomText] = useState("");
-  const [customUnit, setCustomUnit] = useState<"mb" | "gb">("gb");
+  const [customSize, setCustomSize] = useRemembered("hdf.customSize", isFlag, false);
+  const [customText, setCustomText] = useRemembered("hdf.customText", isText, "");
+  const [customUnit, setCustomUnit] = useRemembered<"mb" | "gb">(
+    "hdf.customUnit",
+    isOneOf("mb", "gb"),
+    "gb"
+  );
+  /** The filesystem driver to embed in the new RDB, if one is needed. */
+  const [driverPath, setDriverPath] = useRemembered<string | null>(
+    "hdf.driverPath",
+    isTextOrNothing,
+    null
+  );
 
   // Parsing and warning both live in `@/lib/hdfSize`, with their own tests —
   // the rule that a fraction of a megabyte is refused rather than rounded
@@ -95,10 +161,20 @@ export function HardDiskStudio() {
       ? null
       : hdfSizeWarning(effectiveSizeMb, createTemplate, selectedFs as HdfFsId);
 
+  // Whether this filesystem is one Kickstart has. PFS3 and SFS are not, and a
+  // disk that names one without carrying it is a disk an Amiga ignores in
+  // silence — which is exactly what this wizard used to produce (ART-084).
+  const driverNeed = driverRequirement(selectedFs);
+
+  // Router state names a file when the Dashboard or the drop panel sent us
+  // here; otherwise the studio reopens whatever it had open (ART-085). `info`
+  // is null on every fresh mount, so it is what tells "nothing is loaded here"
+  // apart from "nothing is open at all".
   useEffect(() => {
-    const navState = location.state as { path?: string } | undefined;
-    if (navState?.path && navState.path !== path) {
-      void loadHdf(navState.path);
+    const fromNav = (location.state as { path?: string } | undefined)?.path;
+    const target = fromNav ?? path;
+    if (target && (info === null || target !== path)) {
+      void loadHdf(target);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state]);
@@ -108,6 +184,24 @@ export function HardDiskStudio() {
     setError(null);
     setStatusMsg(null);
     try {
+      // Ask the card reader first, whatever the file is. It answers for both
+      // kinds (`core/card.rs`): a plain HDF comes back as one area at offset
+      // zero with no partition table, so this branches on what was *found*
+      // rather than on the extension or on a guess. It matters because
+      // `hdf_open` cannot open a card at all — it looks for the RDB in the
+      // first blocks of the file, and on a card those are the MBR and the
+      // FAT32 boot partition, with the Amiga's own table about a gigabyte
+      // further in (ART-095).
+      const report = await cardOpen(p);
+      if (isCard(report)) {
+        setCard(report);
+        setInfo(null);
+        setSelectedPart(report.card.areas[0]?.rdb.partitions[0] ?? null);
+        setPath(p);
+        return;
+      }
+
+      setCard(null);
       const hdfInfo = await hdfOpen(p);
       setInfo(hdfInfo);
       setPath(p);
@@ -117,6 +211,7 @@ export function HardDiskStudio() {
     } catch (e) {
       setError(String(e));
       setInfo(null);
+      setCard(null);
     } finally {
       setBusy(false);
     }
@@ -130,6 +225,18 @@ export function HardDiskStudio() {
     });
     if (typeof sel === "string") {
       await loadHdf(sel);
+    }
+  }
+
+  async function handlePickDriver() {
+    // No extension filter: an Amiga executable has no extension, and one
+    // would only hide the file the user came here to pick.
+    const sel = await open({
+      multiple: false,
+      title: t("hardDisk.modal.driver.dialogTitle"),
+    });
+    if (typeof sel === "string") {
+      setDriverPath(sel);
     }
   }
 
@@ -154,6 +261,10 @@ export function HardDiskStudio() {
     setStatusMsg(null);
 
     try {
+      // No `num_buffers` anywhere below, and that is the fix for ART-096: the
+      // screen has never asked the user for a buffer count, so it has nothing
+      // to say about one. The core fills in the measured default (600); the
+      // three literal 100s that used to sit here silently outvoted it.
       const partitions: PartitionSpec[] = [];
       if (createTemplate === "single") {
         partitions.push({
@@ -162,7 +273,6 @@ export function HardDiskStudio() {
           size_mb: sizeMb,
           bootable: true,
           boot_priority: 0,
-          num_buffers: 100,
         });
       } else {
         // Split: 500 MB (or 25%) System + Rest Work
@@ -174,7 +284,6 @@ export function HardDiskStudio() {
           size_mb: sysMb,
           bootable: true,
           boot_priority: 5,
-          num_buffers: 100,
         });
         partitions.push({
           drive_name: "DH1",
@@ -182,12 +291,17 @@ export function HardDiskStudio() {
           size_mb: workMb,
           bootable: false,
           boot_priority: 0,
-          num_buffers: 100,
         });
       }
 
       const totalBytes = (sizeMb as number) * 1024 * 1024;
-      const created = await hdfCreate(dest, totalBytes, true, partitions);
+      const created = await hdfCreate(
+        dest,
+        totalBytes,
+        true,
+        partitions,
+        fileSystemInputsFor(selectedFs, driverPath)
+      );
       setInfo(created);
       setPath(dest);
       setStatusMsg(
@@ -246,6 +360,172 @@ export function HardDiskStudio() {
       {error && <div className="badge badge-err" style={{ marginBottom: 12, padding: "6px 12px" }}>{error}</div>}
       {statusMsg && <div className="badge badge-ok" style={{ marginBottom: 12, padding: "6px 12px" }}>{statusMsg}</div>}
       {busy && <div className="muted" style={{ marginBottom: 12 }}>{t("hardDisk.working")}</div>}
+
+      {/* A card, which is a *list of disks* rather than a disk (ART-095,
+          ART-097). Everything here is read-only and says so: ART can read a
+          card today and cannot write one, and a screen that left that
+          ambiguous would be the ART-090 mistake again. */}
+      {card && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <section className="card">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+              <h2 style={{ fontSize: 16 }}>💳 {t("hardDisk.card.title")}</h2>
+              <span className="badge">{t("hardDisk.card.readOnly")}</span>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                gap: 12,
+                fontSize: 13,
+                marginTop: 12,
+              }}
+            >
+              <div>
+                <span className="muted">{t("hardDisk.capacity")}</span>{" "}
+                <strong>{fmtBytes(card.card.total_bytes)}</strong>
+              </div>
+              <div>
+                <span className="muted">{t("hardDisk.card.disksLabel")}</span>{" "}
+                {card.card.areas.length}
+              </div>
+              <div>
+                <span className="muted">{t("hardDisk.partitionsLabel")}</span>{" "}
+                {partitionCount(card)}
+              </div>
+              <div>
+                <span className="muted">{t("hardDisk.card.bootLabel")}</span>{" "}
+                {bootPartition(card)
+                  ? fmtBytes(bootPartition(card)!.sector_count * 512)
+                  : t("hardDisk.card.noBoot")}
+              </div>
+            </div>
+
+            {/* The four primary slots, as the card's own documentation numbers
+                them — a listing that renumbers disagrees with the user's notes. */}
+            <table style={{ width: "100%", fontSize: 12, marginTop: 12 }}>
+              <thead>
+                <tr className="muted" style={{ textAlign: "left" }}>
+                  <th>{t("hardDisk.card.slot")}</th>
+                  <th>{t("hardDisk.card.type")}</th>
+                  <th>{t("hardDisk.card.start")}</th>
+                  <th>{t("hardDisk.partitionSize")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {card.card.mbr?.partitions.map((p) => (
+                  <tr key={p.index}>
+                    <td>{p.index + 1}</td>
+                    <td>
+                      {p.kind.kind === "fat32"
+                        ? t("hardDisk.card.kind.fat32")
+                        : p.kind.kind === "amiga-rdb"
+                          ? t("hardDisk.card.kind.amiga")
+                          : t("hardDisk.card.kind.other", {
+                              code: `0x${p.type_byte.toString(16).toUpperCase()}`,
+                            })}
+                    </td>
+                    <td>{fmtBytes(p.start_lba * 512)}</td>
+                    <td>{fmtBytes(p.sector_count * 512)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+
+          {/* One section per Amiga disk. The m68k side sees each `0x76` area
+              as a separate drive, so this is not a formatting choice — it is
+              what the machine sees. */}
+          {card.card.areas.map((area, index) => (
+            <section className="card" key={area.offset_bytes}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                <h2 style={{ fontSize: 15 }}>
+                  🗄️ {t("hardDisk.card.disk", { n: index + 1 })}
+                </h2>
+                <span className={`badge ${area.rdb.checksum_valid ? "badge-ok" : "badge-warn"}`}>
+                  {area.rdb.checksum_valid
+                    ? t("hardDisk.checksum.ok")
+                    : t("hardDisk.checksum.invalid")}
+                </span>
+              </div>
+              <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                {t("hardDisk.card.diskAt", {
+                  offset: fmtBytes(area.offset_bytes),
+                  size: area.length_bytes > 0 ? fmtBytes(area.length_bytes) : "—",
+                })}
+              </p>
+
+              <ul style={{ listStyle: "none", padding: 0, margin: "10px 0 0", fontSize: 13 }}>
+                {area.rdb.partitions.map((p) => (
+                  <li key={`${p.block_location}-${p.drive_name}`}>
+                    <button
+                      className="btn btn-sm"
+                      style={{ width: "100%", textAlign: "left", marginBottom: 4 }}
+                      onClick={() => setSelectedPart(p)}
+                    >
+                      <strong>{p.drive_name}:</strong>{" "}
+                      <code>{p.dostype_str}</code>{" "}
+                      <span className="muted">{fmtBytes(p.size_bytes)}</span>
+                      {p.bootable && (
+                        <span className="badge badge-ok" style={{ marginLeft: 6, fontSize: 10 }}>
+                          {t("hardDisk.bootablePri", { n: p.boot_priority })}
+                        </span>
+                      )}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
+
+          {/* Drivers are the **card's**, not the area's. MultibootOS 2.2
+              carries PFS3 in its first RDB and not its second, and all fifteen
+              of its partitions are PFS3 — asking one area in isolation named
+              them all as broken (ART-097). The union is computed in Rust; this
+              only renders it. */}
+          <section className="card">
+            <h2 style={{ fontSize: 15 }}>{t("hardDisk.card.driversTitle")}</h2>
+            {card.file_systems.length === 0 ? (
+              <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                {t("hardDisk.drivers.none")}
+              </p>
+            ) : (
+              <ul style={{ listStyle: "none", padding: 0, margin: "8px 0 0", fontSize: 13 }}>
+                {card.file_systems.map((fs, i) => (
+                  <li key={i} style={{ padding: "3px 0" }}>
+                    <code>{fs.dos_type_str}</code>{" "}
+                    <span className="muted">
+                      {t("hardDisk.drivers.entry", {
+                        version: `${fs.version}.${fs.revision}`,
+                        size: fmtBytes(fs.size_bytes),
+                        blocks: fs.segment_blocks,
+                      })}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {card.unmountable.length > 0 && (
+              <p className="badge badge-warn" style={{ display: "block", marginTop: 10 }}>
+                {t("hardDisk.card.unmountable", {
+                  count: card.unmountable.length,
+                  names: card.unmountable
+                    .map((p) =>
+                      t("hardDisk.card.unmountableEntry", {
+                        name: p.drive_name,
+                        dosType: p.dostype_str,
+                        n: p.area + 1,
+                      })
+                    )
+                    .join(", "),
+                })}
+              </p>
+            )}
+          </section>
+        </div>
+      )}
 
       {/* Disk Overview & Visual Partition Bar */}
       {info && (
@@ -420,8 +700,14 @@ export function HardDiskStudio() {
             </section>
           )}
 
-          {/* Selected Partition Deep Inspector */}
-          {selectedPart && (
+        </div>
+      )}
+
+      {/* The partition inspector serves both views: a partition on a card is
+          the same `ParsedPartition` an HDF's is, and reading one is the same
+          act whichever kind of file it came out of. */}
+      {selectedPart && (
+        <div style={{ marginTop: 16 }}>
             <section className="card">
               <h2 style={{ fontSize: 15 }}>🔬 {t("hardDisk.partitionProperties")}</h2>
               <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 10, fontSize: 13 }}>
@@ -435,7 +721,6 @@ export function HardDiskStudio() {
                 <div><span className="muted">{t("hardDisk.buffers")}</span> {selectedPart.num_buffers}</div>
               </div>
             </section>
-          )}
         </div>
       )}
 
@@ -619,6 +904,45 @@ export function HardDiskStudio() {
                 })}
               </div>
             </div>
+
+            {/* Step 4: the driver, for a filesystem Kickstart does not have */}
+            {driverNeed.required && (
+              <div style={{ marginBottom: 16 }}>
+                <label
+                  className="muted"
+                  style={{ fontSize: 12, display: "block", marginBottom: 6 }}
+                >
+                  {t("hardDisk.modal.driver.label")}
+                </label>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <button className="btn" onClick={handlePickDriver}>
+                    {t("hardDisk.modal.driver.browse")}
+                  </button>
+                  <span style={{ fontSize: 12, flex: 1, wordBreak: "break-all" }}>
+                    {driverPath ? driverFileName(driverPath) : t("hardDisk.modal.driver.none")}
+                  </span>
+                  {driverPath && (
+                    <button className="btn" onClick={() => setDriverPath(null)}>
+                      {t("hardDisk.modal.driver.clear")}
+                    </button>
+                  )}
+                </div>
+                <p className="muted" style={{ margin: "6px 0 0", fontSize: 11 }}>
+                  {t("hardDisk.modal.driver.explain", {
+                    dosType: driverNeed.dosType,
+                    hint: driverNeed.hint,
+                  })}
+                </p>
+                {!driverPath && (
+                  <p
+                    className="badge badge-warn"
+                    style={{ margin: "6px 0 0", fontSize: 11, display: "inline-block" }}
+                  >
+                    {t("hardDisk.modal.driver.warning")}
+                  </p>
+                )}
+              </div>
+            )}
 
             {/* Actions */}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>

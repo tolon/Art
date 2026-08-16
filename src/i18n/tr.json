@@ -12,6 +12,8 @@
     "rom": "ROM Yöneticisi",
     "winuae": "WinUAE",
     "pistorm": "PiStorm",
+    "osBuilder": "İşletim Sistemi Kurucusu",
+    "layout": "İçerik Düzeni",
     "collection": "Koleksiyon",
     "tools": "Araçlar",
     "settings": "Ayarlar",
@@ -65,7 +67,9 @@
     "unknown": "Bilinmiyor",
     "yes": "Evet",
     "no": "Hayır",
-    "launchInWinuae": "WinUAE'de Başlat"
+    "launchInWinuae": "WinUAE'de Başlat",
+    "browse": "Gözat…",
+    "clear": "Temizle"
   },
   "components": {
     "copyPlan": {
@@ -132,14 +136,38 @@
       "apply": "Uygula",
       "reset": "Sıfırla",
       "bits": {
-        "hold": { "name": "Tut", "explanation": "Çalıştıktan sonra bellekte tutulur. Nadiren kullanılır." },
-        "script": { "name": "Betik", "explanation": "Bir kabuk betiği olarak çalışır. WHDLoad kurulumcuları buna dayanır." },
-        "pure": { "name": "Saf", "explanation": "Yeniden girilebilir, bu yüzden bellekte tutulabilir. Slave dosyaları bunu kullanır." },
-        "archived": { "name": "Arşivlendi", "explanation": "Son yedeklemeden bu yana değişmedi." },
-        "read": { "name": "Okuma", "explanation": "Dosya okunabilir." },
-        "write": { "name": "Yazma", "explanation": "Dosya değiştirilebilir." },
-        "execute": { "name": "Çalıştırma", "explanation": "Dosya çalıştırılabilir." },
-        "delete": { "name": "Silme", "explanation": "Dosya silinebilir." }
+        "hold": {
+          "name": "Tut",
+          "explanation": "Çalıştıktan sonra bellekte tutulur. Nadiren kullanılır."
+        },
+        "script": {
+          "name": "Betik",
+          "explanation": "Bir kabuk betiği olarak çalışır. WHDLoad kurulumcuları buna dayanır."
+        },
+        "pure": {
+          "name": "Saf",
+          "explanation": "Yeniden girilebilir, bu yüzden bellekte tutulabilir. Slave dosyaları bunu kullanır."
+        },
+        "archived": {
+          "name": "Arşivlendi",
+          "explanation": "Son yedeklemeden bu yana değişmedi."
+        },
+        "read": {
+          "name": "Okuma",
+          "explanation": "Dosya okunabilir."
+        },
+        "write": {
+          "name": "Yazma",
+          "explanation": "Dosya değiştirilebilir."
+        },
+        "execute": {
+          "name": "Çalıştırma",
+          "explanation": "Dosya çalıştırılabilir."
+        },
+        "delete": {
+          "name": "Silme",
+          "explanation": "Dosya silinebilir."
+        }
       }
     },
     "fnKeys": {
@@ -156,6 +184,8 @@
         "running": "Çalışıyor",
         "done": "Tamamlandı",
         "cancelled": "İptal edildi",
+        "cancelledPartway_one": "İptal edildi — {{count}} dosya çoktan yazılmıştı ve diskte duruyor",
+        "cancelledPartway_other": "İptal edildi — {{count}} dosya çoktan yazılmıştı ve diskte duruyor",
         "failed": "Başarısız ({{code}})"
       }
     },
@@ -175,6 +205,16 @@
     "general": "Genel",
     "appearance": "Görünüm",
     "files": "Dosyalar",
+    "about": {
+      "heading": "Hakkında",
+      "developer": "Yazar",
+      "source": "Kaynak kodu",
+      "licenceLabel": "Lisans",
+      "copyright": "Telif",
+      "licence": "GNU Genel Kamu Lisansı sürüm 3 veya sonrası",
+      "warranty": "Bu program HİÇBİR GARANTİ vermez. Bu özgür bir yazılımdır; belirli koşullar altında yeniden dağıtmakta serbestsiniz.",
+      "whereTheLicenceIs": "Lisansın tam metni programın yanına LICENSE adıyla kurulur."
+    },
     "paths": "Yollar",
     "pathsHint": "ART bir disk yöneticisi değil, bir Amiga aracıdır — Amiga dosyalarınızın nerede olduğunu söyleyin, oradan başlasın.",
     "browse": "Gözat…",
@@ -205,7 +245,14 @@
     "uxPower": "İleri Kullanıcı",
     "language": "Dil",
     "winuaePath": "WinUAE Yolu",
+    "hstImagerPath": "hst.imager Yolu",
+    "appZoom": "Uygulama Boyutu",
+    "appZoomReset": "Sıfırla",
+    "appZoomHint": "Programın tamamını ölçekler — yazılar, arama kutuları, ikonlar, düğmeler — her ekranda. Dosya listesinin dışında Ctrl + fare tekerleği de aynı işi yapar; Ctrl+0 eski haline döndürür.",
     "collectionDir": "Koleksiyon Klasörü",
+    "aminetRoot": "Aminet İndirme Klasörü",
+    "aminetRootHint": "Aminet'ten indirilen paketlerin saklandığı yer. Boş bırakılırsa ART kendi klasörünü kullanır.",
+    "aminetRootInUse": "İndirilenler {{path}} klasörüne gidiyor",
     "uxModePowerHint": "Ham veri araçlarını, blok ve sektör ayrıntılarını ve gelişmiş işlemleri gösterir.",
     "uxModeBeginnerHint": "Ham veri araçlarını ve blok düzeyindeki ayrıntıları gizler. Hiçbir şey devre dışı bırakılmaz — her şeyi görmek için Uzman Kullanıcı moduna geçin.",
     "colourRules": {
@@ -300,8 +347,10 @@
       "dateUnknown": "tarih bilinmiyor",
       "capped": "19 yıl veya daha eski",
       "thisWeek": "bu hafta",
-      "weeksAgo": "{{n}} hafta önce",
-      "monthsAgo": "{{n}} ay önce",
+      "weeksAgo_one": "{{count}} hafta önce",
+      "weeksAgo_other": "{{count}} hafta önce",
+      "monthsAgo_one": "{{count}} ay önce",
+      "monthsAgo_other": "{{count}} ay önce",
       "yearsAgo": "{{n}} yıl önce"
     },
     "size": {
@@ -539,6 +588,27 @@
       "missing_one": "{{names}}, bu diskin taşımadığı bir dosya sistemini adıyla anıyor. Amiga bunu bağlamayacak — sessizce, hiçbir hata vermeden. Sürücünün RDB’ye eklenmesi gerekir.",
       "missing_other": "{{count}} bölüm, bu diskin taşımadığı dosya sistemlerini adıyla anıyor ({{names}}). Amiga bunları bağlamayacak — sessizce, hiçbir hata vermeden."
     },
+    "card": {
+      "title": "PiStorm SD kartı",
+      "readOnly": "Salt okunur — ART bir kartı henüz yazamıyor",
+      "disksLabel": "Amiga diski",
+      "bootLabel": "FAT32 önyükleme bölümü",
+      "noBoot": "yok — Pi'nin önyükleyeceği bir şey bulunmuyor",
+      "slot": "Yuva",
+      "type": "Tür",
+      "start": "Başlangıç",
+      "kind": {
+        "fat32": "FAT32 (Pi buradan açılıyor)",
+        "amiga": "Amiga diski (0x76)",
+        "other": "Diğer ({{code}})"
+      },
+      "disk": "Amiga diski {{n}}",
+      "diskAt": "Kartın {{offset}} içinde başlıyor · {{size}}. Amiga bunu kendi bölüm tablosu olan ayrı bir sürücü olarak görüyor.",
+      "driversTitle": "Bu karttaki dosya sistemi sürücüleri",
+      "unmountableEntry": "{{name}} ({{dosType}}, disk {{n}})",
+      "unmountable_one": "{{names}}, bu kartta hiçbir yerde bulunmayan bir dosya sistemini adıyla anıyor. Amiga bunu bağlamayacak — sessizce, hiçbir hata vermeden.",
+      "unmountable_other": "{{count}} bölüm, bu kartta hiçbir yerde bulunmayan dosya sistemlerini adıyla anıyor ({{names}}). Amiga bunları bağlamayacak — sessizce, hiçbir hata vermeden."
+    },
     "partitionProperties": "Bölüm Özellikleri",
     "deviceName": "Aygıt Adı:",
     "dosTypeSignature": "DosType İmzası:",
@@ -559,7 +629,15 @@
       "singleTitle": "Tek Bölüm",
       "singleDesc": "DH0: Sistem (%100 kapasite)",
       "createButton": "HDF Dosyası Oluştur…",
-      "warnNoDriver": "ART bölüm tablosunu ve bu dosya sisteminin DosType'ını yazar, ancak dosya sisteminin kendisini yazmaz: RDB'ye PFS3 ya da SFS sürücüsü yerleştirilmez, dolayısıyla başka bir araçla oraya bir sürücü konulana kadar Amiga bu bölümü göremez. Fast File System bölümleri, gerçek bir diskte olduğu gibi Amiga tarafında Format ile biçimlendirilir.",
+      "driver": {
+        "label": "4. Dosya Sistemi Sürücüsü:",
+        "browse": "Sürücü seç…",
+        "none": "Seçilmedi",
+        "clear": "Kaldır",
+        "dialogTitle": "RDB'ye gömülecek dosya sistemi sürücüsünü seçin",
+        "explain": "Kickstart'ta {{dosType}} dosya sistemi yok; bu yüzden sürücünün diskin kendi içinde taşınması gerekir. ART'a sürücüyü gösterin — genellikle {{hint}} — kendi belirttiği sürümüyle RDB'ye yazılsın.",
+        "warning": "Sürücü olmadan Amiga bu bölümleri hiç göremez. İmaj yine de oluşturulur; bir sürücü eklenene kadar bağlanmaz."
+      },
       "warnOver4Gb": "Tek parça {{size}} GB'lık bir bölüm, standart AmigaDOS'un adresleyebildiği 4 GB sınırının ötesinde; hem denetleyicide hem dosya sisteminde TD64 ya da NSD desteği gerektirir. Emülatör için ve bu desteğe sahip bir makine için sorun değil — değilse diski bölün.",
       "custom": {
         "button": "Özel…",
@@ -613,79 +691,304 @@
       }
     }
   },
-  "pistorm": {
-    "title": "PiStorm ve Emu68 Stüdyosu",
-    "selectSdTitle": "PiStorm / Emu68 MicroSD Kart Kök Klasörünü Seçin",
-    "scan": {
-      "summary": "MicroSD tarandı: {{firmware}}, {{kickstart}}",
-      "firmwareFound": "✓ Emu68 Ürün Yazılımı Bulundu",
-      "firmwareMissing": "⚠️ Emu68 çekirdeği eksik",
-      "kickstartFound": "✓ Kickstart ({{name}})",
-      "kickstartMissing": "⚠️ Kickstart ROM eksik"
+  "osBuilder": {
+    "intro": "PiStorm üzerinde çalışan AmigaOS dağıtımları, her birinin sizden ne istediği ve elinizdekinin uyup uymadığı. ART hiçbir dağıtımı indirmez — siz indirir, ART'a dosyayı gösterirsiniz.",
+    "notBuiltYet": "ART henüz dağıtım kartı yazamıyor. Bu ekran bir dağıtımın neye ihtiyaç duyduğunu söyler ve elinizdeki ROM ile kartı buna göre denetler.",
+    "what": {
+      "heading": "Ne kuruyorsun?",
+      "bootCard": "Sadece önyükleme kartı",
+      "bootCardHint": "Pi'nin ürün yazılımı, senin Kickstart'ın ve Amiga'nın görebileceği bir bölüm tablosu — kendi Emu68 sürümünden kurulur. Üzerinde AmigaOS yok; o bir sonraki adım.",
+      "install": "AmigaOS kur",
+      "installHint": "Kendi AmigaOS 3.2 kurulum disklerinden bir dağıtım ağacı oluştur — bir kartın Amiga birimlerine kopyalanmaya hazır.",
+      "prepareVolumes": "Bir kartın Amiga birimlerini hazırla",
+      "prepareVolumesHint": "Elindeki kartın bölümlerini biçimlendir ve içeriğini kopyala; kart ilk açılışta kendini biçimlendirmeyi önermek yerine hazır gelsin. hst-imager gerekir, onu sen sağlıyorsun.",
+      "distro": "Tam bir dağıtım",
+      "distroHint": "CaffeineOS, CoffinOS, AmiKit ya da bir ART Baseline — sistemi kurulu gelir."
     },
-    "msg": {
-      "saved": "✓ PiStorm config.txt ve cmdline.txt dosyaları MicroSD karta başarıyla kaydedildi!",
-      "saveFailed": "Kaydedilemedi: {{error}}"
+    "profiles": {
+      "heading": "Hangi dağıtım",
+      "intro": "Her kart lisansıyla başlıyor, çünkü ART yardımcı olmadan önce sizin ne yapmanız gerektiğini o belirliyor."
     },
-    "sdCardLabel": "MicroSD Kart:",
-    "working": "PiStorm yapılandırması üzerinde çalışılıyor…",
-    "profilesHeading": "Parametrik Kullanım Profilleri",
-    "profilesIntro": "PiStorm, oyunlar için özel yonga seti uyumluluğunu korurken Amiga'nızı yüksek performanslı bir iş istasyonuna dönüştürür:",
-    "selectSd": "MicroSD Kart Seç…",
-    "saveSync": "PiStorm SD'yi Kaydet ve Eşitle",
-    "hardwareHeading": "Donanım ve RTG Görüntü Ayarları",
-    "boardLabel": "PiStorm Donanım Kartı:",
-    "board": {
-      "a500a2000": "PiStorm A500 / A2000 (DIP-64 Yuva)",
-      "a1200lite": "PiStorm32-Lite (Amiga 1200 Kapak Altı)",
-      "a600": "PiStorm600 (Amiga 600 PLCC)"
+    "material": {
+      "heading": "Sizin sağladıklarınız",
+      "intro": "{{name}} sizin edinmeniz gereken bir şey. ART sizin kopyanız üzerinde çalışır; indirmez, barındırmaz, birlikte dağıtmaz.",
+      "homepage": "Projenin kendi sayfası:",
+      "chooseImage": "İmajı seç…",
+      "chooseImageTitle": "İndirdiğiniz dağıtım imajını seçin",
+      "noImage": "İmaj seçilmedi",
+      "imageSize": "{{gb}} GB",
+      "chooseRom": "Kickstart seç…",
+      "chooseRomTitle": "Bir Kickstart ROM seçin",
+      "noRom": "ROM seçilmedi",
+      "romIs": "{{rom}} ({{revision}})",
+      "romUnrecognised": "ART bu ROM'u tanımıyor. Yine de doğru ROM olabilir.",
+      "romWrongFamily": "{{base}} için Kickstart {{family}} gerekiyor. Başka bir aileden ROM genelde açılmayan bir kart demektir ve ekranda bunu açıklayan hiçbir şey olmaz — ama ne yaptığınızı biliyorsanız devam edin."
     },
-    "rtgLabel": "RTG Video Çıkışı (Picasso96 HDMI):",
-    "rtg": {
-      "res1080p": "1920x1080 @ 60Hz (Tam HD TrueColor 32-bit)",
-      "res720p": "1280x720 @ 60Hz (HD Ready TrueColor 32-bit)",
-      "res1024": "1024x768 @ 60Hz (Klasik 4:3 RTG)",
-      "res800": "800x600 @ 60Hz",
-      "disabled": "Devre Dışı (Yalnızca Doğal Amiga Video Çıkışı)"
+    "card": {
+      "heading": "Kart",
+      "size": "Kart boyutu",
+      "tooSmall": "Bu dağıtım en az {{needs}} GB istiyor, siz {{has}} GB seçtiniz.",
+      "hint": "Kopyalamanın üçte ikisine gelindiğinde değil, şimdi denetleniyor."
     },
-    "kickstartLabel": "SD Karttaki Kickstart ROM Dosyası:",
-    "performanceHeading": "İşlemci Performansı ve Bellek Haritası",
-    "fastRamLabel": "Fast RAM Ayırımı:",
-    "fastRamHint": "Fast RAM, doğrudan Amiga'nın 32-bit adres alanına eşlenir.",
-    "jitLabel": "JIT Dinamik Derleyiciyi Etkinleştir (Emu68 JIT)",
-    "jitHint": "~800+ MIPS için 68k komutlarını anında ARM64'e çevirir.",
-    "mmuLabel": "68040 MMU Emülasyonunu Etkinleştir",
-    "mmuHint": "WHDLoad MuForce ve gelişmiş bellek korumaları için gereklidir.",
-    "sdStorageLabel": "Yüksek Hızlı MicroSD Depolamayı Etkinleştir (`emu68-sd.device`)",
-    "sdStorageHint": "SD kart bölümlerinden doğrudan yüksek hızlı sabit disk erişimi (20+ MB/s).",
-    "profile": {
-      "workstation": {
-        "title": "AmigaOS Ultra İş İstasyonu",
-        "badge": "AmigaOS ve Üretkenlik için Önerilen",
-        "description": "1080p TrueColor RTG masaüstüyle azami JIT performansı (~800+ MIPS). Anında Workbench açılışı, web gezintisi, ışın izleme ve yüksek üretkenlik.",
-        "feature1": "~800+ MIPS işlemci hızı (68060'tan hızlı)",
-        "feature2": "1080p 32-bit TrueColor RTG HDMI çıkışı",
-        "feature3": "Çoklu görev için 1 GB ile 2 GB arası Fast RAM",
-        "feature4": "Yüksek hızlı emu68-sd.device disk erişimi (20+ MB/s)"
+    "notes": {
+      "heading": "Bilinmesi gerekenler"
+    },
+    "prepare": {
+      "heading": "Kartı hazırla",
+      "explain": "İmajın yazılması, ART'ın zaten bildiği donanım ayarlarıyla PiStorm'unuza uyarlanması, Kickstart'ınızın yerleştirilmesi, multiboot setinin oluşturulması ve sonucun doğrulanması. Hiçbiri henüz yapılmadı."
+    }
+  },
+  "distro": {
+    "licence": {
+      "freeGrey": "{{name}}, yapanlar tarafından ücretsiz dağıtılıyor ve lisanslayamayacakları AmigaOS içeriği taşıyor. ART sizin kopyanızı denetlemez, indirmez de.",
+      "userLicensed": "{{name}}, sahip olmanız gereken bir AmigaOS üzerine kurulu ticari bir ürün. ART, ürününün beklediği kartı hazırlar; onların işini yeniden üretmez.",
+      "artBaseline": "ART tarafından sizin lisanslı medyanızdan kurulur. Tarif olarak paylaşılabilir — imaj olarak asla."
+    },
+    "supply": {
+      "image": "{{name}}'i kendiniz indirirsiniz.",
+      "media": "Kendi {{base}} kurulum medyanız.",
+      "rom": "Bir Kickstart {{family}} ROM'u.",
+      "card": "En az {{gb}} GB'lık bir kart."
+    },
+    "image": {
+      "notAFile": "{{path}} bir dosya değil.",
+      "empty": "{{path}} boş.",
+      "tooSmallForRaw": "{{gb}} GB, bir {{name}} imajı olmak için fazlasıyla küçük — muhtemelen yanlış dosya ya da yarıda kalmış bir indirme."
+    },
+    "note": {
+      "caffeineos": {
+        "download": "Yaklaşık 17 GB'lık tek bir ham imaj olarak dağıtılıyor. Herhangi bir imaj yazıcıyla yazılır; o adım geldiğinde ART donanımınıza uyarlayacak.",
+        "network": "CaffeineOS kendi ağ yığınını kullanıyor (wifipi.device ile Miami DX), Roadshow'unkini değil — yani WiFi, DEVS:NetInterfaces düzenlenerek değil, Amiga tarafındaki kendi aracıyla değiştiriliyor. Hangi yığın olursa olsun ayarlar açılış dosyalarında değil Amiga tarafında durur."
       },
-      "balanced": {
-        "title": "Dengeli Günlük Kullanım ve WHDLoad Oyunları",
-        "badge": "En İyi Günlük Kullanım ve Oyunlar",
-        "description": "WHDLoad MMU ve önbellek temizleme optimizasyonlarıyla yüksek JIT performansı. Oyunlar için otomatik doğal OCS/ECS/AGA geçişli RTG masaüstü.",
-        "feature1": "%99 WHDLoad oyun uyumluluğu",
-        "feature2": "Otomatik ekran modu geçişi (RTG ↔ PAL/NTSC)",
-        "feature3": "512 MB Fast RAM ayırımı",
-        "feature4": "WHDLoad MMU güvenli önbellek temizlemeleri"
+      "coffinos": {
+        "romFamily": "CoffinOS, Hyperion'un 3.1.4 ve 3.2 Kickstart'larının kendisini bozduğunu belirtiyor. Klasik bir 3.1 ROM istiyor.",
+        "demoware": "Roadshow ve iBrowse'un demo sürümleriyle geliyor."
       },
-      "classic": {
-        "title": "Klasik ve Demoscene Uyumluluğu",
-        "badge": "Çevrim Hassasiyetli ve Demolar",
-        "description": "Zamanlamaya duyarlı demoscene yapımları ve disket tabanlı eski yazılımlar için temkinli JIT çalıştırma.",
-        "feature1": "Sıkı zamanlama koruması",
-        "feature2": "128 MB ile 256 MB arası Fast RAM kullanımı",
-        "feature3": "Doğal 15 kHz Amiga video geçiş önceliği",
-        "feature4": "Azami eski yazılım kararlılığı"
+      "amikit": {
+        "ownIt": "AmiKit ticari bir üründür. AmigaOS 3.2 ve P96'yı siz sağlarsınız; onlar yalnızca kendi katmanlarını dağıtır.",
+        "adaptOnly": "ART, ürünün beklediği kartı hazırlar. AmiKit'i yeniden kurmaz."
+      },
+      "baseline": {
+        "recipe": "ART bunu sizin medyanızdan kurar ve nasıl kurulduğunu paylaşabilir — sonucu değil, tarifi.",
+        "yourMedia": "Hiçbir şey birlikte dağıtılmıyor. Sizin işletim sisteminiz, sizin ROM'unuz, sizin lisanslarınız.",
+        "boingBags": "BoingBag 1 ve 2 her zaman ücretsiz indirmelerdi; ART isterseniz onları getirebilir.",
+        "romFamily": "3.9 sistemi klasik bir 3.1 ROM ister; Hyperion 3.1.4 ya da 3.2 değil."
       }
+    }
+  },
+  "pistorm": {
+    "title": "PiStorm & Emu68 Kartı",
+    "intro": "Buradaki her denetim, belgelenmiş bir Emu68 seçeneği ya da Raspberry Pi firmware ayarı yazar — ve hangisi olduğunu size gösterir. İki dosya da kartta zaten olanla birleştirilir, asla yeniden yazılmaz.",
+    "chooseCardTitle": "Kartın açılış klasörünü seçin",
+    "hardware": {
+      "heading": "Donanım",
+      "intro": "Üç cevap, çünkü bir kurulumun neler yapabileceği üçüne birden bağlı: çekirdek karta, depolama sürücüsünün adı Pi'ye, hangi seçeneklerin anlamı olduğu ise Amiga'ya göre değişir.",
+      "amiga": "Amiga",
+      "variant": "PiStorm kartı",
+      "pi": "Raspberry Pi",
+      "line": "Emu68 sürümü"
+    },
+    "derived": {
+      "kernel": "Emu68 sürümü",
+      "storageDevice": "Depolama sürücüsü",
+      "piRam": "Pi belleği",
+      "ramFixed": "{{mb}} MB",
+      "ramRange": "Modele göre {{min}}–{{max}} MB"
+    },
+    "note": {
+      "pi-not-guaranteed": "Bu Pi'nin bu kartta çalıştığı kullanıcılar tarafından bildiriliyor, ancak proje bunu garanti etmiyor.",
+      "cm4-needs-lite-for-sd-card": "Dahili eMMC'li bir Compute Module 4, microSD yuvasını aynı anda kullanamaz. Genel tavsiye, eMMC'siz bir CM4 Lite kullanmaktır.",
+      "pi-physical-fit": "3B ya da 3B+ bu karta sığmak için portlarının sökülmesini ya da yüksek bir bağlantı başlığı gerektirir. Zero 2 W ya da 3A+ olduğu gibi sığar.",
+      "no-activity-led": "3B'de etkinlik LED'i desteği yok.",
+      "needs-cpu-adapter": "Bu makine, kartı takabilmek için bir CPU adaptörü gerektirir.",
+      "power-supply-quality": "İyi bir güç kaynağı kullanın. 5 V hattı düşerse Pi kendini sessizce yavaşlatır; bu tam olarak \"PiStorm yavaş\" gibi görünür ve en sık rastlanan sebebidir.",
+      "ram-beyond-what-amiga-os-uses": "AmigaOS 2 GB'tan fazla Fast RAM kullanmaz; daha fazlası Amiga tarafına bir şey kazandırmaz."
+    },
+    "card": {
+      "heading": "Kart",
+      "choose": "Klasör seç…",
+      "none": "Klasör seçilmedi",
+      "needed": "Bu ekrandaki her şey bir kart üzerindeki dosyaları düzenler. Açılış klasörünü seçin — yazdığınız bir kartın FAT32 bölümü ya da bir tanesini hazırladığınız klasör — gerisi kullanılabilir hale gelsin.",
+      "kernelFound": "Kartta Emu68.img var.",
+      "kernelMissing": "Emu68.img yok — çekirdek karta konulana kadar kart açılmaz.",
+      "kickstartsFound": "Bulunan Kickstart dosyaları: {{list}}",
+      "kickstartsMissing": "Kartta Kickstart dosyası bulunamadı.",
+      "configSets": "Adlandırılmış firmware setleri: {{list}}",
+      "kernelVersion": "Karttaki Emu68: {{version}}",
+      "kernelUnknownVersion": "Kartta Emu68.img var ama sürümünü belirtmiyor."
+    },
+    "scan": {
+      "found": "{{path}} okundu.",
+      "notACard": "{{path}} içinde Emu68 çekirdeği ve config.txt yok; henüz bir PiStorm kartına benzemiyor."
+    },
+    "kickstart": {
+      "label": "Kickstart",
+      "hint": "config.txt içine initramfs satırı olarak yazılır. Dosyanın kendisi kartta durur; ART hiçbir Kickstart dağıtmaz.",
+      "onTheCard": "Kartta",
+      "fileName": "config.txt'e yazılacak dosya adı",
+      "choose": "ROM dosyası seç…",
+      "needsCard": "Önce kartın klasörünü seçin — ROM oraya kopyalanıyor.",
+      "chooseTitle": "Bir Kickstart ROM seçin",
+      "copyTitle": "Bu Kickstart karta kopyalansın mı",
+      "picked": "{{rom}} ({{revision}}) — {{models}} için",
+      "pickedUnrecognised": "ART bu ROM'u tanımıyor. Özel ya da bayt sırası değiştirilmiş bir imaj olabilir — olduğu gibi kopyalanacak.",
+      "nameOnCard": "Karttaki adı",
+      "badName": "Bu, bir kartın taşıyabileceği bir ad değil: düz bir dosya adı, klasör yok, < > : \" | ? * ve boşluk yok.",
+      "willReplace": "{{name}} zaten kartta. Şu anda orada olan yedek olarak saklanacak.",
+      "copyButton": "Kopyala",
+      "replaceButton": "Değiştir",
+      "copied": "{{name}} kartta. Kaydettiğinizde config.txt’e yazılır.",
+      "copiedOver": "{{name}} kartta. Önceki dosya {{path}} konumunda."
+    },
+    "profiles": {
+      "heading": "Hazır ayarlar",
+      "intro": "Her biri bir Emu68 seçenek kümesidir; altında listelenir. Bir profili uygulamak seçenekleri değiştirir; siz kaydedene kadar kartta hiçbir şey değişmez."
+    },
+    "profile": {
+      "apply": "Bunu kullan",
+      "applied": "{{name}} uygulandı. Siz kaydedene kadar hiçbir şey yazılmaz.",
+      "performance": {
+        "title": "Performans",
+        "description": "En hızlı Workbench ve RTG; zamanlama hassasiyetinin önemli olmadığı işler için."
+      },
+      "daily": {
+        "title": "Günlük & WHDLoad",
+        "description": "Dengeli varsayılanlar. WHDLoad NOMMU modda çalışır — Emu68 MMU emüle etmez, başka bir mod yoktur."
+      },
+      "compatibility": {
+        "title": "Uyumluluk & demoscene",
+        "description": "Orijinal veri yolu zamanlamasına daha yakın: hız yerine doğruluk. A500 ailesinde ayrıca kapak altı belleği CHIP'e taşır."
+      },
+      "diagnostics": {
+        "title": "Tanılama",
+        "description": "Sorun avlamak için, makineyi kullanmak için değil. Ayrıntılı günlük her şeyi yavaşlatır."
+      }
+    },
+    "display": {
+      "heading": "Görüntü & saat",
+      "auto": "Firmware monitöre sorsun",
+      "dmt1080p60": "1920×1080, 60 Hz (monitör zamanlaması)",
+      "cea1080p50": "1920×1080, 50 Hz (televizyon, PAL)",
+      "cea720p60": "1280×720, 60 Hz (televizyon)",
+      "disableBluetooth": "Pi'nin Bluetooth'unu kapat",
+      "custom": "Kartta olduğu gibi",
+      "customHint": "ön ayarların kapsamadığı bir çift"
+    },
+    "overclock": {
+      "enable": "Pi'yi satıldığından hızlı çalıştır",
+      "warning": "Isı ve güç kaynağınızın kalitesi. Raspberry Pi'de bu garanti bitini de çevirir. Hiçbir profilin parçası değil — yalnızca sizin açtığınız bir şey."
+    },
+    "advanced": {
+      "heading": "Tüm seçenekler",
+      "intro": "Emu68'in tam listesi; her satır yazdığı token ile etiketli. Yukarıdaki donanımda anlamı olmayan seçenekler gösterilmez.",
+      "unset": "ayarlanmadı"
+    },
+    "group": {
+      "storage": "Depolama",
+      "cpu": "İşlemci",
+      "memory": "Bellek",
+      "rom": "ROM",
+      "rtg": "RTG video",
+      "timing": "Zamanlama",
+      "floppy": "Disket",
+      "board": "Kart",
+      "diagnostics": "Tanılama"
+    },
+    "option": {
+      "storage_unit0": "Amiga kartı nasıl görüyor",
+      "storage_verbose": "depolama sürücüsünün günlük ayrıntısı (0–2)",
+      "storage_low_speed": "50 MHz modunu kullanma — kabul etmeyen kartlar için",
+      "storage_clock_mhz": "saat değeri, MHz",
+      "vbr_move": "vektör tablosunu fast RAM'e taşı",
+      "nofpu": "FPU yok (nadir, uyumluluk için)",
+      "enable_cache": "JIT önbelleği açılıştan itibaren etkin",
+      "limit_2g": "eşlenen RAM'i 2 GB ile sınırla",
+      "z2_ram_size": "Zorro II RAM, MB (0, 1, 2, 4 ya da 8)",
+      "enable_c0_slow": "$C0'daki yavaş bellek",
+      "enable_c8_slow": "$C8'deki yavaş bellek",
+      "enable_d0_slow": "$D0'daki yavaş bellek",
+      "move_slow_to_chip": "kapak altı 512K'yı CHIP RAM yap",
+      "copy_rom_kb": "ROM'u fast RAM'e kopyala, KB",
+      "checksum_rom": "ROM sağlama toplamını yeniden hesapla",
+      "vc4_mem_mb": "Picasso96'ya bildirilen video belleği, MB",
+      "chip_slowdown": "orijinal veri yolu zamanlamasına yaklaş",
+      "cs_dist": "ne kadar kaba (1–8)",
+      "swap_df0_with": "DF0'ı başka bir sürücüyle değiştir (1, 2 ya da 3)",
+      "one_slot": "tek yuva protokolünü zorla",
+      "debug": "JIT istatistikleri",
+      "disassemble": "disassembly çıktısı",
+      "async_log": "beklemeden günlükle",
+      "fast_serial": "daha hızlı seri çıkış",
+      "buptest_kb": "açılışta bellek testi, KB",
+      "bupiter": "kaç geçiş yapılacak"
+    },
+    "choice": {
+      "storage_unit0": {
+        "off": "görünmez",
+        "read-only": "görünür, salt okunur",
+        "read-write": "yazılabilir"
+      }
+    },
+    "tokens": {
+      "heading": "Yazılacak olan",
+      "none": "Hiçbir Emu68 seçeneği ayarlanmadı.",
+      "yours": "Sizin açılış parametreleriniz",
+      "yoursHint": "ART'ın işi değil, olduğu gibi bırakılır. root= olmadan Pi hiç açılmaz."
+    },
+    "preview": {
+      "button": "Değişikliği göster",
+      "title": "Kaydetmeden önce",
+      "unchanged": "değişmedi",
+      "absent": "(henüz böyle bir dosya yok)"
+    },
+    "save": {
+      "button": "Karta kaydet"
+    },
+    "saved": {
+      "withBackup": "Kaydedildi. Önceki sürüm {{path}} konumunda.",
+      "plain": "Kaydedildi."
+    },
+    "wifi": {
+      "heading": "WiFi & ağ",
+      "explain": "PiStorm'da WiFi bir açılış seçeneği değil, Amiga tarafının işidir: Roadshow ile wifipi.device, sistem birimindeki DEVS:NetInterfaces içinde yapılandırılır. Birimlerin kurulmasına aittir ve ART bunu henüz yapamıyor."
+    },
+    "line": {
+      "stable": "En son kararlı (1.0.x)",
+      "alpha11": "1.1 alfa (ön sürüm)"
+    },
+    "archive": {
+      "absent": "bu sürümde arşiv yok — bu kartı ilk destekleyen 1.1 alfa",
+      "unstated": "sürüm notları bu kartı hangi arşivin kapsadığını söylemiyor"
+    },
+    "rom": {
+      "identified": "{{name}} — {{rom}} ({{revision}}), {{models}} için",
+      "unrecognised": "{{name}} — ART'ın tanıdığı bir Kickstart değil",
+      "unreadable": "{{name}} — okunamadı",
+      "mayNotSuit": "{{rom}} {{models}} için; siz {{machine}} seçtiniz. Yine de istediğiniz bu olabilir."
+    },
+    "sets": {
+      "heading": "Adlandırılmış firmware setleri",
+      "intro": "Her sistem için bir config.txt; hangisinin açılacağını seçmek için etkin olanın üzerine kopyalanır — MultibootOS’un kullandığı yöntem. ART içlerinde ne yazdığını okumaz.",
+      "none": "Bu kartta henüz adlandırılmış set yok.",
+      "newName": "Yeni set",
+      "from": "Kaynak",
+      "fromCurrent": "kartın şu anki config.txt dosyası",
+      "fromScreen": "bu ekrandaki ayarlar",
+      "fromSet": "başka bir set",
+      "create": "Oluştur",
+      "activate": "Etkin yap",
+      "rename": "Yeniden adlandır",
+      "write": "Yaz",
+      "previewTitle": "Yazmadan önce",
+      "saved": "'{{name}}' seti kaydedildi.",
+      "activated": "Etkin config.txt artık '{{name}}'.",
+      "activatedWithBackup": "Etkin config.txt artık '{{name}}'. Önceki dosya {{path}} konumunda.",
+      "renamed": "'{{from}}' artık '{{to}}' adını taşıyor.",
+      "delete": "Sil",
+      "confirmDelete": "'{{name}}' seti silinsin mi? ART bir kopyasını saklar, yani geri alınabilir — ama set listeden çıkar.",
+      "deleted": "'{{name}}' seti silindi.",
+      "deletedWithBackup": "'{{name}}' seti silindi. Bir kopyası {{path}} konumunda.",
+      "deleteKeeps": "Bir seti silmek kopyasını saklar. Kartın çalıştırdığı set silinemez — önce başka birini etkin yapın."
     }
   },
   "gotek": {
@@ -932,9 +1235,8 @@
       "default": "ART bu birime yazamıyor",
       "iso": "Bu bölme bir disk (CD/DVD) içeriyor — diskler salt okunurdur",
       "archive": "Bu bölme bir arşiv içeriyor — ART arşivleri okur, onlara yazmaz",
-      "c64": "Bu bölme bir Commodore disketi veya kaseti içeriyor — ART bunları okur, onlara yazmaz",
-      "c64ToVolume": "Önce bir klasöre kopyalayın, sonra birime — ART Commodore dosyalarını doğrudan bir Amiga diskine koymaz",
-      "c64": "C64..."
+      "c64": "C64...",
+      "c64ToVolume": "Önce bir klasöre kopyalayın, sonra birime — ART Commodore dosyalarını doğrudan bir Amiga diskine koymaz"
     },
     "archive": {
       "unusableNames": "{{count}} girdi gösterilmiyor: adları, ART'ın bir klasörün içine yerleştirebileceği yollar değil"
@@ -1047,7 +1349,9 @@
         "confirm_one": "{{count}} öğe {{source}} biriminden {{destination}} hedefine taşınsın mı? Önce kopyalanır, ancak kopya denetlendikten sonra kaldırılır.",
         "confirm_other": "{{count}} öğe {{source}} biriminden {{destination}} hedefine taşınsın mı? Önce kopyalanır, ancak kopyalar denetlendikten sonra kaldırılır.",
         "confirmIcons_one": "{{names}} bir simgeye sahip. O da taşınsın mı? Taşınmazsa nesne Workbench'te görünmeyecek.",
-        "confirmIcons_other": "Bunlardan {{count}} tanesinin simgesi var ({{names}}). Onlar da taşınsın mı? Taşınmazlarsa nesneler Workbench'te görünmeyecek."
+        "confirmIcons_other": "Bunlardan {{count}} tanesinin simgesi var ({{names}}). Onlar da taşınsın mı? Taşınmazlarsa nesneler Workbench'te görünmeyecek.",
+        "confirmProtected_one": "{{names}} Amiga tarafında silinmeye karşı korumalı. Taşımak, kopya denetlendikten sonra buradan silmek demek. Yine de taşınsın mı?",
+        "confirmProtected_other": "Bunların {{count}} tanesi Amiga tarafında silinmeye karşı korumalı ({{names}}). Taşımak, kopyalar denetlendikten sonra buradan silmek demek. Yine de taşınsın mı?"
       }
     },
     "move": {
@@ -1259,6 +1563,421 @@
       "verifiedCount": "{{count}} tanesi doğrulandı",
       "installed": "{{drawer}} konumuna kuruldu: {{files}}, {{verified}}",
       "installedNoIcon": "{{drawer}} konumuna kuruldu: {{files}}, {{verified}} — simge olmadan, bu yüzden Workbench'te görünmeyecek"
+    }
+  },
+  "cardBuilder": {
+    "heading": "Sadece önyükleme kartı",
+    "intro": "ART imaj dosyasını oluşturur; onu karta yazmayı elindeki imaj aracıyla sen yaparsın. ART hiçbir zaman karta doğrudan yazmaz.",
+    "scope": "Çıkan şey, Amiga'nın görebildiği bir bölüm tablosuyla açılan bir karttır; birimlerini Amiga biçimlendirmeyi teklif eder. Üzerlerine AmigaOS kurmak henüz yapılmadı.",
+    "intake": {
+      "heading": "Bu ekrana bırakılanlar",
+      "role": {
+        "emu68Archive": "Emu68 sürümü — {{boards}}",
+        "kickstart": "önyükleme bölümünün Kickstart'ı",
+        "distroConfig": "bir dağıtımın Pi yapılandırması ({{name}}) — tanındı, ama dağıtımlar arasında seçim henüz yapılmadı",
+        "forAnAmigaVolume": "bir Amiga biriminde yaşar, bu kartta henüz biçimlendirilmiş birim yok",
+        "noPlace": "PiStorm kartında yeri yok"
+      }
+    },
+    "archive": {
+      "label": "Emu68 sürüm arşivi",
+      "chooseTitle": "İndirdiğin Emu68 sürümünü seç",
+      "none": "Arşiv seçilmedi",
+      "hint": "Kendi anakartına ait arşiv, Emu68 projesinin kendi sürümlerinden. ART, tek bir baytını okumadan önce adını aşağıdaki anakart ve sürüm hattıyla karşılaştırır."
+    },
+    "kickstart": {
+      "label": "Kickstart ROM",
+      "chooseTitle": "Bir Kickstart ROM seç",
+      "none": "ROM seçilmedi",
+      "hint": "Kendi Kickstart'ın. ART ROM indirmez, ROM dağıtmaz. ROM olmadan kart kurulur ama açılmaz."
+    },
+    "size": {
+      "label": "Kart boyutu"
+    },
+    "dest": {
+      "label": "İmaj nereye yazılsın",
+      "chooseTitle": "Kart imajı nereye yazılsın",
+      "none": "Hedef seçilmedi",
+      "hint": "Seyrek dosya: 128 GB'lık bir kart yalnızca gerçekten yapı olan birkaç megabayt yer kaplar. Var olan bir dosya reddedilir, üzerine asla yazılmaz."
+    },
+    "advanced": {
+      "heading": "Gelişmiş",
+      "amiga": "Amiga",
+      "variant": "PiStorm anakartı",
+      "pi": "Raspberry Pi",
+      "line": "Emu68 sürüm hattı",
+      "sharedWithPistorm": "Bu dördü PiStorm stüdyosunun kullandığı ayarların ta kendisi. Burada değiştirirsen orada da değişir.",
+      "label": "FAT32 etiketi",
+      "bootMib": "Önyükleme bölümü (MB)",
+      "bootMibDefault": "0, iki gerçek kartın da taşıdığı 1,10 GiB'ı kullanır.",
+      "driveName": "Sürücü adı",
+      "partitionMb": "Bölüm boyutu (MB)",
+      "fsType": "Dosya sistemi",
+      "oneDisk": "Önyükleme bölümünden geriye kalanı alan tek bir Amiga diski. Önyükleme menüsüyle birden çok disk çoklu önyüklemedir ve henüz yapılmadı. Yalnızca Kickstart'ın kendi taşıdığı dosya sistemleri sunulur: sürücüsü kartta olmayan bir PFS3 bölümünü Amiga sessizce yok sayar."
+    },
+    "actions": {
+      "preview": "Önizle",
+      "build": "Kartı oluştur"
+    },
+    "plan": {
+      "heading": "Ne yazılacak",
+      "bootPartition": "Önyükleme bölümü",
+      "amigaDisk": "Amiga diski {{n}}",
+      "atGb": "{{size}} GB, {{at}}. bayttan itibaren",
+      "kernel": "Kartın açtığı dosya",
+      "kickstartAs": "Kickstart şu adla yazılır",
+      "rom": "ROM",
+      "files": "Önyükleme bölümündekiler",
+      "filesTotal": "{{count}} dosya, {{mib}} MB",
+      "fileList": "Bütün dosyalar"
+    },
+    "warning": {
+      "noKickstart": "Kickstart seçilmedi. Kart oluşturulur, ama üzerine bir ROM konana kadar açılmaz.",
+      "romUnrecognised": "ART bu ROM'u tanımıyor. Yine de doğru ROM olabilir.",
+      "romMachineUnknown": "{{rom}} — ART bu Kickstart'ın hangisi olduğunu biliyor, ama hangi Amiga için üretildiğini bilmiyor: birden çok makine aynı revizyonu paylaşıyor ve onları yalnızca tam sağlama ayırt ediyor. Makinene ait olan bu mu, kontrol et.",
+      "romWrongMachine": "{{rom}}, seçtiğin Amiga'ya ait bir ROM değil. Bu genellikle açılmayan bir makine demektir ve ekranda bunu açıklayan bir şey olmaz — ama ne yaptığını biliyorsan devam et.",
+      "volumesUnformatted": "Bu karttaki Amiga birimleri biçimlendirilmemiştir. Amiga onları görür ve biçimlendirmeyi teklif eder; üzerlerine sistem kurmak henüz yapılmadı."
+    },
+    "blocked": {
+      "noArchive": "Önce Emu68 sürüm arşivini seç.",
+      "noDestination": "İmajın nereye yazılacağını seç.",
+      "noPartitions": "Amiga diskinde en az bir bölüm olmalı.",
+      "notPlanned": "Önce önizle — ne yazılacağını görmeden hiçbir şey yazılmaz.",
+      "destExists": "O dosya zaten var. ART üzerine yazmaz; başka bir ad seç."
+    },
+    "manifest": {
+      "finding": {
+        "schemaTooNew": "Bu künyeyi daha yeni bir ART yazmış (şema {{found}}; bu sürüm {{understood}} anlıyor). Hiçbir şey denetlenmedi — bilmediği alanlar zaten denetleyemeyeceği alanlar.",
+        "sizeChanged": "İmaj {{found}} bayt, künye {{expected}} diyor.",
+        "partitionTableChanged": "Bölüm tablosu yazılan tablo değil.",
+        "areaMoved": "{{n}}. Amiga diski {{found}}. bayttan başlıyor; künye {{expected}} diyor.",
+        "areaCountChanged": "Künye {{expected}} Amiga diski anlatıyor, kartta {{found}} var.",
+        "areaResized": "{{n}}. Amiga diski {{found}} bayt; künye {{expected}} diyor.",
+        "rdbChanged": "{{n}}. Amiga diskinin bölüm tablosu yazılan tablo değil.",
+        "partitionCountChanged": "{{n}}. Amiga diskinde {{found}} bölüm var; künye {{expected}} diyor.",
+        "partitionChanged": "{{n}}. Amiga diskindeki {{name}} bölümü künyenin anlattığı gibi değil."
+      }
+    },
+    "health": {
+      "heading": "Kartı denetle",
+      "run": "Denetle",
+      "running": "Denetleniyor…",
+      "chooseOther": "Başka bir kartı denetle…",
+      "chooseTitle": "Denetlenecek kart imajını seç",
+      "passed": "ART'ın denetleyebildiği her şey doğru.",
+      "passedWithGaps": "ART'ın denetleyebildiklerinde bir sorun yok — ve hiç cevaplayamadığı {{unanswered}} soru var. Aşağıda listeli.",
+      "failed": "{{count}} denetim başarısız. Bu kart karta yazılmaya hazır değil.",
+      "manifestPath": "Kurulum künyesi:",
+      "byHandHeading": "Bunları sadece sen yapabilirsin",
+      "check": {
+        "bootFirst": "Pi'nin önyükleme bölümü kartın en başında",
+        "bootAligned": "Önyükleme bölümü {{lba}}. sektörden başlıyor",
+        "areaCount": "{{count}} Amiga diski — bir ile üç arasında",
+        "areasAligned": "Her Amiga diski 4 MiB sınırında başlıyor",
+        "noOverlap": "Hiçbir iki bölüm aynı sektörü paylaşmıyor",
+        "insideImage": "Hiçbir şey imajın sonunu aşmıyor",
+        "hasRdb": "{{n}}. Amiga diskinin bölüm tablosu var",
+        "rdbChecksum": "{{n}}. Amiga diskinin bölüm tablosu checksum'ı doğru",
+        "canMount": "Her bölüm kartın taşıdığı bir dosya sistemi adlandırıyor ({{unmountable}} tanesi adlandırmıyor)",
+        "manifest": "Kart hâlâ birlikte kurulduğu künyeyle uyuşuyor",
+        "bootFile": {
+          "config": "config.txt önyükleme bölümünde",
+          "cmdline": "cmdline.txt önyükleme bölümünde",
+          "kernel": "config.txt'nin açtığı çekirdek — {{name}} — önyükleme bölümünde",
+          "kickstart": "Kickstart önyükleme bölümünde, {{name}} adıyla"
+        }
+      },
+      "state": {
+        "pass": "tamam",
+        "fail": "başarısız",
+        "notChecked": "denetlenmedi"
+      },
+      "byHand": {
+        "flash": "İmajı microSD karta yaz. ART dosyayı oluşturur, karta hiçbir zaman kendisi dokunmaz.",
+        "hdmi": "HDMI'ı Amiga'yı açmadan **önce** tak — VPU portu yalnızca açılışta yapılandırır, sonra değil.",
+        "pi": "Bu kart {{pi}} için kuruldu. Makinedeki Pi'nin o olduğunu doğrula.",
+        "format": "Amiga {{count}} birimi biçimlendirmeyi teklif edecek. Bu beklenen: ART şekli kurar, sistemi değil."
+      }
+    },
+    "result": {
+      "heading": "Kart oluşturuldu",
+      "readBack": "ART'ın kendi kart okuyucusuyla geri okundu: {{disks}} Amiga diski, {{partitions}} bölüm.",
+      "nextStep": "Alışık olduğun imaj aracıyla microSD karta yaz, sonra Amiga'yı açmadan önce HDMI'ı tak — VPU portu yalnızca açılışta yapılandırır."
+    }
+  },
+  "preload": {
+    "heading": "Kartın Amiga birimlerini hazırla",
+    "intro": "ART'ın oluşturduğu kartta Amiga'nın gördüğü bölümler var ama içleri boş — Amiga ilk açılışta onları biçimlendirmeyi önerir. Bu ekran onları burada biçimlendirir ve içeriğini kopyalar, böylece kart hazır gelir.",
+    "scope": "PFS3'ü yazan ART değil. Biçimlendirmeyi hst-imager yapıyor; mevcut iki PiStorm imaj aracının da dayandığı araç. ART onu paketlemiyor, kendi kopyanı gösteriyorsun.",
+    "tool": {
+      "heading": "Araç",
+      "label": "hst.imager",
+      "none": "Ayarlanmadı",
+      "hint": "ART hst-imager'ı paketlemiyor — uygulamanın yanında 137 MB değecek bir takas değil. Buradan ya da Ayarlar'dan bir kez ayarla; her iki durumda da hatırlanır.",
+      "probe": "Kendini tanıtsın",
+      "probing": "Soruluyor…",
+      "is": "Kendini {{version}} olarak tanıtıyor.",
+      "untested": "ART'ın komutları {{tested}} sürümüne göre yazıldı. Bu farklı bir sürüm — gayet iyi çalışabilir, ART yalnızca onunla denenmedi."
+    },
+    "card": {
+      "heading": "Kart",
+      "label": "Kart imajı",
+      "none": "Kart seçilmedi",
+      "chooseTitle": "Hazırlanacak kart imajını seç",
+      "read": "{{disks}} Amiga diski, {{partitions}} bölüm.",
+      "noPartitions": "Bu imajda hazırlanacak Amiga bölümü yok.",
+      "unreadable": "ART bu dosyayı kart ya da sabit disk imajı olarak okuyamadı."
+    },
+    "driver": {
+      "label": "Dosya sistemi sürücüsü",
+      "none": "Seçilmedi",
+      "chooseTitle": "Gömülecek dosya sistemi sürücüsünü seç (pfs3aio.lha)",
+      "hint": "Bir bölüm, kartın sürücüsünü taşımadığı bir dosya sistemi adlandırıyorsa gerekir — genellikle PFS3. FFS'i Kickstart'ın kendisi taşır, onun için bir şey gerekmez. Gerekliyken eksikse önizleme bunu söyler; Amiga'nın sessizce yok sayacağı bir birim üretmez."
+    },
+    "partitions": {
+      "heading": "Hangi birimler",
+      "intro": "Başlangıçta hiçbiri seçili değil: biçimlendirme, bölümde ne varsa siler.",
+      "none": "Bir kart seç, bölümleri burada görünsün.",
+      "disk": "Amiga diski {{n}} — {{offset}} konumunda",
+      "volumeName": "Birim adı",
+      "content": "İçerik klasörü",
+      "noContent": "Yalnızca biçimlendir",
+      "chooseContent": "Klasör seç…",
+      "chooseContentTitle": "İçeriği bu birime gidecek klasörü seç",
+      "clearContent": "Yalnızca biçimlendir",
+      "sizeAndType": "{{size}} · {{dostype}}"
+    },
+    "preview": {
+      "run": "Önizle",
+      "running": "Ne olacağı hesaplanıyor…"
+    },
+    "plan": {
+      "heading": "Ne olacak",
+      "willErase_one": "Bu, {{count}} bölümü siler. Yedek yok, geri alma yok.",
+      "willErase_other": "Bu, {{count}} bölümü siler. Yedek yok, geri alma yok.",
+      "step": {
+        "import": "{{name}} sürücüsünü RDB'ye {{dostype}} olarak göm",
+        "format": "{{drive}} bölümünü {{volume}} adıyla biçimlendir — içindeki her şey gider",
+        "copy": "{{source}} içeriğini {{drive}} bölümüne kopyala"
+      }
+    },
+    "confirm_one": "{{count}} bölümün silineceğini anlıyorum",
+    "confirm_other": "{{count}} bölümün silineceğini anlıyorum",
+    "run": "Biçimlendir ve doldur",
+    "running": "Çalışıyor…",
+    "blocked": {
+      "noCard": "Önce kart imajını seç.",
+      "noTool": "hst.imager'ın nerede olduğunu ayarla — ART onu paketlemiyor.",
+      "nothingChosen": "Hazırlanacak en az bir bölüm seç.",
+      "blankName": "{{drive}} için bir birim adı gerekiyor.",
+      "badName": "{{drive}} biriminin adında ':' veya '/' var; bunlar Amiga'da yol ayırıcıdır ve bir adın içinde yer alamaz.",
+      "longName": "{{drive}} biriminin adı {{max}} karakterden uzun; AmigaDOS adları orada biter.",
+      "notPlanned": "Önce önizle — ne biçimlendirileceğini görmeden hiçbir şey biçimlendirilmez."
+    },
+    "result": {
+      "heading": "Bitti",
+      "formatted": "Biçimlendirilen: {{volumes}}",
+      "copied": "Kopyalanan: {{files}} dosya, {{directories}} klasör, {{bytes}} bayt.",
+      "tool": "{{version}} ile.",
+      "notVerified": "ART bu birimi geri okuyamaz. PFS3 okuyucusu yok, yani içeridekiler aracın sözü, ART'ın değil — Amiga'da ya da ART olmayan bir şeyle doğrula."
+    }
+  },
+  "layout": {
+    "heading": "İçeriği yerleştir",
+    "intro": "Bir yığın Amiga dosyasını bu bilgisayarda düzenli bir hazırlık ağacına dönüştürür — Games, Floppies, HardDisks, CDs, Unsorted. ART her şeyin nereye gideceğini önerir; hiçbir şey kopyalanmadan önce istediğini taşıyabilirsin.",
+    "scope": "Bu, bir karta değil bu bilgisayardaki bir klasöre yazar. Gerçek bir PiStorm kartı PFS3'tür ve ART onu doğrudan yazamaz — önce bu klasörü hazırla, sonra kart hazırlama ekranıyla kartın birimlerine kopyala.",
+    "root": {
+      "label": "Hazırlık klasörü",
+      "none": "Hazırlık klasörü seçilmedi",
+      "chooseTitle": "Hazırlık klasörünü seç (ya da oluştur)"
+    },
+    "sources": {
+      "heading": "Ne yerleştirilecek",
+      "intro": "Düzenlenecek dosya ve klasörleri ekle. Doğrudan bir .slave taşıyan klasör tek bir WHDLoad klasörü olarak kabul edilir ve olduğu gibi kopyalanır.",
+      "addFiles": "Dosya ekle…",
+      "addFilesTitle": "Yerleştirilecek dosyaları seç",
+      "addFolder": "Klasör ekle…",
+      "addFolderTitle": "Yerleştirilecek klasörü seç",
+      "none": "Henüz bir şey eklenmedi.",
+      "remove": "Kaldır"
+    },
+    "preview": {
+      "run": "Önizle",
+      "running": "Ne olacağı hesaplanıyor…"
+    },
+    "plan": {
+      "heading": "Neler nereye gidecek",
+      "total": "Toplam {{bytes}}"
+    },
+    "table": {
+      "selectAll": "Tümünü seç",
+      "kind": "Ne",
+      "source": "Nereden",
+      "destination": "Nereye",
+      "size": "Boyut",
+      "none": "Yerleştirilecek bir şey yok."
+    },
+    "retarget": {
+      "label": "İşaretli satırları şuraya taşı",
+      "custom": "Başka klasör…",
+      "customPlaceholder": "Klasör adı",
+      "apply": "Taşı",
+      "hint": "Taşınan her satır kendi adını korur; yalnızca klasörü değişir.",
+      "blockedNoSelection": "Önce en az bir satır işaretle.",
+      "blockedNoDrawerName": "Önce bir klasör adı yaz."
+    },
+    "collisions": {
+      "heading": "Çakışmalar",
+      "intro": "Bu hedefler birden fazla kez isteniyor ya da hazırlık klasöründe zaten var. Her biri çözülene kadar hiçbir şey kopyalanmaz.",
+      "entry": "{{destination}} — {{sources}}"
+    },
+    "refusals": {
+      "heading": "Dahil edilmeyenler",
+      "intro": "Bunların bir Amiga hazırlık ağacında yeri yok, dışarıda bırakıldı:"
+    },
+    "blocked": {
+      "noRoot": "Önce bir hazırlık klasörü seç.",
+      "nothingToPlace": "Yerleştirilecek bir şey yok — önce birkaç dosya ya da klasör bırak.",
+      "notPlanned": "Önce önizle — ne olacağını görmeden hiçbir şey kopyalanmaz.",
+      "collisions": "Önce çakışma(ları) çöz — iki şey aynı adı isterken hiçbir şey kopyalanmaz.",
+      "couldNotRecheck": "ART bu hedeflerin boş olup olmadığını kontrol edemedi — uygulamadan önce yeniden önizle."
+    },
+    "refusal": {
+      "belongsOnBootPartition": "Bu bir Kickstart — Pi donanım yazılımı onu bir Amiga biriminden değil, FAT32 önyükleme bölümünden okur.",
+      "noPlaceOnAnAmigaVolume": "Bunun bir Amiga biriminde yeri yok — bir Commodore 8-bit disk, teyp ya da kartuş imajı Amiga'da çalışmaz."
+    },
+    "kind": {
+      "whdloadArchive": "{{name}} (WHDLoad paketi)",
+      "whdloadDrawer": "{{name}} (WHDLoad klasörü)",
+      "floppyImage": "Disket imajı",
+      "hardDiskImage": "Sabit disk imajı",
+      "opticalImage": "Optik disk imajı",
+      "archive": "Arşiv",
+      "unknown": "Bilinmiyor",
+      "rom": "ROM",
+      "commodore8Bit": "Commodore 8-bit"
+    },
+    "apply": {
+      "run": "Yerleştir",
+      "running": "Kopyalanıyor…"
+    },
+    "result": {
+      "heading": "Yerleştirildi",
+      "placed_one": "{{count}} öge yerleştirildi, toplam {{bytes}}.",
+      "placed_other": "{{count}} öge yerleştirildi, toplam {{bytes}}.",
+      "root": "Hazırlık klasörü: {{root}}",
+      "nextStep": "Bunu bir karta kopyalamak için OS Builder → Amiga birimlerini hazırla ekranını bu klasöre yönlendir."
+    }
+  },
+  "osinstall": {
+    "blocked": {
+      "noFolder": "Önce medya klasörünü seç.",
+      "noDestination": "Önce dağıtım ağacının nereye kurulacağını seç.",
+      "notPlanned": "Önce önizle — ne olacağını görmeden hiçbir şey kurulmaz.",
+      "folderUnreadable": "ART bu klasörü okuyamadı — yolu kontrol et.",
+      "refusals": "Önce reddedilen(ler)i çöz — plan ilerleyemezken hiçbir şey kurulmaz.",
+      "nothingToInstall": "Hiçbir şey kurulmayacak — en az bir bileşen seç."
+    },
+    "refusal": {
+      "mediaMissing": "{{component}}, {{volume}} istiyor ve medya klasöründe bu birim adını taşıyan bir dosya yok.",
+      "mediaPathMissing": "{{component}}'in kendi {{path}} yolu {{media}}'da eksik — bu diskin farklı bir sürümü gibi görünüyor.",
+      "romUnknown": "Kickstart tanımlanamadı, bu yüzden ART sürümüne bağlı şeylere karar veremiyor.",
+      "destinationCollision": "{{path}} birden fazla bileşen tarafından isteniyor ({{components}}) ve hiçbiri diğerinin üzerine yazabileceğini belirtmiyor.",
+      "mediaAmbiguous": "Medya klasöründe {{component}}'in ihtiyaç duyduğu {{volume}} birim adını taşıyan birden fazla dosya var: {{paths}}.",
+      "exclusiveGroupConflict": "{{components}} aynı anda açık olamaz — {{group}} grubundan yalnızca biri seçilebilir.",
+      "ruleKindMismatch": "{{component}}'in {{from}} için kuralı bir {{expected}} bekliyordu, ama medya bir {{found}} taşıyor."
+    },
+    "heading": "AmigaOS Kur",
+    "intro": "Kendi AmigaOS 3.2 kurulum disklerinden, gerçek bir Amiga birimine kopyalanmaya hazır bir dağıtım ağacı oluştur.",
+    "media": {
+      "label": "Kurulum diskleri klasörü",
+      "none": "Klasör seçilmedi.",
+      "chooseTitle": "AmigaOS 3.2 kurulum disk imgelerinin bulunduğu klasörü seç",
+      "unreadable": "ART bu klasörü okuyamadı — yolu kontrol et.",
+      "empty": "Bu klasörde kurulum diski bulunamadı.",
+      "found_one": "{{count}} kurulum diski bulundu: {{names}}.",
+      "found_other": "{{count}} kurulum diski bulundu: {{names}}."
+    },
+    "rom": {
+      "label": "Eşlenen Kickstart",
+      "none": "ROM seçilmedi.",
+      "chooseTitle": "Bu AmigaOS'un üzerinde çalışacağı Kickstart ROM'unu seç",
+      "identified": "Tanımlandı: {{rom}}.",
+      "unreadable": "ART bu dosyayı bir Kickstart ROM'u olarak tanımlayamadı."
+    },
+    "destination": {
+      "label": "Şuraya kur",
+      "none": "Hedef seçilmedi.",
+      "chooseTitle": "Dağıtım ağacının nereye kurulacağını seç",
+      "hint": "Yeni bir klasör — ART zaten var olan bir klasörün üzerine kurmayı reddeder."
+    },
+    "components": {
+      "heading": "Bileşenler",
+      "intro": "Workbench3.2 her zaman kurulur. Geri kalan her şey isteğe bağlıdır, ya da eşlenen Kickstart ihtiyaç duyduğunda kendiliğinden açılır.",
+      "required": "Zorunlu",
+      "reason": {
+        "required": "Her zaman açık — çalışan bir sistem buna ihtiyaç duyar.",
+        "romNeeded": "Bunun kendiliğinden açılıp açılmayacağını bilmek için önce eşlenen Kickstart'ı seç.",
+        "conditionOn": "Açık, çünkü eşlenen Kickstart {{rom}} ve bu sürümün Startup-Sequence'i V{{major}} altındaki her şeyde çıkış yapıyor.",
+        "conditionOff": "Kapalı — eşlenen Kickstart {{rom}}, V{{major}} veya üzeri, bu yüzden sürümün kendi Startup-Sequence'i buna ihtiyaç duymuyor. Yine de kendin açabilirsin.",
+        "conditionOverridden": "Kapalı — bunu sen kapattın. Eşlenen Kickstart V{{major}} altında: bu dosyalar olmadan sürümün kendi Startup-Sequence'i çıkış yapar ve sistem açılmaz."
+      },
+      "confirmOff": {
+        "warning": "Bu ROM V{{major}} altında. Sürümün kendi Startup-Sequence'i bu dosyalar olmadan çıkış yapar — bunları kapatmak sistemin açılmayacağı anlamına gelir. Karar senin makinene ait.",
+        "confirm": "Yine de kapat"
+      }
+    },
+    "refusals": {
+      "heading": "Bu henüz neden kurulamıyor"
+    },
+    "plan": {
+      "heading": "Ne yazılacağı",
+      "summary": "{{items}} öge, toplam {{bytes}}."
+    },
+    "run": {
+      "heading": "Kur",
+      "confirm": "Yukarıdaki dosya listesini inceledim.",
+      "run": "Dağıtım ağacını kur",
+      "running": "Kuruluyor…"
+    },
+    "result": {
+      "heading": "Kuruldu",
+      "summary": "{{files}} dosya, {{directories}} klasör, toplam {{bytes}}.",
+      "root": "Dağıtım ağacı: {{root}}",
+      "nextStep": "Bunu bir karta kopyalamak için OS Builder → Amiga birimlerini hazırla ekranını bu klasöre yönlendir."
+    },
+    "verify": {
+      "heading": "Bir karta karşı doğrula",
+      "intro": "Bu ağaç gerçek bir Amiga birimine kopyalandıktan sonra, ART'ın buraya yazdığı manifesto karşı burada denetle.",
+      "distRoot": {
+        "label": "Dağıtım ağacı",
+        "none": "Dağıtım ağacı seçilmedi.",
+        "chooseTitle": "Dağıtım ağacının kendi kökünü seç — distribution.json'ın yazıldığı yer"
+      },
+      "image": {
+        "label": "Amiga birim imgesi",
+        "none": "İmge seçilmedi.",
+        "chooseTitle": "Ağacın kopyalandığı kart ya da sabit disk imgesini seç"
+      },
+      "slot": {
+        "label": "Yuva",
+        "hint": "Düz bir HDF için boş bırak; aksi halde PiStorm alan numarası."
+      },
+      "index": {
+        "label": "Bölüm sırası"
+      },
+      "run": "Doğrula",
+      "running": "Doğrulanıyor…",
+      "needsInputs": "Önce dağıtım ağacını, imgeyi ve bölüm sırasını seç.",
+      "summary": "{{passed}} geçti, {{failed}} başarısız, {{notChecked}} bakılmadı.",
+      "verified": "Doğrulandı — her dosya manifestoyla eşleşti.",
+      "notVerified": "Doğrulanmadı — aşağıdaki sayılara ve listeye bak.",
+      "state": {
+        "pass": "Geçti",
+        "fail": "Başarısız",
+        "notChecked": "Bakılmadı"
+      },
+      "error": "ART doğrulayamadı: {{message}}"
     }
   }
 }

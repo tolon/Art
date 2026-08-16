@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
@@ -10,11 +10,24 @@ import {
   type FlashFloppyNavMode,
   type FlashFloppyDisplay,
 } from "@/lib/gotek";
+import { isTextOrNothing } from "@/lib/remembered";
+import { useRemembered } from "@/lib/useRemembered";
+import { useSettingsStore } from "@/stores/settingsStore";
 
 export function GotekStudio() {
   const { t } = useTranslation();
+  const settingsLoaded = useSettingsStore((s) => s.loaded);
 
-  const [drivePath, setDrivePath] = useState<string | null>(null);
+  // Only the folder is remembered, and deliberately only the folder: the
+  // config below belongs to the `FF.CFG` **on the stick**, not to ART. Keeping
+  // a copy here and showing it at the next launch would show settings for a
+  // drive that may have been edited, reflashed or swapped since — the config
+  // is read from the drive every time, as it must be (spec §39).
+  const [drivePath, setDrivePath] = useRemembered<string | null>(
+    "gotek.drivePath",
+    isTextOrNothing,
+    null
+  );
   const [config, setConfig] = useState<FlashFloppyConfig>({
     nav_mode: "native",
     display_type: "oled-128x32",
@@ -33,14 +46,7 @@ export function GotekStudio() {
   const [error, setError] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
-  async function handleSelectUsb() {
-    const sel = await open({
-      directory: true,
-      multiple: false,
-      title: t("gotek.selectUsbTitle"),
-    });
-    if (typeof sel !== "string") return;
-
+  async function scanDrive(sel: string, announce: boolean) {
     setBusy(true);
     setError(null);
     setStatusMsg(null);
@@ -53,11 +59,35 @@ export function GotekStudio() {
         t("gotek.msg.scanned", { images: scanned.adf_files.length, slots: scanned.slots.length })
       );
     } catch (e) {
-      setError(String(e));
+      // A drive picked by hand that will not read is an error worth showing. A
+      // drive being reopened from last time is not: a USB stick that is simply
+      // not plugged in is the normal state of a USB stick, and greeting the
+      // user with a red box for it would be wrong.
+      if (announce) setError(String(e));
     } finally {
       setBusy(false);
     }
   }
+
+  async function handleSelectUsb() {
+    const sel = await open({
+      directory: true,
+      multiple: false,
+      title: t("gotek.selectUsbTitle"),
+    });
+    if (typeof sel !== "string") return;
+    await scanDrive(sel, true);
+  }
+
+  // Reopen the drive the user was last working on. Gated on `loaded` for the
+  // reason ART-089 exists: read before the settings arrive, this is `null`.
+  const reopened = useRef<string | null>(null);
+  useEffect(() => {
+    if (!settingsLoaded || !drivePath || reopened.current === drivePath) return;
+    reopened.current = drivePath;
+    void scanDrive(drivePath, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsLoaded, drivePath]);
 
   async function handleAddDisksToSlots() {
     const sel = await open({

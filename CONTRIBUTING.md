@@ -13,14 +13,15 @@ pnpm, MSVC Build Tools).
    the current stage covers.
 2. Pick an issue from [docs/ISSUES.md](docs/ISSUES.md), or open one to discuss
    a change.
-3. Branch from `master`.
+3. Branch from `main`.
 4. Follow the stage plan — **do not implement future-stage features** until the
    current one is stable. [docs/roadmap.md](docs/roadmap.md) defines what each
    phase contains; STATUS.md defines the order.
 5. Keep the build green:
 
    ```bash
-   pnpm lint          # TypeScript type-check
+   pnpm lint          # TypeScript type-check (app + test tsconfig)
+   pnpm test          # frontend unit tests, including the en/tr parity check
    cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
    pnpm tauri build   # full build
    ```
@@ -32,10 +33,9 @@ pnpm, MSVC Build Tools).
    `ART-NNN` entry in [docs/ISSUES.md](docs/ISSUES.md) if you found or fixed a
    defect.
 8. The repository is at <https://github.com/tolon/Art>. `main` is the published
-   branch; phase work happens on its own branch and lands through a pull
-   request there.
-   Merge your branch back to `master` locally (or hand it off for review) with a clear
-   description of what changed and why.
+   branch; phase work happens on its own branch and lands on `main` through a
+   pull request when the phase closes, with a clear description of what changed
+   and why.
 
 ## Architecture rules
 

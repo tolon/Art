@@ -1,0 +1,160 @@
+{
+  "$comment": [
+    "The distro registry (ART-research-distro-profiles.md §4). Data, not code:",
+    "one entry per AmigaOS distribution the OS Builder can work with.",
+    "",
+    "Nothing here is content. ART ships no OS, no ROM and no distro image, and",
+    "downloads none of them — `homepage` is where the user goes themselves, and",
+    "`licence_model` is what the screen says about that before they do.",
+    "",
+    "`default_cmdline_tokens` are checked against `core/pistorm`'s own list by",
+    "`every_token_a_profile_names_is_one_emu68_has`, so a profile cannot",
+    "reintroduce a token Emu68 does not read (ART-090).",
+    "",
+    "`available: false` means registered and described but not yet buildable —",
+    "shown as Coming Later rather than hidden (spec §96)."
+  ],
+  "profiles": [
+    {
+      "id": "caffeineos",
+      "name": "CaffeineOS",
+      "homepage": "https://caffeineos.neocities.org/",
+      "licence_model": "free-grey",
+      "acquisition": "user-supplies-image",
+      "image_format": "raw-img",
+      "min_card_gb": 32,
+      "base_os": "os39",
+      "rom_requirement": {
+        "family": "3.1",
+        "drop_name": "kick.rom"
+      },
+      "default_cmdline_tokens": [
+        "enable_cache",
+        "copy_rom=512"
+      ],
+      "multiboot": {
+        "config_set_name": "caffeineos"
+      },
+      "packages": [],
+      "post_install_notes": [
+        "distro.note.caffeineos.download",
+        "distro.note.caffeineos.network"
+      ],
+      "available": false
+    },
+    {
+      "id": "coffinos",
+      "name": "CoffinOS",
+      "homepage": "https://getcoffin.net/",
+      "licence_model": "free-grey",
+      "acquisition": "user-supplies-image",
+      "image_format": "raw-img",
+      "min_card_gb": 32,
+      "base_os": "os39",
+      "rom_requirement": {
+        "family": "3.1",
+        "drop_name": "kick.rom"
+      },
+      "default_cmdline_tokens": [
+        "enable_cache",
+        "copy_rom=512"
+      ],
+      "multiboot": {
+        "config_set_name": "coffinos"
+      },
+      "packages": [],
+      "post_install_notes": [
+        "distro.note.coffinos.romFamily",
+        "distro.note.coffinos.demoware"
+      ],
+      "available": false
+    },
+    {
+      "id": "amikit",
+      "name": "AmiKit",
+      "homepage": "https://amikit.amiga.sk/",
+      "licence_model": "user-licensed",
+      "acquisition": "user-supplies-image",
+      "image_format": "raw-img",
+      "min_card_gb": 32,
+      "base_os": "os32",
+      "rom_requirement": {
+        "family": "3.2",
+        "drop_name": "kick.rom"
+      },
+      "default_cmdline_tokens": [
+        "enable_cache",
+        "copy_rom=512"
+      ],
+      "multiboot": {
+        "config_set_name": "amikit"
+      },
+      "packages": [],
+      "post_install_notes": [
+        "distro.note.amikit.ownIt",
+        "distro.note.amikit.adaptOnly"
+      ],
+      "available": false
+    },
+    {
+      "id": "art-baseline-32",
+      "name": "ART Baseline (AmigaOS 3.2)",
+      "homepage": "https://github.com/tolon/Art",
+      "licence_model": "art-baseline",
+      "acquisition": "art-builds",
+      "image_format": "build-recipe",
+      "min_card_gb": 16,
+      "base_os": "os32",
+      "rom_requirement": {
+        "family": "3.2",
+        "drop_name": "kick.rom"
+      },
+      "default_cmdline_tokens": [
+        "enable_cache",
+        "copy_rom=512"
+      ],
+      "multiboot": {
+        "config_set_name": "artbaseline32"
+      },
+      "packages": [
+        "classicwb-lite"
+      ],
+      "post_install_notes": [
+        "distro.note.baseline.recipe",
+        "distro.note.baseline.yourMedia"
+      ],
+      "available": false
+    },
+    {
+      "id": "art-baseline-39",
+      "name": "ART Baseline (AmigaOS 3.9)",
+      "homepage": "https://github.com/tolon/Art",
+      "licence_model": "art-baseline",
+      "acquisition": "art-builds",
+      "image_format": "build-recipe",
+      "min_card_gb": 16,
+      "base_os": "os39",
+      "rom_requirement": {
+        "family": "3.1",
+        "drop_name": "kick.rom"
+      },
+      "default_cmdline_tokens": [
+        "enable_cache",
+        "copy_rom=512"
+      ],
+      "multiboot": {
+        "config_set_name": "artbaseline39"
+      },
+      "packages": [
+        "classicwb-os39"
+      ],
+      "post_install_notes": [
+        "distro.note.baseline.recipe",
+        "distro.note.baseline.yourMedia",
+        "distro.note.baseline.boingBags",
+        "distro.note.baseline.romFamily"
+      ],
+      "available": false
+    }
+  ]
+}

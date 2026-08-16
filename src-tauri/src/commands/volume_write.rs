@@ -40,7 +40,9 @@ use crate::core::volume::write::copy::{
     ExtractReport, HostFolder, HostSelection, StagedTree,
 };
 use crate::core::volume::write::plan::{plan_copy, CopyPlan, SourceEntry};
-use crate::core::volume::write::{VolumeWriter, WriteOutcome};
+use crate::core::volume::write::{
+    DeleteProtection, OverwriteProtection, VolumeWriter, WriteOutcome,
+};
 use crate::core::volume::{read_block_vec, BlockDeviceMut, VolumeGeometry, WriteStrategy};
 use crate::error::{AppError, AppResult};
 
@@ -137,18 +139,17 @@ where
 
     match strategy {
         WriteStrategy::WholeFile => {
-            // Read whole, mutate in memory, validate the whole result, then
-            // one atomic guarded write. Nothing reaches the user's file until
-            // that validation passed — see [`commit_whole_file`].
-            let original = std::fs::read(image)?;
-            let mut device = VecDevice::new(original.clone(), geometry.block_size)?;
-
+            // Read whole, mutate in memory, validate the result, then one
+            // atomic guarded write. Nothing reaches the user's file until that
+            // validation passed — see [`WholeFileVolume`], which is also where
+            // the volume's own offset inside the file is honoured (ART-043).
+            let mut session = WholeFileVolume::open(image, &entry)?;
             let outcome = {
-                let mut writer = VolumeWriter::open(&mut device, geometry, image, 0)?;
+                let mut writer = session.writer(geometry, image, entry.byte_offset)?;
                 run(&mut writer)?
             };
 
-            let backup = commit_whole_file(image, device.bytes())?;
+            let backup = session.commit(image)?;
             Ok((outcome, strategy, backup))
         }
         WriteStrategy::BlockJournal => {
@@ -178,6 +179,100 @@ where
     }
 }
 
+/// The whole-file strategy, over **the volume** rather than over the file
+/// (ART-043).
+///
+/// The strategy is chosen by the *file's* size — read it whole, mutate in
+/// memory, validate, one atomic write — and that part is right. What was wrong
+/// is what it handed the writer: the whole file, opened at offset `0`, while
+/// the geometry it was given describes a **partition** that may start
+/// megabytes in. For any RDB image of 16 MiB or less that read and wrote
+/// volume-relative block numbers as if they were file-absolute, so the root
+/// block landed in the middle of the partition's data.
+///
+/// Nothing was ever at risk: the first read failed with something unhelpful
+/// ("block N is not a directory"), and a result that did somehow get written
+/// was refused by the gate below — which, validating the whole file as a
+/// volume, could only ever refuse an RDB image. So this was a strategy that
+/// could not succeed rather than one that could corrupt.
+///
+/// This session gives the writer the volume's own bytes and puts them back
+/// where they came from, which keeps every guarantee the strategy is for:
+/// nothing reaches the user's file until the *volume* validates, and the file
+/// is then replaced in one atomic write. For a bare ADF — offset 0, length the
+/// whole file — the slice is the file and the behaviour is exactly what it was.
+struct WholeFileVolume {
+    /// The file as it was. The volume is spliced back into this, so everything
+    /// around it — an RDB, another partition, trailing bytes — survives
+    /// byte-for-byte.
+    original: Vec<u8>,
+    /// Where the volume begins in `original`.
+    start: usize,
+    device: VecDevice,
+}
+
+impl WholeFileVolume {
+    fn open(image: &Path, entry: &VolumeEntry) -> CoreResult<Self> {
+        let original = std::fs::read(image)?;
+        let file_len = original.len();
+
+        let start = usize::try_from(entry.byte_offset).map_err(|_| CoreError::Malformed {
+            format: "volume".into(),
+            detail: format!(
+                "this volume starts at byte {}, which is not a real offset in a file this size",
+                entry.byte_offset
+            ),
+        })?;
+        if start >= file_len {
+            return Err(CoreError::Malformed {
+                format: "volume".into(),
+                detail: format!(
+                    "this volume starts at byte {start} but the file is only {file_len} bytes long"
+                ),
+            });
+        }
+
+        // Clamped rather than trusted: a partition table is free to claim more
+        // than the file holds, and `VolumeEntry::clamped` is how that is
+        // already reported elsewhere. Not rounded down to whole blocks either
+        // — trailing bytes inside the volume's span are the user's and are
+        // written back untouched.
+        let end = start
+            .saturating_add(usize::try_from(entry.byte_length).unwrap_or(usize::MAX))
+            .min(file_len);
+
+        let device = VecDevice::new(original[start..end].to_vec(), entry.block_size)?;
+        Ok(Self {
+            original,
+            start,
+            device,
+        })
+    }
+
+    fn writer<'a>(
+        &'a mut self,
+        geometry: VolumeGeometry,
+        image: &Path,
+        volume_offset: u64,
+    ) -> CoreResult<VolumeWriter<'a>> {
+        VolumeWriter::open(&mut self.device, geometry, image, volume_offset)
+    }
+
+    /// `VALIDATE → BACKUP → APPLY`, with the volume put back where it came
+    /// from. Consumes the session: there is nothing to do with it afterwards,
+    /// and a caller that decides *not* to commit — a cancelled copy — simply
+    /// drops it and leaves the file untouched.
+    fn commit(self, image: &Path) -> CoreResult<Option<String>> {
+        let volume = self.device.bytes();
+        validate_volume(image, volume)?;
+
+        let mut whole = self.original;
+        whole[self.start..self.start + volume.len()].copy_from_slice(volume);
+        let backup = guarded_write(image, &whole, BackupPolicy::DISK_IMAGE)?;
+        Ok(backup.map(|path| path.display().to_string()))
+    }
+}
+
 /// Validate a whole in-memory image and only then let it reach the user's file.
 ///
 /// The §57 pipeline's last two steps for the whole-file strategy:
@@ -194,16 +289,12 @@ where
 /// that was already like that before ART touched it, and refusing those would
 /// lock the user out of their own disk rather than protect it (§89).
 ///
-/// The bytes are the whole file, which is what this strategy writes back, and
-/// the volume is assumed to start at byte 0 of it — the same assumption the
-/// branch above already makes when it opens the device.
-fn commit_whole_file(image: &Path, bytes: &[u8]) -> CoreResult<Option<String>> {
-    validate_whole_image(image, bytes)?;
-    let backup = guarded_write(image, bytes, BackupPolicy::DISK_IMAGE)?;
-    Ok(backup.map(|path| path.display().to_string()))
-}
-
-fn validate_whole_image(image: &Path, bytes: &[u8]) -> CoreResult<()> {
+/// The bytes are **the volume's**, not the file's (ART-043): for a bare ADF
+/// those are the same thing, and for a partition inside an image they are not.
+/// Handing this the whole of an RDB image would ask whether a partition table
+/// is an AmigaDOS volume, which it is not — and refuse every write to a small
+/// hard disk image on that ground.
+fn validate_volume(image: &Path, bytes: &[u8]) -> CoreResult<()> {
     // An image that cannot even be parsed as a volume is refused with the same
     // sentence as one that parses and is wrong: what the user needs to know
     // first is that their file was not touched.
@@ -379,19 +470,30 @@ pub fn volume_rename(
 /// `Destructive` (§63): the frontend double-confirms before calling this. A
 /// directory must be empty, so deleting a tree is the caller's loop and each
 /// entry is its own journalled operation.
+///
+/// `override_protection` says the user was shown the *third* question — the
+/// one about an entry the Amiga itself protects — and said yes. False is the
+/// safe answer, and it is what any caller that has not asked will send
+/// (ART-088).
 #[tauri::command]
 pub fn volume_delete(
     path: String,
     volume_index: usize,
     dir_block: Option<u32>,
     entry_block: u32,
+    override_protection: bool,
     oplog: State<'_, JsonlOperationLog>,
 ) -> AppResult<MutationResult> {
     let image = PathBuf::from(path.trim());
     let parent = dir_block.unwrap_or(0);
+    let protection = if override_protection {
+        DeleteProtection::Override
+    } else {
+        DeleteProtection::Honour
+    };
 
     let result = with_writer(&image, volume_index, |writer| {
-        writer.delete(parent, entry_block)
+        writer.delete_with(parent, entry_block, protection)
     })
     .map(|(outcome, strategy, backup)| {
         let block_size = outcome_block_size(&image, volume_index);
@@ -507,6 +609,7 @@ fn delete_many(
     volume_index: usize,
     dir_block: Option<u32>,
     names: &[String],
+    protection: DeleteProtection,
 ) -> CoreResult<DeleteManyResult> {
     let parent = dir_block.unwrap_or(0);
     let names = dedupe_case_insensitive(names);
@@ -531,7 +634,7 @@ fn delete_many(
                     "'{name}' is not in this directory any more"
                 )));
             };
-            outcomes.push(writer.delete(parent, found.block)?);
+            outcomes.push(writer.delete_with(parent, found.block, protection)?);
         }
         Ok(outcomes)
     })?;
@@ -562,11 +665,18 @@ pub fn volume_delete_many(
     volume_index: usize,
     dir_block: Option<u32>,
     names: Vec<String>,
+    override_protection: bool,
     oplog: State<'_, JsonlOperationLog>,
 ) -> AppResult<DeleteManyResult> {
     let image = PathBuf::from(path.trim());
+    let protection = if override_protection {
+        DeleteProtection::Override
+    } else {
+        DeleteProtection::Honour
+    };
 
-    let result = delete_many(&image, volume_index, dir_block, &names).map_err(AppError::from);
+    let result =
+        delete_many(&image, volume_index, dir_block, &names, protection).map_err(AppError::from);
 
     write_result(
         &oplog,
@@ -587,6 +697,16 @@ pub fn volume_delete_many(
 }
 
 /// Write one file into a volume — the single-file fast path of F5.
+///
+/// `override_protection` is the answer to the write-protection question
+/// (ART-094): the file being replaced has its `w` bit withheld, the user was
+/// asked anyway, and said yes. False is the safe answer and is what any caller
+/// that has not asked sends.
+// A Tauri command's arguments are its wire format; grouping them into a struct
+// to please the lint would change what the frontend sends without making
+// anything clearer. The same allow every other multi-argument command here
+// carries.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub fn volume_put_file(
     path: String,
@@ -595,11 +715,17 @@ pub fn volume_put_file(
     source: String,
     name: Option<String>,
     overwrite: Option<OverwritePolicy>,
+    override_protection: Option<bool>,
     oplog: State<'_, JsonlOperationLog>,
 ) -> AppResult<MutationResult> {
     let image = PathBuf::from(path.trim());
     let source_path = PathBuf::from(source.trim());
     let parent = dir_block.unwrap_or(0);
+    let overwrite_protection = if override_protection.unwrap_or(false) {
+        OverwriteProtection::Override
+    } else {
+        OverwriteProtection::Honour
+    };
 
     let chosen = name.unwrap_or_else(|| {
         source_path
@@ -627,7 +753,11 @@ pub fn volume_put_file(
                         )))
                     }
                     OverwritePolicy::Overwrite => {
-                        writer.delete(parent, existing.block)?;
+                        // `w`, not `d`: replacing a file's contents is what
+                        // AmigaDOS governs with the write bit, and the delete
+                        // below is only how ART gets there (ART-094).
+                        writer.ensure_overwritable(existing.block, overwrite_protection)?;
+                        writer.delete_with(parent, existing.block, DeleteProtection::Override)?;
                     }
                     OverwritePolicy::Rename => {
                         return Err(CoreError::InvalidInput(format!(
@@ -680,7 +810,12 @@ pub fn replace_file(
     data: &[u8],
 ) -> CoreResult<MutationResult> {
     let (outcome, strategy, backup) = with_writer(image, volume_index, |writer| {
-        writer.delete(dir_block, entry_block)?;
+        // `w` is the question, `d` is not: the entry is going away only so
+        // the same name can carry new bytes. Honoured rather than overridden —
+        // putting an edit back into a file the Amiga would not let you write
+        // to is exactly what the bit is there to stop.
+        writer.ensure_overwritable(entry_block, OverwriteProtection::Honour)?;
+        writer.delete_with(dir_block, entry_block, DeleteProtection::Override)?;
         writer.add_file(dir_block, name, data, Default::default())
     })?;
 
@@ -1226,19 +1361,18 @@ pub fn run_copy_in_folder_with(
     let bytes = std::fs::metadata(image)?.len();
     match WriteStrategy::for_image(bytes) {
         WriteStrategy::WholeFile => {
-            let original = std::fs::read(image)?;
-            let mut device = VecDevice::new(original, geometry.block_size)?;
+            let mut session = WholeFileVolume::open(image, &entry)?;
             let report = {
-                let mut writer = VolumeWriter::open(&mut device, geometry, image, 0)?;
+                let mut writer = session.writer(geometry, image, entry.byte_offset)?;
                 copy_into_volume(&mut writer, parent, source, policy, progress)?
             };
             if report.cancelled && on_cancel == OnCancel::Abandon {
-                // Everything so far happened in `device`, which is a buffer.
-                // Returning here — before `commit_whole_file` — is what leaves
-                // the user's image exactly as it was (§57).
+                // Everything so far happened in a buffer. Returning here —
+                // before the session commits — is what leaves the user's image
+                // exactly as it was (§57).
                 return Err(CoreError::Cancelled);
             }
-            let backup = commit_whole_file(image, device.bytes())?;
+            let backup = session.commit(image)?;
             Ok((report, backup))
         }
         WriteStrategy::BlockJournal => {
@@ -1261,7 +1395,19 @@ pub fn run_copy_in_folder_with(
                 // Synced first, deliberately: the files that did land are
                 // complete, journalled operations and belong on disk. What is
                 // refused is calling this a success.
-                return Err(CoreError::Cancelled);
+                //
+                // And it says how many (ART-058). Cancelling here is not the
+                // same event as cancelling a whole-file write, where nothing
+                // survives at all, and telling the user the same word for both
+                // undersells what happened to their volume. Zero landed is the
+                // plain cancellation it has always been.
+                return Err(if report.files_copied > 0 {
+                    CoreError::CancelledPartway {
+                        files: report.files_copied as u64,
+                    }
+                } else {
+                    CoreError::Cancelled
+                });
             }
             Ok((report, None))
         }
@@ -1640,13 +1786,12 @@ fn run_copy_in_staged(
     let bytes = std::fs::metadata(image)?.len();
     match WriteStrategy::for_image(bytes) {
         WriteStrategy::WholeFile => {
-            let original = std::fs::read(image)?;
-            let mut device = VecDevice::new(original, geometry.block_size)?;
+            let mut session = WholeFileVolume::open(image, &entry)?;
             let report = {
-                let mut writer = VolumeWriter::open(&mut device, geometry, image, 0)?;
+                let mut writer = session.writer(geometry, image, entry.byte_offset)?;
                 copy_into_volume(&mut writer, parent, staged.source(), policy, progress)?
             };
-            let backup = commit_whole_file(image, device.bytes())?;
+            let backup = session.commit(image)?;
             Ok((report, backup))
         }
         WriteStrategy::BlockJournal => {
@@ -2529,7 +2674,7 @@ mod tests {
         assert_eq!(image.listing().len(), 5);
 
         let names: Vec<String> = (0..5).map(|i| format!("F{i}.txt")).collect();
-        let result = delete_many(&image.path, 0, None, &names).unwrap();
+        let result = delete_many(&image.path, 0, None, &names, DeleteProtection::Honour).unwrap();
 
         assert_eq!(result.deleted, 5);
         assert!(result.verified);
@@ -2576,7 +2721,7 @@ mod tests {
             "NotEmpty".to_string(),
             "Readme.txt".to_string(),
         ];
-        let err = delete_many(&image.path, 0, None, &names).unwrap_err();
+        let err = delete_many(&image.path, 0, None, &names, DeleteProtection::Honour).unwrap_err();
         let message = err.to_string();
         assert!(message.contains("NotEmpty"), "{message}");
 
@@ -2601,7 +2746,7 @@ mod tests {
         let before = image.bytes();
 
         let names = vec!["Real.txt".to_string(), "Ghost.txt".to_string()];
-        let err = delete_many(&image.path, 0, None, &names).unwrap_err();
+        let err = delete_many(&image.path, 0, None, &names, DeleteProtection::Honour).unwrap_err();
         assert!(err.to_string().contains("Ghost.txt"), "{err}");
 
         assert_eq!(image.bytes(), before);
@@ -2624,7 +2769,7 @@ mod tests {
         .unwrap();
 
         let names = vec!["A.txt".to_string(), "a.txt".to_string()];
-        let result = delete_many(&image.path, 0, None, &names).unwrap();
+        let result = delete_many(&image.path, 0, None, &names, DeleteProtection::Honour).unwrap();
 
         assert_eq!(result.deleted, 1, "one entry, named twice, deletes once");
         assert!(image.listing().is_empty());
@@ -2942,5 +3087,274 @@ mod tests {
         assert!(!dest.parent().unwrap().join("Escaped").exists());
 
         let _ = std::fs::remove_dir_all(&dest);
+    }
+
+    /// ART-058. Cancelling a copy into an image too large to hold in memory
+    /// leaves the files that already landed on the volume — correctly, since
+    /// each one is its own committed, journalled, verified operation — and the
+    /// user has to be told so. Both cases used to come back as plain
+    /// `Cancelled`, which reads as "nothing happened".
+    ///
+    /// The image is deliberately one block over
+    /// [`WHOLE_FILE_LIMIT_BYTES`](crate::core::volume::WHOLE_FILE_LIMIT_BYTES):
+    /// this behaviour belongs to the block-journal strategy, and the whole-file
+    /// one below must keep saying plain `Cancelled` because it really does
+    /// leave nothing behind.
+    #[test]
+    fn cancelling_a_large_copy_says_how_many_files_landed() {
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+        /// Cancels on the **second** report. The loop checks the flag, then
+        /// reports, then copies — so by the time the third entry's check runs,
+        /// two files are already on the volume. Anything landing at all is
+        /// what this test is about; the exact count is asserted as ">= 1".
+        struct StopAfterTwo {
+            reports: AtomicU64,
+            cancelled: AtomicBool,
+        }
+        impl ProgressSink for StopAfterTwo {
+            fn report(&self, _done: u64, _total: Option<u64>, _message: &str) {
+                if self.reports.fetch_add(1, Ordering::SeqCst) + 1 >= 2 {
+                    self.cancelled.store(true, Ordering::SeqCst);
+                }
+            }
+            fn is_cancelled(&self) -> bool {
+                self.cancelled.load(Ordering::SeqCst)
+            }
+        }
+
+        // 34 000 blocks × 512 = ~17.4 MB, past the 16 MiB whole-file limit.
+        let image = Image::new("cancel-partway", 34_000);
+
+        let source = image.dir.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        for index in 0..5 {
+            std::fs::write(source.join(format!("File{index}")), vec![b'x'; 64]).unwrap();
+        }
+
+        let sink = StopAfterTwo {
+            reports: AtomicU64::new(0),
+            cancelled: AtomicBool::new(false),
+        };
+        let folder = HostFolder::new(&source, false);
+        let err = run_copy_in_folder_with(
+            &image.path,
+            0,
+            0,
+            &folder,
+            OverwritePolicy::Skip,
+            OnCancel::Abandon,
+            &sink,
+        )
+        .expect_err("a cancelled copy must not come back as a success");
+
+        match err {
+            CoreError::CancelledPartway { files } => {
+                assert!(files >= 1, "at least one file had landed, not {files}");
+                // And it is on the volume, which is what the message claims.
+                assert_eq!(
+                    image.listing().len() as u64,
+                    files,
+                    "the count must be what is actually there"
+                );
+            }
+            other => panic!(
+                "expected CancelledPartway, got {other:?} ({})",
+                other.code()
+            ),
+        }
+    }
+
+    /// The other half: a small image is written whole and cancelling it leaves
+    /// **nothing**, so it must keep saying plain `Cancelled`. Claiming files
+    /// landed on a volume that is byte-for-byte what it was would be the same
+    /// defect pointing the other way.
+    #[test]
+    fn cancelling_a_small_copy_still_says_plain_cancelled() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct StopAtOnce(AtomicBool);
+        impl ProgressSink for StopAtOnce {
+            fn report(&self, _done: u64, _total: Option<u64>, _message: &str) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+            fn is_cancelled(&self) -> bool {
+                self.0.load(Ordering::SeqCst)
+            }
+        }
+
+        let image = Image::new("cancel-small", 1760);
+        let before = image.bytes();
+
+        let source = image.dir.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        for index in 0..3 {
+            std::fs::write(source.join(format!("File{index}")), vec![b'x'; 64]).unwrap();
+        }
+
+        let sink = StopAtOnce(AtomicBool::new(false));
+        let folder = HostFolder::new(&source, false);
+        let err = run_copy_in_folder_with(
+            &image.path,
+            0,
+            0,
+            &folder,
+            OverwritePolicy::Skip,
+            OnCancel::Abandon,
+            &sink,
+        )
+        .expect_err("a cancelled copy must not come back as a success");
+
+        assert_eq!(err.code(), "ART-CANCELLED", "{err}");
+        assert_eq!(
+            image.bytes(),
+            before,
+            "the whole-file strategy must leave the image exactly as it was"
+        );
+    }
+
+    // ---- ART-043: a partition inside a small image ----
+
+    /// A hard disk image small enough for the whole-file strategy, with one
+    /// formatted FFS partition inside it. This is the fixture ART-043 says
+    /// nothing in the suite constructed, which is exactly why it survived.
+    ///
+    /// 12 MB, under the 16 MiB whole-file limit on purpose: at hard-disk sizes
+    /// the block-journal strategy takes over and has always opened the volume
+    /// at its own offset. The bug lived only in the small case.
+    fn small_rdb_image(name: &str) -> (PathBuf, PathBuf) {
+        use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
+
+        let dir = scratch(name);
+        let path = dir.join("small.hdf");
+
+        crate::core::hdf::create_hdf(
+            &path,
+            12 * 1024 * 1024,
+            true,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::FfsStandard,
+                size_mb: 4,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 0,
+            }],
+            &[],
+        )
+        .unwrap();
+
+        // `create_hdf` writes the table; the partition inside it is still
+        // unformatted. Format it where it actually lives.
+        let found = scan_image(&path).unwrap();
+        let entry = &found.volumes[0];
+        assert!(
+            entry.byte_offset > 0,
+            "the point of this fixture is a partition that does not start at byte zero"
+        );
+
+        let blocks = (entry.byte_length / 512) as u32;
+        let volume = ffs_volume(blocks, DosType::new(*b"DOS\x01")).0;
+
+        use std::io::{Seek, SeekFrom, Write};
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.seek(SeekFrom::Start(entry.byte_offset)).unwrap();
+        file.write_all(&volume).unwrap();
+        drop(file);
+
+        (dir, path)
+    }
+
+    /// ART-043. The whole-file strategy chose itself by the *file's* size and
+    /// then handed the writer the whole file at offset zero, while the geometry
+    /// described a partition megabytes in. Volume-relative block numbers were
+    /// read and written as file-absolute: the root block landed in the middle
+    /// of the partition's data.
+    ///
+    /// Writing into it had to fail, one way or another, and it did — usually
+    /// with "block N is not a directory", because block 880 of the *file* is
+    /// not this volume's root. That it now succeeds is the fix.
+    #[test]
+    fn a_partition_inside_a_small_image_is_written_where_it_lives() {
+        let (dir, path) = small_rdb_image("art043-write");
+
+        let before = std::fs::read(&path).unwrap();
+        let entry = pick(&path, 0).unwrap();
+        let start = entry.byte_offset as usize;
+
+        let outcome = with_volume(&path, 0, |writer| {
+            writer.add_file(0, "Readme", b"hello from a partition", Default::default())
+        });
+        let (_, strategy, _) = outcome.expect("a small RDB image is written whole");
+        assert_eq!(
+            strategy,
+            WriteStrategy::WholeFile,
+            "12 MB is under the whole-file limit; this is the strategy the bug lived in"
+        );
+
+        // The file is really in the volume, read back through the volume's own
+        // geometry rather than from a byte offset this test worked out.
+        let names: Vec<String> = {
+            let found = scan_image(&path).unwrap();
+            let (device, geometry) = mount(&path, &found.volumes[0]).unwrap();
+            let set = crate::core::volume::write::layout::BlockSet::new(geometry.block_size);
+            crate::core::volume::write::dir::entries_in(
+                &device,
+                &set,
+                &geometry,
+                geometry.root_block,
+            )
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect()
+        };
+        assert!(names.iter().any(|n| n == "Readme"), "listing was {names:?}");
+
+        // And nothing outside the partition moved. This is the assertion the
+        // bug was about: the partition table sits in those first bytes, and a
+        // write that addressed the file instead of the volume would have gone
+        // straight through it.
+        let after = std::fs::read(&path).unwrap();
+        assert_eq!(
+            &after[..start],
+            &before[..start],
+            "everything before the partition — the RDB included — must be untouched"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other half: the gate that refuses a bad result must be asking about
+    /// the **volume**, not about the file. Pointed at the whole of an RDB
+    /// image it would ask whether a partition table is an AmigaDOS volume — it
+    /// is not — and refuse every write to a small hard disk image on that
+    /// ground, which is what it did.
+    #[test]
+    fn the_gate_asks_about_the_volume_not_the_file() {
+        let (dir, path) = small_rdb_image("art043-gate");
+        let whole = std::fs::read(&path).unwrap();
+        let entry = pick(&path, 0).unwrap();
+        let start = entry.byte_offset as usize;
+
+        // The file, whole: `validate_image` does not even reach its findings —
+        // it stops at the signature, which is `RDSK`. So the old code could
+        // never commit a small RDB image, and that is why this was a strategy
+        // that could not succeed rather than one that could corrupt.
+        assert!(
+            validate_volume(&path, &whole).is_err(),
+            "an RDB image is not a volume, and asking this of the file is the bug"
+        );
+
+        // The partition inside it, at its own span — not to the end of the
+        // file, which would hand the validator the slack after the partition
+        // as if it were part of the volume.
+        let end = start + entry.byte_length as usize;
+        assert!(
+            validate_volume(&path, &whole[start..end]).is_ok(),
+            "the partition inside it is a volume"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

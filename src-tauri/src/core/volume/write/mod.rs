@@ -51,7 +51,7 @@ use std::path::{Path, PathBuf};
 use crate::core::adf::bcpl::AmigaDate;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::volume::journal::Journalled;
-use crate::core::volume::{BlockDevice, BlockDeviceMut, VolumeGeometry};
+use crate::core::volume::{BlockDevice, BlockDeviceMut, DosType, VolumeGeometry};
 
 use bitmap::Allocator;
 use layout::{get_u32, BlockSet, CHECKSUM_OFFSET};
@@ -123,6 +123,56 @@ pub struct FileMeta {
     pub date: Option<AmigaDate>,
 }
 
+/// The `D` bit of `HSPARWED`, and it is stored **inverted** like the rest of
+/// `RWED`: a *clear* bit is the permission granted. So "protected against
+/// deletion" is the bit being **set**, which is the way round that catches
+/// everybody at least once.
+const DELETE_BIT: u32 = 1;
+
+/// Whether AmigaDOS would refuse to delete an entry with these bits.
+pub fn is_delete_protected(protection: u32) -> bool {
+    protection & DELETE_BIT != 0
+}
+
+/// The `W` bit, stored inverted for the same reason: **set** means the
+/// permission is withheld.
+const WRITE_BIT: u32 = 1 << 2;
+
+/// Whether AmigaDOS would refuse to write to an entry with these bits.
+pub fn is_write_protected(protection: u32) -> bool {
+    protection & WRITE_BIT != 0
+}
+
+/// What to do about an entry the Amiga itself protects from deletion.
+///
+/// Default is [`Honour`](Self::Honour), so a caller that has not thought about
+/// it gets the safe answer — the same shape `SAFE_CREATE` has for "creating
+/// never replaces".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DeleteProtection {
+    /// Refuse, naming the entry. What the bit is for.
+    #[default]
+    Honour,
+    /// Delete it anyway, because the user has been asked and said yes.
+    ///
+    /// Only ever passed by a path that has actually shown that question.
+    Override,
+}
+
+/// The same question for **replacing** an entry's contents (ART-094).
+///
+/// A separate type from [`DeleteProtection`] because they are separate bits
+/// and separate questions. Overwriting is governed by `w`; `d` governs
+/// deletion. ART's overwrite happens to be implemented as a delete followed by
+/// a create, and letting that implementation detail ask the *deletion*
+/// question would refuse a file the Amiga would happily let you write to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OverwriteProtection {
+    #[default]
+    Honour,
+    Override,
+}
+
 /// A volume open for writing.
 ///
 /// Holds the device and the geometry; each operation loads its own allocator,
@@ -159,6 +209,34 @@ impl<'a> VolumeWriter<'a> {
                     device.total_blocks()
                 ),
             });
+        }
+
+        // ART-049: the geometry and the disk must agree about the filesystem.
+        //
+        // Everything downstream reads the flavour off `geometry.dos_type` —
+        // OFS data blocks carry a 24-byte header and FFS ones do not, and
+        // `is_international()` decides how every name hashes. A caller that
+        // handed in a geometry for one filesystem against an image formatted
+        // as another would have written a disk that is internally coherent and
+        // wrong, and nothing at this boundary said so. `core/adf/create.rs`'s
+        // oracle hook is the live example: it formats with `FileSystemType::Ffs`
+        // and then names `DOS\x01` by hand, and the two agree only because
+        // whoever wrote it chose them to.
+        //
+        // Only a **real** signature counts. A bootblock of zeroes is an
+        // unformatted volume, which is a different complaint with its own
+        // failure further in; refusing it here would turn a confusing error
+        // into a confusing refusal without telling anybody more.
+        let mut boot = vec![0u8; geometry.block_size];
+        device.read_block(0, &mut boot)?;
+        let on_disk = DosType::new([boot[0], boot[1], boot[2], boot[3]]);
+        if on_disk.is_dos() && on_disk != geometry.dos_type {
+            return Err(CoreError::SafetyRefused(format!(
+                "this volume is formatted {} but the write was set up for {} — \
+                 refusing rather than writing blocks in the wrong layout",
+                on_disk.label(),
+                geometry.dos_type.label()
+            )));
         }
 
         Ok(Self {
@@ -484,12 +562,75 @@ impl<'a> VolumeWriter<'a> {
     /// job, one journalled operation per entry, so a cancelled batch leaves a
     /// consistent volume rather than a directory tree half gone (§2).
     pub fn delete(&mut self, parent: u32, entry_block: u32) -> CoreResult<WriteOutcome> {
+        self.delete_with(parent, entry_block, DeleteProtection::Honour)
+    }
+
+    /// Refuse to replace the contents of an entry the Amiga protects (ART-094).
+    ///
+    /// Called by every path that overwrites, **before** it starts. The delete
+    /// those paths then perform is an implementation detail of a replace, not
+    /// a deletion the user asked for, so they pass
+    /// [`DeleteProtection::Override`] for it — this is the question that
+    /// actually belongs to them.
+    pub fn ensure_overwritable(
+        &self,
+        entry_block: u32,
+        protection: OverwriteProtection,
+    ) -> CoreResult<()> {
+        if protection == OverwriteProtection::Override {
+            return Ok(());
+        }
+
+        let set = BlockSet::new(self.geometry.block_size);
+        let entry = set.view(self.device, entry_block)?;
+        let bits = layout::get_u32(&entry, layout::PROTECT_OFFSET)?;
+        if is_write_protected(bits) {
+            let name = dir::name_of(&entry);
+            // Named remedies the user actually has today. The copy dialog will
+            // grow the same third question the delete flow has, and then this
+            // can offer it — until it does, promising a confirmation that is
+            // not there would be worse than the refusal.
+            return Err(CoreError::InvalidInput(format!(
+                "'{name}' is write-protected on the Amiga. Clear its W bit in \
+                 Attributes, or copy it in under another name."
+            )));
+        }
+        Ok(())
+    }
+
+    /// The same, saying what to do about an entry the Amiga itself protects.
+    ///
+    /// See [`DeleteProtection`]. The two-argument [`delete`](Self::delete)
+    /// honours the bit, so a caller has to *ask* to ignore it rather than
+    /// ignore it by not thinking about it.
+    pub fn delete_with(
+        &mut self,
+        parent: u32,
+        entry_block: u32,
+        protection: DeleteProtection,
+    ) -> CoreResult<WriteOutcome> {
         let parent = self.resolve_directory(parent)?;
         let set = BlockSet::new(self.geometry.block_size);
 
         let entry = set.view(self.device, entry_block)?;
         let name = dir::name_of(&entry);
         let is_dir = dir::is_directory(&entry)?;
+
+        // ART-088. AmigaDOS refuses to delete an entry whose `d` bit is clear,
+        // and that is what the bit is *for* — WHDLoad slaves and system files
+        // routinely ship that way. The file manager asks a third time before
+        // getting here, but a confirmation on one screen is not a guard: until
+        // this existed, anything else that reached `delete` removed a
+        // protected entry without noticing.
+        if protection == DeleteProtection::Honour {
+            let bits = layout::get_u32(&entry, layout::PROTECT_OFFSET)?;
+            if is_delete_protected(bits) {
+                return Err(CoreError::InvalidInput(format!(
+                    "'{name}' is protected against deletion on the Amiga. \
+                     Clear its D bit, or confirm deleting it anyway."
+                )));
+            }
+        }
 
         if is_dir && !dir::entries_in(self.device, &set, &self.geometry, entry_block)?.is_empty() {
             return Err(CoreError::InvalidInput(format!(
@@ -959,6 +1100,62 @@ mod tests {
         Disk::new(name, 1760, *b"DOS\x01")
     }
 
+    /// ART-049. The geometry a writer is opened with and the filesystem the
+    /// image is actually formatted as have to be the same answer.
+    ///
+    /// Nothing constructed the disagreement before this test, which is why
+    /// nothing caught it. It is not academic: the flavour byte decides whether
+    /// data blocks carry OFS's 24-byte header and whether names hash in
+    /// international mode, so a writer told the wrong one produces a disk that
+    /// is internally consistent and unreadable to the machine it was made for.
+    #[test]
+    fn a_geometry_that_contradicts_the_bootblock_is_refused() {
+        // Formatted FFS…
+        let disk = floppy("dostype-mismatch");
+        let before = disk.bytes();
+
+        // …opened as OFS. Same size, same layout, one byte of difference.
+        let mut lying = disk.geometry;
+        lying.dos_type = DosType::new(*b"DOS\x00");
+
+        let mut device = disk.device();
+        // `let Err(..) else` rather than `expect_err`: the Ok side is a live
+        // writer holding the device, and it is not `Debug`.
+        let Err(err) = VolumeWriter::open(&mut device, lying, &disk.path, 0) else {
+            panic!("a writer must not open a volume it disagrees with about the filesystem");
+        };
+        assert_eq!(err.code(), "ART-SAFETY-REFUSED", "{err}");
+
+        drop(device);
+        assert_eq!(
+            disk.bytes(),
+            before,
+            "a refused open must leave the image byte-for-byte unchanged"
+        );
+    }
+
+    /// The other half of the same guard: an unformatted volume is **not** what
+    /// it is for. A bootblock of zeroes carries no signature to contradict, and
+    /// refusing it here would replace a confusing error further in with a
+    /// confusing refusal at the door.
+    #[test]
+    fn a_blank_bootblock_is_not_treated_as_a_contradiction() {
+        let dir = scratch("dostype-blank");
+        let path = dir.join("blank.adf");
+        let geometry = VolumeGeometry::floppy_dd(DosType::new(*b"DOS\x01"));
+        std::fs::write(&path, vec![0u8; geometry.total_bytes() as usize]).unwrap();
+
+        let mut device =
+            FileRegionMut::open(&path, 0, geometry.total_bytes(), geometry.block_size).unwrap();
+        assert!(
+            VolumeWriter::open(&mut device, geometry, &path, 0).is_ok(),
+            "an unformatted volume is a different complaint, not this one"
+        );
+
+        drop(device);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// `all_bytes()` is only sound for a volume small enough to hold entirely
     /// in memory, and every ADF command reaches it through `with_volume` with
     /// a `path` string the frontend chose. Pointed at a hard disk partition it
@@ -1084,6 +1281,163 @@ mod tests {
         let inside = dir::entries_in(&device, &set, &disk.geometry, folder).unwrap();
         assert_eq!(inside.len(), 1);
         assert_eq!(inside[0].name, "Inside.txt");
+    }
+
+    /// ART-088. AmigaDOS refuses to delete an entry whose `d` bit is set —
+    /// that is what the bit is for, and WHDLoad slaves and system files ship
+    /// that way. ART checked that a directory was empty and nothing else.
+    #[test]
+    fn a_delete_protected_entry_is_refused_by_name() {
+        let disk = floppy("delete-protected");
+
+        // `----RWED` with the D bit set: RWED are stored inverted, so a *set*
+        // bit is the permission withheld.
+        let protection = file::default_protection() | 1;
+        let added = with_writer(&disk, |w| {
+            w.add_file(
+                0,
+                "Turrican.slave",
+                b"slave bytes",
+                FileMeta {
+                    protection: Some(protection),
+                    date: None,
+                },
+            )
+        })
+        .unwrap();
+        let block = added.block.unwrap();
+
+        let err = with_writer(&disk, |w| w.delete(0, block)).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("Turrican.slave"), "{message}");
+
+        // And it is still there afterwards — a refusal that deleted it anyway
+        // would be the worst of both.
+        assert_eq!(listing(&disk).len(), 1);
+    }
+
+    #[test]
+    fn a_delete_protected_entry_goes_when_the_user_has_been_asked() {
+        // The override exists because the file manager *does* ask, a third
+        // time, and an answer nothing acts on is not an answer.
+        let disk = floppy("delete-protected-override");
+        let protection = file::default_protection() | 1;
+        let added = with_writer(&disk, |w| {
+            w.add_file(
+                0,
+                "Turrican.slave",
+                b"slave bytes",
+                FileMeta {
+                    protection: Some(protection),
+                    date: None,
+                },
+            )
+        })
+        .unwrap();
+
+        with_writer(&disk, |w| {
+            w.delete_with(0, added.block.unwrap(), DeleteProtection::Override)
+        })
+        .unwrap();
+        assert!(listing(&disk).is_empty());
+    }
+
+    #[test]
+    fn an_ordinary_file_still_deletes_without_being_asked_twice() {
+        // The guard must not make every delete a negotiation: the default
+        // protection grants D, so nothing changes for a normal file.
+        let disk = floppy("delete-unprotected");
+        let added = with_writer(&disk, |w| {
+            w.add_file(0, "Readme.txt", b"x", FileMeta::default())
+        })
+        .unwrap();
+
+        with_writer(&disk, |w| w.delete(0, added.block.unwrap())).unwrap();
+        assert!(listing(&disk).is_empty());
+    }
+
+    /// ART-094. AmigaDOS governs replacing a file's contents with `w`, and a
+    /// file with it withheld is one it will not let you write to.
+    #[test]
+    fn a_write_protected_entry_is_refused_before_it_is_replaced() {
+        let disk = floppy("overwrite-protected");
+        let protection = file::default_protection() | (1 << 2);
+        let added = with_writer(&disk, |w| {
+            w.add_file(
+                0,
+                "Startup-Sequence",
+                b"original",
+                FileMeta {
+                    protection: Some(protection),
+                    date: None,
+                },
+            )
+        })
+        .unwrap();
+        let block = added.block.unwrap();
+
+        let err = with_writer(&disk, |w| {
+            w.ensure_overwritable(block, OverwriteProtection::Honour)
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("Startup-Sequence"), "{err}");
+
+        // And the override is there for the path that has asked.
+        with_writer(&disk, |w| {
+            w.ensure_overwritable(block, OverwriteProtection::Override)
+        })
+        .unwrap();
+    }
+
+    /// The distinction the two guards exist to keep apart. A file that may be
+    /// written but not deleted is one an overwrite must still accept —
+    /// refusing it would be ART's delete-then-create showing through.
+    #[test]
+    fn a_delete_protected_file_may_still_be_overwritten() {
+        let disk = floppy("overwrite-vs-delete");
+        let protection = file::default_protection() | 1; // D withheld, W granted
+        let added = with_writer(&disk, |w| {
+            w.add_file(
+                0,
+                "Locked.txt",
+                b"original",
+                FileMeta {
+                    protection: Some(protection),
+                    date: None,
+                },
+            )
+        })
+        .unwrap();
+        let block = added.block.unwrap();
+
+        with_writer(&disk, |w| {
+            w.ensure_overwritable(block, OverwriteProtection::Honour)
+        })
+        .expect("the write bit is granted, so replacing it is allowed");
+
+        // …while deleting it outright is still refused.
+        assert!(with_writer(&disk, |w| w.delete(0, block)).is_err());
+    }
+
+    #[test]
+    fn the_write_bit_is_read_the_way_amigados_stores_it() {
+        assert!(!is_write_protected(file::default_protection()));
+        assert!(is_write_protected(file::default_protection() | (1 << 2)));
+        assert!(
+            !is_write_protected(file::default_protection() | 1),
+            "the D bit is not the W bit"
+        );
+    }
+
+    #[test]
+    fn the_delete_bit_is_read_the_way_amigados_stores_it() {
+        // Inverted, like the rest of RWED — a *set* bit withholds the
+        // permission. Getting this backwards would refuse every ordinary
+        // delete and allow every protected one, which is the failure worth
+        // one explicit test.
+        assert!(!is_delete_protected(file::default_protection()));
+        assert!(is_delete_protected(file::default_protection() | 1));
+        assert!(!is_delete_protected(0b1111_0000), "only the D bit counts");
     }
 
     #[test]

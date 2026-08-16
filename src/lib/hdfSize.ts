@@ -86,20 +86,18 @@ export function largestPartitionMb(totalMb: number, template: HdfTemplate): numb
 }
 
 /**
- * What is worth saying about this combination before the image is made.
+ * What is worth saying about this **size** before the image is made.
  *
- * Two things, and both are ART being honest about its own limits rather than
- * about the user's:
+ * One thing: a partition past 4 GB needs TD64/NSD, which standard FFS does not
+ * issue. A warning, not a refusal — the image may be for an emulator or for a
+ * machine that has both.
  *
- * - **PFS3 and SFS are a DosType, not a filesystem, in an image ART writes.**
- *   `create_hdf` writes RDSK and PART blocks and nothing else — no root block,
- *   no bitmap, and (deliberately, ART-025) no FSHD/LSEG driver in the RDB. An
- *   Amiga will therefore not even see a PDS\3 partition until the driver is
- *   put there by something else. Saying so in the dialog is not a fix
- *   (ART-084 is), but it is the difference between a limitation and a lie.
- * - **A partition past 4 GB** needs TD64/NSD, which standard FFS does not
- *   issue. A warning, not a refusal: the image may be for an emulator or a
- *   machine that has both.
+ * PFS3 and SFS are exempt, not silently but genuinely: they address large
+ * disks, which is most of why anyone chooses them. The other question they
+ * raise — whether the disk carries the driver at all — used to be answered
+ * here as a flat "it does not" (ART-084). It no longer belongs here: the
+ * wizard can embed one now, so the answer depends on what the user picked,
+ * and `@/lib/fsDriver` is what knows.
  */
 export function hdfSizeWarning(
   totalMb: number,
@@ -107,7 +105,7 @@ export function hdfSizeWarning(
   fs: HdfFsId
 ): Phrase | null {
   if (fs === "pfs3directscsi" || fs === "sfs0") {
-    return { key: "hardDisk.modal.warnNoDriver" };
+    return null;
   }
 
   const largest = largestPartitionMb(totalMb, template);

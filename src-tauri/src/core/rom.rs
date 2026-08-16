@@ -183,6 +183,39 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
         });
     }
 
+    // No catalogued dump matched. **Ask the ROM** (ART-104): from 2.0 onwards
+    // it states its own version and revision, so a dump nobody catalogued is
+    // still named rather than called generic.
+    //
+    // **And that is all it says.** The first version of this looked the
+    // revision up in `KNOWN_ROMS` and borrowed that entry's machines —
+    // measuring three real 3.1 dumps killed it: `40.68` is stated by files
+    // whose names claim A500/A600/A2000, A1200 *and* A4000, with three
+    // different SHA-256s. The revision is the exec version, shared across the
+    // per-machine builds; only the hash tells them apart. Borrowing the
+    // machines would have told an A500 owner their ROM was for an A1200 —
+    // worse than the "generic" answer it replaced.
+    if let Some((major, minor)) = stated_version(&bytes) {
+        let revision = format!("{major}.{minor:03}");
+        return Ok(RomInfo {
+            name: match version_name(major) {
+                Some(version) => format!("Kickstart {version} ({revision})"),
+                None => format!("Kickstart {revision}"),
+            },
+            version: version_name(major).unwrap_or("Custom").to_string(),
+            revision,
+            size_bytes,
+            sha256,
+            crc32,
+            is_cloanto,
+            is_aros: false,
+            checksum_valid,
+            // Empty on purpose: the ROM said its version, not its machine.
+            compatible_models: Vec::new(),
+            file_path: path.to_string_lossy().to_string(),
+        });
+    }
+
     // Check if it's an AROS open-source ROM
     let is_aros = String::from_utf8_lossy(&bytes).contains("AROS")
         || path.to_string_lossy().to_lowercase().contains("aros");
@@ -275,6 +308,58 @@ pub fn scan_rom_directory(dir: &Path) -> CoreResult<Vec<RomInfo>> {
 }
 
 /// Strip 11-byte Cloanto encryption prefix (`AMIROMTYPE1`).
+/// The version and revision a Kickstart states in its own header (ART-104).
+///
+/// From Kickstart 2.0 onwards a ROM carries them as two big-endian words at
+/// offset 12 — `40 00 44` for the A1200's 3.1, which reads 40.68. Older ROMs
+/// have something else there (`Kickstart 1.1.rom` reads `65535.65535`), so a
+/// value outside the range Kickstart actually used is not believed.
+///
+/// **Why this exists.** `KNOWN_ROMS` names an exact *dump* by its SHA-256, and
+/// several dumps of the same ROM circulate — the one on this project's own
+/// machine is not the one the table carries, so a perfectly ordinary A1200
+/// Kickstart came back as *Generic Amiga 512KB ROM* and nothing could say
+/// which machine it suited. The ROM says what it is; asking it is cheaper than
+/// cataloguing every dump anybody made.
+pub fn stated_version(bytes: &[u8]) -> Option<(u16, u16)> {
+    /// Kickstart majors in the wild: 33 (1.2) through 47 (3.2.x), with room
+    /// above for a release nobody has shipped yet. Below 33 the field is not a
+    /// version at all.
+    const PLAUSIBLE: std::ops::RangeInclusive<u16> = 33..=55;
+
+    if bytes.len() < 16 {
+        return None;
+    }
+    let major = u16::from_be_bytes([bytes[12], bytes[13]]);
+    let minor = u16::from_be_bytes([bytes[14], bytes[15]]);
+
+    // 0xFFFF is what a pre-2.0 ROM has there, and a minor that large is not a
+    // revision either.
+    if !PLAUSIBLE.contains(&major) || minor == 0xFFFF {
+        return None;
+    }
+    Some((major, minor))
+}
+
+/// The marketing version a Kickstart major belongs to.
+///
+/// Only the ones Commodore shipped; an unknown major is reported by its
+/// numbers rather than given a name ART made up.
+fn version_name(major: u16) -> Option<&'static str> {
+    Some(match major {
+        33 => "1.2",
+        34 => "1.3",
+        36 => "2.0",
+        37 => "2.04",
+        39 => "3.0",
+        40 => "3.1",
+        45 => "3.1.4",
+        46 => "3.2",
+        47 => "3.2.x",
+        _ => return None,
+    })
+}
+
 pub fn strip_cloanto_header(bytes: &[u8]) -> Vec<u8> {
     if bytes.starts_with(CLOANTO_HEADER) && bytes.len() > 11 {
         bytes[11..].to_vec()
@@ -325,6 +410,146 @@ mod tests {
         raw.extend_from_slice(&[0x11, 0x22, 0x33, 0x44]);
         let stripped = strip_cloanto_header(&raw);
         assert_eq!(stripped, vec![0x11, 0x22, 0x33, 0x44]);
+    }
+
+    /// A synthetic ROM that states `major.minor` where a real one does.
+    fn rom_stating(major: u16, minor: u16, size: usize) -> Vec<u8> {
+        let mut bytes = vec![0u8; size];
+        bytes[0..2].copy_from_slice(&0x1114u16.to_be_bytes());
+        bytes[12..14].copy_from_slice(&major.to_be_bytes());
+        bytes[14..16].copy_from_slice(&minor.to_be_bytes());
+        bytes
+    }
+
+    fn write(dir: &std::path::Path, name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("art-rom-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// **A Kickstart says what it is.** From 2.0 onwards the version and
+    /// revision are two big-endian words at offset 12, and reading them is how
+    /// a dump nobody catalogued can still be named.
+    #[test]
+    fn a_rom_states_its_own_version() {
+        assert_eq!(
+            stated_version(&rom_stating(40, 68, 524_288)),
+            Some((40, 68))
+        );
+        assert_eq!(
+            stated_version(&rom_stating(39, 106, 524_288)),
+            Some((39, 106))
+        );
+    }
+
+    /// **ART-104.** A Kickstart that hashes to a dump `KNOWN_ROMS` does not
+    /// carry used to come back as *Generic Amiga 512KB ROM*. It states its own
+    /// version and revision, so it is named from those.
+    #[test]
+    fn a_dump_art_has_not_catalogued_is_named_from_the_revision_it_states() {
+        let dir = scratch("uncatalogued");
+        let path = write(&dir, "mystery.rom", &rom_stating(40, 68, 524_288));
+
+        let info = identify_rom(&path).unwrap();
+
+        assert_eq!(info.version, "3.1", "{info:?}");
+        assert_eq!(info.revision, "40.068");
+        assert_eq!(info.name, "Kickstart 3.1 (40.068)");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **The revision does not name a machine, and this is what stopped the
+    /// first version of the fix from shipping.**
+    ///
+    /// Measured on three real dumps in this project's own collection: files
+    /// whose names claim A500/A600/A2000, A1200 and A4000 all state `40.68`
+    /// and have three different SHA-256s. The revision is the exec version,
+    /// shared across the per-machine builds; only the hash tells them apart.
+    /// Borrowing a same-revision table entry's machines — which the first
+    /// implementation did — would tell an A500 owner their ROM is for an
+    /// A1200, and `rom_suits` would then call a perfectly good ROM wrong.
+    #[test]
+    fn a_rom_named_from_its_revision_claims_no_machine() {
+        let dir = scratch("no-machine");
+        let path = write(&dir, "mystery.rom", &rom_stating(40, 68, 524_288));
+
+        let info = identify_rom(&path).unwrap();
+
+        assert!(
+            info.compatible_models.is_empty(),
+            "the ROM said its version, not its machine: {:?}",
+            info.compatible_models
+        );
+        assert!(
+            KNOWN_ROMS.iter().any(|k| k.revision == "40.068"),
+            "and the table does carry that revision — the point is that it is \
+             not consulted for the machine"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A pre-2.0 ROM has no version there — `Kickstart 1.1.rom` reads
+    /// `65535.65535` — so nothing is claimed and the size-based fallback
+    /// stands.
+    #[test]
+    fn a_rom_that_states_no_version_is_not_guessed_at() {
+        let dir = scratch("silent");
+        let path = write(&dir, "old.rom", &rom_stating(0xFFFF, 0xFFFF, 524_288));
+
+        assert_eq!(stated_version(&rom_stating(0xFFFF, 0xFFFF, 524_288)), None);
+        let info = identify_rom(&path).unwrap();
+        assert_eq!(info.version, "Custom", "{info:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two bytes that happen to sit at offset 12 are not a version. Only a
+    /// range Kickstart actually used is believed.
+    #[test]
+    fn an_implausible_version_is_not_believed() {
+        assert_eq!(stated_version(&rom_stating(0, 0, 524_288)), None);
+        assert_eq!(stated_version(&rom_stating(7, 1, 524_288)), None);
+        assert_eq!(stated_version(&rom_stating(900, 1, 524_288)), None);
+    }
+
+    /// A revision the table does not know is still better than "generic": the
+    /// ROM said what it is, and saying so beats a shrug.
+    #[test]
+    fn an_unknown_revision_is_still_reported_as_what_it_says() {
+        let dir = scratch("unknown-rev");
+        let path = write(&dir, "future.rom", &rom_stating(52, 3, 524_288));
+
+        let info = identify_rom(&path).unwrap();
+
+        assert_eq!(info.revision, "52.003", "{info:?}");
+        assert_eq!(info.name, "Kickstart 52.003", "no version name is invented");
+        assert!(info.compatible_models.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The exact-hash answer still wins where there is one: it names the dump,
+    /// not only the revision.
+    #[test]
+    fn a_catalogued_dump_is_still_named_from_its_hash() {
+        // Only that the lookup is tried first — a real dump's bytes are not
+        // ART's to ship, so this asserts the order rather than a hash.
+        let stated = rom_stating(40, 68, 524_288);
+        assert!(
+            KNOWN_ROMS
+                .iter()
+                .all(|known| !known.sha256.eq_ignore_ascii_case(&sha256_bytes(&stated))),
+            "the synthetic ROM must not collide with a catalogued dump"
+        );
     }
 
     #[test]

@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use super::rdb::{
-    create_rdb_layout, find_rdb_location, parse_rdb, AmigaHardDiskFs, ParsedFileSystem,
-    ParsedPartition, PartitionSpec, BLOCK_SIZE,
+    create_rdb_layout, find_rdb_location, parse_rdb, AmigaHardDiskFs, FileSystemSpec,
+    ParsedFileSystem, ParsedPartition, PartitionSpec, BLOCK_SIZE,
 };
 use crate::core::error::{CoreError, CoreResult};
 
@@ -131,6 +131,10 @@ pub fn open_hdf(path: &Path) -> CoreResult<HdfInfo> {
         surfaces: 1,
         blocks_per_track: 1,
         reserved: 2,
+        // A bare volume has no RDB, so no driver geometry was ever
+        // stated for it. Zero here means "unstated", not "forbidden".
+        max_transfer: 0,
+        mask: 0,
     };
 
     Ok(HdfInfo {
@@ -168,6 +172,7 @@ pub fn create_hdf(
     total_bytes: u64,
     is_rdb: bool,
     partitions: &[PartitionSpec],
+    file_systems: &[FileSystemSpec],
 ) -> CoreResult<HdfInfo> {
     use std::io::Write as _;
 
@@ -180,7 +185,7 @@ pub fn create_hdf(
 
     // Work out the leading blocks and the final size before touching the disk.
     let (leading_blocks, final_size) = if is_rdb {
-        let layout = create_rdb_layout(total_bytes, partitions)?;
+        let layout = create_rdb_layout(total_bytes, partitions, file_systems)?;
         (layout.blocks, layout.total_size)
     } else {
         if total_bytes < MIN_PLAIN_BYTES {
@@ -241,7 +246,7 @@ mod tests {
             num_buffers: 100,
         }];
 
-        let info = create_hdf(&hdf_path, 200 * 1024 * 1024, true, &specs).unwrap();
+        let info = create_hdf(&hdf_path, 200 * 1024 * 1024, true, &specs, &[]).unwrap();
         assert_eq!(info.hdf_type, HdfType::Rdb);
         assert_eq!(info.partitions.len(), 1);
         assert_eq!(info.partitions[0].drive_name, "DH0");
@@ -270,7 +275,7 @@ mod tests {
         let target = dir.join("Workbench.hdf");
         std::fs::write(&target, b"irreplaceable user data").unwrap();
 
-        let err = create_hdf(&target, 100 * 1024 * 1024, false, &[]).unwrap_err();
+        let err = create_hdf(&target, 100 * 1024 * 1024, false, &[], &[]).unwrap_err();
         assert!(matches!(err, CoreError::SafetyRefused(_)), "got {err:?}");
         assert_eq!(
             std::fs::read(&target).unwrap(),
@@ -298,7 +303,7 @@ mod tests {
             num_buffers: 100,
         }];
 
-        let info = create_hdf(&target, 4 * 1024 * 1024 * 1024, true, &specs).unwrap();
+        let info = create_hdf(&target, 4 * 1024 * 1024 * 1024, true, &specs, &[]).unwrap();
         assert!(info.total_bytes >= 4 * 1024 * 1024 * 1024);
         assert_eq!(info.partitions.len(), 1);
         assert!(info.rdb_checksum_valid);
@@ -312,11 +317,11 @@ mod tests {
     fn absurdly_small_sizes_error_rather_than_panic() {
         let dir = scratch("tiny");
 
-        let err = create_hdf(&dir.join("a.hdf"), 2, false, &[]).unwrap_err();
+        let err = create_hdf(&dir.join("a.hdf"), 2, false, &[], &[]).unwrap_err();
         assert!(matches!(err, CoreError::InvalidInput(_)), "got {err:?}");
 
         // The RDB path has its own floor.
-        assert!(create_hdf(&dir.join("b.hdf"), 1024, true, &[]).is_err());
+        assert!(create_hdf(&dir.join("b.hdf"), 1024, true, &[], &[]).is_err());
 
         std::fs::remove_dir_all(&dir).ok();
     }

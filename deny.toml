@@ -33,6 +33,12 @@ allow = [
   # attribution requirement beyond the notice. Added when a lockfile refresh
   # brought webpki-roots 1.0.x in and this check started failing on it.
   "CDLA-Permissive-2.0",
+  # `libpfs3` — the PFS3 implementation ART writes real PiStorm cards with.
+  # LGPL-3.0 is compatible with ART's GPL-3.0-or-later. Noted against the
+  # preference above: this is a weak-copyleft dependency inside `core/`, so a
+  # future standalone `core` crate would carry it. Accepted deliberately —
+  # the alternative was a second filesystem writer of ART's own (SD-4).
+  "LGPL-3.0-or-later",
 ]
 # Confidence threshold for license detection.
 confidence-threshold = 0.8

@@ -32,6 +32,50 @@ import {
   type CopyReport,
 } from "@/lib/volumeWrite";
 import { describeVerdict, describeOutcome, type WhdloadOutcome, type WhdloadVerdict } from "@/lib/whdload";
+import {
+  buildBlocker,
+  defaultPartition,
+  findingPhrase,
+  healthCheckPhrase,
+  healthVerdict,
+  manualStepPhrase,
+  rolePhrase,
+  warningPhrase,
+  type CardBuildPlan,
+  type CardBuildRequest,
+  type CardBuildWarning,
+  type HealthCheck,
+  type ManifestFinding,
+  type CardRole,
+  type ManualStep,
+} from "@/lib/cardBuild";
+import {
+  formatCount,
+  preloadBlocker,
+  stepPhrase,
+  type PartitionPick,
+  type PreloadPlan,
+  type PreloadStep,
+} from "@/lib/preload";
+import {
+  kindPhrase,
+  layoutBlocker,
+  refusalPhrase,
+  type ItemKind,
+  type LayoutPlan,
+  type RefusalReason,
+} from "@/lib/layout";
+import {
+  DEFAULT_EMU68_OPTIONS,
+  DEFAULT_FIRMWARE_CONFIG,
+  DEFAULT_HARDWARE,
+} from "@/lib/pistorm";
+import {
+  osinstallBlocker,
+  refusalPhrase as osinstallRefusalPhrase,
+  type PlanResult,
+  type RefusalReason as OsInstallRefusalReason,
+} from "@/lib/osinstall";
 
 /** Whether `dotted` (e.g. "whdload.outcome.installed") names a string leaf. */
 function isLeafKey(dotted: string): boolean {
@@ -196,12 +240,19 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     const jobs: JobProgress[] = [
       { ...base, state: { state: "running" } },
       { ...base, state: { state: "finished" } },
-      { ...base, state: { state: "cancelled" } },
+      { ...base, state: { state: "cancelled", files_landed: null } },
+      // Both branches of the cancelled case (ART-058): nothing landed, and
+      // some did. The second resolves through i18next's plural suffixes, so
+      // `isLeafKey` is asked about `…_one`/`…_other` rather than the bare key.
+      { ...base, state: { state: "cancelled", files_landed: 1 } },
+      { ...base, state: { state: "cancelled", files_landed: 12 } },
       { ...base, state: { state: "failed", error_code: "ART-001", message: "x" } },
     ];
     for (const job of jobs) {
       const phrase = jobStatusLabel(job);
-      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+      // `resolvesAtRuntime`, not `isLeafKey`: the partway case carries a
+      // `{{count}}` and lives in the catalogue only as `_one`/`_other`.
+      expect(resolvesAtRuntime(phrase.key), phrase.key).toBe(true);
     }
   });
 
@@ -249,7 +300,31 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     ];
     for (const age_weeks of ageWeeks) {
       const phrase = formatAge({ ...base, age_weeks });
-      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+      // `resolvesAtRuntime`, not `isLeafKey`: two of these branches are
+      // pluralised, so the catalogue holds `_one`/`_other` and no bare key
+      // (ART-061).
+      expect(resolvesAtRuntime(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("formatAge: the pluralised branches carry the count i18next selects on", () => {
+    // The half a key check cannot see. i18next picks the plural form from
+    // `count` and from nothing else, so a phrase that says `{ n }` renders the
+    // `_other` form at every number — which is the "1 weeks ago" this fixed.
+    const base: Omit<PackageMeta, "age_weeks"> = {
+      reference: { provider: "aminet", path: "util/libs/AmiSSL.lha" },
+      name: "AmiSSL",
+      directory: "util/libs",
+      size_bytes: 1024,
+      short: "AmiSSL",
+      version: null,
+      requires: [],
+      author: null,
+      distribution: null,
+    };
+    for (const age_weeks of [1, 3, 20, 40]) {
+      const phrase = formatAge({ ...base, age_weeks });
+      expect(phrase.params, phrase.key).toHaveProperty("count");
     }
   });
 
@@ -355,5 +430,324 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     const short = planShortfall({ ...base, blocks_needed: 30 });
     expect(short).not.toBeNull();
     expect(isLeafKey(short!.key), short!.key).toBe(true);
+  });
+
+  it("warningPhrase: every CardBuildWarning variant resolves", () => {
+    const warnings: CardBuildWarning[] = [
+      { kind: "no-kickstart" },
+      { kind: "rom-unrecognised" },
+      { kind: "rom-machine-unknown", rom: "Kickstart 3.1 (40.068)" },
+      { kind: "rom-wrong-machine", rom: "Kickstart 3.1 (A600)" },
+      { kind: "volumes-unformatted" },
+    ];
+    for (const warning of warnings) {
+      const phrase = warningPhrase(warning);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("findingPhrase: every ManifestFinding variant resolves", () => {
+    const findings: ManifestFinding[] = [
+      { kind: "schema-too-new", found: 2, understood: 1 },
+      { kind: "size-changed", expected: 1, found: 2 },
+      { kind: "partition-table-changed" },
+      { kind: "area-count-changed", expected: 1, found: 2 },
+      { kind: "area-moved", area: 0, expected: 1, found: 2 },
+      { kind: "area-resized", area: 0, expected: 1, found: 2 },
+      { kind: "rdb-changed", area: 0 },
+      { kind: "partition-count-changed", area: 0, expected: 1, found: 2 },
+      { kind: "partition-changed", area: 0, name: "SDH0" },
+    ];
+    for (const finding of findings) {
+      const phrase = findingPhrase(finding);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("healthCheckPhrase: every HealthCheck variant resolves", () => {
+    const checks: HealthCheck[] = [
+      { kind: "boot-partition-first" },
+      { kind: "boot-partition-aligned", lba: 2048 },
+      { kind: "amiga-area-count", count: 1 },
+      { kind: "areas-aligned" },
+      { kind: "nothing-overlaps" },
+      { kind: "everything-inside-the-image" },
+      { kind: "area-has-rdb", area: 0 },
+      { kind: "area-rdb-checksum", area: 0 },
+      { kind: "every-partition-can-mount", unmountable: 0 },
+      { kind: "manifest-agrees", findings: [] },
+      { kind: "boot-file", role: "config", name: "config.txt" },
+      { kind: "boot-file", role: "cmdline", name: "cmdline.txt" },
+      { kind: "boot-file", role: "kernel", name: "Emu68-pistorm.gz" },
+      { kind: "boot-file", role: "kickstart", name: "kick.rom" },
+    ];
+    for (const check of checks) {
+      const phrase = healthCheckPhrase(check);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("manualStepPhrase and healthVerdict resolve", () => {
+    const steps: ManualStep[] = [
+      { kind: "flash-the-card" },
+      { kind: "hdmi-before-power" },
+      { kind: "pi-model-matches", pi: "pi3-a-plus" },
+      { kind: "volumes-need-formatting", count: 1 },
+    ];
+    for (const step of steps) {
+      expect(resolvesAtRuntime(manualStepPhrase(step).key), step.kind).toBe(true);
+    }
+    const pass = { check: { kind: "areas-aligned" }, state: "pass" } as const;
+    const gap = { check: { kind: "areas-aligned" }, state: "not-checked" } as const;
+    const bad = { check: { kind: "areas-aligned" }, state: "fail" } as const;
+    for (const items of [[pass], [pass, gap], [bad]]) {
+      const verdict = healthVerdict({ items: [...items], by_hand: [] });
+      expect(resolvesAtRuntime(verdict.key), verdict.key).toBe(true);
+    }
+  });
+
+  it("rolePhrase: every CardRole variant resolves", () => {
+    const roles: CardRole[] = [
+      { kind: "emu68-archive", means: [{ variant: "classic", line: "stable" }] },
+      { kind: "kickstart" },
+      { kind: "distro-config", name: "caffeineos" },
+      { kind: "for-an-amiga-volume", what: "archive" },
+      { kind: "no-place-on-a-card", what: "commodore-8bit" },
+    ];
+    for (const role of roles) {
+      const phrase = rolePhrase(role);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("buildBlocker: every reason a card cannot be built resolves", () => {
+    const request: CardBuildRequest = {
+      archive: "Emu68-pistorm.zip",
+      kickstart: null,
+      dest: "card.img",
+      total_bytes: 2 * 1024 * 1024 * 1024,
+      boot_bytes: 0,
+      label: "ART CARD",
+      hardware: DEFAULT_HARDWARE,
+      line: "stable",
+      firmware: DEFAULT_FIRMWARE_CONFIG,
+      options: DEFAULT_EMU68_OPTIONS,
+      partitions: [defaultPartition()],
+    };
+    const plan = {
+      layout: { total_sectors: 0, boot: {}, areas: [] },
+      boot_files: [],
+      kernel_file: "Emu68-pistorm.gz",
+      kickstart_file: null,
+      rom: null,
+      warnings: [],
+      dest_exists: false,
+    } as unknown as CardBuildPlan;
+
+    const blockers = [
+      buildBlocker({ ...request, archive: "" }, plan),
+      buildBlocker({ ...request, dest: "" }, plan),
+      buildBlocker({ ...request, partitions: [] }, plan),
+      buildBlocker(request, null),
+      buildBlocker(request, { ...plan, dest_exists: true }),
+    ];
+    for (const blocker of blockers) {
+      expect(blocker).not.toBeNull();
+      expect(isLeafKey(blocker!.key), blocker!.key).toBe(true);
+    }
+    expect(buildBlocker(request, plan)).toBeNull();
+  });
+
+  it("stepPhrase: every PreloadStep variant resolves", () => {
+    const steps: PreloadStep[] = [
+      {
+        step: "import-filesystem",
+        slot: 2,
+        driver: "pfs3aio.lha",
+        dostype: "PDS3",
+        name: "pfs3aio",
+      },
+      { step: "format-partition", slot: 2, index: 1, drive_name: "DH0", volume_name: "Work" },
+      { step: "copy-in", slot: 2, drive_name: "DH0", source: "E:\\tree" },
+    ];
+    for (const step of steps) {
+      expect(resolvesAtRuntime(stepPhrase(step).key), step.step).toBe(true);
+    }
+    expect(formatCount({ image: "card.img", steps })).toBe(1);
+  });
+
+  it("preloadBlocker: every reason a preload cannot run resolves", () => {
+    const pick: PartitionPick = {
+      area: 1,
+      index: 1,
+      driveName: "DH0",
+      chosen: true,
+      volumeName: "Work",
+      content: null,
+    };
+    const plan: PreloadPlan = {
+      image: "card.img",
+      steps: [
+        { step: "format-partition", slot: 2, index: 1, drive_name: "DH0", volume_name: "Work" },
+      ],
+    };
+    const ready = { image: "card.img", toolPath: "hst.imager.exe", picks: [pick], plan };
+
+    const blockers = [
+      preloadBlocker({ ...ready, image: null }),
+      preloadBlocker({ ...ready, toolPath: null }),
+      preloadBlocker({ ...ready, picks: [{ ...pick, chosen: false }] }),
+      preloadBlocker({ ...ready, picks: [{ ...pick, volumeName: " " }] }),
+      preloadBlocker({ ...ready, picks: [{ ...pick, volumeName: "Work:" }] }),
+      preloadBlocker({ ...ready, picks: [{ ...pick, volumeName: "W".repeat(31) }] }),
+      preloadBlocker({ ...ready, plan: null }),
+    ];
+    for (const blocker of blockers) {
+      expect(blocker).not.toBeNull();
+      expect(isLeafKey(blocker!.key), blocker!.key).toBe(true);
+    }
+    expect(preloadBlocker(ready)).toBeNull();
+  });
+
+  it("kindPhrase: every ItemKind variant resolves", () => {
+    const kinds: ItemKind[] = [
+      { kind: "whdload-archive", name: "Turrican" },
+      { kind: "whdload-drawer", name: "Turrican" },
+      { kind: "floppy-image" },
+      { kind: "hard-disk-image" },
+      { kind: "optical-image" },
+      { kind: "archive" },
+      { kind: "unknown" },
+      { kind: "rom" },
+      { kind: "commodore8-bit" },
+    ];
+    for (const kind of kinds) {
+      expect(resolvesAtRuntime(kindPhrase(kind).key), kind.kind).toBe(true);
+    }
+  });
+
+  it("refusalPhrase: every RefusalReason variant resolves", () => {
+    const reasons: RefusalReason[] = ["belongs-on-boot-partition", "no-place-on-an-amiga-volume"];
+    for (const reason of reasons) {
+      expect(resolvesAtRuntime(refusalPhrase(reason).key), reason).toBe(true);
+    }
+  });
+
+  it("layoutBlocker: every reason a layout cannot be applied resolves", () => {
+    const plan: LayoutPlan = {
+      root: "E:\\staging",
+      items: [
+        {
+          source: "E:\\a\\Turrican.lha",
+          kind: { kind: "whdload-archive", name: "Turrican" },
+          destination: "Games/Turrican",
+          placement: "unpack-whdload",
+          bytes: 100,
+        },
+      ],
+      refused: [],
+      collisions: [],
+      bytes: 100,
+    };
+    const ready = { root: "E:\\staging", paths: ["E:\\a"], plan };
+
+    const blockers = [
+      layoutBlocker({ ...ready, root: null }),
+      layoutBlocker({ ...ready, paths: [] }),
+      layoutBlocker({ ...ready, plan: null }),
+      layoutBlocker({ ...ready, plan: { ...plan, items: [] } }),
+      layoutBlocker({
+        ...ready,
+        plan: { ...plan, collisions: [{ destination: "Games/Turrican", sources: ["a", "b"] }] },
+      }),
+    ];
+    for (const blocker of blockers) {
+      expect(blocker).not.toBeNull();
+      expect(isLeafKey(blocker!.key), blocker!.key).toBe(true);
+    }
+    expect(layoutBlocker(ready)).toBeNull();
+  });
+
+  // Fix round 1 (Task 12 review): `osinstallBlocker` and `refusalPhrase`
+  // (`src/lib/osinstall.ts`) emitted keys under `osinstall.*` that were in
+  // neither catalogue and never registered here — `pnpm test` passed only
+  // because nothing knew these mappers existed.
+
+  it("osinstallBlocker: every reason an install cannot run resolves", () => {
+    const planned: PlanResult = {
+      outcome: "planned",
+      plan: {
+        release: "AmigaOS 3.2",
+        items: [
+          {
+            component: "workbench-base",
+            media: "Workbench3.2",
+            from: "C",
+            to: "C",
+            isDir: true,
+            bytes: 0,
+          },
+        ],
+        refusals: [],
+        totalBytes: 0,
+        componentsOn: ["workbench-base"],
+        mediaPaths: { Workbench3_2: "E:\\wb.adf" },
+        userStartup: [],
+      },
+    };
+    const ready = { mediaFolder: "E:\\media", destination: "E:\\dist", plan: planned };
+
+    const blockers = [
+      osinstallBlocker({ ...ready, mediaFolder: null }),
+      osinstallBlocker({ ...ready, destination: null }),
+      osinstallBlocker({ ...ready, plan: null }),
+      osinstallBlocker({
+        ...ready,
+        plan: { outcome: "folder-unreadable", folder: "E:\\media" },
+      }),
+      osinstallBlocker({
+        ...ready,
+        plan: {
+          ...planned,
+          plan: { ...planned.plan, refusals: [{ refusal: "rom-unknown" }] },
+        },
+      }),
+      osinstallBlocker({
+        ...ready,
+        plan: { ...planned, plan: { ...planned.plan, items: [] } },
+      }),
+    ];
+    for (const blocker of blockers) {
+      expect(blocker).not.toBeNull();
+      expect(isLeafKey(blocker!.key), blocker!.key).toBe(true);
+    }
+    expect(osinstallBlocker(ready)).toBeNull();
+  });
+
+  it("osinstall refusalPhrase: every RefusalReason variant resolves", () => {
+    const reasons: OsInstallRefusalReason[] = [
+      { refusal: "media-missing", component: "extras", volume_name: "Extras3.2" },
+      { refusal: "media-path-missing", component: "extras", media: "Extras3.2", path: "L" },
+      { refusal: "rom-unknown" },
+      { refusal: "destination-collision", path: "C/Assign", components: ["a", "b"] },
+      {
+        refusal: "media-ambiguous",
+        component: "workbench-base",
+        volume_name: "Workbench3.2",
+        paths: ["a", "b"],
+      },
+      { refusal: "exclusive-group-conflict", group: "modules", components: ["a", "b"] },
+      {
+        refusal: "rule-kind-mismatch",
+        component: "a",
+        from: "C",
+        expected: "file",
+        found: "subtree",
+      },
+    ];
+    for (const reason of reasons) {
+      const phrase = osinstallRefusalPhrase(reason);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
   });
 });

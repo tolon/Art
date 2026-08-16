@@ -31,7 +31,19 @@ ART is built on the following open-source projects:
 - **sevenz-rust2** — 7z reading (MIT / Apache-2.0), with `lzma-rust2`
   (MIT / Apache-2.0) beneath it. Same rule: the encoder is a dev-dependency
   used to build test fixtures and is not compiled into the application
+- **fatfs** — FAT32, created and written for a PiStorm card's boot partition
+  (MIT), with `byteorder` (MIT / Unlicense) and `bitflags` (MIT / Apache-2.0)
+  beneath it. The one filesystem ART writes that is not an Amiga one: the
+  Raspberry Pi's firmware boots from it. `chrono` is switched off, so files
+  carry no timestamps — a build that produces the same bytes twice is one a
+  manifest can describe
 - **ureq** — HTTP client used by the Aminet repository mirror (§41.5.3) (MIT / Apache-2.0)
+- **libpfs3** — PFS3 (Professional File System III) reading and writing, the
+  filesystem a real PiStorm card uses (LGPL-3.0-or-later), with `byteorder`
+  (MIT / Unlicense) and `thiserror` (MIT / Apache-2.0) beneath it. The one
+  weak-copyleft dependency inside `core/`, accepted deliberately in place of a
+  second filesystem writer of ART's own — see `deny.toml`'s allow list for the
+  reasoning and its cost
 - **i18next / react-i18next** — internationalization (MIT)
 - **zustand** — state management (MIT)
 - **react-router-dom** — routing (MIT)

@@ -18,22 +18,26 @@ Update it at the end of any session that changes what works.
 
 | | |
 |---|---|
-| **Last updated** | 2026-08-12 |
+| **Last updated** | 2026-08-16 |
 | **Version** | 0.1.0 (unreleased) |
-| **Current stage** | **Phase 2b complete** (8 of 8 tasks); next is the PiStorm image builder, SD-1 |
+| **Current stage** | **SD-1 complete** — every gap it names is built: the card's shape (G2), RDB filesystem embedding (G4), build manifest (G7), image health check (G8), a build as a drop target (G15), engine and screen throughout. **What is left in SD-1 is not code: a card flashed and an A500 booted.** **SD-2 in progress** — PFS3 preload via `hst-imager` (G3 route E), the layout policy (G11) and OS install (G5) have all landed, engine and screen; ROM pairing (G9) and launcher metadata export (G10) are owed. G5's engine has now been run against the user's own real AmigaOS 3.2 media end to end — a distribution tree built, and (for AmigaDOS-ASCII names) put onto a PFS3 volume and read back independently — but **no Amiga has booted anything G5 built**, and its screen is still unverified past its own headings ([ART-118](ISSUES.md)). Reading a real card has a screen ([ART-095](ISSUES.md), [ART-097](ISSUES.md)); **no card ART built has been flashed or booted** |
 | **Build** | PASS |
-| **Tests** | 912 Rust passed, 0 failed; 288 frontend passed, 0 failed |
+| **Tests** | 1382 Rust passed, 0 failed, 3 ignored (real-media hooks, env-gated — see below); 518 frontend passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
-| **amitools oracle** | 48 checks, both directions |
+| **amitools oracle** | 53 checks, both directions — now including a filesystem driver ART embedded in an RDB and `rdbtool` extracted back out byte-for-byte |
+| **7-Zip FAT32 oracle** | the card's boot partition, written by ART and read by 7-Zip: filesystem type, geometry, label, names and every file's bytes (`scripts/fat-oracle-check.py`) |
 | **7-Zip disc oracle** | 4 fixtures — Joliet, ISO9660-only, raw Mode 1, raw Mode 2/XA — names, sizes and every file's SHA-256 |
+| **hst-imager PFS3 oracle** | both directions, local only (`scripts/pfs3-oracle-check.py`, no `hst.imager.exe` in CI): ART writes a volume through `NativeFormatter` and `hst-imager fs dir -r` reads it back — names, sizes, and every protection-bit string, `hsparwed` cased as `hst-imager` spells it; `hst-imager` formats and fills a volume and ART reads it back through `libpfs3`, SHA-256 per file rather than a length (ART-079's exact shape) plus the same protection strings |
 | **cargo-deny** | advisories, bans, licences, sources — all ok |
 | **MSRV** | 1.93 (raised from 1.77 on 2026-08-12, for a maintained 7z decoder) |
-| **i18n** | `en.json` and `tr.json`, 939 leaf keys each, parity enforced by `pnpm test` |
+| **i18n** | `en.json` and `tr.json`, 1449 leaf keys each, parity enforced by `pnpm test` |
 | **Release bundle** | rebuilt 2026-08-12 — MSI and NSIS, and the application was launched and answered |
-| **Published** | <https://github.com/tolon/Art> — public, `main`, **GPL-3.0-or-later** (was MIT until 2026-08-12) |
+| **Published** | <https://github.com/tolon/Art> — public, `main`, **GPL-3.0-or-later**. Work lands on `sd-1` and merges to `main` at the phase's
+end; the licence *inventory* still said MIT until 2026-08-13, months after the
+licence itself changed |
 | **Real hardware** | **Bare metal, reached 2026-08-12** — `test/art-bootable-test.adf` booted a real **A500/A500+** (Kickstart 3.9) from a **Gotek**, to an AmigaDOS CLI. Photographed. Two ADFs had already mounted/booted under licensed Kickstart in WinUAE (Phase 1a). Still untouched: physical magnetic media — a Gotek is not a mechanical drive |
-| **Seen on a screen** | **The Files screen, at last** — opened, driven and screenshotted on 2026-08-12, along with the ADF, hard-disk, PiStorm, WHDLoad and Settings screens. It cost immediately: [ART-082](ISSUES.md#open) (the listings were capped at 420 px inside panes that filled the window) had shipped green behind 178 tests. Four more findings came out of the same session — ART-083 … ART-086. `ART-062` narrows to the screens still unopened (Aminet, Collection, Gotek, ROM, WinUAE, Tools) |
+| **Seen on a screen** | **The Files screen, at last** — opened, driven and screenshotted on 2026-08-12, along with the ADF, hard-disk, PiStorm, WHDLoad and Settings screens. It cost immediately: [ART-082](ISSUES.md) (the listings were capped at 420 px inside panes that filled the window) had shipped green behind 178 tests. Four more findings came out of the same session — ART-083 … ART-086. `ART-062` narrows to the screens still unopened (Aminet, Collection, Gotek, ROM, WinUAE, Tools) |
 
 Reproduce the numbers above:
 
@@ -45,6 +49,30 @@ cd src-tauri && cargo clippy --all-targets -- -D warnings
 cd src-tauri && cargo test                             # unit + integration (twice — ART-059)
 pip install amitools && python scripts/oracle-check.py # independent cross-check
 python scripts/iso-oracle-check.py                     # the disc reader vs 7-Zip (needs 7z; not in CI)
+python scripts/fat-oracle-check.py                     # the card's boot partition vs 7-Zip (needs 7z; not in CI)
+python scripts/pfs3-oracle-check.py                     # PFS3, both directions, vs hst-imager (needs hst.imager.exe; not in CI)
+python scripts/zoom-check.py                           # the shell's widths, in a real browser (needs `pnpm dev`)
+
+# Task 14's real run — the user's own media, not a fixture. `#[ignore]`d
+# (unlike the two pfs3-oracle hooks above them in the same file, which are
+# only env-gated); skipped cleanly with the vars unset. Needs
+# E:\amiga\Amigatolon (the user's own material) and E:\amiga\ProjeART
+# (scratch) to exist.
+cd src-tauri && ART_OSINSTALL_MEDIA="E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ADF" \
+  ART_OSINSTALL_ROM="E:\amiga\Amigatolon\kickstart\Kickstart v3.1 rev 40.68 (1993)(Commodore)(A1200).rom" \
+  ART_OSINSTALL_DEST="E:\amiga\ProjeART\dist-3.2" \
+  cargo test run_the_real_engine_against_the_users_own_media_when_asked -- --nocapture --ignored
+
+# The second hook only puts a tree onto a card — it does not build one. Point
+# it at dist-3.2 above and it reproduces the ART-113 failure exactly (see
+# that entry). The reduced "witness" tree it built successfully against
+# (dist-3.2 with every non-ASCII-named entry's subtree removed by hand) was
+# a one-off Python pass, not a committed script, so the 969/106-file
+# exclusion count and the 3059/3061 hash-match figure in ART-113/ART-114 are
+# this session's own measurement, not something this block can regenerate.
+cd src-tauri && ART_OSINSTALL_DEST="E:\amiga\ProjeART\dist-3.2-witness" \
+  ART_CARD_OUT="E:\amiga\ProjeART\dist-3.2-witness-card.hdf" \
+  cargo test build_the_real_dist_tree_onto_a_card_when_asked -- --nocapture --ignored
 cd src-tauri && cargo deny check                       # licences and advisories
 pnpm tauri build                                       # full bundle (slow)
 ```
@@ -285,7 +313,7 @@ chosen language ([ART-060](ISSUES.md#open)) — `core/`'s independence rule mean
 this needs a real design decision, not a quick fix. `formatAge`
 (`src/lib/sources.ts`) still renders "1 weeks ago" in English, a pre-existing
 defect task 7b reproduced faithfully rather than fixing mid-refactor
-([ART-061](ISSUES.md#open)). And no language has been checked on a running
+([ART-061](ISSUES.md)). And no language has been checked on a running
 screen — every string was verified by the parity test and by reading, never by
 opening the app ([ART-062](ISSUES.md#open)); several Turkish strings are
 substantially longer than their English originals and sit in tight controls,
@@ -549,7 +577,7 @@ on physical magnetic media. `test/README.md` carries that as its own rung.
 **Filed rather than built** (the phase's own rule): [ART-080](ISSUES.md#open),
 [ART-081](ISSUES.md#open) (move's missing primitives),
 [ART-087](ISSUES.md#open) (`Space` does not count a directory) and
-[ART-088](ISSUES.md#open) (the writer ignores the `d` protection bit; the file
+[ART-088](ISSUES.md) (the writer ignores the `d` protection bit; the file
 manager asks, the engine does not refuse).
 
 **What was and was not seen.** The acceptance walk is in the plan file, point
@@ -598,8 +626,10 @@ research). Three of its findings change what gets built, not merely how:
   primaries, each of which the m68k side sees as a separate hard drive — and
   **the RDB sits at a byte offset inside one of those**, not at offset 0. So G4
   is bigger than "write FSHD/LSEG": ART's RDB writer has to work at an offset,
-  which is the same shape as [ART-043](ISSUES.md#open). One coherent fix, with
-  tests at both offsets.
+  which is the same shape as [ART-043](ISSUES.md). **Both halves are done**
+  (2026-08-13/14) — writing *into* a volume that starts at an offset was
+  ART-043, and laying an RDB *at* one is `core/card/build.rs` — each with tests
+  at both offsets.
 - **PC-side PFS3 write is already solved and MIT-licensed.** `hst-amiga` /
   `hst-imager` read, write *and format* PFS3 and FFS with no emulator, and both
   existing imagers stand on them. G3 gains a Route E that is proven rather than
@@ -643,16 +673,19 @@ gap analysis was written around "the A500"; that is one of the machines
 PiStorm goes into. What varies by machine is data the build already carries —
 which Kickstart ROM lands on the FAT32 partition, what the Emu68 config says
 about the board, which OS release is installed, what partition geometry suits
-the card — not a code path. Two things are still the user's to settle before
-SD-1 designs a layout: which PiStorm board(s) to target first, and which
-machine the first card gets verified on (recorded with the result, not
-generalised from it).
+the card — not a code path.
+
+**Settled 2026-08-13: the classic PiStorm on a Pi 3A+, first verified on an
+A500** (an A500+ follows around 2026-08-28). That is the hardware in the room,
+which is the only kind of answer this question has. It is recorded *with* the
+result rather than generalised from it — a card that boots an A500 has proved
+one machine, not the line.
 
 | Phase | Contents |
 |---|---|
 | **SD-0** | ✅ **Done 2026-08-12** — prior-art teardown, written up as [sd0-prior-art.md](sd0-prior-art.md). One exit test still owed (drive `hst-imager` end to end on a scratch image) |
-| **SD-1** | The image has a shape: MBR + FAT32 boot partition (G2), RDB filesystem embedding FSHD/LSEG (G4 — also closes ART-084), build manifest (G7), a build as a drop target (G15), image validation (G8) |
-| **SD-2** | Content, preloaded: PFS3 via a scripted WinUAE session (G3 route D), OS install engine (G5), ROM pairing (G9), launcher metadata export (G10), layout policy (G11) |
+| **SD-1** | The image has a shape: MBR + FAT32 boot partition (**G2 — done 2026-08-13/14, engine and screen**), RDB filesystem embedding FSHD/LSEG (**G4 — done**, also closed ART-084), build manifest (**G7 — done 2026-08-15**, with 7-Zip answering the half ART cannot check), image validation (**G8 — done 2026-08-15**), a build as a drop target (**G15 — done 2026-08-15**). **Every gap in SD-1 is built; what is left is a card flashed and booted** |
+| **SD-2** | Content, preloaded: PFS3 via `hst-imager` (**G3 route E — done 2026-08-15, engine *and* screen**; route D dropped: E was already proven and needs no Kickstart), OS install engine (G5), ROM pairing (G9), launcher metadata export (G10), layout policy (**G11 — done 2026-08-15, engine *and* screen**: a pile of dropped files becomes a staging tree, not yet driven against real material and no staging tree has reached a card) |
 | **SD-3** | It is *mine*: wallpaper, WiFi, prefs and Startup-Sequence, each edited in place (G14); multiboot as several complete environments and a boot menu (G16) |
 | **SD-4** | The flagship: native PFS3 write in ART (G3 route B) — its own brief; route D's harness becomes its oracle |
 | **SD-5** | Comfort: capacity planner and build profiles (G13) |
@@ -811,83 +844,208 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
 
 ## Picking up next session
 
-1. Run the verification block above and confirm the snapshot still holds.
-   The oracle is part of it: it is the only check that can catch ART's reader
-   and writer being wrong in the same way.
-2. Read this file, then [ISSUES.md](ISSUES.md#open) — open defects are
-   `ART-043` (the whole-file strategy ignores a partition's offset),
-   `ART-046` … `ART-050` (recorded findings, none fixed yet), `ART-060` …
-   `ART-062` (Phase 0b's own: Rust error strings still English, `formatAge`'s
-   English pluralisation, no language checked on screen), and `ART-064` …
-   `ART-068` (Phase 1a's own: volume→volume and volume→local multi-select
-   don't share the other two directions' atomicity, `archives_plan_install`
-   blocks the command thread, a batch install's Stop is unresponsive
-   mid-archive, the filter's empty-vs-no-match message is inferred rather
-   than carried), and `ART-080`/`ART-081` (Phase 2b task 3's own: there is no
-   host-side delete, so nothing can be moved *off* a folder, and no primitive
-   that moves a single file between two images); the next new defect starts at
-   `ART-082`.
-3. **The hardware rung is climbed to the bottom, and it is a photograph now.**
-   `test/art-bootable-test.adf` booted a real **A500/A500+** (Kickstart 3.9)
-   off a **Gotek** to an AmigaDOS `1>` prompt on 2026-08-12 — real silicon, not
-   an emulator. `test/task-10-boot-test.adf` mounted, listed and read back
-   correctly under licensed Kickstart/Workbench (Amiga Forever / WinUAE) in
-   Phase 1a. What is left: **physical magnetic media** — a Gotek is not a
-   mechanical drive, and nothing ART wrote has been through a real floppy head.
-   All of that is a different claim from "the running app has been looked at":
-   apart from the Dashboard, no screen ART shipped in phases 1a, 2a or 2b has
-   actually been opened by a person — still `ART-062`.
-4. **Stage R and Stage W are both done.** Aminet Stage A is complete too,
-   including the update view and install to HDF. **Phase 1a is done too** —
-   the two-pane manager has real focus, multi-select, batch copy/delete,
-   sorting, a filename mask, and now boot code that works; see "Phase 1a"
-   above for what is not (volume→volume batching, ART-064/065).
-5. **Start here tomorrow: SD-1**, the PiStorm image builder's first slice —
-   MBR + FAT32 in an image file (G2), the RDB at a byte offset with FSHD/LSEG
-   embedded (G4, which also closes ART-084), the build manifest (G7), a build
-   as a drag & drop target (G15) and image validation (G8). SD-0 is done and
-   its findings are in [sd0-prior-art.md](sd0-prior-art.md) — read the
-   supersession table at its end before designing, and settle its one exit
-   test (drive `hst-imager` end to end on a scratch image) first.
+*Last session: 2026-08-15. Nothing is half-done on disk and the working tree is
+clean; `sd-1` carries **21 commits ahead of `origin/sd-1`** — the preload screen
+and the whole of G11. Not pushed.*
 
-   **Phase 2b is complete and merged.** Two of its twelve acceptance points
-   were not verified — the light theme was never opened, and session restore
-   has never been seen working — and both are worth ten minutes with the
-   application before they are forgotten.
-6. **Phase 2a is complete** and merged to `main`
-   — see its section above for what it changed and what it left owed, and its
-   plan file's Amendments section for what changed after the plan was written
-   (the real-Amiga-CD step is cancelled; a 7-Zip oracle replaced it).
-6. **The SD Card Appliance Builder is planned but not started** —
-   [sd-appliance-gap-analysis.md](sd-appliance-gap-analysis.md), phases
-   SD-0 … SD-5. It is sequenced after Phase 2a; its order relative to the AI
-   layer is still open.
-7. The named work left in the briefs:
-   - **§45.5 AI Workflow Layer.** Designed
-     ([design-ai-layer.md](design-ai-layer.md)), not built. Its prerequisites
-     (operation log with `origin: ai-plan`, a tested workflow catalogue) are
-     all in place.
-   - **Dircache write support**, if it is wanted. Deliberately refused today;
-     doing it properly means maintaining the cache blocks in the same
-     journalled operation as the directory, which is real work rather than a
-     flag.
+**The tree is green**: 1203 Rust (run twice), 490 frontend across 43 files,
+clippy clean at `-D warnings`, TypeScript clean, amitools oracle 53 both ways,
+the 7-Zip FAT32 oracle clean on a real card's 21 boot files.
 
-Things deliberately left undone, so they are not mistaken for oversights:
+### Where the phases stand
 
-- **No preview step** before destructive operations (§92) *except* copying into
-  a volume, which now plans first and shows the cost, the name problems and the
-  collisions before writing anything. Delete and overwrite still tell the user
-  what happened rather than what is about to.
-- **`pnpm tauri build`** succeeds; MSI and NSIS bundles were produced on
-  2026-08-09. The bundles have not been installed and run from a clean machine.
-- **i18n covers the interface, not the core.** Every screen, shared component
-  and `src/lib` helper goes through `t()` in English and Turkish. `CoreError`
-  and `WhdloadRefusal` sentences, written in Rust, still reach the UI in
-  English only regardless of the chosen language ([ART-060](ISSUES.md#open)) —
-  not a gap left to fill screen by screen, a design question about whether
-  `core/` gets its own catalogue or the frontend keys off `CoreError::code()`.
-- `docs/roadmap.md` phase marks remain the original Phase 0 plan by design —
-  this file is the live position.
+**SD-1 is complete.** Every gap it names is built — G2 (the card's shape,
+engine and screen), G4 (RDB filesystem embedding), G7 (build manifest), G8
+(image health check), G15 (a build as a drop target). A 64 GB card was built
+from the running screen on 2026-08-14 with the user's own material, and 7-Zip
+read it back independently. **What is left in SD-1 is not code: flash a card
+and boot an A500.** The materials are all here bar a microSD card, a USB reader
+and an HDMI cable.
+
+**SD-2 is half built.** Two of its five gaps are done, engine and screen:
+
+- **G3 route E** — `core/preload/` plans and runs a preload, `tools/hst_imager.rs`
+  drives `hst-imager`, `core/` still launches nothing (the boundary is a trait),
+  and the OS Builder's third kind asks for it. Run for real on 2026-08-15: `DH0`
+  formatted as `Work` on a card ART built, a tree copied in, and the tool listed
+  it back as 1 directory, 2 files, 20 B with `----RWED` on each.
+- **G11** — `core/layout/` and its own `/layout` screen, a peer of the OS Builder
+  rather than a page inside it. Design: [content-layout](superpowers/specs/2026-08-15-content-layout-design.md),
+  plan: [content-layout](superpowers/plans/2026-08-15-content-layout.md).
+
+**G5, G9 and G10 are owed**, and G5 is the big one.
+
+**What the two screens have and have not been through.** Both were mounted and
+driven in a real browser against the real bundle — every string resolved, no raw
+key and no `{{variable}}`, and for G11 that browser pass caught a bug the tests
+could not (the drawer dropdown leaking a policy field's value). **Neither has
+been driven in `pnpm tauri dev` against real material**, and **no staging tree
+G11 builds has been carried onto a card**. The preload *engine* has been through
+the real tool; the screen in front of it has not. That is the same rung
+`test/README.md` keeps for everything else.
+
+### What to pick up
+
+Two of these are the same shape — a built screen that no human has driven — and
+doing them together is one session with the application open.
+
+- **Drive both new screens in `pnpm tauri dev` against real material.** For
+  preload: `E:\amiga\ProjeART\screen-test.img` (a copy of the built card, made
+  for exactly this) with `E:\amiga\Amigatolon\hstimager\hst.imager.exe`, and the
+  content tree at `E:\amiga\ProjeART\preload-tree\`. Expect two plan steps —
+  format `SDH0` as `Work`, then copy — and **no** driver-embed step, since the
+  partition is FFS and Kickstart carries it. For layout: drop a folder of real
+  Amiga files on `/layout`, retarget a row, and check the staging tree it
+  builds. Afterwards the tool's own `fs dir` is the independent read-back, and
+  Settings → Operation Log should carry both runs with `verified: false`.
+- **G5 (OS install)** — the largest thing left in SD-2, and now unblocked twice
+  over: there is a formatted volume to install onto and a staging tree to fill
+  it from. Wants its own design round; extracting AmigaOS 3.2/3.9 media without
+  running the Amiga Installer is not a patch.
+- **G9 (ROM pairing)** — smaller than it looks. Half of it is already done by
+  `CardBuilder` (the ROM is placed on FAT32 under the name the config points
+  at); the half that remains is pairing a ROM with an *OS volume*, which wants
+  G5 first.
+- **G10 (launcher metadata export)** — iGame/AGS metadata onto a GAMES: volume.
+  Pairs naturally with G11, which is what puts games there.
+- **tolunnet / tolunwifi**: decided as ART Baseline's default network stack and
+  WiFi suite, and **not yet coded anywhere**. They belong beside SD-2's package
+  manifest, which sits next to G5.
+- **Six issues G11 opened and did not fix**: [ART-105 … ART-110](ISSUES.md).
+  ART-106 is the one worth reading first — the plan never considers where a
+  WHDLoad icon lands, so §82 can fail from the other side.
+
+### Four things this project keeps re-learning
+
+Every one of them cost a wrong turn on 2026-08-15 alone, and every one would
+have shipped behind green tests:
+
+1. **Running it against real material beats reading about it.** Identifying a
+   ROM by revision looked right until 55 real ROMs showed three different files
+   all stating `40.68`. `hst-imager`'s command set looked right until it met a
+   card whose RDB is not at byte zero. A log parser looked right until the
+   command turned out to print no summary at all.
+2. **A screenshot is not a measurement** (ART-099, closed). Ask the thing to
+   report its own numbers, and check the instrument before believing the
+   picture — a DPI-unaware capture returned two thirds of the window and said
+   nothing about it.
+3. **A doc comment that promises the opposite of the code is a trap with a
+   fuse.** `MbrPartition::index` claimed to be the number everybody writes down
+   and was zero-based; it cost a failed run before `slot_number()` existed.
+4. **A guarantee that holds is not the same as a goal that works.** G11's
+   layout screen set a `stale` flag on every retarget so an unverified collision
+   list could never gate Apply — and it held, on every path. What nobody asked
+   was whether the user could then *apply*: the only thing that cleared the flag
+   was a fresh preview, which rebuilds the plan from policy and throws the edit
+   away. The editable preview, which is the entire answer to "ART cannot tell a
+   demo from a game", could not be used at all, and `FEATURES.md` already claimed
+   it. Seven per-task reviews passed it; the whole-branch review caught it. When
+   a rule is added to protect something, the next question is what the rule costs
+   the thing it protects.
+
+### Open issues
+
+Twenty entries remain open ([ISSUES.md](ISSUES.md)); three are waiting on a
+decision rather than on work. ART-099 and ART-104 closed on 2026-08-15, and
+ART-105 … ART-110 opened the same day out of G11's whole-branch review — all six
+in code that landed that day, none in anything older.
+
+**Both of SD-1's open decisions are answered** (2026-08-13), and by hardware
+rather than by preference — the user has an **A500 with a classic PiStorm on a
+Raspberry Pi 3A+**, plus a Gotek. So:
+
+- **Target board: the classic PiStorm, Pi 3A+.** Which is `PistormHardware::default()`
+  already, and the Pi 3A+ is on the project's own supported list for that board
+  rather than the reported-working one.
+- **First image verified on: the A500.** An **A500+ arrives around 2026-08-28**,
+  which makes a second witness possible — the same value the bare-metal ADF pass
+  had, twice over.
+
+Consequences that are now facts instead of parameters: the kernel archive is
+`Emu68-pistorm.zip` on the stable line (**not** the same file as on 1.1 alpha —
+ART-091), the SD driver is `brcm-sdhc.device`, and `genet.device` is irrelevant
+(the 3A+ has no ethernet; its WiFi is `wifipi.device`).
+
+**Materials: the software side is complete.** The collection at
+`E:\amiga\Amigatolon` was inventoried on 2026-08-13 and **nothing copyrighted
+is missing** — A1200 Kickstarts in both families (3.1 rev 40.68, 3.2's
+`kicka1200.rom`, 3.2.1's `A1200.47.102.rom`), the full AmigaOS 3.2 ADF set plus
+its CD and the 3.2.1/3.2.2 updates, the 3.9 ISO with both BoingBags, every
+release from 1.0 to 3.1 as ADFs, and both real PiStorm distributions
+(CaffeineOS 9317, MultibootOS 2.2) as images. WinUAE, 7-Zip and amitools are
+installed.
+
+**Everything on the software side arrived by 2026-08-14**, and the card was
+built from it: `Emu68-pistorm.zip` (with the 1.1 alpha and `-raspi` ones, which
+are *not* the card's), `VideoCore.card` — the name that needed checking, and it
+is capitalised — `pfs3aio.lha`, Picasso96, `Emu68-WiFi.zip`, and
+`hst.imager.exe` with its scripts. The full list, with what each one unblocks,
+is `../eksik malzemeler.md` (Turkish, kept outside the repository since it is
+the user's own shopping list).
+
+**Only physical items are unaccounted for**: a microSD card, a USB reader and
+an HDMI cable — and the card must be started with HDMI *already plugged in*, or
+the VPU never configures the port and there is no RTG that session.
+
+### What the user brings, and what it settles
+
+Recorded 2026-08-15, because each of these changes a decision rather than
+merely being nice to know.
+
+- **Licensed Amiga Forever, desktop and mobile.** There is no Kickstart licence
+  problem to design around, and the Cloanto-headered dumps are available —
+  which `core/rom` already strips (`AMIROMTYPE1`). It is also why
+  [ART-104](ISSUES.md) mattered: a licensed collection carries dumps whose
+  checksums are not the ones a table copied from anywhere else will hold.
+- **Four real Amigas.** Hardware verification is not limited to one witness.
+  The rule stands unchanged — a claim records *which* machine proved it — but
+  there is more than one machine to prove things on.
+- **The user has written two Amiga-side programs, and both are meant to ship
+  in ART-built distributions**: **tolunnet**, a TCP/IP stack to take Roadshow's
+  place, and **tolunwifi**, a WiFi suite. Source at `D:\Projeler\tolunnet`.
+
+  This last one is a real change to SD-2 and SD-3. SD-0 found that the
+  community-standard package set is full of demo and conditionally
+  redistributable software, and concluded that anything not clearly
+  redistributable has to ship as a *fetch task* through the Aminet engine
+  rather than as bundled bytes. A networking stack the user wrote themselves is
+  theirs to distribute, so ART Baseline can carry one outright. And G14's WiFi
+  pre-seeding changes shape: the configuration format belongs to their own
+  program, so ART can write it directly instead of reverse-engineering
+  somebody else's.
+
+  **Not yet designed.** When SD-2 reaches its package manifest, the licence
+  column has an easy row — and Roadshow should not be assumed as the default
+  stack without asking.
+
+### Where things are, for a fresh session
+
+- `E:\amiga\Amigatolon` — the user's material. **Read from, never written to.**
+- `E:\amiga\ProjeART` — where trial output goes. **Not C:, not D:** (the user
+  said so on 2026-08-14), and not F: either, which turned out to be a 499 MB
+  drive a 300 MB oracle image would not fit on. `ART_SCRATCH` overrides it in
+  the scripts. A card ART built from the real release is sitting there as
+  `card.img`.
+- **Staged on 2026-08-15 for the screen run that has not happened yet**, both in
+  `E:\amiga\ProjeART`: `screen-test.img`, a byte copy of `card.img` so the
+  original survives being formatted, and `preload-tree\` holding `Readme` and
+  `S\Startup-Sequence` for the copy step. That card's one Amiga partition is
+  `SDH0`, FFS, 0.90 GiB, in MBR slot 2 — so a correct preload plan has **two**
+  steps and no driver-embed step, because Kickstart carries FFS. If the plan
+  shows three, something is wrong before anything is formatted.
+- Rebuilding that card is the fastest way to see the whole engine work at once:
+
+  ```bash
+  cd src-tauri
+  ART_CARD_ZIP="E:\amiga\Amigatolon\Emu68\Emu68-pistorm.zip" \
+  ART_CARD_ROM="E:\amiga\Amigatolon\kickstart\Kickstart v3.1 rev 40.68 (1993)(Commodore)(A1200).rom" \
+  ART_CARD_OUT="E:\amiga\ProjeART\card.img" \
+    cargo test build_real_card_when_asked -- --nocapture
+  ```
+
+  It prints the payload it chose, where each partition landed, and reads the
+  finished card back. Delete `card.img` first — `build_card` refuses to write
+  over one that is already there.
 
 ## Session log
 
@@ -895,6 +1053,38 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-16 | **SD-2 G5 lands: a distribution tree was built from the user's own 3.2 media and put onto a volume; no Amiga has booted it.** Task 14 of the OS-install plan — the last task — runs the whole engine (Tasks 1–13) against the real thing for the first time: 36 ADFs at `E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ADF` and the user's real Kickstart v3.1 rev 40.68. `find_media` found 35 of the 36 (`Install3.2.adf` is the OS's own boot/installer floppy, not component media the recipe names — expected, not a defect); `plan()` switched on 26 components, `modules-a1200` among them **by its own condition, unchosen**, because the real ROM's stated major (40) is below 47 — exactly the case the confirmation UI exists for, now proven against real hardware's own ROM rather than a fixture. `apply()` wrote 4030 files / 330 directories / 11.9 MB to `E:\amiga\ProjeART\dist-3.2`, manifest included — **after the run found two real recipe defects no synthetic fixture ever could**: `storage`'s six rules named a `Storage/` drawer the real disk does not have ([ART-111](ISSUES.md)), and `glowicons` was missing `classes` from its `overrides`, so the real `Devs/DataTypes/*.info` icons both disks ship collided ([ART-112](ISSUES.md)). Both fixed; the full 26-component plan then built with zero refusals. **Putting it on a volume found a third, open defect**: `libpfs3` 0.1.3 writes an entry's name as UTF-8 and reads it back as Latin-1, so any non-ASCII AmigaDOS name — real content on `Locale-ES/-FR/-PT/-TR` and the base `Locale` disk's own country files (`español`, `türkçe`, `österreich`, 24 *directories* named) — fails `copy_in`'s own sanity check outright ([ART-113](ISSUES.md), open, external pinned crate). Excluding those 24 directories excludes their whole subtrees: **969 of 4030 files and 106 of 330 directories — about a quarter of the tree — never reached a volume**, not "24 files/directories". A reduced tree (that quarter excluded, one-off Python pass, method recorded in ART-113 rather than a committed script) went onto a fresh 128 MB PFS3 `.hdf` instead: 3061 files / 224 directories / 10.3 MB, and **`hst.imager`'s own count matched ART's exactly**; every one of 3059 extracted files hashed byte-for-byte against the source, bar two (`Storage/DOSDrivers/AUX`, `AUX.info` — a real AmigaDOS DOSDriver name colliding with a Windows-reserved device name, `hst-imager`'s own extraction blind spot, filed as [ART-114](ISSUES.md) and not an ART defect). **All of the 969/106 and 3061/3059 figures above are a one-off measurement**, not reproducible from a committed script (see ART-113). `scripts/pfs3-oracle-check.py` reran clean, both directions. Also filed at this task, as required by the plan: the `core::iso` test flake seen three times this session and never diagnosed ([ART-115](ISSUES.md)), the PFS3 writer's silent `.uaem` comment/date drop ([ART-116](ISSUES.md)), `import_filesystem`'s refusal of a foreign card's existing RDB ([ART-117](ISSUES.md)), the OS Builder install screen's unverified depth ([ART-118](ISSUES.md)), and five deferred Task 13 minors folded into one entry ([ART-119](ISSUES.md)). **The WinUAE and hardware rungs are untouched by this task and stay open** — nothing built by G5 has been opened by WinUAE or booted on any Amiga, real or emulated | 1382 Rust / 518 frontend |
+| 2026-08-16 | **Task 11: an independent witness for the PFS3 writer, both ways.** `libpfs3` is both the crate ART writes PFS3 with and the crate ART reads it back with, so ART's own suite cannot catch a mistake the two would share — the exact shape of ART-032 … ART-035, ART-075 and ART-079. `scripts/pfs3-oracle-check.py` closes that gap with `hst-imager` (C#, no shared code) in both directions: `build_pfs3_volume_for_oracle_when_asked` builds a volume through `NativeFormatter` — the same `format_partition`/`copy_in` G5 uses — and prints a JSON claim of every entry, which `hst-imager fs dir -r` is then checked against, protection bits included (`--P-RWED`, `-S--RWED` — the Pure and Script bits, the reason this phase exists: 3.2's `Startup-Sequence` runs `Resident C:Assign PURE`); `read_foreign_pfs3_for_oracle_when_asked` reads back a volume `hst-imager` itself formatted and filled, printing a **SHA-256 per file** rather than a length, because a length is exactly what ART-079 got right while handing over the wrong bytes. Run for real against `hst-imager 1.6.616`: both directions clean. Deliberately broken twice to confirm the oracle actually discriminates — a protection bit forced to zero was caught (`FAIL C/Assign carries --P-RWED (hst-imager says ----RWED)`), and a single byte flipped in a file ART read back was caught by the hash while the length still matched (`ok Readme is 34 bytes` / `FAIL Readme hashes to what hst-imager was given`), which is the property the second direction exists to prove. Local only, like `fat-oracle-check.py` and `iso-oracle-check.py`: the CI runner has no `hst.imager.exe` | 1357 Rust / 490 frontend |
+| 2026-08-15 | **SD-2 G11 lands: what goes where.** `core/layout/` turns a dropped pile of files into an organised staging tree on the PC, which the preload screen then copies onto a card — the piece SD-2's design doc named as missing between the classifier and the card. `scan.rs` walks a drop and stops at a WHDLoad drawer instead of descending into it, depth-capped and skipping symlinks. `policy.rs` carries the drawer table as data — `Games`, `Floppies`, `HardDisks`, `CDs`, `Unsorted` — and the two kinds it refuses **with a reason**: a ROM is the FAT32 boot partition's business, a Commodore 8-bit disk has none on an Amiga volume. `policy.rs::drawer_for` returns `Result<&str, RefusalReason>` so the drawer and the refusal are one exhaustive decision instead of two matches in two files that have to agree. `apply.rs` builds the tree: never overwrites, never touches the source (proved byte for byte), `safe_join` on every destination because it is user-typed text, cancellable between items with `CancelledPartway` reporting how many landed. Unpacking a WHDLoad archive goes through the one archive gate and places the drawer's `.info` **beside** the drawer, never inside it — inside, the game is on the disk and invisible on Workbench (§82). `commands/layout.rs` and `layout_apply` take the plan they are given rather than recomputing it, unlike `preload_run`, because the user's edits to the preview *are* the plan. **The design decision worth keeping:** ART cannot tell a demo from a game — nothing derivable from the bytes separates them — so the policy proposes only what it can justify and its own **layout** screen (`/layout`, `src/pages/ContentLayout.tsx`) — a peer of the OS Builder in the sidebar, not a screen inside it — makes the preview editable rather than building a cleverer rule engine. Every rule is tested and the load-bearing ones mutation-checked: the refusals, the depth caps, the no-overwrite guard, `safe_join` (removing it genuinely wrote a file outside the staging root before being reverted), the §82 icon rule, the scratch-directory cleanup. The screen was mounted and driven in headless Chrome against the real bundle with `invoke` mocked, and it caught a real bug tests could not — the drawer dropdown was leaking a policy field's value into the list; every string resolved, no raw key and no `{{variable}}` reached the screen. **Not yet driven in `pnpm tauri dev` against real material, and no staging tree this builds has been carried onto a card** — nothing built here has been near an Amiga  A whole-branch review then found the feature's own centre unusable and it was fixed before landing: retargeting a row set a `stale` flag that blocked Apply, and the only thing that cleared it was a fresh preview — which rebuilds from policy and throws the edit away. The editable preview, which is the whole answer to "ART cannot tell a demo from a game", could not be used at all. `layout_recheck` answers the question the flag was avoiding instead of blocking on it: it recomputes collisions against the disk without replanning, so edits survive and the red list is always true — and when that check itself fails the screen says so and holds Apply, rather than reading an unverified list as an all-clear (§89). The same review found `unpack_whdload` discarding the extraction gate's verdict — `extract_selection` reports a truncated unpack through its **return value**, not an `Err`, so a drawer cut short by the output cap was placed and counted as a success — and an archive holding an `Install` script placed as a game, which `commands/whdload.rs` refuses outright. Both refuse now. Six things it found and G11 did not fix are filed as [ART-105 … ART-110](ISSUES.md) rather than left in a scratch file | 1203 Rust / 490 frontend |
+| 2026-08-15 | **The preload engine gets a screen — the OS Builder's third kind.** `src/lib/preload.ts` and `components/osbuilder/VolumePreload.tsx`: read the card, tick the partitions to prepare, name each volume, optionally give it a folder, preview, confirm the count, run as a job, report. **No Rust changed at all** — the three commands had been registered since the morning and nothing above them existed. Three decisions carry it. **The ticks are not remembered**, alone among this screen's choices: the card and the paths come back the way the user left them, but a screen returning already armed to format two partitions is ART's own remembering rule turned into a hazard, and it is written down as that rather than left to look like an oversight. **The volume-name rules are `check_name`'s** — no `:` or `/`, thirty characters counted as characters — asked before the format instead of discovered during it; the engine never checked them and `hst-imager`'s answer would have arrived after the first partition was gone. And **the result panel says ART cannot read the volume back**: there is no PFS3 reader here, so what is inside is the tool's word, said as the tool's word (§89). `hst.imager`'s path became a setting beside `winuaePath`, since ART does not ship it. Four mutations, four caught. Driven in a real browser against the real bundle: mounts, every string resolves, no raw key and no `{{variable}}` on screen — **not** yet driven against a real card through Tauri, which is the rung it still owes. And the one thing a thin adapter can get wrong is now pinned in Rust: `the_payload_the_frontend_sends_deserialises` deserialises the literal object `src/lib/preload.ts` builds, because `#[serde(flatten)]` is all that makes the two agree and a renamed field would compile on both sides and fail under the user's finger. Mutation-checked — nest the request and it fails | 1167 Rust / 474 frontend |
+| 2026-08-15 | **SD-2 opens: a card's Amiga volume is formatted and filled from Windows.** `core/preload/` plans it and runs it, `tools/hst_imager.rs` does the work, and `core/` still launches nothing — the boundary is a trait, the way `MirrorClient` is for the network, so route B replaces one file when it comes. **Route E over route D**: SD-0 had already run E end to end, it needs no Kickstart and no unattended emulator session, and the tool was already on this machine. **Running it corrected the design twice.** First: `hst-imager` answered *"Rigid Disk Block not found"* on a card ART built — of course it did, byte zero of a card is a partition table and the Amiga disk begins 1.1 GB in. That is ART-095 from the other side, and the Emu68 Imager's own command set had the answer all along (`<image>\mbr\<slot>`), which also meant a partition is two numbers — which disk, then which partition in *its* RDB — not one flattened index. Second: `fs copy` prints no summary at all, so the parser that read one was reporting numbers it had matched in a different sentence; the count comes from asking the volume afterwards, which makes it the tool's reading rather than ART's guess. Found on the way: `MbrPartition::index` is zero-based while its own comment promised the number everybody else writes down — `slot_number()` now exists and the comment tells the truth. Real run: RDB embedded, `DH0` formatted as `Work`, a tree copied, and the tool listed it back as 1 directory, 2 files, 20 B with `----RWED` on each | 1166 Rust / 454 frontend |
+| 2026-08-15 | **SD-1 G15, and with it every gap the phase names.** The drop pipeline has been architectural since Stage 2 and answers one question — *what can I do with this file*. `core/card/intake.rs` asks the other one: *what does it become in this card*. An Emu68 archive and a Kickstart fill their fields; a `config_<name>.txt` is recognised and declared not-yet-used (G16); everything Amiga — a game, an ADF, an OS CD, a folder — is told it **needs a volume this card has not got**, which is the answer SD-1 owes most often and the one worth not swallowing. Two decisions: the archive is matched **by name and deliberately so** — its bytes say "zip", and which board and which release line it is for lives only in the name, which is what ART-091 was — so the answer carries *every* reading rather than picking one, and `emu68_payload` still refuses if it disagrees with the user's setting; and `intakeFills` is pure, so "the last archive dropped is the one chosen" is a rule with a test rather than whatever the loop happened to do. Four mutations, four caught | 1140 Rust / 454 frontend |
+| 2026-08-15 | **SD-1 G8: the gate before the file is handed over.** `core/card/health.rs` answers "is this a card that will boot" in fourteen checks — the boot partition first (SD-0's unit-0 rule, now a check rather than only an impossibility) and at sector 2048, areas 4 MiB aligned, nothing overlapping or past the end, every RDB read and checksummed, no partition naming a filesystem the card lacks (ART-084 as a gate), the manifest still agreeing, and the four files the firmware needs present. **The design decision is the three states.** `pass`, `fail` and `not-checked` are kept apart and the third never renders as a tick: ART writes FAT32 and cannot read one, so the boot files are answered *from the manifest* and a card with no manifest answers nothing — a green mark meaning "ART did not look" is the claim §89 forbids. The verdict says it out loud: *"nothing is wrong with what ART could check — and N questions it could not answer at all"*. What ART cannot check at all is a separate list, for the machine (§50). G7's manifest button became a section of this one report rather than a second door. Four mutations, four caught. Real 8 GB card: fourteen passes, and 7-Zip still clean on all 21 boot files | 1131 Rust / 450 frontend |
+| 2026-08-15 | **SD-1 G7: a card now says what it was built from, and something that is not ART checks half of it.** `core/card/manifest.rs` writes `<card>.manifest.json` beside the image — the archive's and the ROM's SHA-256, the partition table's, every boot file's, and a 256 KiB window at each RDB. Two decisions carry it: the manifest is **read off the finished card** rather than remembered from the build, so a card ART wrote wrongly cannot be described rightly; and it lives **beside** the image, because a manifest carrying the boot partition's checksums *inside* the boot partition cannot be right about itself. `card_verify_manifest` checks the table, the areas and the RDBs — and **reports what it did not look at**: ART writes FAT32 and does not read one, so the boot files are recorded and left unverified rather than passed over. `scripts/fat-oracle-check.py <card.img>` closes that half with 7-Zip. Driven against the real `Emu68-pistorm.zip` on an 8 GB card: ART's own check clean, 7-Zip clean on 21 of 21 files. Mutation-checked in three places, and the third mutation **found a missing test** — nothing exercised the RDB window, so a byte written into the reserved area (which leaves every parsed field identical) would have passed | 1124 Rust / 449 frontend |
+| 2026-08-14 | **A card was built from the screen, and looking at the screen closed one issue and reopened my own mistake.** The OS Builder's boot-only card was driven in the running application with the user's own material and produced a 64 GB `denemecard.img`; 7-Zip reads its table back independently. On the way there I screenshotted the window, read text as clipped at the right edge, and **committed a wrong diagnosis onto [ART-099](ISSUES.md)** — the capture was made by a DPI-unaware process on a 150 %-scaled 3840-wide display and returned the left *two thirds* of the window. An overlay that printed the page's own rects settled it in one shot: `scroll == client` at every level, `.app-shell` exactly one window wide, the left strip is `max-width: 1180px; margin-inline: auto` doing its job. **ART-099 closes with the shell exonerated**, and with a second half to its lesson: a screenshot is not a measurement, and check the instrument before believing the picture. Also read the Emu68 Imager at source level ([sd0-prior-art.md §4.1](sd0-prior-art.md)) — it settles ART-104 in data (several MD5s per Kickstart revision, and the 524 299-byte Amiga Forever header ART rejects outright), hands SD-2 the `hst-imager` command surface verbatim, and confirms ART's no-physical-media scope as the same tool minus an Administrator requirement | 1114 Rust / 443 frontend |
+| 2026-08-14 | **The application can ask for a card.** `card_plan_build` and `card_build` are the adapter the engine had been waiting for, and the OS Builder leads with a **boot-only card** — the one thing on that screen that produces a file, sitting above the distributions that are all still Coming Later. Four questions (archive, ROM, size, destination) and an `Advanced` panel for everything with a defaulted answer; the hardware half of it writes the *same* `settings.json` keys the PiStorm studio uses, so an answer means one thing in both places. Three decisions worth keeping: **one request type and one `card_spec` for the plan and the build**, so a screen cannot show one card and write another; **`SAFE_CREATE` is answered by the plan**, before the button rather than by a job that fails; and **warnings are a typed enum, not sentences** — `CoreError`'s strings still reach the UI in English (ART-060) and there was no reason to add four more. Two things came out of using real material rather than fixtures: `emu68_payload` had no *total* ceiling — twenty entries under the per-file 64 MB is a gigabyte and a quarter held in memory, so there is a 256 MB budget on the running total now — and **[ART-104](ISSUES.md)**, the user's own A1200 3.1 ROM hashing to a dump `KNOWN_ROMS` does not carry, so every card built with it is warned about a ROM that is very probably right. Filed rather than patched: the fix is to identify a ROM by its own header and treat the checksum as confirmation, which is a change to how ROMs are identified. Driven against the real `Emu68-pistorm.zip`: 21 files, booting `Emu68-pistorm.gz` | 1114 Rust / 443 frontend |
+| 2026-08-14 | **Docs swept and the branch pushed.** Every claim about *now* checked against what is now true: the snapshot still said G2 was owed and that reading a card had no screen; FEATURES still described three fixed defects as live, including Application Size cutting the right edge — which measurement had disproved; README carried two paragraphs that contradicted each other and each other's dates. History kept its own wording; only the present tense was corrected. `sd-1` pushed to origin, fourteen commits, level as of this line | 1106 Rust / 432 frontend |
+| 2026-08-14 | **The payload chooses itself, and doing it against the real archive found a card that would not have booted.** `core/card/payload.rs` takes the user's `Emu68-pistorm.zip` and their Kickstart and produces everything the boot partition needs: the archive is checked against their board *and release line* before a byte of it is read (ART-091's lesson — the same file name means a different board in the two lines), `Emu68-raspi.zip` is refused for what it is rather than as "wrong", the Pi's own `config.txt` is merged rather than regenerated (§39/§40), `cmdline.txt` is written from nothing because the release has none, and the ROM goes on under the name the config points at. Then **[ART-103](ISSUES.md)**: `merge_config_txt` managed the `kernel=` key and wrote `Emu68.img` over the release's own `kernel=Emu68-pistorm.gz` — a name no release has ever shipped, pointing at a file the card does not carry. The card would have failed on the Amiga, where nobody could see why. The kernel's name is a field now, taken from the archive's own config and **verified to be among the files being placed**, so an archive that names a kernel it does not carry is refused before a card is written. Found the same way ART-090 and ART-091 were: by reading what the real thing says instead of what ART believed | 1106 Rust / 432 frontend |
+| 2026-08-14 | **ART built a PiStorm card, from the real Emu68 release.** `core/card/build.rs` puts the four pieces in one file in the right order: a sparse image, the partition table, the formatted boot partition with its payload, and **an RDB at the start of every Amiga area** — each with block numbers relative to its own offset, which is the mirror of ART-043 on the writing side. It then reads the file back with the same reader that opens CaffeineOS and MultibootOS, because a build that cannot be read is not a build. Driven against real material through `build_real_card_when_asked`: the complete `Emu68-pistorm.zip` (20 files, `overlays/` included) plus a Kickstart, laid on a 2 GiB card whose first Amiga disk lands at 1 178 599 424 — the same offset both real cards use. Two findings from reading the real payload rather than the specification: **the boot partition is not flat** (the Emu68 release has an `overlays/` folder and CaffeineOS's card has eighteen folders, so `create_boot_partition` creates directories now), and **`fatfs` writes two things wrong in every directory it makes** ([ART-102](ISSUES.md)) — long-filename entries on `.` and `..`, which the format forbids and 7-Zip reports, and `..` pointing at the root's own cluster instead of 0. Both repaired, both pinned by a test that reads the bytes, and the oracle now writes a folder so it cannot pass while the fault is there. `SAFE_CREATE`: an existing card image is refused, never built over | 1097 Rust / 432 frontend |
+| 2026-08-13 | **The card's boot partition, and the first filesystem ART writes that is not an Amiga one.** `core/fat32.rs` creates the FAT32 the Raspberry Pi boots from and puts files in it — `fatfs` rather than a formatter of ART's own, which is what the gap analysis asked for and the right call for a filesystem whose entire job is to be read by somebody else's firmware. Three decisions worth keeping: **FAT32 is forced**, because `fatfs` picks a width from the size and a small partition would silently come out FAT16 and not boot; **`chrono` is off**, so files carry no timestamps and a build produces the same bytes twice, which is what a manifest can describe (G7); and **every write is bounded to the partition** by `Region`, because the Amiga's first RDB begins where this partition ends — a formatter that ran past its end would take it, so a write past the end is refused rather than shortened, and a test watches the bytes on both sides. Cross-checked against **7-Zip** (`scripts/fat-oracle-check.py`): `File System = FAT32`, 512-byte sectors, 4 KiB clusters, the label, and every file's bytes back byte-for-byte, long names included. `cargo deny` clean with the new crate; `THIRD_PARTY_LICENSES.md` and CLAUDE.md's core-dependency list both updated in the same commit | 1089 Rust / 432 frontend |
+| 2026-08-13 | **G2's first half: ART can decide a card's shape and write its partition table.** `plan_card` + `write_mbr` in `core/mbr.rs`, built on the two real cards rather than on the specification — and reading their tables byte by byte paid twice. First, the front of both cards is identical to the sector (LBA 2048, 2 299 904 sectors of FAT32, first Amiga area at LBA 2 301 952), so the defaults are measured: **1.10 GiB of boot partition, not the "~200 MB" the research estimated**. Second, the two cards *disagree* about the CHS fields and the boot flag and both boot — which is a far better licence for a design decision than a specification is, and is why ART writes the LBA sentinel in every CHS field. Asked for MultibootOS's shape the planner reproduces MultibootOS's layout to the sector. **An Amiga disk at byte zero is not expressible**: the boot partition is not optional and it is first, which is how SD-0's unit-0 rule is enforced — by having no way to say the dangerous thing. Ten tests. Still owed for G2: a filesystem inside that partition, and the Emu68 payload in it | 1080 Rust / 432 frontend |
+| 2026-08-13 | **ART-043 closed — a partition inside a small image is written where it lives.** The whole-file strategy handed the writer the whole file at offset zero while the geometry described a partition megabytes in, so for any RDB image of 16 MiB or less volume-relative block numbers were used as file-absolute. Nothing was ever at risk, and that is now *measured*: the gate ran `validate_image` over the whole file, which stops at the signature — `RDSK`, not `DOS` — so a small RDB image could not be committed at all. `WholeFileVolume` replaces the three copies of that branch with one session that gives the writer the volume's own bytes, opens it at the volume's offset, validates the volume, and splices it back into the file for one atomic write; everything around the partition survives byte-for-byte and a bare ADF is untouched by the change. The fixture the entry said nothing constructed now exists — a 12 MB image with a formatted 4 MB partition — and the test asserts every byte *before* the partition is unchanged, which is where the RDB is. Mutation-checked. The other half of "writing at an offset", writing an **RDB** at one, belongs to G2 and has no caller yet | 1070 Rust / 432 frontend |
+| 2026-08-13 | **ART-099, measured instead of looked at — and the diagnosis was wrong.** `scripts/zoom-check.py` drives the running application in headless Chrome and reads the widths out of the page; seven screens, three sizes, in a window the size of the user's own. `.app-shell` renders **exactly one window wide at every size**, so it was never drawn `z` times too wide and both reverted fixes were corrections to something that was not happening. Nothing on any screen overflows its column at 130 % either. What *was* real: `.app-content` carried `overflow-x: hidden`, and since zoom spends width (2299 CSS px at 100 %, 1717 at 130 %, 1038 at 200 %) anything that did exceed the column would be clipped with no way to reach it — the box could still be scrolled by script while offering the user no scrollbar at all. One character. The entry stays open for the one check a dev server cannot make: the real WebView2 window with real data. Filed on the way: **ART-101**, the sidebar's `max-width: 1000px` collapse is asked of the real viewport and so never fires under zoom — 448 real px of a 1258 px window at 200 % | 1068 Rust / 432 frontend |
+| 2026-08-13 | **A card has a screen.** `core/card.rs` could read a real PiStorm card since the morning and nothing could show one; `card_open` and the Hard Disk studio's card view close that. The studio now asks the **card reader for every file** and branches on whether a partition table was found — an HDF comes back as one area at offset zero, so a card is never recognised by its extension and `hdf_open`, which cannot open a card at all, is never asked to. The card view is a list of *disks*: the four MBR slots as the card's own documentation numbers them, one section per Amiga disk with its offset and its partitions, and the drivers **unioned across the whole card** with the unmountable question asked against that union (ART-097, computed in Rust so the UI cannot get it wrong). Read-only, and it says so on the screen. Verified against both real cards: MultibootOS 2.2 — 128 GB, 2 Amiga disks, 17 partitions, 2 drivers, none unmountable; CaffeineOS 9317 — 64 GB, 1 disk, 2 partitions, 1 driver. Also: **every missing material arrived**, `VideoCore.card` among them (the name that needed checking), so G2 is unblocked | 1068 Rust / 432 frontend |
+| 2026-08-13 | **Two more off the open list.** ART-066: planning a batch of archives has to unpack every one of them, and it did that on the command thread — the window froze with no progress and no Stop, in the step that exists so the user can change their mind. It is a job now, with the plan arriving on its own event; `busy` is cleared by the plan *or* by the job ending, which is the cancelled case the old code could not have at all. ART-058: cancelling a copy into a large image left the files that had landed in place, correctly, and said only "cancelled" — the same word the whole-file strategy uses when it leaves nothing. `CancelledPartway { files }` carries the count as a number to `JobState::Cancelled { files_landed }`, still a cancellation and never a failure, and the sentence is the UI's in the user's language. The large-image test asserts the count against the volume's own listing | 1066 Rust / 425 frontend |
+| 2026-08-13 | **Four off the open list, the four that needed no decision first.** ART-070: refreshing a pane moved the keyboard into it, so after F5 the next key acted on the pane the user was not looking at — `refresh` puts focus back, and the harness test proves the old behaviour too by running with it. ART-067: Stop was heard between archives but not inside one, because the unpack was handed `NoProgress`; a `BatchStep` sink forwards the cancel flag while keeping the batch's own counts, since forwarding it raw would make the progress bar leap and fall back at every archive. ART-068: the pane inferred "your mask matches nothing" from two counts matching a shape; `filterEntriesReporting` answers it where the removing happens. ART-049: `VolumeWriter::open` now refuses a geometry that contradicts the bootblock's dostype — no existing caller was refused, which is the evidence they all already agreed | 1063 Rust / 419 frontend |
+| 2026-08-13 | **ART-085 closed: what ART has open now outlives the screen.** Six studios each held their open file in a `useState`, so leaving the screen threw it away while the Dashboard's Recent list still named it a second later. `useOpenObject(kind)` — one small store, nine slots — is a drop-in for all six. **Session-scoped by the user's decision**: it never reaches `settings.json`, because a path that outlives the run can name a file since deleted or unplugged, and that is a bigger design than this asked for. Only the path is held; a studio re-reads its file on the way back, so nothing comes back stale. Router state still wins. Caught on the way past: ADF Studio's `loadDisk` reset the hex panel on every run, which on a reopen would have switched off a remembered choice — a setting changing without the user changing it. Mutation-checked: the harness back on `useState` fails two of five cases | 1060 Rust / 410 frontend |
+| 2026-08-13 | **ART-096 closed.** The RDB half had landed; what was left was the half that decides what a *user* gets. `HardDiskStudio.tsx` hard-coded `num_buffers: 100` in three places, so the core's measured 600 reached nothing anybody created through the UI — a literal in a component quietly outvoting the engine. The three are gone and the field is now `#[serde(default)]` / optional in `hdf.ts`: absent and zero both mean "the core decides", because a screen that never asks for a buffer count has no business stating one. Three tests, mutation-checked in both directions — restoring either old value fails them. Docs: CLAUDE.md gained the network layer, the two-catalogue string rule and the Vitest jsdom trap; CONTRIBUTING's "branch from `master`" is gone, published months ago | 1060 Rust / 401 frontend |
+| 2026-08-13 | ART-096 half done (RDB `MaxTransfer`, `Mask`, 600 buffers written and read back); ART-100 (the PiStorm screen said "choose a card first" only by being grey); ART-099 reopened after two bad fixes were reverted; docs swept — seventeen fixed entries moved out of ISSUES' Open section, fifteen stale `#open` anchors corrected, CLAUDE.md's dead branch name and missing CI step fixed | 1057 Rust / 401 frontend |
+| 2026-08-13 | **GitHub caught up, and CI turned out to be broken.** 28 commits of `main`, 15 of `phase-2b` and the whole `sd-1` branch had never reached the remote. Pushing them showed the last three runs on `main` red — and the reason was never in the code: the licence gate used a **container** action on a **Windows** runner, which cannot run, so it failed on every push since it was added and took `Build application` and the MSI artifact down with it ([ART-098](ISSUES.md)). `docs/licenses.md` had been claiming that check ran the whole time. The frontend tests were never in CI at all — four hundred of them, including the i18n parity check. Both fixed | 1057 Rust / 401 frontend |
+| 2026-08-13 | **ART can read a real PiStorm card — the thing that blocked SD-2a.** Two real distributions arrived (CaffeineOS 9317, MultibootOS 2.2) and reading them found that ART could not open either: `find_rdb_location` looked in the first 16 blocks of the file, and on every card those are the MBR and the FAT32 partition, with the Amiga's RDB about 1.1 GB in ([ART-095](ISSUES.md)). `core/mbr.rs` + `core/card.rs` fix it, and a card is a **list** of Amiga disks: MultibootOS has two, with different geometries, and its second RDB carries no PFS3 while all fifteen of its partitions are PFS3 — so drivers are the card's, not the area's, or ART would name fifteen working partitions as broken ([ART-097](ISSUES.md)). Both verified against the real files. Also filed: [ART-096](ISSUES.md), ART writes `MaxTransfer` and `Mask` as zero where every partition on both cards uses `0x1FE00` / `0x7FFFFFFE`. The layout is written up in [sd2-card-layout.md](sd2-card-layout.md) | 1057 Rust / 401 frontend |
+| 2026-08-13 | **The two things left owed from the previous rounds.** ART-094: the `w` bit is checked before an overwrite, at all three paths — and it caught a side effect of the fix that created it, since ART-088 had made every overwrite path ask the *deletion* question by going through `delete`. Two bits, two guards, `a_delete_protected_file_may_still_be_overwritten` keeping them apart. ART-092: a named firmware set can be deleted, backed up first so it stays recoverable, and never the one the card is currently running. Still owed and named: the copy dialog's own write-protection question, and [ART-093](ISSUES.md#open) (fetching a kernel) | 1038 Rust / 401 frontend |
+| 2026-08-13 | **Four from the open list, while the card is being prepared.** ART-088: the *writer* honours the delete-protection bit now, not just a dialog — `delete` refuses and names the entry, `delete_with(.., Override)` is the way past it, and the Files screen sends the answer only where it has shown the question. Move asks before the copy half rather than after, so a refusal cannot leave a duplicate behind. ART-072: `Docs` and `docs` are one drawer on an Amiga, so both collision checks compare without case — the clean refusal fires where it used to become a pile of unexplained skips. ART-071: a selection of nothing but shortcuts said it had copied everything; the report carries the declined roots now. ART-061: "1 weeks ago" — fixed with `_one`/`_other`, and with `count`, which is the half that makes i18next actually pluralise. The `w`-bit question is split out as ART-094 rather than left inside ART-088 | 1031 Rust / 401 frontend |
+| 2026-08-13 | **The OS Builder knows the distributions.** `core/distro/` is a registry of real AmigaOS distros as data — CaffeineOS, CoffinOS, AmiKit, two ART Baseline entries — with the licence model each one obliges the user to, the Kickstart family its base wants, and the card it needs. The `/os-builder` screen leads with the licence, checks the ROM family and the card size, and says plainly that ART cannot write a card yet: the adapter is blocked on reading a real distribution's layout by hand (research §8.2) rather than guessing at it. Two open questions closed with evidence in [sd2-distro-decisions.md](sd2-distro-decisions.md) — the **free Aminet Picasso96 is enough** (so ART Baseline is reproducible without a paid component), and the HstWB package format, whose `Install` turns out to be 26 KB of Amiga script only an Amiga can run | 1024 Rust / 400 frontend |
+| 2026-08-13 | **PiStorm fix round.** The Kickstart goes through ROM Manager now — every ROM on a card identified by checksum and labelled with its version and machines, one pickable from anywhere on the PC and copied on under a confirmed name; unrecognised stays a label, never a refusal. The kernel states its version, read from the `$VER:` string Emu68's own build compiles in. Named firmware sets can be created, duplicated, renamed and activated, each through preview to backup to write. **[ART-091](ISSUES.md) found in review**: ART named `Emu68-pistorm16.zip`, which no Emu68 release has ever shipped — and the name that does exist, `Emu68-pistorm.zip`, means the *classic* board in 1.0.x and the PiStorm32-lite/PiStorm16 in 1.1 alpha. The release line is now a field and the answer a type with `Absent` and `Unstated` cases. Owed and named: [ART-093](ISSUES.md#open) (fetching a kernel update) and [ART-092](ISSUES.md) (deleting a set) | 1013 Rust / 379 frontend |
+| 2026-08-12 | **The PiStorm screen stopped inventing things (ART-090).** It offered a JIT switch (Emu68 *is* a JIT), an MMU switch (it emulates none), a Fast RAM slider (it maps RAM itself) and `emu68-sd.device` (the real driver is `brcm-sdhc`/`brcm-emmc`), and wrote three tokens Emu68 has never read. Rebuilt from the user's research brief as `core/pistorm/{hardware,options,firmware}.rs`, 58 tests: a three-field hardware matrix everything derives from, one field per documented token, four profiles whose claims are the tokens they write. The screen prints the token beside every control and the whole line beneath them. **Not verified on real hardware** — no card built by it has been booted | 985 Rust / 367 frontend |
+| 2026-08-12 | **Every choice is remembered now, and the whole program can be made bigger.** `@/lib/remembered` gives every screen's view modes, filters, folders and configs a checked home in `settings.json`; Application Size scales the entire UI 70–250 % with Ctrl+wheel, Ctrl+±, Ctrl+0 and a Settings slider. Both from the user: *nothing changes unless the user changes it*, and *fonts, search fields and icons on every screen* | 985 Rust / 367 frontend |
+| 2026-08-12 | **SD-1 G4: a PFS3 disk ART makes now mounts.** Both halves of RDB filesystem embedding — `parse_file_systems` reads the FSHD/LSEG chain and the studio names any partition nothing will mount; `create_rdb_layout` writes a driver into an RDB it builds, refusing with block numbers one that will not fit the reserved area. Version comes from the binary's own `$VER:`, and ART asks rather than defaulting to 0.0 when it is silent. **Verified from outside, both directions**: `rdbtool` reads ART's image (`PDS3 version=19.2 size=59120`) and extracts the driver back SHA-256-identical; `hst-imager` reads it too. Added to `oracle-check.py` with a synthetic driver (48 → 53 checks, CI-blocking) and mutation-checked: a fixed `SummedLongs` is caught. Closes ART-084. Also: the Aminet download folder is now set from Settings, validated by the engine before it is remembered | 931 Rust / 316 frontend |
 | 2026-08-12 | **Phase 2b complete.** Enter opens a container in the same pane and Backspace comes back out with the cursor on it — verified on a real disk. Full keyboard coverage, tabs with session restore, per-filetype colour rules, and the confirmations his config keeps on. Four gaps filed rather than smuggled in (ART-080/081/087/088). Two acceptance points unverified and said so: the light theme and session restore | 912 Rust / 279 frontend |
 | 2026-08-12 | **First human session with the running application.** ART-082 found and fixed in seconds — the Files panes filled the window and their listings did not, capped at 420 px, behind 178 green tests. ART-083 fixed (the HDF wizard's 8 GB ceiling was five numbers in a component, not an engine limit; there is a Custom size now). ART-084 recorded and labelled in the dialog: a PFS3/SFS HDF is a DosType with no filesystem and no RDB driver, so an Amiga cannot mount it. ART-085/086 recorded. **Scope decision: ART builds the PiStorm `.img`, never the card** — G1 deleted, and G14/G15/G16 (wallpaper + WiFi + prefs, a build as a drop target, real multiboot) added from the user | 912 Rust / 191 frontend |
 | 2026-08-12 | **Bare metal.** `test/art-bootable-test.adf` cold-booted a real A500/A500+ (Kickstart 3.9) from a Gotek to an AmigaDOS `1>` prompt — ART's own boot code running on a real 68000, photographed. Every earlier pass was WinUAE with licensed ROMs. Left standing: physical magnetic media, which a Gotek is not | — |

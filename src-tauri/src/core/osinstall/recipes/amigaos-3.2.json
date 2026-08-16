@@ -1,0 +1,288 @@
+{
+  "release": "AmigaOS 3.2",
+  "components": [
+    {
+      "id": "workbench-base",
+      "media": "Workbench3.2",
+      "required": true,
+      "rules": [
+        { "from": "C", "to": "C", "kind": "subtree" },
+        { "from": "Classes", "to": "Classes", "kind": "subtree" },
+        { "from": "Devs", "to": "Devs", "kind": "subtree" },
+        { "from": "Expansion", "to": "Expansion", "kind": "subtree" },
+        { "from": "Libs", "to": "Libs", "kind": "subtree" },
+        { "from": "Prefs", "to": "Prefs", "kind": "subtree" },
+        { "from": "Rexxc", "to": "Rexxc", "kind": "subtree" },
+        { "from": "S", "to": "S", "kind": "subtree" },
+        { "from": "System", "to": "System", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "extras",
+      "media": "Extras3.2",
+      "rules": [
+        { "from": "L", "to": "L", "kind": "subtree" },
+        { "from": "Prefs", "to": "Prefs", "kind": "subtree" },
+        { "from": "S", "to": "S", "kind": "subtree" },
+        { "from": "System", "to": "System", "kind": "subtree" },
+        { "from": "Tools", "to": "Tools", "kind": "subtree" }
+      ],
+      "overrides": ["workbench-base"]
+    },
+    {
+      "id": "locale-base",
+      "media": "Locale",
+      "rules": [
+        { "from": "Catalogs", "to": "Locale/Catalogs", "kind": "subtree" },
+        { "from": "Countries", "to": "Locale/Countries", "kind": "subtree" },
+        { "from": "Support", "to": "Locale/Support", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-de",
+      "media": "Locale-DE",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-dk",
+      "media": "Locale-DK",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-en",
+      "media": "Locale-EN",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-es",
+      "media": "Locale-ES",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-fr",
+      "media": "Locale-FR",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-gr",
+      "media": "Locale-GR",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-it",
+      "media": "Locale-IT",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-nl",
+      "media": "Locale-NL",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-no",
+      "media": "Locale-NO",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-pl",
+      "media": "Locale-PL",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-pt",
+      "media": "Locale-PT",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-ru",
+      "media": "Locale-RU",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-se",
+      "media": "Locale-SE",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-tr",
+      "media": "Locale-TR",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-uk",
+      "media": "Locale-UK",
+      "rules": [
+        { "from": "Languages", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "Help", "to": "Locale/Help", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "modules-a1200",
+      "media": "ModulesA1200_3.2",
+      "condition": { "condition": "rom-older-than", "major": 47 },
+      "exclusive_group": "modules",
+      "rules": [
+        { "from": "C/LoadModule", "to": "C/LoadModule", "kind": "file" },
+        { "from": "LIBS/Modules", "to": "Libs/Modules", "kind": "subtree" },
+        { "from": "DEVS/A1200", "to": "Devs/A1200", "kind": "subtree" },
+        { "from": "LIBS/A1200", "to": "Libs/A1200", "kind": "subtree" }
+      ],
+      "overrides": ["storage"]
+    },
+    {
+      "id": "update-3.2.1",
+      "media": "Update3.2.1",
+      "available": false,
+      "rules": []
+    },
+    {
+      "id": "fonts",
+      "media": "Fonts",
+      "rules": [
+        { "from": "", "to": "Fonts", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "classes",
+      "media": "Classes3.2",
+      "rules": [
+        { "from": "Classes", "to": "Classes", "kind": "subtree" },
+        { "from": "Devs", "to": "Devs", "kind": "subtree" }
+      ],
+      "overrides": ["workbench-base"]
+    },
+    {
+      "id": "glowicons",
+      "media": "GlowIcons3.2",
+      "rules": [
+        { "from": "Devs", "to": "Devs", "kind": "subtree" },
+        { "from": "Prefs", "to": "Prefs", "kind": "subtree" },
+        { "from": "Storage", "to": "Storage", "kind": "subtree" },
+        { "from": "System", "to": "System", "kind": "subtree" },
+        { "from": "Tools", "to": "Tools", "kind": "subtree" }
+      ],
+      "overrides": ["workbench-base", "extras", "storage", "classes"]
+    },
+    {
+      "id": "backdrops",
+      "media": "Backdrops3.2",
+      "available": false,
+      "rules": [
+        { "from": "", "to": "Backdrops", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "diskdoctor",
+      "media": "DiskDoctor",
+      "rules": [
+        { "from": "C/DAControl", "to": "C/DAControl", "kind": "file" },
+        { "from": "C/DiskDoctor", "to": "C/DiskDoctor", "kind": "file" },
+        { "from": "C/FixROMLibs", "to": "C/FixROMLibs", "kind": "file" }
+      ]
+    },
+    {
+      "id": "mmulibs",
+      "media": "MMULibs",
+      "rules": [
+        { "from": "C/FPU", "to": "C/FPU", "kind": "file" },
+        { "from": "C/MuFastChip", "to": "C/MuFastChip", "kind": "file" },
+        { "from": "C/MuFastRom", "to": "C/MuFastRom", "kind": "file" },
+        { "from": "C/MuFastZero", "to": "C/MuFastZero", "kind": "file" },
+        { "from": "C/MuLockLib", "to": "C/MuLockLib", "kind": "file" },
+        { "from": "C/MuMapRom", "to": "C/MuMapRom", "kind": "file" },
+        { "from": "C/MuProtectModules", "to": "C/MuProtectModules", "kind": "file" },
+        { "from": "C/MuRedox", "to": "C/MuRedox", "kind": "file" },
+        { "from": "C/MuScan", "to": "C/MuScan", "kind": "file" },
+        { "from": "C/MuSetCacheMode", "to": "C/MuSetCacheMode", "kind": "file" },
+        { "from": "C/OmniScsiPatch", "to": "C/OmniScsiPatch", "kind": "file" },
+        { "from": "Libs/68020.library", "to": "Libs/68020.library", "kind": "file" },
+        { "from": "Libs/68030.library", "to": "Libs/68030.library", "kind": "file" },
+        { "from": "Libs/68040.library", "to": "Libs/68040.library", "kind": "file" },
+        { "from": "Libs/68060.library", "to": "Libs/68060.library", "kind": "file" },
+        { "from": "Libs/680x0.library", "to": "Libs/680x0.library", "kind": "file" },
+        { "from": "Libs/mmu", "to": "Libs/mmu", "kind": "subtree" },
+        { "from": "Libs/mmu.library", "to": "Libs/mmu.library", "kind": "file" },
+        { "from": "Libs/memory.library", "to": "Libs/memory.library", "kind": "file" },
+        { "from": "Libs/disassembler.library", "to": "Libs/disassembler.library", "kind": "file" }
+      ]
+    },
+    {
+      "id": "hdtools",
+      "media": "HDSetup3.2",
+      "rules": [
+        { "from": "C/Check2090", "to": "C/Check2090", "kind": "file" },
+        { "from": "C/CopyTooltypes", "to": "C/CopyTooltypes", "kind": "file" },
+        { "from": "C/ExtractKickstart", "to": "C/ExtractKickstart", "kind": "file" },
+        { "from": "C/FindResident", "to": "C/FindResident", "kind": "file" },
+        { "from": "C/IconPos", "to": "C/IconPos", "kind": "file" },
+        { "from": "C/NSDPatch", "to": "C/NSDPatch", "kind": "file" },
+        { "from": "C/Prod_Prep", "to": "C/Prod_Prep", "kind": "file" },
+        { "from": "C/UpdateWBFiles", "to": "C/UpdateWBFiles", "kind": "file" },
+        { "from": "HDTools", "to": "HDTools", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "storage",
+      "media": "Storage3.2",
+      "rules": [
+        { "from": "C/DefIcons", "to": "C/DefIcons", "kind": "file" },
+        { "from": "C/Edit", "to": "C/Edit", "kind": "file" },
+        { "from": "C/Group", "to": "C/Group", "kind": "file" },
+        { "from": "C/LoadModule", "to": "C/LoadModule", "kind": "file" },
+        { "from": "C/LoadMonDrvs", "to": "C/LoadMonDrvs", "kind": "file" },
+        { "from": "C/MD5Sum", "to": "C/MD5Sum", "kind": "file" },
+        { "from": "C/MountInfo", "to": "C/MountInfo", "kind": "file" },
+        { "from": "C/Owner", "to": "C/Owner", "kind": "file" },
+        { "from": "C/Reboot", "to": "C/Reboot", "kind": "file" },
+        { "from": "DOSDrivers", "to": "Storage/DOSDrivers", "kind": "subtree" },
+        { "from": "Keymaps", "to": "Storage/Keymaps", "kind": "subtree" },
+        { "from": "Monitors", "to": "Storage/Monitors", "kind": "subtree" },
+        { "from": "Presets", "to": "Storage/Presets", "kind": "subtree" },
+        { "from": "DefIcons", "to": "Storage/DefIcons", "kind": "subtree" },
+        { "from": "Env-Archive", "to": "Storage/Env-Archive", "kind": "subtree" }
+      ]
+    }
+  ]
+}

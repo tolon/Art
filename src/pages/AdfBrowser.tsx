@@ -18,6 +18,9 @@ import {
   type MutationOutcome,
   type ValidationReport,
 } from "@/lib/adf";
+import { isFlag, isOneOf } from "@/lib/remembered";
+import { useRemembered } from "@/lib/useRemembered";
+import { useOpenObject } from "@/stores/openObjectStore";
 
 interface Breadcrumb {
   block: number | null;
@@ -29,7 +32,9 @@ export function AdfBrowser() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const [path, setPath] = useState<string | null>(null);
+  // The open disk outlives this screen (ART-085): leaving and coming back finds
+  // it still open, for as long as ART is running.
+  const [path, setPath] = useOpenObject("adf");
   const [info, setInfo] = useState<AdfInfo | null>(null);
   const [entries, setEntries] = useState<AdfEntry[]>([]);
   const [report, setReport] = useState<ValidationReport | null>(null);
@@ -43,13 +48,21 @@ export function AdfBrowser() {
   ]);
 
   // Dual-option mode for damaged / non-dos disks
-  const [showHexMode, setShowHexMode] = useState(false);
+  // A view the user turned on, not a mode the screen is in: somebody who works
+  // at block level wants the hex panel there again next time.
+  const [showHexMode, setShowHexMode] = useRemembered("adf.showHex", isFlag, false);
 
   // Modal dialog states
   const [showNewAdfModal, setShowNewAdfModal] = useState(false);
   const [newVolumeName, setNewVolumeName] = useState("EmptyDisk");
-  const [newFsType, setNewFsType] = useState<"ofs" | "ffs">("ffs");
-  const [newBootable, setNewBootable] = useState(false);
+  // The name belongs to the disk being made; the filesystem and the boot block
+  // are how *this user* makes disks, and are the same answer nearly every time.
+  const [newFsType, setNewFsType] = useRemembered<"ofs" | "ffs">(
+    "adf.newFsType",
+    isOneOf("ofs", "ffs"),
+    "ffs"
+  );
+  const [newBootable, setNewBootable] = useRemembered("adf.newBootable", isFlag, false);
 
   const [showMkdirModal, setShowMkdirModal] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
@@ -63,19 +76,28 @@ export function AdfBrowser() {
   const currentBreadcrumb = breadcrumbs[breadcrumbs.length - 1];
   const currentDirBlock = currentBreadcrumb.block ?? undefined;
 
-  // Auto-load if navigated from Dashboard via state
+  // What this screen should be showing when it appears: the file the Dashboard
+  // or the drop panel named in router state, and otherwise whatever was already
+  // open (ART-085). `info` is null on every fresh mount whatever the store
+  // says, so it is the honest test of "is anything loaded *here*, now" —
+  // reopening reads the file again rather than trusting a cached parse.
   useEffect(() => {
-    const p = (location.state as { path?: string })?.path;
-    if (p && p !== path) {
-      void loadDisk(p);
+    const fromNav = (location.state as { path?: string })?.path;
+    const target = fromNav ?? path;
+    if (target && (info === null || target !== path)) {
+      void loadDisk(target, { reopening: !fromNav });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state]);
 
-  async function loadDisk(p: string) {
+  async function loadDisk(p: string, opts?: { reopening?: boolean }) {
     setBusy(true);
     setError(null);
-    setShowHexMode(false);
+    // Opening a *different* disk starts in the normal view; coming back to the
+    // one already open must not, or the hex panel a block-level user turned on
+    // would switch itself off every time they left the screen — a setting
+    // changing without the user changing it.
+    if (!opts?.reopening) setShowHexMode(false);
     setSuccessMsg(null);
     try {
       const [diskInfo, rootEntries] = await Promise.all([adfOpen(p), adfList(p)]);

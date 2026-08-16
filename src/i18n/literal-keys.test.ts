@@ -132,6 +132,67 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // reading a `Phrase.key` from `@/lib/hdfSize` — same pattern as every
     // other refusal on this list, and every branch of both is enumerated in
     // that module's own test file.
-    expect(dynamicCalls).toBe(50);
+    // 50 → 54 (ART-090, the PiStorm rebuild): the screen is now generated from
+    // Rust's own tables rather than from a list of cards written by hand, so
+    // its labels are read by id — the hardware notes, the four profiles' title
+    // and description, the display presets, and each option group and row in
+    // the full inventory. Every one of those ids is an enum in
+    // `core/pistorm`, and `pistormOptions.test.ts` proves the inventory
+    // matches the engine field for field, which is the check this scan cannot
+    // make. It replaces four dynamic calls the old screen made over a table of
+    // cards it invented.
+    // 54 → 57 (the PiStorm fix round): the Emu68 release-line dropdown labels
+    // its two options by id, and the Kickstart picker and its suitability note
+    // both read a `Phrase.key` from `@/lib/pistormRom` — the same pattern every
+    // other refusal on this list follows, with every branch enumerated in that
+    // module's own test file.
+    // 57 → 61 (the OS Builder): a profile's licence sentence, what it asks the
+    // user to supply, what may be wrong with the file they pointed at, and its
+    // post-install notes are all data in the distro registry rather than
+    // sentences on the screen — so they are read by key. Every branch of the
+    // first three is enumerated in `osBuilder.test.ts`, and the notes are
+    // checked against both catalogues by `distro-registry-keys.test.ts`, which
+    // is the check this scan cannot make.
+    // 61 → 64 (the card builder): a build's warnings and the reason the Build
+    // button is off are `Phrase`s from `@/lib/cardBuild` — the kinds are Rust
+    // enums, and putting their sentences on this side is what keeps them in
+    // the user's language (ART-060). Every variant of both mappers is
+    // enumerated in `phrase-keys.test.ts`.
+    // 64 → 70 (G7's manifest, then G8's health report): the verdict line,
+    // every check, every manifest finding under it, and each step only the
+    // user can take are `Phrase`s from `@/lib/cardBuild`, mapped from Rust
+    // enums for the same reason the build warnings are.
+    // `phrase-keys.test.ts` enumerates every variant of all four mappers.
+    // The state word beside each check (`…state.pass`) is the one genuinely
+    // computed key here, and its three values are a closed TypeScript union.
+    // 70 → 71 (G15): what a dropped file becomes on this card is a `Phrase`
+    // too, and `phrase-keys.test.ts` enumerates its five variants.
+    // 71 → 72: the health section's second button reads one of two literal
+    // keys depending on whether a check is running, the same shape the
+    // sidebar toggle uses.
+    // 72 → 78 (SD-2 G3's preload screen): two `Phrase` reads — the reason the
+    // preload cannot run yet and the sentence for each planned step, both
+    // mapped from Rust shapes in `@/lib/preload` and both enumerated in
+    // `phrase-keys.test.ts` — plus four one-of-two-literal-keys ternaries
+    // (probing, previewing, running, and "no card yet" vs "this card has no
+    // Amiga partition"), the same shape the sidebar toggle and the health
+    // section's button already use.
+    // 78 → 84 (SD-2 G11's layout screen, Task 7): a row's `kindPhrase` and a
+    // refusal's `refusalPhrase`, both `Phrase` reads from `@/lib/layout` and
+    // both enumerated in `phrase-keys.test.ts` — plus `layoutBlocker`'s
+    // `Phrase`, read twice (the disabled Apply button's `title` and the
+    // sentence beside it, the same double-read `buildBlocker` already uses in
+    // `CardBuilder.tsx`) — plus two one-of-two-literal-keys ternaries
+    // (Preview running/idle, Apply running/idle), the same shape every other
+    // busy-button on this list already uses.
+    // 84 → 89 (SD-2 G5's install screen, Task 13): `osinstallBlocker`'s and a
+    // refusal's `refusalPhrase`, both `Phrase` reads from `@/lib/osinstall`
+    // (`osinstallRefusalPhrase`'s seven variants are enumerated in
+    // `phrase-keys.test.ts`, same as every other refusal on this list) —
+    // plus three one-of-two-literal-keys ternaries (Build running/idle,
+    // Verify running/idle, and the verify report's own Verified/Not
+    // verified line), the same shape every other busy-button and outcome
+    // badge on this list already uses.
+    expect(dynamicCalls).toBe(89);
   });
 });

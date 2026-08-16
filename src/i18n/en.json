@@ -12,6 +12,8 @@
     "rom": "ROM Manager",
     "winuae": "WinUAE",
     "pistorm": "PiStorm",
+    "osBuilder": "OS Builder",
+    "layout": "Content Layout",
     "collection": "Collection",
     "tools": "Tools",
     "settings": "Settings",
@@ -65,7 +67,9 @@
     "unknown": "Unknown",
     "yes": "Yes",
     "no": "No",
-    "launchInWinuae": "Launch in WinUAE"
+    "launchInWinuae": "Launch in WinUAE",
+    "browse": "Browse…",
+    "clear": "Clear"
   },
   "components": {
     "copyPlan": {
@@ -132,14 +136,38 @@
       "apply": "Apply",
       "reset": "Reset",
       "bits": {
-        "hold": { "name": "Hold", "explanation": "Keep resident after running. Rarely used." },
-        "script": { "name": "Script", "explanation": "Run as a shell script. WHDLoad installers rely on this." },
-        "pure": { "name": "Pure", "explanation": "Re-entrant, so it can be made resident. Slaves use it." },
-        "archived": { "name": "Archived", "explanation": "Unchanged since the last backup." },
-        "read": { "name": "Read", "explanation": "The file can be read." },
-        "write": { "name": "Write", "explanation": "The file can be changed." },
-        "execute": { "name": "Execute", "explanation": "The file can be run." },
-        "delete": { "name": "Delete", "explanation": "The file can be deleted." }
+        "hold": {
+          "name": "Hold",
+          "explanation": "Keep resident after running. Rarely used."
+        },
+        "script": {
+          "name": "Script",
+          "explanation": "Run as a shell script. WHDLoad installers rely on this."
+        },
+        "pure": {
+          "name": "Pure",
+          "explanation": "Re-entrant, so it can be made resident. Slaves use it."
+        },
+        "archived": {
+          "name": "Archived",
+          "explanation": "Unchanged since the last backup."
+        },
+        "read": {
+          "name": "Read",
+          "explanation": "The file can be read."
+        },
+        "write": {
+          "name": "Write",
+          "explanation": "The file can be changed."
+        },
+        "execute": {
+          "name": "Execute",
+          "explanation": "The file can be run."
+        },
+        "delete": {
+          "name": "Delete",
+          "explanation": "The file can be deleted."
+        }
       }
     },
     "fnKeys": {
@@ -156,6 +184,8 @@
         "running": "Running",
         "done": "Done",
         "cancelled": "Cancelled",
+        "cancelledPartway_one": "Cancelled — {{count}} file was already written and is still there",
+        "cancelledPartway_other": "Cancelled — {{count}} files were already written and are still there",
         "failed": "Failed ({{code}})"
       }
     },
@@ -175,6 +205,16 @@
     "general": "General",
     "appearance": "Appearance",
     "files": "Files",
+    "about": {
+      "heading": "About",
+      "developer": "Author",
+      "source": "Source code",
+      "licenceLabel": "Licence",
+      "copyright": "Copyright",
+      "licence": "GNU General Public License v3.0 or later",
+      "warranty": "This program comes with ABSOLUTELY NO WARRANTY. This is free software, and you are welcome to redistribute it under certain conditions.",
+      "whereTheLicenceIs": "The full licence text is installed beside the program, as LICENSE."
+    },
     "paths": "Paths",
     "pathsHint": "ART is an Amiga toolkit, not a disk manager — tell it where your Amiga files live and it will start there.",
     "browse": "Browse…",
@@ -205,7 +245,14 @@
     "uxPower": "Power User",
     "language": "Language",
     "winuaePath": "WinUAE Path",
+    "hstImagerPath": "hst.imager Path",
+    "appZoom": "Application Size",
+    "appZoomReset": "Reset",
+    "appZoomHint": "Scales the whole program — text, search boxes, icons, buttons — on every screen. Ctrl and the mouse wheel does the same anywhere outside the file listing; Ctrl+0 puts it back.",
     "collectionDir": "Collection Directory",
+    "aminetRoot": "Aminet Download Folder",
+    "aminetRootHint": "Where packages downloaded from Aminet are kept. Left empty, ART uses its own folder.",
+    "aminetRootInUse": "Downloads go to {{path}}",
     "uxModePowerHint": "Showing raw data tools, block and sector detail, and advanced actions.",
     "uxModeBeginnerHint": "Hiding raw data tools and block-level detail. Nothing is disabled — switch to Power User to see everything.",
     "colourRules": {
@@ -300,8 +347,10 @@
       "dateUnknown": "date unknown",
       "capped": "19 years or older",
       "thisWeek": "this week",
-      "weeksAgo": "{{n}} weeks ago",
-      "monthsAgo": "{{n}} months ago",
+      "weeksAgo_one": "{{count}} week ago",
+      "weeksAgo_other": "{{count}} weeks ago",
+      "monthsAgo_one": "{{count}} month ago",
+      "monthsAgo_other": "{{count}} months ago",
       "yearsAgo": "{{n}} years ago"
     },
     "size": {
@@ -539,6 +588,27 @@
       "missing_one": "{{names}} names a file system this disk does not carry. An Amiga will not mount it — silently, with no error. The driver has to be added to the RDB.",
       "missing_other": "{{count}} partitions name file systems this disk does not carry ({{names}}). An Amiga will not mount them — silently, with no error."
     },
+    "card": {
+      "title": "PiStorm SD card",
+      "readOnly": "Read only — ART cannot write a card yet",
+      "disksLabel": "Amiga disks",
+      "bootLabel": "FAT32 boot partition",
+      "noBoot": "none — the Pi has nothing to boot from",
+      "slot": "Slot",
+      "type": "Type",
+      "start": "Starts at",
+      "kind": {
+        "fat32": "FAT32 (the Pi boots from this)",
+        "amiga": "Amiga disk (0x76)",
+        "other": "Other ({{code}})"
+      },
+      "disk": "Amiga disk {{n}}",
+      "diskAt": "Starts {{offset}} into the card · {{size}}. The Amiga sees this as a drive of its own, with its own partition table.",
+      "driversTitle": "File system drivers on this card",
+      "unmountableEntry": "{{name}} ({{dosType}}, disk {{n}})",
+      "unmountable_one": "{{names}} names a file system nothing on this card carries. An Amiga will not mount it — silently, with no error.",
+      "unmountable_other": "{{count}} partitions name file systems nothing on this card carries ({{names}}). An Amiga will not mount them — silently, with no error."
+    },
     "partitionProperties": "Partition Properties",
     "deviceName": "Device Name:",
     "dosTypeSignature": "DosType Signature:",
@@ -559,7 +629,15 @@
       "singleTitle": "Single Partition",
       "singleDesc": "DH0: System (100% capacity)",
       "createButton": "Create HDF File…",
-      "warnNoDriver": "ART writes the partition table and this filesystem's DosType, but not the filesystem itself: no PFS3 or SFS driver is placed in the RDB, so an Amiga will not see this partition until one is put there with another tool. Fast File System partitions are formatted on the Amiga with Format, as on a real disk.",
+      "driver": {
+        "label": "4. File System Driver:",
+        "browse": "Choose driver…",
+        "none": "None chosen",
+        "clear": "Remove",
+        "dialogTitle": "Choose the file system driver to embed",
+        "explain": "Kickstart has no {{dosType}} filesystem, so it has to travel inside the disk itself. Point ART at the driver — {{hint}}, usually — and it goes into the RDB with the version it states about itself.",
+        "warning": "Without a driver an Amiga will not see these partitions at all. The image is still made; it will not mount until a driver is added."
+      },
       "warnOver4Gb": "A single {{size}} GB partition is past the 4 GB that standard AmigaDOS can address; it needs TD64 or NSD support in both the controller and the filesystem. Fine for an emulator, and for a machine that has them — split the disk if it does not.",
       "custom": {
         "button": "Custom…",
@@ -613,79 +691,304 @@
       }
     }
   },
-  "pistorm": {
-    "title": "PiStorm & Emu68 Studio",
-    "selectSdTitle": "Select PiStorm / Emu68 MicroSD Card Root Folder",
-    "scan": {
-      "summary": "Scanned MicroSD: {{firmware}}, {{kickstart}}",
-      "firmwareFound": "✓ Emu68 Firmware Found",
-      "firmwareMissing": "⚠️ Emu68 kernel missing",
-      "kickstartFound": "✓ Kickstart ({{name}})",
-      "kickstartMissing": "⚠️ Kickstart ROM missing"
+  "osBuilder": {
+    "intro": "The AmigaOS distributions that run on a PiStorm, what each one needs from you, and whether what you have suits it. ART never downloads a distribution — you fetch it yourself and point ART at the file.",
+    "notBuiltYet": "ART cannot write a distribution card yet. This screen tells you what a distribution requires and checks the ROM and card you have against it.",
+    "what": {
+      "heading": "What are you building?",
+      "bootCard": "A boot-only card",
+      "bootCardHint": "The Pi's firmware, your Kickstart and a partition table an Amiga can see — built from your own Emu68 release. No AmigaOS on it; that comes next.",
+      "install": "Install AmigaOS",
+      "installHint": "Build a distribution tree from your own AmigaOS 3.2 install disks, ready to copy onto a card's Amiga volumes.",
+      "prepareVolumes": "Prepare a card's Amiga volumes",
+      "prepareVolumesHint": "Format the partitions on a card you already have and copy your content in, so it arrives ready instead of offering to format itself on first boot. Needs hst-imager, which you supply.",
+      "distro": "A complete distribution",
+      "distroHint": "CaffeineOS, CoffinOS, AmiKit or an ART Baseline, with the system already installed."
     },
-    "msg": {
-      "saved": "✓ Successfully saved PiStorm config.txt and cmdline.txt to MicroSD card!",
-      "saveFailed": "Failed to save: {{error}}"
+    "profiles": {
+      "heading": "Which distribution",
+      "intro": "Each card leads with its licence, because that decides what you have to do before ART can help."
     },
-    "sdCardLabel": "MicroSD Card:",
-    "working": "Working on PiStorm configuration…",
-    "profilesHeading": "Parametric Usage Profiles",
-    "profilesIntro": "PiStorm transforms your Amiga into a high-performance workstation while preserving custom chipset compatibility for games:",
-    "selectSd": "Select MicroSD Card…",
-    "saveSync": "Save & Sync PiStorm SD",
-    "hardwareHeading": "Hardware & RTG Display Setup",
-    "boardLabel": "PiStorm Hardware Board:",
-    "board": {
-      "a500a2000": "PiStorm A500 / A2000 (DIP-64 Socket)",
-      "a1200lite": "PiStorm32-Lite (Amiga 1200 Trapdoor)",
-      "a600": "PiStorm600 (Amiga 600 PLCC)"
+    "material": {
+      "heading": "What you supply",
+      "intro": "{{name}} is yours to obtain. ART works on your copy; it does not fetch, host or bundle one.",
+      "homepage": "The project's own page:",
+      "chooseImage": "Choose the image…",
+      "chooseImageTitle": "Choose the distribution image you downloaded",
+      "noImage": "No image chosen",
+      "imageSize": "{{gb}} GB",
+      "chooseRom": "Choose a Kickstart…",
+      "chooseRomTitle": "Choose a Kickstart ROM",
+      "noRom": "No ROM chosen",
+      "romIs": "{{rom}} ({{revision}})",
+      "romUnrecognised": "ART does not recognise this ROM. It may still be the right one.",
+      "romWrongFamily": "{{base}} wants a Kickstart {{family}}. A ROM from another family usually means a card that does not boot, with nothing on screen to explain it — but if you know what you are doing, carry on."
     },
-    "rtgLabel": "RTG Video Output (Picasso96 HDMI):",
-    "rtg": {
-      "res1080p": "1920x1080 @ 60Hz (Full HD TrueColor 32-bit)",
-      "res720p": "1280x720 @ 60Hz (HD Ready TrueColor 32-bit)",
-      "res1024": "1024x768 @ 60Hz (Classic 4:3 RTG)",
-      "res800": "800x600 @ 60Hz",
-      "disabled": "Disabled (Native Amiga Video Output Only)"
+    "card": {
+      "heading": "The card",
+      "size": "Card size",
+      "tooSmall": "This distribution needs at least {{needs}} GB, and you have chosen {{has}} GB.",
+      "hint": "Checked now rather than two thirds of the way through a copy."
     },
-    "kickstartLabel": "Kickstart ROM File on SD Card:",
-    "performanceHeading": "CPU Performance & Memory Map",
-    "fastRamLabel": "Fast RAM Allocation:",
-    "fastRamHint": "Fast RAM is mapped directly into Amiga 32-bit address space.",
-    "jitLabel": "Enable JIT Dynamic Recompiler (Emu68 JIT)",
-    "jitHint": "Translates 68k instructions to ARM64 on the fly for ~800+ MIPS.",
-    "mmuLabel": "Enable 68040 MMU Emulation",
-    "mmuHint": "Required for WHDLoad MuForce and advanced memory protections.",
-    "sdStorageLabel": "Enable High-Speed MicroSD Storage (`emu68-sd.device`)",
-    "sdStorageHint": "High speed hard drive access (20+ MB/s) directly from SD card partitions.",
-    "profile": {
-      "workstation": {
-        "title": "AmigaOS Ultra Workstation",
-        "badge": "Recommended for AmigaOS & Productivity",
-        "description": "Maximum JIT performance (~800+ MIPS) with 1080p TrueColor RTG desktop. Instant Workbench loading, web browsing, raytracing, and high productivity.",
-        "feature1": "~800+ MIPS CPU speed (faster than 68060)",
-        "feature2": "1080p 32-bit TrueColor RTG HDMI output",
-        "feature3": "1 GB to 2 GB Fast RAM for multitasking",
-        "feature4": "High-speed emu68-sd.device disk access (20+ MB/s)"
+    "notes": {
+      "heading": "Worth knowing"
+    },
+    "prepare": {
+      "heading": "Prepare the card",
+      "explain": "Writing the image, adapting it to your PiStorm through the hardware settings ART already knows, placing your Kickstart, creating the multiboot set and verifying the result. None of it is built yet."
+    }
+  },
+  "distro": {
+    "licence": {
+      "freeGrey": "{{name}} is given away free by the people who make it, and carries AmigaOS material they cannot license. ART does not police your copy and does not fetch it either.",
+      "userLicensed": "{{name}} is a commercial product built on an AmigaOS you must own. ART prepares the card their product expects; it does not reproduce their work.",
+      "artBaseline": "Built by ART from your own licensed media. Shareable as a recipe — never as an image."
+    },
+    "supply": {
+      "image": "You download {{name}} yourself.",
+      "media": "Your own {{base}} installation media.",
+      "rom": "A Kickstart {{family}} ROM.",
+      "card": "A card of at least {{gb}} GB."
+    },
+    "image": {
+      "notAFile": "{{path}} is not a file.",
+      "empty": "{{path}} is empty.",
+      "tooSmallForRaw": "{{gb}} GB is far too small to be a {{name}} image — this is probably the wrong file, or a download that stopped early."
+    },
+    "note": {
+      "caffeineos": {
+        "download": "Distributed as a single raw image of about 17 GB. Written with any imager; ART will adapt it to your hardware once that step exists.",
+        "network": "CaffeineOS runs its own networking stack (Miami DX with wifipi.device), not the Roadshow one — so WiFi is changed with its own tool on the Amiga, not by editing DEVS:NetInterfaces. Whichever stack a system uses, the settings live on the Amiga side and not in the boot files."
       },
-      "balanced": {
-        "title": "Balanced Daily & WHDLoad Gaming",
-        "badge": "Optimal Daily Driver & Games",
-        "description": "High JIT performance with WHDLoad MMU and cache flush optimizations. RTG desktop with automatic native OCS/ECS/AGA switching for games.",
-        "feature1": "99% WHDLoad game compatibility",
-        "feature2": "Automatic screen-mode switching (RTG ↔ PAL/NTSC)",
-        "feature3": "512 MB Fast RAM allocation",
-        "feature4": "WHDLoad MMU-safe cache flushes"
+      "coffinos": {
+        "romFamily": "CoffinOS states that Hyperion's 3.1.4 and 3.2 Kickstarts break it. It wants a classic 3.1 ROM.",
+        "demoware": "Ships demo versions of Roadshow and iBrowse."
       },
-      "classic": {
-        "title": "Classic & Demoscene Compatibility",
-        "badge": "Cycle-Exact & Demos",
-        "description": "Conservative JIT execution for timing-sensitive demoscene productions and floppy-based legacy software.",
-        "feature1": "Strict timing preservation",
-        "feature2": "128 MB to 256 MB Fast RAM footprint",
-        "feature3": "Native 15 kHz Amiga video pass-through priority",
-        "feature4": "Maximum legacy software stability"
+      "amikit": {
+        "ownIt": "AmiKit is a commercial product. You supply your own AmigaOS 3.2 and P96; they ship only their own layer.",
+        "adaptOnly": "ART prepares the card their product expects. It does not rebuild AmiKit."
+      },
+      "baseline": {
+        "recipe": "ART builds this from your media and can share how it was built — the recipe, not the result.",
+        "yourMedia": "Nothing is bundled. Your OS, your ROM, your licences.",
+        "boingBags": "BoingBag 1 and 2 were always free downloads and ART can fetch them on request.",
+        "romFamily": "A 3.9 system wants a classic 3.1 ROM, not a Hyperion 3.1.4 or 3.2 one."
       }
+    }
+  },
+  "pistorm": {
+    "title": "PiStorm & Emu68 Card",
+    "intro": "Every control here writes a documented Emu68 option or a Raspberry Pi firmware setting — and shows you which one. Both files are merged into what is already on the card, never rewritten.",
+    "chooseCardTitle": "Choose the card's boot folder",
+    "hardware": {
+      "heading": "Hardware",
+      "intro": "Three answers, because what a setup can do depends on all three: the kernel follows the board, the storage driver's name follows the Pi, and which options apply at all follows the Amiga.",
+      "amiga": "Amiga",
+      "variant": "PiStorm board",
+      "pi": "Raspberry Pi",
+      "line": "Emu68 release"
+    },
+    "derived": {
+      "kernel": "Emu68 build",
+      "storageDevice": "Storage driver",
+      "piRam": "Pi memory",
+      "ramFixed": "{{mb}} MB",
+      "ramRange": "{{min}}–{{max}} MB depending on the model"
+    },
+    "note": {
+      "pi-not-guaranteed": "This Pi is reported working on this board by users, but the project does not guarantee it.",
+      "cm4-needs-lite-for-sd-card": "A Compute Module 4 with onboard eMMC cannot use the microSD slot at the same time. The usual recommendation is a CM4 Lite with no eMMC.",
+      "pi-physical-fit": "A 3B or 3B+ needs its ports removed, or a taller stacking header, to fit this board. A Zero 2 W or 3A+ fits as it is.",
+      "no-activity-led": "The 3B has no activity-LED support here.",
+      "needs-cpu-adapter": "This machine needs a CPU adapter to take the board.",
+      "power-supply-quality": "Use a good power supply. If the 5 V rail sags the Pi quietly underclocks itself, which looks exactly like a slow PiStorm and is the commonest cause of one.",
+      "ram-beyond-what-amiga-os-uses": "AmigaOS does not use more than 2 GB of Fast RAM, so a Pi with more is not buying the Amiga anything."
+    },
+    "card": {
+      "heading": "The card",
+      "choose": "Choose folder…",
+      "none": "No folder chosen",
+      "needed": "Everything on this screen edits files on a card. Choose its boot folder — the FAT32 partition of a card you have written, or a folder you are assembling one in — and the rest becomes available.",
+      "kernelFound": "Emu68.img is on the card.",
+      "kernelMissing": "No Emu68.img — the card will not start until the kernel is on it.",
+      "kickstartsFound": "Kickstart images found: {{list}}",
+      "kickstartsMissing": "No Kickstart image found on the card.",
+      "configSets": "Named firmware sets: {{list}}",
+      "kernelVersion": "Emu68 on the card: {{version}}",
+      "kernelUnknownVersion": "Emu68.img is on the card, but it does not state a version."
+    },
+    "scan": {
+      "found": "Read {{path}}.",
+      "notACard": "{{path}} has no Emu68 kernel and no config.txt, so it does not look like a PiStorm card yet."
+    },
+    "kickstart": {
+      "label": "Kickstart",
+      "hint": "Written as the initramfs line in config.txt. The file itself lives on the card; ART never ships one.",
+      "onTheCard": "On the card",
+      "fileName": "File name written to config.txt",
+      "choose": "Choose ROM file…",
+      "needsCard": "Choose the card’s folder first — the ROM is copied onto it.",
+      "chooseTitle": "Choose a Kickstart ROM",
+      "copyTitle": "Copy this Kickstart onto the card",
+      "picked": "{{rom}} ({{revision}}) — for {{models}}",
+      "pickedUnrecognised": "ART does not recognise this ROM. It may be a custom or byte-swapped image — it will be copied exactly as it is.",
+      "nameOnCard": "Name on the card",
+      "badName": "That is not a name a card can carry: a plain file name, no folders, and none of < > : \" | ? * or spaces.",
+      "willReplace": "{{name}} is already on the card. The one there now will be kept as a backup.",
+      "copyButton": "Copy",
+      "replaceButton": "Replace",
+      "copied": "{{name}} is on the card. It is written to config.txt when you save.",
+      "copiedOver": "{{name}} is on the card. The previous one is at {{path}}."
+    },
+    "profiles": {
+      "heading": "Ready-made settings",
+      "intro": "Each one is a set of Emu68 options, listed under it. Applying a profile replaces the options; nothing else on the card changes until you save."
+    },
+    "profile": {
+      "apply": "Use this",
+      "applied": "{{name}} applied. Nothing is written until you save.",
+      "performance": {
+        "title": "Performance",
+        "description": "The fastest Workbench and RTG, for work where exact timing does not matter."
+      },
+      "daily": {
+        "title": "Everyday & WHDLoad",
+        "description": "Balanced defaults. WHDLoad runs in NOMMU mode — Emu68 emulates no MMU, so there is no other mode to run in."
+      },
+      "compatibility": {
+        "title": "Compatibility & demoscene",
+        "description": "Closer to the original bus timing: accuracy instead of speed. On an A500-family machine this also moves the trapdoor memory to CHIP."
+      },
+      "diagnostics": {
+        "title": "Diagnostics",
+        "description": "For hunting a problem, not for using the machine. Verbose logging slows everything down."
+      }
+    },
+    "display": {
+      "heading": "Display & clock",
+      "auto": "Let the firmware ask the monitor",
+      "dmt1080p60": "1920×1080 at 60 Hz (monitor timings)",
+      "cea1080p50": "1920×1080 at 50 Hz (television, PAL)",
+      "cea720p60": "1280×720 at 60 Hz (television)",
+      "disableBluetooth": "Turn off the Pi's Bluetooth",
+      "custom": "As on the card",
+      "customHint": "a pair the presets do not cover"
+    },
+    "overclock": {
+      "enable": "Run the Pi faster than it is sold to run",
+      "warning": "Heat, and the quality of your power supply. On a Raspberry Pi this sets the warranty bit. Never part of a profile — only ever something you turn on yourself."
+    },
+    "advanced": {
+      "heading": "Every option",
+      "intro": "The full Emu68 inventory, each row labelled with the token it writes. Options that mean nothing on the hardware above are not shown.",
+      "unset": "not set"
+    },
+    "group": {
+      "storage": "Storage",
+      "cpu": "CPU",
+      "memory": "Memory",
+      "rom": "ROM",
+      "rtg": "RTG video",
+      "timing": "Timing",
+      "floppy": "Floppy",
+      "board": "Board",
+      "diagnostics": "Diagnostics"
+    },
+    "option": {
+      "storage_unit0": "how the Amiga sees the card",
+      "storage_verbose": "how much the storage driver logs (0–2)",
+      "storage_low_speed": "stay off the 50 MHz mode, for a card that will not take it",
+      "storage_clock_mhz": "clock override, in MHz",
+      "vbr_move": "vector table into fast RAM",
+      "nofpu": "no FPU (rare, for compatibility)",
+      "enable_cache": "JIT cache active from startup",
+      "limit_2g": "cap mapped RAM at 2 GB",
+      "z2_ram_size": "Zorro II RAM in MB (0, 1, 2, 4 or 8)",
+      "enable_c0_slow": "slow memory at $C0",
+      "enable_c8_slow": "slow memory at $C8",
+      "enable_d0_slow": "slow memory at $D0",
+      "move_slow_to_chip": "trapdoor 512K as CHIP RAM",
+      "copy_rom_kb": "copy ROM into fast RAM, in KB",
+      "checksum_rom": "recalculate the ROM checksum",
+      "vc4_mem_mb": "video memory reported to Picasso96, in MB",
+      "chip_slowdown": "approximate the original bus timing",
+      "cs_dist": "how coarsely (1–8)",
+      "swap_df0_with": "swap DF0 with another drive (1, 2 or 3)",
+      "one_slot": "force the single-slot protocol",
+      "debug": "JIT statistics",
+      "disassemble": "disassembly output",
+      "async_log": "log without waiting",
+      "fast_serial": "faster serial output",
+      "buptest_kb": "memory test at startup, in KB",
+      "bupiter": "how many passes of it"
+    },
+    "choice": {
+      "storage_unit0": {
+        "off": "not visible",
+        "read-only": "visible, read-only",
+        "read-write": "writable"
+      }
+    },
+    "tokens": {
+      "heading": "What will be written",
+      "none": "No Emu68 options set.",
+      "yours": "Your own boot parameters",
+      "yoursHint": "None of ART's business, and left exactly as they are. Without root= the Pi does not start at all."
+    },
+    "preview": {
+      "button": "Show me the change",
+      "title": "Before saving",
+      "unchanged": "unchanged",
+      "absent": "(no such file yet)"
+    },
+    "save": {
+      "button": "Save to the card"
+    },
+    "saved": {
+      "withBackup": "Saved. The previous version is at {{path}}.",
+      "plain": "Saved."
+    },
+    "wifi": {
+      "heading": "WiFi & network",
+      "explain": "WiFi on a PiStorm is an Amiga-side matter, not a boot option: wifipi.device with Roadshow, configured in DEVS:NetInterfaces on the system volume. It belongs to building the volumes, which ART cannot do yet."
+    },
+    "line": {
+      "stable": "Latest stable (1.0.x)",
+      "alpha11": "1.1 alpha (prerelease)"
+    },
+    "archive": {
+      "absent": "no archive in this release — the 1.1 alpha is the first to support this board",
+      "unstated": "the release notes do not say which archive covers this board"
+    },
+    "rom": {
+      "identified": "{{name}} — {{rom}} ({{revision}}), for {{models}}",
+      "unrecognised": "{{name}} — not a Kickstart ART recognises",
+      "unreadable": "{{name}} — could not be read",
+      "mayNotSuit": "{{rom}} is for {{models}}, and you have chosen a {{machine}}. That may still be what you want."
+    },
+    "sets": {
+      "heading": "Named firmware sets",
+      "intro": "One config.txt per system, copied over the active one to choose which boots — the pattern MultibootOS uses. ART does not read what is inside them.",
+      "none": "There are no named sets on this card yet.",
+      "newName": "New set",
+      "from": "Made from",
+      "fromCurrent": "the card's current config.txt",
+      "fromScreen": "the settings on this screen",
+      "fromSet": "another set",
+      "create": "Create",
+      "activate": "Make active",
+      "rename": "Rename",
+      "write": "Write it",
+      "previewTitle": "Before writing",
+      "saved": "Set '{{name}}' saved.",
+      "activated": "'{{name}}' is now the active config.txt.",
+      "activatedWithBackup": "'{{name}}' is now the active config.txt. The previous one is at {{path}}.",
+      "renamed": "'{{from}}' is now called '{{to}}'.",
+      "delete": "Delete",
+      "confirmDelete": "Delete the '{{name}}' set? ART keeps a copy, so this can be undone — but the set stops being in the list.",
+      "deleted": "Set '{{name}}' deleted.",
+      "deletedWithBackup": "Set '{{name}}' deleted. A copy is kept at {{path}}.",
+      "deleteKeeps": "Deleting a set keeps a copy of it. The set the card is running cannot be deleted — make another one active first."
     }
   },
   "gotek": {
@@ -932,9 +1235,8 @@
       "default": "ART cannot write to this volume",
       "iso": "This pane holds a disc — discs are read-only",
       "archive": "This pane holds an archive — ART reads archives, it does not write them",
-      "c64": "This pane holds a Commodore disk or tape — ART reads these, it does not write them",
-      "c64ToVolume": "Copy it to a folder first, then into the volume — ART does not put Commodore files straight onto an Amiga disk",
-      "c64": "C64..."
+      "c64": "C64...",
+      "c64ToVolume": "Copy it to a folder first, then into the volume — ART does not put Commodore files straight onto an Amiga disk"
     },
     "archive": {
       "unusableNames": "{{count}} entries are not shown: their names are not paths ART can place inside a folder"
@@ -1047,7 +1349,9 @@
         "confirm_one": "Move {{count}} item from {{source}} to {{destination}}? It is copied first and only removed once the copy has been checked.",
         "confirm_other": "Move {{count}} items from {{source}} to {{destination}}? They are copied first and only removed once the copies have been checked.",
         "confirmIcons_one": "{{names}} has an icon. Move it too? Without it, the object will not show up on Workbench.",
-        "confirmIcons_other": "{{count}} of these have icons ({{names}}). Move them too? Without them, the objects will not show up on Workbench."
+        "confirmIcons_other": "{{count}} of these have icons ({{names}}). Move them too? Without them, the objects will not show up on Workbench.",
+        "confirmProtected_one": "{{names}} is protected against deletion on the Amiga. Moving it means deleting it from here once the copy is checked. Move it anyway?",
+        "confirmProtected_other": "{{count}} of these are protected against deletion on the Amiga ({{names}}). Moving them means deleting them from here once the copies are checked. Move them anyway?"
       }
     },
     "move": {
@@ -1259,6 +1563,421 @@
       "verifiedCount": "{{count}} of them verified",
       "installed": "Installed to {{drawer}}: {{files}}, {{verified}}",
       "installedNoIcon": "Installed to {{drawer}}: {{files}}, {{verified}} — without an icon, so it will not show up on Workbench"
+    }
+  },
+  "cardBuilder": {
+    "heading": "Boot-only card",
+    "intro": "ART builds the image file; you flash it with whichever imager you already have. It never writes to a card itself.",
+    "scope": "What comes out is a card an Amiga boots into a partition table it can see, with volumes it will offer to format. Installing AmigaOS onto them is not built yet.",
+    "intake": {
+      "heading": "Dropped on this screen",
+      "role": {
+        "emu68Archive": "the Emu68 release — {{boards}}",
+        "kickstart": "the Kickstart for the boot partition",
+        "distroConfig": "a distribution's Pi config ({{name}}) — recognised, but choosing between distributions is not built yet",
+        "forAnAmigaVolume": "belongs on an Amiga volume, and this card has none formatted yet",
+        "noPlace": "has no place on a PiStorm card"
+      }
+    },
+    "archive": {
+      "label": "Emu68 release archive",
+      "chooseTitle": "Choose the Emu68 release you downloaded",
+      "none": "No archive chosen",
+      "hint": "The archive for your board, from the Emu68 project's own releases. ART checks its name against the board and release line below before it reads a byte of it."
+    },
+    "kickstart": {
+      "label": "Kickstart ROM",
+      "chooseTitle": "Choose a Kickstart ROM",
+      "none": "No ROM chosen",
+      "hint": "Your own Kickstart. ART neither fetches nor bundles one. Without it the card is built and will not boot."
+    },
+    "size": {
+      "label": "Card size"
+    },
+    "dest": {
+      "label": "Where the image goes",
+      "chooseTitle": "Where to write the card image",
+      "none": "No destination chosen",
+      "hint": "A sparse file: a 128 GB card costs the few megabytes that are actually structure. An existing file is refused, never built over."
+    },
+    "advanced": {
+      "heading": "Advanced",
+      "amiga": "Amiga",
+      "variant": "PiStorm board",
+      "pi": "Raspberry Pi",
+      "line": "Emu68 release line",
+      "sharedWithPistorm": "These four are the same settings the PiStorm studio uses. Changing them here changes them there.",
+      "label": "FAT32 label",
+      "bootMib": "Boot partition (MB)",
+      "bootMibDefault": "0 uses the 1.10 GiB both real cards carry.",
+      "driveName": "Drive name",
+      "partitionMb": "Partition size (MB)",
+      "fsType": "Filesystem",
+      "oneDisk": "One Amiga disk, taking whatever is left after the boot partition. Several disks with a boot menu is multiboot, which is not built yet. Only the filesystems Kickstart carries are offered: a PFS3 partition with no driver on the card is one an Amiga ignores in silence."
+    },
+    "actions": {
+      "preview": "Preview",
+      "build": "Build the card"
+    },
+    "plan": {
+      "heading": "What would be written",
+      "bootPartition": "Boot partition",
+      "amigaDisk": "Amiga disk {{n}}",
+      "atGb": "{{size}} GB, at byte {{at}}",
+      "kernel": "The card boots",
+      "kickstartAs": "Kickstart written as",
+      "rom": "ROM",
+      "files": "Boot partition holds",
+      "filesTotal": "{{count}} files, {{mib}} MB",
+      "fileList": "Every file"
+    },
+    "warning": {
+      "noKickstart": "No Kickstart was chosen. The card will be built, and it will not boot until a ROM is on it.",
+      "romUnrecognised": "ART does not recognise this ROM. It may still be the right one.",
+      "romMachineUnknown": "{{rom}} — ART knows which Kickstart this is, but not which Amiga it was built for: several machines share a revision and only the exact checksum tells them apart. Check it is the one for your machine.",
+      "romWrongMachine": "{{rom}} is not a ROM for the Amiga you chose. Usually that means a machine that does not come up, with nothing on screen to explain it — but if you know what you are doing, carry on.",
+      "volumesUnformatted": "The Amiga volumes on this card are not formatted. The Amiga will see them and offer to format them; putting a system on them is not built yet."
+    },
+    "blocked": {
+      "noArchive": "Choose the Emu68 release archive first.",
+      "noDestination": "Choose where the image goes.",
+      "noPartitions": "The Amiga disk needs at least one partition.",
+      "notPlanned": "Preview it first — nothing is written before you have seen what would be.",
+      "destExists": "That file is already there. ART will not build over it; choose another name."
+    },
+    "manifest": {
+      "finding": {
+        "schemaTooNew": "This manifest was written by a newer ART (schema {{found}}; this one understands {{understood}}). Nothing was checked — the fields it does not know are the ones it cannot check.",
+        "sizeChanged": "The image is {{found}} bytes and the manifest says {{expected}}.",
+        "partitionTableChanged": "The partition table is not the one that was written.",
+        "areaCountChanged": "The manifest describes {{expected}} Amiga disk(s) and the card has {{found}}.",
+        "areaMoved": "Amiga disk {{n}} starts at byte {{found}}; the manifest says {{expected}}.",
+        "areaResized": "Amiga disk {{n}} is {{found}} bytes; the manifest says {{expected}}.",
+        "rdbChanged": "Amiga disk {{n}}'s partition table is not the one that was written.",
+        "partitionCountChanged": "Amiga disk {{n}} has {{found}} partition(s); the manifest says {{expected}}.",
+        "partitionChanged": "Partition {{name}} on Amiga disk {{n}} is not as the manifest describes it."
+      }
+    },
+    "health": {
+      "heading": "Check the card",
+      "run": "Check it",
+      "running": "Checking…",
+      "chooseOther": "Check another card…",
+      "chooseTitle": "Choose a card image to check",
+      "passed": "Everything ART can check is right.",
+      "passedWithGaps": "Nothing is wrong with what ART could check — and {{unanswered}} question(s) it could not answer at all. They are listed below.",
+      "failed": "{{count}} check(s) failed. This card is not ready to flash.",
+      "manifestPath": "Build manifest:",
+      "byHandHeading": "Only you can do these",
+      "check": {
+        "bootFirst": "The Pi's boot partition is the first thing on the card",
+        "bootAligned": "The boot partition starts at sector {{lba}}",
+        "areaCount": "{{count}} Amiga disk(s), which is between one and three",
+        "areasAligned": "Every Amiga disk starts on a 4 MiB boundary",
+        "noOverlap": "No two partitions share a sector",
+        "insideImage": "Nothing runs past the end of the image",
+        "hasRdb": "Amiga disk {{n}} has a partition table",
+        "rdbChecksum": "Amiga disk {{n}}'s partition table checksums correctly",
+        "canMount": "Every partition names a filesystem the card carries ({{unmountable}} do not)",
+        "manifest": "The card still matches the manifest built with it",
+        "bootFile": {
+          "config": "config.txt is on the boot partition",
+          "cmdline": "cmdline.txt is on the boot partition",
+          "kernel": "The kernel config.txt boots — {{name}} — is on the boot partition",
+          "kickstart": "The Kickstart is on the boot partition as {{name}}"
+        }
+      },
+      "state": {
+        "pass": "ok",
+        "fail": "failed",
+        "notChecked": "not checked"
+      },
+      "byHand": {
+        "flash": "Write the image to a microSD card. ART builds the file and never touches a card itself.",
+        "hdmi": "Plug HDMI in **before** powering the Amiga on — the VPU configures the port at boot and not after.",
+        "pi": "The card was built for a {{pi}}. Check that is the Pi in the machine.",
+        "format": "The Amiga will offer to format {{count}} volume(s). That is expected: ART builds the shape, not the system."
+      }
+    },
+    "result": {
+      "heading": "The card is built",
+      "readBack": "Read back by ART's own card reader: {{disks}} Amiga disk(s), {{partitions}} partition(s).",
+      "nextStep": "Flash it to a microSD card with your usual imager, then plug HDMI in before powering the Amiga on — the VPU only configures the port at boot."
+    }
+  },
+  "preload": {
+    "heading": "Prepare the card's Amiga volumes",
+    "intro": "A card ART builds has partitions an Amiga can see and nothing inside them — the Amiga offers to format them on first boot. This formats them here instead, and copies your content in, so the card arrives ready.",
+    "scope": "ART does not write PFS3 itself. hst-imager does the formatting, the same tool both existing PiStorm imagers stand on — you supply your own copy of it.",
+    "tool": {
+      "heading": "The tool",
+      "label": "hst.imager",
+      "none": "Not set",
+      "hint": "ART does not bundle hst-imager — 137 MB beside the application is not a trade worth making. Set it once here or in Settings; it is remembered either way.",
+      "probe": "Ask it what it is",
+      "probing": "Asking…",
+      "is": "It says it is {{version}}.",
+      "untested": "ART's commands were written against {{tested}}. This is a different version — it may work perfectly, ART simply has not been run against it."
+    },
+    "card": {
+      "heading": "The card",
+      "label": "Card image",
+      "none": "No card chosen",
+      "chooseTitle": "Choose the card image to prepare",
+      "read": "{{disks}} Amiga disk(s), {{partitions}} partition(s).",
+      "noPartitions": "This image has no Amiga partition to prepare.",
+      "unreadable": "ART could not read this file as a card or a hard disk image."
+    },
+    "driver": {
+      "label": "Filesystem driver",
+      "none": "None chosen",
+      "chooseTitle": "Choose the filesystem driver to embed (pfs3aio.lha)",
+      "hint": "Needed when a partition names a filesystem the card carries no driver for — PFS3, usually. Kickstart carries FFS itself and needs nothing here. If one is needed and missing, the preview says so rather than producing a volume the Amiga ignores in silence."
+    },
+    "partitions": {
+      "heading": "Which volumes",
+      "intro": "Nothing is chosen to start with: formatting erases whatever the partition held.",
+      "none": "Choose a card and its partitions appear here.",
+      "disk": "Amiga disk {{n}} — at {{offset}}",
+      "volumeName": "Volume name",
+      "content": "Content folder",
+      "noContent": "Format only",
+      "chooseContent": "Choose a folder…",
+      "chooseContentTitle": "Choose the folder whose contents go into this volume",
+      "clearContent": "Format only",
+      "sizeAndType": "{{size}} · {{dostype}}"
+    },
+    "preview": {
+      "run": "Preview",
+      "running": "Working out what would happen…"
+    },
+    "plan": {
+      "heading": "What would happen",
+      "willErase_one": "This erases {{count}} partition. There is no backup and no undo.",
+      "willErase_other": "This erases {{count}} partitions. There is no backup and no undo.",
+      "step": {
+        "import": "Embed {{name}} in the RDB as {{dostype}}",
+        "format": "Format {{drive}} as {{volume}} — everything in it goes",
+        "copy": "Copy {{source}} into {{drive}}"
+      }
+    },
+    "confirm_one": "I understand {{count}} partition will be erased",
+    "confirm_other": "I understand {{count}} partitions will be erased",
+    "run": "Format and fill",
+    "running": "Running…",
+    "blocked": {
+      "noCard": "Choose the card image first.",
+      "noTool": "Set where hst.imager is — ART does not ship it.",
+      "nothingChosen": "Choose at least one partition to prepare.",
+      "blankName": "{{drive}} needs a volume name.",
+      "badName": "{{drive}}'s volume name contains ':' or '/', which separate paths on the Amiga and cannot appear in a name.",
+      "longName": "{{drive}}'s volume name is longer than {{max}} characters, which is where AmigaDOS names stop.",
+      "notPlanned": "Preview it first — nothing is formatted before you have seen what would be."
+    },
+    "result": {
+      "heading": "Done",
+      "formatted": "Formatted: {{volumes}}",
+      "copied": "Copied in: {{files}} file(s), {{directories}} folder(s), {{bytes}} bytes.",
+      "tool": "By {{version}}.",
+      "notVerified": "ART cannot read this volume back. It has no PFS3 reader, so what is inside is the tool's word and not ART's — verify it on the Amiga, or with something that is not ART."
+    }
+  },
+  "layout": {
+    "heading": "Lay content out",
+    "intro": "Turn a pile of Amiga files into an organised staging tree on this PC — Games, Floppies, HardDisks, CDs, Unsorted. ART proposes where each thing goes; you can move any of it before anything is copied.",
+    "scope": "This writes to a folder on this PC, not to a card. A real PiStorm card is PFS3, which ART cannot write directly — prepare this folder, then use the card preparation screen to copy it onto the card's volumes.",
+    "root": {
+      "label": "Staging folder",
+      "none": "No staging folder chosen",
+      "chooseTitle": "Choose (or create) the staging folder"
+    },
+    "sources": {
+      "heading": "What to lay out",
+      "intro": "Add the files and folders to organise. A folder that directly holds a .slave is treated as one WHDLoad drawer and copied whole.",
+      "addFiles": "Add files…",
+      "addFilesTitle": "Choose files to lay out",
+      "addFolder": "Add a folder…",
+      "addFolderTitle": "Choose a folder to lay out",
+      "none": "Nothing added yet.",
+      "remove": "Remove"
+    },
+    "preview": {
+      "run": "Preview",
+      "running": "Working out what would happen…"
+    },
+    "plan": {
+      "heading": "What would be laid out",
+      "total": "{{bytes}} total"
+    },
+    "table": {
+      "selectAll": "Select all",
+      "kind": "What",
+      "source": "From",
+      "destination": "To",
+      "size": "Size",
+      "none": "Nothing to place."
+    },
+    "retarget": {
+      "label": "Move the checked rows to",
+      "custom": "Other drawer…",
+      "customPlaceholder": "Drawer name",
+      "apply": "Move",
+      "hint": "Each moved row keeps its own name; only the drawer changes.",
+      "blockedNoSelection": "Check at least one row first.",
+      "blockedNoDrawerName": "Type a drawer name first."
+    },
+    "collisions": {
+      "heading": "Collisions",
+      "intro": "These destinations are wanted more than once, or already exist in the staging folder. Nothing is copied until each is resolved.",
+      "entry": "{{destination}} — {{sources}}"
+    },
+    "refusals": {
+      "heading": "Not included",
+      "intro": "These have no place in an Amiga staging tree and were left out:"
+    },
+    "blocked": {
+      "noRoot": "Choose a staging folder first.",
+      "nothingToPlace": "Nothing to lay out — drop some files or folders in first.",
+      "notPlanned": "Preview it first — nothing is copied before you have seen what would be.",
+      "collisions": "Resolve the collision(s) first — nothing is copied while two things want the same name.",
+      "couldNotRecheck": "ART could not check whether those destinations are free — preview again before applying."
+    },
+    "refusal": {
+      "belongsOnBootPartition": "This is a Kickstart — the Pi firmware reads it off the FAT32 boot partition, not off an Amiga volume.",
+      "noPlaceOnAnAmigaVolume": "This has no place on an Amiga volume — a Commodore 8-bit disk, tape or cartridge image does not run on an Amiga."
+    },
+    "kind": {
+      "whdloadArchive": "{{name}} (WHDLoad pack)",
+      "whdloadDrawer": "{{name}} (WHDLoad drawer)",
+      "floppyImage": "Floppy image",
+      "hardDiskImage": "Hard disk image",
+      "opticalImage": "Optical disc image",
+      "archive": "Archive",
+      "unknown": "Unknown",
+      "rom": "ROM",
+      "commodore8Bit": "Commodore 8-bit"
+    },
+    "apply": {
+      "run": "Lay it out",
+      "running": "Copying…"
+    },
+    "result": {
+      "heading": "Laid out",
+      "placed_one": "{{count}} item placed, {{bytes}} total.",
+      "placed_other": "{{count}} items placed, {{bytes}} total.",
+      "root": "Staging folder: {{root}}",
+      "nextStep": "Point the card preparation screen (OS Builder → Prepare Amiga volumes) at this folder to copy it onto a card."
+    }
+  },
+  "osinstall": {
+    "blocked": {
+      "noFolder": "Choose the media folder first.",
+      "noDestination": "Choose where to build the distribution tree first.",
+      "notPlanned": "Preview it first — nothing is built before you have seen what would be.",
+      "folderUnreadable": "ART could not read that folder — check the path.",
+      "refusals": "Resolve the refusal(s) first — nothing is built while the plan cannot proceed.",
+      "nothingToInstall": "Nothing would be installed — choose at least one component."
+    },
+    "refusal": {
+      "mediaMissing": "{{component}} needs {{volume}}, and no file in the media folder carries that volume name.",
+      "mediaPathMissing": "{{component}}'s own {{path}} is missing from {{media}} — this looks like a different revision of that disk.",
+      "romUnknown": "The Kickstart could not be identified, so ART cannot decide what depends on its version.",
+      "destinationCollision": "{{path}} is wanted by more than one component ({{components}}), and neither declares it may override the other.",
+      "mediaAmbiguous": "More than one file in the media folder carries the volume name {{volume}} that {{component}} needs: {{paths}}.",
+      "exclusiveGroupConflict": "{{components}} cannot both be on — only one of {{group}} may be chosen.",
+      "ruleKindMismatch": "{{component}}'s rule for {{from}} expected a {{expected}}, but the media holds a {{found}}."
+    },
+    "heading": "Install AmigaOS",
+    "intro": "Build a distribution tree from your own AmigaOS 3.2 install disks, ready to copy onto a real Amiga volume.",
+    "media": {
+      "label": "Install disks folder",
+      "none": "No folder chosen.",
+      "chooseTitle": "Choose the folder holding your AmigaOS 3.2 install disk images",
+      "unreadable": "ART could not read that folder — check the path.",
+      "empty": "No install disks found in that folder.",
+      "found_one": "{{count}} install disk found: {{names}}.",
+      "found_other": "{{count}} install disks found: {{names}}."
+    },
+    "rom": {
+      "label": "Paired Kickstart",
+      "none": "No ROM chosen.",
+      "chooseTitle": "Choose the Kickstart ROM this AmigaOS will run on",
+      "identified": "Identified: {{rom}}.",
+      "unreadable": "ART could not identify that file as a Kickstart ROM."
+    },
+    "destination": {
+      "label": "Build into",
+      "none": "No destination chosen.",
+      "chooseTitle": "Choose where to build the distribution tree",
+      "hint": "A new folder — ART refuses to build into one that already exists."
+    },
+    "components": {
+      "heading": "Components",
+      "intro": "Workbench3.2 is always installed. Everything else is optional, or switches on by itself when the paired Kickstart needs it.",
+      "required": "Required",
+      "reason": {
+        "required": "Always on — a working system needs it.",
+        "romNeeded": "Choose the paired Kickstart to know whether this switches on by itself.",
+        "conditionOn": "On, because the paired Kickstart is {{rom}} and this release's Startup-Sequence quits on anything below V{{major}}.",
+        "conditionOff": "Off — the paired Kickstart is {{rom}}, at or above V{{major}}, so this release's own Startup-Sequence does not need it. You can still switch it on yourself.",
+        "conditionOverridden": "Off — you turned this off yourself. The paired Kickstart is below V{{major}}: without these files this release's own Startup-Sequence quits and the system will not boot."
+      },
+      "confirmOff": {
+        "warning": "This ROM is below V{{major}}. This release's own Startup-Sequence quits without these files — turning them off means the system will not boot. It is your machine to decide.",
+        "confirm": "Turn off anyway"
+      }
+    },
+    "refusals": {
+      "heading": "Why this cannot be built yet"
+    },
+    "plan": {
+      "heading": "What would be written",
+      "summary": "{{items}} items, {{bytes}} total."
+    },
+    "run": {
+      "heading": "Build",
+      "confirm": "I have reviewed the file list above.",
+      "run": "Build the distribution tree",
+      "running": "Building…"
+    },
+    "result": {
+      "heading": "Built",
+      "summary": "{{files}} files, {{directories}} directories, {{bytes}} total.",
+      "root": "Distribution tree: {{root}}",
+      "nextStep": "Point the card preparation screen (OS Builder → Prepare Amiga volumes) at this folder to copy it onto a card."
+    },
+    "verify": {
+      "heading": "Verify against a card",
+      "intro": "Once this tree has been copied onto a real Amiga volume, check it against the manifest ART wrote here.",
+      "distRoot": {
+        "label": "Distribution tree",
+        "none": "No distribution tree chosen.",
+        "chooseTitle": "Choose the distribution tree's own root — where distribution.json was written"
+      },
+      "image": {
+        "label": "Amiga volume image",
+        "none": "No image chosen.",
+        "chooseTitle": "Choose the card or hard disk image the tree was copied onto"
+      },
+      "slot": {
+        "label": "Slot",
+        "hint": "Leave blank for a plain HDF; the PiStorm area number otherwise."
+      },
+      "index": {
+        "label": "Partition index"
+      },
+      "run": "Verify",
+      "running": "Verifying…",
+      "needsInputs": "Choose the distribution tree, the image and a partition index first.",
+      "summary": "{{passed}} passed, {{failed}} failed, {{notChecked}} not checked.",
+      "verified": "Verified — every file matched the manifest.",
+      "notVerified": "Not verified — see the counts and the list below.",
+      "state": {
+        "pass": "Pass",
+        "fail": "Fail",
+        "notChecked": "Not checked"
+      },
+      "error": "ART could not verify: {{message}}"
     }
   }
 }

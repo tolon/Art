@@ -181,11 +181,21 @@ The half that survives is the half that was always the point: **build
 everything into a sparse image file through the existing, tested paths.** That
 was this gap's own recommendation; it is now the whole of it.
 
-## G2 🟥 Hybrid SD layout: MBR + FAT32 boot partition + Amiga RDB
+## G2 ✅ Hybrid SD layout: MBR + FAT32 boot partition + Amiga RDB
+
+> **Done in the engine, 2026-08-13/14.** ART writes a partition table
+> (`core/mbr.rs::plan_card`/`write_mbr`), creates and fills the FAT32 boot
+> partition (`core/fat32.rs`, `fatfs`), chooses the payload from the user's own
+> Emu68 archive (`core/card/payload.rs`) and lays an RDB at the start of every
+> Amiga area (`core/card/build.rs`). Verified against the two real cards, an
+> independent FAT reader (7-Zip) and the real `Emu68-pistorm.zip`. What is left
+> is a command and a screen — and, the part no test answers, flashing a card and
+> booting it. Three things below turned out differently from what this section
+> assumed; they are marked where they appear.
 
 A PiStorm/Emu68 card is not a pure Amiga disk. The Pi boots from a **FAT32
 partition** (Emu68 kernel, Kickstart ROM images, `config.txt`/`cmdline.txt`),
-and the Amiga side lives in the remaining space as RDB. ART has:
+and the Amiga side lives in the remaining space as RDB. ART had:
 
 - no MBR partition table writer,
 - no FAT32 formatter/file writer,
@@ -224,7 +234,7 @@ the emergency exit only. Bonus: once B exists, **D becomes its perfect
 oracle** — the reference implementation writing the fixtures that the native
 writer must match. Build D's harness with that future in mind.
 
-## G4 🟥 RDB filesystem embedding (FSHD + LSEG blocks)
+## G4 ✅ RDB filesystem embedding (FSHD + LSEG blocks) — *done 2026-08-12*
 
 For AmigaOS to mount PFS3 volumes at boot, the PFS3 driver must live **inside
 the RDB** as FileSysHeader + LoadSeg blocks. ART's RDB writer creates RDSK +
@@ -233,6 +243,23 @@ gap: segment-splitting a user-supplied filesystem binary into LSEG chains,
 checksumming them, and wiring `DosType → SegListBlocks` correctly. Needed for
 route A and B alike, and verifiable with amitools (`rdbtool` reads FSHD/LSEG)
 — the oracle already exists.
+
+**Both halves built.** Reading: `parse_file_systems` walks the FSHD/LSEG chain
+and reports each driver's DosType, version and true size, with the bound and
+loop-limit rules the rest of `core/rdb.rs` follows;
+`partitionsMissingDriver` (`@/lib/rdbDrivers`) turns that into the sentence the
+Hard Disk studio shows. Writing: `create_rdb_layout(total, partitions,
+file_systems)` lays out FSHD + LSEG per driver inside the reserved area, and
+refuses — with the block numbers — a driver that will not fit there rather than
+producing an image the first partition would overwrite.
+`version_from_ver_string` reads the version out of the binary's own `$VER:`
+string, so nobody has to type it.
+
+**Verified against the oracle in both directions**, which is the point: ART
+reads `hst-imager`'s RDB and agrees with `rdbtool` on every field, and
+`rdbtool` reads an RDB ART built (`PDS3 version=19.2 size=59120`) and extracts
+the driver back out SHA-256-identical to the file that went in. Closes
+[ART-084](ISSUES.md).
 
 ## G5 🟧 OS installation engine (3.2.x / 3.9 system volumes)
 
@@ -329,6 +356,28 @@ The guided wizard: pick a profile (Power Retro / Gamer / Preservationist…),
 see the proposed volume table scaled to the actual card size, adjust, go.
 Pure UI over G1–G7; last piece to build, first piece the user sees.
 
+**Reframed 2026-08-13 by `ART-research-distro-profiles.md`.** A "profile" is no
+longer a made-up name for a volume layout — it is a **real AmigaOS
+distribution**: CaffeineOS, CoffinOS, AmiKit, or ART's own Baseline built from
+the user's licences. That research is the design; this row is its home in the
+ladder.
+
+**Half built, 2026-08-13.** The registry exists (`core/distro/`, JSON data with
+11 tests over it) and the OS Builder screen renders it: which distribution,
+what it requires of you, whether the ROM you picked is from the family its base
+wants, whether your card is big enough. Every entry is `available: false` and
+says so — because *preparing* the card is blocked on §8.2 of that research:
+the layout has to be read off a real download by hand before an adapter is
+written. Guessing at it is how a tool comes to write a card that quietly does
+not boot.
+
+Two of the research's open questions are closed with evidence in
+[sd2-distro-decisions.md](sd2-distro-decisions.md): the **free Aminet
+Picasso96 is enough** (the commercial P96 is newer, not required — which is
+what makes ART Baseline reproducible at all), and the **HstWB package format**,
+whose manifest and content ART can use today but whose `Install` is 26 KB of
+Amiga script that only an Amiga can run.
+
 ---
 
 # Added 2026-08-12, from the user
@@ -403,7 +452,7 @@ SD-0  Prior art study         : G0 — Emu68-Imager + emu68hatcher teardown;
                                 Their *flashing* code is now irrelevant to us;
                                 their layout and OS-install decisions are not
 SD-1  The image has a shape   : G2 (MBR + FAT32 boot partition, in a file)
-                                + G4 (FSHD/LSEG — also closes ART-084)
+                                + G4 ✅ (FSHD/LSEG — closed ART-084)
                                 + G7 (build manifest)
                                 + G15 (a build as a drop target — the drag &
                                   drop pipeline exists; this is what it drops

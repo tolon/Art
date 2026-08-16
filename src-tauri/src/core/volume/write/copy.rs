@@ -32,7 +32,7 @@ use crate::core::volume::{BlockDevice, VolumeGeometry};
 use super::layout::{amiga_from_unix, BlockSet, PROTECT_OFFSET};
 use super::plan::{order_for_creation, SourceEntry};
 use super::uaem::{self, Sidecar};
-use super::{FileMeta, VolumeWriter};
+use super::{DeleteProtection, FileMeta, OverwriteProtection, VolumeWriter};
 
 /// What to do when a name is already taken.
 ///
@@ -86,6 +86,16 @@ pub trait CopySource {
     /// A Windows folder answers from a `.uaem` sidecar if one is there, and
     /// from the file's own mtime otherwise.
     fn metadata(&self, relative: &str) -> CoreResult<Option<Sidecar>>;
+
+    /// Things the source declined to read at all, and why.
+    ///
+    /// Distinct from the entries it *does* return, and merged into the report
+    /// so that a source which contributes nothing cannot come back looking
+    /// like a clean success (ART-071). Empty for a source with nothing to
+    /// decline, which is most of them.
+    fn skipped_sources(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// Copy a tree into a volume.
@@ -106,6 +116,10 @@ pub fn copy_into_volume(
     let entries = order_for_creation(&source.entries()?);
     let total = entries.len();
     let mut report = CopyReport::default();
+
+    // Before the loop, because a source that declined everything runs the loop
+    // zero times — and an empty report reads as a clean success (ART-071).
+    report.skipped.extend(source.skipped_sources());
 
     // Relative directory path → the block it landed on, so a nested file can
     // find its parent without re-walking the volume.
@@ -168,7 +182,14 @@ fn copy_one(
             return Ok(None);
         }
         Resolution::Replace(existing) => {
-            writer.delete(parent, existing)?;
+            // The `w` bit is the question a replace asks; `d` is not. ART
+            // deletes and re-creates as an implementation detail, so the
+            // delete is overridden and the real check is made first
+            // (ART-088 for the one, ART-094 for the other). A refusal here
+            // becomes this entry's line in `skipped`, which is what the
+            // engine does with any error from one entry.
+            writer.ensure_overwritable(existing, OverwriteProtection::Honour)?;
+            writer.delete_with(parent, existing, DeleteProtection::Override)?;
             name.to_string()
         }
     };
@@ -486,21 +507,56 @@ impl HostSelection {
     /// both in would silently interleave two unrelated trees into one
     /// directory — the user would have no way to know it happened — so this
     /// is refused up front, naming both paths, rather than merged.
+    ///
+    /// **Compared without case** (ART-072). AmigaDOS is case-preserving but
+    /// case-*insensitive* — the same rule `hash::name_hash` respects
+    /// (ART-009/ART-010) — so `Docs` and `docs` are two names here and one
+    /// directory entry there. Keyed on the name as typed, this check simply
+    /// did not fire for such a pair: the second root was dropped later
+    /// instead, taking its whole subtree with it, and the one clear "rename
+    /// one of these" turned into a pile of unexplained skips.
     fn check_for_name_collisions(&self) -> CoreResult<()> {
-        let mut seen: std::collections::BTreeMap<String, &Path> = std::collections::BTreeMap::new();
+        let mut seen: std::collections::BTreeMap<String, (&Path, String)> =
+            std::collections::BTreeMap::new();
         for root in &self.roots {
             let name = Self::base_name(root)?;
-            if let Some(other) = seen.get(name.as_str()) {
+            if let Some((other, other_name)) = seen.get(&name.to_lowercase()) {
                 return Err(CoreError::InvalidInput(format!(
-                    "'{}' and '{}' would both be called '{name}' at the destination — \
+                    "'{}' and '{}' would both be called '{other_name}' at the destination — \
                      rename one before copying",
                     other.display(),
                     root.display()
                 )));
             }
-            seen.insert(name, root);
+            seen.insert(name.to_lowercase(), (root, name));
         }
         Ok(())
+    }
+
+    /// Roots this selection will not read, and why.
+    ///
+    /// A symlinked root is skipped on purpose — a link out of the pick would
+    /// copy in something the user did not select, the same rule `walk` applies
+    /// mid-tree. But skipping it silently was the bug (ART-071): a selection
+    /// of nothing *but* symlinks produced no entries, no skips and no
+    /// cancellation, and `CopyReport::is_complete()` reads that as a clean
+    /// success. The user picked things, ART copied none of them, and every
+    /// signal said it worked.
+    fn skipped_roots(&self) -> Vec<String> {
+        self.roots
+            .iter()
+            .filter(|root| {
+                std::fs::symlink_metadata(root)
+                    .map(|metadata| metadata.file_type().is_symlink())
+                    .unwrap_or(false)
+            })
+            .map(|root| {
+                format!(
+                    "{} — a shortcut, and ART copies what you picked rather than what it points at",
+                    root.display()
+                )
+            })
+            .collect()
     }
 
     /// Everything to copy, with the entry cap taken as a parameter so tests
@@ -603,6 +659,10 @@ impl HostSelection {
 impl CopySource for HostSelection {
     fn entries(&self) -> CoreResult<Vec<SourceEntry>> {
         self.entries_capped(MAX_COPY_ENTRIES)
+    }
+
+    fn skipped_sources(&self) -> Vec<String> {
+        self.skipped_roots()
     }
 
     fn read(&self, relative: &str) -> CoreResult<Vec<u8>> {
@@ -1597,6 +1657,89 @@ mod tests {
             message.contains(&b.display().to_string()),
             "names root b: {message}"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ART-072. AmigaDOS is case-preserving but case-*insensitive*, so `Docs`
+    /// and `docs` are two names here and one directory entry there. Compared
+    /// as typed, this refusal never fired for such a pair — the second root
+    /// was dropped later instead, taking its whole subtree with it, and one
+    /// clear "rename one of these" became a pile of unexplained skips.
+    #[test]
+    fn two_roots_differing_only_in_case_are_refused_too() {
+        let dir = scratch("selection-collision-case");
+        let a = dir.join("a").join("Docs");
+        let b = dir.join("b").join("docs");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(a.join("A.txt"), b"from a").unwrap();
+        std::fs::write(b.join("B.txt"), b"from b").unwrap();
+
+        let selection = HostSelection::new(vec![a.clone(), b.clone()], true);
+        let err = selection
+            .entries()
+            .expect_err("Docs and docs are the same drawer on an Amiga");
+        let message = err.to_string();
+        assert!(message.contains(&a.display().to_string()), "{message}");
+        assert!(message.contains(&b.display().to_string()), "{message}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ART-071. A selection of nothing but shortcuts produced no entries, no
+    /// skips and no cancellation — and `CopyReport::is_complete()` reads that
+    /// as a clean success. The user picked things, ART copied none of them,
+    /// and every signal available to the screen said it worked.
+    #[test]
+    fn a_selection_of_nothing_but_shortcuts_says_so_rather_than_reporting_success() {
+        let dir = scratch("selection-symlinks");
+        let target = dir.join("real.txt");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&target, b"not selected").unwrap();
+
+        let link = dir.join("Link.txt");
+        // Symlink creation needs privileges on Windows; skip when unavailable.
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(&target, &link).is_ok();
+        #[cfg(not(windows))]
+        let made = std::os::unix::fs::symlink(&target, &link).is_ok();
+
+        if made {
+            let selection = HostSelection::new(vec![link.clone()], true);
+            assert!(
+                selection.entries().unwrap().is_empty(),
+                "a shortcut is still not followed"
+            );
+
+            let skipped = selection.skipped_sources();
+            assert_eq!(skipped.len(), 1, "the root that was declined must be named");
+            assert!(
+                skipped[0].contains(&link.display().to_string()),
+                "{}",
+                skipped[0]
+            );
+
+            // And the report the engine builds from it must not read as clean.
+            let mut report = CopyReport::default();
+            report.skipped.extend(selection.skipped_sources());
+            assert!(!report.is_complete());
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_selection_of_ordinary_files_declines_nothing() {
+        // The other half: `skipped_sources` must stay empty for a normal
+        // pick, or every copy would report a skip it did not make.
+        let dir = scratch("selection-no-skips");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("Readme.txt");
+        std::fs::write(&file, b"x").unwrap();
+
+        let selection = HostSelection::new(vec![file], true);
+        assert!(selection.skipped_sources().is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

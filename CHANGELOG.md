@@ -7,6 +7,487 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Install AmigaOS 3.2 from your own media (2026-08-16)
+
+#### Added
+- **The OS Builder can now build an AmigaOS 3.2 distribution tree from your
+  own install floppies.** Point it at a folder of ADFs and your Kickstart:
+  it works out which components apply — Workbench, Extras, every Locale disk,
+  Fonts, Classes, GlowIcons, DiskDoctor, MMULibs, HDTools, Storage — and, if
+  your Kickstart is older than V47, switches on the A1200 Modules disk for
+  you, unasked, because 3.2 needs it and 3.9 does not. Media disks are found
+  by the volume name recorded *inside* them, never by filename, so a renamed
+  or reordered floppy image still resolves.
+- **A manifest, not just a folder.** Every file the build places is recorded
+  with which component put it there, which disk it came from, its SHA-256
+  and its AmigaDOS protection bits — the only record of what an install did,
+  since the original floppy images are not kept around afterwards.
+- **The tree can be put onto a real PFS3 volume — a 128 MB `.hdf` file built
+  by ART itself, not physical hardware — and read back independently.**
+  Verification tells "ART did not check this" apart from "ART checked this
+  and it's fine" — a filesystem ART cannot yet verify reports honestly
+  rather than showing a false pass. (FFS volumes are also supported by the
+  same code path but were not part of this run.)
+- **Run for the first time against the user's own real 3.2 media** (36
+  floppy images, a real Kickstart v3.1 rev 40.68): 26 components, 4030 files,
+  11.9 MB, and the pre-V47 Modules component switching itself on exactly as
+  designed. Two real defects the recipe's own data had — found only by real
+  media, never by a fixture — are already fixed.
+
+#### Known
+- **Putting the *full* tree onto a volume does not yet work for every
+  language.** A dependency this feature relies on mishandles any AmigaDOS
+  filename outside plain ASCII, which is real content on the Spanish,
+  French, Portuguese and Turkish locale disks (and the base Locale disk's
+  own country list) — 24 directories, but excluding a directory excludes
+  everything under it: **about a quarter of the whole tree** (969 of 4030
+  files, 106 of 330 directories) does not yet reach a volume. The copy
+  refuses loudly rather than writing anything wrong; it just does not yet
+  succeed for those files.
+- **No Amiga, real or emulated, has booted anything this feature has built.**
+  The distribution tree and the volume it produces are proven independently
+  of ART — but the WinUAE rung and the real-hardware rung are both still
+  open.
+- **The install screen itself is only lightly verified.** Its top-level
+  layout has been seen rendering correctly; the component checklist, the
+  confirmation step, the file list and the verify results have not yet been
+  driven end to end in a real browser session.
+
+### Drop a pile of files, get an organised staging tree (2026-08-15)
+
+#### Added
+- **A new screen, `layout`, that answers "what goes where".** Drop files or
+  folders on it and each one gets a proposed destination — `Games`,
+  `Floppies`, `HardDisks`, `CDs`, `Unsorted` — in a tree on your PC that the
+  OS Builder's preload screen then copies onto a card's Amiga volume.
+- **A WHDLoad drawer is placed whole, not scattered.** Drop a folder holding
+  fifty games and each one's drawer travels intact, with its icon placed
+  beside the drawer rather than inside it — inside, the game would be on the
+  disk and invisible on Workbench.
+- **A ROM and a Commodore disk are refused, with a reason, rather than
+  placed.** A ROM belongs on the card's boot partition, not an Amiga volume;
+  a C64 disk has no business on one at all.
+- **The preview is a table you can edit, not a rule ART enforces.** ART
+  cannot tell a demo from a game — nothing in what it can detect says so —
+  so it proposes only what it can justify, and you retarget one row or many
+  before anything is written. Nothing overwrites, nothing touches the
+  source, and stopping partway reports how much landed.
+
+#### Known
+- **Not yet driven against real material in the running application** — only
+  in a headless browser against the built bundle.
+- **No staging tree this builds has been carried onto a card.** The folder it
+  produces is pointed at by hand from the preload screen; there is no
+  automatic chaining between the two yet.
+
+### Prepare a card's Amiga volumes, from the OS Builder (2026-08-15)
+
+#### Added
+- **The step after the card exists has a screen.** OS Builder's third choice:
+  point ART at a card, tick the partitions to prepare, name each volume and
+  optionally give it a folder of content, then preview what would happen
+  before any of it does.
+- **Nothing is ticked to start with, and the ticks are not remembered.** The
+  card and the paths come back the way you left them, the way everything in
+  ART does. What gets erased does not — coming back to a screen already armed
+  to format two partitions is not the same kind of convenience.
+- **Volume names are checked before the format, not during it.** The two rules
+  AmigaDOS itself has: no `:` or `/`, and thirty characters, counted as
+  characters.
+- **It says what it cannot check.** Once a volume is formatted and filled, ART
+  has no PFS3 reader to look inside it — so the result panel reports the tool's
+  word as the tool's word, and points you at the Amiga.
+- **`hst.imager`'s path is a setting**, beside the WinUAE path. ART does not
+  ship the tool; you point it at your own copy, from Settings or from the
+  screen itself, and it can be asked to say which version it is.
+
+### Drag your files onto the card builder (2026-08-15)
+
+#### Added
+- **Drop the Emu68 archive and your Kickstart on the screen and the form
+  fills itself.** The archive's name says which PiStorm board and which
+  release line it is for, and ART says so back rather than guessing.
+- **Everything else gets an answer too.** A game, a disk image, an AmigaOS CD
+  or a folder is told it belongs on an Amiga volume — and that this card has
+  none formatted yet. A `config_<name>.txt` is recognised as a distribution's
+  Pi config and declared not-yet-used. A Commodore disk is told plainly it has
+  no place on a PiStorm card.
+
+### Check the card before you flash it (2026-08-15)
+
+#### Added
+- **One button that answers "is this card right".** It checks the partition
+  table, where each Amiga disk landed, every partition table inside them,
+  whether any partition names a filesystem the card does not carry, and
+  whether the card still matches the manifest built with it.
+- **It says what it could not check, and never as a tick.** ART writes the
+  Pi's boot partition but cannot read one back, so the files on it are
+  answered from the manifest — and on a card ART did not build, not at all.
+  Those show as *not checked*, in their own mark and their own colour.
+- **The steps only you can take are on the same page**: write the image to a
+  card, plug HDMI in before powering the Amiga on, check the Pi in the machine
+  is the one the card was built for, and expect the Amiga to offer to format
+  its volumes.
+
+#### Changed
+- The manifest check added earlier the same day is now part of this one report
+  rather than a separate button.
+
+### A card says what it was built from (2026-08-15)
+
+#### Added
+- **Every card comes with a build manifest.** `card.img` now has a
+  `card.img.manifest.json` beside it, recording which Emu68 archive and which
+  Kickstart went in — with their checksums — where every partition landed, and
+  a checksum for each of the files on the boot partition.
+- **Check a card against its manifest, any time.** A button on the result panel
+  re-reads the card and says whether it is still what was built. It also says
+  plainly what it did *not* look at: ART writes the Pi's FAT32 partition but
+  cannot read one back, so those files are recorded rather than re-checked.
+  `python scripts/fat-oracle-check.py your-card.img` checks exactly those, with
+  7-Zip.
+
+#### Known
+- Rebuilding a card *from* a manifest is not built. The manifest names the
+  files it was made from; putting them back together is a later step.
+
+### You can ask for a PiStorm card (2026-08-14)
+
+#### Added
+- **The OS Builder can build a boot-only card.** Point ART at the Emu68 release
+  you downloaded and at your own Kickstart, choose a size and where the image
+  goes, and it produces a card image: the Raspberry Pi's boot partition with
+  the firmware and your ROM on it, and a partition table an Amiga can see. The
+  engine could do this since the day before; nothing in the application could
+  ask for it.
+- **Preview before build.** The card is described first — where the boot
+  partition and the Amiga disk land, which file the card boots, what your ROM
+  is, and every file going onto the boot partition with its size. Nothing is
+  written until you have seen that.
+- **A destination that already exists is refused before the button**, not by a
+  build that fails halfway.
+- **Advanced settings on the same screen**: the board, the Emu68 release line,
+  the FAT32 label, the boot partition's size and the Amiga disk's partition.
+  The first four are the same settings the PiStorm studio uses — change them in
+  either place and both agree.
+
+#### Known
+- The Amiga volumes on the card are **not formatted**. The Amiga sees them and
+  offers to format them; installing AmigaOS onto them is not built yet, and the
+  screen says so rather than leaving it to be discovered.
+- One Amiga disk per card. Several disks with a boot menu is multiboot, which
+  is not built yet.
+- **No card ART has built has been flashed or booted.**
+
+### Writing into a partition of a small hard disk image (2026-08-13)
+
+#### Fixed
+- **A small hard disk image could not be written into at all.** Anything under
+  16 MB went down a path that treated the partition's block numbers as if they
+  were the file's, so the first read failed with something unhelpful and the
+  write was refused. It works now, and everything around the partition — the
+  partition table, anything else on the image — is left byte-for-byte as it
+  was. Larger images were never affected.
+
+### Application Size cannot hide anything any more (2026-08-13)
+
+#### Fixed
+- **Content too wide for the window can be scrolled to.** Making the
+  application bigger makes the room smaller, and anything that no longer fitted
+  used to be cut off with no scrollbar, no wheel and no way to reach it. There
+  is a scrollbar now when there needs to be one.
+
+#### Known
+- The right-hand-edge problem reported earlier could not be reproduced: the
+  application was measured at 100 %, 130 % and 200 % across seven screens, in a
+  window the size of the one it was reported on, and nothing runs off the edge.
+  The two earlier attempts to fix it were both aimed at the wrong thing and
+  both made it worse; they are gone. If you still see it, say so — there is a
+  measuring tool now, and it beats another screenshot.
+- The sidebar keeps its full width at large Application Sizes, where it was
+  meant to shrink to icons. It costs room; nothing is unreachable.
+
+### The Hard Disk screen opens a PiStorm card (2026-08-13)
+
+#### Added
+- **Open a card and see what is on it.** A PiStorm SD card is not one hard
+  disk: it is a partition table with a FAT32 boot partition and one to three
+  Amiga disks inside it, each with its own partitions, and ART now shows it
+  that way — the four slots as the card's own documentation numbers them, then
+  a section per Amiga disk with where it starts and what is on it.
+- **The file system drivers are counted across the whole card**, which is what
+  the Amiga does. A card whose second disk carries no PFS3 while its partitions
+  are all PFS3 works perfectly, and ART no longer has any way to call those
+  partitions broken.
+- Any file can be opened this way: a plain hard disk image comes back as one
+  disk starting at the beginning, exactly as before. Nothing depends on the
+  file's extension.
+
+Reading only — ART cannot write a card yet, and the screen says so rather than
+leaving you to find out.
+
+### Six from the open list (2026-08-13)
+
+#### Fixed
+- **Planning a batch of `.lha` archives no longer freezes the window.** ART has
+  to unpack every archive to tell you what each one will create, and it used to
+  do that with the interface stopped dead — no progress, no Stop, in the very
+  step that exists so you can change your mind. It runs as a job now, with a
+  bar and a Stop button like everything else.
+- **Cancelling a copy into a large hard disk image says how many files already
+  landed**, instead of just "cancelled". They are correctly still there: a large
+  image is written file by file, each one finished before the next starts, so
+  stopping cannot take back what is done. A small image is written whole and
+  cancelling really does leave nothing — that still says plain "cancelled".
+- **After a copy, the keyboard stayed where you were.** F5 refreshes the
+  destination pane when the job finishes, and that used to move the keyboard
+  there — so the next F-key press acted on the pane you were not looking at.
+- **Stop now works in the middle of an archive**, not only between two. A batch
+  of five whose third one is large used to sit there ignoring Stop for as long
+  as that archive took to unpack.
+- A pane with a filter that matches nothing says so. It could, in principle,
+  have said "this folder is empty" instead — which reads as ART having failed
+  to open the disk rather than as a filter doing its job.
+
+### What you have open stays open (2026-08-13)
+
+#### Fixed
+- **Leaving a screen threw away the file you had open.** Step from ADF Studio
+  over to the hard disk screen and back, and the floppy you were working on was
+  gone — while the Dashboard's Recent list still had it at the top. Now it is
+  still there: the ADF, the HDF, the archive, the file in the hex viewer, the
+  package and target a WHDLoad install was being set up with, and the disks
+  attached in the WinUAE screen. Closing ART still starts you fresh.
+- The file is read again when you come back, so one that changed on disk in the
+  meantime shows what it says now rather than what it said when you left.
+- Turning on ADF Studio's hex panel used to switch itself back off every time
+  the disk was loaded again.
+
+### Hard disks ART creates now describe themselves the way real ones do (2026-08-13)
+
+#### Fixed
+- **A partition ART created told the driver nothing about how to transfer to
+  it.** Two fields — the largest transfer it will accept, and which memory it
+  may transfer into — were left at zero, and zero in the second one means "no
+  memory is acceptable". Nothing refused it in practice, because the PiStorm's
+  Emu68 is forgiving, but it is the kind of thing that is impossible to
+  diagnose from the symptom. Both now carry the values every partition on two
+  real cards uses.
+- **The cache size was decided by a number typed into a screen.** New
+  partitions were created with 100 buffers whatever the engine thought,
+  because the Hard Disk studio was sending its own figure — and the studio has
+  never asked you for one. It no longer names a number at all; the engine's
+  600 (300 KB, on a machine with a PiStorm's hundreds of megabytes in it) is
+  what you get, and a partition made before this keeps whatever it was made
+  with.
+
+### About, and the name on the installer (2026-08-13)
+
+#### Fixed
+- **The PiStorm screen no longer goes grey without saying why.** Everything on
+  it edits files on a card, so everything waits for you to choose the card's
+  folder — it says that now, instead of leaving you with buttons that look
+  broken.
+
+#### Known
+- Above 100 %, Application Size still cuts the right-hand edge off. Two
+  attempted fixes made it worse and were reverted; it is being tracked rather
+  than guessed at again.
+
+#### Added
+- **An About panel in Settings**: the version the build actually carries, the
+  author, where the source lives, the licence, and the notice the GPL asks an
+  interactive program to display — that it comes with no warranty and that you
+  are welcome to redistribute it. Static: no version check, no update button,
+  nothing that reaches the network.
+
+#### Fixed
+- The installer's Publisher line said nothing; it says `tolon` now, as do the
+  package metadata and the copyright the bundle carries.
+- The licence inventory had been listing ART itself as MIT since months after
+  the project moved to the GPL.
+
+### ART can read a PiStorm card (2026-08-13)
+
+#### Fixed
+- **ART could not open a real PiStorm card at all.** It looked for the Amiga's
+  partition table in the first few blocks of the file; on every card those are
+  the MBR and the FAT32 boot partition, and the Amiga's own table is about a
+  gigabyte further in. Two real distributions were read to find this out, and
+  both now open.
+
+#### Added
+- **A card can hold more than one Amiga disk**, and ART reads them all.
+  MultibootOS keeps two, with different geometries and seventeen partitions
+  between them.
+- **A filesystem driver belongs to the card, not to one of its tables.** One of
+  those two tables carries no PFS3 while every partition in it is PFS3 — and
+  the card works perfectly. Asking the wrong question would have told you
+  fifteen working partitions were broken.
+
+A plain HDF still reads exactly as before. Reading a card from the Hard Disk
+screen is not wired up yet — this is the engine underneath it.
+
+### Two that were owed (2026-08-13)
+
+#### Fixed
+- **A write-protected file is no longer replaced without a word.** The delete
+  half of this landed yesterday; the *overwrite* half is what AmigaDOS actually
+  governs with the W bit, and nothing checked it. Fixing it also caught a side
+  effect of yesterday's change: copying over a file that was delete-protected
+  but perfectly writable had started being refused for the wrong reason.
+
+#### Added
+- **A named firmware set can be deleted**, and ART keeps a copy when it goes.
+  The set the card is currently running is refused — deleting that one would
+  take away the only copy of the configuration it boots from, so make another
+  active first.
+
+### Four fixes (2026-08-13)
+
+#### Fixed
+- **A file the Amiga itself protects is no longer deleted without a word.**
+  ART asked, but only on one screen — the writer underneath removed it either
+  way. It refuses now, names the file, and only goes ahead when you have
+  actually been asked. Moving one asks *before* the copy, so a refusal cannot
+  leave you with a duplicate and an error.
+- **`Docs` and `docs` are the same drawer on an Amiga**, and ART now says so up
+  front — "rename one of these" — instead of quietly dropping the second one
+  and its whole contents.
+- **A selection of nothing but shortcuts said it had copied everything.** It
+  had copied nothing. The report says which ones it declined, and why.
+- **"1 weeks ago"** in the Aminet listing.
+
+### The OS Builder knows the distributions (2026-08-13)
+
+#### Added
+- **A new screen: OS Builder.** The AmigaOS distributions that run on a
+  PiStorm — CaffeineOS, CoffinOS, AmiKit, and ART's own Baseline — each one
+  leading with its licence, because that decides what you have to do before ART
+  can help. It tells you what you must supply, checks whether the Kickstart you
+  picked is from the family that distribution's base actually wants, and
+  whether your card is big enough — before a copy, not two thirds of the way
+  through one.
+- **ART downloads no distribution, and never will.** The link goes to the
+  project's own page; you come back with a file. The same rule ART already
+  follows for Kickstart ROMs. And both free distributions ship the same
+  sentence, so ART does too: if you bought this from somebody, ask for your
+  money back — building the card yourself is what this screen is for.
+
+#### Not built
+ART cannot prepare a card yet, and every profile says so. What a real
+distribution's card looks like has to be read off a genuine download first;
+guessing at it is how a tool ends up writing a card that quietly does not boot.
+
+### The PiStorm screen knows which Kickstart you have (2026-08-13)
+
+#### Added
+- **Every ROM on the card is identified, not just listed.** ART checks it by
+  checksum and tells you which Kickstart it is, its revision, and the machines
+  it is for. A ROM it does not recognise is *labelled* and stays perfectly
+  usable — it may be custom, byte-swapped, or newer than ART's table.
+- **Choose a Kickstart from anywhere on your PC** and ART copies it onto the
+  card under a name you confirm. It never replaces a file without being asked,
+  and the one it replaces is kept.
+- **The kernel says which Emu68 it is**, read from the version string Emu68's
+  own build puts in the image. If the image says nothing, so does ART.
+- **Named firmware sets**, the way MultibootOS does it: one `config.txt` per
+  system, created from the card or from the settings on screen, duplicated,
+  renamed, and made active — each one showing you the change first.
+
+#### Fixed
+- **ART named an Emu68 download that has never existed.** For the PiStorm16 it
+  said `Emu68-pistorm16.zip`; no Emu68 release has ever contained a file by that
+  name. Worse, the name that *does* exist means different things in different
+  releases: `Emu68-pistorm.zip` is the classic board's firmware in 1.0.x and the
+  PiStorm32-lite's and PiStorm16's in the 1.1 alpha. ART now asks which release
+  line you are building for, and says plainly when a board has no download in it
+  at all — as the PiStorm16 has none in any stable release.
+- A card forcing an HDMI mode ART had no name for selected nothing at all, and
+  saving would quietly have removed the forcing.
+- The Kickstart picker was shown to everyone *except* Power Users. Power Mode
+  now adds free typing beside it instead of taking it away.
+
+#### Not built
+Fetching a kernel update from GitHub. Named in the issues list rather than
+offered as a button that does nothing.
+
+### The PiStorm screen tells the truth now (2026-08-12)
+
+#### Fixed
+- **Four controls that did nothing are gone**, because the things they claimed
+  to switch do not exist: Emu68 *is* a JIT engine and cannot be turned off; it
+  emulates no MMU, so WHDLoad runs in NOMMU mode; it maps Fast RAM itself, so
+  there is no size to set; and the storage driver is called `brcm-sdhc.device`
+  or `brcm-emmc.device`, never `emu68-sd.device`. ART was writing three options
+  Emu68 has never read. A card written by an older ART has them removed the
+  next time you save.
+- **The profile cards no longer quote numbers nobody measured.** Each one now
+  lists the exact options it sets, and you can read them before you apply it.
+
+#### Added
+- **Your hardware is three answers, not one**: which Amiga, which PiStorm
+  board, which Raspberry Pi — each narrowing the next. ART then tells you which
+  Emu68 build to use, what your storage driver is called, and what is worth
+  knowing about that combination, from the CM4's eMMC to why a poor power
+  supply looks exactly like a slow PiStorm.
+- **Every option, with the name of what it writes** beside it, and the whole
+  `cmdline.txt` line beneath. Your own boot parameters are shown too,
+  read-only — so you can see for yourself that they survive.
+- **Show me the change** before saving: both files, before and after, in full.
+- Options that mean nothing on your machine are not shown. The slow-RAM ones on
+  an A1200 are not a harmless extra — they are the documented cause of a wrong
+  memory report.
+
+Not yet booted on real hardware. What ART writes is what the Emu68
+documentation says; whether a given machine likes a given set of options is a
+separate claim, and not one ART is making.
+
+### The whole program can be made bigger, and it remembers everything (2026-08-12)
+
+#### Added
+- **Application Size.** One control in Settings scales the *entire* program —
+  text, search boxes, icons, buttons — on every screen, from 70 % to 250 %.
+  Ctrl and the mouse wheel does the same anywhere outside the file listing,
+  along with Ctrl+plus, Ctrl+minus and Ctrl+0. The listing keeps its own text
+  size, because it is the one wall of text dense enough to want its own answer.
+  Most of the people this program is for are past fifty and wear reading
+  glasses; this is not a preference.
+- **Every choice you make is remembered.** Not just the Files screen's tabs:
+  the Collection's view and filters, Aminet's sort, narrowing and download
+  subfolder, the HDF wizard's size, template, filesystem and driver, PiStorm's
+  configuration, the Gotek folder, your WinUAE machine and ROM, how ADF Studio
+  makes disks. Nothing changes unless you change it.
+
+#### Fixed
+- A setting changed in the first moment after launch could be silently undone
+  by the settings file arriving a beat later.
+
+### A PFS3 disk ART makes now actually mounts (2026-08-12)
+
+#### Added
+- **The New HDF wizard carries the filesystem.** Pick PFS3 or SFS and ART asks
+  for the driver — `pfs3aio`, usually — and writes it *inside* the disk, where
+  Kickstart looks for it. Until now ART wrote the name of a filesystem it did
+  not put there, and an Amiga ignored the partition in silence (ART-084).
+- **ART reads the version off the driver itself**, out of the `$VER:` string
+  every Amiga binary carries, so there is no number to type. If the driver says
+  nothing, ART asks rather than guessing: a version of 0.0 loses to whatever is
+  already loaded, and the driver would never run.
+- **The Hard Disk studio lists what a disk carries**, and names any partition
+  whose filesystem is not there — the same question, asked of a disk somebody
+  else made.
+- **The Aminet download folder is in Settings now**, beside the other paths and
+  with the same Browse button. ART checks the folder before remembering it, and
+  tells you where downloads are actually going.
+
+#### Verified
+- Round-tripped through **amitools**, not just through ART: `rdbtool` reads an
+  image ART built and reports `PDS3 version=19.2 size=59120`, and pulls the
+  driver back out byte-for-byte identical to the file that went in.
+  `hst-imager` reads the same image. ART's own reader agreeing with ART's own
+  writer would have proved nothing.
+
 ### A real Amiga booted a disk ART wrote (2026-08-12)
 
 #### Verified

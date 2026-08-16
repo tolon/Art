@@ -45,6 +45,25 @@ pub enum CoreError {
     /// say "cancelled", not show an error.
     #[error("operation cancelled")]
     Cancelled,
+
+    /// Cancelled, but some of the work is already durable on disk (ART-058).
+    ///
+    /// The whole-file strategy can be cancelled with nothing left behind: it
+    /// works in a buffer and returns before the commit. The block-journal
+    /// strategy — the one an image too large to hold in memory uses — cannot.
+    /// Each file it copied is its own committed, journalled, verified
+    /// operation, already durable in the file before the next one starts, and
+    /// they are deliberately left in place rather than rolled back.
+    ///
+    /// Both used to come back as plain [`Cancelled`](Self::Cancelled), so
+    /// somebody who stopped a large install part way through had no way to
+    /// learn that some of it is on the volume. The count travels as a number
+    /// rather than inside the sentence because the sentence is English and the
+    /// UI's is not (§68).
+    ///
+    /// [`Cancelled`]: Self::Cancelled
+    #[error("operation cancelled after writing {files} file(s)")]
+    CancelledPartway { files: u64 },
 }
 
 impl CoreError {
@@ -68,6 +87,7 @@ impl CoreError {
             Self::MirrorUnreachable(_) => "ART-MIRROR-UNREACHABLE",
             Self::IntegrityMismatch(_) => "ART-INTEGRITY-MISMATCH",
             Self::Cancelled => "ART-CANCELLED",
+            Self::CancelledPartway { .. } => "ART-CANCELLED-PARTWAY",
         }
     }
 

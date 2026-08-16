@@ -3,6 +3,25 @@ import { useTranslation } from "react-i18next";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
 import { useSettingsStore } from "@/stores/settingsStore";
+import { getAppInfo } from "@/lib/api";
+
+/**
+ * The project's mark, if one has been dropped in.
+ *
+ * `import.meta.glob` rather than a plain `import` for one reason: a plain
+ * import of a file that is not there fails the build, and a logo is not
+ * something ART needs in order to work. With the glob, the slot is empty until
+ * a file lands in `src/assets/` and full the moment one does — no code change,
+ * and no broken image in between.
+ *
+ * Any of the usual formats, so whatever the author has is the file they use.
+ */
+const APP_LOGO: string | undefined = Object.values(
+  import.meta.glob<{ default: string }>("../assets/logo.{png,svg,jpg,jpeg,webp}", {
+    eager: true,
+  })
+)[0]?.default;
+import type { AppInfo } from "@/types";
 import { LANGUAGE_NAMES, SUPPORTED_LANGUAGES } from "@/i18n";
 import type { StoredOverwritePolicy, Theme, UxMode } from "@/lib/settings";
 import {
@@ -11,6 +30,14 @@ import {
   PANE_FONT_MAX,
   PANE_FONT_MIN,
 } from "@/lib/dockLayout";
+import {
+  clampZoom,
+  zoomLabel,
+  ZOOM_DEFAULT,
+  ZOOM_MAX,
+  ZOOM_MIN,
+  ZOOM_STEP,
+} from "@/lib/appZoom";
 import {
   DEFAULT_COLOUR_RULES,
   isUsableRuleList,
@@ -24,6 +51,7 @@ import {
   succeeded,
   type OperationRecord,
 } from "@/lib/oplog";
+import { sourcesLibrary, sourcesSetLibraryRoot } from "@/lib/sources";
 
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -59,6 +87,37 @@ export function SettingsPage() {
             {settings.uxMode === "power"
               ? t("settings.uxModePowerHint")
               : t("settings.uxModeBeginnerHint")}
+          </p>
+        </Field>
+        {/* How big the application is drawn. In Appearance rather than in
+            Files, because it is the whole program: text, search boxes, icons,
+            buttons, every screen. The listing has its own size below it, for
+            the one wall of text dense enough to want its own answer. */}
+        <Field label={t("settings.appZoom")}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              type="range"
+              min={ZOOM_MIN}
+              max={ZOOM_MAX}
+              step={ZOOM_STEP}
+              value={clampZoom(settings.appZoom)}
+              onChange={(e) => void update({ appZoom: clampZoom(Number(e.target.value)) })}
+              style={{ flex: "1 1 auto" }}
+              aria-label={t("settings.appZoom")}
+            />
+            <span style={{ fontSize: 13, minWidth: "3.5em", textAlign: "right" }}>
+              {zoomLabel(settings.appZoom)}
+            </span>
+            <button
+              className="btn btn-sm"
+              onClick={() => void update({ appZoom: ZOOM_DEFAULT })}
+              disabled={clampZoom(settings.appZoom) === ZOOM_DEFAULT}
+            >
+              {t("settings.appZoomReset")}
+            </button>
+          </div>
+          <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+            {t("settings.appZoomHint")}
           </p>
         </Field>
       </section>
@@ -223,16 +282,108 @@ export function SettingsPage() {
           onChange={(next) => void update({ winuaePath: next })}
         />
         <PathField
+          label={t("settings.hstImagerPath")}
+          placeholder="E:\\amiga\\hstimager\\hst.imager.exe"
+          value={settings.hstImagerPath}
+          pick="file"
+          onChange={(next) => void update({ hstImagerPath: next })}
+        />
+        <PathField
           label={t("settings.collectionDir")}
           placeholder="D:\\Amiga"
           value={settings.lastCollectionDir}
           pick="folder"
           onChange={(next) => void update({ lastCollectionDir: next })}
         />
+        <AminetDownloadField />
       </section>
 
       <OperationLogSection />
+      <AboutSection />
     </div>
+  );
+}
+
+/**
+ * About — the notice GPLv3 §5 asks an interactive program to display.
+ *
+ * Static, and deliberately so: no version check, no update button, no network
+ * call of any kind. A panel that says who wrote the program and under what
+ * terms has no business reaching the internet to do it.
+ *
+ * The version comes from the build (`CARGO_PKG_VERSION`, through `app_info`)
+ * rather than from a string here, so it cannot drift from the installer's.
+ *
+ * The licence is named and its full text ships beside the program — there is
+ * no link, because opening one would need a plugin ART does not have, and a
+ * link that silently does nothing is worse than a sentence that does not
+ * pretend to be one.
+ */
+function AboutSection() {
+  const { t } = useTranslation();
+  const [info, setInfo] = useState<AppInfo | null>(null);
+
+  useEffect(() => {
+    getAppInfo()
+      .then(setInfo)
+      .catch(() => setInfo(null));
+  }, []);
+
+  return (
+    <section className="card">
+      <h2 style={{ fontSize: 15 }}>{t("settings.about.heading")}</h2>
+
+      <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 8 }}>
+        {APP_LOGO && (
+          // `alt` deliberately empty: the name is right beside it, and a
+          // screen reader announcing "logo" before reading it is noise.
+          <img
+            src={APP_LOGO}
+            alt=""
+            width={56}
+            height={56}
+            style={{ borderRadius: 8, flex: "0 0 auto", objectFit: "contain" }}
+          />
+        )}
+        <div>
+          <p style={{ fontSize: 13, margin: 0 }}>
+            <strong>{info?.name ?? "Amiga Retro Toolkit"}</strong>{" "}
+            {info ? <span className="muted">{info.version}</span> : null}
+          </p>
+          <p className="faint" style={{ fontSize: 11, margin: "2px 0 0" }}>
+            {t("app.tagline")}
+          </p>
+        </div>
+      </div>
+
+      <dl
+        style={{
+          display: "grid",
+          gridTemplateColumns: "auto 1fr",
+          gap: "4px 12px",
+          margin: "10px 0 0",
+          fontSize: 12,
+        }}
+      >
+        <dt className="muted">{t("settings.about.developer")}</dt>
+        <dd style={{ margin: 0 }}>tolon</dd>
+        <dt className="muted">{t("settings.about.source")}</dt>
+        <dd style={{ margin: 0 }}>
+          <code>https://github.com/tolon/Art</code>
+        </dd>
+        <dt className="muted">{t("settings.about.licenceLabel")}</dt>
+        <dd style={{ margin: 0 }}>{t("settings.about.licence")}</dd>
+        <dt className="muted">{t("settings.about.copyright")}</dt>
+        <dd style={{ margin: 0 }}>Copyright (C) 2026 tolon</dd>
+      </dl>
+
+      <p className="faint" style={{ fontSize: 11, margin: "12px 0 0" }}>
+        {t("settings.about.warranty")}
+      </p>
+      <p className="faint" style={{ fontSize: 11, margin: "6px 0 0" }}>
+        {t("settings.about.whereTheLicenceIs")}
+      </p>
+    </section>
   );
 }
 
@@ -495,6 +646,74 @@ function OperationLogSection() {
  * "the user cleared this" and "the user never touched it" stay the same thing
  * — which is what the callers' `?? fallback` already assumes.
  */
+/**
+ * Where Aminet downloads land (§41.5.6).
+ *
+ * Not a plain {@link PathField}, because this path is not merely remembered —
+ * the engine owns it, creates it if it is missing, and can refuse it. So the
+ * folder is offered to Rust first and only written to settings once Rust has
+ * taken it, the same rule the Aminet studio's own picker follows: a folder that
+ * failed validation must not be the one waiting at the next launch.
+ *
+ * It is also shown *read back from the engine* rather than echoed from the
+ * input, so "where downloads go" is the truth and not the intention. Cleared,
+ * it reverts to ART's own folder — which is why the engine's answer is still
+ * shown when the field is empty.
+ */
+function AminetDownloadField() {
+  const { t } = useTranslation();
+  const stored = useSettingsStore((s) => s.settings.aminetRoot);
+  const update = useSettingsStore((s) => s.update);
+  const [inUse, setInUse] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Best-effort: the studio may never have been opened, and a Settings
+    // screen that errors because a subsystem is idle helps nobody.
+    sourcesLibrary()
+      .then((library) => setInUse(library.root))
+      .catch(() => setInUse(null));
+  }, [stored]);
+
+  async function apply(next: string | null) {
+    setError(null);
+    if (next === null) {
+      await update({ aminetRoot: null });
+      return;
+    }
+    try {
+      const library = await sourcesSetLibraryRoot(next);
+      setInUse(library.root);
+      await update({ aminetRoot: next });
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  return (
+    <>
+      <PathField
+        label={t("settings.aminetRoot")}
+        placeholder="D:\\Amiga\\Aminet"
+        value={stored}
+        pick="folder"
+        onChange={(next) => void apply(next)}
+      />
+      {error ? (
+        <p className="badge badge-warn" style={{ fontSize: 11, margin: "-4px 0 0" }}>
+          {error}
+        </p>
+      ) : (
+        <p className="faint" style={{ fontSize: 11, margin: "-4px 0 0" }}>
+          {inUse
+            ? t("settings.aminetRootInUse", { path: inUse })
+            : t("settings.aminetRootHint")}
+        </p>
+      )}
+    </>
+  );
+}
+
 function PathField({
   label,
   placeholder,

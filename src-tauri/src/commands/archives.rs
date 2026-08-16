@@ -45,7 +45,7 @@ use tauri::{AppHandle, Emitter, State};
 use super::jobs::{spawn_job, JobRegistry};
 use super::oplog::{user_operation, write_to_path};
 use crate::core::error::{CoreError, CoreResult};
-use crate::core::jobs::{JobId, NoProgress, ProgressSink};
+use crate::core::jobs::{JobId, ProgressSink};
 use crate::core::lha::OverwritePolicy;
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::core::security::safe_join;
@@ -99,19 +99,52 @@ pub struct ArchivesPlan {
     pub cost: CopyPlan,
 }
 
+/// The event a finished plan arrives on. One per `archives_plan_install` job.
+pub const ARCHIVES_PLAN_EVENT: &str = "archives-plan-result";
+
+/// A plan, tied back to the job that produced it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ArchivesPlanResult {
+    pub job_id: JobId,
+    pub plan: ArchivesPlan,
+}
+
 /// What installing `archives` into a volume would do. Writes nothing.
+/// Returns a job id (§54, §55).
+///
+/// **A job, not a plain command** (ART-066). Planning here is not the cheap
+/// arithmetic every other plan in ART does: it has to *unpack every archive in
+/// the batch* to know what each one contains, and it used to do that straight
+/// on the Tauri command thread — several large archives meant a frozen window,
+/// no progress, and no way to stop, in the one step whose whole purpose is to
+/// let the user change their mind before anything is written. Everything else
+/// in this module already runs through `spawn_job`.
 #[tauri::command]
 pub fn archives_plan_install(
     archives: Vec<String>,
     image: String,
     volume_index: usize,
     dir_block: Option<u32>,
-) -> AppResult<ArchivesPlan> {
+    app: AppHandle,
+    registry: State<'_, Arc<JobRegistry>>,
+) -> AppResult<JobId> {
     let archives = normalize_archives(&archives)?;
     let image_path = PathBuf::from(image.trim());
     let parent = dir_block.unwrap_or(0);
 
-    Ok(build_plan(&archives, &image_path, volume_index, parent)?)
+    let registry = Arc::clone(&registry);
+    let emit_app = app.clone();
+    let title = format!("Planning {} archives", archives.len());
+
+    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+        let plan = build_plan(&archives, &image_path, volume_index, parent, progress)?;
+        // Nothing is logged: §53 is about operations that change user data, and
+        // this one writes nothing at all.
+        let _ = emit_app.emit(ARCHIVES_PLAN_EVENT, ArchivesPlanResult { job_id, plan });
+        Ok(())
+    });
+
+    Ok(id)
 }
 
 fn build_plan(
@@ -119,9 +152,10 @@ fn build_plan(
     image: &Path,
     volume_index: usize,
     parent: u32,
+    progress: &dyn ProgressSink,
 ) -> CoreResult<ArchivesPlan> {
     let staging = Staging::new()?;
-    let (drawers, roots) = prepare_archives(archives, staging.path(), &NoProgress)?;
+    let (drawers, roots) = prepare_archives(archives, staging.path(), progress)?;
 
     // These roots are ART's own unpacked staging tree, not a folder the user
     // picked — the sidecar option (§4.2) is about copies from a real host
@@ -296,6 +330,45 @@ struct Unpacked {
 /// Both [`archives_plan_install`] and [`archives_install`] call this and get
 /// the same drawer name for the same archive — a plan that shows one name and
 /// an install that creates another would defeat §92 entirely.
+/// One archive's slice of a batch's progress (ART-067).
+///
+/// `prepare_archives` used to unpack with `NoProgress`, so `is_cancelled()`
+/// was answered `false` all the way down and Stop was honoured only *between*
+/// archives: a batch whose third archive is large left Stop unresponsive for
+/// however long that one extraction took.
+///
+/// Forwarding the batch's own sink fixes that, but forwarding it **raw** would
+/// let the extractor's per-entry counts (142 of 2000 files) overwrite the
+/// batch's per-archive ones (3 of 5), so the bar would leap forward inside an
+/// archive and fall back at every boundary. This keeps the batch's numbers and
+/// carries the inner message through.
+///
+/// The message keeps the `"Unpacking …"` prefix on purpose: the phase a report
+/// belongs to is told from that prefix — see
+/// `cancelling_during_the_copy_phase_writes_nothing`, whose sink waits for
+/// reports that are *not* the unpack phase's.
+struct BatchStep<'a> {
+    outer: &'a dyn ProgressSink,
+    /// Which archive of the batch, and how many there are.
+    index: u64,
+    total: u64,
+    label: String,
+}
+
+impl ProgressSink for BatchStep<'_> {
+    fn report(&self, _done: u64, _total: Option<u64>, message: &str) {
+        self.outer.report(
+            self.index,
+            Some(self.total),
+            &format!("Unpacking {} — {message}", self.label),
+        );
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.outer.is_cancelled()
+    }
+}
+
 fn prepare_archives(
     archives: &[PathBuf],
     staging: &Path,
@@ -309,16 +382,26 @@ fn prepare_archives(
     let mut unpacked: Vec<Unpacked> = Vec::with_capacity(archives.len());
 
     for (index, archive) in archives.iter().enumerate() {
-        // Between whole units of work, never mid-unpack (§54): one archive is
-        // one unit, so cancelling here stops before the next one starts and
-        // never leaves a partially unpacked archive behind.
+        // Stop, asked between two archives (§54). Since ART-067 it is also
+        // heard *inside* one, through `BatchStep` below — which does not
+        // weaken the rule: what a cancelled unpack leaves half-finished is a
+        // scratch directory ART owns and drops, never a file of the user's.
+        // Nothing reaches the volume until every archive is staged.
         if progress.is_cancelled() {
             return Err(CoreError::Cancelled);
         }
         let label = file_label(archive);
         progress.report(index as u64, Some(total), &format!("Unpacking {label}"));
 
-        let (scratch, unpack_skipped) = unpack_for_install(archive, &NoProgress)?;
+        // The batch's sink, not `NoProgress`: Stop has to be heard *inside* a
+        // large archive, not merely between two (ART-067).
+        let step = BatchStep {
+            outer: progress,
+            index: index as u64,
+            total,
+            label: label.clone(),
+        };
+        let (scratch, unpack_skipped) = unpack_for_install(archive, &step)?;
         let top = top_level_entries(scratch.path())?;
 
         let (drawer_name, content_root) = if top.len() == 1 && top[0].is_dir {
@@ -345,18 +428,27 @@ fn prepare_archives(
     // Two archives that would both create the same drawer are reported by
     // name, before anything moves — silently interleaving two unrelated
     // archives into one directory would be worse than refusing (§92).
-    let mut seen: std::collections::BTreeMap<String, &Path> = std::collections::BTreeMap::new();
+    //
+    // Keyed **without case** (ART-072): AmigaDOS is case-preserving but
+    // case-insensitive, so `Docs` and `docs` are two keys here and one drawer
+    // there. Keyed as typed, the pair reached `std::fs::rename` instead, and
+    // the user got a raw OS error where the exact-match case gets a sentence.
+    let mut seen: std::collections::BTreeMap<String, (&Path, &str)> =
+        std::collections::BTreeMap::new();
     for item in &unpacked {
-        if let Some(other) = seen.get(item.drawer.as_str()) {
+        if let Some((other, other_drawer)) = seen.get(&item.drawer.to_lowercase()) {
             return Err(CoreError::InvalidInput(format!(
                 "'{}' and '{}' would both create a drawer called '{}' — rename one \
                  before installing them together",
                 other.display(),
                 item.archive.display(),
-                item.drawer
+                other_drawer
             )));
         }
-        seen.insert(item.drawer.clone(), item.archive.as_path());
+        seen.insert(
+            item.drawer.to_lowercase(),
+            (item.archive.as_path(), item.drawer.as_str()),
+        );
     }
 
     let mut drawers = Vec::with_capacity(unpacked.len());
@@ -496,6 +588,9 @@ impl Drop for Staging {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // `NoProgress` is a test-only import since ART-066: every caller in the
+    // application now runs on a job with a real sink.
+    use crate::core::jobs::NoProgress;
     use crate::core::lha::tests::make_lha_with;
     use crate::core::volume::fixture::ffs_volume;
     use crate::core::volume::mount::mount;
@@ -643,7 +738,7 @@ mod tests {
         let image = disk(&dir, "disk.adf");
         let archives = vec![a, b, c];
 
-        let plan = build_plan(&archives, &image, 0, 0).unwrap();
+        let plan = build_plan(&archives, &image, 0, 0, &NoProgress).unwrap();
         assert_eq!(plan.drawers.len(), 3);
         assert_eq!(plan.drawers[0].drawer, "Turrican");
         assert_eq!(plan.drawers[1].drawer, "Xenon2");
@@ -692,7 +787,7 @@ mod tests {
         let before = std::fs::read(&image).unwrap();
         let archives = vec![a.clone(), b.clone()];
 
-        let err = build_plan(&archives, &image, 0, 0).unwrap_err();
+        let err = build_plan(&archives, &image, 0, 0, &NoProgress).unwrap_err();
         let message = err.to_string();
         assert!(message.contains("Turrican"), "{message}");
         assert!(message.contains("release-a.lha"), "{message}");
@@ -727,7 +822,7 @@ mod tests {
         let before = std::fs::read(&image).unwrap();
         let archives = vec![a, b];
 
-        let plan = build_plan(&archives, &image, 0, 0).unwrap();
+        let plan = build_plan(&archives, &image, 0, 0, &NoProgress).unwrap();
         assert!(!plan.cost.fits(), "a batch this large must not fit");
         let refusal = plan
             .cost
@@ -825,6 +920,93 @@ mod tests {
             before,
             "cancelling during unpacking must leave the image byte-for-byte unchanged"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ART-067. Stop has to be heard **inside** one archive, not only between
+    /// two: a batch of five whose third is large used to leave Stop
+    /// unresponsive for the whole of that extraction, because
+    /// `prepare_archives` unpacked with `NoProgress` and `is_cancelled()`
+    /// therefore answered `false` all the way down.
+    ///
+    /// One archive on purpose. The loop's own check at the top runs before the
+    /// sink has ever been called, and there is no second iteration to reach —
+    /// so the only way this can come back `Cancelled` is if the cancellation
+    /// travelled *into* the unpack. Against the old code it returned `Ok`.
+    #[test]
+    fn stop_is_heard_inside_an_archive_not_only_between_them() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        /// Trips on the first report the unpack itself makes — `BatchStep`
+        /// marks those with an em dash, where the loop's own per-archive line
+        /// is plain `"Unpacking Game0.lha"`.
+        struct StopInsideUnpack(AtomicBool);
+        impl ProgressSink for StopInsideUnpack {
+            fn report(&self, _done: u64, _total: Option<u64>, message: &str) {
+                if message.contains('—') {
+                    self.0.store(true, Ordering::SeqCst);
+                }
+            }
+            fn is_cancelled(&self) -> bool {
+                self.0.load(Ordering::SeqCst)
+            }
+        }
+
+        let dir = scratch("cancel-inside-archive");
+        let archive = dir.join("Game0.lha");
+        std::fs::write(
+            &archive,
+            make_lha_with(&[
+                ("Game0/One", b"aaaa".as_slice()),
+                ("Game0/Two", b"bbbb".as_slice()),
+                ("Game0/Three", b"cccc".as_slice()),
+            ]),
+        )
+        .unwrap();
+
+        let staging = dir.join("staging");
+        std::fs::create_dir_all(&staging).unwrap();
+
+        let sink = StopInsideUnpack(AtomicBool::new(false));
+        let err = prepare_archives(&[archive], &staging, &sink)
+            .expect_err("a cancelled unpack must not come back as a prepared batch");
+        assert_eq!(err.code(), "ART-CANCELLED", "{err}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ART-066. Planning a batch has to unpack every archive to know what is
+    /// in it, and it used to do that on the Tauri command thread: several
+    /// large archives froze the window with no progress and no way to stop —
+    /// in the one step that exists so the user can change their mind before
+    /// anything is written.
+    ///
+    /// It runs on a job now, which means the sink reaches all the way down and
+    /// Stop is answered. This is the engine half of that; the command itself
+    /// is `spawn_job` plus an event, neither of which a unit test can host.
+    #[test]
+    fn planning_answers_stop() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct StopAtOnce(AtomicBool);
+        impl ProgressSink for StopAtOnce {
+            fn report(&self, _done: u64, _total: Option<u64>, _message: &str) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+            fn is_cancelled(&self) -> bool {
+                self.0.load(Ordering::SeqCst)
+            }
+        }
+
+        let dir = scratch("plan-cancel");
+        let archives = five_archives(&dir);
+        let image = disk(&dir, "disk.adf");
+
+        let sink = StopAtOnce(AtomicBool::new(false));
+        let err = build_plan(&archives, &image, 0, 0, &sink)
+            .expect_err("a cancelled plan must not come back as a plan");
+        assert_eq!(err.code(), "ART-CANCELLED", "{err}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -964,7 +1146,7 @@ mod tests {
 
         let image = disk(&dir, "disk.adf");
 
-        let plan = build_plan(&[a, b], &image, 0, 0).unwrap();
+        let plan = build_plan(&[a, b], &image, 0, 0, &NoProgress).unwrap();
         assert!(!plan.cost.fits(), "this batch must be refused");
 
         let _ = std::fs::remove_dir_all(&dir);

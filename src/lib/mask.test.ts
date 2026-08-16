@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import { entriesIn } from "./selection";
-import { filterEntries, matchesMask } from "./mask";
+import { filterEntries, filterEntriesReporting, matchesMask } from "./mask";
 import type { PanelEntry } from "./panel";
 
 function entry(name: string, overrides: Partial<PanelEntry> = {}): PanelEntry {
@@ -142,5 +142,43 @@ describe("filterEntries + entriesIn — hides non-matching entries without chang
 
     const visible = filterEntries(entries, "*.zip");
     expect(entriesIn(visible, selection)).toEqual([]);
+  });
+});
+
+// ART-068. The pane shows one of two sentences when it has nothing to list:
+// "this folder is empty", or "nothing matches your mask". Getting that wrong
+// reads as ART having failed to open the disk, so the answer comes from the
+// code that did the filtering rather than being inferred at the call site by
+// comparing a filtered count against an unfiltered one.
+describe("filterEntriesReporting — why the list is empty", () => {
+  const three = [entry("a.txt"), entry("b.txt"), entry("c.txt")];
+
+  it("says the mask hid everything when it did", () => {
+    const result = filterEntriesReporting(three, "*.zip");
+    expect(result.entries).toEqual([]);
+    expect(result.hidEverything).toBe(true);
+  });
+
+  it("says nothing of the sort when the mask kept something", () => {
+    expect(filterEntriesReporting(three, "*.txt").hidEverything).toBe(false);
+  });
+
+  it("does not blame a mask for a directory that was empty to begin with", () => {
+    // The distinction the whole thing exists for: an empty pane with an
+    // active mask is still an empty *folder*, not a mask matching nothing.
+    const result = filterEntriesReporting([], "*.zip");
+    expect(result.entries).toEqual([]);
+    expect(result.hidEverything).toBe(false);
+  });
+
+  it("blames nothing when there is no mask", () => {
+    expect(filterEntriesReporting([], "").hidEverything).toBe(false);
+    expect(filterEntriesReporting(three, "   ").hidEverything).toBe(false);
+  });
+
+  it("keeps `filterEntries` exactly as it was — the same list, no reason attached", () => {
+    expect(filterEntries(three, "*.txt")).toEqual(
+      filterEntriesReporting(three, "*.txt").entries
+    );
   });
 });

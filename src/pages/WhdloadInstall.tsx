@@ -35,14 +35,18 @@ import {
   type WhdloadOutcome,
   type WhdloadPlan,
 } from "@/lib/whdload";
+import { useOpenObject } from "@/stores/openObjectStore";
 
 export function WhdloadInstall() {
   const { t } = useTranslation();
   const powerMode = usePowerMode();
   const location = useLocation();
 
-  const [archive, setArchive] = useState<string | null>(null);
-  const [image, setImage] = useState<string | null>(null);
+  // Both halves of the job outlive this screen (ART-085), for the length of the
+  // run: going to look something up in ADF Studio and coming back must not
+  // throw away a package and a target the user has already chosen.
+  const [archive, setArchive] = useOpenObject("whdload-archive");
+  const [image, setImage] = useOpenObject("whdload-image");
   const [volumes, setVolumes] = useState<ImageVolumes | null>(null);
   const [volumeIndex, setVolumeIndex] = useState<number | null>(null);
 
@@ -63,6 +67,15 @@ export function WhdloadInstall() {
     arrivedWith.current = wanted;
     setArchive(wanted);
   }, [location.state]);
+
+  // Coming back to a job already set up: the archive is a path and needs
+  // nothing, but the image's partitions live only in this component and have to
+  // be read again (ART-085). `volumes === null` is what "not loaded here" looks
+  // like on a fresh mount, whatever the store remembers.
+  useEffect(() => {
+    if (image && volumes === null) void loadImage(image);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // One listener for the install job's result (§54).
   useEffect(() => {
@@ -133,7 +146,19 @@ export function WhdloadInstall() {
       ],
     });
     if (typeof picked !== "string") return;
+    await loadImage(picked);
+  }
 
+  /**
+   * Read an image's partitions and pick one if there is nothing to pick.
+   *
+   * Separate from `chooseImage` because it happens twice: once when the user
+   * picks the file, and again when they come back to this screen and the image
+   * is still attached (ART-085). `volumes` is what the screen holds and the
+   * store does not, so returning here re-reads it rather than restoring an
+   * image with no partitions under it.
+   */
+  async function loadImage(picked: string) {
     setError(null);
     setOutcome(null);
     setImage(picked);

@@ -72,12 +72,13 @@ import {
   archivesInstall,
   archivesPlanInstall,
   isArchivePath,
+  onArchivesPlanResult,
   type ArchiveDrawer,
 } from "@/lib/archives";
 import { checkoutEdit, checkoutOpen, volumeIconFor } from "@/lib/checkout";
 import { planFunctionKeys } from "@/lib/functionKeyPlan";
 import { onJobProgress, type JobProgress } from "@/lib/jobs";
-import { filterEntries } from "@/lib/mask";
+import { filterEntries, filterEntriesReporting } from "@/lib/mask";
 import { planMove } from "@/lib/movePlan";
 import {
   clampDockHeight,
@@ -538,6 +539,16 @@ export function FileManager() {
    * function-key table below.
    */
   const [focused, setFocused] = useState<Side>("left");
+  /**
+   * The same value, readable from a callback that must not depend on it.
+   *
+   * `refresh` (below) has to know which pane the user is in so it can put the
+   * keyboard back there, and taking `focused` as a dependency would rebuild
+   * every callback downstream of it on each Tab. A ref is read at call time,
+   * which is exactly when the answer is wanted.
+   */
+  const focusedRef = useRef<Side>(focused);
+  focusedRef.current = focused;
   /** What is typed into the command line above the F-key bar. One box for
    * the whole screen, acting on whichever pane is focused — Total Commander
    * has one too, for the same reason. */
@@ -712,6 +723,25 @@ export function FileManager() {
   // re-subscribing on every id change would race with the async unlisten.
   const pendingCopy = useRef<number | null>(null);
   const copyDestination = useRef<Side | null>(null);
+
+  /**
+   * The archive plan this screen is waiting on, and what it was asked about.
+   *
+   * Planning a batch of archives became a job (ART-066), so the plan arrives
+   * on an event rather than as the call's return value — and the sources, the
+   * names and the destination side have to survive until it does.
+   *
+   * Set **before** the call, not after: the job runs on its own thread and a
+   * small batch can finish before `invoke` has even resolved with the id. The
+   * listener therefore accepts a result while `jobId` is still null; only one
+   * plan can be in flight, since the screen is busy while it runs.
+   */
+  const pendingPlan = useRef<{
+    jobId: number | null;
+    sources: string[];
+    names: string[];
+    side: Side;
+  } | null>(null);
 
   const setPane = useCallback(
     (side: Side, next: PaneState) => (side === "left" ? setLeft(next) : setRight(next)),
@@ -1645,8 +1675,21 @@ export function FileManager() {
     if (back) await openLocal(side, back.path, back.cursor);
   }
 
+  /**
+   * Re-open a pane where it already is, to show what an operation changed.
+   *
+   * **Leaves the keyboard where it was** (ART-070). Each `open*` function ends
+   * with `setFocused(side)`, which is right when the *user* opens something in
+   * a pane and wrong here: F5's copy path refreshes the **destination** once
+   * the job result lands, so focus used to jump silently out of the pane the
+   * user was working in, and the next F-key press landed on the pane they were
+   * not looking at. Total Commander leaves focus on the source. Restoring
+   * afterwards rather than teaching six `open*` functions a flag keeps the fix
+   * in one place, and refreshing the pane that already has focus is a no-op.
+   */
   const refresh = useCallback(
     async (side: Side) => {
+      const keepFocusOn = focusedRef.current;
       const state = pane(side);
       if (state.kind === "local" && state.location) {
         await openLocal(side, state.location);
@@ -1680,6 +1723,7 @@ export function FileManager() {
           await openHdf(side, state.location, state.host);
         }
       }
+      setFocused(keepFocusOn);
     },
     [pane, openLocal, openAdf, openHdf, openVolume, openIso, openArchive, openCbm]
   );
@@ -1732,12 +1776,51 @@ export function FileManager() {
     };
   }, [refresh, t]);
 
-  // A job that fails or is cancelled emits no result, so the listener above
+  // An archive plan's result (ART-066). Planning a batch is a job now, so the
+  // plan comes back here rather than from the call — with the sources and
+  // names the request was made about, kept in `pendingPlan` meanwhile.
+  useEffect(() => {
+    const unlisten = onArchivesPlanResult((result) => {
+      const waiting = pendingPlan.current;
+      // `jobId === null` while `invoke` has not resolved yet: a small batch
+      // can be planned before it does, and only one plan is ever in flight.
+      if (!waiting || (waiting.jobId !== null && waiting.jobId !== result.job_id)) return;
+
+      pendingPlan.current = null;
+      setBusy(null);
+      setPlan({
+        plan: result.plan.cost,
+        sources: waiting.sources,
+        names: waiting.names,
+        side: waiting.side,
+        drawers: result.plan.drawers,
+      });
+    });
+
+    return () => {
+      void unlisten.then((off) => off());
+    };
+  }, []);
+
+  // A job that fails or is cancelled emits no result, so the listeners above
   // alone would leave this screen waiting forever. The job's own terminal
   // state is what says "stop waiting", and it carries the error id (§68).
   useEffect(() => {
     const unlisten = onJobProgress((job) => {
       if (job.state.state === "running") return;
+
+      // A plan job that ended without a plan: cancelled, or failed. Nothing to
+      // refresh — planning writes nothing — so this only stops the waiting.
+      const waitingPlan = pendingPlan.current;
+      if (waitingPlan && waitingPlan.jobId === job.id) {
+        pendingPlan.current = null;
+        setBusy(null);
+        if (job.state.state === "failed") {
+          setError(`${job.state.message} (${job.state.error_code})`);
+        }
+        return;
+      }
+
       if (job.id !== pendingCopy.current) return;
 
       pendingCopy.current = null;
@@ -2267,36 +2350,45 @@ export function FileManager() {
       );
       try {
         if (archiveCount > 0) {
-          const found = await archivesPlanInstall(
+          // A job now (ART-066): unpacking the batch to see what is in it can
+          // take a while, and doing it on the command thread froze the window.
+          // The plan arrives on `onArchivesPlanResult` below; `busy` stays set
+          // until it does, or until the job ends some other way.
+          pendingPlan.current = {
+            jobId: null,
+            sources: paths,
+            names: entries.map((entry) => entry.name),
+            side: to,
+          };
+          const jobId = await archivesPlanInstall(
             paths,
             destination.path,
             destination.volumeIndex,
             destination.dirBlock
           );
-          setPlan({
-            plan: found.cost,
-            sources: paths,
-            names: entries.map((entry) => entry.name),
-            side: to,
-            drawers: found.drawers,
-          });
-        } else {
-          const found = await volumePlanCopyMany(
-            destination.path,
-            destination.volumeIndex,
-            destination.dirBlock,
-            paths
-          );
-          setPlan({
-            plan: found,
-            sources: paths,
-            names: entries.map((entry) => entry.name),
-            side: to,
-          });
+          if (pendingPlan.current) pendingPlan.current.jobId = jobId;
+          // Deliberately no `setBusy(null)` on this path: the work has only
+          // just started. The listener clears it when the plan lands, and the
+          // job-progress listener clears it if the job is cancelled or fails.
+          return;
         }
+
+        const found = await volumePlanCopyMany(
+          destination.path,
+          destination.volumeIndex,
+          destination.dirBlock,
+          paths
+        );
+        setPlan({
+          plan: found,
+          sources: paths,
+          names: entries.map((entry) => entry.name),
+          side: to,
+        });
+        setBusy(null);
       } catch (e) {
+        pendingPlan.current = null;
         setError(String(e));
-      } finally {
         setBusy(null);
       }
       return;
@@ -2435,20 +2527,27 @@ export function FileManager() {
         entry.name
       ).catch(() => null);
 
+      // The writer honours the `d` bit now (ART-088); the last argument is the
+      // answer to the question asked above, and nothing else may send it.
       const outcome = await volumeDelete(
         target.path,
         target.volumeIndex,
         target.dirBlock,
-        entry.header_block
+        entry.header_block,
+        isDeleteProtected(entry.attrs)
       );
 
       let alsoIcon = false;
       if (icon && window.confirm(t("files.dialog.delete.confirmIcon", { icon: icon.icon_name }))) {
+        // The icon goes with the file it belongs to: asking a second time
+        // about `Turrican.info` after the user has just agreed to delete
+        // `Turrican` would be a question with no new information in it.
         await volumeDelete(
           target.path,
           target.volumeIndex,
           target.dirBlock,
-          icon.icon_block
+          icon.icon_block,
+          true
         );
         alsoIcon = true;
       }
@@ -2531,7 +2630,8 @@ export function FileManager() {
         target.path,
         target.volumeIndex,
         target.dirBlock,
-        names
+        names,
+        protectedNames.length > 0
       );
       setMessage(
         outcome.backup
@@ -2648,6 +2748,23 @@ export function FileManager() {
       return;
     }
 
+    // Asked **before** the copy half, not after. A move is a copy and then a
+    // delete, and the writer now refuses to delete a protected entry
+    // (ART-088) — so asking afterwards would mean the copy had already landed
+    // and the user got both a duplicate and an error.
+    const movingProtected = deleteProtectedNames(moving);
+    if (
+      movingProtected.length > 0 &&
+      !window.confirm(
+        t("files.dialog.move.confirmProtected", {
+          count: movingProtected.length,
+          names: movingProtected.slice(0, 3).join(", "),
+        })
+      )
+    ) {
+      return;
+    }
+
     setBusy(t("files.status.moving", { count: moving.length }));
     try {
       // ---- APPLY: the copy half, through the commands F5 already uses ----
@@ -2729,9 +2846,16 @@ export function FileManager() {
               volume.path,
               volume.volumeIndex,
               volume.dirBlock,
-              moving[0].header_block
+              moving[0].header_block,
+              movingProtected.length > 0
             )
-          : await volumeDeleteMany(volume.path, volume.volumeIndex, volume.dirBlock, names);
+          : await volumeDeleteMany(
+              volume.path,
+              volume.volumeIndex,
+              volume.dirBlock,
+              names,
+              movingProtected.length > 0
+            );
 
       setMessage(
         outcome.backup
@@ -2977,6 +3101,9 @@ export function FileManager() {
       side,
       state,
       sortedEntries: paneEntries(side),
+      // Asked of the filter itself rather than worked out from two counts
+      // downstream (ART-068).
+      maskHidEverything: filterEntriesReporting(state.entries, filter[side]).hidEverything,
       sort: sort[side],
       onSortChange: (column: SortColumn) =>
         setSort((s) => ({ ...s, [side]: clickColumn(s[side], column) })),
@@ -3763,6 +3890,7 @@ function Pane({
   side,
   state,
   sortedEntries,
+  maskHidEverything,
   sort,
   onSortChange,
   filter,
@@ -3802,6 +3930,9 @@ function Pane({
    * `FileManager` for why this and not `state.entries` is what the row list
    * below renders. */
   sortedEntries: PanelEntry[];
+  /** Whether the mask is the reason there is nothing to show — see
+   * `@/lib/mask`'s `FilteredEntries` (ART-068). */
+  maskHidEverything: boolean;
   sort: SortState;
   onSortChange: (column: SortColumn) => void;
   /** This pane's filename mask (`@/lib/mask`) — the `*.*` in the reference's
@@ -4223,12 +4354,12 @@ function Pane({
           {/* A mask matching nothing says so, rather than showing the same
               blank pane a genuinely empty directory would — that would read
               as ART having failed to open the disk, not as a filter doing
-              its job. Told apart by whether the *unfiltered* directory
-              (`state.entries`, not `sortedEntries`) actually had anything
-              in it. */}
+              its job. The two are told apart by `@/lib/mask` itself, which
+              did the removing; this used to compare the filtered count
+              against the unfiltered one and infer it (ART-068). */}
           {sortedEntries.length === 0 && !state.error && (
             <li className="muted" style={{ fontSize: 12, padding: "8px 0 8px 8px" }}>
-              {filter.trim() !== "" && state.entries.length > 0
+              {maskHidEverything
                 ? t("files.pane.filterNoMatch", { mask: filter })
                 : t("files.pane.empty")}
             </li>

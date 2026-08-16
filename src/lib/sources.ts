@@ -457,11 +457,20 @@ export function formatAge(pkg: PackageMeta): Phrase {
   if (pkg.age_weeks === null) return { key: "aminet.age.dateUnknown" };
   if (pkg.age_weeks === AGE_CAP_WEEKS) return { key: "aminet.age.capped" };
   if (pkg.age_weeks === 0) return { key: "aminet.age.thisWeek" };
-  if (pkg.age_weeks < 8) return { key: "aminet.age.weeksAgo", params: { n: pkg.age_weeks } };
+  // `count` rather than `n`, because it is what i18next picks the plural form
+  // from — English read "1 weeks ago" for a package uploaded exactly a week
+  // ago until this became a `_one`/`_other` pair (ART-061). Turkish needs no
+  // equivalent change: it does not inflect the noun after a number, so both
+  // forms carry the same sentence.
+  if (pkg.age_weeks < 8) {
+    return { key: "aminet.age.weeksAgo", params: { count: pkg.age_weeks } };
+  }
   const years = pkg.age_weeks / 52;
   if (years < 1) {
-    return { key: "aminet.age.monthsAgo", params: { n: Math.round(pkg.age_weeks / 4) } };
+    return { key: "aminet.age.monthsAgo", params: { count: Math.round(pkg.age_weeks / 4) } };
   }
+  // Not pluralised: this one is a decimal ("1.5"), and "1.0 year ago" would be
+  // worse English than what it replaces.
   return { key: "aminet.age.yearsAgo", params: { n: years.toFixed(years < 10 ? 1 : 0) } };
 }
 

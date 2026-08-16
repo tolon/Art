@@ -330,6 +330,67 @@ def check_read_back_the_other_way(work: Path) -> None:
     )
 
 
+def check_embedded_filesystem(work: Path) -> None:
+    """A filesystem driver ART put *inside* an RDB, taken back out by amitools.
+
+    PFS3 and SFS are not in Kickstart: a partition naming one mounts only if
+    the driver sits in the RDB as FSHD + LSEG blocks. ART writes those now
+    (ART-084), and this is the half of the check ART cannot do for itself — its
+    own reader would agree with its own writer about a chunk size or a
+    `SummedLongs` field that is wrong in both.
+
+    The "driver" here is **synthetic**, generated in a temp directory like every
+    other fixture in this repo. `pfs3aio` is freely distributable but it is not
+    ART's to ship, and ART ships no Amiga content, ever. `rdbtool` does not care
+    whether the bytes are really executable — the format claims are what is
+    under test. The real driver has been through this same path by hand, and
+    came back SHA-256-identical.
+    """
+    print("Filesystem driver embedded by ART, extracted by amitools:")
+    driver = work / "art-oracle-fs"
+    image = work / "with-driver.img"
+
+    # 1236 bytes: three LSEG blocks, the last one holding 252 — part-full, so a
+    # writer that declares a fixed 492 longwords is caught here rather than on
+    # an Amiga. A multiple of four, as every real Amiga executable is, so no
+    # padding blurs the byte-for-byte comparison below.
+    body = bytes(b"$VER: art-oracle-fs 42.7 (12.8.26)\x00")
+    body += bytes((i * 37 + 11) % 256 for i in range(1236 - len(body)))
+    driver.write_bytes(body)
+
+    run(
+        ["cargo", "test", "--quiet", "write_rdb_with_driver_for_oracle_when_asked"],
+        {"ART_FS_DRIVER_IN": str(driver), "ART_RDB_WRITE_OUT": str(image)},
+    )
+    if not image.exists():
+        print("  FAIL the RDB driver hook wrote nothing")
+        failures.append("the RDB driver hook wrote nothing")
+        return
+
+    info = oracle(["rdbtool", str(image), "info"])
+    # A DosType written as four printable characters gives 0x50445333 here.
+    expect("the driver is listed under its DosType", info, "PDS3/0x50445303")
+    # Read out of the binary's own `$VER:`, not typed by anyone.
+    expect("its version is the one the driver states", info, "version=42.7")
+    # 1476 (three full blocks) means `SummedLongs` was not honoured.
+    expect("its size is the driver's, not the blocks'", info, f"size={len(body)}")
+    # The partition it exists for.
+    expect("the partition names that filesystem", info, "'DH0'")
+
+    extracted = work / "extracted-fs"
+    oracle(["rdbtool", str(image), "fsget", "0", str(extracted)])
+    if not extracted.exists():
+        print("  FAIL amitools could not extract the driver back out")
+        failures.append("the driver could not be extracted")
+        return
+
+    if extracted.read_bytes() == body:
+        print("  ok   the driver's bytes come back out byte for byte")
+    else:
+        print("  FAIL the driver came back altered")
+        failures.append("the driver came back altered")
+
+
 def boot_block_checksum(bootblock_bytes: bytes) -> int:
     """Mirror `BootBlock::compute_checksum` in `core/adf/bootblock.rs` exactly.
 
@@ -463,6 +524,7 @@ def main() -> int:
         check_whdload_install(work)
         check_read_back_the_other_way(work)
         check_bootable_adf_opens(work)
+        check_embedded_filesystem(work)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

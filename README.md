@@ -55,6 +55,17 @@ launching; collection scanning; a background job queue with progress/cancel;
 an operation log; Beginner/Power User modes; and the drag-and-drop Workflow
 Engine behind "what can I do with this?".
 
+**PiStorm cards, both directions.** ART opens a real one — an MBR with a FAT32
+boot partition and one to three Amiga disks inside it, each carrying its own
+partition table at a byte offset inside the card — and shows it as the list of
+disks the m68k side actually sees, verified against CaffeineOS and MultibootOS.
+It can also **build one**: the partition table, a FAT32 boot partition carrying
+your own Emu68 release and Kickstart, and a partition table at the start of
+every Amiga disk. Two limits, said here rather than discovered later — building
+is engine work with no screen on it yet, and **no card ART built has been
+flashed or booted**. The volumes inside are left unformatted: PFS3 is not
+written yet.
+
 **Content-first detection**: what a file *is* comes from its bytes, not its
 name, so an `.img` holding a floppy is a floppy and a `.dat` holding an LHA
 still opens.
@@ -62,9 +73,14 @@ still opens.
 Two directions a multi-selection cannot yet move in: image-to-image (copy
 one at a time instead) and, when copying a selection out of an image, as one
 atomic operation rather than several running together — see
-[docs/ISSUES.md](docs/ISSUES.md) (ART-064, ART-065). The restyled Files
-screen is covered by automated tests only; nobody has opened it in a running
-window yet.
+[docs/ISSUES.md](docs/ISSUES.md) (ART-064, ART-065).
+
+**Application Size** (Ctrl +/-/0, or Settings) scales the whole interface from
+70 % to 250 % and is remembered — as is every other choice ART offers. A
+right-hand-edge complaint at 130 % ([ART-099](docs/ISSUES.md#open)) did not
+reproduce when the running application was measured across seven screens and
+three sizes; what was real — content being clipped with no way to scroll to it
+— is fixed.
 
 ### Verified how, exactly
 
@@ -156,6 +172,9 @@ pnpm tauri dev
 # Type-check the frontend
 pnpm lint
 
+# Run the frontend unit tests
+pnpm test
+
 # Run Rust unit tests
 cd src-tauri && cargo test
 
@@ -193,6 +212,8 @@ Windows APIs. This keeps it unit-testable and reusable. See
 [docs/architecture.md](docs/architecture.md).
 
 ## License
+
+Copyright (C) 2026 tolon.
 
 **GNU General Public License v3.0 or later** (`GPL-3.0-or-later`). See
 [LICENSE](LICENSE).

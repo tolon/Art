@@ -11,6 +11,7 @@ import {
   type ExtractOutcome,
   type WhdloadResult,
 } from "@/lib/lha";
+import { useOpenObject } from "@/stores/openObjectStore";
 
 /**
  * The catalogue key for a confidence badge — for everything except
@@ -36,18 +37,22 @@ function confidenceLevelKey(confidence: "HIGH" | "MEDIUM" | "LOW"): string {
 export function LhaBrowser() {
   const { t } = useTranslation();
   const location = useLocation();
-  const [path, setPath] = useState<string | null>(null);
+  // The open archive outlives this screen (ART-085), for the length of the run.
+  const [path, setPath] = useOpenObject("lha");
   const [info, setInfo] = useState<LhaInfo | null>(null);
   const [whdload, setWhdload] = useState<WhdloadResult | null>(null);
   const [outcome, setOutcome] = useState<ExtractOutcome | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Auto-load if navigated from Dashboard via state
+  // The file router state names, or else the one already open (ART-085).
+  // `info` is null on a fresh mount however long the archive has been open, so
+  // it is what separates "not loaded here" from "nothing open".
   useEffect(() => {
-    const p = (location.state as { path?: string })?.path;
-    if (p && p !== path) {
-      void load(p);
+    const fromNav = (location.state as { path?: string })?.path;
+    const target = fromNav ?? path;
+    if (target && (info === null || target !== path)) {
+      void load(target);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state]);

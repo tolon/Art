@@ -1,0 +1,239 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  formatCount,
+  picksFor,
+  preloadBlocker,
+  stepPhrase,
+  toRequest,
+  type PartitionPick,
+  type PreloadPlan,
+} from "@/lib/preload";
+import type { CardReport } from "@/lib/card";
+import type { ParsedPartition } from "@/lib/hdf";
+
+function partition(drive_name: string, dostype_str: string): ParsedPartition {
+  return {
+    drive_name,
+    dostype: 0x50445303,
+    dostype_str,
+    fs_type: "pfs3directscsi",
+    low_cyl: 2,
+    high_cyl: 1000,
+    cylinder_count: 999,
+    size_bytes: 512 * 1024 * 1024,
+    bootable: true,
+    boot_priority: 0,
+    num_buffers: 600,
+    block_location: 3,
+    next_part_block: 0xffffffff,
+    checksum_valid: true,
+  };
+}
+
+/** Two Amiga disks, the way MultibootOS's card has them. */
+const CARD: CardReport = {
+  card: {
+    path: "E:\\amiga\\ProjeART\\card.img",
+    total_bytes: 64 * 1024 * 1024 * 1024,
+    mbr: { partitions: [] },
+    areas: [
+      {
+        offset_bytes: 1_178_599_424,
+        length_bytes: 32 * 1024 * 1024 * 1024,
+        rdb: {
+          partitions: [partition("DH0", "PDS\\3"), partition("DH1", "PDS\\3")],
+          file_systems: [],
+          checksum_valid: true,
+        },
+      },
+      {
+        offset_bytes: 34_000_000_000,
+        length_bytes: 30 * 1024 * 1024 * 1024,
+        rdb: {
+          partitions: [partition("DH2", "PDS\\3")],
+          file_systems: [],
+          checksum_valid: true,
+        },
+      },
+    ],
+  },
+  file_systems: [],
+  unmountable: [],
+};
+
+const PLAN: PreloadPlan = {
+  image: "E:\\amiga\\ProjeART\\card.img",
+  steps: [
+    {
+      step: "format-partition",
+      slot: 2,
+      index: 1,
+      drive_name: "DH0",
+      volume_name: "Work",
+    },
+  ],
+};
+
+/** The card's three partitions, with the first one chosen. */
+function chosenFirst(): PartitionPick[] {
+  const picks = picksFor(CARD);
+  picks[0] = { ...picks[0], chosen: true, volumeName: "Work" };
+  return picks;
+}
+
+describe("picksFor", () => {
+  it("gives one pick per partition, numbered from one within its own disk", () => {
+    expect(picksFor(CARD)).toEqual([
+      { area: 1, index: 1, driveName: "DH0", chosen: false, volumeName: "DH0", content: null },
+      { area: 1, index: 2, driveName: "DH1", chosen: false, volumeName: "DH1", content: null },
+      { area: 2, index: 1, driveName: "DH2", chosen: false, volumeName: "DH2", content: null },
+    ]);
+  });
+
+  it("chooses nothing: formatting is destructive and starts from off", () => {
+    expect(picksFor(CARD).some((pick) => pick.chosen)).toBe(false);
+  });
+
+  it("defaults the volume name to the drive's own name rather than inventing one", () => {
+    expect(picksFor(CARD).map((pick) => pick.volumeName)).toEqual(["DH0", "DH1", "DH2"]);
+  });
+
+  it("answers a card with no Amiga disk at all", () => {
+    const empty: CardReport = { ...CARD, card: { ...CARD.card, areas: [] } };
+    expect(picksFor(empty)).toEqual([]);
+  });
+});
+
+describe("toRequest", () => {
+  it("carries only the partitions that were chosen", () => {
+    const request = toRequest("card.img", null, chosenFirst());
+    expect(request.partitions).toEqual([
+      { area: 1, index: 1, volume_name: "Work", content: null },
+    ]);
+  });
+
+  it("keeps both numbers, because a partition index means nothing without its disk", () => {
+    const picks = picksFor(CARD).map((pick) => ({ ...pick, chosen: true }));
+    const request = toRequest("card.img", null, picks);
+    expect(request.partitions.map((p) => [p.area, p.index])).toEqual([
+      [1, 1],
+      [1, 2],
+      [2, 1],
+    ]);
+  });
+
+  it("trims the volume name and passes a content folder through", () => {
+    const picks = picksFor(CARD);
+    picks[0] = { ...picks[0], chosen: true, volumeName: "  Work  ", content: "E:\\tree" };
+    expect(toRequest("card.img", null, picks).partitions[0]).toEqual({
+      area: 1,
+      index: 1,
+      volume_name: "Work",
+      content: "E:\\tree",
+    });
+  });
+
+  it("a driver nobody chose is absent, not an empty path", () => {
+    expect(toRequest("card.img", "   ", chosenFirst()).driver).toBeNull();
+    expect(toRequest("card.img", "pfs3aio.lha", chosenFirst()).driver).toBe("pfs3aio.lha");
+  });
+});
+
+describe("preloadBlocker", () => {
+  const ready = {
+    image: "card.img",
+    toolPath: "hst.imager.exe",
+    picks: chosenFirst(),
+    plan: PLAN,
+  };
+
+  it("is clear when a card, a tool, a chosen partition and a plan are all in hand", () => {
+    expect(preloadBlocker(ready)).toBeNull();
+  });
+
+  it("asks for the card first", () => {
+    expect(preloadBlocker({ ...ready, image: null })?.key).toBe("preload.blocked.noCard");
+  });
+
+  it("asks for the tool, which ART does not ship", () => {
+    expect(preloadBlocker({ ...ready, toolPath: null })?.key).toBe("preload.blocked.noTool");
+    expect(preloadBlocker({ ...ready, toolPath: "  " })?.key).toBe("preload.blocked.noTool");
+  });
+
+  it("will not run over a card with nothing chosen", () => {
+    expect(preloadBlocker({ ...ready, picks: picksFor(CARD) })?.key).toBe(
+      "preload.blocked.nothingChosen"
+    );
+  });
+
+  it("refuses a blank volume name, and says which drive it belongs to", () => {
+    const picks = chosenFirst();
+    picks[0] = { ...picks[0], volumeName: "   " };
+    const blocker = preloadBlocker({ ...ready, picks });
+    expect(blocker?.key).toBe("preload.blocked.blankName");
+    expect(blocker?.params).toEqual({ drive: "DH0" });
+  });
+
+  // The same two rules `core/volume/write/dir.rs::check_name` holds, and for
+  // the same reason: a name AmigaDOS cannot store is not a name.
+  it("refuses a name carrying a path separator", () => {
+    for (const bad of ["Work:", "Games/Old"]) {
+      const picks = chosenFirst();
+      picks[0] = { ...picks[0], volumeName: bad };
+      expect(preloadBlocker({ ...ready, picks })?.key, bad).toBe("preload.blocked.badName");
+    }
+  });
+
+  it("refuses a name past AmigaDOS's thirty characters, counting characters", () => {
+    const picks = chosenFirst();
+    picks[0] = { ...picks[0], volumeName: "W".repeat(31) };
+    const blocker = preloadBlocker({ ...ready, picks });
+    expect(blocker?.key).toBe("preload.blocked.longName");
+    expect(blocker?.params).toEqual({ drive: "DH0", max: 30 });
+
+    // Thirty accented characters are thirty characters, not sixty bytes.
+    picks[0] = { ...picks[0], volumeName: "ü".repeat(30) };
+    expect(preloadBlocker({ ...ready, picks })).toBeNull();
+  });
+
+  it("asks for a preview before a format, because §92 puts PREVIEW before APPLY", () => {
+    expect(preloadBlocker({ ...ready, plan: null })?.key).toBe("preload.blocked.notPlanned");
+  });
+});
+
+describe("formatCount", () => {
+  it("counts the partitions a plan would erase and nothing else", () => {
+    const plan: PreloadPlan = {
+      image: "card.img",
+      steps: [
+        {
+          step: "import-filesystem",
+          slot: 2,
+          driver: "pfs3aio.lha",
+          dostype: "PDS3",
+          name: "pfs3aio",
+        },
+        { step: "format-partition", slot: 2, index: 1, drive_name: "DH0", volume_name: "Work" },
+        { step: "format-partition", slot: 2, index: 2, drive_name: "DH1", volume_name: "Games" },
+        { step: "copy-in", slot: 2, drive_name: "DH0", source: "E:\\tree" },
+      ],
+    };
+    expect(formatCount(plan)).toBe(2);
+    expect(formatCount({ image: "card.img", steps: [] })).toBe(0);
+  });
+});
+
+describe("stepPhrase", () => {
+  it("names the drive a format would erase, not just the step", () => {
+    const phrase = stepPhrase({
+      step: "format-partition",
+      slot: 2,
+      index: 1,
+      drive_name: "DH0",
+      volume_name: "Work",
+    });
+    expect(phrase.key).toBe("preload.plan.step.format");
+    expect(phrase.params).toEqual({ drive: "DH0", volume: "Work" });
+  });
+});

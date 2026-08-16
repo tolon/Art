@@ -90,9 +90,16 @@ amiga-retro-toolkit/
 ## The core independence rule
 
 `src-tauri/src/core/` compiles with **only `std` + `serde` + `sha2` + `thiserror`
-+ `delharc` + `zip` + `sevenz-rust2`** — the three decompressors are read-only
-and sit behind `core/archive`'s single security gate. It never imports `tauri`, never calls Windows APIs, never touches
-the network.
++ `delharc` + `zip` + `sevenz-rust2` + `fatfs` + `libpfs3`** — the three
+decompressors are read-only and sit behind `core/archive`'s single security
+gate, and `fatfs` creates the one filesystem ART writes that is not an Amiga
+one: the FAT32 partition a PiStorm card's Raspberry Pi boots from. `libpfs3`
+is the PFS3 implementation — the volume format SD-2 G5's OS install writes
+and reads on a PiStorm card — and the one LGPL-3.0-or-later dependency inside
+`core/`: weak copyleft, compatible with ART's own GPL-3.0-or-later, but noted
+deliberately against the project's preference for permissive dependencies,
+because `core/` is meant to be promotable to a standalone crate. It never
+imports `tauri`, never calls Windows APIs, never touches the network.
 This is what makes it unit-testable and what leaves the door open to a future
 CLI or other shells without rewriting the engine.
 

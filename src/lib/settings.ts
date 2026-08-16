@@ -36,6 +36,15 @@ export interface AppSettings {
   language: string;
   lastCollectionDir: string | null;
   winuaePath: string | null;
+  /**
+   * Where `hst.imager` is (SD-2 · G3, route E).
+   *
+   * ART does not ship it — 137 MB beside a Tauri app is not a trade worth
+   * making — so the path is the user's, set once and remembered, the same
+   * shape `winuaePath` above already has for the other external program ART
+   * drives.
+   */
+  hstImagerPath: string | null;
   /** Download folder for Aminet packages. The Rust side holds it only for the
    *  lifetime of the process, so it is remembered here (§41.5.6). */
   aminetRoot: string | null;
@@ -157,6 +166,33 @@ export interface AppSettings {
    * feature the people who most need it will never find.
    */
   paneFontSize: number;
+  /**
+   * How big the whole application is drawn, as a percentage.
+   *
+   * The setting above sizes the file listing; this one sizes **everything** —
+   * the Aminet search box, the studio cards, the buttons, the icons, on every
+   * screen. Same reason, asked once for the whole program rather than once per
+   * wall of small text. Ctrl+wheel anywhere outside the commander, Ctrl+plus,
+   * Ctrl+minus, Ctrl+0, and a control in Settings for the people who will
+   * never be told about a shortcut. See `@/lib/appZoom`.
+   */
+  appZoom: number;
+  /**
+   * Every other choice the user has made, across every screen.
+   *
+   * The rule, in the user's words: *nothing changes unless the user changes
+   * it*, and that is about the whole application rather than the fields above.
+   * A studio's view mode, its filters, the folder it last worked in, the
+   * filesystem its wizard was left on — all of it belongs to the user, and all
+   * of it used to be a `useState` that forgot.
+   *
+   * A bag rather than thirty more named fields here, because these are the
+   * screens' own choices: a new one should cost the screen a line and this
+   * module nothing. `unknown` for the same reason `filesSession` is — the
+   * shapes belong to the screens, and `@/lib/remembered` validates every value
+   * on the way out. `null` means nothing has been remembered yet.
+   */
+  remembered: unknown;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -165,6 +201,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   language: "en",
   lastCollectionDir: null,
   winuaePath: null,
+  hstImagerPath: null,
   aminetRoot: null,
   aminetMirrors: null,
   sidebarCollapsed: false,
@@ -178,6 +215,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   alwaysUseDefaultFolders: true,
   commandLineHeight: 26,
   paneFontSize: 12,
+  appZoom: 100,
+  remembered: null,
 };
 
 export async function getSettings(): Promise<AppSettings> {
@@ -212,9 +251,13 @@ export async function getSettings(): Promise<AppSettings> {
       lastCollectionDir:
         (await s.get<string>("lastCollectionDir")) ?? DEFAULT_SETTINGS.lastCollectionDir,
       winuaePath: (await s.get<string>("winuaePath")) ?? DEFAULT_SETTINGS.winuaePath,
+      hstImagerPath:
+        (await s.get<string>("hstImagerPath")) ?? DEFAULT_SETTINGS.hstImagerPath,
       aminetRoot: (await s.get<string>("aminetRoot")) ?? DEFAULT_SETTINGS.aminetRoot,
       aminetMirrors:
         (await s.get<StoredMirror[]>("aminetMirrors")) ?? DEFAULT_SETTINGS.aminetMirrors,
+      appZoom: (await s.get<number>("appZoom")) ?? DEFAULT_SETTINGS.appZoom,
+      remembered: (await s.get<unknown>("remembered")) ?? DEFAULT_SETTINGS.remembered,
     };
   } catch (e) {
     console.warn("[ART] settings load failed, using defaults:", e);

@@ -49,15 +49,39 @@ export function matchesMask(name: string, mask: string): boolean {
   return maskToRegex(mask).test(name);
 }
 
+/** A filtered listing, and whether the mask is the reason it is empty. */
+export interface FilteredEntries {
+  entries: PanelEntry[];
+  /**
+   * True when a mask was active and removed **everything there was**.
+   *
+   * ART-068: the pane has to tell "this folder is empty" from "your mask
+   * matches nothing", because the first reads as ART having failed to open the
+   * disk. It used to infer that at the call site by comparing the filtered
+   * count against the unfiltered one — true today only because `filterEntries`
+   * never changes the unfiltered list, which is a property of this module that
+   * the call site had no way to depend on. Answered here instead, by the code
+   * that did the removing, from the very list it removed from.
+   */
+  hidEverything: boolean;
+}
+
 /**
- * `entries`, narrowed to the ones `mask` matches. Does not mutate its input,
- * and does not sort — `FileManager.tsx` runs this before `sortEntries` so
- * the visible list is filtered first and sorted second, through the one
- * comparator `@/lib/sort.ts` already owns rather than a second one grown
- * here.
+ * `entries`, narrowed to the ones `mask` matches, with the answer above.
+ *
+ * Does not mutate its input, and does not sort — `FileManager.tsx` runs this
+ * before `sortEntries` so the visible list is filtered first and sorted
+ * second, through the one comparator `@/lib/sort.ts` already owns rather than
+ * a second one grown here.
  */
-export function filterEntries(entries: PanelEntry[], mask: string): PanelEntry[] {
-  if (mask.trim() === "") return entries;
+export function filterEntriesReporting(entries: PanelEntry[], mask: string): FilteredEntries {
+  if (mask.trim() === "") return { entries, hidEverything: false };
   const regex = maskToRegex(mask);
-  return entries.filter((entry) => regex.test(entry.name));
+  const kept = entries.filter((entry) => regex.test(entry.name));
+  return { entries: kept, hidEverything: kept.length === 0 && entries.length > 0 };
+}
+
+/** The narrowed list alone, for the callers that do not need the reason. */
+export function filterEntries(entries: PanelEntry[], mask: string): PanelEntry[] {
+  return filterEntriesReporting(entries, mask).entries;
 }

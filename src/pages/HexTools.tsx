@@ -4,12 +4,17 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
 import { hexRead, type HexChunk } from "@/lib/analysis";
+import { useOpenObject } from "@/stores/openObjectStore";
 
 export function HexTools() {
   const { t } = useTranslation();
   const location = useLocation();
 
-  const [path, setPath] = useState<string | null>(null);
+  // The open file outlives this screen (ART-085), for the length of the run.
+  // The *offset* does not: coming back puts you at the start of the file, not
+  // where you were reading. That is the same complaint one level down and is
+  // deliberately left for its own change rather than smuggled in here.
+  const [path, setPath] = useOpenObject("hex");
   const [offset, setOffset] = useState<number>(0);
   const [chunk, setChunk] = useState<HexChunk | null>(null);
   const [jumpBlockInput, setJumpBlockInput] = useState<string>("880");
@@ -17,10 +22,14 @@ export function HexTools() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Router state names a file when something sent us here; otherwise the screen
+  // reopens the one already open (ART-085). `chunk` is null on a fresh mount
+  // whatever the store holds, so it is the test of "loaded here, now".
   useEffect(() => {
-    const navState = location.state as { path?: string } | undefined;
-    if (navState?.path && navState.path !== path) {
-      void loadHex(navState.path, 0);
+    const fromNav = (location.state as { path?: string } | undefined)?.path;
+    const target = fromNav ?? path;
+    if (target && (chunk === null || target !== path)) {
+      void loadHex(target, 0);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state]);

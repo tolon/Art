@@ -77,6 +77,123 @@ impl AmigaHardDiskFs {
     }
 }
 
+/// A file system driver to embed in a new RDB — G4's writing half.
+///
+/// **What it is, exactly:** `data` is the driver *as it exists on an Amiga
+/// disk* — a standard AmigaDOS executable, hunks and all — stored into the
+/// `LSEG` chain verbatim, 492 bytes at a time. Kickstart `LoadSeg`s it out of
+/// those blocks at boot. Nothing here parses or transforms it; a driver ART
+/// does not understand is one ART must not silently alter.
+///
+/// **Where it comes from is not this module's business.** `core/` opens no
+/// network and reads no user path of its own: the bytes arrive from the
+/// caller, whether that is a file the user picked or a package the Aminet
+/// engine fetched and hash-checked. `pfs3aio` is freely distributable but it
+/// is not ART's to ship, and ART ships no Amiga content, ever.
+#[derive(Debug, Clone)]
+pub struct FileSystemSpec {
+    pub dos_type: u32,
+    /// The two halves of the FSHD's one version longword: `19` and `2` for a
+    /// driver that calls itself 19.2.
+    pub version: u16,
+    pub revision: u16,
+    pub data: Vec<u8>,
+}
+
+/// How many bytes of driver one `LSEG` block carries.
+///
+/// A 512-byte block less five longwords of header — id, summed longs,
+/// checksum, host id, next.
+const LSEG_DATA_BYTES: usize = BLOCK_SIZE - 20;
+
+/// The marker every well-made Amiga binary carries so `Version` can answer.
+const VER_MARKER: &[u8] = b"$VER:";
+
+/// How far past the marker to look. The version follows the program name, so
+/// a couple of lines is generous; scanning further would start finding the
+/// numbers in an unrelated string.
+const VER_SCAN_BYTES: usize = 200;
+
+/// The version a driver states about **itself**.
+///
+/// The FSHD block has to declare a version, and asking the user to type one
+/// invites a wrong answer about a file they downloaded. It matters more than
+/// a label: AmigaOS compares the version in the RDB against whatever is
+/// already loaded and keeps the **higher** one, so a driver that claims 0.0
+/// loses to ROM and is never used — the disk mounts with the wrong filesystem
+/// or not at all. Reading `$VER: pfs3aio 19.2 (2.10.18)` out of the binary
+/// gets it right without asking.
+///
+/// Returns `None` when the driver says nothing; the caller must then ask
+/// rather than guess (spec §89).
+pub fn version_from_ver_string(data: &[u8]) -> Option<(u16, u16)> {
+    let marker = data
+        .windows(VER_MARKER.len())
+        .position(|window| window == VER_MARKER)?;
+    let start = marker + VER_MARKER.len();
+    let end = start.saturating_add(VER_SCAN_BYTES).min(data.len());
+
+    // The first token shaped like `<digits>.<digits>`. The program name comes
+    // first and is skipped by that rule even when it contains a dot
+    // (`pfs3aio.dev`), because its left half is not all digits.
+    for token in data[start..end].split(|b| b.is_ascii_whitespace() || *b == 0) {
+        let Some(dot) = token.iter().position(|b| *b == b'.') else {
+            continue;
+        };
+        let major = &token[..dot];
+        if major.is_empty() || !major.iter().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        // The revision runs until whatever punctuation follows it — `19.2,`
+        // and `19.2)` are both real.
+        let minor: Vec<u8> = token[dot + 1..]
+            .iter()
+            .copied()
+            .take_while(|b| b.is_ascii_digit())
+            .collect();
+        if minor.is_empty() {
+            continue;
+        }
+
+        // A number too big for the field is not this driver's version; keep
+        // looking rather than truncating it into a plausible-looking lie.
+        let (Ok(major), Ok(minor)) = (
+            std::str::from_utf8(major).unwrap_or("x").parse::<u16>(),
+            std::str::from_utf8(&minor).unwrap_or("x").parse::<u16>(),
+        ) else {
+            continue;
+        };
+        return Some((major, minor));
+    }
+    None
+}
+
+/// `MaxTransfer` — the largest single transfer the driver will be asked for.
+///
+/// `0x0001FE00` is 130 560 bytes, i.e. 255 blocks of 512. Every partition on
+/// both cards measured in `docs/sd2-card-layout.md` carries exactly this —
+/// seventeen of them across three RDBs, without one exception — and it is what
+/// hst-imager and the AmigaOS installers write. ART wrote zero here until
+/// ART-096, which is not a smaller limit but an unstated one.
+pub const DEFAULT_MAX_TRANSFER: u32 = 0x0001_FE00;
+
+/// `Mask` — which memory addresses the driver may DMA into.
+///
+/// `0x7FFFFFFE` is "anywhere in the low 2 GB, word-aligned". A mask of **zero**
+/// — ART's old value — says no address is acceptable, which is not a
+/// conservative reading of the field but a meaningless one; a strict driver is
+/// entitled to refuse every transfer. Emu68 is forgiving and did not, which is
+/// exactly why this was cheap to get wrong and expensive to diagnose.
+pub const DEFAULT_MASK: u32 = 0x7FFF_FFFE;
+
+/// `NumBuffers` when the caller does not choose.
+///
+/// The measured cards all use 600. ART's old 100 was a performance decision
+/// made by not making one: buffers are 512 bytes each, so this is the
+/// difference between 50 KB and 300 KB of cache on a machine that, with a
+/// PiStorm in it, has hundreds of megabytes.
+pub const DEFAULT_NUM_BUFFERS: u32 = 600;
+
 /// Specification for creating or adding a partition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PartitionSpec {
@@ -85,6 +202,15 @@ pub struct PartitionSpec {
     pub size_mb: u32,
     pub bootable: bool,
     pub boot_priority: i8,
+    /// `NumBuffers`, or **zero to let the core decide** — which is what a
+    /// caller with no opinion should send, and what the field defaults to when
+    /// a request omits it entirely.
+    ///
+    /// `#[serde(default)]` is the frontend half of ART-096: the Hard Disk
+    /// studio used to name 100 in three places, so a partition created through
+    /// the UI kept getting ART's old guess long after the core had a measured
+    /// value. A number the UI does not know is a number the UI must not state.
+    #[serde(default)]
     pub num_buffers: u32,
 }
 
@@ -118,6 +244,12 @@ pub struct ParsedPartition {
     pub blocks_per_track: u32,
     /// `DosReserved` — boot blocks at the start of the volume. Typically 2.
     pub reserved: u32,
+    /// `MaxTransfer` — largest single transfer, in bytes. Read rather than
+    /// assumed: a disk written by another tool is the case where it matters.
+    pub max_transfer: u32,
+    /// `Mask` — acceptable DMA addresses. Zero here means the disk was written
+    /// by something that left the field unset (ART itself, before ART-096).
+    pub mask: u32,
 }
 
 impl ParsedPartition {
@@ -512,6 +644,9 @@ pub fn parse_rdb(image: &[u8]) -> CoreResult<ParsedRdb> {
             u32::from_be_bytes([p_slice[148], p_slice[149], p_slice[150], p_slice[151]]);
         let dos_reserved =
             u32::from_be_bytes([p_slice[152], p_slice[153], p_slice[154], p_slice[155]]);
+        let max_transfer =
+            u32::from_be_bytes([p_slice[180], p_slice[181], p_slice[182], p_slice[183]]);
+        let mask = u32::from_be_bytes([p_slice[184], p_slice[185], p_slice[186], p_slice[187]]);
         let boot_pri = p_slice[191] as i8;
         let dostype = u32::from_be_bytes([p_slice[192], p_slice[193], p_slice[194], p_slice[195]]);
 
@@ -552,6 +687,8 @@ pub fn parse_rdb(image: &[u8]) -> CoreResult<ParsedRdb> {
             surfaces,
             blocks_per_track,
             reserved: dos_reserved,
+            max_transfer,
+            mask,
         });
 
         part_ptr = next_part;
@@ -597,7 +734,11 @@ pub struct RdbLayout {
 }
 
 /// Build the RDB and partition blocks for a new hard disk image.
-pub fn create_rdb_layout(total_bytes: u64, partitions: &[PartitionSpec]) -> CoreResult<RdbLayout> {
+pub fn create_rdb_layout(
+    total_bytes: u64,
+    partitions: &[PartitionSpec],
+    file_systems: &[FileSystemSpec],
+) -> CoreResult<RdbLayout> {
     if total_bytes < 10 * 1024 * 1024 {
         return Err(CoreError::InvalidInput(
             "Hard disk image size must be at least 10 MB".into(),
@@ -646,8 +787,32 @@ pub fn create_rdb_layout(total_bytes: u64, partitions: &[PartitionSpec]) -> Core
         )));
     }
 
-    // Only the RDSK block plus one PART block per partition carry data.
-    let structured_blocks = 1 + partitions.len();
+    // The RDSK block, one PART block per partition, then one FSHD block per
+    // driver followed immediately by that driver's own LSEG chain. Laying each
+    // driver out contiguously after its header is not required by the format
+    // — every block carries a `next` pointer — but it keeps the arithmetic
+    // below readable and puts a driver's blocks where a person reading a hex
+    // dump expects them.
+    let fs_blocks: Vec<u32> = file_systems
+        .iter()
+        .map(|fs| 1 + fs.data.len().div_ceil(LSEG_DATA_BYTES) as u32)
+        .collect();
+    let structured_blocks = 1 + partitions.len() + fs_blocks.iter().sum::<u32>() as usize;
+
+    // Everything above lives in the reserved area at the front of the disk,
+    // before the first partition's cylinder. A driver big enough to run past
+    // it would be overwritten by the first partition's own data the moment
+    // anything was written there — so it is refused, with the numbers, rather
+    // than produced and left to fail on the Amiga.
+    let reserved_blocks = (RESERVED_CYLINDERS * cyl_blocks) as usize;
+    if structured_blocks > reserved_blocks {
+        return Err(CoreError::InvalidInput(format!(
+            "the partition table and its {} file system driver(s) need {structured_blocks} \
+             blocks, but only {reserved_blocks} are reserved at the front of the disk",
+            file_systems.len()
+        )));
+    }
+
     let mut image = vec![0u8; structured_blocks * BLOCK_SIZE];
 
     // 1. Initialize RDSK Block at Block 0.
@@ -668,7 +833,16 @@ pub fn create_rdb_layout(total_bytes: u64, partitions: &[PartitionSpec]) -> Core
         rdb_slice[24..28].copy_from_slice(&NO_BLOCK.to_be_bytes()); // BadBlockList
         let first_part_block = if partitions.is_empty() { NO_BLOCK } else { 1 };
         rdb_slice[28..32].copy_from_slice(&first_part_block.to_be_bytes()); // PartitionList
-        rdb_slice[32..36].copy_from_slice(&NO_BLOCK.to_be_bytes()); // FileSysHeaderList
+
+        // The drivers begin immediately after the partition blocks. `NO_BLOCK`
+        // rather than 0 when there are none: block 0 is the RDSK itself, and
+        // AmigaOS would follow a zero straight into it.
+        let first_fs_block = if file_systems.is_empty() {
+            NO_BLOCK
+        } else {
+            (1 + partitions.len()) as u32
+        };
+        rdb_slice[32..36].copy_from_slice(&first_fs_block.to_be_bytes()); // FileSysHeaderList
         rdb_slice[36..40].copy_from_slice(&NO_BLOCK.to_be_bytes()); // DriveInit
 
         // Physical geometry.
@@ -736,10 +910,14 @@ pub fn create_rdb_layout(total_bytes: u64, partitions: &[PartitionSpec]) -> Core
         let buffers = if spec.num_buffers > 0 {
             spec.num_buffers
         } else {
-            100
+            DEFAULT_NUM_BUFFERS
         };
         p_slice[172..176].copy_from_slice(&buffers.to_be_bytes());
-        // Mask (LW 46) stays zero; BootPri is LW 47 and DosType LW 48.
+        // MaxTransfer (LW 45) and Mask (LW 46). Both were left at zero until
+        // ART-096; see the constants for why zero is not a safe default for
+        // either. BootPri is LW 47 and DosType LW 48.
+        p_slice[180..184].copy_from_slice(&DEFAULT_MAX_TRANSFER.to_be_bytes());
+        p_slice[184..188].copy_from_slice(&DEFAULT_MASK.to_be_bytes());
         p_slice[188..192].copy_from_slice(&(spec.boot_priority as i32).to_be_bytes());
 
         // DosType at offset 192 (LW 48)
@@ -751,6 +929,91 @@ pub fn create_rdb_layout(total_bytes: u64, partitions: &[PartitionSpec]) -> Core
         p_slice[8..12].copy_from_slice(&p_cks.to_be_bytes());
 
         current_cyl = high_cyl + 1;
+    }
+
+    // 3. File system drivers: one FSHD, then the LSEG chain carrying the
+    //    driver's own bytes.
+    //
+    //    This is the half of G4 that makes a `PDS` partition mountable at
+    //    all. Kickstart has no PFS3; it loads one out of these blocks. A
+    //    partition table naming a filesystem the disk does not carry is one
+    //    an Amiga ignores in silence — which is what ART produced before this
+    //    existed (ART-084), and what `hst-imager` refuses to produce.
+    let mut next_free = (1 + partitions.len()) as u32;
+    for (idx, fs) in file_systems.iter().enumerate() {
+        let fshd_block = next_free;
+        let segment_count = fs.data.len().div_ceil(LSEG_DATA_BYTES);
+        let first_seg_block = fshd_block + 1;
+        let next_fshd = if idx + 1 < file_systems.len() {
+            fshd_block + fs_blocks[idx]
+        } else {
+            NO_BLOCK
+        };
+
+        {
+            let off = fshd_block as usize * BLOCK_SIZE;
+            let block = &mut image[off..off + BLOCK_SIZE];
+            block[0..4].copy_from_slice(&IDNAME_FSHD.to_be_bytes());
+            block[4..8].copy_from_slice(&64u32.to_be_bytes()); // SummedLongs
+            block[12..16].copy_from_slice(&7u32.to_be_bytes()); // HostID
+            block[16..20].copy_from_slice(&next_fshd.to_be_bytes()); // Next
+            block[20..24].copy_from_slice(&0u32.to_be_bytes()); // Flags
+            block[32..36].copy_from_slice(&fs.dos_type.to_be_bytes()); // DosType
+            let version = ((fs.version as u32) << 16) | (fs.revision as u32);
+            block[36..40].copy_from_slice(&version.to_be_bytes()); // Version
+
+            // PatchFlags says which of the DeviceNode fields below AmigaOS
+            // should actually take from here. Bit 4 is `dn_SegListBlock` —
+            // the only one that matters, and the only one written: patching
+            // a stack size or a priority ART has no opinion about would be
+            // overriding the user's mountlist for no reason.
+            block[40..44].copy_from_slice(&0x0000_0010u32.to_be_bytes()); // PatchFlags
+
+            // DeviceNode. Everything but the seg list is left zero, except
+            // GlobalVec, which must be -1: zero means "this filesystem uses a
+            // BCPL global vector", and a modern driver does not.
+            let seg_list = if segment_count == 0 {
+                NO_BLOCK
+            } else {
+                first_seg_block
+            };
+            block[72..76].copy_from_slice(&seg_list.to_be_bytes()); // dn_SegListBlock
+            block[76..80].copy_from_slice(&NO_BLOCK.to_be_bytes()); // dn_GlobalVec
+
+            let cks = compute_rdb_checksum(block);
+            block[8..12].copy_from_slice(&cks.to_be_bytes());
+        }
+
+        for (seg_idx, chunk) in fs.data.chunks(LSEG_DATA_BYTES).enumerate() {
+            let seg_block = first_seg_block + seg_idx as u32;
+            let next_seg = if seg_idx + 1 < segment_count {
+                seg_block + 1
+            } else {
+                NO_BLOCK
+            };
+
+            let off = seg_block as usize * BLOCK_SIZE;
+            let block = &mut image[off..off + BLOCK_SIZE];
+            block[0..4].copy_from_slice(&IDNAME_LSEG.to_be_bytes());
+
+            // **SummedLongs declares how much of this block is real.** The
+            // last block of a chain is nearly always part-full, and writing
+            // 128 here would tell every reader the driver is up to 492 bytes
+            // longer than it is — the same rule the reader relies on, from
+            // the other side. Rounded up to a whole longword, because the
+            // field counts longwords and a driver whose length is not a
+            // multiple of four still has to arrive whole.
+            let longs = 5 + chunk.len().div_ceil(4);
+            block[4..8].copy_from_slice(&(longs as u32).to_be_bytes());
+            block[12..16].copy_from_slice(&7u32.to_be_bytes()); // HostID
+            block[16..20].copy_from_slice(&next_seg.to_be_bytes()); // Next
+            block[20..20 + chunk.len()].copy_from_slice(chunk);
+
+            let cks = compute_rdb_checksum(block);
+            block[8..12].copy_from_slice(&cks.to_be_bytes());
+        }
+
+        next_free += fs_blocks[idx];
     }
 
     Ok(RdbLayout {
@@ -790,6 +1053,7 @@ mod dosenv_layout {
                 boot_priority: 3,
                 num_buffers: 100,
             }],
+            &[],
         )
         .unwrap();
 
@@ -809,8 +1073,21 @@ mod dosenv_layout {
             ])
         };
 
-        // Mask is left alone; BootPri and DosType sit where AmigaOS looks.
-        assert_eq!(long_at(184), 0, "longword 46 is Mask, not BootPri");
+        // MaxTransfer and Mask carry the measured values (ART-096), and — the
+        // point of this test since ART-032 — BootPri is *not* among them:
+        // writing the priority one longword early is the mistake being guarded
+        // against, and a zero Mask no longer proves its absence now that Mask
+        // has a value of its own.
+        assert_eq!(
+            long_at(180),
+            DEFAULT_MAX_TRANSFER,
+            "longword 45 is MaxTransfer"
+        );
+        assert_eq!(
+            long_at(184),
+            DEFAULT_MASK,
+            "longword 46 is Mask, not BootPri"
+        );
         assert_eq!(long_at(188), 3, "BootPri belongs at longword 47");
         assert_eq!(
             long_at(192),
@@ -820,6 +1097,94 @@ mod dosenv_layout {
 
         // TableSize must cover DosType, or an Amiga would ignore it.
         assert!(long_at(128) >= 17, "TableSize must include DosType");
+    }
+
+    /// ART-096. The layout guard above pins *where* MaxTransfer and Mask sit;
+    /// this pins *what* they say, through the round trip a real tool takes —
+    /// create an image, parse it back, read the three fields off the parsed
+    /// partition rather than off the bytes.
+    ///
+    /// The values are the measured ones: seventeen partitions across three RDBs
+    /// on two real PiStorm cards carry `0x0001FE00` / `0x7FFFFFFE` / 600
+    /// without one exception (`docs/sd2-card-layout.md`). ART wrote zero, zero
+    /// and 100. A zero Mask says no address is acceptable for a transfer, and a
+    /// driver entitled to take that literally would refuse every one of them.
+    #[test]
+    fn a_created_partition_carries_the_measured_dosenv_values() {
+        let layout = create_rdb_layout(
+            32 * 1024 * 1024,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::FfsStandard,
+                size_mb: 10,
+                bootable: true,
+                boot_priority: 0,
+                // Zero is how a caller says "no opinion" — the UI's case since
+                // ART-096, and the one that has to reach the default.
+                num_buffers: 0,
+            }],
+            &[],
+        )
+        .unwrap();
+
+        let parsed = parse_rdb(&layout.blocks).unwrap();
+        let partition = &parsed.partitions[0];
+
+        assert_eq!(
+            partition.max_transfer, DEFAULT_MAX_TRANSFER,
+            "MaxTransfer must be the measured 0x1FE00, not the unstated zero"
+        );
+        assert_eq!(
+            partition.mask, DEFAULT_MASK,
+            "Mask must be 0x7FFFFFFE; zero accepts no address at all"
+        );
+        assert_eq!(
+            partition.num_buffers, DEFAULT_NUM_BUFFERS,
+            "a caller with no opinion gets the core's 600, not the UI's old 100"
+        );
+    }
+
+    /// The flip side: the default must not become a ceiling. A caller that
+    /// *does* have an opinion keeps it, or the core would be overriding the
+    /// user instead of standing in for them.
+    #[test]
+    fn an_explicit_buffer_count_survives_the_round_trip() {
+        let layout = create_rdb_layout(
+            32 * 1024 * 1024,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::FfsStandard,
+                size_mb: 10,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 150,
+            }],
+            &[],
+        )
+        .unwrap();
+
+        let parsed = parse_rdb(&layout.blocks).unwrap();
+        assert_eq!(parsed.partitions[0].num_buffers, 150);
+    }
+
+    /// A request that leaves the field out entirely is the same thing as one
+    /// that sends zero — the frontend does exactly this, and `#[serde(default)]`
+    /// is the only thing making the two agree.
+    #[test]
+    fn a_spec_without_a_buffer_count_deserialises_to_the_default() {
+        let spec: PartitionSpec = serde_json::from_str(
+            r#"{"drive_name":"DH0","fs_type":"ffsstandard","size_mb":10,
+                "bootable":true,"boot_priority":0}"#,
+        )
+        .expect("num_buffers is optional on the wire");
+        assert_eq!(
+            spec.num_buffers, 0,
+            "absent means 'no opinion', not a value"
+        );
+
+        let layout = create_rdb_layout(32 * 1024 * 1024, &[spec], &[]).unwrap();
+        let parsed = parse_rdb(&layout.blocks).unwrap();
+        assert_eq!(parsed.partitions[0].num_buffers, DEFAULT_NUM_BUFFERS);
     }
 
     /// The round trip has to agree with the layout, not merely with itself.
@@ -835,6 +1200,7 @@ mod dosenv_layout {
                 boot_priority: -2,
                 num_buffers: 100,
             }],
+            &[],
         )
         .unwrap();
 
@@ -854,6 +1220,258 @@ mod dosenv_layout {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_driver_states_its_own_version() {
+        // The real shape, from `pfs3aio`.
+        let mut data = vec![0u8; 64];
+        data.extend_from_slice(b"$VER: pfs3aio 19.2 (2.10.18)\0");
+        data.extend_from_slice(&[0u8; 32]);
+        assert_eq!(version_from_ver_string(&data), Some((19, 2)));
+    }
+
+    #[test]
+    fn a_dot_in_the_program_name_is_not_mistaken_for_a_version() {
+        let data = b"$VER: pfs3aio.dev 1.4 (1.1.99)".to_vec();
+        assert_eq!(version_from_ver_string(&data), Some((1, 4)));
+    }
+
+    #[test]
+    fn a_driver_that_says_nothing_says_nothing() {
+        // `None`, not `(0, 0)`: 0.0 loses to whatever AmigaOS already has
+        // loaded, so guessing it would produce a disk that quietly does not
+        // use the driver it carries. The caller has to ask instead.
+        assert_eq!(version_from_ver_string(&[0u8; 4096]), None);
+        assert_eq!(version_from_ver_string(b"$VER: pfs3aio"), None);
+        assert_eq!(version_from_ver_string(b"$VER: pfs3aio v.x"), None);
+    }
+
+    #[test]
+    fn a_version_too_big_for_the_field_is_passed_over_not_truncated() {
+        // 70000 does not fit a u16. Taking it modulo 65536 would give 4464 —
+        // a number the driver never claimed.
+        let data = b"$VER: thing 70000.1 real 3.5".to_vec();
+        assert_eq!(version_from_ver_string(&data), Some((3, 5)));
+    }
+
+    #[test]
+    fn the_search_does_not_run_off_the_end_of_a_short_file() {
+        // Every length from nothing to past the marker, so a bound that is
+        // wrong by one shows up as a panic rather than as a wrong answer.
+        let full = b"$VER: x 1.2";
+        for len in 0..=full.len() {
+            let _ = version_from_ver_string(&full[..len]);
+        }
+    }
+
+    /// Round-trip: a driver written into an RDB comes back out measured
+    /// exactly, through ART's own reader.
+    ///
+    /// The two halves of G4 checking each other is worth something but not
+    /// everything — a writer and a reader that share a mistake agree with each
+    /// other and with nothing else, which is precisely how ART-032…035 and
+    /// ART-079 shipped. `write_rdb_with_driver_for_oracle_when_asked` below is
+    /// the half that answers to somebody outside.
+    #[test]
+    fn a_written_driver_reads_back_with_its_version_and_exact_size() {
+        // 1000 bytes: two full LSEG blocks and one holding 16 — a part-full
+        // last block, which is the case a fixed 492 would get wrong.
+        let driver: Vec<u8> = (0..1000u32).map(|i| (i % 251) as u8).collect();
+        let layout = create_rdb_layout(
+            64 * 1024 * 1024,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::Pfs3DirectScsi,
+                size_mb: 32,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 30,
+            }],
+            &[FileSystemSpec {
+                dos_type: 0x5044_5303,
+                version: 19,
+                revision: 2,
+                data: driver.clone(),
+            }],
+        )
+        .unwrap();
+
+        let parsed = parse_rdb(&layout.blocks).unwrap();
+        assert_eq!(parsed.file_systems.len(), 1);
+        let fs = &parsed.file_systems[0];
+        assert_eq!(fs.dos_type_str, "PDS3");
+        assert_eq!((fs.version, fs.revision), (19, 2));
+        assert_eq!(fs.segment_blocks, 3);
+        assert_eq!(fs.size_bytes, driver.len() as u64);
+        assert!(!fs.truncated);
+        assert!(fs.checksum_valid);
+        // The whole point of writing it: the partition's DosType is now
+        // provided by the disk it sits on.
+        assert!(parsed.provides_file_system(0x5044_5303));
+    }
+
+    #[test]
+    fn the_drivers_bytes_survive_the_trip_verbatim() {
+        // A driver ART does not understand must not be silently altered — so
+        // this checks the bytes themselves, not just the length.
+        let driver: Vec<u8> = (0..2000u32).map(|i| (i * 7 % 256) as u8).collect();
+        let layout = create_rdb_layout(
+            64 * 1024 * 1024,
+            &[],
+            &[FileSystemSpec {
+                dos_type: 0x5044_5303,
+                version: 19,
+                revision: 2,
+                data: driver.clone(),
+            }],
+        )
+        .unwrap();
+
+        // Walk the chain by hand and reassemble, exactly as Kickstart would.
+        let parsed = parse_rdb(&layout.blocks).unwrap();
+        let mut block = parsed.file_systems[0].seg_list_block;
+        let mut rebuilt = Vec::new();
+        while block != 0 && block != NO_BLOCK {
+            let off = block as usize * BLOCK_SIZE;
+            let slice = &layout.blocks[off..off + BLOCK_SIZE];
+            let longs = summed_longs(slice);
+            let bytes = (longs - 5) * 4;
+            rebuilt.extend_from_slice(&slice[20..20 + bytes]);
+            block = u32::from_be_bytes([slice[16], slice[17], slice[18], slice[19]]);
+        }
+        // The last block is padded up to a whole longword; the driver itself
+        // is the prefix.
+        assert!(rebuilt.len() >= driver.len());
+        assert_eq!(&rebuilt[..driver.len()], &driver[..]);
+    }
+
+    #[test]
+    fn a_disk_with_no_drivers_says_so_rather_than_pointing_at_block_zero() {
+        // `NO_BLOCK`, not 0: block 0 is the RDSK itself, and AmigaOS would
+        // follow a zero straight into it.
+        let layout = create_rdb_layout(64 * 1024 * 1024, &[], &[]).unwrap();
+        let list = u32::from_be_bytes([
+            layout.blocks[32],
+            layout.blocks[33],
+            layout.blocks[34],
+            layout.blocks[35],
+        ]);
+        assert_eq!(list, NO_BLOCK);
+        assert!(parse_rdb(&layout.blocks).unwrap().file_systems.is_empty());
+    }
+
+    #[test]
+    fn a_driver_too_big_for_the_reserved_area_is_refused_with_the_numbers() {
+        // It would be overwritten by the first partition's own data the
+        // moment anything was written there. Refused before the image exists,
+        // rather than produced and left to fail on the Amiga.
+        let huge = vec![0u8; 3 * 1024 * 1024];
+        let err = create_rdb_layout(
+            64 * 1024 * 1024,
+            &[],
+            &[FileSystemSpec {
+                dos_type: 0x5044_5303,
+                version: 1,
+                revision: 0,
+                data: huge,
+            }],
+        )
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("blocks"), "{message}");
+    }
+
+    #[test]
+    fn two_drivers_are_chained_and_both_come_back() {
+        let layout = create_rdb_layout(
+            64 * 1024 * 1024,
+            &[],
+            &[
+                FileSystemSpec {
+                    dos_type: 0x5044_5303,
+                    version: 19,
+                    revision: 2,
+                    data: vec![1u8; 600],
+                },
+                FileSystemSpec {
+                    dos_type: 0x5346_5300,
+                    version: 1,
+                    revision: 84,
+                    data: vec![2u8; 100],
+                },
+            ],
+        )
+        .unwrap();
+
+        let parsed = parse_rdb(&layout.blocks).unwrap();
+        let seen: Vec<(&str, u16, u16)> = parsed
+            .file_systems
+            .iter()
+            .map(|fs| (fs.dos_type_str.as_str(), fs.version, fs.revision))
+            .collect();
+        assert_eq!(seen, vec![("PDS3", 19, 2), ("SFS0", 1, 84)]);
+        assert_eq!(parsed.file_systems[0].segment_blocks, 2);
+        assert_eq!(parsed.file_systems[1].segment_blocks, 1);
+    }
+
+    /// Write an RDB with a **real** driver and leave it for `rdbtool` to judge.
+    ///
+    /// The other direction of the oracle: `read_foreign_rdb_*` proves ART can
+    /// read what `hst-imager` wrote; this produces something for an
+    /// implementation outside ART to read back. Both halves are needed, and
+    /// this project has the scars to say why (ART-032…035, ART-075, ART-079).
+    ///
+    /// ```text
+    /// ART_FS_DRIVER_IN=... ART_RDB_WRITE_OUT=... cargo test write_rdb_with_driver_for_oracle_when_asked -- --nocapture
+    /// ```
+    #[test]
+    fn write_rdb_with_driver_for_oracle_when_asked() {
+        let (Ok(driver_path), Ok(out)) = (
+            std::env::var("ART_FS_DRIVER_IN"),
+            std::env::var("ART_RDB_WRITE_OUT"),
+        ) else {
+            return;
+        };
+
+        let data = std::fs::read(&driver_path).unwrap();
+
+        // Read the version out of the driver, the way the command does. The
+        // synthetic `$VER:` tests above pin the parser against strings this
+        // file wrote; this one runs it over a binary nobody here made.
+        let (version, revision) = version_from_ver_string(&data)
+            .expect("the driver states no version — pass one explicitly");
+        println!(
+            "driver={} bytes={} version={version}.{revision}",
+            driver_path,
+            data.len()
+        );
+
+        let layout = create_rdb_layout(
+            64 * 1024 * 1024,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::Pfs3DirectScsi,
+                size_mb: 50,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 30,
+            }],
+            &[FileSystemSpec {
+                dos_type: 0x5044_5303,
+                version,
+                revision,
+                data,
+            }],
+        )
+        .unwrap();
+
+        // Sparse, the way `create_hdf` does it: the structured blocks, then
+        // the file extended to its full length.
+        let mut file = std::fs::File::create(&out).unwrap();
+        std::io::Write::write_all(&mut file, &layout.blocks).unwrap();
+        file.set_len(layout.total_size).unwrap();
+        println!("wrote={out} total={} bytes", layout.total_size);
+    }
+
     // ---- FSHD / LSEG reading (G4's reading half) ------------------------
     //
     // Synthetic and built here at runtime, per the project's rule: ART ships
@@ -1097,7 +1715,7 @@ mod tests {
             },
         ];
 
-        let layout = create_rdb_layout(200 * 1024 * 1024, &partitions).unwrap();
+        let layout = create_rdb_layout(200 * 1024 * 1024, &partitions, &[]).unwrap();
         assert!(layout.total_size >= 200 * 1024 * 1024);
         // Only the RDSK block plus one PART block per partition are materialised.
         assert_eq!(layout.blocks.len(), 3 * BLOCK_SIZE);
@@ -1141,7 +1759,7 @@ mod tests {
             boot_priority: 0,
             num_buffers: 100,
         }];
-        let layout = create_rdb_layout(100 * 1024 * 1024, &specs).unwrap();
+        let layout = create_rdb_layout(100 * 1024 * 1024, &specs, &[]).unwrap();
         let rdsk = &layout.blocks[0..BLOCK_SIZE];
 
         let cylinders = lw(rdsk, 16);
@@ -1158,7 +1776,7 @@ mod tests {
     /// Leaving these at zero sends AmigaOS looking into block 0.
     #[test]
     fn rdsk_absent_lists_use_the_no_block_sentinel() {
-        let layout = create_rdb_layout(100 * 1024 * 1024, &[]).unwrap();
+        let layout = create_rdb_layout(100 * 1024 * 1024, &[], &[]).unwrap();
         let rdsk = &layout.blocks[0..BLOCK_SIZE];
 
         assert_eq!(lw(rdsk, 4), BLOCK_SIZE as u32, "BlockBytes must be 512");
@@ -1193,7 +1811,7 @@ mod tests {
         ];
 
         // 100 MB of disk cannot hold 1000 MB of partitions.
-        let err = create_rdb_layout(100 * 1024 * 1024, &specs).unwrap_err();
+        let err = create_rdb_layout(100 * 1024 * 1024, &specs, &[]).unwrap_err();
         assert!(matches!(err, CoreError::InvalidInput(_)), "got {err:?}");
     }
 
@@ -1210,7 +1828,7 @@ mod tests {
             })
             .collect();
 
-        let layout = create_rdb_layout(500 * 1024 * 1024, &specs).unwrap();
+        let layout = create_rdb_layout(500 * 1024 * 1024, &specs, &[]).unwrap();
         let parsed = parse_rdb(&layout.blocks).unwrap();
         assert_eq!(parsed.partitions.len(), 4);
 
@@ -1242,7 +1860,7 @@ mod tests {
             })
             .collect();
 
-        assert!(create_rdb_layout(4096 * 1024 * 1024u64, &specs).is_err());
+        assert!(create_rdb_layout(4096 * 1024 * 1024u64, &specs, &[]).is_err());
     }
 
     /// The checksum covers `SummedLongs` longwords, not the whole block.
