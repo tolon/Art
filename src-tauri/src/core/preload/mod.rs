@@ -7,13 +7,12 @@
 //!
 //! ## Two implementations of one trait
 //!
-//! This paragraph used to say ART does not write PFS3 and route B "would, when
-//! it exists" — written when route E's `hst-imager` was the only
-//! [`VolumeFormatter`]. It now has company: [`native::NativeFormatter`] writes
-//! PFS3 through `libpfs3` and FFS through ART's own `core/volume/write`,
-//! launching nothing (G5). `hst-imager` does not retire — it is now what
-//! `native`'s fixtures are checked against, the independent oracle a reader
-//! and writer that only agree with each other cannot be (`scripts/pfs3-oracle-check.py`).
+//! [`native::NativeFormatter`] writes PFS3 through `libpfs3` and FFS through
+//! ART's own `core/volume/write`, launching nothing (G5). Route E's
+//! `hst-imager` is the other implementation, and it does not retire: it is
+//! what `native`'s fixtures are checked against, the independent oracle a
+//! reader and writer that only agree with each other cannot be
+//! (`scripts/pfs3-oracle-check.py`).
 //!
 //! ## The trait, and why
 //!

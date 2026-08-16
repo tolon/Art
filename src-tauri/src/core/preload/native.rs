@@ -4,8 +4,8 @@
 //! [`FileRegionMut`] satisfies `libpfs3`'s own `BlockDevice` — and `core/card`
 //! and `core/volume/write` already exist. This is what wires all three
 //! together behind [`VolumeFormatter`], so a preload no longer needs
-//! `hst-imager` on the machine. `core/preload/mod.rs`'s doc comment predates
-//! this file; the story it tells ("route B, when it exists") is what this is.
+//! `hst-imager` on the machine. See `core/preload/mod.rs` for how the two
+//! implementations of that trait now relate.
 //!
 //! ## Two families, one trait
 //!
@@ -73,7 +73,13 @@ use crate::core::volume::{BlockDevice, BlockDeviceMut, DosType, VolumeGeometry};
 
 /// The version pinned in `Cargo.toml`. There is no `CARGO_PKG_VERSION`-style
 /// macro for a *dependency's* version, so this is kept in sync by hand — the
-/// same trade-off ART already accepts for `ureq`'s exact pin (CLAUDE.md).
+/// same trade-off ART already accepts for `ureq`'s exact `=3.2.1` pin
+/// (CLAUDE.md). `libpfs3` is pinned exactly (`=0.1.3`) for the same reason:
+/// `probe()` reports this constant as which implementation did the work, and
+/// an unpinned `cargo update` drifting past it would make that report state
+/// a version nobody actually built. `the_pinned_version_constant_matches_cargo_toml`
+/// (below) is what turns "kept in sync by hand" into something a `cargo
+/// update` cannot get away with silently.
 const LIBPFS3_VERSION: &str = "0.1.3";
 
 /// A [`VolumeFormatter`] backed by `libpfs3` and ART's own FFS writer.
@@ -187,11 +193,10 @@ impl VolumeFormatter for NativeFormatter {
         let dos = DosType::new(part.dostype.to_be_bytes());
 
         let entries = collect_entries(source)?;
-        let needed: u64 = entries.iter().filter(|e| !e.is_dir).map(|e| e.size).sum();
 
         match family_of(dos) {
             DosFamily::Pfs3 => copy_in_pfs3(
-                image, offset, length, block_size, drive, source, &entries, needed, sink,
+                image, offset, length, block_size, drive, source, &entries, sink,
             ),
             DosFamily::Ffs => copy_in_ffs(
                 image,
@@ -203,7 +208,6 @@ impl VolumeFormatter for NativeFormatter {
                 drive,
                 source,
                 &entries,
-                needed,
                 sink,
             ),
             DosFamily::Other => Err(CoreError::UnsupportedFormat(format!(
@@ -372,6 +376,36 @@ fn partition_region(area: &AmigaArea, part: &ParsedPartition) -> CoreResult<(u64
 /// without ever materialising the volume in memory — the same reason
 /// `create_rdb_layout` returns only its leading blocks rather than a whole
 /// image.
+///
+/// ## No journal underneath this either
+///
+/// These are raw [`BlockDeviceMut::write_block`] calls, not
+/// `core/volume/journal.rs::Journalled` writes — the same choice
+/// `pfs3dev.rs`'s module doc already makes for PFS3, and for the same
+/// reason: a format's contents are forfeit the moment the user's confirmed
+/// choice runs it, so there is nothing here worth journalling.
+///
+/// What an interrupted format leaves behind is worth being specific about,
+/// because `VolumeWriter::open`'s ART-049 check only compares the
+/// bootblock's four-byte signature against the geometry it was opened
+/// with — and this function writes that signature **first**. An I/O failure
+/// between the boot block write and the root block write leaves a bootblock
+/// that already claims the new `DosType`, sitting over whatever the root
+/// block held before:
+///
+/// - On a partition that was never formatted, that is a block of zeros.
+///   `VolumeWriter::open` accepts it (the signature matches), but every
+///   subsequent read of block 0 refuses by name — `dir::is_directory` sees a
+///   block that is not a `T_HEADER`, not silently an empty directory.
+/// - On a partition being *re*formatted, the previous filesystem's root
+///   block may still be there, structurally valid. `copy_in`'s
+///   already-populated refusal then catches it and refuses to fill what
+///   still looks, correctly, like somebody else's volume.
+///
+/// Neither outcome is data loss beyond what the reformat already asked for,
+/// and neither is corruption with no reason given. G5 always formats before
+/// it fills, so an interrupted format is simply reformatted from scratch on
+/// the next attempt — exactly as an interrupted PFS3 format already is.
 fn format_ffs_volume(
     device: &mut dyn BlockDeviceMut,
     geometry: &VolumeGeometry,
@@ -613,7 +647,6 @@ fn copy_in_pfs3(
     volume_label: &str,
     source: &Path,
     entries: &[CopyEntry],
-    needed: u64,
     sink: &dyn ProgressSink,
 ) -> CoreResult<CopySummary> {
     let region = FileRegionMut::open(image, offset, length, block_size)?;
@@ -633,13 +666,37 @@ fn copy_in_pfs3(
     }
 
     // Binding requirement 5: the fit check, before the first byte, with real
-    // numbers. This is a byte-for-byte comparison against what the bitmap
-    // already reports free — conservative, not exact to the block, but real
-    // and asked before anything is written.
-    let free_bytes = u64::from(vol.free_blocks()) * u64::from(vol.block_size());
-    if needed > free_bytes {
+    // numbers — and a real bound, not a byte sum that fails open. PFS3 draws
+    // file data from `blocksfree` in whole blocks (`write_file_in_no_commit`'s
+    // own `div_ceil(bs).max(1)`, matched exactly here), so a raw byte total
+    // under-counts every file that does not end on a block boundary — the
+    // gap this check used to have. Directory and file *entries* — anodes,
+    // dir blocks — are a **separate** pool (`reserved_free`, not
+    // `blocksfree`), so they cannot be folded into the same byte comparison;
+    // checked on their own instead, one reserved block per entry, which is
+    // never less than PFS3 actually needs (most entries reuse an
+    // already-allocated anode block and consume none).
+    let bs = u64::from(vol.block_size());
+    let data_blocks_needed: u64 = entries
+        .iter()
+        .filter(|e| !e.is_dir)
+        .map(|e| e.size.div_ceil(bs).max(1))
+        .sum();
+    let data_bytes_needed = data_blocks_needed * bs;
+    let free_bytes = u64::from(vol.free_blocks()) * bs;
+    if data_bytes_needed > free_bytes {
         return Err(CoreError::InvalidInput(format!(
-            "'{}' needs {needed} bytes but '{volume_label}' only has {free_bytes} bytes free",
+            "'{}' needs {data_bytes_needed} bytes but '{volume_label}' only has {free_bytes} \
+             bytes free",
+            source.display()
+        )));
+    }
+    let reserved_needed = entries.len() as u64;
+    let reserved_free = u64::from(vol.rootblock.reserved_free);
+    if reserved_needed > reserved_free {
+        return Err(CoreError::InvalidInput(format!(
+            "'{}' needs room for {reserved_needed} new file(s) and folder(s), but \
+             '{volume_label}' only has {reserved_free} reserved block(s) free",
             source.display()
         )));
     }
@@ -686,18 +743,25 @@ fn copy_in_pfs3(
                 .map_err(from_pfs3)?;
             summary.files += 1;
             summary.bytes += data.len() as u64;
+        }
 
-            // Binding requirement 1: apply the sidecar, never copy it as a
-            // file (already excluded in `collect_entries`).
-            let sidecar = uaem::sidecar_path(&entry.host_path);
-            if sidecar.is_file() {
-                let text = std::fs::read_to_string(&sidecar)?;
-                let parsed = uaem::parse(&text)?;
-                let protection = pfs3_protection(parsed.protection)?;
-                writer
-                    .update_dir_entry_protection(parent, name, protection)
-                    .map_err(from_pfs3)?;
-            }
+        // Binding requirement 1: apply the sidecar, never copy it as a file
+        // (already excluded in `collect_entries`) — for a directory's own
+        // sidecar exactly as for a file's; `update_dir_entry_protection`
+        // patches the named entry in its parent's listing and does not care
+        // which kind of entry that is.
+        let sidecar = uaem::sidecar_path(&entry.host_path);
+        if sidecar.is_file() {
+            let text = std::fs::read_to_string(&sidecar)?;
+            let parsed = uaem::parse(&text)?;
+            let protection = pfs3_protection(parsed.protection)?;
+            // libpfs3 0.1.3 exposes no way to set a directory entry's date —
+            // only `update_dir_entry_protection`. The sidecar's date is
+            // therefore read and then dropped here; FFS's `FileMeta` below
+            // carries it because ART's own writer does have that setter.
+            writer
+                .update_dir_entry_protection(parent, name, protection)
+                .map_err(from_pfs3)?;
         }
     }
 
@@ -719,7 +783,6 @@ fn copy_in_ffs(
     volume_label: &str,
     source: &Path,
     entries: &[CopyEntry],
-    needed: u64,
     sink: &dyn ProgressSink,
 ) -> CoreResult<CopySummary> {
     let mut region = FileRegionMut::open(image, offset, length, block_size)?;
@@ -739,10 +802,26 @@ fn copy_in_ffs(
         )));
     }
 
+    // Binding requirement 5: the real bound, not a raw byte sum. FFS keeps
+    // headers, data and extension blocks in the *same* bitmap `free_bytes`
+    // already reports, so `file::budget_for` — the exact formula
+    // `add_file`'s own allocator uses — gives an exact block count per file,
+    // not merely a conservative one; `make_dir` always allocates exactly one
+    // block per directory.
+    let mut blocks_needed: u64 = 0;
+    for entry in entries {
+        blocks_needed += if entry.is_dir {
+            1
+        } else {
+            crate::core::volume::write::file::budget_for(entry.size, &geometry)?.total() as u64
+        };
+    }
+    let bytes_needed = blocks_needed * block_size as u64;
     let free_bytes = writer.free_bytes()?;
-    if needed > free_bytes {
+    if bytes_needed > free_bytes {
         return Err(CoreError::InvalidInput(format!(
-            "'{}' needs {needed} bytes but '{volume_label}' only has {free_bytes} bytes free",
+            "'{}' needs {bytes_needed} bytes but '{volume_label}' only has {free_bytes} bytes \
+             free",
             source.display()
         )));
     }
@@ -775,6 +854,17 @@ fn copy_in_ffs(
             })?;
             block_of.insert(entry.relative.clone(), block);
             summary.directories += 1;
+
+            // Binding requirement 1: a directory's own sidecar, applied the
+            // same as a file's — `make_dir` takes no metadata itself, so
+            // `set_attributes` is what carries it onto the just-created
+            // header block.
+            let sidecar = uaem::sidecar_path(&entry.host_path);
+            if sidecar.is_file() {
+                let text = std::fs::read_to_string(&sidecar)?;
+                let parsed = uaem::parse(&text)?;
+                writer.set_attributes(block, Some(parsed.protection), None, Some(parsed.date))?;
+            }
         } else {
             let data = std::fs::read(&entry.host_path)?;
             let sidecar = uaem::sidecar_path(&entry.host_path);
@@ -882,6 +972,65 @@ mod tests {
         dir
     }
 
+    /// Bytes free on a formatted PFS3 partition, read with `libpfs3`'s own
+    /// reader — independent of `copy_in_pfs3`'s own arithmetic, which is
+    /// exactly what a boundary test needs.
+    fn pfs3_free_bytes(image: &Path) -> u64 {
+        let vol = libpfs3::volume::Volume::open(image, partition_offset(image)).unwrap();
+        u64::from(vol.free_blocks()) * u64::from(vol.block_size())
+    }
+
+    /// The pieces needed to reopen a formatted `DOS\3` partition's volume for
+    /// verification, without going through `NativeFormatter` a second time.
+    fn ffs_region(image: &Path) -> (FileRegionMut, VolumeGeometry, u64) {
+        let card = read_card(image).unwrap();
+        let part = &card.areas[0].rdb.partitions[0];
+        let offset = card.areas[0].offset_bytes + part.byte_offset().unwrap();
+        let length = part.byte_length().unwrap();
+        let block_size = part.block_bytes() as usize;
+        let dos = DosType::new(part.dostype.to_be_bytes());
+        let region = FileRegionMut::open(image, offset, length, block_size).unwrap();
+        let total_blocks = region.total_blocks();
+        let geometry = VolumeGeometry::new(block_size, total_blocks, part.reserved, dos).unwrap();
+        (region, geometry, offset)
+    }
+
+    fn ffs_free_bytes(image: &Path) -> u64 {
+        let (mut region, geometry, offset) = ffs_region(image);
+        VolumeWriter::open(&mut region, geometry, image, offset)
+            .unwrap()
+            .free_bytes()
+            .unwrap()
+    }
+
+    /// The most data blocks a **single** FFS file can occupy while its own
+    /// `file::budget_for` total (data + extension + one header block) still
+    /// fits in `target_total_blocks`. A single file's overhead is not just
+    /// rounding to a block — every 72 data blocks (`pointers_per_block` at
+    /// 512 bytes) needs one more extension block to hold their pointers — so
+    /// "the volume's whole free space, in one file" and "the volume's whole
+    /// free space, in many small files" land at different byte counts. This
+    /// mirrors `budget_for`'s own formula rather than reimplementing a
+    /// different one, so the boundary it finds is the same boundary
+    /// `copy_in_ffs`'s real check uses.
+    fn largest_single_ffs_file_data_blocks(target_total_blocks: u64, block_size: usize) -> u64 {
+        let per_header = crate::core::volume::write::layout::pointers_per_block(block_size) as u64;
+        let mut best = 0u64;
+        let mut data_blocks = 0u64;
+        loop {
+            let extension_blocks = data_blocks
+                .saturating_sub(per_header)
+                .div_ceil(per_header.max(1));
+            let total = data_blocks + extension_blocks + 1; // +1: the header block
+            if total > target_total_blocks {
+                break;
+            }
+            best = data_blocks;
+            data_blocks += 1;
+        }
+        best
+    }
+
     // ---- Step 1's given tests ----
 
     #[test]
@@ -896,16 +1045,14 @@ mod tests {
         assert_eq!(vol.name(), "Work");
     }
 
-    #[test]
-    fn it_formats_an_ffs_partition_with_arts_own_writer() {
-        let image = rdb_image_with_one_dos3_partition();
-        NativeFormatter
-            .format_partition(&image, None, 1, "Work", &NoProgress)
-            .unwrap();
-        // ART reads FFS, so ART's own reader is the check here.
-        let volumes = crate::core::volume::mount::scan_image(&image).unwrap();
-        assert_eq!(volumes.volumes[0].name, "DH0");
-    }
+    // The brief's own `it_formats_an_ffs_partition_with_arts_own_writer` used
+    // to live here, asserting `scan_image(&image).unwrap().volumes[0].name
+    // == "DH0"`. `scan_image` reports the RDB's own drive name regardless of
+    // whether the partition was ever formatted, so that assertion could not
+    // fail for the property it claimed to prove — see
+    // `format_ffs_writes_the_requested_volume_name_into_the_root_block` and
+    // `a_freshly_formatted_ffs_volume_accepts_a_real_write` below, which
+    // replace it with checks that actually exercise the write.
 
     #[test]
     fn copy_in_carries_the_protection_bits_out_of_the_uaem_sidecars() {
@@ -1009,6 +1156,236 @@ mod tests {
             before,
             "nothing was written"
         );
+    }
+
+    // ---- fix round 1, item 1: the fit check must not fail open ----
+    //
+    // The original check summed raw file bytes against whole-block free
+    // space, so a tree that was merely close to full — needing one more
+    // block than it had, rather than one more byte — passed the check and
+    // then failed partway through the real copy. These two pin the corrected
+    // arithmetic at its actual boundary, in bytes, on a real formatted
+    // volume, not a synthetic number.
+
+    #[test]
+    fn a_pfs3_tree_that_exactly_fills_the_volume_is_not_refused() {
+        let image = formatted_pds3_image_of(4);
+        let free = pfs3_free_bytes(&image);
+        let tree = tree_of_bytes(free as usize);
+
+        NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .expect("a tree that exactly fits must not be refused");
+    }
+
+    #[test]
+    fn a_pfs3_tree_one_byte_over_the_limit_is_refused() {
+        let image = formatted_pds3_image_of(4);
+        let free = pfs3_free_bytes(&image);
+        let tree = tree_of_bytes(free as usize + 1);
+        let before = std::fs::read(&image).unwrap();
+
+        let err = NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap_err();
+        assert_eq!(err.code(), "ART-INPUT-INVALID", "{err}");
+        assert_eq!(
+            std::fs::read(&image).unwrap(),
+            before,
+            "nothing was written"
+        );
+    }
+
+    /// The exact scenario fix round 1's review found: many small files whose
+    /// *raw* byte total is tiny but whose *block-rounded* total is not —
+    /// PFS3 allocates one whole data block per file regardless of how small
+    /// it is. The old check summed raw bytes and would have accepted this
+    /// tree outright (a few kilobytes against a formatted volume); the fixed
+    /// one refuses it before anything is written.
+    #[test]
+    fn many_small_pfs3_files_are_refused_by_their_rounded_size_not_their_raw_bytes() {
+        let image = formatted_pds3_image_of(1);
+        // One block per one-byte file, and comfortably more files than the
+        // volume has free *blocks* — while their raw bytes (one each) are
+        // nowhere near its free *bytes*. That gap is exactly what the old
+        // check missed.
+        let block_size = crate::core::volume::SECTOR_BYTES as u64;
+        let file_count = pfs3_free_bytes(&image) / block_size + 100;
+
+        let tree = fixtures::scratch("copy-in-many-small-pfs3");
+        for i in 0..file_count {
+            std::fs::write(tree.join(format!("F{i}")), b"x").unwrap();
+        }
+        let before = std::fs::read(&image).unwrap();
+
+        let err = NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap_err();
+        assert_eq!(err.code(), "ART-INPUT-INVALID", "{err}");
+        assert_eq!(
+            std::fs::read(&image).unwrap(),
+            before,
+            "nothing was written"
+        );
+    }
+
+    #[test]
+    fn an_ffs_tree_that_exactly_fills_the_volume_is_not_refused() {
+        let image = rdb_image_with_one_dos3_partition();
+        NativeFormatter
+            .format_partition(&image, None, 1, "Work", &NoProgress)
+            .unwrap();
+        let free = ffs_free_bytes(&image);
+        let block_size = crate::core::volume::SECTOR_BYTES;
+        let data_blocks = largest_single_ffs_file_data_blocks(free / block_size as u64, block_size);
+        let tree = tree_of_bytes(data_blocks as usize * block_size);
+
+        NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .expect("a tree that exactly fits must not be refused");
+    }
+
+    #[test]
+    fn an_ffs_tree_one_block_over_the_limit_is_refused() {
+        let image = rdb_image_with_one_dos3_partition();
+        NativeFormatter
+            .format_partition(&image, None, 1, "Work", &NoProgress)
+            .unwrap();
+        let free = ffs_free_bytes(&image);
+        let block_size = crate::core::volume::SECTOR_BYTES;
+        let data_blocks = largest_single_ffs_file_data_blocks(free / block_size as u64, block_size);
+        // One byte into the next data block: `budget_for` needs one more
+        // data block (and, past the 72-block mark, sometimes one more
+        // extension block too) — either way, strictly more than fits.
+        let tree = tree_of_bytes(data_blocks as usize * block_size + 1);
+        let before = std::fs::read(&image).unwrap();
+
+        let err = NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap_err();
+        assert_eq!(err.code(), "ART-INPUT-INVALID", "{err}");
+        assert_eq!(
+            std::fs::read(&image).unwrap(),
+            before,
+            "nothing was written"
+        );
+    }
+
+    // ---- fix round 1, item 2: the version pin cannot silently drift ----
+
+    #[test]
+    fn the_pinned_version_constant_matches_cargo_toml() {
+        let cargo_toml = include_str!("../../../Cargo.toml");
+        let expected = format!("libpfs3 = \"={LIBPFS3_VERSION}\"");
+        assert!(
+            cargo_toml.contains(&expected),
+            "Cargo.toml's libpfs3 pin no longer matches LIBPFS3_VERSION \
+             ({LIBPFS3_VERSION}) — update the constant (and what probe() \
+             claims) together with the dependency bump"
+        );
+    }
+
+    // ---- fix round 1, item 3: a directory's own sidecar must not be lost ----
+
+    #[test]
+    fn a_directorys_own_sidecar_is_applied_on_pfs3() {
+        let image = formatted_pds3_image();
+        let tree = fixtures::scratch("copy-in-dir-sidecar-pfs3");
+        std::fs::create_dir_all(tree.join("C")).unwrap();
+        std::fs::write(tree.join("C.uaem"), "--p-rwed 2021-04-13 02:43:13.68 \n").unwrap();
+
+        NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+
+        let mut vol = libpfs3::volume::Volume::open(&image, partition_offset(&image)).unwrap();
+        let entry = vol
+            .list_dir("")
+            .unwrap()
+            .into_iter()
+            .find(|e| e.name == "C")
+            .unwrap();
+        assert_eq!(
+            libpfs3::util::amiga_protection_string(entry.protection),
+            "--p-rwed"
+        );
+    }
+
+    #[test]
+    fn a_directorys_own_sidecar_is_applied_on_ffs() {
+        let image = rdb_image_with_one_dos3_partition();
+        NativeFormatter
+            .format_partition(&image, None, 1, "Work", &NoProgress)
+            .unwrap();
+        let tree = fixtures::scratch("copy-in-dir-sidecar-ffs");
+        std::fs::create_dir_all(tree.join("C")).unwrap();
+        std::fs::write(tree.join("C.uaem"), "--p-rwed 2021-04-13 02:43:13.68 \n").unwrap();
+
+        NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+
+        let (mut region, geometry, offset) = ffs_region(&image);
+        let writer = VolumeWriter::open(&mut region, geometry, &image, offset).unwrap();
+        let c_dir = writer.find(0, "C").unwrap().unwrap();
+        let attrs = writer.attributes(c_dir.block).unwrap();
+        assert_eq!(uaem::format_bits(attrs.protection), "--p-rwed");
+    }
+
+    // ---- fix round 1, item 4: requirement 1's FFS counterpart ----
+
+    #[test]
+    fn ffs_copy_in_carries_the_protection_bits_out_of_the_uaem_sidecars() {
+        let image = rdb_image_with_one_dos3_partition();
+        NativeFormatter
+            .format_partition(&image, None, 1, "Work", &NoProgress)
+            .unwrap();
+        let tree = fixtures::scratch("ffs-copy-in-protection");
+        std::fs::create_dir_all(tree.join("C")).unwrap();
+        std::fs::write(tree.join("C/Assign"), b"x").unwrap();
+        std::fs::write(
+            tree.join("C/Assign.uaem"),
+            "--p-rwed 2021-04-13 02:43:13.68 \n",
+        )
+        .unwrap();
+
+        NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+
+        // ART's own reader, not libpfs3 — this is the FFS branch.
+        let (mut region, geometry, offset) = ffs_region(&image);
+        let writer = VolumeWriter::open(&mut region, geometry, &image, offset).unwrap();
+        let c_dir = writer.find(0, "C").unwrap().unwrap();
+        let assign = writer.find(c_dir.block, "Assign").unwrap().unwrap();
+        let attrs = writer.attributes(assign.block).unwrap();
+        assert_eq!(uaem::format_bits(attrs.protection), "--p-rwed");
+    }
+
+    #[test]
+    fn ffs_a_sidecar_is_applied_and_never_copied_as_a_file_of_its_own() {
+        let image = rdb_image_with_one_dos3_partition();
+        NativeFormatter
+            .format_partition(&image, None, 1, "Work", &NoProgress)
+            .unwrap();
+        let tree = fixtures::scratch("ffs-copy-in-sidecar-not-a-file");
+        std::fs::create_dir_all(tree.join("C")).unwrap();
+        std::fs::write(tree.join("C/Assign"), b"x").unwrap();
+        std::fs::write(
+            tree.join("C/Assign.uaem"),
+            "--p-rwed 2021-04-13 02:43:13.68 \n",
+        )
+        .unwrap();
+
+        NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+
+        let (mut region, geometry, offset) = ffs_region(&image);
+        let writer = VolumeWriter::open(&mut region, geometry, &image, offset).unwrap();
+        let c_dir = writer.find(0, "C").unwrap().unwrap();
+        let listing = writer.list(c_dir.block).unwrap();
+        assert!(listing.iter().all(|e| !e.name.ends_with(".uaem")));
     }
 
     // ---- coverage for binding requirements the given tests do not reach ----
@@ -1115,16 +1492,7 @@ mod tests {
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
 
-        let card = read_card(&image).unwrap();
-        let part = &card.areas[0].rdb.partitions[0];
-        let offset = card.areas[0].offset_bytes + part.byte_offset().unwrap();
-        let length = part.byte_length().unwrap();
-        let block_size = part.block_bytes() as usize;
-        let dos = DosType::new(part.dostype.to_be_bytes());
-
-        let mut region = FileRegionMut::open(&image, offset, length, block_size).unwrap();
-        let total_blocks = region.total_blocks();
-        let geometry = VolumeGeometry::new(block_size, total_blocks, part.reserved, dos).unwrap();
+        let (mut region, geometry, offset) = ffs_region(&image);
         let mut writer = VolumeWriter::open(&mut region, geometry, &image, offset).unwrap();
 
         assert!(writer.list(0).unwrap().is_empty());
