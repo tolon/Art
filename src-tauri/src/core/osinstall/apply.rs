@@ -104,6 +104,25 @@
 //! missing parent: `create_dir_all` on the target's parent before writing.
 //! Refusing here would single out one file for a rule nothing else in this
 //! function follows, over a directory that is entirely ART's own to create.
+//!
+//! ## Latin-1, not UTF-8
+//!
+//! `core/adf/bcpl.rs` already documents this rule for one BCPL field at a
+//! time; `S/User-Startup` needs the same rule applied to a whole text file.
+//! AmigaDOS text is Latin-1 — one byte per character, the identity mapping
+//! on code points `0..=255` — and `String::from_utf8` on a media-provided
+//! starter file or a hand-edited one turns the first accented character
+//! into `CoreError::Malformed`, failing the install on its very last step,
+//! after every other file has already landed. This project's user is
+//! Turkish and the shipped recipe carries a `Locale-TR` component, so that
+//! is an ordinary byte, not a hypothetical one. [`latin1_decode`] cannot
+//! fail — every byte value has a Latin-1 character — so the read side of
+//! this step never rejects a file for what it says. [`latin1_encode`]
+//! mirrors `write_bcpl_string`'s own choice for a character with no Latin-1
+//! byte at all: it becomes `?` rather than failing, since ART's own
+//! generated block content and every shipped component's lines are plain
+//! ASCII today, and a mis-rendered character composed by some future
+//! component is a smaller problem than an install that cannot finish.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -189,6 +208,24 @@ fn hex_sha256(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     format!("{:x}", hasher.finalize())
+}
+
+/// Decode raw bytes as Latin-1 — see the module doc comment's "Latin-1, not
+/// UTF-8" section. Latin-1 is exactly the first 256 Unicode code points, so
+/// this is a plain cast that can never fail, unlike `String::from_utf8`.
+/// The identical rule `core/adf/bcpl.rs::read_bcpl_string` already applies
+/// to one BCPL field; this applies it to a whole file.
+fn latin1_decode(bytes: &[u8]) -> String {
+    bytes.iter().map(|&b| b as char).collect()
+}
+
+/// The write side of the same rule. A character above `U+00FF` has no
+/// Latin-1 byte; `core/adf/bcpl.rs::write_bcpl_string` maps that case to
+/// `?` rather than failing, and this follows the same choice.
+fn latin1_encode(s: &str) -> Vec<u8> {
+    s.chars()
+        .map(|c| if (c as u32) <= 0xFF { c as u8 } else { b'?' })
+        .collect()
 }
 
 /// Build the distribution tree `plan` describes under `root`.
@@ -341,7 +378,6 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
                 CoreError::Cancelled
             });
         }
-        sink.report(total, Some(total), USER_STARTUP_PATH);
 
         let target = safe_join(root, USER_STARTUP_PATH).map_err(|err| {
             CoreError::SafetyRefused(format!(
@@ -360,16 +396,11 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
         // release's own starter file. If so it is already on disk at
         // `target`, and it is read back as the starting point rather than
         // assumed absent, so composing the file never discards content a
-        // plan item just wrote.
+        // plan item just wrote. Latin-1, not UTF-8 — see the module doc
+        // comment's "Latin-1, not UTF-8" section; this read can never fail
+        // on account of what the file says.
         let existing = match std::fs::read(&target) {
-            Ok(bytes) => Some(String::from_utf8(bytes).map_err(|_| {
-                CoreError::Malformed {
-                    format: "S/User-Startup".into(),
-                    detail: "existing content is not valid UTF-8 text, so it cannot be \
-                             edited in place without risking the bytes it already carries"
-                        .into(),
-                }
-            })?),
+            Ok(bytes) => Some(latin1_decode(&bytes)),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
             Err(err) => return Err(CoreError::Io(err)),
         };
@@ -388,10 +419,20 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
         // at least once and always produces `Some`.
         let merged = merged.expect("at least one contribution was folded");
 
-        crate::core::safety::atomic::atomic_write(&target, merged.as_bytes())?;
+        // What actually reaches disk — Latin-1 bytes, not `merged`'s own
+        // UTF-8 representation — so `bytes`/`sha256` below describe the
+        // real file, the same rule `FileRecord::bytes`'s own doc comment
+        // states for every other file this function writes.
+        let merged_disk_bytes = latin1_encode(&merged);
+        crate::core::safety::atomic::atomic_write(&target, &merged_disk_bytes)?;
+        // Reported after the write actually lands, not before it starts —
+        // an earlier version of this line ran ahead of the write itself,
+        // claiming `done == total` while the one atomic write this step
+        // performs had not happened yet.
+        sink.report(total, Some(total), USER_STARTUP_PATH);
 
-        let merged_bytes = merged.len() as u64;
-        let merged_sha256 = hex_sha256(merged.as_bytes());
+        let merged_bytes = merged_disk_bytes.len() as u64;
+        let merged_sha256 = hex_sha256(&merged_disk_bytes);
 
         // Drop whatever record the copy loop above made for this path (a
         // media-provided starter file, if there was one) before adding the
@@ -945,6 +986,20 @@ mod tests {
         assert!(content.contains(";BEGIN modules-a1200\nAssign Alpha: SYS:\n;END modules-a1200\n"));
         assert!(content.contains(";BEGIN storage\nAssign Beta: SYS:\n;END storage\n"));
 
+        // Review item 3: order is claimed everywhere (the field doc,
+        // `plan.rs`'s comment, `apply`'s own fold) and, until now, tested
+        // nowhere. `modules-a1200` is first in `plan.user_startup`, so its
+        // block must land at a lower byte offset than `storage`'s — these
+        // are `Assign` lines, and which one runs first changes what the
+        // Amiga does.
+        let modules_offset = content.find(";BEGIN modules-a1200").unwrap();
+        let storage_offset = content.find(";BEGIN storage").unwrap();
+        assert!(
+            modules_offset < storage_offset,
+            "modules-a1200 is first in plan.user_startup and must land first \
+             in the file: modules at {modules_offset}, storage at {storage_offset}"
+        );
+
         let manifest: DistributionManifest =
             serde_json::from_str(&std::fs::read_to_string(root.join(MANIFEST_FILE_NAME)).unwrap())
                 .unwrap();
@@ -1081,5 +1136,82 @@ mod tests {
         apply(&plan, &root, &NoProgress).unwrap();
 
         assert!(!root.join("S").exists());
+    }
+
+    /// Review item 5: AmigaDOS text is Latin-1, not UTF-8, and this
+    /// project's user is Turkish — an accented byte in a media-provided
+    /// starter file is ordinary input, not a hypothetical one. `0xE7` alone
+    /// is not valid UTF-8 (it is a lead byte that promises two continuation
+    /// bytes that never come), so a `String::from_utf8` read of this exact
+    /// byte is the one that used to fail the whole install on its very last
+    /// step, after every other file had already landed. Latin-1 decodes it
+    /// as `ç` — this must not fail at all.
+    #[test]
+    fn a_latin1_starter_file_does_not_fail_the_install() {
+        let (mut plan, dir) = planned();
+        let folder = media_folder(&dir);
+        let starter: &[u8] = b"; caf\xE7 comment\n";
+        fixtures::media(
+            &folder,
+            "Workbench3.2",
+            "wb.adf",
+            &[("S/User-Startup", starter, 0)],
+        );
+        plan.media_paths
+            .insert("Workbench3.2".to_string(), folder.join("wb.adf"));
+        plan.items.push(PlanItem {
+            component: "workbench-base".into(),
+            media: "Workbench3.2".into(),
+            from: "S/User-Startup".into(),
+            to: "S/User-Startup".into(),
+            is_dir: false,
+            bytes: starter.len() as u64,
+        });
+        plan.user_startup = vec![UserStartupContribution {
+            component: "amissl".into(),
+            lines: vec!["Assign AmiSSL: SYS:Libs/AmiSSL".into()],
+        }];
+        let root = dir.join("dist");
+
+        // Must not fail — that is the whole point of the fix. Before it,
+        // this returned `CoreError::Malformed` here.
+        let outcome = apply(&plan, &root, &NoProgress).unwrap();
+
+        let disk_bytes = std::fs::read(root.join("S").join("User-Startup")).unwrap();
+        assert!(
+            disk_bytes.starts_with(starter),
+            "the release's own Latin-1 starter text survives byte for byte, \
+             including the non-UTF-8 byte"
+        );
+        assert!(disk_bytes
+            .windows(b";BEGIN amissl".len())
+            .any(|w| w == b";BEGIN amissl"));
+
+        // The manifest's own bytes/sha256 must describe what is really on
+        // disk (Latin-1-encoded bytes), not the UTF-8 length of the Rust
+        // `String` used internally to compose it — those two only coincide
+        // here because the *new* block content happens to be plain ASCII;
+        // the starter's own non-ASCII byte is what would expose a mismatch.
+        let manifest: DistributionManifest =
+            serde_json::from_str(&std::fs::read_to_string(root.join(MANIFEST_FILE_NAME)).unwrap())
+                .unwrap();
+        let record = manifest
+            .files
+            .iter()
+            .find(|f| f.path == "S/User-Startup")
+            .unwrap();
+        assert_eq!(record.bytes, disk_bytes.len() as u64);
+        assert_eq!(record.sha256, hex_sha256(&disk_bytes));
+
+        // `ApplyOutcome::bytes` must also agree with disk reality: the sum
+        // of every ordinary copied item plus the composed file's real
+        // (Latin-1-encoded) size.
+        let copied_bytes: u64 = plan
+            .items
+            .iter()
+            .filter(|i| !i.is_dir && i.to != USER_STARTUP_PATH)
+            .map(|i| i.bytes)
+            .sum();
+        assert_eq!(outcome.bytes, copied_bytes + disk_bytes.len() as u64);
     }
 }

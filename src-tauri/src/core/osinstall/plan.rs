@@ -1243,6 +1243,16 @@ mod plan_tests {
     /// (see `mod.rs`'s fixtures comment) — this is the only way to exercise
     /// the field until a real component uses it.
     ///
+    /// Three components, not two: `alpha` and `beta` both declare lines —
+    /// review item 3 pointed out that the original two-component version
+    /// gave `beta` an empty list, so only one component ever contributed
+    /// and no test against it could actually distinguish recipe order from
+    /// request order. `gamma` carries the empty list instead, so the
+    /// "switched on with no lines contributes nothing" case still has a
+    /// component to prove itself against. `chosen` below lists them in the
+    /// reverse of their recipe declaration order, so a test asserting
+    /// recipe order can tell the two apart.
+    ///
     /// A fresh scratch directory every call (a counter, not a fixed tag):
     /// this helper is called from more than one test, several of which run
     /// in parallel threads of the same test binary (same pid) — `planned()`
@@ -1255,6 +1265,7 @@ mod plan_tests {
         std::fs::create_dir(&folder).unwrap();
         crate::core::osinstall::fixtures::media(&folder, "A", "a.adf", &[("x", b"one", 0)]);
         crate::core::osinstall::fixtures::media(&folder, "B", "b.adf", &[("y", b"two", 0)]);
+        crate::core::osinstall::fixtures::media(&folder, "C", "c.adf", &[("z", b"three", 0)]);
 
         let make = |id: &str, media: &str, from: &str, lines: &[&str]| Component {
             id: id.to_string(),
@@ -1273,19 +1284,19 @@ mod plan_tests {
         };
         let recipe = Recipe {
             release: "Test".to_string(),
-            // Declared in the reverse order they will be chosen, so a test
-            // asserting recipe order (not request order) can actually tell
-            // the two apart.
             components: vec![
                 make("alpha", "A", "x", &["Assign Alpha: SYS:"]),
-                make("beta", "B", "y", &[]),
+                make("beta", "B", "y", &["Assign Beta: SYS:"]),
+                make("gamma", "C", "z", &[]),
             ],
         };
 
         let request = InstallRequest {
             media_folder: folder,
             rom: None,
-            chosen: vec!["beta".to_string(), "alpha".to_string()],
+            // Reverse of the recipe's own declaration order — see the doc
+            // comment above.
+            chosen: vec!["gamma".to_string(), "beta".to_string(), "alpha".to_string()],
             destination: dir.join("dist"),
         };
         plan(&request, &recipe).unwrap()
@@ -1305,7 +1316,7 @@ mod plan_tests {
         assert_eq!(contribution.lines, vec!["Assign Alpha: SYS:".to_string()]);
     }
 
-    /// The negative half: `beta` is switched on (it is in `components_on`)
+    /// The negative half: `gamma` is switched on (it is in `components_on`)
     /// but declares no lines at all, so it must not appear in
     /// `user_startup` — a version that carried every on-component
     /// unconditionally, with an empty `Vec`, would still pass a test that
@@ -1313,8 +1324,25 @@ mod plan_tests {
     #[test]
     fn a_switched_on_component_with_no_lines_contributes_nothing() {
         let plan = plan_with_user_startup_components();
-        assert!(plan.components_on.iter().any(|id| id == "beta"));
-        assert!(!plan.user_startup.iter().any(|c| c.component == "beta"));
+        assert!(plan.components_on.iter().any(|id| id == "gamma"));
+        assert!(!plan.user_startup.iter().any(|c| c.component == "gamma"));
+    }
+
+    /// Review item 3: the field doc, `plan.rs`'s own comment and `apply`'s
+    /// fold all commit to recipe order, but nothing tested it — the
+    /// original fixture could not, since only one component ever
+    /// contributed. `chosen` above lists `gamma`, `beta`, `alpha` — the
+    /// reverse of the recipe's own declaration order — so this can only
+    /// pass if `user_startup` tracks the recipe, not the request.
+    #[test]
+    fn user_startup_is_carried_in_recipe_order_not_request_order() {
+        let plan = plan_with_user_startup_components();
+        let ids: Vec<&str> = plan
+            .user_startup
+            .iter()
+            .map(|c| c.component.as_str())
+            .collect();
+        assert_eq!(ids, vec!["alpha", "beta"]);
     }
 
     /// Every shipped component's `user_startup` is empty today, so
