@@ -118,7 +118,10 @@ export interface PreloadOutcome {
  */
 export type FallbackReason =
   | { reason: "foreign-rdb-embed" }
-  | { reason: "non-ascii-pfs3-names"; paths: string[]; more: number };
+  | { reason: "non-ascii-pfs3-names"; paths: string[]; more: number }
+  /** ART-122: a format that followed its own partition's copy onto the
+   *  fallback tool, because a volume is formatted and filled by one tool. */
+  | { reason: "paired-with-fallback-copy"; drive: string };
 
 /** Which tool actually performed one step, and why, if it was not the
  *  default. Present for every step the run reached — a plain `"native"` is
@@ -316,6 +319,11 @@ export function fallbackPhrase(reason: FallbackReason): Phrase {
         key: "preload.fallback.nonAsciiPfs3Names",
         params: { count: reason.paths.length + reason.more, paths: reason.paths.join(", ") },
       };
+    case "paired-with-fallback-copy":
+      return {
+        key: "preload.fallback.pairedWithFallbackCopy",
+        params: { drive: reason.drive },
+      };
   }
 }
 
@@ -329,23 +337,51 @@ export function formatCount(plan: PreloadPlan): number {
  * **before** the confirmation checkbox — the destructive operation's writer
  * changed under ART-120 and the screen never said so (fix-wave finding 3).
  *
- * Two of the three step kinds are static facts, known from the plan alone:
- * `import-filesystem` always needs `hst-imager` (`NativeFormatter` refuses
- * it unconditionally, for every card — ART-117), and `format-partition`
- * never does. A `copy-in`'s ART-113 gap — a non-ASCII AmigaDOS name on a
- * PFS3 partition — is a fact about that step's own content this file's own
- * header comment already says cannot be known until the run tries it, so
- * this names the *possibility* rather than a verdict it cannot make.
+ * One kind is a static fact, known from the plan alone: `import-filesystem`
+ * always needs `hst-imager` (`NativeFormatter` refuses it unconditionally,
+ * for every card — ART-117). A `copy-in`'s ART-113 gap — a non-ASCII
+ * AmigaDOS name on a PFS3 partition — is a fact about that step's own
+ * content this file's own header comment already says cannot be known until
+ * the run tries it, so this names the *possibility* rather than a verdict it
+ * cannot make.
+ *
+ * **A `format-partition` inherits its own partition's copy (ART-122).** The
+ * two are no longer independent: a volume is formatted and filled by one
+ * tool, so a format paired with a copy is exactly as conditional as that
+ * copy is, and saying "ART's own writer does this" against a destructive
+ * step that may well run on `hst-imager` would be the same kind of untrue
+ * label the previous fix wave added this function to remove. A format with
+ * no copy after it is unconditional, because nothing can pull it across.
+ * Which is why this takes the whole plan: the pairing is a fact about the
+ * plan, not about the step in isolation.
  */
-export function plannedToolPhrase(step: PreloadStep): Phrase {
+export function plannedToolPhrase(step: PreloadStep, plan: PreloadPlan): Phrase {
   switch (step.step) {
     case "import-filesystem":
       return { key: "preload.plan.step.tool.hstImager" };
     case "format-partition":
-      return { key: "preload.plan.step.tool.native" };
+      return hasPairedCopy(step, plan)
+        ? { key: "preload.plan.step.tool.formatConditional" }
+        : { key: "preload.plan.step.tool.native" };
     case "copy-in":
       return { key: "preload.plan.step.tool.nativeConditional" };
   }
+}
+
+/** Whether this plan fills the volume this step formats — matched on the
+ *  same two fields `commands/preload.rs::paired_copy_forces_fallback` pairs
+ *  them by, since a mismatch here would label a step the run then treats
+ *  differently. */
+function hasPairedCopy(
+  step: Extract<PreloadStep, { step: "format-partition" }>,
+  plan: PreloadPlan,
+): boolean {
+  return plan.steps.some(
+    (other) =>
+      other.step === "copy-in" &&
+      other.slot === step.slot &&
+      other.drive_name === step.drive_name,
+  );
 }
 
 /** The sentence for one planned step, for the component to render. */

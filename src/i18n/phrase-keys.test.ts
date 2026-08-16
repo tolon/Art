@@ -591,9 +591,20 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       { step: "format-partition", slot: 2, index: 1, drive_name: "DH0", volume_name: "Work" },
       { step: "copy-in", slot: 2, drive_name: "DH0", source: "E:\\tree" },
     ];
+    // This plan fills the volume it formats, so the format resolves through
+    // ART-122's conditional branch.
+    const paired = { image: "card.img", steps };
     for (const step of steps) {
-      expect(isLeafKey(plannedToolPhrase(step).key), step.step).toBe(true);
+      expect(isLeafKey(plannedToolPhrase(step, paired).key), step.step).toBe(true);
     }
+    // And once more with nothing copied in, which is the *other* branch a
+    // format can take — a plan of only the three steps above would never
+    // reach it, leaving `preload.plan.step.tool.native` unchecked here.
+    const formatOnly = steps[1];
+    expect(
+      isLeafKey(plannedToolPhrase(formatOnly, { image: "card.img", steps: [formatOnly] }).key),
+      "format-partition, unpaired",
+    ).toBe(true);
   });
 
   it("preloadBlocker: every reason a preload cannot run resolves", () => {
@@ -659,6 +670,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     const reasons: FallbackReason[] = [
       { reason: "foreign-rdb-embed" },
       { reason: "non-ascii-pfs3-names", paths: ["Locale/español"], more: 3 },
+      { reason: "paired-with-fallback-copy", drive: "DH0" },
     ];
     for (const reason of reasons) {
       expect(resolvesAtRuntime(fallbackPhrase(reason).key), reason.reason).toBe(true);

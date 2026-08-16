@@ -490,7 +490,7 @@ export function VolumePreload() {
                 the fact in the result panel. */}
             {plan.steps.map((step, index) => {
               const phrase = stepPhrase(step);
-              const toolPhrase = plannedToolPhrase(step);
+              const toolPhrase = plannedToolPhrase(step, plan);
               return (
                 <li key={index} style={{ padding: "2px 0" }}>
                   {t(phrase.key, phrase.params)}

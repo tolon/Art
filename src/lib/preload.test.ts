@@ -11,6 +11,7 @@ import {
   toRequest,
   type PartitionPick,
   type PreloadPlan,
+  type PreloadStep,
 } from "@/lib/preload";
 import type { CardReport } from "@/lib/card";
 import type { ParsedPartition } from "@/lib/hdf";
@@ -282,38 +283,70 @@ describe("stepPhrase", () => {
 describe("plannedToolPhrase", () => {
   // fix-wave finding 3: the preview must say which writer is expected to
   // run a step *before* the confirmation, not only after the run in the
-  // result panel. `import-filesystem` and `format-partition` are static
-  // facts (ART-117 always needs the fallback; a format never does); `copy-in`
-  // names the *possibility* of ART-113 rather than a verdict — see this
-  // file's own header comment on why that gap cannot be known ahead of time.
+  // result panel. `import-filesystem` is a static fact (ART-117 always needs
+  // the fallback); `copy-in` names the *possibility* of ART-113 rather than a
+  // verdict — see this file's own header comment on why that gap cannot be
+  // known ahead of time; and a `format-partition` inherits its own
+  // partition's copy (ART-122).
+  const format = {
+    step: "format-partition",
+    slot: 2,
+    index: 1,
+    drive_name: "DH0",
+    volume_name: "Work",
+  } as const;
+  const copy = {
+    step: "copy-in",
+    slot: 2,
+    drive_name: "DH0",
+    source: "E:\\tree",
+  } as const;
+  const planOf = (...steps: PreloadStep[]): PreloadPlan => ({ image: "card.img", steps });
+
   it("names hst-imager for import-filesystem, unconditionally", () => {
-    expect(
-      plannedToolPhrase({
-        step: "import-filesystem",
-        slot: 2,
-        driver: "pfs3aio.lha",
-        dostype: "PDS3",
-        name: "pfs3aio",
-      })
-    ).toEqual({ key: "preload.plan.step.tool.hstImager" });
+    const step = {
+      step: "import-filesystem",
+      slot: 2,
+      driver: "pfs3aio.lha",
+      dostype: "PDS3",
+      name: "pfs3aio",
+    } as const;
+    expect(plannedToolPhrase(step, planOf(step))).toEqual({
+      key: "preload.plan.step.tool.hstImager",
+    });
   });
 
-  it("names ART's own writer for format-partition, unconditionally", () => {
-    expect(
-      plannedToolPhrase({
-        step: "format-partition",
-        slot: 2,
-        index: 1,
-        drive_name: "DH0",
-        volume_name: "Work",
-      })
-    ).toEqual({ key: "preload.plan.step.tool.native" });
+  it("names ART's own writer for a format with nothing copied into it", () => {
+    expect(plannedToolPhrase(format, planOf(format))).toEqual({
+      key: "preload.plan.step.tool.native",
+    });
+  });
+
+  // ART-122: a volume is formatted and filled by one tool, so a format whose
+  // partition is also filled is exactly as conditional as that copy. Saying
+  // "ART's own writer does this" against a destructive step that may well run
+  // on hst-imager is the untrue label this function exists to prevent.
+  it("makes a format conditional when its own partition is filled too", () => {
+    expect(plannedToolPhrase(format, planOf(format, copy))).toEqual({
+      key: "preload.plan.step.tool.formatConditional",
+    });
+  });
+
+  it("does not let another partition's copy make a format conditional", () => {
+    const elsewhere = { ...copy, drive_name: "DH1" } as const;
+    expect(plannedToolPhrase(format, planOf(format, elsewhere))).toEqual({
+      key: "preload.plan.step.tool.native",
+    });
+    const otherSlot = { ...copy, slot: 3 } as const;
+    expect(plannedToolPhrase(format, planOf(format, otherSlot))).toEqual({
+      key: "preload.plan.step.tool.native",
+    });
   });
 
   it("names ART's own writer for copy-in, with the ASCII caveat", () => {
-    expect(
-      plannedToolPhrase({ step: "copy-in", slot: 2, drive_name: "DH0", source: "E:\\tree" })
-    ).toEqual({ key: "preload.plan.step.tool.nativeConditional" });
+    expect(plannedToolPhrase(copy, planOf(copy))).toEqual({
+      key: "preload.plan.step.tool.nativeConditional",
+    });
   });
 });
 
@@ -321,6 +354,15 @@ describe("fallbackPhrase", () => {
   it("names ART-117 with no parameters", () => {
     expect(fallbackPhrase({ reason: "foreign-rdb-embed" })).toEqual({
       key: "preload.fallback.foreignRdbEmbed",
+    });
+  });
+
+  // ART-122: the format's reason is the pairing, not the copy's own reason —
+  // "a name is not ASCII" is not a fact about formatting a partition.
+  it("names the drive whose copy pulled a format across, for ART-122", () => {
+    expect(fallbackPhrase({ reason: "paired-with-fallback-copy", drive: "DH0" })).toEqual({
+      key: "preload.fallback.pairedWithFallbackCopy",
+      params: { drive: "DH0" },
     });
   });
 

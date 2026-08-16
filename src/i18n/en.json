@@ -1762,6 +1762,7 @@
         "tool": {
           "native": "ART's own writer does this.",
           "nativeConditional": "ART's own writer does this — unless a name inside it is not plain ASCII, in which case hst-imager does it instead, and the result says so.",
+          "formatConditional": "ART's own writer does this — unless a name in the folder being copied into this volume is not plain ASCII, in which case hst-imager formats it too: a volume is formatted and filled by one tool, never half by each.",
           "hstImager": "hst-imager does this — embedding a driver into this card's existing RDB in place is something only it can do safely (ART-117)."
         }
       }
@@ -1782,7 +1783,8 @@
     "fallback": {
       "foreignRdbEmbed": "hst-imager did this step: embedding a driver into this card's existing RDB in place means editing a partition table ART did not build, which ART's own writer cannot do safely.",
       "nonAsciiPfs3Names_one": "hst-imager did this step: {{count}} name is not ASCII, and this version of libpfs3 cannot write it correctly ({{paths}}).",
-      "nonAsciiPfs3Names_other": "hst-imager did this step: {{count}} names are not ASCII, and this version of libpfs3 cannot write them correctly ({{paths}})."
+      "nonAsciiPfs3Names_other": "hst-imager did this step: {{count}} names are not ASCII, and this version of libpfs3 cannot write them correctly ({{paths}}).",
+      "pairedWithFallbackCopy": "hst-imager did this step: the copy into {{drive}} has to run on it, and a volume is formatted and filled by one tool — hst-imager cannot write into a volume ART's own writer formatted."
     },
     "result": {
       "heading": "Done",

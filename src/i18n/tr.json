@@ -1762,6 +1762,7 @@
         "tool": {
           "native": "Bunu ART'ın kendi yazıcısı yapar.",
           "nativeConditional": "Bunu ART'ın kendi yazıcısı yapar — içindeki bir ad düz ASCII değilse hst-imager onun yerine yapar, sonuç bunu söyler.",
+          "formatConditional": "Bunu ART'ın kendi yazıcısı yapar — bu birime kopyalanacak klasördeki bir ad düz ASCII değilse biçimlendirmeyi de hst-imager yapar: bir birimi tek bir araç biçimlendirip doldurur, yarısını biri yarısını diğeri asla.",
           "hstImager": "Bunu hst-imager yapar — bir sürücüyü kartın mevcut RDB'sine yerinde gömmek, güvenle yalnızca onun yapabildiği bir şey (ART-117)."
         }
       }
@@ -1782,7 +1783,8 @@
     "fallback": {
       "foreignRdbEmbed": "Bu adımı hst-imager yaptı: kartın mevcut RDB'sine yerinde bir sürücü gömmek, ART'ın oluşturmadığı bir bölüm tablosunu düzenlemeyi gerektirir; ART'ın kendi yazıcısı bunu güvenle yapamaz.",
       "nonAsciiPfs3Names_one": "Bu adımı hst-imager yaptı: {{count}} ad ASCII değil ve libpfs3'ün bu sürümü bunu doğru yazamıyor ({{paths}}).",
-      "nonAsciiPfs3Names_other": "Bu adımı hst-imager yaptı: {{count}} ad ASCII değil ve libpfs3'ün bu sürümü bunları doğru yazamıyor ({{paths}})."
+      "nonAsciiPfs3Names_other": "Bu adımı hst-imager yaptı: {{count}} ad ASCII değil ve libpfs3'ün bu sürümü bunları doğru yazamıyor ({{paths}}).",
+      "pairedWithFallbackCopy": "Bu adımı hst-imager yaptı: {{drive}} birimine yapılacak kopyalama onun üzerinden yürümek zorunda ve bir birimi tek bir araç biçimlendirip doldurur — hst-imager, ART'ın kendi yazıcısının biçimlendirdiği bir birime yazamıyor."
     },
     "result": {
       "heading": "Bitti",
