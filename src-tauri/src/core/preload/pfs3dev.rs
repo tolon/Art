@@ -5,41 +5,65 @@
 //! `FileBlockDevice` uses a `Mutex<File>`, and so do we), and it addresses in
 //! `u64` where ART uses `u32`.
 //!
-//! **The point is not tidiness.** PFS3 has no journalling — the on-disk
-//! format has none, and neither does the original AmigaOS driver. Using
-//! libpfs3's own [`FileBlockDevice`](libpfs3::io::FileBlockDevice) would leave
-//! an interrupted install as an unknown volume. Through ART's device, every
-//! PFS3 block write goes into [`core::volume::journal`](crate::core::volume::journal):
-//! a block that was not saved cannot be written, and a rollback restores the
-//! image byte for byte.
-//!
 //! Limit, written down rather than discovered: ART's `total_blocks()` is
 //! `u32`, so 2 TB at 512-byte blocks — far beyond any card. A `u64` block
 //! number that does not fit `u32` is refused with
 //! [`libpfs3::error::Error::BlockOutOfRange`], never truncated.
 //!
-//! ## Why the device is borrowed, not owned
+//! ## What crash safety this actually provides — and does not
+//!
+//! PFS3 has no journalling of its own — the on-disk format has none, and
+//! neither does the original AmigaOS driver. That is still true, but it does
+//! **not** mean `core/volume/journal.rs` is underneath a PFS3 write: journalling
+//! needs the block set up front (`Journalled::begin(device, image, offset,
+//! description, blocks: &[u32])` saves exactly those blocks, fsyncs, and then
+//! permits writing exactly those and no others — the shape Stage W's own
+//! writer uses, because it plans its `BlockSet` before touching anything).
+//! libpfs3 decides which blocks to touch as it walks the filesystem and
+//! cannot supply that list up front, so there is no journal here. An earlier
+//! draft of this module claimed one anyway; that claim was wrong and has been
+//! withdrawn.
+//!
+//! What this module actually guarantees is narrower and still real: **writes
+//! cannot leave the partition being written.** [`ArtBlockDevice`] wraps
+//! whatever [`BlockDeviceMut`] it is given, and for the real target —
+//! [`FileRegionMut`](crate::core::volume::device::FileRegionMut) — that device
+//! refuses a block number past its own end rather than clamping it (see its
+//! own doc comment; `core/fat32.rs::Region` gives the boot partition the same
+//! guarantee). So a PFS3 write, however libpfs3 sequences it, cannot reach the
+//! neighbouring partition, the RDB, or the FAT32 area where the Amiga's first
+//! RDB begins — not because this adapter checks it, but because the device
+//! underneath already does, for every write, one block at a time.
+//!
+//! What that does *not* cover: G5 (the route that drives this) always
+//! **formats before it fills** — the partition's prior contents are already
+//! forfeit the moment the user confirms that step, so there is nothing there
+//! worth protecting with a rollback. An interrupted run leaves an
+//! **incomplete** volume, which G5 detects and reformats and redoes from
+//! scratch. That is not the same thing as a corrupted volume with a recovery
+//! path, and this module makes no claim of one — there is no rollback,
+//! because there is nothing saved to roll back to.
+//!
+//! The one case where crash safety would genuinely matter — writing into an
+//! **existing, already-populated** PFS3 volume without formatting it first —
+//! is exactly the case this module cannot make safe, for the same reason it
+//! cannot journal: libpfs3 does not hand over the block set in advance. ART
+//! has no answer for that case, so it is refused rather than half-supported.
+//! Enforcing that refusal is Task 9's job; this paragraph is only the record
+//! of why it has to exist.
+//!
+//! ## Why the device is owned, not borrowed
 //!
 //! `libpfs3::volume::Volume::from_device` takes `Box<dyn BlockDevice>`, which
 //! — like every trait object behind a `Box` with no explicit lifetime — is
-//! `Box<dyn BlockDevice + 'static>`. [`ArtBlockDevice`] instead borrows ART's
-//! device (`Mutex<&'a mut D>`), because the device it has to wrap is itself a
-//! borrow: [`core::volume::journal::Journalled`](crate::core::volume::journal::Journalled)
-//! hands out `&'a mut dyn BlockDeviceMut` scoped to one operation, and that
-//! borrow is exactly what has to reach every PFS3 write for the journal to see
-//! it. A `'static`-only adapter would have to *own* the device, which would
-//! mean copying it out of the journal's guard — the one thing that would
-//! defeat this module's reason for existing.
-//!
-//! The consequence is real and left for whichever task next drives an actual
-//! `Volume`/`Writer` through this adapter: `ArtBlockDevice<'a, D>` cannot be
-//! boxed into `Volume::from_device`'s `Box<dyn BlockDevice>` for any `'a`
-//! shorter than `'static`, which a journalled operation's borrow always is.
-//! That task will need either a libpfs3 entry point that accepts a borrowed
-//! device, or a restructuring on ART's side so the whole PFS3 operation runs
-//! inside the borrow's scope without ever needing to erase its lifetime. This
-//! module only builds and proves the adapter itself; it does not yet drive a
-//! `Volume` through it.
+//! `Box<dyn BlockDevice + 'static>`. [`ArtBlockDevice`] owns its device
+//! (`Mutex<D>`, `D: BlockDeviceMut`) rather than borrowing it, which is what
+//! lets a real one — `FileRegionMut`, which owns its `File` and carries no
+//! lifetime of its own — satisfy that bound with nothing further to bridge.
+//! The test
+//! `the_owned_adapter_composes_with_libpfs3s_volume_from_device` proves the
+//! composition actually compiles and runs, not just that the types look
+//! right on paper.
 //!
 //! ## What `flush` maps to
 //!
@@ -60,17 +84,20 @@ use libpfs3::io::BlockDevice as Pfs3BlockDevice;
 use crate::core::error::CoreError;
 use crate::core::volume::BlockDeviceMut;
 
-/// Wraps `&'a mut D` so `libpfs3` can drive it through `&self`, the way its
-/// own [`FileBlockDevice`](libpfs3::io::FileBlockDevice) uses a `Mutex<File>`.
+/// Wraps `D` so `libpfs3` can drive it through `&self`, the way its own
+/// [`FileBlockDevice`](libpfs3::io::FileBlockDevice) uses a `Mutex<File>`.
 ///
-/// See the module docs for why this borrows rather than owns the device, and
-/// for what that means for `Volume::from_device`.
-pub struct ArtBlockDevice<'a, D: ?Sized> {
-    inner: Mutex<&'a mut D>,
+/// See the module docs for why this owns rather than borrows the device, and
+/// for what that buys against `Volume::from_device`.
+pub struct ArtBlockDevice<D> {
+    inner: Mutex<D>,
 }
 
-impl<'a, D: ?Sized> ArtBlockDevice<'a, D> {
-    pub fn new(device: &'a mut D) -> Self {
+impl<D> ArtBlockDevice<D>
+where
+    D: BlockDeviceMut,
+{
+    pub fn new(device: D) -> Self {
         Self {
             inner: Mutex::new(device),
         }
@@ -80,7 +107,7 @@ impl<'a, D: ?Sized> ArtBlockDevice<'a, D> {
     /// propagated — the same choice ART's other single-process devices make
     /// (`core::volume::device::FileRegion`): a panicking reader elsewhere
     /// must not turn every subsequent PFS3 block access into an error too.
-    fn lock(&self) -> MutexGuard<'_, &'a mut D> {
+    fn lock(&self) -> MutexGuard<'_, D> {
         self.inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -100,9 +127,9 @@ fn to_pfs3_error(err: CoreError) -> Pfs3Error {
     Pfs3Error::Io(std::io::Error::other(err.to_string()))
 }
 
-impl<'a, D> Pfs3BlockDevice for ArtBlockDevice<'a, D>
+impl<D> Pfs3BlockDevice for ArtBlockDevice<D>
 where
-    D: BlockDeviceMut + ?Sized,
+    D: BlockDeviceMut,
 {
     fn read_block(&self, block: u64, buf: &mut [u8]) -> libpfs3::error::Result<()> {
         let n = block_number(block)?;
@@ -110,10 +137,13 @@ where
     }
 
     /// Loops over [`read_block`](Self::read_block) rather than reading the
-    /// whole span in one call, so every block still passes through ART's own
-    /// device — the journal (once this adapter is driving one) has to see
-    /// each block individually, and a bulk read/write that bypassed that
-    /// would defeat the reason this adapter exists.
+    /// whole span in one call, so every block still passes through the
+    /// underlying device's own bounds check individually. A raw multi-block
+    /// read that computed one offset and one length from `count` could reach
+    /// past the partition's own end in a single call; looping through the
+    /// single-block path means that boundary is enforced block by block,
+    /// exactly where the device (`FileRegionMut::read_block`, for the real
+    /// target) already enforces it.
     fn read_blocks(&self, block: u64, count: u32, buf: &mut [u8]) -> libpfs3::error::Result<()> {
         let block_size = self.block_size() as usize;
         for i in 0..u64::from(count) {
@@ -151,9 +181,15 @@ where
     }
 
     /// See [`read_blocks`](Self::read_blocks): looping over
-    /// [`write_block`](Self::write_block) is the entire point of this
-    /// adapter, not an implementation detail — it is what lets a journal
-    /// underneath see every block a bulk write touches.
+    /// [`write_block`](Self::write_block) is what keeps the partition
+    /// boundary enforced for every block a bulk write touches, not an
+    /// implementation detail. A write that starts in range and runs past the
+    /// partition's end fails on the first out-of-range block rather than
+    /// silently landing bytes beyond it — the blocks already written stay
+    /// written, which is fine under this module's actual safety story (see
+    /// the module docs): G5 always formats before it fills, so a partially
+    /// written volume is exactly as disposable as an unwritten one, and gets
+    /// reformatted rather than resumed.
     fn write_blocks(&self, block: u64, count: u32, data: &[u8]) -> libpfs3::error::Result<()> {
         let block_size = self.block_size() as usize;
         for i in 0..u64::from(count) {
@@ -183,13 +219,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
     use std::path::PathBuf;
 
     use super::*;
-    use crate::core::volume::device::VecDevice;
-    use crate::core::volume::journal::Journalled;
-    use crate::core::volume::BlockDevice;
+    use crate::core::volume::device::{FileRegionMut, VecDevice};
     use libpfs3::io::BlockDevice as Pfs3Device;
 
     /// The repository's own convention (`core::volume::device::tests::scratch`,
@@ -204,8 +237,8 @@ mod tests {
 
     #[test]
     fn the_adapter_reads_and_writes_through_arts_own_device() {
-        let mut backing = VecDevice::new(vec![0u8; 512 * 64], 512).unwrap();
-        let device = ArtBlockDevice::new(&mut backing);
+        let backing = VecDevice::new(vec![0u8; 512 * 64], 512).unwrap();
+        let device = ArtBlockDevice::new(backing);
 
         device.write_block(3, &[0xAB; 512]).unwrap();
         let mut buf = [0u8; 512];
@@ -215,121 +248,126 @@ mod tests {
 
     #[test]
     fn a_block_past_the_end_is_an_error_not_a_short_write() {
-        let mut backing = VecDevice::new(vec![0u8; 512 * 4], 512).unwrap();
-        let device = ArtBlockDevice::new(&mut backing);
+        let backing = VecDevice::new(vec![0u8; 512 * 4], 512).unwrap();
+        let device = ArtBlockDevice::new(backing);
         assert!(device.write_block(9, &[0; 512]).is_err());
-    }
-
-    /// A `BlockDeviceMut` whose every write goes through ART's own journal
-    /// (`core::volume::journal::Journalled`) rather than a raw buffer poke.
-    /// `journal_holds` records a block only once `Journalled::write_block` —
-    /// which refuses any block it did not already save — has accepted it, so
-    /// it can only be true if the block's previous contents genuinely reached
-    /// the journal before the new bytes were written.
-    ///
-    /// This is what actually gets mutation-checked here: if
-    /// `ArtBlockDevice::write_block` were changed to bypass `D::write_block`
-    /// (writing into some buffer of its own instead of delegating), this
-    /// fixture's journalling logic would never run and `journal_holds` would
-    /// stay false.
-    struct JournallingDevice {
-        _dir: PathBuf,
-        image: PathBuf,
-        backing: VecDevice,
-        journalled_before_write: HashSet<u32>,
-    }
-
-    impl JournallingDevice {
-        /// `tag` must be unique per test: `scratch` names its directory from
-        /// the tag and this process's id alone, and two tests sharing a tag
-        /// would race on the same file when the harness runs them in
-        /// parallel (as it does by default) — each grabbing the other's
-        /// half-written image mid-`remove_dir_all`/`create_dir_all`.
-        fn new(tag: &str) -> Self {
-            let dir = scratch(tag);
-            let image = dir.join("disk.img");
-            let bytes = vec![0u8; 512 * 16];
-            std::fs::write(&image, &bytes).unwrap();
-            Self {
-                _dir: dir,
-                image,
-                backing: VecDevice::new(bytes, 512).unwrap(),
-                journalled_before_write: HashSet::new(),
-            }
-        }
-
-        fn journal_holds(&self, block: u32) -> bool {
-            self.journalled_before_write.contains(&block)
-        }
-    }
-
-    impl BlockDevice for JournallingDevice {
-        fn block_size(&self) -> usize {
-            self.backing.block_size()
-        }
-
-        fn total_blocks(&self) -> u32 {
-            self.backing.total_blocks()
-        }
-
-        fn read_block(&self, n: u32, buf: &mut [u8]) -> crate::core::error::CoreResult<()> {
-            self.backing.read_block(n, buf)
-        }
-    }
-
-    impl BlockDeviceMut for JournallingDevice {
-        fn write_block(&mut self, n: u32, buf: &[u8]) -> crate::core::error::CoreResult<()> {
-            let mut op = Journalled::begin(&mut self.backing, &self.image, 0, "test write", &[n])?;
-            op.write_block(n, buf)?;
-            op.commit()?;
-            // Only reached once the journal accepted and completed the write
-            // — `Journalled::write_block` refuses any block `begin` did not
-            // already save.
-            self.journalled_before_write.insert(n);
-            Ok(())
-        }
-
-        fn sync(&mut self) -> crate::core::error::CoreResult<()> {
-            self.backing.sync()
-        }
-    }
-
-    fn journalled_device(tag: &str) -> JournallingDevice {
-        JournallingDevice::new(tag)
-    }
-
-    /// PFS3 has no journalling of its own — the format has none, and neither
-    /// does the original AmigaOS driver. ART's journal is therefore the only
-    /// crash safety a PFS3 write can have, which is the whole reason this
-    /// adapter exists instead of libpfs3's own FileBlockDevice.
-    #[test]
-    fn a_write_through_a_journalled_device_is_journalled() {
-        let mut journalled = journalled_device("single-write");
-        {
-            let device = ArtBlockDevice::new(&mut journalled);
-            device.write_block(2, &[0x11; 512]).unwrap();
-        }
-        assert!(
-            journalled.journal_holds(2),
-            "block 2 was saved before being written"
-        );
     }
 
     #[test]
     fn a_block_number_beyond_u32_is_refused_rather_than_truncated() {
-        let mut backing = VecDevice::new(vec![0u8; 512 * 4], 512).unwrap();
-        let device = ArtBlockDevice::new(&mut backing);
+        let backing = VecDevice::new(vec![0u8; 512 * 4], 512).unwrap();
+        let device = ArtBlockDevice::new(backing);
         assert!(device
             .read_block(u64::from(u32::MAX) + 1, &mut [0u8; 512])
             .is_err());
     }
 
-    // ---- the parts the brief's four tests do not reach ----
+    // ---- the actual safety property: writes cannot leave the partition ----
+
+    /// The property this module actually guarantees, proved against a real
+    /// [`FileRegionMut`] rather than the in-memory `VecDevice`: an image with
+    /// a "neighbouring partition" laid out right after the one being written,
+    /// the way an RDB or a FAT32 boot area would sit next to it on a real
+    /// card. A write past the region's own end is refused, and the bytes on
+    /// both sides — the successful write just inside the boundary, and every
+    /// block belonging to the next partition — are exactly what they were.
+    #[test]
+    fn a_write_past_the_regions_end_cannot_reach_the_next_partition() {
+        let dir = scratch("bounded-writes");
+        let image = dir.join("card.img");
+
+        // Eight blocks: 0..4 are "our" partition, 4..8 are the next one.
+        // Each block is stamped with its own number so a write landing in
+        // the wrong place is obvious rather than merely different.
+        let mut bytes = vec![0u8; 512 * 8];
+        for block in 0..8u8 {
+            bytes[block as usize * 512] = block;
+        }
+        std::fs::write(&image, &bytes).unwrap();
+
+        let region = FileRegionMut::open(&image, 0, 4 * 512, 512).unwrap();
+        let device = ArtBlockDevice::new(region);
+
+        // In range: lands.
+        device.write_block(3, &[0xAA; 512]).unwrap();
+        // One block past this region's own end — refused, not clamped and
+        // not silently written into the next partition's first block.
+        assert!(device.write_block(4, &[0xBB; 512]).is_err());
+
+        drop(device);
+        let after = std::fs::read(&image).unwrap();
+        assert_eq!(after[3 * 512], 0xAA, "the in-range write landed");
+        for block in 4..8usize {
+            assert_eq!(
+                after[block * 512],
+                block as u8,
+                "block {block}, in the next partition, must be untouched"
+            );
+        }
+    }
+
+    /// The same property through the bulk path: a `write_blocks` call that
+    /// starts inside the region and asks for more blocks than it has must
+    /// not spill into what comes after it.
+    #[test]
+    fn a_bulk_write_that_would_overrun_the_region_touches_nothing_past_it() {
+        let dir = scratch("bounded-bulk-write");
+        let image = dir.join("card.img");
+
+        let mut bytes = vec![0u8; 512 * 8];
+        for block in 0..8u8 {
+            bytes[block as usize * 512] = block;
+        }
+        std::fs::write(&image, &bytes).unwrap();
+
+        let region = FileRegionMut::open(&image, 0, 4 * 512, 512).unwrap();
+        let device = ArtBlockDevice::new(region);
+
+        // Blocks 2, 3, 4: only 2 and 3 belong to this region.
+        let err = device.write_blocks(2, 3, &[0xCC; 512 * 3]);
+        assert!(err.is_err());
+
+        drop(device);
+        let after = std::fs::read(&image).unwrap();
+        for block in 4..8usize {
+            assert_eq!(
+                after[block * 512],
+                block as u8,
+                "block {block}, in the next partition, must be untouched"
+            );
+        }
+    }
+
+    // ---- ownership: the composition that could not be written before ----
+
+    /// Confirms `ArtBlockDevice` really does satisfy `Box<dyn BlockDevice>`'s
+    /// implicit `'static` bound, by handing one to libpfs3's own entry point
+    /// rather than only implementing the trait in isolation. The image is
+    /// blank, so `Volume::from_device` is expected to fail parsing a root
+    /// block that was never written — the point here is that this compiles
+    /// and runs at all, which the earlier borrowed-device shape could not do.
+    #[test]
+    fn the_owned_adapter_composes_with_libpfs3s_volume_from_device() {
+        let dir = scratch("compose-with-volume");
+        let image = dir.join("disk.hdf");
+        std::fs::write(&image, vec![0u8; 512 * 16]).unwrap();
+
+        let region = FileRegionMut::open(&image, 0, 512 * 16, 512).unwrap();
+        let device = ArtBlockDevice::new(region);
+
+        let result = libpfs3::volume::Volume::from_device(Box::new(device));
+        assert!(
+            result.is_err(),
+            "a blank image is not a PFS3 volume — the point is that this call compiles at all"
+        );
+    }
+
+    // ---- the rest ----
 
     #[test]
     fn read_blocks_and_write_blocks_loop_over_the_single_block_methods() {
-        let mut backing = VecDevice::new(vec![0u8; 512 * 8], 512).unwrap();
-        let device = ArtBlockDevice::new(&mut backing);
+        let backing = VecDevice::new(vec![0u8; 512 * 8], 512).unwrap();
+        let device = ArtBlockDevice::new(backing);
 
         let mut payload = vec![0u8; 512 * 3];
         payload[0] = 1;
@@ -347,26 +385,10 @@ mod tests {
         assert_eq!(one[0], 3);
     }
 
-    /// The same property the single-block test proves, but for the bulk
-    /// path: a `write_blocks` that shortcut past `D::write_block` (writing
-    /// the span directly instead of looping) would leave the journal blind
-    /// to some or all of blocks 5, 6 and 7.
-    #[test]
-    fn a_bulk_write_through_a_journalled_device_journals_every_block() {
-        let mut journalled = journalled_device("bulk-write");
-        {
-            let device = ArtBlockDevice::new(&mut journalled);
-            device.write_blocks(5, 3, &[0x22; 512 * 3]).unwrap();
-        }
-        assert!(journalled.journal_holds(5));
-        assert!(journalled.journal_holds(6));
-        assert!(journalled.journal_holds(7));
-    }
-
     #[test]
     fn flush_reaches_the_underlying_devices_sync() {
-        let mut backing = VecDevice::new(vec![0u8; 512 * 4], 512).unwrap();
-        let device = ArtBlockDevice::new(&mut backing);
+        let backing = VecDevice::new(vec![0u8; 512 * 4], 512).unwrap();
+        let device = ArtBlockDevice::new(backing);
         // `VecDevice::sync` is a no-op that always succeeds; this proves the
         // call reaches it rather than being swallowed before it gets there.
         assert!(device.flush().is_ok());
@@ -374,8 +396,8 @@ mod tests {
 
     #[test]
     fn block_size_is_reported_in_bytes_not_blocks() {
-        let mut backing = VecDevice::new(vec![0u8; 1024 * 4], 1024).unwrap();
-        let device = ArtBlockDevice::new(&mut backing);
+        let backing = VecDevice::new(vec![0u8; 1024 * 4], 1024).unwrap();
+        let device = ArtBlockDevice::new(backing);
         assert_eq!(device.block_size(), 1024);
     }
 }
