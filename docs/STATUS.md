@@ -771,7 +771,7 @@ and it leaves the AI layer more engine to describe when its turn comes.
 
 #### Aminet Stage A — where it stands
 
-`core/sources` is built and tested (115 tests, all driven by an in-memory
+`core/sources` is built and tested (167 tests, all driven by an in-memory
 mirror, no socket opened):
 
 | Module | What it does |

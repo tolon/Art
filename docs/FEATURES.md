@@ -333,11 +333,11 @@ Both are designed — [design-software-sources.md](design-software-sources.md),
 | AI plan generation + Plan Cards | §45.5 Stage B | ⏳ |
 | AI full scenarios | §45.5 Stage C | ⏳ |
 
-The Aminet rows are ✅ apart from the AI layer. What is built and tested: Built and tested:
+The Aminet rows are ✅ apart from the AI layer. What is built and tested:
 `core/sources` — index and readme parsing, catalog store, search, version
-resolution, mirror failover, the download trust pipeline and catalog sync (122
+resolution, mirror failover, the download trust pipeline and catalog sync (167
 tests); `net/http_mirror.rs`, the `ureq`-backed transport (16 tests);
-`commands/sources.rs` (6 tests); `src/lib/sources.ts` and Aminet Studio at
+`commands/sources.rs` (12 tests); `src/lib/sources.ts` and Aminet Studio at
 `/aminet`. Core tests run against an in-memory mirror and the transport tests
 against a localhost socket, so CI never leaves the machine.
 
