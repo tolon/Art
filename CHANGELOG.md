@@ -63,6 +63,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Header stripped" was true and meaningless; it now says either that the ROM
   was decoded with your key, or that the key was not found beside it.
 
+#### Verified
+- Against a real Amiga Forever collection: 25 of the 41 ROMs in it are now
+  named with the machine they belong to, each agreeing with Cloanto's own
+  filename, while the boot and keyboard ROMs sitting beside them claim
+  nothing. The decoding was checked with a genuine `rom.key` and a genuine
+  ROM rather than a made-up pair.
+
 ### ART knows your Kickstarts now (2026-08-16)
 
 #### Fixed

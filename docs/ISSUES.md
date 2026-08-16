@@ -579,11 +579,30 @@ synthetic key — recovering `Kickstart 40.68 (A1200)` proves the decode
 produced the original bytes, not merely different ones),
 `a_cloanto_rom_with_no_key_is_named_as_one_rather_than_guessed_at`,
 `an_encrypted_rom_with_no_key_is_refused_rather_than_written_to_a_card`,
-`an_encrypted_rom_reaches_the_card_decoded`. **Not yet run against a real
-Amiga Forever ROM**: the user's licensed copies are on their phone, not on
-this machine — no Cloanto-headered file and no `rom.key` exists anywhere under
-`E:miga`, the Amiga Forever installation or the `.rp9` packages, all of which
-were searched.
+`an_encrypted_rom_reaches_the_card_decoded`.
+
+**Then verified against genuine material, which took a turn worth recording.**
+The user's Amiga Forever ROMs turned out to be on this machine after all, at
+`E:\amiga\shared\rom` — and they are **not encrypted**: every one is a plain
+262 144 or 524 288 bytes, as are the 39 on the original Amiga Forever DVD
+image (`E:\amiga\AmigaForever-DVD.iso`). So this user's licensed ROMs already
+work through the ordinary path, and the identification table proves it: **25
+of the 41 files in that folder are named with their machine**, every one
+agreeing with Cloanto's own filename — `amiga-os-310-a4000t.rom` gives
+`Kickstart 40.70 (A4000T)`, `amiga-os-310-a600.rom` gives
+`Kickstart 40.63 (A500/A600/A2000)`, and the CD32 main and extended ROMs are
+told apart — while the boot ROMs, the keyboard MCU and the bonus ROMs in the
+same folder correctly claim nothing. That is a **second, independent
+collection** (Cloanto's own dumps, a different provenance from the TOSEC-named
+set [ART-104](#fixed) was measured on) agreeing with the Remus table.
+
+The DVD does carry a real `rom.key` (1426 bytes), which made the decode
+testable against genuine material rather than a synthetic key: that key, the
+user's own plain `amiga-os-310-a1200.rom` encrypted with it (524 299 bytes —
+exactly Amiga Forever's encrypted form), and `identify_rom` answering
+`Kickstart 40.68 (A1200)`. The original bytes, recovered with the licence key
+the user owns. The extracted key and the ROM copy were deleted afterwards;
+neither is in the repository and neither ever will be.
 
 **ART-104** 🟡 ✅ **ART's ROM database matched none of the user's 29 Kickstart
 dumps** — *found 2026-08-14 planning a card with the real material; fixed
