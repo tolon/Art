@@ -287,7 +287,7 @@ lives *inside* `core/`:
 
 | Method | Native implementation |
 |---|---|
-| `import_filesystem` | ART already does this — G4's `create_rdb_layout` |
+| `import_filesystem` | **Refused — corrected 2026-08-16, see below** |
 | `format_partition` | `libpfs3::format::format_with_size` for PDS3; ART's own for `DOS\1`…`DOS\7` |
 | `copy_in` | reads the host tree and its `.uaem` sidecars; writes through libpfs3 (PFS3) or `core/volume/write` (FFS) |
 
@@ -309,6 +309,33 @@ The two traits are close enough that the adapter is small:
 `core/preload/pfs3dev.rs` wraps an ART `BlockDeviceMut` in a `Mutex` — which is
 what libpfs3's own `FileBlockDevice` does — widens the block number and maps
 the error type.
+
+### Corrected 2026-08-16: `import_filesystem` is refused, not delegated
+
+The table above claimed this method delegates to G4's `create_rdb_layout`. It
+cannot. `create_rdb_layout(total_bytes, partitions, file_systems)` builds an RDB
+**from scratch** on hardcoded LBA geometry — 16 heads, 63 sectors — and does not
+edit an existing one. Real cards disagree: CaffeineOS's RDB reports 12 heads and
+256 sectors. Writing a fresh 16/63 RDB over an existing area would invalidate
+every partition already in it. Refusing is the only safe answer, and the native
+formatter refuses by name.
+
+**The gap this leaves is narrower than it first appears**, and the boundary is
+worth stating precisely:
+
+- **A card ART built itself already carries its drivers.** `core/card/build.rs`
+  lays an RDB at the start of every Amiga area, and G4 embeds FSHD/LSEG at build
+  time. Nothing needs importing afterwards.
+- **An FFS partition needs no driver at all** — Kickstart carries FFS. This is
+  why the user's own `screen-test.img` has a correct two-step preload plan with
+  no embed step.
+- **What is genuinely unsupported is embedding a driver into a *foreign* card's
+  existing RDB** — a card ART did not build, whose PFS3 partitions need
+  `pfs3aio` put into an RDB laid out by somebody else. `hst-imager` does that,
+  and is named in the refusal.
+
+An RDB-in-place driver-embed path is real future work, filed rather than
+implied.
 
 ### Corrected 2026-08-16: this section claimed journalling it cannot have
 
