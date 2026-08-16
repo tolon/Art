@@ -41,16 +41,12 @@ pub enum Pairing {
     /// hashes are.
     Paired,
     /// A different ROM, and the tree's requirement holds against it.
-    Suitable {
-        #[serde(rename = "rom")]
-        rom: String,
-    },
+    Suitable { rom: String },
     /// The tree needs a newer Kickstart than the card carries.
     Unsuitable {
         needs: u16,
         /// `None` when the card's ROM states no version at all.
         found: Option<u16>,
-        #[serde(rename = "rom")]
         rom: String,
     },
     /// One of the two sides did not answer. **Never rendered as a pass.**
@@ -266,6 +262,55 @@ mod tests {
             Pairing::Suitable { rom } => assert_eq!(rom, "unhashed.rom"),
             other => panic!("an empty hash matches nothing: {other:?}"),
         }
+    }
+
+    /// What `src/lib/preload.ts`'s `Pairing` union has to match, pinned.
+    ///
+    /// The two `#[serde(rename = "rom")]` attributes deleted here were no-ops
+    /// — a container's `rename_all` renames an enum's *variants*, not a
+    /// struct-variant's fields — so they implied a rule that was never in
+    /// force. This is the rule, in the only form that can fail: the variant
+    /// tags are kebab-case, and every field reaches the screen under the name
+    /// the frontend reads it by.
+    #[test]
+    fn the_wire_shape_is_what_the_frontend_reads() {
+        let json = |verdict: Pairing| serde_json::to_value(verdict).unwrap();
+
+        assert_eq!(
+            json(Pairing::Paired),
+            serde_json::json!({ "verdict": "paired" })
+        );
+        assert_eq!(
+            json(Pairing::Suitable {
+                rom: "kick.rom".into()
+            }),
+            serde_json::json!({ "verdict": "suitable", "rom": "kick.rom" })
+        );
+        assert_eq!(
+            json(Pairing::Unsuitable {
+                needs: 47,
+                found: Some(40),
+                rom: "kick.rom".into()
+            }),
+            serde_json::json!({
+                "verdict": "unsuitable",
+                "needs": 47,
+                "found": 40,
+                "rom": "kick.rom"
+            })
+        );
+        assert_eq!(
+            json(Pairing::NotChecked {
+                why: NotCheckedReason::CardRecordsNoRom
+            }),
+            serde_json::json!({ "verdict": "not-checked", "why": "card-records-no-rom" })
+        );
+        assert_eq!(
+            json(Pairing::NotChecked {
+                why: NotCheckedReason::TreeRecordsNoRom
+            }),
+            serde_json::json!({ "verdict": "not-checked", "why": "tree-records-no-rom" })
+        );
     }
 
     /// A missing answer is a missing answer, never a pass (§89).

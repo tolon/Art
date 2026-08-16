@@ -702,17 +702,33 @@ mod tests {
         assert_eq!(read.source.kickstart_file.as_deref(), Some("kick.rom"));
     }
 
-    /// A manifest written before this field existed still reads.
+    /// A manifest written before these fields existed still reads.
+    ///
+    /// **Both** of G9's additions come out, not one: every manifest ART has
+    /// written to date lacks both, so a dropped `#[serde(default)]` on either
+    /// would make `read_manifest` fail wholesale on all of them — taking G8's
+    /// health check and `card_verify_manifest` down with it. Removing one key
+    /// and leaving the other tested the attribute on one field and nothing at
+    /// all on the other.
+    ///
+    /// **What this cannot pin, measured rather than assumed:** deleting
+    /// `#[serde(default)]` from either field does *not* make this fail —
+    /// serde's derive already treats a missing `Option<T>` as `None`. The
+    /// attributes are documentation of intent, and this test's real subject is
+    /// the shape of the file: a `SourceFacts` written before G9 reads back
+    /// whole, with both new facts absent rather than wrong. Change either
+    /// field to a non-`Option` type and the attribute starts carrying the
+    /// weight this test then measures.
     #[test]
     fn an_older_manifest_without_the_field_still_reads() {
         let mut value = serde_json::to_value(manifest()).unwrap();
-        value["source"]
-            .as_object_mut()
-            .unwrap()
-            .remove("kickstart_file");
+        let source = value["source"].as_object_mut().unwrap();
+        source.remove("kickstart_file");
+        source.remove("kickstart_stated_major");
         let read: CardManifest = serde_json::from_value(value).unwrap();
 
         assert_eq!(read.source.kickstart_file, None);
+        assert_eq!(read.source.kickstart_stated_major, None);
     }
 
     /// It has to survive a trip through the file it is written to.
