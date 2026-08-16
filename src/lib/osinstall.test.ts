@@ -96,6 +96,18 @@ describe("AMIGAOS_32_COMPONENTS mirrors the shipped recipe", () => {
       if (mirrored.conditionMajor !== conditionMajor) {
         mismatches.push(`${rc.id}: conditionMajor ${mirrored.conditionMajor} !== ${conditionMajor}`);
       }
+      // ART-119 (#3): `ComponentDef.conditionMajor` mirrors one specific
+      // variant, `Condition::RomOlderThan { major }` — its own doc comment
+      // says so. Matching on `major` alone means a future condition kind
+      // that also happens to carry a `major` field would pass this parity
+      // check while `conditionalReason`'s callers still assumed
+      // rom-older-than and rendered "below Kickstart V47" regardless.
+      if (rc.condition && rc.condition.condition !== "rom-older-than") {
+        mismatches.push(
+          `${rc.id}: condition kind is "${rc.condition.condition}", not "rom-older-than" — ` +
+            `ComponentDef.conditionMajor only mirrors rom-older-than and the screen only knows how to explain that one`
+        );
+      }
       const exclusiveGroup = rc.exclusive_group ?? null;
       if (mirrored.exclusiveGroup !== exclusiveGroup) {
         mismatches.push(`${rc.id}: exclusiveGroup ${mirrored.exclusiveGroup} !== ${exclusiveGroup}`);

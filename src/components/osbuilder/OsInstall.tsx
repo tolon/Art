@@ -512,8 +512,17 @@ export function OsInstall() {
             // Exactly one of four reasons, computed the same way for every
             // conditional row — see `conditionalReason`'s own doc comment
             // for why this can never fall through to nothing.
+            //
+            // ART-119 (#4): gated on `!def.required && def.available` —
+            // dropped in an earlier fix round and re-added here. Unreachable
+            // against today's shipped recipe (no component is both
+            // conditional and either required or unavailable), but a
+            // required or coming-later row already renders its own
+            // "required"/"coming later" line above; a future recipe that
+            // combined the two should not additionally show a rom-needed or
+            // condition-on/off badge that contradicts it.
             const reason =
-              def.conditionMajor !== null
+              def.conditionMajor !== null && !def.required && def.available
                 ? conditionalReason(
                     def.conditionMajor,
                     isForcedOnByCondition(basePlan, chosen, def.id),

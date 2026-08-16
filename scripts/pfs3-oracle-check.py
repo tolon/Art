@@ -170,6 +170,37 @@ def report(checks: list[tuple[bool, str]]) -> None:
 # mistaken for a trailing `B`.
 _SIZE_SUFFIXES = (("GB", 1024**3), ("MB", 1024**2), ("KB", 1024), ("B", 1))
 
+# ART-114: Windows/MS-DOS reserved device basenames. A real AmigaDOS name can
+# collide with one of these — `DOSDrivers/AUX` is a real serial-port device
+# definition, not anything Windows-shaped — and `hst.imager.exe fs copy`
+# extracting to an NTFS path silently drops the entry rather than erroring,
+# because Windows itself refuses to create a file or directory with this
+# basename (checked, case-insensitively, on the part before the first `.` —
+# so `AUX` and `AUX.info` both collide). This is not ART's bug and not
+# `hst-imager`'s to fix here; it is the oracle's job to say so explicitly
+# rather than report an unexplained shortfall.
+_WINDOWS_RESERVED_STEMS = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+
+
+def is_windows_reserved_component(component: str) -> bool:
+    """True if this single path segment is a Windows-reserved device
+    basename — case-insensitive, and matched on the part before the first
+    `.` the way Windows does (`AUX`, `Aux.info`, `com3.txt` all collide)."""
+    stem = component.split(".", 1)[0]
+    return stem.upper() in _WINDOWS_RESERVED_STEMS
+
+
+def path_has_reserved_component(path: str) -> bool:
+    """True if any `/`-separated segment of an `hst-imager`-style path
+    collides with a Windows reserved device basename — checking every
+    segment, not just the last, because a directory ART named that way would
+    make everything under it equally unextractable on Windows."""
+    return any(is_windows_reserved_component(part) for part in path.split("/"))
+
 
 def parse_size(text: str) -> int:
     """A size cell from `fs dir`'s table, in bytes.
@@ -253,7 +284,9 @@ def parse_dir_listing(text: str) -> dict[str, dict]:
     return entries
 
 
-def check_art_writes_hst_reads(hst: str, work: Path) -> list[tuple[bool, str]]:
+def check_art_writes_hst_reads(
+    hst: str, work: Path
+) -> tuple[list[tuple[bool, str]], list[str]]:
     """ART writes a PFS3 volume through `NativeFormatter`; `hst-imager` reads it.
 
     `build_pfs3_volume_for_oracle_when_asked` builds the volume through the
@@ -262,8 +295,17 @@ def check_art_writes_hst_reads(hst: str, work: Path) -> list[tuple[bool, str]]:
     checked is that claim, not ART's opinion of itself. Checked two ways:
     `fs dir -r` for name, kind, size and protection, and `fs copy` extracting
     the volume back out to disk for the file contents themselves.
+
+    Returns `(checks, skipped)`. `skipped` (ART-114) names every file whose
+    path collides with a Windows reserved device basename — `hst-imager`
+    cannot extract those to an NTFS destination at all, on this OS, for a
+    reason that has nothing to do with the volume ART wrote. Those paths are
+    counted separately by the caller: neither a pass nor a failure, so the
+    summary cannot present a known, explainable absence as an unexplained
+    shortfall the way the plain pass count once did.
     """
     checks: list[tuple[bool, str]] = []
+    skipped: list[str] = []
     image = work / "art-write.hdf"
 
     made = run_cargo_test(
@@ -273,7 +315,7 @@ def check_art_writes_hst_reads(hst: str, work: Path) -> list[tuple[bool, str]]:
         checks.append((False, "ART wrote a PFS3 volume"))
         print(made.stdout[-3000:])
         print(made.stderr[-2000:])
-        return checks
+        return checks, skipped
     checks.append((True, "ART wrote a PFS3 volume"))
 
     expected = None
@@ -284,20 +326,20 @@ def check_art_writes_hst_reads(hst: str, work: Path) -> list[tuple[bool, str]]:
     if expected is None:
         checks.append((False, "the write hook printed the JSON it claims to have written"))
         print(made.stdout[-2000:])
-        return checks
+        return checks, skipped
 
     listing = run_hst(hst, ["fs", "dir", f"{image.name}\\rdb\\dh0", "-r"], work)
     if listing.returncode != 0:
         checks.append((False, "hst-imager could open the volume ART wrote"))
         print(listing.stdout[-3000:])
         print(listing.stderr[-1000:])
-        return checks
+        return checks, skipped
 
     try:
         actual = parse_dir_listing(listing.stdout)
     except RuntimeError as err:
         checks.append((False, str(err)))
-        return checks
+        return checks, skipped
 
     for item in expected:
         path = item["path"]
@@ -342,13 +384,21 @@ def check_art_writes_hst_reads(hst: str, work: Path) -> list[tuple[bool, str]]:
         checks.append((False, "hst-imager extracted the volume ART wrote back to disk"))
         print(extracted.stdout[-2000:])
         print(extracted.stderr[-1000:])
-        return checks
+        return checks, skipped
     checks.append((True, "hst-imager extracted the volume ART wrote back to disk"))
 
     for item in expected:
         if item["kind"] != "file":
             continue
         path = item["path"]
+        # ART-114: a Windows reserved device basename (`AUX`, `AUX.info`, …)
+        # never lands in `extract_dir` at all — `hst-imager` silently drops
+        # it while extracting to NTFS, for a reason that is Windows' and not
+        # this volume's. Recorded on its own, not as a failure and not
+        # folded into the pass count below.
+        if path_has_reserved_component(path):
+            skipped.append(path)
+            continue
         local = extract_dir.joinpath(*path.split("/"))
         if not local.is_file():
             checks.append((False, f"{path} was extracted back to disk"))
@@ -361,7 +411,7 @@ def check_art_writes_hst_reads(hst: str, work: Path) -> list[tuple[bool, str]]:
             )
         )
 
-    return checks
+    return checks, skipped
 
 
 def check_hst_writes_art_reads(
@@ -497,12 +547,27 @@ def main() -> int:
         work = Path(tmp)
 
         print("ART writes, hst-imager reads:")
-        checks_a = check_art_writes_hst_reads(hst, work)
+        checks_a, skipped_a = check_art_writes_hst_reads(hst, work)
         report(checks_a)
 
         print("\nhst-imager writes, ART reads:")
         checks_b = check_hst_writes_art_reads(hst, driver, work)
         report(checks_b)
+
+    # ART-114: named on its own, never as a failure and never folded into the
+    # pass count — an oracle that reports "3059 of 3061 matched" for a known,
+    # explainable Windows limitation is doing part of the job of the bug it
+    # exists to catch.
+    if skipped_a:
+        print(
+            f"\n{len(skipped_a)} file(s) skipped — Windows/MS-DOS reserved device "
+            "name(s) (CON, PRN, AUX, NUL, COM1-9, LPT1-9, with or without an "
+            "extension). `hst-imager fs copy` cannot extract these to an NTFS "
+            "path on this OS; that is a Windows limitation in the oracle's own "
+            "tool, not a defect in the volume ART wrote (ART-114):"
+        )
+        for path in skipped_a:
+            print(f"  - {path}")
 
     failures = [what for ok, what in [*checks_a, *checks_b] if not ok]
     if failures:
@@ -518,6 +583,11 @@ def main() -> int:
         return 1
 
     print("\nART and hst-imager agree, both directions — names, sizes, bytes, and protection bits.")
+    if skipped_a:
+        print(
+            f"({len(skipped_a)} file(s) with Windows-reserved names skipped for "
+            "extraction, see above — not a failure.)"
+        )
     return 0
 
 

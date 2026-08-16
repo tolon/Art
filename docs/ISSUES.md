@@ -24,33 +24,65 @@ what fixed it (with the test that proves it).
 ## Open
 
 **ART-119** 🔵 **Five minors deferred from Task 13's review, folded into one
-entry** — *found 2026-08-15/16, Task 13's fix round, filed at Task 14*
+entry — two closed, three still open** — *found 2026-08-15/16, Task 13's fix
+round, filed at Task 14; #3 and #4 closed 2026-08-16*
 `src/lib/osinstall.ts`, `src/components/osbuilder/OsInstall.tsx`,
 `src-tauri/src/core/osinstall/plan.rs` · None promoted during Task 13's own
 round because each is one line, harmless today, or both:
 
-1. The two-plan design (`osinstall_plan` called once for the base plan and
-   once more for `excludedConditional`) doubles the work even when
-   `excludedConditional` is empty and the two requests are byte-identical.
-2. The JSX renders four `conditionalReason` kinds as independent guards
-   rather than an exhaustive `switch`, so a fifth kind would render no reason
-   at all. All four shipped kinds are covered today.
-3. The recipe-parity test (`src/lib/osinstall.test.ts`) does not assert a
-   `Condition`'s **kind** string, only its `major` — a future condition
-   variant other than `rom-older-than` carrying a `major` field would pass
-   the parity test while the screen still said "below Kickstart V47".
-4. The reason block lost its `!def.required && def.available` gate during a
-   fix round; unreachable against the shipped recipe (nothing both
-   `available: false` and non-required needs a reason shown), so not acted
-   on, but the gate's absence is not provably safe against a future recipe.
-5. *(Pre-existing, not introduced by Task 13.)* The base plan can hard-error
-   on `AdfSource::open` for an **excluded** component's damaged or vanished
-   disk, blanking both plans — `osinstall_plan` should probably treat a
-   missing/corrupt medium for a component the caller excluded the same way
-   `MediaMissing`/`MediaPathMissing` already treat one for a component the
-   caller never asked about.
-Not fixed — none is data-unsafe; each is a real, small gap worth someone's
-attention before the recipe or the screen grows past what today's tests cover.
+1. **Open — not a one-line fix, left as designed.** The two-plan design
+   (`osinstall_plan` called once for the base plan and once more for
+   `excludedConditional`) doubles the work even when `excludedConditional` is
+   empty and the two requests are byte-identical. `OsInstall.tsx`'s own
+   comment on `basePlanResult`/`effectivePlanResult` explains why there are
+   two calls at all (a plan requested *with* a component excluded never
+   carries it in `componentsOn`, so one call cannot answer both "is this
+   condition satisfied" and "is this excluded"); skipping the second call
+   when `excludedConditional` is empty is a real option but changes when a
+   live network/IPC round-trip happens versus a cached one, which is more
+   than a one-line change to reason about correctly. Left for whoever grows
+   this screen next.
+2. **Open — cosmetic today, not a one-line fix.** The JSX renders four
+   `conditionalReason` kinds as independent guards rather than an exhaustive
+   `switch`, so a fifth kind would render no reason at all. All four shipped
+   kinds are covered today, and `conditionalReason`'s own return type is a
+   discriminated union a `switch` would exhaustiveness-check — but rewriting
+   four independent `&&` blocks into one `switch` inside this render is a
+   structural change to the JSX, not a one-liner. Left as-is.
+3. **Closed 2026-08-16.** The recipe-parity test (`src/lib/osinstall.test.ts`)
+   did not assert a `Condition`'s **kind** string, only its `major` — a future
+   condition variant other than `rom-older-than` carrying a `major` field
+   would have passed the parity test while the screen still said "below
+   Kickstart V47". → `"agrees on media, required, available, condition and
+   exclusive_group for every id"` now also asserts
+   `rc.condition.condition === "rom-older-than"` whenever a component carries
+   a `condition` at all, since `ComponentDef.conditionMajor`'s own doc comment
+   already says it mirrors only that one variant.
+4. **Closed 2026-08-16.** The reason block lost its
+   `!def.required && def.available` gate during a fix round; unreachable
+   against the shipped recipe (nothing both `available: false` and
+   non-required needs a reason shown), so not acted on at the time, but the
+   gate's absence was not provably safe against a future recipe that combined
+   the two. → Re-added to the single `reason = …` computation in
+   `OsInstall.tsx` rather than to each of the four JSX guards separately, so
+   there is one place, not four, that can drift out of sync again. No new
+   test: unreachable against today's recipe, as the entry always said, and
+   `OsInstall.tsx` has no render test to add one to yet (`ART-118` — the
+   screen has never been seen rendering past its headings in a headless
+   browser).
+5. **Open — blocked, not judged.** *(Pre-existing, not introduced by
+   Task 13.)* The base plan can hard-error on `AdfSource::open` for an
+   **excluded** component's damaged or vanished disk, blanking both plans —
+   `osinstall_plan` should probably treat a missing/corrupt medium for a
+   component the caller excluded the same way `MediaMissing`/
+   `MediaPathMissing` already treat one for a component the caller never
+   asked about. Lives in `src-tauri/src/core/osinstall/plan.rs`, which another
+   session was actively working in at the time of this pass — left alone
+   rather than risking a collision. Still open; needs its own session.
+Not fixed (#1, #2, #5) — none is data-unsafe; each is a real, small gap worth
+someone's attention before the recipe or the screen grows past what today's
+tests cover. #3 and #4 fixed and verified by `pnpm test` (`osinstall.test.ts`:
+26 passed) and `pnpm lint`.
 
 **ART-118** 🟠 **The OS Builder's install screen has not been seen rendering
 beyond its headings** — *found 2026-08-15/16, Task 13's browser pass and
@@ -137,31 +169,6 @@ sighting was reported second-hand as "2 failed, both `core::iso`". **The next
 person to see it should save the panic message before re-running.** Until then
 this stays open and undiagnosed; re-running until green is exactly what this
 project's standing rule forbids.
-
-**ART-114** 🟡 **`hst-imager`'s `fs copy` extraction silently drops any entry
-whose name matches a Windows/MS-DOS reserved device basename** — *found
-2026-08-16, Task 14's real run*
-External tool, not ART code — recorded because it is the independent witness
-Task 14's own Step 2 depends on. The real `Storage3.2.adf` and
-`GlowIcons3.2.adf` each carry a DOSDriver definition named `AUX`
-(`DOSDrivers/AUX`, `DOSDrivers/AUX.info` — a real Amiga serial-port device
-name that happens to collide with Windows' reserved `AUX` device). ART wrote
-both correctly: `distribution.json` records real, distinct SHA-256 hashes and
-byte counts for both (`Storage/DOSDrivers/AUX`, 119 bytes;
-`Storage/DOSDrivers/AUX.info`, 481 bytes), and directory enumeration
-(`Get-ChildItem`, Python's `os.listdir`) confirms both exist on the NTFS
-distribution tree with the right sizes. But `hst.imager.exe fs copy … -r`,
-extracting a PFS3 volume ART built back out to an NTFS folder, produced no
-error and silently omitted both files — found by hashing every extracted file
-against its source: 3059 of 3061 matched byte-for-byte, and the two misses
-were exactly `Storage\DOSDrivers\AUX` and `AUX.info`. Windows-specific
-(`Test-Path`/`Get-Item` on the exact same path fail the same way outside
-`hst-imager` entirely; plain `os.listdir`/`Get-ChildItem` enumeration does
-not), and it only matters for an **extraction to an NTFS path** — nothing
-inside PFS3 itself is Windows-shaped, so ART's own reader is not known to be
-affected and was not the thing under test here. Not fixed — not ART's tool to
-fix. Worth remembering if ART ever grows its own "extract a volume to a PC
-folder" feature.
 
 **ART-113** 🟠 **`libpfs3` 0.1.3 writes an entry's name as UTF-8 and reads it
 back as Latin-1 — any non-ASCII AmigaDOS name fails to copy in** — *found
@@ -625,6 +632,56 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-114** ✅ **`hst-imager`'s `fs copy` extraction silently drops any entry
+whose name matches a Windows/MS-DOS reserved device basename, and the oracle
+that depends on it reported the drop as an unexplained shortfall** — *found
+2026-08-16, Task 14's real run; oracle fixed 2026-08-16*
+External tool, not ART code — recorded because it is the independent witness
+Task 14's own Step 2 depends on. The real `Storage3.2.adf` and
+`GlowIcons3.2.adf` each carry a DOSDriver definition named `AUX`
+(`DOSDrivers/AUX`, `DOSDrivers/AUX.info` — a real Amiga serial-port device
+name that happens to collide with Windows' reserved `AUX` device). ART wrote
+both correctly: `distribution.json` records real, distinct SHA-256 hashes and
+byte counts for both (`Storage/DOSDrivers/AUX`, 119 bytes;
+`Storage/DOSDrivers/AUX.info`, 481 bytes), and directory enumeration
+(`Get-ChildItem`, Python's `os.listdir`) confirms both exist on the NTFS
+distribution tree with the right sizes. But `hst.imager.exe fs copy … -r`,
+extracting a PFS3 volume ART built back out to an NTFS folder, produced no
+error and silently omitted both files — found by hashing every extracted file
+against its source: 3059 of 3061 matched byte-for-byte, and the two misses
+were exactly `Storage\DOSDrivers\AUX` and `AUX.info`. Windows-specific
+(`Test-Path`/`Get-Item` on the exact same path fail the same way outside
+`hst-imager` entirely; plain `os.listdir`/`Get-ChildItem` enumeration does
+not), and it only matters for an **extraction to an NTFS path** — nothing
+inside PFS3 itself is Windows-shaped, so ART's own reader is not known to be
+affected. Not `hst-imager`'s to fix here, and not ART's tool at all — but
+`scripts/pfs3-oracle-check.py`'s own job is to make a wrong volume loud, and
+presenting a known, explainable absence as "3059 of 3061 matched" makes a
+reader investigate by hand exactly the way this entry's own discovery did,
+which is part of the job of the bug the oracle exists to catch.
+→ `pfs3-oracle-check.py` now recognises Windows/MS-DOS reserved device
+basenames (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, matched
+case-insensitively on the part before the first `.`, so `AUX` and `AUX.info`
+both collide, and checked on every `/`-separated path segment, not just the
+last). `check_art_writes_hst_reads` now returns `(checks, skipped)`:
+a file whose path collides is named in `skipped`, `main()` prints it in its
+own section with the reason, and it counts toward neither the pass list nor
+the failure list — the exit status is unaffected by a Windows-reserved name.
+Anything else missing from extraction still fails exactly as before.
+Verified by running the real oracle
+(`python scripts/pfs3-oracle-check.py`, `ART_HST_IMAGER` at
+`E:\amiga\Amigatolon\hstimager\hst.imager.exe`) end to end: it still reports
+"ART and hst-imager agree, both directions" (the synthetic fixture
+`build_pfs3_volume_for_oracle_when_asked` carries no reserved name, so the new
+skip path was not exercised by that run) and separately confirmed by hand —
+`is_windows_reserved_component`/`path_has_reserved_component` invoked directly
+against `AUX`, `AUX.info`, `aux`, `com3.txt` (True), `COM10`, `AUX2` (False,
+correctly not reserved), and `Storage/DOSDrivers/AUX` (True, the real
+colliding path). Extending the Rust-side synthetic fixture to include a
+reserved name so the oracle's own run exercises the skip path was not done —
+that fixture lives in `core/preload/native.rs`, out of scope for this fix
+because another session is actively working in that file.
 
 **ART-112** ✅ **`glowicons` did not declare an override over `classes`, so a real
 card refused to build** — *found and closed 2026-08-16, Task 14's run against
