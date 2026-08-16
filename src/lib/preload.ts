@@ -194,7 +194,13 @@ export type Pairing =
   | { verdict: "paired" }
   | { verdict: "suitable"; rom: string }
   | { verdict: "unsuitable"; needs: number; found: number | null; rom: string }
-  | { verdict: "not-checked"; why: "tree-records-no-rom" | "card-records-no-rom" };
+  | {
+      verdict: "not-checked";
+      /** `check-failed` is the frontend's own: the command rejected, and a
+       *  rejection that renders as silence is indistinguishable from the
+       *  reassuring verdict. `core::rom::pairing` never produces it. */
+      why: "tree-records-no-rom" | "card-records-no-rom" | "check-failed";
+    };
 
 /** Ask whether the card's Kickstart suits the tree. Reads two manifests. */
 export async function preloadRomPairing(image: string, content: string): Promise<Pairing> {
@@ -236,20 +242,81 @@ export function pairingPhrase(pairing: Pairing): Phrase | null {
     case "suitable":
       return { key: "preload.pairing.suitable", params: { rom: pairing.rom } };
     case "unsuitable":
-      return pairing.found === null
-        ? {
-            key: "preload.pairing.unsuitableUnknown",
-            params: { needs: pairing.needs, rom: pairing.rom },
-          }
-        : {
-            key: "preload.pairing.unsuitable",
-            params: { needs: pairing.needs, found: pairing.found, rom: pairing.rom },
-          };
+      if (pairing.found === null) {
+        return {
+          key: "preload.pairing.unsuitableUnknown",
+          params: { needs: pairing.needs, rom: pairing.rom },
+        };
+      }
+      return {
+        // The quoted message is what AmigaOS 3.2 itself prints, observed on
+        // a screen — and it names V47. The threshold is read from the
+        // recipe, so a recipe naming 45 would otherwise have ART quote a
+        // sentence about 47 beside its own "built for V45". The quote is
+        // kept where it is true and dropped where it is not.
+        key: pairing.needs === 47 ? "preload.pairing.unsuitable47" : "preload.pairing.unsuitable",
+        params: { needs: pairing.needs, found: pairing.found, rom: pairing.rom },
+      };
     case "not-checked":
-      return pairing.why === "tree-records-no-rom"
-        ? { key: "preload.pairing.notChecked.tree" }
-        : { key: "preload.pairing.notChecked.card" };
+      switch (pairing.why) {
+        case "tree-records-no-rom":
+          return { key: "preload.pairing.notChecked.tree" };
+        case "card-records-no-rom":
+          return { key: "preload.pairing.notChecked.card" };
+        case "check-failed":
+          return { key: "preload.pairing.notChecked.failed" };
+      }
   }
+}
+
+/** One folder about to go onto one partition, and the verdict on it. */
+export interface PairingFor {
+  /** `DH1`, as the card's own RDB names it. */
+  driveName: string;
+  pairing: Pairing;
+}
+
+/** A verdict that has something to say, and which drive it is about. */
+export interface PairingLine {
+  driveName: string;
+  verdict: Pairing["verdict"];
+  phrase: Phrase;
+}
+
+/**
+ * Which folders the ROM question is about.
+ *
+ * **Every chosen partition that has content, not the first one.** The screen
+ * takes a content folder per partition and the plan emits a `copy-in` for
+ * each, so asking about one of them and rendering an unqualified sentence
+ * described a folder that was not necessarily the one at risk — and, when the
+ * first folder's verdict was `paired`, rendered nothing at all while a second
+ * folder needing a newer Kickstart went onto the card unwarned.
+ */
+export function foldersToCheck(picks: PartitionPick[]): Array<{
+  driveName: string;
+  content: string;
+}> {
+  return picks
+    .filter((pick) => pick.chosen && pick.content)
+    .map((pick) => ({ driveName: pick.driveName, content: pick.content as string }));
+}
+
+/**
+ * One line per folder that has something to say, in the order the partitions
+ * are on the card.
+ *
+ * A `paired` folder still contributes nothing — silence remains the right
+ * report for "the ROM you built this for". What changed is that another
+ * folder's silence can no longer swallow this one's warning.
+ */
+export function pairingLines(results: PairingFor[]): PairingLine[] {
+  return results.flatMap((result) => {
+    const phrase = pairingPhrase(result.pairing);
+    return phrase
+      ? [{ driveName: result.driveName, verdict: result.pairing.verdict, phrase }]
+      : [];
+  });
 }
 
 // ---------------------------------------------------------------------------

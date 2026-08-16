@@ -695,9 +695,13 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       { verdict: "paired" },
       { verdict: "suitable", rom: "kick.rom" },
       { verdict: "unsuitable", needs: 47, found: 40, rom: "kick.rom" },
+      // A recipe naming a threshold other than 47 takes the other sentence —
+      // the one that does not quote a message about V47.
+      { verdict: "unsuitable", needs: 45, found: 40, rom: "kick.rom" },
       { verdict: "unsuitable", needs: 47, found: null, rom: "kick.rom" },
       { verdict: "not-checked", why: "tree-records-no-rom" },
       { verdict: "not-checked", why: "card-records-no-rom" },
+      { verdict: "not-checked", why: "check-failed" },
     ];
     for (const pairing of pairings) {
       const phrase = pairingPhrase(pairing);

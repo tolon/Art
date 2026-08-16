@@ -31,24 +31,22 @@ import {
   fallbackPhrase,
   formatCount,
   onPreloadResult,
-  pairingPhrase,
-  pairingStillApplies,
+  pairingLines,
   picksFor,
   copiedPhrase,
   plannedToolPhrase,
   preloadBlocker,
   preloadPlan,
   preloadProbe,
-  preloadRomPairing,
   preloadRun,
   stepPhrase,
   toRequest,
   type FormatterReport,
   type PartitionPick,
-  type Pairing,
   type PreloadPlan,
   type PreloadResult,
 } from "@/lib/preload";
+import { useRomPairing } from "@/lib/useRomPairing";
 import { isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { usePowerMode } from "@/lib/uxmode";
@@ -95,7 +93,6 @@ export function VolumePreload() {
   const [picks, setPicks] = useState<PartitionPick[]>([]);
   const [plan, setPlan] = useState<PreloadPlan | null>(null);
   const [confirmed, setConfirmed] = useState(false);
-  const [pairing, setPairing] = useState<Pairing | null>(null);
   const [tool, setTool] = useState<FormatterReport | null>(null);
   const [probing, setProbing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -145,46 +142,12 @@ export function VolumePreload() {
     }
   }, [fingerprint]);
 
-  // G9: the ROM question is about the card and the folder going onto it, so
-  // it is asked whenever either changes — and forgotten with the plan, since
-  // a stale verdict beside a fresh plan is worse than none.
-  //
-  // The held verdict is cleared *synchronously*, before the new fetch is
-  // even issued, whenever `pairingStillApplies` says it no longer describes
-  // this fingerprint — not only in the "nothing to check" branch below. A
-  // verdict left in state until its replacement resolves is exactly the
-  // stale-verdict-beside-a-fresh-plan bug this effect exists to prevent: the
-  // sibling effect above clears `plan` synchronously on the same change, and
-  // the pairing paragraph is gated on `plan` being present.
-  const pairingFingerprint = useRef<string | null>(null);
-  useEffect(() => {
-    if (!pairingStillApplies(pairingFingerprint.current, fingerprint)) {
-      setPairing(null);
-      pairingFingerprint.current = null;
-    }
-
-    const filled = picks.find((pick) => pick.chosen && pick.content);
-    if (!imagePath || !filled?.content) {
-      return;
-    }
-    let cancelled = false;
-    preloadRomPairing(imagePath, filled.content)
-      .then((verdict) => {
-        if (!cancelled) {
-          setPairing(verdict);
-          pairingFingerprint.current = fingerprint;
-        }
-      })
-      .catch(() => {
-        // Not an error the user needs: the command answers `not-checked`
-        // for everything it cannot read, so a rejection here means the
-        // command itself failed, and the preview below is unaffected.
-        if (!cancelled) setPairing(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [fingerprint, imagePath]);
+  // G9: the ROM question is about the card and the folders going onto it —
+  // one verdict per folder, since the screen takes one folder per partition
+  // and a warning about DH1 must not be swallowed by DH0's silence. The hook
+  // holds the asking, the forgetting and the "checking…" state; this screen
+  // only renders what it says.
+  const pairing = useRomPairing(imagePath, picks);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -549,19 +512,26 @@ export function VolumePreload() {
             })}
           </ol>
 
-          {pairing &&
-            (() => {
-              const phrase = pairingPhrase(pairing);
-              if (!phrase) return null;
-              return (
-                <p
-                  className={pairing.verdict === "unsuitable" ? "badge badge-warn" : "muted"}
-                  style={{ fontSize: 12, margin: "0 0 8px" }}
-                >
-                  {t(phrase.key, phrase.params)}
-                </p>
-              );
-            })()}
+          {/* One line per folder that has something to say, named by the
+              drive it is going onto — a proper noun the card supplied, so it
+              sits beside the translated sentence rather than inside it. A
+              `paired` folder still says nothing; a check still running says
+              so, because an empty space above a live destructive checkbox
+              must not be able to mean "the answer never came". */}
+          {pairing.checking && (
+            <p className="faint" style={{ fontSize: 12, margin: "0 0 8px" }}>
+              {t("preload.pairing.checking")}
+            </p>
+          )}
+          {pairingLines(pairing.results).map((line, index) => (
+            <p
+              key={`${line.driveName}-${index}`}
+              className={line.verdict === "unsuitable" ? "badge badge-warn" : "muted"}
+              style={{ display: "block", fontSize: 12, margin: "0 0 8px" }}
+            >
+              <strong>{line.driveName}</strong> — {t(line.phrase.key, line.phrase.params)}
+            </p>
+          ))}
 
           <label
             style={{
