@@ -1,9 +1,29 @@
 //! Kickstart ROM identification and validation engine (Phase 2 & Phase 7).
 //!
 //! ART never distributes copyrighted ROMs; this module analyzes and matches
-//! user-provided ROM files against known cryptographic signatures, validates
-//! Kickstart checksums, strips Cloanto encryption headers (`AMIROMTYPE1`), and
-//! provides open-source AROS ROM fallback metadata.
+//! user-provided ROM files against known signatures, validates Kickstart
+//! checksums, strips Cloanto encryption headers (`AMIROMTYPE1`), and provides
+//! open-source AROS ROM fallback metadata.
+//!
+//! ## Three questions, asked in order (ART-104)
+//!
+//! 1. **What the ROM stores about itself.** Every Kickstart keeps a checksum
+//!    24 bytes before its end, and that value is unique per build:
+//!    `40.68 (A1200)` and `40.68 (A4000)` share a revision and differ here.
+//!    [`remus::REMUS_ROMS`] maps it to a name and a machine list, generated
+//!    from an independent database (`scripts/rom-table-check.py`) rather than
+//!    hand-listed. **This is the only question that can name a machine.**
+//! 2. **A catalogued SHA-256.** The older, hand-listed table. Kept because it
+//!    answers for a few dumps the database does not carry, and because
+//!    removing a working answer to make room for a better one is not a fix.
+//!    Measured against the project's own 29 Kickstart dumps it matched none
+//!    of them, which is what ART-104 was.
+//! 3. **What the ROM says about its version.** From 2.0 onwards a ROM states
+//!    its own revision, so an uncatalogued dump is still named — but a
+//!    revision is shared across the per-machine builds, so this claims no
+//!    machine, deliberately.
+
+pub mod remus;
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -163,7 +183,32 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
     // Compute Kickstart 32-bit checksum
     let checksum_valid = verify_kickstart_checksum(&bytes);
 
-    // Check if it matches our known ROM database
+    // 1. What the ROM stores about itself — the only answer that can name a
+    //    machine, and the one that tells same-revision builds apart.
+    if let Some(matched) = stored_checksum(&bytes).and_then(catalogued) {
+        let (version, revision) = match matched.major {
+            0 => ("Custom", String::new()),
+            major => (
+                version_name(major).unwrap_or("Custom"),
+                format!("{major}.{:03}", matched.minor),
+            ),
+        };
+        return Ok(RomInfo {
+            name: matched.name.to_string(),
+            version: version.to_string(),
+            revision,
+            size_bytes,
+            sha256,
+            crc32,
+            is_cloanto,
+            is_aros: false,
+            checksum_valid,
+            compatible_models: matched.models.iter().map(|s| s.to_string()).collect(),
+            file_path: path.to_string_lossy().to_string(),
+        });
+    }
+
+    // 2. A catalogued SHA-256.
     if let Some(matched) = KNOWN_ROMS
         .iter()
         .find(|r| r.sha256.eq_ignore_ascii_case(&sha256))
@@ -183,7 +228,7 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
         });
     }
 
-    // No catalogued dump matched. **Ask the ROM** (ART-104): from 2.0 onwards
+    // 3. No catalogued dump matched. **Ask the ROM** (ART-104): from 2.0 onwards
     // it states its own version and revision, so a dump nobody catalogued is
     // still named rather than called generic.
     //
@@ -235,30 +280,24 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
         });
     }
 
-    // Generic fallback for custom / diagnostic / uncatalogued ROMs
-    let (inferred_name, inferred_models) = match size_bytes {
-        262_144 => (
-            "Generic Amiga 256KB ROM (Kickstart 1.x)",
-            vec!["A500".into(), "A2000".into()],
-        ),
-        524_288 => (
-            "Generic Amiga 512KB ROM (Kickstart 2.x/3.x)",
-            vec![
-                "A500+".into(),
-                "A600".into(),
-                "A1200".into(),
-                "A4000".into(),
-            ],
-        ),
-        1_048_576 => (
-            "Generic Amiga 1MB ROM (CD32 / Extended)",
-            vec!["CD32".into(), "A4000".into()],
-        ),
-        2_097_152 => (
-            "Generic Amiga 2MB ROM (Diagnostic / Custom)",
-            vec!["All Models".into()],
-        ),
-        _ => ("Custom / Unknown ROM Image", vec!["Unknown".into()]),
+    // Generic fallback for custom / diagnostic / uncatalogued ROMs.
+    //
+    // **A size names a shape, not a machine (ART-104).** This used to hand
+    // back a machine list derived from the file's length — a 256 KB image was
+    // "A500, A2000", which it told the user about the CDTV extended ROM in
+    // the project's own collection, and anything unrecognised was given the
+    // model `"Unknown"`, a machine no Amiga ever was. `rom_suits` never acted
+    // on either (it declines to answer when `version` is `Custom`, which is
+    // always the case here), so nothing was refused wrongly — but the screen
+    // showed the claim, and a claim ART cannot support is one it should not
+    // make (§89). The name still comes from the size, because that much *is*
+    // what the size says.
+    let inferred_name = match size_bytes {
+        262_144 => "Generic Amiga 256KB ROM (Kickstart 1.x)",
+        524_288 => "Generic Amiga 512KB ROM (Kickstart 2.x/3.x)",
+        1_048_576 => "Generic Amiga 1MB ROM (CD32 / Extended)",
+        2_097_152 => "Generic Amiga 2MB ROM (Diagnostic / Custom)",
+        _ => "Custom / Unknown ROM Image",
     };
 
     Ok(RomInfo {
@@ -271,7 +310,7 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
         is_cloanto,
         is_aros: false,
         checksum_valid,
-        compatible_models: inferred_models,
+        compatible_models: Vec::new(),
         file_path: path.to_string_lossy().to_string(),
     })
 }
@@ -400,6 +439,33 @@ pub fn compute_crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 
+/// The dump a stored checksum names, if the generated table carries it.
+///
+/// A linear scan over 154 entries, once per identification — nanoseconds, and
+/// not worth a map built at startup. It lives here rather than in `remus.rs`
+/// because that file is generated and holds data only: a function in it would
+/// be lost the next time `scripts/rom-table-check.py --emit` runs, and the
+/// verifier compares the file whole.
+fn catalogued(stored: u32) -> Option<&'static remus::RemusRom> {
+    remus::REMUS_ROMS
+        .iter()
+        .find(|rom| rom.stored_checksum == stored)
+}
+
+/// The checksum a Kickstart keeps 24 bytes before its end.
+///
+/// **Read, never computed.** ART already computes a Kickstart checksum to
+/// answer whether the image is intact (`verify_kickstart_checksum`); this is
+/// the *stored* longword that computation is checked against, and it is what
+/// the Remus database keys on. `None` for anything too short to hold one —
+/// the A1000 bootstrap in the project's own collection is 8 KB and has no such
+/// field.
+fn stored_checksum(bytes: &[u8]) -> Option<u32> {
+    let at = bytes.len().checked_sub(24)?;
+    let slice = bytes.get(at..at + 4)?;
+    Some(u32::from_be_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,6 +484,18 @@ mod tests {
         bytes[0..2].copy_from_slice(&0x1114u16.to_be_bytes());
         bytes[12..14].copy_from_slice(&major.to_be_bytes());
         bytes[14..16].copy_from_slice(&minor.to_be_bytes());
+        bytes
+    }
+
+    /// A 512 KB image carrying `stored` where a Kickstart keeps its own
+    /// checksum — 24 bytes before the end — and nothing else that identifies
+    /// it. ART ships no ROM, so a catalogued dump is stood in for by the one
+    /// field the identification actually reads.
+    fn rom_with_stored_checksum(stored: u32) -> Vec<u8> {
+        let mut bytes = vec![0u8; 524_288];
+        bytes[0..2].copy_from_slice(&0x1114u16.to_be_bytes());
+        let at = bytes.len() - 24;
+        bytes[at..at + 4].copy_from_slice(&stored.to_be_bytes());
         bytes
     }
 
@@ -497,6 +575,64 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// **ART-104, the half `stated_version` could not reach.** A revision
+    /// does not name a machine — 40.68 is stated by the A1200 build and the
+    /// A4000 build alike — so a dump identified only by what it says about
+    /// itself leaves `compatible_models` empty, and `rom_suits` has nothing to
+    /// compare against. Measured before this fix: **none** of the 29 Kickstart
+    /// dumps in the project's own collection matched the ten hand-listed
+    /// hashes, so that check had never once fired for real material.
+    ///
+    /// The dump is now identified by the checksum it stores about itself
+    /// (`size - 24`), against a table derived from the Remus split database
+    /// (`scripts/rom-table-check.py`). Two same-revision builds store
+    /// different values, which is exactly the distinction that was missing.
+    #[test]
+    fn a_catalogued_dump_is_named_and_placed_by_the_checksum_it_stores() {
+        let dir = scratch("stored-checksum");
+
+        // The two real 40.68 builds, by the values the database holds for
+        // them. Nothing else about these fixtures differs — same size, same
+        // stated revision — so the machine can only have come from the
+        // checksum.
+        let a1200 = write(&dir, "a.rom", &rom_with_stored_checksum(0x87BA_7A3E));
+        let a4000 = write(&dir, "b.rom", &rom_with_stored_checksum(0x45C3_145E));
+
+        let one = identify_rom(&a1200).unwrap();
+        let other = identify_rom(&a4000).unwrap();
+
+        assert_eq!(one.name, "Kickstart 40.68 (A1200)");
+        assert_eq!(one.compatible_models, vec!["A1200".to_string()]);
+        assert_eq!(one.version, "3.1", "derived from the major, as ever");
+        assert_eq!(one.revision, "40.068");
+
+        assert_eq!(other.name, "Kickstart 40.68 (A4000)");
+        assert_eq!(other.compatible_models, vec!["A4000".to_string()]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The table names machines only where the database named machines. An
+    /// entry like `Kickstart 40.68 (AmigaForever)` describes a distribution,
+    /// not a model, and claims none — empty means "ART says nothing", never
+    /// "suits nothing" (`rom_suits` reads it as the former).
+    #[test]
+    fn an_entry_that_names_no_machine_claims_none() {
+        let dir = scratch("no-machine-claim");
+        let path = write(&dir, "af.rom", &rom_with_stored_checksum(0x44C3_115E));
+
+        let info = identify_rom(&path).unwrap();
+
+        assert_eq!(info.name, "Kickstart 40.68 (AmigaForever)");
+        assert!(
+            info.compatible_models.is_empty(),
+            "{:?}",
+            info.compatible_models
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A pre-2.0 ROM has no version there — `Kickstart 1.1.rom` reads
     /// `65535.65535` — so nothing is claimed and the size-based fallback
     /// stands.
@@ -550,6 +686,80 @@ mod tests {
                 .all(|known| !known.sha256.eq_ignore_ascii_case(&sha256_bytes(&stated))),
             "the synthetic ROM must not collide with a catalogued dump"
         );
+    }
+
+    /// **The measurement ART-104 was filed over, as a hook rather than a
+    /// claim.** Points at a folder of real Kickstart dumps — the user's own,
+    /// which ART does not ship and never will — and prints what
+    /// `identify_rom` now says about each. Before the Remus table it named 0
+    /// of 29 and could claim a machine for none of them.
+    ///
+    /// ```text
+    /// cd src-tauri
+    /// ART_ROM_DIR="E:\amiga\Amigatolon\kickstart" \
+    ///   cargo test identify_the_real_rom_collection_when_asked -- --nocapture
+    /// ```
+    /// **ART-104's mirror.** The fallback names a ROM by its size, and used
+    /// to name machines by it too — telling the user a 256 KB CDTV extended
+    /// ROM suited an A500 and an A2000. The size is kept; the machines are
+    /// not, because nothing measured them.
+    #[test]
+    fn a_size_names_the_shape_and_not_the_machine() {
+        let dir = scratch("size-only");
+        // 256 KB, stating no version and matching nothing catalogued.
+        let path = write(&dir, "odd.rom", &vec![0u8; 262_144]);
+
+        let info = identify_rom(&path).unwrap();
+
+        assert_eq!(info.name, "Generic Amiga 256KB ROM (Kickstart 1.x)");
+        assert!(
+            info.compatible_models.is_empty(),
+            "a length is not evidence of a machine: {:?}",
+            info.compatible_models
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn identify_the_real_rom_collection_when_asked() {
+        let Ok(dir) = std::env::var("ART_ROM_DIR") else {
+            return;
+        };
+        let mut named = 0;
+        let mut placed = 0;
+        let mut total = 0;
+        let mut entries: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.is_file())
+            .collect();
+        entries.sort();
+        for path in entries {
+            let Ok(info) = identify_rom(&path) else {
+                continue;
+            };
+            total += 1;
+            if info.version != "Custom" && !info.revision.is_empty() {
+                named += 1;
+            }
+            if !info.compatible_models.is_empty() {
+                placed += 1;
+            }
+            println!(
+                "  {:<58} -> {} [{}]",
+                path.file_name().unwrap().to_string_lossy(),
+                info.name,
+                if info.compatible_models.is_empty() {
+                    "no machine claimed".to_string()
+                } else {
+                    info.compatible_models.join(", ")
+                }
+            );
+        }
+        println!("named={named} placed={placed} total={total}");
+        assert!(total > 0, "'{dir}' held no ROM ART could read at all");
     }
 
     #[test]

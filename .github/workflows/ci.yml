@@ -88,6 +88,14 @@ jobs:
       - name: Cross-check ART's images against amitools
         run: python scripts/oracle-check.py
 
+      # The Kickstart table is generated from the Remus split database
+      # amitools ships (ART-104), so it can drift the moment that dependency
+      # updates. Verify mode reads the database and compares — a difference is
+      # worth seeing in a diff rather than absorbing silently, and it needs no
+      # ROM of its own, so it runs everywhere.
+      - name: Check the ROM table against its source
+        run: python scripts/rom-table-check.py
+
       # docs/licenses.md claims this runs; keep the claim true. deny.toml
       # rejects incompatible licences and known advisories (spec §67).
       #
