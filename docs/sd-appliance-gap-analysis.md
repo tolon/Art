@@ -356,7 +356,15 @@ the driver back out SHA-256-identical to the file that went in. Closes
   startup, and copies of the manifests. Content is a curated file set —
   no new engine needed, but the template and its tests don't exist yet.
 
-## G7 🟧 Build manifest + reproducible rebuild
+## G7 ✅ Build manifest + reproducible rebuild — **done 2026-08-15**
+
+Built as `core/card/manifest.rs`. Two decisions carry it: the manifest is
+**read off the finished card** rather than remembered from the build, so a
+card ART wrote wrongly cannot be described rightly; and it lives **beside**
+the image, because a manifest carrying the boot partition's checksums inside
+that partition cannot be right about itself. `card_verify_manifest` reports
+what it did **not** look at — ART writes FAT32 and does not read one — and
+`scripts/fat-oracle-check.py` closes that half with 7-Zip.
 
 The multiboot doc's manifest idea (§31) has no ART counterpart. Gap: a
 `manifest.json` written at build time — schema version, hardware profile,
@@ -367,7 +375,12 @@ folders → identical card). This is also the natural **shared-schema
 contract** between ART and any future Amiga-side tooling: define it once, in
 one repo, versioned.
 
-## G8 🟧 Whole-**image** validation ("appliance health check")
+## G8 ✅ Whole-**image** validation ("appliance health check") — **done 2026-08-15**
+
+Built as `core/card/health.rs`, fourteen checks. The design decision is the
+**three states**: `pass`, `fail` and `not-checked` are kept apart and the
+third never renders as a tick, because a green mark meaning "ART did not
+look" is the claim §89 forbids. The verdict says it out loud.
 
 *Was "whole-card". With G1 gone there is no card to read back from, and no
 need for one: the artifact is a file ART just built and can check in place —
@@ -403,13 +416,29 @@ eat — **iGame** gameslist + screenshots in the expected layout, and/or
 neutral source of truth (schema lives with G7's contract). Box art /
 screenshots: optional online fetch, off by default (§60 offline-first).
 
-## G11 🟨 Content layout policy ("what goes where")
+## G11 ✅ Content layout policy ("what goes where") — **done 2026-08-15, engine and screen**
 
-The classifier exists (detect + WHDLoad analysis); what's missing is the
+The classifier existed (detect + WHDLoad analysis); what was missing was the
 **policy layer** mapping classified content to the card layout (Games/ vs
 Demos/ vs ADF/Coverdisks/…, the multiboot doc §15/§24), with the usual
 preview-before-apply plan. Small, but it is what makes "drop 400 files,
 get an organised card" real.
+
+Built as `core/layout/` — `scan.rs` walks a drop and stops at a WHDLoad drawer
+rather than descending into it, `policy.rs` carries the drawer table as data
+and returns `Result<&str, RefusalReason>` so the drawer and the refusal are one
+exhaustive decision, and `apply.rs` builds the staging tree without ever
+overwriting or touching the source. Its screen is `/layout`, **a peer of the OS
+Builder rather than a page inside it**.
+
+The design decision worth carrying forward: **ART cannot tell a demo from a
+game** — nothing derivable from the bytes separates them — so the policy
+proposes only what it can justify and the preview is editable, rather than the
+rule engine growing cleverer. See [ISSUES.md](ISSUES.md) ART-105…ART-110 for
+what its own review found and did not fix.
+
+Still true of it: no staging tree G11 builds has been carried onto a card, and
+it has not been driven against real material in `pnpm tauri dev`.
 
 ## ~~G12 🟨 Card-level backup/restore~~ — **mostly out of scope with G1**
 
@@ -482,7 +511,13 @@ oplog, out of the build manifest (G7) and out of any AI prompt (§45.5).
 master spec. WiFi is not new — it is §45.5's, reachable only through an AI
 layer that is not built.
 
-## G15 🟧 Drag and drop as the way a build is fed
+## G15 ✅ Drag and drop as the way a build is fed — **done 2026-08-15**
+
+Built as `core/card/intake.rs`. The existing drop pipeline answers *what can
+I do with this file*; this answers the other question, *what does it become
+in this card* — and for everything Amiga the honest answer is usually that it
+**needs a volume this card has not got**, which is the answer SD-1 owes most
+often and the one worth not swallowing.
 
 ART already has exactly one drag & drop pipeline, and it is architectural
 rather than a convenience: `analyze_paths` → `WorkflowEngine::plan` → "what
