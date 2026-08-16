@@ -931,6 +931,53 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// **G9, task-2 review.** `source_facts`'s `Some` branch — the one that
+    /// fills in `kickstart_file` and `kickstart_stated_major` — had no
+    /// executed coverage: `request()` hard-codes `kickstart: None`, and the
+    /// only test that supplies a real ROM (`identify_real_roms_when_asked`)
+    /// is env-var gated and skipped in CI. A wrong field, a dropped `.clone()`
+    /// or a swapped major/minor would pass every test that runs.
+    ///
+    /// A synthetic ROM here, built the way `core::rom`'s own tests build one
+    /// — `0x1114` at offset 0, major/minor as big-endian words at 12..16 —
+    /// needs no `rom.key`, since `decoded_image` only decodes a file starting
+    /// with the Cloanto header. The on-card name (`firmware.kickstart_file`)
+    /// is deliberately different from the source file's own name, so the
+    /// assertion cannot pass by reading the wrong one; the major is
+    /// deliberately neither 40 nor 47, and the minor deliberately different
+    /// from the major, so a swap or a copied constant would show up.
+    #[test]
+    fn source_facts_names_the_on_card_kickstart_and_its_stated_version() {
+        let dir = scratch("source-facts-rom");
+        let archive = emu68_zip(&dir);
+
+        let mut rom = vec![0u8; 524_288];
+        rom[0..2].copy_from_slice(&0x1114u16.to_be_bytes());
+        rom[12..14].copy_from_slice(&45u16.to_be_bytes());
+        rom[14..16].copy_from_slice(&12u16.to_be_bytes());
+        let rom_path = dir.join("A1200-kickstart-dump.rom");
+        std::fs::write(&rom_path, &rom).unwrap();
+
+        let mut req = request(&archive, &dir.join("card.img"));
+        req.kickstart = Some(rom_path.display().to_string());
+        req.firmware.kickstart_file = "kick.rom".into();
+
+        let facts = source_facts(&req, "Emu68-pistorm.gz").unwrap();
+
+        assert_eq!(
+            facts.kickstart_file.as_deref(),
+            Some("kick.rom"),
+            "the on-card name, not the source file's own name"
+        );
+        assert_eq!(
+            facts.kickstart_stated_major,
+            Some(45),
+            "read off the decoded ROM, major before minor"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ART-104, against the ROMs on this machine rather than a synthetic one.
     ///
     /// ```text

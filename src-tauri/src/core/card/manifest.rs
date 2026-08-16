@@ -430,7 +430,7 @@ mod tests {
         dir
     }
 
-    fn source() -> SourceFacts {
+    pub(super) fn source() -> SourceFacts {
         SourceFacts {
             archive_name: "Emu68-pistorm.zip".into(),
             archive_sha256: "a".repeat(64),
@@ -448,7 +448,7 @@ mod tests {
         }
     }
 
-    fn manifest() -> CardManifest {
+    pub(super) fn manifest() -> CardManifest {
         CardManifest {
             schema: MANIFEST_SCHEMA,
             art_version: env!("CARGO_PKG_VERSION").into(),
@@ -738,43 +738,15 @@ mod tests {
 }
 
 /// A shared fixture for other test modules that need a valid [`CardManifest`]
-/// without building a card. One value, defined once, so a later task's tests
-/// and this module's own cannot drift apart.
+/// without building a card. Calls straight into `mod tests`'s own
+/// `manifest()`/`source()` rather than holding a second hand-typed literal —
+/// one definition, two callers, so a field added to either side cannot drift
+/// out of step with the other.
 #[cfg(test)]
 pub(crate) mod tests_support {
     use super::*;
-    use crate::core::pistorm::hardware::{AmigaTarget, PiModel, PistormVariant};
 
     pub(crate) fn sample_manifest() -> CardManifest {
-        CardManifest {
-            schema: MANIFEST_SCHEMA,
-            art_version: env!("CARGO_PKG_VERSION").into(),
-            built_at: None,
-            total_bytes: 2 * 1024 * 1024 * 1024,
-            mbr_sha256: "c".repeat(64),
-            slots: Vec::new(),
-            source: SourceFacts {
-                archive_name: "Emu68-pistorm.zip".into(),
-                archive_sha256: "a".repeat(64),
-                kickstart_name: Some("kick.rom".into()),
-                kickstart_sha256: Some("b".repeat(64)),
-                kickstart_file: None,
-                kickstart_stated_major: None,
-                hardware: PistormHardware {
-                    amiga: AmigaTarget::A500,
-                    variant: PistormVariant::Classic,
-                    pi: PiModel::Pi3APlus,
-                },
-                line: Emu68Line::Stable,
-                kernel_file: "Emu68-pistorm.gz".into(),
-            },
-            boot_files: vec![ManifestFile {
-                name: "kick.rom".into(),
-                bytes: 524_288,
-                sha256: "d".repeat(64),
-            }],
-            areas: Vec::new(),
-            os: Vec::new(),
-        }
+        super::tests::manifest()
     }
 }
