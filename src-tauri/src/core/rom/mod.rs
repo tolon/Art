@@ -23,6 +23,7 @@
 //!    revision is shared across the per-machine builds, so this claims no
 //!    machine, deliberately.
 
+pub mod pairing;
 pub mod remus;
 
 use serde::{Deserialize, Serialize};
