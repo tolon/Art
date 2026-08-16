@@ -121,6 +121,14 @@ mod tests {
         }
     }
 
+    fn card_named(name: &str, sha: &str, major: Option<u16>) -> CardRom {
+        CardRom {
+            name: name.into(),
+            sha256: sha.into(),
+            stated_major: major,
+        }
+    }
+
     #[test]
     fn the_same_rom_is_paired_and_says_nothing() {
         let verdict = compare(Some(&tree("aa", Some(47))), Some(&card("aa", Some(47))));
@@ -129,24 +137,44 @@ mod tests {
 
     #[test]
     fn a_tree_that_carries_its_modules_suits_any_rom() {
-        let verdict = compare(Some(&tree("aa", None)), Some(&card("bb", Some(40))));
-        assert!(matches!(verdict, Pairing::Suitable { .. }), "{verdict:?}");
+        let verdict = compare(
+            Some(&tree("aa", None)),
+            Some(&card_named("fallback-v40.rom", "bb", Some(40))),
+        );
+        match verdict {
+            Pairing::Suitable { rom } => {
+                assert_eq!(rom, "fallback-v40.rom");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
     fn a_newer_rom_than_required_suits() {
-        let verdict = compare(Some(&tree("aa", Some(47))), Some(&card("bb", Some(47))));
-        assert!(matches!(verdict, Pairing::Suitable { .. }), "{verdict:?}");
+        let verdict = compare(
+            Some(&tree("aa", Some(47))),
+            Some(&card_named("suitable-v47.rom", "bb", Some(47))),
+        );
+        match verdict {
+            Pairing::Suitable { rom } => {
+                assert_eq!(rom, "suitable-v47.rom");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     /// The pairing that failed on 2026-08-16: a V47 tree, a V40 card.
     #[test]
     fn an_older_rom_than_required_is_unsuitable_and_says_both_numbers() {
-        let verdict = compare(Some(&tree("aa", Some(47))), Some(&card("bb", Some(40))));
+        let verdict = compare(
+            Some(&tree("aa", Some(47))),
+            Some(&card_named("unsuitable-v40.rom", "bb", Some(40))),
+        );
         match verdict {
-            Pairing::Unsuitable { needs, found, .. } => {
+            Pairing::Unsuitable { needs, found, rom } => {
                 assert_eq!(needs, 47);
                 assert_eq!(found, Some(40));
+                assert_eq!(rom, "unsuitable-v40.rom");
             }
             other => panic!("{other:?}"),
         }
@@ -155,20 +183,36 @@ mod tests {
     /// A ROM that states nothing cannot be the V47 the tree needs.
     #[test]
     fn a_rom_that_states_no_version_cannot_satisfy_a_requirement() {
-        let verdict = compare(Some(&tree("aa", Some(47))), Some(&card("bb", None)));
-        assert!(matches!(verdict, Pairing::Unsuitable { found: None, .. }));
+        let verdict = compare(
+            Some(&tree("aa", Some(47))),
+            Some(&card_named("unknown-version.rom", "bb", None)),
+        );
+        match verdict {
+            Pairing::Unsuitable { found, rom, .. } => {
+                assert_eq!(found, None);
+                assert_eq!(rom, "unknown-version.rom");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     /// A missing answer is a missing answer, never a pass (§89).
     #[test]
     fn a_missing_side_is_not_checked_rather_than_paired() {
-        assert!(matches!(
-            compare(None, Some(&card("aa", Some(47)))),
-            Pairing::NotChecked { .. }
-        ));
-        assert!(matches!(
-            compare(Some(&tree("aa", Some(47))), None),
-            Pairing::NotChecked { .. }
-        ));
+        let no_tree = compare(None, Some(&card_named("no-tree.rom", "aa", Some(47))));
+        assert_eq!(
+            no_tree,
+            Pairing::NotChecked {
+                why: NotCheckedReason::TreeRecordsNoRom
+            }
+        );
+
+        let no_card = compare(Some(&tree("aa", Some(47))), None);
+        assert_eq!(
+            no_card,
+            Pairing::NotChecked {
+                why: NotCheckedReason::CardRecordsNoRom
+            }
+        );
     }
 }
