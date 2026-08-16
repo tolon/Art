@@ -538,6 +538,53 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-128** 🟠 ✅ **A licensed Amiga Forever ROM went onto the card
+encrypted, and the card could not boot** — *found and fixed 2026-08-17, from
+the user saying they own Cloanto ROMs too*
+`src-tauri/src/commands/card.rs`, `src-tauri/src/core/rom/mod.rs`,
+`src/pages/RomStudio.tsx` · An Amiga Forever ROM is the same Kickstart behind
+an `AMIROMTYPE1` header and a repeating XOR against the buyer's own
+`rom.key`. `payload_for` read it with a plain `std::fs::read` and handed the
+bytes straight to the boot partition, so the card carried eleven bytes of
+header and half a megabyte of ciphertext where its Kickstart should be. The
+Amiga would not start, and nothing on the way there said why: the build's only
+note was `RomUnrecognised` — the same one any uncatalogued dump gets, which
+reads as *probably fine*.
+
+Two smaller wrongs sat beside it. `identify_rom` stripped the header and then
+described the ciphertext, so a licensed ROM came back as *Generic Amiga 512KB
+ROM* with no version and no machine — ART's weakest answer for a file it could
+have read exactly. And the ROM screen showed a green **✓ Cloanto Encrypted
+Header Stripped** badge for every such file, which is true and useless: the
+header was off, the image was still encrypted.
+
+→ **Fixed by treating these as first-class input, which is what they are** —
+the user's community owns a mix of bare dumps and licensed Amiga Forever ROMs,
+and uses ART for real Amigas rather than emulators. `decode_cloanto` undoes the
+XOR; the key is looked for as `rom.key` **beside the ROM**, which is where
+Amiga Forever puts it and where `amitools`' own loader looks (the algorithm was
+read from that implementation rather than remembered). Decoded, the image goes
+through the ordinary identification — stored checksum, name, machine — so a
+licensed A1200 dump is now named and placed exactly like a bare one.
+
+Without the key ART says so and stops: the ROM is named *Amiga Forever ROM
+(encrypted, needs rom.key)*, claims no machine, and a card build is **refused**
+rather than warned — refused because this is a certainty, not a risk, and
+ART-103 is the precedent for stopping at one. The badge now splits into the
+decoded case and an amber "no rom.key beside it" case.
+
+Tests: `a_cloanto_rom_is_decoded_with_the_key_beside_it_and_then_identified`
+(a synthetic ROM carrying a catalogued stored checksum, encrypted with a
+synthetic key — recovering `Kickstart 40.68 (A1200)` proves the decode
+produced the original bytes, not merely different ones),
+`a_cloanto_rom_with_no_key_is_named_as_one_rather_than_guessed_at`,
+`an_encrypted_rom_with_no_key_is_refused_rather_than_written_to_a_card`,
+`an_encrypted_rom_reaches_the_card_decoded`. **Not yet run against a real
+Amiga Forever ROM**: the user's licensed copies are on their phone, not on
+this machine — no Cloanto-headered file and no `rom.key` exists anywhere under
+`E:miga`, the Amiga Forever installation or the `.rp9` packages, all of which
+were searched.
+
 **ART-104** 🟡 ✅ **ART's ROM database matched none of the user's 29 Kickstart
 dumps** — *found 2026-08-14 planning a card with the real material; fixed
 2026-08-16*

@@ -45,6 +45,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-ASCII-name figures there remain the earlier, separate measurement.
   **Since re-run** — see the entry above it.
 
+### Amiga Forever ROMs work like any other (2026-08-17)
+
+#### Fixed
+- **A licensed Amiga Forever ROM can now be used to build a card.** These
+  files are the same Kickstart kept behind a header and a simple encoding,
+  unlocked by the `rom.key` that came with your licence. ART used to copy the
+  file onto the card exactly as it sits on disk — so the Amiga found encrypted
+  bytes where its Kickstart should be and would not start, with nothing on the
+  way there saying so. ART now decodes it with the `rom.key` sitting beside it,
+  and the ROM is then recognised, named and matched to a machine like any
+  other dump.
+- **When the key is missing, ART says so and stops.** A card built from an
+  encrypted ROM cannot boot, so the build is refused — naming the file, what
+  would happen, and where to put the key — rather than written and hoped for.
+- **The ROM screen no longer shows a green tick for a ROM it cannot read.**
+  "Header stripped" was true and meaningless; it now says either that the ROM
+  was decoded with your key, or that the key was not found beside it.
+
 ### ART knows your Kickstarts now (2026-08-16)
 
 #### Fixed
