@@ -310,15 +310,45 @@ The two traits are close enough that the adapter is small:
 what libpfs3's own `FileBlockDevice` does — widens the block number and maps
 the error type.
 
-**The point of the adapter is not tidiness.** PFS3 has no journalling of its
-own, so `core/volume/journal.rs` is the only crash safety a PFS3 write can
-have. Driving libpfs3 through ART's device puts every PFS3 block write inside
-that journal: a block that has not been saved cannot be written, and a rollback
-restores the image byte for byte. Using libpfs3's own `FileBlockDevice` would
-leave an interrupted install as an unknown volume.
+### Corrected 2026-08-16: this section claimed journalling it cannot have
 
-Limit, written down rather than discovered: ART's `total_blocks()` is `u32`, so
-2 TB at 512-byte blocks. Far beyond any card.
+The paragraph that stood here argued the adapter was "not optional" because it
+would put every PFS3 block write inside `core/volume/journal.rs`. **That was
+wrong, and it was wrong about a safety property, which is the worst kind.**
+
+`Journalled::begin(device, image, offset, description, blocks: &[u32])` takes
+the block set **up front** — it saves those blocks, fsyncs, and returns a guard
+that may write exactly those and no others. That fits Stage W, where the writer
+plans its `BlockSet` before touching anything. libpfs3 decides which blocks to
+write as it goes and cannot supply the list. The claim was never achievable.
+
+**What is true, and is the property to build and test instead: writes are
+bounded to the target partition.** `FileRegionMut::open(path, offset, length,
+block_size)` refuses a region running past the end of the file rather than
+clamping it — its own doc comment explains why, in the same terms
+`core/fat32.rs::Region` uses for the boot partition. So nothing outside the
+partition being written can be touched: not the neighbouring partitions, not
+the RDB, not the FAT32 boot partition where the Amiga's first RDB begins.
+
+**And the partition's own contents are forfeit by the user's confirmed choice.**
+`core/preload::plan` always emits `FormatPartition` before `CopyIn`, and the
+screen already names formatting as destructive. Journalling blocks the user has
+agreed to erase protects nothing. An interrupted run leaves an **incomplete**
+volume — reformatted and redone, not a corrupted one silently trusted — and the
+report says so rather than implying a rollback exists.
+
+**The one case where crash safety would genuinely matter is therefore refused
+by name:** writing into an existing, populated PFS3 volume *without* formatting
+it. ART has no crash safety for that and does not offer it.
+
+The adapter still earns its place — it keeps the device abstraction ART's, so
+the bounded region and the block-number checks are ART's own code rather than a
+dependency's — but it is no longer load-bearing for a guarantee it cannot make.
+
+Two limits, written down rather than discovered: ART's `total_blocks()` is
+`u32`, so 2 TB at 512-byte blocks, far beyond any card; and `FileRegionMut`
+owns its `File` and carries no lifetime, which is what lets the adapter satisfy
+libpfs3's `Box<dyn BlockDevice + 'static>` at all.
 
 ## Verification, and the trap it avoids
 

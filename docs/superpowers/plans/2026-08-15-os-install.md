@@ -1329,7 +1329,18 @@ git commit -m "SD-2 G5: User-Startup gets a block per component, edited in place
 
 ---
 
-### Task 8: `libpfs3`, and ART's journal underneath it
+### Task 8: `libpfs3`, bounded to its own partition
+
+> **Corrected 2026-08-16, mid-execution.** This task was written around putting
+> every PFS3 block write inside `core/volume/journal.rs`. That is not possible:
+> `Journalled::begin` takes its block set **up front**, and libpfs3 decides as
+> it goes. The property to build and test is **bounded writes** — `FileRegionMut`
+> refuses a region past the end of the file rather than clamping, so nothing
+> outside the target partition can be touched. G5 always formats before it
+> fills, so the partition's own contents are forfeit by the user's confirmed
+> choice; an interrupted run leaves an *incomplete* volume, not a corrupted one.
+> Writing into an existing populated PFS3 volume without formatting is refused
+> by name. See the spec's "Corrected 2026-08-16" section.
 
 **Files:**
 - Modify: `src-tauri/Cargo.toml`
