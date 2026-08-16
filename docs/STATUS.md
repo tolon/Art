@@ -18,16 +18,17 @@ Update it at the end of any session that changes what works.
 
 | | |
 |---|---|
-| **Last updated** | 2026-08-15 |
+| **Last updated** | 2026-08-16 |
 | **Version** | 0.1.0 (unreleased) |
 | **Current stage** | **SD-1 complete** — every gap it names is built: the card's shape (G2), RDB filesystem embedding (G4), build manifest (G7), image health check (G8), a build as a drop target (G15), engine and screen throughout. **What is left in SD-1 is not code: a card flashed and an A500 booted.** **SD-2 in progress** — PFS3 preload via `hst-imager` (G3 route E) and the layout policy (G11) have both landed, engine and screen; OS install (G5), ROM pairing (G9) and launcher metadata export (G10) are owed. Reading a real card has a screen ([ART-095](ISSUES.md), [ART-097](ISSUES.md)); **no card ART built has been flashed or booted** |
 | **Build** | PASS |
-| **Tests** | 1203 Rust passed, 0 failed; 490 frontend passed, 0 failed |
+| **Tests** | 1357 Rust passed, 0 failed; 490 frontend passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
 | **TypeScript** | clean |
 | **amitools oracle** | 53 checks, both directions — now including a filesystem driver ART embedded in an RDB and `rdbtool` extracted back out byte-for-byte |
 | **7-Zip FAT32 oracle** | the card's boot partition, written by ART and read by 7-Zip: filesystem type, geometry, label, names and every file's bytes (`scripts/fat-oracle-check.py`) |
 | **7-Zip disc oracle** | 4 fixtures — Joliet, ISO9660-only, raw Mode 1, raw Mode 2/XA — names, sizes and every file's SHA-256 |
+| **hst-imager PFS3 oracle** | both directions, local only (`scripts/pfs3-oracle-check.py`, no `hst.imager.exe` in CI): ART writes a volume through `NativeFormatter` and `hst-imager fs dir -r` reads it back — names, sizes, and every protection-bit string, `hsparwed` cased as `hst-imager` spells it; `hst-imager` formats and fills a volume and ART reads it back through `libpfs3`, SHA-256 per file rather than a length (ART-079's exact shape) plus the same protection strings |
 | **cargo-deny** | advisories, bans, licences, sources — all ok |
 | **MSRV** | 1.93 (raised from 1.77 on 2026-08-12, for a maintained 7z decoder) |
 | **i18n** | `en.json` and `tr.json`, 1374 leaf keys each, parity enforced by `pnpm test` |
@@ -49,6 +50,7 @@ cd src-tauri && cargo test                             # unit + integration (twi
 pip install amitools && python scripts/oracle-check.py # independent cross-check
 python scripts/iso-oracle-check.py                     # the disc reader vs 7-Zip (needs 7z; not in CI)
 python scripts/fat-oracle-check.py                     # the card's boot partition vs 7-Zip (needs 7z; not in CI)
+python scripts/pfs3-oracle-check.py                     # PFS3, both directions, vs hst-imager (needs hst.imager.exe; not in CI)
 python scripts/zoom-check.py                           # the shell's widths, in a real browser (needs `pnpm dev`)
 cd src-tauri && cargo deny check                       # licences and advisories
 pnpm tauri build                                       # full bundle (slow)
@@ -1027,6 +1029,8 @@ merely being nice to know.
 ## Session log
 
 Newest first. One line per session that changed what works.
+
+| 2026-08-16 | **Task 11: an independent witness for the PFS3 writer, both ways.** `libpfs3` is both the crate ART writes PFS3 with and the crate ART reads it back with, so ART's own suite cannot catch a mistake the two would share — the exact shape of ART-032 … ART-035, ART-075 and ART-079. `scripts/pfs3-oracle-check.py` closes that gap with `hst-imager` (C#, no shared code) in both directions: `build_pfs3_volume_for_oracle_when_asked` builds a volume through `NativeFormatter` — the same `format_partition`/`copy_in` G5 uses — and prints a JSON claim of every entry, which `hst-imager fs dir -r` is then checked against, protection bits included (`--P-RWED`, `-S--RWED` — the Pure and Script bits, the reason this phase exists: 3.2's `Startup-Sequence` runs `Resident C:Assign PURE`); `read_foreign_pfs3_for_oracle_when_asked` reads back a volume `hst-imager` itself formatted and filled, printing a **SHA-256 per file** rather than a length, because a length is exactly what ART-079 got right while handing over the wrong bytes. Run for real against `hst-imager 1.6.616`: both directions clean. Deliberately broken twice to confirm the oracle actually discriminates — a protection bit forced to zero was caught (`FAIL C/Assign carries --P-RWED (hst-imager says ----RWED)`), and a single byte flipped in a file ART read back was caught by the hash while the length still matched (`ok Readme is 34 bytes` / `FAIL Readme hashes to what hst-imager was given`), which is the property the second direction exists to prove. Local only, like `fat-oracle-check.py` and `iso-oracle-check.py`: the CI runner has no `hst.imager.exe` | 1357 Rust / 490 frontend |
 
 | Date | Change | Tests |
 |---|---|---|

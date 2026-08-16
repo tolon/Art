@@ -1544,4 +1544,160 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code(), "ART-FORMAT-UNSUPPORTED", "{err}");
     }
+
+    // -----------------------------------------------------------------------
+    // Task 11: the PFS3 oracle, both directions (`scripts/pfs3-oracle-check.py`)
+    //
+    // A reader and a writer that agree only with each other is the shape
+    // ART-032 … ART-035, ART-075 and ART-079 all were. `libpfs3` is both the
+    // writer this module drives and the reader `core/osinstall/verify.rs`
+    // uses, so ART cannot close that gap on its own — these two hooks are
+    // what let `hst-imager`, a C# implementation sharing no code with ART,
+    // stand in as the outside witness.
+    // -----------------------------------------------------------------------
+
+    /// **ART writes, `hst-imager` reads.** Builds a PFS3 volume end to end
+    /// through `NativeFormatter` — the same `format_partition` then
+    /// `copy_in` calls G5 makes — and prints a JSON description of every
+    /// entry so `hst-imager fs dir -r` can be checked against a claim rather
+    /// than against ART's own opinion of what it wrote.
+    ///
+    /// Protection bits are the point, not an extra: `C/Assign` carries the
+    /// Pure bit (`--p-rwed`) and `C/Startup-Sequence` the Script bit
+    /// (`-s--rwed`) — Task 11's brief calls out the Pure bit specifically,
+    /// because AmigaOS 3.2's `Startup-Sequence` runs `Resident C:Assign
+    /// PURE` and that bit arriving is the reason this whole phase exists. The
+    /// attribute strings are `hst-imager`'s own spelling — `HSPARWED`,
+    /// uppercase for granted — which is `uaem::format_bits`'s lowercase
+    /// output uppercased; the two encodings agree bit for bit
+    /// (`pfs3_protection`'s doc comment), confirmed against a real
+    /// `hst-imager 1.6.616` run rather than assumed.
+    ///
+    /// ```text
+    /// ART_PFS3_WRITE_OUT=... cargo test build_pfs3_volume_for_oracle_when_asked -- --nocapture
+    /// ```
+    #[test]
+    fn build_pfs3_volume_for_oracle_when_asked() {
+        let Ok(target) = std::env::var("ART_PFS3_WRITE_OUT") else {
+            return;
+        };
+        let image = PathBuf::from(&target);
+        if let Some(parent) = image.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+
+        crate::core::hdf::create_hdf(
+            &image,
+            220 * 1024 * 1024,
+            true,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::Pfs3DirectScsi,
+                size_mb: 200,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 0,
+            }],
+            &[],
+        )
+        .unwrap();
+
+        NativeFormatter
+            .format_partition(&image, None, 1, "Workbench", &NoProgress)
+            .unwrap();
+
+        let tree = fixtures::scratch("pfs3-oracle-write");
+        std::fs::create_dir_all(tree.join("C/Extra")).unwrap();
+        std::fs::create_dir_all(tree.join("S")).unwrap();
+        std::fs::write(tree.join("Readme"), b"hello from ART\n").unwrap();
+        std::fs::write(tree.join("C/Assign"), b"ASSIGN\n").unwrap();
+        std::fs::write(
+            tree.join("C/Assign.uaem"),
+            "--p-rwed 2021-04-13 02:43:13.68 kept by ART\n",
+        )
+        .unwrap();
+        std::fs::write(tree.join("C/Startup-Sequence"), b"; a comment\n").unwrap();
+        std::fs::write(
+            tree.join("C/Startup-Sequence.uaem"),
+            "-s--rwed 2021-04-13 02:43:13.68\n",
+        )
+        .unwrap();
+        std::fs::write(tree.join("C/Extra/Deep.txt"), b"deep\n").unwrap();
+
+        NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+
+        // What a real `hst-imager fs dir -r` is expected to show — verified
+        // by hand against `hst-imager 1.6.616` on this exact tree before
+        // this assertion was written, not guessed at: forward slashes in
+        // nested paths, `----RWED` for a file with no sidecar, `--P-RWED`
+        // for the Pure bit, `-S--RWED` for the Script bit.
+        let entries = serde_json::json!([
+            {"path": "Readme", "kind": "file", "size": 15, "attributes": "----RWED"},
+            {"path": "C", "kind": "dir", "attributes": "----RWED"},
+            {"path": "C/Assign", "kind": "file", "size": 7, "attributes": "--P-RWED"},
+            {"path": "C/Startup-Sequence", "kind": "file", "size": 12, "attributes": "-S--RWED"},
+            {"path": "C/Extra", "kind": "dir", "attributes": "----RWED"},
+            {"path": "C/Extra/Deep.txt", "kind": "file", "size": 5, "attributes": "----RWED"},
+            {"path": "S", "kind": "dir", "attributes": "----RWED"},
+        ]);
+        println!("json={entries}");
+    }
+
+    /// **`hst-imager` writes, ART reads** — the other half, and the one that
+    /// catches the hard bugs (Task 11's brief): ART-079 gave every file
+    /// exactly the right *length* and another file's bytes, so this prints a
+    /// SHA-256 per entry rather than a length.
+    ///
+    /// Reads through the same path `core/osinstall/verify.rs` uses —
+    /// `read_card` for the RDB, then `libpfs3::volume::Volume::open` for the
+    /// filesystem — so what is being proved is that ART's reader can make
+    /// sense of a volume an independent writer produced, not merely that it
+    /// agrees with itself.
+    ///
+    /// ```text
+    /// ART_PFS3_READ_IN=... cargo test read_foreign_pfs3_for_oracle_when_asked -- --nocapture
+    /// ```
+    #[test]
+    fn read_foreign_pfs3_for_oracle_when_asked() {
+        let Ok(source) = std::env::var("ART_PFS3_READ_IN") else {
+            return;
+        };
+        let image = PathBuf::from(&source);
+
+        // The RDB is read with ART's own parser regardless of who wrote it —
+        // a plain image from `hst.imager blank` + `format Rdb PDS3` has its
+        // RDB at byte zero, the same `slot: None` convention `mod.rs` and
+        // `format_partition` already use for a plain HDF.
+        let card = read_card(&image).unwrap();
+        let area = area_for_slot(&card, None).unwrap();
+        let part = partition_by_index(area, 1).unwrap();
+        let (offset, _length, _block_size) = partition_region(area, part).unwrap();
+
+        let mut vol = libpfs3::volume::Volume::open(&image, offset).unwrap();
+        println!("volume={}", vol.name());
+
+        fn walk(vol: &mut libpfs3::volume::Volume, prefix: &str) {
+            let mut entries = vol.list_dir(prefix).unwrap();
+            entries.sort_by(|a, b| a.name.cmp(&b.name));
+            for entry in entries {
+                let path = if prefix.is_empty() {
+                    entry.name.clone()
+                } else {
+                    format!("{prefix}/{}", entry.name)
+                };
+                let attrs = uaem::format_bits(u32::from(entry.protection)).to_uppercase();
+                if entry.is_dir() {
+                    println!("entry={path}|dir|-|-|{attrs}");
+                    walk(vol, &path);
+                } else {
+                    let data = vol.read_file(&path).unwrap();
+                    let hash = crate::core::hashing::sha256_bytes(&data);
+                    println!("entry={path}|file|{}|{hash}|{attrs}", data.len());
+                }
+            }
+        }
+        walk(&mut vol, "");
+    }
 }
