@@ -20,6 +20,7 @@ pub mod jobs;
 pub mod layout;
 pub mod lha;
 pub mod oplog;
+pub mod osinstall;
 pub mod panel;
 pub mod pistorm;
 pub mod preload;

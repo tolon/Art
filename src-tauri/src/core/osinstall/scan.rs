@@ -76,12 +76,19 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
 use crate::core::error::CoreResult;
 
 use super::source::{AdfSource, MediaSource};
 
 /// One piece of install media [`find_media`] opened successfully.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Serialize` (Task 12): this is what `commands::osinstall::osinstall_scan_media`
+/// hands back to the screen, so it needs to cross the wire — never
+/// `Deserialize`, since nothing ever sends one back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FoundMedia {
     pub path: PathBuf,
     /// The volume name read from **inside** the image — never derived from

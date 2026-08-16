@@ -148,7 +148,7 @@ pub fn condition_holds(
 /// itself, so whatever it needs to compose the file has to travel on the
 /// plan. Carrying it also means a preview screen can show what would be
 /// added before anything is written.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserStartupContribution {
     pub component: String,
@@ -157,7 +157,7 @@ pub struct UserStartupContribution {
 
 /// One file or directory `apply` (a later task) will place in the
 /// distribution tree.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanItem {
     pub component: String,
@@ -176,7 +176,12 @@ pub struct PlanItem {
 /// written, or every reason it cannot proceed — never both. Any refusal at
 /// all empties `items` and `media_paths` (see the module doc comment); the
 /// UI can always tell the two cases apart by checking `refusals.is_empty()`.
-#[derive(Debug, Clone, Serialize)]
+///
+/// `Deserialize` too, not just `Serialize` (Task 12): `commands::osinstall::osinstall_apply`
+/// takes the plan the screen was shown rather than recomputing it — the same
+/// rule `LayoutPlan` already follows for `layout_apply` — so this has to
+/// cross the wire in both directions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallPlan {
     pub release: String,
