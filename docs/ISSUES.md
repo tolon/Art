@@ -251,37 +251,6 @@ and `size()` byte formatter, now in three screens and identical in all three.
 Two copies was a judgement call; three is where it stops being one. One
 `src/lib/size.ts` is smaller than the next reviewer noticing again.
 
-**ART-104** 🟡 **The user's own A1200 Kickstart is not in the ROM database** —
-*found 2026-08-14, planning a card with the real material*
-`src-tauri/src/core/rom.rs` · `KNOWN_ROMS` holds one SHA-256 per ROM, and the
-3.1 (40.068) A1200 entry is
-`e40a5dfb3d017ba335127d85ea15c34cb27a2444230e963b7b6a1e378774d9b4`. The file the
-project's own material list names —
-`Kickstart v3.1 rev 40.68 (1993)(Commodore)(A1200).rom`, 524 288 bytes — hashes
-to `6d43840d4099a74170ea0f0425b6257c3891ebcaa39c4d1840075a9ab22b5707`. Same ROM,
-a different dump; there are several in circulation.
-
-So `identify_rom` falls back to size and answers *Generic Amiga 512KB ROM
-(Kickstart 2.x/3.x)*, and `card_plan_build` warns `RomUnrecognised` for the ROM
-that is very probably right. Nothing is refused and nothing is substituted —
-that part is by design — but two things are lost: the user is told ART does not
-know their ROM every time they build a card, and `rom_suits` returns `None`, so
-the *wrong machine* check can never fire for this file at all.
-
-**The fix, settled the same day by prior art** ([sd0-prior-art.md §4.1](sd0-prior-art.md)).
-The Emu68 Imager answers this with data rather than with code:
-`Compare-KickstartHashes.ps1` compares against a **CSV carrying several hashes
-per Kickstart revision**, with a `Sequence` field to choose between them, and
-accepts a file of **524 288 *or* 524 299 bytes** — the second being a 512 KiB
-ROM behind Amiga Forever's 11-byte header, which ART's size check rejects
-outright today.
-
-So: `KNOWN_ROMS` gains a **list** of hashes per entry rather than one, and the
-headered size is accepted with the header skipped before hashing. Not the
-header-parsing redesign this entry first proposed — that was a guess, and the
-cheaper answer turned out to be the one a tool in the field already ships.
-Reproduced by `plan_a_real_card_when_asked` with `ART_CARD_ROM` set.
-
 **ART-101** 🔵 **The sidebar's collapse never fires under Application Size** — *open*
 `src/components/layout/layout.css` · `@media (max-width: 1000px)` collapses the
 sidebar to icons, "below this the sidebar's labels cost more than they give".
@@ -568,6 +537,93 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-104** 🟡 ✅ **ART's ROM database matched none of the user's 29 Kickstart
+dumps** — *found 2026-08-14 planning a card with the real material; fixed
+2026-08-16*
+`src-tauri/src/core/rom.rs` · `KNOWN_ROMS` holds one SHA-256 per ROM, and the
+3.1 (40.068) A1200 entry is
+`e40a5dfb3d017ba335127d85ea15c34cb27a2444230e963b7b6a1e378774d9b4`. The file the
+project's own material list names —
+`Kickstart v3.1 rev 40.68 (1993)(Commodore)(A1200).rom`, 524 288 bytes — hashes
+to `6d43840d4099a74170ea0f0425b6257c3891ebcaa39c4d1840075a9ab22b5707`. Same ROM,
+a different dump; there are several in circulation.
+
+So `identify_rom` falls back to size and answers *Generic Amiga 512KB ROM
+(Kickstart 2.x/3.x)*, and `card_plan_build` warns `RomUnrecognised` for the ROM
+that is very probably right. Nothing is refused and nothing is substituted —
+that part is by design — but two things are lost: the user is told ART does not
+know their ROM every time they build a card, and `rom_suits` returns `None`, so
+the *wrong machine* check can never fire for this file at all.
+
+**The fix, settled the same day by prior art** ([sd0-prior-art.md §4.1](sd0-prior-art.md)).
+The Emu68 Imager answers this with data rather than with code:
+`Compare-KickstartHashes.ps1` compares against a **CSV carrying several hashes
+per Kickstart revision**, with a `Sequence` field to choose between them, and
+accepts a file of **524 288 *or* 524 299 bytes** — the second being a 512 KiB
+ROM behind Amiga Forever's 11-byte header, which ART's size check rejects
+outright today.
+
+So: `KNOWN_ROMS` gains a **list** of hashes per entry rather than one, and the
+headered size is accepted with the header skipped before hashing. Not the
+header-parsing redesign this entry first proposed — that was a guess, and the
+cheaper answer turned out to be the one a tool in the field already ships.
+Reproduced by `plan_a_real_card_when_asked` with `ART_CARD_ROM` set.
+
+**Measured before fixing, and it was worse than the entry said.** Not one
+dump: `KNOWN_ROMS`'s ten hand-listed hashes matched **0 of the 29** Kickstart
+files in the project's own collection. So `compatible_models` was empty for
+every one of them, `rom_suits` returned `None` every time, and the
+wrong-machine check had never fired for real material in its life. The ten
+hashes also had no recorded provenance — nothing said where they came from or
+against what they had been checked.
+
+→ **Fixed by identifying a dump the way the ecosystem does.** Every Kickstart
+stores a checksum 24 bytes before its end, and that value is unique *per
+build*: `Kickstart 40.68 (A1200)` and `Kickstart 40.68 (A4000)` share a
+revision and differ here, which is the distinction a revision alone can never
+make (this entry's own earlier note explains why borrowing a same-revision
+entry's machines was rejected). `identify_rom` now asks three questions in
+order — the stored checksum, then the old SHA-256 table, then what the ROM
+says about its own version — and only the first can name a machine.
+
+The table behind it is **generated, not hand-listed**:
+`scripts/rom-table-check.py` reads the Remus split database shipped with
+`amitools` (GPL-2.0-or-later, compatible with ART's GPL-3.0-or-later; recorded
+in `THIRD_PARTY_LICENSES.md`) and emits `core/rom/remus.rs` — 154 dumps with
+their sizes, names and machines. CI runs the same script in verify mode, so
+the committed table cannot drift from its source without the build saying so.
+
+**It cannot grow a claim quietly.** Machine lists come from an explicit map of
+the database's own 44 parenthetical strings, not from splitting them: the
+obvious tokeniser read `A500/2000` as A500 alone and `A1200_R2` as nothing,
+and a *partial* machine list is worse than none — `rom_suits` would then warn
+"wrong machine" about a ROM that suits it, which is this entry in reverse. A
+string the map has never seen stops the script rather than producing a guess
+(one already did: `Kickstart 45.61 AmigaForever (1200)`).
+
+Measured after: **24 of the collection's Kickstarts named with their machine**,
+the two 40.68 builds correctly told apart, and the 52 accelerator and
+diagnostic ROMs in the same folder claiming nothing at all. Six Kickstart
+dumps the database does not carry fall back to what they state about
+themselves, exactly as before — no regression, no invention.
+
+**Its mirror, fixed in the same pass**: the size-based fallback used to name
+machines from a file's *length* — a 256 KB image was "A500, A2000", which is
+what ART told the user about the CDTV extended ROM in their own collection,
+and anything unrecognised was given the model `"Unknown"`. `rom_suits` never
+acted on those (it declines when `version` is `Custom`), so nothing was
+refused wrongly, but the screen showed a claim nothing measured. The size
+still names the *shape*; it no longer names a machine
+(`a_size_names_the_shape_and_not_the_machine`).
+
+Tests: `a_catalogued_dump_is_named_and_placed_by_the_checksum_it_stores` (the
+two 40.68 builds, distinguished by nothing but the stored value),
+`an_entry_that_names_no_machine_claims_none`,
+`a_size_names_the_shape_and_not_the_machine`, and
+`identify_the_real_rom_collection_when_asked` — an `ART_ROM_DIR`-gated hook
+that prints what ART makes of a real collection, since ART ships no ROM and
+never will.
 
 **ART-124** 🟡 ✅ **`apply()` reported how many plan items it ran, not what the
 tree holds — and the manifest carried 94 paths twice** — *found 2026-08-16,

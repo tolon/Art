@@ -45,6 +45,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-ASCII-name figures there remain the earlier, separate measurement.
   **Since re-run** — see the entry above it.
 
+### ART knows your Kickstarts now (2026-08-16)
+
+#### Fixed
+- **ART recognises real Kickstart ROMs.** Its ROM list held ten entries with
+  no record of where they came from, and measured against a real collection of
+  29 Kickstart dumps it recognised **none** of them — so the check that warns
+  "this ROM is not for the machine you picked" had never once been able to
+  fire. ART now identifies a ROM by a value the ROM itself stores, which is
+  different for every build: it can finally tell the A1200 and A4000 versions
+  of the same Kickstart apart, and it names 24 of that collection with the
+  machine each one belongs to.
+- **The list is no longer hand-written.** It is generated from an independent,
+  open-source ROM database and re-checked against it on every build, so it
+  cannot quietly go stale or grow an entry nobody verified.
+- **A file's size no longer names a machine.** A 256 KB ROM image was
+  described as suiting an A500 and an A2000 purely because of its length —
+  which is what ART said about a CDTV ROM. The size still describes the
+  image; it no longer claims a machine nothing measured.
+
 ### Honest numbers on the install report (2026-08-16)
 
 #### Fixed
