@@ -111,6 +111,32 @@ pub trait VolumeFormatter {
         sink: &dyn ProgressSink,
     ) -> CoreResult<()>;
 
+    /// Whether this formatter could run [`copy_in`](Self::copy_in) for
+    /// `source` — asked **before** the partition is formatted, and answering
+    /// with the same `CoreError` `copy_in` itself would refuse with.
+    ///
+    /// **Why this exists (ART-122).** A partition must be formatted and
+    /// filled by *one* implementation: `hst-imager`'s first write into a
+    /// volume `NativeFormatter` formatted dies `ERROR_DISK_FULL`, because the
+    /// two size the PFS3 reserved area differently (ART's number is
+    /// `pfs3aio`'s own, computed by its own algorithm). So the caller has to
+    /// know which tool will do the *copy* before it runs the *format*, and
+    /// asking by attempting the copy is not available — the format has to
+    /// come first. This is that question, and it writes nothing.
+    ///
+    /// The default is `Ok(())`: a formatter that has not stated a limitation
+    /// is taken to have none, which is right for `hst-imager` (it is the
+    /// fallback precisely because it can do what the native path cannot).
+    fn can_copy_in(
+        &self,
+        _image: &Path,
+        _slot: Option<usize>,
+        _drive: &str,
+        _source: &Path,
+    ) -> CoreResult<()> {
+        Ok(())
+    }
+
     /// Copy a tree from the PC into a partition.
     fn copy_in(
         &self,

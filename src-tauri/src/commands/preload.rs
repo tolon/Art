@@ -39,16 +39,27 @@
 //! Both refusals are therefore safe to treat as "try the other tool": the
 //! attempt that failed left nothing behind to clean up or roll back.
 //!
-//! **The choice is made per step, not per run.** A preload's three kinds of
-//! step have different needs — see [`run_with_fallback`]'s own doc comment
-//! for why a single whole-run choice would either waste the native path or
-//! force it aside more often than the two real gaps require. `core/` stays
-//! free of the choice itself (CLAUDE.md): [`VolumeFormatter`] is unchanged,
-//! and `core::preload::run` (the single-formatter runner) is untouched and
-//! still what a caller with only one tool in hand — a test, or `hst-imager`
-//! alone — uses. This module's own [`run_with_fallback`] is the
-//! `commands/`-level orchestration that picks between two formatters, one
-//! step at a time.
+//! ## ART-122 — the unit of that choice is a partition, not a step
+//!
+//! **The choice is made per partition, not per run and not per step.** The
+//! first shipped version chose per step, and that is how a format could run
+//! natively while the copy into the volume it had just made fell back — the
+//! one combination that does not work. `hst-imager`'s first write into a
+//! volume `NativeFormatter` formatted dies `ERROR_DISK_FULL`: the two
+//! implementations size the PFS3 reserved area differently, and ART's number
+//! is the one `pfs3aio`'s own algorithm produces, so this is not ART's
+//! arithmetic being unusual. A volume is therefore formatted and filled by
+//! one implementation or by neither, decided **before** the destructive step
+//! through [`VolumeFormatter::can_copy_in`], which writes nothing. See
+//! [`run_with_fallback`]'s own doc comment for why a whole-run choice is
+//! still wrong.
+//!
+//! `core/` stays free of the choice itself (CLAUDE.md): [`VolumeFormatter`]
+//! gained a capability question, not a policy, and `core::preload::run` (the
+//! single-formatter runner) is untouched and still what a caller with only
+//! one tool in hand — a test, or `hst-imager` alone — uses. This module's own
+//! [`run_with_fallback`] is the `commands/`-level orchestration that picks
+//! between two formatters.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -152,6 +163,14 @@ pub enum FallbackReason {
     /// [`CoreError::NonAsciiPfs3Names`] did, so the screen can say which
     /// names without re-deriving them.
     NonAsciiPfs3Names { paths: Vec<String>, more: usize },
+    /// ART-122. **Not a capability gap of its own** — the format step is one
+    /// the native path can always do. It falls back because the *copy* into
+    /// the same volume must, and `hst-imager`'s first write into a volume
+    /// `NativeFormatter` formatted fails: a partition is formatted and filled
+    /// by one tool or by neither. Carries the drive whose copy forced it, so
+    /// the report names the pairing rather than repeating the copy's own
+    /// reason against a step that reason is not about.
+    PairedWithFallbackCopy { drive: String },
 }
 
 impl FallbackReason {
@@ -198,6 +217,11 @@ impl FallbackReason {
                 } else {
                     String::new()
                 }
+            ),
+            Self::PairedWithFallbackCopy { drive } => format!(
+                "the copy into {drive} has to run on this tool, and a volume is formatted and \
+                 filled by one tool: hst-imager cannot write into a volume ART's own writer \
+                 formatted (ART-122)"
             ),
         }
     }
@@ -287,34 +311,97 @@ fn missing_tool_error(reason: &FallbackReason, step: &PreloadStep) -> CoreError 
     ))
 }
 
+/// The name a report gives the tool that ran a step — the fallback's own
+/// probed version, so a mismatched or untested `hst.imager.exe` is visible in
+/// the report rather than hidden behind a fixed label.
+fn tool_name_of(fallback: Option<&dyn VolumeFormatter>) -> String {
+    fallback
+        .and_then(|tool| tool.probe().ok())
+        .map(|version| version.raw)
+        .unwrap_or_else(|| "the configured tool".into())
+}
+
+/// Whether a `FormatPartition` step must go to the fallback because the
+/// `CopyIn` into the *same* volume will (ART-122) — asked before the format,
+/// answered without writing.
+///
+/// `None` for every other kind of step, for a format with no copy after it
+/// (nothing to be paired with), and for a copy the native path can do. A
+/// native error that is **not** one of the known capability gaps is `None`
+/// too: it is a real failure, and the format is left to run natively so the
+/// copy can report it as itself rather than having it surface early against
+/// a step it is not about.
+fn paired_copy_forces_fallback(
+    made: &PreloadPlan,
+    step: &PreloadStep,
+    native: &dyn VolumeFormatter,
+) -> Option<FallbackReason> {
+    let PreloadStep::FormatPartition {
+        slot, drive_name, ..
+    } = step
+    else {
+        return None;
+    };
+
+    let source = made.steps.iter().find_map(|other| match other {
+        PreloadStep::CopyIn {
+            slot: copy_slot,
+            drive_name: copy_drive,
+            source,
+        } if copy_slot == slot && copy_drive == drive_name => Some(source),
+        _ => None,
+    })?;
+
+    let err = native
+        .can_copy_in(&made.image, *slot, drive_name, source)
+        .err()?;
+    FallbackReason::from_native_error(&err)?;
+    Some(FallbackReason::PairedWithFallbackCopy {
+        drive: drive_name.clone(),
+    })
+}
+
 /// Run a plan, giving the native path first refusal on every step and
 /// falling back to `hst-imager` only for the two known capability gaps
 /// (ART-113, ART-117) — never for a real failure.
 ///
-/// **Per step, chosen here rather than once for the whole run.** A preload's
-/// three kinds of step have different needs: `ImportFilesystem` always needs
-/// the fallback (`NativeFormatter` refuses it unconditionally, for every
-/// card — ART-117), while `FormatPartition` and almost every `CopyIn` run
-/// natively; only a `CopyIn` whose source tree carries a non-ASCII AmigaDOS
-/// name onto a PFS3 partition needs the fallback too (ART-113), and that is
-/// a fact about *that step's own content*, not about the run as a whole.
+/// **Per partition, chosen here rather than once for the whole run.** A
+/// preload's three kinds of step have different needs: `ImportFilesystem`
+/// always needs the fallback (`NativeFormatter` refuses it unconditionally,
+/// for every card — ART-117), while `FormatPartition` and almost every
+/// `CopyIn` run natively; only a `CopyIn` whose source tree carries a
+/// non-ASCII AmigaDOS name onto a PFS3 partition needs the fallback too
+/// (ART-113), and that is a fact about *that partition's own content*, not
+/// about the run as a whole.
 ///
 /// A run-level choice — probe once, then use one formatter for every step —
 /// was the alternative, and it is simpler, but it is wrong in both
 /// directions: a single accented folder name anywhere in a large tree would
-/// force every other step, including every `FormatPartition`, onto
-/// `hst-imager` too; and a run that has to import one driver would waste the
-/// native path for every step after it, even though only that one step
-/// needed the fallback. Per-step costs one extra (cheap) call when a step
-/// needs no fallback — trying native first — in exchange for never using the
-/// slower, external tool for work the native path can already do.
+/// force every other partition's steps onto `hst-imager` too; and a run that
+/// has to import one driver would waste the native path for every step after
+/// it, even though only that one step needed the fallback.
+///
+/// **The unit is a partition, not a step (ART-122).** Formatting a volume
+/// with one implementation and filling it with the other does not work:
+/// `hst-imager`'s first write into a volume `NativeFormatter` formatted dies
+/// `ERROR_DISK_FULL`, because the two size the PFS3 reserved area
+/// differently — ART's number is `pfs3aio`'s own, computed by that
+/// implementation's own algorithm, so it is not ART's arithmetic that is
+/// unusual. The choice therefore has to be made *before* the format, from a
+/// fact about the copy that follows it: [`VolumeFormatter::can_copy_in`]
+/// answers exactly that, without writing. When it refuses with a known gap,
+/// the partition's format goes to the fallback as well, reported as
+/// [`FallbackReason::PairedWithFallbackCopy`]; when no fallback tool is
+/// configured, the run refuses **before** the partition is erased rather
+/// than after.
 ///
 /// This is safe specifically because both known gaps are refused **before**
 /// any byte is written: `import_filesystem` never opens the image, and the
-/// ART-113 check inside `copy_in` runs before `FileRegionMut::open` (see
-/// `core::preload::native`'s own module docs). So trying native first and
-/// reacting to exactly these two typed errors never leaves a half-written
-/// step behind — the failed attempt touched nothing.
+/// ART-113 check runs before `FileRegionMut::open` (see
+/// `core::preload::native`'s own module docs) whether it is reached through
+/// `copy_in` or `can_copy_in`. So trying native first and reacting to exactly
+/// these two typed errors never leaves a half-written step behind — the
+/// failed attempt touched nothing.
 fn run_with_fallback(
     made: &PreloadPlan,
     native: &dyn VolumeFormatter,
@@ -338,6 +425,24 @@ fn run_with_fallback(
             return Err(CoreError::Cancelled);
         }
         sink.report(done as u64, Some(total), &step_label(step));
+
+        // ART-122: a format whose own partition's copy must fall back goes to
+        // the fallback with it, decided before the destructive step rather
+        // than discovered after it.
+        if let Some(reason) = paired_copy_forces_fallback(made, step, native) {
+            let Some(fallback) = fallback else {
+                return Err(missing_tool_error(&reason, step));
+            };
+            let effect = run_step(&made.image, step, fallback, sink)?;
+            used_fallback = true;
+            reports.push(StepReport {
+                step: step.clone(),
+                tool: tool_name_of(Some(fallback)),
+                fallback_reason: Some(reason),
+            });
+            apply_effect(&mut outcome, effect);
+            continue;
+        }
 
         let native_err = match run_step(&made.image, step, native, sink) {
             Ok(effect) => {
@@ -366,13 +471,9 @@ fn run_with_fallback(
 
         let effect = run_step(&made.image, step, fallback, sink)?;
         used_fallback = true;
-        let tool_name = fallback
-            .probe()
-            .map(|v| v.raw)
-            .unwrap_or_else(|_| "the configured tool".into());
         reports.push(StepReport {
             step: step.clone(),
-            tool: tool_name,
+            tool: tool_name_of(Some(fallback)),
             fallback_reason: Some(reason),
         });
         apply_effect(&mut outcome, effect);
@@ -635,6 +736,11 @@ mod tests {
     struct Recorder {
         calls: std::cell::RefCell<Vec<String>>,
         import_fails_with: Option<fn() -> CoreError>,
+        /// What this formatter says it cannot copy — answered by both
+        /// `can_copy_in` (asked before the format, ART-122) and `copy_in`
+        /// itself, from one field, so a double cannot claim it could do a
+        /// copy it then refuses.
+        copy_fails_with: Option<fn() -> CoreError>,
     }
 
     impl VolumeFormatter for Recorder {
@@ -680,10 +786,25 @@ mod tests {
             _s: &dyn ProgressSink,
         ) -> CoreResult<CopySummary> {
             self.calls.borrow_mut().push(format!("copy {drive}"));
-            Ok(CopySummary {
-                files: 1,
-                ..Default::default()
-            })
+            match self.copy_fails_with {
+                Some(make_err) => Err(make_err()),
+                None => Ok(CopySummary {
+                    files: 1,
+                    ..Default::default()
+                }),
+            }
+        }
+        fn can_copy_in(
+            &self,
+            _i: &Path,
+            _slot: Option<usize>,
+            _drive: &str,
+            _src: &Path,
+        ) -> CoreResult<()> {
+            match self.copy_fails_with {
+                Some(make_err) => Err(make_err()),
+                None => Ok(()),
+            }
         }
     }
 
@@ -768,15 +889,240 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// **The fallback fires per step, not for the whole run.** One plan
-    /// carries both a `FormatPartition` step (native can always do this) and
-    /// a `CopyIn` step whose source tree has a non-ASCII name onto a PFS3
-    /// partition (ART-113, native cannot). The `FormatPartition` report must
-    /// still say `"native"` — a run-level choice would have forced it onto
-    /// the fallback too, along with everything else, the moment any step
-    /// needed it.
+    /// **ART-122: the tool is chosen per partition, and a partition is
+    /// formatted and filled by one tool.** A `CopyIn` that must fall back
+    /// takes its own partition's `FormatPartition` with it, because
+    /// `hst-imager` cannot write into a volume `NativeFormatter` formatted —
+    /// its first attempt dies `ERROR_DISK_FULL` (the two implementations size
+    /// the PFS3 reserved area differently; ART's number is `pfs3aio`'s own).
+    /// Before this, the format ran natively and the copy fell back, which is
+    /// exactly the combination that fails — and it failed *after* the
+    /// destructive step, leaving an empty formatted volume and an error.
     #[test]
-    fn a_non_ascii_source_tree_falls_back_only_for_the_step_that_needs_it() {
+    fn a_partition_whose_copy_must_fall_back_is_formatted_by_the_same_tool() {
+        use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
+
+        let dir = scratch("paired-fallback");
+        let image = dir.join("card.hdf");
+        crate::core::hdf::create_hdf(
+            &image,
+            32 * 1024 * 1024,
+            true,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::Pfs3Standard,
+                size_mb: 20,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 0,
+            }],
+            &[],
+        )
+        .unwrap();
+        let tree = dir.join("tree");
+        std::fs::create_dir_all(tree.join("español")).unwrap();
+        std::fs::write(tree.join("español").join("Readme"), b"hola\n").unwrap();
+
+        let made = PreloadPlan {
+            image: image.clone(),
+            steps: vec![
+                PreloadStep::FormatPartition {
+                    slot: None,
+                    index: 1,
+                    drive_name: "DH0".into(),
+                    volume_name: "Work".into(),
+                },
+                PreloadStep::CopyIn {
+                    slot: None,
+                    drive_name: "DH0".into(),
+                    source: tree,
+                },
+            ],
+        };
+
+        let recorder = Recorder::default();
+        let (outcome, reports) = run_with_fallback(
+            &made,
+            &NativeFormatter,
+            Some(&recorder as &dyn VolumeFormatter),
+            &crate::core::jobs::NoProgress,
+        )
+        .unwrap();
+
+        assert_eq!(reports.len(), 2, "{reports:?}");
+        assert_eq!(reports[0].tool, "recorder-tool", "{reports:?}");
+        assert!(
+            matches!(
+                reports[0].fallback_reason,
+                Some(FallbackReason::PairedWithFallbackCopy { .. })
+            ),
+            "the format must say *why* it is not native, and the reason is \
+             the copy it is paired with — not the copy's own reason, which is \
+             not a fact about formatting: {reports:?}"
+        );
+        assert_eq!(reports[1].tool, "recorder-tool", "{reports:?}");
+
+        // Both steps really went through the one tool, in order — and the
+        // native path never formatted this partition.
+        assert_eq!(*recorder.calls.borrow(), vec!["format 1 Work", "copy DH0"]);
+        assert!(
+            outcome
+                .tool
+                .as_ref()
+                .is_some_and(|t| t.raw == "recorder-tool"),
+            "every step fell back, so the summary follows it: {outcome:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **ART-122's other half: the choice is still per partition, not per
+    /// run.** Two partitions in one plan — one whose tree is plain ASCII,
+    /// one whose tree is not. The first must be formatted *and* filled
+    /// natively; only the second goes to the fallback. A run-level choice
+    /// would have pushed all four steps onto the external tool the moment any
+    /// one of them needed it, which is what `run_with_fallback`'s own doc
+    /// comment rejects.
+    #[test]
+    fn one_partitions_fallback_does_not_pull_another_partition_with_it() {
+        use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
+
+        let dir = scratch("per-partition");
+        let image = dir.join("card.hdf");
+        crate::core::hdf::create_hdf(
+            &image,
+            64 * 1024 * 1024,
+            true,
+            &[
+                PartitionSpec {
+                    drive_name: "DH0".into(),
+                    fs_type: AmigaHardDiskFs::Pfs3Standard,
+                    size_mb: 20,
+                    bootable: true,
+                    boot_priority: 0,
+                    num_buffers: 0,
+                },
+                PartitionSpec {
+                    drive_name: "DH1".into(),
+                    fs_type: AmigaHardDiskFs::Pfs3Standard,
+                    size_mb: 20,
+                    bootable: false,
+                    boot_priority: 0,
+                    num_buffers: 0,
+                },
+            ],
+            &[],
+        )
+        .unwrap();
+
+        let ascii = dir.join("ascii");
+        std::fs::create_dir_all(&ascii).unwrap();
+        std::fs::write(ascii.join("Readme"), b"plain\n").unwrap();
+        let accented = dir.join("accented");
+        std::fs::create_dir_all(accented.join("türkçe")).unwrap();
+        std::fs::write(accented.join("türkçe").join("Readme"), b"merhaba\n").unwrap();
+
+        let made = PreloadPlan {
+            image: image.clone(),
+            steps: vec![
+                PreloadStep::FormatPartition {
+                    slot: None,
+                    index: 1,
+                    drive_name: "DH0".into(),
+                    volume_name: "Work".into(),
+                },
+                PreloadStep::CopyIn {
+                    slot: None,
+                    drive_name: "DH0".into(),
+                    source: ascii,
+                },
+                PreloadStep::FormatPartition {
+                    slot: None,
+                    index: 2,
+                    drive_name: "DH1".into(),
+                    volume_name: "Games".into(),
+                },
+                PreloadStep::CopyIn {
+                    slot: None,
+                    drive_name: "DH1".into(),
+                    source: accented,
+                },
+            ],
+        };
+
+        let recorder = Recorder::default();
+        let (outcome, reports) = run_with_fallback(
+            &made,
+            &NativeFormatter,
+            Some(&recorder as &dyn VolumeFormatter),
+            &crate::core::jobs::NoProgress,
+        )
+        .unwrap();
+
+        assert_eq!(reports.len(), 4, "{reports:?}");
+        assert_eq!(reports[0].tool, "native", "DH0's format: {reports:?}");
+        assert_eq!(reports[1].tool, "native", "DH0's copy: {reports:?}");
+        assert_eq!(
+            reports[2].tool, "recorder-tool",
+            "DH1's format: {reports:?}"
+        );
+        assert_eq!(reports[3].tool, "recorder-tool", "DH1's copy: {reports:?}");
+        // The external tool touched DH1 and nothing else.
+        assert_eq!(*recorder.calls.borrow(), vec!["format 2 Games", "copy DH1"]);
+        assert!(
+            outcome.tool.is_none(),
+            "a mixed run attributes itself to neither tool: {outcome:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A partition that cannot be filled is not formatted first.** With no
+    /// fallback tool configured, the run must refuse *before* the destructive
+    /// step — the whole point of asking the question ahead of the format
+    /// (ART-122). Previously the format succeeded and the copy then failed,
+    /// which left the user with an erased partition and an error.
+    #[test]
+    fn a_partition_whose_copy_needs_a_missing_tool_is_not_formatted_first() {
+        let made = plan_of(vec![
+            PreloadStep::FormatPartition {
+                slot: None,
+                index: 1,
+                drive_name: "DH0".into(),
+                volume_name: "Work".into(),
+            },
+            PreloadStep::CopyIn {
+                slot: None,
+                drive_name: "DH0".into(),
+                source: std::path::PathBuf::from("tree"),
+            },
+        ]);
+
+        let native = Recorder {
+            copy_fails_with: Some(|| CoreError::NonAsciiPfs3Names {
+                paths: vec!["español".into()],
+                more: 0,
+            }),
+            ..Default::default()
+        };
+
+        let err =
+            run_with_fallback(&made, &native, None, &crate::core::jobs::NoProgress).unwrap_err();
+
+        assert_eq!(err.code(), "ART-INPUT-INVALID", "{err}");
+        assert!(
+            native.calls.borrow().is_empty(),
+            "nothing may be formatted when the copy that follows it cannot run: {:?}",
+            native.calls.borrow()
+        );
+    }
+
+    /// A `CopyIn` whose partition has no `FormatPartition` in the same plan —
+    /// there is no such plan today, since `core::preload::plan` always emits
+    /// the format, but `run_with_fallback` takes the plan it is given — still
+    /// falls back for itself alone.
+    #[test]
+    fn a_copy_with_no_format_of_its_own_still_falls_back_by_itself() {
         use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
 
         let dir = scratch("fallback-pfs3");
@@ -802,22 +1148,13 @@ mod tests {
         std::fs::create_dir_all(tree.join("español")).unwrap();
         std::fs::write(tree.join("español").join("Readme"), b"hola\n").unwrap();
 
-        let made = plan_of(vec![
-            PreloadStep::FormatPartition {
-                slot: None,
-                index: 1,
-                drive_name: "DH0".into(),
-                volume_name: "Work".into(),
-            },
-            PreloadStep::CopyIn {
+        let made = PreloadPlan {
+            image: image.clone(),
+            steps: vec![PreloadStep::CopyIn {
                 slot: None,
                 drive_name: "DH0".into(),
                 source: tree,
-            },
-        ]);
-        let made = PreloadPlan {
-            image: image.clone(),
-            ..made
+            }],
         };
 
         let native = NativeFormatter;
@@ -830,27 +1167,24 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(reports.len(), 2, "{reports:?}");
-        assert_eq!(reports[0].tool, "native", "{reports:?}");
-        assert!(reports[0].fallback_reason.is_none(), "{reports:?}");
-        assert_eq!(reports[1].tool, "recorder-tool", "{reports:?}");
+        assert_eq!(reports.len(), 1, "{reports:?}");
+        assert_eq!(reports[0].tool, "recorder-tool", "{reports:?}");
         assert!(
             matches!(
-                reports[1].fallback_reason,
+                reports[0].fallback_reason,
                 Some(FallbackReason::NonAsciiPfs3Names { .. })
             ),
-            "{reports:?}"
+            "its own reason, not a paired one: {reports:?}"
         );
         // The fallback tool actually ran the copy — not simulated.
         assert_eq!(*recorder.calls.borrow(), vec!["copy DH0"]);
         assert_eq!(outcome.copied.files, 1, "the recorder's own summary");
-        // A mixed run — one step native, one fallback — must not claim a
-        // single tool did the whole thing (fix-wave finding 4): the
-        // per-step list is what disagrees, so the summary line says nothing
-        // rather than picking a side.
         assert!(
-            outcome.tool.is_none(),
-            "a mixed run must not attribute the whole outcome to one tool, {outcome:?}"
+            outcome
+                .tool
+                .as_ref()
+                .is_some_and(|t| t.raw == "recorder-tool"),
+            "the one step that ran fell back, so the summary follows it: {outcome:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1076,6 +1410,204 @@ mod tests {
         }
     }
 
+    /// Count what a real tree holds the way [`NativeFormatter`] counts it: a
+    /// `.uaem` sidecar is metadata beside an entry, never an entry of its own
+    /// (`core::preload::native::collect_entries` skips them), so counting the
+    /// folder with Explorer or PowerShell gives roughly twice the number and
+    /// makes any comparison against a copy's own summary meaningless.
+    fn count_tree(dir: &std::path::Path, files: &mut u64, directories: &mut u64) {
+        for entry in std::fs::read_dir(dir).expect("the tree must be readable") {
+            let path = entry.expect("a readable directory entry").path();
+            if path.is_dir() {
+                *directories += 1;
+                count_tree(&path, files, directories);
+            } else if !path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("uaem"))
+            {
+                *files += 1;
+            }
+        }
+    }
+
+    /// **The real distribution tree, carried through the product's own
+    /// path** — [`run_with_fallback`], native first, `hst-imager` only where
+    /// a known gap forces it.
+    ///
+    /// This exists because the figures the project quotes for the real
+    /// AmigaOS 3.2 tree — "969 of 4030 files and 106 of 330 directories never
+    /// reached a volume" — were measured *before* ART-120 made
+    /// [`NativeFormatter`] reachable and `hst-imager` a per-step fallback, by
+    /// a one-off manual pass that excluded every non-ASCII subtree by hand.
+    /// Nobody had since carried the whole tree through the path that now
+    /// ships, so nobody knew whether the fallback closes that gap or merely
+    /// reaches it more cleanly. This is the run that answers it, and unlike
+    /// the pass it replaces it is a committed one.
+    ///
+    /// ```text
+    /// cd src-tauri
+    /// ART_OSINSTALL_DEST="E:\amiga\ProjeART\dist-3.2" \
+    /// ART_CARD_OUT="E:\amiga\ProjeART\dist-3.2-fallback.hdf" \
+    /// ART_PFS3="E:\amiga\Amigatolon\hstimager\pfs3aio" \
+    /// ART_HST="E:\amiga\Amigatolon\hstimager\hst.imager.exe" \
+    ///   cargo test carry_the_real_dist_tree_through_the_fallback_path_when_asked \
+    ///   -- --nocapture --ignored
+    /// ```
+    ///
+    /// `ART_HST` is deliberately **optional**: without it the run measures
+    /// what the native path alone does with the real tree, which is the other
+    /// half of the same question — and the refusal it ends on is the one the
+    /// product would show a user who has never configured `hst-imager`.
+    /// `ART_PFS3` names the raw `pfs3aio` binary (not the `.lha`), because
+    /// the driver is embedded by ART's own RDB writer at create time rather
+    /// than by an `ImportFilesystem` step, which would only be measuring
+    /// ART-117 a second time.
+    ///
+    /// **What it measured, 2026-08-16** (`E:\amiga\ProjeART\dist-3.2`, 3933
+    /// files / 280 directories / 12.2 MB): the fallback carries the *whole*
+    /// tree — non-ASCII names included — where the previous, manual
+    /// measurement had to exclude about a quarter of it. It also found
+    /// [ART-122](../../../../docs/ISSUES.md): `hst-imager`'s **first** write
+    /// into a volume `NativeFormatter` has just formatted dies with
+    /// `ERROR_DISK_FULL`, and the run therefore ends on a refusal *after* the
+    /// destructive format step has already run. Until that is fixed, this
+    /// hook's honest result is the refusal — the full-tree figures above came
+    /// from repeating the copy by hand, which is exactly what the product
+    /// must not have to do.
+    #[test]
+    #[ignore = "reads a real distribution tree and writes a multi-hundred-MB image; run explicitly"]
+    fn carry_the_real_dist_tree_through_the_fallback_path_when_asked() {
+        use crate::core::hdf::create_hdf;
+        use crate::core::jobs::NoProgress;
+        use crate::core::rdb::{
+            version_from_ver_string, AmigaHardDiskFs, FileSystemSpec, PartitionSpec,
+        };
+
+        let (Ok(dist), Ok(card_out), Ok(driver_path)) = (
+            std::env::var("ART_OSINSTALL_DEST"),
+            std::env::var("ART_CARD_OUT"),
+            std::env::var("ART_PFS3"),
+        ) else {
+            return;
+        };
+        let tree = std::path::PathBuf::from(&dist);
+        let image = std::path::PathBuf::from(&card_out);
+        assert!(tree.is_dir(), "'{}' is not a folder", tree.display());
+        assert!(
+            !image.exists(),
+            "'{}' already exists — SAFE_CREATE: remove it yourself first, \
+             or point ART_CARD_OUT somewhere new",
+            image.display()
+        );
+
+        let mut source_files = 0;
+        let mut source_dirs = 0;
+        count_tree(&tree, &mut source_files, &mut source_dirs);
+        println!(
+            "source={} files={source_files} directories={source_dirs}",
+            tree.display()
+        );
+
+        // The driver goes in at create time, by ART's own RDB writer (G4), so
+        // the plan below carries no `ImportFilesystem` step and the run
+        // measures the copy rather than ART-117.
+        let driver = std::fs::read(&driver_path).expect("the pfs3aio binary named by ART_PFS3");
+        let (version, revision) =
+            version_from_ver_string(&driver).expect("pfs3aio states its own version");
+        println!(
+            "driver={driver_path} version={version}.{revision} bytes={}",
+            driver.len()
+        );
+
+        create_hdf(
+            &image,
+            512 * 1024 * 1024,
+            true,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::Pfs3DirectScsi,
+                size_mb: 400,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 0,
+            }],
+            &[FileSystemSpec {
+                dos_type: u32::from_be_bytes([b'P', b'D', b'S', 3]),
+                version,
+                revision,
+                data: driver,
+            }],
+        )
+        .expect("a fresh PFS3 image with the driver embedded");
+
+        let request = PreloadRequest {
+            image: image.clone(),
+            driver: None,
+            partitions: vec![PreloadPartition {
+                area: 1,
+                index: 1,
+                volume_name: "Workbench".into(),
+                content: Some(tree.clone()),
+            }],
+        };
+        let made = plan(&request).expect("a plan for the real tree");
+        for step in &made.steps {
+            println!("  step: {}", step_label(step));
+        }
+
+        let fallback = std::env::var("ART_HST").ok().map(HstImager::at);
+        println!(
+            "fallback={}",
+            fallback
+                .as_ref()
+                .map(|tool| format!("{:?}", tool.probe()))
+                .unwrap_or_else(|| "not configured".into())
+        );
+
+        let outcome = run_with_fallback(
+            &made,
+            &NativeFormatter,
+            fallback.as_ref().map(|tool| tool as &dyn VolumeFormatter),
+            &NoProgress,
+        );
+
+        match outcome {
+            Ok((outcome, reports)) => {
+                for report in &reports {
+                    println!(
+                        "  ran: {} by {}{}",
+                        step_label(&report.step),
+                        report.tool,
+                        report
+                            .fallback_reason
+                            .as_ref()
+                            .map(|reason| format!(" — fallback: {}", reason.detail()))
+                            .unwrap_or_default()
+                    );
+                }
+                // Machine-readable, the same `key=value` convention the two
+                // PFS3 oracle hooks and the card hook in
+                // `core::preload::native` already print.
+                println!(
+                    "copied files={} directories={} bytes={} comments_lost={} dates_lost={}",
+                    outcome.copied.files,
+                    outcome.copied.directories,
+                    outcome.copied.bytes,
+                    outcome.copied.comments_lost,
+                    outcome.copied.dates_lost,
+                );
+                println!("source files={source_files} directories={source_dirs}");
+            }
+            Err(err) => {
+                // Not a panic: a refusal *is* a result here. Without
+                // `hst-imager` configured this is the expected end of the run
+                // for any tree carrying a non-ASCII AmigaDOS name, and it is
+                // exactly what the product would tell the user.
+                println!("refused={} code={}", err, err.code());
+            }
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Outbound wire shapes — pinned against src/lib/preload.ts, the same
     // discipline commands/osinstall.rs's own `wire_shapes` module follows.
@@ -1130,6 +1662,15 @@ mod tests {
             expect_keys(&names, &["reason", "paths", "more"]);
             assert_eq!(names["reason"], "non-ascii-pfs3-names");
             assert_eq!(names["more"], 3);
+
+            // ART-122's own variant, which the format step now carries.
+            let paired = serde_json::to_value(FallbackReason::PairedWithFallbackCopy {
+                drive: "DH0".into(),
+            })
+            .unwrap();
+            expect_keys(&paired, &["reason", "drive"]);
+            assert_eq!(paired["reason"], "paired-with-fallback-copy");
+            assert_eq!(paired["drive"], "DH0");
         }
 
         #[test]

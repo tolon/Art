@@ -205,6 +205,29 @@ impl VolumeFormatter for NativeFormatter {
         Ok(())
     }
 
+    /// **ART-122.** Everything `copy_in` decides before it opens the volume,
+    /// and nothing after it. The two share [`plan_copy`] so the answer cannot
+    /// drift from what the copy itself would do — a `can_copy_in` that said
+    /// yes to a copy `copy_in` then refuses would be worse than not asking,
+    /// because the partition is formatted in between.
+    fn can_copy_in(
+        &self,
+        image: &Path,
+        slot: Option<usize>,
+        drive: &str,
+        source: &Path,
+    ) -> CoreResult<()> {
+        let planned = plan_copy(image, slot, drive, source)?;
+        match family_of(planned.dos) {
+            DosFamily::Pfs3 => match non_ascii_refusal(&planned.entries) {
+                Some(err) => Err(err),
+                None => Ok(()),
+            },
+            DosFamily::Ffs => Ok(()),
+            DosFamily::Other => Err(unsupported_family(planned.dos)),
+        }
+    }
+
     fn copy_in(
         &self,
         image: &Path,
@@ -213,43 +236,74 @@ impl VolumeFormatter for NativeFormatter {
         source: &Path,
         sink: &dyn ProgressSink,
     ) -> CoreResult<CopySummary> {
-        if !source.is_dir() {
-            return Err(CoreError::InvalidInput(format!(
-                "'{}' is not a folder",
-                source.display()
-            )));
-        }
-
-        let card = read_card(image)?;
-        let area = area_for_slot(&card, slot)?;
-        let part = partition_by_drive(area, drive)?;
-        let (offset, length, block_size) = partition_region(area, part)?;
-        let dos = DosType::new(part.dostype.to_be_bytes());
-
-        let entries = collect_entries(source)?;
+        let PlannedCopy {
+            offset,
+            length,
+            block_size,
+            dos,
+            reserved,
+            entries,
+        } = plan_copy(image, slot, drive, source)?;
 
         match family_of(dos) {
             DosFamily::Pfs3 => copy_in_pfs3(
                 image, offset, length, block_size, drive, source, &entries, sink,
             ),
             DosFamily::Ffs => copy_in_ffs(
-                image,
-                offset,
-                length,
-                block_size,
-                dos,
-                part.reserved,
-                drive,
-                source,
-                &entries,
-                sink,
+                image, offset, length, block_size, dos, reserved, drive, source, &entries, sink,
             ),
-            DosFamily::Other => Err(CoreError::UnsupportedFormat(format!(
-                "{} is not a filesystem NativeFormatter can copy into",
-                dos.label()
-            ))),
+            DosFamily::Other => Err(unsupported_family(dos)),
         }
     }
+}
+
+/// What both [`NativeFormatter::can_copy_in`] and
+/// [`NativeFormatter::copy_in`] work out before either writes or refuses.
+struct PlannedCopy {
+    offset: u64,
+    length: u64,
+    block_size: usize,
+    dos: DosType,
+    /// The partition's own reserved-block count, which only the FFS branch
+    /// needs — carried here so `copy_in` does not read the card a second time
+    /// to fetch one field.
+    reserved: u32,
+    entries: Vec<CopyEntry>,
+}
+
+fn plan_copy(
+    image: &Path,
+    slot: Option<usize>,
+    drive: &str,
+    source: &Path,
+) -> CoreResult<PlannedCopy> {
+    if !source.is_dir() {
+        return Err(CoreError::InvalidInput(format!(
+            "'{}' is not a folder",
+            source.display()
+        )));
+    }
+
+    let card = read_card(image)?;
+    let area = area_for_slot(&card, slot)?;
+    let part = partition_by_drive(area, drive)?;
+    let (offset, length, block_size) = partition_region(area, part)?;
+
+    Ok(PlannedCopy {
+        offset,
+        length,
+        block_size,
+        dos: DosType::new(part.dostype.to_be_bytes()),
+        reserved: part.reserved,
+        entries: collect_entries(source)?,
+    })
+}
+
+fn unsupported_family(dos: DosType) -> CoreError {
+    CoreError::UnsupportedFormat(format!(
+        "{} is not a filesystem NativeFormatter can copy into",
+        dos.label()
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -635,6 +689,30 @@ fn non_ascii_entries(entries: &[CopyEntry]) -> Vec<&str> {
         .collect()
 }
 
+/// The ART-113 refusal itself, or `None` when there is nothing to refuse.
+///
+/// One place, because two callers now need the same answer: `copy_in_pfs3`
+/// refuses with it before opening the volume, and
+/// [`NativeFormatter::can_copy_in`] answers with it before the partition is
+/// formatted at all (ART-122). Two copies of this decision would be two
+/// chances for the pre-flight to say yes where the copy says no — with a
+/// destructive format in between.
+fn non_ascii_refusal(entries: &[CopyEntry]) -> Option<CoreError> {
+    let offending = non_ascii_entries(entries);
+    if offending.is_empty() {
+        return None;
+    }
+    let more = offending.len().saturating_sub(MAX_NAMED_NON_ASCII);
+    Some(CoreError::NonAsciiPfs3Names {
+        paths: offending
+            .into_iter()
+            .take(MAX_NAMED_NON_ASCII)
+            .map(str::to_string)
+            .collect(),
+        more,
+    })
+}
+
 /// Flatten `source` into an ordered list: a directory always appears before
 /// anything inside it, which is what lets `copy_in` look its parent's anode
 /// or header block up in a map built as it goes, rather than re-walking the
@@ -714,15 +792,8 @@ fn copy_in_pfs3(
 ) -> CoreResult<CopySummary> {
     // ART-113: refused before the volume is even opened, let alone written
     // to — see the module doc comment and `non_ascii_entries`'s own.
-    let offending = non_ascii_entries(entries);
-    if !offending.is_empty() {
-        let more = offending.len().saturating_sub(MAX_NAMED_NON_ASCII);
-        let paths = offending
-            .into_iter()
-            .take(MAX_NAMED_NON_ASCII)
-            .map(str::to_string)
-            .collect();
-        return Err(CoreError::NonAsciiPfs3Names { paths, more });
+    if let Some(refusal) = non_ascii_refusal(entries) {
+        return Err(refusal);
     }
 
     let region = FileRegionMut::open(image, offset, length, block_size)?;
