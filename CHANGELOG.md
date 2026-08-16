@@ -22,11 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot read a ROM record from is left alone rather than guessed at.
 
 #### Verified
-- Against the pairing that actually failed on real hardware emulation on
-  2026-08-16: a real AmigaOS 3.2 build requiring Kickstart 47 against a card
-  carrying a real Kickstart 40 is reported as needing 47 and finding 40. The
-  same build's own module-carrying counterpart, checked against the same
-  card, is never flagged.
+- Against the pairing that actually failed under WinUAE with a licensed ROM
+  on 2026-08-16 (real hardware untouched): a real AmigaOS 3.2 build requiring
+  Kickstart 47 against a card carrying a real Kickstart 40 is reported as
+  needing 47 and finding 40. The same build's own module-carrying
+  counterpart, checked against the same card, is never flagged.
 
 ### hst-imager is no longer required to prepare a card (2026-08-16)
 
