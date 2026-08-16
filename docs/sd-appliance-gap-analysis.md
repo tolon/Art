@@ -143,10 +143,10 @@ define what ART does *better* rather than *again*:
 differentiators are (a) the safety pipeline — journal, backup, verify, oplog —
 none of them have it; (b) one integrated toolkit instead of a one-shot imager:
 the same app that builds the image also browses it, repairs it, updates games
-on it, and validates it against its manifest; (c) longer term, **native
-AmigaOS filesystem engines** (G3 Route B) where the others shell out or
-pre-bake — this is the "fark yaratır" line: an imager images once; ART owns
-the image's whole lifecycle.
+on it, and validates it against its manifest; (c) **native AmigaOS filesystem
+engines** (G3, landed 2026-08-15 — `libpfs3` behind `core/preload/native.rs`)
+where the others shell out or pre-bake — this is the "fark yaratır" line: an
+imager images once; ART owns the image's whole lifecycle.
 
 Note that ART is now *less* than these tools in exactly one respect, on
 purpose: they write the card and ART does not. That is the commodity half.
@@ -209,13 +209,42 @@ fork" adapter boundary the multiboot doc demands. FAT32 write can come from a
 maintained MIT/Apache crate (e.g. `fatfs`) rather than hand-rolling; licence
 check + THIRD_PARTY_LICENSES entry as usual.
 
-## G3 🟥 PFS3 write support — the critical path
+## G3 ✅ PFS3 write support — the critical path — **done: Route E 2026-08-13/14, native (Route B) 2026-08-15**
+
+> **Both landed, and Route D — the recommendation this section originally
+> made — was never built; it turned out unnecessary.** Route E
+> (`hst-imager`, PC-side, MIT) arrived first — SD-0's own teardown found it
+> already solved and proven — and needs no Kickstart, so the
+> WinUAE-assisted Route D below was dropped rather than built: E already
+> delivered the user story D existed to prove. Then, on 2026-08-15,
+> **Route B itself landed**: [`libpfs3`](https://github.com/metaneutrons/pfs3)
+> v0.1.3 (LGPL-3.0-or-later) is a pure-Rust PFS3 implementation that reads,
+> writes and sets AmigaDOS protection bits correctly, measured against a real
+> CaffeineOS card rather than only a synthetic fixture (see
+> `docs/superpowers/specs/2026-08-15-os-install-design.md`). `core/preload/native.rs`
+> wraps it behind the same `VolumeFormatter` trait `hst-imager` already
+> implements, launches nothing, and is now the **default** writer —
+> `hst-imager` is a named fallback for two specific, typed gaps
+> ([ART-113](ISSUES.md)'s non-ASCII AmigaDOS names, [ART-117](ISSUES.md)'s
+> foreign-RDB driver embed), not the primary path any more. This is the
+> differentiator G0's own positioning section named as the long-term goal:
+> ART owns native PFS3 write, not just an imager wrapper.
+>
+> **What is proven and what is not.** Writing at install scale is proven —
+> G5's real 3.2 install put 3061 files onto a native PFS3 volume and
+> `hst-imager` read every one back byte-identical. What is *not* proven is
+> anything past that: no Amiga has booted a volume `libpfs3` wrote, and no
+> card carrying one has been flashed. See G5.
+>
+> The routes table below is kept as the record of the decision, including the
+> one path (C) still true as a fallback and the one (A) nobody built.
 
 The multiboot layout wants 16–32 GB content volumes. Classic FFS is
 effectively capped around 2 GiB in ART today (Stage R deliberately refuses
 larger mounts), so **large volumes require PFS3 — including writing it**,
-which ART does not have in any form (read was planned via
-`metaneutrons/pfs3`; write was never scheduled).
+which at the time this gap was written ART did not have in any form (read
+was planned via `metaneutrons/pfs3`; write was not yet scheduled). Both now
+exist — see the status note above.
 
 Four routes — the project must pick consciously:
 
@@ -226,13 +255,18 @@ Four routes — the project must pick consciously:
 | **C. Many small FFS volumes** | GAMES1:…GAMESn: under 2 GiB each, all FFS | Works today; ugly; a fallback, not a plan |
 | **D. Emulator-assisted build (WinUAE headless)** | ART attaches the sparse build image as a hardfile to a **scripted, unattended WinUAE session** (ART already detects, configures and launches WinUAE — §35, built). A generated `startup-sequence` runs the REAL `pfs3aio`'s format and copies content in from a directory hardfile mapped to a staging folder on the PC, then quits the emulator. ART verifies afterwards by reading the volumes back (its own PFS3 read, or hash manifests) | **The authentic filesystem code does the writing — zero reimplementation risk, PFS3 bytes are correct by construction.** Costs: needs user-provided Kickstart (AROS ROM as fallback where pfs3aio tolerates it — verify, don't assume), slower than native, Windows+WinUAE dependency, and the session must be treated as an untrusted step: timeout, log capture, and a verify pass are mandatory. emu68hatcher's ARexx scripts suggest the same family of approach — study them (G0) |
 
-**Recommendation (revised after prior-art review):** v1 preload = **Route D**,
-with A as the no-Kickstart fallback. Route B stays on the roadmap as its own
-flagship phase — D delivers the user story now, B replaces D's emulator
-dependency later and becomes the headline feature no other imager has. C is
-the emergency exit only. Bonus: once B exists, **D becomes its perfect
-oracle** — the reference implementation writing the fixtures that the native
-writer must match. Build D's harness with that future in mind.
+**What actually happened, revised again after both routes shipped:** the
+original recommendation was v1 preload = Route D, with A as the no-Kickstart
+fallback, and B as its own later flagship phase. Route D was never built —
+Route E (`hst-imager`) proved to be the working no-Kickstart path SD-0 found
+already solved, so D's WinUAE harness was skipped entirely, and E became both
+the shipped fallback tool and, briefly, the reference implementation Route
+B's fixtures were checked against. Route B then landed for real
+(`libpfs3`, 2026-08-15), sooner than "own flagship phase" implied, because
+the crate arrived built rather than needing to be written from scratch. C
+remains what it always was: the emergency exit, never exercised because B
+and E both worked. A was never built and is no longer needed — B format-on-
+build is strictly better than format-on-first-boot once B exists.
 
 ## G4 ✅ RDB filesystem embedding (FSHD + LSEG blocks) — *done 2026-08-12*
 
@@ -261,15 +295,54 @@ reads `hst-imager`'s RDB and agrees with `rdbtool` on every field, and
 the driver back out SHA-256-identical to the file that went in. Closes
 [ART-084](ISSUES.md).
 
-## G5 🟧 OS installation engine (3.2.x / 3.9 system volumes)
+## G5 🟧 OS installation engine (3.2.x / 3.9 system volumes) — **engine built, 2026-08-15/16; not yet booted**
 
-Turning user-provided AmigaOS media (3.2 CD/ADFs, 3.9 CD — Phase 2a's ISO
-reader arrives exactly on time) into a populated SYSTEM32:/SYSTEM39: volume.
-Gap pieces: extracting from install media rather than running the Amiga
-Installer, laying out C:/DEVS:/L:/LIBS:/S:/Classes:, generating a clean
-`startup-sequence` from templates, per-OS isolation (the multiboot doc's
-§3.2), and recording exactly which release was installed into the manifest.
-Never bundle OS files; always user-provided media (same rule as ROMs).
+> **Built and run against the user's own real 3.2 media, not a fixture.**
+> `core/osinstall/` (`recipe` → `source`/`scan` → `plan` → `apply` → `startup`
+> → `verify`, design in
+> `docs/superpowers/specs/2026-08-15-os-install-design.md`) turns AmigaOS
+> install media into a populated system volume without running the Amiga
+> Installer. It does this **without copying whole disks**: a component is a
+> named set of paths, not a disk — measured, not assumed —
+> `ModulesA1200_3.2.adf` carries 14 commands in `C/` and 13 are older copies
+> of commands `Workbench3.2` already has; copying the disk wholesale would
+> downgrade 13 commands to install the one new one, `LoadModule`. Recipes are
+> data (`core/osinstall/recipes/amigaos-3.2.json`), so a future release adds
+> a JSON file, not a code path. The engine's product is a **distribution
+> tree** — a host folder plus `.uaem` sidecars plus a `distribution.json`
+> manifest — not a volume; putting that tree onto a card goes through
+> `core/preload` (G3), which is what makes the manifest also the basis for
+> future component add/remove.
+>
+> Run for real: 36 ADFs, 26 components switched on (the `modules-a1200`
+> condition correctly firing off the user's own ROM's stated version), 4030
+> files / 330 directories built to a tree, and — for AmigaDOS-ASCII names —
+> put onto a native PFS3 volume and read back independently by `hst-imager`
+> byte-for-byte. That run also found a real, permanent limitation:
+> [ART-113](ISSUES.md) — `libpfs3` 0.1.3 cannot round-trip a non-ASCII
+> AmigaDOS name, which excluded about a quarter of that particular tree
+> (real Locale content: `español`, `türkçe`, `österreich`) from the *volume*
+> only — the distribution tree itself carries every file. ART's own refusal
+> ships (✅ ART-113: refused by name, before anything is written) and
+> `commands/preload.rs` now falls back to `hst-imager` for exactly that case
+> (ART-120), so a non-ASCII name no longer stops a preload; it costs a
+> slower write, named as such. Only libpfs3 itself can close the gap for
+> real.
+>
+> **What is left, precisely — not "the gap", three separate things:**
+> - **No Amiga has booted anything G5 built.** The tree, the PFS3 volume and
+>   the independent `hst-imager` read-back are all real and proven; the
+>   WinUAE and real-hardware rungs are untouched by this work.
+> - **The OS Builder's install screen is unverified past its own headings**
+>   ([ART-118](ISSUES.md)) — the engine below it has real coverage, the
+>   screen driving it does not yet.
+> - **AmigaOS 3.9 has no recipe** — the `IsoSource` trait has the slot, and
+>   it costs one JSON file when it is written; the 3.2.1/3.2.2 updates are
+>   the same shape of un-started work.
+>
+> **G9 (ROM/Kickstart profile pairing) and G10 (launcher metadata export)
+> are separate gaps, not sub-items of G5, and remain unbuilt** — see their
+> own entries below.
 
 ## G6 🟧 Multiboot & recovery configuration
 
@@ -461,11 +534,17 @@ SD-1  The image has a shape   : G2 (MBR + FAT32 boot partition, in a file)
       → milestone: an .img whose MBR, FAT32 payload and RDB all check out,
                    flashed by any imager, boots a real Amiga into a CLI
                    (which machine and which PiStorm board: recorded, not assumed)
-SD-2  Content, preloaded      : G3 Route D (WinUAE-assisted PFS3 format+fill)
-                                + G5 (OS install) + G9 (ROM pairing)
-                                + G10 (launcher export) + G11 (layout policy)
+SD-2  Content, preloaded      : G3 ✅ (PFS3 write — route E 2026-08-13/14,
+                                  native/route B 2026-08-15; route D was
+                                  dropped, never built, turned out unneeded)
+                                + G5 🟧 (OS install — engine built and run
+                                  against real media; no Amiga has booted its
+                                  output) + G9 (ROM pairing, owed)
+                                + G10 (launcher export, owed) + G11 (layout
+                                  policy)
       → milestone: AmigaOS and games already on the volumes, from Windows,
-                   with nothing left to do on the Amiga but boot it
+                   with nothing left to do on the Amiga but boot it — not yet
+                   reached: G9, G10, and the boot itself
 SD-3  It is *mine*            : G14 (wallpaper, WiFi, prefs, Startup-Sequence
                                   — every one edited in place, never
                                   regenerated: §39/§40's rule, applied to
@@ -474,8 +553,12 @@ SD-3  It is *mine*            : G14 (wallpaper, WiFi, prefs, Startup-Sequence
                                   and a boot menu, not a priority field)
       → milestone: two OS environments, a recovery volume, the user's own
                    wallpaper and a working network, all chosen in ART
-SD-4  The flagship            : G3 Route B — native PFS3 write, own brief;
-                                Route D's harness becomes its oracle
+SD-4  The flagship            : native PFS3 write landed in SD-2 instead of
+                                  here (G3's own entry) — this slot's next
+                                  candidate is unnamed; the boot rungs (an
+                                  Amiga, real or emulated, booting anything
+                                  SD-2 built) are the honest gate before any
+                                  of SD-4 is worth planning
 SD-5  Comfort                 : G13 (capacity planner / build profiles)
 ```
 

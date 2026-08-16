@@ -11,6 +11,15 @@ not the same plan, and only the spec is current. Do not resurrect the old
 list; treat the spec document as the single source for what each phase
 contains.
 
+**That document is not the current scheduling order.** [STATUS.md](STATUS.md)'s
+own "Stage plan" section (the SD-0 … SD-5 stages built from
+[sd-appliance-gap-analysis.md](sd-appliance-gap-analysis.md), the PiStorm
+image-builder work) supersedes the Phase 0–7 numbering above for *scheduling*
+— STATUS.md says so explicitly. The two do not compete: the spec above still
+defines what a phase *contains*, STATUS.md's stage plan defines what order the
+remaining work actually happens in and why. Read STATUS.md's Stage plan
+section for "what's next", not the Phase list here.
+
 - Current position and stage ordering → [STATUS.md](STATUS.md)
 - Whether a specific feature exists → [FEATURES.md](FEATURES.md)
 

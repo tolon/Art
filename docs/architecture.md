@@ -60,6 +60,8 @@ amiga-retro-toolkit/
 │   │   ├── lib.rs              #   Tauri builder, plugins, state, handlers
 │   │   ├── error.rs            #   AppError (serializes to frontend)
 │   │   ├── commands/           #   #[tauri::command] adapters
+│   │   ├── tools/               #   platform-specific: launches external programs
+│   │   │   └── hst_imager.rs   #     the VolumeFormatter that shells out (outside core/)
 │   │   └── core/               #   AMIGA CORE (platform-independent)
 │   │       ├── error.rs        #     CoreError
 │   │       ├── detect.rs       #     format detection
@@ -75,6 +77,12 @@ amiga-retro-toolkit/
 │   │       ├── adf/            #     bootblock, blocks, fs, extract, mutate...
 │   │       ├── lha/            #     archive, safe_extract, whdload
 │   │       ├── hdf.rs, rdb.rs  #     hard disk images + partition tables
+│   │       ├── mbr.rs, fat32.rs #    SD card partition table + FAT32 boot partition
+│   │       ├── card/            #    a card as Vec<AmigaArea>; build.rs builds one
+│   │       ├── distro/          #    the registry of real AmigaOS distributions
+│   │       ├── osinstall/       #    media -> distribution tree (recipe, plan, apply, verify)
+│   │       ├── preload/         #    distribution tree -> a card's Amiga volumes
+│   │       │   └── native.rs   #       the VolumeFormatter that launches nothing
 │   │       ├── gotek.rs, pistorm.rs, winuae.rs, rom.rs, profile.rs
 │   │       ├── collection.rs, analysis.rs
 │   │       └── recovery.rs, conversion.rs, binary.rs   # stubs, see FEATURES.md
@@ -94,9 +102,10 @@ amiga-retro-toolkit/
 decompressors are read-only and sit behind `core/archive`'s single security
 gate, and `fatfs` creates the one filesystem ART writes that is not an Amiga
 one: the FAT32 partition a PiStorm card's Raspberry Pi boots from. `libpfs3`
-is the PFS3 implementation — the volume format SD-2 G5's OS install writes
-and reads on a PiStorm card — and the one LGPL-3.0-or-later dependency inside
-`core/`: weak copyleft, compatible with ART's own GPL-3.0-or-later, but noted
+is the PFS3 implementation — the volume format `core/preload` (G3 route
+native) writes and reads on a PiStorm card, with SD-2's OS install engine
+(G5) as its newest and largest consumer — and the one LGPL-3.0-or-later
+dependency inside `core/`: weak copyleft, compatible with ART's own GPL-3.0-or-later, but noted
 deliberately against the project's preference for permissive dependencies,
 because `core/` is meant to be promotable to a standalone crate. It never
 imports `tauri`, never calls Windows APIs, never touches the network.
@@ -106,6 +115,13 @@ CLI or other shells without rewriting the engine.
 Concretely: if a `core/` module needs to do something platform-specific (open
 a file dialog, detect a USB drive, launch WinUAE), it exposes a **trait**, and
 the implementation lives outside the core.
+
+`core/preload::VolumeFormatter` (`probe`, `import_filesystem`, `format_partition`, `copy_in`)
+is the newest instance: `src-tauri/src/tools/hst_imager.rs` launches `hst.imager.exe` and lives
+outside `core/` for exactly this reason, while `core/preload/native.rs` — PFS3 through
+`libpfs3`, FFS through `core/volume/write` — launches nothing and lives inside it. Native is the
+product's default; `hst-imager` is a fallback the caller in `commands/` chooses per operation,
+never a decision `core/` makes for itself.
 
 ## Data flow: the DROP pipeline
 
