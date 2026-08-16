@@ -1315,4 +1315,155 @@ mod tests {
             .sum();
         assert_eq!(outcome.bytes, copied_bytes + disk_bytes.len() as u64);
     }
+
+    /// **Task 14 — the real run.** Drives the whole engine — `find_media`
+    /// (through `plan()`'s own call), `plan()`, `apply()` — against the
+    /// user's own AmigaOS 3.2 media and a real Kickstart ROM, never a
+    /// synthetic fixture. Skipped cleanly unless all three environment
+    /// variables are set, the same convention `core/preload/native.rs`'s
+    /// oracle hooks (`ART_PFS3_WRITE_OUT`, `ART_PFS3_READ_IN`) already use:
+    ///
+    /// ```text
+    /// ART_OSINSTALL_MEDIA="E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ADF" ^
+    /// ART_OSINSTALL_ROM="E:\amiga\Amigatolon\kickstart\Kickstart v3.1 rev 40.68 (1993)(Commodore)(A1200).rom" ^
+    /// ART_OSINSTALL_DEST="E:\amiga\ProjeART\dist-3.2" ^
+    /// cargo test run_the_real_engine_against_the_users_own_media_when_asked -- --nocapture --ignored
+    /// ```
+    ///
+    /// (`--ignored` because this test is also marked `#[ignore]` below —
+    /// belt and braces: even with the env vars unset by accident, a plain
+    /// `cargo test` run must never touch anything outside the repo's own
+    /// tempdir, which is this project's own standing fixture rule.)
+    ///
+    /// `chosen` names every component the shipped recipe marks reachable
+    /// (`available: true` and no `condition`) except the two the engine
+    /// decides for itself: `workbench-base` (`required`, always on) and
+    /// `modules-a1200` (`condition: rom-older-than 47`), which is
+    /// deliberately left **out** of `chosen` — the point of this run is to
+    /// prove the condition switches it on by itself against the user's real
+    /// V40 Kickstart, not to force it on the way `chosen` would. Neither
+    /// `update-3.2.1` nor `backdrops` is included: both are
+    /// `available: false` in the recipe (registered, not implemented — see
+    /// `CLAUDE.md`'s "don't claim support that isn't implemented and
+    /// tested"), so a real screen would never offer them either.
+    #[test]
+    #[ignore = "touches the user's real media and E:\\amiga\\ProjeART; run explicitly, see the doc comment"]
+    fn run_the_real_engine_against_the_users_own_media_when_asked() {
+        let (Ok(media), Ok(rom), Ok(dest)) = (
+            std::env::var("ART_OSINSTALL_MEDIA"),
+            std::env::var("ART_OSINSTALL_ROM"),
+            std::env::var("ART_OSINSTALL_DEST"),
+        ) else {
+            return;
+        };
+
+        let chosen: Vec<String> = [
+            "extras",
+            "locale-base",
+            "locale-de",
+            "locale-dk",
+            "locale-en",
+            "locale-es",
+            "locale-fr",
+            "locale-gr",
+            "locale-it",
+            "locale-nl",
+            "locale-no",
+            "locale-pl",
+            "locale-pt",
+            "locale-ru",
+            "locale-se",
+            "locale-tr",
+            "locale-uk",
+            "fonts",
+            "classes",
+            "glowicons",
+            "diskdoctor",
+            "mmulibs",
+            "hdtools",
+            "storage",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+
+        let request = crate::core::osinstall::plan::InstallRequest {
+            media_folder: PathBuf::from(&media),
+            rom: Some(PathBuf::from(&rom)),
+            chosen,
+            excluded: Vec::new(),
+            destination: PathBuf::from(&dest),
+        };
+
+        let found = crate::core::osinstall::scan::find_media(&request.media_folder).unwrap();
+        println!("find_media: {} volume(s) found", found.len());
+        for entry in &found {
+            println!("  {} -> {}", entry.volume_name, entry.path.display());
+        }
+
+        let recipe = crate::core::osinstall::recipe::amigaos_32().unwrap();
+        let planned = crate::core::osinstall::plan::plan(&request, &recipe).unwrap();
+
+        println!("release={}", planned.release);
+        println!("components_on={:?}", planned.components_on);
+        println!("refusals={:?}", planned.refusals);
+        println!("total_bytes={}", planned.total_bytes);
+        println!("items={}", planned.items.len());
+
+        let modules_on = planned.components_on.iter().any(|id| id == "modules-a1200");
+        println!("modules-a1200 on without being chosen: {modules_on}");
+
+        assert!(
+            planned.refusals.is_empty(),
+            "the real plan refused: {:?}",
+            planned.refusals
+        );
+        assert!(
+            modules_on,
+            "the user's real Kickstart states a major below 47 — modules-a1200 \
+             must switch on by its own condition, unchosen; if it did not, \
+             something upstream of this assertion (ROM read, Cloanto strip, \
+             condition_holds) is wrong, which is the finding the brief expects \
+             this run to surface if it happens"
+        );
+
+        let root = PathBuf::from(&dest);
+        let outcome = apply(&planned, &root, &NoProgress).unwrap();
+        println!(
+            "apply: files={} directories={} bytes={}",
+            outcome.files, outcome.directories, outcome.bytes
+        );
+
+        let manifest_text = std::fs::read_to_string(root.join(MANIFEST_FILE_NAME)).unwrap();
+        let manifest: DistributionManifest = serde_json::from_str(&manifest_text).unwrap();
+        println!(
+            "manifest: {} file(s) recorded from {} medium/media",
+            manifest.files.len(),
+            manifest.built_from.len()
+        );
+    }
+
+    /// Throwaway diagnostic, not part of the suite's real coverage — lists
+    /// what is actually inside three of the user's real ADFs, to diagnose
+    /// the refusals `run_the_real_engine_against_the_users_own_media_when_asked`
+    /// found on the first real run. Same env-var-gated skip convention.
+    #[test]
+    #[ignore = "diagnostic only; touches the user's real media"]
+    fn inspect_real_media_when_asked() {
+        let Ok(media) = std::env::var("ART_OSINSTALL_MEDIA") else {
+            return;
+        };
+        let folder = PathBuf::from(&media);
+        let found = crate::core::osinstall::scan::find_media(&folder).unwrap();
+        for volume in ["Storage3.2", "Classes3.2", "GlowIcons3.2"] {
+            let entry = found.iter().find(|f| f.volume_name == volume).unwrap();
+            let mut source = AdfSource::open(&entry.path).unwrap();
+            let mut all = source.walk("").unwrap();
+            all.sort_by(|a, b| a.path.cmp(&b.path));
+            println!("--- {volume} ({}) ---", entry.path.display());
+            for e in &all {
+                println!("  {}{}", e.path, if e.is_dir { "/" } else { "" });
+            }
+        }
+    }
 }

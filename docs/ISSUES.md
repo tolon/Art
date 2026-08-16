@@ -23,6 +23,160 @@ what fixed it (with the test that proves it).
 
 ## Open
 
+**ART-118** 🟠 **The OS Builder's install screen has not been seen rendering
+beyond its headings** — *found 2026-08-15/16, Task 13's browser pass and
+Task 14's real run*
+`src/components/osbuilder/OsInstall.tsx` · A headless-Chrome probe confirmed
+the route, the new `Install` kind, and five resolved `h2` strings with no raw
+key and no `{{…}}`. Deeper interaction — filling the media/ROM/destination
+fields, ticking a component, running Plan, reading the confirmation panel or
+the refusals card, running Verify and reading its three states, switching to
+Turkish — crashed the renderer reproducibly with an access violation
+(`-1073741819`), in both Chrome and Edge and both headless modes, and was not
+resolved. Task 14's real run (`run_the_real_engine_against_the_users_own_media_when_asked`)
+exercised the same 26-component checklist and the modules-on-without-being-
+chosen path **through the Rust engine directly**, never through this screen —
+so the engine's own correctness is now evidenced far beyond the screen's own
+verification. `ART-062` already names Turkish strings as substantially longer
+than their English originals; the screen's tight controls (the component
+checklist, the confirmation panel) are exactly where that would first show and
+have never been seen with real Turkish content in them.
+Not fixed. Needs a real `pnpm tauri dev` pass — or a working headless-browser
+session — driving the screen against `E:\amiga\ProjeART\dist-3.2`.
+
+**ART-117** 🟡 **`import_filesystem` refuses a foreign card's existing RDB —
+by design, but the gap has no other path today** — *found 2026-08-16 (Task 9),
+named for filing at Task 14*
+`src-tauri/src/core/preload/native.rs`, `core/card/build.rs` · `create_rdb_layout`
+builds an RDB **from scratch** on a fixed 16-head/63-sector LBA geometry; it
+cannot edit one already on disk. Real cards disagree with that geometry —
+CaffeineOS's RDB is 12 heads, 256 sectors — so writing a fresh RDB over an
+existing area would invalidate every partition already in it, and
+`NativeFormatter::import_filesystem` refuses by name rather than attempting
+it. A card ART itself built already carries its drivers (`build.rs` lays an
+RDB per area and embeds FSHD/LSEG at build time), and an FFS partition needs
+no driver at all — Kickstart carries FFS — so the gap is narrower than it
+first looks: embedding a PFS3 driver into a **foreign** card's existing RDB
+(one ART did not build) is the one case with no path in ART today.
+`hst-imager` does it; that is named in the refusal text. Not fixed — filed as
+future work, not implied to already work.
+
+**ART-116** 🟡 **ART's PFS3 writer carries protection bits but drops a
+`.uaem`'s comment and date; the FFS branch keeps both** — *found 2026-08-16
+(Task 11), named for filing at Task 14*
+`src-tauri/src/core/preload/native.rs` (`copy_in_pfs3` vs `copy_in_ffs`) ·
+`libpfs3` 0.1.3 exposes `update_dir_entry_protection` and nothing else for a
+directory entry — no setter for a comment or a date — so the PFS3 branch
+applies a sidecar's protection bits and silently drops its comment and date,
+while the FFS branch (`FileMeta`) carries all three. Protection is the
+load-bearing field (`Resident C:Assign PURE` is why this phase exists) and
+nothing is broken — G5 verified end to end on PFS3 without it — but one
+operation's two branches now diverge silently on metadata a user could have
+set by hand. Not fixed — `libpfs3` is pinned at `=0.1.3` and has no upstream
+answer; recorded so nobody reads the PFS3 branch as feature-complete with FFS.
+
+**ART-115** 🔵 **A `core::iso` test flake, seen three times across this
+session, never diagnosed** — *found 2026-08-15/16 (Tasks 3, 7, 8), filed at
+Task 14*
+`src-tauri/src/core/iso/mod.rs` ·
+`extract_tree_does_not_follow_a_directory_that_points_back_at_the_root` failed
+on one of several full-suite runs on three separate days of this session's
+work (Task 3's second run, Task 7's first run — two failures at once — and
+Task 8), always this one test, always in `core::iso`, always passing in
+isolation, and never in code any of those tasks' diffs touched. **This is not
+ART-059**, which is `net/`'s test-server race — a different module entirely.
+The obvious cause was checked and ruled out: `core::iso`'s `tmp()` keys on
+both the process id and a nanosecond timestamp, so a scratch-path collision
+between parallel tests is not it. Two different modules flaking in one
+session (this one and ART-059) may point at something environmental — this
+machine, or `cargo test`'s default parallelism — rather than two unrelated
+defects, but that is a guess, not a finding. Task 14's own two full-suite runs
+(1382 passed, 0 failed, 3 ignored, both times) did **not** reproduce it.
+Not fixed — undiagnosed. If it recurs, worth stopping to diagnose rather than
+re-running until green, per this project's own standing rule about a suite
+that fails at random.
+
+**ART-114** 🟡 **`hst-imager`'s `fs copy` extraction silently drops any entry
+whose name matches a Windows/MS-DOS reserved device basename** — *found
+2026-08-16, Task 14's real run*
+External tool, not ART code — recorded because it is the independent witness
+Task 14's own Step 2 depends on. The real `Storage3.2.adf` and
+`GlowIcons3.2.adf` each carry a DOSDriver definition named `AUX`
+(`DOSDrivers/AUX`, `DOSDrivers/AUX.info` — a real Amiga serial-port device
+name that happens to collide with Windows' reserved `AUX` device). ART wrote
+both correctly: `distribution.json` records real, distinct SHA-256 hashes and
+byte counts for both (`Storage/DOSDrivers/AUX`, 119 bytes;
+`Storage/DOSDrivers/AUX.info`, 481 bytes), and directory enumeration
+(`Get-ChildItem`, Python's `os.listdir`) confirms both exist on the NTFS
+distribution tree with the right sizes. But `hst.imager.exe fs copy … -r`,
+extracting a PFS3 volume ART built back out to an NTFS folder, produced no
+error and silently omitted both files — found by hashing every extracted file
+against its source: 3059 of 3061 matched byte-for-byte, and the two misses
+were exactly `Storage\DOSDrivers\AUX` and `AUX.info`. Windows-specific
+(`Test-Path`/`Get-Item` on the exact same path fail the same way outside
+`hst-imager` entirely; plain `os.listdir`/`Get-ChildItem` enumeration does
+not), and it only matters for an **extraction to an NTFS path** — nothing
+inside PFS3 itself is Windows-shaped, so ART's own reader is not known to be
+affected and was not the thing under test here. Not fixed — not ART's tool to
+fix. Worth remembering if ART ever grows its own "extract a volume to a PC
+folder" feature.
+
+**ART-113** 🟠 **`libpfs3` 0.1.3 writes an entry's name as UTF-8 and reads it
+back as Latin-1 — any non-ASCII AmigaDOS name fails to copy in** — *found
+2026-08-16, Task 14's real run*
+Vendored dependency (`libpfs3 = "=0.1.3"`), not ART code, but it blocks real
+content on the user's own media. `writer.rs::create_dir_in`/`write_file_in`
+encode the given name with `name.as_bytes()` — UTF-8 — while
+`ondisk/direntry.rs`'s `DirEntry` decodes a stored name with
+`util::latin1_to_string`. For any name outside ASCII (where UTF-8 and Latin-1
+coincide byte-for-byte) the two disagree: a name like `español` writes as two
+UTF-8 bytes for `ñ` (`0xC3 0xB1`) and reads back mis-decoded, so
+`NativeFormatter::copy_in`'s own "was created and is not listed back" sanity
+check (`native.rs:742`, `.find(|e| e.name.eq_ignore_ascii_case(name))`) fires
+and the whole copy aborts loudly — never silent corruption, but a hard stop.
+Found via the real `dist-3.2` tree: 24 files/directories across
+`Locale/Catalogs`, `Locale/Countries`, `Locale/Help` and `Locale/Languages`
+carry accented AmigaDOS names — `español`, `français`, `português`, `türkçe`,
+`österreich`, `canada_français` — real content from `Locale-ES/-FR/-PT/-TR`
+and the base `Locale` disk (`Locale.adf`'s own `Countries` subtree, so this is
+not avoidable by simply not choosing a given language component). No synthetic
+fixture in Tasks 1–13 used a non-ASCII name, so nothing caught this before real
+media did. Not fixed — `libpfs3` is pinned and exposes no name-encoding option;
+a fix means either an upstream patch or ART pre-encoding names itself before
+calling into it, which is a real change to `core/preload/native.rs` this task
+did not make. Task 14's Step 2 volume build used a reduced tree with these 24
+entries excluded (documented in the STATUS.md session line and the report) to
+demonstrate the rest of the pipeline while this stays open.
+
+**ART-119** 🔵 **Five minors deferred from Task 13's review, folded into one
+entry** — *found 2026-08-15/16, Task 13's fix round, filed at Task 14*
+`src/lib/osinstall.ts`, `src/components/osbuilder/OsInstall.tsx`,
+`src-tauri/src/core/osinstall/plan.rs` · None promoted during Task 13's own
+round because each is one line, harmless today, or both:
+
+1. The two-plan design (`osinstall_plan` called once for the base plan and
+   once more for `excludedConditional`) doubles the work even when
+   `excludedConditional` is empty and the two requests are byte-identical.
+2. The JSX renders four `conditionalReason` kinds as independent guards
+   rather than an exhaustive `switch`, so a fifth kind would render no reason
+   at all. All four shipped kinds are covered today.
+3. The recipe-parity test (`src/lib/osinstall.test.ts`) does not assert a
+   `Condition`'s **kind** string, only its `major` — a future condition
+   variant other than `rom-older-than` carrying a `major` field would pass
+   the parity test while the screen still said "below Kickstart V47".
+4. The reason block lost its `!def.required && def.available` gate during a
+   fix round; unreachable against the shipped recipe (nothing both
+   `available: false` and non-required needs a reason shown), so not acted
+   on, but the gate's absence is not provably safe against a future recipe.
+5. *(Pre-existing, not introduced by Task 13.)* The base plan can hard-error
+   on `AdfSource::open` for an **excluded** component's damaged or vanished
+   disk, blanking both plans — `osinstall_plan` should probably treat a
+   missing/corrupt medium for a component the caller excluded the same way
+   `MediaMissing`/`MediaPathMissing` already treat one for a component the
+   caller never asked about.
+Not fixed — none is data-unsafe; each is a real, small gap worth someone's
+attention before the recipe or the screen grows past what today's tests cover.
+
 **ART-110** 🔵 **A partial layout apply cannot be resumed, and the screen stays
 busy** — *found 2026-08-15, the whole-branch review of SD-2 G11*
 `src-tauri/src/core/layout/apply.rs` · `src/pages/ContentLayout.tsx` · Any
@@ -432,6 +586,55 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-112** ✅ **`glowicons` did not declare an override over `classes`, so a real
+card refused to build** — *found and closed 2026-08-16, Task 14's run against
+the user's own 3.2 media*
+`src-tauri/src/core/osinstall/recipes/amigaos-3.2.json` · Both `Classes3.2.adf`
+and `GlowIcons3.2.adf` ship `Devs/DataTypes/{8SVX,ACBM,AIFF,ANIM,BMP,CDXL,GIF,
+ILBM,JPEG,PNG,WAVE}.info` — the DataType icons GlowIcons exists to re-skin —
+and `workbench-base` ships three of the same names itself
+(`AmigaGuide/FTXT/ILBM.info`). `glowicons`'s `overrides` list named
+`workbench-base`, `extras` and `storage`, but not `classes`, so `plan()`'s
+own `detect_collisions` (Task 5) correctly found no single winner and refused
+the whole plan with eleven `DestinationCollision`s — every synthetic fixture
+in Tasks 1–13 used ASCII-only single-disk data and never exercised two real
+disks claiming the same nested file inside two overlapping `Subtree` rules.
+→ `"classes"` added to `glowicons`'s `overrides`. Not a behaviour change for
+any content already tested — the fixture recipes never modelled this overlap
+— and correct in direction: GlowIcons is the icon-theme disk, so it wins.
+Reproduced (and now passes) by
+`run_the_real_engine_against_the_users_own_media_when_asked`
+(`core/osinstall/apply.rs`, `#[ignore]`, `ART_OSINSTALL_MEDIA`/`_ROM`/`_DEST`
+set) — `refusals` is empty and `classes`/`glowicons` are both in
+`components_on`.
+
+**ART-111** ✅ **The `storage` component's rules named a `Storage/` drawer the
+real disk does not have** — *found and closed 2026-08-16, Task 14's run
+against the user's own 3.2 media*
+`src-tauri/src/core/osinstall/recipes/amigaos-3.2.json` · Six `Subtree` rules
+read `from: "Storage/DOSDrivers"`, `"Storage/Keymaps"`, `"Storage/Monitors"`,
+`"Storage/Presets"`, `"Storage/DefIcons"`, `"Storage/Env-Archive"` — but the
+real `Storage3.2.adf` carries `DOSDrivers/`, `Keymaps/`, `Monitors/`,
+`Presets/`, `DefIcons/` and `Env-Archive/` at its **root**, with no `Storage/`
+wrapper at all (confirmed by walking the real disk with `AdfSource::open` +
+`MediaSource::walk("")`, the same way ART-013's era found `MMULibs.adf`'s
+`Libs` casing). Every synthetic fixture that exercised `storage` built its own
+tree from the recipe's own (wrong) assumption, so nothing caught the mismatch
+before real media did — `plan()` correctly answered six
+`MediaPathMissing` refusals, one per rule, rather than installing nothing
+silently.
+→ The six `from` values now name the real root-level paths; `to` is
+unchanged (`Storage/DOSDrivers`, …), which is where AmigaOS expects them on
+the installed volume. **Left deliberately incomplete, and said so here rather
+than guessed at**: `Storage3.2.adf`'s real content also includes `Printers/`,
+`LIBS/` (five libraries) and `Classes/DataTypes/{icon,jpeg}.datatype`, none of
+which any `storage` rule reaches. Adding them was out of this fix's scope —
+`Classes/DataTypes/*.datatype` already exists on the `classes` disk too, an
+unmeasured third collision surface this session did not verify — so the
+`storage` component ships today exactly as complete as it was before this fix,
+minus the one bug that made it unusable at all.
+Reproduced (and now passes) the same way as ART-112, above.
 
 **ART-099** ✅ **Application Size cut the right-hand edge off every screen** — *closed 2026-08-14: the real window was measured and nothing is clipped. The third wrong diagnosis was mine, and it lasted an hour.*
 

@@ -1718,4 +1718,85 @@ mod tests {
         }
         walk(&mut vol, "");
     }
+
+    /// **Task 14 — the real run, step 2.** Puts the real `dist-3.2` tree
+    /// `core::osinstall::apply` built from the user's own media
+    /// (`run_the_real_engine_against_the_users_own_media_when_asked` in
+    /// `core/osinstall/apply.rs`) onto **a fresh card image ART itself
+    /// creates here** — never the user's own hardware card, and nothing
+    /// under `E:\amiga\Amigatolon` is opened for writing. `hst.imager fs
+    /// dir` and `python scripts/pfs3-oracle-check.py` are the independent
+    /// witnesses named in the brief; this hook only builds the volume and
+    /// prints where it landed, so a human (or the report) can point both at
+    /// it afterwards.
+    ///
+    /// Same `format_partition` then `copy_in` shape the two oracle hooks
+    /// above already use, and the same shape G5 uses in production —
+    /// `copy_in`'s `source` is "a folder on the PC whose tree goes in"
+    /// (`PreloadPartition::content`'s own doc comment), so the whole
+    /// `dist-3.2` folder, `distribution.json` included, goes in exactly as
+    /// a screen driving Preload at that folder would send it. The manifest
+    /// riding along as an inert extra file on the volume is a real,
+    /// observed consequence worth naming in the report, not a defect this
+    /// hook works around.
+    ///
+    /// ```text
+    /// ART_OSINSTALL_DEST="E:\amiga\ProjeART\dist-3.2" ^
+    /// ART_CARD_OUT="E:\amiga\ProjeART\dist-3.2-card.hdf" ^
+    /// cargo test build_the_real_dist_tree_onto_a_card_when_asked -- --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore = "touches the real dist-3.2 tree on disk and writes a multi-MB image; run explicitly"]
+    fn build_the_real_dist_tree_onto_a_card_when_asked() {
+        let (Ok(dist), Ok(card_out)) = (
+            std::env::var("ART_OSINSTALL_DEST"),
+            std::env::var("ART_CARD_OUT"),
+        ) else {
+            return;
+        };
+        let dist_root = PathBuf::from(&dist);
+        let image = PathBuf::from(&card_out);
+        if let Some(parent) = image.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        let _ = std::fs::remove_file(&image);
+
+        // 128 MB total / 100 MB partition: the real tree measured
+        // ~12.3 MB on disk (`total_bytes` in the run above), comfortably
+        // inside a 100 MB PFS3 partition with room for anode/bitmap
+        // overhead and future growth without re-measuring this number.
+        crate::core::hdf::create_hdf(
+            &image,
+            128 * 1024 * 1024,
+            true,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::Pfs3DirectScsi,
+                size_mb: 100,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 0,
+            }],
+            &[],
+        )
+        .unwrap();
+
+        NativeFormatter
+            .format_partition(&image, None, 1, "Workbench", &NoProgress)
+            .unwrap();
+
+        let summary = NativeFormatter
+            .copy_in(&image, None, "DH0", &dist_root, &NoProgress)
+            .unwrap();
+
+        println!(
+            "card={} files={} directories={} bytes={}",
+            image.display(),
+            summary.files,
+            summary.directories,
+            summary.bytes
+        );
+
+        assert!(summary.files > 0, "the real tree must not copy in empty");
+    }
 }

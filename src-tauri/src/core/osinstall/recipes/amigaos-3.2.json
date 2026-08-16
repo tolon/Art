@@ -203,7 +203,7 @@
         { "from": "System", "to": "System", "kind": "subtree" },
         { "from": "Tools", "to": "Tools", "kind": "subtree" }
       ],
-      "overrides": ["workbench-base", "extras", "storage"]
+      "overrides": ["workbench-base", "extras", "storage", "classes"]
     },
     {
       "id": "backdrops",
@@ -276,12 +276,12 @@
         { "from": "C/MountInfo", "to": "C/MountInfo", "kind": "file" },
         { "from": "C/Owner", "to": "C/Owner", "kind": "file" },
         { "from": "C/Reboot", "to": "C/Reboot", "kind": "file" },
-        { "from": "Storage/DOSDrivers", "to": "Storage/DOSDrivers", "kind": "subtree" },
-        { "from": "Storage/Keymaps", "to": "Storage/Keymaps", "kind": "subtree" },
-        { "from": "Storage/Monitors", "to": "Storage/Monitors", "kind": "subtree" },
-        { "from": "Storage/Presets", "to": "Storage/Presets", "kind": "subtree" },
-        { "from": "Storage/DefIcons", "to": "Storage/DefIcons", "kind": "subtree" },
-        { "from": "Storage/Env-Archive", "to": "Storage/Env-Archive", "kind": "subtree" }
+        { "from": "DOSDrivers", "to": "Storage/DOSDrivers", "kind": "subtree" },
+        { "from": "Keymaps", "to": "Storage/Keymaps", "kind": "subtree" },
+        { "from": "Monitors", "to": "Storage/Monitors", "kind": "subtree" },
+        { "from": "Presets", "to": "Storage/Presets", "kind": "subtree" },
+        { "from": "DefIcons", "to": "Storage/DefIcons", "kind": "subtree" },
+        { "from": "Env-Archive", "to": "Storage/Env-Archive", "kind": "subtree" }
       ]
     }
   ]

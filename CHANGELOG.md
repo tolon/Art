@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Install AmigaOS 3.2 from your own media (2026-08-16)
+
+#### Added
+- **The OS Builder can now build an AmigaOS 3.2 distribution tree from your
+  own install floppies.** Point it at a folder of ADFs and your Kickstart:
+  it works out which components apply — Workbench, Extras, every Locale disk,
+  Fonts, Classes, GlowIcons, DiskDoctor, MMULibs, HDTools, Storage — and, if
+  your Kickstart is older than V47, switches on the A1200 Modules disk for
+  you, unasked, because 3.2 needs it and 3.9 does not. Media disks are found
+  by the volume name recorded *inside* them, never by filename, so a renamed
+  or reordered floppy image still resolves.
+- **A manifest, not just a folder.** Every file the build places is recorded
+  with which component put it there, which disk it came from, its SHA-256
+  and its AmigaDOS protection bits — the only record of what an install did,
+  since the original floppy images are not kept around afterwards.
+- **The tree can be put onto a real PFS3 or FFS volume and read back
+  independently.** Verification tells "ART did not check this" apart from
+  "ART checked this and it's fine" — a filesystem ART cannot yet verify
+  reports honestly rather than showing a false pass.
+- **Run for the first time against the user's own real 3.2 media** (36
+  floppy images, a real Kickstart v3.1 rev 40.68): 26 components, 4030 files,
+  11.9 MB, and the pre-V47 Modules component switching itself on exactly as
+  designed. Two real defects the recipe's own data had — found only by real
+  media, never by a fixture — are already fixed.
+
+#### Known
+- **Putting the *full* tree onto a volume does not yet work for every
+  language.** A dependency this feature relies on mishandles any AmigaDOS
+  filename outside plain ASCII, which is real content on the Spanish,
+  French, Portuguese and Turkish locale disks (and the base Locale disk's
+  own country list). The copy refuses loudly rather than writing anything
+  wrong; it does not yet succeed for those files.
+- **No Amiga, real or emulated, has booted anything this feature has built.**
+  The distribution tree and the volume it produces are proven independently
+  of ART — but the WinUAE rung and the real-hardware rung are both still
+  open.
+- **The install screen itself is only lightly verified.** Its top-level
+  layout has been seen rendering correctly; the component checklist, the
+  confirmation step, the file list and the verify results have not yet been
+  driven end to end in a real browser session.
+
 ### Drop a pile of files, get an organised staging tree (2026-08-15)
 
 #### Added
