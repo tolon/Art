@@ -45,6 +45,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-ASCII-name figures there remain the earlier, separate measurement.
   **Since re-run** — see the entry above it.
 
+### Honest numbers on the install report (2026-08-16)
+
+#### Fixed
+- **The build report now describes the folder it made, not the work it did.**
+  Where two components legitimately write the same file — one deliberately
+  replacing the other's copy — both were counted, so a real AmigaOS 3.2 build
+  announced 4047 files when 3950 were there. More seriously, the record it
+  writes beside the tree (`distribution.json`, the only account of which
+  install disk each file came from once the disks are put away) listed 94
+  files **twice**, crediting two different components for the same file. One
+  of those two entries was always wrong. Each file is now recorded once, by
+  whichever component's copy actually survived, and folders created on the
+  way to somewhere else are counted rather than missed.
+- **A size ART does not have is no longer shown as zero.** When the external
+  tool does the copying it reports its own total rounded ("12.2 MB"), which
+  is not a byte count — so the line simply leaves it out instead of claiming
+  a twelve-megabyte copy moved nothing. A copy that genuinely moved nothing
+  still says so.
+
 ### AmigaOS 3.2 boots from a disk ART prepared (2026-08-16)
 
 #### Fixed
@@ -99,6 +118,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and folder counts — the tool's own summary rounds the size to "12.2 MB",
   and ART would rather show nothing than invent an exact number from a
   rounded one. The fix is to leave the byte count out; it is not done yet.
+  **Since fixed** — see the entry above.
 
 ### Install AmigaOS 3.2 from your own media (2026-08-16)
 

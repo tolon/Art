@@ -26,51 +26,6 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-125** 🔵 **A fallback copy reports zero bytes, and the screen prints
-that as a fact** — *found 2026-08-16, in [ART-122](#fixed)'s own verification
-run*
-`src-tauri/src/tools/hst_imager.rs` (`parse_copy_summary`),
-`src/i18n/*.json` (`preload.result.copied`) · The real run reported
-`files=3933 directories=280 bytes=0`. The counts come from asking the volume
-afterwards — `hst-imager fs dir -r` ends with *"280 directories, 3933 files,
-12.2 MB"* — and `parse_copy_summary` reads the first two and drops the third,
-because `"12.2"` is not a `u64`. So the result panel renders "Copied in: 3933
-file(s), 280 folder(s), **0 bytes**".
-
-The number is unrecoverable rather than merely unparsed: `12.2 MB` is a
-rounded string, and turning it into a byte count would invent 12 782 141 bytes
-that nothing measured. So the fix is *not* to parse it harder — it is to say
-nothing where ART has nothing, the same rule G8's `not-checked` state follows
-(§89). That needs `CopySummary::bytes` to distinguish "zero" from "not
-answered", and a string for each. Native runs are unaffected: they count their
-own bytes exactly.
-
-**ART-124** 🟡 **`apply()` reports how many plan items it ran, not what the
-tree holds — so the headline figure for the real 3.2 install is 98 files and
-50 directories too high** — *found 2026-08-16, counting the tree the real run
-had already written*
-`src-tauri/src/core/osinstall/apply.rs` · `outcome.files += 1` fires once per
-plan item and `outcome.directories += 1` once per directory item. Neither is
-the number of entries that exist afterwards: a component that `overrides`
-another writes the same destination twice by design (that is what an override
-*is* — ART-112 was a missing one), and a directory named by two components is
-created once by `create_dir_all` and counted twice.
-
-Measured against the tree the real run produced, which has not been rebuilt
-since: `apply()` reported **4030 files / 330 directories**;
-`E:\amiga\ProjeART\dist-3.2` holds **3932 files** (plus `distribution.json`,
-which `apply` does not count) **and 280 directories**. Confirmed independently
-— `hst-imager fs dir -r`, after a full copy of that tree onto a PFS3 volume,
-counts *"280 directories, 3933 files"*, the extra one being the manifest.
-
-Nothing is missing or wrong on disk: every file the plan meant to place is
-there, and `distribution.json` records each one once. What is wrong is the
-number the run announces, which has since been quoted as the size of the tree
-in `STATUS.md`, `FEATURES.md` and three issue entries. Not fixed. The fix is
-to count destinations rather than items — and to decide, in the same pass,
-whether the manifest counts as one of the tree's files (it is written by
-`apply`, so probably yes).
-
 **ART-119** 🔵 **Five minors deferred from Task 13's review, folded into one
 entry — two closed, three still open** — *found 2026-08-15/16, Task 13's fix
 round, filed at Task 14; #3 and #4 closed 2026-08-16*
@@ -613,6 +568,88 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-124** 🟡 ✅ **`apply()` reported how many plan items it ran, not what the
+tree holds — and the manifest carried 94 paths twice** — *found 2026-08-16,
+counting the tree the real run had already written; fixed the same day*
+`src-tauri/src/core/osinstall/apply.rs` · `outcome.files += 1` fires once per
+plan item and `outcome.directories += 1` once per directory item. Neither is
+the number of entries that exist afterwards: a component that `overrides`
+another writes the same destination twice by design (that is what an override
+*is* — ART-112 was a missing one), and a directory named by two components is
+created once by `create_dir_all` and counted twice.
+
+Measured against the tree the real run produced, which has not been rebuilt
+since: `apply()` reported **4030 files / 330 directories**;
+`E:\amiga\ProjeART\dist-3.2` holds **3932 files** (plus `distribution.json`,
+which `apply` does not count) **and 280 directories**. Confirmed independently
+— `hst-imager fs dir -r`, after a full copy of that tree onto a PFS3 volume,
+counts *"280 directories, 3933 files"*, the extra one being the manifest.
+
+Nothing is missing or wrong on disk: every file the plan meant to place is
+there, and `distribution.json` records each one once. What is wrong is the
+number the run announces, which has since been quoted as the size of the tree
+in `STATUS.md`, `FEATURES.md` and three issue entries. Not fixed. The fix is
+to count destinations rather than items — and to decide, in the same pass,
+whether the manifest counts as one of the tree's files (it is written by
+`apply`, so probably yes).
+
+**The manifest was the worse half, found while fixing the count.** Every item
+pushed a `FileRecord`, so `distribution.json` — which its own doc comment
+calls "the only record… because the media itself is gone by then" — held 4047
+records for 3950 paths, each duplicate claiming a *different* component put
+the file there. One of the two claims was always false.
+
+→ Fixed: destinations are tracked as they are written (keyed by `item.to`, the
+same key `plan::detect_collisions` pairs claimants by, so the two cannot
+disagree about what "the same destination" means). An override **replaces**
+its predecessor's record instead of adding one, and `bytes` follows the
+surviving file rather than summing every write that landed on the path.
+Directories are deduped the same way — and ancestors no rule names
+(`Prefs/Presets` on the way to `Prefs/Presets/Backdrops`) are now counted,
+which was a second, smaller undercount hiding behind the first.
+
+Measured against the real trees, both ROMs: 3950 files / 278 directories
+(V47) and 3954 / 281 (V40), each matching a filesystem walk exactly, with no
+duplicate path in either manifest. Test:
+`the_report_counts_what_the_tree_holds_not_what_the_plan_did`, which counts
+the tree on disk rather than deriving a number from `plan.items` — the
+derivation being exactly what was wrong. Mutation-checked twice: reverting
+either half fails it.
+
+**ART-125** 🔵 ✅ **A fallback copy reported zero bytes, and the screen printed
+that as a fact** — *found 2026-08-16 in [ART-122](#fixed)'s own verification
+run; fixed the same day*
+`src-tauri/src/tools/hst_imager.rs` (`parse_copy_summary`),
+`src/i18n/*.json` (`preload.result.copied`) · The real run reported
+`files=3933 directories=280 bytes=0`. The counts come from asking the volume
+afterwards — `hst-imager fs dir -r` ends with *"280 directories, 3933 files,
+12.2 MB"* — and `parse_copy_summary` reads the first two and drops the third,
+because `"12.2"` is not a `u64`. So the result panel renders "Copied in: 3933
+file(s), 280 folder(s), **0 bytes**".
+
+The number is unrecoverable rather than merely unparsed: `12.2 MB` is a
+rounded string, and turning it into a byte count would invent 12 782 141 bytes
+that nothing measured. So the fix is *not* to parse it harder — it is to say
+nothing where ART has nothing, the same rule G8's `not-checked` state follows
+(§89). That needs `CopySummary::bytes` to distinguish "zero" from "not
+answered", and a string for each. Native runs are unaffected: they count their
+own bytes exactly.
+
+→ Fixed as the entry proposed: `CopySummary::bytes` is `Option<u64>`, where
+`None` means *not answered* and `Default` is a **known** zero, so an
+accumulator can start there without the two meanings colliding.
+`CopySummary::absorb` folds a step into a run and one unanswered step makes
+the total unanswerable — a sum missing an addend is not a sum. `hst-imager`'s
+parser answers `None` unless it reads an integer byte count, and the screen
+picks a sentence without the byte clause (`preload.result.copiedNoBytes`)
+rather than printing a zero. The real run now says `bytes=not answered`
+where it used to say `bytes=0` against 12 MB. Tests:
+`a_rounded_size_is_not_answered_rather_than_answered_wrongly`,
+`an_unreadable_listing_answers_no_byte_count_either`,
+`an_unreadable_summary_is_zero_rather_than_an_error` (updated), and
+`copiedPhrase`'s three cases — including that a **real** zero still prints,
+since that is a different answer.
 
 **ART-126** 🔴 ✅ **Every RDB filesystem ART has ever embedded was ignored by
 AmigaOS: `PatchFlags` named the wrong field** — *found and fixed 2026-08-16,
