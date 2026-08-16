@@ -8,8 +8,15 @@ build/
 
 # Tauri / Rust
 src-tauri/target/
-src-tauri/Cargo.lock
 src-tauri/gen/schemas/
+
+# `src-tauri/Cargo.lock` is deliberately **not** ignored. ART is an
+# application, not a library, so the lockfile is part of what it ships: it is
+# what makes a build reproducible and what `cargo deny check` actually checks.
+# That mattered less while every dependency was permissive and pinned by hand;
+# it started mattering on 2026-08-16, when `libpfs3` arrived as the first
+# copyleft dependency inside `core/` and brought a transitive set with it.
+# Auditing an unlocked tree tells you about whatever resolved that morning.
 
 # Logs
 logs/
