@@ -33,7 +33,12 @@ pub struct CardRom {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "verdict", rename_all = "kebab-case")]
 pub enum Pairing {
-    /// The same ROM the tree was planned against. Nothing to report.
+    /// The same ROM the tree was planned against, **and** the tree's own
+    /// requirement holds against it. Nothing to report.
+    ///
+    /// Both halves are load-bearing: a tree planned against a ROM that never
+    /// satisfied its recipe is not paired with it, however identical the
+    /// hashes are.
     Paired,
     /// A different ROM, and the tree's requirement holds against it.
     Suitable {
@@ -75,27 +80,40 @@ pub fn compare(tree: Option<&PairedRom>, card: Option<&CardRom>) -> Pairing {
         };
     };
 
+    // **The requirement is asked first, always.** Identity is not permission:
+    // a tree can record the very ROM it was planned against *and* a
+    // requirement that ROM never satisfied — plan against a V40 with the
+    // ROM-modules component excluded (a supported choice) and the tree says
+    // "planned for this V40, needs V47" in the same breath. Taking a `Paired`
+    // exit on the hash would then render nothing at all above a destructive
+    // confirmation, for exactly the pairing this check exists to warn about.
+    // So the recipe's question is put to the card's ROM first; identity only
+    // chooses between `Paired` and `Suitable` once the answer is yes.
+    //
+    // A tree that requires nothing carries its own ROM modules, or never
+    // depended on the ROM at all. See the design's "a floor nobody has
+    // measured": the recipe states no lower bound, so neither does this.
+    if let Some(needs) = tree.requires_major {
+        match card.stated_major {
+            Some(found) if found >= needs => {}
+            found => {
+                return Pairing::Unsuitable {
+                    needs,
+                    found,
+                    rom: card.name.clone(),
+                }
+            }
+        }
+    }
+
+    // An empty hash is an absent fact, not a value: two of them must never
+    // add up to the most reassuring verdict ART has.
     if !tree.sha256.is_empty() && tree.sha256.eq_ignore_ascii_case(&card.sha256) {
         return Pairing::Paired;
     }
 
-    match tree.requires_major {
-        // The tree carries its own ROM modules, or never depended on the ROM
-        // at all. See the design's "a floor nobody has measured": the recipe
-        // states no lower bound, so neither does this.
-        None => Pairing::Suitable {
-            rom: card.name.clone(),
-        },
-        Some(needs) => match card.stated_major {
-            Some(found) if found >= needs => Pairing::Suitable {
-                rom: card.name.clone(),
-            },
-            found => Pairing::Unsuitable {
-                needs,
-                found,
-                rom: card.name.clone(),
-            },
-        },
+    Pairing::Suitable {
+        rom: card.name.clone(),
     }
 }
 
@@ -193,6 +211,60 @@ mod tests {
                 assert_eq!(rom, "unknown-version.rom");
             }
             other => panic!("{other:?}"),
+        }
+    }
+
+    /// **The silence that blocked the merge.** A tree can record a ROM it was
+    /// planned against *and* a requirement that ROM does not satisfy — the
+    /// user excludes `modules-a1200` while planning against their V40, which
+    /// `OsInstall.tsx` supports on purpose, and `plan()` then records
+    /// `{ stated_major: 40, requires_major: 47 }`. Build the card with that
+    /// same ROM and the two hashes match. Identity must not be allowed to
+    /// answer a question it was never asked: a pairing that never satisfied
+    /// its own recipe is not one to be silent about.
+    #[test]
+    fn identity_does_not_excuse_a_requirement_the_rom_never_met() {
+        let same = "deadbeef";
+        let verdict = compare(
+            Some(&tree(same, Some(47))),
+            Some(&card_named("planned-against-v40.rom", same, Some(40))),
+        );
+        match verdict {
+            Pairing::Unsuitable { needs, found, rom } => {
+                assert_eq!(needs, 47);
+                assert_eq!(found, Some(40));
+                assert_eq!(rom, "planned-against-v40.rom");
+            }
+            other => {
+                panic!("the same ROM is not a pass when it never met the requirement: {other:?}")
+            }
+        }
+    }
+
+    /// The other half of the same restructure: identity still decides between
+    /// `Paired` and `Suitable`, once the requirement holds.
+    #[test]
+    fn identity_still_pairs_when_the_requirement_holds() {
+        let same = "deadbeef";
+        let verdict = compare(
+            Some(&tree(same, Some(47))),
+            Some(&card_named("the-very-rom.rom", same, Some(47))),
+        );
+        assert_eq!(verdict, Pairing::Paired);
+    }
+
+    /// Two absent facts are not a match. Without the emptiness guard an
+    /// unhashed tree and an unhashed card would produce the most reassuring
+    /// verdict ART has out of nothing at all.
+    #[test]
+    fn two_empty_hashes_are_not_the_same_rom() {
+        let verdict = compare(
+            Some(&tree("", None)),
+            Some(&card_named("unhashed.rom", "", Some(47))),
+        );
+        match verdict {
+            Pairing::Suitable { rom } => assert_eq!(rom, "unhashed.rom"),
+            other => panic!("an empty hash matches nothing: {other:?}"),
         }
     }
 
