@@ -52,6 +52,7 @@ import {
 import {
   fallbackPhrase,
   formatCount,
+  plannedToolPhrase,
   preloadBlocker,
   stepPhrase,
   type FallbackReason,
@@ -576,6 +577,23 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       expect(resolvesAtRuntime(stepPhrase(step).key), step.step).toBe(true);
     }
     expect(formatCount({ image: "card.img", steps })).toBe(1);
+  });
+
+  it("plannedToolPhrase: every PreloadStep variant resolves", () => {
+    const steps: PreloadStep[] = [
+      {
+        step: "import-filesystem",
+        slot: 2,
+        driver: "pfs3aio.lha",
+        dostype: "PDS3",
+        name: "pfs3aio",
+      },
+      { step: "format-partition", slot: 2, index: 1, drive_name: "DH0", volume_name: "Work" },
+      { step: "copy-in", slot: 2, drive_name: "DH0", source: "E:\\tree" },
+    ];
+    for (const step of steps) {
+      expect(isLeafKey(plannedToolPhrase(step).key), step.step).toBe(true);
+    }
   });
 
   it("preloadBlocker: every reason a preload cannot run resolves", () => {

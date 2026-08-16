@@ -321,11 +321,16 @@ fn run_with_fallback(
     fallback: Option<&dyn VolumeFormatter>,
     sink: &dyn ProgressSink,
 ) -> CoreResult<(PreloadOutcome, Vec<StepReport>)> {
-    let mut outcome = PreloadOutcome {
-        tool: native.probe().ok(),
-        ..Default::default()
-    };
+    let mut outcome = PreloadOutcome::default();
     let mut reports = Vec::new();
+    // Which tool(s) actually did work, so the summary line above the
+    // per-step list can never claim a single tool when the steps disagree
+    // (fix-wave finding 4: this used to be `native.probe().ok()`
+    // unconditionally, so a run where *every* step fell back still printed
+    // "By libpfs3 … (native)" — the one line on the panel that contradicted
+    // the per-step list sitting right beneath it).
+    let mut used_native = false;
+    let mut used_fallback = false;
     let total = made.steps.len() as u64;
 
     for (done, step) in made.steps.iter().enumerate() {
@@ -341,6 +346,7 @@ fn run_with_fallback(
                     tool: "native".into(),
                     fallback_reason: None,
                 });
+                used_native = true;
                 apply_effect(&mut outcome, effect);
                 continue;
             }
@@ -359,6 +365,7 @@ fn run_with_fallback(
         };
 
         let effect = run_step(&made.image, step, fallback, sink)?;
+        used_fallback = true;
         let tool_name = fallback
             .probe()
             .map(|v| v.raw)
@@ -370,6 +377,15 @@ fn run_with_fallback(
         });
         apply_effect(&mut outcome, effect);
     }
+
+    // Only claim a tool here when every step that ran agreed on one — a
+    // plan mixing native and fallback steps says so through `reports`
+    // already, not through this line pretending to speak for both.
+    outcome.tool = match (used_native, used_fallback) {
+        (true, false) => native.probe().ok(),
+        (false, true) => fallback.and_then(|f| f.probe().ok()),
+        _ => None,
+    };
 
     sink.report(total, Some(total), "done");
     Ok((outcome, reports))
@@ -736,6 +752,13 @@ mod tests {
 
         assert_eq!(outcome.formatted, vec!["DH0"]);
         assert_eq!(outcome.copied.files, 1);
+        assert!(
+            outcome
+                .tool
+                .as_ref()
+                .is_some_and(|t| t.raw.contains("libpfs3")),
+            "the summary line should say native, not the unreachable configured tool, {outcome:?}"
+        );
         assert!(reports.iter().all(|r| r.tool == "native"), "{reports:?}");
         assert!(
             reports.iter().all(|r| r.fallback_reason.is_none()),
@@ -821,8 +844,73 @@ mod tests {
         // The fallback tool actually ran the copy — not simulated.
         assert_eq!(*recorder.calls.borrow(), vec!["copy DH0"]);
         assert_eq!(outcome.copied.files, 1, "the recorder's own summary");
+        // A mixed run — one step native, one fallback — must not claim a
+        // single tool did the whole thing (fix-wave finding 4): the
+        // per-step list is what disagrees, so the summary line says nothing
+        // rather than picking a side.
+        assert!(
+            outcome.tool.is_none(),
+            "a mixed run must not attribute the whole outcome to one tool, {outcome:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **The summary line follows the fallback, not the default —
+    /// mutation-checked for fix-wave finding 4.** A plan where *every* step
+    /// needs the fallback (two `ImportFilesystem` steps; `NativeFormatter`
+    /// refuses this unconditionally, for every card — ART-117) must report
+    /// `outcome.tool` as the fallback's own probed version, never
+    /// `native`'s. The bug this guards: `run_with_fallback` used to set
+    /// `outcome.tool = native.probe().ok()` before the loop even ran, so the
+    /// result panel printed "By libpfs3 … (native)" for a run where every
+    /// single step actually went through `hst-imager` — contradicting the
+    /// per-step list rendered right beneath it.
+    #[test]
+    fn every_step_falling_back_makes_the_summary_follow_the_fallback_tool() {
+        let made = plan_of(vec![
+            PreloadStep::ImportFilesystem {
+                slot: None,
+                driver: std::path::PathBuf::from("pfs3aio.lha"),
+                dostype: "PDS3".into(),
+                name: "pfs3aio".into(),
+            },
+            PreloadStep::ImportFilesystem {
+                slot: None,
+                driver: std::path::PathBuf::from("pfs3aio.lha"),
+                dostype: "PDS3".into(),
+                name: "pfs3aio-2".into(),
+            },
+        ]);
+
+        // The real formatter: it refuses `import_filesystem` unconditionally,
+        // for every card (see its own module doc comment), so both steps are
+        // genuinely known capability gaps rather than a canned failure.
+        let native = NativeFormatter;
+        let recorder = Recorder::default();
+        let (outcome, reports) = run_with_fallback(
+            &made,
+            &native,
+            Some(&recorder as &dyn VolumeFormatter),
+            &crate::core::jobs::NoProgress,
+        )
+        .unwrap();
+
+        assert_eq!(reports.len(), 2, "{reports:?}");
+        assert!(
+            reports.iter().all(|r| r.tool == "recorder-tool"),
+            "{reports:?}"
+        );
+        assert!(
+            reports.iter().all(|r| r.fallback_reason.is_some()),
+            "{reports:?}"
+        );
+        assert_eq!(
+            outcome.tool.as_ref().map(|v| v.raw.as_str()),
+            Some("recorder-tool"),
+            "the summary line must follow the tool that actually did the \
+             work, not the default that never ran a single step, {outcome:?}"
+        );
     }
 
     /// **A missing tool refuses, rather than half-running.** The plan needs

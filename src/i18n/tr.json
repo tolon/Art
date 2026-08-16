@@ -1708,7 +1708,7 @@
   "preload": {
     "heading": "Kartın Amiga birimlerini hazırla",
     "intro": "ART'ın oluşturduğu kartta Amiga'nın gördüğü bölümler var ama içleri boş — Amiga ilk açılışta onları biçimlendirmeyi önerir. Bu ekran onları burada biçimlendirir ve içeriğini kopyalar, böylece kart hazır gelir.",
-    "scope": "PFS3'ü yazan ART değil. Biçimlendirmeyi hst-imager yapıyor; mevcut iki PiStorm imaj aracının da dayandığı araç. ART onu paketlemiyor, kendi kopyanı gösteriyorsun.",
+    "scope": "ART, sıradan bir kart için PFS3'ü ve FFS'i varsayılan olarak kendi yazıcısıyla yazar — dış bir araca gerek yok. hst-imager — mevcut iki PiStorm imaj aracının da dayandığı araç — ART'ın kendi yazıcısının henüz yapamadığı iki şey için adı konmuş bir yedek olarak kalır: bir sürücüyü kartın mevcut RDB'sine yerinde gömmek, ve bir PFS3 biriminde düz ASCII dışındaki bir AmigaDOS adı. Bunlardan biri bu kart için geçerliyse kendi kopyanı ayarla.",
     "tool": {
       "heading": "Araç",
       "label": "hst.imager",
@@ -1758,7 +1758,12 @@
       "step": {
         "import": "{{name}} sürücüsünü RDB'ye {{dostype}} olarak göm",
         "format": "{{drive}} bölümünü {{volume}} adıyla biçimlendir — içindeki her şey gider",
-        "copy": "{{source}} içeriğini {{drive}} bölümüne kopyala"
+        "copy": "{{source}} içeriğini {{drive}} bölümüne kopyala",
+        "tool": {
+          "native": "Bunu ART'ın kendi yazıcısı yapar.",
+          "nativeConditional": "Bunu ART'ın kendi yazıcısı yapar — içindeki bir ad düz ASCII değilse hst-imager onun yerine yapar, sonuç bunu söyler.",
+          "hstImager": "Bunu hst-imager yapar — bir sürücüyü kartın mevcut RDB'sine yerinde gömmek, güvenle yalnızca onun yapabildiği bir şey (ART-117)."
+        }
       }
     },
     "confirm_one": "{{count}} bölümün silineceğini anlıyorum",
@@ -1776,14 +1781,15 @@
     },
     "fallback": {
       "foreignRdbEmbed": "Bu adımı hst-imager yaptı: kartın mevcut RDB'sine yerinde bir sürücü gömmek, ART'ın oluşturmadığı bir bölüm tablosunu düzenlemeyi gerektirir; ART'ın kendi yazıcısı bunu güvenle yapamaz.",
-      "nonAsciiPfs3Names": "Bu adımı hst-imager yaptı: {{count}} ad ASCII değil ve libpfs3'ün bu sürümü bunları doğru yazamıyor ({{paths}})."
+      "nonAsciiPfs3Names_one": "Bu adımı hst-imager yaptı: {{count}} ad ASCII değil ve libpfs3'ün bu sürümü bunu doğru yazamıyor ({{paths}}).",
+      "nonAsciiPfs3Names_other": "Bu adımı hst-imager yaptı: {{count}} ad ASCII değil ve libpfs3'ün bu sürümü bunları doğru yazamıyor ({{paths}})."
     },
     "result": {
       "heading": "Bitti",
       "formatted": "Biçimlendirilen: {{volumes}}",
       "copied": "Kopyalanan: {{files}} dosya, {{directories}} klasör, {{bytes}} bayt.",
       "tool": "{{version}} ile.",
-      "notVerified": "ART bu birimi geri okuyamaz. PFS3 okuyucusu yok, yani içeridekiler aracın sözü, ART'ın değil — Amiga'da ya da ART olmayan bir şeyle doğrula.",
+      "notVerified": "Bu çalıştırma birimi sonradan geri okuyup denetlemedi — ne ART'ın kendi yazıcısının yaptığı bir adım için, ne de hst-imager'ın yaptığı bir adım için. Amiga'da ya da ART olmayan bir şeyle doğrula.",
       "steps": {
         "heading": "Hangi adımı hangi araç yaptı",
         "tool": "{{tool}} ile"
@@ -1793,7 +1799,7 @@
   "layout": {
     "heading": "İçeriği yerleştir",
     "intro": "Bir yığın Amiga dosyasını bu bilgisayarda düzenli bir hazırlık ağacına dönüştürür — Games, Floppies, HardDisks, CDs, Unsorted. ART her şeyin nereye gideceğini önerir; hiçbir şey kopyalanmadan önce istediğini taşıyabilirsin.",
-    "scope": "Bu, bir karta değil bu bilgisayardaki bir klasöre yazar. Gerçek bir PiStorm kartı PFS3'tür ve ART onu doğrudan yazamaz — önce bu klasörü hazırla, sonra kart hazırlama ekranıyla kartın birimlerine kopyala.",
+    "scope": "Bu, bir karta değil bu bilgisayardaki bir klasöre yazar — önce burada hazırla, sonra kart hazırlama ekranıyla kartın birimlerine kopyala.",
     "root": {
       "label": "Hazırlık klasörü",
       "none": "Hazırlık klasörü seçilmedi",

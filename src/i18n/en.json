@@ -1708,7 +1708,7 @@
   "preload": {
     "heading": "Prepare the card's Amiga volumes",
     "intro": "A card ART builds has partitions an Amiga can see and nothing inside them — the Amiga offers to format them on first boot. This formats them here instead, and copies your content in, so the card arrives ready.",
-    "scope": "ART does not write PFS3 itself. hst-imager does the formatting, the same tool both existing PiStorm imagers stand on — you supply your own copy of it.",
+    "scope": "ART writes PFS3 and FFS itself by default, through its own writer — no external tool needed for an ordinary card. hst-imager, the same tool both existing PiStorm imagers stand on, stays as a named fallback for the two things ART's own writer cannot yet do: embedding a driver into a card's existing RDB in place, and an AmigaDOS name outside plain ASCII on a PFS3 volume. Set your own copy of it if either applies to this card.",
     "tool": {
       "heading": "The tool",
       "label": "hst.imager",
@@ -1758,7 +1758,12 @@
       "step": {
         "import": "Embed {{name}} in the RDB as {{dostype}}",
         "format": "Format {{drive}} as {{volume}} — everything in it goes",
-        "copy": "Copy {{source}} into {{drive}}"
+        "copy": "Copy {{source}} into {{drive}}",
+        "tool": {
+          "native": "ART's own writer does this.",
+          "nativeConditional": "ART's own writer does this — unless a name inside it is not plain ASCII, in which case hst-imager does it instead, and the result says so.",
+          "hstImager": "hst-imager does this — embedding a driver into this card's existing RDB in place is something only it can do safely (ART-117)."
+        }
       }
     },
     "confirm_one": "I understand {{count}} partition will be erased",
@@ -1776,14 +1781,15 @@
     },
     "fallback": {
       "foreignRdbEmbed": "hst-imager did this step: embedding a driver into this card's existing RDB in place means editing a partition table ART did not build, which ART's own writer cannot do safely.",
-      "nonAsciiPfs3Names": "hst-imager did this step: {{count}} name(s) are not ASCII, and this version of libpfs3 cannot write them correctly ({{paths}})."
+      "nonAsciiPfs3Names_one": "hst-imager did this step: {{count}} name is not ASCII, and this version of libpfs3 cannot write it correctly ({{paths}}).",
+      "nonAsciiPfs3Names_other": "hst-imager did this step: {{count}} names are not ASCII, and this version of libpfs3 cannot write them correctly ({{paths}})."
     },
     "result": {
       "heading": "Done",
       "formatted": "Formatted: {{volumes}}",
       "copied": "Copied in: {{files}} file(s), {{directories}} folder(s), {{bytes}} bytes.",
       "tool": "By {{version}}.",
-      "notVerified": "ART cannot read this volume back. It has no PFS3 reader, so what is inside is the tool's word and not ART's — verify it on the Amiga, or with something that is not ART.",
+      "notVerified": "This run did not read the volume back afterwards to check it — not for a step ART's own writer did, and not for one hst-imager did. Verify it on the Amiga, or with something that is not ART.",
       "steps": {
         "heading": "Which tool did each step",
         "tool": "by {{tool}}"
@@ -1793,7 +1799,7 @@
   "layout": {
     "heading": "Lay content out",
     "intro": "Turn a pile of Amiga files into an organised staging tree on this PC — Games, Floppies, HardDisks, CDs, Unsorted. ART proposes where each thing goes; you can move any of it before anything is copied.",
-    "scope": "This writes to a folder on this PC, not to a card. A real PiStorm card is PFS3, which ART cannot write directly — prepare this folder, then use the card preparation screen to copy it onto the card's volumes.",
+    "scope": "This writes to a folder on this PC, not to a card — prepare it here, then use the card preparation screen to copy it onto the card's volumes.",
     "root": {
       "label": "Staging folder",
       "none": "No staging folder chosen",

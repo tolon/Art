@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### hst-imager is no longer required to prepare a card (2026-08-16)
+
+#### Changed
+- **Preparing a card's Amiga volumes no longer needs `hst-imager` installed.**
+  ART now formats and fills PFS3 and FFS volumes with its own writer by
+  default — no external tool, nothing launched. `hst-imager` stays as a
+  named fallback for the two things ART's own writer cannot yet do:
+  embedding a filesystem driver into a card's existing partition table in
+  place, and an AmigaDOS name outside plain ASCII on a PFS3 volume. The
+  choice is made per step, not for the whole run, so one accented folder
+  name does not push an entire card onto the external tool.
+- **Never silent about which one ran.** The result panel now lists every
+  step alongside the tool that actually performed it, and why, whenever
+  that was not ART's own writer. The preview says which writer is expected
+  to run each step *before* the confirmation checkbox, since formatting a
+  partition is destructive and the default writer changed under this
+  release.
+
+#### Fixed
+- Two warning badges (the card-preparation screen's own, and the
+  content-layout screen's) still told the user ART could not write PFS3
+  itself, and the result panel's "not verified" wording implied the
+  opposite of what a native run actually did. All three now describe the
+  native-by-default writer honestly, including that neither writer's
+  output is read back and checked within this operation, native or
+  fallback alike.
+- The result panel could print "by ART's own writer" for a run where every
+  single step had actually gone through the fallback tool, contradicting
+  the per-step list directly beneath it.
+- A count-bearing string on the same screen (how many names are not ASCII)
+  had no plural forms, unlike every other one.
+
+#### Known
+- The real ~4000-file AmigaOS 3.2 distribution tree built in the entry
+  below was not re-run through this new fallback path end to end — the
+  non-ASCII-name figures there remain the earlier, separate measurement.
+
 ### Install AmigaOS 3.2 from your own media (2026-08-16)
 
 #### Added

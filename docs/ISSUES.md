@@ -566,6 +566,91 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-121** ✅ **ART-120's own fix wave, reviewed — four findings, folded
+into one entry** — *found 2026-08-16 in review of ART-120; fixed 2026-08-16*
+`src/i18n/en.json`, `src/i18n/tr.json`, `src/lib/preload.ts`,
+`src/components/osbuilder/VolumePreload.tsx`,
+`src-tauri/src/commands/preload.rs`, `docs/STATUS.md`, `CHANGELOG.md` ·
+ART-120 made `NativeFormatter` reachable and the engineering held up under
+review, but the wave that landed it left the product saying the opposite of
+what it now does, and left the record of the wave itself half-written.
+
+1. **Fixed — two shipped strings told the user the opposite of what the code
+   does.** `preload.scope` (the warning badge at the top of the very screen
+   ART-120 changed) still read *"ART does not write PFS3 itself. hst-imager
+   does the formatting…"*, and `layout.scope` still read *"A real PiStorm
+   card is PFS3, which ART cannot write directly."* Both false since
+   `NativeFormatter` became reachable. Rewritten in both catalogues to say
+   what is true now — native by default, `hst-imager` a named fallback for
+   the two known gaps — while keeping each string's own role (a scope badge,
+   not a changelog entry).
+2. **Fixed — `preload.result.notVerified` was inverted whenever the native
+   path did the work.** It read *"what is inside is the tool's word and not
+   ART's"*, which stopped being true the moment ART started writing the
+   volume itself. Reading `preload_run`'s own job closure settled which of
+   the two honest framings applies: it does not run any readback/verify pass
+   after either writer finishes — the record's own comment ("ART has no
+   PFS3 reader here") is about *this operation*, not about whether `libpfs3`
+   can read at all (`core/osinstall/verify.rs` uses the same crate to do
+   exactly that, for a different screen). So "not verified" is true for a
+   native run and a fallback run alike, for the same reason in both cases —
+   not "the tool's word", but "nobody re-read what either writer wrote here".
+   The string now says that.
+3. **Fixed — the writer for a destructive operation changed and the screen
+   never said so.** Formatting a partition is `Destructive`, its writer
+   moved from an externally-validated tool to ART's own (still 🟡 in
+   `FEATURES.md` — 3061 of 4030 files proven, no Amiga has booted it), and
+   nothing on the preview named which one was about to run. No Settings
+   toggle was added — the user's decision was "native by default, named
+   fallback", not a choice to expose. Instead `src/lib/preload.ts::
+   plannedToolPhrase` labels each planned step before the confirmation
+   checkbox: `import-filesystem` and `format-partition` are static facts
+   (ART-117 always needs `hst-imager`; a format never does), and `copy-in`
+   names the *possibility* of ART-113 rather than a verdict, since whether a
+   source tree carries a non-ASCII name is a fact about that step's own
+   content the plan does not scan for — the same reason `needsExternalTool`
+   already draws that line. `VolumePreload.tsx` renders it beside
+   `stepPhrase` in the plan list, so the reason (if any applies) is visible
+   before Format and Fill is pressed, not only after in the result panel.
+4. **Fixed — the result panel's tool label was wrong when every step fell
+   back.** `run_with_fallback` set `outcome.tool = native.probe().ok()`
+   **before the loop ran**, so a run where every single step actually went
+   through `hst-imager` still printed "By libpfs3 … (native)" — contradicting
+   the per-step list rendered directly beneath it. `outcome.tool` is now
+   computed from what actually ran: `native`'s version when every step used
+   it, the fallback's when every step did, and nothing at all for a mixed
+   run — the summary line is honest about not being able to speak for a
+   disagreement the per-step list already shows.
+   `commands::preload::tests::
+   every_step_falling_back_makes_the_summary_follow_the_fallback_tool`
+   mutation-checks it: a two-step plan where the real `NativeFormatter`
+   refuses both (ART-117, unconditionally) asserts `outcome.tool` names the
+   fallback, not `native` — the exact case the bug shipped with.
+5. **Fixed — `preload.fallback.nonAsciiPfs3Names` passed `{{count}}` with no
+   plural forms**, unlike every other count-bearing key on the same screen
+   (`preload.confirm_one`/`_other`, `preload.plan.willErase_one`/`_other`).
+   Split into `_one`/`_other` in both catalogues; `fallbackPhrase`'s own
+   return shape did not need to change, since i18next resolves the suffixed
+   keys from `{{count}}` at `t()`-time.
+6. **Fixed — `docs/STATUS.md` and `CHANGELOG.md` carried no record of ART-120
+   at all.** Six commits landed "hst-imager is no longer required to prepare
+   a card" — the most user-visible change in a while — and neither file
+   said so. Both now carry it, and `STATUS.md`'s own entry states plainly
+   what was *not* re-run: the real 4030-file `dist-3.2` tree was not carried
+   through the new fallback path end to end, so the 969/106 non-ASCII
+   figures in `FEATURES.md` remain the prior, separate measurement.
+
+**Noted, no action — recorded rather than fixed:** `core::preload::run` (the
+single-formatter runner `run_with_fallback` was built beside) is now reached
+only by its own tests and the `#[ignore]`d real-card hook; kept because it is
+still what a caller with exactly one formatter in hand — a test, or
+`hst-imager` alone — uses, and CLAUDE.md's core-independence rule wants it
+untouched by the fallback choice. `is_windows_reserved_component`
+(`core/preload/native.rs`) does not match a trailing-dot reserved form
+(`AUX.`) — irrelevant here since AmigaDOS names never carry a trailing dot,
+so there is nothing this check is failing to catch on the data ART actually
+handles.
+
 **ART-120** ✅ **`NativeFormatter` was unreachable from the application —
 every preload a user ran still shelled out to `hst-imager`** — *found
 2026-08-16, after G5 merged; fixed 2026-08-16*

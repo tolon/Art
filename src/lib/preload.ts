@@ -324,6 +324,30 @@ export function formatCount(plan: PreloadPlan): number {
   return plan.steps.filter((step) => step.step === "format-partition").length;
 }
 
+/**
+ * Which writer a planned step is expected to use, for the preview to say
+ * **before** the confirmation checkbox — the destructive operation's writer
+ * changed under ART-120 and the screen never said so (fix-wave finding 3).
+ *
+ * Two of the three step kinds are static facts, known from the plan alone:
+ * `import-filesystem` always needs `hst-imager` (`NativeFormatter` refuses
+ * it unconditionally, for every card — ART-117), and `format-partition`
+ * never does. A `copy-in`'s ART-113 gap — a non-ASCII AmigaDOS name on a
+ * PFS3 partition — is a fact about that step's own content this file's own
+ * header comment already says cannot be known until the run tries it, so
+ * this names the *possibility* rather than a verdict it cannot make.
+ */
+export function plannedToolPhrase(step: PreloadStep): Phrase {
+  switch (step.step) {
+    case "import-filesystem":
+      return { key: "preload.plan.step.tool.hstImager" };
+    case "format-partition":
+      return { key: "preload.plan.step.tool.native" };
+    case "copy-in":
+      return { key: "preload.plan.step.tool.nativeConditional" };
+  }
+}
+
 /** The sentence for one planned step, for the component to render. */
 export function stepPhrase(step: PreloadStep): Phrase {
   switch (step.step) {

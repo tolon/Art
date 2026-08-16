@@ -5,6 +5,7 @@ import {
   formatCount,
   needsExternalTool,
   picksFor,
+  plannedToolPhrase,
   preloadBlocker,
   stepPhrase,
   toRequest,
@@ -275,6 +276,44 @@ describe("stepPhrase", () => {
     });
     expect(phrase.key).toBe("preload.plan.step.format");
     expect(phrase.params).toEqual({ drive: "DH0", volume: "Work" });
+  });
+});
+
+describe("plannedToolPhrase", () => {
+  // fix-wave finding 3: the preview must say which writer is expected to
+  // run a step *before* the confirmation, not only after the run in the
+  // result panel. `import-filesystem` and `format-partition` are static
+  // facts (ART-117 always needs the fallback; a format never does); `copy-in`
+  // names the *possibility* of ART-113 rather than a verdict — see this
+  // file's own header comment on why that gap cannot be known ahead of time.
+  it("names hst-imager for import-filesystem, unconditionally", () => {
+    expect(
+      plannedToolPhrase({
+        step: "import-filesystem",
+        slot: 2,
+        driver: "pfs3aio.lha",
+        dostype: "PDS3",
+        name: "pfs3aio",
+      })
+    ).toEqual({ key: "preload.plan.step.tool.hstImager" });
+  });
+
+  it("names ART's own writer for format-partition, unconditionally", () => {
+    expect(
+      plannedToolPhrase({
+        step: "format-partition",
+        slot: 2,
+        index: 1,
+        drive_name: "DH0",
+        volume_name: "Work",
+      })
+    ).toEqual({ key: "preload.plan.step.tool.native" });
+  });
+
+  it("names ART's own writer for copy-in, with the ASCII caveat", () => {
+    expect(
+      plannedToolPhrase({ step: "copy-in", slot: 2, drive_name: "DH0", source: "E:\\tree" })
+    ).toEqual({ key: "preload.plan.step.tool.nativeConditional" });
   });
 });
 

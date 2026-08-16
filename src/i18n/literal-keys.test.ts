@@ -199,6 +199,11 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // plan preview, once for the result — plus `fallbackPhrase`, a `Phrase`
     // read from `@/lib/preload` for the step(s) where the fallback fired.
     // Both are enumerated in `phrase-keys.test.ts`.
-    expect(dynamicCalls).toBe(91);
+    // 91 → 92 (ART-120 fix wave, finding 3): the plan preview also reads
+    // `plannedToolPhrase` beside each step, so the confirmation screen says
+    // which writer is expected to run it *before* the user confirms, not
+    // only after the fact in the result panel. Enumerated in
+    // `phrase-keys.test.ts`.
+    expect(dynamicCalls).toBe(92);
   });
 });

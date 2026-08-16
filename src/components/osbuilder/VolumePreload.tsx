@@ -32,6 +32,7 @@ import {
   formatCount,
   onPreloadResult,
   picksFor,
+  plannedToolPhrase,
   preloadBlocker,
   preloadPlan,
   preloadProbe,
@@ -483,11 +484,19 @@ export function VolumePreload() {
           </p>
 
           <ol className="muted" style={{ fontSize: 12, margin: 0, paddingLeft: 20 }}>
+            {/* ART-120 changed which writer does this — the default moved
+                from an externally-validated tool to ART's own. Say which one
+                runs each step here, before the confirmation, not only after
+                the fact in the result panel. */}
             {plan.steps.map((step, index) => {
               const phrase = stepPhrase(step);
+              const toolPhrase = plannedToolPhrase(step);
               return (
                 <li key={index} style={{ padding: "2px 0" }}>
                   {t(phrase.key, phrase.params)}
+                  <span className="faint" style={{ marginLeft: 6 }}>
+                    — {t(toolPhrase.key, toolPhrase.params)}
+                  </span>
                 </li>
               );
             })}
