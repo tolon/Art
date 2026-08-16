@@ -803,6 +803,60 @@ mod tests {
             expect_keys(&value, &["outcome", "folder"]);
         }
 
+        /// **G9 fix round.** `install_plan_top_level_keys_are_camelcase`
+        /// only checks `InstallPlan`'s own top-level keys, so it never looked
+        /// inside `pairedRom` at all — `rename_all = "camelCase"` on a
+        /// container does not propagate to a nested struct's own fields, and
+        /// `PairedRom` shipped without its own `rename_all` attribute in
+        /// review. Checked in both places `PairedRom` is nested — `InstallPlan`
+        /// (the plan the frontend receives from `osinstall_plan`) and
+        /// `DistributionManifest` (`distribution.json`, read back by a later
+        /// task's own card-time check, which is exactly why the coordinator
+        /// wants this camelCase everywhere `PairedRom` lands) — so a fix that
+        /// only renamed one container's field would still be caught here.
+        #[test]
+        fn paired_rom_nested_inside_a_plan_or_a_manifest_serialises_with_camelcase_keys() {
+            let (plan, _dir) = crate::core::osinstall::fixtures::planned_with(
+                &["workbench-base"],
+                &["Workbench3.2"],
+                Some(47),
+            );
+            let paired = plan
+                .paired_rom
+                .clone()
+                .expect("planned_with a ROM records the pairing");
+
+            let plan_value = serde_json::to_value(&plan).unwrap();
+            expect_keys(
+                &plan_value["pairedRom"],
+                &[
+                    "name",
+                    "sha256",
+                    "statedMajor",
+                    "compatibleModels",
+                    "requiresMajor",
+                ],
+            );
+
+            let manifest = DistributionManifest {
+                release: "AmigaOS 3.2".into(),
+                built_from: Vec::new(),
+                files: Vec::new(),
+                paired_rom: Some(paired),
+            };
+            let manifest_value = serde_json::to_value(&manifest).unwrap();
+            expect_keys(
+                &manifest_value["pairedRom"],
+                &[
+                    "name",
+                    "sha256",
+                    "statedMajor",
+                    "compatibleModels",
+                    "requiresMajor",
+                ],
+            );
+        }
+
         #[test]
         fn rule_kind_spellings() {
             use crate::core::osinstall::RuleKind;

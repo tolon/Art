@@ -201,6 +201,12 @@ pub struct InstallPlan {
     pub components_on: Vec<String>,
     /// The Kickstart this plan was made against, and what the resulting tree
     /// needs of a future one (G9). `None` when no ROM was supplied.
+    ///
+    /// `#[serde(default)]` — `InstallPlan` derives `Deserialize` and is
+    /// round-tripped through the wire (`osinstall_apply` takes back the plan
+    /// `osinstall_plan` returned), so a plan value serialised before this
+    /// field existed must still deserialise instead of refusing to load.
+    #[serde(default)]
     pub paired_rom: Option<super::PairedRom>,
     /// Volume name -> the image it was found in. Resolved here so `apply`
     /// (a later task) can reopen the media without re-scanning the folder —

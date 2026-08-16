@@ -90,6 +90,7 @@ pub enum Condition {
 /// nowhere by the time somebody puts the tree on a card. Re-planning to
 /// recover it would need the original media, which is exactly what is gone.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PairedRom {
     /// As `core::rom::identify_rom` names it: `Kickstart 40.68 (A1200)`.
     pub name: String,
