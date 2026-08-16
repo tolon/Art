@@ -70,6 +70,12 @@ import {
   DEFAULT_FIRMWARE_CONFIG,
   DEFAULT_HARDWARE,
 } from "@/lib/pistorm";
+import {
+  osinstallBlocker,
+  refusalPhrase as osinstallRefusalPhrase,
+  type PlanResult,
+  type RefusalReason as OsInstallRefusalReason,
+} from "@/lib/osinstall";
 
 /** Whether `dotted` (e.g. "whdload.outcome.installed") names a string leaf. */
 function isLeafKey(dotted: string): boolean {
@@ -660,5 +666,88 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       expect(isLeafKey(blocker!.key), blocker!.key).toBe(true);
     }
     expect(layoutBlocker(ready)).toBeNull();
+  });
+
+  // Fix round 1 (Task 12 review): `osinstallBlocker` and `refusalPhrase`
+  // (`src/lib/osinstall.ts`) emitted keys under `osinstall.*` that were in
+  // neither catalogue and never registered here — `pnpm test` passed only
+  // because nothing knew these mappers existed.
+
+  it("osinstallBlocker: every reason an install cannot run resolves", () => {
+    const planned: PlanResult = {
+      outcome: "planned",
+      plan: {
+        release: "AmigaOS 3.2",
+        items: [
+          {
+            component: "workbench-base",
+            media: "Workbench3.2",
+            from: "C",
+            to: "C",
+            isDir: true,
+            bytes: 0,
+          },
+        ],
+        refusals: [],
+        totalBytes: 0,
+        componentsOn: ["workbench-base"],
+        mediaPaths: { Workbench3_2: "E:\\wb.adf" },
+        userStartup: [],
+      },
+    };
+    const ready = { mediaFolder: "E:\\media", destination: "E:\\dist", plan: planned };
+
+    const blockers = [
+      osinstallBlocker({ ...ready, mediaFolder: null }),
+      osinstallBlocker({ ...ready, destination: null }),
+      osinstallBlocker({ ...ready, plan: null }),
+      osinstallBlocker({
+        ...ready,
+        plan: { outcome: "folder-unreadable", folder: "E:\\media" },
+      }),
+      osinstallBlocker({
+        ...ready,
+        plan: {
+          ...planned,
+          plan: { ...planned.plan, refusals: [{ refusal: "rom-unknown" }] },
+        },
+      }),
+      osinstallBlocker({
+        ...ready,
+        plan: { ...planned, plan: { ...planned.plan, items: [] } },
+      }),
+    ];
+    for (const blocker of blockers) {
+      expect(blocker).not.toBeNull();
+      expect(isLeafKey(blocker!.key), blocker!.key).toBe(true);
+    }
+    expect(osinstallBlocker(ready)).toBeNull();
+  });
+
+  it("osinstall refusalPhrase: every RefusalReason variant resolves", () => {
+    const reasons: OsInstallRefusalReason[] = [
+      { refusal: "media-missing", component: "extras", volume_name: "Extras3.2" },
+      { refusal: "media-path-missing", component: "extras", media: "Extras3.2", path: "L" },
+      { refusal: "rom-unknown" },
+      { refusal: "destination-collision", path: "C/Assign", components: ["a", "b"] },
+      {
+        refusal: "media-ambiguous",
+        component: "workbench-base",
+        volume_name: "Workbench3.2",
+        paths: ["a", "b"],
+      },
+      { refusal: "exclusive-group-conflict", group: "modules", components: ["a", "b"] },
+      {
+        refusal: "rule-kind-mismatch",
+        component: "a",
+        from: "C",
+        expected: "file",
+        found: "subtree",
+      },
+    ];
+    for (const reason of reasons) {
+      const phrase = osinstallRefusalPhrase(reason);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
   });
 });

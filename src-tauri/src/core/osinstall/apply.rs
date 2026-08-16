@@ -208,7 +208,13 @@ pub const MANIFEST_FILE_NAME: &str = "distribution.json";
 const USER_STARTUP_PATH: &str = "S/User-Startup";
 
 /// What one call to [`apply`] actually did.
+///
+/// `rename_all = "camelCase"` (Task 12 fix round 1): every field is a single
+/// word today, so this changes nothing on the wire yet — added anyway so a
+/// future multi-word field cannot repeat `VerifyReport::not_checked`'s
+/// mistake by omission.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ApplyOutcome {
     pub root: PathBuf,
     pub files: u64,

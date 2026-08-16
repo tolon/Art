@@ -1866,5 +1866,24 @@
       "root": "Hazırlık klasörü: {{root}}",
       "nextStep": "Bunu bir karta kopyalamak için OS Builder → Amiga birimlerini hazırla ekranını bu klasöre yönlendir."
     }
+  },
+  "osinstall": {
+    "blocked": {
+      "noFolder": "Önce medya klasörünü seç.",
+      "noDestination": "Önce dağıtım ağacının nereye kurulacağını seç.",
+      "notPlanned": "Önce önizle — ne olacağını görmeden hiçbir şey kurulmaz.",
+      "folderUnreadable": "ART bu klasörü okuyamadı — yolu kontrol et.",
+      "refusals": "Önce reddedilen(ler)i çöz — plan ilerleyemezken hiçbir şey kurulmaz.",
+      "nothingToInstall": "Hiçbir şey kurulmayacak — en az bir bileşen seç."
+    },
+    "refusal": {
+      "mediaMissing": "{{component}}, {{volume}} istiyor ve medya klasöründe bu birim adını taşıyan bir dosya yok.",
+      "mediaPathMissing": "{{component}}'in kendi {{path}} yolu {{media}}'da eksik — bu diskin farklı bir sürümü gibi görünüyor.",
+      "romUnknown": "Kickstart tanımlanamadı, bu yüzden ART sürümüne bağlı şeylere karar veremiyor.",
+      "destinationCollision": "{{path}} birden fazla bileşen tarafından isteniyor ({{components}}) ve hiçbiri diğerinin üzerine yazabileceğini belirtmiyor.",
+      "mediaAmbiguous": "Medya klasöründe {{component}}'in ihtiyaç duyduğu {{volume}} birim adını taşıyan birden fazla dosya var: {{paths}}.",
+      "exclusiveGroupConflict": "{{components}} aynı anda açık olamaz — {{group}} grubundan yalnızca biri seçilebilir.",
+      "ruleKindMismatch": "{{component}}'in {{from}} için kuralı bir {{expected}} bekliyordu, ama medya bir {{found}} taşıyor."
+    }
   }
 }

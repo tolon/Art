@@ -201,7 +201,13 @@ pub enum CheckState {
 }
 
 /// What became of one [`FileRecord`].
+///
+/// `rename_all = "camelCase"` (Task 12 fix round 1): every field here happens
+/// to be a single word today, so this was safe by luck rather than by
+/// construction — a future field would not be. Explicit now, matching every
+/// other type that crosses the command boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FileVerdict {
     /// Matches [`FileRecord::path`] exactly, so the two line up by index or
     /// by lookup either way.
@@ -216,7 +222,15 @@ pub struct FileVerdict {
 /// What reading the volume back found, one verdict per [`FileRecord`] in the
 /// manifest — never more (Decision 3) and never fewer: every record gets
 /// exactly one verdict, so `files.len() == manifest.files.len()` always.
+///
+/// `rename_all = "camelCase"` (Task 12 fix round 1): without it, `not_checked`
+/// crossed the wire as `not_checked` while `src/lib/osinstall.ts` read
+/// `notChecked` — always `undefined`, so `isVerified` always returned
+/// `false` and any screen showing the count rendered nothing. Caught by
+/// `commands::osinstall`'s own outbound wire-shape test, not by anything
+/// here; see that module for why a Rust-only test could not have caught it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VerifyReport {
     pub files: Vec<FileVerdict>,
     pub passed: usize,

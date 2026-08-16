@@ -1866,5 +1866,24 @@
       "root": "Staging folder: {{root}}",
       "nextStep": "Point the card preparation screen (OS Builder → Prepare Amiga volumes) at this folder to copy it onto a card."
     }
+  },
+  "osinstall": {
+    "blocked": {
+      "noFolder": "Choose the media folder first.",
+      "noDestination": "Choose where to build the distribution tree first.",
+      "notPlanned": "Preview it first — nothing is built before you have seen what would be.",
+      "folderUnreadable": "ART could not read that folder — check the path.",
+      "refusals": "Resolve the refusal(s) first — nothing is built while the plan cannot proceed.",
+      "nothingToInstall": "Nothing would be installed — choose at least one component."
+    },
+    "refusal": {
+      "mediaMissing": "{{component}} needs {{volume}}, and no file in the media folder carries that volume name.",
+      "mediaPathMissing": "{{component}}'s own {{path}} is missing from {{media}} — this looks like a different revision of that disk.",
+      "romUnknown": "The Kickstart could not be identified, so ART cannot decide what depends on its version.",
+      "destinationCollision": "{{path}} is wanted by more than one component ({{components}}), and neither declares it may override the other.",
+      "mediaAmbiguous": "More than one file in the media folder carries the volume name {{volume}} that {{component}} needs: {{paths}}.",
+      "exclusiveGroupConflict": "{{components}} cannot both be on — only one of {{group}} may be chosen.",
+      "ruleKindMismatch": "{{component}}'s rule for {{from}} expected a {{expected}}, but the media holds a {{found}}."
+    }
   }
 }
