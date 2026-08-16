@@ -295,7 +295,18 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
         root: root.to_path_buf(),
         ..Default::default()
     };
-    let mut files = Vec::new();
+    let mut files: Vec<FileRecord> = Vec::new();
+    // **ART-124: what the tree holds, not what the run did.** An `overrides`
+    // relationship means two components write the same destination on
+    // purpose, and a directory named by two components is created once.
+    // Counting items therefore over-reports both — and the manifest, which is
+    // the only surviving record of where each file came from, carried the
+    // overridden component's claim beside the winner's, one of them always
+    // false. Keyed by `item.to`, the same key `plan::detect_collisions` pairs
+    // claimants by, so the two cannot disagree about what "the same
+    // destination" means.
+    let mut written: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut made_dirs: std::collections::HashSet<&str> = std::collections::HashSet::new();
 
     for (done, item) in plan.items.iter().enumerate() {
         // Between whole items, never inside one — see the module doc
@@ -318,9 +329,24 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
             ))
         })?;
 
+        // Ancestors no rule names — `Prefs/Presets` on the way to
+        // `Prefs/Presets/Backdrops` — are created by `create_dir_all` and
+        // were counted nowhere, which left `directories` short of the tree
+        // even once the double-counting was fixed (ART-124). Both branches
+        // below create them, so this sits above both; each distinct prefix
+        // is stat'd once, not once per entry inside it.
+        for (at, _) in item.to.match_indices('/') {
+            let prefix = &item.to[..at];
+            if made_dirs.insert(prefix) && !root.join(prefix).is_dir() {
+                outcome.directories += 1;
+            }
+        }
+
         if item.is_dir {
             std::fs::create_dir_all(&target)?;
-            outcome.directories += 1;
+            if made_dirs.insert(item.to.as_str()) {
+                outcome.directories += 1;
+            }
             continue;
         }
 
@@ -359,18 +385,34 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
             )?;
         }
 
-        let written = bytes.len() as u64;
-        let sha256 = sha256_bytes(&bytes);
-        outcome.bytes += written;
-        outcome.files += 1;
-        files.push(FileRecord {
+        let size = bytes.len() as u64;
+        let record = FileRecord {
             path: item.to.clone(),
             component: item.component.clone(),
             media: item.media.clone(),
-            sha256,
-            bytes: written,
+            sha256: sha256_bytes(&bytes),
+            bytes: size,
             protection: Some(entry.protection),
-        });
+        };
+
+        // An override replaces its predecessor's record rather than adding a
+        // second one: the bytes on disk are this component's, so the record
+        // describing them has to be too (ART-124). `bytes` follows, since
+        // what the tree holds is the winner's size, not the sum of every
+        // write that landed on the path.
+        match written.get(item.to.as_str()) {
+            Some(&at) => {
+                outcome.bytes -= files[at].bytes;
+                outcome.bytes += size;
+                files[at] = record;
+            }
+            None => {
+                written.insert(item.to.as_str(), files.len());
+                outcome.bytes += size;
+                outcome.files += 1;
+                files.push(record);
+            }
+        }
     }
 
     // `S:User-Startup` — composed, not copied; see the module doc comment's
@@ -662,6 +704,11 @@ mod tests {
 
         let outcome = apply(&plan, &root, &NoProgress).unwrap();
 
+        // Items and entries are the same number *here* because one component
+        // alone writes no destination twice. Where that stops being true —
+        // an `overrides` relationship — the report counts entries, and
+        // `the_report_counts_what_the_tree_holds_not_what_the_plan_did` is
+        // the test for it (ART-124).
         let expected_files = plan.items.iter().filter(|i| !i.is_dir).count() as u64;
         let expected_dirs = plan.items.iter().filter(|i| i.is_dir).count() as u64;
         assert_eq!(outcome.files, expected_files);
@@ -695,6 +742,119 @@ mod tests {
             outcome.files,
             "the manifest must name exactly the files ApplyOutcome counted"
         );
+    }
+
+    /// **ART-124 — the report has to describe the tree, not the work.**
+    ///
+    /// `outcome.files` and the manifest both counted *plan items*, and an
+    /// override writes one destination twice by design (that is what an
+    /// override is — ART-112 was a missing one). So a real 3.2 install
+    /// announced 4047 files where 3950 existed, and `distribution.json` —
+    /// whose own doc comment calls it "the only record… because the media
+    /// itself is gone by then" — carried 94 paths twice, each claiming a
+    /// different component put it there. One of those two claims was always
+    /// false.
+    ///
+    /// Asserted against the **filesystem**, not against a number worked out
+    /// by hand: a count derived from `plan.items` is exactly the count that
+    /// was wrong, so it cannot be the thing that checks it.
+    #[test]
+    fn the_report_counts_what_the_tree_holds_not_what_the_plan_did() {
+        // `classes` overrides `workbench-base` — the double-count — and
+        // `backdrops` writes into `Prefs/Presets/Backdrops`, whose middle
+        // directory no rule names: the two halves of ART-124 in one plan.
+        let (plan, dir) = fixtures::planned_with(
+            &["classes", "backdrops"],
+            &["Workbench3.2", "Classes3.2", "Install3.2", "Backdrops3.2"],
+            Some(47),
+        );
+        assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
+        assert!(
+            plan.items
+                .iter()
+                .any(|i| i.to.starts_with("Prefs/Presets/"))
+                && !plan.items.iter().any(|i| i.to == "Prefs/Presets"),
+            "this test needs a destination whose parent no rule names"
+        );
+
+        // The fixture has to actually contain the shape this is about.
+        let mut claimed: std::collections::BTreeMap<&str, usize> =
+            std::collections::BTreeMap::new();
+        for item in plan.items.iter().filter(|i| !i.is_dir) {
+            *claimed.entry(item.to.as_str()).or_default() += 1;
+        }
+        let overridden = claimed.values().filter(|n| **n > 1).count();
+        assert!(
+            overridden > 0,
+            "this test needs a plan where one destination is written twice; \
+             `classes` overrides `workbench-base` in the shipped recipe"
+        );
+
+        let root = dir.join("dist");
+        let outcome = apply(&plan, &root, &NoProgress).unwrap();
+
+        // What is actually there, counted the way the tree is counted: a
+        // `.uaem` sidecar is metadata beside an entry, and the manifest is
+        // the report itself, not one of the files it reports.
+        fn walk(dir: &Path, files: &mut u64, dirs: &mut u64) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    *dirs += 1;
+                    walk(&path, files, dirs);
+                } else if !path
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("uaem"))
+                    && path.file_name().is_some_and(|n| n != MANIFEST_FILE_NAME)
+                {
+                    *files += 1;
+                }
+            }
+        }
+        let (mut on_disk_files, mut on_disk_dirs) = (0, 0);
+        walk(&root, &mut on_disk_files, &mut on_disk_dirs);
+
+        assert_eq!(
+            outcome.files, on_disk_files,
+            "the report claims {} files; the tree holds {on_disk_files}",
+            outcome.files
+        );
+        assert_eq!(outcome.directories, on_disk_dirs);
+        assert_eq!(
+            outcome.files,
+            claimed.len() as u64,
+            "one count per destination, not per item"
+        );
+
+        let manifest: DistributionManifest =
+            serde_json::from_str(&std::fs::read_to_string(root.join(MANIFEST_FILE_NAME)).unwrap())
+                .unwrap();
+        assert_eq!(manifest.files.len() as u64, outcome.files);
+        let mut paths: Vec<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
+        paths.sort_unstable();
+        let before = paths.len();
+        paths.dedup();
+        assert_eq!(
+            paths.len(),
+            before,
+            "the manifest may name a path once: two records for one file means \
+             one of them credits a component that did not write what is there"
+        );
+
+        // And the record kept is the one that won — the override, which is
+        // the component that wrote last.
+        let winner = manifest
+            .files
+            .iter()
+            .find(|f| claimed.get(f.path.as_str()).is_some_and(|n| *n > 1))
+            .expect("an overridden path is in the manifest");
+        assert_eq!(
+            winner.component, "classes",
+            "the surviving record must credit the component whose bytes are on \
+             disk, not the one it overrode"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The coordinator's review, Critical 1, closed end to end. Before this
@@ -1452,9 +1612,9 @@ mod tests {
         // pointed at the user's 3.2 ROM — the material it was written against
         // was never the only real material.
         let (want_components, want_files, want_dirs, want_bytes) = if rom_major < 47 {
-            (28, 4052, 331, 12_908_793)
+            (28, 3954, 281, 12_700_698)
         } else {
-            (27, 4047, 328, 12_847_457)
+            (27, 3950, 278, 12_651_178)
         };
         assert_eq!(
             planned.components_on.len(),
