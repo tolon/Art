@@ -39,8 +39,11 @@
 //! **formats before it fills** — the partition's prior contents are already
 //! forfeit the moment the user confirms that step, so there is nothing there
 //! worth protecting with a rollback. An interrupted run leaves an
-//! **incomplete** volume, which G5 detects and reformats and redoes from
-//! scratch. That is not the same thing as a corrupted volume with a recovery
+//! **incomplete** volume. G5 does not need to notice that specifically: it
+//! always formats before it fills, so the next attempt overwrites whatever
+//! was left — complete or not — from scratch. Nothing in `core/preload/`
+//! detects an incomplete volume as its own case, and this doc does not claim
+//! it does. That is not the same thing as a corrupted volume with a recovery
 //! path, and this module makes no claim of one — there is no rollback,
 //! because there is nothing saved to roll back to.
 //!
@@ -146,6 +149,16 @@ where
     /// target) already enforces it.
     fn read_blocks(&self, block: u64, count: u32, buf: &mut [u8]) -> libpfs3::error::Result<()> {
         let block_size = self.block_size() as usize;
+        let expected = block_size
+            .checked_mul(count as usize)
+            .ok_or(Pfs3Error::TooShort("read buffer"))?;
+        // A short buffer is already caught per-chunk below; an over-long one
+        // would not be — its trailing bytes would simply go unfilled and
+        // unremarked — so the exact length is refused up front rather than
+        // silently accepted.
+        if buf.len() != expected {
+            return Err(Pfs3Error::TooShort("read buffer"));
+        }
         for i in 0..u64::from(count) {
             let start = (i as usize)
                 .checked_mul(block_size)
@@ -192,6 +205,15 @@ where
     /// reformatted rather than resumed.
     fn write_blocks(&self, block: u64, count: u32, data: &[u8]) -> libpfs3::error::Result<()> {
         let block_size = self.block_size() as usize;
+        let expected = block_size
+            .checked_mul(count as usize)
+            .ok_or(Pfs3Error::TooShort("write buffer"))?;
+        // Same reasoning as `read_blocks`: a short buffer is already caught
+        // per-chunk below, but an over-long one would have its trailing
+        // bytes silently ignored rather than refused.
+        if data.len() != expected {
+            return Err(Pfs3Error::TooShort("write buffer"));
+        }
         for i in 0..u64::from(count) {
             let start = (i as usize)
                 .checked_mul(block_size)
@@ -223,6 +245,7 @@ mod tests {
 
     use super::*;
     use crate::core::volume::device::{FileRegionMut, VecDevice};
+    use crate::core::volume::BlockDevice;
     use libpfs3::io::BlockDevice as Pfs3Device;
 
     /// The repository's own convention (`core::volume::device::tests::scratch`,
@@ -259,6 +282,11 @@ mod tests {
         let device = ArtBlockDevice::new(backing);
         assert!(device
             .read_block(u64::from(u32::MAX) + 1, &mut [0u8; 512])
+            .is_err());
+        // Same helper (`block_number`) backs both directions; one assertion
+        // closes the gap rather than leaving it implied.
+        assert!(device
+            .write_block(u64::from(u32::MAX) + 1, &[0u8; 512])
             .is_err());
     }
 
@@ -323,12 +351,31 @@ mod tests {
         let region = FileRegionMut::open(&image, 0, 4 * 512, 512).unwrap();
         let device = ArtBlockDevice::new(region);
 
-        // Blocks 2, 3, 4: only 2 and 3 belong to this region.
+        // Blocks 2, 3, 4: only 2 and 3 belong to this region. The loop
+        // writes block by block, so 2 and 3 land before block 4 is refused —
+        // a `write_blocks` that returned `Err` without writing anything would
+        // pass a test that checked only the refusal, so both outcomes are
+        // asserted here: the in-range blocks actually received the write,
+        // and nothing outside the region — on either side — did.
         let err = device.write_blocks(2, 3, &[0xCC; 512 * 3]);
         assert!(err.is_err());
 
         drop(device);
         let after = std::fs::read(&image).unwrap();
+        for block in 0..2usize {
+            assert_eq!(
+                after[block * 512],
+                block as u8,
+                "block {block}, before the write, must be untouched"
+            );
+        }
+        for block in 2..4usize {
+            assert_eq!(
+                after[block * 512],
+                0xCC,
+                "block {block} is in range and must have received the write"
+            );
+        }
         for block in 4..8usize {
             assert_eq!(
                 after[block * 512],
@@ -385,13 +432,61 @@ mod tests {
         assert_eq!(one[0], 3);
     }
 
+    /// `VecDevice::sync` is a documented no-op — asserting only
+    /// `flush().is_ok()` against it cannot fail even if `flush` never called
+    /// through to the device at all, since `Ok(())` and "did nothing" are
+    /// indistinguishable there. This fixture observes the call instead of
+    /// hoping its absence would show up as an error: `synced` flips only
+    /// inside `BlockDeviceMut::sync`, so it can only be true if `flush`
+    /// actually reached it.
+    struct SyncTrackingDevice {
+        backing: VecDevice,
+        synced: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl BlockDevice for SyncTrackingDevice {
+        fn block_size(&self) -> usize {
+            self.backing.block_size()
+        }
+
+        fn total_blocks(&self) -> u32 {
+            self.backing.total_blocks()
+        }
+
+        fn read_block(&self, n: u32, buf: &mut [u8]) -> crate::core::error::CoreResult<()> {
+            self.backing.read_block(n, buf)
+        }
+    }
+
+    impl BlockDeviceMut for SyncTrackingDevice {
+        fn write_block(&mut self, n: u32, buf: &[u8]) -> crate::core::error::CoreResult<()> {
+            self.backing.write_block(n, buf)
+        }
+
+        fn sync(&mut self) -> crate::core::error::CoreResult<()> {
+            self.synced.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
     #[test]
     fn flush_reaches_the_underlying_devices_sync() {
-        let backing = VecDevice::new(vec![0u8; 512 * 4], 512).unwrap();
+        let synced = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let backing = SyncTrackingDevice {
+            backing: VecDevice::new(vec![0u8; 512 * 4], 512).unwrap(),
+            synced: synced.clone(),
+        };
         let device = ArtBlockDevice::new(backing);
-        // `VecDevice::sync` is a no-op that always succeeds; this proves the
-        // call reaches it rather than being swallowed before it gets there.
-        assert!(device.flush().is_ok());
+
+        assert!(
+            !synced.load(std::sync::atomic::Ordering::SeqCst),
+            "sanity: nothing has synced yet"
+        );
+        device.flush().unwrap();
+        assert!(
+            synced.load(std::sync::atomic::Ordering::SeqCst),
+            "flush must reach BlockDeviceMut::sync, not just return Ok"
+        );
     }
 
     #[test]
