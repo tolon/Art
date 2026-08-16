@@ -698,6 +698,8 @@
       "heading": "Ne kuruyorsun?",
       "bootCard": "Sadece önyükleme kartı",
       "bootCardHint": "Pi'nin ürün yazılımı, senin Kickstart'ın ve Amiga'nın görebileceği bir bölüm tablosu — kendi Emu68 sürümünden kurulur. Üzerinde AmigaOS yok; o bir sonraki adım.",
+      "install": "AmigaOS kur",
+      "installHint": "Kendi AmigaOS 3.2 kurulum disklerinden bir dağıtım ağacı oluştur — bir kartın Amiga birimlerine kopyalanmaya hazır.",
       "prepareVolumes": "Bir kartın Amiga birimlerini hazırla",
       "prepareVolumesHint": "Elindeki kartın bölümlerini biçimlendir ve içeriğini kopyala; kart ilk açılışta kendini biçimlendirmeyi önermek yerine hazır gelsin. hst-imager gerekir, onu sen sağlıyorsun.",
       "distro": "Tam bir dağıtım",
@@ -1884,6 +1886,98 @@
       "mediaAmbiguous": "Medya klasöründe {{component}}'in ihtiyaç duyduğu {{volume}} birim adını taşıyan birden fazla dosya var: {{paths}}.",
       "exclusiveGroupConflict": "{{components}} aynı anda açık olamaz — {{group}} grubundan yalnızca biri seçilebilir.",
       "ruleKindMismatch": "{{component}}'in {{from}} için kuralı bir {{expected}} bekliyordu, ama medya bir {{found}} taşıyor."
+    },
+    "heading": "AmigaOS Kur",
+    "intro": "Kendi AmigaOS 3.2 kurulum disklerinden, gerçek bir Amiga birimine kopyalanmaya hazır bir dağıtım ağacı oluştur.",
+    "media": {
+      "label": "Kurulum diskleri klasörü",
+      "none": "Klasör seçilmedi.",
+      "chooseTitle": "AmigaOS 3.2 kurulum disk imgelerinin bulunduğu klasörü seç",
+      "unreadable": "ART bu klasörü okuyamadı — yolu kontrol et.",
+      "empty": "Bu klasörde kurulum diski bulunamadı.",
+      "found_one": "{{count}} kurulum diski bulundu: {{names}}.",
+      "found_other": "{{count}} kurulum diski bulundu: {{names}}."
+    },
+    "rom": {
+      "label": "Eşlenen Kickstart",
+      "none": "ROM seçilmedi.",
+      "chooseTitle": "Bu AmigaOS'un üzerinde çalışacağı Kickstart ROM'unu seç",
+      "identified": "Tanımlandı: {{rom}}.",
+      "unreadable": "ART bu dosyayı bir Kickstart ROM'u olarak tanımlayamadı."
+    },
+    "destination": {
+      "label": "Şuraya kur",
+      "none": "Hedef seçilmedi.",
+      "chooseTitle": "Dağıtım ağacının nereye kurulacağını seç",
+      "hint": "Yeni bir klasör — ART zaten var olan bir klasörün üzerine kurmayı reddeder."
+    },
+    "components": {
+      "heading": "Bileşenler",
+      "intro": "Workbench3.2 her zaman kurulur. Geri kalan her şey isteğe bağlıdır, ya da eşlenen Kickstart ihtiyaç duyduğunda kendiliğinden açılır.",
+      "required": "Zorunlu",
+      "reason": {
+        "required": "Her zaman açık — çalışan bir sistem buna ihtiyaç duyar.",
+        "romNeeded": "Bunun kendiliğinden açılıp açılmayacağını bilmek için önce eşlenen Kickstart'ı seç.",
+        "conditionOn": "Açık, çünkü eşlenen Kickstart {{rom}} ve bu sürümün Startup-Sequence'i V{{major}} altındaki her şeyde çıkış yapıyor.",
+        "conditionOff": "Kapalı — eşlenen Kickstart {{rom}}, V{{major}} veya üzeri, bu yüzden sürümün kendi Startup-Sequence'i buna ihtiyaç duymuyor. Yine de kendin açabilirsin.",
+        "conditionOverridden": "Kapalı — bunu sen kapattın. Eşlenen Kickstart V{{major}} altında: bu dosyalar olmadan sürümün kendi Startup-Sequence'i çıkış yapar ve sistem açılmaz."
+      },
+      "confirmOff": {
+        "warning": "Bu ROM V{{major}} altında. Sürümün kendi Startup-Sequence'i bu dosyalar olmadan çıkış yapar — bunları kapatmak sistemin açılmayacağı anlamına gelir. Karar senin makinene ait.",
+        "confirm": "Yine de kapat"
+      }
+    },
+    "refusals": {
+      "heading": "Bu henüz neden kurulamıyor"
+    },
+    "plan": {
+      "heading": "Ne yazılacağı",
+      "summary": "{{items}} öge, toplam {{bytes}}."
+    },
+    "run": {
+      "heading": "Kur",
+      "confirm": "Yukarıdaki dosya listesini inceledim.",
+      "run": "Dağıtım ağacını kur",
+      "running": "Kuruluyor…"
+    },
+    "result": {
+      "heading": "Kuruldu",
+      "summary": "{{files}} dosya, {{directories}} klasör, toplam {{bytes}}.",
+      "root": "Dağıtım ağacı: {{root}}",
+      "nextStep": "Bunu bir karta kopyalamak için OS Builder → Amiga birimlerini hazırla ekranını bu klasöre yönlendir."
+    },
+    "verify": {
+      "heading": "Bir karta karşı doğrula",
+      "intro": "Bu ağaç gerçek bir Amiga birimine kopyalandıktan sonra, ART'ın buraya yazdığı manifesto karşı burada denetle.",
+      "distRoot": {
+        "label": "Dağıtım ağacı",
+        "none": "Dağıtım ağacı seçilmedi.",
+        "chooseTitle": "Dağıtım ağacının kendi kökünü seç — distribution.json'ın yazıldığı yer"
+      },
+      "image": {
+        "label": "Amiga birim imgesi",
+        "none": "İmge seçilmedi.",
+        "chooseTitle": "Ağacın kopyalandığı kart ya da sabit disk imgesini seç"
+      },
+      "slot": {
+        "label": "Yuva",
+        "hint": "Düz bir HDF için boş bırak; aksi halde PiStorm alan numarası."
+      },
+      "index": {
+        "label": "Bölüm sırası"
+      },
+      "run": "Doğrula",
+      "running": "Doğrulanıyor…",
+      "needsInputs": "Önce dağıtım ağacını, imgeyi ve bölüm sırasını seç.",
+      "summary": "{{passed}} geçti, {{failed}} başarısız, {{notChecked}} bakılmadı.",
+      "verified": "Doğrulandı — her dosya manifestoyla eşleşti.",
+      "notVerified": "Doğrulanmadı — aşağıdaki sayılara ve listeye bak.",
+      "state": {
+        "pass": "Geçti",
+        "fail": "Başarısız",
+        "notChecked": "Bakılmadı"
+      },
+      "error": "ART doğrulayamadı: {{message}}"
     }
   }
 }

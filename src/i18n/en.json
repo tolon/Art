@@ -698,6 +698,8 @@
       "heading": "What are you building?",
       "bootCard": "A boot-only card",
       "bootCardHint": "The Pi's firmware, your Kickstart and a partition table an Amiga can see — built from your own Emu68 release. No AmigaOS on it; that comes next.",
+      "install": "Install AmigaOS",
+      "installHint": "Build a distribution tree from your own AmigaOS 3.2 install disks, ready to copy onto a card's Amiga volumes.",
       "prepareVolumes": "Prepare a card's Amiga volumes",
       "prepareVolumesHint": "Format the partitions on a card you already have and copy your content in, so it arrives ready instead of offering to format itself on first boot. Needs hst-imager, which you supply.",
       "distro": "A complete distribution",
@@ -1884,6 +1886,98 @@
       "mediaAmbiguous": "More than one file in the media folder carries the volume name {{volume}} that {{component}} needs: {{paths}}.",
       "exclusiveGroupConflict": "{{components}} cannot both be on — only one of {{group}} may be chosen.",
       "ruleKindMismatch": "{{component}}'s rule for {{from}} expected a {{expected}}, but the media holds a {{found}}."
+    },
+    "heading": "Install AmigaOS",
+    "intro": "Build a distribution tree from your own AmigaOS 3.2 install disks, ready to copy onto a real Amiga volume.",
+    "media": {
+      "label": "Install disks folder",
+      "none": "No folder chosen.",
+      "chooseTitle": "Choose the folder holding your AmigaOS 3.2 install disk images",
+      "unreadable": "ART could not read that folder — check the path.",
+      "empty": "No install disks found in that folder.",
+      "found_one": "{{count}} install disk found: {{names}}.",
+      "found_other": "{{count}} install disks found: {{names}}."
+    },
+    "rom": {
+      "label": "Paired Kickstart",
+      "none": "No ROM chosen.",
+      "chooseTitle": "Choose the Kickstart ROM this AmigaOS will run on",
+      "identified": "Identified: {{rom}}.",
+      "unreadable": "ART could not identify that file as a Kickstart ROM."
+    },
+    "destination": {
+      "label": "Build into",
+      "none": "No destination chosen.",
+      "chooseTitle": "Choose where to build the distribution tree",
+      "hint": "A new folder — ART refuses to build into one that already exists."
+    },
+    "components": {
+      "heading": "Components",
+      "intro": "Workbench3.2 is always installed. Everything else is optional, or switches on by itself when the paired Kickstart needs it.",
+      "required": "Required",
+      "reason": {
+        "required": "Always on — a working system needs it.",
+        "romNeeded": "Choose the paired Kickstart to know whether this switches on by itself.",
+        "conditionOn": "On, because the paired Kickstart is {{rom}} and this release's Startup-Sequence quits on anything below V{{major}}.",
+        "conditionOff": "Off — the paired Kickstart is {{rom}}, at or above V{{major}}, so this release's own Startup-Sequence does not need it. You can still switch it on yourself.",
+        "conditionOverridden": "Off — you turned this off yourself. The paired Kickstart is below V{{major}}: without these files this release's own Startup-Sequence quits and the system will not boot."
+      },
+      "confirmOff": {
+        "warning": "This ROM is below V{{major}}. This release's own Startup-Sequence quits without these files — turning them off means the system will not boot. It is your machine to decide.",
+        "confirm": "Turn off anyway"
+      }
+    },
+    "refusals": {
+      "heading": "Why this cannot be built yet"
+    },
+    "plan": {
+      "heading": "What would be written",
+      "summary": "{{items}} items, {{bytes}} total."
+    },
+    "run": {
+      "heading": "Build",
+      "confirm": "I have reviewed the file list above.",
+      "run": "Build the distribution tree",
+      "running": "Building…"
+    },
+    "result": {
+      "heading": "Built",
+      "summary": "{{files}} files, {{directories}} directories, {{bytes}} total.",
+      "root": "Distribution tree: {{root}}",
+      "nextStep": "Point the card preparation screen (OS Builder → Prepare Amiga volumes) at this folder to copy it onto a card."
+    },
+    "verify": {
+      "heading": "Verify against a card",
+      "intro": "Once this tree has been copied onto a real Amiga volume, check it against the manifest ART wrote here.",
+      "distRoot": {
+        "label": "Distribution tree",
+        "none": "No distribution tree chosen.",
+        "chooseTitle": "Choose the distribution tree's own root — where distribution.json was written"
+      },
+      "image": {
+        "label": "Amiga volume image",
+        "none": "No image chosen.",
+        "chooseTitle": "Choose the card or hard disk image the tree was copied onto"
+      },
+      "slot": {
+        "label": "Slot",
+        "hint": "Leave blank for a plain HDF; the PiStorm area number otherwise."
+      },
+      "index": {
+        "label": "Partition index"
+      },
+      "run": "Verify",
+      "running": "Verifying…",
+      "needsInputs": "Choose the distribution tree, the image and a partition index first.",
+      "summary": "{{passed}} passed, {{failed}} failed, {{notChecked}} not checked.",
+      "verified": "Verified — every file matched the manifest.",
+      "notVerified": "Not verified — see the counts and the list below.",
+      "state": {
+        "pass": "Pass",
+        "fail": "Fail",
+        "notChecked": "Not checked"
+      },
+      "error": "ART could not verify: {{message}}"
     }
   }
 }

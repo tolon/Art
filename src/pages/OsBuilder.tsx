@@ -38,19 +38,23 @@ import { pistormIdentifyRom, type RomInfo } from "@/lib/pistorm";
 import { isOneOf, isTextOrNothing, isWholeNumberBetween } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { CardBuilder } from "@/components/osbuilder/CardBuilder";
+import { OsInstall } from "@/components/osbuilder/OsInstall";
 import { VolumePreload } from "@/components/osbuilder/VolumePreload";
 
 /**
  * What the screen is being asked for.
  *
- * Two of the three work today, and they are the two steps of the same story:
+ * Three of the four work today, and they are three steps of the same story:
  * `boot-card` writes a card with the Pi's firmware, a Kickstart and a
- * partition table an Amiga can see, and `prepare-volumes` puts a filesystem
- * into those partitions and fills them (SD-2 · G3). Every distribution is
- * still Coming Later, and all three live side by side rather than the working
- * ones being hidden behind the one that is not (§96).
+ * partition table an Amiga can see; `install` turns the user's own AmigaOS
+ * 3.2 install disks into a distribution tree with a manifest (SD-2 · G5);
+ * `prepare-volumes` puts a filesystem into the card's partitions and copies
+ * a tree like that one in, so the card arrives ready rather than offering to
+ * format itself on first boot. Every distribution is still Coming Later, and
+ * all four live side by side rather than the working ones being hidden
+ * behind the one that is not (§96).
  */
-type BuildKind = "distro" | "boot-card" | "prepare-volumes";
+type BuildKind = "distro" | "boot-card" | "install" | "prepare-volumes";
 
 /** Card sizes people actually buy. Typed sizes are allowed too. */
 const CARD_SIZES_GB = [16, 32, 64, 128, 256];
@@ -60,7 +64,7 @@ export function OsBuilder() {
 
   const [kind, setKind] = useRemembered<BuildKind>(
     "osBuilder.kind",
-    isOneOf<BuildKind>("distro", "boot-card", "prepare-volumes"),
+    isOneOf<BuildKind>("distro", "boot-card", "install", "prepare-volumes"),
     "boot-card"
   );
 
@@ -185,6 +189,12 @@ export function OsBuilder() {
             hint={t("osBuilder.what.bootCardHint")}
           />
           <KindChoice
+            chosen={kind === "install"}
+            onChoose={() => setKind("install")}
+            title={t("osBuilder.what.install")}
+            hint={t("osBuilder.what.installHint")}
+          />
+          <KindChoice
             chosen={kind === "prepare-volumes"}
             onChoose={() => setKind("prepare-volumes")}
             title={t("osBuilder.what.prepareVolumes")}
@@ -201,6 +211,8 @@ export function OsBuilder() {
       </section>
 
       {kind === "boot-card" && <CardBuilder />}
+
+      {kind === "install" && <OsInstall />}
 
       {kind === "prepare-volumes" && <VolumePreload />}
 

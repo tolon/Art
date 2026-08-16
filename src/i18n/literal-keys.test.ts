@@ -185,6 +185,14 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // `CardBuilder.tsx`) — plus two one-of-two-literal-keys ternaries
     // (Preview running/idle, Apply running/idle), the same shape every other
     // busy-button on this list already uses.
-    expect(dynamicCalls).toBe(84);
+    // 84 → 89 (SD-2 G5's install screen, Task 13): `osinstallBlocker`'s and a
+    // refusal's `refusalPhrase`, both `Phrase` reads from `@/lib/osinstall`
+    // (`osinstallRefusalPhrase`'s seven variants are enumerated in
+    // `phrase-keys.test.ts`, same as every other refusal on this list) —
+    // plus three one-of-two-literal-keys ternaries (Build running/idle,
+    // Verify running/idle, and the verify report's own Verified/Not
+    // verified line), the same shape every other busy-button and outcome
+    // badge on this list already uses.
+    expect(dynamicCalls).toBe(89);
   });
 });
