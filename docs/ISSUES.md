@@ -23,6 +23,39 @@ what fixed it (with the test that proves it).
 
 ## Open
 
+**ART-120** 🟠 **`NativeFormatter` is unreachable from the application — every
+preload a user runs still shells out to `hst-imager`** — *found 2026-08-16,
+after G5 merged*
+`src-tauri/src/commands/preload.rs` · SD-2's Phase B was built so that ART
+could format an Amiga volume and copy files into it **without launching
+anything**: `core/preload/native.rs` implements the `VolumeFormatter` trait
+over `libpfs3` and ART's own FFS writer, it is covered by its own tests, it is
+checked in both directions by an independent `hst-imager` oracle, and it was
+run against the user's real AmigaOS 3.2 media. **None of that is reachable from
+the product.** `commands/preload.rs` constructs `HstImager::at(...)`
+unconditionally — the formatter is not a choice, a setting or a fallback — and
+outside its own file `NativeFormatter` appears only in test modules. So the
+headline of that phase is true of the engine and false of the application: a
+user preloading a card today still needs `hst.imager.exe` on their machine and
+its path in Settings, exactly as before.
+
+Nothing is broken and nothing claimed here is wrong in the code; what is wrong
+is that the documents describe an implementation the application cannot call.
+`docs/FEATURES.md`'s OS-install row cites `core/preload::NativeFormatter::copy_in`
+as its implementation and discloses only that the osinstall→preload handoff is
+"two separate manual steps today" — which reads as though both steps exist in
+the app. Corrected alongside this entry.
+
+Fixing it is a **design decision, not a repair**, which is why this is filed
+rather than patched: the spec deliberately keeps `hst-imager` as both a
+fallback and the oracle, so the question is whether the native path replaces
+it, becomes the default with the tool as a fallback, or becomes a user-visible
+choice. Two things make the answer non-obvious — [ART-113](#) means the native
+path cannot write non-ASCII AmigaDOS names at all while `hst-imager` can, and
+[ART-117](#) means it cannot embed a driver into a foreign card's RDB. On
+current evidence a straight replacement would be a downgrade for some real
+cards.
+
 **ART-119** 🔵 **Five minors deferred from Task 13's review, folded into one
 entry — two closed, three still open** — *found 2026-08-15/16, Task 13's fix
 round, filed at Task 14; #3 and #4 closed 2026-08-16*
