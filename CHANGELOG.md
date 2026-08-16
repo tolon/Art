@@ -69,8 +69,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requesters — from a PFS3 volume ART formatted and filled, under WinUAE with
   a licensed Kickstart. A smaller volume ART formatted with its own writer
   boots to an AmigaDOS prompt and runs its startup script. **These are the
-  first hard disks ART has made that an Amiga has booted.** Real hardware is
-  still untouched.
+  first hard disks ART has made that an Amiga has booted**, and the code that
+  read them is AmigaOS's own — the Kickstart ROM and the real PFS3 handler,
+  running. What is still untested is a card in a PiStorm: the partition
+  table, the boot partition the Raspberry Pi side reads, and the firmware
+  that starts it.
 
 ### The whole 3.2 tree reaches a volume in one run (2026-08-16)
 
@@ -133,11 +136,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   everything under it: **about a quarter of the whole tree** (969 of 4030
   files, 106 of 330 directories) does not yet reach a volume. The copy
   refuses loudly rather than writing anything wrong; it just does not yet
-  succeed for those files.
+  succeed for those files. **Since fixed** — see "The whole 3.2 tree reaches a
+  volume in one run" above: the copy falls back for those names and the whole
+  tree lands.
 - **No Amiga, real or emulated, has booted anything this feature has built.**
   The distribution tree and the volume it produces are proven independently
   of ART — but the WinUAE rung and the real-hardware rung are both still
-  open.
+  open. **The emulated rung has since been reached** — see "AmigaOS 3.2 boots
+  from a disk ART prepared" above.
 - **The install screen itself is only lightly verified.** Its top-level
   layout has been seen rendering correctly; the component checklist, the
   confirmation step, the file list and the verify results have not yet been

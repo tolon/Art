@@ -20,7 +20,7 @@ Update it at the end of any session that changes what works.
 |---|---|
 | **Last updated** | 2026-08-16 |
 | **Version** | 0.1.0 (unreleased) |
-| **Current stage** | **SD-1 complete** — every gap it names is built: the card's shape (G2), RDB filesystem embedding (G4), build manifest (G7), image health check (G8), a build as a drop target (G15), engine and screen throughout. **What is left in SD-1 is not code: a card flashed and an A500 booted.** **SD-2 in progress** — PFS3/FFS preload (G3/G5 route E and native, [ART-120](ISSUES.md): `NativeFormatter` writes both by default, `hst-imager` a named fallback for two known gaps), the layout policy (G11) and OS install (G5) have all landed, engine and screen; ROM pairing (G9) and launcher metadata export (G10) are owed. **G5's product boots.** AmigaOS 3.2 was built from the user's own media, carried onto a PFS3 volume through the native/fallback path in one unattended run ([ART-122](ISSUES.md) had to be fixed first: a partition is formatted and filled by one tool), and **booted to a clean Workbench** under WinUAE with their licensed V47 A1200 ROM — wallpaper and all, no requesters. Getting there found two defects nothing but a Kickstart could have found: [ART-126](ISSUES.md) (every RDB filesystem ART ever embedded was advertised with the wrong `PatchFlags`, so AmigaOS ignored the driver — the guru a user reported) and [ART-127](ISSUES.md) (the tree lacked `icon.library` and `workbench.library`, and its wallpapers were switched off on an assumption the running system has now corrected). **Real hardware is still untouched**, and the install screen is still unverified past its own headings ([ART-118](ISSUES.md)). Reading a real card has a screen ([ART-095](ISSUES.md), [ART-097](ISSUES.md)); **no card ART built has been flashed or booted** |
+| **Current stage** | **SD-1 complete** — every gap it names is built: the card's shape (G2), RDB filesystem embedding (G4), build manifest (G7), image health check (G8), a build as a drop target (G15), engine and screen throughout. **What is left in SD-1 is not code: a card flashed and an A500 booted.** **SD-2 in progress** — PFS3/FFS preload (G3/G5 route E and native, [ART-120](ISSUES.md): `NativeFormatter` writes both by default, `hst-imager` a named fallback for two known gaps), the layout policy (G11) and OS install (G5) have all landed, engine and screen; ROM pairing (G9) and launcher metadata export (G10) are owed. **G5's product boots.** AmigaOS 3.2 was built from the user's own media, carried onto a PFS3 volume through the native/fallback path in one unattended run ([ART-122](ISSUES.md) had to be fixed first: a partition is formatted and filled by one tool), and **booted to a clean Workbench** under WinUAE with their licensed V47 A1200 ROM — wallpaper and all, no requesters. Getting there found two defects nothing but a Kickstart could have found: [ART-126](ISSUES.md) (every RDB filesystem ART ever embedded was advertised with the wrong `PatchFlags`, so AmigaOS ignored the driver — the guru a user reported) and [ART-127](ISSUES.md) (the tree lacked `icon.library` and `workbench.library`, and its wallpapers were switched off on an assumption the running system has now corrected). **What that proves, stated precisely**: the code that accepted the disk is Kickstart's own `expansion.library` and the real `pfs3aio` 68k binary, executing — so the filesystem side is settled, not provisional. What it does **not** touch is the card path: WinUAE hands the volume over as a plain `.hdf` through `uaehf.device`, where a PiStorm has an MBR, an Amiga disk starting 1.1 GB in, and Emu68's `brcm-sdhc.device` in the way ([ART-095](ISSUES.md)'s shape). That, the FAT32 boot partition and Emu68's own start-up are the untested rung — not the mounting. The install screen is also still unverified past its own headings ([ART-118](ISSUES.md)). Reading a real card has a screen ([ART-095](ISSUES.md), [ART-097](ISSUES.md)); **no card ART built has been flashed or booted** |
 | **Build** | PASS |
 | **Tests** | 1408 Rust passed, 0 failed, 4 ignored (real-media hooks, env-gated — see below); 529 frontend passed, 0 failed |
 | **Clippy** | clean at `-D warnings` |
@@ -978,12 +978,17 @@ someone at the machine (or the Amiga) to run what already exists.
 - **G9 and G10** — both unblocked by G5 landing, neither started. G9 wants a
   design pass on what "pairing a ROM with an OS volume" writes and where; G10
   wants the iGame/AGS metadata shape decided before it can export anything.
-- **Real hardware.** Everything above now works in emulation, and the rung
-  that has never moved is the same one: nothing ART built has been flashed to
-  a card or booted on a real Amiga. The A500 with its PiStorm is here; a
-  microSD card, a USB reader and an HDMI cable are not. **This is now the
-  single most valuable thing left**, because emulation has just shown how much
-  it catches — and how much it took a real Kickstart to catch.
+- **A card, on the PiStorm.** This is the rung that is genuinely untested,
+  and it is worth naming precisely now that the filesystem side is settled.
+  WinUAE ran Kickstart's own `expansion.library` and the real `pfs3aio`
+  binary against a volume ART wrote, so *mounting* is proved by the same code
+  a real Amiga runs — what is not proved is everything around it on a card:
+  the MBR, an Amiga disk starting 1.1 GB in reached through Emu68's
+  `brcm-sdhc.device` rather than a plain hardfile ([ART-095](ISSUES.md)'s
+  shape from the other side), the FAT32 boot partition, and Emu68 starting at
+  all. None of that is something an emulator can answer. Still missing: a
+  microSD card, a USB reader and an HDMI cable (plugged in *before* power, or
+  the VPU never configures the port).
 - **The other screens, in `pnpm tauri dev`.** The engines are proven; the
   screens above them still have not been driven against real material
   ([ART-118](ISSUES.md)), and this session is the argument for doing it:

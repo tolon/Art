@@ -659,6 +659,12 @@ and it settles [ART-122](#fixed)'s open half as well: the real PFS3 driver
 accepts the reserved-area layout `NativeFormatter` writes, which is what
 `pfs3aio`'s own algorithm produces.
 
+**Emulated is not provisional here.** WinUAE did not model any of this: the
+ROM's own `expansion.library` parsed the RDB and the real `pfs3aio` 68k
+binary mounted the volume. The evidence is the same code a real Amiga runs,
+which is why one variable at a time through it was enough to find a defect
+four independent readers had missed.
+
 Test: `the_seg_list_and_global_vec_are_the_fields_amigados_is_told_to_take`,
 which asserts the two bits are claimed *and* that `StackSize` and `Priority`
 are not — the defect was a claimed field, so an unclaimed one is what the test
@@ -695,8 +701,11 @@ be the collision ART-112 was), and `backdrops` is available, aimed at
 
 **The result, which is what this entry exists for**: AmigaOS 3.2 boots to a
 clean Workbench — wallpaper and all, no requesters — from a PFS3 volume ART
-prepared, under WinUAE with the user's own licensed V47 A1200 ROM. Real
-hardware is still untouched.
+prepared, under WinUAE with the user's own licensed V47 A1200 ROM. The code
+that read the disk and started the system is AmigaOS's own, executing, so
+this is not a weaker claim than a hardware one *for what it covers*. What it
+does not cover is the card path — MBR, an Amiga disk 1.1 GB in, Emu68's SD
+driver, the FAT32 boot partition — which no emulator can answer.
 
 Two things this dragged in with it, both worth keeping: the real-media hook
 had one ROM's answers hard-coded (`modules-a1200` asserted on, and one exact
