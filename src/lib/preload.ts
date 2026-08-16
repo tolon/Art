@@ -202,6 +202,27 @@ export async function preloadRomPairing(image: string, content: string): Promise
 }
 
 /**
+ * Whether a `Pairing` fetched for one request still describes the request
+ * on screen now — the invalidation check the pairing effect must make
+ * *before* issuing a new fetch, not only after one resolves.
+ *
+ * `heldFor` is the fingerprint the currently-held verdict was fetched
+ * for (`null` when nothing has been fetched yet, or nothing was held).
+ * `current` is the fingerprint of the request about to be asked about.
+ *
+ * **The bug this exists to prevent:** the pairing effect used to clear the
+ * held verdict only in its "nothing to check" branch, so re-clicking Preview
+ * for a *different* card or folder left the previous verdict on screen
+ * until the new fetch resolved — and `preloadPlan`'s own sibling effect
+ * clears synchronously, so a stale `paired` silence could sit beside a
+ * fresh plan it says nothing true about. Calling this before every fetch
+ * (and clearing when it answers `false`) closes that window.
+ */
+export function pairingStillApplies(heldFor: string | null, current: string): boolean {
+  return heldFor !== null && heldFor === current;
+}
+
+/**
  * The sentence for a pairing, or `null` when there is nothing to say.
  *
  * `paired` renders nothing on purpose: silence is the right report for "the

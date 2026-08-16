@@ -32,6 +32,7 @@ import {
   formatCount,
   onPreloadResult,
   pairingPhrase,
+  pairingStillApplies,
   picksFor,
   copiedPhrase,
   plannedToolPhrase,
@@ -147,16 +148,32 @@ export function VolumePreload() {
   // G9: the ROM question is about the card and the folder going onto it, so
   // it is asked whenever either changes — and forgotten with the plan, since
   // a stale verdict beside a fresh plan is worse than none.
+  //
+  // The held verdict is cleared *synchronously*, before the new fetch is
+  // even issued, whenever `pairingStillApplies` says it no longer describes
+  // this fingerprint — not only in the "nothing to check" branch below. A
+  // verdict left in state until its replacement resolves is exactly the
+  // stale-verdict-beside-a-fresh-plan bug this effect exists to prevent: the
+  // sibling effect above clears `plan` synchronously on the same change, and
+  // the pairing paragraph is gated on `plan` being present.
+  const pairingFingerprint = useRef<string | null>(null);
   useEffect(() => {
+    if (!pairingStillApplies(pairingFingerprint.current, fingerprint)) {
+      setPairing(null);
+      pairingFingerprint.current = null;
+    }
+
     const filled = picks.find((pick) => pick.chosen && pick.content);
     if (!imagePath || !filled?.content) {
-      setPairing(null);
       return;
     }
     let cancelled = false;
     preloadRomPairing(imagePath, filled.content)
       .then((verdict) => {
-        if (!cancelled) setPairing(verdict);
+        if (!cancelled) {
+          setPairing(verdict);
+          pairingFingerprint.current = fingerprint;
+        }
       })
       .catch(() => {
         // Not an error the user needs: the command answers `not-checked`

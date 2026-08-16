@@ -6,6 +6,7 @@ import {
   formatCount,
   needsExternalTool,
   pairingPhrase,
+  pairingStillApplies,
   picksFor,
   plannedToolPhrase,
   preloadBlocker,
@@ -444,5 +445,23 @@ describe("pairingPhrase", () => {
     expect(pairingPhrase({ verdict: "not-checked", why: "card-records-no-rom" })).toEqual({
       key: "preload.pairing.notChecked.card",
     });
+  });
+});
+
+describe("pairingStillApplies", () => {
+  // The invalidation check the pairing effect makes *before* issuing a new
+  // fetch — this is the decision that was missing, letting a verdict fetched
+  // for one card/folder sit on screen beside a plan for a different one
+  // until the new fetch happened to resolve.
+  it("holds when the verdict was fetched for the request now on screen", () => {
+    expect(pairingStillApplies("fp-a", "fp-a")).toBe(true);
+  });
+
+  it("does not hold once the request has moved on", () => {
+    expect(pairingStillApplies("fp-a", "fp-b")).toBe(false);
+  });
+
+  it("never holds when nothing has been fetched yet", () => {
+    expect(pairingStillApplies(null, "fp-a")).toBe(false);
   });
 });
