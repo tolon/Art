@@ -5,22 +5,23 @@
 //! sees the partitions and offers to format them. This is what formats them
 //! from Windows and copies content in, so a card arrives ready.
 //!
-//! ## ART does not write PFS3, and this does not pretend to
+//! ## Two implementations of one trait
 //!
-//! Large volumes need PFS3; classic FFS is capped around 2 GiB. Writing PFS3
-//! natively is route B, the flagship, and a second filesystem writer with all
-//! of Stage W's rigour. Route E is the bridge: **`hst-imager` formats it**, a
-//! proven MIT implementation both existing PiStorm imagers stand on, run end
-//! to end during SD-0 against 1.6.616 with `amitools` as the witness.
-//!
-//! When route B exists, this becomes its oracle — the reference implementation
-//! writing the fixtures the native writer must match.
+//! This paragraph used to say ART does not write PFS3 and route B "would, when
+//! it exists" — written when route E's `hst-imager` was the only
+//! [`VolumeFormatter`]. It now has company: [`native::NativeFormatter`] writes
+//! PFS3 through `libpfs3` and FFS through ART's own `core/volume/write`,
+//! launching nothing (G5). `hst-imager` does not retire — it is now what
+//! `native`'s fixtures are checked against, the independent oracle a reader
+//! and writer that only agree with each other cannot be (`scripts/pfs3-oracle-check.py`).
 //!
 //! ## The trait, and why
 //!
 //! `core/` does not launch programs (CLAUDE.md). [`VolumeFormatter`] is the
-//! boundary; `tools/hst_imager.rs` is the implementation, and a test double
-//! stands in here so none of this needs the binary to be present.
+//! boundary; `tools/hst_imager.rs` was the first implementation, needing a
+//! test double so none of this needed the binary to be present.
+//! [`native::NativeFormatter`] needs no double: it launches nothing, so it is
+//! testable in CI exactly as written.
 //!
 //! ## What ART can check afterwards, and what it cannot
 //!
@@ -29,6 +30,7 @@
 //! file inside the volume. That is a `not-checked` in G8's report and a job for
 //! something that is not ART, exactly as the FAT32 side already is.
 
+pub mod native;
 pub mod pfs3dev;
 
 use std::path::{Path, PathBuf};
