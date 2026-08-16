@@ -85,11 +85,34 @@ fn describe(args: &[String]) -> String {
 }
 
 /// The last line that says something, for an error message.
+///
+/// **A stack frame is not a sentence** (ART-123). `hst-imager` handles its own
+/// errors with one `[ERR] …` line, which the last non-empty line answers
+/// exactly — but an *unhandled* exception prints the .NET stack trace after
+/// the message, so the last line is `at Hst.Imager.ConsoleApp.CommandHandler
+/// .Execute(CommandBase command)` and the sentence the user needs
+/// (`System.IO.IOException: ERROR_DISK_FULL`) is twelve lines above it. Frames
+/// are skipped so the message underneath them is what reaches
+/// [`CoreError::Malformed`] and the screen; when a trace is *all* there is,
+/// the frame is still better than nothing and is used as before.
 fn last_meaningful_line(text: &str) -> Option<String> {
-    text.lines()
+    let lines: Vec<&str> = text
+        .lines()
         .map(str::trim)
-        .rfind(|line| !line.is_empty())
-        .map(str::to_string)
+        .filter(|line| !line.is_empty())
+        .collect();
+    lines
+        .iter()
+        .rfind(|line| !is_stack_frame(line))
+        .or_else(|| lines.last())
+        .map(|line| line.to_string())
+}
+
+/// A .NET stack frame — `at Namespace.Type.Method(Args)`, indented in the
+/// original and already trimmed by the time this sees it. Deliberately narrow:
+/// it must not swallow a real message that happens to begin with "at".
+fn is_stack_frame(line: &str) -> bool {
+    line.starts_with("at ") && line.contains('(') && line.ends_with(')')
 }
 
 /// The disk an RDB command addresses: the image, or an MBR slot inside it.
@@ -385,6 +408,54 @@ mod tests {
         assert_eq!(
             describe(&format_args(&img(), None, 1, "Work")),
             "rdb part format"
+        );
+    }
+
+    /// **ART-123.** The real output of a failed `fs copy`, captured verbatim
+    /// from `hst-imager 1.6.616` while measuring the real AmigaOS 3.2 tree
+    /// (ART-122): an unhandled exception, its message, then eight stack
+    /// frames. The last line is a frame, and reporting it told the user
+    /// nothing at all about what went wrong.
+    #[test]
+    fn an_unhandled_exception_reports_its_message_and_not_a_stack_frame() {
+        let stderr = "\
+[19:50:32 ERR] Failed to execute command 'Hst.Imager.Core.Commands.FsCopyCommand'
+System.IO.IOException: ERROR_DISK_FULL
+   at Hst.Amiga.FileSystems.Pfs3.Directory.NewFile(Boolean found, objectinfo directory, String filename)
+   at Hst.Amiga.FileSystems.Pfs3.Pfs3Volume.CreateFile(String fileName, Boolean overwrite)
+   at Hst.Imager.Core.Commands.FsCopyCommand.Execute(CancellationToken token)
+   at Hst.Imager.ConsoleApp.CommandHandler.Execute(CommandBase command)
+";
+        assert_eq!(
+            last_meaningful_line(stderr).as_deref(),
+            Some("System.IO.IOException: ERROR_DISK_FULL")
+        );
+    }
+
+    /// The ordinary case is unchanged: `hst-imager` handling its own error
+    /// prints one `[ERR]` line and nothing after it.
+    #[test]
+    fn a_handled_error_is_still_its_last_line() {
+        assert_eq!(
+            last_meaningful_line(
+                "[19:48:59 INF] Copying\n[19:48:59 ERR] Partition 'dh9' not found\n"
+            )
+            .as_deref(),
+            Some("[19:48:59 ERR] Partition 'dh9' not found")
+        );
+    }
+
+    /// Nothing but frames still says *something*, and a message that merely
+    /// begins with "at" is not mistaken for one.
+    #[test]
+    fn a_trace_with_no_message_falls_back_to_its_last_frame() {
+        assert_eq!(
+            last_meaningful_line("   at A.B.C(D e)\n   at F.G.H(I j)\n").as_deref(),
+            Some("at F.G.H(I j)")
+        );
+        assert_eq!(
+            last_meaningful_line("at least one partition must be chosen\n").as_deref(),
+            Some("at least one partition must be chosen")
         );
     }
 }
