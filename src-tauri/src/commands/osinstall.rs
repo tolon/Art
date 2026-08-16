@@ -104,7 +104,11 @@ pub fn osinstall_scan_media(folder: PathBuf) -> AppResult<MediaScanResult> {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "outcome", rename_all = "kebab-case")]
 pub enum PlanResult {
-    Planned { plan: InstallPlan },
+    // `Box`ed: G9's `paired_rom` pushed `InstallPlan` past clippy's
+    // `large_enum_variant` threshold next to `FolderUnreadable`'s bare
+    // `String`. Serde serialises `Box<T>` exactly as it would `T`, so this
+    // changes nothing on the wire.
+    Planned { plan: Box<InstallPlan> },
     FolderUnreadable { folder: String },
 }
 
@@ -138,7 +142,7 @@ pub fn osinstall_plan(request: InstallRequest) -> AppResult<PlanResult> {
     }
     let recipe = recipe::amigaos_32()?;
     Ok(PlanResult::Planned {
-        plan: plan(&request, &recipe)?,
+        plan: Box::new(plan(&request, &recipe)?),
     })
 }
 
@@ -587,6 +591,7 @@ mod tests {
                 bytes: 3,
                 protection: Some(0x20),
             }],
+            paired_rom: None,
         };
         std::fs::write(
             dist_root.join(MANIFEST_FILE_NAME),
@@ -722,6 +727,7 @@ mod tests {
                     "refusals",
                     "totalBytes",
                     "componentsOn",
+                    "pairedRom",
                     "mediaPaths",
                     "userStartup",
                 ],
@@ -782,7 +788,10 @@ mod tests {
                 &["Workbench3.2"],
                 Some(47),
             );
-            let value = serde_json::to_value(&PlanResult::Planned { plan }).unwrap();
+            let value = serde_json::to_value(&PlanResult::Planned {
+                plan: Box::new(plan),
+            })
+            .unwrap();
             assert_eq!(value["outcome"], "planned");
             assert!(value.get("plan").is_some());
 

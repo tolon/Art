@@ -677,6 +677,7 @@ mod tests {
                 bytes: content.len() as u64,
                 protection: Some(0x20), // --p-rwed: what apply() actually recorded
             }],
+            paired_rom: None,
         }
     }
 
@@ -1093,6 +1094,7 @@ mod tests {
                 bytes: content.len() as u64,
                 protection: None,
             }],
+            paired_rom: None,
         };
 
         let report = verify_volume(&image, None, 1, &manifest).unwrap();

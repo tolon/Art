@@ -81,6 +81,35 @@ pub enum Condition {
     RomOlderThan { major: u16 },
 }
 
+/// The Kickstart a distribution tree was planned against, and what it needs
+/// of a future one (SD-2 · G9).
+///
+/// **Recorded rather than recomputed.** Which components a plan switches on
+/// depends on the ROM it was given — `modules-a1200` is on for a pre-V47 ROM
+/// and off otherwise — so a tree carries a fact about a file that may be
+/// nowhere by the time somebody puts the tree on a card. Re-planning to
+/// recover it would need the original media, which is exactly what is gone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairedRom {
+    /// As `core::rom::identify_rom` names it: `Kickstart 40.68 (A1200)`.
+    pub name: String,
+    /// Of the ROM image, decoded — so a licensed Amiga Forever dump and a
+    /// bare dump of the same ROM hash alike (ART-128).
+    pub sha256: String,
+    /// What the ROM states about itself. `None` for pre-2.0 ROMs, which
+    /// state nothing at all.
+    pub stated_major: Option<u16>,
+    pub compatible_models: Vec<String>,
+    /// **The load-bearing field.** `Some(47)` when this tree needs a ROM of
+    /// at least that major to start; `None` when it needs nothing, either
+    /// because it carries its own ROM modules or because no component in it
+    /// ever depended on the ROM.
+    ///
+    /// Taken from the recipe's own `Condition::RomOlderThan`, so the
+    /// threshold is not written down a second time.
+    pub requires_major: Option<u16>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Component {
     pub id: String,
