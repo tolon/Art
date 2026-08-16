@@ -963,11 +963,28 @@ pub fn create_rdb_layout(
             block[36..40].copy_from_slice(&version.to_be_bytes()); // Version
 
             // PatchFlags says which of the DeviceNode fields below AmigaOS
-            // should actually take from here. Bit 4 is `dn_SegListBlock` —
-            // the only one that matters, and the only one written: patching
-            // a stack size or a priority ART has no opinion about would be
-            // overriding the user's mountlist for no reason.
-            block[40..44].copy_from_slice(&0x0000_0010u32.to_be_bytes()); // PatchFlags
+            // should actually take from here — one bit per field, **in the
+            // order they appear in the structure**: `Type`(0), `Task`(1),
+            // `Lock`(2), `Handler`(3), `StackSize`(4), `Priority`(5),
+            // `Startup`(6), `SegListBlock`(7), `GlobalVec`(8).
+            //
+            // **ART-126.** This was `0x10` for as long as G4 existed, on the
+            // belief that bit 4 was the seg list. Bit 4 is `StackSize`, which
+            // ART leaves at zero — so every disk ART wrote asked AmigaOS to
+            // patch a stack size to nothing and to ignore the driver it had
+            // just embedded. The partition mounted with no handler; a
+            // bootable one gave a privilege violation. Four readers agreed
+            // the driver was present (`rdbtool` even extracted it
+            // byte-for-byte); none of them acts on this field, and the first
+            // thing that did was a Kickstart.
+            //
+            // `0x180` — SegList and GlobalVec — is what CaffeineOS's own card
+            // writes, and MultibootOS writes `0x190`, the same two plus a
+            // stack size it does have an opinion about. ART claims the two
+            // that must be there and nothing else: overriding a stack size or
+            // a priority ART has no opinion about would be overriding the
+            // user's mountlist for no reason.
+            block[40..44].copy_from_slice(&0x0000_0180u32.to_be_bytes()); // PatchFlags
 
             // DeviceNode. Everything but the seg list is left zero, except
             // GlobalVec, which must be -1: zero means "this filesystem uses a
@@ -1307,6 +1324,78 @@ mod tests {
         // The whole point of writing it: the partition's DosType is now
         // provided by the disk it sits on.
         assert!(parsed.provides_file_system(0x5044_5303));
+    }
+
+    /// **ART-126 — the field that decides whether any of this is used.**
+    ///
+    /// `PatchFlags` names which `FileSysEntry` fields AmigaOS copies into the
+    /// device node, one bit per field **in the order they appear in the
+    /// structure**: `Type`(0), `Task`(1), `Lock`(2), `Handler`(3),
+    /// `StackSize`(4), `Priority`(5), `Startup`(6), `SegListBlock`(7),
+    /// `GlobalVec`(8). ART wrote `0x10` believing that to be the seg-list
+    /// bit; `0x10` is **StackSize**, whose value ART leaves at zero. So the
+    /// driver's seg list was never installed — the partition mounted with no
+    /// handler at all, and a bootable one jumped into nothing.
+    ///
+    /// Every reader ART had agreed the driver was there: `rdbtool` extracted
+    /// it byte-for-byte, `hst-imager` listed it, ART's own parser reported it.
+    /// None of them acts on `PatchFlags`. A real Kickstart does, and it is
+    /// what finally said no (WinUAE, Kickstart 3.1 40.68: the volume never
+    /// appeared, and booting it gave `Software Failure 8000 0008` — a
+    /// privilege violation).
+    ///
+    /// The value is not a guess: both of the user's real, booting PiStorm
+    /// cards were read for it. CaffeineOS 9317 writes **`0x180`** (SegList +
+    /// GlobalVec) with `StackSize` left unpatched, and MultibootOS 2.2 writes
+    /// `0x190` for its PFS3 — the same two bits plus a 2048-byte stack it
+    /// does have an opinion about — and `0x180` for its FFS. ART writes
+    /// `0x180`: the two bits that must be there, and nothing it has no reason
+    /// to override.
+    #[test]
+    fn the_seg_list_and_global_vec_are_the_fields_amigados_is_told_to_take() {
+        let layout = create_rdb_layout(
+            64 * 1024 * 1024,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::Pfs3DirectScsi,
+                size_mb: 32,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 30,
+            }],
+            &[FileSystemSpec {
+                dos_type: 0x5044_5303,
+                version: 19,
+                revision: 2,
+                data: vec![0x4E; 600],
+            }],
+        )
+        .unwrap();
+
+        // The FSHD follows the RDB and the one partition block.
+        let fshd = &layout.blocks[2 * BLOCK_SIZE..3 * BLOCK_SIZE];
+        assert_eq!(&fshd[0..4], b"FSHD");
+
+        // `lw` here is the test module's own — a **longword index**, not a
+        // byte offset. PatchFlags is byte 40, SegListBlock 72, GlobalVec 76.
+        let patch_flags = lw(fshd, 40 / 4);
+        assert_eq!(
+            patch_flags, 0x0000_0180,
+            "PatchFlags must name SegListBlock (bit 7) and GlobalVec (bit 8), \
+             the value both real cards use; 0x{patch_flags:X} was written"
+        );
+        // …and the fields those bits point at have to be worth taking.
+        assert_eq!(lw(fshd, 72 / 4), 3, "dn_SegListBlock names the first LSEG");
+        assert_eq!(
+            lw(fshd, 76 / 4),
+            0xFFFF_FFFF,
+            "dn_GlobalVec must be -1: zero means a BCPL global vector"
+        );
+        // Nothing else is claimed. A patched stack size of zero is how this
+        // defect looked from the other side, so it is asserted as *unclaimed*
+        // rather than merely as zero.
+        assert_eq!(patch_flags & 0x10, 0, "StackSize is not ART's to override");
+        assert_eq!(patch_flags & 0x20, 0, "Priority is not ART's to override");
     }
 
     #[test]
