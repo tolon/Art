@@ -159,7 +159,7 @@ pub struct MediaRecord {
 /// `path`, `sha256` and `bytes` the composed file actually has. `component`
 /// still names a single component for every other file; for that one path
 /// it names "one of possibly several".
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileRecord {
     /// `/`-separated, relative to the distribution root — matches
     /// [`super::plan::PlanItem::to`] exactly, except for `S/User-Startup`.
@@ -173,6 +173,18 @@ pub struct FileRecord {
     /// What was actually written, not [`super::plan::PlanItem::bytes`]'s
     /// estimate — see the module doc comment.
     pub bytes: u64,
+    /// `HSPARWED` exactly as read off the source media (`MediaEntry::protection`
+    /// — same convention throughout `core::volume`, `RWED` inverted). `None`
+    /// for `S/User-Startup`: a composed file has no single medium's byte to
+    /// carry over, and nothing in `apply` ever sets one on it (see the module
+    /// doc comment's "S:User-Startup" section) — recording `Some(0)` there
+    /// would assert an intent nobody actually stated. `#[serde(default)]` so a
+    /// manifest written before this field existed deserializes as `None`
+    /// rather than refusing to load — Task 10's `verify` reads exactly that as
+    /// "this manifest never recorded an expected protection for this file",
+    /// which is the truth.
+    #[serde(default)]
+    pub protection: Option<u32>,
 }
 
 /// What lives at the distribution root's own `distribution.json`: which
@@ -357,6 +369,7 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
             media: item.media.clone(),
             sha256,
             bytes: written,
+            protection: Some(entry.protection),
         });
     }
 
@@ -460,6 +473,9 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
                 media: String::new(),
                 sha256: merged_sha256.clone(),
                 bytes: merged_bytes,
+                // No single medium's byte to carry over — see the field's own
+                // doc comment.
+                protection: None,
             });
         }
     }

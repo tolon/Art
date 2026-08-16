@@ -31,12 +31,14 @@
 //! or a collected list of [`RefusalReason`]s), `apply` ([`apply::apply`]
 //! — the plan turned into a real distribution tree, with a `.uaem` sidecar
 //! beside every file that needs one and `apply::DistributionManifest`
-//! recording what built it) and now `startup` ([`startup::merge_user_startup`]
+//! recording what built it), `startup` ([`startup::merge_user_startup`]
 //! — `apply`'s own last step, composing `S:User-Startup` from every
-//! switched-on component's own lines) exist so far — the module tree this
-//! doc comment describes (`verify`) lands one task at a time, each adding
-//! its own `pub mod` line, so the crate compiles at the end of every task
-//! rather than only at the end of the feature.
+//! switched-on component's own lines) and now `verify` ([`verify::verify_volume`]
+//! — reading the finished PFS3 or FFS volume back and checking it against
+//! the manifest, §92's own VERIFY step) exist so far — this module tree
+//! lands one task at a time, each adding its own `pub mod` line, so the
+//! crate compiles at the end of every task rather than only at the end of
+//! the feature.
 
 pub mod apply;
 pub mod plan;
@@ -44,6 +46,7 @@ pub mod recipe;
 pub mod scan;
 pub mod source;
 pub mod startup;
+pub mod verify;
 
 use serde::{Deserialize, Serialize};
 

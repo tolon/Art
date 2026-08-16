@@ -222,13 +222,17 @@ impl VolumeFormatter for NativeFormatter {
 // Which implementation a partition's DosType wants
 // ---------------------------------------------------------------------------
 
-enum DosFamily {
+/// `pub(crate)`: [`crate::core::osinstall::verify`] routes on the same
+/// families this module writes to, and duplicating the `DosType` decision
+/// there would be a second place ART-043-style offset arithmetic could drift
+/// from this one.
+pub(crate) enum DosFamily {
     Pfs3,
     Ffs,
     Other,
 }
 
-fn family_of(dos: DosType) -> DosFamily {
+pub(crate) fn family_of(dos: DosType) -> DosFamily {
     if dos.family() == b"PFS" || dos.family() == b"PDS" {
         DosFamily::Pfs3
     } else if dos.is_dos() && dos.flavour() <= 7 {
@@ -238,7 +242,7 @@ fn family_of(dos: DosType) -> DosFamily {
     }
 }
 
-fn from_pfs3(err: libpfs3::error::Error) -> CoreError {
+pub(crate) fn from_pfs3(err: libpfs3::error::Error) -> CoreError {
     match err {
         libpfs3::error::Error::DiskFull(detail) => {
             CoreError::InvalidInput(format!("not enough room on this PFS3 volume: {detail}"))
@@ -258,7 +262,7 @@ fn from_pfs3(err: libpfs3::error::Error) -> CoreError {
 /// narrowing is a truncation, and a **checked** one: anything set above bit 7
 /// means the sidecar is not describing what this code thinks it is, and the
 /// safe direction is to refuse rather than silently drop those bits.
-fn pfs3_protection(protection: u32) -> CoreResult<u8> {
+pub(crate) fn pfs3_protection(protection: u32) -> CoreResult<u8> {
     u8::try_from(protection).map_err(|_| CoreError::Malformed {
         format: "uaem".into(),
         detail: format!(
@@ -274,7 +278,7 @@ fn pfs3_protection(protection: u32) -> CoreResult<u8> {
 /// Which Amiga area a `slot` names. `None` is the plain-HDF case: one area at
 /// offset zero, the same convention `core/preload/mod.rs::mbr_slot_of` uses in
 /// the other direction.
-fn area_for_slot(card: &CardImage, slot: Option<usize>) -> CoreResult<&AmigaArea> {
+pub(crate) fn area_for_slot(card: &CardImage, slot: Option<usize>) -> CoreResult<&AmigaArea> {
     match slot {
         None => card.areas.first().ok_or_else(|| CoreError::Malformed {
             format: "card".into(),
@@ -304,7 +308,7 @@ fn area_for_slot(card: &CardImage, slot: Option<usize>) -> CoreResult<&AmigaArea
     }
 }
 
-fn partition_by_index(area: &AmigaArea, index: usize) -> CoreResult<&ParsedPartition> {
+pub(crate) fn partition_by_index(area: &AmigaArea, index: usize) -> CoreResult<&ParsedPartition> {
     index
         .checked_sub(1)
         .and_then(|i| area.rdb.partitions.get(i))
@@ -329,7 +333,10 @@ fn partition_by_drive<'a>(area: &'a AmigaArea, drive: &str) -> CoreResult<&'a Pa
 /// The partition's file-absolute byte offset, length and block size — never
 /// the partition's own, volume-relative numbers on their own (ART-043's
 /// mistake, from the reading side).
-fn partition_region(area: &AmigaArea, part: &ParsedPartition) -> CoreResult<(u64, u64, usize)> {
+pub(crate) fn partition_region(
+    area: &AmigaArea,
+    part: &ParsedPartition,
+) -> CoreResult<(u64, u64, usize)> {
     let rel_offset = part.byte_offset().ok_or_else(|| CoreError::Malformed {
         format: "card".into(),
         detail: format!(
