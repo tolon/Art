@@ -222,8 +222,13 @@ core/gameindex/
     whdhdf.rs       a bootable WHDLoad hardfile's insides
   scan.rs           a folder → a catalogue, on a ProgressSink
   write.rs          a record → igame.data
+  kickstarts.rs     which declared Kickstart images the tree is missing
   export/ags.rs     AGS menu structure
 ```
+
+WHDLoad's CRC16 goes in **`core/hashing`**, not in `core/gameindex`: it is a
+checksum primitive, it sits below everything that wants it, and the next caller
+is on the G9 side (§6), where a `core/gameindex` dependency would be backwards.
 
 Layering holds: `core/gameindex` calls `core::whdload`, `core::volume`,
 `core::archive`, `core::hashing` — all lower — and nothing above. `core/layout`
@@ -323,6 +328,15 @@ The hostile cases are derived from the documentation rather than imagined:
 - a file whose hunk header declares more than one hunk
 - an `igame.data` line exceeding 63 bytes
 - an `.rp9` whose XML is malformed, deeply nested, or declares a huge entity
+- a v16 slave whose `ws_kickname` offset is 0 (declares *no* image) against a
+  v13 slave that has no such field at all — the two must not report the same
+  thing as each other, nor as a slave that does name one
+
+`core/hashing`'s CRC-16/ARC gets a pinned vector, checked the way ART pins
+`name_hash` against `adfGetHashValue`: the reference is
+`WHDLoad/Src/programs/CRC16.asm`, and the test states the parameters it is
+asserting (reflected, poly `0xA001`, init `0x0000`, no final XOR) so a later
+reader can tell whether a mismatch is ART's bug or a different CRC16.
 
 Real-material hooks, `#[ignore]`d and env-gated in the established style: the
 1697 hardfiles, the 207 `.rp9`s, the 2 `.lha`s.
@@ -330,27 +344,51 @@ Real-material hooks, `#[ignore]`d and env-gated in the established style: the
 ## 5. Waves
 
 1. **The index.** `GameRecord`, the four readers, the scan job, the Collection
-   screen. Runs against 2753 real titles on day one. `core/collection.rs`
-   retires.
+   screen. Includes the v16+ Kickstart declaration (§6) and `core/hashing`'s
+   CRC-16/ARC, because both are on the reader path this wave builds anyway.
+   Runs against 2753 real files on day one. `core/collection.rs` retires.
 2. **Extraction and writing.** `ItemKind::WhdloadHardfile` and its placement
-   (closing ART-106), then `igame.data` beside each slave and `games.json` at
-   the root.
+   (fixing ART-106's collision blindness rather than inheriting it), then
+   `igame.data` beside each slave, `games.json` at the root, and the
+   missing-`DEVS:Kickstarts/` report over the tree being built.
 3. **AGS.** The format read off the user's own MultibootOS card —
    `AGS0`…`AGS10`, eleven PFS3 partitions of a real AGS library, which ART can
    now read through `libpfs3`. No format is written before it has been read
    from real material.
 
-## 6. Out of scope, recorded rather than dropped
+## 6. A game that declares the Kickstart it needs
 
-**`ws_kickname` belongs to G9.** A slave may declare the Kickstart image it
-needs, by name (`kick34005.A500`, loaded from `DEVS:Kickstarts/`), size and
-CRC16. ART holds a 154-dump Kickstart table verified against amitools' Remus
-database on every CI run. A card whose `DEVS:Kickstarts/` lacks the named file
-gives a game that will not start — the same class of silent failure G9 exists
-to prevent, arriving from the games side. Neither sample here needs one
-(Moonstone's offset is 0, Lotus3's field does not exist at v13), which is
-exactly the pair of cases a reader must handle. Filed as an issue; not built
-here.
+A slave at `ws_Version >= 16` may declare a Kickstart image by name
+(`kick34005.A500`, which WHDLoad loads from `DEVS:Kickstarts/`), by size, and
+by CRC16. A tree whose `DEVS:Kickstarts/` lacks that file gives a game that
+does not start — the silent-failure class G9 exists to prevent, arriving from
+the games side instead of the OS side.
+
+**The reading half is in scope**, because it is three more fields on the
+version-gated path §3.2 already builds, and the samples already cover both
+awkward cases: Moonstone (v16) has the field with offset 0 meaning *none*, and
+Lotus3 (v13) does not have the field at all.
+
+**WHDLoad's CRC16 is in scope too.** `WHDLoad/Src/programs/CRC16.asm` in the
+dev package titles its routine "ANSI CRC16" and builds a reflected table with
+`eor.w #$a001`, initialising with `moveq #0,d0` and applying no final XOR —
+that is **CRC-16/ARC**, about fifteen lines of Rust, with the reference right
+there to pin a test vector against.
+
+**The report is in scope**: of the titles being placed, how many declare a
+Kickstart image, and which of those images are absent from the tree's own
+`DEVS:Kickstarts/`. This asks only about material ART has in hand while it
+builds the staging tree — no card is read, and nothing is written on the
+answer.
+
+**What is deliberately not in scope**: matching a declared image against ART's
+154-dump Kickstart table and *offering to place it*. That reaches ROM Manager,
+the licensed-Amiga-Forever decode path ([ART-128](../../ISSUES.md)) and the
+card's own layout, and putting a user's ROM on their card on their behalf is a
+decision of theirs, not a side effect of a metadata pass. It is G9/G16 work and
+is filed as an issue.
+
+## 7. Out of scope, recorded rather than dropped
 
 **`ws_config`, `ws_MemConfig`** (v17+/v20+) are read past, not read. They
 describe splash-window gadgets, which no exporter needs.

@@ -26,6 +26,29 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-130** 🔵 **A game can name the Kickstart it needs, and nothing offers to
+supply it** — *filed 2026-08-17, out of G10's design round; the reading half is
+built by G10, this is the half that was deliberately left out*
+`src-tauri/src/core/gameindex/`, `src-tauri/src/core/rom/`, ROM Manager ·
+A WHDLoad slave at `ws_Version >= 16` declares the Kickstart image it needs by
+name (`kick34005.A500`, which WHDLoad loads from `DEVS:Kickstarts/`), by size
+and by CRC16 — documented in whdload.de's autodoc under
+`WHDLoad.Slave/--Overview--`. G10 reads all three fields, computes WHDLoad's
+own CRC-16/ARC (`core/hashing`), and **reports** which declared images are
+missing from the tree it is building. What it does not do is close the loop:
+ART holds a 154-dump Kickstart table, verified against amitools' Remus database
+on every CI run, so in many cases it could *identify* the needed image and
+offer to place it under the name the slave asks for.
+
+Left out on purpose rather than forgotten. Putting a user's ROM onto their card
+on their behalf reaches ROM Manager, the licensed-Amiga-Forever decode path
+([ART-128](#fixed)) and the card's own layout — decisions of theirs, not a side
+effect of a metadata pass. It is the same question G9 answers for the OS side
+("does this Kickstart suit this volume?") arriving from the games side, and it
+belongs beside G9/G16 rather than inside a launcher-metadata round.
+
+Design: [2026-08-17-g10-launcher-metadata-design.md](superpowers/specs/2026-08-17-g10-launcher-metadata-design.md) §6.
+
 **ART-119** 🔵 **Five minors deferred from Task 13's review, folded into one
 entry — two closed, three still open** — *found 2026-08-15/16, Task 13's fix
 round, filed at Task 14; #3 and #4 closed 2026-08-16*
