@@ -9,6 +9,7 @@
 pub mod adf;
 pub mod analysis;
 pub mod archive;
+pub mod artwork;
 pub mod binary;
 pub mod card;
 pub mod cbm;
