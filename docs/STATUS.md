@@ -1009,9 +1009,13 @@ someone at the machine (or the Amiga) to run what already exists.
   1. **The user's collection holds no WHDLoad at all** — `E:\amiga\Titles` is 847
      `.adf` + 207 `.rp9` and not one `.slave`. **iGame is a WHDLoad launcher**,
      so a gameslist over this material would do nothing on a real Amiga; the
-     gap text's own wording targets content this user does not yet own. WHDLoad
-     collections are standard and freely available, so this is a fact about
-     today's proof material rather than a permanent one.
+     gap text's own wording targets content this user does not yet own.
+     **Superseded the same evening:** the user has a WHDLoad collection and is
+     placing it under a folder for it. True of `Titles/` still; no longer true
+     of what this project can reach. Measure the new folder before the design
+     round resumes rather than carrying the count above forward — and note
+     that it removes the strongest argument against reading the gap text
+     literally, since iGame becomes testable against real material.
   2. **`.rp9` already carries curated metadata *and* a screenshot, offline** —
      title, publisher, year, genre, rating, required Kickstart, target machine,
      disk order and `rp9-preview.png`, in a `rp9-manifest.xml` inside each of

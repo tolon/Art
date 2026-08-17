@@ -488,6 +488,15 @@ anything real on the day it was written. WHDLoad collections are standard and
 freely available, so this is a fact about *today's* proof material, not a
 permanent one.
 
+> **Superseded the same evening, before the next round:** the user **has** a
+> WHDLoad collection and is placing it under a folder for it. The measurement
+> above was of `Titles/` alone and stays true of `Titles/`; it is no longer
+> true of the material available to this project. **The iGame path is
+> testable against real material once that folder lands** — which removes the
+> strongest argument against reading the gap text literally. Measure the new
+> folder before the design round resumes; do not carry the count above
+> forward.
+
 **2. `.rp9` carries curated metadata **and** a screenshot, offline.** An `.rp9`
 is a zip: the disk images, plus `rp9-manifest.xml`, plus `rp9-preview.png`.
 Read from `Aerial Racers (Insane Software, 1996, Amiga).rp9`:
