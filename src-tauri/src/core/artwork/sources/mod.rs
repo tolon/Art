@@ -9,6 +9,7 @@
 //! configurable part is per source and small: on/off, and the mirror base
 //! (spec §5).
 
+pub mod libretro;
 pub mod whdload_de;
 
 use std::collections::BTreeMap;
