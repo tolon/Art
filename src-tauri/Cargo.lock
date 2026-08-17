@@ -57,6 +57,7 @@ dependencies = [
  "fatfs",
  "libpfs3",
  "log",
+ "quick-xml",
  "serde",
  "serde_json",
  "sevenz-rust2",

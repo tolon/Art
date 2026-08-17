@@ -1,4 +1,5 @@
 //! Readers — one per source that can answer what a game is.
 
+pub mod rp9;
 pub mod slave;
 pub mod tosec;

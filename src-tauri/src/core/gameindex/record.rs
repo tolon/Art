@@ -50,18 +50,43 @@ impl<T> Fact<T> {
     }
 }
 
-/// Game or demo — **declared only**.
+/// What a packager said this is — **declared only**.
 ///
 /// `core/layout` says there is no `Demo` and there will not be one, because
-/// nothing derivable from the bytes separates one from a game. That holds.
-/// This is not derived: `.rp9` carries `<type>demo</type>`, written by the
-/// packager. §14/§34 forbid acting on an uncertain classification as fact;
-/// they do not forbid recording a statement as a statement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// nothing derivable from the bytes separates one from a game. That holds. This
+/// is not derived: `.rp9` carries `<type>demo</type>`, written by the packager.
+/// §14/§34 forbid acting on an uncertain classification as fact; they do not
+/// forbid recording a statement as a statement.
+///
+/// The variants are the values **measured** across the 242 real `.rp9`
+/// packages on this machine (2026-08-17): 111 `demo`, 96 `game`, 15 `system`,
+/// 10 `gallery`, 10 `video`. The first cut of this enum had only `Game` and
+/// `Demo`, which folded thirty-five stated types into "said nothing" — exactly
+/// the collapse `Fact` exists to prevent, arriving from the other direction.
+/// [`TitleKind::Other`] is there so the next unfamiliar word is recorded rather
+/// than discarded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TitleKind {
     Game,
     Demo,
+    /// An operating system or system software package.
+    System,
+    /// A picture collection.
+    Gallery,
+    Video,
+    /// A word this ART does not know, kept verbatim.
+    Other(String),
+}
+
+impl TitleKind {
+    /// Whether this is something a game launcher should list.
+    ///
+    /// A `gallery` or a `video` on a GAMES: volume is not a game, and iGame
+    /// showing one is a menu entry that does nothing useful.
+    pub fn is_playable(&self) -> bool {
+        matches!(self, Self::Game | Self::Demo)
+    }
 }
 
 /// What chipset a title needs.
