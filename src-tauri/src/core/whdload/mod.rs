@@ -240,7 +240,14 @@ fn stem_of(name: &str) -> &str {
     }
 }
 
-fn has_extension(path: &str, extension: &str) -> bool {
+/// Whether `path`'s last component ends in `.<extension>`, case-insensitively.
+///
+/// **Public because there must be exactly one of these.** `Lotus3.islave` is an
+/// installer's slave and not the game's, and the only thing keeping it out is
+/// that this compares the whole extension rather than looking for a substring.
+/// `core/gameindex` asks the same question of a file inside a hardfile, and a
+/// second copy of this rule is a second place for `.islave` to slip through.
+pub fn has_extension(path: &str, extension: &str) -> bool {
     last_component(path)
         .rsplit('.')
         .next()

@@ -3,3 +3,4 @@
 pub mod rp9;
 pub mod slave;
 pub mod tosec;
+pub mod whdhdf;

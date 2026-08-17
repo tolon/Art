@@ -281,9 +281,14 @@ fn read_u32(buf: &[u8], at: usize) -> Option<u32> {
         .map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
 }
 
+/// Fixture building, shared with the readers that need a valid slave.
+///
+/// `core/gameindex/readers/whdhdf` puts one of these inside a hardfile, and a
+/// second copy of the header layout in that module's tests would be a second
+/// thing to keep in step with the documentation.
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod tests_support {
+    use super::{HUNK_CODE, HUNK_HEADER, WS_SECURITY};
 
     /// Build a slave the way a real one is built: an AmigaDOS hunk executable
     /// of one hunk, with the `WHDLoadSlave` structure at the start of the
@@ -294,19 +299,19 @@ mod tests {
     /// offset 32 — so a fixture built this way is not a convenient shape, it is
     /// the shape.
     #[derive(Default)]
-    struct SlaveBuilder {
-        version: u16,
-        flags: u16,
-        name: Option<&'static str>,
-        copyright: Option<&'static str>,
-        info: Option<&'static str>,
-        kickname: Option<&'static str>,
+    pub(crate) struct SlaveBuilder {
+        pub(crate) version: u16,
+        pub(crate) flags: u16,
+        pub(crate) name: Option<&'static str>,
+        pub(crate) copyright: Option<&'static str>,
+        pub(crate) info: Option<&'static str>,
+        pub(crate) kickname: Option<&'static str>,
         /// Written into `ws_kickname` verbatim, overriding the string.
-        kickname_offset_override: Option<u16>,
+        pub(crate) kickname_offset_override: Option<u16>,
     }
 
     impl SlaveBuilder {
-        fn new(version: u16) -> Self {
+        pub(crate) fn new(version: u16) -> Self {
             Self {
                 version,
                 ..Default::default()
@@ -328,7 +333,7 @@ mod tests {
             }
         }
 
-        fn build(&self) -> Vec<u8> {
+        pub(crate) fn build(&self) -> Vec<u8> {
             let struct_len = Self::struct_len(self.version);
             let mut body = vec![0u8; struct_len];
             body[0..4].copy_from_slice(&WS_SECURITY);
@@ -383,6 +388,26 @@ mod tests {
         }
         out
     }
+
+    /// The common case: a valid slave stating a name and a copyright.
+    pub(crate) fn build_slave(
+        name: &'static str,
+        copyright: &'static str,
+        version: u16,
+    ) -> Vec<u8> {
+        SlaveBuilder {
+            name: Some(name),
+            copyright: Some(copyright),
+            ..SlaveBuilder::new(version)
+        }
+        .build()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tests_support::SlaveBuilder;
+    use super::*;
 
     /// The base is 32 for the standard one-hunk layout — measured on both real
     /// archives before this was written.

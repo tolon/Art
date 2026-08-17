@@ -561,6 +561,49 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-131** 🔴 ✅ **A bare hardfile whose filesystem is smaller than the file
+would not mount — 1456 of the user's 1697 WHDLoad hardfiles** — *found
+2026-08-17 while building G10's hardfile reader; fixed the same day*
+`src-tauri/src/core/volume/mount.rs`, `src-tauri/src/core/gameindex/readers/whdhdf.rs` ·
+A bare hardfile records its own extent nowhere: there is no RDB to ask, so ART
+placed the root block from the file's own length (`total_blocks / 2`). Amiga
+partitions are whole cylinders and a hardfile's *file* need not be, so a volume
+of 1824 blocks lives happily in a file of 1843 — and the root block is at 912
+while that calculation says 921. Everything read from 921 is somebody's game
+data, which is why the failures came back as `header block has type
+-1409280683, expected 2` rather than as anything mentioning geometry.
+
+**Measured across the user's whole collection**: computing from the file's
+length finds the root block in **241** of 1697; rounding down to a whole
+cylinder (32 blocks) first finds it in **1697**. Nothing about this is specific
+to the game index — ADF Studio and the Files screen could not open those 1456
+images either. G10 is only what pointed at it.
+
+`mount()` now probes rather than assumes: the file's own count is tried first,
+so every image that already worked reads exactly as before, and the
+cylinder-aligned count is tried only when that block is not a root block. When
+neither looks right the original count is kept, so a corrupt image still fails
+where and how it failed before. The geometry is rebuilt with the volume's real
+extent, not just its root — otherwise a write could allocate a block the
+bitmap does not cover.
+
+Two smaller findings from the same sweep, both in `whdhdf.rs`:
+**AmigaDOS's thirty-character filename limit truncates the extension too**, so
+`20000MeilenUnterDemMeerDe.Slave` is `…MeerDe.Slav` on disk — thirty-two real
+images, and a whole-extension match found none of them. A name now gets a file
+onto a shortlist and `read_slave` decides from the bytes, which is
+`core/detect`'s own rule one level down. And the entry ceiling started at 4096;
+`Beneath A Steel Sky v2.2 CD32` reached it, so it matches
+`core::whdload::MAX_ENTRIES` at 20 000 now.
+
+Tests: `a_volume_shorter_than_its_file_still_mounts`,
+`a_volume_that_fills_its_file_is_left_alone`,
+`an_image_with_no_root_block_anywhere_keeps_its_own_count`,
+`a_name_truncated_by_amigados_is_still_a_slave`,
+`a_truncated_name_without_a_slave_inside_is_not_a_game`. Real material:
+`read_the_real_hardfiles_when_asked` reads **1697 of 1697, 0 refused** (was
+249 of 1697).
+
 **ART-129** 🟠 ✅ **The ROM pairing check stayed silent for the pairing it
 exists to warn about — twice over** — *found 2026-08-17 in G9's final review;
 fixed 2026-08-17*
