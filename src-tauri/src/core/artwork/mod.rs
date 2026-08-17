@@ -10,6 +10,7 @@
 pub mod cache;
 pub mod encode;
 pub mod key;
+pub mod sources;
 
 use serde::{Deserialize, Serialize};
 
