@@ -126,6 +126,110 @@ export async function onIndexResult(
   return listen<IndexResult>(INDEX_RESULT_EVENT, (e) => handler(e.payload));
 }
 
+// ---------------------------------------------------------------------------
+// The saved catalogue (wave A). Nothing here starts a scan on its own.
+// ---------------------------------------------------------------------------
+
+/** How much a refresh is willing to trust. Mirrors `store::Refresh`. */
+export type RefreshMode = "update" | "rescan";
+
+/**
+ * Whether a string is one of the two words the command accepts.
+ *
+ * The Rust side refuses a third word rather than guessing at it; this stops one
+ * being sent in the first place, and narrows the type on the way.
+ */
+export function isRefreshMode(value: string): value is RefreshMode {
+  return value === "update" || value === "rescan";
+}
+
+/** One title's hand corrections. `null` means "no opinion". */
+export interface RecordOverride {
+  title: string | null;
+  year: number | null;
+  publisher: string | null;
+  genre: string | null;
+  chipset: ChipsetRequirement | null;
+}
+
+/**
+ * An override with nothing in it.
+ *
+ * Sending this is how the screen says "forget my corrections for this title":
+ * the Rust side removes an empty override rather than storing one, so changing
+ * your mind leaves no trace.
+ */
+export const NO_OVERRIDE: RecordOverride = {
+  title: null,
+  year: null,
+  publisher: null,
+  genre: null,
+  chipset: null,
+};
+
+/** One title as the catalogue presents it. */
+export interface EntryView {
+  path: string;
+  /** Asked of the disk at load time, never stored. */
+  available: boolean;
+  record: GameRecord;
+}
+
+/** One catalogued folder. */
+export interface RootView {
+  root: string;
+  /** Seconds since the epoch, as a string. `null` when never scanned. */
+  scanned_at: string | null;
+  /** Read by an older reader; an update would improve these entries. */
+  stale: boolean;
+  entries: EntryView[];
+}
+
+/** Load the saved catalogue. **Starts no scan.** */
+export async function catalogueLoad(): Promise<RootView[]> {
+  return invoke<RootView[]>("catalogue_load");
+}
+
+export async function catalogueAddRoot(root: string): Promise<void> {
+  return invoke<void>("catalogue_add_root", { root });
+}
+
+/** Remove a folder and its titles. The files themselves are untouched. */
+export async function catalogueRemoveRoot(root: string): Promise<void> {
+  return invoke<void>("catalogue_remove_root", { root });
+}
+
+/** Refresh one folder. Returns a job id; watch it through `@/lib/jobs`. */
+export async function catalogueRefresh(
+  root: string,
+  mode: RefreshMode
+): Promise<number> {
+  return invoke<number>("catalogue_refresh", { root, mode });
+}
+
+/** Record or clear one title's corrections. Returns where the backup went. */
+export async function catalogueSetOverride(
+  id: string,
+  edit: RecordOverride
+): Promise<string | null> {
+  return invoke<string | null>("catalogue_set_override", { id, edit });
+}
+
+export const REFRESHED_EVENT = "catalogue-refreshed";
+
+export interface RefreshedRoot {
+  job_id: number;
+  root: string;
+}
+
+/** Subscribe to finished refreshes. Returns an unlisten function. */
+export async function onCatalogueRefreshed(
+  handler: (result: RefreshedRoot) => void
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<RefreshedRoot>(REFRESHED_EVENT, (e) => handler(e.payload));
+}
+
 /** What kind of media a record describes, for a filter or a badge. */
 export function mediaKind(media: Media): "floppies" | "hardfile" | "whdload" {
   switch (media.kind) {
