@@ -1600,9 +1600,14 @@ mod tests {
     /// ART_TREE_V40="E:\amiga\ProjeART\dist-3.2-v40" \
     /// ART_EMU68_ARCHIVE="E:\amiga\Amigatolon\Emu68\Emu68-pistorm.zip" \
     /// ART_KICKSTART_V40="E:\amiga\Amigatolon\kickstart\Kickstart v3.1 rev 40.68 (1993)(Commodore)(A1200).rom" \
+    /// ART_KICKSTART_V47="E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ROM\kicka1200.rom" \
     /// ART_CARD_OUT="E:\amiga\ProjeART\card.img" \
     ///   cargo test the_real_trees_against_a_real_card_when_asked -- --nocapture --ignored
     /// ```
+    ///
+    /// `ART_CARD_OUT` names the V40 card; the V47 one is written beside it
+    /// with `-v47` on the stem, so there is one path to set and one place both
+    /// land. Both are deleted on the way out.
     ///
     /// **A correction to the brief this task came from.** It assumed
     /// `ART_CARD` names "a card ART built, so its manifest is beside it" —
@@ -1620,56 +1625,79 @@ mod tests {
     /// to the comparison: `rom_pairing_for` reads only `SourceFacts` and
     /// `boot_files`.
     ///
-    /// The V47 tree against this V40-carrying card is the pairing that
-    /// actually failed on real hardware emulation on 2026-08-16; the V40
-    /// tree carries its own modules and suits either.
+    /// **Three verdicts, and the third is the one worth having.** The V47 tree
+    /// against the V40-carrying card is the pairing that actually failed on
+    /// real hardware emulation on 2026-08-16, and the V40 tree against that
+    /// same card is `Paired` — but only because the card was built with the
+    /// very ROM that tree was planned against, which proves nothing about the
+    /// tree's own capability. So a **second** card is built from the real V47
+    /// Kickstart, and the V40 tree is asked about that one too: a different
+    /// ROM, and `Suitable` only because the tree carries its own ROM modules.
+    /// That is the design's own third proof case, and the only evidence on
+    /// real material that this check reads the tree's capability rather than
+    /// comparing version numbers.
     #[test]
     #[ignore = "reads the user's own trees, archive and ROM, and writes a card to E:\\amiga\\ProjeART; run explicitly"]
     fn the_real_trees_against_a_real_card_when_asked() {
-        use crate::core::card::build::{build_card, AreaSpec, CardSpec};
-        use crate::core::card::manifest::{
-            describe_card, render_manifest, ManifestFile, SourceFacts,
-        };
-        use crate::core::card::payload::{emu68_payload, PayloadSpec};
-        use crate::core::hashing::{sha256_bytes, sha256_file};
         use crate::core::pistorm::firmware::FirmwareConfig;
         use crate::core::pistorm::hardware::{
             AmigaTarget, Emu68Line, PiModel, PistormHardware, PistormVariant,
         };
         use crate::core::pistorm::options::Emu68Options;
-        use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
-        use crate::core::rom::{decoded_image, stated_version};
-        use crate::core::safety::atomic::atomic_write;
 
-        let (Ok(v47), Ok(v40), Ok(archive), Ok(kickstart_path), Ok(card_out)) = (
+        let (Ok(v47), Ok(v40), Ok(archive), Ok(kickstart_v40), Ok(kickstart_v47), Ok(card_out)) = (
             std::env::var("ART_TREE_V47"),
             std::env::var("ART_TREE_V40"),
             std::env::var("ART_EMU68_ARCHIVE"),
             std::env::var("ART_KICKSTART_V40"),
+            std::env::var("ART_KICKSTART_V47"),
             std::env::var("ART_CARD_OUT"),
         ) else {
             return;
         };
-        let image = Path::new(&card_out);
-        let manifest_path = manifest_path_for(image);
-        assert!(
-            !image.exists(),
-            "'{}' already exists — SAFE_CREATE: remove it yourself first, or point \
-             ART_CARD_OUT somewhere new",
-            image.display()
-        );
 
-        // Deletes the card and its manifest on the way out, on every path —
-        // this is a multi-hundred-MB image and the run must not leave it
-        // behind, whichever way the test ends.
-        struct Cleanup(std::path::PathBuf, std::path::PathBuf);
+        let v40_card = std::path::PathBuf::from(&card_out);
+        // Beside the card the user named, with `-v47` on the stem: one path to
+        // set, and both cards land wherever they pointed it.
+        let v47_card = {
+            let stem = v40_card
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "card".into());
+            let extension = v40_card
+                .extension()
+                .map(|e| format!(".{}", e.to_string_lossy()))
+                .unwrap_or_default();
+            v40_card.with_file_name(format!("{stem}-v47{extension}"))
+        };
+
+        // Deletes every file this run created, on the way out, on every path —
+        // these are multi-hundred-MB images and the run must not leave them
+        // behind, whichever way the test ends. **Only what this run created**:
+        // the SAFE_CREATE assertion below is what makes that true, since a
+        // path that already existed is refused rather than adopted.
+        struct Cleanup(Vec<std::path::PathBuf>);
         impl Drop for Cleanup {
             fn drop(&mut self) {
-                let _ = std::fs::remove_file(&self.0);
-                let _ = std::fs::remove_file(&self.1);
+                for path in &self.0 {
+                    let _ = std::fs::remove_file(path);
+                }
             }
         }
-        let _cleanup = Cleanup(image.to_path_buf(), manifest_path.clone());
+        for image in [&v40_card, &v47_card] {
+            assert!(
+                !image.exists(),
+                "'{}' already exists — SAFE_CREATE: remove it yourself first, or point \
+                 ART_CARD_OUT somewhere new",
+                image.display()
+            );
+        }
+        let _cleanup = Cleanup(vec![
+            v40_card.clone(),
+            manifest_path_for(&v40_card),
+            v47_card.clone(),
+            manifest_path_for(&v47_card),
+        ]);
 
         // The archive's own name means the classic board in the stable line
         // (`core::pistorm::hardware::kernel_archive`) — the only fact about
@@ -1682,95 +1710,143 @@ mod tests {
         };
         let firmware = FirmwareConfig::default();
 
-        let kickstart_bytes =
-            decoded_image(Path::new(&kickstart_path)).expect("the real V40 Kickstart reads");
-        let stated_major = stated_version(&kickstart_bytes).map(|(major, _minor)| major);
-        println!("kickstart={kickstart_path} stated_major={stated_major:?}");
-        assert_eq!(
-            stated_major,
-            Some(40),
-            "the ROM named by ART_KICKSTART_V40 must state major version 40"
-        );
-
-        let payload = emu68_payload(
-            Path::new(&archive),
-            &PayloadSpec {
-                hardware,
-                line: Emu68Line::Stable,
-                firmware: firmware.clone(),
-                options: Emu68Options::default(),
-                kickstart: Some(kickstart_bytes),
-            },
-        )
-        .expect("the real Emu68 archive builds a payload");
-
-        // Hashed here, from the bytes about to be written — the same point
-        // `commands/card.rs::build_requested_card` hashes at, and for the
-        // same reason: ART writes FAT32 and cannot read one back.
-        let boot_files: Vec<ManifestFile> = payload
-            .files
-            .iter()
-            .map(|file| ManifestFile {
-                name: file.name.clone(),
-                bytes: file.bytes.len() as u64,
-                sha256: sha256_bytes(&file.bytes),
-            })
-            .collect();
-        let kernel_file = payload.kernel_file.clone();
-
-        build_card(
-            image,
-            &CardSpec {
-                total_bytes: 2 * 1024 * 1024 * 1024,
-                boot_bytes: 0,
-                label: "ART CARD".into(),
-                boot_files: payload.files,
-                areas: vec![AreaSpec {
-                    size_bytes: 0,
-                    partitions: vec![PartitionSpec {
-                        drive_name: "DH0".into(),
-                        fs_type: AmigaHardDiskFs::FfsStandard,
-                        size_mb: 512,
-                        bootable: true,
-                        boot_priority: 0,
-                        num_buffers: 0,
-                    }],
-                    file_systems: Vec::new(),
-                }],
-            },
-            &crate::core::jobs::NoProgress,
-        )
-        .expect("the card builds");
-
         fn file_name_of(path: &Path) -> String {
             path.file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default()
         }
 
-        let source = SourceFacts {
-            archive_name: file_name_of(Path::new(&archive)),
-            archive_sha256: sha256_file(Path::new(&archive)).unwrap(),
-            kickstart_name: Some(file_name_of(Path::new(&kickstart_path))),
-            kickstart_sha256: Some(sha256_file(Path::new(&kickstart_path)).unwrap()),
-            kickstart_file: Some(firmware.kickstart_file.clone()),
-            kickstart_stated_major: stated_major,
+        /// Build one card carrying one Kickstart, exactly the way
+        /// `commands/card.rs::build_requested_card` does: `build_card`, then
+        /// `describe_card`, then `render_manifest`. Returns what that ROM
+        /// states about itself.
+        #[allow(clippy::too_many_arguments)]
+        fn build_proof_card(
+            image: &Path,
+            kickstart_path: &Path,
+            archive: &Path,
+            hardware: PistormHardware,
+            firmware: &FirmwareConfig,
+        ) -> Option<u16> {
+            use crate::core::card::build::{build_card, AreaSpec, CardSpec};
+            use crate::core::card::manifest::{
+                describe_card, render_manifest, ManifestFile, SourceFacts,
+            };
+            use crate::core::card::payload::{emu68_payload, PayloadSpec};
+            use crate::core::hashing::{sha256_bytes, sha256_file};
+            use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
+            use crate::core::rom::{decoded_image, stated_version};
+            use crate::core::safety::atomic::atomic_write;
+
+            let kickstart_bytes = decoded_image(kickstart_path).expect("the real Kickstart reads");
+            let stated_major = stated_version(&kickstart_bytes).map(|(major, _minor)| major);
+
+            let payload = emu68_payload(
+                archive,
+                &PayloadSpec {
+                    hardware,
+                    line: Emu68Line::Stable,
+                    firmware: firmware.clone(),
+                    options: Emu68Options::default(),
+                    kickstart: Some(kickstart_bytes),
+                },
+            )
+            .expect("the real Emu68 archive builds a payload");
+
+            // Hashed here, from the bytes about to be written — the same point
+            // `commands/card.rs::build_requested_card` hashes at, and for the
+            // same reason: ART writes FAT32 and cannot read one back.
+            let boot_files: Vec<ManifestFile> = payload
+                .files
+                .iter()
+                .map(|file| ManifestFile {
+                    name: file.name.clone(),
+                    bytes: file.bytes.len() as u64,
+                    sha256: sha256_bytes(&file.bytes),
+                })
+                .collect();
+            let kernel_file = payload.kernel_file.clone();
+
+            build_card(
+                image,
+                &CardSpec {
+                    total_bytes: 2 * 1024 * 1024 * 1024,
+                    boot_bytes: 0,
+                    label: "ART CARD".into(),
+                    boot_files: payload.files,
+                    areas: vec![AreaSpec {
+                        size_bytes: 0,
+                        partitions: vec![PartitionSpec {
+                            drive_name: "DH0".into(),
+                            fs_type: AmigaHardDiskFs::FfsStandard,
+                            size_mb: 512,
+                            bootable: true,
+                            boot_priority: 0,
+                            num_buffers: 0,
+                        }],
+                        file_systems: Vec::new(),
+                    }],
+                },
+                &crate::core::jobs::NoProgress,
+            )
+            .expect("the card builds");
+
+            let source = SourceFacts {
+                archive_name: file_name_of(archive),
+                archive_sha256: sha256_file(archive).unwrap(),
+                kickstart_name: Some(file_name_of(kickstart_path)),
+                kickstart_sha256: Some(sha256_file(kickstart_path).unwrap()),
+                kickstart_file: Some(firmware.kickstart_file.clone()),
+                kickstart_stated_major: stated_major,
+                hardware,
+                line: Emu68Line::Stable,
+                kernel_file,
+            };
+
+            let manifest = describe_card(image, source, boot_files, None).expect("describe_card");
+            atomic_write(
+                &manifest_path_for(image),
+                render_manifest(&manifest).unwrap().as_bytes(),
+            )
+            .expect("the manifest writes beside the image");
+
+            stated_major
+        }
+
+        let v40_stated = build_proof_card(
+            &v40_card,
+            Path::new(&kickstart_v40),
+            Path::new(&archive),
             hardware,
-            line: Emu68Line::Stable,
-            kernel_file,
-        };
+            &firmware,
+        );
+        println!("card A kickstart={kickstart_v40} stated_major={v40_stated:?}");
+        assert_eq!(
+            v40_stated,
+            Some(40),
+            "the ROM named by ART_KICKSTART_V40 must state major version 40"
+        );
 
-        let manifest = describe_card(image, source, boot_files, None).expect("describe_card");
-        atomic_write(
-            &manifest_path,
-            render_manifest(&manifest).unwrap().as_bytes(),
-        )
-        .expect("the manifest writes beside the image");
+        let v47_stated = build_proof_card(
+            &v47_card,
+            Path::new(&kickstart_v47),
+            Path::new(&archive),
+            hardware,
+            &firmware,
+        );
+        println!("card B kickstart={kickstart_v47} stated_major={v47_stated:?}");
+        assert_eq!(
+            v47_stated,
+            Some(47),
+            "the ROM named by ART_KICKSTART_V47 must state major version 47"
+        );
 
-        let needs_newer = rom_pairing_for(image, Path::new(&v47)).unwrap();
-        println!("V47 tree: {needs_newer:?}");
-        let brings_its_own = rom_pairing_for(image, Path::new(&v40)).unwrap();
-        println!("V40 tree: {brings_its_own:?}");
+        let needs_newer = rom_pairing_for(&v40_card, Path::new(&v47)).unwrap();
+        println!("V47 tree vs V40 card: {needs_newer:?}");
+        let brings_its_own = rom_pairing_for(&v40_card, Path::new(&v40)).unwrap();
+        println!("V40 tree vs V40 card: {brings_its_own:?}");
+        let brings_its_own_elsewhere = rom_pairing_for(&v47_card, Path::new(&v40)).unwrap();
+        println!("V40 tree vs V47 card: {brings_its_own_elsewhere:?}");
 
         assert!(
             matches!(
@@ -1783,11 +1859,22 @@ mod tests {
             ),
             "the V47 tree against a V40-carrying card is the 2026-08-16 failure: {needs_newer:?}"
         );
-        assert!(
-            !matches!(brings_its_own, Pairing::Unsuitable { .. }),
-            "a tree carrying its own ROM modules is never unsuitable: \
-             {brings_its_own:?}"
+        assert_eq!(
+            brings_its_own,
+            Pairing::Paired,
+            "the V40 tree was planned against this very ROM"
         );
+        // The design's third case, on real material at last. `Suitable` and
+        // not `Paired`: a genuinely different ROM, accepted because the tree
+        // carries its own ROM modules and asks nothing of the Kickstart —
+        // which no comparison of version numbers could have produced, since
+        // 40 is not ≥ 47.
+        match &brings_its_own_elsewhere {
+            Pairing::Suitable { rom } => assert_eq!(rom, &firmware.kickstart_file),
+            other => panic!(
+                "a tree carrying its own ROM modules suits a ROM it was not built for: {other:?}"
+            ),
+        }
     }
 
     /// Count what a real tree holds the way [`NativeFormatter`] counts it: a
