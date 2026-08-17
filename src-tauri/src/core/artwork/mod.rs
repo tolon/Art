@@ -7,6 +7,7 @@
 //! It reads `core::gameindex::record` types. It must never be imported *by*
 //! `core::gameindex` — joining a record to its artwork is a command-layer job.
 
+pub mod cache;
 pub mod encode;
 pub mod key;
 
