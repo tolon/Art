@@ -21,12 +21,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own compatibility modules suits any Kickstart, and a card or a tree ART
   cannot read a ROM record from is left alone rather than guessed at.
 
+- **The warning is per folder, and named by drive.** A card can be given a
+  different folder for each partition, so ART checks each one and says which
+  drive a warning is about. A folder ART is happy with still says nothing.
+- **"Checking…" while it checks.** An empty space above a checkbox that
+  erases partitions must not be able to mean "the answer never came", so
+  the check says while it is running, and says so too when it could not run
+  at all. It never disables the checkbox: this warns, it never blocks.
+
 #### Verified
 - Against the pairing that actually failed under WinUAE with a licensed ROM
   on 2026-08-16 (real hardware untouched): a real AmigaOS 3.2 build requiring
   Kickstart 47 against a card carrying a real Kickstart 40 is reported as
   needing 47 and finding 40. The same build's own module-carrying
-  counterpart, checked against the same card, is never flagged.
+  counterpart, checked against the same card, is never flagged — and against
+  a second card carrying the user's real Kickstart 47, which it was never
+  built for, it is accepted on its own merits rather than on the ROM's
+  version number.
 
 ### hst-imager is no longer required to prepare a card (2026-08-16)
 

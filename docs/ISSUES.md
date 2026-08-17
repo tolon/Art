@@ -538,6 +538,51 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-129** 🟠 ✅ **The ROM pairing check stayed silent for the pairing it
+exists to warn about — twice over** — *found 2026-08-17 in G9's final review;
+fixed 2026-08-17*
+`src-tauri/src/core/rom/pairing.rs`, `src/components/osbuilder/VolumePreload.tsx` ·
+Two independent silences, either of which put a V47 system volume onto a V40
+card with nothing at all rendered above the destructive confirmation. Both are
+the §89 failure — a missing answer read as a pass — one level up from where
+G9's design was written to prevent it.
+
+1. **`compare` returned `Paired` before the requirement was evaluated.** A
+   tree records both the ROM it was planned against *and* what it needs, and
+   the two can disagree: plan AmigaOS 3.2 against a real Kickstart 40.68 with
+   `modules-a1200` excluded — a supported choice, with a shipped test of its
+   own — and `plan()` writes `{ statedMajor: 40, requiresMajor: 47 }`. Build
+   the card with that same ROM and the hashes match, so identity answered a
+   question it was never asked. Fixed by asking the recipe's question first;
+   identity now only chooses between `Paired` and `Suitable` once the answer
+   holds. Test: `identity_does_not_excuse_a_requirement_the_rom_never_met`,
+   with `identity_still_pairs_when_the_requirement_holds` and
+   `two_empty_hashes_are_not_the_same_rom` beside it.
+2. **Only the first filled partition was asked about.** The preload screen
+   takes a content folder per partition and the plan emits a `copy-in` for
+   each, but the pairing did `picks.find(…)` and rendered an unqualified
+   sentence. A staging folder on DH0 made ART talk about the one folder not at
+   risk; a paired DH0 made it say nothing while DH1's tree went on unwarned.
+   Fixed by asking about every chosen folder and rendering one line per folder
+   that has something to say, each named by its drive. Tests:
+   `useRomPairing.test.tsx`'s "asks about every chosen folder, not just the
+   first" and "keeps a warning that a paired folder used to swallow, named by
+   drive".
+
+Three smaller wrongs from the same review, fixed in the same pass. **Silence
+meant four things**, one of which was the check failing: `paired` renders
+nothing by design, and so did a verdict still in flight and a rejecting
+command. A third `NotCheckedReason`, `check-failed`, is held on the rejection —
+per folder — and a muted "checking…" line sits above the confirmation while
+answers are outstanding; the checkbox is never disabled, because this warns and
+never blocks. **The `unsuitable` sentence hard-coded V47** beside its own
+interpolated `{{needs}}`, so a recipe naming 45 would have printed "built for
+V45 … the Amiga will stop asking for V47"; the observed AmigaOS message now
+lives in `unsuitable47` and is used only where it is true. And
+`notChecked.card` asserted a cause it had not established — a corrupt or
+too-new manifest is neither of the two it named — so it now says only that the
+card's manifest did not answer.
+
 **ART-128** 🟠 ✅ **A licensed Amiga Forever ROM went onto the card
 encrypted, and the card could not boot** — *found and fixed 2026-08-17, from
 the user saying they own Cloanto ROMs too*
