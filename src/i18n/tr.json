@@ -2022,6 +2022,24 @@
     "statedBy": "{{source}} tarafından beyan edildi",
     "kickstartNeeded": "Kickstart {{image}} gerekiyor",
     "empty": "Henüz indekslenmiş başlık yok. İndekslenecek bir klasör seçin.",
-    "noMatch": "Bu filtreye uyan başlık yok."
+    "noMatch": "Bu filtreye uyan başlık yok.",
+    "catalogue": {
+      "folders": "Klasörler",
+      "addFolder": "Klasör ekle…",
+      "removeFolder": "Kaldır",
+      "removeConfirm": "{{root}} katalogdan kaldırılsın mı? Başlıkları da gider; dosyalara dokunulmaz.",
+      "update": "Güncelle",
+      "updateHint": "Yalnızca son taramadan beri değişenleri okur.",
+      "rescan": "Yeniden tara",
+      "rescanHint": "Her dosyayı baştan okur. Yavaştır; kataloga güvenmediğinizde kullanın.",
+      "never": "hiç taranmadı",
+      "scannedAt": "son tarama {{when}}",
+      "stale": "Bu başlıklar ART'ın daha eski bir sürümüyle okundu. Güncelleme onları iyileştirir.",
+      "unavailable": "kataloğun bıraktığı yerde değil",
+      "unavailableHint": "Dosya şu an {{path}} konumunda değil. Kayıt korunuyor; sürücüyü geri takın ya da Güncelle'yi kullanın.",
+      "empty": "Katalogda henüz klasör yok. Başlamak için bir tane ekleyin.",
+      "emptyRoot": "Bu klasörde henüz hiçbir şey taranmadı — Güncelle'ye basın.",
+      "titleCount": "{{count}} başlık"
+    }
   }
 }

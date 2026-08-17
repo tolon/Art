@@ -19,7 +19,7 @@
 // Amiga.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -1108,7 +1108,7 @@ function ConfigSetsSection({
   async function removeSet(setName: string) {
     // Destructive, so it asks — and says what "delete" actually means here,
     // because ART keeps a copy (ART-092).
-    if (!window.confirm(t("pistorm.sets.confirmDelete", { name: setName }))) return;
+    if (!(await confirm(t("pistorm.sets.confirmDelete", { name: setName })))) return;
     onError(null);
     try {
       const backup = await pistormDeleteConfigSet(cardPath, setName);

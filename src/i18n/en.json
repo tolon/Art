@@ -2022,6 +2022,24 @@
     "statedBy": "Declared by {{source}}",
     "kickstartNeeded": "Needs Kickstart {{image}}",
     "empty": "No titles indexed yet. Choose a folder to index.",
-    "noMatch": "No title matches this filter."
+    "noMatch": "No title matches this filter.",
+    "catalogue": {
+      "folders": "Folders",
+      "addFolder": "Add folder…",
+      "removeFolder": "Remove",
+      "removeConfirm": "Remove {{root}} from the catalogue? Its titles go with it; the files themselves are untouched.",
+      "update": "Update",
+      "updateHint": "Reads only what has changed since the last scan.",
+      "rescan": "Rescan",
+      "rescanHint": "Reads every file again. Slow; use it when you do not trust the catalogue.",
+      "never": "never scanned",
+      "scannedAt": "last scanned {{when}}",
+      "stale": "These titles were read by an older version of ART. An update would improve them.",
+      "unavailable": "not where the catalogue left it",
+      "unavailableHint": "The file is not at {{path}} right now. The entry is kept; plug the drive back in or use Update.",
+      "empty": "No folders in the catalogue yet. Add one to begin.",
+      "emptyRoot": "Nothing scanned in this folder yet — press Update.",
+      "titleCount": "{{count}} titles"
+    }
   }
 }

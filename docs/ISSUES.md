@@ -561,6 +561,48 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-133** 🔴 ✅ **`window.confirm` asked nothing, so thirteen confirmations
+never fired — four of them in front of a delete** — *found 2026-08-17, driving
+the catalogue screen; the `confirm` half fixed the same day, the `prompt` half
+open below*
+`src/pages/FileManager.tsx`, `src/pages/PistormStudio.tsx`,
+`src/components/files/CheckoutPanel.tsx`, `src/pages/CollectionStudio.tsx` ·
+Removing a folder from the catalogue removed it **with no dialog shown at all**.
+wry disables WebView2's own script dialogs, so the browser's `window.confirm`
+returns without asking, and every guard shaped like
+`if (!window.confirm(…)) return;` was a guard that never fired.
+
+**Thirteen of them, and the four that matter most stood in front of a
+deletion**: `deleteEntry`'s two (whose own comment explains why a second was
+needed — *"the first one is the reflex the user has already learned to click
+through"* — while neither was asked), the delete-protected guard, and
+`deleteMany`'s. Also silent: discarding a modified checkout, and deleting a
+named PiStorm firmware set, which [ART-092](#fixed) had built that confirmation
+for on purpose.
+
+All thirteen now call `confirm` from `@tauri-apps/plugin-dialog`, which shows a
+real dialog; it is async, so every call site is awaited. `dialog:default` was
+already in `capabilities/default.json`, so no new permission was needed.
+
+**The evidence is one observation, and the entry says so rather than
+generalising.** What was seen is the folder removal. The other twelve are the
+same API in the same webview, which is why they were fixed together — but
+nobody has watched them fail.
+
+**Still open — `window.prompt`, four sites**: new folder and rename in the file
+manager, mark-by-mask, and Aminet's partition picker. A suppressed `prompt`
+returns `null`, so those features would silently do nothing, and those screens
+*have* been driven against real material before — so the inference is weaker
+here, not stronger. There is also no drop-in replacement: the dialog plugin has
+`confirm`, `ask` and `message` but no text input, so fixing them means building
+an input dialog. Not a change to make on a guess.
+
+Test: `src/i18n/no-window-dialogs.test.ts` bans `window.confirm` and
+`window.alert` outright and **counts** the four `window.prompt` sites, so the
+number moves only when somebody has looked. It earned its place immediately —
+written to guard the eleven found by hand, it found six more the manual grep
+had missed.
+
 **ART-132** 🟠 ✅ **Three things the Collection screen got wrong, all found in
 the first minute anyone looked at it** — *found 2026-08-17, driving G10's
 screen in `pnpm tauri dev` against the real collection; fixed the same day*
