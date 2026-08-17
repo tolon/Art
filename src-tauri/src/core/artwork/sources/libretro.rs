@@ -105,6 +105,14 @@ impl ArtSource for Libretro {
         &KINDS
     }
 
+    /// The index comes from GitHub's API and the pictures from its CDN, neither
+    /// of which is troubled by this. Still bounded rather than unbounded: ART
+    /// opens one connection at a time and a cap keeps a runaway loop from
+    /// becoming someone else's problem.
+    fn requests_per_second(&self) -> u32 {
+        16
+    }
+
     /// The root tree, which is not an index — it is the document that says
     /// where the indexes are.
     fn manifest_paths(&self) -> Vec<String> {

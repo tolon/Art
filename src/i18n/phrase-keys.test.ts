@@ -879,10 +879,14 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
   });
   it("outcomePhrase: both branches resolve", () => {
     const outcomes: SourceOutcome[] = [
-      { id: "libretro", written: 12, matched: 14, missed: 2, reachable: true, note: null },
+      { id: "libretro", written: 12, adopted: 0, matched: 14, missed: 2, reachable: true, note: null },
+      // The branch a resumed run takes — pictures already on disk from a run
+      // that never got to save its index.
+      { id: "libretro", written: 3, adopted: 790, matched: 5, missed: 2, reachable: true, note: null },
       {
         id: "whdload-de",
         written: 0,
+        adopted: 0,
         matched: 0,
         missed: 0,
         reachable: false,

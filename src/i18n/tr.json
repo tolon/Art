@@ -1477,6 +1477,7 @@
     },
     "outcome": {
       "done": "{{written}} getirildi, {{missed}} bulunamadı",
+      "doneWithAdopted": "{{written}} getirildi, {{adopted}} zaten diskteydi, {{missed}} bulunamadı",
       "unreachable": "Erişilemedi: {{note}}",
       "cachedBefore_one": "{{count}} görsel zaten kayıtlıydı",
       "cachedBefore_other": "{{count}} görsel zaten kayıtlıydı"

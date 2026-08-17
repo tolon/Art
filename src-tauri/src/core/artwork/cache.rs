@@ -120,6 +120,56 @@ impl Cache {
         self.file.misses.insert(miss_key(title_key, kind, source));
     }
 
+    /// Where a picture for this title would live, cache-relative.
+    ///
+    /// Pure, and separate from [`Cache::store`] because [`Cache::adopt`] needs
+    /// to ask the question without answering it: a file already on disk is one
+    /// nobody has to fetch again.
+    fn relative_for(title_key: &str, kind: ArtKind, source: &str, ext: &str) -> String {
+        let stem: String = title_key
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+            .take(MAX_STEM)
+            .collect();
+        let stem = stem.trim_matches('-');
+        let stem = if stem.is_empty() { "untitled" } else { stem };
+        format!("{}/{stem}-{source}.{ext}", kind.as_str())
+    }
+
+    /// Take a picture that is already on disk into the index, without fetching.
+    ///
+    /// This is what makes an interrupted run cheap. The index is the *record*
+    /// of what was fetched, not the fetching itself, so a run that wrote 790
+    /// files and never got to save leaves 790 perfectly good pictures behind.
+    /// Without this they would all be downloaded again — which is exactly what
+    /// happened the first time this ran against a real collection.
+    ///
+    /// Returns `None` when there is no such file, which is the ordinary case.
+    pub fn adopt(
+        &mut self,
+        title_key: &str,
+        kind: ArtKind,
+        source: &str,
+        ext: &str,
+    ) -> Option<ArtRef> {
+        let relative = Self::relative_for(title_key, kind, source, ext);
+        // `safe_join` rather than a plain join even to *ask*: the key is
+        // user-influenced wherever it is used.
+        let destination = safe_join(&self.dir, &relative).ok()?;
+        if !destination.is_file() {
+            return None;
+        }
+        let art = ArtRef {
+            kind,
+            source: source.to_string(),
+            file: relative,
+        };
+        self.file
+            .entries
+            .insert(entry_key(title_key, kind), art.clone());
+        Some(art)
+    }
+
     /// Write one picture and remember it.
     ///
     /// The filename is derived from the title key, which is user-influenced, so
@@ -133,15 +183,7 @@ impl Cache {
         ext: &str,
         bytes: &[u8],
     ) -> CoreResult<ArtRef> {
-        let stem: String = title_key
-            .chars()
-            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
-            .take(MAX_STEM)
-            .collect();
-        let stem = stem.trim_matches('-');
-        let stem = if stem.is_empty() { "untitled" } else { stem };
-
-        let relative = format!("{}/{stem}-{source}.{ext}", kind.as_str());
+        let relative = Self::relative_for(title_key, kind, source, ext);
         let destination = safe_join(&self.dir, &relative).map_err(|err| {
             CoreError::InvalidInput(format!("'{relative}' is not a cache path: {err}"))
         })?;
@@ -267,6 +309,50 @@ mod tests {
             .store("///", ArtKind::Boxart, "libretro", "png", b"X")
             .unwrap();
         assert!(dir.join(&art.file).exists());
+    }
+
+    /// The bug this exists for, in its exact shape: a run wrote 790 pictures
+    /// and was interrupted before the index was saved. The files are perfectly
+    /// good. Without adoption every one of them is fetched again.
+    #[test]
+    fn a_picture_already_on_disk_is_adopted_rather_than_refetched() {
+        let dir = tempdir("adopt");
+        {
+            let mut first = Cache::open(&dir).unwrap();
+            first
+                .store("turrican ii", ArtKind::Boxart, "libretro", "png", b"PNG")
+                .unwrap();
+            // Deliberately not saved — this is the interrupted run.
+        }
+
+        let mut second = Cache::open(&dir).unwrap();
+        assert!(
+            second.get("turrican ii", ArtKind::Boxart).is_none(),
+            "the index really was lost, or this test proves nothing"
+        );
+
+        let adopted = second
+            .adopt("turrican ii", ArtKind::Boxart, "libretro", "png")
+            .expect("the file is on disk and must be adopted");
+        assert_eq!(second.get("turrican ii", ArtKind::Boxart), Some(&adopted));
+        assert_eq!(
+            std::fs::read(dir.join(&adopted.file)).unwrap(),
+            b"PNG",
+            "adoption must not touch the bytes"
+        );
+    }
+
+    /// Adoption answers only about files that exist. Everything else is a
+    /// fetch waiting to happen, and saying otherwise would put an entry in the
+    /// index pointing at nothing.
+    #[test]
+    fn adopt_finds_nothing_when_there_is_no_file() {
+        let dir = tempdir("adopt-empty");
+        let mut cache = Cache::open(&dir).unwrap();
+        assert!(cache
+            .adopt("never fetched", ArtKind::Boxart, "libretro", "png")
+            .is_none());
+        assert!(cache.get("never fetched", ArtKind::Boxart).is_none());
     }
 
     /// Derived data. Refusing to open would strand the user with no way to

@@ -53,6 +53,8 @@ export interface ConfiguredSource {
 export interface SourceOutcome {
   id: string;
   written: number;
+  /** Found already on disk from a run that never got to save its index. */
+  adopted: number;
   matched: number;
   missed: number;
   reachable: boolean;
@@ -161,6 +163,19 @@ export function outcomePhrase(outcome: SourceOutcome): Phrase {
     return {
       key: "artwork.outcome.unreachable",
       params: { note: outcome.note ?? "" },
+    };
+  }
+  // Adopted pictures get their own sentence rather than being folded into
+  // "fetched": they were already on the disk, and saying ART downloaded them
+  // would be a small lie about a number the user can check.
+  if (outcome.adopted > 0) {
+    return {
+      key: "artwork.outcome.doneWithAdopted",
+      params: {
+        written: outcome.written,
+        adopted: outcome.adopted,
+        missed: outcome.missed,
+      },
     };
   }
   return {

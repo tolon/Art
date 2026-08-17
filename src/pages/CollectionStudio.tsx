@@ -162,6 +162,9 @@ export function CollectionStudio() {
   // every row each time one lands. Keyed by the entry id the row already has.
   const [art, setArt] = useState<Map<string, string>>(new Map());
   const [artOutcome, setArtOutcome] = useState<SourceOutcome[] | null>(null);
+  // Separate from `busy`, which a catalogue refresh also sets. Only an
+  // artwork run should make the screen re-read the artwork cache.
+  const [artBusy, setArtBusy] = useState(false);
 
   const storedSources = useSettingsStore((s) => s.settings.artworkSources);
 
@@ -214,6 +217,7 @@ export function CollectionStudio() {
     }
 
     setBusy(true);
+    setArtBusy(true);
     setError(null);
     setArtOutcome(null);
     setStatusMsg(t("artwork.enrich.running"));
@@ -225,6 +229,7 @@ export function CollectionStudio() {
     } catch (e) {
       setError(String(e));
       setBusy(false);
+      setArtBusy(false);
     }
   }
 
@@ -286,6 +291,7 @@ export function CollectionStudio() {
     void (async () => {
       const stop = await onArtworkResult((result) => {
         setBusy(false);
+        setArtBusy(false);
         setStatusMsg(null);
         setArtOutcome(result.perSource);
         // Re-read the cache rather than patching from the event: the run also
@@ -307,6 +313,29 @@ export function CollectionStudio() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /**
+   * While a fetch is running, show pictures as they land.
+   *
+   * The engine writes its index every three seconds, so the screen reads it on
+   * the same cadence. Waiting for the run to finish would mean staring at an
+   * unchanged list for the better part of an hour — the user's objection, and
+   * a fair one: a picture that has arrived should be visible.
+   */
+  useEffect(() => {
+    if (!artBusy) return;
+    const id = window.setInterval(() => {
+      setItems((rows) => {
+        void loadArtwork(rows);
+        return rows;
+      });
+    }, 3000);
+    return () => window.clearInterval(id);
+    // `loadArtwork` is stable in behaviour and reads `items` through the
+    // setter, so it is deliberately not a dependency — listing it would
+    // restart the interval on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [artBusy]);
 
   async function refresh(root: string, mode: RefreshMode) {
     setBusy(true);
@@ -548,9 +577,24 @@ export function CollectionStudio() {
       {statusMsg && <div className="badge badge-ok" style={{ margin: "12px 0", padding: "6px 12px" }}>{statusMsg}</div>}
       {busy && <div className="muted" style={{ margin: "12px 0" }}>{t("collection.status.scanningLong")}</div>}
 
-      {/* Filter Toolbar */}
+      {/* Filter Toolbar.
+
+          Stuck to the top of the scroll area on purpose: this library is 1700
+          rows, and a filter you have to scroll back up to reach is a filter you
+          stop using. `.app-content` is the scrolling ancestor, `.card` is
+          opaque (`--bg-panel`), and the z-index keeps rows from painting over
+          it as they pass underneath. */}
       {items.length > 0 && (
-        <section className="card" style={{ margin: "14px 0", padding: "10px 14px" }}>
+        <section
+          className="card"
+          style={{
+            margin: "14px 0",
+            padding: "10px 14px",
+            position: "sticky",
+            top: 0,
+            zIndex: 5,
+          }}
+        >
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
             {/* Search Input */}
             <div style={{ flex: 1, minWidth: 220 }}>

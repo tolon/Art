@@ -37,6 +37,12 @@ impl ArtSource for WhdloadDe {
         &KINDS
     }
 
+    /// Deliberately slow. This is one volunteer-run server, and finishing ART's
+    /// job sooner at their expense is not a trade ART gets to make.
+    fn requests_per_second(&self) -> u32 {
+        4
+    }
+
     fn manifest_paths(&self) -> Vec<String> {
         Vec::new()
     }

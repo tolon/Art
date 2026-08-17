@@ -561,6 +561,67 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-135** 🟠 ✅ **One politeness rule for every host, and four pictures fetched
+for the one the screen shows: a one-minute job took forty** — *found 2026-08-17,
+driving the artwork run against 1700 real titles; fixed the same day*
+`src-tauri/src/core/artwork/enrich.rs`,
+`src-tauri/src/core/artwork/sources/` · The user asked whether waiting an hour
+for cover art was right. It was not, and both halves were the engine's own
+doing.
+
+`REQUESTS_PER_SECOND` was a single constant applied to every source. It was
+chosen for **whdload.de**, which volunteers run on a small server and where four
+requests a second is right — and then applied unchanged to **libretro's
+pictures, which come off GitHub's CDN**. Holding a CDN to a volunteer server's
+pace is not politeness, it is a mistake with a courteous name. The rate is now
+stated per source ([`ArtSource::requests_per_second`]) under a ceiling in
+`enrich`: whdload.de 4, libretro 16.
+
+The larger half: libretro publishes **four** kinds per title — boxart, snap,
+title screen, logo — and the run fetched all four, while the Collection renders
+exactly one. Three-quarters of the wait bought pictures nothing displays.
+`EnrichRequest::wanted` now carries what the caller will render, and
+`commands/artwork.rs::DISPLAYED_KINDS` names the two the screen actually shows.
+Wave C widens that list when it has somewhere to put the rest.
+
+Measured against the user's real library: about forty minutes to about one.
+Tests: `only_the_wanted_kinds_are_fetched` (fails if a kind nobody asked for is
+requested) and `each_source_states_its_own_rate_and_none_exceeds_the_ceiling`
+(fails if a CDN and a volunteer's server are asked at the same pace).
+
+**ART-134** 🔴 ✅ **The artwork index was written only at the end of an
+hour-long run, so an interruption orphaned every picture it had fetched** —
+*found 2026-08-17, driving the first real artwork run; fixed the same day*
+`src-tauri/src/core/artwork/enrich.rs`,
+`src-tauri/src/core/artwork/cache.rs` · The user reported that downloaded
+artwork did not appear on screen. It had downloaded: **790 pictures were on
+disk**. What was missing was `index.json` — the record of what had been fetched
+— because `cache.save()` ran once, after the last title of a run over 1700 of
+them. The run was interrupted, so nothing knew those 790 files existed: the
+screen reads the index and saw an empty cache, and the next run began
+downloading all of them again.
+
+Two fixes, and the second is what recovers work already done:
+
+- **The index is written whatever happens.** `enrich` now runs the work in an
+  inner function and saves unconditionally on the way out — cancelled, failed
+  or finished — plus every three seconds during the run. Time rather than a
+  title count, because the screen reads the same file to show pictures as they
+  arrive, and a count would save every thirty seconds when titles match and
+  every few when they do not.
+- **A picture already on disk is adopted, not fetched again.** `Cache::adopt`
+  takes an existing file into the index without touching its bytes, which is
+  what rescued the 790 orphans rather than re-downloading them.
+
+The tests that existed did not catch this because every one of them ran a
+handful of titles to completion; a long run that stops half way had never been
+exercised. Both fixes were mutation-checked: disabling adoption fails
+`pictures_on_disk_without_an_index_are_adopted_not_refetched`, and saving only
+on success fails `a_cancelled_run_keeps_its_record_and_the_next_run_refetches_nothing`.
+Stated precisely, because the distinction matters: the real failure was the
+**process ending**, which no in-process test reproduces — the cancellation path
+already saved. The adoption test is the one that covers what actually happened.
+
 **ART-133** 🔴 ✅ **`window.confirm` asked nothing, so thirteen confirmations
 never fired — four of them in front of a delete** — *found 2026-08-17, driving
 the catalogue screen; the `confirm` half fixed the same day, the `prompt` half

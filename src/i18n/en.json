@@ -1477,6 +1477,7 @@
     },
     "outcome": {
       "done": "{{written}} fetched, {{missed}} not found",
+      "doneWithAdopted": "{{written}} fetched, {{adopted}} already on disk, {{missed}} not found",
       "unreachable": "Could not be reached: {{note}}",
       "cachedBefore_one": "{{count}} picture was already saved",
       "cachedBefore_other": "{{count}} pictures were already saved"

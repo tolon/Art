@@ -25,6 +25,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every copy of a game you own, and titles nobody has a picture for are
   remembered as such. A second run over the same library fetches nothing.
 
+- **Pictures appear as they arrive**, and the search box stays put. The filter
+  bar is now stuck to the top of the Collection, so you can narrow a
+  1700-title library without scrolling back up to reach it.
+
+#### Fixed
+- **An interrupted fetch no longer throws its work away.** The record of what
+  had been downloaded was written only when a run finished, so stopping half
+  way left the pictures on disk with nothing that knew they were there — they
+  did not show, and the next run downloaded them all again. The record is now
+  kept as the run goes, and a picture already on disk is used rather than
+  fetched a second time.
+- **Fetching is roughly forty times faster.** ART was asking GitHub's picture
+  archive as slowly as it asks whdload.de — which is right for a server
+  volunteers run, and needlessly cautious for a large one — and it was
+  downloading four pictures per game when the list shows one.
+
 #### Notes
 - Matching is strict on purpose. A title either matches by name, or by the part
   before a subtitle — `1869` finds `1869 - Erlebte Geschichte Teil I` — or it

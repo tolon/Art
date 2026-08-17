@@ -2,11 +2,17 @@
 //!
 //! The rules this honours, all from the design:
 //!
-//! - **Politeness is a constraint, not a setting.** Requests go sequentially,
-//!   at most [`REQUESTS_PER_SECOND`] per host. whdload.de is run by volunteers
-//!   on a small server; opening dozens of parallel connections would finish
-//!   ART's job sooner at their expense. A user cannot be asked to choose
-//!   politely on someone else's behalf, so this is a constant.
+//! - **Politeness is a constraint, not a setting — and it belongs to the host.**
+//!   Requests go sequentially, at a rate each source states for itself
+//!   ([`ArtSource::requests_per_second`]) under a ceiling here. One number for
+//!   every source was wrong in both directions: whdload.de is run by volunteers
+//!   on a small server, while libretro's pictures come off GitHub's CDN, and
+//!   holding the CDN to the volunteer's pace turned a one-minute job into a
+//!   forty-minute one. A user is not asked to choose politely on someone else's
+//!   behalf, so neither is a setting.
+//! - **Only what the caller will render is fetched.** libretro publishes four
+//!   kinds per title; fetching all four costs four times as long for three
+//!   pictures no screen shows yet.
 //! - **A source that fails is not fatal.** The run continues with the others
 //!   and reports which one could not be reached.
 //! - **Cancellation is checked between whole titles**, never mid-write, so a
@@ -29,8 +35,25 @@ use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
 use crate::core::sources::mirror::{fetch_with_failover, Mirror, MirrorClient};
 
-/// At most this many requests per second, per host.
-const REQUESTS_PER_SECOND: u32 = 4;
+/// A ceiling no source may exceed, whatever it asks for.
+///
+/// A source states its own rate — politeness belongs to the host — but a
+/// mistyped constant should not become a flood aimed at somebody else.
+const MAX_REQUESTS_PER_SECOND: u32 = 32;
+
+/// Never go longer than this without writing the index.
+///
+/// The index is the *record* of a run, and a run over 1700 titles takes the
+/// better part of an hour. Saving only at the end means an interruption throws
+/// the whole record away — which is not theory: the first run against a real
+/// collection wrote 790 pictures, was stopped, and left nothing that knew they
+/// existed, so the next run began downloading all of them again.
+///
+/// **Measured in time rather than titles**, because the screen reads this file
+/// to show pictures as they arrive: a count would save every 30 seconds when
+/// titles match and every few seconds when they do not, so a picture could sit
+/// on disk unseen for half a minute for no reason the user could observe.
+const SAVE_INTERVAL: Duration = Duration::from_secs(3);
 
 /// One picture may not exceed this. Never allocate from an unchecked length.
 const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
@@ -41,6 +64,13 @@ pub struct EnrichRequest<'a> {
     pub titles: &'a [String],
     pub sources: &'a [ConfiguredSource],
     pub cache_dir: &'a Path,
+    /// Which kinds to fetch.
+    ///
+    /// Not every kind a source *can* supply: libretro publishes four, and
+    /// fetching all four takes four times as long for three pictures no screen
+    /// shows yet. The caller asks for what it will render, and wave C widens
+    /// this rather than the engine guessing.
+    pub wanted: &'a [ArtKind],
 }
 
 /// How one source did.
@@ -50,6 +80,8 @@ pub struct SourceOutcome {
     pub id: String,
     /// Pictures written this run.
     pub written: u32,
+    /// Pictures found already on disk from a run that never saved its index.
+    pub adopted: u32,
     /// Titles this source had something for.
     pub matched: u32,
     /// Titles this source had nothing for.
@@ -69,16 +101,21 @@ pub struct EnrichOutcome {
 }
 
 /// Holds the request rate down, per host.
+///
+/// The gap is set per source rather than globally: see
+/// [`ArtSource::requests_per_second`] for why one number for every host was
+/// wrong in both directions.
 struct Pace {
     last: HashMap<String, Instant>,
     gap: Duration,
 }
 
 impl Pace {
-    fn new() -> Self {
+    fn new(requests_per_second: u32) -> Self {
+        let rate = requests_per_second.clamp(1, MAX_REQUESTS_PER_SECOND);
         Self {
             last: HashMap::new(),
-            gap: Duration::from_millis(1000 / u64::from(REQUESTS_PER_SECOND)),
+            gap: Duration::from_millis(1000 / u64::from(rate)),
         }
     }
 
@@ -148,15 +185,33 @@ fn build_index(
 
 /// Run the enrichment.
 ///
-/// Returns `Err(CoreError::Cancelled)` when the user stopped it — the cache is
-/// saved first, so nothing already fetched is thrown away.
+/// Returns `Err(CoreError::Cancelled)` when the user stopped it. **The index is
+/// written whatever happens** — see [`enrich`]'s body: the record of what was
+/// fetched is most valuable exactly when the run did not finish.
 pub fn enrich(
     request: EnrichRequest<'_>,
     client: &dyn MirrorClient,
     sink: &dyn ProgressSink,
 ) -> CoreResult<EnrichOutcome> {
     let mut cache = Cache::open(request.cache_dir)?;
-    let mut pace = Pace::new();
+    let outcome = run(&mut cache, request, client, sink);
+
+    // Unconditional, and deliberately not `?`. Every early return above this
+    // line — cancelled, a write that failed, a source that behaved unexpectedly
+    // — is a moment when losing the record costs the most, and a failure to
+    // save must not replace the real outcome with a second, less useful error.
+    let _ = cache.save();
+
+    outcome
+}
+
+fn run(
+    cache: &mut Cache,
+    request: EnrichRequest<'_>,
+    client: &dyn MirrorClient,
+    sink: &dyn ProgressSink,
+) -> CoreResult<EnrichOutcome> {
+    let mut last_save = Instant::now();
 
     let keys: Vec<String> = request.titles.iter().map(|t| normalise(t)).collect();
 
@@ -180,6 +235,7 @@ pub fn enrich(
         let mut outcome = SourceOutcome {
             id: configured.id.clone(),
             written: 0,
+            adopted: 0,
             matched: 0,
             missed: 0,
             reachable: true,
@@ -193,16 +249,16 @@ pub fn enrich(
             continue;
         };
 
+        // Per source, because the rate belongs to the host being asked.
+        let mut pace = Pace::new(source.requests_per_second());
+
         // A configuration error and an unreachable host are the same thing to
         // the run: this source contributes nothing and the others carry on.
         let index = match (index_mirror(configured), image_mirror(configured)) {
             (Ok(index_at), Ok(images_at)) => {
                 match build_index(source.as_ref(), &index_at, client, sink, &mut pace) {
                     Ok(index) => Some((index, images_at)),
-                    Err(CoreError::Cancelled) => {
-                        cache.save()?;
-                        return Err(CoreError::Cancelled);
-                    }
+                    Err(CoreError::Cancelled) => return Err(CoreError::Cancelled),
                     Err(err) => {
                         outcome.reachable = false;
                         outcome.note = Some(err.to_string());
@@ -232,21 +288,17 @@ pub fn enrich(
         // never built would say "this title has no snap" when the truth is
         // "nobody looked", and a recorded miss is never asked again — so a
         // directory the repository adds later would stay invisible forever.
-        let usable: Vec<ArtKind> = if index.by_kind.is_empty() {
-            source.kinds().to_vec()
-        } else {
-            source
-                .kinds()
-                .iter()
-                .copied()
-                .filter(|kind| index.by_kind.contains_key(kind))
-                .collect()
-        };
+        let usable: Vec<ArtKind> = source
+            .kinds()
+            .iter()
+            .copied()
+            .filter(|kind| request.wanted.contains(kind))
+            .filter(|kind| index.by_kind.is_empty() || index.by_kind.contains_key(kind))
+            .collect();
 
         for (key, title) in keys.iter().zip(request.titles) {
             // Between whole titles, never mid-write.
             if sink.is_cancelled() {
-                cache.save()?;
                 return Err(CoreError::Cancelled);
             }
 
@@ -259,17 +311,24 @@ pub fn enrich(
                     outcome.missed += 1;
                     continue;
                 };
+
+                // The picture may already be here from a run that never got to
+                // save. Asking the disk costs one `is_file`; not asking costs
+                // the download again.
+                let ext = extension_of(&repo_path);
+                if cache.adopt(key, *kind, source.id(), ext).is_some() {
+                    outcome.adopted += 1;
+                    continue;
+                }
+
                 outcome.matched += 1;
 
                 match fetch_bounded(&images_at, client, &repo_path, sink, &mut pace) {
                     Ok(bytes) => {
-                        cache.store(key, *kind, source.id(), extension_of(&repo_path), &bytes)?;
+                        cache.store(key, *kind, source.id(), ext, &bytes)?;
                         outcome.written += 1;
                     }
-                    Err(CoreError::Cancelled) => {
-                        cache.save()?;
-                        return Err(CoreError::Cancelled);
-                    }
+                    Err(CoreError::Cancelled) => return Err(CoreError::Cancelled),
                     // An index can name a file the server no longer serves.
                     // That is a miss, not a failed run.
                     Err(_) => {
@@ -281,12 +340,19 @@ pub fn enrich(
 
             done += 1;
             sink.report(done, Some(total), title);
+
+            if last_save.elapsed() >= SAVE_INTERVAL {
+                last_save = Instant::now();
+                // Best-effort mid-run: a save that fails here is not worth
+                // ending a run over, and the unconditional one in `enrich`
+                // will try again on the way out.
+                let _ = cache.save();
+            }
         }
 
         per_source.push(outcome);
     }
 
-    cache.save()?;
     Ok(EnrichOutcome {
         per_source,
         cached_before,
@@ -304,6 +370,13 @@ mod tests {
 
     const ROOT_TREE: &[u8] = br#"{"tree":[
         {"path":"Named_Boxarts","type":"tree","sha":"7a1b0e"}
+    ],"truncated":false}"#;
+
+    /// A root tree naming two directories, so a test can prove one of them is
+    /// left alone.
+    const ROOT_TREE_ALL: &[u8] = br#"{"tree":[
+        {"path":"Named_Boxarts","type":"tree","sha":"7a1b0e"},
+        {"path":"Named_Snaps","type":"tree","sha":"9f65ac"}
     ],"truncated":false}"#;
 
     const BOXART_TREE: &[u8] = br#"{"tree":[
@@ -422,6 +495,7 @@ mod tests {
                 titles: &titles,
                 sources: &sources,
                 cache_dir: &dir,
+                wanted: &ArtKind::ALL,
             },
             &client,
             &crate::core::jobs::NoProgress,
@@ -447,6 +521,7 @@ mod tests {
                     titles: &titles,
                     sources: &sources,
                     cache_dir: &dir,
+                    wanted: &ArtKind::ALL,
                 },
                 &client,
                 &crate::core::jobs::NoProgress,
@@ -472,6 +547,7 @@ mod tests {
                 titles: &titles,
                 sources: &sources,
                 cache_dir: &dir,
+                wanted: &ArtKind::ALL,
             },
             &first,
             &crate::core::jobs::NoProgress,
@@ -484,6 +560,7 @@ mod tests {
                 titles: &titles,
                 sources: &sources,
                 cache_dir: &dir,
+                wanted: &ArtKind::ALL,
             },
             &second,
             &crate::core::jobs::NoProgress,
@@ -522,6 +599,7 @@ mod tests {
                 titles: &titles,
                 sources: &sources,
                 cache_dir: &dir,
+                wanted: &ArtKind::ALL,
             },
             &client,
             &crate::core::jobs::NoProgress,
@@ -561,6 +639,7 @@ mod tests {
                 titles: &titles,
                 sources: &sources,
                 cache_dir: &dir,
+                wanted: &ArtKind::ALL,
             },
             &client,
             &sink,
@@ -591,6 +670,7 @@ mod tests {
                 titles: &titles,
                 sources: &sources,
                 cache_dir: &dir,
+                wanted: &ArtKind::ALL,
             },
             &client,
             &crate::core::jobs::NoProgress,
@@ -625,6 +705,7 @@ mod tests {
                 titles: &titles,
                 sources: &sources,
                 cache_dir: &dir,
+                wanted: &ArtKind::ALL,
             },
             &client,
             &crate::core::jobs::NoProgress,
@@ -652,6 +733,7 @@ mod tests {
                 titles: &titles,
                 sources: &sources,
                 cache_dir: &dir,
+                wanted: &ArtKind::ALL,
             },
             &client,
             &crate::core::jobs::NoProgress,
@@ -670,6 +752,187 @@ mod tests {
                 !cache.is_missing("turrican ii", kind, "libretro"),
                 "{kind:?} was recorded as missing without ever being looked for"
             );
+        }
+    }
+
+    /// The defect this was written for, in the shape it actually appeared in.
+    ///
+    /// A cancelled run used to leave its pictures on disk with nothing that
+    /// knew they existed: the index was written only after the last title, so
+    /// stopping at title 200 of 1700 threw away the record of all 200. The
+    /// screen showed nothing and the next run downloaded every one again.
+    ///
+    /// Two things are asserted, and both matter. The index survives the
+    /// cancellation, and the run that follows fetches **no image at all** —
+    /// the second is what makes an interrupted run cheap rather than merely
+    /// recoverable.
+    #[test]
+    fn a_cancelled_run_keeps_its_record_and_the_next_run_refetches_nothing() {
+        let dir = tempdir("cancel-keeps-record");
+        let sources = libretro_only();
+        let titles = vec!["Turrican II".to_string(), "Turrican II".to_string()];
+
+        let first = libretro_client();
+        let sink = CancelAfter {
+            limit: 1,
+            ..Default::default()
+        };
+        let stopped = enrich(
+            EnrichRequest {
+                titles: &titles,
+                sources: &sources,
+                cache_dir: &dir,
+                wanted: &ArtKind::ALL,
+            },
+            &first,
+            &sink,
+        );
+        assert!(matches!(stopped, Err(CoreError::Cancelled)));
+
+        // The record survived the stop.
+        let reloaded = Cache::open(&dir).unwrap();
+        assert!(
+            reloaded.get("turrican ii", ArtKind::Boxart).is_some(),
+            "the index was not written, so the fetched picture is orphaned"
+        );
+
+        // And the next run pays nothing for it.
+        let second = libretro_client();
+        let outcome = enrich(
+            EnrichRequest {
+                titles: &titles,
+                sources: &sources,
+                cache_dir: &dir,
+                wanted: &ArtKind::ALL,
+            },
+            &second,
+            &crate::core::jobs::NoProgress,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.per_source[0].written, 0);
+        assert!(
+            !second.asked().iter().any(|url| url.contains("images.test")),
+            "an image was fetched again after a cancelled run"
+        );
+    }
+
+    /// Belt and braces for the same failure: even with the index deleted
+    /// outright, the pictures on disk are adopted rather than downloaded. This
+    /// is what recovers the 790 files the first real run left behind.
+    #[test]
+    fn pictures_on_disk_without_an_index_are_adopted_not_refetched() {
+        let dir = tempdir("adopt-orphans");
+        let sources = libretro_only();
+        let titles = vec!["Turrican II".to_string()];
+
+        let first = libretro_client();
+        enrich(
+            EnrichRequest {
+                titles: &titles,
+                sources: &sources,
+                cache_dir: &dir,
+                wanted: &ArtKind::ALL,
+            },
+            &first,
+            &crate::core::jobs::NoProgress,
+        )
+        .unwrap();
+
+        // The interruption this simulates is cruder than any real one.
+        std::fs::remove_file(dir.join("index.json")).unwrap();
+
+        let second = libretro_client();
+        let outcome = enrich(
+            EnrichRequest {
+                titles: &titles,
+                sources: &sources,
+                cache_dir: &dir,
+                wanted: &ArtKind::ALL,
+            },
+            &second,
+            &crate::core::jobs::NoProgress,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.per_source[0].adopted, 1);
+        assert_eq!(outcome.per_source[0].written, 0);
+        assert!(!second.asked().iter().any(|url| url.contains("images.test")));
+        assert!(Cache::open(&dir)
+            .unwrap()
+            .get("turrican ii", ArtKind::Boxart)
+            .is_some());
+    }
+
+    /// libretro publishes four kinds, and fetching all four costs four times as
+    /// long for three pictures nothing renders. The caller says what it will
+    /// show; the engine fetches that and no more.
+    #[test]
+    fn only_the_wanted_kinds_are_fetched() {
+        let dir = tempdir("wanted");
+        let sources = libretro_only();
+        let titles = vec!["Turrican II".to_string()];
+        let client = FakeClient::with(&[
+            (
+                "https://index.test/repos/libretro-thumbnails/Commodore_-_Amiga/git/trees/master",
+                ROOT_TREE_ALL,
+            ),
+            (
+                "https://index.test/repos/libretro-thumbnails/Commodore_-_Amiga/git/trees/7a1b0e",
+                BOXART_TREE,
+            ),
+            (
+                "https://index.test/repos/libretro-thumbnails/Commodore_-_Amiga/git/trees/9f65ac",
+                BOXART_TREE,
+            ),
+            (
+                "https://images.test/Named_Boxarts/Turrican%20II.png",
+                b"BOX",
+            ),
+            ("https://images.test/Named_Snaps/Turrican%20II.png", b"SNAP"),
+        ]);
+
+        let outcome = enrich(
+            EnrichRequest {
+                titles: &titles,
+                sources: &sources,
+                cache_dir: &dir,
+                wanted: &[ArtKind::Boxart],
+            },
+            &client,
+            &crate::core::jobs::NoProgress,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.per_source[0].written, 1);
+        assert!(
+            !client
+                .asked()
+                .iter()
+                .any(|url| url.contains("Named_Snaps/Turrican")),
+            "a kind nobody asked for was fetched"
+        );
+
+        let cache = Cache::open(&dir).unwrap();
+        assert!(cache.get("turrican ii", ArtKind::Boxart).is_some());
+        assert!(cache.get("turrican ii", ArtKind::Snap).is_none());
+    }
+
+    /// The rate belongs to the host. One number for every source held GitHub's
+    /// CDN to a volunteer server's pace.
+    #[test]
+    fn each_source_states_its_own_rate_and_none_exceeds_the_ceiling() {
+        use crate::core::artwork::sources::{libretro::Libretro, whdload_de::WhdloadDe, ArtSource};
+
+        assert!(
+            Libretro.requests_per_second() > WhdloadDe.requests_per_second(),
+            "a CDN and a volunteer's server must not be asked at the same pace"
+        );
+        for rate in [
+            Libretro.requests_per_second(),
+            WhdloadDe.requests_per_second(),
+        ] {
+            assert!((1..=MAX_REQUESTS_PER_SECOND).contains(&rate));
         }
     }
 

@@ -22,7 +22,7 @@ use crate::core::artwork::cache::Cache;
 use crate::core::artwork::config::{self, ConfiguredSource};
 use crate::core::artwork::enrich::{enrich, EnrichOutcome, EnrichRequest};
 use crate::core::artwork::key::normalise;
-use crate::core::artwork::ArtRef;
+use crate::core::artwork::{ArtKind, ArtRef};
 use crate::core::jobs::JobId;
 use crate::error::AppResult;
 use crate::net::http_mirror::HttpMirrorClient;
@@ -103,11 +103,18 @@ pub fn artwork_known(titles: Vec<String>, app: AppHandle) -> AppResult<Vec<Optio
         .collect())
 }
 
+/// What the Collection actually renders today: one picture per row.
+///
+/// libretro publishes four kinds and fetching all four takes four times as long
+/// for three pictures nothing shows — the difference, measured against a real
+/// 1700-title library, between about a minute and about forty. Wave C's richer
+/// screen widens this list when it has somewhere to put them.
+const DISPLAYED_KINDS: [ArtKind; 2] = [ArtKind::Boxart, ArtKind::Icon];
+
 /// Fetch artwork for a list of titles, on a job.
 ///
-/// Returns a job id immediately. A collection of 1700 titles against two
-/// sources at four requests per second is firmly §54/§55 territory, and the
-/// reason the user gets a Stop rather than a spinner.
+/// Returns a job id immediately. A collection of 1700 titles is firmly §54/§55
+/// territory, and the reason the user gets a Stop rather than a spinner.
 ///
 /// **Nothing calls this on its own.** The Collection screen opens without
 /// touching the network; this runs when the user asks it to.
@@ -133,6 +140,7 @@ pub fn artwork_enrich(
                     titles: &titles,
                     sources: &sources,
                     cache_dir: &dir,
+                    wanted: &DISPLAYED_KINDS,
                 },
                 &client,
                 progress,

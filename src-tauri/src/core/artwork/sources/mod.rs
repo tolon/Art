@@ -31,6 +31,16 @@ pub trait ArtSource: Send + Sync {
     /// The kinds this source can supply.
     fn kinds(&self) -> &'static [ArtKind];
 
+    /// How fast this source may be asked, per second.
+    ///
+    /// Politeness is a property of **the host**, not of ART, and one constant
+    /// for every source was wrong in both directions: whdload.de is run by
+    /// volunteers on a small server, while libretro's pictures come off
+    /// GitHub's CDN, which serves orders of magnitude more than this all day.
+    /// Holding the CDN to a volunteer's rate turned a one-minute job into a
+    /// forty-minute one.
+    fn requests_per_second(&self) -> u32;
+
     /// Round one: documents to fetch that are not themselves indexes, but say
     /// where the indexes are. Empty when the source needs none.
     ///
