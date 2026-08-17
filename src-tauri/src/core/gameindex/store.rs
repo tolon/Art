@@ -519,15 +519,32 @@ pub fn refresh_root(
         }
     }
 
-    // Entries whose files are gone: kept, whichever mode this was.
+    // Entries whose files are gone: kept, whichever mode this was — **unless
+    // the same title turned up somewhere else**.
+    //
+    // Content-derived identity is what makes that distinction possible. If a
+    // record with the same id was just read at another path, the bytes did not
+    // vanish, they moved: the old entry is the same title at an address it has
+    // left, and keeping it would leave a permanent ghost behind every rename.
+    // Seen for real — renaming one hardfile left two entries sharing
+    // `1st-division-manager-73284bd6`, and the screen showed the missing one
+    // because it sorted first.
+    //
+    // A file that moved *nowhere* still keeps its entry. Following a move must
+    // not quietly become deleting a title.
     let present: std::collections::BTreeSet<String> = reuse
         .iter()
         .chain(fresh.iter())
         .map(|entry| entry.path.clone())
         .collect();
+    let found_ids: std::collections::BTreeSet<String> = reuse
+        .iter()
+        .chain(fresh.iter())
+        .map(|entry| entry.record.id.clone())
+        .collect();
     let missing: Vec<CachedEntry> = cached
         .into_values()
-        .filter(|entry| !present.contains(&entry.path))
+        .filter(|entry| !present.contains(&entry.path) && !found_ids.contains(&entry.record.id))
         .collect();
 
     let mut entries: Vec<CachedEntry> = reuse.into_iter().chain(fresh).chain(missing).collect();
@@ -761,6 +778,73 @@ mod tests {
 
             std::fs::remove_dir_all(&dir).ok();
         }
+    }
+
+    /// **A renamed file is followed, not duplicated.**
+    ///
+    /// Content-derived identity is what makes this possible: the bytes did not
+    /// change, so the record's id did not change, so the old path record is the
+    /// *same title at an address it has left*. Keeping it would leave a
+    /// permanent ghost behind every rename.
+    ///
+    /// Seen for real: renaming `1st Division Manager v1.0.hdf` produced two
+    /// entries sharing `1st-division-manager-73284bd6`, and the screen showed
+    /// the missing one because it sorted first.
+    #[test]
+    fn a_renamed_file_replaces_its_old_path_rather_than_haunting_the_catalogue() {
+        let dir = scratch("renamed");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        let before = a_real_file(&root, "Zool (1992)(Gremlin).adf");
+
+        let first = refresh_root(&dir, &root, Refresh::Update, None, &NoProgress).unwrap();
+        assert_eq!(first.entries.len(), 1);
+        let id = first.entries[0].record.id.clone();
+
+        // Rename outside ART, keeping the bytes **and** the title. The `[!]`
+        // is a TOSEC dump flag and the parser strips it, so the record's title
+        // — and therefore its id — is unchanged. That is the case the user hit:
+        // a hardfile renamed while the slave inside it still states the same
+        // name. An `.adf` renamed to a *different* title gets a different id
+        // and is genuinely a different record, which is correct and not what
+        // this test is about.
+        let after_path = root.join("Zool (1992)(Gremlin)[!].adf");
+        std::fs::rename(&before, &after_path).unwrap();
+
+        let after = refresh_root(&dir, &root, Refresh::Update, None, &NoProgress).unwrap();
+        assert_eq!(
+            after.entries.len(),
+            1,
+            "the old path must not linger beside the new one: {:?}",
+            after.entries.iter().map(|e| &e.path).collect::<Vec<_>>()
+        );
+        assert_eq!(after.entries[0].record.id, id, "it is the same title");
+        assert!(
+            after.entries[0].path.ends_with("[!].adf"),
+            "{}",
+            after.entries[0].path
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A file that is **gone**, with nothing carrying its id, still keeps its
+    /// entry. Following a move must not become deleting a title.
+    #[test]
+    fn a_file_that_moved_nowhere_still_keeps_its_entry() {
+        let dir = scratch("gone-for-good");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        let file = a_real_file(&root, "Zool (1992)(Gremlin).adf");
+
+        refresh_root(&dir, &root, Refresh::Update, None, &NoProgress).unwrap();
+        std::fs::remove_file(&file).unwrap();
+
+        let after = refresh_root(&dir, &root, Refresh::Update, None, &NoProgress).unwrap();
+        assert_eq!(after.entries.len(), 1, "a lost title is kept");
+        assert_eq!(after.entries[0].record.title.value, "Zool");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A refresh reports what it will actually read, not the file count. Three

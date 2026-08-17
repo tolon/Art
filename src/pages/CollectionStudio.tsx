@@ -161,16 +161,23 @@ export function CollectionStudio() {
       // A title in two folders is one entry on screen, keeping the first. The
       // merge happens here rather than in storage, because storage that merged
       // could not remove one folder without rewriting the other.
-      const seen = new Set<string>();
-      const flat: Shown[] = [];
+      //
+      // **An available copy always wins.** Two entries share an id when they
+      // share bytes, and keeping whichever came first by path order showed the
+      // copy on an unplugged drive while hiding the one right there — which is
+      // what happened the first time a file was renamed while the screen was
+      // open.
+      const byId = new Map<string, Shown>();
       for (const root of loaded) {
         for (const entry of root.entries) {
-          if (seen.has(entry.record.id)) continue;
-          seen.add(entry.record.id);
-          flat.push(flatten(root.root, entry));
+          const shown = flatten(root.root, entry);
+          const existing = byId.get(shown.id);
+          if (!existing || (!existing.available && shown.available)) {
+            byId.set(shown.id, shown);
+          }
         }
       }
-      setItems(flat);
+      setItems([...byId.values()]);
       setScanDir(loaded.length === 1 ? loaded[0].root : null);
       setError(null);
     } catch (e) {
