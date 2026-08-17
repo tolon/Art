@@ -31,9 +31,21 @@ pub trait ArtSource: Send + Sync {
     /// The kinds this source can supply.
     fn kinds(&self) -> &'static [ArtKind];
 
-    /// Index files to fetch before matching can start. Empty when the source
-    /// needs none — whdload.de builds its path from the title alone.
-    fn index_paths(&self) -> Vec<(ArtKind, String)>;
+    /// Round one: documents to fetch that are not themselves indexes, but say
+    /// where the indexes are. Empty when the source needs none.
+    ///
+    /// This round exists because libretro's index is reached in two hops — the
+    /// root tree names each subdirectory's sha, and only then can a subdirectory
+    /// be asked for. Tagging the root tree as though it were a boxart index
+    /// would be a lie the run would have to keep track of.
+    fn manifest_paths(&self) -> Vec<String>;
+
+    /// Round two: given whatever `manifest_paths` fetched, in the same order,
+    /// the index files to fetch and which kind each one describes.
+    ///
+    /// A source with no manifests receives an empty slice and answers from
+    /// nothing, or answers nothing at all.
+    fn index_paths(&self, manifests: &[Vec<u8>]) -> CoreResult<Vec<(ArtKind, String)>>;
 
     /// Parse one fetched index into `into`.
     fn absorb_index(&self, kind: ArtKind, bytes: &[u8], into: &mut SourceIndex) -> CoreResult<()>;

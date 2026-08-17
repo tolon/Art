@@ -105,10 +105,25 @@ impl ArtSource for Libretro {
         &KINDS
     }
 
-    /// The root tree only. The per-kind subtrees are not known until it has been
-    /// read, so the run fetches this first and asks the source again.
-    fn index_paths(&self) -> Vec<(ArtKind, String)> {
-        vec![(ArtKind::Boxart, ROOT_TREE_PATH.to_string())]
+    /// The root tree, which is not an index — it is the document that says
+    /// where the indexes are.
+    fn manifest_paths(&self) -> Vec<String> {
+        vec![ROOT_TREE_PATH.to_string()]
+    }
+
+    /// One subtree path per directory the root tree named and this source
+    /// knows. A directory the repository has dropped simply does not appear,
+    /// which is why this reads the manifest rather than hard-coding four shas.
+    fn index_paths(&self, manifests: &[Vec<u8>]) -> CoreResult<Vec<(ArtKind, String)>> {
+        let Some(root) = manifests.first() else {
+            return Err(CoreError::InvalidInput(
+                "libretro needs its root tree before it can name an index".into(),
+            ));
+        };
+        Ok(read_subtree_shas(root)?
+            .into_iter()
+            .map(|(kind, sha)| (kind, subtree_path(&sha)))
+            .collect())
     }
 
     fn absorb_index(&self, kind: ArtKind, bytes: &[u8], into: &mut SourceIndex) -> CoreResult<()> {
@@ -190,6 +205,24 @@ mod tests {
             crate::core::sources::mirror::Mirror::new("t", "https://api.github.com/").unwrap();
         mirror.url_for(ROOT_TREE_PATH).unwrap();
         mirror.url_for(&subtree_path("7a1b0e")).unwrap();
+    }
+
+    /// The manifest names three of the four directories here; the fourth is
+    /// absent and must simply not be asked for.
+    #[test]
+    fn the_manifest_turns_into_one_index_path_per_directory_it_named() {
+        let paths = Libretro.index_paths(&[ROOT_TREE.to_vec()]).unwrap();
+        assert_eq!(paths.len(), 3);
+        assert!(paths.iter().any(|(kind, path)| *kind == ArtKind::Boxart
+            && path == "repos/libretro-thumbnails/Commodore_-_Amiga/git/trees/7a1b0e"));
+        assert!(!paths.iter().any(|(kind, _)| *kind == ArtKind::Logo));
+    }
+
+    /// Asking for indexes without the manifest is a programming error, not a
+    /// quietly empty answer that would report every title as a miss.
+    #[test]
+    fn index_paths_without_a_manifest_is_an_error() {
+        assert!(Libretro.index_paths(&[]).is_err());
     }
 
     #[test]

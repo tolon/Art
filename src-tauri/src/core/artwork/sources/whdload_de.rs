@@ -37,8 +37,12 @@ impl ArtSource for WhdloadDe {
         &KINDS
     }
 
-    fn index_paths(&self) -> Vec<(ArtKind, String)> {
+    fn manifest_paths(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    fn index_paths(&self, _manifests: &[Vec<u8>]) -> CoreResult<Vec<(ArtKind, String)>> {
+        Ok(Vec::new())
     }
 
     fn absorb_index(
@@ -68,7 +72,8 @@ mod tests {
 
     #[test]
     fn it_needs_no_index() {
-        assert!(WhdloadDe.index_paths().is_empty());
+        assert!(WhdloadDe.manifest_paths().is_empty());
+        assert!(WhdloadDe.index_paths(&[]).unwrap().is_empty());
     }
 
     /// The key is the package name ART already read from the slave, so there is

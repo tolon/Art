@@ -10,6 +10,7 @@
 pub mod cache;
 pub mod config;
 pub mod encode;
+pub mod enrich;
 pub mod key;
 pub mod sources;
 
