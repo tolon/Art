@@ -8,6 +8,8 @@
 import { describe, expect, it } from "vitest";
 import en from "./en.json";
 
+import { ALL_PROVENANCES, provenancePhrase } from "@/lib/gameindex";
+
 import { describeCheckout, type CheckoutRow } from "@/lib/checkout";
 import { jobStatusLabel, type JobProgress } from "@/lib/jobs";
 import { statusLabel, type OperationRecord } from "@/lib/oplog";
@@ -851,6 +853,17 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     ];
     for (const reason of reasons) {
       const phrase = osinstallRefusalPhrase(reason);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+  it("provenancePhrase: every Provenance variant resolves", () => {
+    // `ALL_PROVENANCES` mirrors `core::gameindex::record::Provenance`, and
+    // `gameindex.test.ts` pins that list to the four the core defines. What
+    // *this* test adds is the half that file cannot check: that each key it
+    // builds is a real leaf in the catalogue rather than a plausible-looking
+    // dotted string.
+    for (const from of ALL_PROVENANCES) {
+      const phrase = provenancePhrase(from);
       expect(isLeafKey(phrase.key), phrase.key).toBe(true);
     }
   });

@@ -2009,5 +2009,19 @@
       },
       "error": "ART could not verify: {{message}}"
     }
+  },
+  "gameindex": {
+    "provenance": {
+      "rp9-manifest": "the .rp9 manifest",
+      "whdload-slave": "the WHDLoad slave",
+      "tosec-name": "the filename",
+      "drawer-name": "the drawer name"
+    },
+    "guessed": "guessed",
+    "guessedFrom": "Guessed from {{source}}, not declared",
+    "statedBy": "Declared by {{source}}",
+    "kickstartNeeded": "Needs Kickstart {{image}}",
+    "empty": "No titles indexed yet. Choose a folder to index.",
+    "noMatch": "No title matches this filter."
   }
 }

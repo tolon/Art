@@ -4,23 +4,96 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
 import {
-  collectionScan,
-  onScanResult,
-  type CollectionItem,
-  type MediaKind,
+  gameindexScan,
+  isStated,
+  mediaKind,
+  onIndexResult,
+  provenancePhrase,
+  type CatalogueEntry,
   type ChipsetRequirement,
-} from "@/lib/collection";
+  type Provenance,
+} from "@/lib/gameindex";
 import { isOneOf } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 type ViewMode = "grid" | "table";
-type FormatFilter = "all" | MediaKind;
+type MediaFilter = "all" | "floppies" | "hardfile" | "whdload";
 type ChipsetFilter = "all" | ChipsetRequirement;
 
 const isViewMode = isOneOf<ViewMode>("grid", "table");
-const isFormatFilter = isOneOf<FormatFilter>("all", "adf", "lhawhdload", "hdf");
+const isFormatFilter = isOneOf<MediaFilter>(
+  "all",
+  "floppies",
+  "hardfile",
+  "whdload"
+);
 const isChipsetFilter = isOneOf<ChipsetFilter>("all", "ocsecs", "aga");
+
+/**
+ * What the list needs, flattened out of a `GameRecord` once.
+ *
+ * The record keeps every value beside the source that gave it; the screen
+ * needs both, and doing the unwrapping in one place keeps `isStated` out of
+ * a dozen render sites.
+ */
+interface Shown {
+  id: string;
+  path: string;
+  title: string;
+  titleFrom: Provenance;
+  publisher: string | null;
+  publisherFrom: Provenance | null;
+  year: number | null;
+  yearFrom: Provenance | null;
+  chipset: ChipsetRequirement | null;
+  chipsetFrom: Provenance | null;
+  media: "floppies" | "hardfile" | "whdload";
+  diskCount: number;
+  kickstart: string | null;
+}
+
+function flatten(entry: CatalogueEntry): Shown {
+  const r = entry.record;
+  return {
+    id: r.id,
+    path: entry.path,
+    title: r.title.value,
+    titleFrom: r.title.from,
+    publisher: r.publisher?.value ?? null,
+    publisherFrom: r.publisher?.from ?? null,
+    year: r.year?.value ?? null,
+    yearFrom: r.year?.from ?? null,
+    chipset: r.chipset?.value ?? null,
+    chipsetFrom: r.chipset?.from ?? null,
+    media: mediaKind(r.media),
+    diskCount: r.media.kind === "floppies" ? r.media.ordered.length : 1,
+    kickstart: r.kickstart?.value.image ?? null,
+  };
+}
+
+/**
+ * A small mark on any value the index **guessed** rather than read.
+ *
+ * This is the feature the provenance in the record exists for. `Agassi Tennis`
+ * reads as AGA because the letters are in its filename; a slave that states
+ * `ReqAGA` is a different claim entirely, and a screen showing the two the
+ * same way throws away the only thing that separates them.
+ */
+function Guessed({ from }: { from: Provenance | null }) {
+  const { t } = useTranslation();
+  if (!from || isStated(from)) return null;
+  const source = t(provenancePhrase(from).key);
+  return (
+    <span
+      className="badge badge-muted"
+      title={t("gameindex.guessedFrom", { source })}
+      style={{ fontSize: 9, marginLeft: 4, verticalAlign: "middle" }}
+    >
+      ~{t("gameindex.guessed")}
+    </span>
+  );
+}
 
 export function CollectionStudio() {
   const { t } = useTranslation();
@@ -28,7 +101,7 @@ export function CollectionStudio() {
   const location = useLocation();
 
   const [scanDir, setScanDir] = useState<string | null>(null);
-  const [items, setItems] = useState<CollectionItem[]>([]);
+  const [items, setItems] = useState<Shown[]>([]);
   const [searchTerm, setSearchTerm] = useState<string>("");
 
   // How the library is being looked at is the user's choice, not the screen's
@@ -39,7 +112,7 @@ export function CollectionStudio() {
     isViewMode,
     "grid"
   );
-  const [formatFilter, setFormatFilter] = useRemembered<FormatFilter>(
+  const [formatFilter, setFormatFilter] = useRemembered<MediaFilter>(
     "collection.formatFilter",
     isFormatFilter,
     "all"
@@ -68,11 +141,11 @@ export function CollectionStudio() {
     let unlisten: (() => void) | undefined;
 
     void (async () => {
-      const stop = await onScanResult((result) => {
+      const stop = await onIndexResult((result) => {
         setScanDir(result.dir_path);
-        setItems(result.items);
+        setItems(result.entries.map(flatten));
         setStatusMsg(
-          t("collection.status.indexed", { count: result.items.length })
+          t("collection.status.indexed", { count: result.entries.length })
         );
         setBusy(false);
       });
@@ -91,7 +164,7 @@ export function CollectionStudio() {
     setError(null);
     setStatusMsg(t("collection.status.scanning"));
     try {
-      await collectionScan(dir);
+      await gameindexScan(dir);
       // Remembered only once the scan was accepted, so a folder that failed is
       // not the one waiting at the next launch.
       if (dir !== rememberedDir) await updateSettings({ lastCollectionDir: dir });
@@ -146,18 +219,20 @@ export function CollectionStudio() {
       // Search term
       if (searchTerm.trim()) {
         const q = searchTerm.toLowerCase();
-        const matchTitle = item.clean_title.toLowerCase().includes(q);
+        const matchTitle = item.title.toLowerCase().includes(q);
         const matchPub = item.publisher?.toLowerCase().includes(q) ?? false;
         const matchYear = item.year?.toString().includes(q) ?? false;
         if (!matchTitle && !matchPub && !matchYear) return false;
       }
 
-      // Format filter
-      if (formatFilter !== "all" && item.media_kind !== formatFilter) {
+      // Media filter
+      if (formatFilter !== "all" && item.media !== formatFilter) {
         return false;
       }
 
-      // Chipset filter
+      // Chipset filter. A record whose chipset nothing stated is `null`, and
+      // it must not be swept into either bucket — that is the default this
+      // whole index exists to stop presenting as a fact.
       if (chipsetFilter !== "all" && item.chipset !== chipsetFilter) {
         return false;
       }
@@ -166,8 +241,8 @@ export function CollectionStudio() {
     });
   }, [items, searchTerm, formatFilter, chipsetFilter]);
 
-  function handlePlay(item: CollectionItem) {
-    navigate("/winuae", { state: { path: item.primary_path } });
+  function handlePlay(item: Shown) {
+    navigate("/winuae", { state: { path: item.path } });
   }
 
   return (
@@ -238,14 +313,14 @@ export function CollectionStudio() {
             {/* Media Format Filter Chips */}
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               <span className="muted" style={{ fontSize: 12, alignSelf: "center" }}>{t("collection.filters.formatLabel")}</span>
-              {(["all", "lhawhdload", "adf", "hdf"] as const).map((fmt) => (
+              {(["all", "whdload", "floppies", "hardfile"] as const).map((fmt) => (
                 <button
                   key={fmt}
                   className={`btn btn-sm ${formatFilter === fmt ? "btn-primary" : ""}`}
                   onClick={() => setFormatFilter(fmt)}
                   style={{ padding: "3px 8px", fontSize: 11 }}
                 >
-                  {fmt === "all" ? t("collection.filters.all") : fmt === "lhawhdload" ? "🕹️ WHDLoad" : fmt === "adf" ? `💾 ${t("collection.filters.floppy")}` : "💽 HDF"}
+                  {fmt === "all" ? t("collection.filters.all") : fmt === "whdload" ? "🕹️ WHDLoad" : fmt === "floppies" ? `💾 ${t("collection.filters.floppy")}` : "💽 HDF"}
                 </button>
               ))}
             </div>
@@ -282,6 +357,7 @@ export function CollectionStudio() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
           {filteredItems.map((item) => {
             const isAga = item.chipset === "aga";
+            const chipsetKnown = item.chipset !== null;
             return (
               <div
                 key={item.id}
@@ -297,21 +373,38 @@ export function CollectionStudio() {
                 <div>
                   {/* Top Badges */}
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                    <span className={`badge ${isAga ? "badge-warn" : "badge-ok"}`} style={{ fontSize: 10 }}>
-                      {isAga ? "AGA (1200/4000)" : "OCS / ECS (500)"}
+                    <span
+                      className={`badge ${!chipsetKnown ? "badge-muted" : isAga ? "badge-warn" : "badge-ok"}`}
+                      style={{ fontSize: 10 }}
+                    >
+                      {!chipsetKnown
+                        ? t("common.unknown")
+                        : isAga
+                          ? "AGA (1200/4000)"
+                          : "OCS / ECS (500)"}
+                      <Guessed from={item.chipsetFrom} />
                     </span>
                     <span className="badge badge-muted" style={{ fontSize: 10 }}>
-                      {item.media_kind === "lhawhdload" ? "WHDLoad LHA" : item.media_kind === "adf" ? t("collection.item.floppyDisks", { count: item.disk_count }) : t("collection.item.hardfile")}
+                      {item.media === "whdload" ? "WHDLoad" : item.media === "floppies" ? t("collection.item.floppyDisks", { count: item.diskCount }) : t("collection.item.hardfile")}
                     </span>
                   </div>
 
                   {/* Title & Publisher */}
                   <strong style={{ fontSize: 14, color: "var(--text)", display: "block", marginBottom: 2 }}>
-                    {item.clean_title}
+                    {item.title}
+                    <Guessed from={item.titleFrom} />
                   </strong>
                   <div className="muted" style={{ fontSize: 12 }}>
-                    {item.publisher ?? `${t("common.unknown")} ${t("collection.item.publisher")}`} {item.year ? `(${item.year})` : ""}
+                    {item.publisher ?? `${t("common.unknown")} ${t("collection.item.publisher")}`}
+                    <Guessed from={item.publisherFrom} />
+                    {item.year ? ` (${item.year})` : ""}
+                    <Guessed from={item.yearFrom} />
                   </div>
+                  {item.kickstart && (
+                    <div className="faint" style={{ fontSize: 11, marginTop: 2 }}>
+                      {t("gameindex.kickstartNeeded", { image: item.kickstart })}
+                    </div>
+                  )}
                 </div>
 
                 {/* Card Actions */}
@@ -323,11 +416,11 @@ export function CollectionStudio() {
                   >
                     🚀 {t("common.launchInWinuae")}
                   </button>
-                  {item.media_kind === "adf" && (
+                  {item.media === "floppies" && (
                     <button
                       className="btn btn-sm"
                       title={t("collection.item.openInAdfStudio")}
-                      onClick={() => navigate("/disk-tools", { state: { path: item.primary_path } })}
+                      onClick={() => navigate("/disk-tools", { state: { path: item.path } })}
                     >
                       💾
                     </button>
@@ -351,22 +444,31 @@ export function CollectionStudio() {
               >
                 <div className="file-row-main" style={{ gap: 10 }}>
                   <span className="file-row-icon">
-                    {item.media_kind === "lhawhdload" ? "🕹️" : item.media_kind === "adf" ? "💾" : "💽"}
+                    {item.media === "whdload" ? "🕹️" : item.media === "floppies" ? "💾" : "💽"}
                   </span>
                   <div>
-                    <strong>{item.clean_title}</strong>
+                    <strong>
+                      {item.title}
+                      <Guessed from={item.titleFrom} />
+                    </strong>
                     <div className="faint" style={{ fontSize: 11 }}>
-                      {item.publisher ?? t("common.unknown")} {item.year ? `· ${item.year}` : ""}
+                      {item.publisher ?? t("common.unknown")}
+                      <Guessed from={item.publisherFrom} />
+                      {item.year ? ` · ${item.year}` : ""}
                     </div>
                   </div>
                 </div>
 
                 <div className="file-row-meta" style={{ gap: 10 }}>
-                  <span className={`badge ${item.chipset === "aga" ? "badge-warn" : "badge-ok"}`} style={{ fontSize: 10 }}>
-                    {item.chipset === "aga" ? "AGA" : "OCS/ECS"}
+                  <span
+                    className={`badge ${item.chipset === null ? "badge-muted" : item.chipset === "aga" ? "badge-warn" : "badge-ok"}`}
+                    style={{ fontSize: 10 }}
+                  >
+                    {item.chipset === null ? "—" : item.chipset === "aga" ? "AGA" : "OCS/ECS"}
+                    <Guessed from={item.chipsetFrom} />
                   </span>
                   <span className="badge badge-muted" style={{ fontSize: 10 }}>
-                    {t("collection.item.disksBadge", { count: item.disk_count })}
+                    {t("collection.item.disksBadge", { count: item.diskCount })}
                   </span>
                   <button
                     className="btn btn-sm btn-primary"

@@ -2009,5 +2009,19 @@
       },
       "error": "ART doğrulayamadı: {{message}}"
     }
+  },
+  "gameindex": {
+    "provenance": {
+      "rp9-manifest": ".rp9 manifesti",
+      "whdload-slave": "WHDLoad slave'i",
+      "tosec-name": "dosya adı",
+      "drawer-name": "çekmece adı"
+    },
+    "guessed": "tahmin",
+    "guessedFrom": "{{source}} üzerinden tahmin edildi, beyan edilmedi",
+    "statedBy": "{{source}} tarafından beyan edildi",
+    "kickstartNeeded": "Kickstart {{image}} gerekiyor",
+    "empty": "Henüz indekslenmiş başlık yok. İndekslenecek bir klasör seçin.",
+    "noMatch": "Bu filtreye uyan başlık yok."
   }
 }

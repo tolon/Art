@@ -171,6 +171,7 @@ pub fn run() {
             commands::pistorm::pistorm_delete_config_set,
             commands::pistorm::hex_read,
             commands::collection::collection_scan,
+            commands::gameindex::gameindex_scan,
             commands::winuae::winuae_detect,
             commands::winuae::winuae_list_profiles,
             commands::winuae::winuae_launch,

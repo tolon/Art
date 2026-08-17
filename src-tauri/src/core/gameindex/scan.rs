@@ -36,7 +36,7 @@ const MAX_SCAN_DEPTH: usize = 12;
 ///
 /// The path lives **here** rather than in the record, because a record travels
 /// to a card and a path does not belong on one.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CatalogueEntry {
     pub path: String,
     pub record: GameRecord,
