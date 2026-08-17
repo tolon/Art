@@ -1455,6 +1455,21 @@
       }
     }
   },
+  "cleanup": {
+    "fixTitle": "Başlığı düzelt",
+    "fixTitleHint": "Bu başlık \"{{proposed}}\" olarak görünsün. Yalnızca ART'ın listesi değişir; dosyaya dokunulmaz ve geri alabilirsiniz.",
+    "renameFile": "Dosyayı yeniden adlandır",
+    "renameFileHint": "Diskteki dosyanın adı \"{{proposed}}\" olsun.",
+    "renameConfirm": "Diskteki dosya yeniden adlandırılsın mı?\n\n{{from}}\n→ {{to}}\n\nO adda bir dosya zaten varsa ART işlemi reddeder.",
+    "renamed": "{{name}} olarak adlandırıldı",
+    "titleFixed": "Başlık artık \"{{name}}\"",
+    "undo": "Geri al",
+    "undone": "Başlık eski hâline döndü",
+    "edit": "Düzenle",
+    "editHint": "Bu başlığı kendiniz yazın. ART, eksik bir ilk disketi devam oyunundan ayırt edemediği yerde adı olduğu gibi bırakır — hangisi olduğunu burada siz söylersiniz.",
+    "save": "Kaydet",
+    "cancel": "Vazgeç"
+  },
   "artwork": {
     "title": "Görsel kaynakları",
     "intro": "ART'ın kapak, ekran görüntüsü ve simge ararken bakacağı yerler. Siz istemeden hiçbir şey indirilmez.",

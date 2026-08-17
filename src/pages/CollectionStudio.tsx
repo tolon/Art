@@ -10,8 +10,13 @@ import {
   catalogueRemoveRoot,
   isStated,
   mediaKind,
+  nameSuggestions,
   onCatalogueRefreshed,
   provenancePhrase,
+  renameTitleFile,
+  catalogueSetOverride,
+  NO_OVERRIDE,
+  type NameSuggestion,
   type ChipsetRequirement,
   type EntryView,
   type Provenance,
@@ -117,6 +122,134 @@ function Guessed({ from }: { from: Provenance | null }) {
   );
 }
 
+/**
+ * The one-button fixes for a name ART could only take from a filename.
+ *
+ * Two buttons and not one, because they carry different risk and must not be
+ * confused for each other. **Fix title** changes ART's own listing through the
+ * override layer — reversible, and the file is untouched. **Rename file**
+ * changes the user's data and asks first.
+ *
+ * A row with nothing worth proposing renders nothing at all: a button that
+ * offers to fix a name already right teaches people to click without reading.
+ */
+function NameFixes({
+  current,
+  suggestion,
+  undo,
+  onTitle,
+  onRename,
+  onUndo,
+}: {
+  current: string;
+  suggestion: NameSuggestion | undefined;
+  undo: string | undefined;
+  onTitle: (proposed: string) => void;
+  onRename: (proposed: string) => void;
+  onUndo: () => void;
+}) {
+  const { t } = useTranslation();
+  const [typing, setTyping] = useState(false);
+  const [draft, setDraft] = useState(current);
+
+  // The hand-edit is always shown, because the rules deliberately give up on
+  // the cases they cannot settle. `brian the lion 2` has no disk one anywhere,
+  // so nothing can tell a missing first disk from a sequel — and that is
+  // exactly where a person types the answer instead of a rule guessing at it.
+  if (typing) {
+    return (
+      <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6 }}>
+        <input
+          type="text"
+          value={draft}
+          autoFocus
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && draft.trim()) {
+              onTitle(draft.trim());
+              setTyping(false);
+            }
+            if (e.key === "Escape") setTyping(false);
+          }}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            padding: "2px 6px",
+            fontSize: 11,
+            background: "var(--bg)",
+            color: "var(--text)",
+            border: "1px solid var(--border)",
+            borderRadius: 3,
+          }}
+        />
+        <button
+          className="btn btn-sm"
+          disabled={!draft.trim()}
+          onClick={() => {
+            onTitle(draft.trim());
+            setTyping(false);
+          }}
+          style={{ padding: "2px 8px", fontSize: 10 }}
+        >
+          {t("cleanup.save")}
+        </button>
+        <button
+          className="btn btn-sm"
+          onClick={() => setTyping(false)}
+          style={{ padding: "2px 8px", fontSize: 10 }}
+        >
+          {t("cleanup.cancel")}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+      <button
+        className="btn btn-sm"
+        title={t("cleanup.editHint")}
+        onClick={() => {
+          setDraft(current);
+          setTyping(true);
+        }}
+        style={{ padding: "2px 8px", fontSize: 10 }}
+      >
+        ✏ {t("cleanup.edit")}
+      </button>
+      {suggestion?.title && (
+        <button
+          className="btn btn-sm"
+          title={t("cleanup.fixTitleHint", { proposed: suggestion.title })}
+          onClick={() => onTitle(suggestion.title as string)}
+          style={{ padding: "2px 8px", fontSize: 10 }}
+        >
+          ✎ {t("cleanup.fixTitle")}
+        </button>
+      )}
+      {suggestion?.fileName && (
+        <button
+          className="btn btn-sm"
+          title={t("cleanup.renameFileHint", { proposed: suggestion.fileName })}
+          onClick={() => onRename(suggestion.fileName as string)}
+          style={{ padding: "2px 8px", fontSize: 10 }}
+        >
+          🗂 {t("cleanup.renameFile")}
+        </button>
+      )}
+      {undo && (
+        <button
+          className="btn btn-sm"
+          onClick={onUndo}
+          style={{ padding: "2px 8px", fontSize: 10 }}
+        >
+          ↺ {t("cleanup.undo")}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function CollectionStudio() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -167,6 +300,91 @@ export function CollectionStudio() {
   const [artBusy, setArtBusy] = useState(false);
 
   const storedSources = useSettingsStore((s) => s.settings.artworkSources);
+
+  // What ART would propose for a name it could only take from a filename,
+  // keyed by entry id. Asked once per load and never applied on its own.
+  const [suggestions, setSuggestions] = useState<Map<string, NameSuggestion>>(
+    new Map()
+  );
+  // The title a row had before its last one-button fix, so the fix can be
+  // undone from the same place it was applied.
+  const [undoable, setUndoable] = useState<Map<string, string>>(new Map());
+
+  /**
+   * Ask what ART would propose for these rows' names.
+   *
+   * Read-only. Nothing is written, nothing is renamed, and a row with nothing
+   * worth proposing gets no entry — so the screen shows a button only where
+   * there is something to do.
+   */
+  async function loadSuggestions(rows: Shown[]) {
+    if (rows.length === 0) return;
+    try {
+      const answers = await nameSuggestions(
+        rows.map((row) => row.path),
+        rows.map((row) => row.title)
+      );
+      const next = new Map<string, NameSuggestion>();
+      answers.forEach((answer, index) => {
+        if (answer.title || answer.fileName) next.set(rows[index].id, answer);
+      });
+      setSuggestions(next);
+    } catch {
+      // A screen that cannot suggest is a screen without buttons, not a
+      // screen that fails to open.
+      setSuggestions(new Map());
+    }
+  }
+
+  /** Apply a proposed title as the user's own correction (top provenance). */
+  async function applyTitle(item: Shown, proposed: string) {
+    try {
+      await catalogueSetOverride(item.id, { ...NO_OVERRIDE, title: proposed });
+      setUndoable((prev) => new Map(prev).set(item.id, item.title));
+      setStatusMsg(t("cleanup.titleFixed", { name: proposed }));
+      await reload();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  /** Take the correction back off, leaving no trace of it. */
+  async function undoTitle(item: Shown) {
+    try {
+      await catalogueSetOverride(item.id, NO_OVERRIDE);
+      setUndoable((prev) => {
+        const next = new Map(prev);
+        next.delete(item.id);
+        return next;
+      });
+      setStatusMsg(t("cleanup.undone"));
+      await reload();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  /**
+   * Rename the file on disk, once the user has said so.
+   *
+   * The confirmation shows both names in full: this is the half of the tool
+   * that changes their data, and a dialog that only says "are you sure?" is a
+   * dialog people learn to click through.
+   */
+  async function applyRename(item: Shown, proposed: string) {
+    const agreed = await confirm(
+      t("cleanup.renameConfirm", { from: item.path, to: proposed }),
+      { title: t("cleanup.renameFile"), kind: "warning" }
+    );
+    if (!agreed) return;
+    try {
+      const renamed = await renameTitleFile(item.path, proposed);
+      setStatusMsg(t("cleanup.renamed", { name: renamed }));
+      await reload();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
 
   /**
    * Ask which titles already have a picture, and where it is.
@@ -267,6 +485,7 @@ export function CollectionStudio() {
       const shown = [...byId.values()];
       setItems(shown);
       void loadArtwork(shown);
+      void loadSuggestions(shown);
       setScanDir(loaded.length === 1 ? loaded[0].root : null);
       setError(null);
     } catch (e) {
@@ -738,6 +957,14 @@ export function CollectionStudio() {
                       {t("gameindex.kickstartNeeded", { image: item.kickstart })}
                     </div>
                   )}
+                  <NameFixes
+                    current={item.title}
+                    suggestion={suggestions.get(item.id)}
+                    undo={undoable.get(item.id)}
+                    onTitle={(proposed) => void applyTitle(item, proposed)}
+                    onRename={(proposed) => void applyRename(item, proposed)}
+                    onUndo={() => void undoTitle(item)}
+                  />
                 </div>
 
                 {/* Card Actions */}
@@ -812,6 +1039,14 @@ export function CollectionStudio() {
                       <Guessed from={item.publisherFrom} />
                       {item.year ? ` · ${item.year}` : ""}
                     </div>
+                    <NameFixes
+                      current={item.title}
+                      suggestion={suggestions.get(item.id)}
+                      undo={undoable.get(item.id)}
+                      onTitle={(proposed) => void applyTitle(item, proposed)}
+                      onRename={(proposed) => void applyRename(item, proposed)}
+                      onUndo={() => void undoTitle(item)}
+                    />
                   </div>
                 </div>
 

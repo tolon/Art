@@ -1455,6 +1455,21 @@
       }
     }
   },
+  "cleanup": {
+    "fixTitle": "Fix title",
+    "fixTitleHint": "Show this title as \"{{proposed}}\". Only ART's own listing changes; the file is untouched, and you can undo it.",
+    "renameFile": "Rename file",
+    "renameFileHint": "Rename the file on disk to \"{{proposed}}\".",
+    "renameConfirm": "Rename this file on disk?\n\n{{from}}\n→ {{to}}\n\nART refuses if a file of that name is already there.",
+    "renamed": "Renamed to {{name}}",
+    "titleFixed": "Title is now \"{{name}}\"",
+    "undo": "Undo",
+    "undone": "Title restored",
+    "edit": "Edit",
+    "editHint": "Type this title yourself. ART leaves a name alone when it cannot tell a missing first disk from a sequel — this is where you say which.",
+    "save": "Save",
+    "cancel": "Cancel"
+  },
   "artwork": {
     "title": "Artwork sources",
     "intro": "Where ART looks for cover art, screenshots and icons. Nothing is fetched until you ask for it.",

@@ -215,6 +215,50 @@ export async function catalogueSetOverride(
   return invoke<string | null>("catalogue_set_override", { id, edit });
 }
 
+// ---------------------------------------------------------------------------
+// Names ART could only take from a filename, and what it would propose instead.
+//
+// Nothing here applies anything. The project's decision was that ART must not
+// guess at a name: it proposes, and the user accepts — which is why both fields
+// are null far more often than not, and why a row with nothing to propose shows
+// no button at all.
+// ---------------------------------------------------------------------------
+
+export interface NameSuggestion {
+  /** A cleaner catalogue title. Applying it writes a user override. */
+  title: string | null;
+  /** A cleaner filename, extension included. Applying it renames a real file. */
+  fileName: string | null;
+}
+
+/**
+ * What ART would propose for these paths, one answer each, in order.
+ *
+ * Read-only: nothing is written, so a screen can ask about a whole library.
+ */
+export async function nameSuggestions(
+  paths: string[],
+  titles: string[]
+): Promise<NameSuggestion[]> {
+  return invoke<NameSuggestion[]>("name_suggestions", { paths, titles });
+}
+
+/**
+ * Rename a title's file on disk. Returns the new full path.
+ *
+ * Changes the user's data, so it behaves like every other mutating command:
+ * the new name is a file name and never a path, an existing target is refused
+ * rather than replaced, and the operation is logged either way. The catalogue
+ * is not rewritten — an entry's id comes from its content, so the next refresh
+ * recognises the file at its new path as the same title.
+ */
+export async function renameTitleFile(
+  path: string,
+  newName: string
+): Promise<string> {
+  return invoke<string>("rename_title_file", { path, newName });
+}
+
 export const REFRESHED_EVENT = "catalogue-refreshed";
 
 export interface RefreshedRoot {

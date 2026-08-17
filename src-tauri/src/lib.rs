@@ -176,6 +176,8 @@ pub fn run() {
             commands::gameindex::catalogue_remove_root,
             commands::gameindex::catalogue_refresh,
             commands::gameindex::catalogue_set_override,
+            commands::gameindex::name_suggestions,
+            commands::gameindex::rename_title_file,
             commands::artwork::artwork_defaults,
             commands::artwork::artwork_check_source,
             commands::artwork::artwork_dir,
