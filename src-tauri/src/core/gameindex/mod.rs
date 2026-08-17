@@ -6,15 +6,16 @@
 //! names for games actually called `Lotus 3` and `Moonstone`, which is why the
 //! distinction lives in the type rather than in a comment.
 //!
-//! Nothing here writes. Turning a record into an `igame.data` beside a slave,
-//! and getting a drawer out of a bootable hardfile, are the next wave's job.
-
+//! `store` is where a catalogue is kept between runs, so the 3.74 GB the
+//! readers walk is walked once rather than on every visit.
+//!
 //! Callers name types by their full path (`core::gameindex::record::Fact`)
-//! rather than through a re-export here. That is what the rest of `core/`
-//! does — `core::card::manifest::SourceFacts`, `core::adf::fs::FileEntry` —
-//! and a convenience `pub use` that nothing imports is an error in this crate,
-//! not a warning.
+//! rather than through a re-export here. That is what the rest of `core/` does
+//! — `core::card::manifest::SourceFacts`, `core::adf::fs::FileEntry` — and a
+//! convenience `pub use` that nothing imports is an error in this crate, not a
+//! warning.
 
 pub mod readers;
 pub mod record;
 pub mod scan;
+pub mod store;
