@@ -274,7 +274,7 @@ checks the image comes back byte for byte.
 | Provenance carried beside every fact | §14, §34 | ✅ | `record::Fact<T>`; the screen marks anything guessed rather than read |
 | Multi-disk grouping | §41 | ✅ | `readers/tosec.rs` (`disk`), `record::Media::Floppies` (`.rp9` states the order) |
 | Cover art / screenshots in the listing | §41 | ⏳ | `.rp9` previews are read into `record.preview` but nothing renders them; WHDLoad titles have no artwork at all |
-| Catalogue persistence, tags, favourites | §41 | 🟡 | SQLite schema exists; the catalogue is **not** saved — every visit re-scans |
+| Catalogue persistence, tags, favourites | §41 | ⏳ | **Nothing at all.** The catalogue is not saved — every visit re-scans — and there is no schema for one either: `001_initial.sql` creates `settings`, `recent_files` and `jobs`, and that is the only migration. This row read "schema exists; UI does not write to it" until 2026-08-17, when somebody looked |
 | Duplicate detection (SHA256) | §43 | 🟡 | identical bytes already collapse to one record (`derive_id`); no dedupe *view* |
 | Hex viewer (read-only) | §31 | ✅ | `core/analysis.rs` |
 | Signature scanning | §28 | ✅ | `core/analysis.rs` |
