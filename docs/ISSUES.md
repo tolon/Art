@@ -561,6 +561,40 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-132** 🟠 ✅ **Three things the Collection screen got wrong, all found in
+the first minute anyone looked at it** — *found 2026-08-17, driving G10's
+screen in `pnpm tauri dev` against the real collection; fixed the same day*
+`src-tauri/src/core/gameindex/scan.rs`, `src/pages/CollectionStudio.tsx`,
+`src/components/JobBar.tsx` · The screen was opened, pointed at
+`E:\amiga\Amigatolon\WHDload`, and reported as sitting at "100%" doing
+nothing. It was doing plenty, and three separate defects were stacked on top
+of each other:
+
+1. **The index hashed a file before deciding whether it was a title.** The
+   collection folder holds `WHDLoadPiStorm-180224.img` — a **29 GB** card
+   image beside 1697 two-megabyte games — and `.img` is a hardfile extension,
+   so the scan took its SHA-256. `read_one` identifies first and hashes second
+   now, and refuses anything past `MAX_TITLE_BYTES` (512 MiB) outright: the
+   largest real single-game hardfile here is 93 MB, and a file past that
+   ceiling is a container, not a game. This is ART's own "never read a whole
+   user file when only its header is needed" rule, which the first cut of this
+   scan broke.
+2. **Two scans ran at once.** `startScan` remembers the folder, which changes
+   `rememberedDir`, which re-runs the resume-where-you-left-off effect — whose
+   guard still held the *previous* folder. So requesting a scan started a
+   second one of the same folder. Two "Indexing titles" jobs, side by side, on
+   the same 1699 files. **This predates G10**; with the old scanner's
+   seconds-long run nobody could see it, and a ten-minute run made it obvious.
+   `startScan` claims the folder for both guards before its first `await`.
+3. **The progress bar rounded 99.6% up to 100%.** `Math.round` → `Math.floor`.
+   A bar may say 99% while the last item finishes; it must never say 100% with
+   work left, because that reads as finished-and-stuck.
+
+Test: `a_file_too_large_for_a_title_is_skipped_without_being_read`, which
+builds a sparse file past the ceiling and asserts the scan stays fast — a
+reader that still hashed it would take visibly longer than the test allows.
+The other two are screen behaviour and were verified by opening it again.
+
 **ART-131** 🔴 ✅ **A bare hardfile whose filesystem is smaller than the file
 would not mount — 1456 of the user's 1697 WHDLoad hardfiles** — *found
 2026-08-17 while building G10's hardfile reader; fixed the same day*

@@ -128,7 +128,14 @@ function JobRow({ job }: { job: JobProgress }) {
           <strong>{job.title}</strong>
           <span className="faint" style={{ marginLeft: 6 }}>
             {t(status.key, status.params)}
-            {running && pct !== null && ` · ${Math.round(pct * 100)}%`}
+            {/*
+              Floor, not round. A job 99.6% through rounded to "100%" and then
+              kept working, which reads as finished-but-stuck — seen for real
+              the first time the Collection screen was driven against 1702
+              files whose last few were the large ones. A bar may say 99% while
+              the last item finishes; it must never say 100% with work left.
+            */}
+            {running && pct !== null && ` · ${Math.floor(pct * 100)}%`}
             {running && pct === null && job.done > 0 && ` · ${job.done}`}
           </span>
         </span>

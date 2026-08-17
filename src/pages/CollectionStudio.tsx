@@ -159,10 +159,27 @@ export function CollectionStudio() {
     };
   }, []);
 
+  // Which folder a scan has already been started for. Both are set in
+  // `startScan` so that no path into a scan can trigger another one for the
+  // same folder — see the comment there.
+  const openedFor = useRef<string | null>(null);
+  const arrivedWith = useRef<string | null>(null);
+
   async function startScan(dir: string) {
     setBusy(true);
     setError(null);
     setStatusMsg(t("collection.status.scanning"));
+    // Claim the folder **before** the await, and for both effects below.
+    //
+    // Remembering a folder changes `rememberedDir`, which re-runs the
+    // resume-where-you-left-off effect; its guard still held the *previous*
+    // folder, so it started a second scan of the one just requested. Two
+    // "Indexing titles" jobs ran side by side, on the same 1699 files, and
+    // that was visible on screen the first time this was opened. Claiming it
+    // here means every path into a scan — resume, navigation, the button —
+    // marks the folder as taken before anything can react to it.
+    openedFor.current = dir;
+    arrivedWith.current = dir;
     try {
       await gameindexScan(dir);
       // Remembered only once the scan was accepted, so a folder that failed is
@@ -177,8 +194,9 @@ export function CollectionStudio() {
   // Open where the user left off. Gated on `loaded` for the reason ART-089
   // exists: reading this before the settings arrive gives the default, and the
   // screen would open empty and then be told, too late, where it should have
-  // been. `openedFor` keeps StrictMode's double mount from scanning twice.
-  const openedFor = useRef<string | null>(null);
+  // been. `openedFor` keeps StrictMode's double mount from scanning twice, and
+  // `startScan` claims it so remembering a folder cannot start a second scan
+  // of the very folder just requested.
   useEffect(() => {
     if (!settingsLoaded || !rememberedDir) return;
     if (openedFor.current === rememberedDir) return;
@@ -203,7 +221,6 @@ export function CollectionStudio() {
   // Another screen can send us a folder to index — Aminet does this after a
   // download so the package shows up next to the rest of the library. The ref
   // keeps StrictMode's double mount from starting the same scan twice.
-  const arrivedWith = useRef<string | null>(null);
   useEffect(() => {
     const state = location.state as { path?: string } | null;
     const wanted = state?.path;

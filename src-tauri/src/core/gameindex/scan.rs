@@ -114,43 +114,83 @@ fn is_cancelled_error(err: &crate::core::error::CoreError) -> bool {
     matches!(err, crate::core::error::CoreError::Cancelled)
 }
 
+/// The largest file the index will read as a single title.
+///
+/// **Measured, after the screen was driven for the first time.** The user's
+/// collection folder also holds `WHDLoadPiStorm-180224.img` — a 29 GB card
+/// image sitting beside 1697 two-megabyte games. Nothing about it is a title,
+/// but `.img` is a hardfile extension, so the scan tried to hash all 29 GB of
+/// it and appeared to hang at "100%".
+///
+/// 512 MiB is far above any single-game hardfile (the largest real one here is
+/// 93 MB) and far below a card. A file past it is a container, not a game, and
+/// is skipped rather than hashed.
+const MAX_TITLE_BYTES: u64 = 512 * 1024 * 1024;
+
 /// Read one file, or `Ok(None)` when it is not something the index describes.
+///
+/// **Identify first, hash second.** The content hash is what gives a record its
+/// path-independent identity, so it has to be taken — but taking it before
+/// deciding whether the file is a title at all means the most expensive step
+/// runs on files that are then thrown away. That is what a 29 GB card image in
+/// the collection folder turned into a stall.
 fn read_one(path: &Path) -> CoreResult<Option<GameRecord>> {
     let extension = path
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
+    if !matches!(extension.as_str(), "rp9" | "hdf" | "img" | "adf" | "adz") {
+        return Ok(None);
+    }
+
+    let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    if bytes > MAX_TITLE_BYTES {
+        log::debug!(
+            "gameindex: {} is {bytes} bytes, past the ceiling for a single title",
+            path.display()
+        );
+        return Ok(None);
+    }
+
     let file_name = path
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_default();
+    let named = tosec::read_filename(&file_name);
+
+    // Read what the file *is* before hashing what it holds.
+    enum Read {
+        Rp9(Box<rp9::Rp9Facts>),
+        Hardfile(Box<whdhdf::HardfileGame>),
+        NameOnly(Media),
+    }
+
+    let read = match extension.as_str() {
+        "rp9" => Read::Rp9(Box::new(rp9::read_rp9(path)?)),
+        "hdf" | "img" => match whdhdf::read_whdload_hardfile(path) {
+            Ok(game) => Read::Hardfile(Box::new(game)),
+            // A hard disk image that is not a single-game hardfile is still a
+            // thing the user has; the filename is all ART can say about it.
+            Err(_) => Read::NameOnly(Media::Hardfile {
+                file: file_name.clone(),
+            }),
+        },
+        _ => Read::NameOnly(Media::Floppies {
+            ordered: vec![file_name.clone()],
+        }),
+    };
 
     let source = SourceRef {
         name: file_name.clone(),
         sha256: sha256_file(path)?,
-        bytes: std::fs::metadata(path).map(|m| m.len()).unwrap_or(0),
-    };
-    let named = tosec::read_filename(&file_name);
-
-    let record = match extension.as_str() {
-        "rp9" => from_rp9(rp9::read_rp9(path)?, &named, source),
-        "hdf" | "img" => match whdhdf::read_whdload_hardfile(path) {
-            Ok(game) => from_hardfile(game, &named, source, &file_name),
-            // A hard disk image that is not a single-game hardfile is still a
-            // thing the user has; the filename is all ART can say about it.
-            Err(_) => from_filename(&named, source, Media::Hardfile { file: file_name }),
-        },
-        "adf" | "adz" => from_filename(
-            &named,
-            source,
-            Media::Floppies {
-                ordered: vec![file_name],
-            },
-        ),
-        _ => return Ok(None),
+        bytes,
     };
 
-    Ok(Some(record))
+    Ok(Some(match read {
+        Read::Rp9(facts) => from_rp9(*facts, &named, source),
+        Read::Hardfile(game) => from_hardfile(*game, &named, source, &file_name),
+        Read::NameOnly(media) => from_filename(&named, source, media),
+    }))
 }
 
 /// Build a record from an `.rp9` manifest, with the filename filling gaps.
@@ -503,6 +543,40 @@ mod tests {
         };
         let err = scan_titles_with(&dir, &sink).unwrap_err();
         assert!(is_cancelled_error(&err), "{err}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A file too large to be one title is skipped, and skipped **cheaply**.
+    ///
+    /// The user's collection folder holds a 29 GB card image beside 1697
+    /// two-megabyte games. It is not a title, and the scan must decide that
+    /// without hashing it — which is what it did before the screen was driven
+    /// for the first time, and what made a finished-looking bar sit at 100%.
+    #[test]
+    fn a_file_too_large_for_a_title_is_skipped_without_being_read() {
+        let dir = scratch("too-big");
+        let path = dir.join("Card.img");
+
+        // Sparse: `set_len` costs nothing to create and everything to hash, so
+        // a reader that still hashed it would take visibly longer than a test
+        // has patience for.
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_TITLE_BYTES + 1).unwrap();
+        drop(file);
+
+        write_loose_adf(&dir, "Zool (1992)(Gremlin).adf");
+
+        let started = std::time::Instant::now();
+        let found = scan_titles(&dir).unwrap();
+        let elapsed = started.elapsed();
+
+        assert_eq!(found.len(), 1, "only the ADF is a title");
+        assert_eq!(found[0].record.title.value, "Zool");
+        assert!(
+            elapsed < std::time::Duration::from_secs(20),
+            "the oversized file must be skipped, not hashed (took {elapsed:?})"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

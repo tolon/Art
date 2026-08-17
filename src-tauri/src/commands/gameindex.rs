@@ -42,18 +42,23 @@ pub fn gameindex_scan(
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
 
-    let id = spawn_job(&app, registry, "Indexing titles", move |job_id, progress| {
-        let entries = scan_titles_with(&dir, progress)?;
-        let _ = emit_app.emit(
-            INDEX_RESULT_EVENT,
-            IndexResult {
-                job_id,
-                dir_path,
-                entries,
-            },
-        );
-        Ok(())
-    });
+    let id = spawn_job(
+        &app,
+        registry,
+        "Indexing titles",
+        move |job_id, progress| {
+            let entries = scan_titles_with(&dir, progress)?;
+            let _ = emit_app.emit(
+                INDEX_RESULT_EVENT,
+                IndexResult {
+                    job_id,
+                    dir_path,
+                    entries,
+                },
+            );
+            Ok(())
+        },
+    );
 
     Ok(id)
 }
