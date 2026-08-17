@@ -8,6 +8,7 @@
 //! `core::gameindex` — joining a record to its artwork is a command-layer job.
 
 pub mod cache;
+pub mod config;
 pub mod encode;
 pub mod key;
 pub mod sources;

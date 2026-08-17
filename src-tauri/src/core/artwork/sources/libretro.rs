@@ -218,7 +218,10 @@ mod tests {
             Some("7a1b0e")
         );
         assert_eq!(shas.get(&ArtKind::Snap).map(String::as_str), Some("9f65ac"));
-        assert_eq!(shas.get(&ArtKind::Title).map(String::as_str), Some("2d822f"));
+        assert_eq!(
+            shas.get(&ArtKind::Title).map(String::as_str),
+            Some("2d822f")
+        );
         assert_eq!(shas.get(&ArtKind::Logo), None);
     }
 
@@ -265,7 +268,10 @@ mod tests {
     #[test]
     fn locate_on_an_unabsorbed_kind_finds_nothing() {
         let index = SourceIndex::default();
-        assert_eq!(Libretro.locate(&index, "Turrican II", ArtKind::Boxart), None);
+        assert_eq!(
+            Libretro.locate(&index, "Turrican II", ArtKind::Boxart),
+            None
+        );
     }
 
     #[test]

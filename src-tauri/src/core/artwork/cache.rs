@@ -101,7 +101,9 @@ impl Cache {
     }
 
     pub fn is_missing(&self, title_key: &str, kind: ArtKind, source: &str) -> bool {
-        self.file.misses.contains(&miss_key(title_key, kind, source))
+        self.file
+            .misses
+            .contains(&miss_key(title_key, kind, source))
     }
 
     pub fn record_miss(&mut self, title_key: &str, kind: ArtKind, source: &str) {
@@ -177,7 +179,13 @@ mod tests {
         let dir = tempdir("stored");
         let mut cache = Cache::open(&dir).unwrap();
         let art = cache
-            .store("turrican ii", ArtKind::Boxart, "libretro", "png", b"PNGDATA")
+            .store(
+                "turrican ii",
+                ArtKind::Boxart,
+                "libretro",
+                "png",
+                b"PNGDATA",
+            )
             .unwrap();
 
         assert_eq!(art.kind, ArtKind::Boxart);
@@ -227,7 +235,11 @@ mod tests {
             .store("../../evil", ArtKind::Boxart, "libretro", "png", b"X")
             .unwrap();
 
-        assert!(!art.file.contains(".."), "{} kept a relative step", art.file);
+        assert!(
+            !art.file.contains(".."),
+            "{} kept a relative step",
+            art.file
+        );
         let written = dir.join(&art.file).canonicalize().unwrap();
         assert!(
             written.starts_with(dir.canonicalize().unwrap()),
