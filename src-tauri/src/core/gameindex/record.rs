@@ -10,7 +10,12 @@ use crate::core::hashing::sha256_bytes;
 /// same rule `CardManifest` follows, and for the same reason: the fields this
 /// ART does not know about are exactly the ones a newer build used to describe
 /// something it cannot check.
-pub const GAMEINDEX_SCHEMA: u32 = 1;
+/// 1 → 2 (ART-137): the WHDLoad reader learned that `ws_kickcrc = $ffff` means
+/// `ws_kickname` points at a list of acceptable Kickstarts rather than at one
+/// name. Records written before this carry a name that is really machine code,
+/// so an Update re-reads them — which is the whole reason this number is
+/// separate from the file format's.
+pub const GAMEINDEX_SCHEMA: u32 = 2;
 
 /// Where a fact came from. The first two **state**; the last two **suggest**.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -156,17 +161,40 @@ impl ChipsetRequirement {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct KickstartNeed {
     /// `kick34005.A500` — what WHDLoad looks for in `DEVS:Kickstarts/`.
+    ///
+    /// When [`Self::alternatives`] is non-empty this is the first of them, so a
+    /// caller that wants one name gets a real one.
     pub image: Option<String>,
     pub size: Option<u32>,
+    /// The checksum of the one image, when the slave names exactly one.
+    ///
+    /// **Never the `$ffff` sentinel.** That value is not a checksum; it is how a
+    /// slave says "the name field is a list", and recording it as a checksum
+    /// would be a claim about a ROM that does not exist.
     pub crc16: Option<u16>,
     /// `.rp9`'s `<systemrom>`, e.g. `310`.
     pub rom_version: Option<u16>,
+    /// Every image the slave will accept, when it accepts more than one.
+    ///
+    /// An AGA title commonly names three — an A600, an A1200 and an A4000 ROM —
+    /// and until [ART-137](../../../../docs/ISSUES.md) ART read that list as
+    /// though it were a filename, reporting 99 of 758 titles as needing a ROM
+    /// whose name was 68000 machine code.
+    #[serde(default)]
+    pub alternatives: Vec<KickstartAlternative>,
+}
+
+/// One Kickstart a slave will accept, and the checksum that identifies it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KickstartAlternative {
+    pub image: String,
+    pub crc16: u16,
 }
 
 impl KickstartNeed {
     /// Whether anything was actually asked for.
     pub fn is_empty(&self) -> bool {
-        self.image.is_none() && self.rom_version.is_none()
+        self.image.is_none() && self.rom_version.is_none() && self.alternatives.is_empty()
     }
 }
 

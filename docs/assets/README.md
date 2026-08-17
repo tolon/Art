@@ -11,10 +11,15 @@ rather than photographing the screen, so nothing behind or beside it can appear
 in the result. Downscaled to 1600 px wide; otherwise untouched — no
 compositing, nothing painted over.
 
-`collection.png` is the only cropped one, and the crop is not for looks: two
-cards outside the frame show [ART-137](../ISSUES.md), a Kickstart name that is
-really machine code. **A full-width Collection shot belongs here as soon as that
-is fixed** — cropping around a defect is a stopgap, not a decision.
+`collection.png` was cropped at first, and not for looks: two cards outside the
+frame showed [ART-137](../ISSUES.md), a Kickstart name that was really machine
+code. It is full-width now because that was fixed rather than framed around —
+those two cards read `Needs Kickstart 40068.a1200` in this one.
+
+The pair of `1869` cards is kept deliberately. One is named by its WHDLoad
+slave and one by its filename, so one carries the `~guessed` mark and the other
+does not: a real example of the distinction the whole provenance layer exists
+for, which is worth more than a tidier picture.
 
 ### The three screens that are missing, and why
 

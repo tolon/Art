@@ -55,11 +55,26 @@ export type TitleKind =
 
 export type ChipsetRequirement = "ocsecs" | "aga";
 
+/** One Kickstart a slave will accept, and the checksum identifying it. */
+export interface KickstartAlternative {
+  image: string;
+  crc16: number;
+}
+
 export interface KickstartNeed {
+  /** The one image, or the first of several the slave accepts. */
   image: string | null;
   size: number | null;
+  /** Never the `0xffff` list sentinel — that is a marker, not a checksum. */
   crc16: number | null;
   rom_version: number | null;
+  /**
+   * Every image the slave accepts, when it accepts more than one.
+   *
+   * An AGA title commonly names three — an A600, an A1200 and an A4000 ROM.
+   * Empty for a slave that names exactly one.
+   */
+  alternatives: KickstartAlternative[];
 }
 
 export type Media =

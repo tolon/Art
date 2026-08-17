@@ -26,39 +26,33 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-137** 🔴 **99 of 758 records report a Kickstart image whose name is 68000
-machine code** — *found 2026-08-18, photographing the Collection for the README*
-`src-tauri/src/core/gameindex/readers/slave.rs` · Two cards on screen read
-`Needs Kickstart ÔöÇÔûêÔûêÔûêÔûêÔûêÔûê` where their neighbours read
-`Needs Kickstart 34005.a500`. The bytes behind it are not a mangled string, they
-are code:
+**ART-139** 🟡 **Aminet's text inputs render white in the dark theme** —
+*found 2026-08-18, photographing the screens for the README*
+`src/pages/AminetStudio.tsx` · The catalogue search box, the subfolder field
+and two dropdowns come out white on a dark page while every other input in ART
+— the Collection's search box beside it — is dark. Form controls are not
+inheriting the theme there.
 
-```
-9F F5 11 D5 75 D3 11 E1 97 0C 11 CA   1869 AGA
-9F F5 13 49 75 D3 13 55 97 0C 13 3E   Alfred Chicken AGA/CD32
-9F F5 10 C7 75 D3 10 D3 97 0C 10 BC   Arabian Nights CD32
-```
+Kept out of the README for it. Cosmetic, and a few lines.
 
-The shape repeats with three bytes changing — the high halves of addresses, so
-this is a run of pointers inside the slave's own code. `ws_kickname`'s RPTR is
-landing somewhere that is not a string, and `read_rptr_string` reads until it
-finds a zero and hands back whatever it collected.
+**ART-138** 🟡 **ROM Manager says `CRC ERR` about ROMs it simply does not
+recognise** — *found 2026-08-18, photographing the screens for the README*
+`src/pages/RomManager.tsx`, `src-tauri/src/core/rom/` · Scanning a real ROM
+folder identified 1 of 76 files and marked the other 75 `CRC ERR`. But look at
+what they are: `A2630_390282-06.bin`, `A4091.rom`, `apollo_12xx_v560.bin`,
+`Blizzard_1230-IV.rom`, `Blizzard_2060_v8.5_hi.bin` — **accelerator and SCSI
+controller ROMs, not Kickstarts.**
 
-**Measured across the real catalogue: 99 of the 758 records that declare a
-Kickstart, 13 %.** Every one has `ws_kicksize` = 512 KB and `ws_kickcrc` =
-`0xFFFF`, and every one is an AGA or CD32 title — so this is a class of slave,
-not scattered corruption.
+Not recognising them is correct. Calling them `CRC ERR` is not: that is a claim
+about a file's integrity, and ART has no basis for it — the file is fine, it is
+simply not a Kickstart. This is the same rule [ART-104](#fixed) applied from the
+other side, where the size-based fallback stopped naming a machine it could not
+know; here a label needs to stop naming a fault it cannot know.
 
-Not merely cosmetic. [ART-130](#open) is meant to take a declared Kickstart,
-find it in ART's 154-dump table and offer to place it; ninety-nine entries
-asking for a ROM whose name is machine code is the input that work would rest
-on. `ws_name`, `ws_copy` and `ws_info` resolve correctly for the same slaves
-(1679 titles are named from them), so the RPTR base is right in general and
-something about this field, or this version of the structure, is not.
+`Compatible Amiga Models:` is also blank for the one ROM that *was* identified
+(CDTV Extended 2.30), which may be the same gap or a second one.
 
-Wanted next: a hook that dumps the raw header of one of these slaves —
-`ws_Version`, the RPTR at 42, and the bytes it points at — rather than more
-inference from the values that came out.
+Kept out of the README for it.
 
 **ART-130** 🔵 **A game can name the Kickstart it needs, and nothing offers to
 supply it** — *filed 2026-08-17, out of G10's design round; the reading half is
@@ -594,6 +588,52 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-137** 🔴 ✅ **99 of 758 records reported a Kickstart image whose name was
+68000 machine code — `ws_kickname` is a list when `ws_kickcrc` is `$ffff`** —
+*found 2026-08-18 photographing the Collection for the README; fixed the same
+day*
+`src-tauri/src/core/gameindex/readers/slave.rs`,
+`src-tauri/src/core/gameindex/record.rs` · Two cards on screen read
+`Needs Kickstart ÔöÇÔûêÔûêÔûêÔûêÔûêÔûê` where their neighbours read
+`Needs Kickstart 34005.a500`. The bytes behind it were not a mangled string,
+they were code — and the shape repeated across every affected title with only
+three bytes changing.
+
+**The cause, decoded from the bytes rather than guessed at.** `ws_kickname` was
+being read as a string when it is really a **list**: `(crc16, rptr-to-name)`
+entries ended by a zero word, with the names laid out immediately after it.
+What says which shape it is is `ws_kickcrc` — `$ffff` is not a checksum, it is
+the marker for "the name field is a list". Every affected record had it.
+
+```
+rptr 0x1330 →  9f f5 | 13 49      crc 0x9ff5 → name at 0x1349
+               75 d3 | 13 55      crc 0x75d3 → name at 0x1355
+               97 0c | 13 3e      crc 0x970c → name at 0x133e
+               00 00              end
+               "40063.a600"       0x1330 + 14 = 0x133e ✓
+```
+
+The decode holds up three independent ways, which is why it was trusted without
+the autodoc text (whdload.de could not be retrieved through a fetch that
+session): **two real slaves carry the same three CRCs**; every entry's pointer
+lands exactly on a name; and each name ends one byte before the next entry's
+pointer. It then produces names that exist in the world — `40068.a1200`,
+`40068.a4000`, `40063.a600`, which is precisely what a game that runs on an
+A1200, an A4000 or an A600 would ask for.
+
+`KickstartNeed` gained `alternatives`; `image` holds the first so a screen
+written before this keeps working, and **`crc16` is left `None` rather than
+recording `$ffff`** — a sentinel stored as a checksum is the same class of lie
+as the garbage name it came with. `GAMEINDEX_SCHEMA` moved 1 → 2, which is what
+that number is for: an Update re-reads every record written by the older reader
+without the user having to know why.
+
+Tests: four synthetic (the list, the sentinel not becoming a checksum, a single
+name still reading as one, a truncated list, an entry pointing nowhere) plus
+`one_real_slaves_kickstart` — `#[ignore]`d and env-gated — which asserts the
+invariant rather than a value somebody's disk happens to hold: **nothing ART
+reports as a Kickstart image may be unprintable.**
 
 **ART-136** 🟠 ✅ **The ADF path assumed TOSEC filenames; of 847 real ADFs,
 none are TOSEC — so one game became five entries and artwork matched 3 %** —

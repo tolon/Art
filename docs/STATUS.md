@@ -859,7 +859,43 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
 
 ## Picking up next session
 
-*Last touched: 2026-08-17. **G9 landed** — the volume-preparation screen now
+*Last touched: 2026-08-18. **The Collection is finished as a thing you keep,
+and it merged** — two pull requests, the repository's first: PR #1 (41 commits:
+the game index, the saved catalogue, artwork, the name tool) and PR #2 (the
+README and five screenshots). `main` carries both, plus the ART-137 fix on
+`fix-kickname`.*
+
+***Seven defects, and the user found six of them by driving the screen.*** Not
+one was reachable by the 1614 tests, and the reason is the same every time: the
+suite runs synthetic fixtures, a handful at a time, to completion. Real material
+is 2787 titles across two folders, hand-named, half of it interrupted half way.
+[ART-131](ISSUES.md) (1448 of 1697 hardfiles refused), [ART-132](ISSUES.md),
+[ART-133](ISSUES.md) (thirteen confirmations that never fired),
+[ART-134](ISSUES.md) (an interrupted artwork run orphaned its 790 pictures),
+[ART-135](ISSUES.md) (forty minutes where one would do),
+[ART-136](ISSUES.md) (the ADF path assumed a filename convention **no real file
+used** — zero of 847), [ART-137](ISSUES.md) (99 of 758 records reported a
+Kickstart whose name was 68000 machine code).
+
+***The user corrected the design twice, and was right both times.*** On chipset:
+a shortcut reading a clear `ReqAGA` bit as "runs on OCS/ECS" was tested against
+the catalogue and killed by 83 counterexamples, which left the field
+unsourceable — and the answer was theirs from the start, *ask online*. On disk
+sets: a first cut refused bare trailing numbers because `4D Driving 1` and
+`Turrican 2` are indistinguishable, and their correction — **multi-disk is the
+Amiga norm, `dune2-2` should base on `dune2`** — turned out to be possible by
+reading every name at once rather than one at a time. 551 of 847 files belong to
+a numbered set; accepting one only when it begins at disk one groups the real
+ones and leaves eighteen disk-magazine issues alone.
+
+**What is worth carrying forward:** *the tests keep being right about the code
+and wrong about the world.* Every one of the seven was a correct implementation
+of a wrong assumption — a naming convention, a politeness rate, a field's type,
+a run that finishes. Driving it against somebody's actual disk is not a
+verification step at the end; it is where these are found, and nothing cheaper
+has worked yet.
+
+*Before that, on 2026-08-17: **G9 landed** — the volume-preparation screen now
 says whether a card's Kickstart suits the OS volume about to go onto it, from
 two facts each side already recorded, and it warns rather than blocks. A final
 review of the whole branch found ten things and all ten were fixed in one wave
@@ -888,10 +924,30 @@ crediting two components for 94 of the same files) and
 [ART-125](ISSUES.md) (a byte total ART does not have is left unsaid rather
 than printed as zero). Work is on `main`.*
 
-**The tree is green, measured fresh**: 1439 Rust passed / 0 failed / 5 ignored
-(the real-media hooks, env-gated — run three times back to back, no flake),
-554 frontend across 45 files, 1469 i18n leaf keys in `en.json` and
-`tr.json` alike, `pnpm lint` clean, clippy clean at `-D warnings`.
+### What to pick up first
+
+Four things are open and none of them blocks another. In the order I would take
+them:
+
+1. **[ART-138](ISSUES.md) and [ART-139](ISSUES.md)** — both found by
+   photographing the screens and both small. ROM Manager labels expansion-board
+   ROMs (`A4091.rom`, `Blizzard_1230-IV.rom`) `CRC ERR`, which claims a damage
+   ART has no way to know about; the right label is "not a Kickstart". Aminet
+   renders its text inputs white in the dark theme.
+2. **The light theme.** Its palette was widened once while looking at it —
+   seventeen steps between page and panel is a range in arithmetic and not in
+   perception — but it has not had a proper pass, and it is not in the README
+   pictures because of that. Contrast is not decoration here: most of the people
+   this is for are over fifty.
+3. **The Collection's wave C** — the LaunchBox-shaped screen, and attaching
+   artwork by hand. The 242 `.rp9` packages already carry a screenshot offline
+   in `record.preview` that nothing renders yet, which is free material for it.
+4. **G10 waves 2 and 3** — writing `igame.data`, drawer extraction, AGS export.
+
+**The tree is green, measured fresh**: 1614 Rust passed / 0 failed / 11 ignored
+(the real-media hooks, env-gated), 569 frontend, 1528 i18n leaf keys in
+`en.json` and `tr.json` alike, `pnpm lint` clean, clippy clean at `-D warnings`,
+`cargo deny` clean, the amitools oracle and the ROM table check clean.
 **CI on GitHub was confirmed green two sessions ago** (run `31939802790`, commit
 `544282c`) — but it took three pushes to get there, and the reason is worth
 carrying forward rather than filing away: the merge to `main` was the first
@@ -1220,6 +1276,8 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
+| 2026-08-18 | **ART-137: 99 of 758 records were asking for a Kickstart whose name was 68000 machine code, and the cause was a field that is sometimes a list.** Photographing the Collection for the README showed two cards reading `Needs Kickstart ÔöÇÔûêÔûêÔûêÔûê` beside neighbours reading `34005.a500`. The bytes were not a mangled string but code, repeating across every affected title with three bytes changing. **`ws_kickname` is not always a string**: when `ws_kickcrc` is `$ffff` — a marker, not a checksum — it points at `(crc16, rptr-to-name)` entries ended by a zero word, with the names laid out immediately after. ART read the list as a string and reported what it collected. The layout was **decoded from the bytes rather than looked up**, because whdload.de could not be fetched that session, and it is trusted for three independent reasons: two real slaves carry the same three CRCs; every entry's pointer lands exactly on a name; each name ends one byte before the next entry's pointer. It then yields names that exist — `40068.a1200`, `40068.a4000`, `40063.a600`, which is precisely what a game running on an A1200, an A4000 or an A600 asks for. Verified on the real catalogue after an Update: **99 records carry a list, 659 a single name, zero carry an unprintable one, and zero still record `$ffff` as a checksum** — and the lists themselves are coherent, all 99 accepting both the A1200 and A4000 ROMs while 85 also accept the A600's older 3.0. `crc16` is left `None` rather than storing the sentinel, because a marker kept as a checksum is the same class of lie as the garbage name it arrived with. `GAMEINDEX_SCHEMA` moved 1 → 2, which is exactly what that number was separated from the file format's version for: the Update re-read 1698 records without the user having to know why. Not cosmetic — [ART-130](ISSUES.md) is meant to take a declared Kickstart, find it in the 154-dump table and offer to place it, and this is that work's input. Two more defects were filed from the same photography session and deliberately kept out of the README: [ART-138](ISSUES.md) (ROM Manager labels accelerator and SCSI ROMs `CRC ERR`, claiming a damage it cannot know about) and [ART-139](ISSUES.md) (Aminet's inputs render white in the dark theme) | 1614 Rust / 569 frontend |
+| 2026-08-18 | **The README stops describing a product two months behind itself, and the photography finds three more defects.** Five screenshots of ART's own window — dark, English, on the real 2787-title library — captured with `PrintWindow` so the window draws itself rather than being photographed off the screen, which is what keeps a desktop out of a public repository. The hero is a Workbench 1.3 Extras disk beside a Windows drive: 1988 dates, OFS, `----rwed` protection bits, one frame saying what the paragraph under it did not. **Three claims had gone stale and one of them was a licence claim** — "PFS3 is not written yet" (it has been since `libpfs3`), "not yet built: PFS3/SFS" (only SFS now), and "ART's dependencies are permissively licensed", which stopped being true the moment `libpfs3` arrived as LGPL-3.0-or-later. The architecture tree had never heard of `card`, `osinstall`, `preload`, `gameindex`, `artwork`, `security` or `safety`. Three screens are deliberately absent and `docs/assets/README.md` names each so the absence does not read as taste. **The light theme was widened while looking at it**: `#e9ecf1` to `#fafbfc` is seventeen steps, the same distance the dark theme uses to obvious effect, but contrast is judged against the surrounding luminance and seventeen steps near white reads as nothing — the file manager arrived as one flat sheet. Widened, not finished; it wants a proper pass and is not in the pictures | 1609 Rust / 569 frontend |
 | 2026-08-18 | **A second real folder made a hidden assumption visible: ART's ADF path parses TOSEC filenames, and none of the 847 real ADFs are TOSEC** ([ART-136](ISSUES.md)). The user added `E:\amiga\Titles` — 847 `.adf` + 242 `.rp9`, no WHDLoad at all — and the shape was nothing like the folder beside it. The `.rp9`s came out *richer* than anything WHDLoad can state (`rating` 242 of 242, `preview` 242, `genre` 207 — all three are 0 % in the WHDLoad catalogue), while the ADFs came out poorer than expected and for a reason nobody had looked for: the files are hand-named (`A-Train Disk 1.adf`, `ADPro_D3.adf`, `dune2-2.adf`) and **zero of 847 match the TOSEC convention the reader assumes**. So one game becomes five entries, artwork matches 3 % against the WHDLoad folder's 60 %, and the parser does not merely fail but mangles — `(c) 1990 Svein Berge.adf` arrived as `1990 Svein Berge`, a parenthesised group stripped as though it were a TOSEC field, with provenance then claiming `tosec-name`. **The fix is a tool, not a guess, by the owner's explicit call**: `core/gameindex/cleanup.rs` proposes and the user accepts. A first version refused bare trailing numbers outright — `4D Driving 1` is a disk and `Turrican 2` is a sequel and one name cannot tell you which — and the user's correction was the right one: multi-disk is the Amiga norm and `dune2-2` should base on `dune2`. It can, but only by reading **every name at once**: `disk_sets` accepts a group when it begins at disk one, which 163 of the 174 numbered groups do. That rule carries both directions — it groups `apoc1/2/3`, and it leaves `Turrican 2` beside `Turrican 3` alone *and* `LSD_042 … LSD_064`, eighteen issues of a disk magazine that share a base and are numbered and would have collapsed into one title. What no rule can settle (`brian the lion 2`, no disk one anywhere) is typed by hand — the override editing UI FEATURES had been deferring to wave C landed with it. Renaming a real file is a separate button: confirms with both names in full, refuses an existing target rather than replacing it, logged either way, five tests including a mutation-checked path-traversal guard. **847 files now resolve to 523 titles, 606 with a suggestion**; verified on the user's own disk, rename included, with the catalogue following the moved file by its content id. One test wrote itself wrong on the way and is recorded as such: it demanded the magazine issues get *no* suggestion when the property that matters is that eighteen issues stay eighteen titles | 1609 Rust / 569 frontend |
 | 2026-08-17 | **Wave B on a real screen: two defects in the first run, both mine, both about a run that does not finish.** [ART-134](ISSUES.md) — the user said the downloaded artwork was not showing. It had downloaded: **790 pictures were on disk**. What was missing was `index.json`, because `cache.save()` ran once, after the last of 1700 titles. The run was interrupted, so nothing knew those files existed; the screen reads the index and saw an empty cache, and the next run started downloading all of them again. Fixed twice over — the index is now written unconditionally on the way out of `enrich` (cancelled, failed or finished) and every three seconds during the run, **timed rather than counted** because the screen reads the same file to show pictures as they land; and `Cache::adopt` takes a picture already on disk into the index without fetching it, which is what rescued the 790 rather than re-downloading them. Every existing test ran a handful of titles **to completion**, which is why none of them caught it. Both fixes mutation-checked, and the limit stated rather than glossed: the real failure was the **process ending**, which no in-process test reproduces — the cancellation path already saved, so only the adoption test covers what actually happened. Then [ART-135](ISSUES.md), from the user asking whether waiting an hour for cover art was right. It was not. `REQUESTS_PER_SECOND` was one constant chosen for **whdload.de**, which volunteers run on a small server, and applied unchanged to **libretro's pictures, which come off GitHub's CDN** — holding a CDN to a volunteer's pace is not politeness, it is a mistake with a courteous name. Worse, libretro publishes four kinds per title and the run fetched all four while the Collection renders one, so three-quarters of the wait bought pictures nothing displays. The rate is stated per source under a ceiling (whdload.de 4, libretro 16) and `EnrichRequest::wanted` carries what the caller will render. **About forty minutes to about one, measured against the user's own 1700 titles**, confirmed on screen. Also on screen: pictures now appear as they arrive rather than at the end, and the filter bar is stuck to the top — a filter you must scroll back up to reach in a 1700-row list is a filter nobody uses. Match rate against the real library, measured mid-run: **230 of 383 titles, ~60 %** | 1585 Rust / 569 frontend |
 | 2026-08-17 | **Wave B: measuring the catalogue before designing it turned an "artwork and chipset" round into an artwork round, and killed an attractive shortcut with 83 counterexamples.** The user asked for online enrichment — chipset badges and cover art. Measuring the real 1700-title catalogue first showed the metadata people assume needs fetching is already there and arrived with no network at all: `title` 100 %, `publisher` 98.8 %, `year` 92.5 %, all out of the WHDLoad slave's own header. What is genuinely empty is `preview` (0 %), `genre` (0 %), `rating` (0 %) and `chipset` (9.6 %). **The chipset shortcut was tested rather than argued.** `ws_Flags` bit 5 is read for every slave, so a *clear* bit read as "runs on OCS/ECS" would have taken it to ~99 % offline — and `chipset_of`'s existing comment said that was wrong. It is: 83 records have a slave that left the flag clear while the title says AGA or CD32 (`Ace Ball v1.0 Pl AGA.hdf`, `Akira v1.3 CD32.hdf`), and those are only the ones whose *filename* gives them away. 9.6 % is the correct answer, not a gap. **The source hunt closed the metadata half for a reason that is not ART's**: Lemon Amiga returns 403 to every non-browser request including `robots.txt` — reaching it needs a forged user agent to defeat an access control, so it is out; Hall of Light is HTML only and ART does not scrape (§41.5.3); OpenRetro holds exactly the chipset data and its `/about` expects third-party apps, but documents no endpoint. The user's position is recorded as project policy: **an absent licence is not a blocker for forty-year-old game and demo material, an absent endpoint is.** So `core/artwork/` fetches pictures: libretro-thumbnails through its git-tree index, whdload.de's icons at a path built from the package name ART already read from the slave — an exact key, no matching at all. **ART's own path validator shaped the design twice**: it rejects `:` (a colon could re-point a request at another host), so neither `?recursive=1` nor `trees/master:Named_Boxarts` is expressible and the index takes two colon-free calls (root tree → sha → subtree, verified live: 3324 boxarts, untruncated); and it rejects spaces, which every libretro filename has, so segments are percent-encoded in `core/artwork` rather than the validator being weakened. Matching is two written rules and no similarity measure — whole title, then the part before a ` - ` — because online data is provenance rank 2 and a silently accepted wrong guess would make that ranking meaningless. **Writing the tests found a defect the design had not anticipated**: a source offers four kinds, and when only one had an index the other three were being recorded as *misses* — but a miss means "no picture exists" and is never re-asked, while the truth was "nobody looked", so a directory the repository added later would have stayed invisible forever. Sources ship enabled, per the user's call; **enabled is not automatic** — opening the Collection reads the cache and touches no network, and the run is capped at four requests a second because whdload.de is run by volunteers | 1579 Rust / 569 frontend |
