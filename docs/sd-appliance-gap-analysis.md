@@ -295,7 +295,7 @@ reads `hst-imager`'s RDB and agrees with `rdbtool` on every field, and
 the driver back out SHA-256-identical to the file that went in. Closes
 [ART-084](ISSUES.md).
 
-## G5 🟧 OS installation engine (3.2.x / 3.9 system volumes) — **engine built, 2026-08-15/16; not yet booted**
+## G5 ✅ OS installation engine (3.2.x / 3.9 system volumes) — **engine built 2026-08-15/16; its product booted to a clean Workbench 2026-08-16**
 
 > **Built and run against the user's own real 3.2 media, not a fixture.**
 > `core/osinstall/` (`recipe` → `source`/`scan` → `plan` → `apply` → `startup`
@@ -315,8 +315,8 @@ the driver back out SHA-256-identical to the file that went in. Closes
 > future component add/remove.
 >
 > Run for real: 36 ADFs, 26 components switched on (the `modules-a1200`
-> condition correctly firing off the user's own ROM's stated version), 4030
-> files / 330 directories built to a tree, and — for AmigaDOS-ASCII names —
+> condition correctly firing off the user's own ROM's stated version), **3933
+> files / 280 directories / 12.2 MB** built to a tree, and — for AmigaDOS-ASCII names —
 > put onto a native PFS3 volume and read back independently by `hst-imager`
 > byte-for-byte. That run also found a real, permanent limitation:
 > [ART-113](ISSUES.md) — `libpfs3` 0.1.3 cannot round-trip a non-ASCII
@@ -329,10 +329,23 @@ the driver back out SHA-256-identical to the file that went in. Closes
 > slower write, named as such. Only libpfs3 itself can close the gap for
 > real.
 >
-> **What is left, precisely — not "the gap", three separate things:**
-> - **No Amiga has booted anything G5 built.** The tree, the PFS3 volume and
->   the independent `hst-imager` read-back are all real and proven; the
->   WinUAE and real-hardware rungs are untouched by this work.
+> **It boots, 2026-08-16.** The tree was carried onto a PFS3 volume through
+> the native/fallback path in one unattended run and **started to a clean
+> Workbench** under WinUAE with the user's licensed V47 A1200 ROM — wallpaper
+> and all, no requesters. The code that accepted the disk is Kickstart's own
+> `expansion.library` and the real `pfs3aio` 68k binary, executing, so this is
+> not a claim about ART's own reader. Getting there found two defects nothing
+> but a Kickstart could have found: [ART-126](ISSUES.md) (every RDB filesystem
+> ART ever embedded carried the wrong `PatchFlags`, so AmigaOS ignored the
+> driver — the guru a user reported) and [ART-127](ISSUES.md) (the tree lacked
+> `icon.library` and `workbench.library`, and its wallpapers were switched off
+> on an assumption the running system corrected).
+>
+> **What is still left, precisely — three separate things:**
+> - **No real Amiga has booted it.** WinUAE hands the volume over as a plain
+>   `.hdf` through `uaehf.device`; a PiStorm has an MBR, an Amiga disk starting
+>   1.1 GB in and Emu68's `brcm-sdhc.device` in the way ([ART-095](ISSUES.md)).
+>   The mounting is settled; the card path is not.
 > - **The OS Builder's install screen is unverified past its own headings**
 >   ([ART-118](ISSUES.md)) — the engine below it has real coverage, the
 >   screen driving it does not yet.
@@ -341,8 +354,8 @@ the driver back out SHA-256-identical to the file that went in. Closes
 >   the same shape of un-started work.
 >
 > **G9 (ROM/Kickstart profile pairing) and G10 (launcher metadata export)
-> are separate gaps, not sub-items of G5, and remain unbuilt** — see their
-> own entries below.
+> are separate gaps, not sub-items of G5.** G9 is built (2026-08-17); G10 is
+> the one gap SD-2 still owes — see their own entries below.
 
 ## G6 🟧 Multiboot & recovery configuration
 
@@ -398,15 +411,56 @@ validators — the gap is the orchestration and the report.
 carries more weight than it did when a flash-and-verify step came after it: it
 is the only check between the build and somebody else's imager.
 
-## G9 🟧 ROM/Kickstart profile pairing
+## G9 ✅ ROM/Kickstart profile pairing — **done 2026-08-17, engine and screen**
 
-ART identifies ROMs (§32, built). The gap is **profiles**: pairing a ROM with
-an OS volume and an Emu68 config (`rom_profile` in the multiboot doc §19–21),
-placing the ROM file into the FAT32 partition, and writing the mapping into
-Emu68's config. Pure bookkeeping + existing pistorm.rs-style config editing;
-no new hard tech.
+ART identifies ROMs (§32, built). Placing the ROM into the FAT32 partition and
+pointing Emu68's config at it was already done by `CardBuilder` in SD-1. What
+was missing was the question nobody asked: **is that the ROM this system volume
+was built for?**
 
-## G10 🟧 Launcher metadata export (Game Center, without writing one)
+**Built as a check, not an object**, and that is the load-bearing decision. The
+gap text above asks for `rom_profile` — a named, stored, reusable pairing of ROM
++ volume + Emu68 config. That is a real idea and it belongs to **G16**:
+multiboot *is* "several ROMs and several volumes", and inventing the concept
+here would have meant designing it twice. What shipped instead is one pure
+function over two facts each side already records:
+
+```
+core/osinstall  →  distribution.json   "planned for this ROM, needs V47"
+core/card       →  card.manifest.json  "the boot partition carries this ROM"
+                                ↓
+                    core/rom::pairing (pure)
+                                ↓
+              the preload screen, before formatting
+```
+
+It never asks "is this the same ROM". It asks the tree's own recipe requirement
+again, against the card's ROM — so a tree carrying its own compatibility
+modules is `Suitable` on a ROM it does not match, and a tree that matches
+exactly is still `Unsuitable` when its recipe was never satisfied.
+
+**It warns; it does not block.** The user's own call: the machine boots, prints
+a message, and the ROM can be swapped afterwards without rebuilding anything.
+
+**Proved against the pairing that actually failed** on 2026-08-16 under WinUAE
+with a licensed ROM, plus a second card built from the user's real Kickstart 47,
+so all three verdicts come from real material rather than fixtures:
+
+| | verdict |
+|---|---|
+| V47 tree vs V40 card | `Unsuitable { needs: 47, found: Some(40) }` |
+| V40 tree vs V40 card | `Paired` |
+| V40 tree vs V47 card | `Suitable` |
+
+The last is the only evidence that the check reads the tree's own capability
+rather than comparing version numbers, since 40 is not ≥ 47.
+
+Design: `docs/superpowers/specs/2026-08-17-rom-pairing-design.md`. Its final
+review found ten things and all ten were fixed ([ART-129](ISSUES.md)); two were
+blockers and both were the same failure — the check that exists to warn said
+nothing. **Real hardware untouched**, as everywhere else in SD-2.
+
+## G10 🟧 Launcher metadata export (Game Center, without writing one) — **the one gap SD-2 still owes**
 
 Do NOT write an Amiga-side launcher in v1. Gap on the ART side: export the
 Collection's game metadata in the formats existing Amiga launchers already
@@ -415,6 +469,53 @@ eat — **iGame** gameslist + screenshots in the expected layout, and/or
 `metadata.json` per game (multiboot doc §13) is written alongside as the
 neutral source of truth (schema lives with G7's contract). Box art /
 screenshots: optional online fetch, off by default (§60 offline-first).
+
+### Two facts measured on 2026-08-17, before the design round started
+
+The design round opened, gathered context, and stopped at its first question.
+Both findings below came out of that context pass and are recorded here so the
+next round starts from them rather than rediscovering them. **Neither is a
+decision** — the scoping question they raise is still open.
+
+**1. The user's own collection holds no WHDLoad at all.** `E:\amiga\Titles`
+measured: `Games/` is 847 `.adf` + 96 `.rp9`, `Demoscene/` is 111 `.rp9`. Not
+one `.slave`. This matters because **iGame is fundamentally a WHDLoad
+launcher** — it scans for slaves — so a gameslist pointing at ADFs does nothing
+on a real Amiga: a PiStorm'd A500 cannot run an ADF directly. A Gotek can, and
+ART already has a Gotek module. So "iGame/AGS onto GAMES:" as written targets
+material this user does not yet own, and the export could not be tried against
+anything real on the day it was written. WHDLoad collections are standard and
+freely available, so this is a fact about *today's* proof material, not a
+permanent one.
+
+**2. `.rp9` carries curated metadata **and** a screenshot, offline.** An `.rp9`
+is a zip: the disk images, plus `rp9-manifest.xml`, plus `rp9-preview.png`.
+Read from `Aerial Racers (Insane Software, 1996, Amiga).rp9`:
+
+```xml
+<title>Aerial Racers</title>   <entity type="publisher">Insane Software</entity>
+<year>1996</year>              <genre>driving-simulation</genre>
+<rating>4</rating>             <systemrom>310</systemrom>
+<system>a-1200</system>        <joystick>true</joystick>
+<floppy priority="1">aerialracers1.adf</floppy>   <!-- disk order -->
+<image type="screen-running">rp9-preview.png</image>
+```
+
+Title, publisher, year, genre, rating, required Kickstart, target machine,
+input, **disk order**, and a preview image — for 207 titles here. The gap text
+above budgets an "optional online fetch, off by default" for exactly these
+fields; for this material no fetch is needed at all, which is the stronger form
+of §60's offline-first rule rather than an exception to it.
+
+ART does not read `.rp9` today: `core/layout::classify` sees a zip and sends it
+to `Unsorted/`. `core/collection.rs` already parses TOSEC filenames (title,
+year, publisher, chipset, multi-disk grouping), which is the other candidate
+metadata source and needs no new format work.
+
+**The open question the round stopped on:** whether G10's first deliverable is
+a neutral per-game index that launcher exporters sit on top of, the literal
+iGame/WHDLoad export, or something aimed at the collection's actual shape.
+Not decided — put it to the user.
 
 ## G11 ✅ Content layout policy ("what goes where") — **done 2026-08-15, engine and screen**
 
@@ -572,14 +673,16 @@ SD-1  The image has a shape   : G2 (MBR + FAT32 boot partition, in a file)
 SD-2  Content, preloaded      : G3 ✅ (PFS3 write — route E 2026-08-13/14,
                                   native/route B 2026-08-15; route D was
                                   dropped, never built, turned out unneeded)
-                                + G5 🟧 (OS install — engine built and run
-                                  against real media; no Amiga has booted its
-                                  output) + G9 (ROM pairing, owed)
-                                + G10 (launcher export, owed) + G11 (layout
-                                  policy)
+                                + G5 ✅ (OS install — built from real media
+                                  and booted to a clean Workbench under
+                                  WinUAE, 2026-08-16)
+                                + G9 ✅ (ROM pairing, 2026-08-17)
+                                + G10 🟧 (launcher export, owed — the only
+                                  one left) + G11 ✅ (layout policy)
       → milestone: AmigaOS and games already on the volumes, from Windows,
                    with nothing left to do on the Amiga but boot it — not yet
-                   reached: G9, G10, and the boot itself
+                   reached: G10, and the boot on real hardware. AmigaOS itself
+                   boots; it has only ever booted in emulation
 SD-3  It is *mine*            : G14 (wallpaper, WiFi, prefs, Startup-Sequence
                                   — every one edited in place, never
                                   regenerated: §39/§40's rule, applied to
