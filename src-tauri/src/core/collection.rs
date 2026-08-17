@@ -55,122 +55,6 @@ type ScannedFile = (
     MediaKind,
 );
 
-/// Metadata recovered from a TOSEC-style filename.
-pub type TosecMetadata = (
-    /* clean title */ String,
-    /* year */ Option<u16>,
-    /* publisher */ Option<String>,
-    ChipsetRequirement,
-    Option<DiskPosition>,
-);
-
-/// Parse TOSEC formatted filename metadata.
-///
-/// Example: `Sensible World of Soccer 96-97 (1996)(Renegade)(AGA)(Disk 1 of 2)[!]`
-pub fn parse_tosec_metadata(filename: &str) -> TosecMetadata {
-    let name_without_ext = if let Some(dot_idx) = filename.rfind('.') {
-        &filename[..dot_idx]
-    } else {
-        filename
-    };
-
-    let mut clean_title;
-    let mut year = None;
-    let mut publisher = None;
-    let mut chipset = ChipsetRequirement::OcsEcs;
-    let mut disk_info = None;
-
-    // Check for AGA indicators in filename
-    let upper = filename.to_uppercase();
-    if upper.contains("AGA")
-        || upper.contains("CD32")
-        || upper.contains("A1200")
-        || upper.contains("68020")
-    {
-        chipset = ChipsetRequirement::Aga;
-    }
-
-    // Extract parentheses tokens: (1996), (Renegade), (Disk 1 of 2), etc.
-    let mut tokens = Vec::new();
-    let mut base_name = String::new();
-    let mut in_paren = false;
-    let mut in_bracket = false;
-    let mut cur_token = String::new();
-
-    for c in name_without_ext.chars() {
-        if c == '(' {
-            in_paren = true;
-            cur_token.clear();
-        } else if c == ')' {
-            in_paren = false;
-            tokens.push(cur_token.trim().to_string());
-            cur_token.clear();
-        } else if c == '[' {
-            in_bracket = true;
-        } else if c == ']' {
-            in_bracket = false;
-        } else if in_paren {
-            cur_token.push(c);
-        } else if !in_bracket && !c.is_control() {
-            base_name.push(c);
-        }
-    }
-
-    clean_title = base_name
-        .trim()
-        .trim_end_matches('_')
-        .trim_end_matches('-')
-        .trim()
-        .to_string();
-    if clean_title.is_empty() {
-        clean_title = name_without_ext.to_string();
-    }
-
-    for t in tokens {
-        let t_upper = t.to_uppercase();
-
-        // 1. Year pattern (e.g. "1991", "1996")
-        if t.len() == 4 && t.chars().all(|ch| ch.is_ascii_digit()) {
-            if let Ok(y) = t.parse::<u16>() {
-                if (1980..=2030).contains(&y) {
-                    year = Some(y);
-                    continue;
-                }
-            }
-        }
-
-        // 2. Disk pattern (e.g. "Disk 1 of 2", "Disk 1", "Disk A")
-        if t_upper.contains("DISK") {
-            let parts: Vec<&str> = t_upper.split_whitespace().collect();
-            if let Some(pos) = parts.iter().position(|&x| x == "DISK") {
-                if pos + 1 < parts.len() {
-                    let d_num = parts[pos + 1].parse::<usize>().unwrap_or(1);
-                    let mut total = d_num;
-                    if let Some(of_pos) = parts.iter().position(|&x| x == "OF") {
-                        if of_pos + 1 < parts.len() {
-                            total = parts[of_pos + 1].parse::<usize>().unwrap_or(d_num);
-                        }
-                    }
-                    disk_info = Some((d_num, total));
-                    continue;
-                }
-            }
-        }
-
-        // 3. Publisher
-        if publisher.is_none()
-            && !t_upper.contains("AGA")
-            && !t_upper.contains("PAL")
-            && !t_upper.contains("NTSC")
-            && !t_upper.contains("CRACK")
-        {
-            publisher = Some(t);
-        }
-    }
-
-    (clean_title, year, publisher, chipset, disk_info)
-}
-
 /// Recursively scan a folder for Amiga software collection files.
 ///
 /// Convenience wrapper for callers with nothing to report to.
@@ -237,7 +121,13 @@ pub fn scan_collection_directory_with(
             _ => continue,
         };
 
-        let (clean_title, year, publisher, chipset, _disk_info) = parse_tosec_metadata(&filename);
+        let named = crate::core::gameindex::readers::tosec::read_filename(&filename);
+        let (clean_title, year, publisher) = (named.title, named.year, named.publisher);
+        // The reader answers `None` when the name states no chipset. This
+        // scanner's own model has no room for "unknown", so the default is
+        // applied **here**, where it is chosen and visible, rather than inside
+        // a parser where it would look like a fact.
+        let chipset = named.chipset.unwrap_or(ChipsetRequirement::OcsEcs);
 
         let group_key = format!(
             "{}:{}:{:?}",
@@ -352,26 +242,27 @@ fn md5_hash(s: &str) -> u64 {
 mod tests {
     use super::*;
 
+    // `parse_tosec_filename` and `parse_aga_game_filename` moved with the
+    // parser to `core/gameindex/readers/tosec.rs`. What belongs *here* is the
+    // one thing they did not cover: that this scanner still applies its own
+    // OCS/ECS default when the name states nothing.
     #[test]
-    fn parse_tosec_filename() {
-        let fn1 = "Monkey Island 2 - LeChuck's Revenge (1992)(LucasArts)(Disk 1 of 11)[!].adf";
-        let (title, year, publ, chipset, disk) = parse_tosec_metadata(fn1);
-        assert_eq!(title, "Monkey Island 2 - LeChuck's Revenge");
-        assert_eq!(year, Some(1992));
-        assert_eq!(publ, Some("LucasArts".into()));
-        assert_eq!(chipset, ChipsetRequirement::OcsEcs);
-        assert_eq!(disk, Some((1, 11)));
-    }
+    fn a_name_stating_no_chipset_is_catalogued_as_ocs_ecs() {
+        let root = std::env::temp_dir().join(format!(
+            "art-scan-chipset-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("Zool.adf"), b"x").unwrap();
 
-    #[test]
-    fn parse_aga_game_filename() {
-        let fn2 = "Alien Breed 3D (1995)(Ocean)(AGA)(Disk 1 of 3).adf";
-        let (title, year, publ, chipset, disk) = parse_tosec_metadata(fn2);
-        assert_eq!(title, "Alien Breed 3D");
-        assert_eq!(year, Some(1995));
-        assert_eq!(publ, Some("Ocean".into()));
-        assert_eq!(chipset, ChipsetRequirement::Aga);
-        assert_eq!(disk, Some((1, 3)));
+        let items = scan_collection_directory(&root).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].chipset, ChipsetRequirement::OcsEcs);
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// A directory tree deeper than the scan limit must stop cleanly rather
