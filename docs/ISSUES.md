@@ -26,6 +26,34 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-139** 🟡 **Aminet's text inputs render white in the dark theme** —
+*found 2026-08-18, photographing the screens for the README*
+`src/pages/AminetStudio.tsx` · The catalogue search box, the subfolder field
+and two dropdowns come out white on a dark page while every other input in ART
+— the Collection's search box beside it — is dark. Form controls are not
+inheriting the theme there.
+
+Kept out of the README for it. Cosmetic, and a few lines.
+
+**ART-138** 🟡 **ROM Manager says `CRC ERR` about ROMs it simply does not
+recognise** — *found 2026-08-18, photographing the screens for the README*
+`src/pages/RomManager.tsx`, `src-tauri/src/core/rom/` · Scanning a real ROM
+folder identified 1 of 76 files and marked the other 75 `CRC ERR`. But look at
+what they are: `A2630_390282-06.bin`, `A4091.rom`, `apollo_12xx_v560.bin`,
+`Blizzard_1230-IV.rom`, `Blizzard_2060_v8.5_hi.bin` — **accelerator and SCSI
+controller ROMs, not Kickstarts.**
+
+Not recognising them is correct. Calling them `CRC ERR` is not: that is a claim
+about a file's integrity, and ART has no basis for it — the file is fine, it is
+simply not a Kickstart. This is the same rule [ART-104](#fixed) applied from the
+other side, where the size-based fallback stopped naming a machine it could not
+know; here a label needs to stop naming a fault it cannot know.
+
+`Compatible Amiga Models:` is also blank for the one ROM that *was* identified
+(CDTV Extended 2.30), which may be the same gap or a second one.
+
+Kept out of the README for it.
+
 **ART-130** 🔵 **A game can name the Kickstart it needs, and nothing offers to
 supply it** — *filed 2026-08-17, out of G10's design round; the reading half is
 built by G10, this is the half that was deliberately left out*
