@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Tidying up names ART could only read off a filename (2026-08-18)
+
+#### Added
+- **Edit any title, on the spot.** Every row in the Collection now has an
+  **Edit** button. Type what the game is actually called, press Enter, and it
+  stays that way through every rescan.
+- **One-button fixes where ART is sure.** A file called `A-Train Disk 1.adf`
+  offers **Fix title** — showing it as *A-Train*, one game rather than two
+  entries — and **Rename file**, which tidies the file itself to
+  `A-Train (Disk 1).adf`. Both are suggestions; nothing changes until you say
+  so, and a title fix can be undone from the same place.
+- **Multi-disk games are recognised by their neighbours.** `dune2-2.adf` is
+  Dune II's second disk, and ART knows because `dune2-1.adf` is sitting beside
+  it. On a real 847-file library this resolves to 523 games rather than 847
+  entries.
+
+#### Notes
+- **ART will not guess at a name, deliberately.** Where the evidence runs out it
+  says nothing and leaves the Edit button to you. `Turrican 2` next to
+  `Turrican 3` looks exactly like a two-disk set and is not one; a folder of
+  numbered disk-magazine issues looks the same again. Rather than be clever and
+  occasionally wrong about what your games are called, ART only proposes what it
+  can show a reason for.
+- Renaming a file asks first, shows both names in full, and **refuses** if
+  something of that name is already there. Your catalogue follows the renamed
+  file — nothing is lost and nothing needs re-scanning.
+
 ### The Collection gets pictures (2026-08-17)
 
 #### Added

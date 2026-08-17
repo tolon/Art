@@ -206,6 +206,9 @@ function NameFixes({
 
   return (
     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+      {/* Deliberately a size up from the two beside it. This is the one that
+          is always available and the one a person reaches for when the rules
+          gave up — the suggestions are the shortcut, not the main road. */}
       <button
         className="btn btn-sm"
         title={t("cleanup.editHint")}
@@ -213,7 +216,7 @@ function NameFixes({
           setDraft(current);
           setTyping(true);
         }}
-        style={{ padding: "2px 8px", fontSize: 10 }}
+        style={{ padding: "3px 9px", fontSize: 11.5, fontWeight: 500 }}
       >
         ✏ {t("cleanup.edit")}
       </button>

@@ -561,6 +561,56 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-136** 🟠 ✅ **The ADF path assumed TOSEC filenames; of 847 real ADFs,
+none are TOSEC — so one game became five entries and artwork matched 3 %** —
+*found 2026-08-18, indexing a second real folder; the tool that answers it
+landed the same day*
+`src-tauri/src/core/gameindex/cleanup.rs`,
+`src-tauri/src/commands/gameindex.rs` · Adding a second folder made an
+assumption visible that a WHDLoad-only library had hidden. `readers/tosec.rs`
+parses TOSEC names — `Title (1990)(Publisher)(Disk 1 of 3).adf` — and the real
+material is hand-named: `A-Train Disk 1.adf`, `ADPro_D3.adf`,
+`CaptiveII_Disk1.adf`, `dune2-2.adf`. **Zero of 847 matched the convention.**
+
+Three consequences, measured rather than supposed:
+
+- **The disk number lands in the title.** `A-Train Disk 1` and `A-Train Disk 2`
+  are two entries for one game; `ADPro_D1` … `_D5` are five.
+- **Artwork cannot match.** 3 % for the hand-named ADFs against 60 % for the
+  WHDLoad folder beside them, because `A-Train Disk 1` is in no thumbnail index
+  anywhere.
+- **The parser does not merely fail, it mangles.** `(c) 1990 Svein Berge.adf`
+  came out as `1990 Svein Berge` — a parenthesised group stripped as though it
+  were a TOSEC field. Provenance then records `tosec-name`, claiming a TOSEC
+  name was parsed when the filename was taken raw.
+
+**The fix is a tool, not a guess**, which was the project owner's call: ART
+proposes and the user accepts. `cleanup::suggest_title` removes an explicit disk
+marker (`Disk 3`, `_D3`, `-Disk^1`, `disc2`) and `suggest_stem` keeps it in one
+form, because a title and a filename want opposite things from a disk number —
+two disks are one game, but they must stay two files.
+
+A bare trailing number is the hard case and needs the neighbours: nothing in
+`dune2-2` says whether the 2 is a disk or a sequel, and `dune2` itself ends in a
+digit. `disk_sets` reads every name at once and accepts a set only when it
+**begins at disk one** — 163 of the 174 numbered groups in the real collection
+do. That rule earns its keep in both directions: it groups `4D Driving 1/2` and
+`apoc1/2/3`, and it leaves alone both `Turrican 2` beside `Turrican 3` and
+`LSD_042` … `LSD_064`, which are eighteen issues of a disk magazine that share a
+base, are numbered, and would otherwise have collapsed into one title.
+
+What no rule can settle — `brian the lion 2`, with no disk one anywhere — is
+typed by the user. Applying a title writes a `UserEdit` override (top
+provenance, undoable); renaming the file is a separate button that confirms
+first, refuses an existing target rather than replacing it, and is logged. The
+catalogue follows the renamed file by its content-derived id, verified on real
+material.
+
+847 files now resolve to **523 distinct titles**, 606 with a suggestion. The
+real-material hook is checked in, `#[ignore]`d and env-gated, and asserts the
+property that matters rather than a count that belongs to somebody's disk: the
+magazine issues stay as many titles as there are issues.
+
 **ART-135** 🟠 ✅ **One politeness rule for every host, and four pictures fetched
 for the one the screen shows: a one-minute job took forty** — *found 2026-08-17,
 driving the artwork run against 1700 real titles; fixed the same day*
