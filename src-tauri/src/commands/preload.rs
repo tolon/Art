@@ -71,14 +71,15 @@ use crate::core::card::manifest::{manifest_path_for, read_manifest};
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
-use crate::core::osinstall::apply::{DistributionManifest, MANIFEST_FILE_NAME};
+use crate::core::osinstall::apply::MANIFEST_FILE_NAME;
+use crate::core::osinstall::PairedRom;
 use crate::core::preload::native::NativeFormatter;
 use crate::core::preload::VolumeFormatter;
 use crate::core::preload::{
     plan, step_label, CopySummary, PreloadOutcome, PreloadPlan, PreloadRequest, PreloadStep,
     ToolVersion,
 };
-use crate::core::rom::pairing::{compare, CardRom, Pairing};
+use crate::core::rom::pairing::{compare, CardRom, Pairing, TreeRom};
 use crate::error::AppResult;
 use crate::tools::hst_imager::{HstImager, TESTED_VERSION};
 
@@ -138,10 +139,39 @@ pub fn preload_plan(command: PreloadCommand) -> AppResult<PreloadPlan> {
 /// user pointing at a folder that is not a distribution tree, or a card ART
 /// did not build, has done nothing wrong — there is simply nothing to check.
 fn rom_pairing_for(image: &Path, content: &Path) -> CoreResult<Pairing> {
-    let tree = std::fs::read_to_string(content.join(MANIFEST_FILE_NAME))
+    /// `distribution.json`'s one trailing field, and nothing else.
+    ///
+    /// A real tree's manifest holds 3950 `FileRecord`s and is a megabyte on
+    /// disk; deserialising the whole `DistributionManifest` built all of them
+    /// to read the field after them. Every unknown key is skipped instead, and
+    /// nothing but the record this check reads is ever allocated.
+    ///
+    /// **Mind the container's camelCase**: `DistributionManifest` carries
+    /// `rename_all = "camelCase"`, so the key on the wire is `pairedRom`. A
+    /// narrow struct without the same attribute would read every manifest as
+    /// having no ROM at all — the reassuring silence, out of a spelling
+    /// mistake. `the_pairing_command_reads_both_manifests` pins the key, and
+    /// `a_tree_manifest_is_read_past_its_files` pins the skipping.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PairedRomOnly {
+        #[serde(default)]
+        paired_rom: Option<PairedRom>,
+    }
+
+    let tree = std::fs::File::open(content.join(MANIFEST_FILE_NAME))
         .ok()
-        .and_then(|text| serde_json::from_str::<DistributionManifest>(&text).ok())
-        .and_then(|manifest| manifest.paired_rom);
+        .and_then(|file| {
+            serde_json::from_reader::<_, PairedRomOnly>(std::io::BufReader::new(file)).ok()
+        })
+        .and_then(|manifest| manifest.paired_rom)
+        // The comparison takes what it reads, not the manifest's own record:
+        // `core/rom` does not depend on `core/osinstall`, and this is the one
+        // place the two representations meet.
+        .map(|rom| TreeRom {
+            sha256: rom.sha256,
+            requires_major: rom.requires_major,
+        });
 
     let card = read_manifest(&manifest_path_for(image))
         .ok()
@@ -692,6 +722,76 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **G9, and the reason the narrow struct is safe.** `pairedRom` is the
+    /// manifest's *last* field, written after every `FileRecord` — 3950 of
+    /// them and a megabyte of JSON on the real `dist-3.2b`. Reading it through
+    /// a struct that declares only that field means every one of those records
+    /// is skipped rather than built, and this proves the skipping reaches the
+    /// end: an entry shaped nothing like the narrow struct's own field, and
+    /// the field still arrives.
+    ///
+    /// The second half is the case where there is nothing to find. A tree
+    /// written before G9 has no `pairedRom` at all, and that is `NotChecked`,
+    /// never a pass (§89).
+    #[test]
+    fn a_tree_manifest_is_read_past_its_files() {
+        use crate::core::rom::pairing::{NotCheckedReason, Pairing};
+
+        let dir = scratch("pairing-narrow");
+        let tree = dir.join("dist");
+        std::fs::create_dir_all(&tree).unwrap();
+
+        let files: String = (0..2000)
+            .map(|n| {
+                format!(
+                    r#"{{"path":"C/Command{n}","component":"workbench","media":"Workbench3.2",
+                        "bytes":{n},"sha256":"{n:064}"}}"#
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let manifest = |paired: &str| {
+            format!(
+                r#"{{"release":"AmigaOS 3.2","builtFrom":[],"files":[{files}]{paired}}}"#,
+                files = files,
+                paired = paired
+            )
+        };
+        let path = tree.join(crate::core::osinstall::apply::MANIFEST_FILE_NAME);
+
+        // A card whose manifest cannot be read at all, so the tree's own
+        // answer is the only thing that can decide this verdict.
+        let image = dir.join("card.img");
+        std::fs::write(&image, b"no manifest beside it").unwrap();
+
+        std::fs::write(
+            &path,
+            manifest(
+                r#","pairedRom":{"name":"Kickstart 40.68 (A1200)","sha256":"aa",
+                   "statedMajor":40,"compatibleModels":["A1200"],"requiresMajor":47}"#,
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            rom_pairing_for(&image, &tree).unwrap(),
+            Pairing::NotChecked {
+                why: NotCheckedReason::CardRecordsNoRom
+            },
+            "the tree's record was found past its files, so the card is what is missing"
+        );
+
+        std::fs::write(&path, manifest("")).unwrap();
+        assert_eq!(
+            rom_pairing_for(&image, &tree).unwrap(),
+            Pairing::NotChecked {
+                why: NotCheckedReason::TreeRecordsNoRom
+            },
+            "a tree written before G9 records no ROM, and that is not a pass"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

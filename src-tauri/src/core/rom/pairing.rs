@@ -2,19 +2,50 @@
 //! (SD-2 · G9)
 //!
 //! **A check, not an object.** Both sides already record what they know — the
-//! tree its planning ROM (`core::osinstall::PairedRom`), the card its boot
-//! files and which of them is the Kickstart — and this compares them. It reads
-//! no files, launches nothing and decides nothing: the caller renders the
-//! verdict beside a confirmation, and the user chooses.
+//! tree its planning ROM, the card its boot files and which of them is the
+//! Kickstart — and this compares them. It reads no files, launches nothing
+//! and decides nothing: the caller renders the verdict beside a confirmation,
+//! and the user chooses.
 //!
 //! It does **not** ask "is this the same ROM". A different Kickstart is
 //! perfectly ordinary; the question is whether the tree's own requirement —
 //! recorded at plan time from the recipe's `Condition::RomOlderThan` — still
 //! holds against this one.
+//!
+//! ## It knows about neither side's engine
+//!
+//! [`TreeRom`] and [`CardRom`] are this module's own, mirroring the two
+//! records the two halves of ART write. This module used to take
+//! `core::osinstall::PairedRom` directly, which made the lower-level module
+//! depend on the higher-level one: `core/rom` could no longer be read — or
+//! extracted — without the OS-install engine behind it. `commands/preload.rs`
+//! does the mapping now, which is where translating between two modules'
+//! representations belongs in this codebase.
+//!
+//! `PairedRom` itself is unchanged: it is the manifest's record and carries
+//! the ROM's name, models and stated version because a *manifest* wants those.
+//! The comparison reads two facts, so its own input carries two.
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::osinstall::PairedRom;
+/// What the tree asks of a Kickstart, as the comparison reads it.
+///
+/// Mapped from `core::osinstall::PairedRom` by the caller. Deliberately not
+/// that type: see the module comment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TreeRom {
+    /// Of the Kickstart the tree was planned against, decoded (ART-128).
+    /// Empty when the tree recorded none — never treated as a match.
+    pub sha256: String,
+    /// `Some(47)` when the tree needs a ROM of at least that major to start;
+    /// `None` when it needs nothing, either because it carries its own ROM
+    /// modules or because no component in it ever depended on the ROM.
+    ///
+    /// Taken from the recipe's own `Condition::RomOlderThan`, so the
+    /// threshold is not written down a second time.
+    pub requires_major: Option<u16>,
+}
 
 /// The Kickstart a card carries, as its manifest describes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,7 +95,7 @@ pub enum NotCheckedReason {
 }
 
 /// Compare what the tree was planned for against what the card carries.
-pub fn compare(tree: Option<&PairedRom>, card: Option<&CardRom>) -> Pairing {
+pub fn compare(tree: Option<&TreeRom>, card: Option<&CardRom>) -> Pairing {
     let Some(tree) = tree else {
         return Pairing::NotChecked {
             why: NotCheckedReason::TreeRecordsNoRom,
@@ -117,12 +148,9 @@ pub fn compare(tree: Option<&PairedRom>, card: Option<&CardRom>) -> Pairing {
 mod tests {
     use super::*;
 
-    fn tree(sha: &str, requires: Option<u16>) -> PairedRom {
-        PairedRom {
-            name: "Kickstart 47.102 (A1200)".into(),
+    fn tree(sha: &str, requires: Option<u16>) -> TreeRom {
+        TreeRom {
             sha256: sha.into(),
-            stated_major: Some(47),
-            compatible_models: vec!["A1200".into()],
             requires_major: requires,
         }
     }
