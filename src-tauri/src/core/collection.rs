@@ -9,6 +9,9 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::core::error::{CoreError, CoreResult};
+// `ChipsetRequirement` lives in `core/gameindex` now: the index needs it and a
+// second copy of a two-variant enum is a type to keep in step.
+use crate::core::gameindex::record::ChipsetRequirement;
 use crate::core::jobs::ProgressSink;
 
 /// Type of retro media.
@@ -21,25 +24,6 @@ pub enum MediaKind {
     LhaWhdload,
     /// Hard Disk File / Partition (HDF)
     Hdf,
-}
-
-/// Hardware Chipset Requirement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ChipsetRequirement {
-    /// OCS / ECS (Amiga 500 / 600 / 2000)
-    OcsEcs,
-    /// AGA (Amiga 1200 / 4000 / CD32)
-    Aga,
-}
-
-impl ChipsetRequirement {
-    pub fn display_name(self) -> &'static str {
-        match self {
-            Self::OcsEcs => "OCS / ECS",
-            Self::Aga => "AGA",
-        }
-    }
 }
 
 /// A cataloged game or software title.

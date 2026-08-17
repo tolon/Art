@@ -19,6 +19,7 @@ pub mod detect;
 pub mod distro;
 pub mod error;
 pub mod fat32;
+pub mod gameindex;
 pub mod gotek;
 pub mod hashing;
 pub mod hdf;
