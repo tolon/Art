@@ -38,6 +38,33 @@ pub fn sha256_bytes(data: &[u8]) -> String {
     hex_encode(&hasher.finalize())
 }
 
+/// CRC-16/ARC — reflected, polynomial `0xA001`, init `0x0000`, no final XOR.
+///
+/// This is the checksum a WHDLoad Slave puts in `ws_kickcrc` to identify the
+/// Kickstart image it wants loaded out of `DEVS:Kickstarts/`. ART's own
+/// integrity hash is SHA-256 ([`sha256_bytes`]); this exists **only** to
+/// compare against a value somebody else computed, and must never be used as
+/// a security primitive.
+///
+/// Reference: `WHDLoad/Src/programs/CRC16.asm`, Aminet `dev/misc/WHDLoad_dev.lha`.
+/// Its table is built by shifting right and conditionally `eor`-ing `$a001`,
+/// which is the reflected form; the accumulator starts at zero and is
+/// returned unmodified.
+pub fn crc16_arc(data: &[u8]) -> u16 {
+    let mut crc: u16 = 0;
+    for &byte in data {
+        crc ^= byte as u16;
+        for _ in 0..8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0xA001;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    crc
+}
+
 /// Lowercase hex encoding of a byte slice.
 pub fn hex_encode(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -50,6 +77,37 @@ pub fn hex_encode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// WHDLoad's `ws_kickcrc` is CRC-16/ARC, and this test states the
+    /// parameters it is asserting so a later mismatch can be read as "ART's
+    /// bug" or "a different CRC16" without re-deriving anything:
+    /// **reflected, polynomial 0xA001, init 0x0000, no final XOR**.
+    ///
+    /// The reference is `WHDLoad/Src/programs/CRC16.asm` (Aminet
+    /// `dev/misc/WHDLoad_dev.lha`), whose own header comment calls it
+    /// "ANSI CRC16" and whose table loop is `lsr.w #1,d1` / `eor.w #$a001,d1`
+    /// with `moveq #0,d0` as the initial value.
+    ///
+    /// `"123456789"` is the standard check vector for this parameterisation.
+    #[test]
+    fn crc16_matches_the_arc_check_vector() {
+        assert_eq!(crc16_arc(b"123456789"), 0xBB3D);
+    }
+
+    /// The empty input is the init value, unmodified. WHDLoad's own routine
+    /// returns early on a zero length without touching `d0`, which was set
+    /// to 0.
+    #[test]
+    fn crc16_of_nothing_is_the_init_value() {
+        assert_eq!(crc16_arc(b""), 0x0000);
+    }
+
+    /// Byte order matters: a reflected CRC over reversed input must differ,
+    /// or the implementation is not actually reflecting.
+    #[test]
+    fn crc16_is_order_sensitive() {
+        assert_ne!(crc16_arc(b"AB"), crc16_arc(b"BA"));
+    }
 
     #[test]
     fn known_vector_empty() {
