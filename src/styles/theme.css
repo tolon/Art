@@ -50,12 +50,25 @@
  * direction.
  */
 .theme-light {
-  --bg: #e9ecf1;
-  --bg-elevated: #f5f6f9;
-  --bg-panel: #fafbfc;
-  --bg-hover: #e3e7ee;
-  --border: #ccd3dc;
-  --border-strong: #aab3bf;
+  /* The range, widened after looking at it on a real screen.
+   *
+   * The previous values were a range in arithmetic and not in perception:
+   * #e9ecf1 to #fafbfc is seventeen steps, the same distance the dark theme
+   * uses to obvious effect — but contrast is judged against the surrounding
+   * luminance, so seventeen steps near white reads as nothing. The file
+   * manager showed it worst: sidebar, both panes and the page behind them all
+   * arrived as one flat sheet.
+   *
+   * So: a page that is definitely not white, panels that are, and borders
+   * strong enough to be a line rather than a suggestion. Most of the people
+   * this is for are over fifty, which makes contrast a feature rather than a
+   * preference — the same reason Application Size is a first-class setting. */
+  --bg: #dfe4ec;
+  --bg-elevated: #f1f4f8;
+  --bg-panel: #ffffff;
+  --bg-hover: #d5dce7;
+  --border: #b9c3d1;
+  --border-strong: #8e9aab;
 
   --text: #1b212b;
   --text-muted: #545e6c;

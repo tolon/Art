@@ -26,6 +26,40 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-137** 🔴 **99 of 758 records report a Kickstart image whose name is 68000
+machine code** — *found 2026-08-18, photographing the Collection for the README*
+`src-tauri/src/core/gameindex/readers/slave.rs` · Two cards on screen read
+`Needs Kickstart ÔöÇÔûêÔûêÔûêÔûêÔûêÔûê` where their neighbours read
+`Needs Kickstart 34005.a500`. The bytes behind it are not a mangled string, they
+are code:
+
+```
+9F F5 11 D5 75 D3 11 E1 97 0C 11 CA   1869 AGA
+9F F5 13 49 75 D3 13 55 97 0C 13 3E   Alfred Chicken AGA/CD32
+9F F5 10 C7 75 D3 10 D3 97 0C 10 BC   Arabian Nights CD32
+```
+
+The shape repeats with three bytes changing — the high halves of addresses, so
+this is a run of pointers inside the slave's own code. `ws_kickname`'s RPTR is
+landing somewhere that is not a string, and `read_rptr_string` reads until it
+finds a zero and hands back whatever it collected.
+
+**Measured across the real catalogue: 99 of the 758 records that declare a
+Kickstart, 13 %.** Every one has `ws_kicksize` = 512 KB and `ws_kickcrc` =
+`0xFFFF`, and every one is an AGA or CD32 title — so this is a class of slave,
+not scattered corruption.
+
+Not merely cosmetic. [ART-130](#open) is meant to take a declared Kickstart,
+find it in ART's 154-dump table and offer to place it; ninety-nine entries
+asking for a ROM whose name is machine code is the input that work would rest
+on. `ws_name`, `ws_copy` and `ws_info` resolve correctly for the same slaves
+(1679 titles are named from them), so the RPTR base is right in general and
+something about this field, or this version of the structure, is not.
+
+Wanted next: a hook that dumps the raw header of one of these slaves —
+`ws_Version`, the RPTR at 42, and the bytes it points at — rather than more
+inference from the values that came out.
+
 **ART-130** 🔵 **A game can name the Kickstart it needs, and nothing offers to
 supply it** — *filed 2026-08-17, out of G10's design round; the reading half is
 built by G10, this is the half that was deliberately left out*

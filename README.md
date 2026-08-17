@@ -14,11 +14,41 @@ drag-and-drop-driven application.
 
 > **DROP IT INTO ART.**
 
-![ART's dashboard: the drop zone that starts every workflow](docs/assets/dashboard.png)
+![A real Workbench 1.3 Extras disk open beside a Windows drive](docs/assets/files.png)
 
-*ART running on Windows 11, light theme. Everything starts by dropping
-something on that panel: ART works out what it is from its bytes and offers
-what can be done with it.*
+*An Amiga disk from 1988 on the left — OFS, its own `----rwed` protection bits,
+its own dates — and a Windows drive on the right. Copy either way. Everything
+starts by dropping something on ART: it works out what a file is from its bytes,
+not its name, and offers what can be done with it.*
+
+## What it looks like
+
+**Your library, with covers.** Point ART at the folders your games live in. It
+reads each title from whatever *states* it — a WHDLoad slave's own header, an
+`.rp9` manifest, the filename last — and marks anything it had to guess. Cover
+art is fetched from sources you choose, and nothing reaches the network until
+you ask it to.
+
+![The Collection: 2787 titles across two folders, with cover art](docs/assets/collection.png)
+
+**A PiStorm card, described in the words its own documentation uses.** Every
+control writes a documented Emu68 option or a Raspberry Pi firmware setting —
+and tells you which one. Both files are merged into what is already on the card,
+never rewritten over the top.
+
+![The PiStorm screen: hardware, card, Kickstart and ready-made settings](docs/assets/pistorm.png)
+
+**A Gotek, including what its little screen will say.** The OLED preview is
+live: it renders the same text the hardware will, before you write anything to
+the stick.
+
+![The Gotek screen with an OLED simulator and FlashFloppy settings](docs/assets/gotek.png)
+
+**And when you need to see the actual bytes.** A hex and sector inspector that
+knows where a volume's boot block, root block and bitmap are, and will jump to
+any of them.
+
+![The hex inspector, showing a ROM's first sector](docs/assets/tools.png)
 
 ## Which machines
 
@@ -51,9 +81,21 @@ opened as panes of the same manager, walked into and copied out of — to a
 folder or straight into an Amiga volume; LHA WHDLoad detection with several
 archives installed to a disk at once; Kickstart ROM identification; machine
 profiles for the whole classic line; Gotek/FlashFloppy; PiStorm/Emu68; WinUAE
-launching; collection scanning; a background job queue with progress/cancel;
+launching; a background job queue with progress/cancel;
 an operation log; Beginner/Power User modes; and the drag-and-drop Workflow
 Engine behind "what can I do with this?".
+
+**A collection you can keep.** ART indexes your folders once and remembers:
+a library that takes minutes to read is there the moment the screen opens, and
+an Update re-reads only what changed. Each title's facts come from whatever
+*states* them — a WHDLoad slave's own header, an `.rp9` manifest, a filename
+last — and the screen marks anything guessed rather than read. Cover art is
+fetched from sources listed in Settings, which you can switch off or point
+elsewhere; **nothing reaches the network until you ask it to.** Where a name
+could only be taken off a filename, ART proposes a tidier one and you accept it
+— it will not rename anything by itself, and where the evidence runs out it
+says nothing and leaves you the edit box. Measured against a real 2787-title
+library across two folders.
 
 **PiStorm cards, both directions.** ART opens a real one — an MBR with a FAT32
 boot partition and one to three Amiga disks inside it, each carrying its own
@@ -61,10 +103,10 @@ partition table at a byte offset inside the card — and shows it as the list of
 disks the m68k side actually sees, verified against CaffeineOS and MultibootOS.
 It can also **build one**: the partition table, a FAT32 boot partition carrying
 your own Emu68 release and Kickstart, and a partition table at the start of
-every Amiga disk. Two limits, said here rather than discovered later — building
-is engine work with no screen on it yet, and **no card ART built has been
-flashed or booted**. The volumes inside are left unformatted: PFS3 is not
-written yet.
+every Amiga disk. **PFS3 and FFS volumes are formatted and filled by ART
+itself** — no external tool required, though one can be configured as a
+fallback for two named gaps. One limit, said here rather than discovered later:
+**no card ART built has been flashed or booted.**
 
 **Content-first detection**: what a file *is* comes from its bytes, not its
 name, so an `.img` holding a floppy is a floppy and a `.dat` holding an LHA
@@ -118,10 +160,15 @@ The interface ships in English and Turkish. The language is chosen in
 Settings and remembered across restarts. Error messages coming from the Rust
 core are still English regardless of the chosen language.
 
-Not yet built: PFS3/SFS
-(partitions using them are listed but their contents are not readable),
-DMS/ADZ conversion, recovery tools, and writing *into* a CD or an archive
-(both are read-only, deliberately and permanently).
+Not yet built: SFS (partitions using it are listed but their contents are not
+readable), DMS/ADZ conversion, recovery tools, and writing *into* a CD or an
+archive (both are read-only, deliberately and permanently).
+
+Three fields in the Collection — chipset, genre and rating — are usually empty,
+and that is a shortage of sources rather than of code. Lemon Amiga refuses
+automated requests outright; Hall of Light publishes only web pages, and ART
+fetches index files, never pages; OpenRetro has exactly the right data and
+documents no way in. ART leaves them blank rather than guessing.
 
 | | |
 |---|---|
@@ -200,16 +247,23 @@ Application Services / Commands
 Workflow Engine  ←  Detection
         ↓
 Amiga Core (Rust, platform-independent)
-├── adf / volume (the filesystem driver + writer) / hdf / lha / rdb / rom / binary
-├── analysis / recovery / compatibility
-├── hashing / conversion / validation
+├── volume (the filesystem driver + writer) · adf · hdf · rdb · mbr · fat32
+├── card (an SD card as the list of disks the m68k side sees)
+├── osinstall (a distribution tree, built from your own install media)
+├── preload (putting that tree onto a card) · gameindex · artwork
+├── archive (lha · zip · 7z, read-only) · rom · cbm · binary
+├── analysis · compatibility · conversion · validation · hashing
+├── security (hostile input) · safety (your data against ART itself) · jobs
         ↓
 Platform Services → Windows
 ```
 
-The Amiga core is **platform-independent Rust** — no Tauri types, no
-Windows APIs. This keeps it unit-testable and reusable. See
-[docs/architecture.md](docs/architecture.md).
+The Amiga core is **platform-independent Rust** — no Tauri types, no Windows
+APIs, and no network. Where it needs something platform-specific it declares a
+trait and the implementation lives outside: `MirrorClient` is the one real
+instance, and `src-tauri/src/net/` is the only place in ART that opens a
+connection. This keeps the core unit-testable and leaves a future CLI shell
+open. See [docs/architecture.md](docs/architecture.md).
 
 ## License
 
@@ -219,7 +273,10 @@ Copyright (C) 2026 tolon.
 [LICENSE](LICENSE).
 
 ART's dependencies are permissively licensed (MIT / Apache-2.0 / Zlib / CDLA)
-and remain compatible with this; they are listed in
+with **one deliberate exception**: `libpfs3`, the PFS3 implementation ART writes
+real PiStorm cards with, is **LGPL-3.0-or-later**. Weak copyleft, compatible
+with ART's own licence, and taken in preference to writing a second filesystem
+writer from scratch. All of them are listed in
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) and checked on every push by
 `cargo deny`. ART itself distributes **no** Amiga ROMs, no AmigaOS files and no
 copyrighted software — see [docs/licenses.md](docs/licenses.md).
