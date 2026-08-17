@@ -25,6 +25,10 @@ pub enum Provenance {
     /// The name of the drawer the slave sits in — the weakest source, and the
     /// reason it is last: `Moonstone Install` is a drawer, not a title.
     DrawerName,
+    /// The user typed it. Outranks everything, including a declaration —
+    /// *nothing changes unless the user changes it* cuts both ways, and a
+    /// correction they made must survive every later refresh.
+    UserEdit,
 }
 
 impl Provenance {
@@ -34,6 +38,35 @@ impl Provenance {
     /// still recoverable because the winner records itself.
     pub fn is_stated(self) -> bool {
         matches!(self, Self::Rp9Manifest | Self::WhdloadSlave)
+    }
+
+    /// Which fact wins when two sources answer the same question.
+    ///
+    /// **A bool cannot order four tiers.** [`is_stated`](Self::is_stated) stays
+    /// because the screen's badge asks a two-way question — did anybody declare
+    /// this, or was it guessed — but the precedence the catalogue turns on is
+    /// this:
+    ///
+    /// ```text
+    /// 4  the user typed it
+    /// 3  the packager declared it   (.rp9 manifest · WHDLoad slave header)
+    /// 2  reserved for a third-party database (wave B)
+    /// 1  a TOSEC-shaped filename
+    /// 0  the name of the drawer a slave happens to sit in
+    /// ```
+    ///
+    /// **2 is deliberately empty.** Wave B fetches facts from a source the user
+    /// configures, and a stranger's guess does not outrank what the packager
+    /// wrote down — leaving the gap here means B adds a variant rather than
+    /// renumbering the tiers and re-reading every comparison that depends on
+    /// them.
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::UserEdit => 4,
+            Self::Rp9Manifest | Self::WhdloadSlave => 3,
+            Self::TosecName => 1,
+            Self::DrawerName => 0,
+        }
     }
 }
 
@@ -260,6 +293,78 @@ mod tests {
     fn a_title_with_no_usable_characters_still_gets_an_id() {
         let id = derive_id("!!!", "0011223344556677");
         assert!(id.starts_with("untitled-"), "{id}");
+    }
+
+    /// The order the whole catalogue turns on, pinned as a list rather than
+    /// asserted pairwise — a pairwise test passes while two variants are
+    /// accidentally equal.
+    #[test]
+    fn the_sources_are_ranked_from_user_edit_down_to_a_drawer_name() {
+        let order = [
+            Provenance::UserEdit,
+            Provenance::Rp9Manifest,
+            Provenance::TosecName,
+            Provenance::DrawerName,
+        ];
+        for pair in order.windows(2) {
+            assert!(
+                pair[0].rank() >= pair[1].rank(),
+                "{:?} must not rank below {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+        // A user edit outranks everything, and the two declarations tie: an
+        // `.rp9` manifest and a slave header are both the packager writing it
+        // down, and nothing here is entitled to prefer one.
+        assert!(Provenance::UserEdit.rank() > Provenance::Rp9Manifest.rank());
+        assert_eq!(
+            Provenance::Rp9Manifest.rank(),
+            Provenance::WhdloadSlave.rank()
+        );
+        assert!(Provenance::WhdloadSlave.rank() > Provenance::TosecName.rank());
+        assert!(Provenance::TosecName.rank() > Provenance::DrawerName.rank());
+    }
+
+    /// `is_stated` and `rank` must not drift apart: anything that states a fact
+    /// outranks anything that merely suggests one.
+    #[test]
+    fn every_stated_source_outranks_every_guessed_one() {
+        let all = [
+            Provenance::Rp9Manifest,
+            Provenance::WhdloadSlave,
+            Provenance::TosecName,
+            Provenance::DrawerName,
+            Provenance::UserEdit,
+        ];
+        for stated in all.iter().filter(|p| p.is_stated()) {
+            for guessed in all
+                .iter()
+                .filter(|p| !p.is_stated() && **p != Provenance::UserEdit)
+            {
+                assert!(stated.rank() > guessed.rank(), "{stated:?} vs {guessed:?}");
+            }
+        }
+    }
+
+    /// A user edit is not a *declaration by the packager*, so the badge does not
+    /// call it one — but it still wins. The two questions are different and the
+    /// two methods answer them differently on purpose.
+    #[test]
+    fn a_user_edit_is_not_stated_but_still_wins() {
+        assert!(!Provenance::UserEdit.is_stated());
+        let highest = [
+            Provenance::Rp9Manifest,
+            Provenance::WhdloadSlave,
+            Provenance::TosecName,
+            Provenance::DrawerName,
+            Provenance::UserEdit,
+        ]
+        .iter()
+        .map(|p| p.rank())
+        .max()
+        .unwrap();
+        assert_eq!(Provenance::UserEdit.rank(), highest);
     }
 
     /// The provenance travels with the value. This is the whole point of the
