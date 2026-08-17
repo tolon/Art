@@ -37,30 +37,40 @@ schema for the catalogue existed and only lacked wiring. It does not.
 `001_initial.sql` creates `settings`, `recent_files` and `jobs`, and it is the
 only migration. Corrected in the same session.
 
-## Why not SQLite
+## Why JSON and not SQLite: who owns the file
 
-ART has SQLite (`art.db`, `tauri-plugin-sql`) and it is the wrong tool here.
-**The frontend owns it** — migrations run on the frontend's first
-`Database.load` — while the thing that produces a catalogue is `core/`. Writing
-1698 records from TypeScript puts the work on the wrong side of CLAUDE.md's
-rule that technical complexity belongs in the Rust core.
+ART has SQLite (`art.db`, `tauri-plugin-sql`) and it is the wrong tool here for
+a reason that has nothing to do with performance. **The frontend owns it** —
+migrations run on the frontend's first `Database.load` — while the thing that
+produces a catalogue is `core/`. Writing 1698 records from TypeScript puts the
+work on the wrong side of CLAUDE.md's rule that technical complexity belongs in
+the Rust core, and putting a SQL dependency inside `core/` puts a C library into
+a list kept deliberately narrow and pure-Rust so the module stays promotable.
 
 The project's own precedent is a JSON manifest written by `core/`:
 `distribution.json` (G5), `card.manifest.json` (G7). This follows it.
+
+§4 carries the other half of the answer — the numbers — because the question
+deserves both.
 
 ## 1. What is stored, in three layers
 
 ```
 <ART data dir>\catalogue\
-  roots.json                        which roots are catalogued, in order, each
-                                    with its last-scan time and the schema it
-                                    was scanned with
+  roots.json                        which roots are catalogued, and in what
+                                    order — nothing else
   e-amiga-amigatolon-whdload.json   the READ layer — one file per root: its
-  e-amiga-titles.json               records, each beside a cheap cache key
-                                    (path · size · mtime)
+  e-amiga-titles.json               records each beside a cheap cache key
+                                    (path · size · mtime), plus when it was
+                                    last scanned and which reader read it
   overrides.json                    the USER layer — hand edits, keyed by
                                     record id
 ```
+
+**A root's own facts live in that root's file, not in the list.** Two places
+holding "when was this scanned" is two places to disagree, and the list would
+have to be rewritten every time any single root was refreshed — losing the
+per-root isolation that is the whole reason for the split.
 
 One file per root is what makes several folders fall out for free: adding a
 root writes a file, removing one deletes a file, and refreshing one leaves the
@@ -162,19 +172,27 @@ Shape:
 
 ```rust
 pub struct CatalogueRoot {
+    pub schema: u32,                  // the catalogue FILE format's version
     pub root: String,
     pub scanned_at: Option<String>,   // supplied by the caller; core has no clock
-    pub schema: u32,
+    pub index_schema: u32,            // GAMEINDEX_SCHEMA when this root was read
     pub entries: Vec<CachedEntry>,
 }
 
 pub struct CachedEntry {
     pub path: String,
     pub size: u64,
-    pub mtime: i64,
+    pub mtime_ms: i64,                // milliseconds: two writes inside one second are not unusual
     pub record: GameRecord,
 }
 ```
+
+**Two schema numbers, and conflating them would be a mistake.** `schema`
+versions the *file format*; `index_schema` records which *reader* produced the
+records inside. They move for different reasons — the first when these files
+change shape, the second when a reader starts producing better facts from the
+same bytes — and treating a reader improvement as a format change would force a
+migration nobody needs.
 
 ### Two write classes, deliberately not treated alike
 
@@ -188,7 +206,86 @@ pub struct CachedEntry {
 Storage keeps it in both root files; the **screen** merges by `id`. Merging in
 storage would make removing a root impossible without rewriting the other.
 
-## 4. Testing
+## 4. Scale, measured
+
+The user asked the right question: *what happens at 10,000 games, and would
+SQLite not be more correct?* Measured rather than argued.
+
+**One entry serialises to 824 bytes compact, 1124 pretty**, in the shape
+`record.rs` actually produces:
+
+| entries | compact | pretty |
+|---:|---:|---:|
+| 1698 (today's library) | 1.3 MB | 1.8 MB |
+| 10 000 | 7.9 MB | 10.7 MB |
+| 50 000 | 39 MB | 54 MB |
+
+**Root files are written compact.** A machine reads them, and pretty-printing
+costs 36% for nobody's benefit. `overrides.json` stays pretty — a person may
+open it, and it is small.
+
+Where the time actually goes at 10 000, and whether SQLite helps:
+
+| Cost | At 10 000 | Does SQLite help? |
+|---|---|---|
+| **The scan itself** — hashing, reading inside hardfiles | minutes; the problem this whole round exists to remove | **No.** Identical either way. Persistence is what fixes it, not the format |
+| Parsing the catalogue on load | ~8 MB of JSON | Partly — it need not parse what is not shown |
+| Writing after a refresh | ~8 MB, atomically | Similar; SQLite writes only changed rows |
+| Availability | 10 000 `metadata()` calls | **No.** The same syscalls |
+| Crossing to the webview | ~8 MB over IPC | **No**, unless the screen paginates — a screen decision, not a storage one |
+| Rendering 10 000 rows | needs virtualisation | **No.** Wave C's problem regardless |
+
+SQLite's one real win is **querying without loading**, and it only pays if the
+screen paginates. Against that, in ART specifically: `art.db` is opened by the
+*frontend* — migrations run on its first `Database.load` — so a SQLite
+catalogue means either TypeScript writing 10 000 rows, which is the wrong side
+of "technical complexity belongs in the Rust core", or a SQL dependency inside
+`core/`, which is a C library in a dependency list kept deliberately narrow and
+pure-Rust so `core/` stays promotable.
+
+**The decision is reversible, which is why measuring beats arguing.**
+`store`'s interface — `load`, `refresh_root`, `add_root`, `remove_root`,
+`set_override` — says nothing about JSON. A different backing store would touch
+`store.rs` and nothing else.
+
+So the plan carries a **10 000-entry load test**, printing its timing. It is
+there to catch the one thing that would actually change the answer: an
+accidentally quadratic load. If it ever fails, the seam above is where SQLite
+goes in.
+
+### Artwork is the big number, and it is not this format's problem
+
+Measured from the sources the user named, `Commodore - Amiga` on
+[thumbnails.libretro.com](https://thumbnails.libretro.com/):
+
+| set | files | median | total |
+|---|---:|---:|---:|
+| `Named_Boxarts` | 2958 | 368 KB | **1217 MB** |
+| `Named_Snaps` | 3072 | 11 KB | 96 MB |
+| `Named_Titles` | 3045 | 31 KB | 352 MB |
+| | | | **1.63 GB** |
+
+([LaunchBox's `Metadata.zip`](https://gamesdb.launchbox-app.com/Metadata.zip)
+is 102 MB, refreshed daily, covers every platform in one file, carries no
+images, and publishes no terms.)
+
+Three consequences, and they are **constraints A places on B** rather than
+things B gets to decide:
+
+1. **No image ever goes in the catalogue JSON.** A record points at a cache
+   entry; the bytes live beside it as files. 1.63 GB is 200× the metadata, and
+   conflating them would make every load pay for artwork.
+2. **Artwork is cached per *title*, not per record.** The whole Amiga platform
+   is about 3000 titles, so the cache has a ceiling that does not grow with the
+   collection — and one image serves several records: this user's 1697
+   hardfiles hold `1869` five times (`1869 AGA`, `1869 AGA De`, `1869 De`,
+   `1869 Pl`, `1869`) and `Agony` twice.
+3. **The cache's location is a setting.** The default is ART's data directory,
+   which is on `C:` — and 1.6 GB written to `C:` without asking is precisely
+   what this user objects to. The same instinct that made them ask for
+   configurable sources applies to where the bytes land.
+
+## 5. Testing
 
 Tempdir throughout, as always. Two tests carry the design:
 
@@ -205,7 +302,7 @@ and loaded round-trips · a catalogue directory that does not exist yet is
 created rather than refused · a corrupt root file is refused with a reason
 rather than silently starting empty.
 
-## 5. Out of scope
+## 6. Out of scope
 
 - **The editing UI.** A carries the override layer and the "user always wins"
   rule; the interface for editing a title belongs to C.
