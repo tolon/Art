@@ -62,9 +62,7 @@ pub fn scan_titles_with(
     // Walking the tree comes first and its size is unknown until it finishes —
     // an indefinite phase rather than an invented percentage.
     progress.report(0, None, "Looking for titles…");
-    let mut files = Vec::new();
-    collect(dir, &mut files, 0);
-    files.sort();
+    let files = collect_indexable(dir);
 
     let total = files.len() as u64;
     let mut by_id: BTreeMap<String, CatalogueEntry> = BTreeMap::new();
@@ -127,6 +125,29 @@ fn is_cancelled_error(err: &crate::core::error::CoreError) -> bool {
 /// is skipped rather than hashed.
 const MAX_TITLE_BYTES: u64 = 512 * 1024 * 1024;
 
+/// The extensions the index looks inside.
+///
+/// **One list.** The walk filters on it and [`read_one`] guards on it, and two
+/// copies would be two places for a format to be half-supported.
+fn is_indexable(path: &Path) -> bool {
+    path.extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .is_some_and(|e| matches!(e.as_str(), "rp9" | "hdf" | "img" | "adf" | "adz"))
+}
+
+/// Every indexable file under `dir`, sorted, depth-limited, symlinks skipped.
+///
+/// `pub(crate)` because `store::refresh_root` walks the same way — two walks
+/// with two depth limits is two things to keep in step, and the one that drifts
+/// is the one nobody is looking at.
+pub(crate) fn collect_indexable(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    collect(dir, &mut files, 0);
+    files.retain(|path| is_indexable(path));
+    files.sort();
+    files
+}
+
 /// Read one file, or `Ok(None)` when it is not something the index describes.
 ///
 /// **Identify first, hash second.** The content hash is what gives a record its
@@ -134,14 +155,14 @@ const MAX_TITLE_BYTES: u64 = 512 * 1024 * 1024;
 /// deciding whether the file is a title at all means the most expensive step
 /// runs on files that are then thrown away. That is what a 29 GB card image in
 /// the collection folder turned into a stall.
-fn read_one(path: &Path) -> CoreResult<Option<GameRecord>> {
+pub(crate) fn read_one(path: &Path) -> CoreResult<Option<GameRecord>> {
+    if !is_indexable(path) {
+        return Ok(None);
+    }
     let extension = path
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
-    if !matches!(extension.as_str(), "rp9" | "hdf" | "img" | "adf" | "adz") {
-        return Ok(None);
-    }
 
     let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     if bytes > MAX_TITLE_BYTES {

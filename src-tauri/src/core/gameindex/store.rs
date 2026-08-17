@@ -248,6 +248,141 @@ pub fn write_overrides(dir: &Path, value: &Overrides) -> CoreResult<Option<PathB
     guarded_write(&path, &bytes, BackupPolicy::CONFIG)
 }
 
+/// Which entries a refresh is willing to trust.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refresh {
+    /// Trust a cached entry whose file looks unchanged and whose record was read
+    /// by the current reader.
+    Update,
+    /// Trust nothing on disk that is still there. **Not** "start from zero":
+    /// entries whose files have gone are still kept.
+    Rescan,
+}
+
+/// The cheap identity of a file: its size and its modification time.
+///
+/// `None` when the file is not there — which is not an error, and is how a
+/// refresh recognises an entry whose file has gone.
+pub fn file_key(path: &Path) -> Option<(u64, i64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_millis();
+    Some((meta.len(), mtime as i64))
+}
+
+/// Read a root again, reusing what can be reused.
+///
+/// Never deletes an entry whose file has gone: a catalogue is a library, not a
+/// mirror of the disk, and an unplugged drive must not empty it.
+pub fn refresh_root(
+    dir: &Path,
+    root: &Path,
+    mode: Refresh,
+    scanned_at: Option<String>,
+    progress: &dyn crate::core::jobs::ProgressSink,
+) -> CoreResult<CatalogueRoot> {
+    use crate::core::gameindex::record::GAMEINDEX_SCHEMA;
+    use crate::core::gameindex::scan::{collect_indexable, read_one};
+
+    if !root.is_dir() {
+        return Err(CoreError::InvalidInput(format!(
+            "Directory not found at '{}'",
+            root.display()
+        )));
+    }
+
+    let cached: BTreeMap<String, CachedEntry> = read_root(dir, root)?
+        .map(|value| {
+            value
+                .entries
+                .into_iter()
+                .map(|entry| (entry.path.clone(), entry))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    progress.report(0, None, "Looking for titles…");
+    let files = collect_indexable(root);
+
+    // Decide what needs reading *before* reading anything, so the total the user
+    // sees is the work that is actually left.
+    let mut reuse: Vec<CachedEntry> = Vec::new();
+    let mut to_read: Vec<(PathBuf, u64, i64)> = Vec::new();
+    for path in &files {
+        let Some((size, mtime_ms)) = file_key(path) else {
+            continue;
+        };
+        let key = path.to_string_lossy().to_string();
+        let hit = (mode == Refresh::Update)
+            .then(|| cached.get(&key))
+            .flatten()
+            .filter(|entry| {
+                entry.size == size
+                    && entry.mtime_ms == mtime_ms
+                    && entry.record.schema == GAMEINDEX_SCHEMA
+            });
+        match hit {
+            Some(entry) => reuse.push(entry.clone()),
+            None => to_read.push((path.clone(), size, mtime_ms)),
+        }
+    }
+
+    let total = to_read.len() as u64;
+    let mut fresh: Vec<CachedEntry> = Vec::new();
+    for (index, (path, size, mtime_ms)) in to_read.into_iter().enumerate() {
+        // Between whole files is the only safe place to stop, and nothing has
+        // been written yet in any case.
+        if progress.is_cancelled() {
+            return Err(crate::core::jobs::cancelled_error());
+        }
+        let short = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
+        progress.report(index as u64 + 1, Some(total), &short);
+
+        match read_one(&path) {
+            Ok(Some(record)) => fresh.push(CachedEntry {
+                path: path.to_string_lossy().into(),
+                size,
+                mtime_ms,
+                record,
+            }),
+            Ok(None) => {}
+            Err(err) if matches!(err, CoreError::Cancelled) => return Err(err),
+            Err(err) => log::debug!("catalogue: skipping {}: {err}", path.display()),
+        }
+    }
+
+    // Entries whose files are gone: kept, whichever mode this was.
+    let present: std::collections::BTreeSet<String> = reuse
+        .iter()
+        .chain(fresh.iter())
+        .map(|entry| entry.path.clone())
+        .collect();
+    let missing: Vec<CachedEntry> = cached
+        .into_values()
+        .filter(|entry| !present.contains(&entry.path))
+        .collect();
+
+    let mut entries: Vec<CachedEntry> = reuse.into_iter().chain(fresh).chain(missing).collect();
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+
+    let value = CatalogueRoot {
+        schema: CATALOGUE_SCHEMA,
+        root: root.to_string_lossy().into(),
+        scanned_at,
+        index_schema: GAMEINDEX_SCHEMA,
+        entries,
+    };
+    write_root(dir, &value)?;
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,6 +422,274 @@ mod tests {
                 bytes: 943_616,
             },
         }
+    }
+
+    use crate::core::jobs::NoProgress;
+
+    /// Build a real, readable `.adf` under `dir` and return its path.
+    fn a_real_file(dir: &Path, name: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, format!("pretend this is {name}")).unwrap();
+        path
+    }
+
+    /// A root with one planted entry, so the cache tests all start the same way.
+    fn plant(dir: &Path, root: &Path, entry: CachedEntry, index_schema: u32) {
+        write_root(
+            dir,
+            &CatalogueRoot {
+                schema: CATALOGUE_SCHEMA,
+                root: root.to_string_lossy().into(),
+                scanned_at: None,
+                index_schema,
+                entries: vec![entry],
+            },
+        )
+        .unwrap();
+    }
+
+    /// **The cache really skips the read.**
+    ///
+    /// A cached entry is planted whose `record` says `SENTINEL` — a title the
+    /// file's own name could never produce — with the file's real size and
+    /// mtime. If Update returns `SENTINEL`, the file was not opened. An
+    /// implementation that reads anyway cannot pass this, and no clock or mtime
+    /// trickery is needed to prove it.
+    #[test]
+    fn an_unchanged_file_is_not_read_again() {
+        let dir = scratch("cache-hit");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        let file = a_real_file(&root, "Zool (1992)(Gremlin).adf");
+        let (size, mtime_ms) = file_key(&file).unwrap();
+
+        plant(
+            &dir,
+            &root,
+            CachedEntry {
+                path: file.to_string_lossy().into(),
+                size,
+                mtime_ms,
+                record: a_record("SENTINEL"),
+            },
+            GAMEINDEX_SCHEMA,
+        );
+
+        let after = refresh_root(&dir, &root, Refresh::Update, None, &NoProgress).unwrap();
+        assert_eq!(after.entries.len(), 1);
+        assert_eq!(
+            after.entries[0].record.title.value, "SENTINEL",
+            "the file was re-read when the cache should have answered"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A record read by an **older reader** is re-read even when path, size and
+    /// mtime all match. This is what makes a fix like ART-131 land without the
+    /// user knowing to ask for it.
+    #[test]
+    fn a_record_from_an_older_reader_is_read_again() {
+        let dir = scratch("stale-schema");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        let file = a_real_file(&root, "Zool (1992)(Gremlin).adf");
+        let (size, mtime_ms) = file_key(&file).unwrap();
+
+        let mut stale = a_record("SENTINEL");
+        stale.schema = GAMEINDEX_SCHEMA - 1;
+        plant(
+            &dir,
+            &root,
+            CachedEntry {
+                path: file.to_string_lossy().into(),
+                size,
+                mtime_ms,
+                record: stale,
+            },
+            GAMEINDEX_SCHEMA - 1,
+        );
+
+        let after = refresh_root(&dir, &root, Refresh::Update, None, &NoProgress).unwrap();
+        assert_eq!(after.entries[0].record.title.value, "Zool");
+        assert_eq!(after.index_schema, GAMEINDEX_SCHEMA);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A file whose size changed is read again.
+    #[test]
+    fn a_changed_file_is_read_again() {
+        let dir = scratch("changed");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        let file = a_real_file(&root, "Zool (1992)(Gremlin).adf");
+        let (_, mtime_ms) = file_key(&file).unwrap();
+
+        plant(
+            &dir,
+            &root,
+            CachedEntry {
+                path: file.to_string_lossy().into(),
+                size: 1,
+                mtime_ms,
+                record: a_record("SENTINEL"),
+            },
+            GAMEINDEX_SCHEMA,
+        );
+
+        let after = refresh_root(&dir, &root, Refresh::Update, None, &NoProgress).unwrap();
+        assert_eq!(after.entries[0].record.title.value, "Zool");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **Rescan ignores the cache.** Same planted sentinel, and this time it
+    /// must be gone.
+    #[test]
+    fn a_rescan_reads_everything_present() {
+        let dir = scratch("rescan");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        let file = a_real_file(&root, "Zool (1992)(Gremlin).adf");
+        let (size, mtime_ms) = file_key(&file).unwrap();
+
+        plant(
+            &dir,
+            &root,
+            CachedEntry {
+                path: file.to_string_lossy().into(),
+                size,
+                mtime_ms,
+                record: a_record("SENTINEL"),
+            },
+            GAMEINDEX_SCHEMA,
+        );
+
+        let after = refresh_root(&dir, &root, Refresh::Rescan, None, &NoProgress).unwrap();
+        assert_eq!(after.entries[0].record.title.value, "Zool");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **A file that has gone keeps its entry** — through an Update *and*
+    /// through a Rescan. A catalogue is a library, not a mirror of the disk, and
+    /// an unplugged drive must not delete it.
+    #[test]
+    fn an_entry_whose_file_has_gone_is_kept_by_both_modes() {
+        for mode in [Refresh::Update, Refresh::Rescan] {
+            let dir = scratch("missing");
+            let root = dir.join("library");
+            std::fs::create_dir_all(&root).unwrap();
+
+            plant(
+                &dir,
+                &root,
+                CachedEntry {
+                    path: root.join("Gone.adf").to_string_lossy().into(),
+                    size: 100,
+                    mtime_ms: 1,
+                    record: a_record("Gone Game"),
+                },
+                GAMEINDEX_SCHEMA,
+            );
+
+            let after = refresh_root(&dir, &root, mode, None, &NoProgress).unwrap();
+            assert_eq!(after.entries.len(), 1, "{mode:?} dropped a missing entry");
+            assert_eq!(after.entries[0].record.title.value, "Gone Game");
+
+            std::fs::remove_dir_all(&dir).ok();
+        }
+    }
+
+    /// A refresh reports what it will actually read, not the file count. Three
+    /// changed files out of 1699 is "3", which is both the honest number and the
+    /// reassuring one.
+    #[test]
+    fn progress_counts_the_files_that_need_reading() {
+        use std::sync::Mutex;
+
+        #[derive(Default)]
+        struct Recorder {
+            totals: Mutex<Vec<Option<u64>>>,
+        }
+        impl crate::core::jobs::ProgressSink for Recorder {
+            fn report(&self, _done: u64, total: Option<u64>, _message: &str) {
+                self.totals.lock().unwrap().push(total);
+            }
+            fn is_cancelled(&self) -> bool {
+                false
+            }
+        }
+
+        let dir = scratch("progress");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        let cached = a_real_file(&root, "Cached (1992)(Someone).adf");
+        a_real_file(&root, "Fresh (1993)(Someone).adf");
+        let (size, mtime_ms) = file_key(&cached).unwrap();
+
+        plant(
+            &dir,
+            &root,
+            CachedEntry {
+                path: cached.to_string_lossy().into(),
+                size,
+                mtime_ms,
+                record: a_record("SENTINEL"),
+            },
+            GAMEINDEX_SCHEMA,
+        );
+
+        let sink = Recorder::default();
+        refresh_root(&dir, &root, Refresh::Update, None, &sink).unwrap();
+
+        let totals = sink.totals.lock().unwrap();
+        assert!(
+            totals.contains(&Some(1)),
+            "one file needed reading, so the total must be 1: {totals:?}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Cancelling between files is a cancellation, never a failure, and the
+    /// catalogue on disk is left as it was.
+    #[test]
+    fn a_cancelled_refresh_leaves_the_catalogue_alone() {
+        use crate::core::jobs::CancelToken;
+
+        struct CancelAtOnce(CancelToken);
+        impl crate::core::jobs::ProgressSink for CancelAtOnce {
+            fn report(&self, _done: u64, _total: Option<u64>, _message: &str) {
+                self.0.cancel();
+            }
+            fn is_cancelled(&self) -> bool {
+                self.0.is_cancelled()
+            }
+        }
+
+        let dir = scratch("cancel");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        a_real_file(&root, "One (1992)(Someone).adf");
+        a_real_file(&root, "Two (1992)(Someone).adf");
+
+        let err = refresh_root(
+            &dir,
+            &root,
+            Refresh::Update,
+            None,
+            &CancelAtOnce(CancelToken::default()),
+        )
+        .unwrap_err();
+        assert!(matches!(err, CoreError::Cancelled), "{err}");
+        assert!(
+            read_root(&dir, &root).unwrap().is_none(),
+            "a cancelled refresh must not have written a partial catalogue"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A root file written and read back is the same value.
