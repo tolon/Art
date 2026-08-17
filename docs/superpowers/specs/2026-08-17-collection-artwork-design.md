@@ -140,6 +140,7 @@ Measured on `libretro-thumbnails/Commodore_-_Amiga` (1.76 GB, default branch
 | `Named_Boxarts` | 3324 | 0.8 MB |
 | `Named_Titles` | 3434 | 0.8 MB |
 | `Named_Snaps` | 3475 | 0.8 MB |
+| `Named_Logos` | present, unmeasured | — |
 
 The naming is plain title text, not No-Intro region tags:
 
@@ -158,17 +159,32 @@ and then downloads only what matched.
 
 The index must be machine-readable, which rules out the browsable HTML directory
 listing at `thumbnails.libretro.com`. GitHub's git-tree API serves the same
-listing as JSON, and — verified — a **query-free** path returns one directory
-complete and untruncated:
+listing as JSON.
+
+Getting at it takes **two calls, and the reason is ART's own path validator**.
+`validate_fetch_path` rejects a repository path containing `?`, `#`, a space, or
+a `:` — the last because a colon could re-point the request at another host.
+That rules out both `?recursive=1` and the compact `trees/master:Named_Boxarts`
+tree-ish form. What passes is the plain two-step, verified against the live API:
 
 ```
 base:  https://api.github.com/
-path:  repos/libretro-thumbnails/Commodore_-_Amiga/git/trees/master:Named_Boxarts
+1.     repos/libretro-thumbnails/Commodore_-_Amiga/git/trees/master
+         -> the root tree, naming each subdirectory and its SHA
+2.     repos/libretro-thumbnails/Commodore_-_Amiga/git/trees/<sha>
+         -> that subdirectory, complete and untruncated (3324 for Named_Boxarts)
 ```
 
-This matters because `Mirror::new` rejects a base containing `?` or `#`, and
-`url_for` builds `<base><path>` and nothing else. The `?recursive=1` form would
-not have been expressible; the `tree-ish:subdirectory` form is.
+Every character in both paths is alphanumeric, `_`, `-`, `.` or `/`, so neither
+needs encoding and neither weakens the validator to pass it.
+
+The root tree also names a fourth kind this design had not accounted for —
+`Named_Logos` — so `ArtKind` carries it.
+
+**Image paths do need encoding.** The files themselves are named
+`1000 Miglia - 1927-1933 Volume 1.png`, and a space is not `ascii_graphic`. The
+path handed to `url_for` is percent-encoded first, `/` excluded, in
+`core/artwork`; the validator is not relaxed to accommodate it.
 
 ---
 
@@ -259,12 +275,13 @@ bulk of the traffic: three index files, then only the images that matched.
 
 ```
 core/artwork/
-├── mod.rs          ArtKind { Boxart, Screenshot, Title, Icon }, ArtRef
+├── mod.rs          ArtKind { Boxart, Snap, Title, Logo, Icon }, ArtRef
 ├── key.rs          normalisation and the two matching rules
+├── encode.rs       percent-encoding for paths that hold spaces
 ├── cache.rs        the on-disk cache: entries, misses, atomic writes
 └── sources/
     ├── mod.rs      trait ArtSource
-    ├── libretro.rs index parsing + image paths
+    ├── libretro.rs the two-step tree index + image paths
     └── whdload_de.rs  exact package-name paths
 ```
 
