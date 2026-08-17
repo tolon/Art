@@ -31,6 +31,14 @@ you ask it to.
 
 ![The Collection: 2787 titles across two folders, with cover art](docs/assets/collection.png)
 
+*The two `1869` cards in the top row are the point, and they are a real pair
+rather than a staged one. Both are AGA, both ask for Kickstart `40068.a1200`,
+and both say so because the WHDLoad slave inside them says so. But the third
+card's **name** was taken off its filename — somebody had renamed the file —
+so ART marks it `~guessed` while its neighbour, named by the slave itself,
+carries no mark. A guess and a statement look identical once they are on a
+screen, and ART's answer is to never let them.*
+
 **A PiStorm card, described in the words its own documentation uses.** Every
 control writes a documented Emu68 option or a Raspberry Pi firmware setting —
 and tells you which one. Both files are merged into what is already on the card,
