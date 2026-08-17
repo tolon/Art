@@ -248,6 +248,52 @@ pub fn write_overrides(dir: &Path, value: &Overrides) -> CoreResult<Option<PathB
     guarded_write(&path, &bytes, BackupPolicy::CONFIG)
 }
 
+/// Add a folder to the catalogue. Nothing is scanned; that is a separate ask.
+///
+/// A path that is not a directory is refused rather than listed: a typo left in
+/// the list would produce an empty root for ever and look like a folder with no
+/// games in it.
+pub fn add_root(dir: &Path, root: &Path) -> CoreResult<()> {
+    if !root.is_dir() {
+        return Err(CoreError::InvalidInput(format!(
+            "Directory not found at '{}'",
+            root.display()
+        )));
+    }
+    let key = root.to_string_lossy().to_string();
+    let mut roots = read_roots(dir)?;
+    if !roots.roots.iter().any(|existing| existing == &key) {
+        roots.roots.push(key);
+        write_roots(dir, &roots)?;
+    }
+    Ok(())
+}
+
+/// Take a folder out of the catalogue, and its entries with it.
+///
+/// **The only way anything leaves the catalogue.** A refresh never deletes an
+/// entry, so this is the escape hatch for a folder of games the user really has
+/// deleted. Removing a root ART never had is not an error: the folder is gone
+/// either way, which is what was asked for.
+pub fn remove_root(dir: &Path, root: &Path) -> CoreResult<()> {
+    let key = root.to_string_lossy().to_string();
+    let mut roots = read_roots(dir)?;
+    let before = roots.roots.len();
+    roots.roots.retain(|existing| existing != &key);
+    if roots.roots.len() != before {
+        write_roots(dir, &roots)?;
+    }
+
+    // The file goes whether or not the root was listed — an unlisted file left
+    // behind would come back the next time the same folder was added.
+    let path = dir.join(root_file_name(root));
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err.into()),
+    }
+}
+
 /// One title as the screen sees it.
 ///
 /// `available` is **not** stored: see [`load`].
@@ -1083,6 +1129,77 @@ mod tests {
             "loading 10 000 entries took {read:?} — something is quadratic"
         );
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Roots keep the order the user put them in, and adding the same folder
+    /// twice does not double it.
+    #[test]
+    fn roots_keep_their_order_and_do_not_duplicate() {
+        let dir = scratch("roots");
+        let a = dir.join("a");
+        let b = dir.join("b");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+
+        add_root(&dir, &b).unwrap();
+        add_root(&dir, &a).unwrap();
+        add_root(&dir, &b).unwrap();
+
+        let roots = read_roots(&dir).unwrap().roots;
+        assert_eq!(
+            roots,
+            vec![
+                b.to_string_lossy().to_string(),
+                a.to_string_lossy().to_string()
+            ],
+            "b was added first, and adding it again must not move or repeat it"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **Removing a root removes its entries** — the only way anything leaves
+    /// the catalogue, and therefore the escape hatch for a folder full of games
+    /// the user has really deleted.
+    #[test]
+    fn removing_a_root_takes_its_entries_with_it() {
+        let dir = scratch("remove");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        a_real_file(&root, "Zool (1992)(Gremlin).adf");
+
+        add_root(&dir, &root).unwrap();
+        refresh_root(&dir, &root, Refresh::Update, None, &NoProgress).unwrap();
+        assert_eq!(load(&dir).unwrap()[0].entries.len(), 1);
+
+        remove_root(&dir, &root).unwrap();
+
+        assert!(load(&dir).unwrap().is_empty());
+        assert!(
+            !dir.join(root_file_name(&root)).exists(),
+            "the root's file must be gone, not just unlisted"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Removing a root ART never had is not an error. The user asked for it to
+    /// be gone; it is gone.
+    #[test]
+    fn removing_an_unknown_root_is_not_an_error() {
+        let dir = scratch("remove-unknown");
+        assert!(remove_root(&dir, Path::new(r"E:\nowhere")).is_ok());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A root that is not a directory is refused when it is added, so a typo
+    /// does not sit in the list for ever producing nothing.
+    #[test]
+    fn a_root_that_is_not_a_directory_is_refused() {
+        let dir = scratch("bad-root");
+        let file = a_real_file(&dir, "not-a-folder.adf");
+        assert!(add_root(&dir, &file).is_err());
         std::fs::remove_dir_all(&dir).ok();
     }
 
