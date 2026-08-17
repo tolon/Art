@@ -123,6 +123,23 @@ outside `core/` for exactly this reason, while `core/preload/native.rs` — PFS3
 product's default; `hst-imager` is a fallback the caller in `commands/` chooses per operation,
 never a decision `core/` makes for itself.
 
+### The same rule pointing inwards: `core/` modules do not depend upwards
+
+The rule above keeps the platform out of `core/`. It has a second form that is
+easy to break because nothing outside `core/` notices: **a lower-level `core/`
+module must not import a higher-level one.** `core/rom` is about ROM files;
+`core/osinstall` is an engine that happens to record one. When `core/rom`'s
+pairing check took `core::osinstall::PairedRom` as its input, `core/rom` could
+no longer be read — or extracted — without dragging the whole OS-install engine
+along, for the sake of two fields.
+
+The fix is the shape to copy: the comparison declares its **own** record
+carrying only what it reads, and the caller in `commands/` maps the other
+module's type into it. Translation between two modules' representations is a
+command-layer concern, which is where it belongs in this codebase — the same
+place `run_with_fallback` decides which formatter runs. `core/rom/pairing.rs`
+and `commands/preload.rs::rom_pairing_for` are the worked example.
+
 ## Data flow: the DROP pipeline
 
 ```
