@@ -12,7 +12,6 @@ pub mod archive;
 pub mod binary;
 pub mod card;
 pub mod cbm;
-pub mod collection;
 pub mod compatibility;
 pub mod conversion;
 pub mod detect;

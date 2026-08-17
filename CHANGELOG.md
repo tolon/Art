@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### The Collection knows what a game is called, because it asks the game (2026-08-17)
+
+#### Added
+- **Titles now come from whatever actually states them, not from the
+  filename.** A WHDLoad game carries its own name, copyright year and
+  publisher inside its `.slave`; a Cloanto `.rp9` package carries a curated
+  manifest. The Collection reads both. Against a real 1698-title library that
+  means 1679 names, 1678 publishers and 1570 years came from the game itself
+  rather than being guessed — `Lotus3HD` on disk is `Lotus 3` on screen.
+- **Anything ART guessed is marked as a guess.** A value read from a filename
+  gets a small `~guessed` badge naming where it came from. The distinction is
+  real: a game whose slave declares it needs AGA is a different claim from one
+  whose filename merely contains the letters "AGA", and the two used to look
+  identical.
+- **A game that asks for a particular Kickstart says so.** 758 of the 1698
+  named an image such as `kick34005.a500`.
+- Bootable single-game hardfiles — the shape most WHDLoad collections come in
+  — are read from the inside rather than by their filename. All 1697 in the
+  test library are read, none refused.
+
+#### Changed
+- A title whose chipset nothing declares now reads **Unknown** instead of
+  being listed as OCS/ECS. The old default was a guess presented as a fact.
+
+#### Fixed
+- **Hard disk images whose filesystem is smaller than the file now open.** A
+  hardfile's partition is a whole number of cylinders and its file need not
+  be, so most WHDLoad game images are a few blocks larger than the volume
+  inside them. ART placed the root block from the file's size and read
+  nothing but noise. 1456 of 1697 real images were affected — in the
+  Collection, in ADF Studio and in the file manager alike.
+- The Collection no longer starts a second scan of the folder it was just
+  asked to scan.
+- A progress bar no longer rounds up to 100% while it is still working.
+
 ### ART warns before preparing a card whose Kickstart is older than the system needs (2026-08-17)
 
 #### Added

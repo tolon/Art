@@ -269,10 +269,13 @@ checks the image comes back byte for byte.
 
 | Feature | Spec | State | Code |
 |---|---|:---:|---|
-| Folder scan, TOSEC metadata parse | §41, §42 | ✅ | `core/collection.rs` (runs as a job) |
-| Multi-disk grouping | §41 | ✅ | `core/collection.rs` |
-| SQLite persistence, tags, favourites | §41 | 🟡 | schema exists; UI does not write to it |
-| Duplicate detection (SHA256) | §43 | 🟡 | hashing works; no dedupe view |
+| Folder scan into a title catalogue | §41, §42 | ✅ | `core/gameindex/scan.rs` (a job; `core/collection.rs` retired onto it) |
+| A title's facts read from what states them | §41, §42 | ✅ | `core/gameindex/readers/` — a WHDLoad slave's `ws_name`/`ws_copy`/`ws_Flags`, an `.rp9` manifest, a bootable hardfile's insides, a TOSEC filename |
+| Provenance carried beside every fact | §14, §34 | ✅ | `record::Fact<T>`; the screen marks anything guessed rather than read |
+| Multi-disk grouping | §41 | ✅ | `readers/tosec.rs` (`disk`), `record::Media::Floppies` (`.rp9` states the order) |
+| Cover art / screenshots in the listing | §41 | ⏳ | `.rp9` previews are read into `record.preview` but nothing renders them; WHDLoad titles have no artwork at all |
+| Catalogue persistence, tags, favourites | §41 | 🟡 | SQLite schema exists; the catalogue is **not** saved — every visit re-scans |
+| Duplicate detection (SHA256) | §43 | 🟡 | identical bytes already collapse to one record (`derive_id`); no dedupe *view* |
 | Hex viewer (read-only) | §31 | ✅ | `core/analysis.rs` |
 | Signature scanning | §28 | ✅ | `core/analysis.rs` |
 | Disk Analyzer / forensics | §28 | 🟡 | hex + signatures only |

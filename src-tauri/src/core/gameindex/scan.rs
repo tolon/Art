@@ -547,6 +547,53 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// A tree deeper than the limit stops cleanly rather than recursing until
+    /// the stack overflows — which, with `panic = "abort"`, takes the whole
+    /// application down rather than reporting an error.
+    ///
+    /// Moved here with the scanner it guards when `core/collection.rs` was
+    /// retired. The hazard did not go away with that module: `collect` walks a
+    /// user's folder, and a directory symlink pointing back up the tree is a
+    /// cycle. A test deleted along with the code it protected would have left
+    /// the same crash behind a suite that no longer looked for it.
+    #[test]
+    fn the_walk_stops_at_the_depth_limit() {
+        let dir = scratch("deep");
+
+        // Twice as deep as the limit, with a title at the bottom.
+        let mut deep = dir.clone();
+        for level in 0..(MAX_SCAN_DEPTH * 2) {
+            deep = deep.join(format!("d{level}"));
+        }
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("Buried (1992)(Someone).adf"), b"x").unwrap();
+
+        let mut found = Vec::new();
+        collect(&dir, &mut found, 0);
+
+        // The point is that it returned at all; the buried file is out of reach.
+        assert!(found.is_empty(), "found {found:?}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// And a tree *within* the limit is walked in full, so the guard above is
+    /// not passing by refusing everything.
+    #[test]
+    fn the_walk_finds_titles_within_the_limit() {
+        let dir = scratch("nested");
+        let nested = dir.join("Games").join("Puzzle");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("Lemmings (1991)(Psygnosis).adf"), b"x").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"x").unwrap();
+
+        let found = scan_titles(&dir).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].record.title.value, "Lemmings");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// A file too large to be one title is skipped, and skipped **cheaply**.
     ///
     /// The user's collection folder holds a 29 GB card image beside 1697
