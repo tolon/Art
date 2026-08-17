@@ -7,6 +7,7 @@
 pub mod adf;
 pub mod archive;
 pub mod archives;
+pub mod artwork;
 pub mod card;
 pub mod cbm;
 pub mod checkout;

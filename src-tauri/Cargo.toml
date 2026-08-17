@@ -32,7 +32,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# `protocol-asset` lets the webview load cached artwork as files rather than
+# through IPC. A collection of 1700 rows would otherwise carry every thumbnail
+# across the bridge as bytes. The scope in `tauri.conf.json` is one directory
+# and read-only.
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
 tauri-plugin-log = "2"
