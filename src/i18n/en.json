@@ -1768,6 +1768,18 @@
         }
       }
     },
+    "pairing": {
+      "checking": "Checking whether the card's Kickstart suits what is going onto it…",
+      "suitable": "The card carries {{rom}}, which is not the Kickstart this system was built against — but it is new enough to run it.",
+      "unsuitable": "This system was built for a Kickstart V{{needs}} or newer, and the card carries {{rom}}, which states V{{found}}. The Amiga will start and stop asking for a newer ROM. Preparing the card anyway is fine — the ROM can be replaced afterwards without rebuilding anything.",
+      "unsuitable47": "This system was built for a Kickstart V{{needs}} or newer, and the card carries {{rom}}, which states V{{found}}. The Amiga will start and stop with \"This disk must be booted from Kickstart ROM 3.2 (V47) or from the 'Modules' disk that matches your hardware.\" Preparing the card anyway is fine — the ROM can be replaced afterwards without rebuilding anything.",
+      "unsuitableUnknown": "This system was built for a Kickstart V{{needs}} or newer, and {{rom}} on the card states no version at all, so ART cannot tell whether it will run. The Amiga may stop asking for a newer ROM.",
+      "notChecked": {
+        "tree": "ART cannot check whether the card's Kickstart suits this folder: the folder carries no record of the ROM it was built against.",
+        "card": "ART cannot check whether the card's Kickstart suits this system: the card's manifest did not say which Kickstart the card carries.",
+        "failed": "ART could not run the Kickstart check for this folder, so it cannot say whether the card's ROM suits it."
+      }
+    },
     "confirm_one": "I understand {{count}} partition will be erased",
     "confirm_other": "I understand {{count}} partitions will be erased",
     "run": "Format and fill",

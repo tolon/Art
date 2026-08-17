@@ -422,6 +422,8 @@ mod tests {
                 archive_sha256: "a".repeat(64),
                 kickstart_name: with_rom.then(|| "A1200.rom".to_string()),
                 kickstart_sha256: with_rom.then(|| "b".repeat(64)),
+                kickstart_file: None,
+                kickstart_stated_major: None,
                 hardware: PistormHardware {
                     amiga: AmigaTarget::A500,
                     variant: PistormVariant::Classic,

@@ -3,8 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   copiedPhrase,
   fallbackPhrase,
+  foldersToCheck,
   formatCount,
   needsExternalTool,
+  pairingLines,
+  pairingPhrase,
+  pairingStillApplies,
   picksFor,
   plannedToolPhrase,
   preloadBlocker,
@@ -403,5 +407,141 @@ describe("fallbackPhrase", () => {
     });
     expect(phrase.key).toBe("preload.fallback.nonAsciiPfs3Names");
     expect(phrase.params).toEqual({ count: 24, paths: "Locale/español, Locale/français" });
+  });
+});
+
+describe("pairingPhrase", () => {
+  it("says nothing when the card carries the very ROM the tree was built for", () => {
+    expect(pairingPhrase({ verdict: "paired" })).toBeNull();
+  });
+
+  it("names the ROM when it is a different but sufficient one", () => {
+    expect(pairingPhrase({ verdict: "suitable", rom: "kick.rom" })).toEqual({
+      key: "preload.pairing.suitable",
+      params: { rom: "kick.rom" },
+    });
+  });
+
+  it("gives both versions when the card's ROM is too old", () => {
+    expect(
+      pairingPhrase({ verdict: "unsuitable", needs: 47, found: 40, rom: "kick.rom" })
+    ).toEqual({
+      key: "preload.pairing.unsuitable47",
+      params: { needs: 47, found: 40, rom: "kick.rom" },
+    });
+  });
+
+  // The quoted AmigaOS message names V47 in its own words. The threshold is
+  // the recipe's, not ART's, so the moment a recipe names another one the
+  // quote stops being true — and the sentence that carries no quote is the
+  // one that gets used.
+  it("only quotes the observed V47 message when 47 is what is needed", () => {
+    expect(
+      pairingPhrase({ verdict: "unsuitable", needs: 45, found: 40, rom: "kick.rom" })
+    ).toEqual({
+      key: "preload.pairing.unsuitable",
+      params: { needs: 45, found: 40, rom: "kick.rom" },
+    });
+  });
+
+  it("has a sentence for a ROM that states no version at all", () => {
+    expect(
+      pairingPhrase({ verdict: "unsuitable", needs: 47, found: null, rom: "kick.rom" })
+    ).toEqual({
+      key: "preload.pairing.unsuitableUnknown",
+      params: { needs: 47, rom: "kick.rom" },
+    });
+  });
+
+  it("says which side did not answer, and never passes", () => {
+    expect(pairingPhrase({ verdict: "not-checked", why: "tree-records-no-rom" })).toEqual({
+      key: "preload.pairing.notChecked.tree",
+    });
+    expect(pairingPhrase({ verdict: "not-checked", why: "card-records-no-rom" })).toEqual({
+      key: "preload.pairing.notChecked.card",
+    });
+  });
+
+  // The fourth silence: the command itself rejecting used to be rendered
+  // exactly like "checked, and the ROM is the one you built for".
+  it("has a sentence for the check failing outright", () => {
+    expect(pairingPhrase({ verdict: "not-checked", why: "check-failed" })).toEqual({
+      key: "preload.pairing.notChecked.failed",
+    });
+  });
+});
+
+describe("foldersToCheck", () => {
+  const pick = (driveName: string, chosen: boolean, content: string | null) => ({
+    area: 1,
+    index: 1,
+    driveName,
+    chosen,
+    volumeName: driveName,
+    content,
+  });
+
+  it("takes every chosen partition that has a folder, not the first", () => {
+    expect(
+      foldersToCheck([
+        pick("DH0", true, "E:\\staging"),
+        pick("DH1", true, "E:\\dist-3.2b"),
+        pick("DH2", true, null),
+        pick("DH3", false, "E:\\not-chosen"),
+      ])
+    ).toEqual([
+      { driveName: "DH0", content: "E:\\staging" },
+      { driveName: "DH1", content: "E:\\dist-3.2b" },
+    ]);
+  });
+});
+
+describe("pairingLines", () => {
+  it("drops the folders with nothing to say and keeps the rest named", () => {
+    expect(
+      pairingLines([
+        { driveName: "DH0", pairing: { verdict: "paired" } },
+        {
+          driveName: "DH1",
+          pairing: { verdict: "unsuitable", needs: 47, found: 40, rom: "kick.rom" },
+        },
+      ])
+    ).toEqual([
+      {
+        driveName: "DH1",
+        verdict: "unsuitable",
+        phrase: {
+          key: "preload.pairing.unsuitable47",
+          params: { needs: 47, found: 40, rom: "kick.rom" },
+        },
+      },
+    ]);
+  });
+
+  it("says nothing at all when every folder is paired", () => {
+    expect(
+      pairingLines([
+        { driveName: "DH0", pairing: { verdict: "paired" } },
+        { driveName: "DH1", pairing: { verdict: "paired" } },
+      ])
+    ).toEqual([]);
+  });
+});
+
+describe("pairingStillApplies", () => {
+  // The invalidation check the pairing effect makes *before* issuing a new
+  // fetch — this is the decision that was missing, letting a verdict fetched
+  // for one card/folder sit on screen beside a plan for a different one
+  // until the new fetch happened to resolve.
+  it("holds when the verdict was fetched for the request now on screen", () => {
+    expect(pairingStillApplies("fp-a", "fp-a")).toBe(true);
+  });
+
+  it("does not hold once the request has moved on", () => {
+    expect(pairingStillApplies("fp-a", "fp-b")).toBe(false);
+  });
+
+  it("never holds when nothing has been fetched yet", () => {
+    expect(pairingStillApplies(null, "fp-a")).toBe(false);
   });
 });

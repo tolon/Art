@@ -197,6 +197,10 @@ pub struct DistributionManifest {
     pub release: String,
     pub built_from: Vec<MediaRecord>,
     pub files: Vec<FileRecord>,
+    /// The Kickstart this tree was built for (G9). `#[serde(default)]` so a
+    /// tree written by an older ART still reads back.
+    #[serde(default)]
+    pub paired_rom: Option<super::PairedRom>,
 }
 
 /// The manifest's own file name, at the distribution root.
@@ -531,6 +535,7 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
         release: plan.release.clone(),
         built_from,
         files,
+        paired_rom: plan.paired_rom.clone(),
     };
     let manifest_text =
         serde_json::to_string_pretty(&manifest).map_err(|err| CoreError::Malformed {
@@ -619,6 +624,7 @@ mod tests {
             refusals: Vec::new(),
             total_bytes,
             components_on: vec!["modules-a1200".into()],
+            paired_rom: None,
             media_paths,
             user_startup: Vec::new(),
         };
@@ -1016,6 +1022,7 @@ mod tests {
             refusals: Vec::new(),
             total_bytes: 16,
             components_on: vec!["a".into()],
+            paired_rom: None,
             media_paths,
             user_startup: Vec::new(),
         };

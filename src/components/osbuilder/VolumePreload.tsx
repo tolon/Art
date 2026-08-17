@@ -31,6 +31,7 @@ import {
   fallbackPhrase,
   formatCount,
   onPreloadResult,
+  pairingLines,
   picksFor,
   copiedPhrase,
   plannedToolPhrase,
@@ -45,6 +46,7 @@ import {
   type PreloadPlan,
   type PreloadResult,
 } from "@/lib/preload";
+import { useRomPairing } from "@/lib/useRomPairing";
 import { isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { usePowerMode } from "@/lib/uxmode";
@@ -139,6 +141,13 @@ export function VolumePreload() {
       setConfirmed(false);
     }
   }, [fingerprint]);
+
+  // G9: the ROM question is about the card and the folders going onto it —
+  // one verdict per folder, since the screen takes one folder per partition
+  // and a warning about DH1 must not be swallowed by DH0's silence. The hook
+  // holds the asking, the forgetting and the "checking…" state; this screen
+  // only renders what it says.
+  const pairing = useRomPairing(imagePath, picks);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -502,6 +511,27 @@ export function VolumePreload() {
               );
             })}
           </ol>
+
+          {/* One line per folder that has something to say, named by the
+              drive it is going onto — a proper noun the card supplied, so it
+              sits beside the translated sentence rather than inside it. A
+              `paired` folder still says nothing; a check still running says
+              so, because an empty space above a live destructive checkbox
+              must not be able to mean "the answer never came". */}
+          {pairing.checking && (
+            <p className="faint" style={{ fontSize: 12, margin: "0 0 8px" }}>
+              {t("preload.pairing.checking")}
+            </p>
+          )}
+          {pairingLines(pairing.results).map((line, index) => (
+            <p
+              key={`${line.driveName}-${index}`}
+              className={line.verdict === "unsuitable" ? "badge badge-warn" : "muted"}
+              style={{ display: "block", fontSize: 12, margin: "0 0 8px" }}
+            >
+              <strong>{line.driveName}</strong> — {t(line.phrase.key, line.phrase.params)}
+            </p>
+          ))}
 
           <label
             style={{

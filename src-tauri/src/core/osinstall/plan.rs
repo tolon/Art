@@ -107,24 +107,27 @@ use crate::core::error::{CoreError, CoreResult};
 /// would be a guess about a need that does not exist yet, which is exactly
 /// what this module's own `RomOlderThan` rule is built to avoid making
 /// about the ROM itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RomFacts {
     pub major: u16,
+    /// Kept whole so `plan()` can record the pairing without reading the file
+    /// twice — and so a future condition can ask about the machine.
+    pub info: crate::core::rom::RomInfo,
 }
 
 /// Read the paired Kickstart's own stated major.
 ///
-/// Strips a Cloanto header first (`core::rom::strip_cloanto_header`) — the
-/// user has Amiga Forever, and those dumps carry an 11-byte `AMIROMTYPE1`
-/// prefix that is not part of the ROM proper. A Kickstart is 512 KB, small
-/// enough that reading it whole here does not need the windowed-read
-/// treatment `open_hdf` gives a multi-gigabyte HDF.
+/// Goes through `core::rom::identify_rom`, which decodes a licensed Amiga
+/// Forever ROM with the `rom.key` beside it (ART-128) instead of describing
+/// its ciphertext — the previous version stripped the header and read the
+/// encrypted bytes, so a licensed ROM refused the whole plan.
 pub fn rom_facts(rom: &Path) -> CoreResult<RomFacts> {
-    let bytes = crate::core::rom::strip_cloanto_header(&std::fs::read(rom)?);
+    let info = crate::core::rom::identify_rom(rom)?;
+    let bytes = crate::core::rom::decoded_image(rom)?;
     let (major, _minor) = crate::core::rom::stated_version(&bytes).ok_or_else(|| {
         CoreError::InvalidInput("this file does not state a Kickstart version".into())
     })?;
-    Ok(RomFacts { major })
+    Ok(RomFacts { major, info })
 }
 
 /// Whether a conditional component switches on, given the facts already
@@ -196,6 +199,15 @@ pub struct InstallPlan {
     /// plan as a whole refuses, so the UI can explain *why* a refusal names
     /// a component the user never picked.
     pub components_on: Vec<String>,
+    /// The Kickstart this plan was made against, and what the resulting tree
+    /// needs of a future one (G9). `None` when no ROM was supplied.
+    ///
+    /// `#[serde(default)]` — `InstallPlan` derives `Deserialize` and is
+    /// round-tripped through the wire (`osinstall_apply` takes back the plan
+    /// `osinstall_plan` returned), so a plan value serialised before this
+    /// field existed must still deserialise instead of refusing to load.
+    #[serde(default)]
+    pub paired_rom: Option<super::PairedRom>,
     /// Volume name -> the image it was found in. Resolved here so `apply`
     /// (a later task) can reopen the media without re-scanning the folder —
     /// and so the plan that was previewed is the plan that runs, even if
@@ -588,39 +600,88 @@ pub fn plan(request: &InstallRequest, recipe: &Recipe) -> CoreResult<InstallPlan
     };
     let total_bytes = items.iter().map(|item| item.bytes).sum();
 
+    let paired_rom = rom_facts.map(|facts| super::PairedRom {
+        name: facts.info.name.clone(),
+        sha256: facts.info.sha256.clone(),
+        stated_major: Some(facts.major),
+        compatible_models: facts.info.compatible_models.clone(),
+        requires_major: rom_requirement(recipe, &components_on),
+    });
+
     Ok(InstallPlan {
         release: recipe.release.clone(),
         items,
         refusals,
         total_bytes,
         components_on,
+        paired_rom,
         media_paths,
         user_startup,
     })
+}
+
+/// What a tree with these components needs of a future ROM.
+///
+/// A component with a `RomOlderThan` condition that is **off** is one whose
+/// modules are absent, so the tree needs a ROM the condition would not have
+/// fired for: at least `major`. A component that is *on* brought its modules
+/// with it and needs nothing.
+fn rom_requirement(recipe: &Recipe, components_on: &[String]) -> Option<u16> {
+    recipe
+        .components
+        .iter()
+        .filter_map(|component| {
+            component
+                .condition
+                .map(|Condition::RomOlderThan { major }| (component.id.as_str(), major))
+        })
+        .filter(|(id, _)| !components_on.iter().any(|on| on == id))
+        .map(|(_, major)| major)
+        .max()
 }
 
 #[cfg(test)]
 mod condition_tests {
     use super::*;
 
+    /// `RomFacts` now carries the whole `RomInfo` (G9), which
+    /// `condition_holds` never reads — only `major` matters to a
+    /// `Condition`. This fills the rest with placeholder values so a test
+    /// about the condition does not have to state facts it does not use.
+    fn fake_rom_facts(major: u16) -> RomFacts {
+        RomFacts {
+            major,
+            info: crate::core::rom::RomInfo {
+                name: "Test ROM".to_string(),
+                version: "Custom".to_string(),
+                revision: String::new(),
+                size_bytes: 0,
+                sha256: String::new(),
+                crc32: String::new(),
+                is_cloanto: false,
+                key_available: false,
+                is_aros: false,
+                checksum_valid: false,
+                compatible_models: Vec::new(),
+                file_path: String::new(),
+            },
+        }
+    }
+
     /// `Workbench3.2.adf:S/Startup-sequence` opens with
     /// `Version exec.library version 47 … If Warn … Quit`. So a 3.2 system on a
     /// 3.1 ROM without `LIBS:Modules` does not boot at all.
     #[test]
     fn a_pre_v47_rom_turns_the_modules_component_on() {
-        let holds = condition_holds(
-            &Condition::RomOlderThan { major: 47 },
-            Some(&RomFacts { major: 40 }),
-        );
+        let facts = fake_rom_facts(40);
+        let holds = condition_holds(&Condition::RomOlderThan { major: 47 }, Some(&facts));
         assert_eq!(holds, Ok(true));
     }
 
     #[test]
     fn a_v47_rom_leaves_it_off() {
-        let holds = condition_holds(
-            &Condition::RomOlderThan { major: 47 },
-            Some(&RomFacts { major: 47 }),
-        );
+        let facts = fake_rom_facts(47);
+        let holds = condition_holds(&Condition::RomOlderThan { major: 47 }, Some(&facts));
         assert_eq!(holds, Ok(false));
     }
 
@@ -651,18 +712,21 @@ mod condition_tests {
         assert_eq!(rom_facts(&path).unwrap().major, 40);
     }
 
-    /// The user has licensed Amiga Forever (desktop and mobile — see
-    /// `docs/STATUS.md`), so a Cloanto-headered dump is ordinary input on
-    /// this machine, not an edge case. Without the strip, `rom_facts` would
-    /// read bytes 12..16 eleven bytes early, land outside the plausible
-    /// major range, and refuse a perfectly good ROM — ART-104's exact shape,
-    /// surfacing at the user's Amiga instead of in CI. `fake_rom` alone
-    /// cannot express this: it never carries the `AMIROMTYPE1` prefix, so
-    /// this test builds one by hand, the one byte-for-byte thing `fake_rom`
-    /// does not do.
+    /// **Superseded by ART-128 (G9).** This test used to prove `rom_facts`
+    /// read a Cloanto-headered dump's stated major by stripping the header
+    /// alone — but that is exactly the bug ART-128 fixed: a real Amiga
+    /// Forever dump is XOR-encoded behind that header, so reading the bytes
+    /// straight after it (as this test's own fixture did, with no XOR
+    /// applied) never matched what a real licensed ROM looks like. Now that
+    /// `rom_facts` goes through `core::rom::decoded_image`, a Cloanto header
+    /// with no `rom.key` beside it is refused rather than misread — which is
+    /// the correct behaviour, and what this proves instead.
+    /// `a_licensed_rom_with_its_key_beside_it_states_its_version` (below, in
+    /// `plan_tests`) is this test's replacement for the case with a key
+    /// actually present.
     #[test]
-    fn a_cloanto_headered_dump_still_reads_its_stated_major() {
-        let dir = super::super::fixtures::scratch("plan-rom-cloanto");
+    fn a_cloanto_header_with_no_key_beside_it_is_refused_not_misread() {
+        let dir = super::super::fixtures::scratch("plan-rom-cloanto-no-key");
         let path = dir.join("cloanto.rom");
 
         let mut bytes = b"AMIROMTYPE1".to_vec();
@@ -672,7 +736,7 @@ mod condition_tests {
         bytes.extend_from_slice(&body);
         std::fs::write(&path, &bytes).unwrap();
 
-        assert_eq!(rom_facts(&path).unwrap().major, 40);
+        assert!(rom_facts(&path).is_err());
     }
 
     /// A file that exists and reads fine but is not a ROM at all — plain
@@ -1533,5 +1597,102 @@ mod plan_tests {
         let plan = plan_with(&["workbench-base"], &["Workbench3.2"]);
         assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
         assert!(plan.user_startup.is_empty());
+    }
+
+    // ---- G9: the plan records the ROM it was planned against ----
+
+    /// **G9.** A tree is planned against one Kickstart, and which one decides
+    /// what is in it — `modules-a1200` switches on for a pre-V47 ROM and not
+    /// otherwise. The plan records that pairing so the check at card time
+    /// needs no re-planning and no media.
+    #[test]
+    fn the_plan_records_the_rom_it_was_planned_against() {
+        let (plan, dir) = crate::core::osinstall::fixtures::planned_with(
+            &["workbench-base"],
+            &["Workbench3.2"],
+            Some(47),
+        );
+        let paired = plan.paired_rom.expect("a plan with a ROM records it");
+
+        assert_eq!(paired.stated_major, Some(47));
+        // `modules-a1200`'s own condition (`RomOlderThan { major: 47 }`) does
+        // not fire for a V47 ROM, so the tree this plan describes carries no
+        // ROM modules at all — which means it needs a real ROM's own copy of
+        // them, i.e. a future ROM of at least V47. See
+        // `a_tree_planned_on_v47_without_modules_requires_v47`, below, for
+        // the same fact stated as its own dedicated test.
+        assert_eq!(
+            paired.requires_major,
+            Some(47),
+            "the tree carries no ROM modules for a V47-planned install, so it \
+             needs a future ROM to be at least V47 itself"
+        );
+        assert!(!paired.sha256.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other half, and the load-bearing one: a tree built for an older
+    /// ROM carries the modules that let an older ROM run it, so it requires
+    /// nothing — `requires_major` is `None` for the opposite reason.
+    #[test]
+    fn a_tree_built_for_a_pre_v47_rom_requires_nothing_of_the_card() {
+        let (plan, dir) = crate::core::osinstall::fixtures::planned_with(
+            &["workbench-base"],
+            &["Workbench3.2", "ModulesA1200_3.2"],
+            Some(40),
+        );
+        assert!(plan.components_on.iter().any(|id| id == "modules-a1200"));
+        let paired = plan.paired_rom.expect("a plan with a ROM records it");
+
+        assert_eq!(paired.stated_major, Some(40));
+        assert_eq!(paired.requires_major, None, "it brings its own modules");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// And the case the check exists for: a V47-planned tree whose modules
+    /// component is *not* on states what a future ROM has to be.
+    #[test]
+    fn a_tree_planned_on_v47_without_modules_requires_v47() {
+        let (plan, dir) = crate::core::osinstall::fixtures::planned_with(
+            &["workbench-base"],
+            &["Workbench3.2", "ModulesA1200_3.2"],
+            Some(47),
+        );
+        assert!(!plan.components_on.iter().any(|id| id == "modules-a1200"));
+        let paired = plan.paired_rom.unwrap();
+        assert_eq!(paired.requires_major, Some(47));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **ART-128, from the planning side.** `rom_facts` used to strip the
+    /// header and read the ciphertext, so a licensed Amiga Forever ROM
+    /// refused the whole install with "does not state a Kickstart version".
+    #[test]
+    fn a_licensed_rom_with_its_key_beside_it_states_its_version() {
+        let dir = crate::core::osinstall::fixtures::scratch("rom-facts-cloanto");
+        let key = b"a key".to_vec();
+        std::fs::write(dir.join("rom.key"), &key).unwrap();
+
+        let mut plain = vec![0u8; 524_288];
+        plain[0..2].copy_from_slice(&0x1114u16.to_be_bytes());
+        plain[12..14].copy_from_slice(&47u16.to_be_bytes());
+        plain[14..16].copy_from_slice(&102u16.to_be_bytes());
+
+        let mut encoded = b"AMIROMTYPE1".to_vec();
+        encoded.extend(
+            plain
+                .iter()
+                .enumerate()
+                .map(|(at, byte)| byte ^ key[at % key.len()]),
+        );
+        let path = dir.join("amiga-os-321-a1200.rom");
+        std::fs::write(&path, &encoded).unwrap();
+
+        assert_eq!(rom_facts(&path).unwrap().major, 47);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

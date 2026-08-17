@@ -23,6 +23,7 @@
 //!    revision is shared across the per-machine builds, so this claims no
 //!    machine, deliberately.
 
+pub mod pairing;
 pub mod remus;
 
 use serde::{Deserialize, Serialize};
@@ -35,7 +36,7 @@ use crate::core::hashing::sha256_bytes;
 const CLOANTO_HEADER: &[u8] = b"AMIROMTYPE1";
 
 /// Kickstart ROM info surfaced to the frontend.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RomInfo {
     pub name: String,
     pub version: String,
@@ -458,6 +459,26 @@ fn key_beside(rom: &Path) -> Option<Vec<u8>> {
     let key = rom.parent()?.join("rom.key");
     let bytes = std::fs::read(key).ok()?;
     (!bytes.is_empty()).then_some(bytes)
+}
+
+/// A ROM's bytes as an Amiga would read them: the header gone and the image
+/// decoded when it is a licensed Amiga Forever dump with its key beside it
+/// (ART-128), and the file as-is otherwise.
+///
+/// The one place that answers "what is actually in this ROM", so nothing has
+/// to repeat the header-and-key dance to read a version out of one.
+pub fn decoded_image(path: &Path) -> CoreResult<Vec<u8>> {
+    let raw = std::fs::read(path)?;
+    if !raw.starts_with(CLOANTO_HEADER) {
+        return Ok(raw);
+    }
+    match key_beside(path) {
+        Some(key) => Ok(decode_cloanto(&strip_cloanto_header(&raw), &key)),
+        None => Err(CoreError::InvalidInput(format!(
+            "'{}' is an encrypted Amiga Forever ROM and its 'rom.key' is not beside it",
+            path.display()
+        ))),
+    }
 }
 
 pub fn strip_cloanto_header(bytes: &[u8]) -> Vec<u8> {

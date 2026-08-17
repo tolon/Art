@@ -72,6 +72,27 @@ pub struct SourceFacts {
     pub archive_sha256: String,
     pub kickstart_name: Option<String>,
     pub kickstart_sha256: Option<String>,
+    /// The name the Kickstart is written under **on the card** — what
+    /// `config.txt`'s `initramfs` line points at. `kickstart_name` above is
+    /// the source file's own name and `kickstart_sha256` the source file's
+    /// hash; since ART-128 neither describes the bytes on the card, because a
+    /// licensed Amiga Forever ROM is decoded on the way there. This field is
+    /// how a reader finds the ROM among `boot_files`, whose hashes *are* of
+    /// the bytes placed.
+    ///
+    /// `None` on a manifest written before this existed.
+    #[serde(default)]
+    pub kickstart_file: Option<String>,
+    /// The major version that Kickstart states about itself, read once at
+    /// build time.
+    ///
+    /// **Recorded because it cannot be recovered.** ART writes FAT32 and has
+    /// no reader for it, so once the card exists the ROM's own bytes are out
+    /// of reach — the same reason G8 answers the boot files from the manifest
+    /// rather than by looking. `None` when the ROM states none (pre-2.0) or
+    /// when the manifest predates this field.
+    #[serde(default)]
+    pub kickstart_stated_major: Option<u16>,
     /// The real types, not a rendered sentence: a manifest is data, and a
     /// sentence would have to be parsed back to rebuild anything from it.
     pub hardware: PistormHardware,
@@ -409,12 +430,14 @@ mod tests {
         dir
     }
 
-    fn source() -> SourceFacts {
+    pub(super) fn source() -> SourceFacts {
         SourceFacts {
             archive_name: "Emu68-pistorm.zip".into(),
             archive_sha256: "a".repeat(64),
             kickstart_name: Some("kick.rom".into()),
             kickstart_sha256: Some("b".repeat(64)),
+            kickstart_file: None,
+            kickstart_stated_major: None,
             hardware: PistormHardware {
                 amiga: AmigaTarget::A500,
                 variant: PistormVariant::Classic,
@@ -422,6 +445,25 @@ mod tests {
             },
             line: Emu68Line::Stable,
             kernel_file: "Emu68-pistorm.gz".into(),
+        }
+    }
+
+    pub(super) fn manifest() -> CardManifest {
+        CardManifest {
+            schema: MANIFEST_SCHEMA,
+            art_version: env!("CARGO_PKG_VERSION").into(),
+            built_at: None,
+            total_bytes: 2 * 1024 * 1024 * 1024,
+            mbr_sha256: "c".repeat(64),
+            slots: Vec::new(),
+            source: source(),
+            boot_files: vec![ManifestFile {
+                name: "kick.rom".into(),
+                bytes: 524_288,
+                sha256: "d".repeat(64),
+            }],
+            areas: Vec::new(),
+            os: Vec::new(),
         }
     }
 
@@ -642,6 +684,51 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// **G9.** A manifest lists the boot files and, until now, gave no way to
+    /// tell which of them is the Kickstart: `kickstart_name` is the *source*
+    /// file's name on the user's PC, and after ART-128 not even the same
+    /// bytes. The on-card name is what a reader needs.
+    #[test]
+    fn the_manifest_says_which_boot_file_is_the_kickstart() {
+        let mut facts = source();
+        facts.kickstart_file = Some("kick.rom".into());
+        let rendered = render_manifest(&CardManifest {
+            source: facts,
+            ..manifest()
+        })
+        .unwrap();
+        let read: CardManifest = serde_json::from_str(&rendered).unwrap();
+
+        assert_eq!(read.source.kickstart_file.as_deref(), Some("kick.rom"));
+    }
+
+    /// A manifest written before these fields existed still reads.
+    ///
+    /// **Both** of G9's additions come out, not one: every manifest ART has
+    /// written to date lacks both, so testing one key and leaving the other
+    /// exercised half the change. The subject is the shape of the file — a
+    /// `SourceFacts` written before G9 reads back whole, with both new facts
+    /// absent rather than wrong.
+    ///
+    /// **What this test does *not* pin, measured rather than assumed:** the
+    /// `#[serde(default)]` attributes on those fields. Deleting either one
+    /// leaves this passing, because serde's derive already treats a missing
+    /// `Option<T>` as `None`. The attributes state the intent; they are not
+    /// what keeps older manifests readable. Change either field to a
+    /// non-`Option` type and the attribute starts carrying real weight — and
+    /// this test is then the thing that measures it.
+    #[test]
+    fn an_older_manifest_without_the_field_still_reads() {
+        let mut value = serde_json::to_value(manifest()).unwrap();
+        let source = value["source"].as_object_mut().unwrap();
+        source.remove("kickstart_file");
+        source.remove("kickstart_stated_major");
+        let read: CardManifest = serde_json::from_value(value).unwrap();
+
+        assert_eq!(read.source.kickstart_file, None);
+        assert_eq!(read.source.kickstart_stated_major, None);
+    }
+
     /// It has to survive a trip through the file it is written to.
     #[test]
     fn a_manifest_round_trips_through_json() {
@@ -661,5 +748,19 @@ mod tests {
         assert_eq!(read_manifest(&path).unwrap(), manifest);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// A shared fixture for other test modules that need a valid [`CardManifest`]
+/// without building a card. Calls straight into `mod tests`'s own
+/// `manifest()`/`source()` rather than holding a second hand-typed literal —
+/// one definition, two callers, so a field added to either side cannot drift
+/// out of step with the other.
+#[cfg(test)]
+pub(crate) mod tests_support {
+    use super::*;
+
+    pub(crate) fn sample_manifest() -> CardManifest {
+        super::tests::manifest()
     }
 }

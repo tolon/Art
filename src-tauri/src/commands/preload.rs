@@ -67,15 +67,19 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
+use crate::core::card::manifest::{manifest_path_for, read_manifest};
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
+use crate::core::osinstall::apply::MANIFEST_FILE_NAME;
+use crate::core::osinstall::PairedRom;
 use crate::core::preload::native::NativeFormatter;
 use crate::core::preload::VolumeFormatter;
 use crate::core::preload::{
     plan, step_label, CopySummary, PreloadOutcome, PreloadPlan, PreloadRequest, PreloadStep,
     ToolVersion,
 };
+use crate::core::rom::pairing::{compare, CardRom, Pairing, TreeRom};
 use crate::error::AppResult;
 use crate::tools::hst_imager::{HstImager, TESTED_VERSION};
 
@@ -126,6 +130,72 @@ pub struct PreloadCommand {
 #[tauri::command]
 pub fn preload_plan(command: PreloadCommand) -> AppResult<PreloadPlan> {
     Ok(plan(&command.request)?)
+}
+
+/// Read both records and compare them (G9). Split from the command so the
+/// test can drive it without Tauri.
+///
+/// **Everything missing is `NotChecked`, never an error and never a pass.** A
+/// user pointing at a folder that is not a distribution tree, or a card ART
+/// did not build, has done nothing wrong — there is simply nothing to check.
+fn rom_pairing_for(image: &Path, content: &Path) -> CoreResult<Pairing> {
+    /// `distribution.json`'s one trailing field, and nothing else.
+    ///
+    /// A real tree's manifest holds 3950 `FileRecord`s and is a megabyte on
+    /// disk; deserialising the whole `DistributionManifest` built all of them
+    /// to read the field after them. Every unknown key is skipped instead, and
+    /// nothing but the record this check reads is ever allocated.
+    ///
+    /// **Mind the container's camelCase**: `DistributionManifest` carries
+    /// `rename_all = "camelCase"`, so the key on the wire is `pairedRom`. A
+    /// narrow struct without the same attribute would read every manifest as
+    /// having no ROM at all — the reassuring silence, out of a spelling
+    /// mistake. `the_pairing_command_reads_both_manifests` pins the key, and
+    /// `a_tree_manifest_is_read_past_its_files` pins the skipping.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PairedRomOnly {
+        #[serde(default)]
+        paired_rom: Option<PairedRom>,
+    }
+
+    let tree = std::fs::File::open(content.join(MANIFEST_FILE_NAME))
+        .ok()
+        .and_then(|file| {
+            serde_json::from_reader::<_, PairedRomOnly>(std::io::BufReader::new(file)).ok()
+        })
+        .and_then(|manifest| manifest.paired_rom)
+        // The comparison takes what it reads, not the manifest's own record:
+        // `core/rom` does not depend on `core/osinstall`, and this is the one
+        // place the two representations meet.
+        .map(|rom| TreeRom {
+            sha256: rom.sha256,
+            requires_major: rom.requires_major,
+        });
+
+    let card = read_manifest(&manifest_path_for(image))
+        .ok()
+        .and_then(|card| {
+            let name = card.source.kickstart_file.clone()?;
+            let entry = card.boot_files.iter().find(|file| file.name == name)?;
+            Some(CardRom {
+                name,
+                sha256: entry.sha256.clone(),
+                stated_major: card.source.kickstart_stated_major,
+            })
+        });
+
+    Ok(compare(tree.as_ref(), card.as_ref()))
+}
+
+/// What ART can say about the ROM on this card and the tree about to go onto
+/// it. Reads two manifests; writes nothing (§92's PREVIEW).
+#[tauri::command]
+pub fn preload_rom_pairing(image: String, content: String) -> AppResult<Pairing> {
+    Ok(rom_pairing_for(
+        Path::new(image.trim()),
+        Path::new(content.trim()),
+    )?)
 }
 
 /// The event a finished preload arrives on.
@@ -606,6 +676,124 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// **G9.** The command reads both records off disk — the tree's
+    /// `distribution.json` and the card's own manifest — and answers with the
+    /// comparison. Nothing else in ART reads those two files together.
+    #[test]
+    fn the_pairing_command_reads_both_manifests() {
+        use crate::core::rom::pairing::Pairing;
+
+        let dir = scratch("pairing-command");
+        let tree = dir.join("dist");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(
+            tree.join(crate::core::osinstall::apply::MANIFEST_FILE_NAME),
+            r#"{"release":"AmigaOS 3.2","builtFrom":[],"files":[],
+                "pairedRom":{"name":"Kickstart 47.102 (A1200)","sha256":"aa",
+                "statedMajor":47,"compatibleModels":["A1200"],"requiresMajor":47}}"#,
+        )
+        .unwrap();
+
+        let image = dir.join("card.img");
+        std::fs::write(&image, b"not a card; only its manifest is read").unwrap();
+
+        // A card carrying a V40 ROM under the name config.txt points at.
+        let mut card = crate::core::card::manifest::tests_support::sample_manifest();
+        card.source.kickstart_file = Some("kick.rom".into());
+        card.source.kickstart_stated_major = Some(40);
+        card.boot_files = vec![crate::core::card::manifest::ManifestFile {
+            name: "kick.rom".into(),
+            bytes: 524_288,
+            sha256: "bb".into(),
+        }];
+        std::fs::write(
+            crate::core::card::manifest::manifest_path_for(&image),
+            crate::core::card::manifest::render_manifest(&card).unwrap(),
+        )
+        .unwrap();
+
+        let verdict = rom_pairing_for(&image, &tree).unwrap();
+
+        match verdict {
+            Pairing::Unsuitable { needs, found, .. } => {
+                assert_eq!((needs, found), (47, Some(40)));
+            }
+            other => panic!("{other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **G9, and the reason the narrow struct is safe.** `pairedRom` is the
+    /// manifest's *last* field, written after every `FileRecord` — 3950 of
+    /// them and a megabyte of JSON on the real `dist-3.2b`. Reading it through
+    /// a struct that declares only that field means every one of those records
+    /// is skipped rather than built, and this proves the skipping reaches the
+    /// end: an entry shaped nothing like the narrow struct's own field, and
+    /// the field still arrives.
+    ///
+    /// The second half is the case where there is nothing to find. A tree
+    /// written before G9 has no `pairedRom` at all, and that is `NotChecked`,
+    /// never a pass (§89).
+    #[test]
+    fn a_tree_manifest_is_read_past_its_files() {
+        use crate::core::rom::pairing::{NotCheckedReason, Pairing};
+
+        let dir = scratch("pairing-narrow");
+        let tree = dir.join("dist");
+        std::fs::create_dir_all(&tree).unwrap();
+
+        let files: String = (0..2000)
+            .map(|n| {
+                format!(
+                    r#"{{"path":"C/Command{n}","component":"workbench","media":"Workbench3.2",
+                        "bytes":{n},"sha256":"{n:064}"}}"#
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let manifest = |paired: &str| {
+            format!(
+                r#"{{"release":"AmigaOS 3.2","builtFrom":[],"files":[{files}]{paired}}}"#,
+                files = files,
+                paired = paired
+            )
+        };
+        let path = tree.join(crate::core::osinstall::apply::MANIFEST_FILE_NAME);
+
+        // A card whose manifest cannot be read at all, so the tree's own
+        // answer is the only thing that can decide this verdict.
+        let image = dir.join("card.img");
+        std::fs::write(&image, b"no manifest beside it").unwrap();
+
+        std::fs::write(
+            &path,
+            manifest(
+                r#","pairedRom":{"name":"Kickstart 40.68 (A1200)","sha256":"aa",
+                   "statedMajor":40,"compatibleModels":["A1200"],"requiresMajor":47}"#,
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            rom_pairing_for(&image, &tree).unwrap(),
+            Pairing::NotChecked {
+                why: NotCheckedReason::CardRecordsNoRom
+            },
+            "the tree's record was found past its files, so the card is what is missing"
+        );
+
+        std::fs::write(&path, manifest("")).unwrap();
+        assert_eq!(
+            rom_pairing_for(&image, &tree).unwrap(),
+            Pairing::NotChecked {
+                why: NotCheckedReason::TreeRecordsNoRom
+            },
+            "a tree written before G9 records no ROM, and that is not a pass"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// **The wire, written down.** `src/lib/preload.ts` builds this object by
@@ -1401,6 +1589,291 @@ mod tests {
         match run(&made, &formatter, &NoProgress) {
             Ok(outcome) => println!("outcome: {outcome:?}"),
             Err(err) => panic!("preload failed: {err}"),
+        }
+    }
+
+    /// **The pairing that actually failed, as a test** (G9).
+    ///
+    /// ```text
+    /// cd src-tauri
+    /// ART_TREE_V47="E:\amiga\ProjeART\dist-3.2b" \
+    /// ART_TREE_V40="E:\amiga\ProjeART\dist-3.2-v40" \
+    /// ART_EMU68_ARCHIVE="E:\amiga\Amigatolon\Emu68\Emu68-pistorm.zip" \
+    /// ART_KICKSTART_V40="E:\amiga\Amigatolon\kickstart\Kickstart v3.1 rev 40.68 (1993)(Commodore)(A1200).rom" \
+    /// ART_KICKSTART_V47="E:\amiga\Amigatolon\paketler\3.2\AmigaOs 3.2\ROM\kicka1200.rom" \
+    /// ART_CARD_OUT="E:\amiga\ProjeART\card.img" \
+    ///   cargo test the_real_trees_against_a_real_card_when_asked -- --nocapture --ignored
+    /// ```
+    ///
+    /// `ART_CARD_OUT` names the V40 card; the V47 one is written beside it
+    /// with `-v47` on the stem, so there is one path to set and one place both
+    /// land. Both are deleted on the way out.
+    ///
+    /// **A correction to the brief this task came from.** It assumed
+    /// `ART_CARD` names "a card ART built, so its manifest is beside it" —
+    /// false on this machine: every real card here came from
+    /// `preload_a_real_card_when_asked`, above, which calls `build_card`
+    /// directly and writes no manifest at all (only `card_build`, the
+    /// *command*, does that, through `describe_card`/`render_manifest`). So
+    /// this hook builds its own card from the real V40 Kickstart and the real
+    /// Emu68 archive, following exactly the three calls
+    /// `commands/card.rs::build_requested_card` makes in the same order —
+    /// `build_card`, then `describe_card`, then `render_manifest` — so the
+    /// manifest the check reads carries facts read back off a real card
+    /// rather than invented ones. Which Amiga/board/Pi the card is nominally
+    /// for, and what it is filled with beyond the Kickstart, are irrelevant
+    /// to the comparison: `rom_pairing_for` reads only `SourceFacts` and
+    /// `boot_files`.
+    ///
+    /// **Three verdicts, and the third is the one worth having.** The V47 tree
+    /// against the V40-carrying card is the pairing that actually failed on
+    /// real hardware emulation on 2026-08-16, and the V40 tree against that
+    /// same card is `Paired` — but only because the card was built with the
+    /// very ROM that tree was planned against, which proves nothing about the
+    /// tree's own capability. So a **second** card is built from the real V47
+    /// Kickstart, and the V40 tree is asked about that one too: a different
+    /// ROM, and `Suitable` only because the tree carries its own ROM modules.
+    /// That is the design's own third proof case, and the only evidence on
+    /// real material that this check reads the tree's capability rather than
+    /// comparing version numbers.
+    #[test]
+    #[ignore = "reads the user's own trees, archive and ROM, and writes a card to E:\\amiga\\ProjeART; run explicitly"]
+    fn the_real_trees_against_a_real_card_when_asked() {
+        use crate::core::pistorm::firmware::FirmwareConfig;
+        use crate::core::pistorm::hardware::{
+            AmigaTarget, Emu68Line, PiModel, PistormHardware, PistormVariant,
+        };
+        use crate::core::pistorm::options::Emu68Options;
+
+        let (Ok(v47), Ok(v40), Ok(archive), Ok(kickstart_v40), Ok(kickstart_v47), Ok(card_out)) = (
+            std::env::var("ART_TREE_V47"),
+            std::env::var("ART_TREE_V40"),
+            std::env::var("ART_EMU68_ARCHIVE"),
+            std::env::var("ART_KICKSTART_V40"),
+            std::env::var("ART_KICKSTART_V47"),
+            std::env::var("ART_CARD_OUT"),
+        ) else {
+            return;
+        };
+
+        let v40_card = std::path::PathBuf::from(&card_out);
+        // Beside the card the user named, with `-v47` on the stem: one path to
+        // set, and both cards land wherever they pointed it.
+        let v47_card = {
+            let stem = v40_card
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "card".into());
+            let extension = v40_card
+                .extension()
+                .map(|e| format!(".{}", e.to_string_lossy()))
+                .unwrap_or_default();
+            v40_card.with_file_name(format!("{stem}-v47{extension}"))
+        };
+
+        // Deletes every file this run created, on the way out, on every path —
+        // these are multi-hundred-MB images and the run must not leave them
+        // behind, whichever way the test ends. **Only what this run created**:
+        // the SAFE_CREATE assertion below is what makes that true, since a
+        // path that already existed is refused rather than adopted.
+        struct Cleanup(Vec<std::path::PathBuf>);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                for path in &self.0 {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
+        for image in [&v40_card, &v47_card] {
+            assert!(
+                !image.exists(),
+                "'{}' already exists — SAFE_CREATE: remove it yourself first, or point \
+                 ART_CARD_OUT somewhere new",
+                image.display()
+            );
+        }
+        let _cleanup = Cleanup(vec![
+            v40_card.clone(),
+            manifest_path_for(&v40_card),
+            v47_card.clone(),
+            manifest_path_for(&v47_card),
+        ]);
+
+        // The archive's own name means the classic board in the stable line
+        // (`core::pistorm::hardware::kernel_archive`) — the only fact about
+        // "which board" the archive-name check (ART-091) cares about. The
+        // rest of `hardware` plays no part in what `rom_pairing_for` reads.
+        let hardware = PistormHardware {
+            amiga: AmigaTarget::A500,
+            variant: PistormVariant::Classic,
+            pi: PiModel::Pi3A,
+        };
+        let firmware = FirmwareConfig::default();
+
+        fn file_name_of(path: &Path) -> String {
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        }
+
+        /// Build one card carrying one Kickstart, exactly the way
+        /// `commands/card.rs::build_requested_card` does: `build_card`, then
+        /// `describe_card`, then `render_manifest`. Returns what that ROM
+        /// states about itself.
+        #[allow(clippy::too_many_arguments)]
+        fn build_proof_card(
+            image: &Path,
+            kickstart_path: &Path,
+            archive: &Path,
+            hardware: PistormHardware,
+            firmware: &FirmwareConfig,
+        ) -> Option<u16> {
+            use crate::core::card::build::{build_card, AreaSpec, CardSpec};
+            use crate::core::card::manifest::{
+                describe_card, render_manifest, ManifestFile, SourceFacts,
+            };
+            use crate::core::card::payload::{emu68_payload, PayloadSpec};
+            use crate::core::hashing::{sha256_bytes, sha256_file};
+            use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
+            use crate::core::rom::{decoded_image, stated_version};
+            use crate::core::safety::atomic::atomic_write;
+
+            let kickstart_bytes = decoded_image(kickstart_path).expect("the real Kickstart reads");
+            let stated_major = stated_version(&kickstart_bytes).map(|(major, _minor)| major);
+
+            let payload = emu68_payload(
+                archive,
+                &PayloadSpec {
+                    hardware,
+                    line: Emu68Line::Stable,
+                    firmware: firmware.clone(),
+                    options: Emu68Options::default(),
+                    kickstart: Some(kickstart_bytes),
+                },
+            )
+            .expect("the real Emu68 archive builds a payload");
+
+            // Hashed here, from the bytes about to be written — the same point
+            // `commands/card.rs::build_requested_card` hashes at, and for the
+            // same reason: ART writes FAT32 and cannot read one back.
+            let boot_files: Vec<ManifestFile> = payload
+                .files
+                .iter()
+                .map(|file| ManifestFile {
+                    name: file.name.clone(),
+                    bytes: file.bytes.len() as u64,
+                    sha256: sha256_bytes(&file.bytes),
+                })
+                .collect();
+            let kernel_file = payload.kernel_file.clone();
+
+            build_card(
+                image,
+                &CardSpec {
+                    total_bytes: 2 * 1024 * 1024 * 1024,
+                    boot_bytes: 0,
+                    label: "ART CARD".into(),
+                    boot_files: payload.files,
+                    areas: vec![AreaSpec {
+                        size_bytes: 0,
+                        partitions: vec![PartitionSpec {
+                            drive_name: "DH0".into(),
+                            fs_type: AmigaHardDiskFs::FfsStandard,
+                            size_mb: 512,
+                            bootable: true,
+                            boot_priority: 0,
+                            num_buffers: 0,
+                        }],
+                        file_systems: Vec::new(),
+                    }],
+                },
+                &crate::core::jobs::NoProgress,
+            )
+            .expect("the card builds");
+
+            let source = SourceFacts {
+                archive_name: file_name_of(archive),
+                archive_sha256: sha256_file(archive).unwrap(),
+                kickstart_name: Some(file_name_of(kickstart_path)),
+                kickstart_sha256: Some(sha256_file(kickstart_path).unwrap()),
+                kickstart_file: Some(firmware.kickstart_file.clone()),
+                kickstart_stated_major: stated_major,
+                hardware,
+                line: Emu68Line::Stable,
+                kernel_file,
+            };
+
+            let manifest = describe_card(image, source, boot_files, None).expect("describe_card");
+            atomic_write(
+                &manifest_path_for(image),
+                render_manifest(&manifest).unwrap().as_bytes(),
+            )
+            .expect("the manifest writes beside the image");
+
+            stated_major
+        }
+
+        let v40_stated = build_proof_card(
+            &v40_card,
+            Path::new(&kickstart_v40),
+            Path::new(&archive),
+            hardware,
+            &firmware,
+        );
+        println!("card A kickstart={kickstart_v40} stated_major={v40_stated:?}");
+        assert_eq!(
+            v40_stated,
+            Some(40),
+            "the ROM named by ART_KICKSTART_V40 must state major version 40"
+        );
+
+        let v47_stated = build_proof_card(
+            &v47_card,
+            Path::new(&kickstart_v47),
+            Path::new(&archive),
+            hardware,
+            &firmware,
+        );
+        println!("card B kickstart={kickstart_v47} stated_major={v47_stated:?}");
+        assert_eq!(
+            v47_stated,
+            Some(47),
+            "the ROM named by ART_KICKSTART_V47 must state major version 47"
+        );
+
+        let needs_newer = rom_pairing_for(&v40_card, Path::new(&v47)).unwrap();
+        println!("V47 tree vs V40 card: {needs_newer:?}");
+        let brings_its_own = rom_pairing_for(&v40_card, Path::new(&v40)).unwrap();
+        println!("V40 tree vs V40 card: {brings_its_own:?}");
+        let brings_its_own_elsewhere = rom_pairing_for(&v47_card, Path::new(&v40)).unwrap();
+        println!("V40 tree vs V47 card: {brings_its_own_elsewhere:?}");
+
+        assert!(
+            matches!(
+                needs_newer,
+                Pairing::Unsuitable {
+                    needs: 47,
+                    found: Some(40),
+                    ..
+                }
+            ),
+            "the V47 tree against a V40-carrying card is the 2026-08-16 failure: {needs_newer:?}"
+        );
+        assert_eq!(
+            brings_its_own,
+            Pairing::Paired,
+            "the V40 tree was planned against this very ROM"
+        );
+        // The design's third case, on real material at last. `Suitable` and
+        // not `Paired`: a genuinely different ROM, accepted because the tree
+        // carries its own ROM modules and asks nothing of the Kickstart —
+        // which no comparison of version numbers could have produced, since
+        // 40 is not ≥ 47.
+        match &brings_its_own_elsewhere {
+            Pairing::Suitable { rom } => assert_eq!(rom, &firmware.kickstart_file),
+            other => panic!(
+                "a tree carrying its own ROM modules suits a ROM it was not built for: {other:?}"
+            ),
         }
     }
 

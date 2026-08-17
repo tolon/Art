@@ -104,7 +104,11 @@ pub fn osinstall_scan_media(folder: PathBuf) -> AppResult<MediaScanResult> {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "outcome", rename_all = "kebab-case")]
 pub enum PlanResult {
-    Planned { plan: InstallPlan },
+    // `Box`ed: G9's `paired_rom` pushed `InstallPlan` past clippy's
+    // `large_enum_variant` threshold next to `FolderUnreadable`'s bare
+    // `String`. Serde serialises `Box<T>` exactly as it would `T`, so this
+    // changes nothing on the wire.
+    Planned { plan: Box<InstallPlan> },
     FolderUnreadable { folder: String },
 }
 
@@ -138,7 +142,7 @@ pub fn osinstall_plan(request: InstallRequest) -> AppResult<PlanResult> {
     }
     let recipe = recipe::amigaos_32()?;
     Ok(PlanResult::Planned {
-        plan: plan(&request, &recipe)?,
+        plan: Box::new(plan(&request, &recipe)?),
     })
 }
 
@@ -587,6 +591,7 @@ mod tests {
                 bytes: 3,
                 protection: Some(0x20),
             }],
+            paired_rom: None,
         };
         std::fs::write(
             dist_root.join(MANIFEST_FILE_NAME),
@@ -722,6 +727,7 @@ mod tests {
                     "refusals",
                     "totalBytes",
                     "componentsOn",
+                    "pairedRom",
                     "mediaPaths",
                     "userStartup",
                 ],
@@ -782,7 +788,10 @@ mod tests {
                 &["Workbench3.2"],
                 Some(47),
             );
-            let value = serde_json::to_value(&PlanResult::Planned { plan }).unwrap();
+            let value = serde_json::to_value(&PlanResult::Planned {
+                plan: Box::new(plan),
+            })
+            .unwrap();
             assert_eq!(value["outcome"], "planned");
             assert!(value.get("plan").is_some());
 
@@ -792,6 +801,60 @@ mod tests {
             .unwrap();
             assert_eq!(value["outcome"], "folder-unreadable");
             expect_keys(&value, &["outcome", "folder"]);
+        }
+
+        /// **G9 fix round.** `install_plan_top_level_keys_are_camelcase`
+        /// only checks `InstallPlan`'s own top-level keys, so it never looked
+        /// inside `pairedRom` at all — `rename_all = "camelCase"` on a
+        /// container does not propagate to a nested struct's own fields, and
+        /// `PairedRom` shipped without its own `rename_all` attribute in
+        /// review. Checked in both places `PairedRom` is nested — `InstallPlan`
+        /// (the plan the frontend receives from `osinstall_plan`) and
+        /// `DistributionManifest` (`distribution.json`, read back by a later
+        /// task's own card-time check, which is exactly why the coordinator
+        /// wants this camelCase everywhere `PairedRom` lands) — so a fix that
+        /// only renamed one container's field would still be caught here.
+        #[test]
+        fn paired_rom_nested_inside_a_plan_or_a_manifest_serialises_with_camelcase_keys() {
+            let (plan, _dir) = crate::core::osinstall::fixtures::planned_with(
+                &["workbench-base"],
+                &["Workbench3.2"],
+                Some(47),
+            );
+            let paired = plan
+                .paired_rom
+                .clone()
+                .expect("planned_with a ROM records the pairing");
+
+            let plan_value = serde_json::to_value(&plan).unwrap();
+            expect_keys(
+                &plan_value["pairedRom"],
+                &[
+                    "name",
+                    "sha256",
+                    "statedMajor",
+                    "compatibleModels",
+                    "requiresMajor",
+                ],
+            );
+
+            let manifest = DistributionManifest {
+                release: "AmigaOS 3.2".into(),
+                built_from: Vec::new(),
+                files: Vec::new(),
+                paired_rom: Some(paired),
+            };
+            let manifest_value = serde_json::to_value(&manifest).unwrap();
+            expect_keys(
+                &manifest_value["pairedRom"],
+                &[
+                    "name",
+                    "sha256",
+                    "statedMajor",
+                    "compatibleModels",
+                    "requiresMajor",
+                ],
+            );
         }
 
         #[test]
