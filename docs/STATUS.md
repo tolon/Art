@@ -32,7 +32,7 @@ Update it at the end of any session that changes what works.
 | **hst-imager PFS3 oracle** | both directions, local only (`scripts/pfs3-oracle-check.py`, no `hst.imager.exe` in CI): ART writes a volume through `NativeFormatter` and `hst-imager fs dir -r` reads it back — names, sizes, and every protection-bit string, `hsparwed` cased as `hst-imager` spells it; `hst-imager` formats and fills a volume and ART reads it back through `libpfs3`, SHA-256 per file rather than a length (ART-079's exact shape) plus the same protection strings |
 | **cargo-deny** | advisories, bans, licences, sources — all ok |
 | **MSRV** | 1.93 (raised from 1.77 on 2026-08-12, for a maintained 7z decoder) |
-| **i18n** | `en.json` and `tr.json`, 1460 leaf keys each, parity enforced by `pnpm test` |
+| **i18n** | `en.json` and `tr.json`, 1469 leaf keys each, parity enforced by `pnpm test` |
 | **Release bundle** | rebuilt 2026-08-12 — MSI and NSIS, and the application was launched and answered |
 | **Published** | <https://github.com/tolon/Art> — public, `main`, **GPL-3.0-or-later**. Work lands on `sd-1` and merges to `main` at the phase's
 end; the licence *inventory* still said MIT until 2026-08-13, months after the
@@ -700,7 +700,7 @@ one machine, not the line.
 |---|---|
 | **SD-0** | ✅ **Done 2026-08-12** — prior-art teardown, written up as [sd0-prior-art.md](sd0-prior-art.md). One exit test still owed (drive `hst-imager` end to end on a scratch image) |
 | **SD-1** | The image has a shape: MBR + FAT32 boot partition (**G2 — done 2026-08-13/14, engine and screen**), RDB filesystem embedding FSHD/LSEG (**G4 — done**, also closed ART-084), build manifest (**G7 — done 2026-08-15**, with 7-Zip answering the half ART cannot check), image validation (**G8 — done 2026-08-15**), a build as a drop target (**G15 — done 2026-08-15**). **Every gap in SD-1 is built; what is left is a card flashed and booted** |
-| **SD-2** | Content, preloaded: PFS3 via `hst-imager` (**G3 route E — done 2026-08-15, engine *and* screen**; route D dropped: E was already proven and needs no Kickstart), OS install engine (G5), ROM pairing (G9), launcher metadata export (G10), layout policy (**G11 — done 2026-08-15, engine *and* screen**: a pile of dropped files becomes a staging tree, not yet driven against real material and no staging tree has reached a card) |
+| **SD-2** | Content, preloaded: PFS3 via `hst-imager` (**G3 route E — done 2026-08-15, engine *and* screen**; route D dropped: E was already proven and needs no Kickstart), OS install engine (**G5 — done 2026-08-16, engine *and* screen**), ROM pairing (**G9 — done 2026-08-17, engine *and* screen**: the preload screen says whether a card's Kickstart suits the volume about to be written, and warns without blocking), launcher metadata export (G10), layout policy (**G11 — done 2026-08-15, engine *and* screen**: a pile of dropped files becomes a staging tree, not yet driven against real material and no staging tree has reached a card) |
 | **SD-3** | It is *mine*: wallpaper, WiFi, prefs and Startup-Sequence, each edited in place (G14); multiboot as several complete environments and a boot menu (G16) |
 | **SD-4** | The flagship: native PFS3 write in ART (G3 route B) — its own brief; route D's harness becomes its oracle |
 | **SD-5** | Comfort: capacity planner and build profiles (G13) |
@@ -859,7 +859,19 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
 
 ## Picking up next session
 
-*Last touched: 2026-08-16. Three sessions in one day: first re-measuring the
+*Last touched: 2026-08-17. **G9 landed** — the volume-preparation screen now
+says whether a card's Kickstart suits the OS volume about to go onto it, from
+two facts each side already recorded, and it warns rather than blocks. A final
+review of the whole branch found ten things and all ten were fixed in one wave
+([ART-129](ISSUES.md)); two were blockers and both were the same failure —
+**the check that exists to warn said nothing.** Identity was allowed to answer
+a question it was never asked, and the screen asked about only the first of
+several partitions. The design's third proof case — a V40 tree that carries
+its own compatibility modules coming back `Suitable` against a V47 card —
+reached real material for the first time, which is the only evidence that the
+check reads the tree's capability rather than comparing version numbers.*
+
+*Before that, on 2026-08-16, three sessions in one day: first re-measuring the
 real AmigaOS 3.2 tree through the native/fallback preload path (which closed
 [ART-122](ISSUES.md) — a partition is formatted and filled by one tool — and
 filed [ART-124](ISSUES.md)/[ART-125](ISSUES.md)), then chasing a guru the user
@@ -876,10 +888,11 @@ crediting two components for 94 of the same files) and
 [ART-125](ISSUES.md) (a byte total ART does not have is left unsaid rather
 than printed as zero). Work is on `main`.*
 
-**The tree is green, measured fresh**: 1411 Rust (run twice back to back, no
-flake), 533 frontend across 44 files, 1460 i18n leaf keys in `en.json` and
+**The tree is green, measured fresh**: 1439 Rust passed / 0 failed / 5 ignored
+(the real-media hooks, env-gated — run three times back to back, no flake),
+554 frontend across 45 files, 1469 i18n leaf keys in `en.json` and
 `tr.json` alike, `pnpm lint` clean, clippy clean at `-D warnings`.
-**CI on GitHub was confirmed green on the previous session** (run `31939802790`, commit
+**CI on GitHub was confirmed green two sessions ago** (run `31939802790`, commit
 `544282c`) — but it took three pushes to get there, and the reason is worth
 carrying forward rather than filing away: the merge to `main` was the first
 time any runner had ever compiled the card builder (those commits sat
@@ -945,12 +958,18 @@ have arrived.
   tool a per-*partition* choice rather than a per-step one) — the full-tree
   figures above are from one unattended run through the fixed path.
 
-**G9 and G10 are still owed**, and both are smaller than the gap analysis
-first sized them, now that G5 exists:
+- **G9 (ROM pairing) — done 2026-08-17.** Half was already done by
+  `CardBuilder` (the ROM lands on FAT32 under the name the config points at).
+  The remaining half — pairing a ROM with an *OS volume* — built as a check
+  rather than an object: `core/rom/pairing.rs::compare` is pure, takes the
+  tree's own planning record and the card's manifest entry, and asks only
+  whether the tree's recipe requirement still holds. No stored profile, no
+  picker; a named, reusable ROM+volume pairing belongs to G16 (multiboot),
+  which is where "several ROMs and several volumes" actually lives, and
+  inventing it here would have meant designing it twice.
 
-- **G9 (ROM pairing)** — half already done by `CardBuilder` (the ROM lands on
-  FAT32 under the name the config points at). The remaining half — pairing a
-  ROM with an *OS volume* — was blocked on G5; it no longer is.
+**G10 is the last gap SD-2 owes.**
+
 - **G10 (launcher metadata export)** — iGame/AGS metadata onto a GAMES:
   volume. Pairs naturally with G11, which is what puts games there. Not
   started.
@@ -980,8 +999,7 @@ someone at the machine (or the Amiga) to run what already exists.
 
 ### What to pick up, once at the machine
 
-- **G9 and G10** — both unblocked by G5 landing, neither started. G9 wants a
-  design pass on what "pairing a ROM with an OS volume" writes and where; G10
+- **G10** — the last of SD-2's five gaps, and the only one not started. It
   wants the iGame/AGS metadata shape decided before it can export anything.
 - **A card, on the PiStorm.** This is the rung that is genuinely untested,
   and it is worth naming precisely now that the filesystem side is settled.
