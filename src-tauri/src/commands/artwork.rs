@@ -18,8 +18,11 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use super::jobs::{spawn_job, JobRegistry};
+use crate::core::artwork::cache::Cache;
 use crate::core::artwork::config::{self, ConfiguredSource};
 use crate::core::artwork::enrich::{enrich, EnrichOutcome, EnrichRequest};
+use crate::core::artwork::key::normalise;
+use crate::core::artwork::ArtRef;
 use crate::core::jobs::JobId;
 use crate::error::AppResult;
 use crate::net::http_mirror::HttpMirrorClient;
@@ -83,6 +86,21 @@ pub fn artwork_check_source(source: ConfiguredSource) -> AppResult<()> {
 #[tauri::command]
 pub fn artwork_dir(app: AppHandle) -> String {
     artwork_dir_for(&app).to_string_lossy().to_string()
+}
+
+/// Which of these titles already have a picture, in the order asked.
+///
+/// The screen sends its titles as the catalogue holds them and gets back one
+/// slot each. Normalising here rather than in TypeScript is the point: the two
+/// matching rules live in `core/artwork/key.rs`, and a second implementation in
+/// the frontend would drift from them the first time one changed.
+#[tauri::command]
+pub fn artwork_known(titles: Vec<String>, app: AppHandle) -> AppResult<Vec<Option<ArtRef>>> {
+    let cache = Cache::open(&artwork_dir_for(&app))?;
+    Ok(titles
+        .iter()
+        .map(|title| cache.best(&normalise(title)).cloned())
+        .collect())
 }
 
 /// Fetch artwork for a list of titles, on a job.

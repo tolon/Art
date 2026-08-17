@@ -1455,6 +1455,33 @@
       }
     }
   },
+  "artwork": {
+    "title": "Artwork sources",
+    "intro": "Where ART looks for cover art, screenshots and icons. Nothing is fetched until you ask for it.",
+    "enabled": "Use this source",
+    "indexMirror": "Index address",
+    "imageMirror": "Picture address",
+    "imageMirrorSame": "Same as the index address",
+    "reset": "Restore defaults",
+    "invalid": "That address cannot be used: {{reason}}",
+    "source": {
+      "libretro": "libretro thumbnails",
+      "whdloadDe": "whdload.de icons",
+      "unknown": "Unknown source ({{id}})"
+    },
+    "enrich": {
+      "action": "Fetch artwork",
+      "running": "Fetching artwork…",
+      "noSources": "Every artwork source is switched off.",
+      "noTitles": "There is nothing in the catalogue to fetch artwork for."
+    },
+    "outcome": {
+      "done": "{{written}} fetched, {{missed}} not found",
+      "unreachable": "Could not be reached: {{note}}",
+      "cachedBefore_one": "{{count}} picture was already saved",
+      "cachedBefore_other": "{{count}} pictures were already saved"
+    }
+  },
   "collection": {
     "subtitle": "Amiga Collection Studio",
     "header": {

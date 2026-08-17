@@ -51,6 +51,12 @@ export interface AppSettings {
   /** A custom mirror order. Null means "use the ones ART ships with", which is
    *  not the same as an empty list — an empty list would disable syncing. */
   aminetMirrors: StoredMirror[] | null;
+  /** Artwork sources, as the user left them. Null means "ask Rust for the
+   *  shipped list", which is not the same as an empty list — an empty list is
+   *  a user who switched every source off, and must survive a restart like any
+   *  other choice. Shaped as `ConfiguredSource` in `@/lib/artwork`; held as
+   *  `unknown` here so `settings.ts` does not depend on a studio's types. */
+  artworkSources: unknown;
   /** Whether the app sidebar is collapsed (Ctrl+B). A preference rather than
    *  view state: someone who works with the panes full-width expects them
    *  full-width the next time they open ART, not one keystroke away from it. */
@@ -204,6 +210,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   hstImagerPath: null,
   aminetRoot: null,
   aminetMirrors: null,
+  artworkSources: null,
   sidebarCollapsed: false,
   showSourceButtons: false,
   overwritePolicy: "skip",
@@ -256,6 +263,8 @@ export async function getSettings(): Promise<AppSettings> {
       aminetRoot: (await s.get<string>("aminetRoot")) ?? DEFAULT_SETTINGS.aminetRoot,
       aminetMirrors:
         (await s.get<StoredMirror[]>("aminetMirrors")) ?? DEFAULT_SETTINGS.aminetMirrors,
+      artworkSources:
+        (await s.get<unknown>("artworkSources")) ?? DEFAULT_SETTINGS.artworkSources,
       appZoom: (await s.get<number>("appZoom")) ?? DEFAULT_SETTINGS.appZoom,
       remembered: (await s.get<unknown>("remembered")) ?? DEFAULT_SETTINGS.remembered,
     };

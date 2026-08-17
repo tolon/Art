@@ -18,6 +18,17 @@ import {
   type RefreshMode,
   type RootView,
 } from "@/lib/gameindex";
+import {
+  artworkDefaults,
+  artworkDir,
+  artworkEnrich,
+  artworkKnown,
+  onArtworkResult,
+  outcomePhrase,
+  sourcePhrase,
+  type ConfiguredSource,
+  type SourceOutcome,
+} from "@/lib/artwork";
 import { isOneOf } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -146,6 +157,77 @@ export function CollectionStudio() {
 
   const [roots, setRoots] = useState<RootView[]>([]);
 
+  // Artwork, kept beside the items rather than folded into them: a picture
+  // arrives long after the row it belongs to, and merging would mean rebuilding
+  // every row each time one lands. Keyed by the entry id the row already has.
+  const [art, setArt] = useState<Map<string, string>>(new Map());
+  const [artOutcome, setArtOutcome] = useState<SourceOutcome[] | null>(null);
+
+  const storedSources = useSettingsStore((s) => s.settings.artworkSources);
+
+  /**
+   * Ask which titles already have a picture, and where it is.
+   *
+   * **Reads the cache; fetches nothing.** Rust does the normalising because the
+   * two matching rules live there and a copy here would drift from them.
+   */
+  async function loadArtwork(rows: Shown[]) {
+    if (rows.length === 0) return;
+    try {
+      const [dir, known] = await Promise.all([
+        artworkDir(),
+        artworkKnown(rows.map((row) => row.title)),
+      ]);
+      const { convertFileSrc } = await import("@tauri-apps/api/core");
+      const next = new Map<string, string>();
+      known.forEach((ref, index) => {
+        if (ref) next.set(rows[index].id, convertFileSrc(`${dir}/${ref.file}`));
+      });
+      setArt(next);
+    } catch {
+      // A cache that cannot be read is a screen without pictures, not a screen
+      // that fails to open. The rows stand on their own.
+      setArt(new Map());
+    }
+  }
+
+  /**
+   * Fetch artwork for everything on screen.
+   *
+   * The user's action, never a side effect of opening the screen — the same
+   * rule that took the automatic scan out (ART-132).
+   */
+  async function handleEnrich(rows: Shown[]) {
+    const shipped = await artworkDefaults().catch(() => [] as ConfiguredSource[]);
+    const saved = Array.isArray(storedSources)
+      ? (storedSources as ConfiguredSource[])
+      : null;
+    const sources = saved ?? shipped;
+
+    if (rows.length === 0) {
+      setError(t("artwork.enrich.noTitles"));
+      return;
+    }
+    if (!sources.some((source) => source.enabled)) {
+      setError(t("artwork.enrich.noSources"));
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+    setArtOutcome(null);
+    setStatusMsg(t("artwork.enrich.running"));
+    try {
+      await artworkEnrich(
+        rows.map((row) => row.title),
+        sources
+      );
+    } catch (e) {
+      setError(String(e));
+      setBusy(false);
+    }
+  }
+
   /**
    * Load the saved catalogue. **Starts nothing.**
    *
@@ -177,7 +259,9 @@ export function CollectionStudio() {
           }
         }
       }
-      setItems([...byId.values()]);
+      const shown = [...byId.values()];
+      setItems(shown);
+      void loadArtwork(shown);
       setScanDir(loaded.length === 1 ? loaded[0].root : null);
       setError(null);
     } catch (e) {
@@ -190,6 +274,7 @@ export function CollectionStudio() {
 
     let cancelled = false;
     let unlisten: (() => void) | undefined;
+    let unlistenArt: (() => void) | undefined;
     void (async () => {
       const stop = await onCatalogueRefreshed(() => {
         setBusy(false);
@@ -198,10 +283,27 @@ export function CollectionStudio() {
       if (cancelled) stop();
       else unlisten = stop;
     })();
+    void (async () => {
+      const stop = await onArtworkResult((result) => {
+        setBusy(false);
+        setStatusMsg(null);
+        setArtOutcome(result.perSource);
+        // Re-read the cache rather than patching from the event: the run also
+        // records what it could not find, and the screen should reflect the
+        // cache it will read on the next open.
+        setItems((rows) => {
+          void loadArtwork(rows);
+          return rows;
+        });
+      });
+      if (cancelled) stop();
+      else unlistenArt = stop;
+    })();
 
     return () => {
       cancelled = true;
       unlisten?.();
+      unlistenArt?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -421,6 +523,25 @@ export function CollectionStudio() {
             </button>
           </div>
         ))}
+
+        {items.length > 0 && (
+          <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 10 }}>
+            <button
+              className="btn btn-sm"
+              disabled={busy}
+              onClick={() => void handleEnrich(items)}
+              style={{ padding: "3px 10px", fontSize: 11 }}
+            >
+              {t("artwork.enrich.action")}
+            </button>
+            {artOutcome?.map((outcome) => (
+              <span key={outcome.id} className="faint" style={{ fontSize: 11 }}>
+                {t(sourcePhrase(outcome.id).key, sourcePhrase(outcome.id).params)}:{" "}
+                {t(outcomePhrase(outcome).key, outcomePhrase(outcome).params)}
+              </span>
+            ))}
+          </div>
+        )}
       </section>
 
       {error && <div className="badge badge-err" style={{ margin: "12px 0", padding: "6px 12px" }}>{error}</div>}
@@ -539,6 +660,24 @@ export function CollectionStudio() {
                     </span>
                   </div>
 
+                  {/* The picture, when the cache has one. A row without one is
+                      the ordinary case until the user runs a fetch, so nothing
+                      reserves space for an image that may never arrive. */}
+                  {art.get(item.id) && (
+                    <img
+                      src={art.get(item.id)}
+                      alt=""
+                      loading="lazy"
+                      style={{
+                        display: "block",
+                        width: "100%",
+                        maxHeight: 160,
+                        objectFit: "contain",
+                        marginBottom: 6,
+                      }}
+                    />
+                  )}
+
                   {/* Title & Publisher */}
                   <strong style={{ fontSize: 14, color: "var(--text)", display: "block", marginBottom: 2 }}>
                     {item.title}
@@ -605,9 +744,20 @@ export function CollectionStudio() {
                 style={{ padding: "8px 12px" }}
               >
                 <div className="file-row-main" style={{ gap: 10 }}>
-                  <span className="file-row-icon">
-                    {item.media === "whdload" ? "🕹️" : item.media === "floppies" ? "💾" : "💽"}
-                  </span>
+                  {/* The picture stands in for the media glyph when there is
+                      one, so a row never grows taller than the rows around it. */}
+                  {art.get(item.id) ? (
+                    <img
+                      src={art.get(item.id)}
+                      alt=""
+                      loading="lazy"
+                      style={{ width: 28, height: 28, objectFit: "contain", flexShrink: 0 }}
+                    />
+                  ) : (
+                    <span className="file-row-icon">
+                      {item.media === "whdload" ? "🕹️" : item.media === "floppies" ? "💾" : "💽"}
+                    </span>
+                  )}
                   <div>
                     <strong>
                       {item.title}

@@ -1455,6 +1455,33 @@
       }
     }
   },
+  "artwork": {
+    "title": "Görsel kaynakları",
+    "intro": "ART'ın kapak, ekran görüntüsü ve simge ararken bakacağı yerler. Siz istemeden hiçbir şey indirilmez.",
+    "enabled": "Bu kaynağı kullan",
+    "indexMirror": "Dizin adresi",
+    "imageMirror": "Görsel adresi",
+    "imageMirrorSame": "Dizin adresiyle aynı",
+    "reset": "Varsayılanlara dön",
+    "invalid": "Bu adres kullanılamıyor: {{reason}}",
+    "source": {
+      "libretro": "libretro küçük resimleri",
+      "whdloadDe": "whdload.de simgeleri",
+      "unknown": "Bilinmeyen kaynak ({{id}})"
+    },
+    "enrich": {
+      "action": "Görselleri getir",
+      "running": "Görseller getiriliyor…",
+      "noSources": "Bütün görsel kaynakları kapalı.",
+      "noTitles": "Katalogda görsel getirilecek bir şey yok."
+    },
+    "outcome": {
+      "done": "{{written}} getirildi, {{missed}} bulunamadı",
+      "unreachable": "Erişilemedi: {{note}}",
+      "cachedBefore_one": "{{count}} görsel zaten kayıtlıydı",
+      "cachedBefore_other": "{{count}} görsel zaten kayıtlıydı"
+    }
+  },
   "collection": {
     "subtitle": "Amiga Koleksiyon Stüdyosu",
     "header": {

@@ -100,6 +100,16 @@ impl Cache {
         self.file.entries.get(&entry_key(title_key, kind))
     }
 
+    /// The picture a screen should show for this title, or none.
+    ///
+    /// Walks [`ArtKind::ALL`], which is in preference order, so a title with
+    /// both a boxart and an icon shows the boxart.
+    pub fn best(&self, title_key: &str) -> Option<&ArtRef> {
+        ArtKind::ALL
+            .iter()
+            .find_map(|kind| self.get(title_key, *kind))
+    }
+
     pub fn is_missing(&self, title_key: &str, kind: ArtKind, source: &str) -> bool {
         self.file
             .misses
@@ -267,6 +277,23 @@ mod tests {
         std::fs::write(dir.join(INDEX_FILE), b"{ not json").unwrap();
         let cache = Cache::open(&dir).unwrap();
         assert!(cache.get("anything", ArtKind::Boxart).is_none());
+    }
+
+    /// A title with more than one picture shows the one earliest in
+    /// `ArtKind::ALL` — a cover beats an icon, whatever order they arrived in.
+    #[test]
+    fn best_prefers_the_kind_a_screen_should_show_first() {
+        let dir = tempdir("best");
+        let mut cache = Cache::open(&dir).unwrap();
+        cache
+            .store("moonstone", ArtKind::Icon, "whdload-de", "png", b"I")
+            .unwrap();
+        cache
+            .store("moonstone", ArtKind::Boxart, "libretro", "png", b"B")
+            .unwrap();
+
+        assert_eq!(cache.best("moonstone").unwrap().kind, ArtKind::Boxart);
+        assert!(cache.best("nothing here").is_none());
     }
 
     /// Two titles that differ only in case are one title, so they must share a

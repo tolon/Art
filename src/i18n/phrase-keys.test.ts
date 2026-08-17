@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import en from "./en.json";
 
 import { ALL_PROVENANCES, provenancePhrase } from "@/lib/gameindex";
+import { outcomePhrase, sourcePhrase, type SourceOutcome } from "@/lib/artwork";
 
 import { describeCheckout, type CheckoutRow } from "@/lib/checkout";
 import { jobStatusLabel, type JobProgress } from "@/lib/jobs";
@@ -864,6 +865,32 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     // dotted string.
     for (const from of ALL_PROVENANCES) {
       const phrase = provenancePhrase(from);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+  it("sourcePhrase: every shipped source, and an unknown one, resolve", () => {
+    // The ids are the strings `core::artwork::config::source_for` matches on.
+    // The default arm matters as much as the named ones: a settings file
+    // carrying a source a later ART dropped must still render a row.
+    for (const id of ["libretro", "whdload-de", "something-else"]) {
+      const phrase = sourcePhrase(id);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+  it("outcomePhrase: both branches resolve", () => {
+    const outcomes: SourceOutcome[] = [
+      { id: "libretro", written: 12, matched: 14, missed: 2, reachable: true, note: null },
+      {
+        id: "whdload-de",
+        written: 0,
+        matched: 0,
+        missed: 0,
+        reachable: false,
+        note: "404 https://www.whdload.de/",
+      },
+    ];
+    for (const outcome of outcomes) {
+      const phrase = outcomePhrase(outcome);
       expect(isLeafKey(phrase.key), phrase.key).toBe(true);
     }
   });
