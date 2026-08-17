@@ -26,6 +26,29 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-130** 🔵 **A game can name the Kickstart it needs, and nothing offers to
+supply it** — *filed 2026-08-17, out of G10's design round; the reading half is
+built by G10, this is the half that was deliberately left out*
+`src-tauri/src/core/gameindex/`, `src-tauri/src/core/rom/`, ROM Manager ·
+A WHDLoad slave at `ws_Version >= 16` declares the Kickstart image it needs by
+name (`kick34005.A500`, which WHDLoad loads from `DEVS:Kickstarts/`), by size
+and by CRC16 — documented in whdload.de's autodoc under
+`WHDLoad.Slave/--Overview--`. G10 reads all three fields, computes WHDLoad's
+own CRC-16/ARC (`core/hashing`), and **reports** which declared images are
+missing from the tree it is building. What it does not do is close the loop:
+ART holds a 154-dump Kickstart table, verified against amitools' Remus database
+on every CI run, so in many cases it could *identify* the needed image and
+offer to place it under the name the slave asks for.
+
+Left out on purpose rather than forgotten. Putting a user's ROM onto their card
+on their behalf reaches ROM Manager, the licensed-Amiga-Forever decode path
+([ART-128](#fixed)) and the card's own layout — decisions of theirs, not a side
+effect of a metadata pass. It is the same question G9 answers for the OS side
+("does this Kickstart suit this volume?") arriving from the games side, and it
+belongs beside G9/G16 rather than inside a launcher-metadata round.
+
+Design: [2026-08-17-g10-launcher-metadata-design.md](superpowers/specs/2026-08-17-g10-launcher-metadata-design.md) §6.
+
 **ART-119** 🔵 **Five minors deferred from Task 13's review, folded into one
 entry — two closed, three still open** — *found 2026-08-15/16, Task 13's fix
 round, filed at Task 14; #3 and #4 closed 2026-08-16*
@@ -537,6 +560,236 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-136** 🟠 ✅ **The ADF path assumed TOSEC filenames; of 847 real ADFs,
+none are TOSEC — so one game became five entries and artwork matched 3 %** —
+*found 2026-08-18, indexing a second real folder; the tool that answers it
+landed the same day*
+`src-tauri/src/core/gameindex/cleanup.rs`,
+`src-tauri/src/commands/gameindex.rs` · Adding a second folder made an
+assumption visible that a WHDLoad-only library had hidden. `readers/tosec.rs`
+parses TOSEC names — `Title (1990)(Publisher)(Disk 1 of 3).adf` — and the real
+material is hand-named: `A-Train Disk 1.adf`, `ADPro_D3.adf`,
+`CaptiveII_Disk1.adf`, `dune2-2.adf`. **Zero of 847 matched the convention.**
+
+Three consequences, measured rather than supposed:
+
+- **The disk number lands in the title.** `A-Train Disk 1` and `A-Train Disk 2`
+  are two entries for one game; `ADPro_D1` … `_D5` are five.
+- **Artwork cannot match.** 3 % for the hand-named ADFs against 60 % for the
+  WHDLoad folder beside them, because `A-Train Disk 1` is in no thumbnail index
+  anywhere.
+- **The parser does not merely fail, it mangles.** `(c) 1990 Svein Berge.adf`
+  came out as `1990 Svein Berge` — a parenthesised group stripped as though it
+  were a TOSEC field. Provenance then records `tosec-name`, claiming a TOSEC
+  name was parsed when the filename was taken raw.
+
+**The fix is a tool, not a guess**, which was the project owner's call: ART
+proposes and the user accepts. `cleanup::suggest_title` removes an explicit disk
+marker (`Disk 3`, `_D3`, `-Disk^1`, `disc2`) and `suggest_stem` keeps it in one
+form, because a title and a filename want opposite things from a disk number —
+two disks are one game, but they must stay two files.
+
+A bare trailing number is the hard case and needs the neighbours: nothing in
+`dune2-2` says whether the 2 is a disk or a sequel, and `dune2` itself ends in a
+digit. `disk_sets` reads every name at once and accepts a set only when it
+**begins at disk one** — 163 of the 174 numbered groups in the real collection
+do. That rule earns its keep in both directions: it groups `4D Driving 1/2` and
+`apoc1/2/3`, and it leaves alone both `Turrican 2` beside `Turrican 3` and
+`LSD_042` … `LSD_064`, which are eighteen issues of a disk magazine that share a
+base, are numbered, and would otherwise have collapsed into one title.
+
+What no rule can settle — `brian the lion 2`, with no disk one anywhere — is
+typed by the user. Applying a title writes a `UserEdit` override (top
+provenance, undoable); renaming the file is a separate button that confirms
+first, refuses an existing target rather than replacing it, and is logged. The
+catalogue follows the renamed file by its content-derived id, verified on real
+material.
+
+847 files now resolve to **523 distinct titles**, 606 with a suggestion. The
+real-material hook is checked in, `#[ignore]`d and env-gated, and asserts the
+property that matters rather than a count that belongs to somebody's disk: the
+magazine issues stay as many titles as there are issues.
+
+**ART-135** 🟠 ✅ **One politeness rule for every host, and four pictures fetched
+for the one the screen shows: a one-minute job took forty** — *found 2026-08-17,
+driving the artwork run against 1700 real titles; fixed the same day*
+`src-tauri/src/core/artwork/enrich.rs`,
+`src-tauri/src/core/artwork/sources/` · The user asked whether waiting an hour
+for cover art was right. It was not, and both halves were the engine's own
+doing.
+
+`REQUESTS_PER_SECOND` was a single constant applied to every source. It was
+chosen for **whdload.de**, which volunteers run on a small server and where four
+requests a second is right — and then applied unchanged to **libretro's
+pictures, which come off GitHub's CDN**. Holding a CDN to a volunteer server's
+pace is not politeness, it is a mistake with a courteous name. The rate is now
+stated per source ([`ArtSource::requests_per_second`]) under a ceiling in
+`enrich`: whdload.de 4, libretro 16.
+
+The larger half: libretro publishes **four** kinds per title — boxart, snap,
+title screen, logo — and the run fetched all four, while the Collection renders
+exactly one. Three-quarters of the wait bought pictures nothing displays.
+`EnrichRequest::wanted` now carries what the caller will render, and
+`commands/artwork.rs::DISPLAYED_KINDS` names the two the screen actually shows.
+Wave C widens that list when it has somewhere to put the rest.
+
+Measured against the user's real library: about forty minutes to about one.
+Tests: `only_the_wanted_kinds_are_fetched` (fails if a kind nobody asked for is
+requested) and `each_source_states_its_own_rate_and_none_exceeds_the_ceiling`
+(fails if a CDN and a volunteer's server are asked at the same pace).
+
+**ART-134** 🔴 ✅ **The artwork index was written only at the end of an
+hour-long run, so an interruption orphaned every picture it had fetched** —
+*found 2026-08-17, driving the first real artwork run; fixed the same day*
+`src-tauri/src/core/artwork/enrich.rs`,
+`src-tauri/src/core/artwork/cache.rs` · The user reported that downloaded
+artwork did not appear on screen. It had downloaded: **790 pictures were on
+disk**. What was missing was `index.json` — the record of what had been fetched
+— because `cache.save()` ran once, after the last title of a run over 1700 of
+them. The run was interrupted, so nothing knew those 790 files existed: the
+screen reads the index and saw an empty cache, and the next run began
+downloading all of them again.
+
+Two fixes, and the second is what recovers work already done:
+
+- **The index is written whatever happens.** `enrich` now runs the work in an
+  inner function and saves unconditionally on the way out — cancelled, failed
+  or finished — plus every three seconds during the run. Time rather than a
+  title count, because the screen reads the same file to show pictures as they
+  arrive, and a count would save every thirty seconds when titles match and
+  every few when they do not.
+- **A picture already on disk is adopted, not fetched again.** `Cache::adopt`
+  takes an existing file into the index without touching its bytes, which is
+  what rescued the 790 orphans rather than re-downloading them.
+
+The tests that existed did not catch this because every one of them ran a
+handful of titles to completion; a long run that stops half way had never been
+exercised. Both fixes were mutation-checked: disabling adoption fails
+`pictures_on_disk_without_an_index_are_adopted_not_refetched`, and saving only
+on success fails `a_cancelled_run_keeps_its_record_and_the_next_run_refetches_nothing`.
+Stated precisely, because the distinction matters: the real failure was the
+**process ending**, which no in-process test reproduces — the cancellation path
+already saved. The adoption test is the one that covers what actually happened.
+
+**ART-133** 🔴 ✅ **`window.confirm` asked nothing, so thirteen confirmations
+never fired — four of them in front of a delete** — *found 2026-08-17, driving
+the catalogue screen; the `confirm` half fixed the same day, the `prompt` half
+open below*
+`src/pages/FileManager.tsx`, `src/pages/PistormStudio.tsx`,
+`src/components/files/CheckoutPanel.tsx`, `src/pages/CollectionStudio.tsx` ·
+Removing a folder from the catalogue removed it **with no dialog shown at all**.
+wry disables WebView2's own script dialogs, so the browser's `window.confirm`
+returns without asking, and every guard shaped like
+`if (!window.confirm(…)) return;` was a guard that never fired.
+
+**Thirteen of them, and the four that matter most stood in front of a
+deletion**: `deleteEntry`'s two (whose own comment explains why a second was
+needed — *"the first one is the reflex the user has already learned to click
+through"* — while neither was asked), the delete-protected guard, and
+`deleteMany`'s. Also silent: discarding a modified checkout, and deleting a
+named PiStorm firmware set, which [ART-092](#fixed) had built that confirmation
+for on purpose.
+
+All thirteen now call `confirm` from `@tauri-apps/plugin-dialog`, which shows a
+real dialog; it is async, so every call site is awaited. `dialog:default` was
+already in `capabilities/default.json`, so no new permission was needed.
+
+**The evidence is one observation, and the entry says so rather than
+generalising.** What was seen is the folder removal. The other twelve are the
+same API in the same webview, which is why they were fixed together — but
+nobody has watched them fail.
+
+**Still open — `window.prompt`, four sites**: new folder and rename in the file
+manager, mark-by-mask, and Aminet's partition picker. A suppressed `prompt`
+returns `null`, so those features would silently do nothing, and those screens
+*have* been driven against real material before — so the inference is weaker
+here, not stronger. There is also no drop-in replacement: the dialog plugin has
+`confirm`, `ask` and `message` but no text input, so fixing them means building
+an input dialog. Not a change to make on a guess.
+
+Test: `src/i18n/no-window-dialogs.test.ts` bans `window.confirm` and
+`window.alert` outright and **counts** the four `window.prompt` sites, so the
+number moves only when somebody has looked. It earned its place immediately —
+written to guard the eleven found by hand, it found six more the manual grep
+had missed.
+
+**ART-132** 🟠 ✅ **Three things the Collection screen got wrong, all found in
+the first minute anyone looked at it** — *found 2026-08-17, driving G10's
+screen in `pnpm tauri dev` against the real collection; fixed the same day*
+`src-tauri/src/core/gameindex/scan.rs`, `src/pages/CollectionStudio.tsx`,
+`src/components/JobBar.tsx` · The screen was opened, pointed at
+`E:\amiga\Amigatolon\WHDload`, and reported as sitting at "100%" doing
+nothing. It was doing plenty, and three separate defects were stacked on top
+of each other:
+
+1. **The index hashed a file before deciding whether it was a title.** The
+   collection folder holds `WHDLoadPiStorm-180224.img` — a **29 GB** card
+   image beside 1697 two-megabyte games — and `.img` is a hardfile extension,
+   so the scan took its SHA-256. `read_one` identifies first and hashes second
+   now, and refuses anything past `MAX_TITLE_BYTES` (512 MiB) outright: the
+   largest real single-game hardfile here is 93 MB, and a file past that
+   ceiling is a container, not a game. This is ART's own "never read a whole
+   user file when only its header is needed" rule, which the first cut of this
+   scan broke.
+2. **Two scans ran at once.** `startScan` remembers the folder, which changes
+   `rememberedDir`, which re-runs the resume-where-you-left-off effect — whose
+   guard still held the *previous* folder. So requesting a scan started a
+   second one of the same folder. Two "Indexing titles" jobs, side by side, on
+   the same 1699 files. **This predates G10**; with the old scanner's
+   seconds-long run nobody could see it, and a ten-minute run made it obvious.
+   `startScan` claims the folder for both guards before its first `await`.
+3. **The progress bar rounded 99.6% up to 100%.** `Math.round` → `Math.floor`.
+   A bar may say 99% while the last item finishes; it must never say 100% with
+   work left, because that reads as finished-and-stuck.
+
+Test: `a_file_too_large_for_a_title_is_skipped_without_being_read`, which
+builds a sparse file past the ceiling and asserts the scan stays fast — a
+reader that still hashed it would take visibly longer than the test allows.
+The other two are screen behaviour and were verified by opening it again.
+
+**ART-131** 🔴 ✅ **A bare hardfile whose filesystem is smaller than the file
+would not mount — 1456 of the user's 1697 WHDLoad hardfiles** — *found
+2026-08-17 while building G10's hardfile reader; fixed the same day*
+`src-tauri/src/core/volume/mount.rs`, `src-tauri/src/core/gameindex/readers/whdhdf.rs` ·
+A bare hardfile records its own extent nowhere: there is no RDB to ask, so ART
+placed the root block from the file's own length (`total_blocks / 2`). Amiga
+partitions are whole cylinders and a hardfile's *file* need not be, so a volume
+of 1824 blocks lives happily in a file of 1843 — and the root block is at 912
+while that calculation says 921. Everything read from 921 is somebody's game
+data, which is why the failures came back as `header block has type
+-1409280683, expected 2` rather than as anything mentioning geometry.
+
+**Measured across the user's whole collection**: computing from the file's
+length finds the root block in **241** of 1697; rounding down to a whole
+cylinder (32 blocks) first finds it in **1697**. Nothing about this is specific
+to the game index — ADF Studio and the Files screen could not open those 1456
+images either. G10 is only what pointed at it.
+
+`mount()` now probes rather than assumes: the file's own count is tried first,
+so every image that already worked reads exactly as before, and the
+cylinder-aligned count is tried only when that block is not a root block. When
+neither looks right the original count is kept, so a corrupt image still fails
+where and how it failed before. The geometry is rebuilt with the volume's real
+extent, not just its root — otherwise a write could allocate a block the
+bitmap does not cover.
+
+Two smaller findings from the same sweep, both in `whdhdf.rs`:
+**AmigaDOS's thirty-character filename limit truncates the extension too**, so
+`20000MeilenUnterDemMeerDe.Slave` is `…MeerDe.Slav` on disk — thirty-two real
+images, and a whole-extension match found none of them. A name now gets a file
+onto a shortlist and `read_slave` decides from the bytes, which is
+`core/detect`'s own rule one level down. And the entry ceiling started at 4096;
+`Beneath A Steel Sky v2.2 CD32` reached it, so it matches
+`core::whdload::MAX_ENTRIES` at 20 000 now.
+
+Tests: `a_volume_shorter_than_its_file_still_mounts`,
+`a_volume_that_fills_its_file_is_left_alone`,
+`an_image_with_no_root_block_anywhere_keeps_its_own_count`,
+`a_name_truncated_by_amigados_is_still_a_slave`,
+`a_truncated_name_without_a_slave_inside_is_not_a_game`. Real material:
+`read_the_real_hardfiles_when_asked` reads **1697 of 1697, 0 refused** (was
+249 of 1697).
 
 **ART-129** 🟠 ✅ **The ROM pairing check stayed silent for the pairing it
 exists to warn about — twice over** — *found 2026-08-17 in G9's final review;

@@ -37,6 +37,13 @@ ART is built on the following open-source projects:
   Raspberry Pi's firmware boots from it. `chrono` is switched off, so files
   carry no timestamps — a build that produces the same bytes twice is one a
   manifest can describe
+- **quick-xml** — XML reading, for one file: `rp9-manifest.xml` inside a
+  Cloanto RetroPlatform `.rp9` package (MIT), with `memchr` (MIT / Unlicense)
+  beneath it. Read-only, and reached through `core/archive`'s gate rather than
+  from a path, so the manifest's bytes arrive already bounded. It is a crate
+  rather than a reader of ART's own because hand-parsing namespaced XML out of
+  a file a stranger wrote — entity escapes, CDATA, attribute quoting — is the
+  failure class `core/security` exists for
 - **ureq** — HTTP client used by the Aminet repository mirror (§41.5.3) (MIT / Apache-2.0)
 - **libpfs3** — PFS3 (Professional File System III) reading and writing, the
   filesystem a real PiStorm card uses (LGPL-3.0-or-later), with `byteorder`

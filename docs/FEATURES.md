@@ -269,10 +269,18 @@ checks the image comes back byte for byte.
 
 | Feature | Spec | State | Code |
 |---|---|:---:|---|
-| Folder scan, TOSEC metadata parse | §41, §42 | ✅ | `core/collection.rs` (runs as a job) |
-| Multi-disk grouping | §41 | ✅ | `core/collection.rs` |
-| SQLite persistence, tags, favourites | §41 | 🟡 | schema exists; UI does not write to it |
-| Duplicate detection (SHA256) | §43 | 🟡 | hashing works; no dedupe view |
+| Folder scan into a title catalogue | §41, §42 | ✅ | `core/gameindex/scan.rs` (a job; `core/collection.rs` retired onto it) |
+| A title's facts read from what states them | §41, §42 | ✅ | `core/gameindex/readers/` — a WHDLoad slave's `ws_name`/`ws_copy`/`ws_Flags`, an `.rp9` manifest, a bootable hardfile's insides, a TOSEC filename |
+| Provenance carried beside every fact | §14, §34 | ✅ | `record::Fact<T>`; the screen marks anything guessed rather than read |
+| Multi-disk grouping | §41 | ✅ | `readers/tosec.rs` (`disk`), `record::Media::Floppies` (`.rp9` states the order) |
+| Cover art / screenshots in the listing | §41 | 🟡 | `core/artwork/` — two sources (libretro-thumbnails' git-tree index, whdload.de's icons at an exact package-name path), strict two-rule matching, a per-title cache that records misses so a second run asks nothing. 29 tests, no network in any of them. The listing shows a thumbnail; **attaching one by hand needs wave C's screen**, and `.rp9` previews already in `record.preview` are still unrendered |
+| Artwork sources configurable in Settings | §41 | ✅ | `core/artwork/config.rs` — source types are code, on/off and both mirror bases are the user's. Every source ships enabled; nothing fetches until the user starts the job |
+| Chipset, genre and rating from an online source | §41 | ⏳ | **unsourceable today, not unimplemented.** Lemon Amiga returns 403 to every non-browser request including `robots.txt`; Hall of Light is HTML only and ART does not scrape (§41.5.3); OpenRetro holds exactly the chipset data and expects third-party apps but documents no endpoint. Measured: `chipset` is stated for 9.6 % of one real 1700-title catalogue and cannot be inferred — 83 records have a slave that left `ReqAGA` clear while the title says AGA or CD32 |
+| Catalogue persistence, multiple folders | §41 | ✅ | `core/gameindex/store.rs` — one JSON per root, refreshed only when asked. A cached entry is reused when path, size and mtime match and the record's schema is current; a renamed file is followed by its content-derived id rather than duplicated. 27 tests, and the second Update of an unchanged folder was watched reading nothing on a real screen |
+| Hand-edited titles | §41 | ✅ | the override layer, its backup policy and "the user always wins" were built in wave A; **the editing UI landed with the name tool** — every row has an Edit button, Enter saves, and the correction is a `UserEdit` (top provenance) that survives every refresh and undoes cleanly |
+| Cleaning up hand-named files | §41 | ✅ | `core/gameindex/cleanup.rs` — ART **proposes and the user accepts**, never renames on its own ([ART-136](ISSUES.md)). Explicit disk markers are removed from a title and normalised in a filename; a bare trailing number is settled by the neighbours (`dune2-1` beside `dune2-2`) and only when the set begins at disk one, which is what keeps eighteen disk-magazine issues from collapsing into one. Renaming a real file confirms first, refuses an existing target, and is logged; the catalogue follows it by content id. 847 real files → 523 distinct titles |
+| Tags, favourites | §41 | ⏳ | — |
+| Duplicate detection (SHA256) | §43 | 🟡 | identical bytes already collapse to one record (`derive_id`); no dedupe *view* |
 | Hex viewer (read-only) | §31 | ✅ | `core/analysis.rs` |
 | Signature scanning | §28 | ✅ | `core/analysis.rs` |
 | Disk Analyzer / forensics | §28 | 🟡 | hex + signatures only |

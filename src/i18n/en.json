@@ -1455,6 +1455,49 @@
       }
     }
   },
+  "cleanup": {
+    "fixTitle": "Fix title",
+    "fixTitleHint": "Show this title as \"{{proposed}}\". Only ART's own listing changes; the file is untouched, and you can undo it.",
+    "renameFile": "Rename file",
+    "renameFileHint": "Rename the file on disk to \"{{proposed}}\".",
+    "renameConfirm": "Rename this file on disk?\n\n{{from}}\n→ {{to}}\n\nART refuses if a file of that name is already there.",
+    "renamed": "Renamed to {{name}}",
+    "titleFixed": "Title is now \"{{name}}\"",
+    "undo": "Undo",
+    "undone": "Title restored",
+    "edit": "Edit",
+    "editHint": "Type this title yourself. ART leaves a name alone when it cannot tell a missing first disk from a sequel — this is where you say which.",
+    "save": "Save",
+    "cancel": "Cancel"
+  },
+  "artwork": {
+    "title": "Artwork sources",
+    "intro": "Where ART looks for cover art, screenshots and icons. Nothing is fetched until you ask for it.",
+    "enabled": "Use this source",
+    "indexMirror": "Index address",
+    "imageMirror": "Picture address",
+    "imageMirrorSame": "Same as the index address",
+    "reset": "Restore defaults",
+    "invalid": "That address cannot be used: {{reason}}",
+    "source": {
+      "libretro": "libretro thumbnails",
+      "whdloadDe": "whdload.de icons",
+      "unknown": "Unknown source ({{id}})"
+    },
+    "enrich": {
+      "action": "Fetch artwork",
+      "running": "Fetching artwork…",
+      "noSources": "Every artwork source is switched off.",
+      "noTitles": "There is nothing in the catalogue to fetch artwork for."
+    },
+    "outcome": {
+      "done": "{{written}} fetched, {{missed}} not found",
+      "doneWithAdopted": "{{written}} fetched, {{adopted}} already on disk, {{missed}} not found",
+      "unreachable": "Could not be reached: {{note}}",
+      "cachedBefore_one": "{{count}} picture was already saved",
+      "cachedBefore_other": "{{count}} pictures were already saved"
+    }
+  },
   "collection": {
     "subtitle": "Amiga Collection Studio",
     "header": {
@@ -2008,6 +2051,38 @@
         "notChecked": "Not checked"
       },
       "error": "ART could not verify: {{message}}"
+    }
+  },
+  "gameindex": {
+    "provenance": {
+      "rp9-manifest": "the .rp9 manifest",
+      "whdload-slave": "the WHDLoad slave",
+      "tosec-name": "the filename",
+      "drawer-name": "the drawer name"
+    },
+    "guessed": "guessed",
+    "guessedFrom": "Guessed from {{source}}, not declared",
+    "statedBy": "Declared by {{source}}",
+    "kickstartNeeded": "Needs Kickstart {{image}}",
+    "empty": "No titles indexed yet. Choose a folder to index.",
+    "noMatch": "No title matches this filter.",
+    "catalogue": {
+      "folders": "Folders",
+      "addFolder": "Add folder…",
+      "removeFolder": "Remove",
+      "removeConfirm": "Remove {{root}} from the catalogue? Its titles go with it; the files themselves are untouched.",
+      "update": "Update",
+      "updateHint": "Reads only what has changed since the last scan.",
+      "rescan": "Rescan",
+      "rescanHint": "Reads every file again. Slow; use it when you do not trust the catalogue.",
+      "never": "never scanned",
+      "scannedAt": "last scanned {{when}}",
+      "stale": "These titles were read by an older version of ART. An update would improve them.",
+      "unavailable": "not where the catalogue left it",
+      "unavailableHint": "The file is not at {{path}} right now. The entry is kept; plug the drive back in or use Update.",
+      "empty": "No folders in the catalogue yet. Add one to begin.",
+      "emptyRoot": "Nothing scanned in this folder yet — press Update.",
+      "titleCount": "{{count}} titles"
     }
   }
 }

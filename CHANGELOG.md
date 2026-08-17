@@ -7,6 +7,142 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Tidying up names ART could only read off a filename (2026-08-18)
+
+#### Added
+- **Edit any title, on the spot.** Every row in the Collection now has an
+  **Edit** button. Type what the game is actually called, press Enter, and it
+  stays that way through every rescan.
+- **One-button fixes where ART is sure.** A file called `A-Train Disk 1.adf`
+  offers **Fix title** — showing it as *A-Train*, one game rather than two
+  entries — and **Rename file**, which tidies the file itself to
+  `A-Train (Disk 1).adf`. Both are suggestions; nothing changes until you say
+  so, and a title fix can be undone from the same place.
+- **Multi-disk games are recognised by their neighbours.** `dune2-2.adf` is
+  Dune II's second disk, and ART knows because `dune2-1.adf` is sitting beside
+  it. On a real 847-file library this resolves to 523 games rather than 847
+  entries.
+
+#### Notes
+- **ART will not guess at a name, deliberately.** Where the evidence runs out it
+  says nothing and leaves the Edit button to you. `Turrican 2` next to
+  `Turrican 3` looks exactly like a two-disk set and is not one; a folder of
+  numbered disk-magazine issues looks the same again. Rather than be clever and
+  occasionally wrong about what your games are called, ART only proposes what it
+  can show a reason for.
+- Renaming a file asks first, shows both names in full, and **refuses** if
+  something of that name is already there. Your catalogue follows the renamed
+  file — nothing is lost and nothing needs re-scanning.
+
+### The Collection gets pictures (2026-08-17)
+
+#### Added
+- **Cover art, screenshots and icons for your titles.** A new **Fetch artwork**
+  button on the Collection looks your library up in two places: the
+  libretro thumbnail archive, and whdload.de's own icons. Pictures appear in
+  both the grid and the list.
+- **The sources are yours to change.** Settings now has an **Artwork sources**
+  panel: switch either source off, or point it at a different address. Both
+  ship switched on.
+- **Nothing is fetched until you ask.** Opening the Collection reads what has
+  already been saved and touches no network. The fetch runs in the background
+  with a progress bar and a Stop, and it is deliberately unhurried — no more
+  than four requests a second, because whdload.de is run by volunteers.
+- **It never asks twice.** Pictures are saved per title, so one file serves
+  every copy of a game you own, and titles nobody has a picture for are
+  remembered as such. A second run over the same library fetches nothing.
+
+- **Pictures appear as they arrive**, and the search box stays put. The filter
+  bar is now stuck to the top of the Collection, so you can narrow a
+  1700-title library without scrolling back up to reach it.
+
+#### Fixed
+- **An interrupted fetch no longer throws its work away.** The record of what
+  had been downloaded was written only when a run finished, so stopping half
+  way left the pictures on disk with nothing that knew they were there — they
+  did not show, and the next run downloaded them all again. The record is now
+  kept as the run goes, and a picture already on disk is used rather than
+  fetched a second time.
+- **Fetching is roughly forty times faster.** ART was asking GitHub's picture
+  archive as slowly as it asks whdload.de — which is right for a server
+  volunteers run, and needlessly cautious for a large one — and it was
+  downloading four pictures per game when the list shows one.
+
+#### Notes
+- Matching is strict on purpose. A title either matches by name, or by the part
+  before a subtitle — `1869` finds `1869 - Erlebte Geschichte Teil I` — or it
+  gets no picture. ART does not guess, because a wrong cover you cannot explain
+  is worse than none.
+- **Chipset, genre and rating are still empty, and this is not an oversight.**
+  There is no source ART can use for them: Lemon Amiga refuses automated
+  requests outright, Hall of Light publishes only web pages, and OpenRetro —
+  which has exactly the right data — documents no way in yet. Attaching a
+  picture by hand is also not here; that needs the richer screen still to come.
+
+### The Collection remembers, and asks before it deletes (2026-08-17)
+
+#### Added
+- **The Collection opens instantly and keeps its folders.** The catalogue is
+  saved, so a library that took minutes to read is there the moment the screen
+  opens — including after ART has been closed and reopened.
+- **Update reads only what changed.** A file ART has already read, whose size
+  and date have not moved, is not opened again. On a 1699-title library the
+  second Update finishes at once.
+- **More than one folder.** Keep games in as many places as you like; they
+  appear as one library, and each folder is updated, rescanned or removed on
+  its own.
+- **A title whose file has moved is followed.** Rename a game outside ART and
+  the next Update finds it under its new name rather than showing the old one
+  as missing — it is recognised by its contents, not its filename.
+- **A title whose file has really gone is kept and marked**, with its launch
+  buttons disabled rather than hidden. Unplugging a drive does not empty your
+  library.
+- Corrections you make by hand are stored apart from what ART read, so a
+  rescan never overwrites them, and the previous version is backed up.
+
+#### Fixed
+- **Confirmations now actually appear.** Deleting a file, discarding a
+  modified file, deleting a PiStorm firmware set and removing a folder all
+  asked for confirmation in the code and showed nothing on screen — the
+  browser dialog ART relied on returns "yes" without opening in this kind of
+  window. Thirteen confirmations were affected, four of them standing in front
+  of a deletion.
+
+### The Collection knows what a game is called, because it asks the game (2026-08-17)
+
+#### Added
+- **Titles now come from whatever actually states them, not from the
+  filename.** A WHDLoad game carries its own name, copyright year and
+  publisher inside its `.slave`; a Cloanto `.rp9` package carries a curated
+  manifest. The Collection reads both. Against a real 1698-title library that
+  means 1679 names, 1678 publishers and 1570 years came from the game itself
+  rather than being guessed — `Lotus3HD` on disk is `Lotus 3` on screen.
+- **Anything ART guessed is marked as a guess.** A value read from a filename
+  gets a small `~guessed` badge naming where it came from. The distinction is
+  real: a game whose slave declares it needs AGA is a different claim from one
+  whose filename merely contains the letters "AGA", and the two used to look
+  identical.
+- **A game that asks for a particular Kickstart says so.** 758 of the 1698
+  named an image such as `kick34005.a500`.
+- Bootable single-game hardfiles — the shape most WHDLoad collections come in
+  — are read from the inside rather than by their filename. All 1697 in the
+  test library are read, none refused.
+
+#### Changed
+- A title whose chipset nothing declares now reads **Unknown** instead of
+  being listed as OCS/ECS. The old default was a guess presented as a fact.
+
+#### Fixed
+- **Hard disk images whose filesystem is smaller than the file now open.** A
+  hardfile's partition is a whole number of cylinders and its file need not
+  be, so most WHDLoad game images are a few blocks larger than the volume
+  inside them. ART placed the root block from the file's size and read
+  nothing but noise. 1456 of 1697 real images were affected — in the
+  Collection, in ADF Studio and in the file manager alike.
+- The Collection no longer starts a second scan of the folder it was just
+  asked to scan.
+- A progress bar no longer rounds up to 100% while it is still working.
+
 ### ART warns before preparing a card whose Kickstart is older than the system needs (2026-08-17)
 
 #### Added

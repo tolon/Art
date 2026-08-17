@@ -304,6 +304,69 @@ fn why_not(dos_type: DosType, block_size: usize, offset: u64, file_len: u64) -> 
     None
 }
 
+/// Amiga partitions are whole cylinders, and a hardfile's *file* need not be.
+///
+/// 32 blocks is the common hardfile cylinder — one surface of 32 sectors, or two
+/// of sixteen — and it is what every one of the 1697 WHDLoad hardfiles measured
+/// for [ART-131](../../../docs/ISSUES.md) uses.
+const CYLINDER_BLOCKS: u32 = 32;
+
+/// How many blocks the filesystem inside this device actually occupies.
+///
+/// **A bare hardfile does not record its own extent.** There is no RDB to ask,
+/// so the only way to place the root block is to compute it from a block count
+/// — and the file's own length is the wrong count whenever the filesystem was
+/// laid out on cylinder boundaries and the file was not. Measured across the
+/// user's 1697 WHDLoad hardfiles: computing from the file's length finds the
+/// root block in **241** of them; rounding down to a whole cylinder first finds
+/// it in **1697** ([ART-131](../../../docs/ISSUES.md)).
+///
+/// So this probes rather than assuming. The file's own block count is tried
+/// first, which leaves every image that already worked — ART's own fixtures
+/// among them — reading exactly as before. Only when that block is not a root
+/// block is the cylinder-aligned count tried. When neither looks right the
+/// original count is returned unchanged, so a corrupt image still fails where
+/// and how it failed before rather than with a new message from here.
+fn volume_extent(device: &FileRegion, covered: u32, reserved: u32) -> u32 {
+    if looks_like_root(device, VolumeGeometry::root_block_for(covered)) {
+        return covered;
+    }
+
+    let aligned = covered - (covered % CYLINDER_BLOCKS);
+    if aligned > reserved.saturating_add(2)
+        && aligned != covered
+        && looks_like_root(device, VolumeGeometry::root_block_for(aligned))
+    {
+        return aligned;
+    }
+
+    covered
+}
+
+/// Whether `block` holds something shaped like a root block.
+///
+/// `T_HEADER` with a secondary type of `ST_ROOT`. Deliberately cheap and
+/// deliberately not a validation: this decides *where the volume ends*, and a
+/// root block that is present but damaged is a different problem, reported by
+/// the code that reads it properly.
+fn looks_like_root(device: &FileRegion, block: u32) -> bool {
+    let Ok(bytes) = super::read_block_vec(device, block) else {
+        return false;
+    };
+    if bytes.len() < super::SECTOR_BYTES {
+        return false;
+    }
+    let block_type = i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    let secondary = i32::from_be_bytes([
+        bytes[bytes.len() - 4],
+        bytes[bytes.len() - 3],
+        bytes[bytes.len() - 2],
+        bytes[bytes.len() - 1],
+    ]);
+    block_type == crate::core::adf::blocks::block_type::HEADER
+        && secondary == crate::core::adf::blocks::block_subtype::ROOT
+}
+
 /// Open one of the volumes [`scan_image`] found.
 ///
 /// Returns the device to read blocks from and the geometry to read them with.
@@ -320,9 +383,11 @@ pub fn mount(path: &Path, entry: &VolumeEntry) -> CoreResult<(FileRegion, Volume
     // The geometry comes from what the device *actually* covers, not from what
     // the table claimed: a clamped partition must not be walked as if the
     // missing blocks were there.
+    let covered = <FileRegion as super::BlockDevice>::total_blocks(&device);
+    let total_blocks = volume_extent(&device, covered, entry.reserved);
     let geometry = VolumeGeometry::new(
         entry.block_size,
-        <FileRegion as super::BlockDevice>::total_blocks(&device),
+        total_blocks,
         entry.reserved,
         DosType::new(entry.dos_type),
     )?;
@@ -342,6 +407,89 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    // ---- where a bare volume actually ends (ART-131) ----
+
+    /// A hardfile whose filesystem is **smaller than the file** still mounts.
+    ///
+    /// Amiga partitions are whole cylinders and a hardfile's file need not be,
+    /// so a volume of 1824 blocks can live in a file of 1843. Computing the
+    /// root block from the file's length puts it at 921; it is really at 912,
+    /// and everything read from 921 is somebody's game data.
+    ///
+    /// Measured, not imagined: of the user's 1697 WHDLoad hardfiles, the
+    /// file-length calculation finds the root block in 241 and the
+    /// cylinder-aligned one finds it in all 1697.
+    #[test]
+    fn a_volume_shorter_than_its_file_still_mounts() {
+        use crate::core::volume::fixture::make_ffs_volume;
+
+        const VOLUME_BLOCKS: u32 = 1824; // 57 cylinders of 32
+        const FILE_BLOCKS: u32 = 1843; // what the real images measure
+
+        let dir = scratch("short-volume");
+        let path = dir.join("Game.hdf");
+
+        let mut bytes = make_ffs_volume(VOLUME_BLOCKS, "Game", &[]);
+        bytes.resize(FILE_BLOCKS as usize * SECTOR_BYTES, 0);
+        std::fs::write(&path, &bytes).unwrap();
+
+        let found = scan_image(&path).unwrap();
+        let (_device, geometry) = mount(&path, &found.volumes[0]).unwrap();
+
+        assert_eq!(
+            geometry.root_block, 912,
+            "the root block is the volume's, not the file's"
+        );
+        assert_eq!(
+            geometry.total_blocks, VOLUME_BLOCKS,
+            "the geometry must describe the volume, or a write could allocate \
+             a block the bitmap does not cover"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// An image whose filesystem *does* fill it is unchanged.
+    ///
+    /// This is the half that keeps the probe honest: ART's own fixtures are not
+    /// cylinder-aligned, and 1843 blocks of actual volume must still put the
+    /// root at 921 rather than being "corrected" to 912.
+    #[test]
+    fn a_volume_that_fills_its_file_is_left_alone() {
+        use crate::core::volume::fixture::make_ffs_volume;
+
+        let dir = scratch("full-volume");
+        let path = dir.join("Game.hdf");
+        std::fs::write(&path, make_ffs_volume(1843, "Game", &[])).unwrap();
+
+        let found = scan_image(&path).unwrap();
+        let (_device, geometry) = mount(&path, &found.volumes[0]).unwrap();
+
+        assert_eq!(geometry.root_block, 921);
+        assert_eq!(geometry.total_blocks, 1843);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// When neither candidate holds a root block the original count is kept, so
+    /// a corrupt image fails where it failed before rather than with a new
+    /// message from the probe.
+    #[test]
+    fn an_image_with_no_root_block_anywhere_keeps_its_own_count() {
+        let dir = scratch("no-root");
+        let path = dir.join("Rubbish.hdf");
+
+        let mut bytes = vec![0u8; 1843 * SECTOR_BYTES];
+        bytes[0..4].copy_from_slice(b"DOS\x01");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let found = scan_image(&path).unwrap();
+        let (_device, geometry) = mount(&path, &found.volumes[0]).unwrap();
+        assert_eq!(geometry.total_blocks, 1843);
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     // ---- detection order (§2.4) ----

@@ -214,6 +214,20 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // about to go onto it. A `Phrase` read from `@/lib/preload`, and all six
     // `Pairing` variants (five phrases plus the deliberate `null` for
     // `paired`) are enumerated in `phrase-keys.test.ts`.
-    expect(dynamicCalls).toBe(94);
+    // 94 → 95 (SD-2 G10): the Collection screen marks any value the index
+    // *guessed* rather than read, and names the source in the mark's tooltip
+    // — `t(provenancePhrase(from).key)`. One read, and the closed set behind
+    // it is checked twice: `gameindex.test.ts` pins `ALL_PROVENANCES` to the
+    // four variants `core::gameindex::record::Provenance` defines, and
+    // `phrase-keys.test.ts` proves each of the four resolves to a real leaf.
+    // 95 → 98 (Collection wave B): three reads across two screens, all of
+    // artwork `Phrase`s. Settings names each source beside its switch;
+    // the Collection names it again beside what that source managed, and
+    // reads `outcomePhrase` for the sentence itself — which of two it is
+    // depends on whether the source could be reached at all, so it cannot
+    // be a literal. `sourcePhrase`'s three arms (both shipped ids and the
+    // default, for a settings file naming a source this ART dropped) and
+    // `outcomePhrase`'s two are enumerated in `phrase-keys.test.ts`.
+    expect(dynamicCalls).toBe(98);
   });
 });

@@ -7,12 +7,13 @@
 pub mod adf;
 pub mod archive;
 pub mod archives;
+pub mod artwork;
 pub mod card;
 pub mod cbm;
 pub mod checkout;
-pub mod collection;
 pub mod distro;
 pub mod dragdrop;
+pub mod gameindex;
 pub mod gotek;
 pub mod hdf;
 pub mod iso;

@@ -4,6 +4,12 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 
 import { useSettingsStore } from "@/stores/settingsStore";
 import { getAppInfo } from "@/lib/api";
+import {
+  artworkCheckSource,
+  artworkDefaults,
+  sourcePhrase,
+  type ConfiguredSource,
+} from "@/lib/artwork";
 
 /**
  * The project's mark, if one has been dropped in.
@@ -298,6 +304,7 @@ export function SettingsPage() {
         <AminetDownloadField />
       </section>
 
+      <ArtworkSourcesSection />
       <OperationLogSection />
       <AboutSection />
     </div>
@@ -660,6 +667,153 @@ function OperationLogSection() {
  * it reverts to ART's own folder — which is why the engine's answer is still
  * shown when the field is empty.
  */
+/**
+ * Whether a stored value is a source row rather than whatever a hand-edited
+ * settings file happens to hold.
+ *
+ * Checked field by field, the same reason `recallInto` exists: a row that has
+ * lost one field must fall back on that field rather than putting `undefined`
+ * on screen and into a fetch.
+ */
+function isConfiguredSource(value: unknown): value is ConfiguredSource {
+  if (typeof value !== "object" || value === null) return false;
+  const row = value as Record<string, unknown>;
+  return (
+    typeof row.id === "string" &&
+    typeof row.enabled === "boolean" &&
+    typeof row.mirrorBase === "string" &&
+    typeof row.imageBase === "string"
+  );
+}
+
+/**
+ * The artwork sources, and the two things a user may change about each.
+ *
+ * The list comes from Rust rather than being written here, so there is one
+ * place mirror URLs live. A source ART ships but the saved list has never seen
+ * — because this ART is newer than the settings file — is appended rather than
+ * ignored; the alternative is a source the user can never reach.
+ *
+ * An edited address is checked before it is saved. A base that cannot become a
+ * `Mirror` would otherwise sit in the file looking fine until a run failed on
+ * it, which is the same "refused at the door" rule the rest of ART follows.
+ */
+function ArtworkSourcesSection() {
+  const { t } = useTranslation();
+  const stored = useSettingsStore((s) => s.settings.artworkSources);
+  const update = useSettingsStore((s) => s.update);
+  const [rows, setRows] = useState<ConfiguredSource[] | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const shipped = await artworkDefaults().catch(() => [] as ConfiguredSource[]);
+      const saved = Array.isArray(stored) ? stored.filter(isConfiguredSource) : [];
+      // Saved rows first, in the user's order; then anything this ART ships
+      // that the file has never heard of.
+      const merged = [
+        ...saved,
+        ...shipped.filter((s) => !saved.some((row) => row.id === s.id)),
+      ];
+      if (!cancelled) setRows(merged.length > 0 ? merged : shipped);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Deliberately once: re-reading on every store write would fight the user's
+    // typing, which is the shape of ART-089.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function apply(next: ConfiguredSource[], changed: ConfiguredSource) {
+    setRows(next);
+    try {
+      await artworkCheckSource(changed);
+      setErrors((prev) => {
+        const rest = { ...prev };
+        delete rest[changed.id];
+        return rest;
+      });
+      await update({ artworkSources: next });
+    } catch (e) {
+      // Kept on screen so the user can go on editing, but not saved: a base
+      // ART refused must not be the one waiting at the next launch.
+      setErrors((prev) => ({ ...prev, [changed.id]: String(e) }));
+    }
+  }
+
+  function edit(id: string, patch: Partial<ConfiguredSource>) {
+    if (!rows) return;
+    const next = rows.map((row) => (row.id === id ? { ...row, ...patch } : row));
+    const changed = next.find((row) => row.id === id);
+    if (changed) void apply(next, changed);
+  }
+
+  async function restore() {
+    const shipped = await artworkDefaults().catch(() => null);
+    if (!shipped) return;
+    setRows(shipped);
+    setErrors({});
+    await update({ artworkSources: shipped });
+  }
+
+  if (!rows) return null;
+
+  return (
+    <section className="card">
+      <h2>{t("artwork.title")}</h2>
+      <p className="faint" style={{ fontSize: 12, marginTop: -4 }}>
+        {t("artwork.intro")}
+      </p>
+
+      {rows.map((row) => (
+        <div key={row.id} style={{ marginTop: 12 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={row.enabled}
+              onChange={(e) => edit(row.id, { enabled: e.target.checked })}
+            />
+            <strong>{t(sourcePhrase(row.id).key, sourcePhrase(row.id).params)}</strong>
+          </label>
+
+          <label style={{ display: "block", marginTop: 6, fontSize: 12 }}>
+            {t("artwork.indexMirror")}
+            <input
+              type="text"
+              value={row.mirrorBase}
+              onChange={(e) => edit(row.id, { mirrorBase: e.target.value })}
+              style={{ width: "100%" }}
+            />
+          </label>
+
+          <label style={{ display: "block", marginTop: 6, fontSize: 12 }}>
+            {t("artwork.imageMirror")}
+            <input
+              type="text"
+              value={row.imageBase}
+              placeholder={t("artwork.imageMirrorSame")}
+              onChange={(e) => edit(row.id, { imageBase: e.target.value })}
+              style={{ width: "100%" }}
+            />
+          </label>
+
+          {errors[row.id] ? (
+            <p className="badge badge-warn" style={{ fontSize: 11, margin: "4px 0 0" }}>
+              {t("artwork.invalid", { reason: errors[row.id] })}
+            </p>
+          ) : null}
+        </div>
+      ))}
+
+      <button type="button" style={{ marginTop: 12 }} onClick={() => void restore()}>
+        {t("artwork.reset")}
+      </button>
+    </section>
+  );
+}
+
 function AminetDownloadField() {
   const { t } = useTranslation();
   const stored = useSettingsStore((s) => s.settings.aminetRoot);

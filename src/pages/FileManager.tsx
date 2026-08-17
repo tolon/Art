@@ -42,7 +42,14 @@ import { useLocation } from "react-router-dom";
 
 import { analyzePaths } from "@/lib/api";
 import { useTranslation } from "react-i18next";
-import { open } from "@tauri-apps/plugin-dialog";
+// `confirm` from the plugin, never `window.confirm`.
+//
+// ART-133: wry disables WebView2's own script dialogs, so `window.confirm`
+// returns without asking and every `if (!window.confirm(...)) return;` here was
+// a guard that never fired — including the two that stand between a user and a
+// deleted file. The plugin's version shows a real dialog; it is async, which is
+// why every call below is awaited.
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 
 import { AttributesDialog } from "@/components/files/AttributesDialog";
@@ -2496,10 +2503,10 @@ export function FileManager() {
     const target = writableVolume(state);
     if (!target || entry.header_block === null) return;
 
-    if (!window.confirm(t("files.dialog.delete.confirm1", { name: entry.name, volume: state.volumeName }))) {
+    if (!(await confirm(t("files.dialog.delete.confirm1", { name: entry.name, volume: state.volumeName })))) {
       return;
     }
-    if (!window.confirm(t("files.dialog.delete.confirm2", { name: entry.name }))) {
+    if (!(await confirm(t("files.dialog.delete.confirm2", { name: entry.name })))) {
       return;
     }
     // §3.4: the user's `[Confirmation]` keeps "overwrite read-only" on, and
@@ -2509,7 +2516,7 @@ export function FileManager() {
     // override and a surprise.
     if (
       isDeleteProtected(entry.attrs) &&
-      !window.confirm(t("files.dialog.delete.confirmProtected", { name: entry.name }))
+      !(await confirm(t("files.dialog.delete.confirmProtected", { name: entry.name })))
     ) {
       return;
     }
@@ -2538,7 +2545,7 @@ export function FileManager() {
       );
 
       let alsoIcon = false;
-      if (icon && window.confirm(t("files.dialog.delete.confirmIcon", { icon: icon.icon_name }))) {
+      if (icon && (await confirm(t("files.dialog.delete.confirmIcon", { icon: icon.icon_name })))) {
         // The icon goes with the file it belongs to: asking a second time
         // about `Turrican.info` after the user has just agreed to delete
         // `Turrican` would be a question with no new information in it.
@@ -2596,28 +2603,28 @@ export function FileManager() {
     const totalBytes = entries.reduce((sum, entry) => sum + entry.bytes, 0);
 
     if (
-      !window.confirm(
+      !(await confirm(
         t("files.dialog.deleteMany.confirm1", {
           count: names.length,
           volume: state.volumeName,
           size: formatBytes(totalBytes),
         })
-      )
+      ))
     ) {
       return;
     }
-    if (!window.confirm(t("files.dialog.deleteMany.confirm2", { count: names.length }))) {
+    if (!(await confirm(t("files.dialog.deleteMany.confirm2", { count: names.length })))) {
       return;
     }
     const protectedNames = deleteProtectedNames(entries);
     if (
       protectedNames.length > 0 &&
-      !window.confirm(
+      !(await confirm(
         t("files.dialog.deleteMany.confirmProtected", {
           count: protectedNames.length,
           names: protectedNames.slice(0, 3).join(", "),
         })
-      )
+      ))
     ) {
       return;
     }
@@ -2710,12 +2717,12 @@ export function FileManager() {
     let moving = entries;
     if (
       icons.length > 0 &&
-      window.confirm(
+      (await confirm(
         t("files.dialog.move.confirmIcons", {
           count: icons.length,
           names: icons.slice(0, 3).map((icon) => icon.name).join(", "),
         })
-      )
+      ))
     ) {
       moving = [...entries, ...icons];
     }
@@ -2737,13 +2744,13 @@ export function FileManager() {
     }
 
     if (
-      !window.confirm(
+      !(await confirm(
         t("files.dialog.move.confirm", {
           count: moving.length,
           source: source.volumeName || source.location,
           destination: target.volumeName || target.location,
         })
-      )
+      ))
     ) {
       return;
     }
@@ -2755,12 +2762,12 @@ export function FileManager() {
     const movingProtected = deleteProtectedNames(moving);
     if (
       movingProtected.length > 0 &&
-      !window.confirm(
+      !(await confirm(
         t("files.dialog.move.confirmProtected", {
           count: movingProtected.length,
           names: movingProtected.slice(0, 3).join(", "),
         })
-      )
+      ))
     ) {
       return;
     }
@@ -2992,13 +2999,13 @@ export function FileManager() {
       let alsoIcon = false;
       if (
         icon &&
-        window.confirm(
+        (await confirm(
           t("files.dialog.rename.confirmIcon", {
             name: entry.name,
             icon: icon.icon_name,
             newName: name,
           })
-        )
+        ))
       ) {
         await volumeRename(
           target.path,

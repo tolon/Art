@@ -32,7 +32,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# `protocol-asset` lets the webview load cached artwork as files rather than
+# through IPC. A collection of 1700 rows would otherwise carry every thumbnail
+# across the bridge as bytes. The scope in `tauri.conf.json` is one directory
+# and read-only.
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
 tauri-plugin-log = "2"
@@ -95,6 +99,26 @@ zip = { version = "8", default-features = false, features = [
 # and an old LZMA decoder is precisely the thing not to point at files
 # strangers wrote.
 sevenz-rust2 = { version = "0.21.4", default-features = false }
+
+# XML, read-only, for one file: `rp9-manifest.xml` inside an `.rp9` package
+# (SD-2 · G10).
+#
+# A Cloanto RetroPlatform package is a zip carrying the disk images plus a
+# manifest that **states** the title, publisher, year, genre, rating, required
+# Kickstart, target machine and disk order — 207 of them on this machine, all
+# offline. That is the strongest form of §60's offline-first rule, not an
+# exception to it, and reading it needs an XML parser `core/` did not have.
+#
+# Hand-parsing namespaced XML from a file a stranger wrote — entity escapes,
+# CDATA, self-closing tags, attribute quoting — is exactly the failure class
+# `core/security` exists for, so this is a crate rather than a hand-rolled
+# reader. It sits behind `core/archive`'s existing gate: the manifest's bytes
+# arrive through `ArchiveBackend::read` with a limit, never from a path.
+#
+# `default-features = false` for the same reason as the decompressors above:
+# ART reads and never writes XML. MIT, 0.41.0, checked against crates.io on
+# 2026-08-17.
+quick-xml = { version = "0.41", default-features = false }
 
 # FAT32, and the first filesystem ART **writes** that is not an Amiga one.
 #

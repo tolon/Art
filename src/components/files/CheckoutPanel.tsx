@@ -11,6 +11,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+// ART-133: the plugin's dialog, not the browser's — see the note in
+// FileManager.tsx. It is async, which is why the call below is awaited.
+import { confirm } from "@tauri-apps/plugin-dialog";
 
 import {
   checkoutCheckin,
@@ -69,7 +72,7 @@ export function CheckoutPanel({
   async function discard(row: CheckoutRow) {
     if (
       row.state.state === "modified" &&
-      !window.confirm(t("components.checkout.discardConfirm", { name: row.name }))
+      !(await confirm(t("components.checkout.discardConfirm", { name: row.name })))
     ) {
       return;
     }
