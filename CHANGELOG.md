@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### The Collection remembers, and asks before it deletes (2026-08-17)
+
+#### Added
+- **The Collection opens instantly and keeps its folders.** The catalogue is
+  saved, so a library that took minutes to read is there the moment the screen
+  opens — including after ART has been closed and reopened.
+- **Update reads only what changed.** A file ART has already read, whose size
+  and date have not moved, is not opened again. On a 1699-title library the
+  second Update finishes at once.
+- **More than one folder.** Keep games in as many places as you like; they
+  appear as one library, and each folder is updated, rescanned or removed on
+  its own.
+- **A title whose file has moved is followed.** Rename a game outside ART and
+  the next Update finds it under its new name rather than showing the old one
+  as missing — it is recognised by its contents, not its filename.
+- **A title whose file has really gone is kept and marked**, with its launch
+  buttons disabled rather than hidden. Unplugging a drive does not empty your
+  library.
+- Corrections you make by hand are stored apart from what ART read, so a
+  rescan never overwrites them, and the previous version is backed up.
+
+#### Fixed
+- **Confirmations now actually appear.** Deleting a file, discarding a
+  modified file, deleting a PiStorm firmware set and removing a folder all
+  asked for confirmation in the code and showed nothing on screen — the
+  browser dialog ART relied on returns "yes" without opening in this kind of
+  window. Thirteen confirmations were affected, four of them standing in front
+  of a deletion.
+
 ### The Collection knows what a game is called, because it asks the game (2026-08-17)
 
 #### Added

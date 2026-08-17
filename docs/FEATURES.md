@@ -274,7 +274,9 @@ checks the image comes back byte for byte.
 | Provenance carried beside every fact | §14, §34 | ✅ | `record::Fact<T>`; the screen marks anything guessed rather than read |
 | Multi-disk grouping | §41 | ✅ | `readers/tosec.rs` (`disk`), `record::Media::Floppies` (`.rp9` states the order) |
 | Cover art / screenshots in the listing | §41 | ⏳ | `.rp9` previews are read into `record.preview` but nothing renders them; WHDLoad titles have no artwork at all |
-| Catalogue persistence, tags, favourites | §41 | ⏳ | **Nothing at all.** The catalogue is not saved — every visit re-scans — and there is no schema for one either: `001_initial.sql` creates `settings`, `recent_files` and `jobs`, and that is the only migration. This row read "schema exists; UI does not write to it" until 2026-08-17, when somebody looked |
+| Catalogue persistence, multiple folders | §41 | ✅ | `core/gameindex/store.rs` — one JSON per root, refreshed only when asked. A cached entry is reused when path, size and mtime match and the record's schema is current; a renamed file is followed by its content-derived id rather than duplicated. 27 tests, and the second Update of an unchanged folder was watched reading nothing on a real screen |
+| Hand-edited titles | §41 | 🟡 | the override layer, its backup policy and "the user always wins" are built and tested; the editing UI belongs to wave C |
+| Tags, favourites | §41 | ⏳ | — |
 | Duplicate detection (SHA256) | §43 | 🟡 | identical bytes already collapse to one record (`derive_id`); no dedupe *view* |
 | Hex viewer (read-only) | §31 | ✅ | `core/analysis.rs` |
 | Signature scanning | §28 | ✅ | `core/analysis.rs` |
