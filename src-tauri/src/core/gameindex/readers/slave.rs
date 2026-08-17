@@ -39,7 +39,7 @@
 //! describe splash-window gadgets, which no exporter needs.
 
 use crate::core::error::{CoreError, CoreResult};
-use crate::core::gameindex::record::{ChipsetRequirement, KickstartNeed};
+use crate::core::gameindex::record::{ChipsetRequirement, KickstartAlternative, KickstartNeed};
 
 const HUNK_HEADER: u32 = 0x0000_03F3;
 const HUNK_CODE: u32 = 0x0000_03E9;
@@ -173,12 +173,7 @@ pub fn read_slave(bytes: &[u8]) -> CoreResult<SlaveFacts> {
     // from "this slave is too old to say" — and both differ again from naming
     // one. All three cases have a test.
     let kickstart = if version >= 16 {
-        KickstartNeed {
-            image: read_rptr_string(body, 42),
-            size: read_u32(body, 44),
-            crc16: read_u16(body, 48),
-            rom_version: None,
-        }
+        read_kickstart_need(body)
     } else {
         KickstartNeed::default()
     };
@@ -192,6 +187,87 @@ pub fn read_slave(bytes: &[u8]) -> CoreResult<SlaveFacts> {
         requires_68020: flags & WHDLB_REQ68020 != 0,
         kickstart,
     })
+}
+
+/// `ws_kickcrc` when the name field is a list rather than one name.
+///
+/// Not a checksum. A slave that runs on any of several ROMs sets this and points
+/// `ws_kickname` at a table instead of a string.
+const KICK_LIST_SENTINEL: u16 = 0xffff;
+
+/// How many alternatives a slave may name before ART stops believing it.
+///
+/// The real ones name three. A malformed list must terminate, and a bound is
+/// what makes that certain — the same rule every chain walk in the ADF core
+/// follows.
+const MAX_KICK_ALTERNATIVES: usize = 32;
+
+/// What the slave asks for at `ws_Version >= 16`.
+///
+/// Two shapes, and the sentinel in `ws_kickcrc` is what tells them apart:
+///
+/// - **one name** — `ws_kickname` points at a string, `ws_kickcrc` is that
+///   image's checksum;
+/// - **a list** — `ws_kickcrc` is `$ffff` and `ws_kickname` points at
+///   `(crc16, rptr-to-name)` entries ended by a zero, with the names laid out
+///   immediately after.
+///
+/// The second shape is [ART-137](../../../../docs/ISSUES.md), and it is worth
+/// saying where the layout came from: the autodoc could not be retrieved when
+/// this was written, so it was **decoded from two real slaves** and holds up
+/// three independent ways — the same three CRCs appear in both, each entry's
+/// pointer lands exactly on a name, and each name ends one byte before the next
+/// entry's pointer. 99 of one collection's 758 declaring titles are this shape.
+fn read_kickstart_need(body: &[u8]) -> KickstartNeed {
+    let size = read_u32(body, 44);
+    let crc = read_u16(body, 48);
+
+    if crc != Some(KICK_LIST_SENTINEL) {
+        return KickstartNeed {
+            image: read_rptr_string(body, 42),
+            size,
+            crc16: crc,
+            rom_version: None,
+            alternatives: Vec::new(),
+        };
+    }
+
+    let mut alternatives = Vec::new();
+    if let Some(list_at) = read_u16(body, 42).filter(|at| *at != 0) {
+        let mut at = list_at as usize;
+        while alternatives.len() < MAX_KICK_ALTERNATIVES {
+            let Some(entry_crc) = read_u16(body, at) else {
+                break;
+            };
+            // A zero checksum ends the list. The real slaves write exactly two
+            // zero bytes here and then start the names, so the terminator is
+            // one word rather than a whole empty entry.
+            if entry_crc == 0 {
+                break;
+            }
+            let Some(name_at) = read_u16(body, at + 2) else {
+                break;
+            };
+            // An entry pointing outside the slave is dropped, not read: this
+            // offset comes out of a file ART did not write.
+            if let Some(image) = read_string_at(body, name_at as usize) {
+                alternatives.push(KickstartAlternative {
+                    image,
+                    crc16: entry_crc,
+                });
+            }
+            at += 4;
+        }
+    }
+
+    KickstartNeed {
+        image: alternatives.first().map(|first| first.image.clone()),
+        size,
+        // The sentinel is not a checksum and is not recorded as one.
+        crc16: None,
+        rom_version: None,
+        alternatives,
+    }
 }
 
 /// The chipset a slave states it needs, or `None` when it states nothing.
@@ -235,7 +311,14 @@ pub fn split_copyright(copy: &str) -> (Option<u16>, Option<String>) {
 /// unchecked field. An offset of 0 means **absent**, which the format uses
 /// deliberately.
 fn read_rptr_string(body: &[u8], at: usize) -> Option<String> {
-    let offset = read_u16(body, at)? as usize;
+    read_string_at(body, read_u16(body, at)? as usize)
+}
+
+/// The NUL-terminated string at `offset`, bounded the same way.
+///
+/// Separate from [`read_rptr_string`] because the alternatives list holds its
+/// offsets in its own entries rather than at a fixed place in the structure.
+fn read_string_at(body: &[u8], offset: usize) -> Option<String> {
     if offset == 0 || offset >= body.len() {
         return None;
     }
@@ -288,7 +371,7 @@ fn read_u32(buf: &[u8], at: usize) -> Option<u32> {
 /// thing to keep in step with the documentation.
 #[cfg(test)]
 pub(crate) mod tests_support {
-    use super::{HUNK_CODE, HUNK_HEADER, WS_SECURITY};
+    use super::{HUNK_CODE, HUNK_HEADER, KICK_LIST_SENTINEL, WS_SECURITY};
 
     /// Build a slave the way a real one is built: an AmigaDOS hunk executable
     /// of one hunk, with the `WHDLoadSlave` structure at the start of the
@@ -308,6 +391,10 @@ pub(crate) mod tests_support {
         pub(crate) kickname: Option<&'static str>,
         /// Written into `ws_kickname` verbatim, overriding the string.
         pub(crate) kickname_offset_override: Option<u16>,
+        /// `(crc16, image name)` pairs. When set, `ws_kickcrc` becomes the
+        /// `$ffff` sentinel and `ws_kickname` points at the list instead of a
+        /// single name — the shape ART-137 turned out to be.
+        pub(crate) kick_list: Vec<(u16, &'static str)>,
     }
 
     impl SlaveBuilder {
@@ -356,6 +443,28 @@ pub(crate) mod tests_support {
                     body.push(0);
                 }
             }
+            // The list, laid out exactly as two real slaves lay it out: the
+            // entries, a zero to end them, then the names back to back, each
+            // one being the target of an entry above it.
+            if !self.kick_list.is_empty() && body.len() >= 50 {
+                let list_at = body.len() as u16;
+                body[42..44].copy_from_slice(&list_at.to_be_bytes());
+                body[48..50].copy_from_slice(&KICK_LIST_SENTINEL.to_be_bytes());
+
+                // Reserve the entries, then fill their pointers as the names
+                // are appended.
+                let entries_at = body.len();
+                body.extend(std::iter::repeat_n(0u8, self.kick_list.len() * 4 + 2));
+                for (index, (crc, name)) in self.kick_list.iter().enumerate() {
+                    let name_at = body.len() as u16;
+                    let entry = entries_at + index * 4;
+                    body[entry..entry + 2].copy_from_slice(&crc.to_be_bytes());
+                    body[entry + 2..entry + 4].copy_from_slice(&name_at.to_be_bytes());
+                    body.extend_from_slice(name.as_bytes());
+                    body.push(0);
+                }
+            }
+
             if let Some(raw) = self.kickname_offset_override {
                 if body.len() >= 44 {
                     body[42..44].copy_from_slice(&raw.to_be_bytes());
@@ -617,6 +726,173 @@ mod tests {
             (None, Some("Public Domain".to_string()))
         );
         assert_eq!(split_copyright(""), (None, None));
+    }
+
+    // -- ws_kickname as a list (ART-137) --------------------------------------
+
+    /// The shape two real slaves turned out to have.
+    ///
+    /// `1869 AGA` and `Alfred Chicken AGA` both carry `ws_kickcrc = $ffff` and
+    /// a `ws_kickname` pointing at three `(crc16, name)` entries — the same
+    /// three CRCs in both, which is what a game that runs on any of an A600,
+    /// an A1200 or an A4000 would say.
+    #[test]
+    fn a_kickcrc_sentinel_means_the_name_field_is_a_list() {
+        let bytes = SlaveBuilder {
+            kick_list: vec![
+                (0x9ff5, "40068.a1200"),
+                (0x75d3, "40068.a4000"),
+                (0x970c, "40063.a600"),
+            ],
+            ..SlaveBuilder::new(16)
+        }
+        .build();
+
+        let facts = read_slave(&bytes).unwrap();
+        let kick = facts.kickstart;
+
+        assert_eq!(
+            kick.alternatives,
+            vec![
+                KickstartAlternative {
+                    image: "40068.a1200".into(),
+                    crc16: 0x9ff5
+                },
+                KickstartAlternative {
+                    image: "40068.a4000".into(),
+                    crc16: 0x75d3
+                },
+                KickstartAlternative {
+                    image: "40063.a600".into(),
+                    crc16: 0x970c
+                },
+            ]
+        );
+        // The first is shown where one name is wanted, so a screen built before
+        // this existed keeps working.
+        assert_eq!(kick.image.as_deref(), Some("40068.a1200"));
+    }
+
+    /// `$ffff` is a marker, not a checksum. Recording it as one would be the
+    /// same class of lie as showing the list's bytes as a filename.
+    #[test]
+    fn the_sentinel_is_not_recorded_as_a_checksum() {
+        let bytes = SlaveBuilder {
+            kick_list: vec![(0x9ff5, "40068.a1200")],
+            ..SlaveBuilder::new(16)
+        }
+        .build();
+        assert_eq!(read_slave(&bytes).unwrap().kickstart.crc16, None);
+    }
+
+    /// One name and a real checksum is the ordinary case and must not change.
+    #[test]
+    fn a_single_name_still_reads_as_one_name() {
+        let bytes = SlaveBuilder {
+            kickname: Some("34005.a500"),
+            ..SlaveBuilder::new(16)
+        }
+        .build();
+
+        let kick = read_slave(&bytes).unwrap().kickstart;
+        assert_eq!(kick.image.as_deref(), Some("34005.a500"));
+        assert!(kick.alternatives.is_empty());
+    }
+
+    /// A list that never terminates must not be walked forever, and a slave
+    /// that lies about its length must not produce a name from whatever
+    /// follows.
+    #[test]
+    fn a_list_that_runs_off_the_end_yields_what_it_can_and_stops() {
+        let mut bytes = SlaveBuilder {
+            kick_list: vec![(0x9ff5, "40068.a1200")],
+            ..SlaveBuilder::new(16)
+        }
+        .build();
+        // Cut the file short, after the entry but inside the name.
+        bytes.truncate(bytes.len() - 6);
+
+        let kick = read_slave(&bytes).unwrap().kickstart;
+        assert!(kick.alternatives.len() <= 1);
+    }
+
+    /// An entry pointing outside the slave is dropped rather than read.
+    #[test]
+    fn an_entry_pointing_nowhere_is_dropped() {
+        let bytes = SlaveBuilder {
+            kick_list: vec![(0x9ff5, "40068.a1200")],
+            ..SlaveBuilder::new(16)
+        }
+        .build();
+
+        // Rewrite the one entry's pointer to somewhere absurd. The list sits
+        // right after the 50-byte structure, inside the hunk that starts at 32.
+        let mut broken = bytes.clone();
+        let entry = 32 + 50;
+        broken[entry + 2..entry + 4].copy_from_slice(&0xfff0u16.to_be_bytes());
+
+        let kick = read_slave(&broken).unwrap().kickstart;
+        assert!(kick.alternatives.is_empty());
+        assert_eq!(kick.image, None);
+    }
+
+    /// Read one real slave and print what it asks for.
+    ///
+    /// Written to diagnose [ART-137](../../../../docs/ISSUES.md) and kept as
+    /// the check on it. The fixtures above are synthetic and prove the decoder
+    /// against the shape it was told; this proves the shape itself, on files
+    /// nobody involved wrote.
+    ///
+    /// What it printed before the fix, and what it prints now:
+    ///
+    /// ```text
+    /// 1869 AGA  before: image "\u{9f}õ\u{11}ÕuÓ…", crc16 65535
+    ///           after:  40068.a1200 / 40068.a4000 / 40063.a600, crc16 none
+    /// ```
+    ///
+    /// ```text
+    /// set ART_SLAVE_HDF=…\1869 History Experience Part I v1.2 AGA.hdf
+    /// cargo test one_real_slaves_kickstart -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "needs a real hardfile; set ART_SLAVE_HDF"]
+    fn one_real_slaves_kickstart() {
+        let Ok(path) = std::env::var("ART_SLAVE_HDF") else {
+            eprintln!("ART_SLAVE_HDF is not set");
+            return;
+        };
+
+        let game = crate::core::gameindex::readers::whdhdf::read_whdload_hardfile(
+            std::path::Path::new(&path),
+        )
+        .expect("the hardfile should hold a slave");
+
+        eprintln!("drawer  : {}", game.drawer);
+        eprintln!("version : {}", game.slave.version);
+        eprintln!("name    : {:?}", game.slave.name);
+        eprintln!("copy    : {:?}", game.slave.copyright);
+        eprintln!("info    : {:?}", game.slave.info);
+        eprintln!("kick    : {:?}", game.slave.kickstart);
+
+        // The invariant, whichever shape the slave used: nothing ART reports as
+        // a Kickstart image is allowed to be unprintable. That is precisely
+        // what ART-137 was.
+        let kick = &game.slave.kickstart;
+        for image in kick
+            .image
+            .iter()
+            .chain(kick.alternatives.iter().map(|a| &a.image))
+        {
+            assert!(
+                image.chars().all(|ch| ch.is_ascii_graphic() || ch == ' '),
+                "{image:?} is not a filename"
+            );
+        }
+        assert_ne!(
+            kick.crc16,
+            Some(0xffff),
+            "the list sentinel was recorded as a checksum"
+        );
     }
 
     /// Only the set bit is evidence.
