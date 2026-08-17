@@ -248,6 +248,121 @@ pub fn write_overrides(dir: &Path, value: &Overrides) -> CoreResult<Option<PathB
     guarded_write(&path, &bytes, BackupPolicy::CONFIG)
 }
 
+/// One title as the screen sees it.
+///
+/// `available` is **not** stored: see [`load`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntryView {
+    pub path: String,
+    pub available: bool,
+    pub record: GameRecord,
+}
+
+/// One catalogued root as the screen sees it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RootView {
+    pub root: String,
+    pub scanned_at: Option<String>,
+    /// Read by an older reader than this build's. The screen says an update
+    /// would improve these entries; it does not run one.
+    pub stale: bool,
+    pub entries: Vec<EntryView>,
+}
+
+/// Put the user's corrections over a record.
+///
+/// Each edited field becomes a `Fact` whose provenance is
+/// `Provenance::UserEdit`, which outranks everything. A field the user did not
+/// touch is left exactly as it was read, provenance included.
+pub fn apply_override(record: &mut GameRecord, edit: &RecordOverride) {
+    use crate::core::gameindex::record::{Fact, Provenance};
+
+    if let Some(title) = &edit.title {
+        record.title = Fact::new(title.clone(), Provenance::UserEdit);
+    }
+    if let Some(year) = edit.year {
+        record.year = Some(Fact::new(year, Provenance::UserEdit));
+    }
+    if let Some(publisher) = &edit.publisher {
+        record.publisher = Some(Fact::new(publisher.clone(), Provenance::UserEdit));
+    }
+    if let Some(genre) = &edit.genre {
+        record.genre = Some(Fact::new(genre.clone(), Provenance::UserEdit));
+    }
+    if let Some(chipset) = edit.chipset {
+        record.chipset = Some(Fact::new(chipset, Provenance::UserEdit));
+    }
+}
+
+/// Load every catalogued root, with the user layer applied.
+///
+/// **Availability is asked of the disk here, not read from a file.** One
+/// `metadata()` per entry — well under a second for the 1699 this was built
+/// against — and the reason is §89-shaped: a stored "available" would let the
+/// catalogue claim a game on an unplugged drive is ready to run, which is a
+/// missing answer rendered as a pass.
+pub fn load(dir: &Path) -> CoreResult<Vec<RootView>> {
+    use crate::core::gameindex::record::GAMEINDEX_SCHEMA;
+
+    let overrides = read_overrides(dir)?;
+    let mut out = Vec::new();
+
+    for root in read_roots(dir)?.roots {
+        let Some(stored) = read_root(dir, Path::new(&root))? else {
+            // Listed but never scanned: an empty root rather than a refusal, so
+            // adding a folder and not scanning it yet is a normal state.
+            out.push(RootView {
+                root,
+                scanned_at: None,
+                stale: false,
+                entries: Vec::new(),
+            });
+            continue;
+        };
+
+        let entries = stored
+            .entries
+            .into_iter()
+            .map(|entry| {
+                let available = file_key(Path::new(&entry.path)).is_some();
+                let mut record = entry.record;
+                if let Some(edit) = overrides.edits.get(&record.id) {
+                    apply_override(&mut record, edit);
+                }
+                EntryView {
+                    path: entry.path,
+                    available,
+                    record,
+                }
+            })
+            .collect();
+
+        out.push(RootView {
+            root: stored.root,
+            scanned_at: stored.scanned_at,
+            stale: stored.index_schema != GAMEINDEX_SCHEMA,
+            entries,
+        });
+    }
+
+    Ok(out)
+}
+
+/// Record — or clear — one title's hand corrections.
+///
+/// An override with nothing in it is **removed** rather than stored, so changing
+/// one's mind leaves no trace. Returns where the previous overrides were backed
+/// up, which the command surfaces.
+pub fn set_override(dir: &Path, id: &str, edit: RecordOverride) -> CoreResult<Option<PathBuf>> {
+    let mut overrides = read_overrides(dir)?;
+    if edit.is_empty() {
+        overrides.edits.remove(id);
+    } else {
+        overrides.edits.insert(id.to_string(), edit);
+    }
+    write_overrides(dir, &overrides)
+}
+
 /// Which entries a refresh is willing to trust.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refresh {
@@ -687,6 +802,285 @@ mod tests {
         assert!(
             read_root(&dir, &root).unwrap().is_none(),
             "a cancelled refresh must not have written a partial catalogue"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A user edit replaces the value **and** says so. It does not pretend the
+    /// packager declared it — `is_stated()` is false for a `UserEdit`, so the
+    /// screen will not badge it as a guess and will not badge it as a
+    /// declaration either.
+    #[test]
+    fn an_override_wins_and_records_that_it_was_the_user() {
+        let mut record = a_record("Lotus 3");
+        record.year = Some(Fact::new(1991, Provenance::WhdloadSlave));
+
+        apply_override(
+            &mut record,
+            &RecordOverride {
+                title: Some("Lotus III".into()),
+                year: Some(1992),
+                ..RecordOverride::default()
+            },
+        );
+
+        assert_eq!(record.title.value, "Lotus III");
+        assert_eq!(record.title.from, Provenance::UserEdit);
+        assert_eq!(record.year.as_ref().unwrap().value, 1992);
+        assert_eq!(record.year.as_ref().unwrap().from, Provenance::UserEdit);
+        assert!(record.title.from.rank() > Provenance::WhdloadSlave.rank());
+    }
+
+    /// A field the user did not touch keeps whatever read it.
+    #[test]
+    fn an_override_leaves_untouched_fields_alone() {
+        let mut record = a_record("Lotus 3");
+        record.publisher = Some(Fact::new("Gremlin".into(), Provenance::WhdloadSlave));
+
+        apply_override(
+            &mut record,
+            &RecordOverride {
+                title: Some("Lotus III".into()),
+                ..RecordOverride::default()
+            },
+        );
+
+        assert_eq!(record.publisher.as_ref().unwrap().value, "Gremlin");
+        assert_eq!(
+            record.publisher.as_ref().unwrap().from,
+            Provenance::WhdloadSlave
+        );
+    }
+
+    /// **Overrides survive a rescan.** The whole reason the layers are apart: a
+    /// refresh rewrites the read layer, and the user's correction is still there
+    /// afterwards.
+    #[test]
+    fn overrides_survive_a_rescan() {
+        let dir = scratch("survive");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        a_real_file(&root, "Zool (1992)(Gremlin).adf");
+        write_roots(
+            &dir,
+            &RootsFile {
+                schema: CATALOGUE_SCHEMA,
+                roots: vec![root.to_string_lossy().into()],
+            },
+        )
+        .unwrap();
+
+        let first = refresh_root(&dir, &root, Refresh::Rescan, None, &NoProgress).unwrap();
+        let id = first.entries[0].record.id.clone();
+
+        set_override(
+            &dir,
+            &id,
+            RecordOverride {
+                title: Some("Zool: Ninja of the Nth Dimension".into()),
+                ..RecordOverride::default()
+            },
+        )
+        .unwrap();
+
+        refresh_root(&dir, &root, Refresh::Rescan, None, &NoProgress).unwrap();
+
+        let loaded = load(&dir).unwrap();
+        let entry = &loaded[0].entries[0];
+        assert_eq!(entry.record.title.value, "Zool: Ninja of the Nth Dimension");
+        assert_eq!(entry.record.title.from, Provenance::UserEdit);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An override emptied out is deleted rather than stored, so changing one's
+    /// mind leaves nothing behind.
+    #[test]
+    fn an_emptied_override_is_removed() {
+        let dir = scratch("empty-override");
+        set_override(
+            &dir,
+            "some-id-00000000",
+            RecordOverride {
+                title: Some("X".into()),
+                ..RecordOverride::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(read_overrides(&dir).unwrap().edits.len(), 1);
+
+        set_override(&dir, "some-id-00000000", RecordOverride::default()).unwrap();
+        assert!(read_overrides(&dir).unwrap().edits.is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **Availability is derived, never stored.** The record on disk says what
+    /// was read; whether the file is there *now* is asked of the disk each time,
+    /// so a catalogue cannot claim "ready" about a game on an unplugged drive.
+    #[test]
+    fn availability_comes_from_the_disk_not_the_file() {
+        let dir = scratch("availability");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        let file = a_real_file(&root, "Zool (1992)(Gremlin).adf");
+        write_roots(
+            &dir,
+            &RootsFile {
+                schema: CATALOGUE_SCHEMA,
+                roots: vec![root.to_string_lossy().into()],
+            },
+        )
+        .unwrap();
+
+        refresh_root(&dir, &root, Refresh::Rescan, None, &NoProgress).unwrap();
+        assert!(load(&dir).unwrap()[0].entries[0].available);
+
+        std::fs::remove_file(&file).unwrap();
+        let after = load(&dir).unwrap();
+        assert_eq!(after[0].entries.len(), 1, "the entry is kept");
+        assert!(
+            !after[0].entries[0].available,
+            "the file is gone, so it cannot be available"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A root read by an older reader is flagged, so the screen can say an
+    /// update would improve it **without doing the update**.
+    #[test]
+    fn a_root_read_by_an_older_reader_is_flagged_as_stale() {
+        let dir = scratch("stale-flag");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+
+        write_roots(
+            &dir,
+            &RootsFile {
+                schema: CATALOGUE_SCHEMA,
+                roots: vec![root.to_string_lossy().into()],
+            },
+        )
+        .unwrap();
+        write_root(
+            &dir,
+            &CatalogueRoot {
+                schema: CATALOGUE_SCHEMA,
+                root: root.to_string_lossy().into(),
+                scanned_at: None,
+                index_schema: GAMEINDEX_SCHEMA - 1,
+                entries: vec![],
+            },
+        )
+        .unwrap();
+
+        assert!(load(&dir).unwrap()[0].stale);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **Ten thousand entries, loaded.**
+    ///
+    /// The question this answers is not "is JSON fast" — it is "did anything
+    /// here become quadratic". A load that walks the overrides map per entry, or
+    /// re-reads a file per entry, turns 10 000 into minutes; the ceiling below
+    /// is loose enough never to flake on a slow machine and tight enough to
+    /// catch that.
+    ///
+    /// The timing is **printed**, so the real number is in the log:
+    ///
+    /// ```text
+    /// cargo test ten_thousand -- --nocapture
+    /// ```
+    #[test]
+    fn ten_thousand_entries_load_without_going_quadratic() {
+        let dir = scratch("ten-thousand");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+
+        // Entries only; the files themselves are not created. That is the point
+        // — `load` must not open a title to list it, and every one of these will
+        // come back marked unavailable.
+        let entries: Vec<CachedEntry> = (0..10_000)
+            .map(|n| CachedEntry {
+                path: root
+                    .join(format!("Game {n:05} (1992)(Someone).adf"))
+                    .to_string_lossy()
+                    .into(),
+                size: 901_120,
+                mtime_ms: 1_700_000_000_000 + n as i64,
+                record: a_record(&format!("Game {n:05}")),
+            })
+            .collect();
+
+        write_roots(
+            &dir,
+            &RootsFile {
+                schema: CATALOGUE_SCHEMA,
+                roots: vec![root.to_string_lossy().into()],
+            },
+        )
+        .unwrap();
+
+        let started = std::time::Instant::now();
+        write_root(
+            &dir,
+            &CatalogueRoot {
+                schema: CATALOGUE_SCHEMA,
+                root: root.to_string_lossy().into(),
+                scanned_at: None,
+                index_schema: GAMEINDEX_SCHEMA,
+                entries,
+            },
+        )
+        .unwrap();
+        let wrote = started.elapsed();
+
+        // A few overrides, so the merge is exercised rather than skipped.
+        for n in [0, 5_000, 9_999] {
+            set_override(
+                &dir,
+                &a_record(&format!("Game {n:05}")).id,
+                RecordOverride {
+                    year: Some(1993),
+                    ..RecordOverride::default()
+                },
+            )
+            .unwrap();
+        }
+
+        let started = std::time::Instant::now();
+        let loaded = load(&dir).unwrap();
+        let read = started.elapsed();
+
+        let bytes = std::fs::metadata(dir.join(root_file_name(&root)))
+            .unwrap()
+            .len();
+        println!("10 000 entries: {bytes} bytes on disk, wrote in {wrote:?}, loaded in {read:?}");
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].entries.len(), 10_000);
+        assert!(
+            loaded[0].entries.iter().all(|entry| !entry.available),
+            "none of these files exist, so none may be reported available"
+        );
+        assert_eq!(
+            loaded[0]
+                .entries
+                .iter()
+                .filter(|entry| entry.record.year.as_ref().map(|y| y.value) == Some(1993))
+                .count(),
+            3,
+            "the three overrides must be applied, and only those three"
+        );
+
+        // Loose on purpose: this is a debug build with 10 000 stat calls in it.
+        // A quadratic load blows through this by orders of magnitude.
+        assert!(
+            read < std::time::Duration::from_secs(30),
+            "loading 10 000 entries took {read:?} — something is quadratic"
         );
 
         std::fs::remove_dir_all(&dir).ok();
