@@ -15,6 +15,7 @@
 //! convenience `pub use` that nothing imports is an error in this crate, not a
 //! warning.
 
+pub mod cleanup;
 pub mod readers;
 pub mod record;
 pub mod scan;
