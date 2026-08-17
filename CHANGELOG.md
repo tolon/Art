@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### The Collection gets pictures (2026-08-17)
+
+#### Added
+- **Cover art, screenshots and icons for your titles.** A new **Fetch artwork**
+  button on the Collection looks your library up in two places: the
+  libretro thumbnail archive, and whdload.de's own icons. Pictures appear in
+  both the grid and the list.
+- **The sources are yours to change.** Settings now has an **Artwork sources**
+  panel: switch either source off, or point it at a different address. Both
+  ship switched on.
+- **Nothing is fetched until you ask.** Opening the Collection reads what has
+  already been saved and touches no network. The fetch runs in the background
+  with a progress bar and a Stop, and it is deliberately unhurried — no more
+  than four requests a second, because whdload.de is run by volunteers.
+- **It never asks twice.** Pictures are saved per title, so one file serves
+  every copy of a game you own, and titles nobody has a picture for are
+  remembered as such. A second run over the same library fetches nothing.
+
+#### Notes
+- Matching is strict on purpose. A title either matches by name, or by the part
+  before a subtitle — `1869` finds `1869 - Erlebte Geschichte Teil I` — or it
+  gets no picture. ART does not guess, because a wrong cover you cannot explain
+  is worse than none.
+- **Chipset, genre and rating are still empty, and this is not an oversight.**
+  There is no source ART can use for them: Lemon Amiga refuses automated
+  requests outright, Hall of Light publishes only web pages, and OpenRetro —
+  which has exactly the right data — documents no way in yet. Attaching a
+  picture by hand is also not here; that needs the richer screen still to come.
+
 ### The Collection remembers, and asks before it deletes (2026-08-17)
 
 #### Added
