@@ -619,6 +619,168 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-147** 🔴 ✅ **A self-booting WHDLoad hardfile was catalogued as an
+unpacked drawer, sending Play looking for a system volume the file never
+needed — and shipping the fix broke every catalogue that already existed**
+— *found and fixed 2026-08-18, running the real application against
+`E:\amiga\Amigatolon\WHDload\...\1000 Miglia v1.2.hdf` (the same title
+ART-146 left unretried), then again immediately after landing the fix, when
+the Collection screen itself came up showing
+`ART-FORMAT-MALFORMED: unknown variant 'whdload-drawer'` instead of any
+title at all*
+`src-tauri/src/core/gameindex/scan.rs::from_hardfile`,
+`src-tauri/src/core/gameindex/record.rs::Media`,
+`src-tauri/src/core/gameindex/store.rs::{read_root,read_overrides}`,
+`src-tauri/src/commands/launch.rs` ·
+1698 of this user's 2787 catalogued titles are the shape
+`core::gameindex::readers::whdhdf`'s own header already documented: a bare
+`DOS\1` FFS volume, no RDB, holding a WHDLoad drawer and an
+`S/startup-sequence` that runs it — verified independently against
+`1000 Miglia v1.2.hdf` (1.1 MB, begins `DOS\1`, carries the strings `WHDLoad`
+×40 and `1000Miglia.Slave` ×3). `from_hardfile` recorded every one of them as
+`Media::WhdloadDrawer { slave }` anyway — the shape for an *unpacked* drawer
+that needs a separate bootable system — which sent Play down the WHDLoad
+(Y1/Y2) path: ask for a system volume, mount the game as a plain directory,
+write ART's own boot directory. The user hit exactly this: chose a plain
+Workbench 3.0 image (no WHDLoad on it at all) as the "system", landed at an
+AmigaDOS CLI, and reasonably concluded they had to install WHDLoad. They did
+not — the file boots itself.
+
+`Media::WhdloadDrawer` was checked and found to have exactly one producer,
+`scan.rs::from_hardfile` — nothing else in the codebase ever constructed it
+(`core::layout::ItemKind::WhdloadDrawer` is a same-named but unrelated type,
+for laying files onto a card during an OS install, not for the catalogue).
+Removed rather than left beside its replacement: a variant nothing produces
+is a trap for the next reader, and repurposing it as
+`Media::WhdloadHardfile { file, slave }` says what these 1698 files actually
+are — `file` is the image ART now mounts and boots directly, `slave` is kept
+rather than discarded, since it is what named the title and carries its
+chipset and declared Kickstart. `GAMEINDEX_SCHEMA` moved 2 → 3 so an Update
+re-reads every one of them, the same way ART-137's bump did.
+`commands/launch.rs::request_kind_from` now maps `WhdloadHardfile` onto the
+same `RequestKind::Hardfile` a plain `Hardfile` takes — mount the image, boot
+it, no system volume, no boot directory, no Y1/Y2. `core::launch`'s
+`RequestKind::Whdload`/`LaunchKind::Whdload` (drawer + separate system) stays
+in place: it is the real shape for an *already-unpacked* WHDLoad pack that
+needs a separate bootable system, the same shape `core::whdload` installs
+onto a card during an OS install — no `Media` variant reaches it today because
+nothing in `core::gameindex` catalogues a loose drawer or an `.lha` archive as
+a title, not because the shape is imaginary.
+
+The other half of this fix is a conflict the previous wave's own review
+created: ART-141's whole-branch review made a plain hardfile mount
+**read-only** on spec §93 ("originals are immutable by default"), correctly —
+but a self-booting WHDLoad hardfile is the one shape where the game itself
+writes its saves back into that exact image, so read-only-by-default silently
+throws them away with no error and no message. §93 stands: the default is
+still read-only. `LaunchArgs` gained `allow_write` (`#[serde(default)]`, so a
+frontend build ahead of a not-yet-rebuilt backend still gets the safe
+default rather than a failed deserialize), a per-title, off-by-default
+opt-in `TitleDetail.tsx` remembers through `useRemembered` keyed by
+`launch.allowWrite.<record.id>`. The confirmation screen states which side of
+that choice is in effect before Start is reached: a new `MountNote::
+WhdloadHardfile { read_only }`, distinct from the plain `Hardfile` note, so
+the sentence can say plainly "any save this game makes will not be kept"
+rather than reusing wording written for a different shape.
+
+**A third bug, found live, the moment the first two landed.** Every one of
+this user's WHDLoad titles had already been catalogued once, under the old
+`Media::WhdloadDrawer { slave }` shape — so the instant `Media` changed
+shape, `store.rs::read_root` hit `serde_json::from_slice::<CatalogueRoot>`
+failing on `unknown variant 'whdload-drawer'` and turned that into a hard
+`CoreError::Malformed`, which `store::load` propagated straight up through
+`commands::gameindex::catalogue_load` to the screen. `GAMEINDEX_SCHEMA`'s
+2 → 3 bump — the mechanism ART-137 built for exactly "an older reader wrote
+this, re-read it" — never got a chance to run: `index_schema` lives *inside*
+the same document that failed to parse, so a shape change that breaks
+deserialization defeats its own re-read signal. The Collection screen came
+up refusing outright, for every catalogue this user had.
+
+**The fix turns on one distinction: a root catalogue file is derived data;
+the overrides file is not.** A root file's every entry comes from a file
+under the user's own folder — one Update reproduces it exactly — so
+`read_root` now distinguishes three outcomes (`StoredRoot::Absent` /
+`Unreadable` / `Found`) instead of collapsing "never scanned" and "cannot be
+parsed" into the same `None`, or "cannot be parsed" into an error.
+`Unreadable` (any raw `serde_json` parse failure — an old shape, truncation,
+anything) folds into `RootView::stale`, the exact signal an `index_schema`
+mismatch already used, rather than inventing a second one; `load()` returns
+that root with `stale: true` and no entries instead of failing, and the
+Collection screen's existing stale badge ("These titles were read by an
+older version of ART. An update would improve them.") already says why and
+already points at Update — no frontend change was needed. `refresh_root`
+(what Update actually runs) reads the same file through the same
+`read_root`, so it had to change too: `Unreadable` is now treated exactly
+like `Absent` — nothing to reuse, every file re-read fresh — so pressing
+Update is what actually rebuilds the file, rather than failing on the exact
+document it exists to replace. A **newer**-schema root (one this build's
+structs *can* parse, but whose `CatalogueRoot.schema` number is higher than
+`CATALOGUE_SCHEMA`) is kept a hard error, unchanged: rescanning with an
+*older* build cannot fix a file a newer one wrote, and `GAMEINDEX_SCHEMA`'s
+own doc comment is explicit that a newer shape is refused rather than
+half-read.
+
+`read_overrides` was deliberately left exactly as strict as before. The
+user's own title corrections and hand-attached pictures are not rebuildable
+by rescanning — silently discarding a corrupt overrides file would replace
+one bug (a screen that refuses to open) with a worse, quieter one (the
+user's own edits gone with no message at all). This is the load-bearing
+half of the fix: not "make parsing lenient," but "know which of these two
+files can be forgiven and which cannot."
+
+**Checked for the same latent bug elsewhere.** Every other derived-data
+reader already found in `core/` — `artwork::cache` (its own doc comment
+already says "derived data, refusing to open would strand the user"),
+`oplog::jsonl`, `sources::catalog::jsonl`, `sources::installed` — already
+tolerates a parse failure per-record or per-line rather than failing the
+whole file; `gameindex::store::read_root` was the one reader still using an
+all-or-nothing parse. Not checked further in this pass: `read_roots`
+(`roots.json`, the list of catalogued folder paths) goes through the same
+strict `read_json` helper and would fail the same way if its own shape ever
+changed — lower risk, since it holds no `GameRecord`/`Media` and is far less
+likely to change shape, but the same class of bug and not fixed here.
+`core::card::manifest::read_manifest` is strict by the same pattern too, but
+is arguably a different case: it describes what ART itself already wrote
+onto a specific physical card, not something rebuildable by rescanning a
+folder, so refusing rather than guessing may be the right call there — worth
+a second look, not reopened as a defect.
+
+Test: `core::gameindex::scan`'s `a_mixed_folder_yields_one_record_per_title`
+and `a_stated_chipset_beats_a_guessed_one` (both already exercise
+`from_hardfile`, now against the new `Media` shape);
+`commands/launch.rs`'s `media_whdload_hardfile_becomes_request_kind_hardfile`,
+`mount_notes_state_a_whdload_hardfile_as_read_only_by_default`,
+`mount_notes_state_a_whdload_hardfile_as_writable_when_the_user_opts_in`,
+`a_whdload_hardfile_mounts_read_only_by_default`,
+`a_whdload_hardfile_mounts_writable_when_the_user_allows_it`, and
+`allow_write_is_ignored_for_a_plain_hardfile` (the field must not leak onto a
+shape the screen never offered it for);
+`mount_note_wire_shape_is_what_the_frontend_reads` pinning the new variant's
+JSON. Frontend: `src/lib/collectionDetail.test.ts`'s `mediaPhrase`/`diskList`/
+`canLaunch` cases against the renamed kind, and `src/i18n/phrase-keys.test.ts`'s
+`mediaPhrase`/`mountNotePhrase` variant-resolution tests extended with the new
+tag. `core::gameindex::store`'s
+`a_corrupt_root_file_is_read_as_unreadable_rather_than_erroring`,
+`a_root_file_with_an_unknown_media_variant_is_read_as_unreadable`,
+`load_reads_a_root_with_an_unknown_media_variant_as_stale_not_an_error` (the
+exact end-to-end shape the live bug took),
+`refresh_self_heals_a_root_file_this_build_cannot_parse` (proves Update
+itself does not fail on the file it is meant to replace), and
+`an_overrides_file_with_an_unknown_field_still_errors` (pins that the user
+layer did **not** become lenient along with the root layer) — the last two
+are the pair the fix's split is checked against; `a_root_file_from_a_newer_art_is_refused`
+still passes unchanged, proving the newer-schema case is still a hard error.
+
+**What remains unproven.** This closes the classification defect found by
+reading `1000 Miglia v1.2.hdf`'s own bytes, and the load-bearing crash found
+by running the real application against the fix itself — not by re-running
+WinUAE or re-running the actual app against a real stale catalogue directory
+a second time after this change. Whether `1000 Miglia` then launches,
+whether a save survives with `allow_write` turned on, and whether the
+Collection screen actually shows the stale badge and a working Update button
+against this user's real, already-`whdload-drawer`-shaped catalogue files on
+disk, has **not** been retried against the real application.
+
 **ART-146** 🔴 ✅ **`hardfile2=` forced bare-image geometry onto every hard
 drive image, including a VHD container — WinUAE reported "Not a DOS disk in
 unit 0"** — *found and fixed 2026-08-18, retrying Y1 against the user's own

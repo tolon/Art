@@ -131,7 +131,12 @@ export function TitleDetail({
     isMachine,
     "a500"
   );
-  const [systemVolume, setSystemVolume] = useRemembered<string | null>(
+  // ART-147: `TitleDetail` no longer offers its own picker for this — the
+  // per-title WHDLoad-drawer flow that needed one is gone (every title this
+  // reader now catalogues boots itself), and Settings already has the one
+  // real place to set a bootable system. Read only, so this stays in step
+  // with whatever the user set there without a second control to drift.
+  const [systemVolume] = useRemembered<string | null>(
     "launch.systemVolume",
     isTextOrNothing,
     null
@@ -144,10 +149,22 @@ export function TitleDetail({
     isMachineChoice,
     "auto"
   );
-  const [oneClick, setOneClick] = useRemembered<boolean>(
-    `launch.oneClick.${record.id}`,
+  // ART-147: no `Media` this screen sees today reaches `RequestKind::Whdload`
+  // (`core::launch`'s system-plus-drawer path) any more — every WHDLoad title
+  // the catalogue reads boots itself — so there is nowhere left on screen to
+  // choose Y1 vs Y2. Read only, so the value survives if a future reader ever
+  // catalogues a real unpacked drawer and this control comes back.
+  const [oneClick] = useRemembered<boolean>(`launch.oneClick.${record.id}`, isFlag, true);
+  // ART-147: a self-booting WHDLoad hardfile is the user's own file, so it
+  // mounts read-only by default (§93) — but WHDLoad writes saves back into
+  // the very image it boots from, so that default silently loses them. This
+  // is the explicit, per-title, off-by-default opt-in the confirmation
+  // screen offers after saying so plainly (`mountNotePhrase`'s
+  // `whdload-hardfile` case); nothing here infers it.
+  const [allowWrite, setAllowWrite] = useRemembered<boolean>(
+    `launch.allowWrite.${record.id}`,
     isFlag,
-    true
+    false
   );
 
   const [preview, setPreview] = useState<LaunchPreview | null>(null);
@@ -174,6 +191,7 @@ export function TitleDetail({
       machine_override: machineChoice === "auto" ? null : machineChoice,
       system_volume: systemVolume,
       one_click: oneClick,
+      allow_write: allowWrite,
     };
   }
 
@@ -210,14 +228,6 @@ export function TitleDetail({
       title: t("collection.detail.play.romDirDialog"),
     });
     if (typeof sel === "string") setRomDir(sel);
-  }
-
-  async function pickSystemVolume() {
-    const sel = await open({
-      multiple: false,
-      title: t("collection.detail.play.systemVolumeDialog"),
-    });
-    if (typeof sel === "string") setSystemVolume(sel);
   }
 
   // The grid/table Play button asked for this title specifically — fetch its
@@ -451,33 +461,6 @@ export function TitleDetail({
                 onChange={(choice) => choice !== "auto" && setDefaultMachine(choice)}
               />
             </div>
-
-            {record.media.kind === "whdload-drawer" && (
-              <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                {t("collection.detail.play.systemVolume")}
-                <div style={{ display: "flex", gap: 6 }}>
-                  <input
-                    type="text"
-                    value={systemVolume ?? ""}
-                    readOnly
-                    placeholder={t("collection.detail.play.systemVolumeNone")}
-                    style={{
-                      flex: 1,
-                      minWidth: 0,
-                      padding: "3px 6px",
-                      background: "var(--bg)",
-                      color: "var(--text)",
-                      border: "1px solid var(--border)",
-                      borderRadius: 3,
-                      fontSize: 12,
-                    }}
-                  />
-                  <button className="btn btn-sm" onClick={() => void pickSystemVolume()}>
-                    {t("collection.detail.play.browse")}
-                  </button>
-                </div>
-              </label>
-            )}
           </div>
 
           {/* This title's own choices. */}
@@ -490,21 +473,20 @@ export function TitleDetail({
             />
           </div>
 
-          {record.media.kind === "whdload-drawer" && (
-            <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
-              <button
-                className={`btn btn-sm ${oneClick ? "btn-primary" : ""}`}
-                onClick={() => setOneClick(true)}
-              >
-                {t("collection.detail.play.oneClick")}
-              </button>
-              <button
-                className={`btn btn-sm ${!oneClick ? "btn-primary" : ""}`}
-                onClick={() => setOneClick(false)}
-              >
-                {t("collection.detail.play.mountOnly")}
-              </button>
-            </div>
+          {/* ART-147: a self-booting WHDLoad hardfile mounts read-only by
+              default (§93) — WHDLoad's own saves live inside this exact
+              image, so that silently drops them. Off by default; the user
+              turns it on having been told what it means (the mount note
+              below, once a plan is on screen). */}
+          {record.media.kind === "whdload-hardfile" && (
+            <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
+              <input
+                type="checkbox"
+                checked={allowWrite}
+                onChange={(e) => setAllowWrite(e.target.checked)}
+              />
+              {t("collection.detail.play.allowWrite")}
+            </label>
           )}
 
           <button

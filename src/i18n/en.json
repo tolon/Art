@@ -1590,10 +1590,7 @@
           "a1200": "A1200"
         },
         "systemVolume": "Bootable system (for WHDLoad)",
-        "systemVolumeDialog": "Select the bootable system image or volume",
-        "systemVolumeNone": "Not set",
-        "oneClick": "One click (Y2)",
-        "mountOnly": "Mount and hand over (Y1)",
+        "allowWrite": "Allow this game to save",
         "action": "Play",
         "planning": "Working out what this needs…",
         "start": "Start",
@@ -1615,6 +1612,8 @@
           "floppies_other": "{{count}} floppy disks will be mounted.",
           "hardfileReadOnly": "This hard disk image is your own file — it mounts read-only, so nothing written to it during play is kept.",
           "hardfileWritable": "This hard disk image is ART's own extracted copy — it mounts writable, so saves made during play are kept.",
+          "whdloadHardfileReadOnly": "This is a self-booting WHDLoad hardfile — your own file. It mounts read-only by default, so any save this game makes during play will not be kept. Turn on \"Allow this game to save\" above if you want to keep them.",
+          "whdloadHardfileWritable": "This self-booting WHDLoad hardfile mounts writable — saves this game makes during play are kept, written straight back into your own file.",
           "whdloadOneClick": "Your system volume mounts read-only. The game's drawer mounts writable, so saves are kept. ART also mounts its own boot directory to start the game as soon as WinUAE boots.",
           "whdloadMountOnly": "Your system volume mounts read-only. The game's drawer mounts writable, so saves are kept. You start WHDLoad yourself once Workbench has booted."
         },

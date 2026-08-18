@@ -19,7 +19,7 @@ export function mediaPhrase(media: Media): Phrase {
       };
     case "hardfile":
       return { key: "collection.detail.media.hardfile", params: { file: media.file } };
-    default:
+    case "whdload-hardfile":
       return { key: "collection.detail.media.whdload", params: { slave: media.slave } };
   }
 }
@@ -37,7 +37,7 @@ export function diskList(media: Media): string[] {
 /** Whether Play can do anything with this medium at all. */
 export function canLaunch(media: Media): boolean {
   return (
-    media.kind === "floppies" || media.kind === "hardfile" || media.kind === "whdload-drawer"
+    media.kind === "floppies" || media.kind === "hardfile" || media.kind === "whdload-hardfile"
   );
 }
 

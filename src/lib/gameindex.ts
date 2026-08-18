@@ -77,10 +77,17 @@ export interface KickstartNeed {
   alternatives: KickstartAlternative[];
 }
 
+/**
+ * A hardfile that boots itself — no RDB, a WHDLoad drawer and an
+ * `S/startup-sequence` that runs it (ART-147; `core::gameindex::readers::
+ * whdhdf`'s own header). `file` is the image, mounted and booted directly:
+ * no system volume, no boot directory, no Y1/Y2. `slave` is not the media's
+ * kind but a fact carried alongside it — what named the title.
+ */
 export type Media =
   | { kind: "floppies"; ordered: string[] }
   | { kind: "hardfile"; file: string }
-  | { kind: "whdload-drawer"; slave: string };
+  | { kind: "whdload-hardfile"; file: string; slave: string };
 
 export interface SourceRef {
   name: string;
@@ -296,7 +303,7 @@ export function mediaKind(media: Media): "floppies" | "hardfile" | "whdload" {
       return "floppies";
     case "hardfile":
       return "hardfile";
-    case "whdload-drawer":
+    case "whdload-hardfile":
       return "whdload";
   }
 }

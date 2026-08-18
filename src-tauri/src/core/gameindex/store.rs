@@ -171,6 +171,17 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> CoreResult<Option<T>>
         .map_err(|err| malformed(format!("'{}' is not readable: {err}", path.display())))
 }
 
+/// The bytes of a file, distinguishing "not there" from a real I/O failure —
+/// the split [`read_json`] already draws, pulled out so [`read_root`] can
+/// treat a parse failure differently from either.
+fn read_bytes(path: &Path) -> CoreResult<Option<Vec<u8>>> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err.into()),
+    }
+}
+
 /// Serialise for a machine to read back.
 ///
 /// **Compact, not pretty.** One entry is 824 bytes compact and 1124 pretty —
@@ -225,14 +236,50 @@ pub fn write_roots(dir: &Path, roots: &RootsFile) -> CoreResult<()> {
     atomic_write(&path, &bytes)
 }
 
-pub fn read_root(dir: &Path, root: &Path) -> CoreResult<Option<CatalogueRoot>> {
-    match read_json::<CatalogueRoot>(&dir.join(root_file_name(root)))? {
-        Some(value) => {
-            refuse_if_newer(value.schema, "catalogue file")?;
-            Ok(Some(value))
-        }
-        None => Ok(None),
-    }
+/// What reading one root's catalogue file found.
+///
+/// ART-147, the live symptom: `Media::WhdloadDrawer` was renamed to
+/// `WhdloadHardfile`, and every one of this user's 1698 WHDLoad titles had
+/// already been written to disk under the old name. `serde_json::from_slice`
+/// fails on an unrecognised enum variant *before* anything — including
+/// `CatalogueRoot::index_schema`, the field ART-137 added for exactly this
+/// kind of change — can be read back out of the document, so the schema-number
+/// bump alone cannot save a reader that treats a parse failure as fatal.
+///
+/// **A root file is derived data.** Every title in it comes from a file under
+/// the user's own root folder; one Update reproduces it exactly. So a parse
+/// failure here becomes [`StoredRoot::Unreadable`] — folded into
+/// [`RootView::stale`] by [`load`], the same signal an `index_schema`
+/// mismatch already used, rather than a second one — never a hard error.
+/// Contrast [`read_overrides`], which stays strict: the user's own
+/// corrections and hand-attached pictures cannot be rebuilt by rescanning, so
+/// discarding a corrupt overrides file would destroy something real.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoredRoot {
+    /// No file at all: this root has never been scanned.
+    Absent,
+    /// A file is there, but this build cannot parse it.
+    Unreadable,
+    Found(CatalogueRoot),
+}
+
+pub fn read_root(dir: &Path, root: &Path) -> CoreResult<StoredRoot> {
+    let Some(bytes) = read_bytes(&dir.join(root_file_name(root)))? else {
+        return Ok(StoredRoot::Absent);
+    };
+    let value: CatalogueRoot = match serde_json::from_slice(&bytes) {
+        Ok(value) => value,
+        // Not corruption ART needs to alarm about — see `StoredRoot`'s own
+        // doc comment. `read_overrides` below is the strict counterpart.
+        Err(_) => return Ok(StoredRoot::Unreadable),
+    };
+    // This one *did* parse, so it is not an unrecognised shape — it is a
+    // claim from a build newer than this one, which `record::GAMEINDEX_SCHEMA`'s
+    // own doc comment says to refuse rather than silently half-read. Kept as
+    // a hard error rather than folded into `Unreadable`: rescanning with an
+    // *older* build cannot fix a file a *newer* one wrote.
+    refuse_if_newer(value.schema, "catalogue file")?;
+    Ok(StoredRoot::Found(value))
 }
 
 pub fn write_root(dir: &Path, value: &CatalogueRoot) -> CoreResult<()> {
@@ -371,16 +418,32 @@ pub fn load(dir: &Path) -> CoreResult<Vec<RootView>> {
     let mut out = Vec::new();
 
     for root in read_roots(dir)?.roots {
-        let Some(stored) = read_root(dir, Path::new(&root))? else {
+        let stored = match read_root(dir, Path::new(&root))? {
+            StoredRoot::Found(value) => value,
             // Listed but never scanned: an empty root rather than a refusal, so
             // adding a folder and not scanning it yet is a normal state.
-            out.push(RootView {
-                root,
-                scanned_at: None,
-                stale: false,
-                entries: Vec::new(),
-            });
-            continue;
+            StoredRoot::Absent => {
+                out.push(RootView {
+                    root,
+                    scanned_at: None,
+                    stale: false,
+                    entries: Vec::new(),
+                });
+                continue;
+            }
+            // ART-147: a shape this build cannot parse — most often a record
+            // enum whose variants changed. Derived data, so this is "needs a
+            // rescan" (`stale`), the same signal an `index_schema` mismatch
+            // uses, not a hard error that would take the whole screen down.
+            StoredRoot::Unreadable => {
+                out.push(RootView {
+                    root,
+                    scanned_at: None,
+                    stale: true,
+                    entries: Vec::new(),
+                });
+                continue;
+            }
         };
 
         let entries = stored
@@ -473,15 +536,20 @@ pub fn refresh_root(
         )));
     }
 
-    let cached: BTreeMap<String, CachedEntry> = read_root(dir, root)?
-        .map(|value| {
-            value
-                .entries
-                .into_iter()
-                .map(|entry| (entry.path.clone(), entry))
-                .collect()
-        })
-        .unwrap_or_default();
+    // ART-147: `StoredRoot::Unreadable` (an old file this build cannot parse)
+    // is treated exactly like `Absent` here — nothing to reuse, so every file
+    // is read fresh regardless of `mode`. That is what makes pressing Update
+    // on a `stale`-from-`Unreadable` root self-heal: this is the one place a
+    // rebuild actually happens, and it must not itself fail on the very file
+    // it exists to replace.
+    let cached: BTreeMap<String, CachedEntry> = match read_root(dir, root)? {
+        StoredRoot::Found(value) => value
+            .entries
+            .into_iter()
+            .map(|entry| (entry.path.clone(), entry))
+            .collect(),
+        StoredRoot::Absent | StoredRoot::Unreadable => BTreeMap::new(),
+    };
 
     progress.report(0, None, "Looking for titles…");
     let files = collect_indexable(root);
@@ -607,7 +675,8 @@ mod tests {
             rating: None,
             chipset: None,
             kickstart: None,
-            media: Media::WhdloadDrawer {
+            media: Media::WhdloadHardfile {
+                file: format!("{title}.hdf"),
                 slave: format!("{title}.slave"),
             },
             preview: None,
@@ -706,6 +775,34 @@ mod tests {
         );
 
         let after = refresh_root(&dir, &root, Refresh::Update, None, &NoProgress).unwrap();
+        assert_eq!(after.entries[0].record.title.value, "Zool");
+        assert_eq!(after.index_schema, GAMEINDEX_SCHEMA);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// ART-147's other half: pressing Update is the fix for a `stale`-from-
+    /// `Unreadable` root, so `refresh_root` must not itself fail on the exact
+    /// file it exists to replace. A root file this build cannot parse (an
+    /// old `Media` shape, here) is treated the same as no cached file at all
+    /// — every real file gets read fresh — rather than propagating the parse
+    /// error, which is what `read_root`'s old strict behaviour did.
+    #[test]
+    fn refresh_self_heals_a_root_file_this_build_cannot_parse() {
+        let dir = scratch("self-heal");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        a_real_file(&root, "Zool (1992)(Gremlin).adf");
+
+        std::fs::write(
+            dir.join(root_file_name(&root)),
+            b"{ this is not the shape any reader here understands",
+        )
+        .unwrap();
+        assert_eq!(read_root(&dir, &root).unwrap(), StoredRoot::Unreadable);
+
+        let after = refresh_root(&dir, &root, Refresh::Update, None, &NoProgress).unwrap();
+        assert_eq!(after.entries.len(), 1);
         assert_eq!(after.entries[0].record.title.value, "Zool");
         assert_eq!(after.index_schema, GAMEINDEX_SCHEMA);
 
@@ -946,8 +1043,9 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, CoreError::Cancelled), "{err}");
-        assert!(
-            read_root(&dir, &root).unwrap().is_none(),
+        assert_eq!(
+            read_root(&dir, &root).unwrap(),
+            StoredRoot::Absent,
             "a cancelled refresh must not have written a partial catalogue"
         );
 
@@ -1322,18 +1420,24 @@ mod tests {
         };
 
         write_root(&dir, &value).unwrap();
-        let back = read_root(&dir, Path::new(&value.root)).unwrap().unwrap();
+        let back = match read_root(&dir, Path::new(&value.root)).unwrap() {
+            StoredRoot::Found(value) => value,
+            other => panic!("{other:?}"),
+        };
         assert_eq!(back, value);
 
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// A root ART has never scanned is `None`, not an error. An empty catalogue
-    /// is the normal first-run state.
+    /// A root ART has never scanned is `Absent`, not an error. An empty
+    /// catalogue is the normal first-run state.
     #[test]
     fn an_unscanned_root_reads_as_nothing() {
         let dir = scratch("absent");
-        assert!(read_root(&dir, Path::new(r"E:\nowhere")).unwrap().is_none());
+        assert_eq!(
+            read_root(&dir, Path::new(r"E:\nowhere")).unwrap(),
+            StoredRoot::Absent
+        );
         assert_eq!(read_roots(&dir).unwrap().roots, Vec::<String>::new());
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1391,15 +1495,96 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// A corrupt file is refused with a reason rather than silently starting
-    /// empty — losing a catalogue quietly is worse than saying so.
+    /// A corrupt root file is `Unreadable`, not an error — ART-147. A root
+    /// file is derived data (every title in it comes from a file under the
+    /// user's own folder), so losing the ability to parse it costs one
+    /// Update, not the whole catalogue screen. Contrast
+    /// `an_overrides_file_with_an_unknown_field_still_errors` below, which
+    /// pins the opposite answer for the user's own corrections.
     #[test]
-    fn a_corrupt_root_file_is_refused_with_a_reason() {
+    fn a_corrupt_root_file_is_read_as_unreadable_rather_than_erroring() {
         let dir = scratch("corrupt");
         let root = Path::new(r"E:\amiga");
         std::fs::write(dir.join(root_file_name(root)), b"{ not json at all").unwrap();
 
-        assert!(read_root(&dir, root).is_err());
+        assert_eq!(read_root(&dir, root).unwrap(), StoredRoot::Unreadable);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **The exact defect ART-147 shipped and then hit live.** A root file
+    /// written before `Media::WhdloadDrawer` was renamed to `WhdloadHardfile`
+    /// contains a variant `serde` no longer knows — this is what every one of
+    /// this user's 1698 WHDLoad titles looked like the moment the rename
+    /// landed, and it took the whole Collection screen down with
+    /// `ART-FORMAT-MALFORMED` until this test's fix. `read_root` on its own
+    /// must read this as `Unreadable`, not error.
+    #[test]
+    fn a_root_file_with_an_unknown_media_variant_is_read_as_unreadable() {
+        let dir = scratch("unknown-variant");
+        let root = Path::new(r"E:\amiga");
+        let json = format!(
+            r#"{{"schema":{CATALOGUE_SCHEMA},"root":"E:\\amiga","scanned_at":null,"index_schema":{GAMEINDEX_SCHEMA},"entries":[{{"path":"E:\\amiga\\Lotus3.hdf","size":1,"mtime_ms":0,"record":{{"schema":{GAMEINDEX_SCHEMA},"id":"lotus-3-00000000","title":{{"value":"Lotus 3","from":"whdload-slave"}},"kind":null,"year":null,"publisher":null,"genre":null,"rating":null,"chipset":null,"kickstart":null,"media":{{"kind":"whdload-drawer","slave":"Lotus3.slave"}},"preview":null,"source":{{"name":"Lotus3.hdf","sha256":"{}","bytes":1}}}}}}]}}"#,
+            "0".repeat(64)
+        );
+        std::fs::write(dir.join(root_file_name(root)), json).unwrap();
+
+        assert_eq!(read_root(&dir, root).unwrap(), StoredRoot::Unreadable);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The end-to-end shape of the live bug: `load()` — what
+    /// `commands::gameindex::catalogue_load` returns straight to the screen —
+    /// must come back `Ok` with this root marked `stale` and empty, never
+    /// `Err`. Before this fix this returned `Err(malformed(...))`, and the
+    /// whole Collection screen showed `ART-FORMAT-MALFORMED` instead of any
+    /// title at all.
+    #[test]
+    fn load_reads_a_root_with_an_unknown_media_variant_as_stale_not_an_error() {
+        let dir = scratch("load-unknown-variant");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+
+        write_roots(
+            &dir,
+            &RootsFile {
+                schema: CATALOGUE_SCHEMA,
+                roots: vec![root.to_string_lossy().into()],
+            },
+        )
+        .unwrap();
+        let json = format!(
+            r#"{{"schema":{CATALOGUE_SCHEMA},"root":"{}","scanned_at":null,"index_schema":{GAMEINDEX_SCHEMA},"entries":[{{"path":"x.hdf","size":1,"mtime_ms":0,"record":{{"schema":{GAMEINDEX_SCHEMA},"id":"lotus-3-00000000","title":{{"value":"Lotus 3","from":"whdload-slave"}},"kind":null,"year":null,"publisher":null,"genre":null,"rating":null,"chipset":null,"kickstart":null,"media":{{"kind":"whdload-drawer","slave":"Lotus3.slave"}},"preview":null,"source":{{"name":"Lotus3.hdf","sha256":"{}","bytes":1}}}}}}]}}"#,
+            root.to_string_lossy().replace('\\', "\\\\"),
+            "0".repeat(64)
+        );
+        std::fs::write(dir.join(root_file_name(&root)), json).unwrap();
+
+        let roots = load(&dir).unwrap();
+        assert_eq!(roots.len(), 1);
+        assert!(roots[0].stale, "an unparseable root must read as stale");
+        assert!(
+            roots[0].entries.is_empty(),
+            "nothing readable came out of a file this build cannot parse"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The other half of the split: `read_overrides` stays strict. The
+    /// user's own title corrections and hand-attached pictures are not
+    /// rebuildable by rescanning, so a corrupt or unrecognised overrides file
+    /// must still be a hard error rather than silently discarded.
+    #[test]
+    fn an_overrides_file_with_an_unknown_field_still_errors() {
+        let dir = scratch("overrides-unknown-field");
+        std::fs::create_dir_all(&dir).unwrap();
+        // `ChipsetRequirement` has exactly two variants (`ocsecs`, `aga`); a
+        // third one is exactly the shape an old-shaped root's `Media` was —
+        // an enum value this build's `serde` derive does not know.
+        let json = r#"{"schema":1,"edits":{"lotus-3-00000000":{"title":null,"year":null,"publisher":null,"genre":null,"chipset":"turbo"}}}"#;
+        std::fs::write(dir.join(OVERRIDES_FILE), json).unwrap();
+
+        assert!(read_overrides(&dir).is_err());
         std::fs::remove_dir_all(&dir).ok();
     }
 

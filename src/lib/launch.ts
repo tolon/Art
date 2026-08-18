@@ -63,6 +63,12 @@ export interface LaunchPlan {
 export type MountNote =
   | { kind: "floppies"; count: number }
   | { kind: "hardfile"; read_only: boolean }
+  /**
+   * A self-booting WHDLoad hardfile (ART-147) — distinct from `"hardfile"` so
+   * the screen can say plainly that a save this game makes will not be kept
+   * while `read_only` holds true, rather than the generic hardfile wording.
+   */
+  | { kind: "whdload-hardfile"; read_only: boolean }
   | { kind: "whdload"; one_click: boolean };
 
 export interface LaunchPreview {
@@ -86,6 +92,15 @@ export interface LaunchArgs {
   machine_override: Machine | null;
   system_volume: string | null;
   one_click: boolean;
+  /**
+   * The user's explicit opt-in to mount a `whdload-hardfile` title writable,
+   * so a save it makes survives — ignored for every other media kind.
+   * §93 ("originals are immutable by default") stays the default; this is
+   * the per-title override `TitleDetail.tsx` offers after telling the user
+   * what leaving it off means (see the `whdload-hardfile` case of
+   * {@link mountNotePhrase}).
+   */
+  allow_write: boolean;
 }
 
 /** Work out what a launch would need. Starts nothing. */
@@ -167,6 +182,12 @@ export function mountNotePhrase(note: MountNote): Phrase {
         key: note.read_only
           ? "collection.detail.play.mount.hardfileReadOnly"
           : "collection.detail.play.mount.hardfileWritable",
+      };
+    case "whdload-hardfile":
+      return {
+        key: note.read_only
+          ? "collection.detail.play.mount.whdloadHardfileReadOnly"
+          : "collection.detail.play.mount.whdloadHardfileWritable",
       };
     case "whdload":
       return {

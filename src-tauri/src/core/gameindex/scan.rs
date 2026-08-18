@@ -324,7 +324,16 @@ fn from_hardfile(
             .map(|c| Fact::new(c, Provenance::WhdloadSlave))
             .or_else(|| named.chipset.map(|c| Fact::new(c, Provenance::TosecName))),
         kickstart,
-        media: Media::WhdloadDrawer {
+        // ART-147: this file boots itself — `whdhdf::read_whdload_hardfile`
+        // only returns `Ok` for a bare `DOS\1` volume with a WHDLoad drawer
+        // and an `S/startup-sequence` that runs it (its own module header).
+        // The old `Media::WhdloadDrawer { slave }` said this was an unpacked
+        // drawer needing the user's own bootable system, which sent Play
+        // looking for a system volume this file never needed — most of the
+        // user's WHDLoad titles are this shape. `file` carries the image so
+        // launch can mount and boot it directly.
+        media: Media::WhdloadHardfile {
+            file: file_name.to_string(),
             slave: game.slave_name.clone(),
         },
         preview: None,

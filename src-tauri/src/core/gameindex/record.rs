@@ -15,7 +15,13 @@ use crate::core::hashing::sha256_bytes;
 /// name. Records written before this carry a name that is really machine code,
 /// so an Update re-reads them — which is the whole reason this number is
 /// separate from the file format's.
-pub const GAMEINDEX_SCHEMA: u32 = 2;
+/// 2 → 3 (ART-147): `Media::WhdloadDrawer` claimed most of this user's WHDLoad
+/// titles were an unpacked drawer needing the user's own bootable system —
+/// they are bare `DOS\1` hardfiles that boot themselves, and Play asked for a
+/// system volume, mounted the game as a plain directory and wrote a boot
+/// directory none of that needed. Records written before this carry the wrong
+/// [`Media`] shape, so an Update re-reads them the same way ART-137's bump did.
+pub const GAMEINDEX_SCHEMA: u32 = 3;
 
 /// Where a fact came from. The first two **state**; the last two **suggest**.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -205,10 +211,22 @@ pub enum Media {
     /// Floppy images in the order they are asked for. `.rp9` states the order
     /// through `<floppy priority="n">`; a TOSEC set infers it from the names.
     Floppies { ordered: Vec<String> },
-    /// A hardfile that *is* the title — Enzo's collection, one game per image.
+    /// A hardfile that *is* the title, of a shape ART could not read a slave
+    /// out of — an `.rp9`'s own `<harddrive>`, or one of Enzo's images that
+    /// held no `.slave` `read_whdload_hardfile` could find.
     Hardfile { file: String },
-    /// A WHDLoad drawer, named by the slave inside it.
-    WhdloadDrawer { slave: String },
+    /// A hardfile that boots itself. `core::gameindex::readers::whdhdf`'s own
+    /// header measured this against 1697 of this user's 2787 titles: a bare
+    /// `DOS\1` FFS volume, no RDB, holding a WHDLoad drawer and an
+    /// `S/startup-sequence` that runs it. `file` is the image, the same
+    /// `file` a plain `Hardfile` carries; `slave` is not discarded the way
+    /// the `WhdloadDrawer` variant this replaced discarded the file (ART-147)
+    /// — it is the fact that named the title and carries its chipset and
+    /// declared Kickstart, kept as data about the image rather than folded
+    /// into the media's kind. Launch mounts `file` directly and boots it: no
+    /// system volume, no boot directory, no Y1/Y2 — see
+    /// `commands/launch.rs::request_kind_from`.
+    WhdloadHardfile { file: String, slave: String },
 }
 
 /// Which file this record was read from.

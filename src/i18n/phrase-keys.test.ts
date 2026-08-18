@@ -932,7 +932,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     const media: Media[] = [
       { kind: "floppies", ordered: ["a.adf"] },
       { kind: "hardfile", file: "a.hdf" },
-      { kind: "whdload-drawer", slave: "a.slave" },
+      { kind: "whdload-hardfile", file: "a.hdf", slave: "a.slave" },
     ];
     for (const one of media) {
       const phrase = mediaPhrase(one);
@@ -986,6 +986,8 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       { kind: "floppies", count: 2 },
       { kind: "hardfile", read_only: true },
       { kind: "hardfile", read_only: false },
+      { kind: "whdload-hardfile", read_only: true },
+      { kind: "whdload-hardfile", read_only: false },
       { kind: "whdload", one_click: true },
       { kind: "whdload", one_click: false },
     ];

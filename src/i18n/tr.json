@@ -1590,10 +1590,7 @@
           "a1200": "A1200"
         },
         "systemVolume": "Önyüklenebilir sistem (WHDLoad için)",
-        "systemVolumeDialog": "Önyüklenebilir sistem imajını veya bölümünü seçin",
-        "systemVolumeNone": "Ayarlanmadı",
-        "oneClick": "Tek tık (Y2)",
-        "mountOnly": "Bağla ve elden bırak (Y1)",
+        "allowWrite": "Bu oyunun kaydetmesine izin ver",
         "action": "Oynat",
         "planning": "Ne gerektiği hesaplanıyor…",
         "start": "Başlat",
@@ -1615,6 +1612,8 @@
           "floppies_other": "{{count}} disket takılacak.",
           "hardfileReadOnly": "Bu sabit disk imajı kendi dosyanız — salt okunur takılır, oynanış sırasında yazılan hiçbir şey saklanmaz.",
           "hardfileWritable": "Bu sabit disk imajı ART'ın kendi çıkardığı kopya — yazılabilir takılır, oynanış sırasında yapılan kayıtlar saklanır.",
+          "whdloadHardfileReadOnly": "Bu, kendi kendine önyüklenen bir WHDLoad sabit diski — kendi dosyanız. Varsayılan olarak salt okunur takılır, bu yüzden oynanış sırasında oyunun yaptığı hiçbir kayıt saklanmaz. Kayıtları saklamak istiyorsanız yukarıdaki \"Bu oyunun kaydetmesine izin ver\" seçeneğini açın.",
+          "whdloadHardfileWritable": "Bu kendi kendine önyüklenen WHDLoad sabit diski yazılabilir takılır — oynanış sırasında oyunun yaptığı kayıtlar, doğrudan kendi dosyanıza yazılarak saklanır.",
           "whdloadOneClick": "Sistem bölümünüz salt okunur takılır. Oyunun klasörü yazılabilir takılır, kayıtlar saklanır. ART, WinUAE açılır açılmaz oyunu başlatmak için kendi önyükleme klasörünü de takar.",
           "whdloadMountOnly": "Sistem bölümünüz salt okunur takılır. Oyunun klasörü yazılabilir takılır, kayıtlar saklanır. Workbench açıldıktan sonra WHDLoad'u kendiniz başlatırsınız."
         },

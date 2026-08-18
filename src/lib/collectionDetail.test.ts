@@ -6,7 +6,13 @@ import type { ArtKind } from "./artwork";
 
 const floppies: Media = { kind: "floppies", ordered: ["Dune2 Disk1.adf", "Dune2 Disk2.adf"] };
 const hardfile: Media = { kind: "hardfile", file: "Agony.hdf" };
-const drawer: Media = { kind: "whdload-drawer", slave: "Turrican.slave" };
+// ART-147: a self-booting WHDLoad hardfile, not an unpacked drawer — the
+// shape 1698 of this user's titles actually are.
+const drawer: Media = {
+  kind: "whdload-hardfile",
+  file: "Turrican.hdf",
+  slave: "Turrican.slave",
+};
 
 describe("mediaPhrase", () => {
   it("counts the disks of a floppy set", () => {
@@ -16,7 +22,7 @@ describe("mediaPhrase", () => {
     });
   });
 
-  it("names the slave of a WHDLoad drawer", () => {
+  it("names the slave of a self-booting WHDLoad hardfile", () => {
     expect(mediaPhrase(drawer)).toEqual({
       key: "collection.detail.media.whdload",
       params: { slave: "Turrican.slave" },

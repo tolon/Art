@@ -90,6 +90,18 @@ pub struct LaunchArgs {
     pub machine_override: Option<Machine>,
     pub system_volume: Option<String>,
     pub one_click: bool,
+    /// The user's explicit opt-in to mount a `Media::WhdloadHardfile` image
+    /// writable, so a save the game makes survives. Ignored by every other
+    /// media kind. Defaults to `false` on the frontend
+    /// (`TitleDetail.tsx`'s `launch.allowWrite.<id>`, remembered per title) —
+    /// §93's "originals are immutable by default" stands, and this field is
+    /// how the user is asked to override it for *this* title, having been
+    /// told what turning it on means (`MountNote::WhdloadHardfile`).
+    /// `#[serde(default)]`: a screen still running the previous build's
+    /// bundled frontend against a rebuilt backend sends no such field, and
+    /// the safe default — read-only, §93 — must be what it gets.
+    #[serde(default)]
+    pub allow_write: bool,
 }
 
 /// The machine a launch actually uses: the user's own per-title choice when
@@ -124,6 +136,17 @@ fn resolved_machine(request: &LaunchArgs) -> Machine {
 /// untouched here; [`media_for_plan`] is what turns it into a real path,
 /// extracting from the `.rp9` when there is one to extract from.
 ///
+/// `Media::WhdloadHardfile` takes the **same** `RequestKind::Hardfile` path,
+/// not `RequestKind::Whdload` — that was ART-147. The image boots itself
+/// (`core::gameindex::readers::whdhdf`'s own header), so there is no system
+/// volume to mount alongside it and no boot directory for ART to write; the
+/// slave's name is a fact carried on the record, not something a launch needs
+/// to act on. `RequestKind::Whdload` still exists in `core::launch` for the
+/// shape it was built for — an already-unpacked drawer that needs a separate
+/// bootable system, the same shape `core::whdload` installs onto a card — but
+/// no `Media` variant reaches it today: nothing in `core::gameindex` catalogues
+/// a loose drawer or an `.lha` archive as a title.
+///
 /// [`launch_title_inner`] is what turns either shape into real paths on
 /// disk; the preview shows the disk/hardfile name the user recognises rather
 /// than a temporary directory they have never seen.
@@ -132,12 +155,8 @@ fn request_kind_from(args: &LaunchArgs) -> RequestKind {
         Media::Floppies { ordered } => RequestKind::Floppies {
             images: ordered.clone(),
         },
-        Media::Hardfile { file } => RequestKind::Hardfile {
+        Media::Hardfile { file } | Media::WhdloadHardfile { file, .. } => RequestKind::Hardfile {
             image: file.clone(),
-        },
-        Media::WhdloadDrawer { slave } => RequestKind::Whdload {
-            drawer: args.path.clone(),
-            slave: slave.clone(),
         },
     }
 }
@@ -233,17 +252,33 @@ fn is_rp9(path: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Whether a plain `Hardfile` title's image mounts read-only.
+/// Whether a `Hardfile`-shaped title's image mounts read-only.
 ///
-/// A bare `.hdf` is the user's own original file — read-only (CHANGELOG,
-/// FEATURES, spec §93). A `.rp9`'s hardfile is unpacked into ART's own launch
-/// directory and is ART's copy, not the user's original, so it stays
-/// writable so its saves can persist (`unpack_hardfile`'s reuse). Shared by
-/// [`media_for_plan`], which acts on it, and [`mount_notes_for`], which
-/// states it on the confirmation screen before anything is mounted — the two
-/// must never compute a different answer from each other.
+/// A bare `.hdf` is the user's own original file — read-only by default
+/// (CHANGELOG, FEATURES, spec §93). A `.rp9`'s hardfile is unpacked into
+/// ART's own launch directory and is ART's copy, not the user's original, so
+/// it stays writable so its saves can persist (`unpack_hardfile`'s reuse).
+///
+/// A `Media::WhdloadHardfile` is the one exception to "read-only unless it's
+/// ART's own copy" (ART-147): it is the user's own file, but WHDLoad writes
+/// saved games back into the image it boots from, so mounting it read-only
+/// by default silently loses them. §93 still stands — the default here is
+/// still `true` — but `request.allow_write` is the user's own explicit
+/// opt-in for *this* title, made after the confirmation screen told them
+/// plainly what leaving it off means (`MountNote::WhdloadHardfile`). Turning
+/// it on is never inferred from anything else.
+///
+/// Shared by [`media_for_plan`], which acts on it, and [`mount_notes_for`],
+/// which states it on the confirmation screen before anything is mounted —
+/// the two must never compute a different answer from each other.
 fn hardfile_write_protected(request: &LaunchArgs) -> bool {
-    !is_rp9(&request.path)
+    if is_rp9(&request.path) {
+        return false;
+    }
+    if matches!(request.media, Media::WhdloadHardfile { .. }) {
+        return !request.allow_write;
+    }
+    true
 }
 
 /// What the confirmation screen must say before Start is reached (design
@@ -261,6 +296,15 @@ pub enum MountNote {
     Hardfile {
         read_only: bool,
     },
+    /// A self-booting WHDLoad hardfile (ART-147): distinct from the plain
+    /// `Hardfile` note so the confirmation screen can say, plainly, that a
+    /// game's own saves are lost while `read_only` holds — the collision
+    /// between §93 (originals immutable by default) and WHDLoad writing
+    /// saves back into the very image it boots from, resolved by telling the
+    /// user rather than picking silently either way.
+    WhdloadHardfile {
+        read_only: bool,
+    },
     /// The system volume is always read-only and the game's drawer is always
     /// writable (§4.4) — only `one_click` varies, which is what decides
     /// whether ART's own boot directory is mounted too.
@@ -274,9 +318,14 @@ fn mount_notes_for(request: &LaunchArgs, plan: &LaunchPlan) -> Vec<MountNote> {
         LaunchKind::Floppies { images } => vec![MountNote::Floppies {
             count: images.len(),
         }],
-        LaunchKind::Hardfile { .. } => vec![MountNote::Hardfile {
-            read_only: hardfile_write_protected(request),
-        }],
+        LaunchKind::Hardfile { .. } => {
+            let read_only = hardfile_write_protected(request);
+            if matches!(request.media, Media::WhdloadHardfile { .. }) {
+                vec![MountNote::WhdloadHardfile { read_only }]
+            } else {
+                vec![MountNote::Hardfile { read_only }]
+            }
+        }
         LaunchKind::Whdload { one_click, .. } => vec![MountNote::Whdload {
             one_click: *one_click,
         }],
@@ -371,6 +420,14 @@ fn media_for_plan(
             //   actually happen, and `unpack_hardfile` reuses that same copy
             //   on a later launch rather than overwriting it, which is what
             //   makes those saves survive between sessions.
+            // - A `Media::WhdloadHardfile` (ART-147) is also the user's own
+            //   original, so it defaults read-only same as any other bare
+            //   `.hdf` — but it is the one shape where that default silently
+            //   loses the game's own saves, since WHDLoad writes them back
+            //   into the exact image it boots from. `hardfile_write_protected`
+            //   honours `request.allow_write`, the per-title opt-in the
+            //   confirmation screen offers after stating what leaving it off
+            //   means.
             let real_path = if is_rp9(&request.path) {
                 require_exists(&request.path)?;
                 // ART's own copy, not the user's original (§93 does not
@@ -669,6 +726,54 @@ mod tests {
         ));
     }
 
+    /// ART-147. Default is read-only, same as any other bare hardfile — and
+    /// the mount note distinguishes this shape from a plain `Hardfile` one,
+    /// which is what lets the screen say plainly that a save will not be
+    /// kept rather than reusing the generic hardfile wording.
+    #[test]
+    fn mount_notes_state_a_whdload_hardfile_as_read_only_by_default() {
+        let request = LaunchArgs {
+            path: r"D:\games\1000 Miglia.hdf".into(),
+            ..args(Media::WhdloadHardfile {
+                file: "1000 Miglia.hdf".into(),
+                slave: "1000Miglia.Slave".into(),
+            })
+        };
+        let plan = plan_with(LaunchKind::Hardfile {
+            image: "1000 Miglia.hdf".into(),
+        });
+
+        let notes = mount_notes_for(&request, &plan);
+        assert!(matches!(
+            notes.as_slice(),
+            [MountNote::WhdloadHardfile { read_only: true }]
+        ));
+    }
+
+    /// The user's own explicit opt-in — never inferred — is what turns this
+    /// writable, and the confirmation screen must be told so it can say
+    /// saves will be kept.
+    #[test]
+    fn mount_notes_state_a_whdload_hardfile_as_writable_when_the_user_opts_in() {
+        let request = LaunchArgs {
+            path: r"D:\games\1000 Miglia.hdf".into(),
+            allow_write: true,
+            ..args(Media::WhdloadHardfile {
+                file: "1000 Miglia.hdf".into(),
+                slave: "1000Miglia.Slave".into(),
+            })
+        };
+        let plan = plan_with(LaunchKind::Hardfile {
+            image: "1000 Miglia.hdf".into(),
+        });
+
+        let notes = mount_notes_for(&request, &plan);
+        assert!(matches!(
+            notes.as_slice(),
+            [MountNote::WhdloadHardfile { read_only: false }]
+        ));
+    }
+
     #[test]
     fn mount_notes_state_whdload_one_click() {
         let request = whdload_args(
@@ -703,6 +808,10 @@ mod tests {
             serde_json::json!({ "kind": "hardfile", "read_only": true })
         );
         assert_eq!(
+            serde_json::to_value(MountNote::WhdloadHardfile { read_only: true }).unwrap(),
+            serde_json::json!({ "kind": "whdload-hardfile", "read_only": true })
+        );
+        assert_eq!(
             serde_json::to_value(MountNote::Whdload { one_click: false }).unwrap(),
             serde_json::json!({ "kind": "whdload", "one_click": false })
         );
@@ -720,6 +829,7 @@ mod tests {
             machine_override: None,
             system_volume: None,
             one_click: true,
+            allow_write: false,
         }
     }
 
@@ -758,16 +868,19 @@ mod tests {
         }
     }
 
+    /// ART-147. A self-booting hardfile takes the plain `Hardfile` request
+    /// kind, not `Whdload` — there is no system to mount alongside it and no
+    /// boot directory to write. `slave` is not read here at all; it is a fact
+    /// carried on the record for the title's provenance, not something a
+    /// launch decision consults.
     #[test]
-    fn media_whdload_drawer_uses_the_catalogued_path_and_slave() {
-        let a = args(Media::WhdloadDrawer {
-            slave: "Turrican.slave".into(),
+    fn media_whdload_hardfile_becomes_request_kind_hardfile() {
+        let a = args(Media::WhdloadHardfile {
+            file: "1000 Miglia.hdf".into(),
+            slave: "1000Miglia.Slave".into(),
         });
         match request_kind_from(&a) {
-            RequestKind::Whdload { drawer, slave } => {
-                assert_eq!(drawer, r"D:\games\Title.rp9");
-                assert_eq!(slave, "Turrican.slave");
-            }
+            RequestKind::Hardfile { image } => assert_eq!(image, "1000 Miglia.hdf"),
             other => panic!("{other:?}"),
         }
     }
@@ -1012,12 +1125,116 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ART-147, the fix itself. A self-booting WHDLoad hardfile is the
+    /// user's own original file, so it mounts read-only by default just like
+    /// a plain `Hardfile` — §93 still stands even though this is the shape
+    /// where read-only silently loses the game's saves.
+    #[test]
+    fn a_whdload_hardfile_mounts_read_only_by_default() {
+        let dir = scratch("whdload-hardfile-default");
+        let hdf = dir.join("1000 Miglia.hdf");
+        std::fs::write(&hdf, b"HARDFILE").unwrap();
+
+        let request = LaunchArgs {
+            path: hdf.to_string_lossy().to_string(),
+            ..args(Media::WhdloadHardfile {
+                file: "1000 Miglia.hdf".into(),
+                slave: "1000Miglia.Slave".into(),
+            })
+        };
+        let plan = plan_with(LaunchKind::Hardfile {
+            image: "1000 Miglia.hdf".into(),
+        });
+
+        let media =
+            media_for_plan(&request, &plan, &dir.join("launch"), &dir.join("boot")).unwrap();
+
+        assert_eq!(
+            media.hardfile_paths,
+            vec![hdf.to_string_lossy().to_string()]
+        );
+        assert!(
+            media.write_protect_hardfiles,
+            "default must protect the user's own file (spec §93)"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The user's own opt-in — never inferred — is what makes this mount
+    /// writable, so a save WHDLoad writes back into the image survives.
+    #[test]
+    fn a_whdload_hardfile_mounts_writable_when_the_user_allows_it() {
+        let dir = scratch("whdload-hardfile-allow-write");
+        let hdf = dir.join("1000 Miglia.hdf");
+        std::fs::write(&hdf, b"HARDFILE").unwrap();
+
+        let request = LaunchArgs {
+            path: hdf.to_string_lossy().to_string(),
+            allow_write: true,
+            ..args(Media::WhdloadHardfile {
+                file: "1000 Miglia.hdf".into(),
+                slave: "1000Miglia.Slave".into(),
+            })
+        };
+        let plan = plan_with(LaunchKind::Hardfile {
+            image: "1000 Miglia.hdf".into(),
+        });
+
+        let media =
+            media_for_plan(&request, &plan, &dir.join("launch"), &dir.join("boot")).unwrap();
+
+        assert!(
+            !media.write_protect_hardfiles,
+            "the user's explicit opt-in must make this writable"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `allow_write` must only affect a `WhdloadHardfile` — a plain
+    /// `Hardfile` (Enzo's collection, no known slave) stays read-only
+    /// regardless, since nothing about that shape asked the user for this
+    /// opt-in and there is no confirmation-screen sentence explaining what it
+    /// would mean for it.
+    #[test]
+    fn allow_write_is_ignored_for_a_plain_hardfile() {
+        let dir = scratch("hardfile-allow-write-ignored");
+        let hdf = dir.join("Game.hdf");
+        std::fs::write(&hdf, b"HARDFILE").unwrap();
+
+        let request = LaunchArgs {
+            path: hdf.to_string_lossy().to_string(),
+            allow_write: true,
+            ..args(Media::Hardfile {
+                file: "Game.hdf".into(),
+            })
+        };
+        let plan = plan_with(LaunchKind::Hardfile {
+            image: "Game.hdf".into(),
+        });
+
+        let media =
+            media_for_plan(&request, &plan, &dir.join("launch"), &dir.join("boot")).unwrap();
+
+        assert!(
+            media.write_protect_hardfiles,
+            "a plain Hardfile has no allow_write switch on screen, so the field must not act on it"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Exercises `media_for_plan`'s `LaunchKind::Whdload` arm directly, with a
+    /// hand-built plan — not through `request_kind_from`, which (ART-147) no
+    /// `Media` variant reaches any more. The `media` field is therefore
+    /// irrelevant to what these tests check and carries a placeholder value.
     fn whdload_args(system: &Path, drawer: &Path) -> LaunchArgs {
         LaunchArgs {
             path: drawer.to_string_lossy().to_string(),
             system_volume: Some(system.to_string_lossy().to_string()),
-            ..args(Media::WhdloadDrawer {
-                slave: "Turrican.slave".into(),
+            ..args(Media::Hardfile {
+                file: "unused-placeholder.hdf".into(),
             })
         }
     }

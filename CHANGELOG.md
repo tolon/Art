@@ -23,13 +23,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the WHDLoad slave's name, the Kickstart it declares, where the file is on
   disk, and what ART knows versus what it guessed.
 - **Play.** The panel's Play button hands a title to WinUAE: a floppy title
-  boots directly, a hardfile mounts read-only — except one ART itself
+  boots directly, and a hardfile mounts read-only — except one ART itself
   unpacked from a `.rp9`, which is ART's own copy and stays writable so the
-  game's saves survive — and a WHDLoad game — given a
-  bootable system image you already have — either mounts it for you to start
-  the game yourself, or, when your system supports it, boots straight into
-  the game in one click. Your original system image is never written to; the
-  game's own drawer stays writable, the way WHDLoad expects, for save games.
+  game's saves survive. Most WHDLoad titles in a collection like this are a
+  self-booting hardfile — no separate system needed at all, mounted and
+  booted directly, same as any other hardfile; a switch lets one of these
+  mount writable too, once you've been told that leaving it off means the
+  game's own saves are not kept. A WHDLoad *drawer* — given a bootable
+  system image you already have — either mounts it for you to start the game
+  yourself, or, when your system supports it, boots straight into the game in
+  one click; your original system image is never written to.
+
+#### Fixed
+- **A self-booting WHDLoad hardfile no longer asks for a system it does not
+  need.** It was catalogued the same way as an unpacked drawer, so Play sent
+  you looking for a bootable system for a title that already boots itself —
+  landing at a bare AmigaDOS prompt rather than the game. This was most of
+  this user's WHDLoad titles.
+- **An older catalogue no longer breaks the Collection screen.** A catalogue
+  written before that fix now reads as *stale, needs an update* rather than
+  failing to open at all — press Update and it rebuilds itself. Your own
+  title corrections and attached pictures are unaffected either way.
 
 #### Notes
 - **None of this has been run against your own files yet.** It is written and
