@@ -619,6 +619,49 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-145** 🔴 ✅ **The one-click WHDLoad launch never got past the CLI: the
+generated startup-sequence could not run its own first line** — *found and
+fixed 2026-08-18, by running Y2 against a real title (`1000 Miglia`) in
+WinUAE*
+`src-tauri/src/core/launch/whdload_boot.rs::startup_sequence` · Wave C's
+headline feature is one click from drop to game. The first real run of it
+put the user at an AmigaDOS CLI instead. Read off disk, ART's generated
+`S/Startup-Sequence` was:
+
+```
+Assign C: DH0:C
+Assign LIBS: DH0:Libs
+Assign DEVS: DH0:Devs
+CD DH1:
+WHDLoad 1000Miglia.Slave
+```
+
+— and ART's boot directory, mounted at the highest boot priority so AmigaDOS
+boots from it, contains no `C` drawer at all. Per the AmigaOS documentation,
+`SYS:` becomes that boot volume and AmigaDOS auto-assigns `C:` only when a
+`C` directory actually exists there. It does not on ART's, so `C:` was never
+assigned — and `Assign` is itself a command that lives in `C:`. The script's
+own first line could not run; AmigaDOS reported the command not found and
+left the user at the prompt, exactly as read off disk.
+
+Fixed by invoking that first `Assign` through an explicit path on the
+mounted system volume (`DH0:C/Assign C: DH0:C`) rather than relying on `C:`
+to already resolve — once that line runs, `C:` exists and every following
+`Assign` resolves normally. Also added `SYS:` and `S:`, alongside the
+existing `LIBS:` and `DEVS:`, so ART's boot directory presents the assigns a
+real system boot would; `S:` matters concretely because WHDLoad reads
+`S:WHDLoad.prefs`, and without it `S:` would have silently resolved to ART's
+own `S` drawer instead of the user's system.
+
+Test: `the_startup_sequence_assigns_from_the_system_and_runs_the_slave` and
+`the_boot_directory_is_written_where_art_owns_it`, both updated to pin the
+complete new script text with `assert_eq!`.
+
+**What remains unproven.** The fixed script has not yet been run against the
+real AmiKit image — this entry closes the defect the first run actually hit
+and found by reading the script it produced, not by re-running WinUAE with
+the fix applied. Whether `1000 Miglia` then starts is still open.
+
 **ART-142** 🟠 ✅ **A comma in a mounted folder's path shifts every field
 after it in the generated WinUAE configuration** — *filed 2026-08-18,
 collection-wave-c Task 12, out of Task 9's own deferred finding; fixed in the

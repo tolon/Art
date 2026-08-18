@@ -1,4 +1,4 @@
-//! The five lines that make Y2 one click (wave C).
+//! The lines that make Y2 one click (wave C).
 //!
 //! A WHDLoad slave is not a program WinUAE can run: it needs an Amiga that has
 //! booted, with WHDLoad installed. ART owns no such system and does not build
@@ -16,6 +16,32 @@
 //! always one switch away on the panel, and is what this falls back to. That
 //! pairing is the shape `commands/preload.rs::run_with_fallback` already uses:
 //! the good path first, a named alternative behind it, never a silent one.
+//!
+//! ## ART-118 — found by running it, not by reading it
+//!
+//! The first real run (`1000 Miglia`, 2026-08-18) left the user at an
+//! AmigaDOS CLI instead of the game. The script ART had written was never
+//! wrong on paper — reading it did not find this — but AmigaOS boots from
+//! ART's own directory (mounted at the highest boot priority), and that
+//! directory has no `C` drawer. `SYS:` becomes ART's directory, and AmigaDOS
+//! auto-assigns `C:` only when a `C` directory actually exists on the boot
+//! volume — it does not on ART's, so `C:` is never assigned. `Assign` is
+//! itself a command that lives in `C:`, so the script's own first line could
+//! not run: AmigaDOS reported the command not found and dropped the user at
+//! the CLI. [`startup_sequence`] now invokes that first `Assign` by an
+//! explicit path on the mounted system volume instead of relying on `C:`,
+//! which is the one line here that is certain: it is the actual blocker, and
+//! nothing after it can run without it.
+//!
+//! The rest of what changed is reasoned rather than confirmed by that run:
+//! ART's boot directory stands in for a system volume, so it should present
+//! the assigns a real boot would, and it did not. `SYS:` and `S:` join the
+//! existing `LIBS:` and `DEVS:` — `S:` in particular because WHDLoad reads
+//! its preferences from `S:WHDLoad.prefs`, and with ART's own directory as
+//! the boot volume, `S:` would otherwise silently resolve to ART's `S`
+//! drawer and ignore the user's WHDLoad settings. Whether `1000 Miglia`
+//! actually starts with this fix has not yet been tested against the real
+//! AmiKit image — only the generated script is pinned here.
 
 use std::path::{Path, PathBuf};
 
@@ -91,13 +117,29 @@ fn refuse_shell_metacharacters(label: &str, value: &str) -> CoreResult<()> {
 /// The assigns come before the `CD` and the `WHDLoad` line, because AmigaDOS
 /// resolves `C:`, `LIBS:` and `DEVS:` for everything that follows — the
 /// `WHDLoad` command itself included.
+///
+/// The very first line is `Assign` invoked by its own path on
+/// `system_volume`, not by name — see the module header's ART-118 note.
+/// AmigaDOS auto-assigns `C:` only when a `C` directory exists on the boot
+/// volume, and ART's boot directory has none, so plain `Assign C: ...` as
+/// the first command cannot run: `Assign` itself lives in `C:`, which does
+/// not exist yet. Once that one line has run, `C:` exists and every
+/// following `Assign` resolves normally by name.
+///
+/// `SYS:` and `S:` are reasoned, not confirmed by the run that found this —
+/// see the module header. `S:` matters specifically because WHDLoad reads
+/// `S:WHDLoad.prefs`; without it, `S:` would resolve to ART's own `S`
+/// drawer instead of the user's system, silently ignoring their WHDLoad
+/// settings.
 pub fn startup_sequence(slave: &str, system_volume: &str, game_volume: &str) -> CoreResult<String> {
     refuse_shell_metacharacters("WHDLoad slave name", slave)?;
     refuse_shell_metacharacters("system volume name", system_volume)?;
     refuse_shell_metacharacters("game volume name", game_volume)?;
 
     Ok(format!(
-        "Assign C: {system_volume}:C\n\
+        "{system_volume}:C/Assign C: {system_volume}:C\n\
+         Assign SYS: {system_volume}:\n\
+         Assign S: {system_volume}:S\n\
          Assign LIBS: {system_volume}:Libs\n\
          Assign DEVS: {system_volume}:Devs\n\
          CD {game_volume}:\n\
@@ -149,7 +191,9 @@ mod tests {
 
         assert_eq!(
             text,
-            "Assign C: DH0:C\n\
+            "DH0:C/Assign C: DH0:C\n\
+             Assign SYS: DH0:\n\
+             Assign S: DH0:S\n\
              Assign LIBS: DH0:Libs\n\
              Assign DEVS: DH0:Devs\n\
              CD DH1:\n\
@@ -221,7 +265,9 @@ mod tests {
         let text = std::fs::read_to_string(dir.join("S").join("Startup-Sequence")).unwrap();
         assert_eq!(
             text,
-            "Assign C: DH0:C\n\
+            "DH0:C/Assign C: DH0:C\n\
+             Assign SYS: DH0:\n\
+             Assign S: DH0:S\n\
              Assign LIBS: DH0:Libs\n\
              Assign DEVS: DH0:Devs\n\
              CD DH1:\n\
