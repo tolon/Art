@@ -1554,7 +1554,11 @@
         "floppies_other": "{{count}} disket",
         "hardfile": "Sabit disk imajı — {{file}}",
         "whdload": "WHDLoad — {{slave}}"
-      }
+      },
+      "publisher": "Yayıncı",
+      "year": "Yıl",
+      "genre": "Tür",
+      "rating": "Puan"
     }
   },
   "whdload": {

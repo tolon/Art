@@ -234,6 +234,12 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // the fix is that ART must not call a file damaged when it has no
     // checksum to check. Its four keys are enumerated in
     // `phrase-keys.test.ts`.
-    expect(dynamicCalls).toBe(99);
+    // 99 → 100 (Collection wave C, Task 4): the new detail panel reads its
+    // media line — floppy count, hardfile name or WHDLoad slave — from
+    // `mediaPhrase()` in `@/lib/collectionDetail` (Task 3), the same `Phrase`
+    // read `t(media.key, media.params)` every other mapper on this list
+    // uses. All three arms are enumerated in `phrase-keys.test.ts`
+    // (`mediaPhrase: every medium resolves`).
+    expect(dynamicCalls).toBe(100);
   });
 });

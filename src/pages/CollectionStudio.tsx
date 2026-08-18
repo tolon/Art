@@ -8,14 +8,13 @@ import {
   catalogueLoad,
   catalogueRefresh,
   catalogueRemoveRoot,
-  isStated,
   mediaKind,
   nameSuggestions,
   onCatalogueRefreshed,
-  provenancePhrase,
   renameTitleFile,
   catalogueSetOverride,
   NO_OVERRIDE,
+  type GameRecord,
   type NameSuggestion,
   type ChipsetRequirement,
   type EntryView,
@@ -40,6 +39,8 @@ import {
 import { isOneOf } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { Guessed } from "@/components/collection/Guessed";
+import { TitleDetail } from "@/components/collection/TitleDetail";
 
 type ViewMode = "grid" | "table";
 type MediaFilter = "all" | "floppies" | "hardfile" | "whdload";
@@ -81,6 +82,13 @@ interface Shown {
   kickstart: string | null;
   /** The screenshot's entry name inside the package, when it carries one. */
   preview: string | null;
+  /**
+   * The record as the catalogue holds it. Kept alongside the flattened
+   * fields above (rather than reached for through them) so a selected row
+   * can be handed to `TitleDetail` as the `CatalogueEntry` it expects
+   * without a second trip to the backend.
+   */
+  record: GameRecord;
 }
 
 function flatten(root: string, entry: EntryView): Shown {
@@ -102,30 +110,8 @@ function flatten(root: string, entry: EntryView): Shown {
     diskCount: r.media.kind === "floppies" ? r.media.ordered.length : 1,
     kickstart: r.kickstart?.value.image ?? null,
     preview: r.preview,
+    record: r,
   };
-}
-
-/**
- * A small mark on any value the index **guessed** rather than read.
- *
- * This is the feature the provenance in the record exists for. `Agassi Tennis`
- * reads as AGA because the letters are in its filename; a slave that states
- * `ReqAGA` is a different claim entirely, and a screen showing the two the
- * same way throws away the only thing that separates them.
- */
-function Guessed({ from }: { from: Provenance | null }) {
-  const { t } = useTranslation();
-  if (!from || isStated(from)) return null;
-  const source = t(provenancePhrase(from).key);
-  return (
-    <span
-      className="badge badge-muted"
-      title={t("gameindex.guessedFrom", { source })}
-      style={{ fontSize: 9, marginLeft: 4, verticalAlign: "middle" }}
-    >
-      ~{t("gameindex.guessed")}
-    </span>
-  );
 }
 
 /**
@@ -267,6 +253,12 @@ export function CollectionStudio() {
   const [scanDir, setScanDir] = useState<string | null>(null);
   const [items, setItems] = useState<Shown[]>([]);
   const [searchTerm, setSearchTerm] = useState<string>("");
+
+  // Which title's detail panel is open. Not remembered: this is what the
+  // screen is merely doing right now — the row it has open — not a choice
+  // the user would be annoyed to make again tomorrow (`@/lib/useRemembered`'s
+  // own line between the two).
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   // How the library is being looked at is the user's choice, not the screen's
   // (see `@/lib/useRemembered`). A grid-and-AGA view set on Monday is still
@@ -709,6 +701,17 @@ export function CollectionStudio() {
     navigate("/winuae", { state: { path: item.path } });
   }
 
+  // Looked up from every loaded item, not the filtered set: changing a
+  // filter after opening a title must not close the panel out from under it.
+  const selectedItem = selectedId
+    ? (items.find((item) => item.id === selectedId) ?? null)
+    : null;
+
+  /** Clicking a card opens it; clicking the same card again closes it. */
+  function handleSelect(item: Shown) {
+    setSelectedId((current) => (current === item.id ? null : item.id));
+  }
+
   return (
     <div>
       {/* Top Header */}
@@ -951,6 +954,28 @@ export function CollectionStudio() {
         </div>
       )}
 
+      {/* The listing and, once a title is opened, its detail panel beside it
+          — a two-column grid that collapses to one column at the same width
+          the app's own sidebar already does (`layout.css`, 1000px). This
+          screen has no stylesheet of its own to hang that media query on, so
+          the query travels with the one class it applies to. Application
+          Size is untouched either way: neither column gets a fixed pixel
+          height (ART-082). */}
+      <style>{`
+        .collection-with-detail {
+          display: grid;
+          grid-template-columns: 2fr 1fr;
+          gap: 14px;
+          align-items: start;
+        }
+        @media (max-width: 1000px) {
+          .collection-with-detail {
+            grid-template-columns: 1fr;
+          }
+        }
+      `}</style>
+      <div className={selectedItem ? "collection-with-detail" : undefined}>
+        <div>
       {/* VIEW MODE 1: VISUAL GRID VIEW */}
       {viewMode === "grid" && filteredItems.length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
@@ -961,11 +986,14 @@ export function CollectionStudio() {
               <div
                 key={item.id}
                 className="card"
+                onClick={() => handleSelect(item)}
                 style={{
                   display: "flex",
                   flexDirection: "column",
                   justifyContent: "space-between",
                   padding: "12px",
+                  cursor: "pointer",
+                  borderColor: item.id === selectedId ? "var(--accent)" : undefined,
                   transition: "transform 0.1s, border-color 0.1s",
                 }}
               >
@@ -1032,18 +1060,28 @@ export function CollectionStudio() {
                       {t("gameindex.kickstartNeeded", { image: item.kickstart })}
                     </div>
                   )}
-                  <NameFixes
-                    current={item.title}
-                    suggestion={suggestions.get(item.id)}
-                    undo={undoable.get(item.id)}
-                    onTitle={(proposed) => void applyTitle(item, proposed)}
-                    onRename={(proposed) => void applyRename(item, proposed)}
-                    onUndo={() => void undoTitle(item)}
-                  />
+                  {/* A click on any of these fixes is a decision about the
+                      name, not a card selection — it must not also toggle
+                      the detail panel open or closed underneath it. */}
+                  <div onClick={(e) => e.stopPropagation()}>
+                    <NameFixes
+                      current={item.title}
+                      suggestion={suggestions.get(item.id)}
+                      undo={undoable.get(item.id)}
+                      onTitle={(proposed) => void applyTitle(item, proposed)}
+                      onRename={(proposed) => void applyRename(item, proposed)}
+                      onUndo={() => void undoTitle(item)}
+                    />
+                  </div>
                 </div>
 
-                {/* Card Actions */}
-                <div style={{ display: "flex", gap: 6, marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                {/* Card Actions. Stopped from bubbling for the same reason:
+                    Play and the ADF-Studio shortcut are their own actions,
+                    not a way to open the detail panel. */}
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ display: "flex", gap: 6, marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 8 }}
+                >
                   {/*
                     Disabled, not hidden. A game whose drive is unplugged is
                     still in the library, and hiding it would look like ART
@@ -1165,6 +1203,16 @@ export function CollectionStudio() {
           {t("collection.empty.noCollection", { buttonLabel: t("collection.toolbar.scanFolder") })}
         </p>
       )}
+        </div>
+
+        {selectedItem && (
+          <TitleDetail
+            entry={{ path: selectedItem.path, record: selectedItem.record }}
+            art={art.get(selectedItem.id)}
+            onClose={() => setSelectedId(null)}
+          />
+        )}
+      </div>
     </div>
   );
 }

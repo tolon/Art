@@ -1554,7 +1554,11 @@
         "floppies_other": "{{count}} floppy disks",
         "hardfile": "Hard disk image — {{file}}",
         "whdload": "WHDLoad — {{slave}}"
-      }
+      },
+      "publisher": "Publisher",
+      "year": "Year",
+      "genre": "Genre",
+      "rating": "Rating"
     }
   },
   "whdload": {
