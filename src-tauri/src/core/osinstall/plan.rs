@@ -661,7 +661,7 @@ mod condition_tests {
                 is_cloanto: false,
                 key_available: false,
                 is_aros: false,
-                checksum_valid: false,
+                checksum: crate::core::rom::RomChecksum::NotChecked,
                 compatible_models: Vec::new(),
                 file_path: String::new(),
             },

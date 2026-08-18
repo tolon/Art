@@ -7,6 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Pictures already on your disk, a detail panel, and Play (2026-08-18)
+
+#### Added
+- **The Collection now shows the pictures already inside your `.rp9` files.**
+  Every `.rp9` carries its own screenshot; a new button — *use the pictures
+  already in your files* — reads it straight off the package, with no network
+  and nothing to confirm. It only fills gaps: a picture already found some
+  other way is left alone.
+- **You can attach your own picture to a title.** Pick a PNG or JPEG and it
+  stays attached — a later refresh or online search will not replace it, and
+  it survives a rescan of the folder. If a title has more than one picture,
+  a switch lets you choose which one shows.
+- **Click a title to open it.** A panel shows the picture, the disk order or
+  the WHDLoad slave's name, the Kickstart it declares, where the file is on
+  disk, and what ART knows versus what it guessed.
+- **Play.** The panel's Play button hands a title to WinUAE: a floppy title
+  boots directly, a hardfile mounts read-only — except one ART itself
+  unpacked from a `.rp9`, which is ART's own copy and stays writable so the
+  game's saves survive — and a WHDLoad game — given a
+  bootable system image you already have — either mounts it for you to start
+  the game yourself, or, when your system supports it, boots straight into
+  the game in one click. Your original system image is never written to; the
+  game's own drawer stays writable, the way WHDLoad expects, for save games.
+
+#### Notes
+- **None of this has been run against your own files yet.** It is written and
+  tested, but no session here has your `.rp9` collection, your emulator, or
+  your `AmiKit.hdf` to try it against. Please run the three checks below and
+  report back what you actually saw — not just whether something happened,
+  but what the screen said if it didn't work as expected.
+
+#### To verify yourself
+1. Open the Collection on your `.rp9` folder, press *use the pictures
+   already in your files*, and note the real numbers it reports — how many
+   were written, how many were already there, how many it could not read.
+2. Play a bare `.adf` title, then an `.rp9` title. Both should reach a
+   running game.
+3. Play a WHDLoad title against `E:\amiga\amikit\AmiKit.hdf` — try the
+   one-click option first. If it does not reach the game, note exactly what
+   the screen showed; that ART offers a fallback is not the same claim as
+   that the fallback is needed, and which one actually happened is what's
+   worth knowing.
+
+### Colours you can actually read (2026-08-18)
+
+#### Fixed
+- **Every status badge is readable now, in both themes.** The green *OK*, the
+  amber *CRC ERR* and the red error pills were coloured the same as the pill
+  behind them — measured, the light theme's *OK* badge was 2.20:1, where
+  readable text needs 4.5:1. Each colour now has a text version dark enough
+  (or light enough) to be read on its own background.
+- **File paths and secondary lines are no longer whispers.** The faintest text
+  in ART sat at 2.85:1 on a light page and 2.58:1 on a highlighted row. Both
+  levels of secondary text are now readable, with the difference between them
+  kept.
+- **The primary button's label.** White on the light theme's blue was 3.94:1;
+  the blue is slightly deeper now, and it clears 4.5:1.
+- **Input boxes look like input boxes.** Their edges are drawn with a border
+  strong enough to see against the page — 3:1, the threshold for a control you
+  have to find before you can use it.
+- **The crash screen is readable on a light background.** It had the dark
+  theme's colours written into it, so a stack trace appeared at 2.3:1.
+
+#### Notes
+- Contrast is checked by a script (`scripts/contrast-check.py`) on every build,
+  not by looking at a screenshot. It measures all 90 colour pairs the program
+  can render and fails the build if one drops below its threshold.
+
+### Two labels that said more than ART knew (2026-08-18)
+
+#### Fixed
+- **ART no longer calls your accelerator ROMs broken.** Scanning a ROM folder
+  used to mark anything that was not a Kickstart `CRC ERR` — a claim that the
+  file is damaged. Of the 76 files in one real collection, 46 got it: Blizzard,
+  CyberStorm, GVP, Apollo, A2630, A4091, and both halves of every split dump.
+  They are all fine. They are simply not Kickstarts, and they carry no Kickstart
+  checksum for ART to check. The badge now says **not a Kickstart** — or
+  **encrypted**, for an Amiga Forever ROM whose `rom.key` is not beside it —
+  and `CRC ERR` is kept for the one case it means something: a Kickstart whose
+  checksum really does not add up.
+- **And it stops calling them Kickstarts, too.** A 256 KB accelerator ROM was
+  named *Generic Amiga 256KB ROM (Kickstart 1.x)* on its size alone. It now
+  reads *Not a Kickstart image (256 KB)*.
+- **A blank field says why it is blank.** *Compatible Amiga Models* was empty
+  under the CDTV Extended 2.30 because ART's source names no machine for that
+  dump. The screen says so now, rather than leaving a gap that looks like
+  something missing.
+- **Aminet's search and folder boxes follow the theme.** They came out white on
+  a dark page — bare form controls taking the browser's own colours. Every input,
+  dropdown and text area in ART now takes the theme, in both light and dark.
+
 ### Tidying up names ART could only read off a filename (2026-08-18)
 
 #### Added

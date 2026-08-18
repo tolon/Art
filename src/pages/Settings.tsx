@@ -58,6 +58,9 @@ import {
   type OperationRecord,
 } from "@/lib/oplog";
 import { sourcesLibrary, sourcesSetLibraryRoot } from "@/lib/sources";
+import { isMachine, machinePhrase, type Machine } from "@/lib/launch";
+import { isText, isTextOrNothing } from "@/lib/remembered";
+import { useRemembered } from "@/lib/useRemembered";
 
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -304,10 +307,75 @@ export function SettingsPage() {
         <AminetDownloadField />
       </section>
 
+      <PlaySettingsSection />
       <ArtworkSourcesSection />
       <OperationLogSection />
       <AboutSection />
     </div>
+  );
+}
+
+/**
+ * What Play (the Collection screen's launch flow, Task 11) needs before it
+ * can start anything: a Kickstart ROM folder, the machine to default to when
+ * a title states no chipset, and the bootable system a WHDLoad title mounts
+ * beside its own drawer.
+ *
+ * **Reuses `TitleDetail`'s own remembered keys** (`launch.romDir`,
+ * `launch.defaultMachine`, `launch.systemVolume`) rather than introducing a
+ * second copy of them — this is a second entry point onto the same three
+ * values, not a second set. A user who has never opened a title's Play
+ * section still has somewhere to find them, which matters most for the
+ * system volume: a WHDLoad launch cannot work at all without one.
+ */
+function PlaySettingsSection() {
+  const { t } = useTranslation();
+  const [romDir, setRomDir] = useRemembered<string>("launch.romDir", isText, "");
+  const [defaultMachine, setDefaultMachine] = useRemembered<Machine>(
+    "launch.defaultMachine",
+    isMachine,
+    "a500"
+  );
+  const [systemVolume, setSystemVolume] = useRemembered<string | null>(
+    "launch.systemVolume",
+    isTextOrNothing,
+    null
+  );
+
+  return (
+    <section className="card">
+      <h2 style={{ fontSize: 15 }}>{t("settings.play.title")}</h2>
+      <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+        {t("settings.play.hint")}
+      </p>
+
+      <PathField
+        label={t("collection.detail.play.romDir")}
+        placeholder="D:\\amiga\\kickstart"
+        value={romDir || null}
+        pick="folder"
+        onChange={(next) => setRomDir(next ?? "")}
+      />
+
+      <Field label={t("collection.detail.play.defaultMachine")}>
+        <select
+          className="btn"
+          value={defaultMachine}
+          onChange={(e) => setDefaultMachine(e.target.value as Machine)}
+        >
+          <option value="a500">{t(machinePhrase("a500").key)}</option>
+          <option value="a1200">{t(machinePhrase("a1200").key)}</option>
+        </select>
+      </Field>
+
+      <PathField
+        label={t("collection.detail.play.systemVolume")}
+        placeholder="E:\\amiga\\amikit\\AmiKit.hdf"
+        value={systemVolume}
+        pick="file"
+        onChange={setSystemVolume}
+      />
+    </section>
   );
 }
 

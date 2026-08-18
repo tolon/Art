@@ -6,6 +6,30 @@
  * checkmark-of-twelve nothingness. No fake CRT, no neon, no pixel fonts.
  */
 
+/*
+ * ## Two colours per meaning, and why (ART-140)
+ *
+ * A colour that works as a **fill** does not work as **text on a tint of
+ * itself**, and ART was using one token for both. `.badge-ok` puts
+ * `color: var(--ok)` on a background that is 22% of `var(--ok)` — measured,
+ * that is 2.20:1 in the light theme, where readable text needs 4.5:1. Every
+ * status badge in the program was affected, in both themes.
+ *
+ * So each meaning has two tokens:
+ *
+ * - `--accent` / `--ok` / `--warn` / `--err` — the **mark**: fills, borders,
+ *   `accent-color`, the tint behind a badge. These carry the identity and are
+ *   unchanged in the dark theme.
+ * - `--accent-text` / `--ok-text` / `--warn-text` / `--err-text` — the same
+ *   meaning **as text**, and the only one that may be used for words. Each is
+ *   the mark's own hue, moved in lightness until it clears 4.5:1 against all
+ *   four surfaces *and* against its own badge tint on each of them.
+ *
+ * The values below are not chosen by eye. `scripts/contrast-check.py` reads
+ * this file, computes every pair ART actually renders, and fails if one drops
+ * below its threshold — run it after touching anything here.
+ */
+
 :root,
 .theme-dark {
   --bg: #1a1d23;
@@ -13,11 +37,17 @@
   --bg-panel: #272c35;
   --bg-hover: #2f3540;
   --border: #353b46;
-  --border-strong: #444c5a;
+  /* 3:1 against every surface — the threshold for a boundary that has to be
+     seen to be used (an input's edge, the drop zone's dashed frame). */
+  --border-strong: #768297;
 
   --text: #e6e9ef;
-  --text-muted: #9aa3b2;
-  --text-faint: #6b7383;
+  /* Three readable levels rather than two readable and one decorative: muted
+     6.5:1 and faint 4.6:1 at worst, against the lightest surface they land
+     on. Faint used to be 2.58:1 on a hovered row — and what it carries is
+     file paths, which is the line a user reads when something is wrong. */
+  --text-muted: #b6bdc8;
+  --text-faint: #989eab;
 
   /* Amiga copper-blue accent */
   --accent: #3aa9c9;
@@ -28,6 +58,12 @@
   --ok: #4caf7d;
   --warn: #d6a838;
   --err: #d65a5a;
+
+  /* The same meanings as text. See the note above. */
+  --accent-text: #7ec7dc;
+  --ok-text: #86cba8;
+  --warn-text: #e0be69;
+  --err-text: #e79f9f;
 
   --shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
   --radius: 8px;
@@ -68,19 +104,29 @@
   --bg-panel: #ffffff;
   --bg-hover: #d5dce7;
   --border: #b9c3d1;
-  --border-strong: #8e9aab;
+  --border-strong: #6a7a8f;
 
   --text: #1b212b;
-  --text-muted: #545e6c;
-  --text-faint: #7d8794;
+  --text-muted: #424a55;
+  --text-faint: #58606b;
 
-  --accent: #2d8aab;
-  --accent-hover: #247a99;
+  /* Darkened from #2d8aab so the primary button's white label clears 4.5:1
+     against it — it was 3.94:1, and that button is the one people press. */
+  --accent: #297e9c;
+  --accent-hover: #216981;
   --accent-fg: #ffffff;
 
   --ok: #2f9c66;
   --warn: #b9881f;
   --err: #c14b4b;
+
+  /* The same meanings as text — see the note at the top of this file. Deep
+     rather than bright: on paper a mid-tone green or amber is not readable at
+     11px, and the badge tint behind it makes it worse, not better. */
+  --accent-text: #1d586d;
+  --ok-text: #1c5e3d;
+  --warn-text: #6c4f12;
+  --err-text: #8a3030;
 
   --shadow: 0 2px 8px rgba(20, 30, 50, 0.08);
 }

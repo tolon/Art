@@ -9,7 +9,9 @@ import { describe, expect, it } from "vitest";
 import en from "./en.json";
 
 import { ALL_PROVENANCES, provenancePhrase } from "@/lib/gameindex";
-import { outcomePhrase, sourcePhrase, type SourceOutcome } from "@/lib/artwork";
+import { kindPhrase as artworkKindPhrase, mediaPhrase } from "@/lib/collectionDetail";
+import type { Media } from "@/lib/gameindex";
+import { outcomePhrase, sourcePhrase, type ArtKind, type SourceOutcome } from "@/lib/artwork";
 
 import { describeCheckout, type CheckoutRow } from "@/lib/checkout";
 import { jobStatusLabel, type JobProgress } from "@/lib/jobs";
@@ -24,6 +26,7 @@ import {
   type PackageMeta,
   type PackageUpdate,
 } from "@/lib/sources";
+import { checksumBadge, type RomChecksum } from "@/lib/rom";
 import { copyDirection, ISO_WRITE_REFUSAL } from "@/lib/isoPane";
 import { parseCommandLine } from "@/lib/commandLine";
 import { planMove, type MoveInput } from "@/lib/movePlan";
@@ -85,6 +88,18 @@ import {
   type PlanResult,
   type RefusalReason as OsInstallRefusalReason,
 } from "@/lib/osinstall";
+import {
+  launchKindPhrase,
+  machinePhrase,
+  mountNotePhrase,
+  notePhrase,
+  refusalPhrase as launchRefusalPhrase,
+  type LaunchKind,
+  type LaunchNote,
+  type LaunchRefusal,
+  type Machine,
+  type MountNote,
+} from "@/lib/launch";
 
 /** Whether `dotted` (e.g. "whdload.outcome.installed") names a string leaf. */
 function isLeafKey(dotted: string): boolean {
@@ -896,6 +911,114 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     for (const outcome of outcomes) {
       const phrase = outcomePhrase(outcome);
       expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+  it("checksumBadge: every verdict, and both readings of not-checked", () => {
+    const verdicts: RomChecksum[] = ["valid", "invalid", "not-checked"];
+    for (const checksum of verdicts) {
+      for (const rom of [
+        { checksum, is_cloanto: false, key_available: false },
+        // The encrypted-with-no-key reading of `not-checked`, which is a
+        // different sentence from "not a Kickstart" (ART-138).
+        { checksum, is_cloanto: true, key_available: false },
+      ]) {
+        const { phrase } = checksumBadge(rom);
+        expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+      }
+    }
+  });
+
+  it("mediaPhrase: every medium resolves", () => {
+    const media: Media[] = [
+      { kind: "floppies", ordered: ["a.adf"] },
+      { kind: "hardfile", file: "a.hdf" },
+      { kind: "whdload-drawer", slave: "a.slave" },
+    ];
+    for (const one of media) {
+      const phrase = mediaPhrase(one);
+      expect(resolvesAtRuntime(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  // Collection wave C, Task 6b: the detail panel's picture switch labels each
+  // button with `kindPhrase` (`@/lib/collectionDetail`) — not the identically
+  // named mapper from `@/lib/layout` above, which is a different `kindPhrase`
+  // over a different union and already enumerated by its own test.
+  it("collectionDetail's kindPhrase: every ArtKind resolves", () => {
+    const kinds: ArtKind[] = ["boxart", "snap", "title", "logo", "icon"];
+    for (const kind of kinds) {
+      const phrase = artworkKindPhrase(kind);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  // Collection wave C, Task 11 (Play): the four mappers in `@/lib/launch`
+  // that turn `core::launch`'s decision into what the confirmation panel
+  // shows.
+
+  it("launch machinePhrase: every Machine resolves", () => {
+    const machines: Machine[] = ["a500", "a1200"];
+    for (const machine of machines) {
+      expect(isLeafKey(machinePhrase(machine).key), machine).toBe(true);
+    }
+  });
+
+  it("launch refusalPhrase: every LaunchRefusal variant resolves", () => {
+    const refusals: LaunchRefusal[] = [
+      { kind: "no-suitable-rom", machine: "a1200" },
+      { kind: "no-system-volume" },
+      { kind: "file-missing", path: "D:\\g\\a.adf" },
+      { kind: "nothing-to-mount" },
+    ];
+    for (const refusal of refusals) {
+      const phrase = launchRefusalPhrase(refusal);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("launch notePhrase: the only LaunchNote variant resolves", () => {
+    const note: LaunchNote = { kind: "more-disks-than-drives", total: 6, mounted: 4 };
+    expect(isLeafKey(notePhrase(note).key)).toBe(true);
+  });
+
+  it("launch mountNotePhrase: every MountNote variant resolves", () => {
+    const mounts: MountNote[] = [
+      { kind: "floppies", count: 2 },
+      { kind: "hardfile", read_only: true },
+      { kind: "hardfile", read_only: false },
+      { kind: "whdload", one_click: true },
+      { kind: "whdload", one_click: false },
+    ];
+    for (const mount of mounts) {
+      const phrase = mountNotePhrase(mount);
+      // `resolvesAtRuntime`, not `isLeafKey`: the floppies variant carries a
+      // count and is pluralised (`…_one`/`…_other`), the same reason
+      // `launchKindPhrase`'s own floppies case above uses it.
+      expect(resolvesAtRuntime(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("launchKindPhrase: every LaunchKind variant resolves", () => {
+    const kinds: LaunchKind[] = [
+      { kind: "floppies", images: ["a.adf"] },
+      { kind: "hardfile", image: "a.hdf" },
+      {
+        kind: "whdload",
+        drawer: "D:\\games\\Turrican",
+        slave: "Turrican.slave",
+        system: "E:\\amikit\\AmiKit.hdf",
+        one_click: true,
+      },
+      {
+        kind: "whdload",
+        drawer: "D:\\games\\Turrican",
+        slave: "Turrican.slave",
+        system: "E:\\amikit\\AmiKit.hdf",
+        one_click: false,
+      },
+    ];
+    for (const kind of kinds) {
+      expect(resolvesAtRuntime(launchKindPhrase(kind).key), kind.kind).toBe(true);
     }
   });
 });

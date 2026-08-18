@@ -29,6 +29,33 @@ pub struct LaunchMedia {
     /// user's HDF images (spec §93 — originals are immutable by default).
     #[serde(default)]
     pub write_protect_hardfiles: bool,
+    /// Host folders exposed to the emulated Amiga as `filesystem2=` volumes —
+    /// a game's drawer, and/or ART's own boot directory (spec §4.3/§4.4 of the
+    /// collection-wave-c design). `#[serde(default)]` so a `LaunchMedia`
+    /// stored by an older build, which never wrote this field, still
+    /// deserialises instead of failing to load.
+    #[serde(default)]
+    pub directories: Vec<DirMount>,
+}
+
+/// A host folder mounted as an Amiga volume (WinUAE `filesystem2=`).
+///
+/// `boot_priority` follows the same AmigaDOS `BootPri` convention as
+/// `hardfile2=` and the real RDB field it mirrors (`core::rdb::PartitionSpec`,
+/// `-128..=127`): during boot, AmigaDOS tries bootable devices in descending
+/// priority order, so a *higher* number boots *first*. ART's own boot
+/// directory is given the highest priority of anything mounted so it is
+/// always the device AmigaDOS boots from — that is the entire mechanism
+/// behind "one click starts the game" (Y2 in the design doc).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirMount {
+    pub host_path: String,
+    /// The WinUAE device name, e.g. `DH1` — not an Amiga volume label.
+    pub volume: String,
+    /// The Amiga volume label the mounted device presents, e.g. `Game`.
+    pub label: String,
+    pub boot_priority: i8,
+    pub read_only: bool,
 }
 
 /// Detect WinUAE on the host Windows environment.
@@ -85,14 +112,28 @@ pub fn detect_winuae(custom_path: Option<&str>) -> WinUaeInstallation {
     }
 }
 
-/// Reject a path that would break out of its `key=value` line.
+/// Reject a value that would break out of its `key=value` line, or shift the
+/// comma-delimited fields around it.
 ///
 /// `.uae` files are line-oriented, so a newline inside a media path would let
-/// the rest of it be read as further configuration directives.
+/// the rest of it be read as further configuration directives. `filesystem2=`
+/// and `hardfile2=` are both comma-delimited WinUAE directives —
+/// `hardfile2=<rw|ro>,<device>:<path>,<sectors>,<surfaces>,<reserved>,
+/// <blocksize>,<bootpri>,<filesystem>,<controller>` and
+/// `filesystem2=<rw|ro>,<device>:<volume label>:<host path>,<bootpri>` both
+/// put unrelated fields after the path — so a comma inside a value (a Windows
+/// folder named `Games, Amiga`, mounted as a directory volume) shifts every
+/// field after it, including the boot priority, rather than being refused
+/// outright. ART-142.
 fn checked_config_value(label: &str, value: &str) -> CoreResult<String> {
     if value.contains('\n') || value.contains('\r') {
         return Err(CoreError::InvalidInput(format!(
             "{label} contains a line break, which would corrupt the WinUAE configuration"
+        )));
+    }
+    if value.contains(',') {
+        return Err(CoreError::InvalidInput(format!(
+            "{label} contains a comma, which would shift the fields after it in the WinUAE configuration"
         )));
     }
     Ok(value.to_string())
@@ -185,6 +226,24 @@ pub fn generate_uae_config(profile: &AmigaProfile, media: &LaunchMedia) -> CoreR
         let boot_priority = if i == 0 { 0 } else { -128 };
         lines.push(format!(
             "hardfile2={access},DH{i}:{hp},32,1,2,512,{boot_priority},,uae"
+        ));
+    }
+
+    // Directory volumes (WinUAE cfgfile.cpp):
+    //   filesystem2=<rw|ro>,<device>:<volume label>:<host path>,<bootpri>
+    //
+    // Each entry's own `read_only` decides access — unlike the hardfiles
+    // above, a directory mount is typically the game's own writable drawer
+    // (WHDLoad keeps save games there) sitting beside ART's own read-write
+    // boot directory, so there is no single flag that applies to all of them.
+    for dm in &media.directories {
+        let host_path = checked_config_value("directory mount host path", &dm.host_path)?;
+        let volume = checked_config_value("directory mount volume", &dm.volume)?;
+        let label = checked_config_value("directory mount label", &dm.label)?;
+        let dm_access = if dm.read_only { "ro" } else { "rw" };
+        lines.push(format!(
+            "filesystem2={dm_access},{volume}:{label}:{host_path},{}",
+            dm.boot_priority
         ));
     }
 
@@ -340,5 +399,90 @@ mod tests {
 
         let err = generate_uae_config(&profile, &media).unwrap_err();
         assert!(matches!(err, CoreError::InvalidInput(_)));
+    }
+
+    /// ART-142. `filesystem2=` and `hardfile2=` are comma-delimited, so a
+    /// Windows folder the user actually named — `Games, Amiga` — would shift
+    /// the boot priority and every other field after it rather than being
+    /// refused. Fixed by rejecting a comma the same way a line break already
+    /// is.
+    #[test]
+    fn a_comma_in_a_directory_mount_path_is_rejected() {
+        let profile = AmigaProfile::a1200_aga();
+        let media = LaunchMedia {
+            directories: vec![DirMount {
+                host_path: r"D:\Games, Amiga\Turrican".into(),
+                volume: "DH1".into(),
+                label: "Game".into(),
+                boot_priority: 0,
+                read_only: false,
+            }],
+            use_aros: true,
+            ..Default::default()
+        };
+
+        let err = generate_uae_config(&profile, &media).unwrap_err();
+        assert!(matches!(err, CoreError::InvalidInput(_)));
+    }
+
+    /// The same defect, pre-existing since before this wave — the review
+    /// judged it far more likely to fire now that a Windows folder (not an
+    /// ADF filename) can be mounted directly.
+    #[test]
+    fn a_comma_in_a_hardfile_path_is_rejected() {
+        let profile = AmigaProfile::a1200_aga();
+        let media = LaunchMedia {
+            hardfile_paths: vec![r"D:\Games, Amiga\System.hdf".into()],
+            use_aros: true,
+            ..Default::default()
+        };
+
+        let err = generate_uae_config(&profile, &media).unwrap_err();
+        assert!(matches!(err, CoreError::InvalidInput(_)));
+    }
+
+    /// Y1 and Y2 both need a host folder to appear as an Amiga volume, and the
+    /// system image beside it must not be writable.
+    #[test]
+    fn a_directory_mount_and_a_write_protected_system_reach_the_configuration() {
+        let profile = AmigaProfile::a1200_aga();
+        let media = LaunchMedia {
+            hardfile_paths: vec![r"E:\amiga\amikit\AmiKit.hdf".into()],
+            write_protect_hardfiles: true,
+            directories: vec![
+                DirMount {
+                    host_path: r"D:\games\Turrican".into(),
+                    volume: "DH1".into(),
+                    label: "Game".into(),
+                    boot_priority: 0,
+                    read_only: false,
+                },
+                DirMount {
+                    host_path: r"C:\Users\x\AppData\Roaming\art\launch\boot".into(),
+                    volume: "DH2".into(),
+                    label: "ARTBoot".into(),
+                    boot_priority: 10,
+                    read_only: false,
+                },
+            ],
+            ..Default::default()
+        };
+
+        let uae = generate_uae_config(&profile, &media).unwrap();
+
+        assert!(
+            uae.contains(r"filesystem2=rw,DH1:Game:D:\games\Turrican,0"),
+            "{uae}"
+        );
+        assert!(
+            uae.contains(
+                r"filesystem2=rw,DH2:ARTBoot:C:\Users\x\AppData\Roaming\art\launch\boot,10"
+            ),
+            "the boot directory outranks everything, which is what makes Y2 one click"
+        );
+        assert!(
+            uae.contains("hardfile2=ro,"),
+            "the user's own system image is mounted read-only"
+        );
     }
 }

@@ -255,6 +255,10 @@
     "aminetRootInUse": "Downloads go to {{path}}",
     "uxModePowerHint": "Showing raw data tools, block and sector detail, and advanced actions.",
     "uxModeBeginnerHint": "Hiding raw data tools and block-level detail. Nothing is disabled — switch to Power User to see everything.",
+    "play": {
+      "title": "Play",
+      "hint": "Used by Play, on the Collection screen, to decide which Kickstart and which system a title launches with. The bootable system is what a WHDLoad title mounts alongside its own drawer — without one, a WHDLoad launch cannot start at all."
+    },
     "colourRules": {
       "title": "File colours",
       "description": "A filename mask on the left, a colour on the right. The first rule that matches wins, so the order is yours to set — a rule above the container rule picks one file out of the rest. Several masks go in one rule, separated by ;. Anything no rule matches keeps ART's own colouring.",
@@ -1122,7 +1126,9 @@
       "empty": "No ROMs loaded yet. Click \"Scan ROM Folder\" to detect your Kickstart files."
     },
     "badges": {
-      "crcErr": "CRC ERR"
+      "crcErr": "CRC ERR",
+      "notKickstart": "not a Kickstart",
+      "encrypted": "encrypted"
     },
     "details": {
       "title": "ROM Details",
@@ -1133,6 +1139,7 @@
       "crc32Label": "CRC32:",
       "sha256Label": "SHA256:",
       "modelsLabel": "Compatible Amiga Models:",
+      "noModels": "Not stated — ART names a machine only where its source does.",
       "cloantoDecoded": "Amiga Forever ROM, decoded with the rom.key beside it",
       "cloantoNeedsKey": "Amiga Forever ROM — encrypted, and no rom.key was found beside it. ART can read nothing of the image itself, and a card built with it would not start."
     }
@@ -1484,6 +1491,13 @@
       "whdloadDe": "whdload.de icons",
       "unknown": "Unknown source ({{id}})"
     },
+    "kind": {
+      "boxart": "Box art",
+      "snap": "Screenshot",
+      "title": "Title screen",
+      "logo": "Logo",
+      "icon": "Icon"
+    },
     "enrich": {
       "action": "Fetch artwork",
       "running": "Fetching artwork…",
@@ -1496,6 +1510,12 @@
       "unreachable": "Could not be reached: {{note}}",
       "cachedBefore_one": "{{count}} picture was already saved",
       "cachedBefore_other": "{{count}} pictures were already saved"
+    },
+    "local": {
+      "action": "Use the pictures in my files",
+      "running": "Reading {{count}} picture(s) out of your packages…",
+      "none": "None of the titles on screen carries a picture of its own.",
+      "done": "{{written}} added, {{adopted}} already there, {{missed}} without one."
     }
   },
   "collection": {
@@ -1538,6 +1558,73 @@
     },
     "empty": {
       "noCollection": "No collection loaded. Click \"{{buttonLabel}}\" to catalog your Amiga games, WHDLoad archives, and disks."
+    },
+    "detail": {
+      "media": {
+        "floppies_one": "{{count}} floppy disk",
+        "floppies_other": "{{count}} floppy disks",
+        "hardfile": "Hard disk image — {{file}}",
+        "whdload": "WHDLoad — {{slave}}"
+      },
+      "publisher": "Publisher",
+      "year": "Year",
+      "genre": "Genre",
+      "rating": "Rating",
+      "art": {
+        "attach": "Attach a picture…",
+        "remove": "Remove the picture",
+        "dialog": "Choose a picture for this title",
+        "filter": "Picture (PNG, JPEG)",
+        "rejected": "ART can show PNG and JPEG pictures. This file is neither."
+      },
+      "play": {
+        "title": "Play",
+        "romDir": "Kickstart ROM folder",
+        "romDirDialog": "Select the folder holding your Kickstart ROMs",
+        "browse": "Browse…",
+        "defaultMachine": "Default machine:",
+        "machineForThisTitle": "Machine for this title:",
+        "machineAuto": "Auto",
+        "machine": {
+          "a500": "A500",
+          "a1200": "A1200"
+        },
+        "systemVolume": "Bootable system (for WHDLoad)",
+        "systemVolumeDialog": "Select the bootable system image or volume",
+        "systemVolumeNone": "Not set",
+        "oneClick": "One click (Y2)",
+        "mountOnly": "Mount and hand over (Y1)",
+        "action": "Play",
+        "planning": "Working out what this needs…",
+        "start": "Start",
+        "starting": "Starting…",
+        "started": "Started (process {{pid}})",
+        "willUse": "{{machine}} · {{rom}}",
+        "kind": {
+          "floppies_one": "{{count}} floppy disk will be mounted",
+          "floppies_other": "{{count}} floppy disks will be mounted",
+          "hardfile": "Hard disk image: {{image}}",
+          "whdloadOneClick": "One click: {{slave}} starts as soon as WinUAE boots",
+          "whdloadMountOnly": "Mounted for you to start {{slave}} by hand"
+        },
+        "note": {
+          "moreDisksThanDrives": "This title has {{total}} disks; only the first {{mounted}} will be mounted — WinUAE has four floppy drives."
+        },
+        "mount": {
+          "floppies_one": "{{count}} floppy disk will be mounted.",
+          "floppies_other": "{{count}} floppy disks will be mounted.",
+          "hardfileReadOnly": "This hard disk image is your own file — it mounts read-only, so nothing written to it during play is kept.",
+          "hardfileWritable": "This hard disk image is ART's own extracted copy — it mounts writable, so saves made during play are kept.",
+          "whdloadOneClick": "Your system volume mounts read-only. The game's drawer mounts writable, so saves are kept. ART also mounts its own boot directory to start the game as soon as WinUAE boots.",
+          "whdloadMountOnly": "Your system volume mounts read-only. The game's drawer mounts writable, so saves are kept. You start WHDLoad yourself once Workbench has booted."
+        },
+        "refusal": {
+          "noSuitableRom": "No Kickstart in the ROM folder suits {{machine}}.",
+          "noSystemVolume": "This WHDLoad title needs a bootable system, and none is set.",
+          "fileMissing": "'{{path}}' no longer exists.",
+          "nothingToMount": "This title names no disk to mount — there is nothing for WinUAE to load."
+        }
+      }
     }
   },
   "whdload": {

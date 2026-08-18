@@ -26,33 +26,63 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-139** 🟡 **Aminet's text inputs render white in the dark theme** —
-*found 2026-08-18, photographing the screens for the README*
-`src/pages/AminetStudio.tsx` · The catalogue search box, the subfolder field
-and two dropdowns come out white on a dark page while every other input in ART
-— the Collection's search box beside it — is dark. Form controls are not
-inheriting the theme there.
+**ART-144** 🔵 **Five minors deferred across collection-wave-c's own review
+rounds, folded into one entry — #4 closed by the whole-branch review's fix
+pass, #1/#2/#3/#5 still open** — *found 2026-08-18, Tasks 3/6/6b/8; filed at
+Task 12 — none promoted at the time because each was small, harmless then, or
+both*
+`src/lib/collectionDetail.ts`, `commands/artwork.rs`,
+`src/components/collection/TitleDetail.tsx`, `core/launch/extract.rs` ·
 
-Kept out of the README for it. Cosmetic, and a few lines.
+1. **`collectionDetail.ts:13-21`** — `mediaPhrase`'s third arm switches on
+   `default`, where its sibling `mediaKind()` in `gameindex.ts` uses three
+   explicit cases and no default. A fourth `Media` variant would fall through
+   silently here instead of failing to compile there, as it would over there.
+2. **`commands/artwork.rs`** — `set_override`'s backup path is discarded in
+   both `artwork_attach` and `artwork_detach`. Consistent with the task
+   brief's fixed command signatures, so noted rather than fixed.
+3. **`TitleDetail.tsx:161-177`** — `loadPictures()` has no out-of-order guard.
+   Switching titles quickly can let a slow query for the previous title
+   resolve last and overwrite the current one's pictures on screen. Needs a
+   request id or an `AbortController` if it ever shows up in use.
+4. ~~**`core/launch/extract.rs:66-91`** — `safe_join` ran inside the write
+   loop rather than before it, so a hostile name late in `ordered` was
+   refused only after earlier legitimate disks were already on disk.~~ Fixed
+   by the whole-branch review's fix pass (2026-08-18):
+   `unpack_named` now resolves every entry's index *and* its `safe_join`-
+   checked destination in one loop before any `atomic_write` runs, which also
+   made the module doc comment's "before writing anything" claim true rather
+   than only true of the archive lookup half of it. No new test was needed —
+   `an_entry_that_escapes_the_destination_is_refused` already covers the
+   refusal itself; what changed is only when a multi-entry unpack can be left
+   partially written.
+5. **`core/launch/extract.rs::an_entry_that_escapes_the_destination_is_refused`**
+   (cited by test name, not line number, so this doesn't go stale again) —
+   the traversal test asserts `!dir.join("evil.adf").exists()`, but an
+   unguarded join would land in `dir`'s *parent*, so that assertion alone
+   proves nothing; the test still fails without `safe_join` only because
+   `.unwrap_err()` panics first. This one came from the task's own plan text,
+   not the implementer who wrote it.
 
-**ART-138** 🟡 **ROM Manager says `CRC ERR` about ROMs it simply does not
-recognise** — *found 2026-08-18, photographing the screens for the README*
-`src/pages/RomManager.tsx`, `src-tauri/src/core/rom/` · Scanning a real ROM
-folder identified 1 of 76 files and marked the other 75 `CRC ERR`. But look at
-what they are: `A2630_390282-06.bin`, `A4091.rom`, `apollo_12xx_v560.bin`,
-`Blizzard_1230-IV.rom`, `Blizzard_2060_v8.5_hi.bin` — **accelerator and SCSI
-controller ROMs, not Kickstarts.**
+**ART-143** 🟡 **A hand-attached picture is not re-materialised if the
+artwork cache is deleted** — *filed 2026-08-18, collection-wave-c's own
+design (§2) promised this and no task in the wave built it*
+`src-tauri/src/core/gameindex/store.rs::ArtBinding`,
+`src-tauri/src/core/artwork/local.rs` · The binding splits by design: the
+bytes go into the artwork cache — derived data, rebuildable — under source
+`manual`, and the *choice* goes into `RecordOverride`'s user layer, which a
+refresh never touches. `ArtBinding.chosen` is the original path the user
+picked, kept, per the struct's own doc comment, "so the binding can be
+re-materialised if the cache is ever cleared" — but nothing reads it back.
+Deleting the artwork cache, by hand today, leaves every hand-attached
+picture rendering nothing on screen, even though the exact file the user
+pointed at is still named in the override right beside it. Nothing is
+lost — `chosen` survives on disk — but nothing rebuilds the cache entry from
+it either. Filed rather than fixed per the wave's own ruling: inventing the
+re-materialisation mechanism this late in a wave was judged worse than
+naming the gap and letting the user decide whether it earns one of its own.
 
-Not recognising them is correct. Calling them `CRC ERR` is not: that is a claim
-about a file's integrity, and ART has no basis for it — the file is fine, it is
-simply not a Kickstart. This is the same rule [ART-104](#fixed) applied from the
-other side, where the size-based fallback stopped naming a machine it could not
-know; here a label needs to stop naming a fault it cannot know.
-
-`Compatible Amiga Models:` is also blank for the one ROM that *was* identified
-(CDTV Extended 2.30), which may be the same gap or a second one.
-
-Kept out of the README for it.
+Design: [2026-08-18-collection-wave-c-design.md](superpowers/specs/2026-08-18-collection-wave-c-design.md) §2.
 
 **ART-130** 🔵 **A game can name the Kickstart it needs, and nothing offers to
 supply it** — *filed 2026-08-17, out of G10's design round; the reading half is
@@ -588,6 +618,198 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-142** 🟠 ✅ **A comma in a mounted folder's path shifts every field
+after it in the generated WinUAE configuration** — *filed 2026-08-18,
+collection-wave-c Task 12, out of Task 9's own deferred finding; fixed in the
+whole-branch review's fix pass, same day*
+`src-tauri/src/core/winuae.rs::checked_config_value` ·
+`filesystem2=` and `hardfile2=` are both comma-delimited WinUAE directives —
+`hardfile2=<rw|ro>,<device>:<path>,<sectors>,<surfaces>,<reserved>,
+<blocksize>,<bootpri>,<filesystem>,<controller>` and
+`filesystem2=<rw|ro>,<device>:<volume label>:<host path>,<bootpri>` both put
+unrelated fields after the path — but `checked_config_value` only rejected a
+line break, the corruption its own doc comment named. A Windows folder named
+`Games, Amiga`, mounted as a directory volume, turned
+`filesystem2=rw,DH1:Game:D:\Games, Amiga,0` into six comma-separated fields
+instead of four, so WinUAE would have read the boot priority wrong rather
+than the line being refused outright. Pre-existing in the `hardfile2=` loop
+since before this wave — an ADF filename rarely carries a comma — but
+collection-wave-c's directory mounts (§4.3 of its design) made it far more
+likely to fire, since a Windows folder is a name the user chose, not one ART
+generated.
+
+Fixed the same way the newline case already was: `checked_config_value` now
+refuses a value containing a comma with the same `CoreError::InvalidInput`
+shape, covered by two new tests,
+`a_comma_in_a_directory_mount_path_is_rejected` and
+`a_comma_in_a_hardfile_path_is_rejected` (`core/winuae.rs`).
+
+**ART-141** 🔴 ✅ **Play mounted an `.rp9`'s hardfile as the zip package
+itself, writable** — *found in code review of Task 11 (Play, collection-wave-c),
+fixed the same day*
+`src-tauri/src/commands/launch.rs`, `src-tauri/src/core/launch/extract.rs` ·
+`commands/launch.rs::request_kind_from`'s `Media::Hardfile` arm discarded the
+record's `file` field — which for an `.rp9` is the zip entry name a
+`<harddrive>` tag names, e.g. `af-application.hdf` — and used `args.path`, the
+`.rp9` package itself. `media_for_plan`'s `Hardfile` arm then had no
+`is_rp9`/extraction branch at all, unlike the `Floppies` arm beside it, so
+`hardfile_paths` ended up holding the path to the zip, mounted **writable**
+(this branch never sets `write_protect_hardfiles`) via `hardfile2=`. WinUAE
+would have opened the user's own `.rp9` archive as a raw block device and
+could have written AmigaDOS filesystem structures over it the moment the
+"game" tried to save — not a failed launch, a corrupted package, hence 🔴
+rather than 🟠. Not hypothetical: the user's catalogue holds 242 `.rp9`
+packages, and a hardfile-based one (Enzo's collection) is an ordinary shape.
+
+Fixed with the same treatment the `Floppies` arm already had:
+`request_kind_from` now carries `Media::Hardfile { file }`'s `file` through
+untouched (mirroring how `Floppies { ordered }` was already handled), and
+`core/launch/extract.rs` gained `unpack_hardfile` — `unpack_floppies`'
+counterpart, sharing its entry-resolution logic through a new private
+`unpack_named` but with its own ceiling (`MAX_HARDFILE_BYTES`, 512 MB, the
+same one `core::gameindex::scan::MAX_TITLE_BYTES` already treats as "one
+catalogued title" — `unpack_floppies`'s 8 MB floppy ceiling would have
+refused any real hardfile). `media_for_plan`'s `Hardfile` arm now branches on
+`is_rp9(&request.path)` exactly as `Floppies` does: extract-then-mount for a
+`.rp9`, mount the catalogued path directly otherwise.
+
+Also fixed, filed against the same review:
+
+- `detect_winuae(None)` ignored the user's configured WinUAE path
+  (`settings.winuaePath`) — the same path `commands/winuae.rs::winuae_launch`
+  already honours. `launch_title` now takes a `winuae_path: Option<String>`
+  sibling argument, the same shape `winuae_launch` uses, and
+  `src/lib/launch.ts::launchTitle` takes it from the caller; `TitleDetail.tsx`
+  reads it from `useSettingsStore`.
+- The three settings Play needs — `launch.romDir`, `launch.defaultMachine`,
+  `launch.systemVolume` — existed only inside an already-open title's Play
+  panel, so a user who had never opened one (in particular, never set the
+  bootable system a WHDLoad launch cannot work without) had no way to find
+  them. `src/pages/Settings.tsx` gained a Play section reusing the exact same
+  `useRemembered` keys, so both surfaces read and write the same values.
+- `media_for_plan` — the highest-risk function in the task and the one with
+  no direct test, which is how the mounting bug got through — now takes plain
+  `launch_dir`/`boot_dir` paths instead of an `AppHandle`, making it callable
+  from a plain unit test with no running Tauri app. Ten new tests cover it
+  directly: a plain floppy, an `.rp9` floppy set, a plain hardfile, an `.rp9`
+  hardfile (`an_rp9_hardfile_is_extracted_not_the_package_itself` — fails
+  against the pre-fix code), and WHDLoad in both one-click and
+  mount-and-hand-over modes, asserting the system image stays read-only, the
+  game drawer stays writable, and the boot directory's priority outranks
+  both. `core/launch/extract.rs` gained four more:
+  `the_hardfile_comes_out_from_under_its_entry_name`,
+  `a_hardfile_the_package_does_not_carry_is_an_error`,
+  `a_hardfile_larger_than_a_floppy_ceiling_still_unpacks`.
+
+**ART-140** 🟡 ✅ **The palette was chosen by eye, and the light theme put
+2.20:1 text inside its own success badge** — *found and fixed 2026-08-18, the
+contrast pass the user asked for after [ART-139](#fixed)*
+`src/styles/theme.css`, `src/styles/global.css`, `scripts/contrast-check.py` ·
+The light theme had already been widened once by looking at it. Measured
+against WCAG — 4.5:1 for text this size — it still failed in 23 places, and the
+dark theme in 9:
+
+| | light | dark | needs |
+|---|---|---|---|
+| `.badge-ok` text on its own tint | **2.20** | 4.29 | 4.5 |
+| `.badge-warn` text on its own tint | **2.07** | 4.97 → 3.75 hovered | 4.5 |
+| `.badge-err` text on its own tint | **2.85** | **3.40** | 4.5 |
+| `--text-faint` (file paths) | **2.85** | **3.54** | 4.5 |
+| white on `.btn-primary` | **3.94** | 6.42 | 4.5 |
+| `--border-strong` (input edges, drop zone) | 2.23 | **1.95** | 3.0 |
+
+**The cause is one token doing two jobs.** `.badge-ok` sets
+`background: color-mix(in srgb, var(--ok) 22%, transparent)` and
+`color: var(--ok)` — the same colour as its own background, 22% apart. No value
+of `--ok` fixes that: darkening it to clear the tint takes the fill down with
+it, and solving both at once produces `#614710` for a warning, which is mud.
+
+So each meaning now has **two** tokens: `--ok` / `--warn` / `--err` / `--accent`
+stay the mark (fills, borders, `accent-color`, the tint), and `--ok-text` /
+`--warn-text` / `--err-text` / `--accent-text` are the same hue moved in
+lightness until they clear 4.5:1 against all four surfaces *and* against their
+own badge tint on each. The dark theme's identity colours are untouched; the
+light theme's accent moved `#2d8aab` → `#297e9c`, which is what the primary
+button's white label needed.
+
+Two more from the same sweep, both from hard-coded colour rather than tokens:
+`ErrorBoundary` had the dark theme's hex values baked in, so the crash screen —
+the one you see when everything else has failed — showed its stack trace at
+2.3:1 on a light page; and the Hex viewer's header read `var(--text-muted)`
+inside a hard-coded `#0d1117` panel, which the light theme turned into dark
+grey on near-black.
+
+**The check is now a script, not a judgement.** `scripts/contrast-check.py`
+reads `theme.css` itself, computes all 90 pairs ART actually renders — including
+each badge's tint composited over each surface — and exits non-zero below
+threshold. It needs no browser and no dev server, so unlike `zoom-check.py` it
+**runs in CI**. All 90 pass.
+
+Not covered, deliberately: `--border` (a panel edge is not the only thing
+separating a card from the page) and the File Manager's `--tc-*` palette, which
+is Total Commander's own, taken from the user's config and already theme-aware.
+
+**ART-138** 🟡 ✅ **ROM Manager said `CRC ERR` about ROMs it simply did not
+recognise** — *found 2026-08-18 photographing the screens for the README; fixed
+the same day*
+`src-tauri/src/core/rom/mod.rs`, `src/lib/rom.ts`, `src/pages/RomStudio.tsx` ·
+Scanning a real ROM folder marked accelerator and SCSI-controller ROMs —
+`A2630_390282-06.bin`, `A4091.rom`, `apollo_12xx_v560.bin`,
+`Blizzard_1230-IV.rom` — `CRC ERR`. Not recognising them is correct; calling
+them damaged is not, and ART had no basis for it.
+
+**The cause was a two-valued field.** `RomInfo.checksum_valid` was a `bool`, so
+"this is a Kickstart and its checksum does not verify" and "there is no
+Kickstart checksum here to verify" arrived at the screen as the same `false`.
+It is now `RomChecksum::{Valid, Invalid, NotChecked}`, and the badge for
+`NotChecked` says *not a Kickstart* — or *encrypted*, when the file is a
+licensed Amiga Forever dump with no `rom.key` beside it (ART-128), which is a
+Kickstart ART cannot read rather than a file that is not one.
+
+**How ART tells them apart, measured rather than assumed.** Two structural
+marks Commodore's build leaves and damage between them does not touch: the
+opening `$11xx 4EF9`, and the eight bytes `00 1C 00 1D 00 1E 00 1F` that end
+the table after the stored checksum. Over ~150 real files — the 76 in this
+project's ROM folder, the AmigaOS 3.2/3.2.1/3.2.2 releases and an Amiga Forever
+export, Kickstart 0.7 through 47.111 — carrying both marks and summing
+correctly agreed **exactly**: every image with both summed, and no accelerator,
+SCSI or split half-image carried either. Re-measured through `identify_rom`
+itself, the user's folder now reports `valid=30 invalid=0 not-checked=46`
+where it previously accused 46 files of damage.
+
+The size-based fallback name was the same unfounded claim from the other side:
+a 256 KB accelerator ROM was called *Generic Amiga 256KB ROM (Kickstart 1.x)*.
+It now reads `Not a Kickstart image (256 KB)`, and the generic Kickstart names
+are kept for images that actually are one.
+
+Second half of the report, and a different thing: `Compatible Amiga Models:`
+was blank for the CDTV Extended 2.30 because the Remus database names no
+machine for it — correct data, rendered as an empty gap that read as a missing
+feature. The screen now says so in words.
+
+Tests: `a_rom_that_is_not_a_kickstart_is_not_accused_of_a_bad_checksum`,
+`a_kickstart_whose_body_changed_still_reports_a_bad_checksum`,
+`a_kickstart_is_recognised_by_its_opening_and_its_tail`,
+`an_encrypted_rom_with_no_key_says_nothing_about_its_checksum`, plus
+`checksumBadge`'s four keys in `src/i18n/phrase-keys.test.ts`. The
+`ART_ROM_DIR` hook prints the verdict per file and the three totals.
+
+**ART-139** 🟡 ✅ **Aminet's text inputs rendered white in the dark theme** —
+*found 2026-08-18, photographing the screens for the README; fixed the same day*
+`src/styles/global.css` · The catalogue search box, the subfolder field and two
+dropdowns were bare `<input>`/`<select>` elements, so they came from the
+browser's own stylesheet: white boxes with black text on a dark page. The
+Collection's search box beside them was dark only because that screen styles it
+inline.
+
+Fixed where it belongs — a theme rule for `input`, `select` and `textarea` in
+`global.css` rather than another inline style on one screen. Written inside
+`:where()` so it carries zero specificity: every existing inline style and
+class rule still wins, so nothing that already looked right changed.
+Checkboxes, radios, ranges and colour swatches keep their native shape and take
+`accent-color`. Verified in both themes in a real browser (headless Chrome
+against `pnpm dev`, the same approach `scripts/zoom-check.py` uses).
 
 **ART-137** 🔴 ✅ **99 of 758 records reported a Kickstart image whose name was
 68000 machine code — `ws_kickname` is a list when `ws_kickcrc` is `$ffff`** —

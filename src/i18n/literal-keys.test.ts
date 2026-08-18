@@ -228,6 +228,51 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // be a literal. `sourcePhrase`'s three arms (both shipped ids and the
     // default, for a settings file naming a source this ART dropped) and
     // `outcomePhrase`'s two are enumerated in `phrase-keys.test.ts`.
-    expect(dynamicCalls).toBe(98);
+    // 98 → 99 (ART-138): the ROM library's checksum badge. Which of four
+    // sentences it is — OK, CRC ERR, "not a Kickstart", "encrypted" — is
+    // `checksumBadge`'s decision in `@/lib/rom`, because the whole point of
+    // the fix is that ART must not call a file damaged when it has no
+    // checksum to check. Its four keys are enumerated in
+    // `phrase-keys.test.ts`.
+    // 99 → 100 (Collection wave C, Task 4): the new detail panel reads its
+    // media line — floppy count, hardfile name or WHDLoad slave — from
+    // `mediaPhrase()` in `@/lib/collectionDetail` (Task 3), the same `Phrase`
+    // read `t(media.key, media.params)` every other mapper on this list
+    // uses. All three arms are enumerated in `phrase-keys.test.ts`
+    // (`mediaPhrase: every medium resolves`).
+    // 100 → 101 (Collection wave C, Task 6b): the detail panel's picture
+    // switch labels each button with `t(kindPhrase(kind).key)` —
+    // `kindPhrase()` in `@/lib/collectionDetail`, the same `Phrase` shape
+    // `mediaPhrase` above already uses. Its five variants are enumerated in
+    // `phrase-keys.test.ts` (`collectionDetail's kindPhrase: every ArtKind
+    // resolves`).
+    // 101 → 106 (Collection wave C, Task 11 — Play): the detail panel's new
+    // Play section reads five `Phrase`s from `@/lib/launch` — the machine
+    // picker shared between the global default and the per-title override
+    // (`t(machinePhrase(option).key)`, one source occurrence doing the work
+    // of two thanks to the shared `MachineChoiceButtons` component), the
+    // refusal shown instead of a confirmation, the machine named inside the
+    // "will use" sentence, what a settled plan will mount, and the note
+    // beside it when a title has more disks than WinUAE has drives. All four
+    // mappers are enumerated in `phrase-keys.test.ts`.
+    // 106 → 108 (Task 11 fix round, finding 3): `Settings.tsx`'s new Play
+    // section (`launch.romDir`/`launch.defaultMachine`/`launch.systemVolume`,
+    // the same remembered keys `TitleDetail`'s panel already uses) labels its
+    // A500/A1200 `<select>` options with `t(machinePhrase("a500").key)` and
+    // `t(machinePhrase("a1200").key)` — two literal arguments to
+    // `machinePhrase`, but the call is still `t(...)` over a `.key` read
+    // rather than a string literal, so each counts as its own dynamic site
+    // the same way `MachineChoiceButtons`' single shared occurrence already
+    // does above. `machinePhrase`'s two variants are enumerated in
+    // `phrase-keys.test.ts` (`launch machinePhrase: every Machine resolves`).
+    // 108 → 109 (whole-branch review, finding 3): the confirmation screen did
+    // not say what a plan would mount or whether it could be written to
+    // (design §4.4). `TitleDetail.tsx` gained one more site,
+    // `t(mountNotePhrase(mount).key, mountNotePhrase(mount).params)`, reading
+    // `mountNotePhrase()` from `@/lib/launch` the same way the note above it
+    // reads `notePhrase()`. Its three variants are enumerated in
+    // `phrase-keys.test.ts` (`launch mountNotePhrase: every MountNote variant
+    // resolves`).
+    expect(dynamicCalls).toBe(109);
   });
 });

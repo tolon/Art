@@ -204,6 +204,26 @@ impl Cache {
         Ok(art)
     }
 
+    /// Forget one picture: drop it from the index and delete its file.
+    ///
+    /// The mirror of [`Cache::store`], for undoing a hand-attached picture.
+    /// A no-op when there is nothing to remove, on either side — an entry
+    /// with no file on disk still loses its index row, and a file that is
+    /// already gone is not an error.
+    pub fn remove(&mut self, title_key: &str, kind: ArtKind) -> CoreResult<()> {
+        let Some(art) = self.file.entries.remove(&entry_key(title_key, kind)) else {
+            return Ok(());
+        };
+        let destination = safe_join(&self.dir, &art.file).map_err(|err| {
+            CoreError::InvalidInput(format!("'{}' is not a cache path: {err}", art.file))
+        })?;
+        match std::fs::remove_file(&destination) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     /// Persist the index. Derived data, so atomic but unbacked.
     pub fn save(&self) -> CoreResult<()> {
         let bytes = serde_json::to_vec(&self.file)
@@ -393,5 +413,33 @@ mod tests {
             .unwrap();
         assert!(cache.get("turrican ii", ArtKind::Boxart).is_some());
         assert!(cache.get("Turrican II", ArtKind::Boxart).is_none());
+    }
+
+    /// The mirror of `store`: the index entry and the file both go, and a
+    /// second removal of the same title is quiet rather than an error.
+    #[test]
+    fn a_removed_picture_leaves_neither_an_entry_nor_a_file() {
+        let dir = tempdir("removed");
+        let mut cache = Cache::open(&dir).unwrap();
+        let art = cache
+            .store("moonstone", ArtKind::Boxart, "manual", "png", b"X")
+            .unwrap();
+        let file_path = dir.join(&art.file);
+        assert!(file_path.exists());
+
+        cache.remove("moonstone", ArtKind::Boxart).unwrap();
+
+        assert!(cache.get("moonstone", ArtKind::Boxart).is_none());
+        assert!(!file_path.exists());
+        // Nothing left to remove, and that must not be an error.
+        cache.remove("moonstone", ArtKind::Boxart).unwrap();
+    }
+
+    /// Removing a title nothing was ever stored for is a no-op, not an error.
+    #[test]
+    fn removing_a_title_with_nothing_stored_is_quiet() {
+        let dir = tempdir("remove-nothing");
+        let mut cache = Cache::open(&dir).unwrap();
+        cache.remove("never stored", ArtKind::Boxart).unwrap();
     }
 }

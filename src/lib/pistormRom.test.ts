@@ -19,7 +19,7 @@ function info(overrides: Partial<RomInfo> = {}): RomInfo {
     is_cloanto: false,
     key_available: false,
     is_aros: false,
-    checksum_valid: true,
+    checksum: "valid",
     compatible_models: ["A500", "A600", "A2000"],
     file_path: "",
     ...overrides,

@@ -106,17 +106,72 @@ export async function artworkKnown(
 }
 
 /**
+ * Every picture the cache holds for one title, in {@link ART_KINDS} order.
+ *
+ * The first element is the one the grid is already showing, so the detail
+ * panel's switch needs no second rule for its default position.
+ */
+export async function artworkForTitle(title: string): Promise<ArtRef[]> {
+  return invoke<ArtRef[]>("artwork_for_title", { title });
+}
+
+/**
  * Fetch artwork for these titles, on a job.
  *
  * Returns a job id straight away. 1700 titles against two sources at four
  * requests per second is §54/§55 territory — the user gets a Stop, and the
  * result arrives in an `artwork-result` event.
+ *
+ * `pinned` names the titles whose picture the user chose by hand, so no
+ * source overwrites it. Built by the caller from the rows whose cached
+ * picture's `source` is `"manual"` — the override layer that actually records
+ * the choice is keyed by record id, not by title, and has no title to hand
+ * back.
  */
 export async function artworkEnrich(
   titles: string[],
-  sources: ConfiguredSource[]
+  sources: ConfiguredSource[],
+  pinned: string[]
 ): Promise<number> {
-  return invoke<number>("artwork_enrich", { titles, sources });
+  return invoke<number>("artwork_enrich", { titles, sources, pinned });
+}
+
+/**
+ * Attach a picture the user picked to a title.
+ *
+ * `id` is the record's id, because the choice is written into the catalogue's
+ * user layer — the one a refresh does not touch. `title` is what the artwork
+ * cache is keyed by. They are different things and both are needed.
+ */
+export async function artworkAttach(
+  title: string,
+  id: string,
+  file: string
+): Promise<ArtRef> {
+  return invoke<ArtRef>("artwork_attach", { title, id, file });
+}
+
+/** Undo that. An override with nothing left in it deletes itself. */
+export async function artworkDetach(title: string, id: string): Promise<void> {
+  await invoke("artwork_detach", { title, id });
+}
+
+/**
+ * Whether ART's format gate would accept this file as a picture.
+ *
+ * Mirrors `picture_extension` in `commands/artwork.rs` exactly — case-
+ * insensitive PNG or JPEG by extension, nothing else. The Rust gate is the
+ * real enforcement and stays; this exists only so the panel can show a
+ * translated refusal (`collection.detail.art.rejected`) before ever calling
+ * {@link artworkAttach}, instead of surfacing Rust's own — English-only,
+ * ART-060 — refusal string on screen regardless of the chosen language.
+ */
+export function isSupportedPicture(path: string): boolean {
+  const name = path.split(/[\\/]/).pop() ?? "";
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) return false;
+  const ext = name.slice(dot + 1).toLowerCase();
+  return ext === "png" || ext === "jpg" || ext === "jpeg";
 }
 
 /** Payload of the `artwork-result` event. */
@@ -132,6 +187,48 @@ export async function onArtworkResult(
 ): Promise<() => void> {
   const { listen } = await import("@tauri-apps/api/event");
   return listen<ArtworkResult>(ARTWORK_RESULT_EVENT, (e) => handler(e.payload));
+}
+
+/** One picture to look for inside a package the user already has. */
+export interface LocalPreviewArg {
+  title: string;
+  /** The `.rp9` on disk. */
+  package: string;
+  /** The entry's name inside it — `GameRecord.preview`, verbatim. */
+  entry: string;
+}
+
+/** What the offline pass managed. Mirrors `core::artwork::local::LocalOutcome`. */
+export interface LocalOutcome {
+  written: number;
+  adopted: number;
+  missed: number;
+}
+
+/**
+ * Take the pictures the user's own `.rp9` packages carry.
+ *
+ * Touches no network and asks no source, which is why it needs no
+ * configuration and no consent: nothing leaves the machine.
+ */
+export async function artworkAdoptLocal(previews: LocalPreviewArg[]): Promise<number> {
+  return invoke<number>("artwork_adopt_local", { previews });
+}
+
+/** Payload of the `artwork-local-result` event. */
+export interface LocalResult {
+  job_id: number;
+  outcome: LocalOutcome;
+}
+
+export const ARTWORK_LOCAL_RESULT_EVENT = "artwork-local-result";
+
+/** Subscribe to finished offline passes. Returns an unlisten function. */
+export async function onArtworkLocalResult(
+  handler: (result: LocalResult) => void
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<LocalResult>(ARTWORK_LOCAL_RESULT_EVENT, (e) => handler(e.payload));
 }
 
 /**

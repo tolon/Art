@@ -49,12 +49,15 @@ export class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (this.state.hasError) {
+      // The dark theme's own hex values used to be baked in here, so the one
+      // screen that appears when everything else has failed was unreadable in
+      // the light theme — 2.3:1 for the stack trace (ART-140).
       return (
-        <div style={{ padding: 24, color: "#d65a5a", fontFamily: "monospace", whiteSpace: "pre-wrap" }}>
-          <h2 style={{ color: "#d65a5a" }}>{titleText()}</h2>
+        <div style={{ padding: 24, color: "var(--err-text)", fontFamily: "monospace", whiteSpace: "pre-wrap" }}>
+          <h2 style={{ color: "var(--err-text)" }}>{titleText()}</h2>
           <pre>{this.state.error?.toString()}</pre>
           {this.state.info && (
-            <pre style={{ marginTop: 12, color: "#9aa3b2" }}>{this.state.info}</pre>
+            <pre style={{ marginTop: 12, color: "var(--text-muted)" }}>{this.state.info}</pre>
           )}
         </div>
       );

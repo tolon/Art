@@ -76,6 +76,19 @@ pub struct RootsFile {
     pub roots: Vec<String>,
 }
 
+/// A picture the user attached by hand.
+///
+/// **Two halves with two owners.** The bytes live in the artwork cache, which
+/// is derived data and can be rebuilt; the *choice* lives here, in the layer
+/// no refresh touches. `chosen` is the file the user picked, kept so the
+/// binding can be re-materialised if the cache is ever cleared; `cached` is
+/// the cache-relative name the screen renders.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtBinding {
+    pub chosen: String,
+    pub cached: String,
+}
+
 /// One title's hand corrections. Every field absent means "no opinion".
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordOverride {
@@ -84,6 +97,9 @@ pub struct RecordOverride {
     pub publisher: Option<String>,
     pub genre: Option<String>,
     pub chipset: Option<ChipsetRequirement>,
+    /// The user's own picture, not a `Fact` on the record — the screen reads
+    /// it from the cache rather than through `apply_override`.
+    pub art: Option<ArtBinding>,
 }
 
 impl RecordOverride {
@@ -95,6 +111,7 @@ impl RecordOverride {
             && self.publisher.is_none()
             && self.genre.is_none()
             && self.chipset.is_none()
+            && self.art.is_none()
     }
 }
 
@@ -1422,5 +1439,92 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The user's picture is a choice, not derived data: a refresh re-reads
+    /// every file on disk — the whole read layer, `art` was never applied
+    /// through `apply_override` and lives only in the user layer — and must
+    /// not touch it. Same shape as `overrides_survive_a_rescan` above, for
+    /// the field that one does not cover.
+    #[test]
+    fn a_hand_attached_picture_survives_a_refresh() {
+        let dir = scratch("art-binding");
+        let root = dir.join("library");
+        std::fs::create_dir_all(&root).unwrap();
+        a_real_file(&root, "Turrican (1990)(Rainbow Arts).adf");
+        write_roots(
+            &dir,
+            &RootsFile {
+                schema: CATALOGUE_SCHEMA,
+                roots: vec![root.to_string_lossy().into()],
+            },
+        )
+        .unwrap();
+
+        let first = refresh_root(&dir, &root, Refresh::Rescan, None, &NoProgress).unwrap();
+        let id = first.entries[0].record.id.clone();
+
+        set_override(
+            &dir,
+            &id,
+            RecordOverride {
+                art: Some(ArtBinding {
+                    chosen: r"D:\pictures\turrican.png".into(),
+                    cached: "turrican/manual-snap.png".into(),
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // The refresh itself — the whole point of this test. Without it, this
+        // is only a write/read round-trip of the overrides file, which proves
+        // nothing about surviving a refresh.
+        refresh_root(&dir, &root, Refresh::Rescan, None, &NoProgress).unwrap();
+
+        let overrides = read_overrides(&dir).unwrap();
+        let kept = overrides
+            .edits
+            .get(&id)
+            .expect("still there after the refresh");
+
+        assert_eq!(
+            kept.art.as_ref().map(|art| art.cached.as_str()),
+            Some("turrican/manual-snap.png")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// And an override that says nothing is still deleted rather than
+    /// stored — including one whose only content was a picture the user has
+    /// now removed, which is `set_override`'s own delete rule and the one
+    /// this test names.
+    #[test]
+    fn removing_the_picture_leaves_no_trace() {
+        let dir = scratch("art-binding-removed");
+        set_override(
+            &dir,
+            "turrican-1a2b3c4d",
+            RecordOverride {
+                art: Some(ArtBinding {
+                    chosen: r"D:\pictures\turrican.png".into(),
+                    cached: "turrican/manual-snap.png".into(),
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(read_overrides(&dir).unwrap().edits.len(), 1);
+
+        // The user detaches the picture — an override with nothing else in
+        // it, exactly what `attach`'s screen-side undo produces.
+        set_override(&dir, "turrican-1a2b3c4d", RecordOverride::default()).unwrap();
+        assert!(
+            read_overrides(&dir).unwrap().edits.is_empty(),
+            "an override left holding nothing must be deleted, not stored empty"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

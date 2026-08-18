@@ -255,6 +255,10 @@
     "aminetRootInUse": "İndirilenler {{path}} klasörüne gidiyor",
     "uxModePowerHint": "Ham veri araçlarını, blok ve sektör ayrıntılarını ve gelişmiş işlemleri gösterir.",
     "uxModeBeginnerHint": "Ham veri araçlarını ve blok düzeyindeki ayrıntıları gizler. Hiçbir şey devre dışı bırakılmaz — her şeyi görmek için Uzman Kullanıcı moduna geçin.",
+    "play": {
+      "title": "Oynat",
+      "hint": "Koleksiyon ekranındaki Oynat'ın hangi Kickstart ve hangi sistemle bir başlığı başlatacağına karar vermek için kullanır. Önyüklenebilir sistem, bir WHDLoad başlığının kendi çekmecesinin yanına bağladığı şeydir — biri olmadan bir WHDLoad başlatması hiç başlayamaz."
+    },
     "colourRules": {
       "title": "Dosya renkleri",
       "description": "Solda bir dosya adı kalıbı, sağda bir renk. Eşleşen ilk kural kazanır, dolayısıyla sıra sizin elinizde — konteyner kuralının üstündeki bir kural, bir dosyayı diğerlerinden ayırır. Birden çok kalıp tek kurala noktalı virgülle yazılır. Hiçbir kuralın tutmadığı satır ART'ın kendi renklendirmesini korur.",
@@ -1122,7 +1126,9 @@
       "empty": "Henüz ROM yüklenmedi. Kickstart dosyalarınızı bulmak için \"ROM Klasörünü Tara\" düğmesine tıklayın."
     },
     "badges": {
-      "crcErr": "CRC HATA"
+      "crcErr": "CRC HATA",
+      "notKickstart": "Kickstart değil",
+      "encrypted": "şifreli"
     },
     "details": {
       "title": "ROM Detayları",
@@ -1133,6 +1139,7 @@
       "crc32Label": "CRC32:",
       "sha256Label": "SHA256:",
       "modelsLabel": "Uyumlu Amiga Modelleri:",
+      "noModels": "Belirtilmemiş — ART, kaynağı söylemedikçe bir makine adı vermez.",
       "cloantoDecoded": "Amiga Forever ROM'u, yanındaki rom.key ile çözüldü",
       "cloantoNeedsKey": "Amiga Forever ROM'u — şifreli, ve yanında rom.key bulunamadı. ART imajın içeriğini hiç okuyamıyor; bununla yapılan bir kart açılmaz."
     }
@@ -1484,6 +1491,13 @@
       "whdloadDe": "whdload.de simgeleri",
       "unknown": "Bilinmeyen kaynak ({{id}})"
     },
+    "kind": {
+      "boxart": "Kutu görseli",
+      "snap": "Ekran görüntüsü",
+      "title": "Başlık ekranı",
+      "logo": "Logo",
+      "icon": "Simge"
+    },
     "enrich": {
       "action": "Görselleri getir",
       "running": "Görseller getiriliyor…",
@@ -1496,6 +1510,12 @@
       "unreachable": "Erişilemedi: {{note}}",
       "cachedBefore_one": "{{count}} görsel zaten kayıtlıydı",
       "cachedBefore_other": "{{count}} görsel zaten kayıtlıydı"
+    },
+    "local": {
+      "action": "Dosyalarımdaki resimleri kullan",
+      "running": "{{count}} resim paketlerinden okunuyor…",
+      "none": "Ekrandaki başlıkların hiçbiri kendi resmini taşımıyor.",
+      "done": "{{written}} eklendi, {{adopted}} zaten vardı, {{missed}} resimsiz."
     }
   },
   "collection": {
@@ -1538,6 +1558,73 @@
     },
     "empty": {
       "noCollection": "Henüz koleksiyon yüklenmedi. Amiga oyunlarınızı, WHDLoad arşivlerinizi ve disklerinizi kataloglamak için \"{{buttonLabel}}\" düğmesine tıklayın."
+    },
+    "detail": {
+      "media": {
+        "floppies_one": "{{count}} disket",
+        "floppies_other": "{{count}} disket",
+        "hardfile": "Sabit disk imajı — {{file}}",
+        "whdload": "WHDLoad — {{slave}}"
+      },
+      "publisher": "Yayıncı",
+      "year": "Yıl",
+      "genre": "Tür",
+      "rating": "Puan",
+      "art": {
+        "attach": "Resim bağla…",
+        "remove": "Resmi kaldır",
+        "dialog": "Bu başlık için bir resim seç",
+        "filter": "Resim (PNG, JPEG)",
+        "rejected": "ART, PNG ve JPEG resimleri gösterebilir. Bu dosya ikisi de değil."
+      },
+      "play": {
+        "title": "Oynat",
+        "romDir": "Kickstart ROM klasörü",
+        "romDirDialog": "Kickstart ROM'larınızın bulunduğu klasörü seçin",
+        "browse": "Gözat…",
+        "defaultMachine": "Varsayılan makine:",
+        "machineForThisTitle": "Bu başlık için makine:",
+        "machineAuto": "Otomatik",
+        "machine": {
+          "a500": "A500",
+          "a1200": "A1200"
+        },
+        "systemVolume": "Önyüklenebilir sistem (WHDLoad için)",
+        "systemVolumeDialog": "Önyüklenebilir sistem imajını veya bölümünü seçin",
+        "systemVolumeNone": "Ayarlanmadı",
+        "oneClick": "Tek tık (Y2)",
+        "mountOnly": "Bağla ve elden bırak (Y1)",
+        "action": "Oynat",
+        "planning": "Ne gerektiği hesaplanıyor…",
+        "start": "Başlat",
+        "starting": "Başlatılıyor…",
+        "started": "Başlatıldı (süreç {{pid}})",
+        "willUse": "{{machine}} · {{rom}}",
+        "kind": {
+          "floppies_one": "{{count}} disket takılacak",
+          "floppies_other": "{{count}} disket takılacak",
+          "hardfile": "Sabit disk imajı: {{image}}",
+          "whdloadOneClick": "Tek tık: WinUAE açılır açılmaz {{slave}} başlar",
+          "whdloadMountOnly": "{{slave}}'i elle başlatmanız için bağlandı"
+        },
+        "note": {
+          "moreDisksThanDrives": "Bu başlığın {{total}} disketi var; yalnızca ilk {{mounted}} tanesi takılacak — WinUAE'nin dört disket sürücüsü var."
+        },
+        "mount": {
+          "floppies_one": "{{count}} disket takılacak.",
+          "floppies_other": "{{count}} disket takılacak.",
+          "hardfileReadOnly": "Bu sabit disk imajı kendi dosyanız — salt okunur takılır, oynanış sırasında yazılan hiçbir şey saklanmaz.",
+          "hardfileWritable": "Bu sabit disk imajı ART'ın kendi çıkardığı kopya — yazılabilir takılır, oynanış sırasında yapılan kayıtlar saklanır.",
+          "whdloadOneClick": "Sistem bölümünüz salt okunur takılır. Oyunun klasörü yazılabilir takılır, kayıtlar saklanır. ART, WinUAE açılır açılmaz oyunu başlatmak için kendi önyükleme klasörünü de takar.",
+          "whdloadMountOnly": "Sistem bölümünüz salt okunur takılır. Oyunun klasörü yazılabilir takılır, kayıtlar saklanır. Workbench açıldıktan sonra WHDLoad'u kendiniz başlatırsınız."
+        },
+        "refusal": {
+          "noSuitableRom": "ROM klasöründe {{machine}} için uygun bir Kickstart yok.",
+          "noSystemVolume": "Bu WHDLoad başlığı önyüklenebilir bir sistem gerektiriyor ve ayarlanmış değil.",
+          "fileMissing": "'{{path}}' artık yok.",
+          "nothingToMount": "Bu başlık takılacak bir disk belirtmiyor — WinUAE'nin yükleyeceği hiçbir şey yok."
+        }
+      }
     }
   },
   "whdload": {

@@ -230,6 +230,9 @@ export interface PistormSetup {
   firmware: FirmwareConfig;
 }
 
+/** The three answers `core/rom` gives about a ROM's stored checksum. */
+export type RomChecksum = "valid" | "invalid" | "not-checked";
+
 /** What `core/rom` makes of a Kickstart-shaped file — mirrors `RomInfo`. */
 export interface RomInfo {
   name: string;
@@ -244,7 +247,11 @@ export interface RomInfo {
    *  image itself — the name says so and no machine is claimed. */
   key_available: boolean;
   is_aros: boolean;
-  checksum_valid: boolean;
+  /** What ART can honestly say about this file's integrity (ART-138).
+   *  `"not-checked"` is not a failure: an accelerator's ROM, or a licensed
+   *  dump with no `rom.key` beside it, carries no Kickstart checksum for ART
+   *  to verify — and calling that `CRC ERR` claimed damage ART cannot see. */
+  checksum: RomChecksum;
   compatible_models: string[];
   file_path: string;
 }

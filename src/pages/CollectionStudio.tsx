@@ -8,14 +8,13 @@ import {
   catalogueLoad,
   catalogueRefresh,
   catalogueRemoveRoot,
-  isStated,
   mediaKind,
   nameSuggestions,
   onCatalogueRefreshed,
-  provenancePhrase,
   renameTitleFile,
   catalogueSetOverride,
   NO_OVERRIDE,
+  type GameRecord,
   type NameSuggestion,
   type ChipsetRequirement,
   type EntryView,
@@ -24,19 +23,24 @@ import {
   type RootView,
 } from "@/lib/gameindex";
 import {
+  artworkAdoptLocal,
   artworkDefaults,
   artworkDir,
   artworkEnrich,
   artworkKnown,
+  onArtworkLocalResult,
   onArtworkResult,
   outcomePhrase,
   sourcePhrase,
   type ConfiguredSource,
+  type LocalOutcome,
   type SourceOutcome,
 } from "@/lib/artwork";
 import { isOneOf } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { Guessed } from "@/components/collection/Guessed";
+import { TitleDetail } from "@/components/collection/TitleDetail";
 
 type ViewMode = "grid" | "table";
 type MediaFilter = "all" | "floppies" | "hardfile" | "whdload";
@@ -76,6 +80,15 @@ interface Shown {
   media: "floppies" | "hardfile" | "whdload";
   diskCount: number;
   kickstart: string | null;
+  /** The screenshot's entry name inside the package, when it carries one. */
+  preview: string | null;
+  /**
+   * The record as the catalogue holds it. Kept alongside the flattened
+   * fields above (rather than reached for through them) so a selected row
+   * can be handed to `TitleDetail` as the `CatalogueEntry` it expects
+   * without a second trip to the backend.
+   */
+  record: GameRecord;
 }
 
 function flatten(root: string, entry: EntryView): Shown {
@@ -96,30 +109,9 @@ function flatten(root: string, entry: EntryView): Shown {
     media: mediaKind(r.media),
     diskCount: r.media.kind === "floppies" ? r.media.ordered.length : 1,
     kickstart: r.kickstart?.value.image ?? null,
+    preview: r.preview,
+    record: r,
   };
-}
-
-/**
- * A small mark on any value the index **guessed** rather than read.
- *
- * This is the feature the provenance in the record exists for. `Agassi Tennis`
- * reads as AGA because the letters are in its filename; a slave that states
- * `ReqAGA` is a different claim entirely, and a screen showing the two the
- * same way throws away the only thing that separates them.
- */
-function Guessed({ from }: { from: Provenance | null }) {
-  const { t } = useTranslation();
-  if (!from || isStated(from)) return null;
-  const source = t(provenancePhrase(from).key);
-  return (
-    <span
-      className="badge badge-muted"
-      title={t("gameindex.guessedFrom", { source })}
-      style={{ fontSize: 9, marginLeft: 4, verticalAlign: "middle" }}
-    >
-      ~{t("gameindex.guessed")}
-    </span>
-  );
 }
 
 /**
@@ -262,6 +254,20 @@ export function CollectionStudio() {
   const [items, setItems] = useState<Shown[]>([]);
   const [searchTerm, setSearchTerm] = useState<string>("");
 
+  // Which title's detail panel is open. Not remembered: this is what the
+  // screen is merely doing right now — the row it has open — not a choice
+  // the user would be annoyed to make again tomorrow (`@/lib/useRemembered`'s
+  // own line between the two).
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Bumped every time a Play button is pressed, and handed to `TitleDetail`
+  // so it fetches that title's launch plan the moment the panel opens —
+  // one click reaches a confirmation, not only an open panel. Not a boolean:
+  // pressing Play again for the same title (say, after changing the ROM
+  // folder) must re-trigger the fetch even though `selectedId` did not
+  // change.
+  const [playRequest, setPlayRequest] = useState(0);
+
   // How the library is being looked at is the user's choice, not the screen's
   // (see `@/lib/useRemembered`). A grid-and-AGA view set on Monday is still
   // grid-and-AGA on Tuesday.
@@ -297,10 +303,17 @@ export function CollectionStudio() {
   // arrives long after the row it belongs to, and merging would mean rebuilding
   // every row each time one lands. Keyed by the entry id the row already has.
   const [art, setArt] = useState<Map<string, string>>(new Map());
+  // Ids whose cached picture came from the user attaching one by hand
+  // (`ArtRef.source === "manual"`), rather than a fetched or `.rp9` one. The
+  // override layer that records the choice is keyed by record id and carries
+  // no title, so this is what the screen sends as `artworkEnrich`'s pinned
+  // list, and what tells `TitleDetail` whether to offer "Remove".
+  const [manualArt, setManualArt] = useState<Set<string>>(new Set());
   const [artOutcome, setArtOutcome] = useState<SourceOutcome[] | null>(null);
   // Separate from `busy`, which a catalogue refresh also sets. Only an
   // artwork run should make the screen re-read the artwork cache.
   const [artBusy, setArtBusy] = useState(false);
+  const [localOutcome, setLocalOutcome] = useState<LocalOutcome | null>(null);
 
   const storedSources = useSettingsStore((s) => s.settings.artworkSources);
 
@@ -404,14 +417,19 @@ export function CollectionStudio() {
       ]);
       const { convertFileSrc } = await import("@tauri-apps/api/core");
       const next = new Map<string, string>();
+      const manual = new Set<string>();
       known.forEach((ref, index) => {
-        if (ref) next.set(rows[index].id, convertFileSrc(`${dir}/${ref.file}`));
+        if (!ref) return;
+        next.set(rows[index].id, convertFileSrc(`${dir}/${ref.file}`));
+        if (ref.source === "manual") manual.add(rows[index].id);
       });
       setArt(next);
+      setManualArt(manual);
     } catch {
       // A cache that cannot be read is a screen without pictures, not a screen
       // that fails to open. The rows stand on their own.
       setArt(new Map());
+      setManualArt(new Set());
     }
   }
 
@@ -443,10 +461,50 @@ export function CollectionStudio() {
     setArtOutcome(null);
     setStatusMsg(t("artwork.enrich.running"));
     try {
+      // The rows whose cached picture the user attached by hand — no source
+      // may overwrite that choice.
+      const pinned = rows
+        .filter((row) => manualArt.has(row.id))
+        .map((row) => row.title);
       await artworkEnrich(
         rows.map((row) => row.title),
-        sources
+        sources,
+        pinned
       );
+    } catch (e) {
+      setError(String(e));
+      setBusy(false);
+      setArtBusy(false);
+    }
+  }
+
+  /**
+   * Pull the pictures already embedded in the rows shown right now.
+   *
+   * Touches no network: every `.rp9` on screen with a `preview` entry is
+   * opened and its screenshot copied into the artwork cache. The user's
+   * action, never a side effect of opening the screen (ART-132's rule).
+   */
+  async function handleLocalPictures() {
+    const previews = filteredItems
+      .filter((item) => item.preview)
+      .map((item) => ({
+        title: item.title,
+        package: item.path,
+        entry: item.preview as string,
+      }));
+    if (previews.length === 0) {
+      setError(t("artwork.local.none"));
+      return;
+    }
+
+    setBusy(true);
+    setArtBusy(true);
+    setError(null);
+    setLocalOutcome(null);
+    setStatusMsg(t("artwork.local.running", { count: previews.length }));
+    try {
+      await artworkAdoptLocal(previews);
     } catch (e) {
       setError(String(e));
       setBusy(false);
@@ -502,6 +560,7 @@ export function CollectionStudio() {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
     let unlistenArt: (() => void) | undefined;
+    let unlistenLocal: (() => void) | undefined;
     void (async () => {
       const stop = await onCatalogueRefreshed(() => {
         setBusy(false);
@@ -527,11 +586,28 @@ export function CollectionStudio() {
       if (cancelled) stop();
       else unlistenArt = stop;
     })();
+    void (async () => {
+      const stop = await onArtworkLocalResult((result) => {
+        setBusy(false);
+        setArtBusy(false);
+        setStatusMsg(null);
+        setLocalOutcome(result.outcome);
+        // Same reasoning as the enrichment listener above: re-read the cache
+        // rather than patch from the event.
+        setItems((rows) => {
+          void loadArtwork(rows);
+          return rows;
+        });
+      });
+      if (cancelled) stop();
+      else unlistenLocal = stop;
+    })();
 
     return () => {
       cancelled = true;
       unlisten?.();
       unlistenArt?.();
+      unlistenLocal?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -646,8 +722,33 @@ export function CollectionStudio() {
     });
   }, [items, searchTerm, formatFilter, chipsetFilter]);
 
+  /**
+   * The screen's one Play control (Collection · wave C, Task 11).
+   *
+   * This used to `navigate("/winuae", ...)` — a route that opens WinUAE
+   * Studio empty-handed and launches nothing, so the button labelled "Play"
+   * did not play anything. The real launch flow — a read-only plan, a
+   * confirmation showing the machine, the ROM and the media, and only then
+   * a Start button — lives in `TitleDetail`'s Play section, because that is
+   * where there is room to show it and where the per-title choices already
+   * live. This opens that panel and asks it to fetch the plan immediately,
+   * so one click reaches the confirmation rather than a second empty panel
+   * the user has to act in again.
+   */
   function handlePlay(item: Shown) {
-    navigate("/winuae", { state: { path: item.path } });
+    setSelectedId(item.id);
+    setPlayRequest((n) => n + 1);
+  }
+
+  // Looked up from every loaded item, not the filtered set: changing a
+  // filter after opening a title must not close the panel out from under it.
+  const selectedItem = selectedId
+    ? (items.find((item) => item.id === selectedId) ?? null)
+    : null;
+
+  /** Clicking a card opens it; clicking the same card again closes it. */
+  function handleSelect(item: Shown) {
+    setSelectedId((current) => (current === item.id ? null : item.id));
   }
 
   return (
@@ -780,10 +881,21 @@ export function CollectionStudio() {
             <button
               className="btn btn-sm"
               disabled={busy}
-              onClick={() => void handleEnrich(items)}
+              // `filteredItems`, matching `handleLocalPictures` beside it —
+              // both buttons act on what the screen is actually showing right
+              // now, not the whole unfiltered library behind it.
+              onClick={() => void handleEnrich(filteredItems)}
               style={{ padding: "3px 10px", fontSize: 11 }}
             >
               {t("artwork.enrich.action")}
+            </button>
+            <button
+              className="btn btn-sm"
+              onClick={() => void handleLocalPictures()}
+              disabled={busy}
+              style={{ padding: "3px 10px", fontSize: 11 }}
+            >
+              🖼 {t("artwork.local.action")}
             </button>
             {artOutcome?.map((outcome) => (
               <span key={outcome.id} className="faint" style={{ fontSize: 11 }}>
@@ -791,6 +903,11 @@ export function CollectionStudio() {
                 {t(outcomePhrase(outcome).key, outcomePhrase(outcome).params)}
               </span>
             ))}
+            {localOutcome && (
+              <span className="faint" style={{ fontSize: 11 }}>
+                {t("artwork.local.done", { ...localOutcome })}
+              </span>
+            )}
           </div>
         )}
       </section>
@@ -879,6 +996,28 @@ export function CollectionStudio() {
         </div>
       )}
 
+      {/* The listing and, once a title is opened, its detail panel beside it
+          — a two-column grid that collapses to one column at the same width
+          the app's own sidebar already does (`layout.css`, 1000px). This
+          screen has no stylesheet of its own to hang that media query on, so
+          the query travels with the one class it applies to. Application
+          Size is untouched either way: neither column gets a fixed pixel
+          height (ART-082). */}
+      <style>{`
+        .collection-with-detail {
+          display: grid;
+          grid-template-columns: 2fr 1fr;
+          gap: 14px;
+          align-items: start;
+        }
+        @media (max-width: 1000px) {
+          .collection-with-detail {
+            grid-template-columns: 1fr;
+          }
+        }
+      `}</style>
+      <div className={selectedItem ? "collection-with-detail" : undefined}>
+        <div>
       {/* VIEW MODE 1: VISUAL GRID VIEW */}
       {viewMode === "grid" && filteredItems.length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
@@ -889,11 +1028,14 @@ export function CollectionStudio() {
               <div
                 key={item.id}
                 className="card"
+                onClick={() => handleSelect(item)}
                 style={{
                   display: "flex",
                   flexDirection: "column",
                   justifyContent: "space-between",
                   padding: "12px",
+                  cursor: "pointer",
+                  borderColor: item.id === selectedId ? "var(--accent)" : undefined,
                   transition: "transform 0.1s, border-color 0.1s",
                 }}
               >
@@ -960,18 +1102,28 @@ export function CollectionStudio() {
                       {t("gameindex.kickstartNeeded", { image: item.kickstart })}
                     </div>
                   )}
-                  <NameFixes
-                    current={item.title}
-                    suggestion={suggestions.get(item.id)}
-                    undo={undoable.get(item.id)}
-                    onTitle={(proposed) => void applyTitle(item, proposed)}
-                    onRename={(proposed) => void applyRename(item, proposed)}
-                    onUndo={() => void undoTitle(item)}
-                  />
+                  {/* A click on any of these fixes is a decision about the
+                      name, not a card selection — it must not also toggle
+                      the detail panel open or closed underneath it. */}
+                  <div onClick={(e) => e.stopPropagation()}>
+                    <NameFixes
+                      current={item.title}
+                      suggestion={suggestions.get(item.id)}
+                      undo={undoable.get(item.id)}
+                      onTitle={(proposed) => void applyTitle(item, proposed)}
+                      onRename={(proposed) => void applyRename(item, proposed)}
+                      onUndo={() => void undoTitle(item)}
+                    />
+                  </div>
                 </div>
 
-                {/* Card Actions */}
-                <div style={{ display: "flex", gap: 6, marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                {/* Card Actions. Stopped from bubbling for the same reason:
+                    Play and the ADF-Studio shortcut are their own actions,
+                    not a way to open the detail panel. */}
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ display: "flex", gap: 6, marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 8 }}
+                >
                   {/*
                     Disabled, not hidden. A game whose drive is unplugged is
                     still in the library, and hiding it would look like ART
@@ -1015,7 +1167,15 @@ export function CollectionStudio() {
               <div
                 key={item.id}
                 className="file-row"
-                style={{ padding: "8px 12px" }}
+                onClick={() => handleSelect(item)}
+                style={{
+                  padding: "8px 12px",
+                  cursor: "pointer",
+                  // The same selected-row affordance `HardDiskStudio`'s
+                  // partition list already uses for a `.file-row` — not a
+                  // new highlight invented for this screen.
+                  borderColor: item.id === selectedId ? "var(--accent)" : "transparent",
+                }}
               >
                 <div className="file-row-main" style={{ gap: 10 }}>
                   {/* The picture stands in for the media glyph when there is
@@ -1042,18 +1202,26 @@ export function CollectionStudio() {
                       <Guessed from={item.publisherFrom} />
                       {item.year ? ` · ${item.year}` : ""}
                     </div>
-                    <NameFixes
-                      current={item.title}
-                      suggestion={suggestions.get(item.id)}
-                      undo={undoable.get(item.id)}
-                      onTitle={(proposed) => void applyTitle(item, proposed)}
-                      onRename={(proposed) => void applyRename(item, proposed)}
-                      onUndo={() => void undoTitle(item)}
-                    />
+                    {/* A name fix is a decision about the title, not a row
+                        selection — it must not also toggle the panel. */}
+                    <div onClick={(e) => e.stopPropagation()}>
+                      <NameFixes
+                        current={item.title}
+                        suggestion={suggestions.get(item.id)}
+                        undo={undoable.get(item.id)}
+                        onTitle={(proposed) => void applyTitle(item, proposed)}
+                        onRename={(proposed) => void applyRename(item, proposed)}
+                        onUndo={() => void undoTitle(item)}
+                      />
+                    </div>
                   </div>
                 </div>
 
-                <div className="file-row-meta" style={{ gap: 10 }}>
+                <div
+                  className="file-row-meta"
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ gap: 10 }}
+                >
                   <span
                     className={`badge ${item.chipset === null ? "badge-muted" : item.chipset === "aga" ? "badge-warn" : "badge-ok"}`}
                     style={{ fontSize: 10 }}
@@ -1093,6 +1261,19 @@ export function CollectionStudio() {
           {t("collection.empty.noCollection", { buttonLabel: t("collection.toolbar.scanFolder") })}
         </p>
       )}
+        </div>
+
+        {selectedItem && (
+          <TitleDetail
+            entry={{ path: selectedItem.path, record: selectedItem.record }}
+            art={art.get(selectedItem.id)}
+            hasManualArt={manualArt.has(selectedItem.id)}
+            onArtChanged={() => void loadArtwork(items)}
+            onClose={() => setSelectedId(null)}
+            playRequest={playRequest}
+          />
+        )}
+      </div>
     </div>
   );
 }

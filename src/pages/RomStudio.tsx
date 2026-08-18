@@ -2,7 +2,7 @@ import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
-import { romIdentify, romScanDir, type RomInfo } from "@/lib/rom";
+import { checksumBadge, romIdentify, romScanDir, type RomInfo } from "@/lib/rom";
 
 export function RomStudio() {
   const { t } = useTranslation();
@@ -115,8 +115,8 @@ export function RomStudio() {
                   >
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <strong style={{ fontSize: 13 }}>{r.name}</strong>
-                      <span className={`badge ${r.checksum_valid ? "badge-ok" : "badge-warn"}`}>
-                        {r.checksum_valid ? t("common.ok") : t("rom.badges.crcErr")}
+                      <span className={`badge ${checksumBadge(r).tone}`}>
+                        {t(checksumBadge(r).phrase.key)}
                       </span>
                     </div>
                     <div className="faint" style={{ fontSize: 11, marginTop: 4, wordBreak: "break-all" }}>
@@ -145,7 +145,7 @@ export function RomStudio() {
                 {t("rom.details.sizeValue", { kb: selectedRom.size_bytes / 1024, bytes: selectedRom.size_bytes })}
               </div>
               <div>
-                <span className="muted">{t("rom.details.crc32Label")}</span> <code style={{ color: "var(--accent)" }}>{selectedRom.crc32}</code>
+                <span className="muted">{t("rom.details.crc32Label")}</span> <code style={{ color: "var(--accent-text)" }}>{selectedRom.crc32}</code>
               </div>
               <div>
                 <span className="muted">{t("rom.details.sha256Label")}</span>
@@ -155,13 +155,22 @@ export function RomStudio() {
               </div>
               <div>
                 <span className="muted">{t("rom.details.modelsLabel")}</span>
-                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
-                  {selectedRom.compatible_models.map((m) => (
-                    <span key={m} className="badge badge-muted">
-                      {m}
-                    </span>
-                  ))}
-                </div>
+                {/* Empty means ART's source named no machine — the Remus
+                    database says nothing about a CDTV extended ROM's model —
+                    and a bare gap read as a missing feature (ART-138). */}
+                {selectedRom.compatible_models.length === 0 ? (
+                  <div className="faint" style={{ fontSize: 12, marginTop: 4 }}>
+                    {t("rom.details.noModels")}
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
+                    {selectedRom.compatible_models.map((m) => (
+                      <span key={m} className="badge badge-muted">
+                        {m}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
               {/* A green tick for every Amiga Forever ROM was a false
                   reassurance: stripping the header leaves the image still
