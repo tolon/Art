@@ -1487,6 +1487,13 @@
       "whdloadDe": "whdload.de icons",
       "unknown": "Unknown source ({{id}})"
     },
+    "kind": {
+      "boxart": "Box art",
+      "snap": "Screenshot",
+      "title": "Title screen",
+      "logo": "Logo",
+      "icon": "Icon"
+    },
     "enrich": {
       "action": "Fetch artwork",
       "running": "Fetching artwork…",

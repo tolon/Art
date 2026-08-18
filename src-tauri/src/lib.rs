@@ -182,6 +182,7 @@ pub fn run() {
             commands::artwork::artwork_check_source,
             commands::artwork::artwork_dir,
             commands::artwork::artwork_known,
+            commands::artwork::artwork_for_title,
             commands::artwork::artwork_enrich,
             commands::artwork::artwork_adopt_local,
             commands::artwork::artwork_attach,

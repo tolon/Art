@@ -1487,6 +1487,13 @@
       "whdloadDe": "whdload.de simgeleri",
       "unknown": "Bilinmeyen kaynak ({{id}})"
     },
+    "kind": {
+      "boxart": "Kutu görseli",
+      "snap": "Ekran görüntüsü",
+      "title": "Başlık ekranı",
+      "logo": "Logo",
+      "icon": "Simge"
+    },
     "enrich": {
       "action": "Görselleri getir",
       "running": "Görseller getiriliyor…",

@@ -106,6 +106,22 @@ pub fn artwork_known(titles: Vec<String>, app: AppHandle) -> AppResult<Vec<Optio
         .collect())
 }
 
+/// Every picture the cache holds for one title, in `ArtKind::ALL` order.
+///
+/// That is the preference order, so the first element is the one the grid is
+/// already showing and the detail panel's default switch position needs no
+/// second rule. Normalised the same way `artwork_known` normalises: the cache
+/// keys itself on the normalised title, and every reader folds it first.
+#[tauri::command]
+pub fn artwork_for_title(title: String, app: AppHandle) -> AppResult<Vec<ArtRef>> {
+    let cache = Cache::open(&artwork_dir_for(&app))?;
+    let key = normalise(&title);
+    Ok(ArtKind::ALL
+        .into_iter()
+        .filter_map(|kind| cache.get(&key, kind).cloned())
+        .collect())
+}
+
 /// What the Collection actually renders today: one picture per row.
 ///
 /// libretro publishes four kinds and fetching all four takes four times as long

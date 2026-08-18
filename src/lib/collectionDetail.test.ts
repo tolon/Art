@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { canLaunch, diskList, mediaPhrase } from "./collectionDetail";
+import { canLaunch, diskList, kindPhrase, mediaPhrase } from "./collectionDetail";
 import type { Media } from "./gameindex";
+import type { ArtKind } from "./artwork";
 
 const floppies: Media = { kind: "floppies", ordered: ["Dune2 Disk1.adf", "Dune2 Disk2.adf"] };
 const hardfile: Media = { kind: "hardfile", file: "Agony.hdf" };
@@ -46,5 +47,14 @@ describe("canLaunch", () => {
     expect(canLaunch(floppies)).toBe(true);
     expect(canLaunch(hardfile)).toBe(true);
     expect(canLaunch(drawer)).toBe(true);
+  });
+});
+
+describe("kindPhrase", () => {
+  it("names every kind of picture", () => {
+    const kinds: ArtKind[] = ["boxart", "snap", "title", "logo", "icon"];
+    for (const kind of kinds) {
+      expect(kindPhrase(kind)).toEqual({ key: `artwork.kind.${kind}` });
+    }
   });
 });

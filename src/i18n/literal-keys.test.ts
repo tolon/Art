@@ -240,6 +240,12 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // read `t(media.key, media.params)` every other mapper on this list
     // uses. All three arms are enumerated in `phrase-keys.test.ts`
     // (`mediaPhrase: every medium resolves`).
-    expect(dynamicCalls).toBe(100);
+    // 100 → 101 (Collection wave C, Task 6b): the detail panel's picture
+    // switch labels each button with `t(kindPhrase(kind).key)` —
+    // `kindPhrase()` in `@/lib/collectionDetail`, the same `Phrase` shape
+    // `mediaPhrase` above already uses. Its five variants are enumerated in
+    // `phrase-keys.test.ts` (`collectionDetail's kindPhrase: every ArtKind
+    // resolves`).
+    expect(dynamicCalls).toBe(101);
   });
 });

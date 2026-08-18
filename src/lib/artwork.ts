@@ -106,6 +106,16 @@ export async function artworkKnown(
 }
 
 /**
+ * Every picture the cache holds for one title, in {@link ART_KINDS} order.
+ *
+ * The first element is the one the grid is already showing, so the detail
+ * panel's switch needs no second rule for its default position.
+ */
+export async function artworkForTitle(title: string): Promise<ArtRef[]> {
+  return invoke<ArtRef[]>("artwork_for_title", { title });
+}
+
+/**
  * Fetch artwork for these titles, on a job.
  *
  * Returns a job id straight away. 1700 titles against two sources at four

@@ -9,9 +9,9 @@ import { describe, expect, it } from "vitest";
 import en from "./en.json";
 
 import { ALL_PROVENANCES, provenancePhrase } from "@/lib/gameindex";
-import { mediaPhrase } from "@/lib/collectionDetail";
+import { kindPhrase as artworkKindPhrase, mediaPhrase } from "@/lib/collectionDetail";
 import type { Media } from "@/lib/gameindex";
-import { outcomePhrase, sourcePhrase, type SourceOutcome } from "@/lib/artwork";
+import { outcomePhrase, sourcePhrase, type ArtKind, type SourceOutcome } from "@/lib/artwork";
 
 import { describeCheckout, type CheckoutRow } from "@/lib/checkout";
 import { jobStatusLabel, type JobProgress } from "@/lib/jobs";
@@ -925,6 +925,18 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     for (const one of media) {
       const phrase = mediaPhrase(one);
       expect(resolvesAtRuntime(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  // Collection wave C, Task 6b: the detail panel's picture switch labels each
+  // button with `kindPhrase` (`@/lib/collectionDetail`) — not the identically
+  // named mapper from `@/lib/layout` above, which is a different `kindPhrase`
+  // over a different union and already enumerated by its own test.
+  it("collectionDetail's kindPhrase: every ArtKind resolves", () => {
+    const kinds: ArtKind[] = ["boxart", "snap", "title", "logo", "icon"];
+    for (const kind of kinds) {
+      const phrase = artworkKindPhrase(kind);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
     }
   });
 });

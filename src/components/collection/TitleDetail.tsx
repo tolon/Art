@@ -1,10 +1,17 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
 import { Guessed } from "@/components/collection/Guessed";
-import { diskList, mediaPhrase } from "@/lib/collectionDetail";
-import { artworkAttach, artworkDetach, isSupportedPicture } from "@/lib/artwork";
+import { diskList, kindPhrase, mediaPhrase } from "@/lib/collectionDetail";
+import {
+  artworkAttach,
+  artworkDetach,
+  artworkDir,
+  artworkForTitle,
+  isSupportedPicture,
+  type ArtKind,
+} from "@/lib/artwork";
 import type { CatalogueEntry } from "@/lib/gameindex";
 import { usePowerMode } from "@/lib/uxmode";
 
@@ -13,13 +20,14 @@ import { usePowerMode } from "@/lib/uxmode";
  *
  * `art` is the one picture the screen already resolves per title — the
  * `ArtKind` the artwork cache prefers first for whichever titles are on
- * screen (`CollectionStudio`'s `art` map, built from `artworkKnown()`).
+ * screen (`CollectionStudio`'s `art` map, built from `artworkKnown()`). It is
+ * also this panel's fallback while its own query (`artworkForTitle`) is in
+ * flight, or once it resolves to nothing.
  *
- * One picture, not a switch between kinds — deliberately, for now. A title
- * holds more than one kind only once a hand-attached picture joins the
- * `.rp9` snap (wave C, the attach task), and `artworkKnown` answers with the
- * preferred one rather than the set. The switch belongs with the second
- * kind, not ahead of it.
+ * When a title holds more than one kind of picture — a hand-attached one
+ * beside the `.rp9` snap, say — the panel offers a switch between them,
+ * defaulting to the first in preference order (the one the grid already
+ * shows).
  */
 export function TitleDetail({
   entry,
@@ -43,6 +51,38 @@ export function TitleDetail({
   const disks = diskList(record.media);
   const media = mediaPhrase(record.media);
   const [artError, setArtError] = useState<string | null>(null);
+  const [pictures, setPictures] = useState<{ kind: ArtKind; src: string }[]>([]);
+  const [chosenKind, setChosenKind] = useState<ArtKind | null>(null);
+
+  /**
+   * Every picture this title has, built the same way `CollectionStudio`
+   * builds the grid's thumbnails: `artworkDir()` plus each `ArtRef.file`,
+   * through `convertFileSrc`. The chosen kind resets to the first of the
+   * list — the preferred one, the picture the grid was already showing.
+   */
+  async function loadPictures() {
+    try {
+      const [dir, refs] = await Promise.all([artworkDir(), artworkForTitle(record.title.value)]);
+      const { convertFileSrc } = await import("@tauri-apps/api/core");
+      const next = refs.map((ref) => ({
+        kind: ref.kind,
+        src: convertFileSrc(`${dir}/${ref.file}`),
+      }));
+      setPictures(next);
+      setChosenKind(next[0]?.kind ?? null);
+    } catch {
+      // A cache that cannot be read is a panel without a switch, not a panel
+      // that fails to open — the `art` prop still stands on its own.
+      setPictures([]);
+      setChosenKind(null);
+    }
+  }
+
+  useEffect(() => {
+    void loadPictures();
+    // The chosen kind is meant to reset on every title change, so this
+    // depends only on the title, not on `loadPictures` itself.
+  }, [record.title.value]);
 
   async function attach() {
     setArtError(null);
@@ -62,6 +102,7 @@ export function TitleDetail({
     try {
       await artworkAttach(record.title.value, record.id, chosen);
       onArtChanged();
+      void loadPictures();
     } catch (e) {
       setArtError(String(e));
     }
@@ -72,10 +113,16 @@ export function TitleDetail({
     try {
       await artworkDetach(record.title.value, record.id);
       onArtChanged();
+      void loadPictures();
     } catch (e) {
       setArtError(String(e));
     }
   }
+
+  // The chosen kind's picture, falling back to the `art` prop while the
+  // query is in flight or once it resolves to nothing — so nothing regresses
+  // for a title the artwork cache does not know about yet.
+  const chosenPicture = pictures.find((picture) => picture.kind === chosenKind)?.src ?? art;
 
   return (
     <section className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -86,12 +133,28 @@ export function TitleDetail({
         </button>
       </div>
 
-      {art && (
+      {chosenPicture && (
         <img
-          src={art}
+          src={chosenPicture}
           alt=""
           style={{ display: "block", width: "100%", maxHeight: 260, objectFit: "contain" }}
         />
+      )}
+
+      {/* A control with one option is noise — only shown once this title
+          holds more than one kind of picture. */}
+      {pictures.length > 1 && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {pictures.map((picture) => (
+            <button
+              key={picture.kind}
+              className={`btn btn-sm ${chosenKind === picture.kind ? "btn-primary" : ""}`}
+              onClick={() => setChosenKind(picture.kind)}
+            >
+              {t(kindPhrase(picture.kind).key)}
+            </button>
+          ))}
+        </div>
       )}
 
       <div style={{ display: "flex", gap: 6 }}>

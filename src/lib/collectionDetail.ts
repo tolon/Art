@@ -5,6 +5,7 @@
  * a {@link Phrase} and `TitleDetail.tsx` calls `t()` on it.
  */
 
+import type { ArtKind } from "./artwork";
 import type { Media } from "./gameindex";
 import type { Phrase } from "./phrase";
 
@@ -38,4 +39,9 @@ export function canLaunch(media: Media): boolean {
   return (
     media.kind === "floppies" || media.kind === "hardfile" || media.kind === "whdload-drawer"
   );
+}
+
+/** What to call one kind of picture on a button the user has to read. */
+export function kindPhrase(kind: ArtKind): Phrase {
+  return { key: `artwork.kind.${kind}` };
 }
