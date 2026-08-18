@@ -12,6 +12,7 @@ pub mod config;
 pub mod encode;
 pub mod enrich;
 pub mod key;
+pub mod local;
 pub mod sources;
 
 use serde::{Deserialize, Serialize};
