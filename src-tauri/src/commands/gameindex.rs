@@ -27,7 +27,12 @@ use crate::error::{AppError, AppResult};
 /// `%APPDATA%` is not. The temp-directory fallback is the same one `lib.rs`
 /// uses for the software catalog, and for the same reason: a catalogue ART
 /// cannot place is recoverable with one rescan, refusing to start is not.
-fn catalogue_dir(app: &AppHandle) -> PathBuf {
+///
+/// `pub(crate)` rather than a second copy: `commands/artwork.rs` needs this
+/// same path to reach the overrides layer when attaching or detaching a
+/// picture, and a second implementation of the same lookup is how the two
+/// would drift.
+pub(crate) fn catalogue_dir(app: &AppHandle) -> PathBuf {
     app.path()
         .app_data_dir()
         .unwrap_or_else(|_| std::env::temp_dir())

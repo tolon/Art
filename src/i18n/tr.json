@@ -1558,7 +1558,14 @@
       "publisher": "Yayıncı",
       "year": "Yıl",
       "genre": "Tür",
-      "rating": "Puan"
+      "rating": "Puan",
+      "art": {
+        "attach": "Resim bağla…",
+        "remove": "Resmi kaldır",
+        "dialog": "Bu başlık için bir resim seç",
+        "filter": "Resim (PNG, JPEG)",
+        "rejected": "ART, PNG ve JPEG resimleri gösterebilir. Bu dosya ikisi de değil."
+      }
     }
   },
   "whdload": {

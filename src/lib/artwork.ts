@@ -111,12 +111,39 @@ export async function artworkKnown(
  * Returns a job id straight away. 1700 titles against two sources at four
  * requests per second is §54/§55 territory — the user gets a Stop, and the
  * result arrives in an `artwork-result` event.
+ *
+ * `pinned` names the titles whose picture the user chose by hand, so no
+ * source overwrites it. Built by the caller from the rows whose cached
+ * picture's `source` is `"manual"` — the override layer that actually records
+ * the choice is keyed by record id, not by title, and has no title to hand
+ * back.
  */
 export async function artworkEnrich(
   titles: string[],
-  sources: ConfiguredSource[]
+  sources: ConfiguredSource[],
+  pinned: string[]
 ): Promise<number> {
-  return invoke<number>("artwork_enrich", { titles, sources });
+  return invoke<number>("artwork_enrich", { titles, sources, pinned });
+}
+
+/**
+ * Attach a picture the user picked to a title.
+ *
+ * `id` is the record's id, because the choice is written into the catalogue's
+ * user layer — the one a refresh does not touch. `title` is what the artwork
+ * cache is keyed by. They are different things and both are needed.
+ */
+export async function artworkAttach(
+  title: string,
+  id: string,
+  file: string
+): Promise<ArtRef> {
+  return invoke<ArtRef>("artwork_attach", { title, id, file });
+}
+
+/** Undo that. An override with nothing left in it deletes itself. */
+export async function artworkDetach(title: string, id: string): Promise<void> {
+  await invoke("artwork_detach", { title, id });
 }
 
 /** Payload of the `artwork-result` event. */

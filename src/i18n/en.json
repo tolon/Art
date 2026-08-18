@@ -1558,7 +1558,14 @@
       "publisher": "Publisher",
       "year": "Year",
       "genre": "Genre",
-      "rating": "Rating"
+      "rating": "Rating",
+      "art": {
+        "attach": "Attach a picture…",
+        "remove": "Remove the picture",
+        "dialog": "Choose a picture for this title",
+        "filter": "Picture (PNG, JPEG)",
+        "rejected": "ART can show PNG and JPEG pictures. This file is neither."
+      }
     }
   },
   "whdload": {

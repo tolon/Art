@@ -295,6 +295,12 @@ export function CollectionStudio() {
   // arrives long after the row it belongs to, and merging would mean rebuilding
   // every row each time one lands. Keyed by the entry id the row already has.
   const [art, setArt] = useState<Map<string, string>>(new Map());
+  // Ids whose cached picture came from the user attaching one by hand
+  // (`ArtRef.source === "manual"`), rather than a fetched or `.rp9` one. The
+  // override layer that records the choice is keyed by record id and carries
+  // no title, so this is what the screen sends as `artworkEnrich`'s pinned
+  // list, and what tells `TitleDetail` whether to offer "Remove".
+  const [manualArt, setManualArt] = useState<Set<string>>(new Set());
   const [artOutcome, setArtOutcome] = useState<SourceOutcome[] | null>(null);
   // Separate from `busy`, which a catalogue refresh also sets. Only an
   // artwork run should make the screen re-read the artwork cache.
@@ -403,14 +409,19 @@ export function CollectionStudio() {
       ]);
       const { convertFileSrc } = await import("@tauri-apps/api/core");
       const next = new Map<string, string>();
+      const manual = new Set<string>();
       known.forEach((ref, index) => {
-        if (ref) next.set(rows[index].id, convertFileSrc(`${dir}/${ref.file}`));
+        if (!ref) return;
+        next.set(rows[index].id, convertFileSrc(`${dir}/${ref.file}`));
+        if (ref.source === "manual") manual.add(rows[index].id);
       });
       setArt(next);
+      setManualArt(manual);
     } catch {
       // A cache that cannot be read is a screen without pictures, not a screen
       // that fails to open. The rows stand on their own.
       setArt(new Map());
+      setManualArt(new Set());
     }
   }
 
@@ -442,9 +453,15 @@ export function CollectionStudio() {
     setArtOutcome(null);
     setStatusMsg(t("artwork.enrich.running"));
     try {
+      // The rows whose cached picture the user attached by hand — no source
+      // may overwrite that choice.
+      const pinned = rows
+        .filter((row) => manualArt.has(row.id))
+        .map((row) => row.title);
       await artworkEnrich(
         rows.map((row) => row.title),
-        sources
+        sources,
+        pinned
       );
     } catch (e) {
       setError(String(e));
@@ -1225,6 +1242,8 @@ export function CollectionStudio() {
           <TitleDetail
             entry={{ path: selectedItem.path, record: selectedItem.record }}
             art={art.get(selectedItem.id)}
+            hasManualArt={manualArt.has(selectedItem.id)}
+            onArtChanged={() => void loadArtwork(items)}
             onClose={() => setSelectedId(null)}
           />
         )}

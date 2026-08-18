@@ -1,7 +1,10 @@
+import { useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
 import { Guessed } from "@/components/collection/Guessed";
 import { diskList, mediaPhrase } from "@/lib/collectionDetail";
+import { artworkAttach, artworkDetach } from "@/lib/artwork";
 import type { CatalogueEntry } from "@/lib/gameindex";
 import { usePowerMode } from "@/lib/uxmode";
 
@@ -21,10 +24,17 @@ import { usePowerMode } from "@/lib/uxmode";
 export function TitleDetail({
   entry,
   art,
+  hasManualArt,
+  onArtChanged,
   onClose,
 }: {
   entry: CatalogueEntry;
   art: string | undefined;
+  /** Whether this title's cached picture is one the user attached by hand. */
+  hasManualArt: boolean;
+  /** Re-read the artwork cache — the same re-read the screen already does
+   *  after an artwork job finishes. */
+  onArtChanged: () => void;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -32,6 +42,33 @@ export function TitleDetail({
   const record = entry.record;
   const disks = diskList(record.media);
   const media = mediaPhrase(record.media);
+  const [artError, setArtError] = useState<string | null>(null);
+
+  async function attach() {
+    setArtError(null);
+    const chosen = await open({
+      multiple: false,
+      filters: [{ name: t("collection.detail.art.filter"), extensions: ["png", "jpg", "jpeg"] }],
+      title: t("collection.detail.art.dialog"),
+    });
+    if (typeof chosen !== "string") return;
+    try {
+      await artworkAttach(record.title.value, record.id, chosen);
+      onArtChanged();
+    } catch (e) {
+      setArtError(String(e));
+    }
+  }
+
+  async function detach() {
+    setArtError(null);
+    try {
+      await artworkDetach(record.title.value, record.id);
+      onArtChanged();
+    } catch (e) {
+      setArtError(String(e));
+    }
+  }
 
   return (
     <section className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -48,6 +85,22 @@ export function TitleDetail({
           alt=""
           style={{ display: "block", width: "100%", maxHeight: 260, objectFit: "contain" }}
         />
+      )}
+
+      <div style={{ display: "flex", gap: 6 }}>
+        <button className="btn btn-sm" onClick={() => void attach()}>
+          {t("collection.detail.art.attach")}
+        </button>
+        {hasManualArt && (
+          <button className="btn btn-sm" onClick={() => void detach()}>
+            {t("collection.detail.art.remove")}
+          </button>
+        )}
+      </div>
+      {artError && (
+        <div className="badge badge-err" style={{ fontSize: 11 }}>
+          {artError}
+        </div>
       )}
 
       <div className="muted" style={{ fontSize: 13 }}>

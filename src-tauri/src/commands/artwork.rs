@@ -11,12 +11,13 @@
 //! list back as an argument when the job runs. A second persistence mechanism
 //! for one list would be a second place for a setting to disagree with itself.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use super::gameindex::catalogue_dir;
 use super::jobs::{spawn_job, JobRegistry};
 use crate::core::artwork::cache::Cache;
 use crate::core::artwork::config::{self, ConfiguredSource};
@@ -24,6 +25,7 @@ use crate::core::artwork::enrich::{enrich, EnrichOutcome, EnrichRequest};
 use crate::core::artwork::key::normalise;
 use crate::core::artwork::local::{adopt_local, LocalOutcome, LocalPreview};
 use crate::core::artwork::{ArtKind, ArtRef};
+use crate::core::gameindex::store::{read_overrides, set_override, ArtBinding};
 use crate::core::jobs::JobId;
 use crate::error::AppResult;
 use crate::net::http_mirror::HttpMirrorClient;
@@ -119,10 +121,16 @@ const DISPLAYED_KINDS: [ArtKind; 2] = [ArtKind::Boxart, ArtKind::Icon];
 ///
 /// **Nothing calls this on its own.** The Collection screen opens without
 /// touching the network; this runs when the user asks it to.
+///
+/// `pinned` names the titles whose picture the user chose by hand — the
+/// screen builds it from the rows whose cached picture's `source` is
+/// `"manual"`, because the override layer that actually records the choice is
+/// keyed by record id, not by title, and carries no title to send back.
 #[tauri::command]
 pub fn artwork_enrich(
     titles: Vec<String>,
     sources: Vec<ConfiguredSource>,
+    pinned: Vec<String>,
     app: AppHandle,
     registry: State<'_, Arc<JobRegistry>>,
 ) -> AppResult<JobId> {
@@ -142,10 +150,7 @@ pub fn artwork_enrich(
                     sources: &sources,
                     cache_dir: &dir,
                     wanted: &DISPLAYED_KINDS,
-                    // Task 6 is where the real pinned list arrives from the
-                    // catalogue's overrides; until then this command pins
-                    // nothing, which is exactly what it does today.
-                    pinned: &[],
+                    pinned: &pinned,
                 },
                 &client,
                 progress,
@@ -156,6 +161,86 @@ pub fn artwork_enrich(
     );
 
     Ok(id)
+}
+
+/// The cache extension for a picture the screen can actually draw.
+fn picture_extension(path: &Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => Some("png"),
+        Some("jpg" | "jpeg") => Some("jpg"),
+        _ => None,
+    }
+}
+
+/// Attach a picture the user picked to a title.
+///
+/// The bytes are copied into the cache under source `manual`; the choice is
+/// written into the catalogue's user layer, which is what makes it survive a
+/// refresh and stops a later fetch from replacing it. `ArtKind::Boxart` on
+/// purpose: `ART_KINDS` prefers it first, so a hand-attached picture outranks
+/// the `.rp9` snap from Task 1 — which is what the user meant by attaching
+/// one.
+#[tauri::command]
+pub fn artwork_attach(
+    title: String,
+    id: String,
+    file: String,
+    app: AppHandle,
+) -> AppResult<ArtRef> {
+    let source = PathBuf::from(&file);
+    let ext = picture_extension(&source)
+        .ok_or("ART can show PNG and JPEG pictures. This file is neither.")?;
+    let bytes = std::fs::read(&source)?;
+
+    let dir = artwork_dir_for(&app);
+    let mut cache = Cache::open(&dir)?;
+    // The normalised key, not the raw title: every other write to this cache
+    // (`enrich`) keys itself the same way, and `artwork_known`'s lookup
+    // normalises the title it is asked about. A raw key here would make the
+    // picture invisible the moment casing or a leading article differs.
+    let key = normalise(&title);
+    let art = cache.store(&key, ArtKind::Boxart, "manual", ext, &bytes)?;
+    cache.save()?;
+
+    let catalogue = catalogue_dir(&app);
+    let mut edit = read_overrides(&catalogue)?
+        .edits
+        .get(&id)
+        .cloned()
+        .unwrap_or_default();
+    edit.art = Some(ArtBinding {
+        chosen: file,
+        cached: art.file.clone(),
+    });
+    set_override(&catalogue, &id, edit)?;
+
+    Ok(art)
+}
+
+/// Undo [`artwork_attach`].
+///
+/// Removes the cached picture and clears the override's `art` field;
+/// `set_override`'s existing empty-override rule deletes the record entirely
+/// once nothing else is left in it.
+#[tauri::command]
+pub fn artwork_detach(title: String, id: String, app: AppHandle) -> AppResult<()> {
+    let dir = artwork_dir_for(&app);
+    let mut cache = Cache::open(&dir)?;
+    cache.remove(&normalise(&title), ArtKind::Boxart)?;
+    cache.save()?;
+
+    let catalogue = catalogue_dir(&app);
+    if let Some(mut edit) = read_overrides(&catalogue)?.edits.get(&id).cloned() {
+        edit.art = None;
+        set_override(&catalogue, &id, edit)?;
+    }
+
+    Ok(())
 }
 
 /// The argument shape: a path is a string on the wire, a `PathBuf` in `core`.
@@ -209,4 +294,21 @@ pub fn artwork_adopt_local(
     );
 
     Ok(id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// PNG and JPEG are what the webview draws. An IFF would be accepted here
+    /// and then not render, which is worse than an honest refusal.
+    #[test]
+    fn only_the_formats_the_screen_can_draw_are_accepted() {
+        assert_eq!(picture_extension(Path::new("cover.png")), Some("png"));
+        assert_eq!(picture_extension(Path::new("cover.PNG")), Some("png"));
+        assert_eq!(picture_extension(Path::new("cover.jpg")), Some("jpg"));
+        assert_eq!(picture_extension(Path::new("cover.jpeg")), Some("jpg"));
+        assert_eq!(picture_extension(Path::new("cover.iff")), None);
+        assert_eq!(picture_extension(Path::new("cover")), None);
+    }
 }
