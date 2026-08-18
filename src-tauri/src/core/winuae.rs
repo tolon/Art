@@ -232,46 +232,56 @@ pub fn generate_uae_config(profile: &AmigaProfile, media: &LaunchMedia) -> CoreR
     // Each image needs its own device name — emitting several bare `hardfile=`
     // lines made every drive after the first unreachable.
     //
-    // The forced geometry below is only correct for a *bare* filesystem image
-    // — what `<device>:` names too, since AmigaDOS has nothing else to call
-    // it. `HardfileShape::Rdb` and `::Unknown` both skip it (ART-146): the
-    // e-uae configuration syntax WinUAE inherits (`docs/configuration.txt`)
-    // states that blocksize `0` marks an RDB hard file and that "all other
-    // components ... will be ignored apart from <path> and <access>" — its
-    // own example (`hardfile2=rw,:/path,0,0,0,0,0,`) leaves `<device>` empty,
-    // which is the right call here too: a forced `DH{i}:` would be
-    // meaningless on a disk that carries its own device names in its own RDB
-    // (or, for anything else including a VHD container, no meaning ART can
-    // supply at all) — so the geometry fields are left at `0` and the device
-    // name is left empty, and WinUAE reads the disk itself.
+    // That forced geometry (32 sectors, 1 surface, 2 reserved, 512 blocksize)
+    // is only correct for a *bare* filesystem image — what `<device>:` names
+    // too, since AmigaDOS has nothing else to call it. `HardfileShape::Rdb`
+    // and `::Unknown` both skip it (ART-146): the e-uae configuration syntax
+    // WinUAE inherits (`docs/configuration.txt`) states that blocksize `0`
+    // marks an RDB hard file and that "all other components ... will be
+    // ignored apart from <path> and <access>" — its own example
+    // (`hardfile2=rw,:/path,0,0,0,0,0,`) leaves `<device>` empty, which is
+    // the right call here too: a forced `DH{i}:` would be meaningless on a
+    // disk that carries its own device names in its own RDB (or, for
+    // anything else including a VHD container, no meaning ART can supply at
+    // all) — so the geometry fields are left at `0` and the device name is
+    // left empty, and WinUAE reads the disk itself.
     //
-    // ART-149 (this fix was briefly reverted under a mistaken stand-down
-    // favoring weaker forum evidence over the WinUAE source reading below,
-    // then restored once that reading was confirmed — see docs/ISSUES.md):
-    // the bare-image geometry used to be `32,1,2,512` (32 sectors, 1
-    // surface, 2 reserved, 512 blocksize) — a plausible-looking floppy-style
-    // default that is wrong for almost every real hardfile. One cylinder at
-    // that geometry is 32*1*512 = 16384 bytes, and WinUAE derives the
-    // cylinder count as `(filesize / blocksize) / (sectors * surfaces)`
-    // (`hardfile.cpp::getchs2`) with *integer* division — any file whose size
-    // is not a whole multiple of 16384 bytes gets silently rounded down to
-    // the next whole cylinder, and the remainder (up to 16383 bytes, i.e. up
-    // to 31 whole 512-byte blocks) is never presented to AmigaDOS at all.
-    // Measured against 40 real WHDLoad hardfiles
-    // (`E:\amiga\Amigatolon\WHDload\...`), *zero* were a whole number of
-    // 32-sector cylinders — including `1000 Miglia v1.2.hdf`, 1,195,008 bytes
-    // = 2334 blocks = 72.9375 cylinders at the old geometry, rounded down to
-    // 72 (2304 blocks). An FFS root block sits at half the block count
-    // (`core::volume::VolumeGeometry::root_block_for`) — 1167 for this image
-    // — which lands past the truncated disk's own midpoint (1152), so the
-    // layout no longer validates and AmigaDOS reports "not a DOS disk"
-    // against a perfectly good file.
+    // ART-149: `sectors=32` here is deliberate, not an oversight, even though
+    // WinUAE's `hardfile.cpp::getchs2` floors `filesize / blocksize /
+    // (sectors * surfaces)` with integer division and so drops any partial
+    // last cylinder — a file that is not a whole multiple of 32*512 = 16384
+    // bytes loses up to 31 blocks off the end when *presented* this way. The
+    // mechanism is real; changing `sectors` to `1` to avoid it was tried and
+    // reverted, because the images this matters for were not truncated by
+    // WinUAE — they were **built** at 32-sectors/1-surface geometry in the
+    // first place, and the filesystem inside them is sized to the truncated
+    // whole-cylinder block count, not to the file's raw byte length. An FFS
+    // root block sits at half the volume's block count
+    // (`core::volume::VolumeGeometry::root_block_for`), so the root block's
+    // position tells you what block count the filesystem inside was built
+    // for. Measured across six real WHDLoad hardfiles from this user's
+    // collection (`E:\amiga\Amigatolon\WHDload\HDF_Games_WHDLoad_by_Enzo_[A]\`)
+    // by scanning for the block whose first longword is `2` (T_SHORT) and
+    // whose last is `1` (ST_ROOT):
     //
-    // `sectors=1, surfaces=1` makes one cylinder exactly one 512-byte block,
-    // so cylinders = filesize/512 divides evenly for *any* 512-multiple —
-    // every image ART itself can produce, and (per the same integer-division
-    // formula) every image whose size is a whole number of blocks, which a
-    // real Amiga filesystem always is.
+    //   file blocks | root block | 2 * root | blocks truncated to a multiple of 32
+    //   ------------|-----------|----------|--------------------------------------
+    //          1843 |       912 |     1824 | 1824
+    //          1331 |       656 |     1312 | 1312
+    //          3993 |      1984 |     3968 | 3968
+    //          5734 |      2864 |     5728 | 5728
+    //          5038 |      2512 |     5024 | 5024
+    //
+    // Six for six: `2 * root_block` always equals the file's block count
+    // truncated down to a multiple of 32, never the raw block count. Passing
+    // `sectors=1` (so WinUAE presents the full, untruncated block count)
+    // makes AmigaDOS compute the root block at the *raw* half-count instead —
+    // for a 2334-block image that is 1167, where the filesystem's own root
+    // block is really at 1152 (half of 2304, the truncated count) — so the
+    // volume fails to validate and AmigaDOS reports "not a DOS disk", which
+    // is exactly what the user saw after the `sectors=1` change shipped.
+    // `sectors=32` is not a truncation bug to fix; it is the geometry these
+    // images were built for, and WinUAE must be told that geometry back.
     //
     // `reserved` stays at `2`. e-uae's own `docs/configuration.txt` documents
     // it as "the number of reserved blocks at the start of the partition
@@ -280,8 +290,7 @@ pub fn generate_uae_config(profile: &AmigaProfile, media: &LaunchMedia) -> CoreR
     // 32,1,2,512,1,`. Those two reserved blocks are the boot block (the
     // `DOS\x` signature and checksum) that sits at the very start of the
     // filesystem's own data — present whether or not an RDB precedes the
-    // image — so `reserved=2` describes this bare image correctly and is not
-    // part of what broke here; only the cylinder-rounding geometry was wrong.
+    // image — so `reserved=2` describes this bare image correctly.
     let access = if media.write_protect_hardfiles {
         "ro"
     } else {
@@ -298,7 +307,7 @@ pub fn generate_uae_config(profile: &AmigaProfile, media: &LaunchMedia) -> CoreR
             .unwrap_or(HardfileShape::Bare);
         match shape {
             HardfileShape::Bare => lines.push(format!(
-                "hardfile2={access},DH{i}:{hp},1,1,2,512,{boot_priority},,uae"
+                "hardfile2={access},DH{i}:{hp},32,1,2,512,{boot_priority},,uae"
             )),
             HardfileShape::Rdb | HardfileShape::Unknown => lines.push(format!(
                 "hardfile2={access},:{hp},0,0,0,0,{boot_priority},,uae"
@@ -409,39 +418,39 @@ mod tests {
         assert!(uae.contains("chipmem_size=4")); // 2048 KB / 512 = 4
         assert!(uae.contains("fastmem_size=8"));
         assert!(uae.contains("kickstart_rom_file=:AROS"));
-        assert!(uae.contains(r"hardfile2=rw,DH0:C:\HDFs\WHDGames.hdf,1,1,2,512,0,,uae"));
+        assert!(uae.contains(r"hardfile2=rw,DH0:C:\HDFs\WHDGames.hdf,32,1,2,512,0,,uae"));
     }
 
     /// ART-149: `1000 Miglia v1.2.hdf`
-    /// (`E:\amiga\Amigatolon\WHDload\HDF_Games_WHDLoad_by_Enzo_[#]\`), a real
+    /// (`E:\amiga\Amigatolon\WHDload\HDF_Games_WHDLoad_by_Enzo_[A]\`), a real
     /// self-booting WHDLoad hardfile, is 1,195,008 bytes = 2334 blocks of
-    /// 512 — deliberately *not* a round size, and deliberately not a whole
-    /// number of the old 32-sector/1-surface cylinders (72.9375 of them),
-    /// which is exactly why a test built only from round sizes never caught
-    /// this. Under that old geometry WinUAE rounded down to 72 whole
-    /// cylinders (2304 blocks) and silently dropped the last 30 blocks —
-    /// including the root block an FFS volume this size expects at block
-    /// 1167 — so the real run against this exact file produced "not a DOS
-    /// disk" in WinUAE despite the image being intact.
+    /// 512 — not a whole number of 32-sector/1-surface cylinders (72.9375 of
+    /// them). A change that presented the *raw* 2334-block count instead
+    /// (`sectors=1`) was tried and reverted: measured against six real
+    /// hardfiles from this user's collection, `2 * root_block` always equals
+    /// the file's block count truncated down to a multiple of 32, never the
+    /// raw count — these images were **built** at 32-sectors/1-surface
+    /// geometry, so the filesystem inside expects the truncated count, and
+    /// presenting the untruncated one instead is what actually produced
+    /// "not a DOS disk" on this exact file. `sectors=32` is correct and
+    /// pinned here so it is not "fixed" again the same way.
     #[test]
-    fn bare_geometry_represents_a_non_round_real_image_exactly() {
+    fn bare_geometry_truncates_to_the_built_cylinder_count() {
         let total_bytes: u64 = 1_195_008;
         assert_eq!(total_bytes, 2334 * 512, "the measured file size, in blocks");
-        // The defect: not a whole number of 32-sector/1-surface cylinders,
-        // so the old forced geometry (32,1,...) truncated the image.
+        // Not a whole number of 32-sector/1-surface cylinders — this file's
+        // block count (2334) truncates to 2304 (72 cylinders) under
+        // sectors=32, which is the geometry these images were built at.
         assert_ne!(
             total_bytes % (32 * 512),
             0,
-            "this file must not be a whole number of the old cylinder size, \
-             or it could not have exposed ART-149"
+            "this file must not be a whole number of 32-sector cylinders, \
+             or it would not distinguish the two geometries"
         );
-        // The fix: sectors=1, surfaces=1 makes one cylinder exactly one
-        // 512-byte block, so any whole-block file size divides evenly.
-        assert_eq!(total_bytes % 512, 0);
 
         let profile = AmigaProfile::a1200_aga();
         let path =
-            r"E:\amiga\Amigatolon\WHDload\HDF_Games_WHDLoad_by_Enzo_[#]\1000 Miglia v1.2.hdf";
+            r"E:\amiga\Amigatolon\WHDload\HDF_Games_WHDLoad_by_Enzo_[A]\1000 Miglia v1.2.hdf";
         let media = LaunchMedia {
             hardfile_paths: vec![path.into()],
             hardfile_shapes: vec![HardfileShape::Bare],
@@ -451,7 +460,7 @@ mod tests {
 
         let uae = generate_uae_config(&profile, &media).unwrap();
         assert!(
-            uae.contains(&format!("hardfile2=rw,DH0:{path},1,1,2,512,0,,uae")),
+            uae.contains(&format!("hardfile2=rw,DH0:{path},32,1,2,512,0,,uae")),
             "{uae}"
         );
     }
@@ -472,9 +481,9 @@ mod tests {
         };
 
         let uae = generate_uae_config(&profile, &media).unwrap();
-        assert!(uae.contains(r"hardfile2=rw,DH0:C:\HDFs\System.hdf,1,1,2,512,0,,uae"));
-        assert!(uae.contains(r"hardfile2=rw,DH1:C:\HDFs\Games.hdf,1,1,2,512,-128,,uae"));
-        assert!(uae.contains(r"hardfile2=rw,DH2:C:\HDFs\Data.hdf,1,1,2,512,-128,,uae"));
+        assert!(uae.contains(r"hardfile2=rw,DH0:C:\HDFs\System.hdf,32,1,2,512,0,,uae"));
+        assert!(uae.contains(r"hardfile2=rw,DH1:C:\HDFs\Games.hdf,32,1,2,512,-128,,uae"));
+        assert!(uae.contains(r"hardfile2=rw,DH2:C:\HDFs\Data.hdf,32,1,2,512,-128,,uae"));
         assert_eq!(uae.matches("hardfile2=").count(), 3);
     }
 
@@ -542,7 +551,7 @@ mod tests {
         assert!(media.hardfile_shapes.is_empty());
 
         let uae = generate_uae_config(&profile, &media).unwrap();
-        assert!(uae.contains(r"hardfile2=rw,DH0:C:\HDFs\WHDGames.hdf,1,1,2,512,0,,uae"));
+        assert!(uae.contains(r"hardfile2=rw,DH0:C:\HDFs\WHDGames.hdf,32,1,2,512,0,,uae"));
     }
 
     #[test]

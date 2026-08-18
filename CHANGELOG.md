@@ -51,16 +51,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   this used to land on Kickstart 1.3 — which cannot run WHDLoad, and cannot
   mount a hardfile's filesystem either — and reported *not a DOS disk*
   against a perfectly good file.
-- **A hardfile with no partition table no longer loses its last cylinder.**
-  WinUAE was told a fixed disk shape (32 sectors, 1 surface) for every plain
-  hardfile, which only fits a file whose size happens to be a whole multiple
-  of that shape — almost none are. The rest lost up to 16 KB off the end,
-  which is why some titles showed *not a DOS disk* even though the file
-  itself was intact. WinUAE is now told the file's actual size directly, so
-  every plain hardfile mounts complete. (This is a second, independent fix
-  for the same *not a DOS disk* message — see the Kickstart-selection fix
-  above for the other cause. Both had to land before the same title mounts
-  cleanly.)
+- **A change meant to stop a hardfile from "losing its last cylinder" was
+  itself wrong, and has been reverted (ART-149).** WinUAE's forced geometry
+  for a plain hardfile (32 sectors, 1 surface) was briefly changed to present
+  a file's exact byte size instead, on the theory that the old geometry
+  silently dropped a file's last partial cylinder. That theory's mechanism
+  was real but its conclusion was not: this collection's self-booting
+  WHDLoad hardfiles were themselves built at the old 32-sector geometry, and
+  the filesystem inside each one is sized to match — so presenting the exact
+  byte size instead made AmigaDOS look for the root block in the wrong
+  place, and titles that had mounted fine started reporting *not a DOS disk*
+  instead. The original 32-sectors/1-surface geometry is restored; see
+  ART-149 for the six-image measurement that settled it.
 
 #### Notes
 - **None of this has been run against your own files yet.** It is written and
