@@ -30,7 +30,7 @@ function sourceFiles(dir: string): string[] {
     const stat = statSync(full);
     if (stat.isDirectory()) {
       out.push(...sourceFiles(full));
-    } else if (/\.(ts|tsx)$/.test(entry) && !entry.endsWith(".test.ts")) {
+    } else if (/\.(ts|tsx)$/.test(entry) && !/\.test\.tsx?$/.test(entry)) {
       out.push(full);
     }
   }
