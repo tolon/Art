@@ -9,6 +9,8 @@ import { describe, expect, it } from "vitest";
 import en from "./en.json";
 
 import { ALL_PROVENANCES, provenancePhrase } from "@/lib/gameindex";
+import { mediaPhrase } from "@/lib/collectionDetail";
+import type { Media } from "@/lib/gameindex";
 import { outcomePhrase, sourcePhrase, type SourceOutcome } from "@/lib/artwork";
 
 import { describeCheckout, type CheckoutRow } from "@/lib/checkout";
@@ -911,6 +913,18 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
         const { phrase } = checksumBadge(rom);
         expect(isLeafKey(phrase.key), phrase.key).toBe(true);
       }
+    }
+  });
+
+  it("mediaPhrase: every medium resolves", () => {
+    const media: Media[] = [
+      { kind: "floppies", ordered: ["a.adf"] },
+      { kind: "hardfile", file: "a.hdf" },
+      { kind: "whdload-drawer", slave: "a.slave" },
+    ];
+    for (const one of media) {
+      const phrase = mediaPhrase(one);
+      expect(resolvesAtRuntime(phrase.key), phrase.key).toBe(true);
     }
   });
 });

@@ -1547,6 +1547,14 @@
     },
     "empty": {
       "noCollection": "Henüz koleksiyon yüklenmedi. Amiga oyunlarınızı, WHDLoad arşivlerinizi ve disklerinizi kataloglamak için \"{{buttonLabel}}\" düğmesine tıklayın."
+    },
+    "detail": {
+      "media": {
+        "floppies_one": "{{count}} disket",
+        "floppies_other": "{{count}} disket",
+        "hardfile": "Sabit disk imajı — {{file}}",
+        "whdload": "WHDLoad — {{slave}}"
+      }
     }
   },
   "whdload": {

@@ -1547,6 +1547,14 @@
     },
     "empty": {
       "noCollection": "No collection loaded. Click \"{{buttonLabel}}\" to catalog your Amiga games, WHDLoad archives, and disks."
+    },
+    "detail": {
+      "media": {
+        "floppies_one": "{{count}} floppy disk",
+        "floppies_other": "{{count}} floppy disks",
+        "hardfile": "Hard disk image — {{file}}",
+        "whdload": "WHDLoad — {{slave}}"
+      }
     }
   },
   "whdload": {
