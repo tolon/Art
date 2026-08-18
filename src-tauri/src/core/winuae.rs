@@ -29,6 +29,33 @@ pub struct LaunchMedia {
     /// user's HDF images (spec §93 — originals are immutable by default).
     #[serde(default)]
     pub write_protect_hardfiles: bool,
+    /// Host folders exposed to the emulated Amiga as `filesystem2=` volumes —
+    /// a game's drawer, and/or ART's own boot directory (spec §4.3/§4.4 of the
+    /// collection-wave-c design). `#[serde(default)]` so a `LaunchMedia`
+    /// stored by an older build, which never wrote this field, still
+    /// deserialises instead of failing to load.
+    #[serde(default)]
+    pub directories: Vec<DirMount>,
+}
+
+/// A host folder mounted as an Amiga volume (WinUAE `filesystem2=`).
+///
+/// `boot_priority` follows the same AmigaDOS `BootPri` convention as
+/// `hardfile2=` and the real RDB field it mirrors (`core::rdb::PartitionSpec`,
+/// `-128..=127`): during boot, AmigaDOS tries bootable devices in descending
+/// priority order, so a *higher* number boots *first*. ART's own boot
+/// directory is given the highest priority of anything mounted so it is
+/// always the device AmigaDOS boots from — that is the entire mechanism
+/// behind "one click starts the game" (Y2 in the design doc).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirMount {
+    pub host_path: String,
+    /// The WinUAE device name, e.g. `DH1` — not an Amiga volume label.
+    pub volume: String,
+    /// The Amiga volume label the mounted device presents, e.g. `Game`.
+    pub label: String,
+    pub boot_priority: i8,
+    pub read_only: bool,
 }
 
 /// Detect WinUAE on the host Windows environment.
@@ -188,6 +215,24 @@ pub fn generate_uae_config(profile: &AmigaProfile, media: &LaunchMedia) -> CoreR
         ));
     }
 
+    // Directory volumes (WinUAE cfgfile.cpp):
+    //   filesystem2=<rw|ro>,<device>:<volume label>:<host path>,<bootpri>
+    //
+    // Each entry's own `read_only` decides access — unlike the hardfiles
+    // above, a directory mount is typically the game's own writable drawer
+    // (WHDLoad keeps save games there) sitting beside ART's own read-write
+    // boot directory, so there is no single flag that applies to all of them.
+    for dm in &media.directories {
+        let host_path = checked_config_value("directory mount host path", &dm.host_path)?;
+        let volume = checked_config_value("directory mount volume", &dm.volume)?;
+        let label = checked_config_value("directory mount label", &dm.label)?;
+        let dm_access = if dm.read_only { "ro" } else { "rw" };
+        lines.push(format!(
+            "filesystem2={dm_access},{volume}:{label}:{host_path},{}",
+            dm.boot_priority
+        ));
+    }
+
     // Display & Graphics
     lines.push(format!("gfx_width_win={}", profile.display.width));
     lines.push(format!("gfx_height_win={}", profile.display.height));
@@ -340,5 +385,50 @@ mod tests {
 
         let err = generate_uae_config(&profile, &media).unwrap_err();
         assert!(matches!(err, CoreError::InvalidInput(_)));
+    }
+
+    /// Y1 and Y2 both need a host folder to appear as an Amiga volume, and the
+    /// system image beside it must not be writable.
+    #[test]
+    fn a_directory_mount_and_a_write_protected_system_reach_the_configuration() {
+        let profile = AmigaProfile::a1200_aga();
+        let media = LaunchMedia {
+            hardfile_paths: vec![r"E:\amiga\amikit\AmiKit.hdf".into()],
+            write_protect_hardfiles: true,
+            directories: vec![
+                DirMount {
+                    host_path: r"D:\games\Turrican".into(),
+                    volume: "DH1".into(),
+                    label: "Game".into(),
+                    boot_priority: 0,
+                    read_only: false,
+                },
+                DirMount {
+                    host_path: r"C:\Users\x\AppData\Roaming\art\launch\boot".into(),
+                    volume: "DH2".into(),
+                    label: "ARTBoot".into(),
+                    boot_priority: 10,
+                    read_only: false,
+                },
+            ],
+            ..Default::default()
+        };
+
+        let uae = generate_uae_config(&profile, &media).unwrap();
+
+        assert!(
+            uae.contains(r"filesystem2=rw,DH1:Game:D:\games\Turrican,0"),
+            "{uae}"
+        );
+        assert!(
+            uae.contains(
+                r"filesystem2=rw,DH2:ARTBoot:C:\Users\x\AppData\Roaming\art\launch\boot,10"
+            ),
+            "the boot directory outranks everything, which is what makes Y2 one click"
+        );
+        assert!(
+            uae.contains("hardfile2=ro,"),
+            "the user's own system image is mounted read-only"
+        );
     }
 }
