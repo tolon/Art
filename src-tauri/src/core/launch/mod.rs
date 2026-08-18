@@ -23,6 +23,7 @@
 //!   translation belongs at the command layer, not here.
 
 pub mod extract;
+pub mod whdload_boot;
 
 use serde::{Deserialize, Serialize};
 
