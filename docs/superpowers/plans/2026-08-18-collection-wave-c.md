@@ -923,7 +923,10 @@ export function TitleDetail({
         <dd style={{ margin: 0 }}>{record.rating?.value ?? t("common.unknown")}</dd>
       </dl>
 
-      {record.kickstart && (
+      {/* `KickstartNeed.image` is nullable — a slave can declare a size and a
+          CRC and no name at all — so the guard is on the image, not on the
+          need. Rendering `null` into the sentence is the bug this avoids. */}
+      {record.kickstart?.value.image && (
         <div className="faint" style={{ fontSize: 12 }}>
           {t("gameindex.kickstartNeeded", { image: record.kickstart.value.image })}
         </div>
@@ -1154,6 +1157,11 @@ pub struct ArtBinding {
 Add `pub art: Option<ArtBinding>` to `RecordOverride`, extend `is_empty()` with
 `&& self.art.is_none()`, and leave `apply_override` alone: a picture is not a
 `Fact` on the record and the screen reads it from the cache.
+
+Adding `pinned` to `EnrichRequest` breaks its one existing caller,
+`commands/artwork.rs::artwork_enrich`. **Pass `pinned: &[]` there for now** —
+Task 6 step 5 is where the real list arrives, and a command that pins nothing
+behaves exactly as it does today.
 
 In `enrich.rs`, add `pub pinned: &'a [String]` to `EnrichRequest` with a
 doc-comment saying why, and skip a title whose normalised key is in it before
