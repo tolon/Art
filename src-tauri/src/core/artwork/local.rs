@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::archive::open;
 use crate::core::artwork::cache::Cache;
+use crate::core::artwork::key::normalise;
 use crate::core::artwork::ArtKind;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
@@ -72,20 +73,20 @@ pub fn adopt_local(
         }
         sink.report(done as u64, Some(total), &want.title);
 
-        if cache
-            .adopt(&want.title, ArtKind::Snap, SOURCE_ID, "png")
-            .is_some()
-        {
+        // The Collection screen looks up `cache.best(&normalise(title))`
+        // (`commands/artwork.rs::artwork_known`), and `enrich()` stores under
+        // the same folded key. A raw `want.title` here would land the entry
+        // where nothing ever reads it back.
+        let key = normalise(&want.title);
+        if cache.adopt(&key, ArtKind::Snap, SOURCE_ID, "png").is_some() {
             outcome.adopted += 1;
             continue;
         }
         match extract(want) {
-            Some(bytes) => {
-                match cache.store(&want.title, ArtKind::Snap, SOURCE_ID, "png", &bytes) {
-                    Ok(_) => outcome.written += 1,
-                    Err(_) => outcome.missed += 1,
-                }
-            }
+            Some(bytes) => match cache.store(&key, ArtKind::Snap, SOURCE_ID, "png", &bytes) {
+                Ok(_) => outcome.written += 1,
+                Err(_) => outcome.missed += 1,
+            },
             None => outcome.missed += 1,
         }
     }
@@ -139,23 +140,29 @@ mod tests {
         dir
     }
 
+    /// The Collection screen never asks the cache for the raw title — it asks
+    /// for `normalise(title)`, exactly like `artwork_known` and `enrich()` do.
+    /// Storing under anything else extracts and writes the picture and then
+    /// never shows it, so the lookup here must go through the same fold the
+    /// reader uses rather than the raw title `adopt_local` was given.
     #[test]
     fn a_preview_inside_a_package_becomes_a_cached_picture() {
         let dir = scratch("adopt");
         let cache_dir = dir.join("cache");
         let pkg = package(
             &dir,
-            "Turrican.rp9",
+            "TheChaosEngine.rp9",
             &[
                 ("rp9-manifest.xml", b"<application/>"),
                 ("rp9-preview.png", b"PNGDATA"),
             ],
         );
+        let title = "The Chaos Engine";
 
         let outcome = adopt_local(
             &cache_dir,
             &[LocalPreview {
-                title: "Turrican".into(),
+                title: title.into(),
                 package: pkg,
                 entry: "rp9-preview.png".into(),
             }],
@@ -165,7 +172,9 @@ mod tests {
 
         assert_eq!(outcome.written, 1);
         let cache = Cache::open(&cache_dir).unwrap();
-        let art = cache.best("Turrican").expect("the cache holds it now");
+        let art = cache
+            .best(&normalise(title))
+            .expect("found the way artwork_known looks it up: cache.best(&normalise(title))");
         assert_eq!(art.source, "rp9");
         assert_eq!(art.kind, ArtKind::Snap);
         let bytes = std::fs::read(cache_dir.join(&art.file)).unwrap();
@@ -177,7 +186,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The second run must not rewrite 242 files to reach the same place.
+    /// The second run must not rewrite 242 files to reach the same place —
+    /// and can only find them again if `adopt` folds the title the same way
+    /// `store` did on the first pass.
     #[test]
     fn a_second_pass_adopts_rather_than_rewrites() {
         let dir = scratch("second");
