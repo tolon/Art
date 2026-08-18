@@ -619,6 +619,85 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-148** 🔴 ✅ **A WHDLoad title's machine was chosen with no floor on the
+Kickstart it boots, so a name-sorted ROM-folder scan could hand it one older
+than WHDLoad itself requires** — *found and fixed 2026-08-18, running the real
+application against the user's own `1000 Miglia` (a self-booting WHDLoad
+hardfile), which the emulator reported as "not a DOS disk", and confirmed
+against whdload.de's own requirements page*
+`src-tauri/src/core/launch/mod.rs`, `src-tauri/src/core/rom/mod.rs`,
+`src-tauri/src/commands/launch.rs` ·
+
+`1000 Miglia`'s catalogue record states no chipset and no Kickstart (both
+`null`). `machine_for(None, default)` therefore fell back to the user's own
+default machine — never set, so `a500` — and `plan_for` took the *first*
+A500-suitable ROM in `scan_rom_directory`'s name-sorted order, which in this
+user's folder is Kickstart 1.3. Two independent facts make that fatal on its
+own, not merely unlucky: WHDLoad's own requirements page
+(<https://www.whdload.de/docs/en/need.html>) states its minimum as "Kickstart
+2.0 (version 37)", so a 1.3 machine cannot run WHDLoad at all; and Kickstart
+1.x carries no hard-disk filesystem in ROM — Workbench 1.3 shipped
+FastFileSystem as a driver for the RDB, and a self-booting WHDLoad hardfile is
+a bare `DOS\1` FFS volume with **no** RDB, so a 1.x ROM has nothing to mount it
+with regardless of geometry. That second fact is "not a DOS disk", by itself.
+
+**A geometry theory for this same symptom, on this same file, was raised and
+withdrawn first — worth recording so the number is not reused for a claim that
+never shipped.** An earlier session traced the "not a DOS disk" report to
+`hardfile2=`'s forced `32 sectors/1 surface` geometry rounding a non-cylinder-
+aligned image's block count down, and implemented and committed a fix
+(`81e3162`, "Fix bare-hardfile geometry rounding down the last cylinder
+(ART-148)"). The premise was never established — WinUAE's own
+`32/1/2/512` geometry is reported as the working convention for non-aligned
+bare images in practice, and whether a floored *reported* cylinder count
+actually gates real I/O was traced into `hardfile.cpp::getchs2()` but not
+confirmed either way — so the commit was reverted with `git reset --hard`
+before it reached `main` (full writeup:
+`.superpowers/sdd/bare-geometry-fix-report.md`). The same investigation is
+where the cause above was first identified; this entry is where it was
+actually confirmed, fixed and tested, which is why it takes the number the
+withdrawn attempt never got to keep.
+
+**The fix.** `core::launch::WHDLOAD_MIN_KICKSTART_MAJOR` (37) is enforced as a
+floor on the *booted machine's* chosen ROM whenever a request is
+WHDLoad-shaped — `RequestKind::Whdload`, or `RequestKind::Hardfile { whdload:
+true }`, the shape `Media::WhdloadHardfile` (self-booting) takes. A plain
+hardfile (`whdload: false`) and a floppy set are never held to it: a
+hand-installed AmigaOS hardfile may legitimately need an old Kickstart, and a
+bare `.adf` must keep booting on any Kickstart. `core::rom::RomInfo` gained a
+`major: Option<u16>` field (mirrored onto `core::launch::LaunchRom`) so the
+floor is checked against a number, not re-derived from display text. Choosing
+among several suitable ROMs is now deterministic and no longer "first in
+scan order": `core::launch::best_rom` takes the highest known major, ties
+broken by name. A folder with nothing meeting the floor now refuses with a
+new `LaunchRefusal::NoRomMeetsWhdloadMinimum { machine }`, naming the actual
+requirement, rather than leaving the user at an AmigaDOS prompt to work out
+why.
+
+**The conceptual error this closes off.** A WHDLoad slave's own declared
+Kickstart (`SlaveFacts.kickstart` / a catalogue record's `KickstartNeed`) is
+the ROM image *WHDLoad itself* loads from `DEVS:Kickstarts` for the game, on a
+machine already running something modern — it is not what the machine should
+boot, and the floor above must never read it. `core/launch/mod.rs`'s own doc
+comment on `WHDLOAD_MIN_KICKSTART_MAJOR` and `commands/launch.rs::
+request_kind_from`'s doc comment both say so at the point the choice is made,
+since a field named `kickstart` sitting right next to a real launch decision
+is exactly the kind of thing that gets re-broken by someone reading the name
+instead of the comment.
+
+Regression tests, all failing against the pre-fix code:
+`core::launch::tests::a_whdload_hardfile_with_a_1_3_and_a_3_1_available_plans_the_3_1`,
+`core::launch::tests::a_whdload_hardfile_with_only_kickstart_1_x_refuses_with_the_floor`,
+`core::launch::tests::a_whdload_drawer_with_only_kickstart_1_x_refuses_with_the_floor`,
+`core::launch::tests::a_plain_hardfile_is_not_held_to_the_whdload_floor`,
+`core::launch::tests::a_floppy_set_is_not_held_to_the_whdload_floor`, and
+`core::rom::tests::major_from_revision_reads_the_leading_number_and_nothing_else`.
+
+**Whether `1000 Miglia` itself now boots has not been retried against the real
+emulator.** This entry is confirmed against WHDLoad's own stated minimum and
+the Kickstart-1.x-has-no-HD-filesystem-in-ROM fact above, and against the unit
+tests named here — not against WinUAE again.
+
 **ART-147** 🔴 ✅ **A self-booting WHDLoad hardfile was catalogued as an
 unpacked drawer, sending Play looking for a system volume the file never
 needed — and shipping the fix broke every catalogue that already existed**

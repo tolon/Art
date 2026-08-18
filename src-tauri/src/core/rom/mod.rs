@@ -57,6 +57,19 @@ pub struct RomInfo {
     pub checksum: RomChecksum,
     pub compatible_models: Vec<String>,
     pub file_path: String,
+    /// The Kickstart major this file identifies as, when one is known —
+    /// `Some(37)` for a 2.04, `Some(40)` for a 3.1. Exists so a caller can
+    /// apply a floor like WHDLoad's own stated minimum ("Kickstart 2.0
+    /// (version 37)", <https://www.whdload.de/docs/en/need.html> — see
+    /// `core::launch::WHDLOAD_MIN_KICKSTART_MAJOR`) without re-deriving a
+    /// number out of `revision`'s text. **Not an identifier**: several
+    /// models share a major, so `compatible_models` stays the authority on
+    /// which machine a ROM suits — this only ever answers "how new".
+    /// `None` when nothing here names a numeric major: an AROS replacement
+    /// (`revision` is `"Built-in"`), an Amiga Forever dump with no `rom.key`
+    /// beside it to decode, or a file that is not recognisably a Kickstart.
+    #[serde(default)]
+    pub major: Option<u16>,
 }
 
 /// The verdict on a ROM file's stored checksum.
@@ -175,6 +188,17 @@ const KNOWN_ROMS: &[KnownRom] = &[
     },
 ];
 
+/// The Kickstart major encoded in a `major.minor` revision string, the shape
+/// every `KNOWN_ROMS` entry's `revision` and every ROM's own stated version
+/// both write it (`format!("{major}.{:03}", minor)`) — see
+/// [`RomInfo::major`]. `None` for anything not that shape: `""`, `"Built-in"`
+/// (AROS) or a size like `"256 KB"` (the generic fallback), none of which
+/// this function is ever actually called on today but all of which it must
+/// answer safely rather than panic on.
+fn major_from_revision(revision: &str) -> Option<u16> {
+    revision.split('.').next()?.parse().ok()
+}
+
 /// Largest file ART will read as a Kickstart ROM.
 ///
 /// Real Kickstarts top out at 1 MB (2 MB for an extended pair). The user can
@@ -223,6 +247,7 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
                 checksum: RomChecksum::NotChecked,
                 compatible_models: Vec::new(),
                 file_path: path.to_string_lossy().to_string(),
+                major: None,
             })
         }
         (false, _) => raw_bytes,
@@ -261,6 +286,9 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
             checksum,
             compatible_models: matched.models.iter().map(|s| s.to_string()).collect(),
             file_path: path.to_string_lossy().to_string(),
+            // `0` is remus's own "no numbered major" case (`Custom` above) —
+            // never a real Kickstart major, so it becomes `None` here too.
+            major: (matched.major != 0).then_some(matched.major),
         });
     }
 
@@ -282,6 +310,7 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
             checksum,
             compatible_models: matched.models.iter().map(|s| s.to_string()).collect(),
             file_path: path.to_string_lossy().to_string(),
+            major: major_from_revision(matched.revision),
         });
     }
 
@@ -316,6 +345,7 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
             // Empty on purpose: the ROM said its version, not its machine.
             compatible_models: Vec::new(),
             file_path: path.to_string_lossy().to_string(),
+            major: Some(major),
         });
     }
 
@@ -336,6 +366,10 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
             checksum,
             compatible_models: vec!["A500".into(), "A1200".into(), "A4000".into()],
             file_path: path.to_string_lossy().to_string(),
+            // AROS states no Kickstart major at all — nothing here to floor
+            // against, so a caller enforcing WHDLoad's minimum must not
+            // guess one on AROS's behalf.
+            major: None,
         });
     }
 
@@ -381,6 +415,9 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
         checksum,
         compatible_models: Vec::new(),
         file_path: path.to_string_lossy().to_string(),
+        // Nothing here identified a Kickstart major — `revision` is a size,
+        // not a version.
+        major: None,
     })
 }
 
@@ -631,6 +668,22 @@ fn stored_checksum(bytes: &[u8]) -> Option<u32> {
 mod tests {
     use super::*;
 
+    /// [`major_from_revision`] feeds [`RomInfo::major`] for the
+    /// `KNOWN_ROMS`-by-hash case — every real revision string parses, and
+    /// the shapes that are not a `major.minor` string (an AROS entry's
+    /// `"Built-in"`, a Cloanto-without-key's `""`, a generic fallback's
+    /// `"256 KB"`) come back `None` rather than panicking or misreading a
+    /// leading digit run as a major.
+    #[test]
+    fn major_from_revision_reads_the_leading_number_and_nothing_else() {
+        assert_eq!(major_from_revision("40.068"), Some(40));
+        assert_eq!(major_from_revision("34.005"), Some(34));
+        assert_eq!(major_from_revision("47.111"), Some(47));
+        assert_eq!(major_from_revision(""), None);
+        assert_eq!(major_from_revision("Built-in"), None);
+        assert_eq!(major_from_revision("256 KB"), None);
+    }
+
     #[test]
     fn strip_cloanto_rom_header() {
         let mut raw = CLOANTO_HEADER.to_vec();
@@ -740,6 +793,11 @@ mod tests {
         assert_eq!(info.version, "3.1", "{info:?}");
         assert_eq!(info.revision, "40.068");
         assert_eq!(info.name, "Kickstart 3.1 (40.068)");
+        assert_eq!(
+            info.major,
+            Some(40),
+            "the ROM's own stated major (ART-150's floor reads exactly this)"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -805,9 +863,11 @@ mod tests {
         assert_eq!(one.compatible_models, vec!["A1200".to_string()]);
         assert_eq!(one.version, "3.1", "derived from the major, as ever");
         assert_eq!(one.revision, "40.068");
+        assert_eq!(one.major, Some(40));
 
         assert_eq!(other.name, "Kickstart 40.68 (A4000)");
         assert_eq!(other.compatible_models, vec!["A4000".to_string()]);
+        assert_eq!(other.major, Some(40));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -1619,6 +1619,7 @@
         },
         "refusal": {
           "noSuitableRom": "ROM klasöründe {{machine}} için uygun bir Kickstart yok.",
+          "noRomMeetsWhdloadMinimum": "WHDLoad, Kickstart 2.0 veya daha yenisini gerektiriyor; ROM klasörünüzde bunu karşılayan bir {{machine}} Kickstart'ı yok.",
           "noSystemVolume": "Bu WHDLoad başlığı önyüklenebilir bir sistem gerektiriyor ve ayarlanmış değil.",
           "fileMissing": "'{{path}}' artık yok.",
           "nothingToMount": "Bu başlık takılacak bir disk belirtmiyor — WinUAE'nin yükleyeceği hiçbir şey yok."

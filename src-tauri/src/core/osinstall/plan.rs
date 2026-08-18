@@ -664,6 +664,7 @@ mod condition_tests {
                 checksum: crate::core::rom::RomChecksum::NotChecked,
                 compatible_models: Vec::new(),
                 file_path: String::new(),
+                major: Some(major),
             },
         }
     }

@@ -37,13 +37,14 @@ use crate::core::winuae::{
 };
 use crate::error::{AppError, AppResult};
 
-/// `RomInfo` → the two fields `core/launch` reads. The lower module must not
-/// know the higher one's type; this is where the translation lives.
+/// `RomInfo` → the three fields `core/launch` reads. The lower module must
+/// not know the higher one's type; this is where the translation lives.
 fn launch_rom_from(info: &RomInfo) -> LaunchRom {
     LaunchRom {
         name: info.name.clone(),
         models: info.compatible_models.clone(),
         path: info.file_path.clone(),
+        major: info.major,
     }
 }
 
@@ -147,6 +148,15 @@ fn resolved_machine(request: &LaunchArgs) -> Machine {
 /// no `Media` variant reaches it today: nothing in `core::gameindex` catalogues
 /// a loose drawer or an `.lha` archive as a title.
 ///
+/// **`whdload` on the request is not the same field it looks like.** It is
+/// `RequestKind::Hardfile::whdload` — whether `core::launch::plan_for` must
+/// enforce WHDLoad's own Kickstart floor (ART-150) — set from *which `Media`
+/// variant this is*, never from anything the catalogue's `KickstartNeed`
+/// states. A WHDLoad slave's own declared Kickstart (`kick34005.A500`, say)
+/// is the ROM *WHDLoad itself* loads for the game once the machine is
+/// already running; it says nothing about what floor the machine's own boot
+/// ROM needs, and this mapping must never read it as if it did.
+///
 /// [`launch_title_inner`] is what turns either shape into real paths on
 /// disk; the preview shows the disk/hardfile name the user recognises rather
 /// than a temporary directory they have never seen.
@@ -155,8 +165,13 @@ fn request_kind_from(args: &LaunchArgs) -> RequestKind {
         Media::Floppies { ordered } => RequestKind::Floppies {
             images: ordered.clone(),
         },
-        Media::Hardfile { file } | Media::WhdloadHardfile { file, .. } => RequestKind::Hardfile {
+        Media::Hardfile { file } => RequestKind::Hardfile {
             image: file.clone(),
+            whdload: false,
+        },
+        Media::WhdloadHardfile { file, .. } => RequestKind::Hardfile {
+            image: file.clone(),
+            whdload: true,
         },
     }
 }
@@ -218,6 +233,12 @@ fn refusal_error(refusal: LaunchRefusal) -> CoreError {
     let message = match &refusal {
         LaunchRefusal::NoSuitableRom { machine } => {
             format!("no Kickstart in the ROM folder suits {machine:?}")
+        }
+        LaunchRefusal::NoRomMeetsWhdloadMinimum { machine } => {
+            format!(
+                "this WHDLoad title needs Kickstart 2.0 or newer, and the ROM folder holds \
+                 none for {machine:?} that meet it"
+            )
         }
         LaunchRefusal::NoSystemVolume => {
             "no bootable system volume is configured for this WHDLoad title".to_string()
@@ -598,7 +619,7 @@ mod tests {
     /// lower-imports-higher mistake `core/rom/pairing.rs` documents. The
     /// translation happens here, which is where this codebase puts it.
     #[test]
-    fn a_rom_info_becomes_the_two_fields_the_launcher_reads() {
+    fn a_rom_info_becomes_the_three_fields_the_launcher_reads() {
         let info = RomInfo {
             name: "Kickstart 40.68 (A1200)".into(),
             version: "3.1".into(),
@@ -612,6 +633,7 @@ mod tests {
             checksum: RomChecksum::Valid,
             compatible_models: vec!["A1200".into()],
             file_path: r"D:\roms\kick.rom".into(),
+            major: Some(40),
         };
 
         let rom = launch_rom_from(&info);
@@ -619,6 +641,7 @@ mod tests {
         assert_eq!(rom.name, "Kickstart 40.68 (A1200)");
         assert_eq!(rom.models, vec!["A1200".to_string()]);
         assert_eq!(rom.path, r"D:\roms\kick.rom");
+        assert_eq!(rom.major, Some(40));
     }
 
     /// The catalogue's two-way `ChipsetRequirement` ("ocsecs" / "aga") maps
@@ -863,7 +886,10 @@ mod tests {
             file: "af-application.hdf".into(),
         });
         match request_kind_from(&a) {
-            RequestKind::Hardfile { image } => assert_eq!(image, "af-application.hdf"),
+            RequestKind::Hardfile { image, whdload } => {
+                assert_eq!(image, "af-application.hdf");
+                assert!(!whdload, "a plain hardfile is not WHDLoad-shaped");
+            }
             other => panic!("{other:?}"),
         }
     }
@@ -873,6 +899,11 @@ mod tests {
     /// boot directory to write. `slave` is not read here at all; it is a fact
     /// carried on the record for the title's provenance, not something a
     /// launch decision consults.
+    ///
+    /// ART-150: `whdload` on the request kind must be `true` here — this is
+    /// exactly `1000 Miglia`'s own shape, and it is what tells `plan_for` to
+    /// enforce WHDLoad's Kickstart floor instead of accepting any ROM that
+    /// merely suits the machine's model.
     #[test]
     fn media_whdload_hardfile_becomes_request_kind_hardfile() {
         let a = args(Media::WhdloadHardfile {
@@ -880,7 +911,10 @@ mod tests {
             slave: "1000Miglia.Slave".into(),
         });
         match request_kind_from(&a) {
-            RequestKind::Hardfile { image } => assert_eq!(image, "1000 Miglia.hdf"),
+            RequestKind::Hardfile { image, whdload } => {
+                assert_eq!(image, "1000 Miglia.hdf");
+                assert!(whdload, "a self-booting WHDLoad hardfile is WHDLoad-shaped");
+            }
             other => panic!("{other:?}"),
         }
     }
@@ -940,6 +974,7 @@ mod tests {
                 name: "Kickstart 3.1".into(),
                 models: vec!["A1200".into()],
                 path: r"D:\roms\kick.rom".into(),
+                major: Some(40),
             },
             kind,
             notes: vec![],

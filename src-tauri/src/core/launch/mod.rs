@@ -37,6 +37,15 @@ pub struct LaunchRom {
     /// Which Amiga models this ROM suits, e.g. `["A500", "A2000"]`.
     pub models: Vec<String>,
     pub path: String,
+    /// Mirrors `core::rom::RomInfo::major` — see that field's doc comment
+    /// for what "major" means and why it is not an identifier. `None` when
+    /// the ROM states no numeric version ART could read (ART-150): an AROS
+    /// replacement or an encrypted Amiga Forever dump ART has no key for.
+    /// [`WHDLOAD_MIN_KICKSTART_MAJOR`] is the one thing this module reads it
+    /// for, so a ROM with no known major can never satisfy that floor —
+    /// deliberately: ART does not guess a ROM new enough for WHDLoad out of
+    /// one it could not identify.
+    pub major: Option<u16>,
 }
 
 /// Which Amiga a title runs on. Only the two chipset tiers ART's catalogue
@@ -87,9 +96,29 @@ pub enum LaunchKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum RequestKind {
-    Floppies { images: Vec<String> },
-    Hardfile { image: String },
-    Whdload { drawer: String, slave: String },
+    Floppies {
+        images: Vec<String>,
+    },
+    /// `whdload: true` for a self-booting WHDLoad hardfile
+    /// (`Media::WhdloadHardfile` — `commands/launch.rs::request_kind_from`),
+    /// `false` for a hardfile that is a plain AmigaOS installation
+    /// (`Media::Hardfile`, or an `.rp9`'s own `<harddrive>`). This is the
+    /// one bit `plan_for` needs to know whether [`WHDLOAD_MIN_KICKSTART_MAJOR`]
+    /// applies: WHDLoad's own stated minimum is a fact about *that*
+    /// software, not about hardfiles in general, and a hand-installed
+    /// AmigaOS hardfile may need — and legitimately run on — a Kickstart
+    /// older than WHDLoad ever supported. Getting this backwards in either
+    /// direction is wrong: raising the floor for every hardfile would refuse
+    /// old-OS installs that work today; never raising it is ART-150, the bug
+    /// this field exists to fix.
+    Hardfile {
+        image: String,
+        whdload: bool,
+    },
+    Whdload {
+        drawer: String,
+        slave: String,
+    },
 }
 
 /// The finished decision: what to launch, and anything the user should be
@@ -122,6 +151,18 @@ pub enum LaunchNote {
 pub enum LaunchRefusal {
     /// None of the candidate ROMs suit the chosen machine.
     NoSuitableRom { machine: Machine },
+    /// The chosen machine has a suitable ROM for its model, but nothing new
+    /// enough to meet WHDLoad's own stated minimum
+    /// ([`WHDLOAD_MIN_KICKSTART_MAJOR`]) — ART-150. A Kickstart 1.x machine
+    /// cannot run WHDLoad at all (whdload.de's requirements page:
+    /// <https://www.whdload.de/docs/en/need.html>), and a bare `DOS\1` FFS
+    /// hardfile with no RDB has no filesystem for a 1.x ROM to mount it
+    /// with either way — the "not a DOS disk" a user sees is this refusal,
+    /// arrived at the hard way instead of stated up front. Distinct from
+    /// [`LaunchRefusal::NoSuitableRom`] so the message can name the actual
+    /// requirement instead of leaving the user to guess why an otherwise
+    /// working-looking ROM was not picked.
+    NoRomMeetsWhdloadMinimum { machine: Machine },
     /// A WHDLoad drawer needs a system to boot into, and ART owns none.
     NoSystemVolume,
     /// A path the plan needs turned out not to exist, once the command
@@ -170,6 +211,24 @@ pub struct LaunchRequest<'a> {
 /// not a silent drop.
 pub const MAX_FLOPPY_DRIVES: usize = 4;
 
+/// WHDLoad's own stated minimum — "Kickstart 2.0 (version 37)" — from its
+/// requirements page: <https://www.whdload.de/docs/en/need.html>. Applied as
+/// a floor on the **booted machine's** ROM ([`LaunchRom::major`]), never as a
+/// hardcoded machine choice: an A500 with a 3.1 ROM meets it exactly as well
+/// as an A1200 does (ART-150).
+///
+/// **This is not the same number a WHDLoad slave names.** A slave like
+/// `Turrican.slave` carries its own declared Kickstart — `kick34005.A500`,
+/// say — in `SlaveFacts::kickstart` / `Media::WhdloadHardfile`'s catalogued
+/// `KickstartNeed`, and that name is the ROM image *WHDLoad itself* loads
+/// from `DEVS:Kickstarts` for the game, on a machine that is **already
+/// running something modern**. It is not what the machine should boot, and
+/// this floor must never be read off it — that would put a 1.3-shaped
+/// requirement back into a check built to rule 1.3 out. `machine_for` and
+/// `plan_for` read only the catalogue's `Chipset` and the ROM's own stated
+/// major; neither ever looks at a slave's declared Kickstart.
+pub const WHDLOAD_MIN_KICKSTART_MAJOR: u16 = 37;
+
 /// Which machine a stated chipset requirement asks for, falling back to the
 /// user's own default when the catalogue states none.
 ///
@@ -184,6 +243,46 @@ pub fn machine_for(stated: Option<Chipset>, default: Machine) -> Machine {
     }
 }
 
+/// Whether a request needs [`WHDLOAD_MIN_KICKSTART_MAJOR`] enforced — see
+/// that constant and [`RequestKind::Hardfile`]'s own doc comment for why a
+/// plain hardfile is excluded.
+fn needs_whdload_floor(kind: &RequestKind) -> bool {
+    match kind {
+        RequestKind::Whdload { .. } => true,
+        RequestKind::Hardfile { whdload, .. } => *whdload,
+        RequestKind::Floppies { .. } => false,
+    }
+}
+
+/// The ROM this launch will boot, among every candidate that suits the
+/// machine's model.
+///
+/// **The rule: highest known major wins, ties break by name.** A ROM whose
+/// major ART could not read ([`LaunchRom::major`] is `None`) sorts below
+/// every known one — `Option<u16>`'s own `Ord` already orders `None` before
+/// `Some`, so this reads as plainly as it decides. Picking the newest
+/// suitable ROM rather than "first in scan order" (ART-150: that scan order
+/// is alphabetic, so a folder holding both a 1.3 and a 3.1 dump for the same
+/// machine picked the 1.3) is deliberate for two reasons: it is what a
+/// WHDLoad floor needs to be checkable — filtering by `min_major` first and
+/// taking the newest survivor is the same operation, not a special case —
+/// and a newer Kickstart is the more broadly compatible default absent any
+/// other signal, since ART has no per-title data saying an *older* one is
+/// required. `min_major` is `None` for anything that does not carry
+/// [`WHDLOAD_MIN_KICKSTART_MAJOR`]'s requirement (a floppy, a plain
+/// hardfile), in which case a ROM with no known major is still eligible —
+/// only the WHDLoad floor demands a *proven* major, because an unproven one
+/// might be exactly the 1.x machine that requirement exists to rule out.
+fn best_rom(roms: &[LaunchRom], machine: Machine, min_major: Option<u16>) -> Option<&LaunchRom> {
+    roms.iter()
+        .filter(|rom| rom.models.iter().any(|m| m == machine.model_name()))
+        .filter(|rom| match min_major {
+            Some(floor) => rom.major.is_some_and(|major| major >= floor),
+            None => true,
+        })
+        .max_by_key(|rom| (rom.major, std::cmp::Reverse(rom.name.clone())))
+}
+
 /// Decide what a launch needs, or refuse rather than guess.
 pub fn plan_for(request: &LaunchRequest) -> Result<LaunchPlan, LaunchRefusal> {
     // Checked before the ROM lookup: a floppy set with nothing to mount is a
@@ -195,14 +294,26 @@ pub fn plan_for(request: &LaunchRequest) -> Result<LaunchPlan, LaunchRefusal> {
         }
     }
 
-    let rom = request
-        .roms
-        .iter()
-        .find(|rom| rom.models.iter().any(|m| m == request.machine.model_name()))
+    // A bare `.adf` boots on any Kickstart and must keep doing so (ART-150):
+    // the floor below applies only when `needs_whdload_floor` says this
+    // request is WHDLoad-shaped.
+    let rom = if needs_whdload_floor(&request.kind) {
+        best_rom(
+            request.roms,
+            request.machine,
+            Some(WHDLOAD_MIN_KICKSTART_MAJOR),
+        )
         .cloned()
-        .ok_or(LaunchRefusal::NoSuitableRom {
+        .ok_or(LaunchRefusal::NoRomMeetsWhdloadMinimum {
             machine: request.machine,
-        })?;
+        })?
+    } else {
+        best_rom(request.roms, request.machine, None)
+            .cloned()
+            .ok_or(LaunchRefusal::NoSuitableRom {
+                machine: request.machine,
+            })?
+    };
 
     let mut notes = Vec::new();
 
@@ -218,7 +329,7 @@ pub fn plan_for(request: &LaunchRequest) -> Result<LaunchPlan, LaunchRefusal> {
             }
             LaunchKind::Floppies { images: mounted }
         }
-        RequestKind::Hardfile { image } => LaunchKind::Hardfile {
+        RequestKind::Hardfile { image, .. } => LaunchKind::Hardfile {
             image: image.clone(),
         },
         RequestKind::Whdload { drawer, slave } => {
@@ -252,6 +363,7 @@ mod tests {
             name: "Kickstart 40.68 (A1200)".into(),
             models: vec!["A1200".into()],
             path: r"D:\roms\kick40068.A1200".into(),
+            major: Some(40),
         }
     }
 
@@ -260,6 +372,18 @@ mod tests {
             name: "Kickstart 34.5 (A500/A2000/A1000)".into(),
             models: vec!["A500".into(), "A2000".into()],
             path: r"D:\roms\kick34005.A500".into(),
+            major: Some(34),
+        }
+    }
+
+    /// The other end of the ROM folder from [`a500_rom`] — same models, a
+    /// major that meets [`WHDLOAD_MIN_KICKSTART_MAJOR`].
+    fn a500_kick31() -> LaunchRom {
+        LaunchRom {
+            name: "Kickstart 3.1 (40.063) A500/A600/A2000".into(),
+            models: vec!["A500".into(), "A600".into(), "A2000".into()],
+            path: r"D:\roms\kick40063.A500".into(),
+            major: Some(40),
         }
     }
 
@@ -314,6 +438,7 @@ mod tests {
             roms: &[],
             kind: RequestKind::Hardfile {
                 image: r"D:\g\game.hdf".into(),
+                whdload: false,
             },
             system_volume: None,
             one_click: true,
@@ -434,6 +559,124 @@ mod tests {
         }
     }
 
+    // ---- ART-150: WHDLoad's own Kickstart floor -----------------------
+    //
+    // <https://www.whdload.de/docs/en/need.html> states WHDLoad's minimum as
+    // "Kickstart 2.0 (version 37)". `1000 Miglia` — a self-booting WHDLoad
+    // hardfile whose catalogue record states no chipset — was planned on a
+    // Kickstart 1.3 machine because `plan_for` used to take "first suitable
+    // ROM in scan order" with no floor at all. A 1.3 machine cannot run
+    // WHDLoad (below its stated minimum) and has no hard-disk filesystem in
+    // ROM to mount the bare `DOS\1` FFS hardfile with either way — both
+    // halves of why the emulator said "not a DOS disk".
+
+    /// A folder holding both a 1.3 and a 3.1 dump for the same machine must
+    /// plan the 3.1 — the 1.3 winning a name-sorted scan is exactly ART-150.
+    #[test]
+    fn a_whdload_hardfile_with_a_1_3_and_a_3_1_available_plans_the_3_1() {
+        let plan = plan_for(&LaunchRequest {
+            machine: Machine::A500,
+            roms: &[a500_rom(), a500_kick31()],
+            kind: RequestKind::Hardfile {
+                image: r"D:\g\1000 Miglia.hdf".into(),
+                whdload: true,
+            },
+            system_volume: None,
+            one_click: true,
+        })
+        .unwrap();
+
+        assert_eq!(plan.rom.major, Some(40));
+    }
+
+    /// A folder holding only Kickstart 1.x must refuse a WHDLoad hardfile
+    /// rather than plan a machine that cannot run WHDLoad — or mount the
+    /// hardfile — at all.
+    #[test]
+    fn a_whdload_hardfile_with_only_kickstart_1_x_refuses_with_the_floor() {
+        let refusal = plan_for(&LaunchRequest {
+            machine: Machine::A500,
+            roms: &[a500_rom()],
+            kind: RequestKind::Hardfile {
+                image: r"D:\g\1000 Miglia.hdf".into(),
+                whdload: true,
+            },
+            system_volume: None,
+            one_click: true,
+        })
+        .unwrap_err();
+
+        assert!(matches!(
+            refusal,
+            LaunchRefusal::NoRomMeetsWhdloadMinimum {
+                machine: Machine::A500
+            }
+        ));
+    }
+
+    /// `RequestKind::Whdload` is WHDLoad-shaped by definition, so the same
+    /// floor applies to it — checked before `NoSystemVolume`, so a title
+    /// with no suitable Kickstart is refused for the right reason first.
+    #[test]
+    fn a_whdload_drawer_with_only_kickstart_1_x_refuses_with_the_floor() {
+        let refusal = plan_for(&LaunchRequest {
+            machine: Machine::A500,
+            roms: &[a500_rom()],
+            kind: RequestKind::Whdload {
+                drawer: r"D:\games\Turrican".into(),
+                slave: "Turrican.slave".into(),
+            },
+            system_volume: None,
+            one_click: true,
+        })
+        .unwrap_err();
+
+        assert!(matches!(
+            refusal,
+            LaunchRefusal::NoRomMeetsWhdloadMinimum {
+                machine: Machine::A500
+            }
+        ));
+    }
+
+    /// The same folder, for a *plain* hardfile (`whdload: false`), must not
+    /// be held to WHDLoad's floor — a hand-installed AmigaOS hardfile may
+    /// need exactly this Kickstart and has nothing to do with WHDLoad.
+    #[test]
+    fn a_plain_hardfile_is_not_held_to_the_whdload_floor() {
+        let plan = plan_for(&LaunchRequest {
+            machine: Machine::A500,
+            roms: &[a500_rom()],
+            kind: RequestKind::Hardfile {
+                image: r"D:\g\game.hdf".into(),
+                whdload: false,
+            },
+            system_volume: None,
+            one_click: true,
+        })
+        .unwrap();
+
+        assert_eq!(plan.rom.major, Some(34));
+    }
+
+    /// A bare `.adf` must keep booting on any Kickstart — the floor never
+    /// applies to floppies, even when the only ROM on hand is a 1.3.
+    #[test]
+    fn a_floppy_set_is_not_held_to_the_whdload_floor() {
+        let plan = plan_for(&LaunchRequest {
+            machine: Machine::A500,
+            roms: &[a500_rom()],
+            kind: RequestKind::Floppies {
+                images: vec![r"D:\g\a.adf".into()],
+            },
+            system_volume: None,
+            one_click: true,
+        })
+        .unwrap();
+
+        assert_eq!(plan.rom.major, Some(34));
+    }
+
     /// What a later task's TypeScript has to match, pinned exactly as
     /// `core/rom/pairing.rs::the_wire_shape_is_what_the_frontend_reads` pins
     /// `Pairing`'s — for the same reason: Rust keeps compiling if a variant
@@ -471,6 +714,13 @@ mod tests {
             })
             .unwrap(),
             serde_json::json!({ "kind": "no-suitable-rom", "machine": "a1200" })
+        );
+        assert_eq!(
+            serde_json::to_value(LaunchRefusal::NoRomMeetsWhdloadMinimum {
+                machine: Machine::A500
+            })
+            .unwrap(),
+            serde_json::json!({ "kind": "no-rom-meets-whdload-minimum", "machine": "a500" })
         );
         assert_eq!(
             serde_json::to_value(LaunchRefusal::NoSystemVolume).unwrap(),
@@ -528,10 +778,11 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(RequestKind::Hardfile {
-                image: "a.hdf".into()
+                image: "a.hdf".into(),
+                whdload: true,
             })
             .unwrap(),
-            serde_json::json!({ "kind": "hardfile", "image": "a.hdf" })
+            serde_json::json!({ "kind": "hardfile", "image": "a.hdf", "whdload": true })
         );
         assert_eq!(
             serde_json::to_value(RequestKind::Whdload {

@@ -1619,6 +1619,7 @@
         },
         "refusal": {
           "noSuitableRom": "No Kickstart in the ROM folder suits {{machine}}.",
+          "noRomMeetsWhdloadMinimum": "WHDLoad needs Kickstart 2.0 or newer, and your ROM folder has no {{machine}} Kickstart that meets it.",
           "noSystemVolume": "This WHDLoad title needs a bootable system, and none is set.",
           "fileMissing": "'{{path}}' no longer exists.",
           "nothingToMount": "This title names no disk to mount — there is nothing for WinUAE to load."

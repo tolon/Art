@@ -25,6 +25,9 @@ export interface LaunchRom {
   name: string;
   models: string[];
   path: string;
+  /** Mirrors `core::rom::RomInfo.major` / `core::launch::LaunchRom.major` —
+   *  `null` when ART could not read a numeric Kickstart major off this ROM. */
+  major: number | null;
 }
 
 /**
@@ -43,6 +46,15 @@ export type LaunchNote = { kind: "more-disks-than-drives"; total: number; mounte
 
 export type LaunchRefusal =
   | { kind: "no-suitable-rom"; machine: Machine }
+  /**
+   * ART-150: a WHDLoad title (a self-booting hardfile or a drawer+system
+   * launch) found a ROM for the machine's model, but nothing new enough to
+   * meet WHDLoad's own stated minimum — see
+   * `core::launch::WHDLOAD_MIN_KICKSTART_MAJOR`'s doc comment for the cited
+   * source. Distinct from `"no-suitable-rom"` so the screen can name the
+   * actual requirement instead of a generic "no ROM suits this machine".
+   */
+  | { kind: "no-rom-meets-whdload-minimum"; machine: Machine }
   | { kind: "no-system-volume" }
   | { kind: "file-missing"; path: string }
   | { kind: "nothing-to-mount" };
@@ -139,6 +151,11 @@ export function refusalPhrase(refusal: LaunchRefusal): Phrase {
       // second `Phrase` needing its own translator.
       return {
         key: "collection.detail.play.refusal.noSuitableRom",
+        params: { machine: refusal.machine.toUpperCase() },
+      };
+    case "no-rom-meets-whdload-minimum":
+      return {
+        key: "collection.detail.play.refusal.noRomMeetsWhdloadMinimum",
         params: { machine: refusal.machine.toUpperCase() },
       };
     case "no-system-volume":
