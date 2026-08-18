@@ -41,8 +41,9 @@
 
 use std::path::Path;
 
+use crate::core::adf::bcpl::AmigaDate;
 use crate::core::error::{CoreError, CoreResult};
-use crate::core::iso::{IsoImage, IsoWalkEntry};
+use crate::core::iso::{IsoImage, IsoWalkEntry, MAX_WALK_DEPTH, MAX_WALK_ENTRIES};
 use crate::core::volume::write::file::default_protection;
 use crate::core::volume::write::layout::amiga_from_unix;
 
@@ -61,9 +62,42 @@ pub struct CdSource {
 
 impl CdSource {
     /// Open `path` and walk its whole tree once.
+    ///
+    /// `IsoImage::walk` can stop short of the whole disc — `depth_limited`
+    /// when a directory sits at [`MAX_WALK_DEPTH`], `truncated` at
+    /// [`MAX_WALK_ENTRIES`] — and returns what it found anyway rather than
+    /// failing outright, because a caller like a file-manager listing would
+    /// rather show a partial tree than nothing. An install source is not
+    /// that caller: a `CdSource` missing files it silently never saw would
+    /// turn into an install plan silently missing files, which is exactly
+    /// the "truncated listing presented as complete" `IsoImage::walk`'s own
+    /// doc comment names as the thing to avoid (§10, §89). So here, unlike
+    /// the file-manager path, either flag is refused rather than carried
+    /// through — the one call site allowed to decide "some of the disc is
+    /// good enough".
     pub fn open(path: &Path) -> CoreResult<Self> {
         let image = IsoImage::open(path)?;
         let walk = image.walk()?;
+        if walk.truncated {
+            return Err(CoreError::Malformed {
+                format: "iso9660".into(),
+                detail: format!(
+                    "this disc holds more than {MAX_WALK_ENTRIES} entries; ART stopped \
+                     reading before it reached the end of the tree, so an install plan \
+                     built from it would be missing files without saying so"
+                ),
+            });
+        }
+        if walk.depth_limited {
+            return Err(CoreError::Malformed {
+                format: "iso9660".into(),
+                detail: format!(
+                    "this disc nests directories deeper than {MAX_WALK_DEPTH} levels; ART \
+                     stopped descending before it reached the bottom of the tree, so an \
+                     install plan built from it would be missing files without saying so"
+                ),
+            });
+        }
         Ok(Self {
             image,
             entries: walk.entries,
@@ -92,6 +126,32 @@ impl CdSource {
             comment: String::new(),
         }
     }
+
+    /// The disc's own root, as a [`MediaEntry`] — never one of
+    /// `self.entries` itself, because `IsoImage::walk` lists a directory's
+    /// *contents*, not the directory. A flat, whole-disc component (the
+    /// disc equivalent of `AdfSource`'s `Fonts.adf`) still needs its
+    /// `Subtree` rule's `from: ""` to resolve to *something*:
+    /// `core/osinstall/plan.rs` calls `source.entry(&rule.from)` for every
+    /// rule, regardless of kind, and turns `None` into a `MediaPathMissing`
+    /// refusal that would wrongly say the whole component is not on the
+    /// disc. `AdfSource::root_entry` answers the same question for a floppy
+    /// with a declared default rather than a reading, because there is
+    /// nothing on a bare volume's root block to read as protection,
+    /// comment or date either; a disc's root is the same kind of nothing,
+    /// for the same reason this whole module already gives every entry —
+    /// there is no protection byte, comment or (for the root specifically)
+    /// recording date on an ISO9660 disc to measure.
+    fn root_entry() -> MediaEntry {
+        MediaEntry {
+            path: String::new(),
+            is_dir: true,
+            size: 0,
+            protection: default_protection(),
+            date: AmigaDate::default(),
+            comment: String::new(),
+        }
+    }
 }
 
 impl MediaSource for CdSource {
@@ -101,6 +161,9 @@ impl MediaSource for CdSource {
 
     fn entry(&mut self, path: &str) -> CoreResult<Option<MediaEntry>> {
         let normalized = Self::normalized(path);
+        if normalized.is_empty() {
+            return Ok(Some(Self::root_entry()));
+        }
         Ok(self
             .entries
             .iter()
@@ -279,5 +342,40 @@ mod tests {
             .is_some());
 
         let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    // ---- fix round 1: review item 1 ----
+
+    /// `core/osinstall/plan.rs` calls `source.entry(&rule.from)` for a
+    /// `Subtree` rule's own root before it ever walks the rule's contents —
+    /// including when `from: ""` names the whole disc — so `entry("")` has
+    /// to answer with a directory, not `None`, or a flat whole-disc
+    /// component would be refused as `MediaPathMissing` against media that
+    /// genuinely holds it. `AdfSource` has the identical test for the
+    /// identical reason.
+    #[test]
+    fn an_empty_path_entry_resolves_to_the_root_directory() {
+        let path = disc("root-entry");
+        let mut source = CdSource::open(&path).unwrap();
+
+        let entry = source.entry("").unwrap().unwrap();
+        assert!(entry.is_dir);
+        assert_eq!(entry.path, "");
+    }
+
+    // ---- fix round 1: review item 2 ----
+
+    /// `read("OS-Version3.9/Workbench3.5/C")` would otherwise hand
+    /// `IsoImage::read_file` a directory's own extent and length — bounds
+    /// checked, so not a crash, but a `kind: "file"` rule aimed at a drawer
+    /// by mistake has to be refused by name, not produce whatever bytes an
+    /// ISO9660 directory extent happens to read back as.
+    #[test]
+    fn read_refuses_a_path_that_names_a_drawer() {
+        let path = disc("read-wrong-kind");
+        let mut source = CdSource::open(&path).unwrap();
+
+        let err = source.read("OS-Version3.9/Workbench3.5/C").unwrap_err();
+        assert!(err.to_string().contains("not a file"), "{err}");
     }
 }
