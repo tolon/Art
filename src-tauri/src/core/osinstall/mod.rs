@@ -328,6 +328,27 @@ pub(crate) mod fixtures {
         path
     }
 
+    /// A synthetic install disc — one file is enough for `find_media` to
+    /// open it and read its volume name back. Built the same way
+    /// `source_cd`'s own fixtures are (`core::iso::fixture::IsoBuilder`,
+    /// Joliet on so `volume` round-trips through the long-name tree exactly
+    /// as typed, matching a real AmigaOS 3.9 disc).
+    pub fn write_test_iso(dir: &Path, filename: &str, volume: &str) -> PathBuf {
+        use crate::core::iso::fixture::{file, IsoBuilder};
+
+        let bytes = IsoBuilder {
+            volume: volume.to_string(),
+            joliet_volume: volume.to_string(),
+            joliet: true,
+            children: vec![file("README.;1", "readme.txt", b"install disc")],
+            ..Default::default()
+        }
+        .build();
+        let path = dir.join(filename);
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
     /// `Workbench3.2` with the two files every test in this plan leans on.
     pub fn workbench(dir: &Path) -> PathBuf {
         media(

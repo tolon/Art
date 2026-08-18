@@ -645,12 +645,16 @@ mod tests {
 
         #[test]
         fn found_media_serializes_with_the_keys_the_frontend_declares() {
+            use crate::core::osinstall::scan::MediaKind;
+
             let media = FoundMedia {
                 path: PathBuf::from("E:\\wb.adf"),
                 volume_name: "Workbench3.2".into(),
+                kind: MediaKind::Floppy,
             };
             let value = serde_json::to_value(&media).unwrap();
-            expect_keys(&value, &["path", "volumeName"]);
+            expect_keys(&value, &["path", "volumeName", "kind"]);
+            assert_eq!(value["kind"], "floppy");
         }
 
         /// The regression this whole module exists to prevent: without

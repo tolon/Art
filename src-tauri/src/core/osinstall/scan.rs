@@ -81,6 +81,19 @@ use serde::Serialize;
 use crate::core::error::CoreResult;
 
 use super::source::{AdfSource, MediaSource};
+use super::source_cd::CdSource;
+
+/// Which reader a piece of found media needs — the fact `find_media` learns
+/// by successfully opening a candidate, and the only thing [`open_media`]
+/// needs to know to hand back the right one without re-probing the file.
+///
+/// `Serialize`, kebab-case: this crosses the wire alongside [`FoundMedia`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MediaKind {
+    Floppy,
+    Disc,
+}
 
 /// One piece of install media [`find_media`] opened successfully.
 ///
@@ -94,6 +107,24 @@ pub struct FoundMedia {
     /// The volume name read from **inside** the image — never derived from
     /// `path`.
     pub volume_name: String,
+    /// Which reader opened it — carried forward so [`open_media`] never has
+    /// to re-probe the file to answer the same question `find_media` already
+    /// answered once.
+    pub kind: MediaKind,
+}
+
+/// Open whichever kind of media `found` was identified as, without a caller
+/// ever having to ask what it is holding.
+///
+/// Re-opens by `found.path` rather than caching a handle from `find_media`'s
+/// own probe — a scan can find far more candidates than a single install
+/// touches, and holding every one open (or every one's read window) for the
+/// whole scan would cost memory nothing here needs.
+pub fn open_media(found: &FoundMedia) -> CoreResult<Box<dyn MediaSource>> {
+    Ok(match found.kind {
+        MediaKind::Floppy => Box::new(AdfSource::open(&found.path)?),
+        MediaKind::Disc => Box::new(CdSource::open(&found.path)?),
+    })
 }
 
 /// Every install disk found directly inside `folder`, duplicates included.
@@ -133,14 +164,25 @@ pub fn find_media(folder: &Path) -> CoreResult<Vec<FoundMedia>> {
             continue;
         }
 
-        let Ok(source) = AdfSource::open(&path) else {
-            // Not an Amiga volume at all, or a layout `open` refuses by
-            // name (RDB, unrecognised signature, too small) — a normal
-            // thing to find in a real media folder, not a scan failure.
+        // A floppy is tried first: it is the cheaper open (a bounded
+        // signature scan, see the module doc's "Cost" section) and by far
+        // the commoner case in a real media folder — never because a file
+        // could plausibly be both. Anything either refuses (not an Amiga
+        // volume at all, an RDB, an ISO whose walk hit ART's own limits) is
+        // skipped exactly like today: one unreadable candidate must not
+        // fail the whole scan.
+        let (volume_name, kind) = if let Ok(source) = AdfSource::open(&path) {
+            (source.volume_name().to_string(), MediaKind::Floppy)
+        } else if let Ok(source) = CdSource::open(&path) {
+            (source.volume_name().to_string(), MediaKind::Disc)
+        } else {
             continue;
         };
-        let volume_name = source.volume_name().to_string();
-        found.push(FoundMedia { path, volume_name });
+        found.push(FoundMedia {
+            path,
+            volume_name,
+            kind,
+        });
     }
 
     Ok(found)
@@ -196,7 +238,7 @@ pub fn media_for<'a>(found: &'a [FoundMedia], volume_name: &str) -> MediaMatch<'
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::osinstall::fixtures::{media, scratch};
+    use crate::core::osinstall::fixtures::{media, scratch, write_test_iso};
 
     #[test]
     fn media_is_found_by_its_volume_name_not_its_filename() {
@@ -320,5 +362,59 @@ mod tests {
 
         let found = find_media(&dir).unwrap();
         assert_eq!(media_for(&found, "Extras3.2"), MediaMatch::Missing);
+    }
+
+    // ---- Task 2: a disc is media too ----
+
+    /// A disc in the media folder is found the same way a floppy is, and by
+    /// the volume name recorded inside it.
+    #[test]
+    fn a_disc_is_found_and_named_by_its_own_volume() {
+        let dir = scratch("disc-found");
+        write_test_iso(&dir, "os39.iso", "AmigaOS3.9");
+
+        let found = find_media(&dir).unwrap();
+
+        let disc = found
+            .iter()
+            .find(|m| m.volume_name == "AmigaOS3.9")
+            .expect("the disc is media");
+        assert_eq!(disc.kind, MediaKind::Disc);
+    }
+
+    /// And a floppy is still a floppy — this must not reclassify what
+    /// already works.
+    #[test]
+    fn a_floppy_is_still_found_as_a_floppy() {
+        let dir = scratch("floppy-still");
+        media(&dir, "Workbench3.2", "wb.adf", &[]);
+
+        let found = find_media(&dir).unwrap();
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].kind, MediaKind::Floppy);
+    }
+
+    /// One factory, so a caller never has to ask what it is holding.
+    #[test]
+    fn the_factory_opens_whichever_kind_was_found() {
+        let dir = scratch("factory");
+        media(&dir, "Workbench3.2", "wb.adf", &[]);
+        write_test_iso(&dir, "os39.iso", "AmigaOS3.9");
+
+        for m in find_media(&dir).unwrap() {
+            let source = open_media(&m).unwrap();
+            assert_eq!(source.volume_name(), m.volume_name);
+        }
+    }
+
+    /// A folder holding neither is still not an error — the module's own
+    /// rule.
+    #[test]
+    fn something_that_is_neither_is_skipped_rather_than_failing_the_scan() {
+        let dir = scratch("neither");
+        std::fs::write(dir.join("notes.txt"), b"not an image").unwrap();
+
+        assert!(find_media(&dir).unwrap().is_empty());
     }
 }
