@@ -255,6 +255,16 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // "will use" sentence, what a settled plan will mount, and the note
     // beside it when a title has more disks than WinUAE has drives. All four
     // mappers are enumerated in `phrase-keys.test.ts`.
-    expect(dynamicCalls).toBe(106);
+    // 106 → 108 (Task 11 fix round, finding 3): `Settings.tsx`'s new Play
+    // section (`launch.romDir`/`launch.defaultMachine`/`launch.systemVolume`,
+    // the same remembered keys `TitleDetail`'s panel already uses) labels its
+    // A500/A1200 `<select>` options with `t(machinePhrase("a500").key)` and
+    // `t(machinePhrase("a1200").key)` — two literal arguments to
+    // `machinePhrase`, but the call is still `t(...)` over a `.key` read
+    // rather than a string literal, so each counts as its own dynamic site
+    // the same way `MachineChoiceButtons`' single shared occurrence already
+    // does above. `machinePhrase`'s two variants are enumerated in
+    // `phrase-keys.test.ts` (`launch machinePhrase: every Machine resolves`).
+    expect(dynamicCalls).toBe(108);
   });
 });

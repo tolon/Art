@@ -255,6 +255,10 @@
     "aminetRootInUse": "Downloads go to {{path}}",
     "uxModePowerHint": "Showing raw data tools, block and sector detail, and advanced actions.",
     "uxModeBeginnerHint": "Hiding raw data tools and block-level detail. Nothing is disabled — switch to Power User to see everything.",
+    "play": {
+      "title": "Play",
+      "hint": "Used by Play, on the Collection screen, to decide which Kickstart and which system a title launches with. The bootable system is what a WHDLoad title mounts alongside its own drawer — without one, a WHDLoad launch cannot start at all."
+    },
     "colourRules": {
       "title": "File colours",
       "description": "A filename mask on the left, a colour on the right. The first rule that matches wins, so the order is yours to set — a rule above the container rule picks one file out of the rest. Several masks go in one rule, separated by ;. Anything no rule matches keeps ART's own colouring.",

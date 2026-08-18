@@ -22,7 +22,7 @@ use tauri::{AppHandle, Manager, State};
 use super::oplog::{user_operation, write_result};
 use crate::core::error::CoreError;
 use crate::core::gameindex::record::Media;
-use crate::core::launch::extract::unpack_floppies;
+use crate::core::launch::extract::{unpack_floppies, unpack_hardfile};
 use crate::core::launch::whdload_boot::write_boot_dir;
 use crate::core::launch::{
     machine_for, plan_for, Chipset, LaunchKind, LaunchPlan, LaunchRefusal, LaunchRequest,
@@ -90,16 +90,25 @@ pub struct LaunchArgs {
 /// catalogued file is a `.rp9` (`from_rp9` in `core/gameindex/scan.rs`
 /// reads them out of `<floppy priority="n">`), and are the file's own single
 /// name otherwise (`read_one` in the same module, for a bare `.adf`/`.img`).
+///
+/// `Hardfile` follows the **same rule**, and getting this wrong was ART-141:
+/// `Media::Hardfile { file }`'s `file` is the zip entry name a `.rp9`'s
+/// `<harddrive>` names (`core::gameindex::readers::rp9`) when the catalogued
+/// file is a `.rp9`, and is the file's own name — the same one `args.path`
+/// already points at — otherwise. Either way `file` is carried through
+/// untouched here; [`media_for_plan`] is what turns it into a real path,
+/// extracting from the `.rp9` when there is one to extract from.
+///
 /// [`launch_title_inner`] is what turns either shape into real paths on
-/// disk; the preview shows the disk names the user recognises rather than a
-/// temporary directory they have never seen.
+/// disk; the preview shows the disk/hardfile name the user recognises rather
+/// than a temporary directory they have never seen.
 fn request_kind_from(args: &LaunchArgs) -> RequestKind {
     match &args.media {
         Media::Floppies { ordered } => RequestKind::Floppies {
             images: ordered.clone(),
         },
-        Media::Hardfile { .. } => RequestKind::Hardfile {
-            image: args.path.clone(),
+        Media::Hardfile { file } => RequestKind::Hardfile {
+            image: file.clone(),
         },
         Media::WhdloadDrawer { slave } => RequestKind::Whdload {
             drawer: args.path.clone(),
@@ -224,10 +233,19 @@ fn profile_for(machine: Machine) -> AmigaProfile {
 
 /// Turn a settled [`LaunchPlan`] into the media WinUAE mounts, unpacking or
 /// writing whatever the plan's kind needs along the way.
+///
+/// Takes `launch_dir`/`boot_dir` as plain paths rather than an `AppHandle` —
+/// the only thing either was ever used for is `app.path().app_data_dir()`,
+/// resolved once by the caller (`launch_title_inner`). Keeping the platform
+/// handle out of this function is what makes it possible to test directly:
+/// this is the highest-risk part of the whole command (device names,
+/// read-only flags, boot priorities, which `.rp9` branch to take), and it
+/// should not need a running Tauri app to exercise.
 fn media_for_plan(
-    app: &AppHandle,
     request: &LaunchArgs,
     plan: &LaunchPlan,
+    launch_dir: &Path,
+    boot_dir: &Path,
 ) -> Result<LaunchMedia, CoreError> {
     let mut media = LaunchMedia {
         kickstart_path: Some(plan.rom.path.clone()),
@@ -238,14 +256,10 @@ fn media_for_plan(
         LaunchKind::Floppies { images } => {
             let paths: Vec<String> = if is_rp9(&request.path) {
                 require_exists(&request.path)?;
-                unpack_floppies(
-                    Path::new(&request.path),
-                    images,
-                    &launch_dir_for(app, &request.id),
-                )?
-                .into_iter()
-                .map(|p| p.to_string_lossy().to_string())
-                .collect()
+                unpack_floppies(Path::new(&request.path), images, launch_dir)?
+                    .into_iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect()
             } else {
                 require_exists(&request.path)?;
                 vec![request.path.clone()]
@@ -253,8 +267,21 @@ fn media_for_plan(
             media.floppy_paths = paths;
         }
         LaunchKind::Hardfile { image } => {
-            require_exists(image)?;
-            media.hardfile_paths = vec![image.clone()];
+            // ART-141: `image` is a `.rp9`'s zip entry name when the
+            // catalogued file is a `.rp9` — mounting `request.path` itself in
+            // that case would hand WinUAE the zip, not the hard disk image
+            // inside it. Otherwise `image` is just the file's own name, which
+            // `request.path` already points at directly.
+            let real_path = if is_rp9(&request.path) {
+                require_exists(&request.path)?;
+                unpack_hardfile(Path::new(&request.path), image, launch_dir)?
+                    .to_string_lossy()
+                    .to_string()
+            } else {
+                require_exists(&request.path)?;
+                request.path.clone()
+            };
+            media.hardfile_paths = vec![real_path];
         }
         LaunchKind::Whdload {
             drawer,
@@ -271,8 +298,7 @@ fn media_for_plan(
             media.write_protect_hardfiles = true;
 
             if *one_click {
-                let boot_dir = boot_dir_for(app);
-                write_boot_dir(&boot_dir, slave, "DH0", "DH1")?;
+                write_boot_dir(boot_dir, slave, "DH0", "DH1")?;
                 media.directories = vec![
                     DirMount {
                         host_path: drawer.clone(),
@@ -310,7 +336,11 @@ fn media_for_plan(
     Ok(media)
 }
 
-fn launch_title_inner(request: &LaunchArgs, app: &AppHandle) -> Result<u32, CoreError> {
+fn launch_title_inner(
+    request: &LaunchArgs,
+    winuae_path: Option<&str>,
+    app: &AppHandle,
+) -> Result<u32, CoreError> {
     let roms: Vec<LaunchRom> = scan_rom_directory(Path::new(&request.rom_dir))
         .unwrap_or_default()
         .iter()
@@ -333,11 +363,16 @@ fn launch_title_inner(request: &LaunchArgs, app: &AppHandle) -> Result<u32, Core
     })
     .map_err(refusal_error)?;
 
-    let media = media_for_plan(app, request, &plan)?;
+    let launch_dir = launch_dir_for(app, &request.id);
+    let boot_dir = boot_dir_for(app);
+    let media = media_for_plan(request, &plan, &launch_dir, &boot_dir)?;
     let profile = profile_for(plan.machine);
     let config_text = generate_uae_config(&profile, &media)?;
 
-    let install = detect_winuae(None);
+    // The same configured path `commands/winuae.rs::winuae_launch` already
+    // honours — Play must not be the one launch path in ART that only finds
+    // WinUAE when it happens to sit in a standard install location.
+    let install = detect_winuae(winuae_path);
     let exe = install.executable_path.ok_or_else(|| {
         CoreError::InvalidInput(
             "WinUAE was not found in a standard install location — set its path in Settings"
@@ -348,17 +383,23 @@ fn launch_title_inner(request: &LaunchArgs, app: &AppHandle) -> Result<u32, Core
     launch_winuae(Path::new(&exe), &config_text)
 }
 
-/// Launch a catalogued title. Unpacks a `.rp9`'s disks, writes the WHDLoad
-/// boot directory when Y2 is asked for, then starts WinUAE — and logs the
-/// result either way (§53: an external process against the user's own files
-/// is exactly what the operation log is for).
+/// Launch a catalogued title. Unpacks a `.rp9`'s disks or hardfile, writes
+/// the WHDLoad boot directory when Y2 is asked for, then starts WinUAE — and
+/// logs the result either way (§53: an external process against the user's
+/// own files is exactly what the operation log is for).
+///
+/// `winuae_path` is the user's configured path from Settings, the same
+/// argument `winuae_launch` already takes — `None` falls back to
+/// [`detect_winuae`]'s standard install locations.
 #[tauri::command]
 pub fn launch_title(
     request: LaunchArgs,
+    winuae_path: Option<String>,
     app: AppHandle,
     oplog: State<'_, JsonlOperationLog>,
 ) -> AppResult<u32> {
-    let result: AppResult<u32> = launch_title_inner(&request, &app).map_err(AppError::from);
+    let result: AppResult<u32> =
+        launch_title_inner(&request, winuae_path.as_deref(), &app).map_err(AppError::from);
 
     write_result(
         &oplog,
@@ -454,16 +495,18 @@ mod tests {
         }
     }
 
-    /// A hardfile record's launch path is the catalogued file itself — the
-    /// `file` field inside `Media::Hardfile` names the packaged entry, but
-    /// there is only ever one file for this kind of title.
+    /// ART-141. `Media::Hardfile { file }`'s `file` is carried through as
+    /// given — it is a `.rp9`'s zip entry name when the catalogued file is a
+    /// `.rp9`, and `media_for_plan` (tested below) is what decides whether
+    /// that needs extracting. This mapping must not silently swap it for
+    /// `args.path`, which is what made the old code mount the zip itself.
     #[test]
-    fn media_hardfile_uses_the_catalogued_path() {
+    fn media_hardfile_carries_the_records_file_field_untouched() {
         let a = args(Media::Hardfile {
-            file: "Game.hdf".into(),
+            file: "af-application.hdf".into(),
         });
         match request_kind_from(&a) {
-            RequestKind::Hardfile { image } => assert_eq!(image, r"D:\games\Title.rp9"),
+            RequestKind::Hardfile { image } => assert_eq!(image, "af-application.hdf"),
             other => panic!("{other:?}"),
         }
     }
@@ -498,5 +541,328 @@ mod tests {
         let err = require_exists(r"D:\definitely\not\here.adf").unwrap_err();
         assert!(matches!(err, CoreError::InvalidInput(_)));
         assert!(format!("{err}").contains("no longer exists"));
+    }
+
+    // ---- media_for_plan: the highest-risk function in this module --------
+    //
+    // Device names, read-only flags, boot priorities, and which `.rp9`
+    // branch to take. `media_for_plan` takes plain paths rather than an
+    // `AppHandle` for exactly this reason: none of the cases below need a
+    // running Tauri app.
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("art-launch-cmd-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A `.rp9`-shaped zip, the same fixture shape `core/launch/extract.rs`'s
+    /// own tests build.
+    fn zip_package(dir: &Path, name: &str, entries: &[(&str, &[u8])]) -> PathBuf {
+        use std::io::Write;
+        let path = dir.join(name);
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        for (entry, bytes) in entries {
+            zip.start_file(*entry, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap();
+        path
+    }
+
+    fn plan_with(kind: LaunchKind) -> LaunchPlan {
+        LaunchPlan {
+            machine: Machine::A1200,
+            rom: LaunchRom {
+                name: "Kickstart 3.1".into(),
+                models: vec!["A1200".into()],
+                path: r"D:\roms\kick.rom".into(),
+            },
+            kind,
+            notes: vec![],
+        }
+    }
+
+    /// A bare `.adf` mounts directly — nothing to unpack, and the plan's
+    /// `images` entry (the file's own name) is not even consulted.
+    #[test]
+    fn a_plain_floppy_mounts_the_catalogued_path_directly() {
+        let dir = scratch("floppy-plain");
+        let adf = dir.join("Game.adf");
+        std::fs::write(&adf, b"DISK").unwrap();
+
+        let request = LaunchArgs {
+            path: adf.to_string_lossy().to_string(),
+            media: Media::Floppies {
+                ordered: vec!["Game.adf".into()],
+            },
+            ..args(Media::Floppies {
+                ordered: vec!["Game.adf".into()],
+            })
+        };
+        let plan = plan_with(LaunchKind::Floppies {
+            images: vec!["Game.adf".into()],
+        });
+
+        let media =
+            media_for_plan(&request, &plan, &dir.join("launch"), &dir.join("boot")).unwrap();
+        assert_eq!(media.floppy_paths, vec![adf.to_string_lossy().to_string()]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A `.rp9`'s floppies are zip entries and have to be unpacked before
+    /// WinUAE can mount them.
+    #[test]
+    fn rp9_floppies_are_extracted_into_the_launch_directory() {
+        let dir = scratch("floppy-rp9");
+        let pkg = zip_package(
+            &dir,
+            "Dune2.rp9",
+            &[("a.adf", b"FIRST"), ("b.adf", b"SECOND")],
+        );
+
+        let request = LaunchArgs {
+            path: pkg.to_string_lossy().to_string(),
+            ..args(Media::Floppies {
+                ordered: vec!["a.adf".into(), "b.adf".into()],
+            })
+        };
+        let plan = plan_with(LaunchKind::Floppies {
+            images: vec!["a.adf".into(), "b.adf".into()],
+        });
+
+        let launch_dir = dir.join("launch");
+        let media = media_for_plan(&request, &plan, &launch_dir, &dir.join("boot")).unwrap();
+
+        assert_eq!(media.floppy_paths.len(), 2);
+        assert_eq!(std::fs::read(&media.floppy_paths[0]).unwrap(), b"FIRST");
+        assert_eq!(std::fs::read(&media.floppy_paths[1]).unwrap(), b"SECOND");
+        for p in &media.floppy_paths {
+            assert!(
+                Path::new(p).starts_with(&launch_dir),
+                "{p} should be under the launch directory, not the package"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A plain hardfile — Enzo's collection — mounts directly, writable: it
+    /// *is* the game, saves and all.
+    #[test]
+    fn a_plain_hardfile_mounts_the_catalogued_path_directly_and_writable() {
+        let dir = scratch("hardfile-plain");
+        let hdf = dir.join("Game.hdf");
+        std::fs::write(&hdf, b"HARDFILE").unwrap();
+
+        let request = LaunchArgs {
+            path: hdf.to_string_lossy().to_string(),
+            ..args(Media::Hardfile {
+                file: "Game.hdf".into(),
+            })
+        };
+        let plan = plan_with(LaunchKind::Hardfile {
+            image: "Game.hdf".into(),
+        });
+
+        let media =
+            media_for_plan(&request, &plan, &dir.join("launch"), &dir.join("boot")).unwrap();
+
+        assert_eq!(
+            media.hardfile_paths,
+            vec![hdf.to_string_lossy().to_string()]
+        );
+        assert!(
+            !media.write_protect_hardfiles,
+            "the game's own hardfile must stay writable for its saves"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **ART-141, the Critical fix.** A `.rp9`'s hardfile is a named zip
+    /// entry, not the package itself — this test fails against the code that
+    /// mounted `request.path` (the `.rp9`) unconditionally, and passes once
+    /// the `Hardfile` arm has the same `is_rp9` branch the `Floppies` arm
+    /// already had.
+    #[test]
+    fn an_rp9_hardfile_is_extracted_not_the_package_itself() {
+        let dir = scratch("hardfile-rp9");
+        let pkg = zip_package(
+            &dir,
+            "Enzo.rp9",
+            &[("af-application.hdf", b"REAL-HARDFILE-BYTES")],
+        );
+
+        let request = LaunchArgs {
+            path: pkg.to_string_lossy().to_string(),
+            ..args(Media::Hardfile {
+                file: "af-application.hdf".into(),
+            })
+        };
+        let plan = plan_with(LaunchKind::Hardfile {
+            image: "af-application.hdf".into(),
+        });
+
+        let launch_dir = dir.join("launch");
+        let media = media_for_plan(&request, &plan, &launch_dir, &dir.join("boot")).unwrap();
+
+        assert_eq!(media.hardfile_paths.len(), 1);
+        assert_ne!(
+            media.hardfile_paths[0],
+            pkg.to_string_lossy().to_string(),
+            "must mount the extracted image, not the .rp9 package"
+        );
+        assert!(Path::new(&media.hardfile_paths[0]).starts_with(&launch_dir));
+        assert_eq!(
+            std::fs::read(&media.hardfile_paths[0]).unwrap(),
+            b"REAL-HARDFILE-BYTES"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn whdload_args(system: &Path, drawer: &Path) -> LaunchArgs {
+        LaunchArgs {
+            path: drawer.to_string_lossy().to_string(),
+            system_volume: Some(system.to_string_lossy().to_string()),
+            ..args(Media::WhdloadDrawer {
+                slave: "Turrican.slave".into(),
+            })
+        }
+    }
+
+    /// Y2: one click. The system is read-only, the game drawer is writable,
+    /// and ART's own boot directory — which is what makes the click "one" —
+    /// outranks both.
+    #[test]
+    fn whdload_one_click_writes_the_boot_directory_and_outranks_everything() {
+        let dir = scratch("whdload-y2");
+        let system = dir.join("System.hdf");
+        std::fs::write(&system, b"SYSTEM").unwrap();
+        let drawer = dir.join("Turrican");
+        std::fs::create_dir_all(&drawer).unwrap();
+
+        let request = whdload_args(&system, &drawer);
+        let plan = plan_with(LaunchKind::Whdload {
+            drawer: drawer.to_string_lossy().to_string(),
+            slave: "Turrican.slave".into(),
+            system: system.to_string_lossy().to_string(),
+            one_click: true,
+        });
+
+        let boot_dir = dir.join("boot");
+        let media = media_for_plan(&request, &plan, &dir.join("launch"), &boot_dir).unwrap();
+
+        assert_eq!(
+            media.hardfile_paths,
+            vec![system.to_string_lossy().to_string()]
+        );
+        assert!(
+            media.write_protect_hardfiles,
+            "the user's own system must stay read-only"
+        );
+
+        assert_eq!(media.directories.len(), 2);
+        let game = media
+            .directories
+            .iter()
+            .find(|d| d.label == "Game")
+            .unwrap();
+        assert_eq!(game.host_path, drawer.to_string_lossy().to_string());
+        assert!(!game.read_only, "WHDLoad keeps save games in the drawer");
+
+        let boot = media
+            .directories
+            .iter()
+            .find(|d| d.label == "ARTBoot")
+            .unwrap();
+        assert_eq!(boot.host_path, boot_dir.to_string_lossy().to_string());
+        assert!(
+            boot.boot_priority > game.boot_priority,
+            "the boot directory must outrank the game drawer"
+        );
+        assert!(
+            boot.boot_priority > 0,
+            "and outrank the system hardfile too (priority 0 by construction)"
+        );
+
+        let startup = boot_dir.join("S").join("Startup-Sequence");
+        assert!(startup.is_file(), "Y2 must write ART's own boot directory");
+        assert!(std::fs::read_to_string(startup)
+            .unwrap()
+            .contains("Turrican.slave"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Y1: mount and hand over. No boot directory — the system hardfile
+    /// itself boots to Workbench, and the user starts WHDLoad by hand.
+    #[test]
+    fn whdload_mount_and_hand_over_writes_no_boot_directory() {
+        let dir = scratch("whdload-y1");
+        let system = dir.join("System.hdf");
+        std::fs::write(&system, b"SYSTEM").unwrap();
+        let drawer = dir.join("Turrican");
+        std::fs::create_dir_all(&drawer).unwrap();
+
+        let request = whdload_args(&system, &drawer);
+        let plan = plan_with(LaunchKind::Whdload {
+            drawer: drawer.to_string_lossy().to_string(),
+            slave: "Turrican.slave".into(),
+            system: system.to_string_lossy().to_string(),
+            one_click: false,
+        });
+
+        let boot_dir = dir.join("boot");
+        let media = media_for_plan(&request, &plan, &dir.join("launch"), &boot_dir).unwrap();
+
+        assert_eq!(
+            media.hardfile_paths,
+            vec![system.to_string_lossy().to_string()]
+        );
+        assert!(media.write_protect_hardfiles);
+
+        assert_eq!(
+            media.directories.len(),
+            1,
+            "only the game drawer, no ARTBoot"
+        );
+        assert_eq!(media.directories[0].label, "Game");
+        assert!(!media.directories[0].read_only);
+
+        assert!(
+            !boot_dir.join("S").join("Startup-Sequence").is_file(),
+            "Y1 must not write ART's own boot directory at all"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A vanished file — the drawer, the system image, an unpacked disk —
+    /// refuses rather than handing WinUAE a path that is not there.
+    #[test]
+    fn a_missing_whdload_system_refuses() {
+        let dir = scratch("whdload-missing-system");
+        let drawer = dir.join("Turrican");
+        std::fs::create_dir_all(&drawer).unwrap();
+
+        let request = whdload_args(&dir.join("nope.hdf"), &drawer);
+        let plan = plan_with(LaunchKind::Whdload {
+            drawer: drawer.to_string_lossy().to_string(),
+            slave: "Turrican.slave".into(),
+            system: dir.join("nope.hdf").to_string_lossy().to_string(),
+            one_click: true,
+        });
+
+        let err =
+            media_for_plan(&request, &plan, &dir.join("launch"), &dir.join("boot")).unwrap_err();
+        assert!(matches!(err, CoreError::InvalidInput(_)));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

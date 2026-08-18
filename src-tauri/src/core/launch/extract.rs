@@ -1,20 +1,23 @@
-//! Getting the floppies out of a `.rp9`.
+//! Getting a title's own media out of a `.rp9`.
 //!
-//! A `.rp9` package is a zip holding the title's disk images plus a manifest
-//! ART reads separately (`core::artwork::local` reads the same archive for its
+//! A `.rp9` package is a zip holding the title's disk images — or, for a
+//! hardfile-based title, one whole hard disk image — plus a manifest ART
+//! reads separately (`core::artwork::local` reads the same archive for its
 //! screenshot, through the same [`core::archive::open`](crate::core::archive::open)
 //! gate). WinUAE cannot mount an image that is still inside the zip, so before
-//! `core::launch`'s decision becomes a running emulator, the disks named in it
-//! have to land on disk as ordinary files.
+//! `core::launch`'s decision becomes a running emulator, the media named in it
+//! has to land on disk as an ordinary file.
 //!
 //! **Why not [`core::archive::extract_selection`](crate::core::archive::extract::extract_selection).**
 //! That gate answers "what did the archive hold, and what happened to each
 //! entry" — the right shape for extracting an archive's contents. This is a
-//! narrower question: "give me exactly these disks, in exactly this order, or
-//! tell me which one is missing." A `LaunchPlan`'s `Floppies { images }` is an
-//! ordered list WinUAE will mount as `floppy0`, `floppy1`, … — a silently
-//! shorter result is a game that boots wrong, not a game that boots without
-//! extras.
+//! narrower question: "give me exactly this media, or tell me it is missing."
+//! A `LaunchPlan`'s `Floppies { images }` is an ordered list WinUAE will mount
+//! as `floppy0`, `floppy1`, … — a silently shorter result is a game that boots
+//! wrong, not a game that boots without extras — and a `Hardfile { image }`
+//! mounted from the zip itself rather than what is inside it is not a
+//! shorter result at all, it is the wrong file entirely (the bug this module
+//! exists to not repeat).
 use std::path::{Path, PathBuf};
 
 use crate::core::archive::open;
@@ -27,6 +30,13 @@ use crate::core::security::path::safe_join;
 /// exhaust memory — the same reasoning `MAX_PREVIEW_BYTES` uses one module
 /// over for a screenshot.
 pub const MAX_FLOPPY_BYTES: u64 = 8 * 1024 * 1024;
+
+/// A hardfile is a whole installed game, not a floppy image — real ones in
+/// this collection run to tens of megabytes. The same ceiling
+/// `core::gameindex::scan`'s `MAX_TITLE_BYTES` already treats as "a single
+/// catalogued title", so nothing this module extracts can be larger than
+/// what the catalogue would have indexed as one title to begin with.
+pub const MAX_HARDFILE_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Unpack `ordered`'s entries out of `package` and into `into`, in the order
 /// given.
@@ -41,11 +51,48 @@ pub fn unpack_floppies(
     ordered: &[String],
     into: &Path,
 ) -> CoreResult<Vec<PathBuf>> {
+    unpack_named(package, ordered, into, MAX_FLOPPY_BYTES)
+}
+
+/// Unpack the one entry `name` out of `package` and into `into`, returning
+/// its path.
+///
+/// The `Hardfile` counterpart of [`unpack_floppies`]. A `.rp9` whose media is
+/// `Media::Hardfile { file }` (`core::gameindex::record`) carries the whole
+/// hard disk image as a single named zip entry — `core::gameindex::readers::
+/// rp9` reads it out of `<harddrive>`, e.g. `af-application.hdf` — and WinUAE
+/// cannot mount it any more than a floppy while it is still inside the
+/// archive. Mounting the `.rp9` itself instead of what this function
+/// extracts was ART-141.
+pub fn unpack_hardfile(package: &Path, name: &str, into: &Path) -> CoreResult<PathBuf> {
+    let written = unpack_named(
+        package,
+        std::slice::from_ref(&name.to_string()),
+        into,
+        MAX_HARDFILE_BYTES,
+    )?;
+    written.into_iter().next().ok_or_else(|| {
+        CoreError::InvalidInput(format!(
+            "'{name}' did not unpack from '{}'",
+            package.display()
+        ))
+    })
+}
+
+/// The shared body of [`unpack_floppies`] and [`unpack_hardfile`]: resolve
+/// every wanted name to an archive index before writing anything (so a
+/// package missing one of several wanted entries fails before any of the
+/// others land on disk), then read each one bounded by `max_bytes` and write
+/// it through [`atomic_write`].
+fn unpack_named(
+    package: &Path,
+    ordered: &[String],
+    into: &Path,
+    max_bytes: u64,
+) -> CoreResult<Vec<PathBuf>> {
     let mut archive = open(package)?;
     let entries = archive.entries()?;
 
-    // Resolve every wanted name to an index before writing anything, so a
-    // package missing disk 3 of 4 fails before disks 1 and 2 land on disk.
     let mut indices = Vec::with_capacity(ordered.len());
     for name in ordered {
         let index = entries
@@ -64,7 +111,7 @@ pub fn unpack_floppies(
         let target =
             safe_join(into, name).map_err(|e| CoreError::InvalidInput(format!("'{name}': {e}")))?;
 
-        let bytes = archive.read(index, MAX_FLOPPY_BYTES)?;
+        let bytes = archive.read(index, max_bytes)?;
 
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent)?;
@@ -143,6 +190,53 @@ mod tests {
         assert!(
             unpack_floppies(&pkg, &["a.adf".into(), "b.adf".into()], &dir.join("out")).is_err()
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ART-141. A `.rp9`'s hardfile is one named zip entry, the same shape a
+    /// floppy set's entries are — the bug was mounting the zip itself.
+    #[test]
+    fn the_hardfile_comes_out_from_under_its_entry_name() {
+        let dir = scratch("unpack-hardfile");
+        let pkg = package(
+            &dir,
+            "Enzo.rp9",
+            &[("af-application.hdf", b"NOT-A-ZIP-ANYMORE")],
+        );
+
+        let written = unpack_hardfile(&pkg, "af-application.hdf", &dir.join("out")).unwrap();
+
+        assert_eq!(std::fs::read(&written).unwrap(), b"NOT-A-ZIP-ANYMORE");
+        assert_ne!(
+            written, pkg,
+            "the extracted image, not the package it came from"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_hardfile_the_package_does_not_carry_is_an_error() {
+        let dir = scratch("unpack-hardfile-missing");
+        let pkg = package(&dir, "Empty.rp9", &[("readme.txt", b"nothing here")]);
+
+        let err = unpack_hardfile(&pkg, "af-application.hdf", &dir.join("out")).unwrap_err();
+        assert!(matches!(err, CoreError::InvalidInput(_)), "{err:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A hardfile entry may be well past the 8 MB floppy ceiling —
+    /// `unpack_floppies` would refuse this; `unpack_hardfile` must not.
+    #[test]
+    fn a_hardfile_larger_than_a_floppy_ceiling_still_unpacks() {
+        let dir = scratch("unpack-hardfile-large");
+        let big = vec![0x42u8; (MAX_FLOPPY_BYTES + 1) as usize];
+        let pkg = package(&dir, "Big.rp9", &[("game.hdf", &big)]);
+
+        let written = unpack_hardfile(&pkg, "game.hdf", &dir.join("out")).unwrap();
+        assert_eq!(std::fs::read(&written).unwrap().len(), big.len());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -561,6 +561,63 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-141** 🔴 ✅ **Play mounted an `.rp9`'s hardfile as the zip package
+itself, writable** — *found in code review of Task 11 (Play, collection-wave-c),
+fixed the same day*
+`src-tauri/src/commands/launch.rs`, `src-tauri/src/core/launch/extract.rs` ·
+`commands/launch.rs::request_kind_from`'s `Media::Hardfile` arm discarded the
+record's `file` field — which for an `.rp9` is the zip entry name a
+`<harddrive>` tag names, e.g. `af-application.hdf` — and used `args.path`, the
+`.rp9` package itself. `media_for_plan`'s `Hardfile` arm then had no
+`is_rp9`/extraction branch at all, unlike the `Floppies` arm beside it, so
+`hardfile_paths` ended up holding the path to the zip, mounted **writable**
+(this branch never sets `write_protect_hardfiles`) via `hardfile2=`. WinUAE
+would have opened the user's own `.rp9` archive as a raw block device and
+could have written AmigaDOS filesystem structures over it the moment the
+"game" tried to save — not a failed launch, a corrupted package, hence 🔴
+rather than 🟠. Not hypothetical: the user's catalogue holds 242 `.rp9`
+packages, and a hardfile-based one (Enzo's collection) is an ordinary shape.
+
+Fixed with the same treatment the `Floppies` arm already had:
+`request_kind_from` now carries `Media::Hardfile { file }`'s `file` through
+untouched (mirroring how `Floppies { ordered }` was already handled), and
+`core/launch/extract.rs` gained `unpack_hardfile` — `unpack_floppies`'
+counterpart, sharing its entry-resolution logic through a new private
+`unpack_named` but with its own ceiling (`MAX_HARDFILE_BYTES`, 512 MB, the
+same one `core::gameindex::scan::MAX_TITLE_BYTES` already treats as "one
+catalogued title" — `unpack_floppies`'s 8 MB floppy ceiling would have
+refused any real hardfile). `media_for_plan`'s `Hardfile` arm now branches on
+`is_rp9(&request.path)` exactly as `Floppies` does: extract-then-mount for a
+`.rp9`, mount the catalogued path directly otherwise.
+
+Also fixed, filed against the same review:
+
+- `detect_winuae(None)` ignored the user's configured WinUAE path
+  (`settings.winuaePath`) — the same path `commands/winuae.rs::winuae_launch`
+  already honours. `launch_title` now takes a `winuae_path: Option<String>`
+  sibling argument, the same shape `winuae_launch` uses, and
+  `src/lib/launch.ts::launchTitle` takes it from the caller; `TitleDetail.tsx`
+  reads it from `useSettingsStore`.
+- The three settings Play needs — `launch.romDir`, `launch.defaultMachine`,
+  `launch.systemVolume` — existed only inside an already-open title's Play
+  panel, so a user who had never opened one (in particular, never set the
+  bootable system a WHDLoad launch cannot work without) had no way to find
+  them. `src/pages/Settings.tsx` gained a Play section reusing the exact same
+  `useRemembered` keys, so both surfaces read and write the same values.
+- `media_for_plan` — the highest-risk function in the task and the one with
+  no direct test, which is how the mounting bug got through — now takes plain
+  `launch_dir`/`boot_dir` paths instead of an `AppHandle`, making it callable
+  from a plain unit test with no running Tauri app. Ten new tests cover it
+  directly: a plain floppy, an `.rp9` floppy set, a plain hardfile, an `.rp9`
+  hardfile (`an_rp9_hardfile_is_extracted_not_the_package_itself` — fails
+  against the pre-fix code), and WHDLoad in both one-click and
+  mount-and-hand-over modes, asserting the system image stays read-only, the
+  game drawer stays writable, and the boot directory's priority outranks
+  both. `core/launch/extract.rs` gained four more:
+  `the_hardfile_comes_out_from_under_its_entry_name`,
+  `a_hardfile_the_package_does_not_carry_is_an_error`,
+  `a_hardfile_larger_than_a_floppy_ceiling_still_unpacks`.
+
 **ART-140** 🟡 ✅ **The palette was chosen by eye, and the light theme put
 2.20:1 text inside its own success badge** — *found and fixed 2026-08-18, the
 contrast pass the user asked for after [ART-139](#fixed)*

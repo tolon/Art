@@ -14,6 +14,7 @@ import {
 } from "@/lib/artwork";
 import type { CatalogueEntry } from "@/lib/gameindex";
 import {
+  isMachine,
   launchKindPhrase,
   launchPlan,
   launchTitle,
@@ -25,9 +26,9 @@ import {
 } from "@/lib/launch";
 import { isFlag, isOneOf, isText, isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
+import { useSettingsStore } from "@/stores/settingsStore";
 import { usePowerMode } from "@/lib/uxmode";
 
-const isMachine = isOneOf<Machine>("a500", "a1200");
 type MachineChoice = "auto" | Machine;
 const isMachineChoice = isOneOf<MachineChoice>("auto", "a500", "a1200");
 
@@ -114,6 +115,11 @@ export function TitleDetail({
   const [pictures, setPictures] = useState<{ kind: ArtKind; src: string }[]>([]);
   const [chosenKind, setChosenKind] = useState<ArtKind | null>(null);
 
+  // The same configured path `WinuaeStudio`'s own launch already honours
+  // (`settings.winuaePath`) — Play must not be the one launch surface that
+  // only finds WinUAE when it happens to sit in a standard install location.
+  const winuaePath = useSettingsStore((s) => s.settings.winuaePath);
+
   // Launch settings that apply to every title (a ROM folder, the default
   // machine, the bootable system a WHDLoad title mounts) — remembered under
   // fixed keys rather than per record id, and shown here because this is the
@@ -181,7 +187,7 @@ export function TitleDetail({
     setLaunching(true);
     setLaunchError(null);
     try {
-      setLaunchedPid(await launchTitle(launchArgs()));
+      setLaunchedPid(await launchTitle(launchArgs(), winuaePath));
     } catch (e) {
       setLaunchError(String(e));
     } finally {

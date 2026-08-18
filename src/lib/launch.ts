@@ -10,8 +10,16 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type { Media } from "@/lib/gameindex";
 import type { Phrase } from "@/lib/phrase";
+import { isOneOf } from "@/lib/remembered";
 
 export type Machine = "a500" | "a1200";
+
+/**
+ * Shared by every screen that remembers a plain `Machine` choice — Settings'
+ * global default and `TitleDetail`'s per-title override both guard with this
+ * rather than each defining their own copy of the same two strings.
+ */
+export const isMachine = isOneOf<Machine>("a500", "a1200");
 
 export interface LaunchRom {
   name: string;
@@ -68,12 +76,19 @@ export async function launchPlan(request: LaunchArgs): Promise<LaunchPreview> {
 }
 
 /**
- * Launch the title. Unpacks a `.rp9`'s disks, writes the WHDLoad boot
- * directory for a one-click (Y2) launch, then starts WinUAE. Returns its
- * process id.
+ * Launch the title. Unpacks a `.rp9`'s disk or hardfile, writes the WHDLoad
+ * boot directory for a one-click (Y2) launch, then starts WinUAE. Returns
+ * its process id.
+ *
+ * `winuaePath` is the user's configured path from Settings
+ * (`settings.winuaePath`) — the same argument `winuaeLaunch` already takes.
+ * `undefined`/`null` falls back to WinUAE's standard install locations.
  */
-export async function launchTitle(request: LaunchArgs): Promise<number> {
-  return invoke<number>("launch_title", { request });
+export async function launchTitle(
+  request: LaunchArgs,
+  winuaePath?: string | null
+): Promise<number> {
+  return invoke<number>("launch_title", { request, winuaePath: winuaePath ?? null });
 }
 
 /** The machine a plan settled on, as a sentence a user reads. */

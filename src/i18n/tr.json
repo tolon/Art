@@ -255,6 +255,10 @@
     "aminetRootInUse": "İndirilenler {{path}} klasörüne gidiyor",
     "uxModePowerHint": "Ham veri araçlarını, blok ve sektör ayrıntılarını ve gelişmiş işlemleri gösterir.",
     "uxModeBeginnerHint": "Ham veri araçlarını ve blok düzeyindeki ayrıntıları gizler. Hiçbir şey devre dışı bırakılmaz — her şeyi görmek için Uzman Kullanıcı moduna geçin.",
+    "play": {
+      "title": "Oynat",
+      "hint": "Koleksiyon ekranındaki Oynat'ın hangi Kickstart ve hangi sistemle bir başlığı başlatacağına karar vermek için kullanır. Önyüklenebilir sistem, bir WHDLoad başlığının kendi çekmecesinin yanına bağladığı şeydir — biri olmadan bir WHDLoad başlatması hiç başlayamaz."
+    },
     "colourRules": {
       "title": "Dosya renkleri",
       "description": "Solda bir dosya adı kalıbı, sağda bir renk. Eşleşen ilk kural kazanır, dolayısıyla sıra sizin elinizde — konteyner kuralının üstündeki bir kural, bir dosyayı diğerlerinden ayırır. Birden çok kalıp tek kurala noktalı virgülle yazılır. Hiçbir kuralın tutmadığı satır ART'ın kendi renklendirmesini korur.",
