@@ -39,6 +39,28 @@ so ART marks it `~guessed` while its neighbour, named by the slave itself,
 carries no mark. A guess and a statement look identical once they are on a
 screen, and ART's answer is to never let them.*
 
+**Play.** The Collection's detail panel has a Play button that hands a
+catalogued title straight to WinUAE. ART picks the machine from the title's
+own chipset, picks a Kickstart from your ROM folder, works out how much extra
+memory a WHDLoad title needs on top of the stock machine, shows all of that
+on a confirmation screen before anything starts, and **refuses rather than
+launches** when no ROM in your folder actually suits the title. A floppy set
+— plain `.adf` or `.rp9` — mounts and boots directly; a self-booting WHDLoad
+hardfile (most WHDLoad titles in a real collection) mounts the same way, with
+an off-by-default switch to make it writable so saves survive; a WHDLoad
+*drawer* that needs a separate system image is handed that system read-only,
+or, when the system supports it, boots straight into the game in one step.
+Two shapes have run for real, from this project's own collection: a
+self-booting WHDLoad hardfile (`1000 Miglia`, one of 1697 catalogued the same
+way) reached the game, and an `.rp9`-packaged floppy title (`3D Demo`)
+launched with its two floppies extracted and mounted in order. That is two
+proven shapes, not all of them — see
+[What still needs testing](#what-still-needs-testing) for exactly what is
+still unverified and how to try it.
+
+*(A screenshot of the Play confirmation screen — machine, Kickstart, memory,
+shown before anything starts — would fit here; none exists yet.)*
+
 **A PiStorm card, described in the words its own documentation uses.** Every
 control writes a documented Emu68 option or a Raspberry Pi firmware setting —
 and tells you which one. Both files are merged into what is already on the card,
@@ -158,6 +180,64 @@ That rung is listed by name in [`test/README.md`](test/README.md) and is not
 being quietly folded into the one above it — claiming hardware ART has not
 been tried on is the one thing [docs/FEATURES.md](docs/FEATURES.md) exists to
 prevent.
+
+### What still needs testing
+
+The owner has decided the remaining verification of Play happens by the
+community, not alone. One WHDLoad hardfile and one `.rp9` floppy title have
+run for real (above); the rest of what the Collection catalogues has not.
+Each of these is a concrete gap, not a vague "try it and see" — what to run
+and what a good or bad result looks like:
+
+1. **A bare `.adf` floppy set (no `.rp9` wrapper).** Only an `.rp9`-packaged
+   floppy set has actually launched. Catalogue a folder holding a plain
+   multi-disk `.adf` title, open its detail panel and press Play. **Good:**
+   WinUAE starts with the disks mounted in the order the panel shows, and
+   boots. **Bad:** the wrong disk order, a missing disk, or a refusal that
+   should not have happened.
+2. **An `.rp9`-packaged *hardfile* title.** 102 of these are in this user's
+   collection and none has run. This is the shape [ART-141](docs/ISSUES.md)
+   was found and fixed in review, but the fix has never been exercised
+   against a real launch. Play one. **Good:** ART extracts the hardfile entry
+   named inside the package (never the `.rp9` zip itself) and mounts it.
+   **Bad:** WinUAE opens the wrong file, or reports it cannot be mounted.
+3. **The WHDLoad *drawer*-plus-system Y1/Y2 path.** Nothing in this
+   collection produces this shape — an unpacked WHDLoad pack paired with a
+   separate bootable system image — so only its own unit tests have ever
+   exercised it. Configure a bootable system image in Settings → Play, then
+   Play a drawer-based (not hardfile) WHDLoad title. **Good:** Y1 mounts your
+   system read-only and hands control over, or Y2 (where supported) boots
+   straight to the game. **Bad:** a bare AmigaDOS CLI prompt instead of the
+   game — this exact failure is how [ART-145](docs/ISSUES.md),
+   [ART-147](docs/ISSUES.md), [ART-148](docs/ISSUES.md) and
+   [ART-149](docs/ISSUES.md) were each found — or your original system image
+   being modified, which it must never be.
+4. **Any VHD- or RDB-container system image.** [ART-146](docs/ISSUES.md)
+   stopped ART forcing bare-image geometry onto every hardfile, VHD and RDB
+   containers included; the fix reads the file's own bytes (`conectix`,
+   `RDSK`) instead of assuming one shape for all of them, but has **not**
+   been retried against a real emulator run — the one real run since
+   (`1000 Miglia`) is a bare `DOS\1` image, the branch ART-146 left
+   unchanged. Launch a title or a WHDLoad system (via Y1)
+   backed by a VHD container (e.g. an AmiKit-style `.hdf`) or a plain RDB
+   hardfile. **Good:** WinUAE mounts and reads it normally. **Bad:** "Not a
+   DOS disk in unit 0" — the exact error ART-146 was filed against.
+5. **Whether a WHDLoad save survives with the writable switch on.** Measured,
+   not proven: two titles were played with *allow writes* on, the emulator
+   window was closed rather than quit through WHDLoad's own key, and the
+   images were read back afterward — same byte counts and timestamps as
+   before, so the mount really is read-write (the generated configuration
+   says `rw`) but nothing wrote in that session. The likely explanation is
+   that a WHDLoad game writes its save or high-score table on a clean exit,
+   not while running, and this session never gave it one. Play a title with
+   *allow writes* on, exit through WHDLoad's own quit key rather than closing
+   the window, then reopen and check for the save. **Good:** the save is
+   there. **Bad:** still nothing after a clean exit, which would mean the
+   switch does not do what it claims.
+
+Found something? File it the way every other defect in this project is
+filed — see [docs/ISSUES.md](docs/ISSUES.md) for the format, and
+[CONTRIBUTING.md](CONTRIBUTING.md) for how to open one.
 
 Data safety is enforced in `core/safety`: every write is atomic, and files are
 backed up to `.art-backup/` before being replaced (or, for images too large to

@@ -12,7 +12,11 @@ pnpm, MSVC Build Tools).
 1. Read [docs/STATUS.md](docs/STATUS.md) to see where the project is and what
    the current stage covers.
 2. Pick an issue from [docs/ISSUES.md](docs/ISSUES.md), or open one to discuss
-   a change.
+   a change. **If you are looking for where help is wanted right now**, see
+   [README.md § What still needs testing](README.md#what-still-needs-testing)
+   — five concrete, unverified Play scenarios, each with what to run and what
+   a good or bad result looks like. Trying one of these and reporting back
+   (good or bad) is as useful as a code change.
 3. Branch from `main`.
 4. Follow the stage plan — **do not implement future-stage features** until the
    current one is stable. [docs/roadmap.md](docs/roadmap.md) defines what each
