@@ -22,6 +22,8 @@
 //!   launch.rs` maps `RomInfo` to `LaunchRom` in a later task; that
 //!   translation belongs at the command layer, not here.
 
+pub mod extract;
+
 use serde::{Deserialize, Serialize};
 
 /// The two facts about a candidate Kickstart this module's decision reads.
@@ -286,6 +288,29 @@ mod tests {
         ));
     }
 
+    /// An empty ROM folder is the commonest case there is, not an edge — a
+    /// user who has added no Kickstarts yet has exactly this list.
+    #[test]
+    fn no_suitable_rom_refuses_when_the_rom_list_is_empty() {
+        let refusal = plan_for(&LaunchRequest {
+            machine: Machine::A1200,
+            roms: &[],
+            kind: RequestKind::Hardfile {
+                image: r"D:\g\game.hdf".into(),
+            },
+            system_volume: None,
+            one_click: true,
+        })
+        .unwrap_err();
+
+        assert!(matches!(
+            refusal,
+            LaunchRefusal::NoSuitableRom {
+                machine: Machine::A1200
+            }
+        ));
+    }
+
     /// WinUAE has four drives. Saying so is the whole fix; pretending
     /// otherwise is what §89 forbids.
     #[test]
@@ -356,5 +381,114 @@ mod tests {
             }
             ref other => panic!("{other:?}"),
         }
+    }
+
+    /// What a later task's TypeScript has to match, pinned exactly as
+    /// `core/rom/pairing.rs::the_wire_shape_is_what_the_frontend_reads` pins
+    /// `Pairing`'s — for the same reason: Rust keeps compiling if a variant
+    /// is renamed or a `#[serde(tag = ...)]` is dropped, TypeScript keeps
+    /// compiling too, and the break only shows up at runtime, in the user's
+    /// hands.
+    ///
+    /// `one_click` is asserted as `"one_click"`, not `"oneClick"` — that is
+    /// what this struct actually produces, with no `rename_all = "camelCase"`
+    /// on `LaunchKind`. If the frontend plan expects `oneClick`, that is a
+    /// choice for a later task to make, not for this test to paper over.
+    #[test]
+    fn the_wire_shape_is_what_the_frontend_reads() {
+        assert_eq!(
+            serde_json::to_value(Machine::A500).unwrap(),
+            serde_json::json!("a500")
+        );
+        assert_eq!(
+            serde_json::to_value(Machine::A1200).unwrap(),
+            serde_json::json!("a1200")
+        );
+
+        assert_eq!(
+            serde_json::to_value(LaunchNote::MoreDisksThanDrives {
+                total: 6,
+                mounted: 4
+            })
+            .unwrap(),
+            serde_json::json!({ "kind": "more-disks-than-drives", "total": 6, "mounted": 4 })
+        );
+
+        assert_eq!(
+            serde_json::to_value(LaunchRefusal::NoSuitableRom {
+                machine: Machine::A1200
+            })
+            .unwrap(),
+            serde_json::json!({ "kind": "no-suitable-rom", "machine": "a1200" })
+        );
+        assert_eq!(
+            serde_json::to_value(LaunchRefusal::NoSystemVolume).unwrap(),
+            serde_json::json!({ "kind": "no-system-volume" })
+        );
+        assert_eq!(
+            serde_json::to_value(LaunchRefusal::FileMissing {
+                path: r"D:\g\a.adf".into()
+            })
+            .unwrap(),
+            serde_json::json!({ "kind": "file-missing", "path": r"D:\g\a.adf" })
+        );
+
+        assert_eq!(
+            serde_json::to_value(LaunchKind::Floppies {
+                images: vec!["a.adf".into()]
+            })
+            .unwrap(),
+            serde_json::json!({ "kind": "floppies", "images": ["a.adf"] })
+        );
+        assert_eq!(
+            serde_json::to_value(LaunchKind::Hardfile {
+                image: "a.hdf".into()
+            })
+            .unwrap(),
+            serde_json::json!({ "kind": "hardfile", "image": "a.hdf" })
+        );
+        assert_eq!(
+            serde_json::to_value(LaunchKind::Whdload {
+                drawer: r"D:\games\Turrican".into(),
+                slave: "Turrican.slave".into(),
+                system: r"E:\amiga\amikit\AmiKit.hdf".into(),
+                one_click: true,
+            })
+            .unwrap(),
+            serde_json::json!({
+                "kind": "whdload",
+                "drawer": r"D:\games\Turrican",
+                "slave": "Turrican.slave",
+                "system": r"E:\amiga\amikit\AmiKit.hdf",
+                "one_click": true
+            })
+        );
+
+        assert_eq!(
+            serde_json::to_value(RequestKind::Floppies {
+                images: vec!["a.adf".into()]
+            })
+            .unwrap(),
+            serde_json::json!({ "kind": "floppies", "images": ["a.adf"] })
+        );
+        assert_eq!(
+            serde_json::to_value(RequestKind::Hardfile {
+                image: "a.hdf".into()
+            })
+            .unwrap(),
+            serde_json::json!({ "kind": "hardfile", "image": "a.hdf" })
+        );
+        assert_eq!(
+            serde_json::to_value(RequestKind::Whdload {
+                drawer: r"D:\games\Turrican".into(),
+                slave: "Turrican.slave".into(),
+            })
+            .unwrap(),
+            serde_json::json!({
+                "kind": "whdload",
+                "drawer": r"D:\games\Turrican",
+                "slave": "Turrican.slave"
+            })
+        );
     }
 }
