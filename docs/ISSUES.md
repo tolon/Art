@@ -781,6 +781,18 @@ Collection screen actually shows the stale badge and a working Update button
 against this user's real, already-`whdload-drawer`-shaped catalogue files on
 disk, has **not** been retried against the real application.
 
+
+**And the recovery was then verified on the user's own files, not simulated.**
+After the fix, they pressed Update once in the running application. Read back
+off disk afterwards: the WHDLoad root was rewritten with `index_schema: 3` and
+**1697 records carrying `whdload-hardfile`** (plus the one floppy title that
+root has always held), while `overrides.json` was left untouched at its
+earlier timestamp with the user's own `1869 AGAdeneme` title correction intact
+— which is the whole point of the derived/user-data split this fix turns on.
+What is still unproven is the other end: whether `1000 Miglia` now actually
+launches, and whether a save survives with `allow_write` turned on. Neither
+has been retried.
+
 **ART-146** 🔴 ✅ **`hardfile2=` forced bare-image geometry onto every hard
 drive image, including a VHD container — WinUAE reported "Not a DOS disk in
 unit 0"** — *found and fixed 2026-08-18, retrying Y1 against the user's own
