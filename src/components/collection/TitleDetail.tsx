@@ -14,11 +14,14 @@ import {
 } from "@/lib/artwork";
 import type { CatalogueEntry } from "@/lib/gameindex";
 import {
+  DEFAULT_WHDLOAD_FAST_RAM_MB,
   isMachine,
+  isWhdloadFastRamMb,
   launchKindPhrase,
   launchPlan,
   launchTitle,
   machinePhrase,
+  memoryLabel,
   mountNotePhrase,
   notePhrase,
   refusalPhrase,
@@ -141,6 +144,14 @@ export function TitleDetail({
     isTextOrNothing,
     null
   );
+  // ART-151: read only, same reason `systemVolume` is above — Settings is
+  // the one place this is edited (`PlaySettingsSection`); this screen only
+  // needs the current value to send with the launch.
+  const [whdloadFastRamMb] = useRemembered<number>(
+    "launch.whdloadFastRamMb",
+    isWhdloadFastRamMb,
+    DEFAULT_WHDLOAD_FAST_RAM_MB
+  );
 
   // This title's own choices — keyed by record id, so switching titles does
   // not carry one game's override onto another's.
@@ -192,6 +203,7 @@ export function TitleDetail({
       system_volume: systemVolume,
       one_click: oneClick,
       allow_write: allowWrite,
+      whdload_fast_ram_mb: whdloadFastRamMb,
     };
   }
 
@@ -519,6 +531,11 @@ export function TitleDetail({
                 {t("collection.detail.play.willUse", {
                   machine: t(machinePhrase(preview.plan.machine).key),
                   rom: preview.plan.rom.name,
+                  // ART-151: DOS-Error #103 ("not enough memory available")
+                  // is exactly this number falling short, so it belongs in
+                  // the same sentence as the machine and the ROM rather than
+                  // only surfacing once WHDLoad itself refuses.
+                  memory: preview.memory ? memoryLabel(preview.memory) : "",
                 })}
               </div>
               <div>

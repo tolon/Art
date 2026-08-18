@@ -10,7 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type { Media } from "@/lib/gameindex";
 import type { Phrase } from "@/lib/phrase";
-import { isOneOf } from "@/lib/remembered";
+import { isOneOf, isWholeNumberBetween } from "@/lib/remembered";
 
 export type Machine = "a500" | "a1200";
 
@@ -20,6 +20,32 @@ export type Machine = "a500" | "a1200";
  * rather than each defining their own copy of the same two strings.
  */
 export const isMachine = isOneOf<Machine>("a500", "a1200");
+
+/**
+ * Fast RAM, in MB, ART adds to a WHDLoad launch's profile (ART-151) — mirrors
+ * `core::launch::DEFAULT_WHDLOAD_FAST_RAM_MB`, whose doc comment cites the
+ * two sources this default comes from: whdload.de's own stated 1 MB
+ * requirement floor, and `AmigaProfile::a1200_aga`'s already-vetted 8 MB
+ * Fast RAM ("the ideal WHDLoad setup"), reused here rather than invented
+ * fresh.
+ */
+export const DEFAULT_WHDLOAD_FAST_RAM_MB = 8;
+
+/**
+ * WinUAE's 24-bit `fastmem_size=` tops out at 8 MB — the same ceiling
+ * `AmigaProfile::a1200_aga`'s own stock preset already uses. `0` is a valid
+ * choice too: it turns this setting off and leaves a WHDLoad launch on
+ * whatever Fast RAM its machine's stock preset already carries.
+ */
+export const WHDLOAD_FAST_RAM_MAX_MB = 8;
+
+/**
+ * Guards `launch.whdloadFastRamMb` — a hand-edited or stale settings file
+ * (a negative number, `NaN`, a value past what WinUAE's 24-bit Fast RAM
+ * address space supports) falls back to
+ * {@link DEFAULT_WHDLOAD_FAST_RAM_MB} instead of reaching a launch.
+ */
+export const isWhdloadFastRamMb = isWholeNumberBetween(0, WHDLOAD_FAST_RAM_MAX_MB);
 
 export interface LaunchRom {
   name: string;
@@ -67,6 +93,20 @@ export interface LaunchPlan {
 }
 
 /**
+ * The memory the planned machine will actually have — mirrors
+ * `commands::launch::MemorySummary`. ART-151: DOS-Error #103 ("not enough
+ * memory available") is exactly this falling short, so the confirmation
+ * screen states it beside the machine and the ROM rather than leaving the
+ * user to learn it from WHDLoad's own error screen.
+ */
+export interface MemorySummary {
+  chip_kb: number;
+  slow_kb: number;
+  fast_mb: number;
+  z3_fast_mb: number;
+}
+
+/**
  * What will be mounted and whether it can be written to (design §4.4) — the
  * confirmation screen must state this rather than leave it assumed, which is
  * why it travels apart from `LaunchKind`: `LaunchKind` says *what* the plan
@@ -87,6 +127,9 @@ export interface LaunchPreview {
   plan: LaunchPlan | null;
   refusal: LaunchRefusal | null;
   mounts: MountNote[];
+  /** `null` on a refusal — nothing is going to be tried, so there is nothing
+   *  to state. Set whenever `plan` is, never independently of it. */
+  memory: MemorySummary | null;
 }
 
 export interface LaunchArgs {
@@ -113,6 +156,13 @@ export interface LaunchArgs {
    * {@link mountNotePhrase}).
    */
   allow_write: boolean;
+  /**
+   * Fast RAM, in MB, added to a WHDLoad launch's profile (ART-151) — ignored
+   * for anything that is not WHDLoad-shaped. From Settings
+   * (`launch.whdloadFastRamMb`, guarded by {@link isWhdloadFastRamMb}),
+   * defaulting to {@link DEFAULT_WHDLOAD_FAST_RAM_MB}.
+   */
+  whdload_fast_ram_mb: number;
 }
 
 /** Work out what a launch would need. Starts nothing. */
@@ -213,6 +263,26 @@ export function mountNotePhrase(note: MountNote): Phrase {
           : "collection.detail.play.mount.whdloadMountOnly",
       };
   }
+}
+
+/**
+ * The machine's memory as one line — ART-151, the fact the confirmation
+ * screen must show beside the machine and the ROM (`willUse`'s `{{memory}}`
+ * param), because it is the thing DOS-Error #103 measured too small.
+ *
+ * Plain formatting, not a {@link Phrase}: "Chip"/"Fast"/"KB"/"MB" are
+ * hardware names, the same reason `refusalPhrase` leaves `A500`/`A1200`
+ * untranslated rather than building a second translation catalogue entry per
+ * unit. `slow_kb`/`z3_fast_mb` are omitted when zero — most machines never
+ * carry either, and reciting "+0 KB Slow" is exactly the kind of noise the
+ * DOS error this fixes never needed either.
+ */
+export function memoryLabel(memory: MemorySummary): string {
+  const parts = [`${memory.chip_kb} KB Chip`];
+  if (memory.slow_kb > 0) parts.push(`${memory.slow_kb} KB Slow`);
+  if (memory.fast_mb > 0) parts.push(`${memory.fast_mb} MB Fast`);
+  if (memory.z3_fast_mb > 0) parts.push(`${memory.z3_fast_mb} MB Z3 Fast`);
+  return parts.join(" + ");
 }
 
 /** What a settled plan will actually mount, in one line. */

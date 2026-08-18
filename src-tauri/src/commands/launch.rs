@@ -26,11 +26,11 @@ use crate::core::hdf::detect_hardfile_shape;
 use crate::core::launch::extract::{unpack_floppies, unpack_hardfile};
 use crate::core::launch::whdload_boot::write_boot_dir;
 use crate::core::launch::{
-    machine_for, plan_for, Chipset, LaunchKind, LaunchPlan, LaunchRefusal, LaunchRequest,
-    LaunchRom, Machine, RequestKind,
+    is_whdload_shaped, machine_for, plan_for, Chipset, LaunchKind, LaunchPlan, LaunchRefusal,
+    LaunchRequest, LaunchRom, Machine, RequestKind, DEFAULT_WHDLOAD_FAST_RAM_MB,
 };
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
-use crate::core::profile::AmigaProfile;
+use crate::core::profile::{AmigaProfile, MemoryConfig};
 use crate::core::rom::{scan_rom_directory, RomInfo};
 use crate::core::winuae::{
     detect_winuae, generate_uae_config, launch_winuae, DirMount, LaunchMedia,
@@ -103,6 +103,27 @@ pub struct LaunchArgs {
     /// the safe default — read-only, §93 — must be what it gets.
     #[serde(default)]
     pub allow_write: bool,
+    /// Fast RAM, in MB, added to a WHDLoad launch's profile — ART-151.
+    /// Ignored for anything that is not WHDLoad-shaped
+    /// (`core::launch::is_whdload_shaped`), the same predicate that decides
+    /// [`crate::core::launch::WHDLOAD_MIN_KICKSTART_MAJOR`]'s Kickstart
+    /// floor. From Settings (`launch.whdloadFastRamMb`), guarded by
+    /// `isWholeNumberBetween` on the frontend so a hand-edited or stale
+    /// settings file falls back to the default instead of putting a
+    /// nonsense value in a launch. `#[serde(default = ...)]`: a screen still
+    /// running an older bundled frontend against a rebuilt backend sends no
+    /// such field, and the safe default — WHDLoad's own headroom, not zero —
+    /// is what it gets, the same shape `allow_write`'s own default takes
+    /// just above.
+    #[serde(default = "default_whdload_fast_ram_mb")]
+    pub whdload_fast_ram_mb: u32,
+}
+
+/// [`LaunchArgs::whdload_fast_ram_mb`]'s serde default — see that field and
+/// [`DEFAULT_WHDLOAD_FAST_RAM_MB`]'s own doc comment for why this number and
+/// not zero.
+fn default_whdload_fast_ram_mb() -> u32 {
+    DEFAULT_WHDLOAD_FAST_RAM_MB
 }
 
 /// The machine a launch actually uses: the user's own per-title choice when
@@ -176,6 +197,30 @@ fn request_kind_from(args: &LaunchArgs) -> RequestKind {
     }
 }
 
+/// The four numbers `generate_uae_config` actually writes into the WinUAE
+/// config (`core::winuae`'s `fastmem_size=` and friends) — mirrors
+/// `core::profile::MemoryConfig` rather than handing the frontend the whole
+/// `AmigaProfile` (CPU, chipset, display, ROM hash…) just to show four
+/// numbers on the confirmation screen.
+#[derive(Debug, Clone, Serialize)]
+pub struct MemorySummary {
+    pub chip_kb: u32,
+    pub slow_kb: u32,
+    pub fast_mb: u32,
+    pub z3_fast_mb: u32,
+}
+
+impl From<&MemoryConfig> for MemorySummary {
+    fn from(memory: &MemoryConfig) -> Self {
+        Self {
+            chip_kb: memory.chip_kb,
+            slow_kb: memory.slow_kb,
+            fast_mb: memory.fast_mb,
+            z3_fast_mb: memory.z3_fast_mb,
+        }
+    }
+}
+
 /// What a launch would do, or why it cannot — computed without starting
 /// anything, so the confirmation screen has something to show.
 #[derive(Debug, Clone, Serialize)]
@@ -185,6 +230,52 @@ pub struct LaunchPreview {
     /// What will be mounted and whether it can be written to (design §4.4) —
     /// empty on a refusal, since nothing is going to be mounted.
     pub mounts: Vec<MountNote>,
+    /// The memory the planned machine will actually have — `None` on a
+    /// refusal, since nothing is going to be tried. ART-151: DOS-Error #103
+    /// ("not enough memory available") is exactly this number falling short,
+    /// discovered only after WHDLoad itself refused — the confirmation
+    /// screen states it beside the machine and the ROM so the user can see
+    /// what will be tried before pressing Start, rather than learn it from
+    /// WHDLoad's own error screen a second time.
+    pub memory: Option<MemorySummary>,
+}
+
+/// Work out what a launch would need. Starts nothing, reads no media —
+/// only the ROM folder is scanned, which is what a Kickstart choice needs.
+///
+/// Takes `roms` and `request` rather than an `AppHandle` for the same reason
+/// `media_for_plan` does (that function's own doc comment): this is exactly
+/// the logic worth exercising directly in a test, without a running Tauri
+/// app to produce one.
+fn preview_for(request: &LaunchArgs, roms: &[LaunchRom]) -> LaunchPreview {
+    let machine = resolved_machine(request);
+    let kind = request_kind_from(request);
+    let plan = plan_for(&LaunchRequest {
+        machine,
+        roms,
+        kind: kind.clone(),
+        system_volume: request.system_volume.clone(),
+        one_click: request.one_click,
+    });
+
+    match plan {
+        Ok(plan) => {
+            let mounts = mount_notes_for(request, &plan);
+            let profile = profile_for_request(&kind, plan.machine, request.whdload_fast_ram_mb);
+            LaunchPreview {
+                plan: Some(plan),
+                refusal: None,
+                mounts,
+                memory: Some(MemorySummary::from(&profile.memory)),
+            }
+        }
+        Err(refusal) => LaunchPreview {
+            plan: None,
+            refusal: Some(refusal),
+            mounts: vec![],
+            memory: None,
+        },
+    }
 }
 
 /// Work out what a launch would need. Starts nothing, reads no media —
@@ -197,30 +288,7 @@ pub fn launch_plan(request: LaunchArgs, _app: AppHandle) -> AppResult<LaunchPrev
         .map(launch_rom_from)
         .collect();
 
-    let machine = resolved_machine(&request);
-    let plan = plan_for(&LaunchRequest {
-        machine,
-        roms: &roms,
-        kind: request_kind_from(&request),
-        system_volume: request.system_volume.clone(),
-        one_click: request.one_click,
-    });
-
-    Ok(match plan {
-        Ok(plan) => {
-            let mounts = mount_notes_for(&request, &plan);
-            LaunchPreview {
-                plan: Some(plan),
-                refusal: None,
-                mounts,
-            }
-        }
-        Err(refusal) => LaunchPreview {
-            plan: None,
-            refusal: Some(refusal),
-            mounts: vec![],
-        },
-    })
+    Ok(preview_for(&request, &roms))
 }
 
 /// A [`LaunchRefusal`] as a [`CoreError`], for the one place ART cannot show
@@ -385,6 +453,39 @@ fn profile_for(machine: Machine) -> AmigaProfile {
     }
 }
 
+/// The profile a plan will actually run with — [`profile_for`]'s stock
+/// preset, with a WHDLoad launch's fast-RAM headroom
+/// ([`DEFAULT_WHDLOAD_FAST_RAM_MB`], or whatever Settings has raised it to)
+/// folded in. ART-151: a WHDLoad launch on `Machine::A500` used to get
+/// `AmigaProfile::a500_ocs` completely unmodified — 512 KB Chip, 512 KB Slow,
+/// no Fast RAM at all — which is exactly the memory DOS-Error #103 measured
+/// as too small. Never applied to a floppy or a plain (non-WHDLoad) hardfile
+/// — [`is_whdload_shaped`] is the same predicate [`plan_for`] already reads
+/// for the Kickstart floor, so a title never becomes WHDLoad-shaped for one
+/// purpose and not the other.
+///
+/// **Never mutates a shared preset.** [`profile_for`] returns a fresh
+/// [`AmigaProfile`] on every call — `AmigaProfile::a500_ocs()` /
+/// `a1200_aga()` build a new struct each time rather than handing back a
+/// shared instance — so raising `.memory.fast_mb` here only ever changes the
+/// copy this one launch is about to use. `core/profile.rs`'s presets, and
+/// every other screen that reads them (the Profile Studio among them), are
+/// untouched — CLAUDE.md is explicit that a WHDLoad launch "should adjust
+/// the memory of the profile it plans with, not redefine what an A500 is".
+///
+/// `.max(...)` rather than a plain assignment: `Machine::A1200` already
+/// carries 8 MB of Fast RAM in its stock preset (`AmigaProfile::a1200_aga`,
+/// "the ideal WHDLoad setup"), and a user-configured value lower than that
+/// must not *shrink* it back down — only ever add headroom, never take it
+/// away.
+fn profile_for_request(kind: &RequestKind, machine: Machine, fast_ram_mb: u32) -> AmigaProfile {
+    let mut profile = profile_for(machine);
+    if is_whdload_shaped(kind) {
+        profile.memory.fast_mb = profile.memory.fast_mb.max(fast_ram_mb);
+    }
+    profile
+}
+
 /// Turn a settled [`LaunchPlan`] into the media WinUAE mounts, unpacking or
 /// writing whatever the plan's kind needs along the way.
 ///
@@ -543,13 +644,14 @@ fn launch_title_inner(
         .collect();
 
     let machine = resolved_machine(request);
+    let kind = request_kind_from(request);
     // Computed again, not carried from the preview: the screen may have sat
     // open for a while, and a ROM folder or a file on disk can change under
     // it in the meantime.
     let plan = plan_for(&LaunchRequest {
         machine,
         roms: &roms,
-        kind: request_kind_from(request),
+        kind: kind.clone(),
         system_volume: request.system_volume.clone(),
         one_click: request.one_click,
     })
@@ -558,7 +660,7 @@ fn launch_title_inner(
     let launch_dir = launch_dir_for(app, &request.id);
     let boot_dir = boot_dir_for(app);
     let media = media_for_plan(request, &plan, &launch_dir, &boot_dir)?;
-    let profile = profile_for(plan.machine);
+    let profile = profile_for_request(&kind, plan.machine, request.whdload_fast_ram_mb);
     let config_text = generate_uae_config(&profile, &media)?;
 
     // The same configured path `commands/winuae.rs::winuae_launch` already
@@ -686,6 +788,141 @@ mod tests {
         request.machine_override = None;
 
         assert_eq!(resolved_machine(&request), Machine::A1200);
+    }
+
+    // ---- profile_for_request: ART-151's fast-RAM headroom -----------------
+    //
+    // `1000 Miglia` reached WHDLoad on a stock `AmigaProfile::a500_ocs` — 512
+    // KB Chip, 512 KB Slow, no Fast RAM at all, exactly 1 MB — and WHDLoad
+    // itself refused with "DOS-Error #103 (not enough memory available) on
+    // loading 1000Miglia.Slave". `docs/ISSUES.md`'s ART-151 entry has the
+    // full measurement.
+
+    fn a500_rom() -> LaunchRom {
+        LaunchRom {
+            name: "Kickstart 3.1 (40.063) A500".into(),
+            models: vec!["A500".into()],
+            path: r"D:\roms\kick40063.A500".into(),
+            major: Some(40),
+        }
+    }
+
+    /// A WHDLoad-shaped hardfile gets the *configured* fast RAM folded into
+    /// its profile — 16, not `DEFAULT_WHDLOAD_FAST_RAM_MB`'s 8, so this test
+    /// cannot pass by coincidence with the default. `chip_kb`/`slow_kb` stay
+    /// exactly `AmigaProfile::a500_ocs`'s own numbers: this fix adds Fast
+    /// RAM headroom, it does not touch the Chip RAM the emulated game itself
+    /// sees.
+    #[test]
+    fn a_whdload_hardfile_plans_the_configured_fast_ram() {
+        let kind = RequestKind::Hardfile {
+            image: "1000 Miglia.hdf".into(),
+            whdload: true,
+        };
+        let profile = profile_for_request(&kind, Machine::A500, 16);
+
+        assert_eq!(profile.memory.fast_mb, 16);
+        assert_eq!(profile.memory.chip_kb, 512);
+        assert_eq!(profile.memory.slow_kb, 512);
+    }
+
+    /// The same predicate covers `RequestKind::Whdload` too — a title that is
+    /// WHDLoad-shaped by construction, not by the `whdload` flag on a
+    /// hardfile.
+    #[test]
+    fn a_whdload_drawer_plans_the_configured_fast_ram() {
+        let kind = RequestKind::Whdload {
+            drawer: r"D:\games\Turrican".into(),
+            slave: "Turrican.slave".into(),
+        };
+        let profile = profile_for_request(&kind, Machine::A500, 16);
+
+        assert_eq!(profile.memory.fast_mb, 16);
+    }
+
+    /// A floppy title must not get the WHDLoad headroom silently applied —
+    /// it is not WHDLoad-shaped, and a stock A500 profile is exactly what a
+    /// bare `.adf` is meant to boot on.
+    #[test]
+    fn a_floppy_title_does_not_get_whdload_memory_silently_applied() {
+        let kind = RequestKind::Floppies {
+            images: vec![r"D:\g\a.adf".into()],
+        };
+        let profile = profile_for_request(&kind, Machine::A500, 16);
+
+        assert_eq!(
+            profile.memory.fast_mb, 0,
+            "a floppy title must keep the stock A500 profile's own memory"
+        );
+    }
+
+    /// A plain (non-WHDLoad) hardfile is the same "not held to WHDLoad's own
+    /// rules" case `WHDLOAD_MIN_KICKSTART_MAJOR`'s own tests cover — a
+    /// hand-installed AmigaOS hardfile has nothing to do with WHDLoad and
+    /// must not have its memory grown either.
+    #[test]
+    fn a_plain_hardfile_does_not_get_whdload_memory_applied() {
+        let kind = RequestKind::Hardfile {
+            image: "Game.hdf".into(),
+            whdload: false,
+        };
+        let profile = profile_for_request(&kind, Machine::A500, 16);
+
+        assert_eq!(profile.memory.fast_mb, 0);
+    }
+
+    /// `Machine::A1200`'s stock preset already carries 8 MB of Fast RAM
+    /// (`AmigaProfile::a1200_aga`, "the ideal WHDLoad setup") — a
+    /// lower-than-stock configured value must never shrink it back down,
+    /// only ever add headroom on top.
+    #[test]
+    fn a_configured_value_lower_than_the_stock_a1200_preset_never_shrinks_it() {
+        let kind = RequestKind::Hardfile {
+            image: "Game.hdf".into(),
+            whdload: true,
+        };
+        let profile = profile_for_request(&kind, Machine::A1200, 2);
+
+        assert_eq!(profile.memory.fast_mb, 8);
+    }
+
+    // ---- preview_for: what the confirmation screen is actually told -------
+
+    /// The confirmation screen's own note must name the memory a WHDLoad
+    /// launch will use — this is `LaunchPreview.memory`, which ART-151's
+    /// frontend change reads into the same sentence that already states the
+    /// machine and the ROM.
+    #[test]
+    fn preview_for_states_the_memory_a_whdload_launch_will_use() {
+        let mut request = args(Media::WhdloadHardfile {
+            file: "1000 Miglia.hdf".into(),
+            slave: "1000Miglia.Slave".into(),
+        });
+        request.whdload_fast_ram_mb = 16;
+
+        let preview = preview_for(&request, &[a500_rom()]);
+
+        let memory = preview
+            .memory
+            .expect("a settled plan must state its memory");
+        assert_eq!(memory.fast_mb, 16);
+        assert!(preview.plan.is_some());
+    }
+
+    /// A refusal has nothing to try, so it states no memory either — the
+    /// field must not be left populated with a plan that was never settled.
+    #[test]
+    fn preview_for_states_no_memory_on_a_refusal() {
+        let request = args(Media::WhdloadHardfile {
+            file: "1000 Miglia.hdf".into(),
+            slave: "1000Miglia.Slave".into(),
+        });
+
+        // No ROM at all: `plan_for` refuses with `NoRomMeetsWhdloadMinimum`.
+        let preview = preview_for(&request, &[]);
+
+        assert!(preview.plan.is_none());
+        assert!(preview.memory.is_none());
     }
 
     // ---- mount_notes_for: what the confirmation screen is told ------------
@@ -853,6 +1090,7 @@ mod tests {
             system_volume: None,
             one_click: true,
             allow_write: false,
+            whdload_fast_ram_mb: DEFAULT_WHDLOAD_FAST_RAM_MB,
         }
     }
 

@@ -58,7 +58,13 @@ import {
   type OperationRecord,
 } from "@/lib/oplog";
 import { sourcesLibrary, sourcesSetLibraryRoot } from "@/lib/sources";
-import { isMachine, machinePhrase, type Machine } from "@/lib/launch";
+import {
+  DEFAULT_WHDLOAD_FAST_RAM_MB,
+  isMachine,
+  isWhdloadFastRamMb,
+  machinePhrase,
+  type Machine,
+} from "@/lib/launch";
 import { isText, isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 
@@ -318,15 +324,17 @@ export function SettingsPage() {
 /**
  * What Play (the Collection screen's launch flow, Task 11) needs before it
  * can start anything: a Kickstart ROM folder, the machine to default to when
- * a title states no chipset, and the bootable system a WHDLoad title mounts
- * beside its own drawer.
+ * a title states no chipset, the bootable system a WHDLoad title mounts
+ * beside its own drawer, and (ART-151) the Fast RAM headroom a WHDLoad
+ * launch's profile gets on top of its stock preset.
  *
  * **Reuses `TitleDetail`'s own remembered keys** (`launch.romDir`,
- * `launch.defaultMachine`, `launch.systemVolume`) rather than introducing a
- * second copy of them — this is a second entry point onto the same three
- * values, not a second set. A user who has never opened a title's Play
- * section still has somewhere to find them, which matters most for the
- * system volume: a WHDLoad launch cannot work at all without one.
+ * `launch.defaultMachine`, `launch.systemVolume`, `launch.whdloadFastRamMb`)
+ * rather than introducing a second copy of them — this is a second entry
+ * point onto the same values, not a second set. A user who has never opened
+ * a title's Play section still has somewhere to find them, which matters
+ * most for the system volume: a WHDLoad launch cannot work at all without
+ * one.
  */
 function PlaySettingsSection() {
   const { t } = useTranslation();
@@ -340,6 +348,16 @@ function PlaySettingsSection() {
     "launch.systemVolume",
     isTextOrNothing,
     null
+  );
+  // ART-151: `1000 Miglia` reached WHDLoad on a stock A500 profile — 512 KB
+  // Chip, 512 KB Slow, no Fast RAM at all — and WHDLoad itself refused with
+  // DOS-Error #103, "not enough memory available". This is the headroom a
+  // WHDLoad launch's profile gets on top of that stock preset; it never
+  // applies to a floppy or a plain hardfile.
+  const [whdloadFastRamMb, setWhdloadFastRamMb] = useRemembered<number>(
+    "launch.whdloadFastRamMb",
+    isWhdloadFastRamMb,
+    DEFAULT_WHDLOAD_FAST_RAM_MB
   );
 
   return (
@@ -375,6 +393,23 @@ function PlaySettingsSection() {
         pick="file"
         onChange={setSystemVolume}
       />
+
+      <Field label={t("collection.detail.play.whdloadFastRam")}>
+        <select
+          className="btn"
+          value={whdloadFastRamMb}
+          onChange={(e) => setWhdloadFastRamMb(Number(e.target.value))}
+        >
+          <option value={0}>0 MB</option>
+          <option value={1}>1 MB</option>
+          <option value={2}>2 MB</option>
+          <option value={4}>4 MB</option>
+          <option value={8}>8 MB</option>
+        </select>
+        <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+          {t("collection.detail.play.whdloadFastRamHint")}
+        </p>
+      </Field>
     </section>
   );
 }

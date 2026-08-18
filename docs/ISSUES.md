@@ -26,6 +26,31 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-152** 🔵 **ART sizes a WHDLoad launch's Fast RAM from a fixed setting,
+never from what the slave itself states it needs** — *filed 2026-08-18,
+alongside ART-151's fix, deliberately not built there*
+`src-tauri/src/core/launch/mod.rs` ·
+
+WHDLoad's own autodoc (<https://www.whdload.de/docs/autodoc.html>, Overview)
+describes `ws_ExpMem` as "the expansion memory, an extra memory area which
+can optionally requested by the Slave-structure, it may be Chip- or
+Fast-memory dependently on what is available" — a per-title signal WHDLoad
+slave files already carry, and one ART's own catalogue reader does not read
+today. ART-151 fixed the immediate DOS-Error #103 with a flat default
+(`DEFAULT_WHDLOAD_FAST_RAM_MB`, user-adjustable in Settings) rather than this,
+on purpose: `ws_ExpMem` names what a slave *may request*, not the title's
+whole requirement (WHDLoad's own base memory need sits alongside it and is
+not itself exposed the same way), and reading it would mean another
+catalogue schema bump plus another rescan of every user's existing
+collection — real costs, not warranted by one measured failure.
+
+**What it would buy.** ART could size a WHDLoad launch's machine from what
+the slave itself states it needs, per title, rather than from one number every
+WHDLoad launch shares — closer to the real requirement for a title that needs
+more than the default, and no wasted headroom for one that needs less. Worth
+doing once more than one real title's memory failure has been measured, not
+before.
+
 **ART-144** 🔵 **Five minors deferred across collection-wave-c's own review
 rounds, folded into one entry — #4 closed by the whole-branch review's fix
 pass, #1/#2/#3/#5 still open** — *found 2026-08-18, Tasks 3/6/6b/8; filed at
@@ -618,6 +643,107 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-151** 🟠 ✅ **A WHDLoad launch got the stock A500 profile completely
+unmodified — 512 KB Chip, 512 KB Slow, no Fast RAM at all — and WHDLoad itself
+refused to load the game for want of memory** — *found and fixed 2026-08-18,
+running the real application against the user's own `1000 Miglia` after
+ART-148/ART-149 got it past "not a DOS disk" and into WHDLoad itself, which
+then printed:*
+```
+WHDLoad 18.7 ©1994-2021 Wepl
+DOS-Error #103
+(not enough memory available)
+on loading "1000Miglia.Slave"
+```
+`src-tauri/src/core/launch/mod.rs`, `src-tauri/src/commands/launch.rs`,
+`src/lib/launch.ts`, `src/components/collection/TitleDetail.tsx`,
+`src/pages/Settings.tsx` ·
+
+`1000 Miglia`'s catalogue record states no chipset, so `machine_for` fell back
+to the user's own default machine — `a500` — and `commands/launch.rs::
+profile_for` handed that plan `AmigaProfile::a500_ocs` exactly as
+`core/profile.rs` defines it: a stock 1987 machine, `chip_kb: 512, slow_kb:
+512, fast_mb: 0, z3_fast_mb: 0`. That is 1 MB total, none of it Fast — and
+WHDLoad's own requirements page (<https://www.whdload.de/docs/en/need.html>)
+states its minimum as "a minimum of 1.0 MiB RAM (sometimes more, it depends on
+the installed program)". A stock A500 meets that floor with nothing left over
+for the game itself, which is exactly the DOS-Error #103 above: WHDLoad
+started, tried to load `1000Miglia.Slave`, and there was nowhere left to put
+it.
+
+**The fix.** `core::launch::DEFAULT_WHDLOAD_FAST_RAM_MB` (8) is folded into a
+WHDLoad launch's profile by a new `commands/launch.rs::profile_for_request`,
+which wraps the existing `profile_for` and raises `.memory.fast_mb` (never
+lowers it — `.max(...)`) whenever the request is WHDLoad-shaped, read from the
+same `core::launch::is_whdload_shaped` predicate `WHDLOAD_MIN_KICKSTART_MAJOR`
+already uses for the Kickstart floor (the old private `needs_whdload_floor`
+is now this public, shared predicate). A floppy or a plain (non-WHDLoad)
+hardfile is never touched. 8 MB is not invented for this fix: it reuses the
+number `AmigaProfile::a1200_aga` already settled on, describing itself as
+"the ideal WHDLoad setup" — and it is Fast RAM specifically because
+WHDLoad's own autodoc (<https://www.whdload.de/docs/autodoc.html>, Overview)
+states the installed program's `BaseMem` "is always Chip-memory" while the one
+optional extra a slave may request, `ExpMem`, "may be Chip- or Fast-memory
+dependently on what is available" — so Fast RAM headroom gives WHDLoad and
+AmigaDOS somewhere to live without changing what the emulated game's own
+Chip RAM budget looks like.
+
+**Never touches the shared presets.** `profile_for` already returns a fresh
+`AmigaProfile` per call — `a500_ocs()`/`a1200_aga()` build a new struct every
+time rather than handing back a shared instance — so `profile_for_request`
+raising `.memory.fast_mb` on its result only ever changes the one launch in
+progress. `core/profile.rs` itself, and every other screen that reads those
+presets (the Profile Studio among them), are unmodified; a test
+(`the_presets_cover_the_classic_line_with_unique_ids`'s neighbours in
+`core/profile.rs`) was already pinning `AmigaProfile::a500_ocs`'s numbers and
+still passes unchanged.
+
+**Exposed as a setting, not a buried constant.** `launch.whdloadFastRamMb`
+sits alongside `launch.romDir`/`launch.defaultMachine`/`launch.systemVolume`
+in `Settings.tsx`'s `PlaySettingsSection`, remembered through `useRemembered`
+and guarded by `isWhdloadFastRamMb` (`isWholeNumberBetween(0, 8)`, matching
+WinUAE's own 24-bit Fast RAM ceiling — the same ceiling
+`AmigaProfile::a1200_aga`'s stock preset already uses) so a hand-edited or
+stale `settings.json` falls back to the default rather than reaching a
+launch. `commands/launch.rs::LaunchArgs::whdload_fast_ram_mb` carries it to
+the backend, `#[serde(default = "default_whdload_fast_ram_mb")]` for a screen
+still running an older bundled frontend against a rebuilt backend.
+
+**Said on the confirmation screen, not only on failure.** `LaunchPreview`
+gained a `memory: Option<MemorySummary>` — `Some` exactly when a plan
+settled, `None` on a refusal — and `TitleDetail.tsx`'s "will use" sentence
+now reads `{{machine}} · {{rom}} · {{memory}}` (`en.json`/`tr.json`, both
+updated in this commit) with `memoryLabel()` formatting the four numbers,
+because DOS-Error #103 is exactly this fact and the user must be able to see
+what will be tried before pressing Start, not learn it a second time from
+WHDLoad's own error screen.
+
+**`ws_ExpMem` is deliberately not read.** WHDLoad's autodoc describes it as an
+*optional* extra memory area a slave may request — see the ExpMem quote
+above — so it names a **request**, not the title's total requirement, and
+reading it would need another catalogue schema bump and another rescan of
+every user's collection. Filed separately as ART-152 below rather than built
+here.
+
+Regression tests, all failing against the pre-fix code:
+`commands::launch::tests::a_whdload_hardfile_plans_the_configured_fast_ram`,
+`commands::launch::tests::a_whdload_drawer_plans_the_configured_fast_ram`,
+`commands::launch::tests::a_floppy_title_does_not_get_whdload_memory_silently_applied`,
+`commands::launch::tests::a_plain_hardfile_does_not_get_whdload_memory_applied`,
+`commands::launch::tests::a_configured_value_lower_than_the_stock_a1200_preset_never_shrinks_it`,
+`commands::launch::tests::preview_for_states_the_memory_a_whdload_launch_will_use`,
+`commands::launch::tests::preview_for_states_no_memory_on_a_refusal`, and, on
+the frontend, `src/lib/launch.test.ts`'s `isWhdloadFastRamMb` guard suite and
+`memoryLabel` suite.
+
+**Whether `1000 Miglia` now reaches the game itself has not been retried
+against the real emulator.** This entry is confirmed against WHDLoad's own
+stated minimum, its autodoc's `BaseMem`/`ExpMem` distinction, and the unit
+tests named here — not against WinUAE again. DOS-Error #103 is the only
+symptom this fix addresses; a game that needs more than 8 MB of Fast RAM, or
+fails for an unrelated reason once memory is no longer the blocker, is not
+covered by it.
 
 **ART-149** 🔴 ✅ **A fix built on a correct mechanism and a wrong inference
 changed the bare-hardfile geometry from `sectors=32` to `sectors=1`, and it

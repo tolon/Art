@@ -1590,13 +1590,15 @@
           "a1200": "A1200"
         },
         "systemVolume": "Önyüklenebilir sistem (WHDLoad için)",
+        "whdloadFastRam": "WHDLoad için ek Fast RAM",
+        "whdloadFastRamHint": "Bir WHDLoad başlatmasının profiline, kendi standart makinesinin üstüne eklenir — bir disket veya düz bir sabit disk için asla uygulanmaz. Standart bir A500'ün toplam belleği 1 MB'tır ve hiçbiri Fast değildir; WHDLoad'un bir başlığı yükleyememesinin nedeni tam olarak buydu (\"DOS-Error #103, yeterli bellek yok\").",
         "allowWrite": "Bu oyunun kaydetmesine izin ver",
         "action": "Oynat",
         "planning": "Ne gerektiği hesaplanıyor…",
         "start": "Başlat",
         "starting": "Başlatılıyor…",
         "started": "Başlatıldı (süreç {{pid}})",
-        "willUse": "{{machine}} · {{rom}}",
+        "willUse": "{{machine}} · {{rom}} · {{memory}}",
         "kind": {
           "floppies_one": "{{count}} disket takılacak",
           "floppies_other": "{{count}} disket takılacak",

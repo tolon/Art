@@ -229,6 +229,46 @@ pub const MAX_FLOPPY_DRIVES: usize = 4;
 /// major; neither ever looks at a slave's declared Kickstart.
 pub const WHDLOAD_MIN_KICKSTART_MAJOR: u16 = 37;
 
+/// Fast RAM, in MB, ART adds to a WHDLoad launch's profile — ART-151:
+/// `1000 Miglia` reached WHDLoad on a stock `AmigaProfile::a500_ocs`
+/// (`chip_kb: 512, slow_kb: 512, fast_mb: 0`, exactly 1 MB and none of it
+/// Fast) and WHDLoad itself refused with "DOS-Error #103 (not enough memory
+/// available) on loading 1000Miglia.Slave".
+///
+/// **Why this is a default and not a floor `plan_for` enforces.** WHDLoad's
+/// own requirements page (<https://www.whdload.de/docs/en/need.html>) states
+/// its minimum as "a minimum of 1.0 MiB RAM (sometimes more, it depends on
+/// the installed program)" — a floor `plan_for` already meets exactly
+/// (§WHDLOAD_MIN_KICKSTART_MAJOR is a Kickstart floor, not a memory one; a
+/// stock A500's 1 MB total is what the DOS-Error above measured against).
+/// "Sometimes more" is a fact about each game, not a number WHDLoad states —
+/// this constant is ART's own headroom on top of that floor, not a second
+/// reading of it.
+///
+/// **Why Fast RAM specifically.** WHDLoad's own autodoc
+/// (<https://www.whdload.de/docs/autodoc.html>, Overview) states that
+/// `BaseMem` — the memory the installed program itself runs in — "is always
+/// Chip-memory", while `ExpMem`, the one optional extra a slave may request,
+/// "may be Chip- or Fast-memory dependently on what is available". Growing
+/// Chip RAM would change what the emulated game itself sees, on a machine
+/// profile other screens rely on staying a real one; growing Fast RAM gives
+/// WHDLoad, AmigaDOS and any `ExpMem` request somewhere to live that never
+/// competes with the game for the Chip RAM it was written against.
+///
+/// **8 is not invented here.** `AmigaProfile::a1200_aga` (`core/profile.rs`)
+/// already settled on 8 MB of Fast RAM, describing itself as "the ideal
+/// WHDLoad setup" — this reuses that already-vetted number for the default
+/// rather than adding a second constant this codebase would have to keep in
+/// step with it.
+///
+/// Never applied by mutating a shared preset — see
+/// `commands/launch.rs::profile_for_request`, the one place this constant is
+/// read, for how a fresh per-launch copy is what actually changes.
+/// Settings exposes it (`launch.whdloadFastRamMb`) so a title that needs more
+/// has somewhere to ask, and the "nothing changes unless the user changes it"
+/// rule means a value the user set there must survive.
+pub const DEFAULT_WHDLOAD_FAST_RAM_MB: u32 = 8;
+
 /// Which machine a stated chipset requirement asks for, falling back to the
 /// user's own default when the catalogue states none.
 ///
@@ -243,10 +283,15 @@ pub fn machine_for(stated: Option<Chipset>, default: Machine) -> Machine {
     }
 }
 
-/// Whether a request needs [`WHDLOAD_MIN_KICKSTART_MAJOR`] enforced — see
-/// that constant and [`RequestKind::Hardfile`]'s own doc comment for why a
-/// plain hardfile is excluded.
-fn needs_whdload_floor(kind: &RequestKind) -> bool {
+/// Whether a request is WHDLoad-shaped — see [`RequestKind::Hardfile`]'s own
+/// doc comment for why a plain hardfile is excluded. Backs two decisions, not
+/// one: [`WHDLOAD_MIN_KICKSTART_MAJOR`]'s floor on the chosen ROM (`plan_for`,
+/// below), and [`DEFAULT_WHDLOAD_FAST_RAM_MB`]'s headroom on the chosen
+/// profile's memory (`commands/launch.rs::profile_for_request`). Both are
+/// facts about WHDLoad itself, not about hardfiles or drawers in general, so
+/// both read the same predicate rather than risking two definitions drifting
+/// apart.
+pub fn is_whdload_shaped(kind: &RequestKind) -> bool {
     match kind {
         RequestKind::Whdload { .. } => true,
         RequestKind::Hardfile { whdload, .. } => *whdload,
@@ -295,9 +340,9 @@ pub fn plan_for(request: &LaunchRequest) -> Result<LaunchPlan, LaunchRefusal> {
     }
 
     // A bare `.adf` boots on any Kickstart and must keep doing so (ART-150):
-    // the floor below applies only when `needs_whdload_floor` says this
+    // the floor below applies only when `is_whdload_shaped` says this
     // request is WHDLoad-shaped.
-    let rom = if needs_whdload_floor(&request.kind) {
+    let rom = if is_whdload_shaped(&request.kind) {
         best_rom(
             request.roms,
             request.machine,
