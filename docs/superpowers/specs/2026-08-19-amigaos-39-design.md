@@ -76,7 +76,7 @@ does not change; the paths get deeper.
 
 ## 0. The medium is not a 3.9-only investment
 
-Pointed at `E:miga\Amigatolon\iso` by the owner after this design was first
+Pointed at `E:\amiga\Amigatolon\iso` by the owner after this design was first
 written, and worth recording because it changes what `IsoSource` is worth.
 That folder also holds **`AmigaOS3.2CD(ZaP).iso`** (volume `AmigaOS3.2CD`,
 4753 files in 736 folders), and it carries three things at once:
