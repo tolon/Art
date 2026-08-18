@@ -74,6 +74,32 @@ recipe is 29 components of this shape:
 `media: "AmigaOS3.9"` with `from: "OS-Version3.9/Workbench3.5/C"`. The model
 does not change; the paths get deeper.
 
+## 0. The medium is not a 3.9-only investment
+
+Pointed at `E:miga\Amigatolon\iso` by the owner after this design was first
+written, and worth recording because it changes what `IsoSource` is worth.
+That folder also holds **`AmigaOS3.2CD(ZaP).iso`** (volume `AmigaOS3.2CD`,
+4753 files in 736 folders), and it carries three things at once:
+
+```
+C  Devs  L  Libs  Prefs  S  System  Tools  Utilities  WBStartup  Labels
+                      ← a full Workbench tree at the CD's own top level
+ADF/                  ← every install disk: Install3.2, Extras3.2, Classes3.2,
+                        Fonts, GlowIcons3.2, HDSetup3.2, Backdrops3.2, DiskDoctor
+ROM/  NDK3.2/  GlowIconsCollection/  FAQs/
+```
+
+So the second `MediaSource` serves **both** releases, and 3.2 gains a second
+route: build from one CD rather than from 36 loose ADFs. It also raises a
+question this round does not have to answer — whether a recipe should ever read
+an ADF *out of* an ISO (a nested medium) rather than reading the CD's own tree.
+Both are possible from this disc; neither is needed to make 3.9 boot, so
+neither is in this round.
+
+The Amiga Developer CDs (v1.1, v2.1) and a `kick.rom` sit in the same folder.
+They are not part of this design, but they are the kind of material the
+content round will meet.
+
 ## 1. `IsoSource` — the second medium
 
 A new `core/osinstall/source_iso.rs` implementing `MediaSource` over ART's
