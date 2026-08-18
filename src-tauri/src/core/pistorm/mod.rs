@@ -812,7 +812,7 @@ mod tests {
             is_cloanto: false,
             key_available: false,
             is_aros: false,
-            checksum_valid: true,
+            checksum: crate::core::rom::RomChecksum::Valid,
             compatible_models: vec!["A500".into(), "A600".into(), "A2000".into()],
             file_path: String::new(),
         };

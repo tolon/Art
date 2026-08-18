@@ -92,6 +92,46 @@ h3 {
   background: var(--accent);
 }
 
+/* Form controls follow the theme — every one of them, not the ones somebody
+   remembered to style (ART-139).
+ *
+ * Aminet's search box, its subfolder field and its two dropdowns were bare
+ * elements, so they came out of the browser's own stylesheet: white boxes with
+ * black text on a dark page, beside a Collection search box that was dark only
+ * because that screen styled it inline. A control's colours are the theme's
+ * job, not each screen's.
+ *
+ * `:where()` keeps this at zero specificity on purpose: every inline style and
+ * every existing class rule still wins, so nothing that already looked right
+ * changes. Checkboxes and radios are left to the browser — a background and a
+ * border make a mess of them, and `accent-color` is what actually tints them.
+ */
+input:where(:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"])),
+select,
+textarea {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: inherit;
+}
+input:where(:not([type="checkbox"]):not([type="radio"])):focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-faint);
+}
+/* Checkboxes and radios keep their native shape and take the accent. */
+input:where([type="checkbox"], [type="radio"]) {
+  accent-color: var(--accent);
+}
+
 input:disabled,
 select:disabled,
 textarea:disabled {

@@ -26,34 +26,6 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-139** 🟡 **Aminet's text inputs render white in the dark theme** —
-*found 2026-08-18, photographing the screens for the README*
-`src/pages/AminetStudio.tsx` · The catalogue search box, the subfolder field
-and two dropdowns come out white on a dark page while every other input in ART
-— the Collection's search box beside it — is dark. Form controls are not
-inheriting the theme there.
-
-Kept out of the README for it. Cosmetic, and a few lines.
-
-**ART-138** 🟡 **ROM Manager says `CRC ERR` about ROMs it simply does not
-recognise** — *found 2026-08-18, photographing the screens for the README*
-`src/pages/RomManager.tsx`, `src-tauri/src/core/rom/` · Scanning a real ROM
-folder identified 1 of 76 files and marked the other 75 `CRC ERR`. But look at
-what they are: `A2630_390282-06.bin`, `A4091.rom`, `apollo_12xx_v560.bin`,
-`Blizzard_1230-IV.rom`, `Blizzard_2060_v8.5_hi.bin` — **accelerator and SCSI
-controller ROMs, not Kickstarts.**
-
-Not recognising them is correct. Calling them `CRC ERR` is not: that is a claim
-about a file's integrity, and ART has no basis for it — the file is fine, it is
-simply not a Kickstart. This is the same rule [ART-104](#fixed) applied from the
-other side, where the size-based fallback stopped naming a machine it could not
-know; here a label needs to stop naming a fault it cannot know.
-
-`Compatible Amiga Models:` is also blank for the one ROM that *was* identified
-(CDTV Extended 2.30), which may be the same gap or a second one.
-
-Kept out of the README for it.
-
 **ART-130** 🔵 **A game can name the Kickstart it needs, and nothing offers to
 supply it** — *filed 2026-08-17, out of G10's design round; the reading half is
 built by G10, this is the half that was deliberately left out*
@@ -588,6 +560,67 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-138** 🟡 ✅ **ROM Manager said `CRC ERR` about ROMs it simply did not
+recognise** — *found 2026-08-18 photographing the screens for the README; fixed
+the same day*
+`src-tauri/src/core/rom/mod.rs`, `src/lib/rom.ts`, `src/pages/RomStudio.tsx` ·
+Scanning a real ROM folder marked accelerator and SCSI-controller ROMs —
+`A2630_390282-06.bin`, `A4091.rom`, `apollo_12xx_v560.bin`,
+`Blizzard_1230-IV.rom` — `CRC ERR`. Not recognising them is correct; calling
+them damaged is not, and ART had no basis for it.
+
+**The cause was a two-valued field.** `RomInfo.checksum_valid` was a `bool`, so
+"this is a Kickstart and its checksum does not verify" and "there is no
+Kickstart checksum here to verify" arrived at the screen as the same `false`.
+It is now `RomChecksum::{Valid, Invalid, NotChecked}`, and the badge for
+`NotChecked` says *not a Kickstart* — or *encrypted*, when the file is a
+licensed Amiga Forever dump with no `rom.key` beside it (ART-128), which is a
+Kickstart ART cannot read rather than a file that is not one.
+
+**How ART tells them apart, measured rather than assumed.** Two structural
+marks Commodore's build leaves and damage between them does not touch: the
+opening `$11xx 4EF9`, and the eight bytes `00 1C 00 1D 00 1E 00 1F` that end
+the table after the stored checksum. Over ~150 real files — the 76 in this
+project's ROM folder, the AmigaOS 3.2/3.2.1/3.2.2 releases and an Amiga Forever
+export, Kickstart 0.7 through 47.111 — carrying both marks and summing
+correctly agreed **exactly**: every image with both summed, and no accelerator,
+SCSI or split half-image carried either. Re-measured through `identify_rom`
+itself, the user's folder now reports `valid=30 invalid=0 not-checked=46`
+where it previously accused 46 files of damage.
+
+The size-based fallback name was the same unfounded claim from the other side:
+a 256 KB accelerator ROM was called *Generic Amiga 256KB ROM (Kickstart 1.x)*.
+It now reads `Not a Kickstart image (256 KB)`, and the generic Kickstart names
+are kept for images that actually are one.
+
+Second half of the report, and a different thing: `Compatible Amiga Models:`
+was blank for the CDTV Extended 2.30 because the Remus database names no
+machine for it — correct data, rendered as an empty gap that read as a missing
+feature. The screen now says so in words.
+
+Tests: `a_rom_that_is_not_a_kickstart_is_not_accused_of_a_bad_checksum`,
+`a_kickstart_whose_body_changed_still_reports_a_bad_checksum`,
+`a_kickstart_is_recognised_by_its_opening_and_its_tail`,
+`an_encrypted_rom_with_no_key_says_nothing_about_its_checksum`, plus
+`checksumBadge`'s four keys in `src/i18n/phrase-keys.test.ts`. The
+`ART_ROM_DIR` hook prints the verdict per file and the three totals.
+
+**ART-139** 🟡 ✅ **Aminet's text inputs rendered white in the dark theme** —
+*found 2026-08-18, photographing the screens for the README; fixed the same day*
+`src/styles/global.css` · The catalogue search box, the subfolder field and two
+dropdowns were bare `<input>`/`<select>` elements, so they came from the
+browser's own stylesheet: white boxes with black text on a dark page. The
+Collection's search box beside them was dark only because that screen styles it
+inline.
+
+Fixed where it belongs — a theme rule for `input`, `select` and `textarea` in
+`global.css` rather than another inline style on one screen. Written inside
+`:where()` so it carries zero specificity: every existing inline style and
+class rule still wins, so nothing that already looked right changed.
+Checkboxes, radios, ranges and colour swatches keep their native shape and take
+`accent-color`. Verified in both themes in a real browser (headless Chrome
+against `pnpm dev`, the same approach `scripts/zoom-check.py` uses).
 
 **ART-137** 🔴 ✅ **99 of 758 records reported a Kickstart image whose name was
 68000 machine code — `ws_kickname` is a list when `ws_kickcrc` is `$ffff`** —

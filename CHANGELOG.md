@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Two labels that said more than ART knew (2026-08-18)
+
+#### Fixed
+- **ART no longer calls your accelerator ROMs broken.** Scanning a ROM folder
+  used to mark anything that was not a Kickstart `CRC ERR` — a claim that the
+  file is damaged. Of the 76 files in one real collection, 46 got it: Blizzard,
+  CyberStorm, GVP, Apollo, A2630, A4091, and both halves of every split dump.
+  They are all fine. They are simply not Kickstarts, and they carry no Kickstart
+  checksum for ART to check. The badge now says **not a Kickstart** — or
+  **encrypted**, for an Amiga Forever ROM whose `rom.key` is not beside it —
+  and `CRC ERR` is kept for the one case it means something: a Kickstart whose
+  checksum really does not add up.
+- **And it stops calling them Kickstarts, too.** A 256 KB accelerator ROM was
+  named *Generic Amiga 256KB ROM (Kickstart 1.x)* on its size alone. It now
+  reads *Not a Kickstart image (256 KB)*.
+- **A blank field says why it is blank.** *Compatible Amiga Models* was empty
+  under the CDTV Extended 2.30 because ART's source names no machine for that
+  dump. The screen says so now, rather than leaving a gap that looks like
+  something missing.
+- **Aminet's search and folder boxes follow the theme.** They came out white on
+  a dark page — bare form controls taking the browser's own colours. Every input,
+  dropdown and text area in ART now takes the theme, in both light and dark.
+
 ### Tidying up names ART could only read off a filename (2026-08-18)
 
 #### Added

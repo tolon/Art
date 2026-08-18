@@ -228,6 +228,12 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // be a literal. `sourcePhrase`'s three arms (both shipped ids and the
     // default, for a settings file naming a source this ART dropped) and
     // `outcomePhrase`'s two are enumerated in `phrase-keys.test.ts`.
-    expect(dynamicCalls).toBe(98);
+    // 98 → 99 (ART-138): the ROM library's checksum badge. Which of four
+    // sentences it is — OK, CRC ERR, "not a Kickstart", "encrypted" — is
+    // `checksumBadge`'s decision in `@/lib/rom`, because the whole point of
+    // the fix is that ART must not call a file damaged when it has no
+    // checksum to check. Its four keys are enumerated in
+    // `phrase-keys.test.ts`.
+    expect(dynamicCalls).toBe(99);
   });
 });

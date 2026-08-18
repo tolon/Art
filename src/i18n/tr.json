@@ -1122,7 +1122,9 @@
       "empty": "Henüz ROM yüklenmedi. Kickstart dosyalarınızı bulmak için \"ROM Klasörünü Tara\" düğmesine tıklayın."
     },
     "badges": {
-      "crcErr": "CRC HATA"
+      "crcErr": "CRC HATA",
+      "notKickstart": "Kickstart değil",
+      "encrypted": "şifreli"
     },
     "details": {
       "title": "ROM Detayları",
@@ -1133,6 +1135,7 @@
       "crc32Label": "CRC32:",
       "sha256Label": "SHA256:",
       "modelsLabel": "Uyumlu Amiga Modelleri:",
+      "noModels": "Belirtilmemiş — ART, kaynağı söylemedikçe bir makine adı vermez.",
       "cloantoDecoded": "Amiga Forever ROM'u, yanındaki rom.key ile çözüldü",
       "cloantoNeedsKey": "Amiga Forever ROM'u — şifreli, ve yanında rom.key bulunamadı. ART imajın içeriğini hiç okuyamıyor; bununla yapılan bir kart açılmaz."
     }

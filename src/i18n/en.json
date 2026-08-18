@@ -1122,7 +1122,9 @@
       "empty": "No ROMs loaded yet. Click \"Scan ROM Folder\" to detect your Kickstart files."
     },
     "badges": {
-      "crcErr": "CRC ERR"
+      "crcErr": "CRC ERR",
+      "notKickstart": "not a Kickstart",
+      "encrypted": "encrypted"
     },
     "details": {
       "title": "ROM Details",
@@ -1133,6 +1135,7 @@
       "crc32Label": "CRC32:",
       "sha256Label": "SHA256:",
       "modelsLabel": "Compatible Amiga Models:",
+      "noModels": "Not stated — ART names a machine only where its source does.",
       "cloantoDecoded": "Amiga Forever ROM, decoded with the rom.key beside it",
       "cloantoNeedsKey": "Amiga Forever ROM — encrypted, and no rom.key was found beside it. ART can read nothing of the image itself, and a card built with it would not start."
     }

@@ -52,9 +52,33 @@ pub struct RomInfo {
     #[serde(default)]
     pub key_available: bool,
     pub is_aros: bool,
-    pub checksum_valid: bool,
+    /// What ART can honestly say about this file's integrity — three answers,
+    /// not two (ART-138).
+    pub checksum: RomChecksum,
     pub compatible_models: Vec<String>,
     pub file_path: String,
+}
+
+/// The verdict on a ROM file's stored checksum.
+///
+/// **A missing answer is not a failing one (ART-138).** The field this
+/// replaced was a `bool`, so every file that is not a Kickstart — an
+/// accelerator's boot ROM, a SCSI controller's, half of a split dump — came
+/// back `false` and the screen said `CRC ERR` about it. That is a claim of
+/// damage, and ART has no basis for it: the file is intact, it simply is not
+/// a Kickstart and carries no Kickstart checksum to verify. The same rule
+/// ART-104 applied to machine names, applied to faults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RomChecksum {
+    /// The image is a Kickstart and its stored checksum verifies.
+    Valid,
+    /// The image is a Kickstart and its stored checksum does **not** verify —
+    /// the one case where saying so is a claim about the file's integrity.
+    Invalid,
+    /// There was nothing to check: no Kickstart image here, or one ART cannot
+    /// read (a licensed dump with no `rom.key` beside it).
+    NotChecked,
 }
 
 /// Known Kickstart ROM signature definition in database.
@@ -196,7 +220,7 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
                 is_cloanto,
                 key_available,
                 is_aros: false,
-                checksum_valid: false,
+                checksum: RomChecksum::NotChecked,
                 compatible_models: Vec::new(),
                 file_path: path.to_string_lossy().to_string(),
             })
@@ -209,8 +233,10 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
     let crc = compute_crc32(&bytes);
     let crc32 = format!("{:08X}", crc);
 
-    // Compute Kickstart 32-bit checksum
-    let checksum_valid = verify_kickstart_checksum(&bytes);
+    // What can honestly be said about this file's integrity (ART-138): a
+    // Kickstart's stored checksum verifies or it does not, and anything that
+    // is not a Kickstart image is not accused of either.
+    let checksum = checksum_verdict(&bytes);
 
     // 1. What the ROM stores about itself — the only answer that can name a
     //    machine, and the one that tells same-revision builds apart.
@@ -232,7 +258,7 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
             is_cloanto,
             key_available,
             is_aros: false,
-            checksum_valid,
+            checksum,
             compatible_models: matched.models.iter().map(|s| s.to_string()).collect(),
             file_path: path.to_string_lossy().to_string(),
         });
@@ -253,7 +279,7 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
             is_cloanto,
             key_available,
             is_aros: false,
-            checksum_valid,
+            checksum,
             compatible_models: matched.models.iter().map(|s| s.to_string()).collect(),
             file_path: path.to_string_lossy().to_string(),
         });
@@ -286,7 +312,7 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
             is_cloanto,
             key_available,
             is_aros: false,
-            checksum_valid,
+            checksum,
             // Empty on purpose: the ROM said its version, not its machine.
             compatible_models: Vec::new(),
             file_path: path.to_string_lossy().to_string(),
@@ -307,7 +333,7 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
             is_cloanto: false,
             key_available: false,
             is_aros: true,
-            checksum_valid: true,
+            checksum,
             compatible_models: vec!["A500".into(), "A1200".into(), "A4000".into()],
             file_path: path.to_string_lossy().to_string(),
         });
@@ -325,16 +351,25 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
     // showed the claim, and a claim ART cannot support is one it should not
     // make (§89). The name still comes from the size, because that much *is*
     // what the size says.
-    let inferred_name = match size_bytes {
-        262_144 => "Generic Amiga 256KB ROM (Kickstart 1.x)",
-        524_288 => "Generic Amiga 512KB ROM (Kickstart 2.x/3.x)",
-        1_048_576 => "Generic Amiga 1MB ROM (CD32 / Extended)",
-        2_097_152 => "Generic Amiga 2MB ROM (Diagnostic / Custom)",
-        _ => "Custom / Unknown ROM Image",
+    //
+    // **And the size only says it of a Kickstart (ART-138).** A 256 KB
+    // accelerator ROM was called *Generic Amiga 256KB ROM (Kickstart 1.x)* —
+    // the same unfounded claim in the other direction, now that ART can tell
+    // a Kickstart image from a file that merely sits in the same folder.
+    let inferred_name = if is_kickstart_image(&bytes) {
+        match size_bytes {
+            262_144 => "Generic Amiga 256KB ROM (Kickstart 1.x)".to_string(),
+            524_288 => "Generic Amiga 512KB ROM (Kickstart 2.x/3.x)".to_string(),
+            1_048_576 => "Generic Amiga 1MB ROM (CD32 / Extended)".to_string(),
+            2_097_152 => "Generic Amiga 2MB ROM (Diagnostic / Custom)".to_string(),
+            _ => "Custom / Unknown ROM Image".to_string(),
+        }
+    } else {
+        format!("Not a Kickstart image ({} KB)", size_bytes / 1024)
     };
 
     Ok(RomInfo {
-        name: inferred_name.to_string(),
+        name: inferred_name,
         version: "Custom".to_string(),
         revision: format!("{} KB", size_bytes / 1024),
         size_bytes,
@@ -343,7 +378,7 @@ pub fn identify_rom(path: &Path) -> CoreResult<RomInfo> {
         is_cloanto,
         key_available,
         is_aros: false,
-        checksum_valid,
+        checksum,
         compatible_models: Vec::new(),
         file_path: path.to_string_lossy().to_string(),
     })
@@ -489,6 +524,50 @@ pub fn strip_cloanto_header(bytes: &[u8]) -> Vec<u8> {
     }
 }
 
+/// Whether this image is shaped like a Kickstart at all — the question that
+/// has to be answered **before** its checksum means anything (ART-138).
+///
+/// Two structural marks, both put there by Commodore's build and neither
+/// affected by damage to the code between them:
+///
+/// - it opens with `$11`, then a `JMP` (`$4EF9`) into the ROM. The second byte
+///   varies with the image's size (`$11`, `$14`, `$16` all occur), so it is
+///   not part of the test;
+/// - it ends with the eight bytes `00 1C 00 1D 00 1E 00 1F`, the tail of the
+///   table that follows the checksum a Kickstart stores 24 bytes before its
+///   end.
+///
+/// **Measured, not assumed.** Over the 76 files in this project's own ROM
+/// folder plus the AmigaOS 3.2 / 3.2.1 / 3.2.2 releases and an Amiga Forever
+/// export — some 150 files in total, Kickstart 0.7 through 47.111 — these two
+/// marks and a verifying checksum agree exactly: every image carrying both
+/// summed correctly, and no accelerator, SCSI or split half-image carried
+/// either. The two files that opened like a ROM but carried no tail (a CDTV
+/// extended v1.0 dump and the A1000 bootstrap) are the honest "nothing to
+/// check" case: they keep no checksum where a Kickstart keeps one.
+pub fn is_kickstart_image(bytes: &[u8]) -> bool {
+    const TAIL: &[u8] = &[0x00, 0x1C, 0x00, 0x1D, 0x00, 0x1E, 0x00, 0x1F];
+
+    bytes.len() >= 32
+        && bytes.len().is_multiple_of(4)
+        && bytes[0] == 0x11
+        && bytes[2..4] == [0x4E, 0xF9]
+        && bytes.ends_with(TAIL)
+}
+
+/// The checksum verdict for an image, refusing to answer where there is no
+/// question (ART-138).
+pub fn checksum_verdict(bytes: &[u8]) -> RomChecksum {
+    if !is_kickstart_image(bytes) {
+        return RomChecksum::NotChecked;
+    }
+    if verify_kickstart_checksum(bytes) {
+        RomChecksum::Valid
+    } else {
+        RomChecksum::Invalid
+    }
+}
+
 /// Verify standard Kickstart 32-bit checksum (sum of all 32-bit big-endian words with carry).
 pub fn verify_kickstart_checksum(bytes: &[u8]) -> bool {
     if bytes.len() < 4 || !bytes.len().is_multiple_of(4) {
@@ -560,10 +639,36 @@ mod tests {
         assert_eq!(stripped, vec![0x11, 0x22, 0x33, 0x44]);
     }
 
+    /// An image shaped like a Kickstart: Commodore's opening `$11xx 4EF9` and
+    /// the tail its build leaves at the end. Everything between is zero, which
+    /// is what makes these fixtures legal to ship (ART owns no ROM).
+    fn kickstart_shaped(size: usize) -> Vec<u8> {
+        let mut bytes = vec![0u8; size];
+        bytes[0..4].copy_from_slice(&[0x11, 0x14, 0x4E, 0xF9]);
+        let at = bytes.len() - 8;
+        bytes[at..].copy_from_slice(&[0x00, 0x1C, 0x00, 0x1D, 0x00, 0x1E, 0x00, 0x1F]);
+        bytes
+    }
+
+    /// The same, with the checksum a Kickstart stores 24 bytes before its end
+    /// set to the value that makes the image sum correctly.
+    fn kickstart_that_sums(size: usize) -> Vec<u8> {
+        let mut bytes = kickstart_shaped(size);
+        let at = bytes.len() - 24;
+        bytes[at..at + 4].copy_from_slice(&[0, 0, 0, 0]);
+        let mut sum = 0u32;
+        for chunk in bytes.chunks_exact(4) {
+            let val = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            let (next, carry) = sum.overflowing_add(val);
+            sum = next.wrapping_add(carry as u32);
+        }
+        bytes[at..at + 4].copy_from_slice(&(0xFFFF_FFFFu32 - sum).to_be_bytes());
+        bytes
+    }
+
     /// A synthetic ROM that states `major.minor` where a real one does.
     fn rom_stating(major: u16, minor: u16, size: usize) -> Vec<u8> {
-        let mut bytes = vec![0u8; size];
-        bytes[0..2].copy_from_slice(&0x1114u16.to_be_bytes());
+        let mut bytes = kickstart_shaped(size);
         bytes[12..14].copy_from_slice(&major.to_be_bytes());
         bytes[14..16].copy_from_slice(&minor.to_be_bytes());
         bytes
@@ -574,8 +679,7 @@ mod tests {
     /// it. ART ships no ROM, so a catalogued dump is stood in for by the one
     /// field the identification actually reads.
     fn rom_with_stored_checksum(stored: u32) -> Vec<u8> {
-        let mut bytes = vec![0u8; 524_288];
-        bytes[0..2].copy_from_slice(&0x1114u16.to_be_bytes());
+        let mut bytes = kickstart_shaped(524_288);
         let at = bytes.len() - 24;
         bytes[at..at + 4].copy_from_slice(&stored.to_be_bytes());
         bytes
@@ -875,8 +979,9 @@ mod tests {
     #[test]
     fn a_size_names_the_shape_and_not_the_machine() {
         let dir = scratch("size-only");
-        // 256 KB, stating no version and matching nothing catalogued.
-        let path = write(&dir, "odd.rom", &vec![0u8; 262_144]);
+        // 256 KB, shaped like a Kickstart, stating no version and matching
+        // nothing catalogued.
+        let path = write(&dir, "odd.rom", &kickstart_shaped(262_144));
 
         let info = identify_rom(&path).unwrap();
 
@@ -890,6 +995,99 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// **ART-138.** An accelerator's boot ROM is not a Kickstart, and ART has
+    /// no basis whatsoever for a claim about its integrity. The file below is
+    /// shaped like the ones that provoked this — `A2630_390282-06.bin` and its
+    /// 39 companions in the project's own ROM folder, every one of which the
+    /// screen labelled `CRC ERR`.
+    #[test]
+    fn a_rom_that_is_not_a_kickstart_is_not_accused_of_a_bad_checksum() {
+        let dir = scratch("not-a-kickstart");
+        let mut bytes = vec![0u8; 32_768];
+        bytes[0..4].copy_from_slice(&[0x13, 0xF9, 0xF8, 0x60]);
+        let path = write(&dir, "A2630_390282-06.bin", &bytes);
+
+        let info = identify_rom(&path).unwrap();
+
+        assert_eq!(
+            info.checksum,
+            RomChecksum::NotChecked,
+            "the file is intact; there is simply no Kickstart checksum in it"
+        );
+        assert_eq!(
+            info.name, "Not a Kickstart image (32 KB)",
+            "and it is not passed off as a generic Kickstart either"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other half of the same rule: where a Kickstart **does** keep a
+    /// checksum, a body that no longer sums to it is a real finding and ART
+    /// still says so.
+    #[test]
+    fn a_kickstart_whose_body_changed_still_reports_a_bad_checksum() {
+        let dir = scratch("damaged-kickstart");
+        let sound = kickstart_that_sums(262_144);
+        assert_eq!(checksum_verdict(&sound), RomChecksum::Valid);
+
+        let mut damaged = sound.clone();
+        damaged[4096] ^= 0x01;
+        let path = write(&dir, "damaged.rom", &damaged);
+
+        let info = identify_rom(&path).unwrap();
+
+        assert_eq!(
+            info.checksum,
+            RomChecksum::Invalid,
+            "one flipped bit in the body, and both structural marks intact —              exactly the case the label is for"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The two marks are structural, so damage to the code between them does
+    /// not make ART forget what kind of file it is looking at.
+    #[test]
+    fn a_kickstart_is_recognised_by_its_opening_and_its_tail() {
+        let rom = kickstart_shaped(262_144);
+        assert!(is_kickstart_image(&rom));
+
+        let mut no_header = rom.clone();
+        no_header[0] = 0x00;
+        assert!(!is_kickstart_image(&no_header));
+
+        let mut no_tail = rom.clone();
+        let at = no_tail.len() - 1;
+        no_tail[at] = 0x00;
+        assert!(!is_kickstart_image(&no_tail));
+
+        assert!(
+            !is_kickstart_image(&[0x11, 0x14, 0x4E, 0xF9]),
+            "and something far too short to hold either is not one"
+        );
+    }
+
+    /// A licensed dump with no `rom.key` beside it is a Kickstart ART cannot
+    /// read at all — which is a reason to say nothing about its checksum, not
+    /// a reason to fail it (ART-138 meeting ART-128).
+    #[test]
+    fn an_encrypted_rom_with_no_key_says_nothing_about_its_checksum() {
+        let dir = scratch("cloanto-checksum");
+        let path = write(
+            &dir,
+            "amiga-os-310-a1200.rom",
+            &encrypted(&kickstart_that_sums(524_288), b"whatever"),
+        );
+
+        let info = identify_rom(&path).unwrap();
+
+        assert!(!info.key_available);
+        assert_eq!(info.checksum, RomChecksum::NotChecked);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn identify_the_real_rom_collection_when_asked() {
         let Ok(dir) = std::env::var("ART_ROM_DIR") else {
@@ -898,6 +1096,7 @@ mod tests {
         let mut named = 0;
         let mut placed = 0;
         let mut total = 0;
+        let (mut sums, mut accused, mut unchecked) = (0, 0, 0);
         let mut entries: Vec<_> = std::fs::read_dir(&dir)
             .unwrap()
             .filter_map(|e| e.ok())
@@ -916,18 +1115,26 @@ mod tests {
             if !info.compatible_models.is_empty() {
                 placed += 1;
             }
+            match info.checksum {
+                RomChecksum::Valid => sums += 1,
+                RomChecksum::Invalid => accused += 1,
+                RomChecksum::NotChecked => unchecked += 1,
+            }
             println!(
-                "  {:<58} -> {} [{}]",
+                "  {:<58} -> {} [{}] {:?}",
                 path.file_name().unwrap().to_string_lossy(),
                 info.name,
                 if info.compatible_models.is_empty() {
                     "no machine claimed".to_string()
                 } else {
                     info.compatible_models.join(", ")
-                }
+                },
+                info.checksum
             );
         }
-        println!("named={named} placed={placed} total={total}");
+        println!(
+            "named={named} placed={placed} total={total}              checksum: valid={sums} invalid={accused} not-checked={unchecked}"
+        );
         assert!(total > 0, "'{dir}' held no ROM ART could read at all");
     }
 

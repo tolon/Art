@@ -24,6 +24,7 @@ import {
   type PackageMeta,
   type PackageUpdate,
 } from "@/lib/sources";
+import { checksumBadge, type RomChecksum } from "@/lib/rom";
 import { copyDirection, ISO_WRITE_REFUSAL } from "@/lib/isoPane";
 import { parseCommandLine } from "@/lib/commandLine";
 import { planMove, type MoveInput } from "@/lib/movePlan";
@@ -896,6 +897,20 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     for (const outcome of outcomes) {
       const phrase = outcomePhrase(outcome);
       expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+  it("checksumBadge: every verdict, and both readings of not-checked", () => {
+    const verdicts: RomChecksum[] = ["valid", "invalid", "not-checked"];
+    for (const checksum of verdicts) {
+      for (const rom of [
+        { checksum, is_cloanto: false, key_available: false },
+        // The encrypted-with-no-key reading of `not-checked`, which is a
+        // different sentence from "not a Kickstart" (ART-138).
+        { checksum, is_cloanto: true, key_available: false },
+      ]) {
+        const { phrase } = checksumBadge(rom);
+        expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+      }
     }
   });
 });
