@@ -164,7 +164,7 @@ itself between runs.
 |---|---|---|
 | `Floppies` from bare `.adf` | `floppy0..3` in the order the catalogue holds | none |
 | `Floppies` inside a `.rp9` | extract the ordered images to ART's own data directory, then as above | extraction |
-| `Hardfile` | one hardfile, **write-protected** | none |
+| `Hardfile` | one hardfile — **write-protected** if it is the user's own `.hdf`, **writable** if it is ART's own copy unpacked from a `.rp9` (so the game's saves survive) | none |
 | `WhdloadDrawer` | §4.3 | directory mounts, a boot directory |
 
 WinUAE takes four floppy drives. A set with more disks is launched with the

@@ -372,6 +372,10 @@ fn media_for_plan(
             //   makes those saves survive between sessions.
             let real_path = if is_rp9(&request.path) {
                 require_exists(&request.path)?;
+                // ART's own copy, not the user's original (§93 does not
+                // reach it) — writable so it can hold saves, made explicit
+                // here rather than left to `LaunchMedia::default()`.
+                media.write_protect_hardfiles = false;
                 unpack_hardfile(Path::new(&request.path), image, launch_dir)?
                     .to_string_lossy()
                     .to_string()

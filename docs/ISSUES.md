@@ -56,11 +56,13 @@ both*
    `an_entry_that_escapes_the_destination_is_refused` already covers the
    refusal itself; what changed is only when a multi-entry unpack can be left
    partially written.
-5. **`core/launch/extract.rs:150`** — the traversal test asserts
-   `!dir.join("evil.adf").exists()`, but an unguarded join would land in
-   `dir`'s *parent*, so that assertion alone proves nothing; the test still
-   fails without `safe_join` only because `.unwrap_err()` panics first. This
-   one came from the task's own plan text, not the implementer who wrote it.
+5. **`core/launch/extract.rs::an_entry_that_escapes_the_destination_is_refused`**
+   (cited by test name, not line number, so this doesn't go stale again) —
+   the traversal test asserts `!dir.join("evil.adf").exists()`, but an
+   unguarded join would land in `dir`'s *parent*, so that assertion alone
+   proves nothing; the test still fails without `safe_join` only because
+   `.unwrap_err()` panics first. This one came from the task's own plan text,
+   not the implementer who wrote it.
 
 **ART-143** 🟡 **A hand-attached picture is not re-materialised if the
 artwork cache is deleted** — *filed 2026-08-18, collection-wave-c's own

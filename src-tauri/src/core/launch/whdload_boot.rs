@@ -41,18 +41,21 @@ use crate::core::safety::atomic_write;
 ///   volume, which is mounted **writable on purpose** so WHDLoad can keep
 ///   save games there. `>>` (append) is already refused because it contains
 ///   `>`;
-/// - `` ` `` and `$` — refused on suspicion, not on a confirmed mechanism.
-///   AmigaDOS 2.0+ Shell — the interpreter that runs a `Startup-Sequence` —
-///   is reported to support backtick command substitution and `$name`
-///   expansion at the command-line-parser level, the same level `;`/`>`/`<`
-///   act at, which would make either as dangerous as those three. This has
-///   not been verified from here: neither the AmigaDOS "Using the Shell"
-///   chapter (its section on command substitution and local variables) nor
-///   a WinUAE run with a backtick or `$` in a real `Startup-Sequence` line
-///   has been checked against. Refusing costs a WHDLoad slave name that
-///   almost certainly never uses either character; allowing risks a command
-///   executing on the user's machine if the report is right — so this
-///   refuses rather than waits for proof.
+/// - `` ` `` and `$` — refused on a confirmed mechanism, not suspicion. The
+///   AmigaOS Manual's "AmigaDOS Using Scripts" chapter (wiki.amigaos.net)
+///   states that `$` "introduces an environment variable (which also works
+///   outside of a script)", and that "back apostrophes are used to execute
+///   commands from within a string" — "if a string containing a command
+///   enclosed in back apostrophe is printed, the enclosed command is
+///   executed." Both are real Shell features, at the same command-line
+///   level `;`/`>`/`<` act at, so either is as dangerous as those three.
+///   One reservation the source does not settle: it describes backtick
+///   substitution happening *within a string*, while the slave name here is
+///   interpolated **unquoted** into the generated line, so whether an
+///   unquoted occurrence is substituted the same way is not established by
+///   that chapter. The refusal is correct either way — a WHDLoad slave name
+///   almost certainly never needs either character — so this refuses rather
+///   than resolve that open question first.
 ///
 /// Considered and not added: AmigaDOS's pattern-matching wildcards (`#?`,
 /// `%`, `(a|b)`) are interpreted per-command by whichever program chooses to
@@ -183,16 +186,17 @@ mod tests {
         assert!(startup_sequence("Turrican.slave <DH1:secret", "DH0", "DH1").is_err());
     }
 
-    /// Refused on suspicion: AmigaDOS 2.0+ Shell is reported to run backtick
-    /// command substitution at command-line-parser level, which was not
-    /// verified from here but would make it as dangerous as `;`/`>`/`<` if
-    /// true. See `refuse_shell_metacharacters`'s doc comment.
+    /// Refused on a confirmed mechanism: the AmigaOS Manual's "AmigaDOS
+    /// Using Scripts" chapter documents backtick command substitution as a
+    /// real Shell feature, at the same command-line-parser level as
+    /// `;`/`>`/`<`. See `refuse_shell_metacharacters`'s doc comment.
     #[test]
     fn a_slave_name_with_a_backtick_is_refused() {
         assert!(startup_sequence("Turrican.slave `Format DH0:`", "DH0", "DH1").is_err());
     }
 
-    /// Refused on the same suspicion as the backtick, for `$name` expansion.
+    /// Refused on the same confirmed mechanism as the backtick, for `$name`
+    /// expansion.
     #[test]
     fn a_slave_name_with_a_dollar_sign_is_refused() {
         assert!(startup_sequence("Turrican.slave $evil", "DH0", "DH1").is_err());

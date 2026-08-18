@@ -23,7 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the WHDLoad slave's name, the Kickstart it declares, where the file is on
   disk, and what ART knows versus what it guessed.
 - **Play.** The panel's Play button hands a title to WinUAE: a floppy title
-  boots directly, a hardfile mounts read-only, and a WHDLoad game — given a
+  boots directly, a hardfile mounts read-only — except one ART itself
+  unpacked from a `.rp9`, which is ART's own copy and stays writable so the
+  game's saves survive — and a WHDLoad game — given a
   bootable system image you already have — either mounts it for you to start
   the game yourself, or, when your system supports it, boots straight into
   the game in one click. Your original system image is never written to; the
