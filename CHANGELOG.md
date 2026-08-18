@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-08-18
+
 ### A WHDLoad game from your own collection now starts (2026-08-18)
 
 #### Added

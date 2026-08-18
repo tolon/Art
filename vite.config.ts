@@ -6,9 +6,32 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
+import { readFileSync } from "node:fs";
 
 // Tauri expects a fixed port and ignores its own source tree to avoid rebuild loops.
 const host = process.env.TAURI_DEV_HOST;
+
+// Single source of truth for the version shown in the UI (Sidebar.tsx): read
+// straight from package.json rather than duplicating the number here. Handed
+// to the app as `import.meta.env.VITE_APP_VERSION` rather than
+// `@tauri-apps/api/app`'s `getVersion()` deliberately — the sidebar is part
+// of the shell chrome and must render the same way in `pnpm dev` (no Tauri
+// IPC bridge, no packaged app behind it) as in the built app, with no async
+// fetch and no "how do I check I'm inside Tauri" branch to keep in sync with
+// the other route. It is also not Vite's own `define` config below this
+// comment: `define` is textually substituted at build time only — Vite 6
+// deliberately skips it for the dev server's client transform (confirmed
+// against this project's pinned Vite version; `pnpm dev` would keep serving
+// the literal `__APP_VERSION__` token forever) — while `import.meta.env.*`
+// is populated for real in both dev and build. Setting it on `process.env`
+// here, before Vite's own env loading runs, is what makes a plain env
+// variable carry a value computed at config time rather than typed by hand
+// into a `.env` file that could drift from package.json.
+process.env.VITE_APP_VERSION = (
+  JSON.parse(readFileSync(path.resolve(__dirname, "package.json"), "utf-8")) as {
+    version: string;
+  }
+).version;
 
 // https://vite.dev/config/
 export default defineConfig({

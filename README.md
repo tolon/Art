@@ -321,8 +321,8 @@ Build output:
 
 ```
 src-tauri/target/release/bundle/
-├── msi/   Amiga Retro Toolkit_0.1.0_x64_en-US.msi
-└── nsis/  Amiga Retro Toolkit_0.1.0_x64-setup.exe
+├── msi/   Amiga Retro Toolkit_0.8.5_x64_en-US.msi
+└── nsis/  Amiga Retro Toolkit_0.8.5_x64-setup.exe
 ```
 
 ## Architecture

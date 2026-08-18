@@ -37,7 +37,7 @@ export function Sidebar() {
     <aside className="sidebar">
       <div className="sidebar-brand">
         <span className="sidebar-logo">ART</span>
-        <span className="sidebar-version">v0.1</span>
+        <span className="sidebar-version">v{import.meta.env.VITE_APP_VERSION}</span>
       </div>
       <nav className="sidebar-nav">
         {visible.map(({ to, key, icon }) => (

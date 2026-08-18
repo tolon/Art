@@ -20,5 +20,11 @@
   // `exclude` is inherited through `extends`, and the base excludes exactly
   // these files. Clear it, or this program has no inputs at all.
   "exclude": [],
-  "include": ["src/**/*.test.ts", "src/**/*.test.tsx"]
+  // `vite-env.d.ts` is listed explicitly: `include` replaces (not merges
+  // with) the base config's, so this program otherwise never picks up its
+  // ambient declarations (`__APP_VERSION__`, `*.css`) — a test that reaches
+  // them only via an app import (e.g. rendering a component that reads
+  // `__APP_VERSION__`) would fail to type-check without it, even though
+  // Vitest injects the real value at runtime regardless.
+  "include": ["src/**/*.test.ts", "src/**/*.test.tsx", "src/vite-env.d.ts"]
 }
