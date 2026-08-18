@@ -44,6 +44,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   written before that fix now reads as *stale, needs an update* rather than
   failing to open at all — press Update and it rebuilds itself. Your own
   title corrections and attached pictures are unaffected either way.
+- **A WHDLoad title with no stated chipset or Kickstart no longer boots on
+  whatever ROM happens to sort first.** Play now refuses to boot one of these
+  on a Kickstart too old for WHDLoad to run at all, and picks the newest
+  suitable ROM available instead of the first one alphabetically. Titles like
+  this used to land on Kickstart 1.3 — which cannot run WHDLoad, and cannot
+  mount a hardfile's filesystem either — and reported *not a DOS disk*
+  against a perfectly good file.
+- **A hardfile with no partition table no longer loses its last cylinder.**
+  WinUAE was told a fixed disk shape (32 sectors, 1 surface) for every plain
+  hardfile, which only fits a file whose size happens to be a whole multiple
+  of that shape — almost none are. The rest lost up to 16 KB off the end,
+  which is why some titles showed *not a DOS disk* even though the file
+  itself was intact. WinUAE is now told the file's actual size directly, so
+  every plain hardfile mounts complete. (This is a second, independent fix
+  for the same *not a DOS disk* message — see the Kickstart-selection fix
+  above for the other cause. Both had to land before the same title mounts
+  cleanly.)
 
 #### Notes
 - **None of this has been run against your own files yet.** It is written and

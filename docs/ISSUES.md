@@ -619,6 +619,87 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-149** 🔴 ✅ **`hardfile2=`'s bare-image geometry rounded almost every
+real hardfile down to a whole number of cylinders, silently dropping its last
+partial cylinder — WinUAE reported "not a DOS disk"** — *found and fixed
+2026-08-18, pressing Play on `1000 Miglia` (the same title ART-146, ART-147
+and ART-148 all used, ART-146 and ART-147 left unretried) against the user's
+real `E:\amiga\Amigatolon\WHDload\HDF_Games_WHDLoad_by_Enzo_[#]\1000 Miglia
+v1.2.hdf`, and measuring 40 more hardfiles from the same folder once the
+first one's numbers did not add up*
+`src-tauri/src/core/winuae.rs::generate_uae_config` ·
+ART-146 fixed *which* hardfiles get forced geometry (bare images only, never
+an RDB or VHD one) but never checked whether the forced geometry itself was
+right, and it was not. The `32,1,2,512` line (32 sectors, 1 surface, 2
+reserved, 512-byte blocksize) makes one cylinder 32×512 = 16,384 bytes.
+WinUAE derives the cylinder count as `(filesize / blocksize) / (sectors ×
+surfaces)` (`hardfile.cpp::getchs2`) with integer division, so any file whose
+size is not a whole multiple of 16,384 bytes gets rounded down to the next
+whole cylinder — up to 31 whole 512-byte blocks past the cut simply do not
+exist as far as WinUAE is concerned. `1000 Miglia v1.2.hdf` is 1,195,008
+bytes = 2334 blocks = 72.9375 of the old cylinders, rounded down to 72 whole
+cylinders (2304 blocks); the FFS root block for a 2334-block volume sits at
+half that count, block 1167 (`core::volume::VolumeGeometry::root_block_for`),
+which lands past the truncated disk's own midpoint (1152), so the layout no
+longer validates and AmigaDOS reports "not a DOS disk" against an intact
+file. This is not one unlucky title: of 40 images sampled from the same
+folder, zero were a whole number of 32×512 cylinders — the forced geometry
+was wrong for essentially all 1697 of this user's WHDLoad titles, not the
+handful ART-146 and ART-147 had already looked at. This is a second, distinct
+cause of the same "not a DOS disk" symptom this exact file also raised
+against ART-148's missing Kickstart floor — see that entry — because a
+correctly-chosen Kickstart still cannot mount a hardfile that has been
+truncated before it ever reaches the emulator.
+
+**This fix was committed, reverted, and restored.** It was first committed as
+`81e3162` in the same investigation that produced ART-148, filed at the time
+as ART-148 itself. The session controller then told the author to stand down
+on the strength of forum posts reporting `32,1,2,512` as a working geometry
+for bare hardfiles, and the commit was removed from `main` with
+`git reset --hard`. Those forum reports were about round-sized images — every
+one of the 1697 images in this user's actual collection is not round — and
+the author had already checked the stronger evidence: WinUAE's own
+`hardfile.cpp::getchs2`, read directly, which settles the integer-division
+question this entry describes without needing a forum to confirm it. The fix
+is restored here, taking ART-149 since ART-148 had been claimed by the
+Kickstart-floor entry (below) while it was off the branch.
+
+Fixed by changing the forced geometry to `sectors=1, surfaces=1` — one
+cylinder is then exactly one 512-byte block, so cylinders = filesize/512
+divides evenly for *any* 512-multiple, which every valid AmigaDOS filesystem
+image is. `reserved` was checked against e-uae's own
+`docs/configuration.txt` rather than assumed: it documents `<reserved>` as
+"the number of reserved blocks at the start of the partition (typically 2)"
+and gives exactly this case — a bare, non-RDB partition image — as its own
+worked example, `hardfile2=rw,DH1:/home/.../myhardfile,32,1,2,512,1,`. Those
+two blocks are the boot block (the `DOS\x` signature and checksum) sitting at
+the very start of the filesystem's own data, present whether or not an RDB
+precedes the image, so `reserved=2` already described this correctly; only
+the cylinder-rounding `sectors`/`surfaces` pair was wrong, and only that
+changed. `commands/winuae.rs::winuae_launch` (the WinUAE screen's own manual
+launch) and the catalogued-title launch path both call the same
+`generate_uae_config`, so both are fixed by the one change; checked, not
+assumed, that ART's own `create_hdf`-produced bare images are unaffected
+either way — `HardDiskStudio.tsx` always sizes them in whole megabytes
+(`sizeMb * 1024 * 1024`), and 1 MiB is exactly 64× the old cylinder size, so
+every image ART itself has ever created was already an exact fit under both
+geometries.
+
+Tests (`src-tauri/src/core/winuae.rs`): every existing bare-geometry
+assertion updated from `32,1,2,512` to `1,1,2,512`
+(`generate_a1200_config_with_aros_fallback`, `each_hardfile_gets_its_own_device`,
+`a_missing_shape_entry_defaults_to_bare_geometry`), plus a new
+`bare_geometry_represents_a_non_round_real_image_exactly`, built on the
+measured 1,195,008-byte size — deliberately not a round number and
+deliberately not a multiple of 32×512, which is exactly why a round-size-only
+test suite could not have caught this. It asserts the size is not a whole
+number of the old cylinders (documenting the defect), is a whole number of
+512-byte blocks (the only requirement of the fix), and that the emitted line
+is exactly `hardfile2=rw,DH0:E:\amiga\Amigatolon\WHDload\HDF_Games_WHDLoad_by_Enzo_[#]\1000
+Miglia v1.2.hdf,1,1,2,512,0,,uae`. What is still unproven: whether `1000
+Miglia` then actually boots and the game runs in WinUAE. That has not been
+retried.
+
 **ART-148** 🔴 ✅ **A WHDLoad title's machine was chosen with no floor on the
 Kickstart it boots, so a name-sorted ROM-folder scan could hand it one older
 than WHDLoad itself requires** — *found and fixed 2026-08-18, running the real
@@ -641,22 +722,19 @@ FastFileSystem as a driver for the RDB, and a self-booting WHDLoad hardfile is
 a bare `DOS\1` FFS volume with **no** RDB, so a 1.x ROM has nothing to mount it
 with regardless of geometry. That second fact is "not a DOS disk", by itself.
 
-**A geometry theory for this same symptom, on this same file, was raised and
-withdrawn first — worth recording so the number is not reused for a claim that
-never shipped.** An earlier session traced the "not a DOS disk" report to
-`hardfile2=`'s forced `32 sectors/1 surface` geometry rounding a non-cylinder-
-aligned image's block count down, and implemented and committed a fix
-(`81e3162`, "Fix bare-hardfile geometry rounding down the last cylinder
-(ART-148)"). The premise was never established — WinUAE's own
-`32/1/2/512` geometry is reported as the working convention for non-aligned
-bare images in practice, and whether a floored *reported* cylinder count
-actually gates real I/O was traced into `hardfile.cpp::getchs2()` but not
-confirmed either way — so the commit was reverted with `git reset --hard`
-before it reached `main` (full writeup:
-`.superpowers/sdd/bare-geometry-fix-report.md`). The same investigation is
-where the cause above was first identified; this entry is where it was
-actually confirmed, fixed and tested, which is why it takes the number the
-withdrawn attempt never got to keep.
+**A second, independent cause of the same "not a DOS disk" symptom on this
+same file exists — see ART-149.** `hardfile2=`'s forced bare-image geometry
+was rounding the last partial cylinder off almost every real hardfile,
+`1000 Miglia` included. That fix was traced and committed first, in the same
+investigation that produced this entry (`81e3162`), then briefly reverted with
+`git reset --hard` on a mistaken stand-down — weaker forum evidence about
+round-sized images was preferred over the author's own reading of WinUAE's
+source — and restored once that source reading settled it. It now carries
+ART-149, since ART-148 had already been taken by this entry by the time
+it came back. Both defects are real and both had to be fixed before
+`1000 Miglia` can actually boot: this entry gets it a Kickstart able to run
+WHDLoad and mount an FFS volume at all; ART-149 keeps that Kickstart from
+being handed a disk image truncated by bad geometry.
 
 **The fix.** `core::launch::WHDLOAD_MIN_KICKSTART_MAJOR` (37) is enforced as a
 floor on the *booted machine's* chosen ROM whenever a request is
