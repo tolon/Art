@@ -1499,6 +1499,12 @@
       "unreachable": "Erişilemedi: {{note}}",
       "cachedBefore_one": "{{count}} görsel zaten kayıtlıydı",
       "cachedBefore_other": "{{count}} görsel zaten kayıtlıydı"
+    },
+    "local": {
+      "action": "Dosyalarımdaki resimleri kullan",
+      "running": "{{count}} resim paketlerinden okunuyor…",
+      "none": "Ekrandaki başlıkların hiçbiri kendi resmini taşımıyor.",
+      "done": "{{written}} eklendi, {{adopted}} zaten vardı, {{missed}} resimsiz."
     }
   },
   "collection": {

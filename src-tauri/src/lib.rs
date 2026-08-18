@@ -183,6 +183,7 @@ pub fn run() {
             commands::artwork::artwork_dir,
             commands::artwork::artwork_known,
             commands::artwork::artwork_enrich,
+            commands::artwork::artwork_adopt_local,
             commands::winuae::winuae_detect,
             commands::winuae::winuae_list_profiles,
             commands::winuae::winuae_launch,

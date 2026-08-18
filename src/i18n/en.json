@@ -1499,6 +1499,12 @@
       "unreachable": "Could not be reached: {{note}}",
       "cachedBefore_one": "{{count}} picture was already saved",
       "cachedBefore_other": "{{count}} pictures were already saved"
+    },
+    "local": {
+      "action": "Use the pictures in my files",
+      "running": "Reading {{count}} picture(s) out of your packages…",
+      "none": "None of the titles on screen carries a picture of its own.",
+      "done": "{{written}} added, {{adopted}} already there, {{missed}} without one."
     }
   },
   "collection": {

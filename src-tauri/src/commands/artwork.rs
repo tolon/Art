@@ -14,7 +14,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use super::jobs::{spawn_job, JobRegistry};
@@ -22,6 +22,7 @@ use crate::core::artwork::cache::Cache;
 use crate::core::artwork::config::{self, ConfiguredSource};
 use crate::core::artwork::enrich::{enrich, EnrichOutcome, EnrichRequest};
 use crate::core::artwork::key::normalise;
+use crate::core::artwork::local::{adopt_local, LocalOutcome, LocalPreview};
 use crate::core::artwork::{ArtKind, ArtRef};
 use crate::core::jobs::JobId;
 use crate::error::AppResult;
@@ -146,6 +147,59 @@ pub fn artwork_enrich(
                 progress,
             )?;
             let _ = emit_app.emit(ARTWORK_RESULT_EVENT, ArtworkResult { job_id, outcome });
+            Ok(())
+        },
+    );
+
+    Ok(id)
+}
+
+/// The argument shape: a path is a string on the wire, a `PathBuf` in `core`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LocalPreviewArg {
+    pub title: String,
+    pub package: String,
+    pub entry: String,
+}
+
+/// Emitted when the offline pass finishes.
+pub const LOCAL_RESULT_EVENT: &str = "artwork-local-result";
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalResult {
+    pub job_id: JobId,
+    pub outcome: LocalOutcome,
+}
+
+/// Take the pictures the user's own packages already carry.
+///
+/// A job rather than a plain command because it opens one archive per title
+/// and there are 242 of them (§54).
+#[tauri::command]
+pub fn artwork_adopt_local(
+    previews: Vec<LocalPreviewArg>,
+    app: AppHandle,
+    registry: State<'_, Arc<JobRegistry>>,
+) -> AppResult<JobId> {
+    let dir = artwork_dir_for(&app);
+    let registry = Arc::clone(&registry);
+    let emit_app = app.clone();
+    let previews: Vec<LocalPreview> = previews
+        .into_iter()
+        .map(|arg| LocalPreview {
+            title: arg.title,
+            package: PathBuf::from(arg.package),
+            entry: arg.entry,
+        })
+        .collect();
+
+    let id = spawn_job(
+        &app,
+        registry,
+        "Reading pictures from your files",
+        move |job_id, progress| {
+            let outcome = adopt_local(&dir, &previews, progress)?;
+            let _ = emit_app.emit(LOCAL_RESULT_EVENT, LocalResult { job_id, outcome });
             Ok(())
         },
     );

@@ -24,14 +24,17 @@ import {
   type RootView,
 } from "@/lib/gameindex";
 import {
+  artworkAdoptLocal,
   artworkDefaults,
   artworkDir,
   artworkEnrich,
   artworkKnown,
+  onArtworkLocalResult,
   onArtworkResult,
   outcomePhrase,
   sourcePhrase,
   type ConfiguredSource,
+  type LocalOutcome,
   type SourceOutcome,
 } from "@/lib/artwork";
 import { isOneOf } from "@/lib/remembered";
@@ -76,6 +79,8 @@ interface Shown {
   media: "floppies" | "hardfile" | "whdload";
   diskCount: number;
   kickstart: string | null;
+  /** The screenshot's entry name inside the package, when it carries one. */
+  preview: string | null;
 }
 
 function flatten(root: string, entry: EntryView): Shown {
@@ -96,6 +101,7 @@ function flatten(root: string, entry: EntryView): Shown {
     media: mediaKind(r.media),
     diskCount: r.media.kind === "floppies" ? r.media.ordered.length : 1,
     kickstart: r.kickstart?.value.image ?? null,
+    preview: r.preview,
   };
 }
 
@@ -301,6 +307,7 @@ export function CollectionStudio() {
   // Separate from `busy`, which a catalogue refresh also sets. Only an
   // artwork run should make the screen re-read the artwork cache.
   const [artBusy, setArtBusy] = useState(false);
+  const [localOutcome, setLocalOutcome] = useState<LocalOutcome | null>(null);
 
   const storedSources = useSettingsStore((s) => s.settings.artworkSources);
 
@@ -455,6 +462,40 @@ export function CollectionStudio() {
   }
 
   /**
+   * Pull the pictures already embedded in the rows shown right now.
+   *
+   * Touches no network: every `.rp9` on screen with a `preview` entry is
+   * opened and its screenshot copied into the artwork cache. The user's
+   * action, never a side effect of opening the screen (ART-132's rule).
+   */
+  async function handleLocalPictures() {
+    const previews = filteredItems
+      .filter((item) => item.preview)
+      .map((item) => ({
+        title: item.title,
+        package: item.path,
+        entry: item.preview as string,
+      }));
+    if (previews.length === 0) {
+      setError(t("artwork.local.none"));
+      return;
+    }
+
+    setBusy(true);
+    setArtBusy(true);
+    setError(null);
+    setLocalOutcome(null);
+    setStatusMsg(t("artwork.local.running", { count: previews.length }));
+    try {
+      await artworkAdoptLocal(previews);
+    } catch (e) {
+      setError(String(e));
+      setBusy(false);
+      setArtBusy(false);
+    }
+  }
+
+  /**
    * Load the saved catalogue. **Starts nothing.**
    *
    * Opening this screen used to scan; that is what ART-132's double scan came
@@ -502,6 +543,7 @@ export function CollectionStudio() {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
     let unlistenArt: (() => void) | undefined;
+    let unlistenLocal: (() => void) | undefined;
     void (async () => {
       const stop = await onCatalogueRefreshed(() => {
         setBusy(false);
@@ -527,11 +569,28 @@ export function CollectionStudio() {
       if (cancelled) stop();
       else unlistenArt = stop;
     })();
+    void (async () => {
+      const stop = await onArtworkLocalResult((result) => {
+        setBusy(false);
+        setArtBusy(false);
+        setStatusMsg(null);
+        setLocalOutcome(result.outcome);
+        // Same reasoning as the enrichment listener above: re-read the cache
+        // rather than patch from the event.
+        setItems((rows) => {
+          void loadArtwork(rows);
+          return rows;
+        });
+      });
+      if (cancelled) stop();
+      else unlistenLocal = stop;
+    })();
 
     return () => {
       cancelled = true;
       unlisten?.();
       unlistenArt?.();
+      unlistenLocal?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -785,12 +844,25 @@ export function CollectionStudio() {
             >
               {t("artwork.enrich.action")}
             </button>
+            <button
+              className="btn btn-sm"
+              onClick={() => void handleLocalPictures()}
+              disabled={busy}
+              style={{ padding: "3px 10px", fontSize: 11 }}
+            >
+              🖼 {t("artwork.local.action")}
+            </button>
             {artOutcome?.map((outcome) => (
               <span key={outcome.id} className="faint" style={{ fontSize: 11 }}>
                 {t(sourcePhrase(outcome.id).key, sourcePhrase(outcome.id).params)}:{" "}
                 {t(outcomePhrase(outcome).key, outcomePhrase(outcome).params)}
               </span>
             ))}
+            {localOutcome && (
+              <span className="faint" style={{ fontSize: 11 }}>
+                {t("artwork.local.done", { ...localOutcome })}
+              </span>
+            )}
           </div>
         )}
       </section>

@@ -134,6 +134,48 @@ export async function onArtworkResult(
   return listen<ArtworkResult>(ARTWORK_RESULT_EVENT, (e) => handler(e.payload));
 }
 
+/** One picture to look for inside a package the user already has. */
+export interface LocalPreviewArg {
+  title: string;
+  /** The `.rp9` on disk. */
+  package: string;
+  /** The entry's name inside it — `GameRecord.preview`, verbatim. */
+  entry: string;
+}
+
+/** What the offline pass managed. Mirrors `core::artwork::local::LocalOutcome`. */
+export interface LocalOutcome {
+  written: number;
+  adopted: number;
+  missed: number;
+}
+
+/**
+ * Take the pictures the user's own `.rp9` packages carry.
+ *
+ * Touches no network and asks no source, which is why it needs no
+ * configuration and no consent: nothing leaves the machine.
+ */
+export async function artworkAdoptLocal(previews: LocalPreviewArg[]): Promise<number> {
+  return invoke<number>("artwork_adopt_local", { previews });
+}
+
+/** Payload of the `artwork-local-result` event. */
+export interface LocalResult {
+  job_id: number;
+  outcome: LocalOutcome;
+}
+
+export const ARTWORK_LOCAL_RESULT_EVENT = "artwork-local-result";
+
+/** Subscribe to finished offline passes. Returns an unlisten function. */
+export async function onArtworkLocalResult(
+  handler: (result: LocalResult) => void
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<LocalResult>(ARTWORK_LOCAL_RESULT_EVENT, (e) => handler(e.payload));
+}
+
 /**
  * The name to show for a source ART ships.
  *
