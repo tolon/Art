@@ -737,13 +737,14 @@ Regression tests, all failing against the pre-fix code:
 the frontend, `src/lib/launch.test.ts`'s `isWhdloadFastRamMb` guard suite and
 `memoryLabel` suite.
 
-**Whether `1000 Miglia` now reaches the game itself has not been retried
-against the real emulator.** This entry is confirmed against WHDLoad's own
-stated minimum, its autodoc's `BaseMem`/`ExpMem` distinction, and the unit
-tests named here — not against WinUAE again. DOS-Error #103 is the only
-symptom this fix addresses; a game that needs more than 8 MB of Fast RAM, or
-fails for an unrelated reason once memory is no longer the blocker, is not
-covered by it.
+**Retried against the real emulator, and it is what got `1000 Miglia` past
+DOS-Error #103.** Read off disk after the retry, the only line that changed
+between the failing and the succeeding configuration was `fastmem_size=0` →
+`fastmem_size=8` — exactly the value this fix adds. WHDLoad loaded
+`1000Miglia.Slave` and Simulmondo's own title logo appeared in the WinUAE
+window. DOS-Error #103 is the only symptom this fix addresses; a game that
+needs more than 8 MB of Fast RAM, or fails for an unrelated reason once
+memory is no longer the blocker, is still not covered by it.
 
 **ART-149** 🔴 ✅ **A fix built on a correct mechanism and a wrong inference
 changed the bare-hardfile geometry from `sectors=32` to `sectors=1`, and it
@@ -826,9 +827,15 @@ The regression test that had asserted `sectors=1` was replaced —
 `bare_geometry_truncates_to_the_built_cylinder_count` — built on the same
 real 1,195,008-byte `1000 Miglia` measurement, but now pinning the *correct*
 line, `hardfile2=rw,DH0:...,32,1,2,512,0,,uae`, with the six-image table
-above carried in its doc comment as the evidence. What remains unproven is
-the same as before: whether `1000 Miglia` and the rest of this collection
-now actually boot in WinUAE. That has not been retried.
+above carried in its doc comment as the evidence. **Retried against the real
+emulator, and confirmed by the working run's own configuration.** The
+successful launch's `hardfile2=` line, read off disk, is exactly
+`rw,DH0:E:\amiga\Amigatolon\WHDload\HDF_Games_WHDLoad_by_Enzo_[#]\1000
+Miglia v1.2.hdf,32,1,2,512,0,,uae` — the geometry this entry restores.
+`1000 Miglia` reached Simulmondo's title logo on it. The other 1697 titles
+built to the same shape were not each individually retried; one title
+booting on this geometry is a strong signal for the rest, not proof of
+every one.
 
 **ART-148** 🔴 ✅ **A WHDLoad title's machine was chosen with no floor on the
 Kickstart it boots, so a name-sorted ROM-folder scan could hand it one older
@@ -904,10 +911,12 @@ Regression tests, all failing against the pre-fix code:
 `core::launch::tests::a_floppy_set_is_not_held_to_the_whdload_floor`, and
 `core::rom::tests::major_from_revision_reads_the_leading_number_and_nothing_else`.
 
-**Whether `1000 Miglia` itself now boots has not been retried against the real
-emulator.** This entry is confirmed against WHDLoad's own stated minimum and
-the Kickstart-1.x-has-no-HD-filesystem-in-ROM fact above, and against the unit
-tests named here — not against WinUAE again.
+**Retried against the real emulator, and proven directly.** The successful
+run's configuration names `kickstart_rom_file=E:\amiga\Amigatolon\kickstart\
+Kickstart 3.1.rom`, read off disk — the highest-major ROM in the user's
+folder, exactly what `best_rom`'s "highest major wins" rule picks where the
+old first-alphabetical scan had handed this same title Kickstart 1.3.
+`1000 Miglia` reached Simulmondo's own title logo on that machine.
 
 **ART-147** 🔴 ✅ **A self-booting WHDLoad hardfile was catalogued as an
 unpacked drawer, sending Play looking for a system volume the file never
@@ -1061,15 +1070,15 @@ layer did **not** become lenient along with the root layer) — the last two
 are the pair the fix's split is checked against; `a_root_file_from_a_newer_art_is_refused`
 still passes unchanged, proving the newer-schema case is still a hard error.
 
-**What remains unproven.** This closes the classification defect found by
-reading `1000 Miglia v1.2.hdf`'s own bytes, and the load-bearing crash found
-by running the real application against the fix itself — not by re-running
-WinUAE or re-running the actual app against a real stale catalogue directory
-a second time after this change. Whether `1000 Miglia` then launches,
-whether a save survives with `allow_write` turned on, and whether the
-Collection screen actually shows the stale badge and a working Update button
-against this user's real, already-`whdload-drawer`-shaped catalogue files on
-disk, has **not** been retried against the real application.
+**Retried, and the classification itself is now proven.** `1000 Miglia`
+launched as `Media::WhdloadHardfile` — mounted and booted directly, no
+system-volume prompt, no ART boot directory — and reached Simulmondo's own
+title logo, which is only reachable if Play took the hardfile path this fix
+put it on rather than the old drawer-plus-system path. What the
+classification fix does **not** cover is still open: whether a save
+survives with `allow_write` turned on has not been retried, and this one
+title's launch does not stand in for the other 1696 records this fix
+reclassified the same way.
 
 
 **And the recovery was then verified on the user's own files, not simulated.**
@@ -1079,9 +1088,10 @@ off disk afterwards: the WHDLoad root was rewritten with `index_schema: 3` and
 root has always held), while `overrides.json` was left untouched at its
 earlier timestamp with the user's own `1869 AGAdeneme` title correction intact
 — which is the whole point of the derived/user-data split this fix turns on.
-What is still unproven is the other end: whether `1000 Miglia` now actually
-launches, and whether a save survives with `allow_write` turned on. Neither
-has been retried.
+`1000 Miglia` itself has since launched from this reclassified record and
+reached the game (ART-148/ART-149/ART-151, retried the same day, same
+session). Still unproven: whether a save survives with `allow_write` turned
+on.
 
 **ART-146** 🔴 ✅ **`hardfile2=` forced bare-image geometry onto every hard
 drive image, including a VHD container — WinUAE reported "Not a DOS disk in
@@ -1139,11 +1149,16 @@ and `a_whdload_systems_vhd_shape_is_detected`; `commands/winuae.rs`'s
 `detects_the_shape_of_a_manually_selected_hardfile` and
 `no_hardfiles_means_no_shapes_to_detect`.
 
-**What remains unproven.** This closes the defect the second real run hit,
-found by reading the image's own bytes (`conectix` at offset 0, confirmed
-against the user's actual `AmiKit.hdf`) rather than by re-running WinUAE with
-the fix applied. Whether `1000 Miglia` then starts against AmiKit has **not**
-been retried.
+**Still unproven — deliberately not exercised by the `1000 Miglia` run.**
+This closes the defect the second real run hit, found by reading the image's
+own bytes (`conectix` at offset 0, confirmed against the user's actual
+`AmiKit.hdf`) rather than by re-running WinUAE with the fix applied. The
+`1000 Miglia` run that later reached the game (ART-148/ART-149/ART-151) is a
+bare `DOS\1` hardfile with no RDB and no VHD container — the `Bare` branch
+this entry leaves unchanged, not the `Rdb`/`Unknown` branch this entry adds.
+No VHD or RDB image was involved, so whether `AmiKit.hdf`, or any other VHD
+or RDB image, now mounts correctly has still **not** been retried against
+the real emulator.
 
 **ART-145** 🔴 ✅ **The one-click WHDLoad launch never got past the CLI: the
 generated startup-sequence could not run its own first line** — *found and
@@ -1183,10 +1198,16 @@ Test: `the_startup_sequence_assigns_from_the_system_and_runs_the_slave` and
 `the_boot_directory_is_written_where_art_owns_it`, both updated to pin the
 complete new script text with `assert_eq!`.
 
-**What remains unproven.** The fixed script has not yet been run against the
-real AmiKit image — this entry closes the defect the first run actually hit
-and found by reading the script it produced, not by re-running WinUAE with
-the fix applied. Whether `1000 Miglia` then starts is still open.
+**Still unproven — and unexercised by the `1000 Miglia` run for a structural
+reason, not an oversight.** The fixed script has not yet been run against the
+real AmiKit image. `1000 Miglia`'s later successful run (ART-148/ART-149/
+ART-151) is a self-booting `Media::WhdloadHardfile` — ART-147's fix routes
+that shape through `RequestKind::Hardfile`, mounting and booting the image's
+own filesystem directly, with no ART-generated boot directory and no
+`S/Startup-Sequence` of ART's own in play at all. Only `RequestKind::Whdload`
+(an unpacked drawer paired with a separate system volume, Y1/Y2) ever reaches
+`whdload_boot::startup_sequence`, and no title in this run took that path.
+Whether the fixed script now runs is still open.
 
 **ART-142** 🟠 ✅ **A comma in a mounted folder's path shifts every field
 after it in the generated WinUAE configuration** — *filed 2026-08-18,

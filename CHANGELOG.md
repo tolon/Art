@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### A WHDLoad game from your own collection now starts (2026-08-18)
+
+#### Added
+- **Play now gives a WHDLoad launch enough memory to actually load the
+  game.** A stock Amiga profile has 1 MB total and none of it Fast RAM, which
+  is exactly enough for WHDLoad to start and not enough for it to load the
+  game itself — reported as *DOS-Error #103, not enough memory available*.
+  WHDLoad titles now get extra Fast RAM added on top of their machine
+  automatically; the amount is a setting (*WHDLoad Fast RAM headroom*, 0–8
+  MB, Settings → Play) rather than a fixed number you cannot change, and it
+  is never applied to a floppy or a plain (non-WHDLoad) hardfile.
+- **The confirmation screen now says what memory a launch will use**, not
+  only the machine and the ROM, so you can see what will be tried before
+  pressing Start rather than learning it afterward from WHDLoad's own error.
+
+#### Confirmed
+- **A WHDLoad game from your own collection now runs, start to finish, from
+  the Collection screen.** `1000 Miglia` (a self-booting WHDLoad hardfile,
+  one of 1697 catalogued the same way in this collection) was launched with
+  one click and reached the game — Simulmondo's own title logo appeared in
+  the emulator window. Along the way, three things ART chooses for you were
+  each confirmed doing the right thing on this title: it picked Kickstart
+  3.1 over an older 1.3 sitting in the same ROM folder, it mounted the
+  hardfile with the geometry the file was actually built for, and it added
+  the Fast RAM headroom above. It also honoured this title's own *allow
+  writes* switch, mounting the image read-write because that switch was on.
+  One title running is a strong sign the rest of this collection's
+  self-booting WHDLoad hardfiles will too, since they share the same shape —
+  it is not proof of each one individually, and it does not yet cover a
+  bare `.adf`, an `.rp9`-packaged hardfile, a WHDLoad title paired with a
+  separate system image (VHD or RDB), or whether a save survives with
+  *allow writes* turned on. Those are still unverified and still worth
+  trying.
+
 ### Pictures already on your disk, a detail panel, and Play (2026-08-18)
 
 #### Added
