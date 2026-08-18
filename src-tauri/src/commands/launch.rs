@@ -22,6 +22,7 @@ use tauri::{AppHandle, Manager, State};
 use super::oplog::{user_operation, write_result};
 use crate::core::error::CoreError;
 use crate::core::gameindex::record::Media;
+use crate::core::hdf::detect_hardfile_shape;
 use crate::core::launch::extract::{unpack_floppies, unpack_hardfile};
 use crate::core::launch::whdload_boot::write_boot_dir;
 use crate::core::launch::{
@@ -384,7 +385,14 @@ fn media_for_plan(
                 media.write_protect_hardfiles = hardfile_write_protected(request);
                 request.path.clone()
             };
+            // ART-146: decide the image's shape from the file itself —
+            // a bare filesystem image needs WinUAE told its geometry, an
+            // RDB (or anything else, including a VHD container like the
+            // user's own `AmiKit.hdf`) does not, and forcing it there is
+            // what produced "Not a DOS disk in unit 0" against real material.
+            let shape = detect_hardfile_shape(Path::new(&real_path))?;
             media.hardfile_paths = vec![real_path];
+            media.hardfile_shapes = vec![shape];
         }
         LaunchKind::Whdload {
             drawer,
@@ -397,7 +405,13 @@ fn media_for_plan(
 
             // The system image is the user's own — never ART's, and never
             // writable (spec §93: originals are immutable by default).
+            //
+            // ART-146: it is also the exact image the real run hit —
+            // `AmiKit.hdf` is a VHD container, not a bare filesystem image,
+            // so it must not be forced through bare-image geometry either.
+            let shape = detect_hardfile_shape(Path::new(system))?;
             media.hardfile_paths = vec![system.clone()];
+            media.hardfile_shapes = vec![shape];
             media.write_protect_hardfiles = true;
 
             if *one_click {
@@ -520,6 +534,7 @@ pub fn launch_title(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::hdf::HardfileShape;
     use crate::core::rom::RomChecksum;
 
     /// `core/launch` must not know what a `RomInfo` is — that is the
@@ -920,6 +935,36 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ART-146: the plain-hardfile path decides the image's shape from the
+    /// file itself rather than assuming every hardfile is bare — an `RDSK`
+    /// image here (unlike the placeholder bytes the other hardfile tests
+    /// use) must come out `HardfileShape::Rdb`.
+    #[test]
+    fn a_plain_hardfile_shape_is_detected_from_its_own_bytes() {
+        let dir = scratch("hardfile-shape-rdb");
+        let hdf = dir.join("Rdb.hdf");
+        let mut image = vec![0u8; 512 * 4];
+        image[0..4].copy_from_slice(b"RDSK");
+        std::fs::write(&hdf, &image).unwrap();
+
+        let request = LaunchArgs {
+            path: hdf.to_string_lossy().to_string(),
+            ..args(Media::Hardfile {
+                file: "Rdb.hdf".into(),
+            })
+        };
+        let plan = plan_with(LaunchKind::Hardfile {
+            image: "Rdb.hdf".into(),
+        });
+
+        let media =
+            media_for_plan(&request, &plan, &dir.join("launch"), &dir.join("boot")).unwrap();
+
+        assert_eq!(media.hardfile_shapes, vec![HardfileShape::Rdb]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// **ART-141, the Critical fix.** A `.rp9`'s hardfile is a named zip
     /// entry, not the package itself — this test fails against the code that
     /// mounted `request.path` (the `.rp9`) unconditionally, and passes once
@@ -1037,6 +1082,37 @@ mod tests {
         assert!(std::fs::read_to_string(startup)
             .unwrap()
             .contains("Turrican.slave"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ART-146, the exact scenario the real run hit: the WHDLoad system
+    /// image is a VHD container (`conectix` at offset 0 — `AmiKit.hdf`'s
+    /// actual bytes), not a bare filesystem image. `media_for_plan` must
+    /// record that so `generate_uae_config` stops forcing bare-image
+    /// geometry over it, which is what produced "Not a DOS disk in unit 0".
+    #[test]
+    fn a_whdload_systems_vhd_shape_is_detected() {
+        let dir = scratch("whdload-shape-vhd");
+        let system = dir.join("AmiKit.hdf");
+        let mut image = vec![0u8; 512 * 4];
+        image[0..8].copy_from_slice(b"conectix");
+        std::fs::write(&system, &image).unwrap();
+        let drawer = dir.join("Turrican");
+        std::fs::create_dir_all(&drawer).unwrap();
+
+        let request = whdload_args(&system, &drawer);
+        let plan = plan_with(LaunchKind::Whdload {
+            drawer: drawer.to_string_lossy().to_string(),
+            slave: "Turrican.slave".into(),
+            system: system.to_string_lossy().to_string(),
+            one_click: true,
+        });
+
+        let media =
+            media_for_plan(&request, &plan, &dir.join("launch"), &dir.join("boot")).unwrap();
+
+        assert_eq!(media.hardfile_shapes, vec![HardfileShape::Unknown]);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -53,6 +53,86 @@ pub struct HdfInfo {
 /// would exhaust memory for no benefit.
 const HEADER_READ_BYTES: usize = 1024 * 1024;
 
+/// The on-disk shape of a hard drive image, as far as ART's WinUAE launcher
+/// needs to know it (ART-146).
+///
+/// This is deliberately its own type rather than reusing [`HdfType`]:
+/// `HdfType::Plain` has always meant "not RDB", which `open_hdf` then treats
+/// as a bare filesystem image regardless of what is actually there — correct
+/// for the images ART itself creates, wrong for a VHD container, whose
+/// `conectix` header at offset 0 is not a filesystem signature at all.
+/// Widening `HdfType` to cover that would change what every other caller of
+/// `open_hdf` sees; a narrow, purpose-built enum for "how should this be
+/// mounted" does not. A fourth shape later is a new variant here, not a
+/// second bool alongside `write_protect_hardfiles`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HardfileShape {
+    /// A bare filesystem image — `DOS\0`..`DOS\7`, `PFS\3`, `PDS\3`, `SFS\0`
+    /// at offset 0 — exactly what ART itself creates (`create_hdf` with
+    /// `is_rdb: false`). WinUAE is told the geometry explicitly, as it
+    /// always has been.
+    #[default]
+    Bare,
+    /// An `RDSK` signature is present within the first 16 blocks: the image
+    /// carries its own partition table, device names and geometry. WinUAE
+    /// must read that itself — forced geometry over an RDB makes it parse
+    /// partition-table bytes as if they were filesystem data.
+    Rdb,
+    /// Neither of the above. Chief example: a VHD-wrapped image (`conectix`
+    /// at offset 0), whose real `RDSK` sits behind a header at a nonzero
+    /// block — forcing geometry meant for a bare image reads that header
+    /// where AmigaDOS expects a filesystem, which is `ART-146`'s "Not a DOS
+    /// disk in unit 0". WinUAE recognises VHD (and other containers) itself,
+    /// so the fix here is the same as the RDB case: get out of the way.
+    Unknown,
+}
+
+/// Known AmigaDOS signatures at offset 0 of a *bare* image — the shapes
+/// `create_hdf` writes and `core/detect.rs`'s drop-pipeline classification
+/// already checks for the same reason (`DOS` bootblocks plus the three
+/// hard-disk filesystem headers ART recognises elsewhere).
+fn is_bare_filesystem_signature(head: &[u8]) -> bool {
+    if head.len() < 4 {
+        return false;
+    }
+    // DOS\0..DOS\7: OFS/FFS, international, dircache/long-filenames.
+    if &head[0..3] == b"DOS" && head[3] <= 0x07 {
+        return true;
+    }
+    matches!(&head[0..4], b"PFS\x03" | b"PDS\x03" | b"SFS\x00")
+}
+
+/// How much of an image is read to decide its [`HardfileShape`]: enough for
+/// `find_rdb_location` to scan its full 16-block window, which also covers
+/// the four signature bytes at offset 0 that `is_bare_filesystem_signature`
+/// needs. Far smaller than `HEADER_READ_BYTES` — this only answers "which
+/// shape", not "what partitions" — and still never the whole file.
+const SHAPE_PROBE_BYTES: usize = 16 * BLOCK_SIZE;
+
+/// Decide how WinUAE should be told to mount a hard drive image (ART-146).
+///
+/// Reuses `find_rdb_location` (`core/rdb.rs`) rather than re-implementing
+/// RDB detection — the whole point is one place that knows an image's shape,
+/// not a second detector that can quietly disagree with the first.
+pub fn detect_hardfile_shape(path: &Path) -> CoreResult<HardfileShape> {
+    use std::io::Read as _;
+
+    let mut file = std::fs::File::open(path)?;
+    let total_bytes = file.metadata()?.len();
+    let to_read = total_bytes.min(SHAPE_PROBE_BYTES as u64) as usize;
+    let mut bytes = vec![0u8; to_read];
+    file.read_exact(&mut bytes)?;
+
+    if find_rdb_location(&bytes).is_some() {
+        return Ok(HardfileShape::Rdb);
+    }
+    if is_bare_filesystem_signature(&bytes) {
+        return Ok(HardfileShape::Bare);
+    }
+    Ok(HardfileShape::Unknown)
+}
+
 /// Open and inspect an HDF image from disk.
 pub fn open_hdf(path: &Path) -> CoreResult<HdfInfo> {
     use std::io::Read as _;
@@ -223,6 +303,7 @@ pub fn create_hdf(
 
 #[cfg(test)]
 mod tests {
+    use super::super::rdb::IDNAME_RDSK;
     use super::*;
 
     #[test]
@@ -322,6 +403,74 @@ mod tests {
 
         // The RDB path has its own floor.
         assert!(create_hdf(&dir.join("b.hdf"), 1024, true, &[], &[]).is_err());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// ART-146: a bare filesystem image — what `create_hdf(is_rdb: false)`
+    /// writes and what ART's forced-geometry `hardfile2=` line has always
+    /// been correct for.
+    #[test]
+    fn detect_shape_of_a_bare_dos_image() {
+        let dir = scratch("shape-bare");
+        let target = dir.join("Bare.hdf");
+        let mut image = vec![0u8; BLOCK_SIZE * 4];
+        image[0..4].copy_from_slice(b"DOS\x03");
+        std::fs::write(&target, &image).unwrap();
+
+        assert_eq!(detect_hardfile_shape(&target).unwrap(), HardfileShape::Bare);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A PFS3-DirectSCSI bare image carries the same shape — `DOS` is not
+    /// the only bare signature ART already knows.
+    #[test]
+    fn detect_shape_of_a_bare_pds3_image() {
+        let dir = scratch("shape-pds3");
+        let target = dir.join("Bare.hdf");
+        let mut image = vec![0u8; BLOCK_SIZE * 4];
+        image[0..4].copy_from_slice(b"PDS\x03");
+        std::fs::write(&target, &image).unwrap();
+
+        assert_eq!(detect_hardfile_shape(&target).unwrap(), HardfileShape::Bare);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The real defect: an `RDSK` block, wherever within the first 16
+    /// blocks it falls, must be read as an RDB image rather than a bare one.
+    #[test]
+    fn detect_shape_of_an_rdb_image() {
+        let dir = scratch("shape-rdb");
+        let target = dir.join("Rdb.hdf");
+        let mut image = vec![0u8; BLOCK_SIZE * 16];
+        image[0..4].copy_from_slice(&IDNAME_RDSK.to_be_bytes());
+        std::fs::write(&target, &image).unwrap();
+
+        assert_eq!(detect_hardfile_shape(&target).unwrap(), HardfileShape::Rdb);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The exact evidence from `AmiKit.hdf`: a VHD container's `conectix`
+    /// signature at offset 0 is not a filesystem signature ART knows, and
+    /// must not be forced through the bare-image geometry path — its real
+    /// `RDSK` sits at block 67, past this function's 16-block window, which
+    /// is the point: forcing geometry over unrecognised bytes is exactly
+    /// what produced "Not a DOS disk in unit 0".
+    #[test]
+    fn detect_shape_of_a_vhd_image_is_unknown() {
+        let dir = scratch("shape-vhd");
+        let target = dir.join("AmiKit.hdf");
+        let mut image = vec![0u8; BLOCK_SIZE * 16];
+        image[0..8].copy_from_slice(b"conectix");
+        std::fs::write(&target, &image).unwrap();
+
+        assert_eq!(
+            detect_hardfile_shape(&target).unwrap(),
+            HardfileShape::Unknown
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

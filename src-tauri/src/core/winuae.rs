@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+use super::hdf::HardfileShape;
 use super::profile::{AmigaProfile, ChipsetModel, CpuModel};
 use crate::core::error::{CoreError, CoreResult};
 
@@ -23,6 +24,21 @@ pub struct WinUaeInstallation {
 pub struct LaunchMedia {
     pub floppy_paths: Vec<String>,
     pub hardfile_paths: Vec<String>,
+    /// The on-disk shape of each entry in `hardfile_paths`, at the same
+    /// index (ART-146). Deciding this needs to read the file — RDB blocks,
+    /// filesystem signatures — which this module deliberately cannot do: it
+    /// takes a `LaunchMedia` of strings and must not start touching the
+    /// filesystem itself. The decision is made where the image is actually
+    /// available (`commands/launch.rs`, `commands/winuae.rs`, via
+    /// `core::hdf::detect_hardfile_shape`) and travels here as data.
+    ///
+    /// `#[serde(default)]` so a `LaunchMedia` stored by a build before this
+    /// field existed still deserialises, and a short or empty vector here
+    /// means every hardfile past its end falls back to `HardfileShape::Bare`
+    /// — the forced geometry this module already emitted for every hardfile
+    /// before this fix, so nothing already working regresses.
+    #[serde(default)]
+    pub hardfile_shapes: Vec<HardfileShape>,
     pub kickstart_path: Option<String>,
     pub use_aros: bool,
     /// Mount hard drives read-only so the emulated system cannot modify the
@@ -215,6 +231,20 @@ pub fn generate_uae_config(profile: &AmigaProfile, media: &LaunchMedia) -> CoreR
     //
     // Each image needs its own device name — emitting several bare `hardfile=`
     // lines made every drive after the first unreachable.
+    //
+    // That forced geometry (32 sectors, 1 surface, 2 reserved, 512 blocksize)
+    // is only correct for a *bare* filesystem image — what `<device>:` names
+    // too, since AmigaDOS has nothing else to call it. `HardfileShape::Rdb`
+    // and `::Unknown` both skip it (ART-146): the e-uae configuration syntax
+    // WinUAE inherits (`docs/configuration.txt`) states that blocksize `0`
+    // marks an RDB hard file and that "all other components ... will be
+    // ignored apart from <path> and <access>" — its own example
+    // (`hardfile2=rw,:/path,0,0,0,0,0,`) leaves `<device>` empty, which is
+    // the right call here too: a forced `DH{i}:` would be meaningless on a
+    // disk that carries its own device names in its own RDB (or, for
+    // anything else including a VHD container, no meaning ART can supply at
+    // all) — so the geometry fields are left at `0` and the device name is
+    // left empty, and WinUAE reads the disk itself.
     let access = if media.write_protect_hardfiles {
         "ro"
     } else {
@@ -224,9 +254,19 @@ pub fn generate_uae_config(profile: &AmigaProfile, media: &LaunchMedia) -> CoreR
         let hp = checked_config_value("hardfile path", hp)?;
         // First hardfile boots (priority 0); later ones mount without booting.
         let boot_priority = if i == 0 { 0 } else { -128 };
-        lines.push(format!(
-            "hardfile2={access},DH{i}:{hp},32,1,2,512,{boot_priority},,uae"
-        ));
+        let shape = media
+            .hardfile_shapes
+            .get(i)
+            .copied()
+            .unwrap_or(HardfileShape::Bare);
+        match shape {
+            HardfileShape::Bare => lines.push(format!(
+                "hardfile2={access},DH{i}:{hp},32,1,2,512,{boot_priority},,uae"
+            )),
+            HardfileShape::Rdb | HardfileShape::Unknown => lines.push(format!(
+                "hardfile2={access},:{hp},0,0,0,0,{boot_priority},,uae"
+            )),
+        }
     }
 
     // Directory volumes (WinUAE cfgfile.cpp):
@@ -355,6 +395,73 @@ mod tests {
         assert!(uae.contains(r"hardfile2=rw,DH1:C:\HDFs\Games.hdf,32,1,2,512,-128,,uae"));
         assert!(uae.contains(r"hardfile2=rw,DH2:C:\HDFs\Data.hdf,32,1,2,512,-128,,uae"));
         assert_eq!(uae.matches("hardfile2=").count(), 3);
+    }
+
+    /// ART-146, the RDB shape: `AmiKit.hdf`'s real `RDSK` (behind its VHD
+    /// header, but the principle is the same for a bare RDB image too) must
+    /// not be forced through bare-image geometry — WinUAE reads the RDB
+    /// itself once blocksize is `0`, per e-uae's `docs/configuration.txt`.
+    #[test]
+    fn an_rdb_hardfile_gets_no_forced_geometry() {
+        let profile = AmigaProfile::a1200_aga();
+        let media = LaunchMedia {
+            hardfile_paths: vec![r"E:\amiga\Amigatolon\hdf\RdbSystem.hdf".into()],
+            hardfile_shapes: vec![HardfileShape::Rdb],
+            use_aros: true,
+            ..Default::default()
+        };
+
+        let uae = generate_uae_config(&profile, &media).unwrap();
+        assert_eq!(
+            uae.matches("hardfile2=").count(),
+            1,
+            "no forced-geometry line should also be emitted for the same image"
+        );
+        assert!(
+            uae.contains(r"hardfile2=rw,:E:\amiga\Amigatolon\hdf\RdbSystem.hdf,0,0,0,0,0,,uae"),
+            "{uae}"
+        );
+    }
+
+    /// ART-146, the "anything else" shape: a VHD container (`conectix` at
+    /// offset 0, `AmiKit.hdf`'s actual bytes) is not a signature ART
+    /// recognises, so it gets the same treatment as an RDB — WinUAE detects
+    /// VHD on its own, and forcing geometry over it produced "Not a DOS disk
+    /// in unit 0" against the user's real image.
+    #[test]
+    fn an_unrecognised_hardfile_shape_gets_no_forced_geometry() {
+        let profile = AmigaProfile::a1200_aga();
+        let media = LaunchMedia {
+            hardfile_paths: vec![r"E:\amiga\amikit\AmiKit.hdf".into()],
+            hardfile_shapes: vec![HardfileShape::Unknown],
+            write_protect_hardfiles: true,
+            use_aros: true,
+            ..Default::default()
+        };
+
+        let uae = generate_uae_config(&profile, &media).unwrap();
+        assert!(
+            uae.contains(r"hardfile2=ro,:E:\amiga\amikit\AmiKit.hdf,0,0,0,0,0,,uae"),
+            "{uae}"
+        );
+    }
+
+    /// No `hardfile_shapes` entry at all — a `LaunchMedia` built by code that
+    /// predates this field, or one whose vector is simply shorter than
+    /// `hardfile_paths` — must keep emitting the forced-geometry line the
+    /// WinUAE screen has always relied on, not silently switch shape.
+    #[test]
+    fn a_missing_shape_entry_defaults_to_bare_geometry() {
+        let profile = AmigaProfile::a1200_aga();
+        let media = LaunchMedia {
+            hardfile_paths: vec![r"C:\HDFs\WHDGames.hdf".into()],
+            use_aros: true,
+            ..Default::default()
+        };
+        assert!(media.hardfile_shapes.is_empty());
+
+        let uae = generate_uae_config(&profile, &media).unwrap();
+        assert!(uae.contains(r"hardfile2=rw,DH0:C:\HDFs\WHDGames.hdf,32,1,2,512,0,,uae"));
     }
 
     #[test]

@@ -619,6 +619,68 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-146** 🔴 ✅ **`hardfile2=` forced bare-image geometry onto every hard
+drive image, including a VHD container — WinUAE reported "Not a DOS disk in
+unit 0"** — *found and fixed 2026-08-18, retrying Y1 against the user's own
+`E:\amiga\amikit\AmiKit.hdf` after ART-145's fix landed*
+`src-tauri/src/core/winuae.rs::generate_uae_config`,
+`src-tauri/src/core/hdf.rs::detect_hardfile_shape` ·
+`core/winuae.rs` always emitted
+`hardfile2={access},DH{i}:{path},32,1,2,512,{bootpri},,uae` — forced 32
+sectors, 1 surface, 2 reserved, 512-byte blocks — for every hardfile,
+regardless of what the file actually was. That is correct for the bare
+filesystem images ART itself creates (`create_hdf` with `is_rdb: false`),
+whose first four bytes are `DOS\0`. Read directly off the user's disk,
+`AmiKit.hdf` is not that: its first eight bytes are the ASCII `conectix`, the
+Microsoft/Connectix VHD container signature, and the Amiga `RDSK` block sits
+at block 67 behind the VHD header. Mounting it with forced geometry made the
+emulated Amiga read VHD header bytes where AmigaDOS expected a filesystem —
+exactly "Not a DOS disk in unit 0". The e-uae configuration syntax WinUAE
+inherits (`docs/configuration.txt`) already states the fix: blocksize `0`
+marks an RDB hard file, and "all other components ... will be ignored apart
+from `<path>` and `<access>`" — its own example
+(`hardfile2=rw,:/path,0,0,0,0,0,`) leaves the device name empty too, since a
+forced `DH{i}:` is meaningless once the disk carries its own device names in
+its own RDB.
+
+Fixed by deciding the image's shape from the file itself before saying how to
+mount it, rather than assuming one shape for all of them. `core/hdf.rs` gains
+`HardfileShape` (`Bare` / `Rdb` / `Unknown`) and `detect_hardfile_shape`,
+which reuses `find_rdb_location` (`core/rdb.rs`) for the RDB case rather than
+adding a second RDB detector, and otherwise checks for the same bare
+signatures `core/detect.rs`'s drop-pipeline classification already knows
+(`DOS\0`..`DOS\7`, `PFS\3`, `PDS\3`, `SFS\0`) — anything else, VHD included,
+comes back `Unknown`. `core/winuae.rs::generate_uae_config` stays
+platform-independent and file-free: `LaunchMedia` grew a `hardfile_shapes:
+Vec<HardfileShape>` field (`#[serde(default)]`, so a stored configuration
+from before this field existed still deserialises, and a short vector leaves
+later hardfiles at `HardfileShape::Bare` — the geometry every hardfile got
+before this fix, so the WinUAE screen's own already-working path does not
+regress) that the *caller* fills in from the real file, and `Bare` still
+emits the forced-geometry line while `Rdb`/`Unknown` both emit
+`hardfile2={access},:{path},0,0,0,0,{bootpri},,uae` — empty device, zeroed
+geometry. The decision is made in `commands/launch.rs::media_for_plan` (both
+the plain-hardfile and WHDLoad-system branches) and
+`commands/winuae.rs::winuae_launch` (WinUAE Studio's own manual launch),
+since that is where the image is actually available to read.
+
+Test: `core/winuae.rs`'s `an_rdb_hardfile_gets_no_forced_geometry`,
+`an_unrecognised_hardfile_shape_gets_no_forced_geometry` and
+`a_missing_shape_entry_defaults_to_bare_geometry`, all pinning complete
+`hardfile2=` lines with `assert!`/`assert_eq!`; `core/hdf.rs`'s
+`detect_shape_of_a_bare_dos_image`, `detect_shape_of_a_bare_pds3_image`,
+`detect_shape_of_an_rdb_image` and `detect_shape_of_a_vhd_image_is_unknown`;
+`commands/launch.rs`'s `a_plain_hardfile_shape_is_detected_from_its_own_bytes`
+and `a_whdload_systems_vhd_shape_is_detected`; `commands/winuae.rs`'s
+`detects_the_shape_of_a_manually_selected_hardfile` and
+`no_hardfiles_means_no_shapes_to_detect`.
+
+**What remains unproven.** This closes the defect the second real run hit,
+found by reading the image's own bytes (`conectix` at offset 0, confirmed
+against the user's actual `AmiKit.hdf`) rather than by re-running WinUAE with
+the fix applied. Whether `1000 Miglia` then starts against AmiKit has **not**
+been retried.
+
 **ART-145** 🔴 ✅ **The one-click WHDLoad launch never got past the CLI: the
 generated startup-sequence could not run its own first line** — *found and
 fixed 2026-08-18, by running Y2 against a real title (`1000 Miglia`) in
