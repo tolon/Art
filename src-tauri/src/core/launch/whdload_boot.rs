@@ -40,20 +40,32 @@ use crate::core::safety::atomic_write;
 ///   into a redirection that overwrites an arbitrary file on the game
 ///   volume, which is mounted **writable on purpose** so WHDLoad can keep
 ///   save games there. `>>` (append) is already refused because it contains
-///   `>`.
+///   `>`;
+/// - `` ` `` and `$` — refused on suspicion, not on a confirmed mechanism.
+///   AmigaDOS 2.0+ Shell — the interpreter that runs a `Startup-Sequence` —
+///   is reported to support backtick command substitution and `$name`
+///   expansion at the command-line-parser level, the same level `;`/`>`/`<`
+///   act at, which would make either as dangerous as those three. This has
+///   not been verified from here: neither the AmigaDOS "Using the Shell"
+///   chapter (its section on command substitution and local variables) nor
+///   a WinUAE run with a backtick or `$` in a real `Startup-Sequence` line
+///   has been checked against. Refusing costs a WHDLoad slave name that
+///   almost certainly never uses either character; allowing risks a command
+///   executing on the user's machine if the report is right — so this
+///   refuses rather than waits for proof.
 ///
 /// Considered and not added: AmigaDOS's pattern-matching wildcards (`#?`,
 /// `%`, `(a|b)`) are interpreted per-command by whichever program chooses to
 /// treat its own argument as a pattern — unlike a Unix shell, AmigaDOS does
 /// not expand them while parsing the command line, so they cannot change
 /// *which* command runs or *where its output goes*, only how one already-
-/// chosen command might later read its own argument. Backtick command
-/// substitution and `$VAR` environment expansion do not exist in the stock
-/// AmigaDOS command-line parser, so there is nothing there to refuse either.
+/// chosen command might later read its own argument. That reasoning does
+/// not extend to backtick and `$`, which is exactly why those two are
+/// refused above instead of joining this list.
 fn refuse_shell_metacharacters(label: &str, value: &str) -> CoreResult<()> {
     if value
         .chars()
-        .any(|c| c.is_control() || matches!(c, '"' | '*' | ';' | '>' | '<'))
+        .any(|c| c.is_control() || matches!(c, '"' | '*' | ';' | '>' | '<' | '`' | '$'))
     {
         return Err(CoreError::InvalidInput(format!(
             "'{value}' is not a valid {label}"
@@ -169,6 +181,21 @@ mod tests {
     #[test]
     fn a_slave_name_with_an_input_redirection_is_refused() {
         assert!(startup_sequence("Turrican.slave <DH1:secret", "DH0", "DH1").is_err());
+    }
+
+    /// Refused on suspicion: AmigaDOS 2.0+ Shell is reported to run backtick
+    /// command substitution at command-line-parser level, which was not
+    /// verified from here but would make it as dangerous as `;`/`>`/`<` if
+    /// true. See `refuse_shell_metacharacters`'s doc comment.
+    #[test]
+    fn a_slave_name_with_a_backtick_is_refused() {
+        assert!(startup_sequence("Turrican.slave `Format DH0:`", "DH0", "DH1").is_err());
+    }
+
+    /// Refused on the same suspicion as the backtick, for `$name` expansion.
+    #[test]
+    fn a_slave_name_with_a_dollar_sign_is_refused() {
+        assert!(startup_sequence("Turrican.slave $evil", "DH0", "DH1").is_err());
     }
 
     /// The slave name is not the only value that lands in the script —
