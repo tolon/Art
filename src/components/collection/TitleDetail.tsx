@@ -19,6 +19,7 @@ import {
   launchPlan,
   launchTitle,
   machinePhrase,
+  mountNotePhrase,
   notePhrase,
   refusalPhrase,
   type LaunchPreview,
@@ -163,7 +164,14 @@ export function TitleDetail({
       media: record.media,
       chipset: record.chipset?.value ?? null,
       rom_dir: romDir,
-      default_machine: machineChoice === "auto" ? defaultMachine : machineChoice,
+      default_machine: defaultMachine,
+      // Sent apart from `default_machine`, not folded into it: `machine_for`
+      // (the backend's chipset inference) only consults its `default`
+      // argument when the catalogue states no chipset, so an AGA title with
+      // this folded in ignored the user's A500 choice entirely. Sending it
+      // as its own field lets the choice win outright — see
+      // `resolved_machine` in `commands/launch.rs`.
+      machine_override: machineChoice === "auto" ? null : machineChoice,
       system_volume: systemVolume,
       one_click: oneClick,
     };
@@ -544,6 +552,13 @@ export function TitleDetail({
               {preview.plan.notes.map((note, index) => (
                 <div key={index} className="faint">
                   {t(notePhrase(note).key, notePhrase(note).params)}
+                </div>
+              ))}
+              {/* Design §4.4: what is mounted and whether it can be written
+                  to is stated here, before Start, rather than assumed. */}
+              {preview.mounts.map((mount, index) => (
+                <div key={index} className="faint">
+                  {t(mountNotePhrase(mount).key, mountNotePhrase(mount).params)}
                 </div>
               ))}
               <button

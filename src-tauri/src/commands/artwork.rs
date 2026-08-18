@@ -23,7 +23,7 @@ use crate::core::artwork::cache::Cache;
 use crate::core::artwork::config::{self, ConfiguredSource};
 use crate::core::artwork::enrich::{enrich, EnrichOutcome, EnrichRequest};
 use crate::core::artwork::key::normalise;
-use crate::core::artwork::local::{adopt_local, LocalOutcome, LocalPreview};
+use crate::core::artwork::local::{adopt_local, LocalOutcome, LocalPreview, MAX_PREVIEW_BYTES};
 use crate::core::artwork::{ArtKind, ArtRef};
 use crate::core::gameindex::store::{read_overrides, set_override, ArtBinding};
 use crate::core::jobs::JobId;
@@ -217,6 +217,18 @@ fn attach_picture(
     let source = PathBuf::from(&file);
     let ext = picture_extension(&source)
         .ok_or("ART can show PNG and JPEG pictures. This file is neither.")?;
+    // Every other picture path in this wave carries a ceiling
+    // (`MAX_PREVIEW_BYTES`) — a user's chosen file is untrusted the same way
+    // an archive entry is, and reading it whole with no bound is the one gap
+    // this path had left.
+    let size = std::fs::metadata(&source)?.len();
+    if size > MAX_PREVIEW_BYTES {
+        return Err(format!(
+            "'{}' is {size} bytes, larger than ART accepts for a picture ({MAX_PREVIEW_BYTES} bytes)",
+            source.display()
+        )
+        .into());
+    }
     let bytes = std::fs::read(&source)?;
 
     let mut cache = Cache::open(dir)?;
@@ -438,5 +450,36 @@ mod tests {
         assert_eq!(art.source, "manual");
         let cache = Cache::open(&cache_dir).unwrap();
         assert!(cache.get("turrican ii", ArtKind::Boxart).is_some());
+    }
+
+    /// A picture the user points at is untrusted the same way an archive
+    /// entry is — every other picture path in this wave carries a ceiling
+    /// (`MAX_PREVIEW_BYTES`); this is the one that did not, until now.
+    #[test]
+    fn a_picture_larger_than_the_ceiling_is_refused() {
+        let root = tempdir("oversized");
+        let cache_dir = root.join("artwork");
+        let catalogue_dir = root.join("catalogue");
+        std::fs::create_dir_all(&catalogue_dir).unwrap();
+
+        let picture = root.join("huge.png");
+        // One byte past the ceiling is enough to prove the refusal fires on
+        // the boundary rather than only on something absurdly large.
+        std::fs::write(&picture, vec![0u8; (MAX_PREVIEW_BYTES + 1) as usize]).unwrap();
+
+        let result = attach_picture(
+            &cache_dir,
+            &catalogue_dir,
+            "Turrican II",
+            "some-id",
+            picture.to_string_lossy().to_string(),
+        );
+
+        assert!(result.is_err(), "an oversized picture must be refused");
+        let cache = Cache::open(&cache_dir).unwrap();
+        assert!(
+            cache.get("turrican ii", ArtKind::Boxart).is_none(),
+            "a refused attach must not leave a cache entry behind"
+        );
     }
 }

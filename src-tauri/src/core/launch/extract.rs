@@ -64,7 +64,23 @@ pub fn unpack_floppies(
 /// cannot mount it any more than a floppy while it is still inside the
 /// archive. Mounting the `.rp9` itself instead of what this function
 /// extracts was ART-141.
+///
+/// **Reuses an already-extracted copy rather than overwriting it.** A
+/// hardfile-based title's save lives inside the hardfile itself (WHDLoad and
+/// most AGA-era installers alike), and `into` is per-title
+/// (`commands/launch.rs::launch_dir_for`), so a second launch finding the
+/// same target already there is the *second session of the same title*, not
+/// a stale leftover — re-extracting would silently discard whatever the
+/// first session saved, which is the launcher failure this wave's own words
+/// call out. If the `.rp9` package changes on disk, the stale copy is still
+/// preferred; nothing here compares the two.
 pub fn unpack_hardfile(package: &Path, name: &str, into: &Path) -> CoreResult<PathBuf> {
+    let target =
+        safe_join(into, name).map_err(|e| CoreError::InvalidInput(format!("'{name}': {e}")))?;
+    if target.is_file() {
+        return Ok(target);
+    }
+
     let written = unpack_named(
         package,
         std::slice::from_ref(&name.to_string()),
@@ -80,8 +96,9 @@ pub fn unpack_hardfile(package: &Path, name: &str, into: &Path) -> CoreResult<Pa
 }
 
 /// The shared body of [`unpack_floppies`] and [`unpack_hardfile`]: resolve
-/// every wanted name to an archive index before writing anything (so a
-/// package missing one of several wanted entries fails before any of the
+/// every wanted name to an archive index *and* a validated destination
+/// before writing anything (so a package missing one of several wanted
+/// entries, or naming one that escapes `into`, fails before any of the
 /// others land on disk), then read each one bounded by `max_bytes` and write
 /// it through [`atomic_write`].
 fn unpack_named(
@@ -93,7 +110,7 @@ fn unpack_named(
     let mut archive = open(package)?;
     let entries = archive.entries()?;
 
-    let mut indices = Vec::with_capacity(ordered.len());
+    let mut resolved = Vec::with_capacity(ordered.len());
     for name in ordered {
         let index = entries
             .iter()
@@ -103,14 +120,13 @@ fn unpack_named(
             .ok_or_else(|| {
                 CoreError::InvalidInput(format!("'{name}' is not in '{}'", package.display()))
             })?;
-        indices.push(index);
+        let target =
+            safe_join(into, name).map_err(|e| CoreError::InvalidInput(format!("'{name}': {e}")))?;
+        resolved.push((index, target));
     }
 
     let mut written = Vec::with_capacity(ordered.len());
-    for (name, index) in ordered.iter().zip(indices) {
-        let target =
-            safe_join(into, name).map_err(|e| CoreError::InvalidInput(format!("'{name}': {e}")))?;
-
+    for (index, target) in resolved {
         let bytes = archive.read(index, max_bytes)?;
 
         if let Some(parent) = target.parent() {
@@ -229,6 +245,33 @@ mod tests {
 
     /// A hardfile entry may be well past the 8 MB floppy ceiling —
     /// `unpack_floppies` would refuse this; `unpack_hardfile` must not.
+    /// A second launch of the same title must not discard whatever the first
+    /// session saved inside the hardfile — the failure this wave's own words
+    /// call out ("a launcher that silently discards a saved position is not
+    /// a launcher").
+    #[test]
+    fn a_second_extraction_reuses_the_copy_already_there_instead_of_overwriting_it() {
+        let dir = scratch("unpack-hardfile-reuse");
+        let pkg = package(&dir, "Enzo.rp9", &[("af-application.hdf", b"PRISTINE")]);
+        let out = dir.join("out");
+
+        let first = unpack_hardfile(&pkg, "af-application.hdf", &out).unwrap();
+        assert_eq!(std::fs::read(&first).unwrap(), b"PRISTINE");
+
+        // Stand in for a WHDLoad save written during the first session.
+        std::fs::write(&first, b"PRISTINE-PLUS-A-SAVED-GAME").unwrap();
+
+        let second = unpack_hardfile(&pkg, "af-application.hdf", &out).unwrap();
+        assert_eq!(second, first);
+        assert_eq!(
+            std::fs::read(&second).unwrap(),
+            b"PRISTINE-PLUS-A-SAVED-GAME",
+            "the second launch must not re-extract over a saved game"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_hardfile_larger_than_a_floppy_ceiling_still_unpacks() {
         let dir = scratch("unpack-hardfile-large");

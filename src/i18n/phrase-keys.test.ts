@@ -91,12 +91,14 @@ import {
 import {
   launchKindPhrase,
   machinePhrase,
+  mountNotePhrase,
   notePhrase,
   refusalPhrase as launchRefusalPhrase,
   type LaunchKind,
   type LaunchNote,
   type LaunchRefusal,
   type Machine,
+  type MountNote,
 } from "@/lib/launch";
 
 /** Whether `dotted` (e.g. "whdload.outcome.installed") names a string leaf. */
@@ -966,6 +968,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       { kind: "no-suitable-rom", machine: "a1200" },
       { kind: "no-system-volume" },
       { kind: "file-missing", path: "D:\\g\\a.adf" },
+      { kind: "nothing-to-mount" },
     ];
     for (const refusal of refusals) {
       const phrase = launchRefusalPhrase(refusal);
@@ -976,6 +979,23 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
   it("launch notePhrase: the only LaunchNote variant resolves", () => {
     const note: LaunchNote = { kind: "more-disks-than-drives", total: 6, mounted: 4 };
     expect(isLeafKey(notePhrase(note).key)).toBe(true);
+  });
+
+  it("launch mountNotePhrase: every MountNote variant resolves", () => {
+    const mounts: MountNote[] = [
+      { kind: "floppies", count: 2 },
+      { kind: "hardfile", read_only: true },
+      { kind: "hardfile", read_only: false },
+      { kind: "whdload", one_click: true },
+      { kind: "whdload", one_click: false },
+    ];
+    for (const mount of mounts) {
+      const phrase = mountNotePhrase(mount);
+      // `resolvesAtRuntime`, not `isLeafKey`: the floppies variant carries a
+      // count and is pluralised (`…_one`/`…_other`), the same reason
+      // `launchKindPhrase`'s own floppies case above uses it.
+      expect(resolvesAtRuntime(phrase.key), phrase.key).toBe(true);
+    }
   });
 
   it("launchKindPhrase: every LaunchKind variant resolves", () => {

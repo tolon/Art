@@ -112,14 +112,28 @@ pub fn detect_winuae(custom_path: Option<&str>) -> WinUaeInstallation {
     }
 }
 
-/// Reject a path that would break out of its `key=value` line.
+/// Reject a value that would break out of its `key=value` line, or shift the
+/// comma-delimited fields around it.
 ///
 /// `.uae` files are line-oriented, so a newline inside a media path would let
-/// the rest of it be read as further configuration directives.
+/// the rest of it be read as further configuration directives. `filesystem2=`
+/// and `hardfile2=` are both comma-delimited WinUAE directives —
+/// `hardfile2=<rw|ro>,<device>:<path>,<sectors>,<surfaces>,<reserved>,
+/// <blocksize>,<bootpri>,<filesystem>,<controller>` and
+/// `filesystem2=<rw|ro>,<device>:<volume label>:<host path>,<bootpri>` both
+/// put unrelated fields after the path — so a comma inside a value (a Windows
+/// folder named `Games, Amiga`, mounted as a directory volume) shifts every
+/// field after it, including the boot priority, rather than being refused
+/// outright. ART-142.
 fn checked_config_value(label: &str, value: &str) -> CoreResult<String> {
     if value.contains('\n') || value.contains('\r') {
         return Err(CoreError::InvalidInput(format!(
             "{label} contains a line break, which would corrupt the WinUAE configuration"
+        )));
+    }
+    if value.contains(',') {
+        return Err(CoreError::InvalidInput(format!(
+            "{label} contains a comma, which would shift the fields after it in the WinUAE configuration"
         )));
     }
     Ok(value.to_string())
@@ -379,6 +393,46 @@ mod tests {
         let profile = AmigaProfile::a500_ocs();
         let media = LaunchMedia {
             floppy_paths: vec!["C:\\ok.adf\nkickstart_rom_file=C:\\evil.rom".into()],
+            use_aros: true,
+            ..Default::default()
+        };
+
+        let err = generate_uae_config(&profile, &media).unwrap_err();
+        assert!(matches!(err, CoreError::InvalidInput(_)));
+    }
+
+    /// ART-142. `filesystem2=` and `hardfile2=` are comma-delimited, so a
+    /// Windows folder the user actually named — `Games, Amiga` — would shift
+    /// the boot priority and every other field after it rather than being
+    /// refused. Fixed by rejecting a comma the same way a line break already
+    /// is.
+    #[test]
+    fn a_comma_in_a_directory_mount_path_is_rejected() {
+        let profile = AmigaProfile::a1200_aga();
+        let media = LaunchMedia {
+            directories: vec![DirMount {
+                host_path: r"D:\Games, Amiga\Turrican".into(),
+                volume: "DH1".into(),
+                label: "Game".into(),
+                boot_priority: 0,
+                read_only: false,
+            }],
+            use_aros: true,
+            ..Default::default()
+        };
+
+        let err = generate_uae_config(&profile, &media).unwrap_err();
+        assert!(matches!(err, CoreError::InvalidInput(_)));
+    }
+
+    /// The same defect, pre-existing since before this wave — the review
+    /// judged it far more likely to fire now that a Windows folder (not an
+    /// ADF filename) can be mounted directly.
+    #[test]
+    fn a_comma_in_a_hardfile_path_is_rejected() {
+        let profile = AmigaProfile::a1200_aga();
+        let media = LaunchMedia {
+            hardfile_paths: vec![r"D:\Games, Amiga\System.hdf".into()],
             use_aros: true,
             ..Default::default()
         };

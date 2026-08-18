@@ -27,8 +27,10 @@ pass — filed and closed together rather than sitting in Open in between.
 ## Open
 
 **ART-144** 🔵 **Five minors deferred across collection-wave-c's own review
-rounds, folded into one entry** — *found 2026-08-18, Tasks 3/6/6b/8; filed at
-Task 12 — none promoted because each is small, harmless today, or both*
+rounds, folded into one entry — #4 closed by the whole-branch review's fix
+pass, #1/#2/#3/#5 still open** — *found 2026-08-18, Tasks 3/6/6b/8; filed at
+Task 12 — none promoted at the time because each was small, harmless then, or
+both*
 `src/lib/collectionDetail.ts`, `commands/artwork.rs`,
 `src/components/collection/TitleDetail.tsx`, `core/launch/extract.rs` ·
 
@@ -43,11 +45,17 @@ Task 12 — none promoted because each is small, harmless today, or both*
    Switching titles quickly can let a slow query for the previous title
    resolve last and overwrite the current one's pictures on screen. Needs a
    request id or an `AbortController` if it ever shows up in use.
-4. **`core/launch/extract.rs:66-91`** — `safe_join` runs inside the write
-   loop rather than before it, so a hostile name late in `ordered` is refused
-   only after earlier legitimate disks are already on disk. Judged Minor
-   because the destination is ART's own scratch directory under its data
-   directory, not user data.
+4. ~~**`core/launch/extract.rs:66-91`** — `safe_join` ran inside the write
+   loop rather than before it, so a hostile name late in `ordered` was
+   refused only after earlier legitimate disks were already on disk.~~ Fixed
+   by the whole-branch review's fix pass (2026-08-18):
+   `unpack_named` now resolves every entry's index *and* its `safe_join`-
+   checked destination in one loop before any `atomic_write` runs, which also
+   made the module doc comment's "before writing anything" claim true rather
+   than only true of the archive lookup half of it. No new test was needed —
+   `an_entry_that_escapes_the_destination_is_refused` already covers the
+   refusal itself; what changed is only when a multi-entry unpack can be left
+   partially written.
 5. **`core/launch/extract.rs:150`** — the traversal test asserts
    `!dir.join("evil.adf").exists()`, but an unguarded join would land in
    `dir`'s *parent*, so that assertion alone proves nothing; the test still
@@ -73,27 +81,6 @@ re-materialisation mechanism this late in a wave was judged worse than
 naming the gap and letting the user decide whether it earns one of its own.
 
 Design: [2026-08-18-collection-wave-c-design.md](superpowers/specs/2026-08-18-collection-wave-c-design.md) §2.
-
-**ART-142** 🟠 **A comma in a mounted folder's path shifts every field after
-it in the generated WinUAE configuration** — *filed 2026-08-18,
-collection-wave-c Task 12, out of Task 9's own deferred finding*
-`src-tauri/src/core/winuae.rs::checked_config_value` ·
-`filesystem2=` and `hardfile2=` are both comma-delimited WinUAE directives —
-`hardfile2=<rw|ro>,<device>:<path>,<sectors>,<surfaces>,<reserved>,
-<blocksize>,<bootpri>,<filesystem>,<controller>` and
-`filesystem2=<rw|ro>,<device>:<volume label>:<host path>,<bootpri>` both put
-unrelated fields after the path — but `checked_config_value` only rejects a
-line break, the corruption its own doc comment names. A Windows folder
-named `Games, Amiga`, mounted as a directory volume, turns
-`filesystem2=rw,DH1:Game:D:\Games, Amiga,0` into six comma-separated fields
-instead of four, so WinUAE reads the boot priority wrong rather than the
-line being refused outright. Pre-existing in the `hardfile2=` loop since
-before this wave — an ADF filename rarely carries a comma — but
-collection-wave-c's directory mounts (§4.3 of its design) make it far more
-likely to fire, since a Windows folder is a name the user chose, not one
-ART generated. Not fixed here; filed so the fix carries its own test
-asserting a refusal, the way `checked_config_value`'s newline case already
-does.
 
 **ART-130** 🔵 **A game can name the Kickstart it needs, and nothing offers to
 supply it** — *filed 2026-08-17, out of G10's design round; the reading half is
@@ -629,6 +616,32 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-142** 🟠 ✅ **A comma in a mounted folder's path shifts every field
+after it in the generated WinUAE configuration** — *filed 2026-08-18,
+collection-wave-c Task 12, out of Task 9's own deferred finding; fixed in the
+whole-branch review's fix pass, same day*
+`src-tauri/src/core/winuae.rs::checked_config_value` ·
+`filesystem2=` and `hardfile2=` are both comma-delimited WinUAE directives —
+`hardfile2=<rw|ro>,<device>:<path>,<sectors>,<surfaces>,<reserved>,
+<blocksize>,<bootpri>,<filesystem>,<controller>` and
+`filesystem2=<rw|ro>,<device>:<volume label>:<host path>,<bootpri>` both put
+unrelated fields after the path — but `checked_config_value` only rejected a
+line break, the corruption its own doc comment named. A Windows folder named
+`Games, Amiga`, mounted as a directory volume, turned
+`filesystem2=rw,DH1:Game:D:\Games, Amiga,0` into six comma-separated fields
+instead of four, so WinUAE would have read the boot priority wrong rather
+than the line being refused outright. Pre-existing in the `hardfile2=` loop
+since before this wave — an ADF filename rarely carries a comma — but
+collection-wave-c's directory mounts (§4.3 of its design) made it far more
+likely to fire, since a Windows folder is a name the user chose, not one ART
+generated.
+
+Fixed the same way the newline case already was: `checked_config_value` now
+refuses a value containing a comma with the same `CoreError::InvalidInput`
+shape, covered by two new tests,
+`a_comma_in_a_directory_mount_path_is_rejected` and
+`a_comma_in_a_hardfile_path_is_rejected` (`core/winuae.rs`).
 
 **ART-141** 🔴 ✅ **Play mounted an `.rp9`'s hardfile as the zip package
 itself, writable** — *found in code review of Task 11 (Play, collection-wave-c),

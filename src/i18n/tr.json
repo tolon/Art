@@ -1610,10 +1610,19 @@
         "note": {
           "moreDisksThanDrives": "Bu başlığın {{total}} disketi var; yalnızca ilk {{mounted}} tanesi takılacak — WinUAE'nin dört disket sürücüsü var."
         },
+        "mount": {
+          "floppies_one": "{{count}} disket takılacak.",
+          "floppies_other": "{{count}} disket takılacak.",
+          "hardfileReadOnly": "Bu sabit disk imajı kendi dosyanız — salt okunur takılır, oynanış sırasında yazılan hiçbir şey saklanmaz.",
+          "hardfileWritable": "Bu sabit disk imajı ART'ın kendi çıkardığı kopya — yazılabilir takılır, oynanış sırasında yapılan kayıtlar saklanır.",
+          "whdloadOneClick": "Sistem bölümünüz salt okunur takılır. Oyunun klasörü yazılabilir takılır, kayıtlar saklanır. ART, WinUAE açılır açılmaz oyunu başlatmak için kendi önyükleme klasörünü de takar.",
+          "whdloadMountOnly": "Sistem bölümünüz salt okunur takılır. Oyunun klasörü yazılabilir takılır, kayıtlar saklanır. Workbench açıldıktan sonra WHDLoad'u kendiniz başlatırsınız."
+        },
         "refusal": {
           "noSuitableRom": "ROM klasöründe {{machine}} için uygun bir Kickstart yok.",
           "noSystemVolume": "Bu WHDLoad başlığı önyüklenebilir bir sistem gerektiriyor ve ayarlanmış değil.",
-          "fileMissing": "'{{path}}' artık yok."
+          "fileMissing": "'{{path}}' artık yok.",
+          "nothingToMount": "Bu başlık takılacak bir disk belirtmiyor — WinUAE'nin yükleyeceği hiçbir şey yok."
         }
       }
     }

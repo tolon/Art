@@ -129,6 +129,13 @@ pub enum LaunchRefusal {
     /// files — but part of the same refusal type so callers have one place
     /// to render either kind of "cannot launch this".
     FileMissing { path: String },
+    /// A floppy set with nothing in it — `Media::Floppies { ordered: [] }`
+    /// is constructible (an `.rp9` manifest naming neither a hardfile nor a
+    /// floppy, `core::gameindex::scan::from_rp9`) and would otherwise plan
+    /// and launch WinUAE with no disk mounted at all: exactly the
+    /// insert-disk hand the design (§4.2) says ART refuses to produce,
+    /// rather than a black screen with no explanation.
+    NothingToMount,
 }
 
 /// What a title asks for in the catalogue's own terms.
@@ -179,6 +186,15 @@ pub fn machine_for(stated: Option<Chipset>, default: Machine) -> Machine {
 
 /// Decide what a launch needs, or refuse rather than guess.
 pub fn plan_for(request: &LaunchRequest) -> Result<LaunchPlan, LaunchRefusal> {
+    // Checked before the ROM lookup: a floppy set with nothing to mount is a
+    // broken request on its own terms, independent of whether a suitable
+    // Kickstart happens to be on hand.
+    if let RequestKind::Floppies { images } = &request.kind {
+        if images.is_empty() {
+            return Err(LaunchRefusal::NothingToMount);
+        }
+    }
+
     let rom = request
         .roms
         .iter()
@@ -337,6 +353,40 @@ mod tests {
         }));
     }
 
+    /// A floppy set with nothing in it — an `.rp9` manifest naming no disk
+    /// and no hardfile — must refuse rather than plan and launch WinUAE with
+    /// nothing mounted at all.
+    #[test]
+    fn an_empty_floppy_set_refuses_rather_than_launching_with_nothing_mounted() {
+        let refusal = plan_for(&LaunchRequest {
+            machine: Machine::A500,
+            roms: &[a500_rom()],
+            kind: RequestKind::Floppies { images: vec![] },
+            system_volume: None,
+            one_click: true,
+        })
+        .unwrap_err();
+
+        assert!(matches!(refusal, LaunchRefusal::NothingToMount));
+    }
+
+    /// The refusal fires even when no ROM would have suited either — the
+    /// request is broken on its own terms, not merely unlucky about the ROM
+    /// folder.
+    #[test]
+    fn an_empty_floppy_set_refuses_even_with_no_roms_at_all() {
+        let refusal = plan_for(&LaunchRequest {
+            machine: Machine::A500,
+            roms: &[],
+            kind: RequestKind::Floppies { images: vec![] },
+            system_volume: None,
+            one_click: true,
+        })
+        .unwrap_err();
+
+        assert!(matches!(refusal, LaunchRefusal::NothingToMount));
+    }
+
     /// A WHDLoad drawer cannot run without a booting system, and ART owns none.
     #[test]
     fn a_whdload_title_without_a_system_volume_refuses() {
@@ -432,6 +482,10 @@ mod tests {
             })
             .unwrap(),
             serde_json::json!({ "kind": "file-missing", "path": r"D:\g\a.adf" })
+        );
+        assert_eq!(
+            serde_json::to_value(LaunchRefusal::NothingToMount).unwrap(),
+            serde_json::json!({ "kind": "nothing-to-mount" })
         );
 
         assert_eq!(

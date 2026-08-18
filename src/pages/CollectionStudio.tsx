@@ -881,7 +881,10 @@ export function CollectionStudio() {
             <button
               className="btn btn-sm"
               disabled={busy}
-              onClick={() => void handleEnrich(items)}
+              // `filteredItems`, matching `handleLocalPictures` beside it —
+              // both buttons act on what the screen is actually showing right
+              // now, not the whole unfiltered library behind it.
+              onClick={() => void handleEnrich(filteredItems)}
               style={{ padding: "3px 10px", fontSize: 11 }}
             >
               {t("artwork.enrich.action")}

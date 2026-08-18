@@ -1610,10 +1610,19 @@
         "note": {
           "moreDisksThanDrives": "This title has {{total}} disks; only the first {{mounted}} will be mounted — WinUAE has four floppy drives."
         },
+        "mount": {
+          "floppies_one": "{{count}} floppy disk will be mounted.",
+          "floppies_other": "{{count}} floppy disks will be mounted.",
+          "hardfileReadOnly": "This hard disk image is your own file — it mounts read-only, so nothing written to it during play is kept.",
+          "hardfileWritable": "This hard disk image is ART's own extracted copy — it mounts writable, so saves made during play are kept.",
+          "whdloadOneClick": "Your system volume mounts read-only. The game's drawer mounts writable, so saves are kept. ART also mounts its own boot directory to start the game as soon as WinUAE boots.",
+          "whdloadMountOnly": "Your system volume mounts read-only. The game's drawer mounts writable, so saves are kept. You start WHDLoad yourself once Workbench has booted."
+        },
         "refusal": {
           "noSuitableRom": "No Kickstart in the ROM folder suits {{machine}}.",
           "noSystemVolume": "This WHDLoad title needs a bootable system, and none is set.",
-          "fileMissing": "'{{path}}' no longer exists."
+          "fileMissing": "'{{path}}' no longer exists.",
+          "nothingToMount": "This title names no disk to mount — there is nothing for WinUAE to load."
         }
       }
     }

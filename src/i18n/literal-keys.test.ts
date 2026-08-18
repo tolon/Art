@@ -265,6 +265,14 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // the same way `MachineChoiceButtons`' single shared occurrence already
     // does above. `machinePhrase`'s two variants are enumerated in
     // `phrase-keys.test.ts` (`launch machinePhrase: every Machine resolves`).
-    expect(dynamicCalls).toBe(108);
+    // 108 → 109 (whole-branch review, finding 3): the confirmation screen did
+    // not say what a plan would mount or whether it could be written to
+    // (design §4.4). `TitleDetail.tsx` gained one more site,
+    // `t(mountNotePhrase(mount).key, mountNotePhrase(mount).params)`, reading
+    // `mountNotePhrase()` from `@/lib/launch` the same way the note above it
+    // reads `notePhrase()`. Its three variants are enumerated in
+    // `phrase-keys.test.ts` (`launch mountNotePhrase: every MountNote variant
+    // resolves`).
+    expect(dynamicCalls).toBe(109);
   });
 });

@@ -44,7 +44,8 @@ export type LaunchNote = { kind: "more-disks-than-drives"; total: number; mounte
 export type LaunchRefusal =
   | { kind: "no-suitable-rom"; machine: Machine }
   | { kind: "no-system-volume" }
-  | { kind: "file-missing"; path: string };
+  | { kind: "file-missing"; path: string }
+  | { kind: "nothing-to-mount" };
 
 export interface LaunchPlan {
   machine: Machine;
@@ -53,9 +54,21 @@ export interface LaunchPlan {
   notes: LaunchNote[];
 }
 
+/**
+ * What will be mounted and whether it can be written to (design §4.4) — the
+ * confirmation screen must state this rather than leave it assumed, which is
+ * why it travels apart from `LaunchKind`: `LaunchKind` says *what* the plan
+ * mounts, this says *how*.
+ */
+export type MountNote =
+  | { kind: "floppies"; count: number }
+  | { kind: "hardfile"; read_only: boolean }
+  | { kind: "whdload"; one_click: boolean };
+
 export interface LaunchPreview {
   plan: LaunchPlan | null;
   refusal: LaunchRefusal | null;
+  mounts: MountNote[];
 }
 
 export interface LaunchArgs {
@@ -66,6 +79,11 @@ export interface LaunchArgs {
   chipset: string | null;
   rom_dir: string;
   default_machine: Machine;
+  /** The user's own choice for this title — outranks the stated chipset the
+   *  way every explicit choice in ART outranks an inference. `null` is
+   *  "auto": let the backend infer from the catalogue's chipset and fall
+   *  back to `default_machine`. */
+  machine_override: Machine | null;
   system_volume: string | null;
   one_click: boolean;
 }
@@ -115,6 +133,8 @@ export function refusalPhrase(refusal: LaunchRefusal): Phrase {
         key: "collection.detail.play.refusal.fileMissing",
         params: { path: refusal.path },
       };
+    case "nothing-to-mount":
+      return { key: "collection.detail.play.refusal.nothingToMount" };
   }
 }
 
@@ -125,6 +145,34 @@ export function notePhrase(note: LaunchNote): Phrase {
       return {
         key: "collection.detail.play.note.moreDisksThanDrives",
         params: { total: note.total, mounted: note.mounted },
+      };
+  }
+}
+
+/**
+ * What is mounted and whether it can be written to — design §4.4's own
+ * requirement, shown on the confirmation screen before Start rather than
+ * assumed. A floppy set gets no read/write statement: ART does not
+ * write-protect floppies differently from one another today.
+ */
+export function mountNotePhrase(note: MountNote): Phrase {
+  switch (note.kind) {
+    case "floppies":
+      return {
+        key: "collection.detail.play.mount.floppies",
+        params: { count: note.count },
+      };
+    case "hardfile":
+      return {
+        key: note.read_only
+          ? "collection.detail.play.mount.hardfileReadOnly"
+          : "collection.detail.play.mount.hardfileWritable",
+      };
+    case "whdload":
+      return {
+        key: note.one_click
+          ? "collection.detail.play.mount.whdloadOneClick"
+          : "collection.detail.play.mount.whdloadMountOnly",
       };
   }
 }

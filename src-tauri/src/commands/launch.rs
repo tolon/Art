@@ -78,8 +78,32 @@ pub struct LaunchArgs {
     /// bootable system a WHDLoad title needs.
     pub rom_dir: String,
     pub default_machine: Machine,
+    /// The user's own choice for *this* title (`TitleDetail`'s per-title
+    /// machine picker), kept apart from `default_machine` rather than folded
+    /// into it. A choice the user made explicitly must outrank an inference
+    /// — the same rule `Provenance::UserEdit` states everywhere else in this
+    /// codebase — and `machine_for`'s chipset→machine inference is exactly
+    /// an inference: it must never override a machine the user picked by
+    /// hand for this title. `None` is "auto": no override, let `machine_for`
+    /// decide from the catalogue's chipset and `default_machine`.
+    pub machine_override: Option<Machine>,
     pub system_volume: Option<String>,
     pub one_click: bool,
+}
+
+/// The machine a launch actually uses: the user's own per-title choice when
+/// there is one, otherwise `machine_for`'s inference from the catalogue's
+/// chipset and the user's default. `machine_override` is never folded into
+/// `default_machine` before this call — doing that once made the per-title
+/// picker inert for any title with a stated chipset, because `machine_for`
+/// only consults its `default` argument when the chipset is `None`.
+fn resolved_machine(request: &LaunchArgs) -> Machine {
+    request.machine_override.unwrap_or_else(|| {
+        machine_for(
+            chipset_from(request.chipset.as_deref()),
+            request.default_machine,
+        )
+    })
 }
 
 /// `Media` → the shape `core/launch::plan_for` reads.
@@ -123,6 +147,9 @@ fn request_kind_from(args: &LaunchArgs) -> RequestKind {
 pub struct LaunchPreview {
     pub plan: Option<LaunchPlan>,
     pub refusal: Option<LaunchRefusal>,
+    /// What will be mounted and whether it can be written to (design §4.4) —
+    /// empty on a refusal, since nothing is going to be mounted.
+    pub mounts: Vec<MountNote>,
 }
 
 /// Work out what a launch would need. Starts nothing, reads no media —
@@ -135,10 +162,7 @@ pub fn launch_plan(request: LaunchArgs, _app: AppHandle) -> AppResult<LaunchPrev
         .map(launch_rom_from)
         .collect();
 
-    let machine = machine_for(
-        chipset_from(request.chipset.as_deref()),
-        request.default_machine,
-    );
+    let machine = resolved_machine(&request);
     let plan = plan_for(&LaunchRequest {
         machine,
         roms: &roms,
@@ -148,13 +172,18 @@ pub fn launch_plan(request: LaunchArgs, _app: AppHandle) -> AppResult<LaunchPrev
     });
 
     Ok(match plan {
-        Ok(plan) => LaunchPreview {
-            plan: Some(plan),
-            refusal: None,
-        },
+        Ok(plan) => {
+            let mounts = mount_notes_for(&request, &plan);
+            LaunchPreview {
+                plan: Some(plan),
+                refusal: None,
+                mounts,
+            }
+        }
         Err(refusal) => LaunchPreview {
             plan: None,
             refusal: Some(refusal),
+            mounts: vec![],
         },
     })
 }
@@ -174,6 +203,10 @@ fn refusal_error(refusal: LaunchRefusal) -> CoreError {
             "no bootable system volume is configured for this WHDLoad title".to_string()
         }
         LaunchRefusal::FileMissing { path } => format!("'{path}' no longer exists"),
+        LaunchRefusal::NothingToMount => {
+            "this title's media names no disk to mount — there is nothing for WinUAE to load"
+                .to_string()
+        }
     };
     CoreError::InvalidInput(message)
 }
@@ -197,6 +230,56 @@ fn is_rp9(path: &str) -> bool {
         .extension()
         .map(|e| e.eq_ignore_ascii_case("rp9"))
         .unwrap_or(false)
+}
+
+/// Whether a plain `Hardfile` title's image mounts read-only.
+///
+/// A bare `.hdf` is the user's own original file — read-only (CHANGELOG,
+/// FEATURES, spec §93). A `.rp9`'s hardfile is unpacked into ART's own launch
+/// directory and is ART's copy, not the user's original, so it stays
+/// writable so its saves can persist (`unpack_hardfile`'s reuse). Shared by
+/// [`media_for_plan`], which acts on it, and [`mount_notes_for`], which
+/// states it on the confirmation screen before anything is mounted — the two
+/// must never compute a different answer from each other.
+fn hardfile_write_protected(request: &LaunchArgs) -> bool {
+    !is_rp9(&request.path)
+}
+
+/// What the confirmation screen must say before Start is reached (design
+/// §4.4): what each medium's kind mounts, and whether it can be written to.
+/// Computed from the same facts [`media_for_plan`] later acts on, but
+/// without touching disk — the preview command's own contract ("starts
+/// nothing, reads no media") — so this can run during `launch_plan` as well
+/// as `launch_title`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum MountNote {
+    Floppies {
+        count: usize,
+    },
+    Hardfile {
+        read_only: bool,
+    },
+    /// The system volume is always read-only and the game's drawer is always
+    /// writable (§4.4) — only `one_click` varies, which is what decides
+    /// whether ART's own boot directory is mounted too.
+    Whdload {
+        one_click: bool,
+    },
+}
+
+fn mount_notes_for(request: &LaunchArgs, plan: &LaunchPlan) -> Vec<MountNote> {
+    match &plan.kind {
+        LaunchKind::Floppies { images } => vec![MountNote::Floppies {
+            count: images.len(),
+        }],
+        LaunchKind::Hardfile { .. } => vec![MountNote::Hardfile {
+            read_only: hardfile_write_protected(request),
+        }],
+        LaunchKind::Whdload { one_click, .. } => vec![MountNote::Whdload {
+            one_click: *one_click,
+        }],
+    }
 }
 
 /// Where a `.rp9`'s disks are unpacked to for one launch (Task 8).
@@ -272,6 +355,21 @@ fn media_for_plan(
             // that case would hand WinUAE the zip, not the hard disk image
             // inside it. Otherwise `image` is just the file's own name, which
             // `request.path` already points at directly.
+            //
+            // Write protection differs between the two, and deliberately:
+            //
+            // - A bare `.hdf` is the user's own original file. CHANGELOG,
+            //   FEATURES and spec §93 all say a hardfile mounts read-only,
+            //   and until this fix the code did not — writing to somebody's
+            //   original hard disk image without asking is exactly what
+            //   §93's "immutable by default" exists to prevent.
+            // - A `.rp9`'s hardfile is unpacked into ART's own launch
+            //   directory (`unpack_hardfile`), never beside the user's file —
+            //   it is ART's copy, not their original, so §93 does not reach
+            //   it. It stays writable so WHDLoad/game saves inside it can
+            //   actually happen, and `unpack_hardfile` reuses that same copy
+            //   on a later launch rather than overwriting it, which is what
+            //   makes those saves survive between sessions.
             let real_path = if is_rp9(&request.path) {
                 require_exists(&request.path)?;
                 unpack_hardfile(Path::new(&request.path), image, launch_dir)?
@@ -279,6 +377,7 @@ fn media_for_plan(
                     .to_string()
             } else {
                 require_exists(&request.path)?;
+                media.write_protect_hardfiles = hardfile_write_protected(request);
                 request.path.clone()
             };
             media.hardfile_paths = vec![real_path];
@@ -347,10 +446,7 @@ fn launch_title_inner(
         .map(launch_rom_from)
         .collect();
 
-    let machine = machine_for(
-        chipset_from(request.chipset.as_deref()),
-        request.default_machine,
-    );
+    let machine = resolved_machine(request);
     // Computed again, not carried from the preview: the screen may have sat
     // open for a while, and a ROM folder or a file on disk can change under
     // it in the meantime.
@@ -462,6 +558,137 @@ mod tests {
         assert_eq!(chipset_from(Some("whatever")), None);
     }
 
+    /// A choice the user made explicitly must outrank an inference. Before
+    /// this fix, `TitleDetail.tsx` folded the per-title choice into
+    /// `default_machine`, and `machine_for` only consults its `default` when
+    /// the catalogue states no chipset — so picking A500 for a stated-AGA
+    /// title changed nothing.
+    #[test]
+    fn a_users_per_title_choice_outranks_a_stated_chipset() {
+        let mut request = args(Media::Hardfile {
+            file: "Game.hdf".into(),
+        });
+        request.chipset = Some("aga".into());
+        request.default_machine = Machine::A1200;
+        request.machine_override = Some(Machine::A500);
+
+        assert_eq!(resolved_machine(&request), Machine::A500);
+    }
+
+    /// With no per-title choice, the stated chipset still decides — the
+    /// inference `machine_for` exists for is untouched.
+    #[test]
+    fn with_no_per_title_choice_the_stated_chipset_still_decides() {
+        let mut request = args(Media::Hardfile {
+            file: "Game.hdf".into(),
+        });
+        request.chipset = Some("aga".into());
+        request.default_machine = Machine::A500;
+        request.machine_override = None;
+
+        assert_eq!(resolved_machine(&request), Machine::A1200);
+    }
+
+    // ---- mount_notes_for: what the confirmation screen is told ------------
+    //
+    // Design §4.4: the read-only system image, the writable game drawer and
+    // the boot directory ART writes must be stated on the confirmation
+    // screen rather than assumed. These must agree with `media_for_plan`'s
+    // own decisions, which is why both read `hardfile_write_protected`.
+
+    #[test]
+    fn mount_notes_state_a_bare_hardfile_as_read_only() {
+        let request = LaunchArgs {
+            path: r"D:\games\Game.hdf".into(),
+            ..args(Media::Hardfile {
+                file: "Game.hdf".into(),
+            })
+        };
+        let plan = plan_with(LaunchKind::Hardfile {
+            image: "Game.hdf".into(),
+        });
+
+        let notes = mount_notes_for(&request, &plan);
+        assert!(matches!(
+            notes.as_slice(),
+            [MountNote::Hardfile { read_only: true }]
+        ));
+    }
+
+    #[test]
+    fn mount_notes_state_an_rp9_hardfile_as_writable() {
+        let request = LaunchArgs {
+            path: r"D:\games\Enzo.rp9".into(),
+            ..args(Media::Hardfile {
+                file: "af-application.hdf".into(),
+            })
+        };
+        let plan = plan_with(LaunchKind::Hardfile {
+            image: "af-application.hdf".into(),
+        });
+
+        let notes = mount_notes_for(&request, &plan);
+        assert!(matches!(
+            notes.as_slice(),
+            [MountNote::Hardfile { read_only: false }]
+        ));
+    }
+
+    #[test]
+    fn mount_notes_state_the_floppy_count() {
+        let request = args(Media::Floppies {
+            ordered: vec!["a.adf".into(), "b.adf".into()],
+        });
+        let plan = plan_with(LaunchKind::Floppies {
+            images: vec!["a.adf".into(), "b.adf".into()],
+        });
+
+        let notes = mount_notes_for(&request, &plan);
+        assert!(matches!(
+            notes.as_slice(),
+            [MountNote::Floppies { count: 2 }]
+        ));
+    }
+
+    #[test]
+    fn mount_notes_state_whdload_one_click() {
+        let request = whdload_args(
+            Path::new(r"E:\amikit\AmiKit.hdf"),
+            Path::new(r"D:\Turrican"),
+        );
+        let plan = plan_with(LaunchKind::Whdload {
+            drawer: r"D:\Turrican".into(),
+            slave: "Turrican.slave".into(),
+            system: r"E:\amikit\AmiKit.hdf".into(),
+            one_click: true,
+        });
+
+        let notes = mount_notes_for(&request, &plan);
+        assert!(matches!(
+            notes.as_slice(),
+            [MountNote::Whdload { one_click: true }]
+        ));
+    }
+
+    /// The frontend's `MountNote` union (`src/lib/launch.ts`) must match this
+    /// exactly, the same discipline `the_wire_shape_is_what_the_frontend_reads`
+    /// applies in `core/launch/mod.rs`.
+    #[test]
+    fn mount_note_wire_shape_is_what_the_frontend_reads() {
+        assert_eq!(
+            serde_json::to_value(MountNote::Floppies { count: 2 }).unwrap(),
+            serde_json::json!({ "kind": "floppies", "count": 2 })
+        );
+        assert_eq!(
+            serde_json::to_value(MountNote::Hardfile { read_only: true }).unwrap(),
+            serde_json::json!({ "kind": "hardfile", "read_only": true })
+        );
+        assert_eq!(
+            serde_json::to_value(MountNote::Whdload { one_click: false }).unwrap(),
+            serde_json::json!({ "kind": "whdload", "one_click": false })
+        );
+    }
+
     fn args(media: Media) -> LaunchArgs {
         LaunchArgs {
             id: "id".into(),
@@ -471,6 +698,7 @@ mod tests {
             chipset: None,
             rom_dir: r"D:\roms".into(),
             default_machine: Machine::A500,
+            machine_override: None,
             system_volume: None,
             one_click: true,
         }
@@ -651,10 +879,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A plain hardfile — Enzo's collection — mounts directly, writable: it
-    /// *is* the game, saves and all.
+    /// A plain hardfile — Enzo's collection — mounts directly, but
+    /// **read-only**: it is the user's own original file, and CHANGELOG,
+    /// FEATURES and spec §93 all say a hardfile mounts read-only. Named for
+    /// what it must do, not for the defect it used to pin — this test used
+    /// to assert the opposite and passed against the bug (the Critical
+    /// finding from the whole-branch review).
     #[test]
-    fn a_plain_hardfile_mounts_the_catalogued_path_directly_and_writable() {
+    fn a_plain_hardfile_mounts_the_catalogued_path_directly_and_read_only() {
         let dir = scratch("hardfile-plain");
         let hdf = dir.join("Game.hdf");
         std::fs::write(&hdf, b"HARDFILE").unwrap();
@@ -677,8 +909,8 @@ mod tests {
             vec![hdf.to_string_lossy().to_string()]
         );
         assert!(
-            !media.write_protect_hardfiles,
-            "the game's own hardfile must stay writable for its saves"
+            media.write_protect_hardfiles,
+            "the user's own original hardfile must mount read-only (spec §93)"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -721,6 +953,11 @@ mod tests {
         assert_eq!(
             std::fs::read(&media.hardfile_paths[0]).unwrap(),
             b"REAL-HARDFILE-BYTES"
+        );
+        assert!(
+            !media.write_protect_hardfiles,
+            "the extracted copy is ART's own, under its launch directory, not the user's \
+             original — it stays writable so saves inside it can persist"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
