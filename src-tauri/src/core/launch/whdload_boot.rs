@@ -22,28 +22,64 @@ use std::path::{Path, PathBuf};
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::safety::atomic_write;
 
+/// Refuse a value that would change what the generated AmigaShell command
+/// line does, rather than merely what it names.
+///
+/// Every one of `slave`, `system_volume` and `game_volume` is interpolated
+/// straight into the script `startup_sequence` builds, so any of the three
+/// can carry an attack — not only the slave name. The set refused:
+///
+/// - a control character (`\n` or `\r` starts a new script line — a name
+///   ending `...slave\nDelete DH0:#?` adds a command of its own);
+/// - `"` (opens a quoted string, changing where the current one ends);
+/// - `*` — AmigaDOS's escape character, which cancels the special meaning of
+///   whatever follows it;
+/// - `;` — separates multiple commands on one AmigaShell line;
+/// - `>` and `<` — redirect a command's output or input. `>` is how
+///   `Turrican.slave >DH1:C/something` turns `WHDLoad`'s own command line
+///   into a redirection that overwrites an arbitrary file on the game
+///   volume, which is mounted **writable on purpose** so WHDLoad can keep
+///   save games there. `>>` (append) is already refused because it contains
+///   `>`.
+///
+/// Considered and not added: AmigaDOS's pattern-matching wildcards (`#?`,
+/// `%`, `(a|b)`) are interpreted per-command by whichever program chooses to
+/// treat its own argument as a pattern — unlike a Unix shell, AmigaDOS does
+/// not expand them while parsing the command line, so they cannot change
+/// *which* command runs or *where its output goes*, only how one already-
+/// chosen command might later read its own argument. Backtick command
+/// substitution and `$VAR` environment expansion do not exist in the stock
+/// AmigaDOS command-line parser, so there is nothing there to refuse either.
+fn refuse_shell_metacharacters(label: &str, value: &str) -> CoreResult<()> {
+    if value
+        .chars()
+        .any(|c| c.is_control() || matches!(c, '"' | '*' | ';' | '>' | '<'))
+    {
+        return Err(CoreError::InvalidInput(format!(
+            "'{value}' is not a valid {label}"
+        )));
+    }
+    Ok(())
+}
+
 /// Build the startup-sequence text that assigns from `system_volume` and runs
 /// `slave` out of `game_volume`.
 ///
-/// This text becomes commands an Amiga executes, and `slave` comes from a
-/// file somebody else made — untrusted input, exactly like an archive entry
-/// name. A name containing a control character, `"` or `*` (AmigaDOS's
-/// escape character) is refused with [`CoreError::InvalidInput`] naming the
-/// slave, rather than sanitised: a launcher that silently rewrites what it
-/// was told to run is not one to trust with a startup-sequence.
+/// This text becomes commands an Amiga executes. All three inputs can come
+/// from data ART did not write itself — `slave` out of a file somebody else
+/// made, `system_volume` and `game_volume` out of whatever mounted the
+/// title's drawer and the user's system — so all three go through
+/// [`refuse_shell_metacharacters`] before anything is formatted, rather than
+/// being sanitised: a launcher that silently rewrites what it was told to
+/// run is not one to trust with a startup-sequence.
 ///
 /// The assigns come before the `CD` and the `WHDLoad` line, because AmigaDOS
 /// resolves `C:`, `LIBS:` and `DEVS:` for everything that follows — the
 /// `WHDLoad` command itself included.
 pub fn startup_sequence(slave: &str, system_volume: &str, game_volume: &str) -> CoreResult<String> {
-    if slave
-        .chars()
-        .any(|c| c.is_control() || c == '"' || c == '*')
-    {
-        return Err(CoreError::InvalidInput(format!(
-            "'{slave}' is not a valid WHDLoad slave name"
-        )));
-    }
+    refuse_shell_metacharacters("WHDLoad slave name", slave)?;
+    refuse_shell_metacharacters("system volume name", system_volume)?;
+    refuse_shell_metacharacters("game volume name", game_volume)?;
 
     Ok(format!(
         "Assign C: {system_volume}:C\n\
@@ -87,15 +123,23 @@ mod tests {
         dir
     }
 
+    /// Pins the complete text, not a substring of it — a substring check
+    /// would not notice the assigns landing *after* the `CD` and `WHDLoad`
+    /// lines, which the module doc comment says must never happen because
+    /// those lines depend on the assigns already being in effect. An exact
+    /// match also catches a stray `\r` that a substring check would miss.
     #[test]
     fn the_startup_sequence_assigns_from_the_system_and_runs_the_slave() {
         let text = startup_sequence("Turrican.slave", "DH0", "DH1").unwrap();
 
-        assert!(text.contains("Assign C: DH0:C"), "{text}");
-        assert!(text.contains("Assign LIBS: DH0:Libs"), "{text}");
-        assert!(text.contains("Assign DEVS: DH0:Devs"), "{text}");
-        assert!(text.contains("CD DH1:"), "{text}");
-        assert!(text.contains("WHDLoad Turrican.slave"), "{text}");
+        assert_eq!(
+            text,
+            "Assign C: DH0:C\n\
+             Assign LIBS: DH0:Libs\n\
+             Assign DEVS: DH0:Devs\n\
+             CD DH1:\n\
+             WHDLoad Turrican.slave\n"
+        );
     }
 
     /// A slave's name comes out of a file somebody else made, and this text
@@ -106,6 +150,36 @@ mod tests {
         assert!(startup_sequence("Turrican.slave\rFormat", "DH0", "DH1").is_err());
     }
 
+    /// `;` separates commands on an AmigaShell line — a name carrying one
+    /// would run whatever follows it as a second command.
+    #[test]
+    fn a_slave_name_with_a_command_separator_is_refused() {
+        assert!(startup_sequence("Turrican.slave;Delete DH0:#?", "DH0", "DH1").is_err());
+    }
+
+    /// `>` redirects a command's output. `WHDLoad`'s own argument line can
+    /// carry a redirection that overwrites an arbitrary file on the game
+    /// volume — mounted writable on purpose, so WHDLoad can keep saves.
+    #[test]
+    fn a_slave_name_with_an_output_redirection_is_refused() {
+        assert!(startup_sequence("Turrican.slave >DH1:C/something", "DH0", "DH1").is_err());
+    }
+
+    /// `<` redirects a command's input — the read side of the same hazard.
+    #[test]
+    fn a_slave_name_with_an_input_redirection_is_refused() {
+        assert!(startup_sequence("Turrican.slave <DH1:secret", "DH0", "DH1").is_err());
+    }
+
+    /// The slave name is not the only value that lands in the script —
+    /// `system_volume` and `game_volume` are interpolated exactly the same
+    /// way, and ART is no longer the only caller that supplies them.
+    #[test]
+    fn a_volume_name_with_a_shell_metacharacter_is_refused() {
+        assert!(startup_sequence("Turrican.slave", "DH0;Format", "DH1").is_err());
+        assert!(startup_sequence("Turrican.slave", "DH0", "DH1>evil").is_err());
+    }
+
     #[test]
     fn the_boot_directory_is_written_where_art_owns_it() {
         let dir = scratch("boot");
@@ -114,7 +188,14 @@ mod tests {
         assert!(written.ends_with("Startup-Sequence"));
         assert!(dir.join("S").join("Startup-Sequence").is_file());
         let text = std::fs::read_to_string(dir.join("S").join("Startup-Sequence")).unwrap();
-        assert!(text.contains("WHDLoad Turrican.slave"));
+        assert_eq!(
+            text,
+            "Assign C: DH0:C\n\
+             Assign LIBS: DH0:Libs\n\
+             Assign DEVS: DH0:Devs\n\
+             CD DH1:\n\
+             WHDLoad Turrican.slave\n"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
