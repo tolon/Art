@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { Guessed } from "@/components/collection/Guessed";
 import { diskList, mediaPhrase } from "@/lib/collectionDetail";
-import { artworkAttach, artworkDetach } from "@/lib/artwork";
+import { artworkAttach, artworkDetach, isSupportedPicture } from "@/lib/artwork";
 import type { CatalogueEntry } from "@/lib/gameindex";
 import { usePowerMode } from "@/lib/uxmode";
 
@@ -52,6 +52,13 @@ export function TitleDetail({
       title: t("collection.detail.art.dialog"),
     });
     if (typeof chosen !== "string") return;
+    // The dialog's own filter already narrows to PNG/JPEG, but a translated
+    // refusal here — rather than surfacing Rust's English-only one (ART-060)
+    // — needs its own check, kept identical to the Rust gate on purpose.
+    if (!isSupportedPicture(chosen)) {
+      setArtError(t("collection.detail.art.rejected"));
+      return;
+    }
     try {
       await artworkAttach(record.title.value, record.id, chosen);
       onArtChanged();

@@ -146,6 +146,24 @@ export async function artworkDetach(title: string, id: string): Promise<void> {
   await invoke("artwork_detach", { title, id });
 }
 
+/**
+ * Whether ART's format gate would accept this file as a picture.
+ *
+ * Mirrors `picture_extension` in `commands/artwork.rs` exactly — case-
+ * insensitive PNG or JPEG by extension, nothing else. The Rust gate is the
+ * real enforcement and stays; this exists only so the panel can show a
+ * translated refusal (`collection.detail.art.rejected`) before ever calling
+ * {@link artworkAttach}, instead of surfacing Rust's own — English-only,
+ * ART-060 — refusal string on screen regardless of the chosen language.
+ */
+export function isSupportedPicture(path: string): boolean {
+  const name = path.split(/[\\/]/).pop() ?? "";
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) return false;
+  const ext = name.slice(dot + 1).toLowerCase();
+  return ext === "png" || ext === "jpg" || ext === "jpeg";
+}
+
 /** Payload of the `artwork-result` event. */
 export interface ArtworkResult extends EnrichOutcome {
   job_id: number;

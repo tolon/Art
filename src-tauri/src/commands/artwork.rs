@@ -177,6 +177,64 @@ fn picture_extension(path: &Path) -> Option<&'static str> {
     }
 }
 
+/// The logic behind [`artwork_attach`], `AppHandle`-free so it can be tested
+/// directly against a tempdir rather than a real Tauri app.
+///
+/// **Two writes, one rollback.** The cache write (bytes plus index row) and
+/// the override write (the choice that makes it stick) are two different
+/// files on two different rules — `core/safety`'s guarded write for the
+/// override, a plain atomic write for the derived cache — so one can succeed
+/// while the other fails. If the override write fails, the cache entry this
+/// call just created is removed before the error is returned: otherwise a
+/// picture would sit live in the cache under source `manual` with nothing in
+/// the override layer backing it, and the user would see an error for an
+/// attach that half happened. The rollback's own failure is swallowed — there
+/// is nothing further to do about it — but it must never replace the real
+/// error with one about cleanup.
+fn attach_picture(
+    dir: &Path,
+    catalogue: &Path,
+    title: &str,
+    id: &str,
+    file: String,
+) -> AppResult<ArtRef> {
+    let source = PathBuf::from(&file);
+    let ext = picture_extension(&source)
+        .ok_or("ART can show PNG and JPEG pictures. This file is neither.")?;
+    let bytes = std::fs::read(&source)?;
+
+    let mut cache = Cache::open(dir)?;
+    // The normalised key, not the raw title: every other write to this cache
+    // (`enrich`) keys itself the same way, and `artwork_known`'s lookup
+    // normalises the title it is asked about. A raw key here would make the
+    // picture invisible the moment casing or a leading article differs.
+    let key = normalise(title);
+    let art = cache.store(&key, ArtKind::Boxart, "manual", ext, &bytes)?;
+    cache.save()?;
+
+    let write_override: AppResult<()> = (|| {
+        let mut edit = read_overrides(catalogue)?
+            .edits
+            .get(id)
+            .cloned()
+            .unwrap_or_default();
+        edit.art = Some(ArtBinding {
+            chosen: file,
+            cached: art.file.clone(),
+        });
+        set_override(catalogue, id, edit)?;
+        Ok(())
+    })();
+
+    if let Err(err) = write_override {
+        let _ = cache.remove(&key, ArtKind::Boxart);
+        let _ = cache.save();
+        return Err(err);
+    }
+
+    Ok(art)
+}
+
 /// Attach a picture the user picked to a title.
 ///
 /// The bytes are copied into the cache under source `manual`; the choice is
@@ -192,34 +250,13 @@ pub fn artwork_attach(
     file: String,
     app: AppHandle,
 ) -> AppResult<ArtRef> {
-    let source = PathBuf::from(&file);
-    let ext = picture_extension(&source)
-        .ok_or("ART can show PNG and JPEG pictures. This file is neither.")?;
-    let bytes = std::fs::read(&source)?;
-
-    let dir = artwork_dir_for(&app);
-    let mut cache = Cache::open(&dir)?;
-    // The normalised key, not the raw title: every other write to this cache
-    // (`enrich`) keys itself the same way, and `artwork_known`'s lookup
-    // normalises the title it is asked about. A raw key here would make the
-    // picture invisible the moment casing or a leading article differs.
-    let key = normalise(&title);
-    let art = cache.store(&key, ArtKind::Boxart, "manual", ext, &bytes)?;
-    cache.save()?;
-
-    let catalogue = catalogue_dir(&app);
-    let mut edit = read_overrides(&catalogue)?
-        .edits
-        .get(&id)
-        .cloned()
-        .unwrap_or_default();
-    edit.art = Some(ArtBinding {
-        chosen: file,
-        cached: art.file.clone(),
-    });
-    set_override(&catalogue, &id, edit)?;
-
-    Ok(art)
+    attach_picture(
+        &artwork_dir_for(&app),
+        &catalogue_dir(&app),
+        &title,
+        &id,
+        file,
+    )
 }
 
 /// Undo [`artwork_attach`].
@@ -310,5 +347,80 @@ mod tests {
         assert_eq!(picture_extension(Path::new("cover.jpeg")), Some("jpg"));
         assert_eq!(picture_extension(Path::new("cover.iff")), None);
         assert_eq!(picture_extension(Path::new("cover")), None);
+    }
+
+    fn tempdir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("art-artwork-cmd-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The defect this exists for: the cache write (bytes plus index row)
+    /// succeeds and the override write that is supposed to record the choice
+    /// fails. Without the rollback, the picture would sit in the cache under
+    /// source `manual` — indistinguishable from a successfully attached one —
+    /// while the catalogue has no idea it exists.
+    #[test]
+    fn a_failed_override_write_rolls_back_the_cache_entry() {
+        let root = tempdir("rollback");
+        let cache_dir = root.join("artwork");
+        let catalogue_dir = root.join("catalogue");
+        std::fs::create_dir_all(&catalogue_dir).unwrap();
+        // Malformed JSON makes `read_overrides` fail deterministically — the
+        // same failure shape a locked or corrupt overrides file would produce
+        // for real, without reaching for filesystem permissions.
+        std::fs::write(catalogue_dir.join("overrides.json"), b"{ not json").unwrap();
+
+        let picture = root.join("cover.png");
+        std::fs::write(&picture, b"PNGDATA").unwrap();
+
+        let result = attach_picture(
+            &cache_dir,
+            &catalogue_dir,
+            "Turrican II",
+            "some-id",
+            picture.to_string_lossy().to_string(),
+        );
+
+        assert!(
+            result.is_err(),
+            "the override write must have failed for this test to prove anything"
+        );
+
+        // The cache write that happened before the failure must have been
+        // undone, not left behind as an orphaned "manual" entry.
+        let cache = Cache::open(&cache_dir).unwrap();
+        assert!(
+            cache.get("turrican ii", ArtKind::Boxart).is_none(),
+            "a failed attach left a picture live in the cache"
+        );
+    }
+
+    /// The ordinary path still works once the rollback exists: a successful
+    /// attach's picture is findable afterwards, normalised key and all.
+    #[test]
+    fn a_successful_attach_leaves_the_picture_in_the_cache() {
+        let root = tempdir("success");
+        let cache_dir = root.join("artwork");
+        let catalogue_dir = root.join("catalogue");
+        std::fs::create_dir_all(&catalogue_dir).unwrap();
+
+        let picture = root.join("cover.png");
+        std::fs::write(&picture, b"PNGDATA").unwrap();
+
+        let art = attach_picture(
+            &cache_dir,
+            &catalogue_dir,
+            "Turrican II",
+            "some-id",
+            picture.to_string_lossy().to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(art.source, "manual");
+        let cache = Cache::open(&cache_dir).unwrap();
+        assert!(cache.get("turrican ii", ArtKind::Boxart).is_some());
     }
 }
