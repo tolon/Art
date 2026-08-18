@@ -71,6 +71,12 @@ pub struct EnrichRequest<'a> {
     /// shows yet. The caller asks for what it will render, and wave C widens
     /// this rather than the engine guessing.
     pub wanted: &'a [ArtKind],
+    /// Titles whose picture the user chose by hand.
+    ///
+    /// No source may overwrite that choice, so a pinned title is skipped
+    /// **before any source is asked** about it — not recorded as a miss,
+    /// since nobody looked, and a recorded miss is never asked again.
+    pub pinned: &'a [String],
 }
 
 /// How one source did.
@@ -215,6 +221,11 @@ fn run(
 
     let keys: Vec<String> = request.titles.iter().map(|t| normalise(t)).collect();
 
+    // Normalised once, the same way `keys` is: a pinned title is matched by
+    // the same key a source would have been asked about.
+    let pinned: std::collections::HashSet<String> =
+        request.pinned.iter().map(|t| normalise(t)).collect();
+
     let cached_before = keys
         .iter()
         .flat_map(|key| ArtKind::ALL.iter().map(move |kind| (key, *kind)))
@@ -300,6 +311,12 @@ fn run(
             // Between whole titles, never mid-write.
             if sink.is_cancelled() {
                 return Err(CoreError::Cancelled);
+            }
+
+            if pinned.contains(key) {
+                done += 1;
+                sink.report(done, Some(total), title);
+                continue;
             }
 
             for kind in &usable {
@@ -483,6 +500,19 @@ mod tests {
         ])
     }
 
+    /// A source configured exactly as `libretro_only()` provides it, named for
+    /// what the pinned-title test needs to say about it: it is there, and it
+    /// has an answer, so a written count of zero can only mean the pin worked.
+    fn source_that_always_answers() -> Vec<ConfiguredSource> {
+        libretro_only()
+    }
+
+    /// The same fake as every other test here, holding the reply that would
+    /// have matched "Turrican" if it had been asked.
+    fn client_that_would_answer() -> FakeClient {
+        libretro_client()
+    }
+
     #[test]
     fn a_matched_title_is_written_to_the_cache() {
         let dir = tempdir("matched");
@@ -496,6 +526,7 @@ mod tests {
                 sources: &sources,
                 cache_dir: &dir,
                 wanted: &ArtKind::ALL,
+                pinned: &[],
             },
             &client,
             &crate::core::jobs::NoProgress,
@@ -522,6 +553,7 @@ mod tests {
                     sources: &sources,
                     cache_dir: &dir,
                     wanted: &ArtKind::ALL,
+                    pinned: &[],
                 },
                 &client,
                 &crate::core::jobs::NoProgress,
@@ -548,6 +580,7 @@ mod tests {
                 sources: &sources,
                 cache_dir: &dir,
                 wanted: &ArtKind::ALL,
+                pinned: &[],
             },
             &first,
             &crate::core::jobs::NoProgress,
@@ -561,6 +594,7 @@ mod tests {
                 sources: &sources,
                 cache_dir: &dir,
                 wanted: &ArtKind::ALL,
+                pinned: &[],
             },
             &second,
             &crate::core::jobs::NoProgress,
@@ -600,6 +634,7 @@ mod tests {
                 sources: &sources,
                 cache_dir: &dir,
                 wanted: &ArtKind::ALL,
+                pinned: &[],
             },
             &client,
             &crate::core::jobs::NoProgress,
@@ -640,6 +675,7 @@ mod tests {
                 sources: &sources,
                 cache_dir: &dir,
                 wanted: &ArtKind::ALL,
+                pinned: &[],
             },
             &client,
             &sink,
@@ -671,6 +707,7 @@ mod tests {
                 sources: &sources,
                 cache_dir: &dir,
                 wanted: &ArtKind::ALL,
+                pinned: &[],
             },
             &client,
             &crate::core::jobs::NoProgress,
@@ -706,6 +743,7 @@ mod tests {
                 sources: &sources,
                 cache_dir: &dir,
                 wanted: &ArtKind::ALL,
+                pinned: &[],
             },
             &client,
             &crate::core::jobs::NoProgress,
@@ -734,6 +772,7 @@ mod tests {
                 sources: &sources,
                 cache_dir: &dir,
                 wanted: &ArtKind::ALL,
+                pinned: &[],
             },
             &client,
             &crate::core::jobs::NoProgress,
@@ -783,6 +822,7 @@ mod tests {
                 sources: &sources,
                 cache_dir: &dir,
                 wanted: &ArtKind::ALL,
+                pinned: &[],
             },
             &first,
             &sink,
@@ -804,6 +844,7 @@ mod tests {
                 sources: &sources,
                 cache_dir: &dir,
                 wanted: &ArtKind::ALL,
+                pinned: &[],
             },
             &second,
             &crate::core::jobs::NoProgress,
@@ -833,6 +874,7 @@ mod tests {
                 sources: &sources,
                 cache_dir: &dir,
                 wanted: &ArtKind::ALL,
+                pinned: &[],
             },
             &first,
             &crate::core::jobs::NoProgress,
@@ -849,6 +891,7 @@ mod tests {
                 sources: &sources,
                 cache_dir: &dir,
                 wanted: &ArtKind::ALL,
+                pinned: &[],
             },
             &second,
             &crate::core::jobs::NoProgress,
@@ -898,6 +941,7 @@ mod tests {
                 sources: &sources,
                 cache_dir: &dir,
                 wanted: &[ArtKind::Boxart],
+                pinned: &[],
             },
             &client,
             &crate::core::jobs::NoProgress,
@@ -916,6 +960,46 @@ mod tests {
         let cache = Cache::open(&dir).unwrap();
         assert!(cache.get("turrican ii", ArtKind::Boxart).is_some());
         assert!(cache.get("turrican ii", ArtKind::Snap).is_none());
+    }
+
+    /// A source may not overwrite a picture the user chose by hand.
+    ///
+    /// The title and fixture are the same ones `a_matched_title_is_written_to_
+    /// the_cache` uses to prove a *match* happens — so a written count of zero
+    /// here can only be the pin, never a fixture that had nothing to offer.
+    #[test]
+    fn a_pinned_title_is_left_alone() {
+        let dir = tempdir("pinned");
+        let sources = source_that_always_answers();
+        let titles = vec!["Turrican II".to_string()];
+        let pinned = vec!["Turrican II".to_string()];
+        let client = client_that_would_answer();
+
+        let outcome = enrich(
+            EnrichRequest {
+                titles: &titles,
+                sources: &sources,
+                cache_dir: &dir,
+                wanted: &[ArtKind::Boxart],
+                pinned: &pinned,
+            },
+            &client,
+            &crate::core::jobs::NoProgress,
+        )
+        .unwrap();
+
+        assert_eq!(
+            outcome.per_source.iter().map(|s| s.written).sum::<u32>(),
+            0,
+            "the user's own picture is not something a source gets to replace"
+        );
+        assert!(
+            Cache::open(&dir)
+                .unwrap()
+                .get("turrican ii", ArtKind::Boxart)
+                .is_none(),
+            "nothing should have been written to the cache for a pinned title"
+        );
     }
 
     /// The rate belongs to the host. One number for every source held GitHub's

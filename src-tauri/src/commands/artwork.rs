@@ -142,6 +142,10 @@ pub fn artwork_enrich(
                     sources: &sources,
                     cache_dir: &dir,
                     wanted: &DISPLAYED_KINDS,
+                    // Task 6 is where the real pinned list arrives from the
+                    // catalogue's overrides; until then this command pins
+                    // nothing, which is exactly what it does today.
+                    pinned: &[],
                 },
                 &client,
                 progress,
