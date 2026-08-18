@@ -26,6 +26,75 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-144** 🔵 **Five minors deferred across collection-wave-c's own review
+rounds, folded into one entry** — *found 2026-08-18, Tasks 3/6/6b/8; filed at
+Task 12 — none promoted because each is small, harmless today, or both*
+`src/lib/collectionDetail.ts`, `commands/artwork.rs`,
+`src/components/collection/TitleDetail.tsx`, `core/launch/extract.rs` ·
+
+1. **`collectionDetail.ts:13-21`** — `mediaPhrase`'s third arm switches on
+   `default`, where its sibling `mediaKind()` in `gameindex.ts` uses three
+   explicit cases and no default. A fourth `Media` variant would fall through
+   silently here instead of failing to compile there, as it would over there.
+2. **`commands/artwork.rs`** — `set_override`'s backup path is discarded in
+   both `artwork_attach` and `artwork_detach`. Consistent with the task
+   brief's fixed command signatures, so noted rather than fixed.
+3. **`TitleDetail.tsx:161-177`** — `loadPictures()` has no out-of-order guard.
+   Switching titles quickly can let a slow query for the previous title
+   resolve last and overwrite the current one's pictures on screen. Needs a
+   request id or an `AbortController` if it ever shows up in use.
+4. **`core/launch/extract.rs:66-91`** — `safe_join` runs inside the write
+   loop rather than before it, so a hostile name late in `ordered` is refused
+   only after earlier legitimate disks are already on disk. Judged Minor
+   because the destination is ART's own scratch directory under its data
+   directory, not user data.
+5. **`core/launch/extract.rs:150`** — the traversal test asserts
+   `!dir.join("evil.adf").exists()`, but an unguarded join would land in
+   `dir`'s *parent*, so that assertion alone proves nothing; the test still
+   fails without `safe_join` only because `.unwrap_err()` panics first. This
+   one came from the task's own plan text, not the implementer who wrote it.
+
+**ART-143** 🟡 **A hand-attached picture is not re-materialised if the
+artwork cache is deleted** — *filed 2026-08-18, collection-wave-c's own
+design (§2) promised this and no task in the wave built it*
+`src-tauri/src/core/gameindex/store.rs::ArtBinding`,
+`src-tauri/src/core/artwork/local.rs` · The binding splits by design: the
+bytes go into the artwork cache — derived data, rebuildable — under source
+`manual`, and the *choice* goes into `RecordOverride`'s user layer, which a
+refresh never touches. `ArtBinding.chosen` is the original path the user
+picked, kept, per the struct's own doc comment, "so the binding can be
+re-materialised if the cache is ever cleared" — but nothing reads it back.
+Deleting the artwork cache, by hand today, leaves every hand-attached
+picture rendering nothing on screen, even though the exact file the user
+pointed at is still named in the override right beside it. Nothing is
+lost — `chosen` survives on disk — but nothing rebuilds the cache entry from
+it either. Filed rather than fixed per the wave's own ruling: inventing the
+re-materialisation mechanism this late in a wave was judged worse than
+naming the gap and letting the user decide whether it earns one of its own.
+
+Design: [2026-08-18-collection-wave-c-design.md](superpowers/specs/2026-08-18-collection-wave-c-design.md) §2.
+
+**ART-142** 🟠 **A comma in a mounted folder's path shifts every field after
+it in the generated WinUAE configuration** — *filed 2026-08-18,
+collection-wave-c Task 12, out of Task 9's own deferred finding*
+`src-tauri/src/core/winuae.rs::checked_config_value` ·
+`filesystem2=` and `hardfile2=` are both comma-delimited WinUAE directives —
+`hardfile2=<rw|ro>,<device>:<path>,<sectors>,<surfaces>,<reserved>,
+<blocksize>,<bootpri>,<filesystem>,<controller>` and
+`filesystem2=<rw|ro>,<device>:<volume label>:<host path>,<bootpri>` both put
+unrelated fields after the path — but `checked_config_value` only rejects a
+line break, the corruption its own doc comment names. A Windows folder
+named `Games, Amiga`, mounted as a directory volume, turns
+`filesystem2=rw,DH1:Game:D:\Games, Amiga,0` into six comma-separated fields
+instead of four, so WinUAE reads the boot priority wrong rather than the
+line being refused outright. Pre-existing in the `hardfile2=` loop since
+before this wave — an ADF filename rarely carries a comma — but
+collection-wave-c's directory mounts (§4.3 of its design) make it far more
+likely to fire, since a Windows folder is a name the user chose, not one
+ART generated. Not fixed here; filed so the fix carries its own test
+asserting a refusal, the way `checked_config_value`'s newline case already
+does.
+
 **ART-130** 🔵 **A game can name the Kickstart it needs, and nothing offers to
 supply it** — *filed 2026-08-17, out of G10's design round; the reading half is
 built by G10, this is the half that was deliberately left out*

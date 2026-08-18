@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Pictures already on your disk, a detail panel, and Play (2026-08-18)
+
+#### Added
+- **The Collection now shows the pictures already inside your `.rp9` files.**
+  Every `.rp9` carries its own screenshot; a new button — *use the pictures
+  already in your files* — reads it straight off the package, with no network
+  and nothing to confirm. It only fills gaps: a picture already found some
+  other way is left alone.
+- **You can attach your own picture to a title.** Pick a PNG or JPEG and it
+  stays attached — a later refresh or online search will not replace it, and
+  it survives a rescan of the folder. If a title has more than one picture,
+  a switch lets you choose which one shows.
+- **Click a title to open it.** A panel shows the picture, the disk order or
+  the WHDLoad slave's name, the Kickstart it declares, where the file is on
+  disk, and what ART knows versus what it guessed.
+- **Play.** The panel's Play button hands a title to WinUAE: a floppy title
+  boots directly, a hardfile mounts read-only, and a WHDLoad game — given a
+  bootable system image you already have — either mounts it for you to start
+  the game yourself, or, when your system supports it, boots straight into
+  the game in one click. Your original system image is never written to; the
+  game's own drawer stays writable, the way WHDLoad expects, for save games.
+
+#### Notes
+- **None of this has been run against your own files yet.** It is written and
+  tested, but no session here has your `.rp9` collection, your emulator, or
+  your `AmiKit.hdf` to try it against. Please run the three checks below and
+  report back what you actually saw — not just whether something happened,
+  but what the screen said if it didn't work as expected.
+
+#### To verify yourself
+1. Open the Collection on your `.rp9` folder, press *use the pictures
+   already in your files*, and note the real numbers it reports — how many
+   were written, how many were already there, how many it could not read.
+2. Play a bare `.adf` title, then an `.rp9` title. Both should reach a
+   running game.
+3. Play a WHDLoad title against `E:\amiga\amikit\AmiKit.hdf` — try the
+   one-click option first. If it does not reach the game, note exactly what
+   the screen showed; that ART offers a fallback is not the same claim as
+   that the fallback is needed, and which one actually happened is what's
+   worth knowing.
+
 ### Colours you can actually read (2026-08-18)
 
 #### Fixed
