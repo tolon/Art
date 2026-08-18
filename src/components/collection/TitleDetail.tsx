@@ -11,16 +11,12 @@ import { usePowerMode } from "@/lib/uxmode";
  * `art` is the one picture the screen already resolves per title — the
  * `ArtKind` the artwork cache prefers first for whichever titles are on
  * screen (`CollectionStudio`'s `art` map, built from `artworkKnown()`).
- * The wave-C design also describes a row of small buttons for switching
- * between *every* kind the cache holds for a title, shown only when there is
- * more than one. That needs a per-kind cache query — `Cache::get` already
- * exists in `core/artwork/cache.rs`, but nothing exposes it as a command the
- * way `artwork_known` exposes `Cache::best` — and adding one is a
- * `commands/artwork.rs` change outside this task's files (reserved for a
- * later task per the wave-C plan's cross-task file table). So today a title
- * never carries more than one kind through to this panel, and the "single
- * kind, no row" rule in the design already covers that case correctly —
- * there is nothing to switch between yet.
+ *
+ * One picture, not a switch between kinds — deliberately, for now. A title
+ * holds more than one kind only once a hand-attached picture joins the
+ * `.rp9` snap (wave C, the attach task), and `artworkKnown` answers with the
+ * preferred one rather than the set. The switch belongs with the second
+ * kind, not ahead of it.
  */
 export function TitleDetail({
   entry,

@@ -1125,7 +1125,15 @@ export function CollectionStudio() {
               <div
                 key={item.id}
                 className="file-row"
-                style={{ padding: "8px 12px" }}
+                onClick={() => handleSelect(item)}
+                style={{
+                  padding: "8px 12px",
+                  cursor: "pointer",
+                  // The same selected-row affordance `HardDiskStudio`'s
+                  // partition list already uses for a `.file-row` — not a
+                  // new highlight invented for this screen.
+                  borderColor: item.id === selectedId ? "var(--accent)" : "transparent",
+                }}
               >
                 <div className="file-row-main" style={{ gap: 10 }}>
                   {/* The picture stands in for the media glyph when there is
@@ -1152,18 +1160,26 @@ export function CollectionStudio() {
                       <Guessed from={item.publisherFrom} />
                       {item.year ? ` · ${item.year}` : ""}
                     </div>
-                    <NameFixes
-                      current={item.title}
-                      suggestion={suggestions.get(item.id)}
-                      undo={undoable.get(item.id)}
-                      onTitle={(proposed) => void applyTitle(item, proposed)}
-                      onRename={(proposed) => void applyRename(item, proposed)}
-                      onUndo={() => void undoTitle(item)}
-                    />
+                    {/* A name fix is a decision about the title, not a row
+                        selection — it must not also toggle the panel. */}
+                    <div onClick={(e) => e.stopPropagation()}>
+                      <NameFixes
+                        current={item.title}
+                        suggestion={suggestions.get(item.id)}
+                        undo={undoable.get(item.id)}
+                        onTitle={(proposed) => void applyTitle(item, proposed)}
+                        onRename={(proposed) => void applyRename(item, proposed)}
+                        onUndo={() => void undoTitle(item)}
+                      />
+                    </div>
                   </div>
                 </div>
 
-                <div className="file-row-meta" style={{ gap: 10 }}>
+                <div
+                  className="file-row-meta"
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ gap: 10 }}
+                >
                   <span
                     className={`badge ${item.chipset === null ? "badge-muted" : item.chipset === "aga" ? "badge-warn" : "badge-ok"}`}
                     style={{ fontSize: 10 }}
