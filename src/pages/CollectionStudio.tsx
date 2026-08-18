@@ -260,6 +260,14 @@ export function CollectionStudio() {
   // own line between the two).
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
+  // Bumped every time a Play button is pressed, and handed to `TitleDetail`
+  // so it fetches that title's launch plan the moment the panel opens —
+  // one click reaches a confirmation, not only an open panel. Not a boolean:
+  // pressing Play again for the same title (say, after changing the ROM
+  // folder) must re-trigger the fetch even though `selectedId` did not
+  // change.
+  const [playRequest, setPlayRequest] = useState(0);
+
   // How the library is being looked at is the user's choice, not the screen's
   // (see `@/lib/useRemembered`). A grid-and-AGA view set on Monday is still
   // grid-and-AGA on Tuesday.
@@ -714,8 +722,22 @@ export function CollectionStudio() {
     });
   }, [items, searchTerm, formatFilter, chipsetFilter]);
 
+  /**
+   * The screen's one Play control (Collection · wave C, Task 11).
+   *
+   * This used to `navigate("/winuae", ...)` — a route that opens WinUAE
+   * Studio empty-handed and launches nothing, so the button labelled "Play"
+   * did not play anything. The real launch flow — a read-only plan, a
+   * confirmation showing the machine, the ROM and the media, and only then
+   * a Start button — lives in `TitleDetail`'s Play section, because that is
+   * where there is room to show it and where the per-title choices already
+   * live. This opens that panel and asks it to fetch the plan immediately,
+   * so one click reaches the confirmation rather than a second empty panel
+   * the user has to act in again.
+   */
   function handlePlay(item: Shown) {
-    navigate("/winuae", { state: { path: item.path } });
+    setSelectedId(item.id);
+    setPlayRequest((n) => n + 1);
   }
 
   // Looked up from every loaded item, not the filtered set: changing a
@@ -1245,6 +1267,7 @@ export function CollectionStudio() {
             hasManualArt={manualArt.has(selectedItem.id)}
             onArtChanged={() => void loadArtwork(items)}
             onClose={() => setSelectedId(null)}
+            playRequest={playRequest}
           />
         )}
       </div>

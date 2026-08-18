@@ -88,6 +88,16 @@ import {
   type PlanResult,
   type RefusalReason as OsInstallRefusalReason,
 } from "@/lib/osinstall";
+import {
+  launchKindPhrase,
+  machinePhrase,
+  notePhrase,
+  refusalPhrase as launchRefusalPhrase,
+  type LaunchKind,
+  type LaunchNote,
+  type LaunchRefusal,
+  type Machine,
+} from "@/lib/launch";
 
 /** Whether `dotted` (e.g. "whdload.outcome.installed") names a string leaf. */
 function isLeafKey(dotted: string): boolean {
@@ -937,6 +947,58 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     for (const kind of kinds) {
       const phrase = artworkKindPhrase(kind);
       expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  // Collection wave C, Task 11 (Play): the four mappers in `@/lib/launch`
+  // that turn `core::launch`'s decision into what the confirmation panel
+  // shows.
+
+  it("launch machinePhrase: every Machine resolves", () => {
+    const machines: Machine[] = ["a500", "a1200"];
+    for (const machine of machines) {
+      expect(isLeafKey(machinePhrase(machine).key), machine).toBe(true);
+    }
+  });
+
+  it("launch refusalPhrase: every LaunchRefusal variant resolves", () => {
+    const refusals: LaunchRefusal[] = [
+      { kind: "no-suitable-rom", machine: "a1200" },
+      { kind: "no-system-volume" },
+      { kind: "file-missing", path: "D:\\g\\a.adf" },
+    ];
+    for (const refusal of refusals) {
+      const phrase = launchRefusalPhrase(refusal);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("launch notePhrase: the only LaunchNote variant resolves", () => {
+    const note: LaunchNote = { kind: "more-disks-than-drives", total: 6, mounted: 4 };
+    expect(isLeafKey(notePhrase(note).key)).toBe(true);
+  });
+
+  it("launchKindPhrase: every LaunchKind variant resolves", () => {
+    const kinds: LaunchKind[] = [
+      { kind: "floppies", images: ["a.adf"] },
+      { kind: "hardfile", image: "a.hdf" },
+      {
+        kind: "whdload",
+        drawer: "D:\\games\\Turrican",
+        slave: "Turrican.slave",
+        system: "E:\\amikit\\AmiKit.hdf",
+        one_click: true,
+      },
+      {
+        kind: "whdload",
+        drawer: "D:\\games\\Turrican",
+        slave: "Turrican.slave",
+        system: "E:\\amikit\\AmiKit.hdf",
+        one_click: false,
+      },
+    ];
+    for (const kind of kinds) {
+      expect(resolvesAtRuntime(launchKindPhrase(kind).key), kind.kind).toBe(true);
     }
   });
 });

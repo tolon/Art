@@ -192,6 +192,8 @@ pub fn run() {
             commands::winuae::winuae_launch,
             commands::winuae::rom_identify,
             commands::winuae::rom_scan_dir,
+            commands::launch::launch_plan,
+            commands::launch::launch_title,
             commands::oplog::oplog_recent,
             commands::oplog::oplog_export,
             commands::oplog::oplog_export_to,

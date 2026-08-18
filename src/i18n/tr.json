@@ -1572,6 +1572,45 @@
         "dialog": "Bu başlık için bir resim seç",
         "filter": "Resim (PNG, JPEG)",
         "rejected": "ART, PNG ve JPEG resimleri gösterebilir. Bu dosya ikisi de değil."
+      },
+      "play": {
+        "title": "Oynat",
+        "romDir": "Kickstart ROM klasörü",
+        "romDirDialog": "Kickstart ROM'larınızın bulunduğu klasörü seçin",
+        "browse": "Gözat…",
+        "defaultMachine": "Varsayılan makine:",
+        "machineForThisTitle": "Bu başlık için makine:",
+        "machineAuto": "Otomatik",
+        "machine": {
+          "a500": "A500",
+          "a1200": "A1200"
+        },
+        "systemVolume": "Önyüklenebilir sistem (WHDLoad için)",
+        "systemVolumeDialog": "Önyüklenebilir sistem imajını veya bölümünü seçin",
+        "systemVolumeNone": "Ayarlanmadı",
+        "oneClick": "Tek tık (Y2)",
+        "mountOnly": "Bağla ve elden bırak (Y1)",
+        "action": "Oynat",
+        "planning": "Ne gerektiği hesaplanıyor…",
+        "start": "Başlat",
+        "starting": "Başlatılıyor…",
+        "started": "Başlatıldı (süreç {{pid}})",
+        "willUse": "{{machine}} · {{rom}}",
+        "kind": {
+          "floppies_one": "{{count}} disket takılacak",
+          "floppies_other": "{{count}} disket takılacak",
+          "hardfile": "Sabit disk imajı: {{image}}",
+          "whdloadOneClick": "Tek tık: WinUAE açılır açılmaz {{slave}} başlar",
+          "whdloadMountOnly": "{{slave}}'i elle başlatmanız için bağlandı"
+        },
+        "note": {
+          "moreDisksThanDrives": "Bu başlığın {{total}} disketi var; yalnızca ilk {{mounted}} tanesi takılacak — WinUAE'nin dört disket sürücüsü var."
+        },
+        "refusal": {
+          "noSuitableRom": "ROM klasöründe {{machine}} için uygun bir Kickstart yok.",
+          "noSystemVolume": "Bu WHDLoad başlığı önyüklenebilir bir sistem gerektiriyor ve ayarlanmış değil.",
+          "fileMissing": "'{{path}}' artık yok."
+        }
       }
     }
   },

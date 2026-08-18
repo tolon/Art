@@ -3,7 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
 import { Guessed } from "@/components/collection/Guessed";
-import { diskList, kindPhrase, mediaPhrase } from "@/lib/collectionDetail";
+import { canLaunch, diskList, kindPhrase, mediaPhrase } from "@/lib/collectionDetail";
 import {
   artworkAttach,
   artworkDetach,
@@ -13,7 +13,58 @@ import {
   type ArtKind,
 } from "@/lib/artwork";
 import type { CatalogueEntry } from "@/lib/gameindex";
+import {
+  launchKindPhrase,
+  launchPlan,
+  launchTitle,
+  machinePhrase,
+  notePhrase,
+  refusalPhrase,
+  type LaunchPreview,
+  type Machine,
+} from "@/lib/launch";
+import { isFlag, isOneOf, isText, isTextOrNothing } from "@/lib/remembered";
+import { useRemembered } from "@/lib/useRemembered";
 import { usePowerMode } from "@/lib/uxmode";
+
+const isMachine = isOneOf<Machine>("a500", "a1200");
+type MachineChoice = "auto" | Machine;
+const isMachineChoice = isOneOf<MachineChoice>("auto", "a500", "a1200");
+
+/**
+ * The A500/A1200 picker, shared between the global default and the
+ * per-title override — the same small control either way, just with a
+ * different option set and a different remembered value behind it. Kept as
+ * its own component so the translated call over `machinePhrase(...).key` is
+ * one source occurrence (one dynamic call site for `literal-keys.test.ts` to
+ * count) rather than two.
+ */
+function MachineChoiceButtons({
+  options,
+  value,
+  onChange,
+}: {
+  options: readonly MachineChoice[];
+  value: string;
+  onChange: (choice: MachineChoice) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {options.map((option) => (
+        <button
+          key={option}
+          className={`btn btn-sm ${value === option ? "btn-primary" : ""}`}
+          onClick={() => onChange(option)}
+        >
+          {option === "auto"
+            ? t("collection.detail.play.machineAuto")
+            : t(machinePhrase(option).key)}
+        </button>
+      ))}
+    </>
+  );
+}
 
 /**
  * The detail panel a title's card opens into (Collection · wave C).
@@ -35,6 +86,7 @@ export function TitleDetail({
   hasManualArt,
   onArtChanged,
   onClose,
+  playRequest,
 }: {
   entry: CatalogueEntry;
   art: string | undefined;
@@ -44,6 +96,14 @@ export function TitleDetail({
    *  after an artwork job finishes. */
   onArtChanged: () => void;
   onClose: () => void;
+  /**
+   * Bumped by the grid/table Play button (Collection · wave C, Task 11) to
+   * fetch a launch plan the moment the panel opens for it — the button that
+   * used to navigate to a dead `/winuae` route now opens the real thing. `0`
+   * means "not asked for yet"; the panel's own Play button still works with
+   * no bump at all.
+   */
+  playRequest: number;
 }) {
   const { t } = useTranslation();
   const power = usePowerMode();
@@ -53,6 +113,116 @@ export function TitleDetail({
   const [artError, setArtError] = useState<string | null>(null);
   const [pictures, setPictures] = useState<{ kind: ArtKind; src: string }[]>([]);
   const [chosenKind, setChosenKind] = useState<ArtKind | null>(null);
+
+  // Launch settings that apply to every title (a ROM folder, the default
+  // machine, the bootable system a WHDLoad title mounts) — remembered under
+  // fixed keys rather than per record id, and shown here because this is the
+  // only screen with anywhere to put them.
+  const [romDir, setRomDir] = useRemembered<string>("launch.romDir", isText, "");
+  const [defaultMachine, setDefaultMachine] = useRemembered<Machine>(
+    "launch.defaultMachine",
+    isMachine,
+    "a500"
+  );
+  const [systemVolume, setSystemVolume] = useRemembered<string | null>(
+    "launch.systemVolume",
+    isTextOrNothing,
+    null
+  );
+
+  // This title's own choices — keyed by record id, so switching titles does
+  // not carry one game's override onto another's.
+  const [machineChoice, setMachineChoice] = useRemembered<MachineChoice>(
+    `launch.machine.${record.id}`,
+    isMachineChoice,
+    "auto"
+  );
+  const [oneClick, setOneClick] = useRemembered<boolean>(
+    `launch.oneClick.${record.id}`,
+    isFlag,
+    true
+  );
+
+  const [preview, setPreview] = useState<LaunchPreview | null>(null);
+  const [planning, setPlanning] = useState(false);
+  const [launching, setLaunching] = useState(false);
+  const [launchedPid, setLaunchedPid] = useState<number | null>(null);
+  const [launchError, setLaunchError] = useState<string | null>(null);
+
+  function launchArgs() {
+    return {
+      id: record.id,
+      title: record.title.value,
+      path: entry.path,
+      media: record.media,
+      chipset: record.chipset?.value ?? null,
+      rom_dir: romDir,
+      default_machine: machineChoice === "auto" ? defaultMachine : machineChoice,
+      system_volume: systemVolume,
+      one_click: oneClick,
+    };
+  }
+
+  async function runPlan() {
+    setPlanning(true);
+    setLaunchError(null);
+    setLaunchedPid(null);
+    try {
+      setPreview(await launchPlan(launchArgs()));
+    } catch (e) {
+      setPreview(null);
+      setLaunchError(String(e));
+    } finally {
+      setPlanning(false);
+    }
+  }
+
+  async function runLaunch() {
+    setLaunching(true);
+    setLaunchError(null);
+    try {
+      setLaunchedPid(await launchTitle(launchArgs()));
+    } catch (e) {
+      setLaunchError(String(e));
+    } finally {
+      setLaunching(false);
+    }
+  }
+
+  async function pickRomDir() {
+    const sel = await open({
+      directory: true,
+      multiple: false,
+      title: t("collection.detail.play.romDirDialog"),
+    });
+    if (typeof sel === "string") setRomDir(sel);
+  }
+
+  async function pickSystemVolume() {
+    const sel = await open({
+      multiple: false,
+      title: t("collection.detail.play.systemVolumeDialog"),
+    });
+    if (typeof sel === "string") setSystemVolume(sel);
+  }
+
+  // The grid/table Play button asked for this title specifically — fetch its
+  // plan right away, the same read-only preview the panel's own Play button
+  // produces, so one click gets the user to a confirmation rather than only
+  // to an open panel they have to act in a second time.
+  useEffect(() => {
+    if (playRequest === 0) return;
+    void runPlan();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playRequest]);
+
+  // A stale plan for the last title must not be shown as though it were
+  // this one's.
+  useEffect(() => {
+    setPreview(null);
+    setLaunchError(null);
+    setLaunchedPid(null);
+  }, [record.id]);
 
   /**
    * Every picture this title has, built the same way `CollectionStudio`
@@ -214,6 +384,185 @@ export function TitleDetail({
             <li key={disk}>{disk}</li>
           ))}
         </ol>
+      )}
+
+      {/* Play (Collection · wave C, Task 11). The confirmation comes before
+          the destructive-feeling step: `runPlan` only reads a ROM folder and
+          decides, `runLaunch` is the one call that actually starts a
+          process, and it is reached through its own button once the plan is
+          on screen — never automatically. */}
+      {canLaunch(record.media) && (
+        <section
+          style={{
+            borderTop: "1px solid var(--border)",
+            paddingTop: 10,
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+          }}
+        >
+          <strong style={{ fontSize: 13 }}>{t("collection.detail.play.title")}</strong>
+
+          {/* Settings that apply to every title, remembered globally. */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              {t("collection.detail.play.romDir")}
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  type="text"
+                  value={romDir}
+                  onChange={(e) => setRomDir(e.target.value)}
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    padding: "3px 6px",
+                    background: "var(--bg)",
+                    color: "var(--text)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 3,
+                    fontSize: 12,
+                  }}
+                />
+                <button className="btn btn-sm" onClick={() => void pickRomDir()}>
+                  {t("collection.detail.play.browse")}
+                </button>
+              </div>
+            </label>
+
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              <span className="muted">{t("collection.detail.play.defaultMachine")}</span>
+              <MachineChoiceButtons
+                options={["a500", "a1200"]}
+                value={defaultMachine}
+                onChange={(choice) => choice !== "auto" && setDefaultMachine(choice)}
+              />
+            </div>
+
+            {record.media.kind === "whdload-drawer" && (
+              <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                {t("collection.detail.play.systemVolume")}
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input
+                    type="text"
+                    value={systemVolume ?? ""}
+                    readOnly
+                    placeholder={t("collection.detail.play.systemVolumeNone")}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      padding: "3px 6px",
+                      background: "var(--bg)",
+                      color: "var(--text)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 3,
+                      fontSize: 12,
+                    }}
+                  />
+                  <button className="btn btn-sm" onClick={() => void pickSystemVolume()}>
+                    {t("collection.detail.play.browse")}
+                  </button>
+                </div>
+              </label>
+            )}
+          </div>
+
+          {/* This title's own choices. */}
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", fontSize: 12 }}>
+            <span className="muted">{t("collection.detail.play.machineForThisTitle")}</span>
+            <MachineChoiceButtons
+              options={["auto", "a500", "a1200"]}
+              value={machineChoice}
+              onChange={setMachineChoice}
+            />
+          </div>
+
+          {record.media.kind === "whdload-drawer" && (
+            <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
+              <button
+                className={`btn btn-sm ${oneClick ? "btn-primary" : ""}`}
+                onClick={() => setOneClick(true)}
+              >
+                {t("collection.detail.play.oneClick")}
+              </button>
+              <button
+                className={`btn btn-sm ${!oneClick ? "btn-primary" : ""}`}
+                onClick={() => setOneClick(false)}
+              >
+                {t("collection.detail.play.mountOnly")}
+              </button>
+            </div>
+          )}
+
+          <button
+            className="btn btn-sm btn-primary"
+            onClick={() => void runPlan()}
+            disabled={planning}
+          >
+            🚀 {planning ? t("collection.detail.play.planning") : t("collection.detail.play.action")}
+          </button>
+
+          {preview?.refusal && (
+            <div className="badge badge-err" style={{ fontSize: 11 }}>
+              {t(refusalPhrase(preview.refusal).key, refusalPhrase(preview.refusal).params)}
+            </div>
+          )}
+
+          {preview?.plan && (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+                fontSize: 12,
+                border: "1px solid var(--border)",
+                borderRadius: 4,
+                padding: 8,
+              }}
+            >
+              <div>
+                {t("collection.detail.play.willUse", {
+                  machine: t(machinePhrase(preview.plan.machine).key),
+                  rom: preview.plan.rom.name,
+                })}
+              </div>
+              <div>
+                {t(launchKindPhrase(preview.plan.kind).key, launchKindPhrase(preview.plan.kind).params)}
+              </div>
+              {preview.plan.kind.kind === "floppies" && preview.plan.kind.images.length > 0 && (
+                <ol style={{ margin: 0, paddingLeft: 18 }}>
+                  {preview.plan.kind.images.map((image) => (
+                    <li key={image}>{image}</li>
+                  ))}
+                </ol>
+              )}
+              {preview.plan.notes.map((note, index) => (
+                <div key={index} className="faint">
+                  {t(notePhrase(note).key, notePhrase(note).params)}
+                </div>
+              ))}
+              <button
+                className="btn btn-sm btn-primary"
+                onClick={() => void runLaunch()}
+                disabled={launching}
+              >
+                {launching
+                  ? t("collection.detail.play.starting")
+                  : t("collection.detail.play.start")}
+              </button>
+            </div>
+          )}
+
+          {launchedPid !== null && (
+            <div className="badge badge-ok" style={{ fontSize: 11 }}>
+              {t("collection.detail.play.started", { pid: launchedPid })}
+            </div>
+          )}
+          {launchError && (
+            <div className="badge badge-err" style={{ fontSize: 11 }}>
+              {launchError}
+            </div>
+          )}
+        </section>
       )}
 
       {/* Beginner mode hides the raw path — and hides only. No action below

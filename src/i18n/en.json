@@ -1572,6 +1572,45 @@
         "dialog": "Choose a picture for this title",
         "filter": "Picture (PNG, JPEG)",
         "rejected": "ART can show PNG and JPEG pictures. This file is neither."
+      },
+      "play": {
+        "title": "Play",
+        "romDir": "Kickstart ROM folder",
+        "romDirDialog": "Select the folder holding your Kickstart ROMs",
+        "browse": "Browse…",
+        "defaultMachine": "Default machine:",
+        "machineForThisTitle": "Machine for this title:",
+        "machineAuto": "Auto",
+        "machine": {
+          "a500": "A500",
+          "a1200": "A1200"
+        },
+        "systemVolume": "Bootable system (for WHDLoad)",
+        "systemVolumeDialog": "Select the bootable system image or volume",
+        "systemVolumeNone": "Not set",
+        "oneClick": "One click (Y2)",
+        "mountOnly": "Mount and hand over (Y1)",
+        "action": "Play",
+        "planning": "Working out what this needs…",
+        "start": "Start",
+        "starting": "Starting…",
+        "started": "Started (process {{pid}})",
+        "willUse": "{{machine}} · {{rom}}",
+        "kind": {
+          "floppies_one": "{{count}} floppy disk will be mounted",
+          "floppies_other": "{{count}} floppy disks will be mounted",
+          "hardfile": "Hard disk image: {{image}}",
+          "whdloadOneClick": "One click: {{slave}} starts as soon as WinUAE boots",
+          "whdloadMountOnly": "Mounted for you to start {{slave}} by hand"
+        },
+        "note": {
+          "moreDisksThanDrives": "This title has {{total}} disks; only the first {{mounted}} will be mounted — WinUAE has four floppy drives."
+        },
+        "refusal": {
+          "noSuitableRom": "No Kickstart in the ROM folder suits {{machine}}.",
+          "noSystemVolume": "This WHDLoad title needs a bootable system, and none is set.",
+          "fileMissing": "'{{path}}' no longer exists."
+        }
       }
     }
   },

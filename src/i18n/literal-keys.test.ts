@@ -246,6 +246,15 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // `mediaPhrase` above already uses. Its five variants are enumerated in
     // `phrase-keys.test.ts` (`collectionDetail's kindPhrase: every ArtKind
     // resolves`).
-    expect(dynamicCalls).toBe(101);
+    // 101 → 106 (Collection wave C, Task 11 — Play): the detail panel's new
+    // Play section reads five `Phrase`s from `@/lib/launch` — the machine
+    // picker shared between the global default and the per-title override
+    // (`t(machinePhrase(option).key)`, one source occurrence doing the work
+    // of two thanks to the shared `MachineChoiceButtons` component), the
+    // refusal shown instead of a confirmation, the machine named inside the
+    // "will use" sentence, what a settled plan will mount, and the note
+    // beside it when a title has more disks than WinUAE has drives. All four
+    // mappers are enumerated in `phrase-keys.test.ts`.
+    expect(dynamicCalls).toBe(106);
   });
 });
