@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Colours you can actually read (2026-08-18)
+
+#### Fixed
+- **Every status badge is readable now, in both themes.** The green *OK*, the
+  amber *CRC ERR* and the red error pills were coloured the same as the pill
+  behind them — measured, the light theme's *OK* badge was 2.20:1, where
+  readable text needs 4.5:1. Each colour now has a text version dark enough
+  (or light enough) to be read on its own background.
+- **File paths and secondary lines are no longer whispers.** The faintest text
+  in ART sat at 2.85:1 on a light page and 2.58:1 on a highlighted row. Both
+  levels of secondary text are now readable, with the difference between them
+  kept.
+- **The primary button's label.** White on the light theme's blue was 3.94:1;
+  the blue is slightly deeper now, and it clears 4.5:1.
+- **Input boxes look like input boxes.** Their edges are drawn with a border
+  strong enough to see against the page — 3:1, the threshold for a control you
+  have to find before you can use it.
+- **The crash screen is readable on a light background.** It had the dark
+  theme's colours written into it, so a stack trace appeared at 2.3:1.
+
+#### Notes
+- Contrast is checked by a script (`scripts/contrast-check.py`) on every build,
+  not by looking at a screenshot. It measures all 90 colour pairs the program
+  can render and fails the build if one drops below its threshold.
+
 ### Two labels that said more than ART knew (2026-08-18)
 
 #### Fixed

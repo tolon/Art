@@ -561,6 +561,54 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-140** 🟡 ✅ **The palette was chosen by eye, and the light theme put
+2.20:1 text inside its own success badge** — *found and fixed 2026-08-18, the
+contrast pass the user asked for after [ART-139](#fixed)*
+`src/styles/theme.css`, `src/styles/global.css`, `scripts/contrast-check.py` ·
+The light theme had already been widened once by looking at it. Measured
+against WCAG — 4.5:1 for text this size — it still failed in 23 places, and the
+dark theme in 9:
+
+| | light | dark | needs |
+|---|---|---|---|
+| `.badge-ok` text on its own tint | **2.20** | 4.29 | 4.5 |
+| `.badge-warn` text on its own tint | **2.07** | 4.97 → 3.75 hovered | 4.5 |
+| `.badge-err` text on its own tint | **2.85** | **3.40** | 4.5 |
+| `--text-faint` (file paths) | **2.85** | **3.54** | 4.5 |
+| white on `.btn-primary` | **3.94** | 6.42 | 4.5 |
+| `--border-strong` (input edges, drop zone) | 2.23 | **1.95** | 3.0 |
+
+**The cause is one token doing two jobs.** `.badge-ok` sets
+`background: color-mix(in srgb, var(--ok) 22%, transparent)` and
+`color: var(--ok)` — the same colour as its own background, 22% apart. No value
+of `--ok` fixes that: darkening it to clear the tint takes the fill down with
+it, and solving both at once produces `#614710` for a warning, which is mud.
+
+So each meaning now has **two** tokens: `--ok` / `--warn` / `--err` / `--accent`
+stay the mark (fills, borders, `accent-color`, the tint), and `--ok-text` /
+`--warn-text` / `--err-text` / `--accent-text` are the same hue moved in
+lightness until they clear 4.5:1 against all four surfaces *and* against their
+own badge tint on each. The dark theme's identity colours are untouched; the
+light theme's accent moved `#2d8aab` → `#297e9c`, which is what the primary
+button's white label needed.
+
+Two more from the same sweep, both from hard-coded colour rather than tokens:
+`ErrorBoundary` had the dark theme's hex values baked in, so the crash screen —
+the one you see when everything else has failed — showed its stack trace at
+2.3:1 on a light page; and the Hex viewer's header read `var(--text-muted)`
+inside a hard-coded `#0d1117` panel, which the light theme turned into dark
+grey on near-black.
+
+**The check is now a script, not a judgement.** `scripts/contrast-check.py`
+reads `theme.css` itself, computes all 90 pairs ART actually renders — including
+each badge's tint composited over each surface — and exits non-zero below
+threshold. It needs no browser and no dev server, so unlike `zoom-check.py` it
+**runs in CI**. All 90 pass.
+
+Not covered, deliberately: `--border` (a panel edge is not the only thing
+separating a card from the page) and the File Manager's `--tc-*` palette, which
+is Total Commander's own, taken from the user's config and already theme-aware.
+
 **ART-138** 🟡 ✅ **ROM Manager said `CRC ERR` about ROMs it simply did not
 recognise** — *found 2026-08-18 photographing the screens for the README; fixed
 the same day*

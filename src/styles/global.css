@@ -23,12 +23,15 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* A link is text, so it takes the text colour of the accent, and its hover
+   state is an underline rather than a second colour — a state a colour alone
+   announces is a state some people do not see (ART-140). */
 a {
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration: none;
 }
 a:hover {
-  color: var(--accent-hover);
+  text-decoration: underline;
 }
 
 button {
@@ -111,7 +114,9 @@ select,
 textarea {
   background: var(--bg);
   color: var(--text);
-  border: 1px solid var(--border);
+  /* `--border-strong`, not `--border`: a field's edge is what says there is a
+     field, so it is held to the 3:1 that a boundary needs (ART-140). */
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   padding: 6px 10px;
   font-size: 13px;
@@ -140,7 +145,7 @@ textarea:disabled {
 }
 .btn-warn {
   background: color-mix(in srgb, var(--warn) 18%, var(--bg-elevated));
-  color: var(--warn);
+  color: var(--warn-text);
   border-color: color-mix(in srgb, var(--warn) 40%, transparent);
 }
 .btn-warn:hover {
@@ -163,17 +168,19 @@ textarea:disabled {
   font-weight: 600;
   letter-spacing: 0.03em;
 }
+/* Tint from the mark, words in the text colour: the same colour for both was
+   2.20:1 in the light theme (ART-140). */
 .badge-ok {
   background: color-mix(in srgb, var(--ok) 22%, transparent);
-  color: var(--ok);
+  color: var(--ok-text);
 }
 .badge-warn {
   background: color-mix(in srgb, var(--warn) 22%, transparent);
-  color: var(--warn);
+  color: var(--warn-text);
 }
 .badge-err {
   background: color-mix(in srgb, var(--err) 22%, transparent);
-  color: var(--err);
+  color: var(--err-text);
 }
 .badge-muted {
   background: var(--bg-hover);
@@ -223,7 +230,7 @@ textarea:disabled {
   align-items: center;
   gap: 4px;
   cursor: pointer;
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 500;
   border: none;
   background: none;
@@ -312,7 +319,7 @@ textarea:disabled {
   gap: 6px;
 }
 .file-row-dir-btn:hover .file-row-name {
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration: underline;
 }
 /* ART-039: disabled while an operation runs, and it has to look it. */

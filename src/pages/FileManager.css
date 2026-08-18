@@ -337,8 +337,9 @@
   overflow: hidden;
 }
 .tc-fnkey-danger:not(:disabled) {
+  /* The border keeps the mark colour; the label takes the readable one. */
   border-color: var(--err);
-  color: var(--err);
+  color: var(--err-text);
 }
 .tc-fnkey-cap {
   margin-right: 5px;

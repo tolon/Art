@@ -96,6 +96,14 @@ jobs:
       - name: Check the ROM table against its source
         run: python scripts/rom-table-check.py
 
+      # The palette is a measurement, not a preference (ART-140). The light
+      # theme once shipped 2.20:1 text inside its own success badge because it
+      # had been judged by eye. This reads theme.css and fails below the
+      # threshold — pure Python, no browser, so unlike zoom-check.py it runs
+      # here.
+      - name: Check both themes for contrast
+        run: python scripts/contrast-check.py --quiet
+
       # docs/licenses.md claims this runs; keep the claim true. deny.toml
       # rejects incompatible licences and known advisories (spec §67).
       #

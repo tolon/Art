@@ -159,7 +159,7 @@ export function LhaBrowser() {
           </h2>
           {outcome.abort_reason && <div className="badge badge-err">{outcome.abort_reason}</div>}
           {outcome.errors.length > 0 && (
-            <ul style={{ fontSize: 12, color: "var(--err)", paddingLeft: 20 }}>
+            <ul style={{ fontSize: 12, color: "var(--err-text)", paddingLeft: 20 }}>
               {outcome.errors.map((e, i) => <li key={i}>{e}</li>)}
             </ul>
           )}

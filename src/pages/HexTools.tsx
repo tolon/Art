@@ -164,7 +164,7 @@ export function HexTools() {
             padding: 12,
           }}
         >
-          <div style={{ display: "flex", borderBottom: "1px solid #21262d", paddingBottom: 4, marginBottom: 6, color: "var(--text-muted)", fontWeight: "bold" }}>
+          <div style={{ display: "flex", borderBottom: "1px solid #21262d", paddingBottom: 4, marginBottom: 6, color: "#8b949e", fontWeight: "bold" }}>
             <span style={{ width: 90 }}>{t("hex.columns.offset")}</span>
             <span style={{ flex: 1 }}>{t("hex.columns.hexBytes")}</span>
             <span style={{ width: 150 }}>{t("hex.columns.ascii")}</span>

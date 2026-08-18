@@ -822,7 +822,7 @@ export function AdfBrowser() {
           }}
         >
           <div className="card" style={{ width: 400, maxWidth: "90vw" }}>
-            <h3 style={{ color: "var(--err)" }}>🗑️ {t("adf.modal.deleteTitle")}</h3>
+            <h3 style={{ color: "var(--err-text)" }}>🗑️ {t("adf.modal.deleteTitle")}</h3>
             <p className="muted" style={{ margin: "8px 0 16px", fontSize: 13 }}>
               {t("adf.modal.deleteConfirm", { name: deleteTarget.name })}
             </p>

@@ -387,7 +387,7 @@ export function CardBuilder() {
                   <li key={item.path} style={{ padding: "2px 0" }}>
                     <span
                       style={{
-                        color: placed ? "var(--ok, #4caf50)" : "var(--text-faint, #888)",
+                        color: placed ? "var(--ok-text)" : "var(--text-faint)",
                         fontWeight: 700,
                         marginRight: 8,
                       }}
@@ -728,9 +728,9 @@ function HealthPanel({ report }: { report: HealthReport }) {
     "not-checked": "–",
   };
   const colour: Record<HealthReport["items"][number]["state"], string> = {
-    pass: "var(--ok, #4caf50)",
-    fail: "var(--err, #ff5252)",
-    "not-checked": "var(--text-faint, #888)",
+    pass: "var(--ok-text)",
+    fail: "var(--err-text)",
+    "not-checked": "var(--text-faint)",
   };
 
   return (

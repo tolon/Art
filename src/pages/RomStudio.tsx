@@ -145,7 +145,7 @@ export function RomStudio() {
                 {t("rom.details.sizeValue", { kb: selectedRom.size_bytes / 1024, bytes: selectedRom.size_bytes })}
               </div>
               <div>
-                <span className="muted">{t("rom.details.crc32Label")}</span> <code style={{ color: "var(--accent)" }}>{selectedRom.crc32}</code>
+                <span className="muted">{t("rom.details.crc32Label")}</span> <code style={{ color: "var(--accent-text)" }}>{selectedRom.crc32}</code>
               </div>
               <div>
                 <span className="muted">{t("rom.details.sha256Label")}</span>
