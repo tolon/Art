@@ -26,7 +26,7 @@
 //      release **component** (`requiresComponents`, ART-162's own rule)
 //      shown before any refusal, not only after one.
 //   2. Once at least one is chosen, the preview — grouped by class,
-//      downgrades first (`sortCollisionsForPreview`), with the shape
+//      downgrades first (`groupCollisionsForPreview`), with the shape
 //      legible in the heading before the list is read
 //      (`collisionCounts`). `Identical` never reaches this panel at all —
 //      the core excludes it before a `CollisionReport` exists.
@@ -38,6 +38,36 @@
 //   5. A line saying what this round does not do: it can place only the
 //      packages it ships a recipe for, and says so by name and by count —
 //      never implying a fourth is coming.
+//
+// ## Fix round 1 (Task 7's own review)
+//
+// **F1 — a downgrade is marked as one, not just coloured differently.** The
+// preview is now grouped into real, headed sections (downgrades first),
+// and `collisionPhrase` gives `upgrade`/`downgrade` their own keys instead
+// of sharing one — a downgrade row now says "Downgrade: 45.9 → 37.4" in
+// its own words, not merely in a different colour from an upgrade's.
+//
+// **F2 — a refused add shows the real sentence.** `osinstallAddPackage` now
+// answers `AddPackageResult`; a `"refused"` outcome renders every
+// `RefusalReason` through `refusalPhrase`, the same mirror the install
+// screen's own refusals go through, instead of starting a job that could
+// only have failed with Rust's own debug text.
+//
+// **F3 — no more dead ends.** A remembered pick whose archive has vanished
+// stays *tickable off* (`disabled` no longer fires for a checked box) and
+// says why (`archiveGone`); a chosen set previewed with no package folder
+// yet says so (`needsFolderToPreview`) instead of asking the backend to
+// scan `""` and rendering nothing.
+//
+// **F7 — every subscription goes through `subscribeSafely`.** A promise
+// that never settles because the effect tore down first no longer leaks a
+// live Tauri listener, and a rejected one (no IPC bridge, e.g. under test)
+// no longer reaches the console as unhandled.
+//
+// **F10 — the outcome is shown, and confirming resets.** `onOsInstallAddPackageResult`
+// carries the files/directories/bytes actually written; `confirmed` clears
+// once a run finishes, the same way `OsInstall.tsx`'s own run confirmation
+// does not survive its build.
 
 import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -45,15 +75,21 @@ import { useTranslation } from "react-i18next";
 
 import {
   collisionCounts,
+  collisionGroupHeadingKey,
   collisionPhrase,
+  groupCollisionsForPreview,
+  onOsInstallAddPackageResult,
   osinstallAddPackage,
   osinstallCollisions,
   osinstallPackages,
-  sortCollisionsForPreview,
+  refusalPhrase,
+  type ApplyOutcome,
   type CollisionReport,
   type PackageSummary,
+  type RefusalReason,
 } from "@/lib/osinstall";
-import { fraction, onJobProgress, type JobProgress } from "@/lib/jobs";
+import { fraction, onJobProgress, subscribeSafely, type JobProgress } from "@/lib/jobs";
+import { formatBytes } from "@/lib/panel";
 import { Field } from "@/components/osbuilder/Field";
 
 export interface PackagePanelProps {
@@ -98,7 +134,10 @@ export function PackagePanel({
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<JobProgress | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
-  const [applied, setApplied] = useState(false);
+  const [applyOutcome, setApplyOutcome] = useState<ApplyOutcome | null>(null);
+  /** F2: a refused selection, resolved and typed before anything was
+   *  written — never a job, never `busy`, never progress. */
+  const [refusals, setRefusals] = useState<RefusalReason[] | null>(null);
 
   // The checklist: loaded whenever the package folder changes. Left `null`
   // (never `[]`) while nothing has arrived, so a row is never dropped just
@@ -132,17 +171,19 @@ export function PackagePanel({
   // The preview: read-only (§3's PREVIEW), recomputed whenever the request
   // changes, and only once at least one package is chosen — an empty
   // selection previews nothing rather than asking the engine a question
-  // with no content.
+  // with no content. F3/F5: a chosen set with no package folder yet is its
+  // own, explained state — never a call asking the backend to scan `""`.
   useEffect(() => {
     setConfirmed(false);
-    setApplied(false);
-    if (!treeRoot || chosen.length === 0) {
+    setApplyOutcome(null);
+    setRefusals(null);
+    if (!treeRoot || chosen.length === 0 || !packageFolder) {
       setCollisions(null);
       setCollisionsError(null);
       return;
     }
     let cancelled = false;
-    osinstallCollisions(treeRoot, packageFolder ?? "", chosen)
+    osinstallCollisions(treeRoot, packageFolder, chosen)
       .then((reports) => {
         if (!cancelled) {
           setCollisions(reports);
@@ -164,26 +205,40 @@ export function PackagePanel({
   // The add job's own progress — `job-progress` is application-wide, so
   // every update is checked against this panel's own job id first.
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void onJobProgress((job) => {
-      if (job.id !== applyJob.current) return;
-      setProgress(job);
-      if (job.state.state === "running") return;
+    return subscribeSafely(() =>
+      onJobProgress((job) => {
+        if (job.id !== applyJob.current) return;
+        setProgress(job);
+        if (job.state.state === "running") return;
 
-      applyJob.current = null;
-      setBusy(false);
-      if (job.state.state === "failed") {
-        setApplyError(`${job.state.message} (${job.state.error_code})`);
-      } else if (job.state.state === "cancelled") {
-        setApplyError(t("osinstall.packages.apply.cancelled"));
-      } else {
-        setApplied(true);
-      }
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => unlisten?.();
+        applyJob.current = null;
+        setBusy(false);
+        if (job.state.state === "failed") {
+          setApplyError(`${job.state.message} (${job.state.error_code})`);
+        } else if (job.state.state === "cancelled") {
+          setApplyError(t("osinstall.packages.apply.cancelled"));
+        }
+        // A clean finish says nothing here — its own outcome (files,
+        // directories, bytes) arrives on `OSINSTALL_ADD_PACKAGE_EVENT`
+        // below, and that is what flips this panel into "done".
+      })
+    );
   }, [t]);
+
+  // The add job's own outcome (F10) — logged before this task's fix round,
+  // and nowhere else; this is what lets the panel say more than "Added."
+  useEffect(() => {
+    return subscribeSafely(() =>
+      onOsInstallAddPackageResult((result) => {
+        if (result.job_id !== applyJob.current) return;
+        setApplyOutcome(result.outcome);
+        // F10: confirming describes the run that was on screen when it was
+        // ticked; once that run has finished, the tick is stale — the same
+        // rule `OsInstall.tsx`'s own build confirmation follows.
+        setConfirmed(false);
+      })
+    );
+  }, []);
 
   async function chooseTreeRoot() {
     const picked = await open({
@@ -209,13 +264,24 @@ export function PackagePanel({
   }
 
   async function runApply() {
-    if (!treeRoot || chosen.length === 0) return;
+    if (!treeRoot || !packageFolder || chosen.length === 0) return;
     setBusy(true);
     setApplyError(null);
     setProgress(null);
-    setApplied(false);
+    setApplyOutcome(null);
+    setRefusals(null);
     try {
-      applyJob.current = await osinstallAddPackage(treeRoot, packageFolder ?? "", chosen);
+      const result = await osinstallAddPackage(treeRoot, packageFolder, chosen);
+      if (result.outcome === "refused") {
+        // F2: typed, not a job that could only have failed later with
+        // Rust's own debug text — nothing was written.
+        setBusy(false);
+        setRefusals(result.refusals);
+        return;
+      }
+      applyJob.current = result.job_id;
+      // `busy` clears on the job's own progress event, or here if the job
+      // never actually started.
     } catch (e) {
       setApplyError(String(e));
       setBusy(false);
@@ -224,9 +290,10 @@ export function PackagePanel({
   }
 
   const counts = collisions ? collisionCounts(collisions) : null;
-  const sorted = collisions ? sortCollisionsForPreview(collisions) : [];
+  const groups = collisions ? groupCollisionsForPreview(collisions) : [];
   const pct = progress ? fraction(progress) : null;
   const shippedCount = catalogue?.length ?? 3;
+  const previewNeedsFolder = treeRoot !== null && chosen.length > 0 && !packageFolder;
 
   return (
     <section className="card" style={{ marginBottom: 16 }}>
@@ -271,6 +338,12 @@ export function PackagePanel({
       <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
         {(catalogue ?? []).map((pkg) => {
           const checked = chosen.includes(pkg.id);
+          // F3: a checked-but-now-unavailable package must stay untickable
+          // off — only *checking* an unavailable one is refused, never
+          // unchecking it. The old `disabled={!pkg.available}` disabled
+          // both directions at once, so a remembered pick whose archive had
+          // since vanished could never be cleared from the screen.
+          const disabled = !pkg.available && !checked;
           return (
             <div
               key={pkg.id}
@@ -285,7 +358,7 @@ export function PackagePanel({
                 <input
                   type="checkbox"
                   checked={checked}
-                  disabled={!pkg.available}
+                  disabled={disabled}
                   onChange={() => toggle(pkg.id)}
                 />
                 <strong>{pkg.name}</strong>
@@ -295,6 +368,11 @@ export function PackagePanel({
                   </span>
                 )}
               </label>
+              {checked && !pkg.available && (
+                <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+                  {t("osinstall.packages.archiveGone")}
+                </p>
+              )}
               {pkg.requires.length > 0 && (
                 <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
                   {t("osinstall.packages.requiresPackages", { list: pkg.requires.join(", ") })}
@@ -320,6 +398,12 @@ export function PackagePanel({
               : t("osinstall.packages.preview.loading")}
           </h3>
 
+          {previewNeedsFolder && (
+            <p className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
+              {t("osinstall.packages.needsFolderToPreview", { count: chosen.length })}
+            </p>
+          )}
+
           {collisionsError && (
             <p className="badge badge-err" style={{ display: "block", padding: "6px 12px", fontSize: 12, marginBottom: 12 }}>
               {collisionsError}
@@ -329,7 +413,7 @@ export function PackagePanel({
           {collisions && (
             <div
               style={{
-                maxHeight: 320,
+                maxHeight: 360,
                 overflowY: "auto",
                 border: "1px solid var(--border)",
                 borderRadius: 4,
@@ -337,31 +421,74 @@ export function PackagePanel({
                 marginBottom: 10,
               }}
             >
-              {sorted.length === 0 && (
+              {groups.length === 0 && (
                 <p className="faint" style={{ fontSize: 11, margin: "4px 0" }}>
                   {t("osinstall.packages.preview.nothing")}
                 </p>
               )}
-              {sorted.map((report) => {
-                const phrase = collisionPhrase(report.collision);
-                return (
+              {groups.map((group) => (
+                <div key={group.kind} style={{ marginBottom: 10 }}>
+                  {/* F1: a real heading per class, not a flat sorted list —
+                      downgrades' own heading is styled with the error
+                      palette so it is marked by more than colour alone
+                      (its text already says "Downgrades", not just red). */}
                   <div
-                    key={report.path}
-                    data-testid="collision-row"
-                    style={{ fontSize: 11, padding: "3px 0", borderBottom: "1px solid var(--border)" }}
+                    className={group.kind === "downgrade" ? "badge badge-err" : "muted"}
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 600,
+                      margin: "4px 0",
+                      display: group.kind === "downgrade" ? "inline-block" : "block",
+                    }}
                   >
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                      <span style={{ wordBreak: "break-all" }}>{report.path}</span>
-                      <span className="faint">{t(phrase.key, phrase.params)}</span>
-                    </div>
-                    {!report.declared && (
-                      <span className="badge badge-warn" style={{ fontSize: 10 }}>
-                        {t("osinstall.packages.undeclared")}
-                      </span>
-                    )}
+                    {t(collisionGroupHeadingKey(group.kind), { count: group.reports.length })}
                   </div>
-                );
-              })}
+                  {group.reports.map((report) => {
+                    const phrase = collisionPhrase(report.collision);
+                    return (
+                      <div
+                        key={report.path}
+                        data-testid="collision-row"
+                        style={{ fontSize: 11, padding: "3px 0", borderBottom: "1px solid var(--border)" }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                          <span style={{ wordBreak: "break-all" }}>{report.path}</span>
+                          <span
+                            className={group.kind === "downgrade" ? undefined : "faint"}
+                            style={group.kind === "downgrade" ? { color: "var(--err-text)" } : undefined}
+                          >
+                            {t(phrase.key, phrase.params)}
+                          </span>
+                        </div>
+                        {!report.declared && (
+                          <span className="badge badge-warn" style={{ fontSize: 10 }}>
+                            {t("osinstall.packages.undeclared")}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {refusals && refusals.length > 0 && (
+            <div
+              className="badge badge-err"
+              style={{ display: "block", padding: "8px 10px", margin: "0 0 12px", fontSize: 11 }}
+            >
+              <p style={{ margin: "0 0 6px", fontWeight: 600 }}>{t("osinstall.packages.refused.heading")}</p>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {refusals.map((reason, i) => {
+                  const phrase = refusalPhrase(reason);
+                  return (
+                    <li key={i} style={{ padding: "2px 0" }}>
+                      {t(phrase.key, phrase.params)}
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
           )}
 
@@ -382,9 +509,14 @@ export function PackagePanel({
               {applyError}
             </div>
           )}
-          {applied && (
+          {applyOutcome && (
             <div className="badge badge-ok" style={{ display: "block", padding: "6px 12px", fontSize: 12, marginBottom: 12 }}>
-              {t("osinstall.packages.apply.done")}
+              {t("osinstall.packages.apply.done")}{" "}
+              {t("osinstall.packages.apply.outcome", {
+                files: applyOutcome.files,
+                directories: applyOutcome.directories,
+                bytes: formatBytes(applyOutcome.bytes),
+              })}
             </div>
           )}
 
@@ -392,7 +524,7 @@ export function PackagePanel({
             <button
               className="btn btn-primary"
               onClick={() => void runApply()}
-              disabled={busy || !confirmed || !treeRoot}
+              disabled={busy || !confirmed || !treeRoot || !packageFolder}
             >
               {t(busy ? "osinstall.packages.apply.running" : "osinstall.packages.apply.run")}
             </button>

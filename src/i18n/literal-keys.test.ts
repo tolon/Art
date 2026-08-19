@@ -284,6 +284,17 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // button already uses (`t(busy ? "osinstall.run.running" : "osinstall.run.run")`)
     // — the `t(` is not immediately followed by a quote, so the regex above
     // counts it as dynamic even though both branches are literal strings.
-    expect(dynamicCalls).toBe(111);
+    // 111 → 113 (Task 7's own fix round, F1/F2): `PackagePanel.tsx` gained
+    // two more. `t(collisionGroupHeadingKey(group.kind), { count: … })`
+    // reads a key from a small switch in `@/lib/osinstall`, the same shape
+    // `kindPhrase`/`machinePhrase` above already use for a key-only (no
+    // `Phrase` object) mapper — its four `Collision["kind"]` values are
+    // exhaustive by the function's own return-type switch, so there is
+    // nothing further to enumerate in `phrase-keys.test.ts`. The other is a
+    // second `t(phrase.key, phrase.params)` site, now reading `refusalPhrase()`
+    // for the refused-selection list (F2) rather than only `collisionPhrase()` —
+    // its own variants are already enumerated in `phrase-keys.test.ts`
+    // (`osinstall refusalPhrase: every RefusalReason variant resolves`).
+    expect(dynamicCalls).toBe(113);
   });
 });

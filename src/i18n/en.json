@@ -2049,12 +2049,12 @@
       "mediaAmbiguous": "More than one file in the media folder carries the volume name {{volume}} that {{component}} needs: {{paths}}.",
       "exclusiveGroupConflict": "{{components}} cannot both be on — only one of {{group}} may be chosen.",
       "ruleKindMismatch": "{{component}}'s rule for {{from}} expected a {{expected}}, but the media holds a {{found}}.",
-      "packageUnknown": "\"{{package}}\" is not a package ART ships a recipe for.",
-      "packageFolderMissing": "Packages were chosen ({{packages}}), but no update packages folder was given.",
-      "packageRequirementMissing": "\"{{package}}\" needs \"{{requires}}\" applied first, and it was not chosen.",
-      "packageComponentMissing": "\"{{package}}\" needs the \"{{component}}\" component switched on, and it is not.",
-      "packageArchiveMissing": "No archive in the package folder carries \"{{media}}\", the media \"{{package}}\" needs.",
-      "packageArchiveAmbiguous": "More than one archive in the package folder carries the media name {{media}} that \"{{package}}\" needs: {{paths}}."
+      "packageUnknown": "\"{{package}}\" is not a package ART ships a recipe for — it cannot be applied. Untick it; this is usually a choice saved by an older version of ART.",
+      "packageFolderMissing": "Packages were chosen ({{packages}}), but no update packages folder was given — choose the folder holding their archives.",
+      "packageRequirementMissing": "\"{{package}}\" needs \"{{requires}}\" applied first — tick that one too, or untick \"{{package}}\" on its own.",
+      "packageComponentMissing": "\"{{package}}\" needs the \"{{component}}\" component, and this tree was not built with it. Untick \"{{package}}\", or build a new tree with \"{{component}}\" switched on and add \"{{package}}\" to that one instead.",
+      "packageArchiveMissing": "No archive in the update packages folder carries \"{{media}}\", the media \"{{package}}\" needs — put that archive in the folder and try again.",
+      "packageArchiveAmbiguous": "More than one archive in the update packages folder carries the media name {{media}} that \"{{package}}\" needs: {{paths}}. Remove all but the one you want."
     },
     "heading": "Install AmigaOS",
     "intro": "Build a distribution tree from your own AmigaOS install disks or disc, ready to copy onto a real Amiga volume.",
@@ -2163,7 +2163,7 @@
     "packages": {
       "heading": "Update packages",
       "intro": "Add an official update — a BoingBag, or an unofficial pack like the Turkish catalogs — onto a distribution tree ART, or you, already built.",
-      "scopeNote": "ART can place the {{count}} update packages it ships a recipe for. A package with no recipe here, or one whose own installer is an Amiga Installer script, cannot be placed by this version of ART.",
+      "scopeNote": "ART can place the {{count}} update packages it ships a recipe for — each one a hand-written list of files and their own destinations. A package with no such recipe, or one whose own installer is an Amiga Installer script deciding what to do at run time on real hardware, cannot be placed here: there is nothing for ART to reproduce that decision with.",
       "treeRoot": {
         "label": "Distribution tree",
         "none": "No distribution tree chosen.",
@@ -2181,24 +2181,37 @@
         "needsFolder": "Choose the update packages folder to see which archives are actually here."
       },
       "archiveMissing": "Archive not found",
+      "archiveGone": "This package stays ticked because you chose it, but its archive is no longer in the update packages folder — nothing will be added for it. Untick it, or put the archive back and it will be offered again.",
+      "needsFolderToPreview": "Choose the update packages folder above to preview what these {{count}} package(s) would replace.",
       "requiresPackages": "Needs {{list}} applied first.",
       "requiresComponents": "Needs the {{list}} component switched on.",
       "preview": {
         "loading": "Checking what this would replace…",
         "heading": "{{downgrades}} downgrades, {{upgrades}} upgrades, {{sameVersion}} same version, {{unversioned}} unversioned",
-        "nothing": "Nothing on the tree would be replaced."
+        "nothing": "Nothing on the tree would be replaced.",
+        "group": {
+          "downgrade": "Downgrades ({{count}})",
+          "upgrade": "Upgrades ({{count}})",
+          "sameVersion": "Same version, different bytes ({{count}})",
+          "unversioned": "No version to compare ({{count}})"
+        }
       },
       "collision": {
-        "versioned": "{{from}} → {{to}}",
+        "upgrade": "Upgrade: {{from}} → {{to}}",
+        "downgrade": "Downgrade: {{from}} → {{to}}",
         "sameVersion": "{{version}}, different bytes",
-        "unversioned": "{{fromBytes}} → {{toBytes}} bytes"
+        "unversioned": "{{fromBytes}} → {{toBytes}}"
       },
       "undeclared": "Undeclared — this package's own recipe never said it may replace this file",
       "confirm": "I confirm this set of {{count}} package(s) will replace the files listed above.",
+      "refused": {
+        "heading": "This selection cannot be added"
+      },
       "apply": {
         "run": "Add the chosen packages",
         "running": "Adding…",
         "done": "Added.",
+        "outcome": "{{files}} files, {{directories}} directories, {{bytes}} total.",
         "cancelled": "Cancelled partway through.",
         "progressStarting": "Starting…",
         "progressPercent": "{{percent}}% — {{done}} of {{total}} files"

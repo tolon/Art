@@ -35,14 +35,56 @@
 //! checked with `serde_json::to_value` against the exact key names
 //! `src/lib/osinstall.ts` declares, so a missing or wrong `rename_all` (or a
 //! field renamed on one side only) fails a test instead of shipping.
+//!
+//! ## Task 7 fix round — the packages screen's own review
+//!
+//! Four things changed shape after the packages screen's first review, all
+//! in this file:
+//!
+//! - **`osinstall_collisions` runs on a job thread, not the command thread**
+//!   (F4). A real BoingBag extracts ~211 files; doing that synchronously
+//!   inside the `#[tauri::command]` handler is exactly the "long operation
+//!   on the command thread" §54 forbids. The actual work moved to
+//!   [`preview_collisions`], run inside [`super::jobs::spawn_job`]; the
+//!   command itself only starts the job and returns its id.
+//!   [`extract_package_items`] also gained a cache (an archive's own
+//!   extraction is reused, keyed on its path/mtime/len, across repeated
+//!   previews of the same selection — no more re-reading a package's bytes
+//!   on every checkbox toggle), a bound
+//!   ([`MAX_PREVIEW_FILES`]/[`MAX_PREVIEW_BYTES`]), and
+//!   [`sweep_stale_preview_scratch_dirs`] reaps anything a crash or a killed
+//!   job left behind under `%TEMP%`.
+//! - **`osinstall_add_package` sends a typed refusal, not `{:?}` text**
+//!   (F2). [`resolve_packages_for_add`] now answers
+//!   `Result<Vec<(Package, PathBuf)>, Vec<RefusalReason>>` rather than
+//!   folding every refusal into one `CoreError::InvalidInput` sentence built
+//!   from `format!("{r:?}")` — the six sentences Task 7 wrote in both
+//!   catalogues were unreachable dead code until this. [`AddPackageResult`]
+//!   carries the refusals across the wire; `src/lib/osinstall.ts` renders
+//!   them through the same `refusalPhrase` mirror the install screen's own
+//!   refusals already go through.
+//! - **[`resolve_package_archive`] replaces two hand-written copies of the
+//!   same `MediaMatch` match** (F11) — one in the old
+//!   `extract_incoming_for_preview`, one in the old
+//!   `resolve_packages_for_add`. Both now call the one function, so
+//!   "missing" and "ambiguous" cannot quietly mean something different
+//!   between the preview path and the add path.
+//! - **`osinstall_add_package` emits its own outcome** (F10, half of it —
+//!   the other half, resetting the screen's confirmation after a run, is
+//!   `PackagePanel.tsx`'s). `OSINSTALL_ADD_PACKAGE_EVENT` carries the summed
+//!   `ApplyOutcome` the way `OSINSTALL_EVENT` already does for a fresh
+//!   install; before this the counts were written to the oplog and nowhere
+//!   else, so the screen could say only "Added." with no numbers behind it.
 
+use std::collections::{BTreeSet, HashMap};
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::core::error::CoreError;
+use crate::core::error::{CoreError, CoreResult};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome, OperationRecord};
 use crate::core::osinstall::apply::{
     add_package, apply, ApplyOutcome, DistributionManifest, MANIFEST_FILE_NAME,
@@ -54,9 +96,11 @@ use crate::core::osinstall::plan::{
 };
 use crate::core::osinstall::recipe;
 use crate::core::osinstall::scan::{
-    find_media, find_packages, open_package, package_for, FoundMedia, MediaMatch, PackageMedium,
+    find_media, find_packages, open_package, package_for, FoundMedia, FoundPackage, MediaMatch,
+    PackageMedium,
 };
 use crate::core::osinstall::verify::{verify_volume, VerifyReport};
+use crate::core::osinstall::RefusalReason;
 use crate::error::{AppError, AppResult};
 
 use super::jobs::{spawn_job, JobRegistry};
@@ -302,146 +346,301 @@ pub fn osinstall_packages(package_folder: PathBuf) -> AppResult<Vec<PackageSumma
 // osinstall_collisions
 // ---------------------------------------------------------------------------
 
-/// A fresh scratch directory under the system temp folder, named after `tag`
-/// plus the process id and a nanosecond timestamp — the same convention
-/// `core::osinstall::fixtures::scratch` uses for tests, applied here for a
-/// real run: unique enough that two previews mid-flight on independent job
-/// threads (`core::jobs::spawn_job` runs each on its own) never share one.
-fn scratch_dir(tag: &str) -> AppResult<PathBuf> {
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!(
-        "art-osinstall-{tag}-{}-{stamp}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).map_err(CoreError::Io)?;
-    Ok(dir)
+/// A ceiling on how much one preview call pulls out of a chosen package set
+/// — real update packages are floppy-era software (a BoingBag's ~211 files
+/// sum to a few megabytes), so this is generous headroom, not a tuning
+/// knob: crossing it means something is wrong with the archive or the
+/// selection, not that a legitimate preview needs more room (F4).
+const MAX_PREVIEW_FILES: usize = 20_000;
+const MAX_PREVIEW_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Every scratch directory this module writes lives under this prefix, so
+/// [`sweep_stale_preview_scratch_dirs`] can find them (and only them) inside
+/// a shared `%TEMP%`.
+const PREVIEW_SCRATCH_PREFIX: &str = "art-osinstall-collisions-";
+
+/// How old one of this module's own scratch directories has to be before
+/// [`sweep_stale_preview_scratch_dirs`] removes it. Long enough that a
+/// preview genuinely still in flight is never swept out from under itself;
+/// short enough that a crash or a killed job does not accumulate files
+/// under `%TEMP%` across a whole day of use (F4's own "no sweep" finding).
+const PREVIEW_SCRATCH_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Best-effort: remove any of this module's own preview scratch directories
+/// older than [`PREVIEW_SCRATCH_MAX_AGE`]. Never fails the call it runs
+/// inside — a directory this pass misses (a transient I/O error, a
+/// directory that changed under it) is swept the next time instead, and a
+/// cache hit that turns out to point at a just-swept file is caught by
+/// [`extract_package_items`]'s own existence check, never served as a wrong
+/// answer.
+fn sweep_stale_preview_scratch_dirs() {
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(PREVIEW_SCRATCH_PREFIX)
+        {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_dir() {
+            continue;
+        }
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        let Ok(age) = now.duration_since(modified) else {
+            continue;
+        };
+        if age > PREVIEW_SCRATCH_MAX_AGE {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 /// One extracted incoming file: its destination (`to`), the id of the
 /// component (package) it would come from, and a real path to its bytes.
 type ExtractedItem = (String, String, PathBuf);
 
+/// Identifies one archive's own extracted contents for
+/// [`extract_package_items`]'s cache — the archive's path plus enough of
+/// its own metadata (`mtime`, `len`) that a changed file (a re-downloaded or
+/// hand-edited archive) is never served stale bytes from a cache keyed on
+/// the path alone.
+type PreviewCacheKey = (PathBuf, u64, u64, Option<String>);
+
+fn preview_cache_key(archive_path: &Path, member: Option<&str>) -> CoreResult<PreviewCacheKey> {
+    let metadata = std::fs::metadata(archive_path)?;
+    let mtime_nanos = metadata
+        .modified()
+        .ok()
+        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    Ok((
+        archive_path.to_path_buf(),
+        mtime_nanos,
+        metadata.len(),
+        member.map(str::to_string),
+    ))
+}
+
+/// Where one cache key's extraction lives on disk — deterministic (a hash
+/// of the key, not a timestamp or a counter), so repeated preview calls for
+/// the same archive identity reuse the same directory on disk rather than
+/// growing a new one under `%TEMP%` on every checkbox toggle (F4's own "no
+/// cache" finding).
+fn preview_cache_dir(key: &PreviewCacheKey) -> PathBuf {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    std::env::temp_dir().join(format!("{PREVIEW_SCRATCH_PREFIX}{:016x}", hasher.finish()))
+}
+
+/// The in-process cache: an archive's identity -> the items already
+/// extracted for it. Reused across preview calls within one run of ART;
+/// not persisted, and not needed to be — [`preview_cache_dir`]'s own
+/// deterministic naming means a cold cache after a restart still finds the
+/// same directory on disk if [`sweep_stale_preview_scratch_dirs`] has not
+/// yet reaped it, and [`extract_package_items`] verifies every cached path
+/// still exists before trusting it either way.
+static PREVIEW_CACHE: OnceLock<Mutex<HashMap<PreviewCacheKey, Vec<ExtractedItem>>>> =
+    OnceLock::new();
+
+fn preview_cache() -> &'static Mutex<HashMap<PreviewCacheKey, Vec<ExtractedItem>>> {
+    PREVIEW_CACHE.get_or_init(Default::default)
+}
+
+/// Resolve `package`'s own archive against `found`, as a typed refusal
+/// rather than a hand-written English sentence — the
+/// `PackageArchiveMissing`/`PackageArchiveAmbiguous` refusals `plan()`'s own
+/// package block already raises for the identical situation, reused here so
+/// the preview path and the add path cannot silently disagree about what
+/// counts as "missing" or "ambiguous" (F11: this used to be two hand-written
+/// copies of the same `MediaMatch` match, one in each path).
+fn resolve_package_archive<'a>(
+    package: &Package,
+    found: &'a [FoundPackage],
+) -> Result<&'a FoundPackage, RefusalReason> {
+    match package_for(found, &package.media) {
+        MediaMatch::Found(archive) => Ok(archive),
+        MediaMatch::Missing => Err(RefusalReason::PackageArchiveMissing {
+            package: package.id.clone(),
+            media: package.media.clone(),
+        }),
+        MediaMatch::Ambiguous(matches) => Err(RefusalReason::PackageArchiveAmbiguous {
+            package: package.id.clone(),
+            media: package.media.clone(),
+            paths: matches
+                .iter()
+                .map(|m| m.path.display().to_string())
+                .collect(),
+        }),
+    }
+}
+
+/// A plain-English sentence for one package refusal — used only for the
+/// preview path's own `CoreError` (the add path sends the `RefusalReason`
+/// itself across the wire as data; see [`AddPackageResult`]). Rust-side
+/// strings stay English regardless of the chosen language (ART-060), the
+/// same rule every other `CoreError` message in this codebase already
+/// follows.
+fn describe_package_refusal(reason: &RefusalReason) -> String {
+    match reason {
+        RefusalReason::PackageArchiveMissing { package, media } => {
+            format!("no archive carries '{media}', the media '{package}' needs")
+        }
+        RefusalReason::PackageArchiveAmbiguous {
+            package,
+            media,
+            paths,
+        } => format!(
+            "more than one archive carries '{media}', the media '{package}' needs: {}",
+            paths.join(", ")
+        ),
+        // `resolve_package_archive` only ever produces the two variants
+        // above; kept total rather than narrowing the return type so a
+        // future caller passing some other `RefusalReason` in still gets a
+        // sentence instead of a panic.
+        other => format!("{other:?}"),
+    }
+}
+
+/// Every non-directory item one package would place, as real files on disk
+/// — reusing a cached extraction when the archive has not changed since the
+/// last preview (F4), and refusing rather than continuing once either of
+/// [`MAX_PREVIEW_FILES`]/[`MAX_PREVIEW_BYTES`] is crossed.
+fn extract_package_items(
+    package: &Package,
+    archive: &FoundPackage,
+    total_files: &mut usize,
+    total_bytes: &mut u64,
+) -> CoreResult<Vec<ExtractedItem>> {
+    let key = preview_cache_key(&archive.path, package.member.as_deref())?;
+
+    if let Some(cached) = preview_cache().lock().unwrap().get(&key) {
+        // A hit is still verified against the real filesystem before being
+        // trusted — a cache entry whose directory `sweep_stale_preview_scratch_dirs`
+        // has since reaped is a miss, never a wrong answer.
+        if cached.iter().all(|(_, _, path)| path.is_file()) {
+            *total_files += cached.len();
+            *total_bytes += cached
+                .iter()
+                .filter_map(|(_, _, path)| std::fs::metadata(path).ok())
+                .map(|m| m.len())
+                .sum::<u64>();
+            return Ok(cached.clone());
+        }
+    }
+
+    let medium = PackageMedium {
+        path: archive.path.clone(),
+        member: package.member.clone(),
+    };
+    let mut source = open_package(&medium)?;
+
+    let mut refusals = Vec::new();
+    let items = expand_rules(&package.component, source.as_mut(), &mut refusals)?;
+    if !refusals.is_empty() {
+        return Err(CoreError::InvalidInput(format!(
+            "'{}' does not resolve against '{}': {} rule(s) did not match",
+            package.id,
+            archive.path.display(),
+            refusals.len()
+        )));
+    }
+
+    let dir = preview_cache_dir(&key);
+    std::fs::create_dir_all(&dir)?;
+
+    let mut extracted = Vec::new();
+    let items: Vec<_> = items.into_iter().filter(|item| !item.is_dir).collect();
+    for (counter, item) in items.into_iter().enumerate() {
+        *total_files += 1;
+        if *total_files > MAX_PREVIEW_FILES {
+            return Err(CoreError::InvalidInput(format!(
+                "the chosen packages would preview more than {MAX_PREVIEW_FILES} files at once"
+            )));
+        }
+        let bytes = source.read(&item.from)?;
+        *total_bytes += bytes.len() as u64;
+        if *total_bytes > MAX_PREVIEW_BYTES {
+            return Err(CoreError::InvalidInput(format!(
+                "the chosen packages would preview more than {MAX_PREVIEW_BYTES} bytes at once"
+            )));
+        }
+        let path = dir.join(counter.to_string());
+        std::fs::write(&path, &bytes)?;
+        extracted.push((item.to, item.component, path));
+    }
+
+    preview_cache()
+        .lock()
+        .unwrap()
+        .insert(key, extracted.clone());
+    Ok(extracted)
+}
+
 /// Every non-directory item a chosen, ordered package set would place,
-/// written to a real file under a fresh scratch directory — what
-/// `collide.rs`'s own module doc comment asks the command layer to build:
-/// [`Incoming::bytes_at`] needs a real, directly-readable path, and a
-/// package's payload lives inside an archive until something reads it out.
+/// across every package in `ordered` — see [`extract_package_items`] for
+/// the per-package half, its own cache and its own bound.
 ///
-/// Resolves each package's archive and expands its rules through
-/// [`expand_rules`] — the same function `plan()` itself calls — rather than
-/// a second, nearly-identical resolver (the module doc comment on
-/// `core::osinstall::plan::expand_rules`'s own `pub(crate)` widening states
-/// this rule explicitly). The caller is responsible for removing the
-/// returned directory once its preview has run.
+/// Resolves each package's archive through [`resolve_package_archive`] and
+/// expands its rules through [`expand_rules`] — the same function `plan()`
+/// itself calls — rather than a second, nearly-identical resolver.
 fn extract_incoming_for_preview(
     package_folder: &Path,
     ordered: &[String],
     catalogue: &[Package],
-) -> AppResult<(Vec<ExtractedItem>, PathBuf)> {
+) -> CoreResult<Vec<ExtractedItem>> {
     let found = find_packages(package_folder)?;
-    let scratch = scratch_dir("collisions")?;
+    let mut total_files = 0usize;
+    let mut total_bytes = 0u64;
+    let mut incoming = Vec::new();
 
-    let result = (|| -> AppResult<Vec<ExtractedItem>> {
-        let mut incoming = Vec::new();
-        let mut counter: u64 = 0;
-
-        for id in ordered {
-            let package = catalogue
-                .iter()
-                .find(|p| &p.id == id)
-                .expect("order() only ever returns ids it read from this same catalogue");
-
-            let archive = match package_for(&found, &package.media) {
-                MediaMatch::Found(f) => f,
-                MediaMatch::Missing => {
-                    return Err(CoreError::InvalidInput(format!(
-                        "no archive in '{}' carries '{}', the media '{}' names",
-                        package_folder.display(),
-                        package.media,
-                        package.id
-                    ))
-                    .into())
-                }
-                MediaMatch::Ambiguous(matches) => {
-                    return Err(CoreError::InvalidInput(format!(
-                        "more than one archive in '{}' carries '{}': {}",
-                        package_folder.display(),
-                        package.media,
-                        matches
-                            .iter()
-                            .map(|m| m.path.display().to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ))
-                    .into())
-                }
-            };
-
-            let medium = PackageMedium {
-                path: archive.path.clone(),
-                member: package.member.clone(),
-            };
-            let mut source = open_package(&medium)?;
-
-            let mut refusals = Vec::new();
-            let items = expand_rules(&package.component, source.as_mut(), &mut refusals)?;
-            if !refusals.is_empty() {
-                return Err(CoreError::InvalidInput(format!(
-                    "'{}' does not resolve against '{}': {} rule(s) did not match",
-                    package.id,
-                    archive.path.display(),
-                    refusals.len()
-                ))
-                .into());
-            }
-
-            for item in items.into_iter().filter(|item| !item.is_dir) {
-                let bytes = source.read(&item.from)?;
-                let path = scratch.join(counter.to_string());
-                counter += 1;
-                std::fs::write(&path, &bytes).map_err(CoreError::Io)?;
-                incoming.push((item.to, item.component, path));
-            }
-        }
-
-        Ok(incoming)
-    })();
-
-    match result {
-        Ok(incoming) => Ok((incoming, scratch)),
-        Err(err) => {
-            let _ = std::fs::remove_dir_all(&scratch);
-            Err(err)
-        }
+    for id in ordered {
+        let package = catalogue
+            .iter()
+            .find(|p| &p.id == id)
+            .expect("order() only ever returns ids it read from this same catalogue");
+        let archive = resolve_package_archive(package, &found)
+            .map_err(|r| CoreError::InvalidInput(describe_package_refusal(&r)))?;
+        incoming.extend(extract_package_items(
+            package,
+            archive,
+            &mut total_files,
+            &mut total_bytes,
+        )?);
     }
+
+    Ok(incoming)
 }
 
-/// What landing the chosen packages on `tree_root` would actually do to the
-/// files already there (spec §3's PREVIEW) — never listed, only shown when
-/// at least one package is chosen. Writes nothing: every incoming byte is
-/// read into a scratch copy purely so [`collide::preview`] has a real path
-/// to compare against, and that scratch copy is removed again before this
-/// returns.
+/// The read-only work `osinstall_collisions` does, pulled out so it can be
+/// unit-tested without a live `AppHandle`/`State`/job registry — the same
+/// shape `resolve_packages_for_add` and `osinstall_verify`'s own `verify_at`
+/// already use.
 ///
-/// Built the same way `plan()` builds a package's items — see
-/// [`extract_incoming_for_preview`] — never a second resolver.
-#[tauri::command]
-pub fn osinstall_collisions(
-    tree_root: PathBuf,
-    package_folder: PathBuf,
-    packages: Vec<String>,
-) -> AppResult<Vec<CollisionReport>> {
-    if packages.is_empty() {
+/// Run from a background job in the real command (F4 of Task 7's own fix
+/// round): a real BoingBag extracts on the order of two hundred files, and
+/// doing that synchronously inside the Tauri command handler is exactly the
+/// "long operation on the command thread" §54 forbids.
+fn preview_collisions(
+    tree_root: &Path,
+    package_folder: &Path,
+    ordered: &[String],
+    catalogue: &[Package],
+) -> CoreResult<Vec<CollisionReport>> {
+    if ordered.is_empty() {
         return Ok(Vec::new());
     }
-
-    let catalogue = package::packages()?;
-    let ordered = package::order(&packages)?;
-    let (incoming, scratch) = extract_incoming_for_preview(&package_folder, &ordered, &catalogue)?;
-
+    sweep_stale_preview_scratch_dirs();
+    let incoming = extract_incoming_for_preview(package_folder, ordered, catalogue)?;
     let entries: Vec<Incoming> = incoming
         .iter()
         .map(|(to, component, bytes_at)| Incoming {
@@ -450,14 +649,84 @@ pub fn osinstall_collisions(
             bytes_at,
         })
         .collect();
-    let result = collide::preview(&tree_root, &entries);
-    let _ = std::fs::remove_dir_all(&scratch);
-    Ok(result?)
+    collide::preview(tree_root, &entries)
+}
+
+/// The event a finished collision preview arrives on.
+pub const OSINSTALL_COLLISIONS_EVENT: &str = "osinstall-collisions-result";
+
+// Deliberately not camelCased — `job_id` matches `OsInstallResult` and its
+// siblings (`LayoutResult`, `PreloadResult`), and `src/lib/osinstall.ts`
+// declares `job_id` to match.
+#[derive(Debug, Clone, Serialize)]
+pub struct OsInstallCollisionsResult {
+    pub job_id: u64,
+    pub reports: Vec<CollisionReport>,
+}
+
+/// What landing the chosen packages on `tree_root` would actually do to the
+/// files already there (spec §3's PREVIEW). Returns a job id (§54) — see
+/// [`preview_collisions`]'s own doc comment for why this now runs as a job
+/// rather than answering synchronously. `src/lib/osinstall.ts`'s own
+/// `osinstallCollisions` hides the job underneath its usual
+/// `Promise<CollisionReport[]>` shape by awaiting
+/// [`OSINSTALL_COLLISIONS_EVENT`] itself — nothing about the public TS
+/// contract changed, only what runs behind it. A failed preview reaches the
+/// screen through the ordinary `job-progress` failed state, the same as any
+/// other job.
+#[tauri::command]
+pub fn osinstall_collisions(
+    tree_root: PathBuf,
+    package_folder: PathBuf,
+    packages: Vec<String>,
+    app: AppHandle,
+    registry: State<'_, Arc<JobRegistry>>,
+) -> AppResult<u64> {
+    let catalogue = package::packages()?;
+    let ordered = package::order(&packages)?;
+    let title = format!(
+        "Previewing {} package(s) against {}",
+        ordered.len(),
+        tree_root.display()
+    );
+    let emit_app = app.clone();
+    let registry = Arc::clone(&registry);
+
+    let id = spawn_job(&app, registry, &title, move |job_id, _progress| {
+        let reports = preview_collisions(&tree_root, &package_folder, &ordered, &catalogue)?;
+        let _ = emit_app.emit(
+            OSINSTALL_COLLISIONS_EVENT,
+            OsInstallCollisionsResult { job_id, reports },
+        );
+        Ok(())
+    });
+
+    Ok(id)
 }
 
 // ---------------------------------------------------------------------------
 // osinstall_add_package
 // ---------------------------------------------------------------------------
+
+/// `osinstall_add_package`'s own answer: either a job started, or every
+/// typed reason it could not (F2 of Task 7's own fix round — see
+/// [`resolve_packages_for_add`]). `src/lib/osinstall.ts` renders `refusals`
+/// through the same `refusalPhrase` mirror the install screen's own
+/// refusals already go through, instead of the Rust `{:?}` debug text a
+/// plain `CoreError::InvalidInput` used to produce.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "outcome", rename_all = "kebab-case")]
+pub enum AddPackageResult {
+    Started { job_id: u64 },
+    Refused { refusals: Vec<RefusalReason> },
+}
+
+/// [`resolve_packages_for_add`]'s own answer: `Ok` with the resolved
+/// package/archive pairs, or `Err` with every typed refusal. A named alias
+/// rather than the bare nested `Result` inline — clippy's own
+/// `type_complexity` lint, and a second reader's, agree that a three-deep
+/// generic is worth naming.
+type PackageResolution = Result<Vec<(Package, PathBuf)>, Vec<RefusalReason>>;
 
 /// The selection-resolution half of [`osinstall_add_package`], pulled out so
 /// it can be unit-tested directly without a live `AppHandle`/`State` — the
@@ -466,106 +735,100 @@ pub fn osinstall_collisions(
 /// construct its `State` arguments, so the logic worth testing on its own
 /// has to live somewhere a plain `#[test]` can reach.
 ///
-/// Refuses, before anything is opened for writing, in three ways:
-/// [`package::order`]'s own English-sentence refusal (an id ART ships no
-/// recipe for, or a `requires` that was not itself chosen — ART-060 is not
-/// fully paid off for this path yet), [`detect_package_refusals`]'s typed
-/// [`crate::core::osinstall::RefusalReason::PackageComponentMissing`] (a
+/// `Ok(Ok(resolved))` is the happy path. `Ok(Err(refusals))` is every typed
+/// reason the selection cannot proceed — an id ART ships no recipe for, a
 /// `requires_components` this tree's own `distribution.json` does not
-/// record — there is no recipe left to resolve once a tree already exists,
+/// record (there is no recipe left to resolve once a tree already exists,
 /// so the manifest is the only record of what is really on it), or a
-/// missing/ambiguous archive in `package_folder`.
+/// missing/ambiguous archive — collected all at once, never stopping at the
+/// first, the same rule `plan()` itself follows. The outer `AppResult` is
+/// reserved for what is not a user selection problem at all: an unreadable
+/// `distribution.json`, or a cycle in the shipped package data.
 fn resolve_packages_for_add(
     tree_root: &Path,
     package_folder: &Path,
     packages: &[String],
-) -> AppResult<Vec<(Package, PathBuf)>> {
+) -> AppResult<PackageResolution> {
     if packages.is_empty() {
         return Err(CoreError::InvalidInput("no packages were chosen".into()).into());
     }
 
     let catalogue = package::packages()?;
-    let ordered = package::order(packages)?;
-
     let manifest = read_manifest(tree_root)?;
     let components_on: Vec<String> = {
-        let mut set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut set: BTreeSet<String> = BTreeSet::new();
         for file in &manifest.files {
             set.insert(file.component.clone());
         }
         set.into_iter().collect()
     };
-    let refusals = detect_package_refusals(&ordered, &catalogue, &components_on);
-    if !refusals.is_empty() {
-        return Err(CoreError::InvalidInput(format!(
-            "{} package selection problem(s) found before anything was written: {}",
-            refusals.len(),
-            refusals
-                .iter()
-                .map(|r| format!("{r:?}"))
-                .collect::<Vec<_>>()
-                .join("; ")
-        ))
-        .into());
-    }
+
+    let mut refusals = detect_package_refusals(packages, &catalogue, &components_on);
 
     let found = find_packages(package_folder)?;
-    let mut resolved: Vec<(Package, PathBuf)> = Vec::new();
+    for id in packages {
+        let Some(package) = catalogue.iter().find(|p| &p.id == id) else {
+            // Already named by `PackageUnknown` above (from
+            // `detect_package_refusals`); resolving an archive for an id
+            // that names no shipped package would only repeat it.
+            continue;
+        };
+        if let Err(refusal) = resolve_package_archive(package, &found) {
+            refusals.push(refusal);
+        }
+    }
+
+    if !refusals.is_empty() {
+        return Ok(Err(refusals));
+    }
+
+    // Only reordered once the selection is known-good — `order` refuses an
+    // unsatisfied `requires` or a cycle with its own English sentence
+    // (ART-060 not fully paid off for this one case: a cycle is a bug in
+    // the shipped data, not a user situation), and `detect_package_refusals`
+    // above has already named the ordinary case — a `requires` that was not
+    // itself chosen — by type.
+    let ordered = package::order(packages)?;
+    let mut resolved = Vec::new();
     for id in &ordered {
         let package = catalogue
             .iter()
             .find(|p| &p.id == id)
             .expect("order() only ever returns ids it read from this same catalogue")
             .clone();
-        let archive = match package_for(&found, &package.media) {
-            MediaMatch::Found(f) => f.path.clone(),
-            MediaMatch::Missing => {
-                return Err(CoreError::InvalidInput(format!(
-                    "no archive in '{}' carries '{}', the media '{}' names",
-                    package_folder.display(),
-                    package.media,
-                    package.id
-                ))
-                .into())
-            }
-            MediaMatch::Ambiguous(matches) => {
-                return Err(CoreError::InvalidInput(format!(
-                    "more than one archive in '{}' carries '{}': {}",
-                    package_folder.display(),
-                    package.media,
-                    matches
-                        .iter()
-                        .map(|m| m.path.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ))
-                .into())
-            }
-        };
+        let archive = resolve_package_archive(&package, &found)
+            .expect("every id in `packages` was already resolved without refusal above")
+            .path
+            .clone();
         resolved.push((package, archive));
     }
 
-    Ok(resolved)
+    Ok(Ok(resolved))
+}
+
+/// The event a finished (or failed) package-add job's own outcome arrives
+/// on — F10: the counts used to be written to the oplog and nowhere else,
+/// so the screen could say only "Added." with no numbers behind it. Mirrors
+/// `OSINSTALL_EVENT`/`OsInstallResult` for a fresh install.
+pub const OSINSTALL_ADD_PACKAGE_EVENT: &str = "osinstall-add-package-result";
+
+// Deliberately not camelCased — see `OsInstallCollisionsResult`'s own
+// comment just above for why.
+#[derive(Debug, Clone, Serialize)]
+pub struct OsInstallAddPackageResult {
+    pub job_id: u64,
+    pub outcome: ApplyOutcome,
 }
 
 /// Add every chosen package to a distribution tree that already exists — one
 /// job for the whole set, not one per package and never one per file: the
 /// screen asks its own single confirmation before this is ever called (spec
 /// §3), and a job that stopped to ask again per file would teach a user to
-/// click through it. Returns a job id (§54); progress is the ordinary
-/// `job-progress` event, filtered by that id, exactly like
-/// `osinstall_apply`'s own install job.
-///
-/// Refused **before anything is written** when the selection itself cannot
-/// be satisfied: an id ART ships no recipe for or a `requires` that was not
-/// itself chosen (both from [`package::order`]'s own English-sentence
-/// refusal — ART-060 is not fully paid off for this path yet, only the
-/// component-level refusal below is typed), or a `requires_components` that
-/// is not on this tree ([`crate::core::osinstall::plan::detect_package_refusals`],
-/// checked against the set of component ids this tree's own
-/// `distribution.json` actually records — there is no recipe left to
-/// resolve once a tree already exists, so the manifest is the only record
-/// of what is really on it). Every per-file collision refusal —
+/// click through it. Returns [`AddPackageResult`] — either a job id (§54),
+/// with progress on the ordinary `job-progress` event and its outcome on
+/// [`OSINSTALL_ADD_PACKAGE_EVENT`], or every typed refusal, resolved and
+/// checked **before anything is written** (see
+/// [`resolve_packages_for_add`]). Every per-file collision refusal —
 /// `add_package`'s own undeclared-overwrite check — is `core`'s, unchanged;
 /// this command adds nothing on top of it.
 #[tauri::command]
@@ -576,20 +839,24 @@ pub fn osinstall_add_package(
     app: AppHandle,
     registry: State<'_, Arc<JobRegistry>>,
     oplog: State<'_, JsonlOperationLog>,
-) -> AppResult<u64> {
-    let resolved = resolve_packages_for_add(&tree_root, &package_folder, &packages)?;
+) -> AppResult<AddPackageResult> {
+    let resolved = match resolve_packages_for_add(&tree_root, &package_folder, &packages)? {
+        Ok(resolved) => resolved,
+        Err(refusals) => return Ok(AddPackageResult::Refused { refusals }),
+    };
 
     let root = tree_root.clone();
     let for_log = tree_root.display().to_string();
     let package_names: Vec<String> = resolved.iter().map(|(p, _)| p.id.clone()).collect();
     let title = format!("Adding {} package(s) to {for_log}", resolved.len());
     let log_path = oplog.path().to_path_buf();
+    let emit_app = app.clone();
 
     let id = spawn_job(
         &app,
         Arc::clone(&registry),
         &title,
-        move |_job_id, progress| {
+        move |job_id, progress| {
             let mut total = ApplyOutcome {
                 root: root.clone(),
                 files: 0,
@@ -631,11 +898,19 @@ pub fn osinstall_add_package(
             if let Some(err) = failure {
                 return Err(err);
             }
+
+            let _ = emit_app.emit(
+                OSINSTALL_ADD_PACKAGE_EVENT,
+                OsInstallAddPackageResult {
+                    job_id,
+                    outcome: total,
+                },
+            );
             Ok(())
         },
     );
 
-    Ok(id)
+    Ok(AddPackageResult::Started { job_id: id })
 }
 
 // ---------------------------------------------------------------------------
@@ -1094,8 +1369,14 @@ mod tests {
             b"$VER: x.catalog 2.0 (1.1.21)",
         );
 
-        let reports =
-            osinstall_collisions(tree, packages_dir, vec!["locale-turkish".to_string()]).unwrap();
+        // `preview_collisions`, not the `#[tauri::command]` itself — the
+        // real command now needs a live `AppHandle`/`State` to spawn its
+        // job (F4 of Task 7's own fix round), so this tests the same
+        // read-only work directly, the way `resolve_packages_for_add` and
+        // `osinstall_verify`'s own `verify_at` already are.
+        let catalogue = package::packages().unwrap();
+        let ordered = package::order(&["locale-turkish".to_string()]).unwrap();
+        let reports = preview_collisions(&tree, &packages_dir, &ordered, &catalogue).unwrap();
 
         assert_eq!(reports.len(), 1, "{reports:?}");
         assert_eq!(reports[0].path, "Locale/Catalogs/x.catalog");
@@ -1120,12 +1401,113 @@ mod tests {
     fn osinstall_collisions_with_nothing_chosen_is_empty() {
         let dir = scratch("collisions-empty");
         let tree = dir.join("does-not-exist-tree");
-        let packages = dir.join("does-not-exist-packages");
+        let packages_dir = dir.join("does-not-exist-packages");
 
-        assert_eq!(
-            osinstall_collisions(tree, packages, Vec::new()).unwrap(),
-            Vec::new()
+        let catalogue = package::packages().unwrap();
+        let reports = preview_collisions(&tree, &packages_dir, &[], &catalogue).unwrap();
+        assert_eq!(reports, Vec::new());
+    }
+
+    /// F4 of Task 7's own fix round: a second preview of the same archive
+    /// must not re-read it. Proved by deleting the archive after the first
+    /// call — if the second call still succeeds and returns the same
+    /// items, it can only have come from the cache, never from the (now
+    /// missing) file on disk.
+    #[test]
+    fn extract_package_items_reuses_a_cached_extraction_without_rereading_the_archive() {
+        let dir = scratch("preview-cache-reuse");
+        let packages_dir = dir.join("packages");
+        std::fs::create_dir_all(&packages_dir).unwrap();
+        write_locale_turkish_archive(&packages_dir, "turkish.zip", b"catalog bytes");
+
+        let catalogue = package::packages().unwrap();
+        let package = catalogue.iter().find(|p| p.id == "locale-turkish").unwrap();
+        let found = crate::core::osinstall::scan::find_packages(&packages_dir).unwrap();
+        let archive = resolve_package_archive(package, &found).unwrap();
+
+        let mut files = 0usize;
+        let mut bytes = 0u64;
+        let first = extract_package_items(package, archive, &mut files, &mut bytes).unwrap();
+        assert_eq!(first.len(), 1);
+        assert!(first[0].2.is_file());
+
+        // Corrupted **in place, same length, same mtime restored** — so the
+        // cache key (path/mtime/len/member) the second call computes is
+        // identical to the first, and only the cache — never a real re-open
+        // of this now-broken zip — can explain a second call that still
+        // succeeds and still returns `first`'s own (correct) bytes.
+        let original_modified = std::fs::metadata(&archive.path)
+            .unwrap()
+            .modified()
+            .unwrap();
+        let original_len = std::fs::metadata(&archive.path).unwrap().len();
+        let garbage = vec![0u8; original_len as usize];
+        std::fs::write(&archive.path, &garbage).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&archive.path)
+            .and_then(|f| f.set_modified(original_modified))
+            .unwrap();
+        assert!(
+            open_package(&PackageMedium {
+                path: archive.path.clone(),
+                member: package.member.clone(),
+            })
+            .is_err(),
+            "the corrupted archive must not itself still open as a real one, \
+             or this test would not distinguish a cache hit from a fresh read"
         );
+
+        let mut files2 = 0usize;
+        let mut bytes2 = 0u64;
+        let second = extract_package_items(package, archive, &mut files2, &mut bytes2).unwrap();
+        assert_eq!(second, first, "the cached extraction, unchanged");
+    }
+
+    /// F4's own "no sweep" finding: a preview scratch directory older than
+    /// the retention window is reaped; a fresh one, and anything outside
+    /// this module's own prefix, is left alone.
+    #[test]
+    fn sweep_stale_preview_scratch_dirs_removes_only_old_directories_under_its_own_prefix() {
+        // Opening a plain directory as a `File` is refused on Windows
+        // (`ERROR_ACCESS_DENIED`) unless `FILE_FLAG_BACKUP_SEMANTICS` is
+        // set — there is no portable `std` way to back-date a directory's
+        // own mtime, so this reaches for the one Windows-specific flag that
+        // makes `set_modified` work on one. The whole project only ever
+        // builds for `x86_64-pc-windows-msvc` (CLAUDE.md), so a test-only
+        // `#[cfg(windows)]` helper costs nothing real.
+        fn set_dir_modified(path: &Path, time: std::time::SystemTime) {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(path)
+                .and_then(|f| f.set_modified(time))
+                .unwrap();
+        }
+
+        let temp = std::env::temp_dir();
+
+        let stale = temp.join(format!("{PREVIEW_SCRATCH_PREFIX}sweep-test-stale"));
+        let _ = std::fs::remove_dir_all(&stale);
+        std::fs::create_dir_all(&stale).unwrap();
+        set_dir_modified(
+            &stale,
+            std::time::SystemTime::now() - (PREVIEW_SCRATCH_MAX_AGE * 2),
+        );
+
+        let fresh = temp.join(format!("{PREVIEW_SCRATCH_PREFIX}sweep-test-fresh"));
+        let _ = std::fs::remove_dir_all(&fresh);
+        std::fs::create_dir_all(&fresh).unwrap();
+
+        sweep_stale_preview_scratch_dirs();
+
+        assert!(!stale.exists(), "a stale scratch directory must be swept");
+        assert!(fresh.exists(), "a fresh scratch directory must survive");
+
+        let _ = std::fs::remove_dir_all(&fresh);
     }
 
     /// ART-162's own rule, reachable from this command: `locale-turkish`
@@ -1157,11 +1539,16 @@ mod tests {
         std::fs::create_dir_all(&packages_dir).unwrap();
         write_locale_turkish_archive(&packages_dir, "turkish.zip", b"catalog bytes");
 
-        let err = resolve_packages_for_add(&tree, &packages_dir, &["locale-turkish".to_string()])
-            .unwrap_err();
+        let refusals =
+            resolve_packages_for_add(&tree, &packages_dir, &["locale-turkish".to_string()])
+                .unwrap()
+                .unwrap_err();
         assert!(
-            format!("{err}").contains("PackageComponentMissing"),
-            "{err}"
+            refusals.iter().any(|r| matches!(
+                r,
+                crate::core::osinstall::RefusalReason::PackageComponentMissing { .. }
+            )),
+            "{refusals:?}"
         );
     }
 
@@ -1184,6 +1571,7 @@ mod tests {
 
         let resolved =
             resolve_packages_for_add(&tree, &packages_dir, &["locale-turkish".to_string()])
+                .unwrap()
                 .unwrap();
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].0.id, "locale-turkish");
@@ -1206,9 +1594,18 @@ mod tests {
         std::fs::create_dir_all(&packages_dir).unwrap();
         // No archive ever written here.
 
-        let err = resolve_packages_for_add(&tree, &packages_dir, &["locale-turkish".to_string()])
-            .unwrap_err();
-        assert!(format!("{err}").contains("LocaleUpdate"), "{err}");
+        let refusals =
+            resolve_packages_for_add(&tree, &packages_dir, &["locale-turkish".to_string()])
+                .unwrap()
+                .unwrap_err();
+        assert!(
+            refusals.iter().any(|r| matches!(
+                r,
+                crate::core::osinstall::RefusalReason::PackageArchiveMissing { media, .. }
+                    if media == "LocaleUpdate"
+            )),
+            "{refusals:?}"
+        );
     }
 
     /// The carried-forward review point: a media folder that does not exist
@@ -1737,6 +2134,50 @@ mod tests {
             assert_eq!(serde_json::to_value(RuleKind::Subtree).unwrap(), "subtree");
         }
 
+        /// Task 7's fix round, F2: `AddPackageResult::Refused` carries the
+        /// typed refusals across the wire — this pins that its own tag and
+        /// field spellings are what `src/lib/osinstall.ts`'s `AddPackageResult`
+        /// declares, the same discipline every other outbound type here gets.
+        #[test]
+        fn add_package_result_tag_and_field_spellings() {
+            let started = AddPackageResult::Started { job_id: 7 };
+            let value = serde_json::to_value(&started).unwrap();
+            assert_eq!(value["outcome"], "started");
+            expect_keys(&value, &["outcome", "job_id"]);
+
+            let refused = AddPackageResult::Refused {
+                refusals: vec![
+                    crate::core::osinstall::RefusalReason::PackageComponentMissing {
+                        package: "locale-turkish".into(),
+                        component: "locale-base".into(),
+                    },
+                ],
+            };
+            let value = serde_json::to_value(&refused).unwrap();
+            assert_eq!(value["outcome"], "refused");
+            expect_keys(&value, &["outcome", "refusals"]);
+        }
+
+        #[test]
+        fn os_install_collisions_result_serializes_with_the_keys_the_frontend_declares() {
+            let result = OsInstallCollisionsResult {
+                job_id: 3,
+                reports: Vec::new(),
+            };
+            let value = serde_json::to_value(&result).unwrap();
+            expect_keys(&value, &["job_id", "reports"]);
+        }
+
+        #[test]
+        fn os_install_add_package_result_serializes_with_the_keys_the_frontend_declares() {
+            let result = OsInstallAddPackageResult {
+                job_id: 3,
+                outcome: ApplyOutcome::default(),
+            };
+            let value = serde_json::to_value(&result).unwrap();
+            expect_keys(&value, &["job_id", "outcome"]);
+        }
+
         /// `rename_all = "kebab-case"` on `RefusalReason` renames the
         /// **variant** (the `refusal` tag) only — struct-variant field names
         /// (`volume_name`, and so on) are untouched by it, which is the one
@@ -1745,6 +2186,32 @@ mod tests {
         #[test]
         fn refusal_reason_tag_and_field_spellings_for_every_variant() {
             use crate::core::osinstall::{RefusalReason, RuleKind};
+
+            // Exhaustive **by construction** (F6 of Task 7's own fix round —
+            // the six package variants were simply absent from `cases`
+            // below until that review, and a plain `Vec` cannot itself
+            // notice a missing entry). This match has no body worth
+            // running; its only job is to fail to *compile* the moment a
+            // fourteenth `RefusalReason` variant exists without an arm
+            // here, which is the signal to add its own case below too.
+            #[allow(dead_code)]
+            fn every_variant_is_matched(reason: RefusalReason) {
+                match reason {
+                    RefusalReason::MediaMissing { .. }
+                    | RefusalReason::MediaPathMissing { .. }
+                    | RefusalReason::RomUnknown
+                    | RefusalReason::DestinationCollision { .. }
+                    | RefusalReason::MediaAmbiguous { .. }
+                    | RefusalReason::ExclusiveGroupConflict { .. }
+                    | RefusalReason::RuleKindMismatch { .. }
+                    | RefusalReason::PackageUnknown { .. }
+                    | RefusalReason::PackageFolderMissing { .. }
+                    | RefusalReason::PackageRequirementMissing { .. }
+                    | RefusalReason::PackageComponentMissing { .. }
+                    | RefusalReason::PackageArchiveMissing { .. }
+                    | RefusalReason::PackageArchiveAmbiguous { .. } => {}
+                }
+            }
 
             let cases: Vec<(RefusalReason, &str, &[&str])> = vec![
                 (
@@ -1799,6 +2266,53 @@ mod tests {
                     },
                     "rule-kind-mismatch",
                     &["refusal", "component", "from", "expected", "found"],
+                ),
+                (
+                    RefusalReason::PackageUnknown {
+                        package: "locale-turkish".into(),
+                    },
+                    "package-unknown",
+                    &["refusal", "package"],
+                ),
+                (
+                    RefusalReason::PackageFolderMissing {
+                        packages: vec!["locale-turkish".into()],
+                    },
+                    "package-folder-missing",
+                    &["refusal", "packages"],
+                ),
+                (
+                    RefusalReason::PackageRequirementMissing {
+                        package: "boingbag-39-2".into(),
+                        requires: "boingbag-39-1".into(),
+                    },
+                    "package-requirement-missing",
+                    &["refusal", "package", "requires"],
+                ),
+                (
+                    RefusalReason::PackageComponentMissing {
+                        package: "locale-turkish".into(),
+                        component: "locale-base".into(),
+                    },
+                    "package-component-missing",
+                    &["refusal", "package", "component"],
+                ),
+                (
+                    RefusalReason::PackageArchiveMissing {
+                        package: "locale-turkish".into(),
+                        media: "LocaleUpdate".into(),
+                    },
+                    "package-archive-missing",
+                    &["refusal", "package", "media"],
+                ),
+                (
+                    RefusalReason::PackageArchiveAmbiguous {
+                        package: "locale-turkish".into(),
+                        media: "LocaleUpdate".into(),
+                        paths: vec!["a".into(), "b".into()],
+                    },
+                    "package-archive-ambiguous",
+                    &["refusal", "package", "media", "paths"],
                 ),
             ];
 

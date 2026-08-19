@@ -22,6 +22,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+import { awaitJobResult } from "@/lib/jobs";
+import { formatBytes } from "@/lib/panel";
 import type { Phrase } from "@/lib/phrase";
 
 // ---------------------------------------------------------------------------
@@ -294,6 +296,20 @@ export async function osinstallVerify(
 // `#[serde(rename)]` on their byte counts (`collide.rs`'s own doc comment
 // explains why `rename_all = "kebab-case"` alone would not have camelCased
 // them), so `fromBytes`/`toBytes` here really is what crosses the wire.
+//
+// ## Fix round 1 (Task 7's own review)
+//
+// **F2 — refusals are data, not debug text.** `osinstallAddPackage` used to
+// return a bare job id; a refused selection reached the screen as Rust's
+// own `{:?}` output. It now returns [`AddPackageResult`], and a `Refused`
+// answer carries the same six-variant `RefusalReason` the install screen's
+// own refusals already render through [`refusalPhrase`].
+//
+// **F4 — the preview runs off the command thread.** `osinstall_collisions`
+// now starts a job and answers with its id; [`osinstallCollisions`] hides
+// that behind its own unchanged `Promise<CollisionReport[]>` shape by
+// awaiting [`OSINSTALL_COLLISIONS_EVENT`] through [`awaitJobResult`] — no
+// caller of this function had to change.
 // ---------------------------------------------------------------------------
 
 /** What landing one incoming file over an existing one would actually do —
@@ -349,58 +365,137 @@ export async function osinstallPackages(packageFolder: string): Promise<PackageS
   return invoke<PackageSummary[]>("osinstall_packages", { packageFolder });
 }
 
+/** The event `osinstall_collisions`'s own background job answers on. */
+export const OSINSTALL_COLLISIONS_EVENT = "osinstall-collisions-result";
+
+interface OsInstallCollisionsResult {
+  job_id: number;
+  reports: CollisionReport[];
+}
+
 /**
  * What landing the chosen packages on `treeRoot` would actually do to the
  * files already there (§3's PREVIEW) — writes nothing. `packages` empty
- * answers `[]` without opening either folder, matching the panel's own rule
+ * answers `[]` **without calling into Tauri at all** (F5 of Task 7's own fix
+ * round — an empty selection, or no package folder chosen yet, is guarded
+ * here rather than asked of the backend), matching the panel's own rule
  * that the preview only appears once at least one package is chosen.
+ *
+ * Runs as a background job on the Rust side (F4 — a real BoingBag extracts
+ * on the order of two hundred files, which is too long for the command
+ * thread); this wrapper hides that behind the same
+ * `Promise<CollisionReport[]>` shape it always had, by starting the job and
+ * awaiting its own result event.
  */
 export async function osinstallCollisions(
   treeRoot: string,
   packageFolder: string,
   packages: string[]
 ): Promise<CollisionReport[]> {
-  return invoke<CollisionReport[]>("osinstall_collisions", { treeRoot, packageFolder, packages });
+  if (!treeRoot || !packageFolder || packages.length === 0) return [];
+  const jobId = await invoke<number>("osinstall_collisions", {
+    treeRoot,
+    packageFolder,
+    packages,
+  });
+  return awaitJobResult<OsInstallCollisionsResult, CollisionReport[]>(
+    jobId,
+    OSINSTALL_COLLISIONS_EVENT,
+    (payload) => payload.reports
+  );
 }
+
+/** `osinstall_add_package`'s own answer — either a job started, or every
+ *  typed reason it could not (F2). Mirrors `commands::osinstall::AddPackageResult`
+ *  exactly, including the `outcome` tag. */
+export type AddPackageResult =
+  | { outcome: "started"; job_id: number }
+  | { outcome: "refused"; refusals: RefusalReason[] };
 
 /**
  * Add every chosen package to a distribution tree that already exists.
- * Returns a job id (§54) — one job for the whole set, never one per package
- * and never one per file, matching the panel's single confirmation for the
- * whole set. Progress is the ordinary `job-progress` event, filtered by this
- * id, the same way `osinstallApply`'s own install job is tracked.
+ * One job for the whole set, never one per package and never one per file,
+ * matching the panel's single confirmation for the whole set. A refused
+ * selection never reaches the job system at all — see [`AddPackageResult`].
+ * Progress for a started job is the ordinary `job-progress` event, filtered
+ * by its id, the same way `osinstallApply`'s own install job is tracked;
+ * its outcome (files/directories/bytes actually written) arrives on
+ * [`OSINSTALL_ADD_PACKAGE_EVENT`].
  */
 export async function osinstallAddPackage(
   treeRoot: string,
   packageFolder: string,
   packages: string[]
-): Promise<number> {
-  return invoke<number>("osinstall_add_package", { treeRoot, packageFolder, packages });
+): Promise<AddPackageResult> {
+  return invoke<AddPackageResult>("osinstall_add_package", {
+    treeRoot,
+    packageFolder,
+    packages,
+  });
+}
+
+/** The event a finished (or failed) package-add job's own outcome arrives
+ *  on (F10 — the counts used to reach nowhere but the oplog). */
+export const OSINSTALL_ADD_PACKAGE_EVENT = "osinstall-add-package-result";
+
+export interface OsInstallAddPackageResult {
+  job_id: number;
+  outcome: ApplyOutcome;
+}
+
+export async function onOsInstallAddPackageResult(
+  handler: (result: OsInstallAddPackageResult) => void
+): Promise<UnlistenFn> {
+  return listen<OsInstallAddPackageResult>(OSINSTALL_ADD_PACKAGE_EVENT, (event) =>
+    handler(event.payload)
+  );
 }
 
 /**
- * The order [`PackagePanel`](@/components/osbuilder/PackagePanel) groups the
- * preview in — downgrades first ("a downgrade is what the user most needs
- * to see"), then upgrades, then same-version, then unversioned. `same-version`
- * is never folded into `unversioned` here or anywhere else: the two mean
+ * `reports`, split into the five classes the preview groups by — downgrades
+ * first ("a downgrade is what the user most needs to see": spec §3's whole
+ * reason for existing is `ModulesA1200_3.2.adf`'s thirteen stale commands),
+ * then upgrades, then same-version, then unversioned. `same-version` is
+ * never folded into `unversioned`, here or anywhere else — the two mean
  * different things (both sides agree on a version vs. neither side says
- * anything at all).
+ * anything at all). A group with nothing in it is omitted, not shown empty
+ * (F1 of Task 7's own fix round — this replaces a flat, unlabelled sort
+ * that gave a downgrade the same key, and so the same look, as an upgrade).
  */
-const COLLISION_CLASS_ORDER: Record<Collision["kind"], number> = {
-  downgrade: 0,
-  upgrade: 1,
-  "same-version": 2,
-  unversioned: 3,
-};
+export interface CollisionGroup {
+  kind: Collision["kind"];
+  reports: CollisionReport[];
+}
 
-/** `reports`, grouped by class in `COLLISION_CLASS_ORDER`'s order. A stable
- *  sort, so two rows of the same class keep the order the core reported
- *  them in — `Array.prototype.sort` is stable per the ECMAScript spec, so
- *  this needs no secondary key. */
-export function sortCollisionsForPreview(reports: CollisionReport[]): CollisionReport[] {
-  return [...reports].sort(
-    (a, b) => COLLISION_CLASS_ORDER[a.collision.kind] - COLLISION_CLASS_ORDER[b.collision.kind]
-  );
+const COLLISION_GROUP_ORDER: Collision["kind"][] = [
+  "downgrade",
+  "upgrade",
+  "same-version",
+  "unversioned",
+];
+
+export function groupCollisionsForPreview(reports: CollisionReport[]): CollisionGroup[] {
+  return COLLISION_GROUP_ORDER.map((kind) => ({
+    kind,
+    reports: reports.filter((r) => r.collision.kind === kind),
+  })).filter((group) => group.reports.length > 0);
+}
+
+/** The heading label for one group — its own translation key, not a value
+ *  interpolated into a shared one, so "Downgrades" and "Upgrades" can read
+ *  differently rather than only differing by colour (F1: colour alone is
+ *  not marking). */
+export function collisionGroupHeadingKey(kind: Collision["kind"]): string {
+  switch (kind) {
+    case "downgrade":
+      return "osinstall.packages.preview.group.downgrade";
+    case "upgrade":
+      return "osinstall.packages.preview.group.upgrade";
+    case "same-version":
+      return "osinstall.packages.preview.group.sameVersion";
+    case "unversioned":
+      return "osinstall.packages.preview.group.unversioned";
+  }
 }
 
 /** How many of each class `reports` holds — the preview heading's own
@@ -435,17 +530,25 @@ export function collisionCounts(reports: CollisionReport[]): CollisionCounts {
 }
 
 /** The sentence for one row's own collision — what it would replace and
- *  with what, or the sizes alone when neither side names a version. */
+ *  with what, or the sizes alone when neither side names a version.
+ *
+ *  **F1** — `upgrade` and `downgrade` now read different keys (they used to
+ *  share one, `collision.versioned`, which is why a downgrade rendered
+ *  exactly like an upgrade with nothing but colour to tell them apart).
+ *  **F12** — byte counts go through `formatBytes` (`@/lib/panel.ts`, the
+ *  same helper the rest of the app already uses) rather than crossing raw:
+ *  spec §3 shows sizes the way a person reads them, in KB/MB, not as an
+ *  unbroken run of digits. */
 export function collisionPhrase(collision: Collision): Phrase {
   switch (collision.kind) {
     case "upgrade":
       return {
-        key: "osinstall.packages.collision.versioned",
+        key: "osinstall.packages.collision.upgrade",
         params: { from: collision.from, to: collision.to },
       };
     case "downgrade":
       return {
-        key: "osinstall.packages.collision.versioned",
+        key: "osinstall.packages.collision.downgrade",
         params: { from: collision.from, to: collision.to },
       };
     case "same-version":
@@ -456,7 +559,10 @@ export function collisionPhrase(collision: Collision): Phrase {
     case "unversioned":
       return {
         key: "osinstall.packages.collision.unversioned",
-        params: { fromBytes: collision.fromBytes, toBytes: collision.toBytes },
+        params: {
+          fromBytes: formatBytes(collision.fromBytes),
+          toBytes: formatBytes(collision.toBytes),
+        },
       };
   }
 }

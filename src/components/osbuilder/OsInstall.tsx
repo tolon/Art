@@ -106,7 +106,7 @@ import {
 import { pistormIdentifyRom, type RomInfo } from "@/lib/pistorm";
 import { isTextList, isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
-import { fraction, onJobProgress, type JobProgress } from "@/lib/jobs";
+import { fraction, onJobProgress, subscribeSafely, type JobProgress } from "@/lib/jobs";
 import { Field } from "@/components/osbuilder/Field";
 import { PackagePanel } from "@/components/osbuilder/PackagePanel";
 
@@ -525,19 +525,22 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mediaFolder, romPath, chosen, destination, excludedConditional, release, catalogue]);
 
+  // `subscribeSafely` (Task 7's own fix round, F7/ART-165): the bare
+  // `.then((fn) => { unlisten = fn })` shape this used to have could both
+  // leak the real Tauri listener (an unmount before the promise resolved
+  // left nothing to call) and surface an unhandled rejection (no IPC bridge
+  // to reach, e.g. under test) — see `docs/ISSUES.md`'s ART-165.
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void onOsInstallResult((r) => {
-      setResult(r);
-      setBusy(false);
-      setConfirmed(false);
-      setVerifyDistRoot(r.destination);
-      installJob.current = null;
-      setProgress(null);
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => unlisten?.();
+    return subscribeSafely(() =>
+      onOsInstallResult((r) => {
+        setResult(r);
+        setBusy(false);
+        setConfirmed(false);
+        setVerifyDistRoot(r.destination);
+        installJob.current = null;
+        setProgress(null);
+      })
+    );
   }, []);
 
   // The install's own progress. `job-progress` is application-wide, so every
@@ -546,33 +549,31 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   // sends an `osinstall-result`, so the terminal states are cleared here too,
   // otherwise the bar would sit at its last percentage for ever.
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void onJobProgress((job) => {
-      if (job.id !== installJob.current) return;
-      setProgress(job);
-      if (job.state.state === "running") return;
+    return subscribeSafely(() =>
+      onJobProgress((job) => {
+        if (job.id !== installJob.current) return;
+        setProgress(job);
+        if (job.state.state === "running") return;
 
-      installJob.current = null;
-      setBusy(false);
-      // A finished install announces itself through `osinstall-result`. A
-      // **failed or cancelled** one never sends that event, so without this
-      // the screen simply stopped saying "Installing…" and said nothing at
-      // all — the user's own report: "it did something, but did it install?
-      // what did it install? there is no feedback on screen." A job that
-      // ended badly has to say so where the button is.
-      if (job.state.state === "failed") {
-        setError(`${job.state.message} (${job.state.error_code})`);
-      } else if (job.state.state === "cancelled") {
-        setError(
-          t("osinstall.run.cancelled", {
-            files: job.state.files_landed ?? 0,
-          })
-        );
-      }
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => unlisten?.();
+        installJob.current = null;
+        setBusy(false);
+        // A finished install announces itself through `osinstall-result`. A
+        // **failed or cancelled** one never sends that event, so without this
+        // the screen simply stopped saying "Installing…" and said nothing at
+        // all — the user's own report: "it did something, but did it install?
+        // what did it install? there is no feedback on screen." A job that
+        // ended badly has to say so where the button is.
+        if (job.state.state === "failed") {
+          setError(`${job.state.message} (${job.state.error_code})`);
+        } else if (job.state.state === "cancelled") {
+          setError(
+            t("osinstall.run.cancelled", {
+              files: job.state.files_landed ?? 0,
+            })
+          );
+        }
+      })
+    );
   }, [t]);
 
   // Is the destination already occupied? Asked while it is being chosen, so

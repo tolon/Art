@@ -2049,12 +2049,12 @@
       "mediaAmbiguous": "Medya klasöründe {{component}}'in ihtiyaç duyduğu {{volume}} birim adını taşıyan birden fazla dosya var: {{paths}}.",
       "exclusiveGroupConflict": "{{components}} aynı anda açık olamaz — {{group}} grubundan yalnızca biri seçilebilir.",
       "ruleKindMismatch": "{{component}}'in {{from}} için kuralı bir {{expected}} bekliyordu, ama medya bir {{found}} taşıyor.",
-      "packageUnknown": "\"{{package}}\", ART'ın tarifini gönderdiği bir paket değil.",
-      "packageFolderMissing": "Paketler seçildi ({{packages}}), ama bir güncelleme paketleri klasörü verilmedi.",
-      "packageRequirementMissing": "\"{{package}}\", önce \"{{requires}}\"in uygulanmasına ihtiyaç duyuyor, ve o seçilmedi.",
-      "packageComponentMissing": "\"{{package}}\", \"{{component}}\" bileşeninin açık olmasına ihtiyaç duyuyor, ve açık değil.",
-      "packageArchiveMissing": "Paket klasöründe, \"{{package}}\"in ihtiyaç duyduğu \"{{media}}\" medyasını taşıyan bir arşiv yok.",
-      "packageArchiveAmbiguous": "Paket klasöründe \"{{package}}\"in ihtiyaç duyduğu {{media}} medya adını taşıyan birden fazla arşiv var: {{paths}}."
+      "packageUnknown": "\"{{package}}\", ART'ın tarifini gönderdiği bir paket değil — uygulanamaz. Tikini kaldır; bu genelde ART'ın eski bir sürümünün kaydettiği bir seçimdir.",
+      "packageFolderMissing": "Paketler seçildi ({{packages}}), ama bir güncelleme paketleri klasörü verilmedi — arşivlerinin bulunduğu klasörü seç.",
+      "packageRequirementMissing": "\"{{package}}\", önce \"{{requires}}\"in uygulanmasına ihtiyaç duyuyor — onu da tikle, ya da \"{{package}}\"in tikini tek başına kaldır.",
+      "packageComponentMissing": "\"{{package}}\", \"{{component}}\" bileşenine ihtiyaç duyuyor, ve bu ağaç onunla kurulmadı. \"{{package}}\"in tikini kaldır, ya da \"{{component}}\" açıkken yeni bir ağaç kur ve \"{{package}}\"i o ağaca ekle.",
+      "packageArchiveMissing": "Güncelleme paketleri klasöründe, \"{{package}}\"in ihtiyaç duyduğu \"{{media}}\" medyasını taşıyan bir arşiv yok — o arşivi klasöre koy ve yeniden dene.",
+      "packageArchiveAmbiguous": "Güncelleme paketleri klasöründe \"{{package}}\"in ihtiyaç duyduğu {{media}} medya adını taşıyan birden fazla arşiv var: {{paths}}. İstediğin biri dışında hepsini kaldır."
     },
     "heading": "AmigaOS Kur",
     "intro": "Kendi AmigaOS kurulum disklerinden ya da diskinden, gerçek bir Amiga birimine kopyalanmaya hazır bir dağıtım ağacı oluştur.",
@@ -2163,7 +2163,7 @@
     "packages": {
       "heading": "Güncelleme paketleri",
       "intro": "ART'ın ya da senin zaten kurduğun bir dağıtım ağacına resmi bir güncelleme — bir BoingBag, ya da Türkçe katalog paketi gibi resmi olmayan bir paket — ekle.",
-      "scopeNote": "ART, tarifini gönderdiği {{count}} güncelleme paketini yerleştirebilir. Tarifi olmayan bir paket, ya da kurulumu bir Amiga Installer betiği olan bir paket, bu sürümde yerleştirilemez.",
+      "scopeNote": "ART, tarifini gönderdiği {{count}} güncelleme paketini yerleştirebilir — her biri dosyaların ve kendi hedeflerinin elle yazılmış bir listesidir. Böyle bir tarifi olmayan bir paket, ya da kurulumu gerçek donanımda çalışma anında karar veren bir Amiga Installer betiği olan bir paket burada yerleştirilemez: ART'ın o kararı yeniden üretecek hiçbir şeyi yok.",
       "treeRoot": {
         "label": "Dağıtım ağacı",
         "none": "Dağıtım ağacı seçilmedi.",
@@ -2181,24 +2181,37 @@
         "needsFolder": "Hangi arşivlerin gerçekten burada olduğunu görmek için güncelleme paketleri klasörünü seç."
       },
       "archiveMissing": "Arşiv bulunamadı",
+      "archiveGone": "Bu paket, sen seçtiğin için tikli kalıyor, ama arşivi artık güncelleme paketleri klasöründe değil — onun için hiçbir şey eklenmeyecek. Tikini kaldır, ya da arşivi geri koy; o zaman yeniden sunulur.",
+      "needsFolderToPreview": "Bu {{count}} paketin neyin yerine geçeceğini önizlemek için yukarıdan güncelleme paketleri klasörünü seç.",
       "requiresPackages": "Önce {{list}} uygulanmasına ihtiyaç duyuyor.",
       "requiresComponents": "{{list}} bileşeninin açık olmasına ihtiyaç duyuyor.",
       "preview": {
         "loading": "Bunun neyin yerini alacağı kontrol ediliyor…",
         "heading": "{{downgrades}} eski sürüm, {{upgrades}} yeni sürüm, {{sameVersion}} aynı sürüm, {{unversioned}} sürümsüz",
-        "nothing": "Ağaçta hiçbir şeyin yerine geçilmeyecek."
+        "nothing": "Ağaçta hiçbir şeyin yerine geçilmeyecek.",
+        "group": {
+          "downgrade": "Eski sürümler ({{count}})",
+          "upgrade": "Yeni sürümler ({{count}})",
+          "sameVersion": "Aynı sürüm, farklı baytlar ({{count}})",
+          "unversioned": "Karşılaştırılacak sürüm yok ({{count}})"
+        }
       },
       "collision": {
-        "versioned": "{{from}} → {{to}}",
+        "upgrade": "Yeni sürüm: {{from}} → {{to}}",
+        "downgrade": "Eski sürüme düşüş: {{from}} → {{to}}",
         "sameVersion": "{{version}}, farklı baytlar",
-        "unversioned": "{{fromBytes}} → {{toBytes}} bayt"
+        "unversioned": "{{fromBytes}} → {{toBytes}}"
       },
       "undeclared": "Belirtilmemiş — bu paketin kendi tarifi bu dosyanın yerine geçebileceğini hiç söylemedi",
       "confirm": "Bu {{count}} paketlik kümenin yukarıda listelenen dosyaların yerine geçeceğini onaylıyorum.",
+      "refused": {
+        "heading": "Bu seçim eklenemez"
+      },
       "apply": {
         "run": "Seçilen paketleri ekle",
         "running": "Ekleniyor…",
         "done": "Eklendi.",
+        "outcome": "{{files}} dosya, {{directories}} klasör, toplam {{bytes}}.",
         "cancelled": "Yarıda iptal edildi.",
         "progressStarting": "Başlıyor…",
         "progressPercent": "%{{percent}} — {{total}} dosyadan {{done}} tanesi"

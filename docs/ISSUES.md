@@ -26,28 +26,6 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-163** 🟠 **`pnpm test` exits non-zero while every test passes, so CI's
-own verdict disagrees with its own output** — *found 2026-08-19 during the
-content-layer round, and present on `main`*
-`src/**/*.test.tsx` · `vite.config.ts`
-
-The frontend suite reports `Test Files 54 passed (54)` and `Tests 619 passed
-(619)`, and then exits `1`. Vitest catches **10 unhandled rejections** during
-the run — the first is `TypeError: Cannot read properties of undefined
-(reading 'transformCallback')`, a Tauri shim reached at teardown — and its own
-message is the point: *"This might cause false positive tests."*
-
-Two costs, and the second is the reason this is 🟠 rather than 🔵. CI runs
-`pnpm test` as a blocking step (see `CLAUDE.md`), so the step's verdict has
-been decided by teardown noise rather than by the tests. And a person reading
-the run sees the reassuring line and stops — which happened here: this issue
-was **first reported correctly by an implementer, and I told it the report was
-wrong** after reading `Tests 619 passed` and not the exit code. It withdrew a
-true finding on my say-so. Restored, and filed.
-
-Verified on `main` with this round's work stashed: same exit code, same ten
-errors, so it is not this round's doing.
-
 **ART-164** 🔵 **`core::iso`'s test scratch directory can be shared by two
 threads, so one test fails about one run in thirty** — *found 2026-08-19,
 measured on `main`*
@@ -885,6 +863,72 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-165** 🟡 ✅ **Every `on*` subscription wrapper's fire-and-forget
+`.then((fn) => { unlisten = fn })` pattern could both leak a live Tauri
+listener and surface an unhandled promise rejection — the product-code
+defect ART-163's own test symptom was standing in front of** — *found
+reviewing ART-163's root cause, 2026-08-19; fixed the same round (Task 7's
+own fix round, packages screen)*
+`src/lib/jobs.ts` · `src/components/osbuilder/OsInstall.tsx` ·
+`src/components/osbuilder/PackagePanel.tsx`
+
+Neither half was hypothetical. **The leak:** an effect's cleanup function is
+only ever the `unlisten` closure captured *at the moment the subscribe
+promise resolves* — a component unmounted before that (a fast navigation, or
+a test's own `cleanup()`) runs the returned cleanup with `unlisten` still
+`undefined`, so the real listener already registered with Tauri is never
+removed. **The rejection:** `listen()`'s own promise rejects whenever there
+is no IPC bridge to reach it through, and nothing downstream of the bare
+`.then()` ever added a `.catch()` — this is production code, not only a test
+artefact; ART-163 only ever showed the test-environment symptom of it.
+
+**The fix.** `subscribeSafely()` (`src/lib/jobs.ts`) wraps any
+`() => Promise<UnlistenFn>` subscribe call with a `cancelled` flag — a
+listener that resolves after teardown is unregistered the instant it
+arrives, never stored — and a `.catch()` that absorbs a failed subscribe
+instead of leaving it unhandled. `OsInstall.tsx`'s own `onJobProgress` and
+`PackagePanel.tsx`'s `onJobProgress`/`onOsInstallAddPackageResult`
+subscriptions all go through it now.
+
+Covered indirectly by every component test that mounts either screen without
+tripping an unhandled-rejection failure — the same evidence ART-163's own
+fix below cites. There is no dedicated unit test for the leak half
+specifically: proving a real Tauri listener handle was released needs a seam
+into Tauri's own internal listener registry that this test suite does not
+have yet.
+
+**ART-163** 🟠 ✅ **`pnpm test` exited non-zero while every test passed,
+because ten jsdom-rendered tests never mocked the Tauri `listen()` shim their
+components subscribed through, and each one left an unhandled promise
+rejection behind** — *found 2026-08-19 during the content-layer round,
+present on `main`; fixed the same round*
+`src/components/osbuilder/OsInstall.test.tsx` · `src/lib/jobs.ts`
+
+**The cause**, not just the symptom. `OsInstall.tsx` subscribes to
+`onJobProgress` on mount, which calls `@tauri-apps/api/event`'s real
+`listen()`. A jsdom test has no Tauri IPC bridge for that call to reach, so
+the promise rejects — and nothing in `OsInstall.test.tsx`'s own mocks ever
+intercepted `@/lib/jobs`, so the rejection was real and uncaught, once per
+render, across every test in the file (ten in total). Vitest counts an
+unhandled rejection as a failure regardless of what the tests themselves
+asserted, which is why the run's own summary line (`Tests 619 passed`)
+disagreed with its exit code. This issue was **first reported correctly by
+an implementer, and told the report was wrong** on a first pass that read
+the summary line and not the exit code — a true finding withdrawn on that
+say-so, then restored.
+
+**The fix.** `OsInstall.test.tsx` now mocks `@/lib/jobs`'s `onJobProgress`
+the same way it already mocks every other Tauri-backed wrapper the screen
+calls (`osinstallPlan`, `osinstallApply`, …), so the real `listen()` — and
+its rejecting promise — is never reached at all during the test run. This
+closes the *symptom*; ART-165 above is the underlying defect in the
+subscription pattern itself, filed and fixed separately so closing this one
+could not also, quietly, close that.
+
+Verified by the full `pnpm test` run itself: zero unhandled-rejection errors
+and exit code `0`, confirmed on repeated runs — there is no narrower unit
+test for "an exit code agrees with a summary line."
 
 **ART-162** 🟠 ✅ **The AmigaOS 3.9 recipe placed nothing from the disc's own
 `Locale` drawer, which made the same task's `locale-turkish` package inert —
