@@ -37,6 +37,7 @@ mod route {
     pub const HEX: &str = "/tools";
     pub const FILES: &str = "/files";
     pub const WHDLOAD: &str = "/whdload";
+    pub const OS_BUILDER: &str = "/os-builder";
 }
 
 // ---------------------------------------------------------------------------
@@ -91,8 +92,9 @@ fn is_known_file(d: &Detection) -> bool {
 /// now (`core::iso`) and browse it in the file manager, but nothing hashes or
 /// catalogues one yet — the Collection Studio has no ISO code path, and
 /// claiming otherwise would overclaim support (spec §10, §89). It still
-/// isn't a dead end — `iso.browse` offers the file manager, and `any.hex`
-/// below accepts any known-but-not-collectable file too.
+/// isn't a dead end — `iso.browse` offers the file manager,
+/// `os.install-from-disc` offers the OS Builder, and `any.hex` below accepts
+/// any known-but-not-collectable file too.
 fn is_collectable(d: &Detection) -> bool {
     matches!(
         d.category,
@@ -546,6 +548,18 @@ fn navigation_workflows() -> Vec<NavWorkflow> {
             true,
             is_optical,
         ),
+        nav(
+            "os.install-from-disc",
+            "Build an AmigaOS system from this disc",
+            "Use the disc as install media in the OS Builder. ART reads what is \
+             on it and tells you what it can install — a disc that is not \
+             install media simply offers nothing.",
+            route::OS_BUILDER,
+            Recommended,
+            20,
+            true,
+            is_optical,
+        ),
         // --- Anything collectable ---
         nav(
             "any.hex",
@@ -753,6 +767,51 @@ mod tests {
         assert!(recommended.contains(&"iso.browse"), "got {recommended:?}");
     }
 
+    /// The owner's request: an ISO dropped on the panel must offer the OS
+    /// Builder, not only the file manager.
+    #[test]
+    fn an_optical_image_offers_the_os_builder() {
+        let d = detection(FormatCategory::OpticalImage, "iso9660", false);
+        let ids = ids_for(&d);
+        assert!(ids.contains(&"os.install-from-disc"), "got {ids:?}");
+        assert!(ids.contains(&"iso.browse"), "got {ids:?}");
+    }
+
+    /// Browsing is always right; installing is an offer. The file manager
+    /// therefore stays first in the list (§89 — ART does not assert that a
+    /// disc is install media before it has looked).
+    #[test]
+    fn browsing_a_disc_is_listed_before_installing_from_it() {
+        let d = detection(FormatCategory::OpticalImage, "iso9660", false);
+        let ids = ids_for(&d);
+        let browse = ids.iter().position(|i| *i == "iso.browse");
+        let install = ids.iter().position(|i| *i == "os.install-from-disc");
+        assert!(
+            browse < install,
+            "iso.browse must precede os.install-from-disc: {ids:?}"
+        );
+    }
+
+    /// The offer is for discs only. A floppy image goes to the ADF studio and
+    /// an install ADF set is chosen inside the OS Builder itself, so nothing
+    /// else may pick this workflow up.
+    #[test]
+    fn only_a_disc_offers_the_os_builder() {
+        for (category, hint) in [
+            (FormatCategory::FloppyImage, "adf"),
+            (FormatCategory::HardDiskImage, "hdf"),
+            (FormatCategory::Archive, "lha"),
+            (FormatCategory::Rom, "rom"),
+            (FormatCategory::Commodore8Bit, "d64"),
+        ] {
+            let ids = ids_for(&detection(category, hint, false));
+            assert!(
+                !ids.contains(&"os.install-from-disc"),
+                "{hint} must not offer os.install-from-disc: {ids:?}"
+            );
+        }
+    }
+
     #[test]
     fn candidates_are_ordered_by_priority() {
         let d = detection(FormatCategory::FloppyImage, "adf", false);
@@ -816,6 +875,7 @@ mod tests {
             route::HEX,
             route::FILES,
             route::WHDLOAD,
+            route::OS_BUILDER,
         ];
 
         for w in navigation_workflows() {
