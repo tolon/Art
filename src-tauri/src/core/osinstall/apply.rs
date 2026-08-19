@@ -2148,6 +2148,18 @@ mod tests {
                 assert_eq!(outcome.directories, 75, "directories written");
                 assert_eq!(outcome.bytes, 6_054_225, "file bytes written");
 
+                // Fix round 1, review item 2: the counts and sums above would
+                // pass just as well if every file landed empty. Name one
+                // real file the tree must hold and check it has plausible
+                // content — chosen with a Latin-1 letter in its own name
+                // (`Ö`) specifically so this assertion pins ART-155's
+                // decode_iso646 fix end to end (the name *and* the bytes
+                // behind it), not only the aggregate counts above.
+                let osterreich = root.join("Storage/LOCALE/COUNTRIES-EURO/\u{d6}STERREICH.COUNTRY");
+                let content = std::fs::read(&osterreich)
+                    .unwrap_or_else(|err| panic!("{} should exist: {err}", osterreich.display()));
+                assert!(!content.is_empty(), "{} landed empty", osterreich.display());
+
                 let manifest_text = std::fs::read_to_string(root.join(MANIFEST_FILE_NAME)).unwrap();
                 let manifest: DistributionManifest = serde_json::from_str(&manifest_text).unwrap();
                 println!(

@@ -738,14 +738,19 @@ the disc by a throwaway diagnostic,
 `Ö`, `Ë`, `Ñ`, the accented letters `Österreich`, a Belgian name and `España`
 need. That is not a coincidence: AmigaDOS's own native character set is
 ISO-8859-1 (<https://en.wikipedia.org/wiki/AmigaDOS>), the same
-byte-transparent choice `write_bcpl_string` already makes in the ADF core,
-and it is independently confirmed by a second implementation sharing no code
-with ART's own — 7-Zip, this project's own ISO9660 oracle
-(`scripts/iso-oracle-check.py`) — which reads this exact disc's Rock Ridge
-alternate names for the same three files as lower-case `ö`/`ë`/`ñ`, the
-lower-case Latin-1 pairing of the identical bytes. (`amitools`, ART's chosen
-*ADF/HDF* oracle, has no ISO9660 support at all to consult — checked
-directly.) ECMA-119 itself restricts a Primary-tree identifier to upper-case
+byte-transparent choice `write_bcpl_string` already makes in the ADF core.
+A second implementation sharing no code with ART's own — 7-Zip, this
+project's own ISO9660 oracle (`scripts/iso-oracle-check.py`) — reads this
+exact disc's Rock Ridge alternate names for the same three files as
+lower-case `ö`/`ë`/`ñ`, the lower-case Latin-1 pairing of the identical
+bytes; stated honestly, that shows 7-Zip *agrees* with Latin-1 rather than
+independently deriving it (its own Rock Ridge reader may itself default to a
+Latin-1-like page), and these three bytes happen to coincide across Latin-1
+and Windows-1252/1254 too — so it corroborates without ruling those out, and
+the conclusion rests on AmigaDOS's documented charset, not on this
+cross-check. (`amitools`, ART's chosen *ADF/HDF* oracle, has no ISO9660
+support at all to consult — checked directly.) ECMA-119 itself restricts a
+Primary-tree identifier to upper-case
 letters, digits, underscore and a dot
 (<https://en.wikipedia.org/wiki/ISO_9660>), so a high-bit byte there is
 genuinely out of spec — this disc's mastering tool wrote one anyway, real

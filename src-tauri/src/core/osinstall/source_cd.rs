@@ -152,6 +152,35 @@ impl CdSource {
             comment: String::new(),
         }
     }
+
+    /// Resolve `normalized` against `entries` — an exact match first,
+    /// falling back to a case-insensitive one only when nothing matches
+    /// exactly.
+    ///
+    /// A recipe's `from`/`to` values are AmigaDOS paths, and AmigaDOS
+    /// filesystems are case-insensitive: `AdfSource::resolve` goes through
+    /// `core::volume::write::dir::find_entry`, which lowercases both sides
+    /// before comparing, "as AmigaDOS is (ART-012)". `CdSource` matched only
+    /// the exact byte case until this task — invisible against the
+    /// uppercase-only Primary tree a disc mastered without Joliet produces
+    /// (matching the recipe's own now-uppercase `from` values), but wrong
+    /// the moment a disc *is* pressed with Joliet: `IsoImage`'s own
+    /// `scan_descriptors` prefers Joliet when present ("Joliet wins when it
+    /// is there"), and a Joliet tree carries names in their natural mixed
+    /// case (`OS-Version3.9`, not `OS-VERSION3.9`) — exactly the disc-vs-tree
+    /// mismatch ART-155 hit in reverse, unguarded, before this fix.
+    ///
+    /// Exact-first, not case-insensitive-only: ISO9660 puts no case-folding
+    /// rule on Joliet names, so a disc can legitimately hold two entries at
+    /// the same level differing only in case, and a query that spells one of
+    /// them exactly should never be answered with the other.
+    fn find_by_path<'a>(entries: &'a [IsoWalkEntry], normalized: &str) -> Option<&'a IsoWalkEntry> {
+        entries.iter().find(|e| e.path == normalized).or_else(|| {
+            entries
+                .iter()
+                .find(|e| e.path.eq_ignore_ascii_case(normalized))
+        })
+    }
 }
 
 impl MediaSource for CdSource {
@@ -164,11 +193,7 @@ impl MediaSource for CdSource {
         if normalized.is_empty() {
             return Ok(Some(Self::root_entry()));
         }
-        Ok(self
-            .entries
-            .iter()
-            .find(|e| e.path == normalized)
-            .map(Self::to_media_entry))
+        Ok(Self::find_by_path(&self.entries, &normalized).map(Self::to_media_entry))
     }
 
     fn walk(&mut self, path: &str) -> CoreResult<Vec<MediaEntry>> {
@@ -180,12 +205,23 @@ impl MediaSource for CdSource {
             // directory). So the whole disc is exactly every entry there is.
             return Ok(self.entries.iter().map(Self::to_media_entry).collect());
         }
+        // The prefix has to be built from the entry's *own* casing, not
+        // necessarily `path`'s: `find_by_path` may have matched `path`
+        // case-insensitively, and a `starts_with` prefix test is exact-case
+        // itself, so building it from `normalized` would silently drop
+        // every descendant again the moment `path` and the disc disagree on
+        // case. When nothing matches at all, fall back to `normalized`
+        // unchanged — the same "path not on this media" answer as before,
+        // an empty `Vec`, not an error (see the trait doc comment).
+        let base = Self::find_by_path(&self.entries, &normalized)
+            .map(|e| e.path.clone())
+            .unwrap_or(normalized);
         // Strict descendants only, matching `AdfSource::walk`: the
         // directory named by `path` is never included in its own listing,
         // only what is inside it — `core::osinstall::plan` relies on this
         // exact shape ("`walk` yields only what is *inside* `from`, never
         // `from` itself").
-        let prefix = format!("{normalized}/");
+        let prefix = format!("{base}/");
         Ok(self
             .entries
             .iter()
@@ -196,10 +232,7 @@ impl MediaSource for CdSource {
 
     fn read(&mut self, path: &str) -> CoreResult<Vec<u8>> {
         let normalized = Self::normalized(path);
-        let found = self
-            .entries
-            .iter()
-            .find(|e| e.path == normalized)
+        let found = Self::find_by_path(&self.entries, &normalized)
             .ok_or_else(|| CoreError::InvalidInput(format!("'{path}' is not on this media")))?;
         if found.entry.is_dir {
             return Err(CoreError::InvalidInput(format!(
@@ -377,5 +410,88 @@ mod tests {
 
         let err = source.read("OS-Version3.9/Workbench3.5/C").unwrap_err();
         assert!(err.to_string().contains("not a file"), "{err}");
+    }
+
+    // ---- Task 5 fix round 1: review item 1 (case-insensitive resolution) ----
+
+    /// A recipe's `from` is an AmigaDOS path, and AmigaDOS is
+    /// case-insensitive — the same rule `AdfSource::resolve` already follows
+    /// (`core::volume::write::dir::find_entry`, ART-012). Before this fix,
+    /// `CdSource` matched only the exact byte case, which happened to be
+    /// invisible against the shipped 3.9 recipe's own uppercase `from`
+    /// values read against a disc mastered *without* Joliet (uppercase
+    /// Primary tree, matching case by construction) but would refuse
+    /// everything the moment a disc carries the same names in mixed case —
+    /// a Joliet-pressed disc, this fixture, and `entry`/`read`/`walk` all
+    /// three, since a directory's own case has to resolve before its
+    /// contents can be walked.
+    #[test]
+    fn a_mixed_case_path_resolves_case_insensitively() {
+        let folder =
+            std::env::temp_dir().join(format!("art-cdsource-case-fallback-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        let bytes = IsoBuilder {
+            volume: "AMIGAOS39".to_string(),
+            joliet_volume: "AmigaOS3.9".to_string(),
+            joliet: true,
+            children: vec![dir(
+                "STORAGE",
+                "Storage",
+                vec![file("AUX.;1", "Aux", b"aux-bytes")],
+            )],
+            ..Default::default()
+        }
+        .build();
+        let path = folder.join("os39.iso");
+        std::fs::write(&path, bytes).unwrap();
+
+        let mut source = CdSource::open(&path).unwrap();
+        // The disc's own (Joliet) tree spells this `Storage/Aux`; a `from`
+        // written in the recipe's own uppercase convention must still find
+        // it, through all three trait methods.
+        let entry = source
+            .entry("STORAGE/AUX")
+            .unwrap()
+            .expect("case-insensitive fallback should have found it");
+        assert_eq!(entry.path, "Storage/Aux", "the real, on-disc casing");
+        assert_eq!(source.read("STORAGE/AUX").unwrap(), b"aux-bytes");
+        let walked = source.walk("STORAGE").unwrap();
+        assert!(walked.iter().any(|e| e.path == "Storage/Aux"), "{walked:?}");
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// The fallback must never shadow an exact match: a disc that
+    /// legitimately holds two entries differing only in case (ISO9660 puts
+    /// no case-folding rule on Joliet names) has to answer a query naming
+    /// one of them exactly with *that* one, not whichever the
+    /// case-insensitive search happens to reach first.
+    #[test]
+    fn an_exact_case_match_wins_over_a_differently_cased_entry() {
+        let folder =
+            std::env::temp_dir().join(format!("art-cdsource-exact-wins-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        let bytes = IsoBuilder {
+            volume: "AMIGAOS39".to_string(),
+            joliet_volume: "AmigaOS3.9".to_string(),
+            joliet: true,
+            children: vec![
+                file("SAME1.;1", "Same", b"exact-bytes"),
+                file("SAME2.;1", "SAME", b"other-bytes"),
+            ],
+            ..Default::default()
+        }
+        .build();
+        let path = folder.join("os39.iso");
+        std::fs::write(&path, bytes).unwrap();
+
+        let mut source = CdSource::open(&path).unwrap();
+        let entry = source.entry("Same").unwrap().unwrap();
+        assert_eq!(entry.path, "Same", "the exactly-cased entry, not \"SAME\"");
+        assert_eq!(source.read("Same").unwrap(), b"exact-bytes");
+
+        let _ = std::fs::remove_dir_all(&folder);
     }
 }

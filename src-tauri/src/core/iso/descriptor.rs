@@ -286,14 +286,23 @@ pub fn parse_volume_descriptor(sector: &[u8], kind: DescriptorKind) -> CoreResul
 /// choice `write_bcpl_string` already makes in the ADF core, so an Amiga
 /// filename's accented letters were Latin-1 before this disc's mastering
 /// tool ever copied them, unchanged, into a d-string field the standard
-/// says they do not belong in. And this is independently confirmed by a
-/// second implementation sharing no code with ART's: this project's own
-/// ISO9660 oracle, 7-Zip (`scripts/iso-oracle-check.py`), reads this exact
-/// disc's Rock Ridge alternate names for the same three files as
-/// lower-case `ö` (`0xF6`), `ë` (`0xEB`), `ñ` (`0xF1`) — the lower-case
-/// Latin-1 pairing of the very same three bytes found in the Primary tree.
-/// (amitools, this project's chosen *ADF/HDF* oracle, has no ISO9660
-/// support to consult at all — checked directly, not assumed.)
+/// says they do not belong in. A second implementation sharing no code with
+/// ART's — 7-Zip, this project's own ISO9660 oracle
+/// (`scripts/iso-oracle-check.py`) — reads this exact disc's Rock Ridge
+/// alternate names for the same three files as lower-case `ö` (`0xF6`),
+/// `ë` (`0xEB`), `ñ` (`0xF1`), the lower-case Latin-1 pairing of the same
+/// three bytes. Weaker corroboration than it might look, honestly stated:
+/// 7-Zip's own Rock Ridge reader may itself default to a Latin-1-like page
+/// rather than deriving the charset from the disc, so this shows 7-Zip
+/// *agrees* with the Latin-1 reading, not that it independently *derived*
+/// one — and these three particular bytes happen to coincide across
+/// Latin-1 and Windows-1252/1254 too, so this cross-check does not by
+/// itself rule those out either. What it does establish: nothing about
+/// reading this disc as Latin-1 looks wrong to a second, unrelated tool.
+/// The conclusion rests on AmigaDOS's own documented native charset above,
+/// not on this paragraph. (amitools, this project's chosen *ADF/HDF*
+/// oracle, has no ISO9660 support to consult at all — checked directly,
+/// not assumed.)
 ///
 /// # The decision
 ///
