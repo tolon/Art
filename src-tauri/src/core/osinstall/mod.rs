@@ -174,6 +174,51 @@ impl Recipe {
     }
 }
 
+/// The key two destination paths are compared, matched and indexed by.
+///
+/// **A destination is compared the way AmigaDOS compares it: without regard
+/// to case (ART-012).** Every *resolution* around these paths already works
+/// that way — `AdfSource`, `CdSource` and `ArchiveSource` all resolve a
+/// rule's `from` case-insensitively, `plan::relative_to` strips its prefix
+/// case-insensitively, and the Windows filesystem the tree is built on
+/// treats `C/Assign` and `C/ASSIGN` as one file. Only the *comparisons*
+/// between destinations were exact, and that mismatch is a real defect on
+/// ART's own shipped material, not a hypothetical:
+///
+/// - the Joliet-less `AmigaOS39.iso` yields `C/ASSIGN` (see `recipe.rs`'s
+///   own note on why the Primary tree forces all-caps)
+/// - BoingBag 3.9-1's ZIP payload yields `C/Assign` — measured
+/// - so all ~211 of that package's files collide in reality and did not
+///   collide in the comparison
+///
+/// Both entry points then failed, in opposite and equally bad ways: `Add`
+/// refused all 211 as undeclared overwrites *despite* the package declaring
+/// `overrides: ["workbench-base"]`, and `Produce` wrote them silently and
+/// left `distribution.json` naming a file whose `sha256` matched nothing on
+/// disk — a manifest lying about the tree it describes.
+///
+/// So there is one function, and everything that pairs destinations goes
+/// through it: `plan::detect_collisions`, `apply::undeclared_overwrites`,
+/// `apply::TreeWriter`'s three maps, and `collide::preview`'s own index. A
+/// `HashMap` or `BTreeMap` keyed on a raw destination is the same defect in
+/// a quieter form, so those are keyed on this instead.
+///
+/// ASCII-only folding, matching `eq_ignore_ascii_case` — which is what every
+/// other case comparison in this module tree already uses, and what
+/// `hash::name_hash` folds for AmigaDOS itself. A destination is never
+/// normalised for *storage*: what the manifest records and what the
+/// filesystem holds stays whatever the medium spelled. This is only how two
+/// of them are told apart.
+pub fn destination_key(path: &str) -> String {
+    path.to_ascii_lowercase()
+}
+
+/// Whether two destination paths name the same place — see
+/// [`destination_key`].
+pub fn same_destination(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
+}
+
 /// Why an install cannot proceed. A value, never a sentence — the UI
 /// translates it (ART-060).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

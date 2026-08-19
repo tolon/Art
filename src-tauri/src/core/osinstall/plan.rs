@@ -489,16 +489,24 @@ fn detect_collisions(
     items: &[PlanItem],
     components: &BTreeMap<&str, &Component>,
 ) -> Vec<RefusalReason> {
-    let mut claimants: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // Keyed by `destination_key`, not by the path as spelled: the Joliet-less
+    // 3.9 disc yields `C/ASSIGN` where a BoingBag's ZIP payload yields
+    // `C/Assign`, and an exact key made all ~211 of that package's real
+    // collisions invisible here — see `destination_key`'s own doc comment.
+    // The first spelling seen is carried alongside, so a refusal names a
+    // path the user can actually find rather than a folded one.
+    let mut claimants: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
     for item in items.iter().filter(|item| !item.is_dir) {
-        let claiming = claimants.entry(item.to.clone()).or_default();
+        let (_, claiming) = claimants
+            .entry(super::destination_key(&item.to))
+            .or_insert_with(|| (item.to.clone(), Vec::new()));
         if !claiming.contains(&item.component) {
             claiming.push(item.component.clone());
         }
     }
 
     let mut refusals = Vec::new();
-    for (path, claiming) in &claimants {
+    for (path, claiming) in claimants.values() {
         if claiming.len() < 2 {
             continue;
         }

@@ -353,9 +353,13 @@ struct TreeWriter<'a> {
     /// tree's own for [`add_package`].
     files: Vec<FileRecord>,
     /// Destination -> the index in `files` of the record describing what is
-    /// there **now**. Keyed by `item.to`, the same key
+    /// there **now**. Keyed by [`super::destination_key`], the same key
     /// `plan::detect_collisions` pairs claimants by, so the two cannot
-    /// disagree about what "the same destination" means (ART-124).
+    /// disagree about what "the same destination" means (ART-124) — and,
+    /// since that key folds case the way AmigaDOS and the host filesystem
+    /// both do, so that a package spelling a path `C/ASSIGN` over a manifest
+    /// record of `C/Assign` replaces that record instead of adding a second
+    /// one describing bytes nobody wrote (F11).
     record_index: std::collections::HashMap<String, usize>,
     /// Destination -> the size *this run* last wrote there. Separate from
     /// `record_index` because [`ApplyOutcome`] describes this run and the
@@ -375,7 +379,9 @@ impl<'a> TreeWriter<'a> {
         // collapses those the moment something writes over the path.
         let mut record_index = std::collections::HashMap::new();
         for (at, file) in files.iter().enumerate() {
-            record_index.entry(file.path.clone()).or_insert(at);
+            record_index
+                .entry(super::destination_key(&file.path))
+                .or_insert(at);
         }
         Self {
             root,
@@ -412,7 +418,9 @@ impl<'a> TreeWriter<'a> {
     fn count_missing_prefixes(&mut self, to: &str) {
         for (at, _) in to.match_indices('/') {
             let prefix = &to[..at];
-            if self.made_dirs.insert(prefix.to_string()) && !self.root.join(prefix).is_dir() {
+            if self.made_dirs.insert(super::destination_key(prefix))
+                && !self.root.join(prefix).is_dir()
+            {
                 self.outcome.directories += 1;
             }
         }
@@ -428,7 +436,8 @@ impl<'a> TreeWriter<'a> {
     /// ([`FileRecord::overwrote`]) rather than being dropped.
     fn record(&mut self, to: &str, mut record: FileRecord) {
         let size = record.bytes;
-        match self.run_sizes.insert(to.to_string(), size) {
+        let key = super::destination_key(to);
+        match self.run_sizes.insert(key.clone(), size) {
             // This run already wrote here; the tree gains no file and the
             // byte count swaps rather than adds.
             Some(previous) => {
@@ -440,7 +449,7 @@ impl<'a> TreeWriter<'a> {
             }
         }
 
-        match self.record_index.get(to).copied() {
+        match self.record_index.get(&key).copied() {
             Some(at) => {
                 record.overwrote = Some(Overwritten::of(&self.files[at]));
                 self.files[at] = record;
@@ -449,10 +458,16 @@ impl<'a> TreeWriter<'a> {
                 // by a single real file: the other records describe bytes
                 // nobody wrote any more, so they go, and the indices they
                 // shifted are rebuilt.
-                if self.files.iter().filter(|f| f.path == to).count() > 1 {
+                if self
+                    .files
+                    .iter()
+                    .filter(|f| super::same_destination(&f.path, to))
+                    .count()
+                    > 1
+                {
                     let mut seen = false;
                     self.files.retain(|f| {
-                        if f.path != to {
+                        if !super::same_destination(&f.path, to) {
                             return true;
                         }
                         let keep = !seen;
@@ -461,12 +476,14 @@ impl<'a> TreeWriter<'a> {
                     });
                     self.record_index.clear();
                     for (at, file) in self.files.iter().enumerate() {
-                        self.record_index.entry(file.path.clone()).or_insert(at);
+                        self.record_index
+                            .entry(super::destination_key(&file.path))
+                            .or_insert(at);
                     }
                 }
             }
             None => {
-                self.record_index.insert(to.to_string(), self.files.len());
+                self.record_index.insert(key, self.files.len());
                 self.files.push(record);
             }
         }
@@ -529,7 +546,17 @@ impl<'a> TreeWriter<'a> {
             Ok(text) => match crate::core::volume::write::uaem::parse(&text) {
                 Ok(previous) => Ok(previous.protection),
                 Err(_) => {
-                    std::fs::remove_file(&beside)?;
+                    // Through `core/safety`, like every other write in this
+                    // module — a removal is a write, and the one `std::fs`
+                    // call that skipped the gate because it produced no
+                    // bytes was still the most complete way for something to
+                    // disappear. `CONFIG`'s five generations: a sidecar is
+                    // tiny, irreplaceable and easy to get wrong, which is the
+                    // policy's own description of itself.
+                    crate::core::safety::guarded_remove(
+                        &beside,
+                        crate::core::safety::BackupPolicy::CONFIG,
+                    )?;
                     Ok(entry.protection)
                 }
             },
@@ -577,7 +604,7 @@ impl<'a> TreeWriter<'a> {
                 // and is already in `made_dirs`).
                 let existed = target.is_dir();
                 std::fs::create_dir_all(&target)?;
-                if self.made_dirs.insert(item.to.clone()) && !existed {
+                if self.made_dirs.insert(super::destination_key(&item.to)) && !existed {
                     self.outcome.directories += 1;
                 }
                 continue;
@@ -706,7 +733,7 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
         // agree.
         if identified.volume_name != *volume {
             return Err(CoreError::InvalidInput(format!(
-                "'{}' now carries volume '{}', not '{volume}' — it was replaced since this                  plan was made",
+                "'{}' now carries volume '{}', not '{volume}' — it was replaced since this plan was made",
                 path.display(),
                 identified.volume_name
             )));
@@ -733,7 +760,7 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
         let opened = super::scan::open_package(medium)?;
         if opened.volume_name() != media {
             return Err(CoreError::InvalidInput(format!(
-                "'{}' now carries '{}', not '{media}' — it was replaced since this plan was                  made",
+                "'{}' now carries '{}', not '{media}' — it was replaced since this plan was made",
                 medium.path.display(),
                 opened.volume_name()
             )));
@@ -851,9 +878,9 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
         // carried no longer describe what is actually on disk.
         let previous_bytes = files
             .iter()
-            .find(|f| f.path == USER_STARTUP_PATH)
+            .find(|f| super::same_destination(&f.path, USER_STARTUP_PATH))
             .map(|f| f.bytes);
-        files.retain(|f| f.path != USER_STARTUP_PATH);
+        files.retain(|f| !super::same_destination(&f.path, USER_STARTUP_PATH));
         match previous_bytes {
             Some(previous_bytes) => {
                 outcome.bytes = outcome.bytes - previous_bytes + merged_bytes;
@@ -1040,13 +1067,26 @@ pub fn add_package(
     // one Produce enforces through `plan::detect_collisions`. Add has to
     // reach the same verdict on the same facts, or the two entry points
     // disagree about whether an install is allowed at all.
-    let undeclared = undeclared_overwrites(tree_root, package, &items, &manifest)?;
+    let (undeclared, unrecorded) = undeclared_overwrites(tree_root, package, &items, &manifest)?;
     if !undeclared.is_empty() {
         return Err(CoreError::SafetyRefused(format!(
-            "'{}' would write over {} file(s) it never declared it may replace: {} —              a package overwrites only what its own `overrides` names",
+            "'{}' would write over {} file(s) it never declared it may replace: {} — a package overwrites only what its own `overrides` names",
             package.id,
             undeclared.len(),
-            undeclared.join(", ")
+            some_of(&undeclared)
+        )));
+    }
+    // A different problem and a different sentence: these files are in the
+    // tree and not in `distribution.json`, so nothing says who put them there
+    // and ART cannot tell what it would be replacing. Telling the user to
+    // declare an override would be the wrong instruction — there is no
+    // component to declare one over.
+    if !unrecorded.is_empty() {
+        return Err(CoreError::SafetyRefused(format!(
+            "'{}' would write over {} file(s) that {MANIFEST_FILE_NAME} does not record: {} — ART cannot say what it would be replacing, so it replaces nothing",
+            package.id,
+            unrecorded.len(),
+            some_of(&unrecorded)
         )));
     }
 
@@ -1120,13 +1160,15 @@ pub fn add_package(
 /// Directories are not claims — the same rule `detect_collisions` follows,
 /// where a coinciding `Subtree` destination is a merge point rather than an
 /// overwrite.
+#[allow(clippy::type_complexity)]
 fn undeclared_overwrites(
     tree_root: &Path,
     package: &super::package::Package,
     items: &[PlanItem],
     manifest: &DistributionManifest,
-) -> CoreResult<Vec<String>> {
+) -> CoreResult<(Vec<String>, Vec<String>)> {
     let mut undeclared = Vec::new();
+    let mut unrecorded = Vec::new();
     for item in items.iter().filter(|item| !item.is_dir) {
         let target = safe_join(tree_root, &item.to).map_err(|err| {
             CoreError::SafetyRefused(format!(
@@ -1137,23 +1179,47 @@ fn undeclared_overwrites(
         if !target.is_file() {
             continue;
         }
+        // `same_destination`, not `==`: the manifest records whatever the
+        // release media spelled (`C/Assign` off the 3.9 disc's Joliet tree,
+        // `C/ASSIGN` off its Primary one) and the package spells whatever its
+        // own payload does. An exact match found no owner for all ~211 of a
+        // real BoingBag's files and refused every one of them as undeclared —
+        // see `destination_key`'s own doc comment.
         let owner = manifest
             .files
             .iter()
-            .find(|file| file.path == item.to)
+            .find(|file| super::same_destination(&file.path, &item.to))
             .map(|file| file.component.as_str());
-        let allowed = match owner {
+        match owner {
             // This package rewriting its own file — adding the same package
             // twice, which is a replacement, not a surprise.
-            Some(owner) if owner == package.id => true,
-            Some(owner) => package.component.overrides.iter().any(|over| over == owner),
-            None => false,
-        };
-        if !allowed {
-            undeclared.push(item.to.clone());
+            Some(owner) if owner == package.id => {}
+            Some(owner) if package.component.overrides.iter().any(|over| over == owner) => {}
+            Some(_) => undeclared.push(item.to.clone()),
+            None => unrecorded.push(item.to.clone()),
         }
     }
-    Ok(undeclared)
+    Ok((undeclared, unrecorded))
+}
+
+/// At most this many paths are named in a refusal, with a count for the
+/// rest.
+///
+/// A real BoingBag carries 211 files, so "name every one" is a wall of text
+/// nobody reads and a log line nothing can hold. Enough to recognise the
+/// shape of the problem, and then the number.
+const REFUSAL_PATHS_SHOWN: usize = 5;
+
+/// `paths`, capped — see [`REFUSAL_PATHS_SHOWN`].
+fn some_of(paths: &[String]) -> String {
+    if paths.len() <= REFUSAL_PATHS_SHOWN {
+        return paths.join(", ");
+    }
+    format!(
+        "{}, and {} more",
+        paths[..REFUSAL_PATHS_SHOWN].join(", "),
+        paths.len() - REFUSAL_PATHS_SHOWN
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -3456,10 +3522,291 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, CoreError::SafetyRefused(_)), "got {err:?}");
-        assert!(err.to_string().contains("C/OnlyPack"), "got {err}");
+        let text = err.to_string();
+        assert!(text.contains("C/OnlyPack"), "got {text}");
+        // The instruction has to be the one that would help: there is no
+        // component to declare an override over, so saying so would be
+        // wrong (fix round 3).
+        assert!(
+            text.contains(MANIFEST_FILE_NAME) && !text.contains("overrides"),
+            "an unrecorded file is not an undeclared override: {text}"
+        );
         assert_eq!(
             std::fs::read(root.join("C").join("OnlyPack")).unwrap(),
             b"the user's own file"
+        );
+    }
+
+    // ---- fix round 3: a destination is compared as AmigaDOS compares it ---
+
+    /// Every file `distribution.json` names really holds what it says it
+    /// holds. A manifest that describes bytes nobody wrote is the one thing
+    /// this file exists to prevent, and it is the shape F11 produced on the
+    /// Produce path.
+    fn assert_manifest_matches_disk(root: &Path) {
+        let manifest = read_manifest(root);
+        for record in &manifest.files {
+            let on_disk = root.join(record.path.replace('/', "\\"));
+            let bytes = std::fs::read(&on_disk).unwrap_or_else(|e| {
+                panic!(
+                    "{MANIFEST_FILE_NAME} names '{}', which is not there: {e}",
+                    record.path
+                )
+            });
+            assert_eq!(
+                sha256_bytes(&bytes),
+                record.sha256,
+                "'{}' does not hold what the manifest says it holds",
+                record.path
+            );
+        }
+    }
+
+    /// The real spellings, not invented ones: the Joliet-less `AmigaOS39.iso`
+    /// yields `C/ASSIGN` and BoingBag 3.9-1's ZIP payload yields `C/Assign`,
+    /// so **every one of that package's 211 files** is this case.
+    ///
+    /// Destinations used to be compared with `==` while everything around
+    /// them resolved case-insensitively, and the two entry points failed in
+    /// opposite, equally bad ways: Add refused all 211 as undeclared
+    /// overwrites *despite* the declared `overrides`, and Produce wrote them
+    /// silently and left a manifest naming a file whose `sha256` matched
+    /// nothing on disk.
+    fn case_dirs(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = fixtures::scratch(&format!("apply-case-{tag}-{n}"));
+        let media = dir.join("media");
+        let packages = dir.join("packages");
+        std::fs::create_dir(&media).unwrap();
+        std::fs::create_dir(&packages).unwrap();
+        // The disc's own all-caps spelling.
+        fixtures::media(
+            &media,
+            "TestBase",
+            "base.adf",
+            &[
+                ("C/ASSIGN", b"disc Assign", 0x20),
+                ("C/OnlyBase", b"base only", 0),
+            ],
+        );
+        // The package payload's mixed-case one.
+        std::fs::write(
+            packages.join("pack.zip"),
+            crate::core::archive::zip::tests::make_zip_with(&[
+                ("TestPack/C/Assign", b"package Assign" as &[u8]),
+                ("TestPack/C/OnlyPack", b"package only"),
+            ]),
+        )
+        .unwrap();
+        (dir, media, packages)
+    }
+
+    #[test]
+    fn a_destination_spelled_in_another_case_is_the_same_destination_to_both_paths() {
+        let (dir, media, packages) = case_dirs("both");
+        let archive = packages.join("pack.zip");
+        let left = dir.join("produced");
+        let right = dir.join("added");
+
+        // Produce: the collision is seen, the declared override resolves it,
+        // and the plan does not refuse.
+        let with_package = install_request(&media, &packages, &left, &["test-package"]);
+        let planned = planned_over(&with_package);
+        apply(&planned, &left, &NoProgress).unwrap();
+
+        // Add: must **not** refuse — the manifest records `C/ASSIGN` and the
+        // package writes `C/Assign`, which is the same file.
+        let base_only = install_request(&media, &packages, &right, &[]);
+        apply(&planned_over(&base_only), &right, &NoProgress).unwrap();
+        add_package(
+            &right,
+            &fixtures::package_test_package(),
+            &archive,
+            &NoProgress,
+        )
+        .expect("the package declares `overrides: [base-c]`, and this is that file");
+
+        for root in [&left, &right] {
+            // One file, not two: `C` holds `Assign`, `OnlyBase` and
+            // `OnlyPack`, plus their sidecars.
+            let names: std::collections::BTreeSet<String> = std::fs::read_dir(root.join("C"))
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|n| !n.ends_with(".uaem"))
+                .collect();
+            assert_eq!(
+                names,
+                ["Assign", "OnlyBase", "OnlyPack"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                "the two spellings are one file, in {}",
+                root.display()
+            );
+
+            // One record for it, and it is the package's.
+            let manifest = read_manifest(root);
+            let records: Vec<&FileRecord> = manifest
+                .files
+                .iter()
+                .filter(|f| f.path.eq_ignore_ascii_case("C/Assign"))
+                .collect();
+            assert_eq!(records.len(), 1, "{:?}", manifest.files);
+            assert_eq!(records[0].component, "test-package");
+            assert_eq!(
+                records[0].overwrote.as_ref().map(|o| o.component.as_str()),
+                Some("base-c"),
+                "and it records what it replaced"
+            );
+
+            // The whole point: the manifest describes the tree.
+            assert_manifest_matches_disk(root);
+        }
+
+        assert_trees_agree(&left, &right);
+    }
+
+    /// The undeclared case still refuses when the spellings differ — the
+    /// case fix must not have turned the collision check off, only made it
+    /// find the right owner.
+    #[test]
+    fn a_differently_cased_destination_is_still_refused_when_undeclared() {
+        let (dir, media, packages) = case_dirs("undeclared");
+        let archive = packages.join("pack.zip");
+        let root = dir.join("dist");
+
+        let mut undeclaring = fixtures::package_test_package();
+        undeclaring.component.overrides.clear();
+
+        let produce = crate::core::osinstall::plan::plan_over(
+            &install_request(&media, &packages, &dir.join("produced"), &["test-package"]),
+            &fixtures::package_test_recipe(),
+            std::slice::from_ref(&undeclaring),
+        )
+        .unwrap();
+        assert!(
+            produce.refusals.iter().any(|r| matches!(
+                r,
+                crate::core::osinstall::RefusalReason::DestinationCollision { .. }
+            )),
+            "a collision that only differs in case is still a collision: {:?}",
+            produce.refusals
+        );
+
+        let base_only = install_request(&media, &packages, &root, &[]);
+        apply(&planned_over(&base_only), &root, &NoProgress).unwrap();
+        let err = add_package(&root, &undeclaring, &archive, &NoProgress).unwrap_err();
+        assert!(matches!(err, CoreError::SafetyRefused(_)), "got {err:?}");
+    }
+
+    /// F1's remaining branch: a package writing over **its own** earlier
+    /// file. It works by construction (`component.id == package.id`), which
+    /// is exactly the kind of thing that stops working when somebody
+    /// rearranges the match arms.
+    #[test]
+    fn adding_the_same_package_twice_replaces_its_own_files_rather_than_refusing() {
+        let (dir, media, packages) = package_dirs("re-add");
+        let archive = fixtures::package_test_archive(&packages, "pack.zip");
+        let root = dir.join("dist");
+
+        let base_only = install_request(&media, &packages, &root, &[]);
+        apply(&planned_over(&base_only), &root, &NoProgress).unwrap();
+        add_package(
+            &root,
+            &fixtures::package_test_package(),
+            &archive,
+            &NoProgress,
+        )
+        .unwrap();
+
+        // Again. Nothing about the tree has changed except that the package
+        // is now the owner of the files it is about to write.
+        let outcome = add_package(
+            &root,
+            &fixtures::package_test_package(),
+            &archive,
+            &NoProgress,
+        )
+        .expect("a package may replace its own earlier files");
+        assert_eq!(outcome.files, 2);
+
+        let manifest = read_manifest(&root);
+        let records: Vec<&FileRecord> = manifest
+            .files
+            .iter()
+            .filter(|f| f.path == fixtures::OVERWRITTEN_PATH)
+            .collect();
+        assert_eq!(records.len(), 1, "one file is one record");
+        assert_eq!(records[0].component, "test-package");
+        assert_eq!(
+            records[0].overwrote.as_ref().map(|o| o.component.as_str()),
+            Some("test-package"),
+            "the second write replaced the first, and says so"
+        );
+        // `built_from` gains no second entry for one archive.
+        assert_eq!(
+            manifest
+                .built_from
+                .iter()
+                .filter(|m| m.volume_name == "TestPack")
+                .count(),
+            1
+        );
+        assert_manifest_matches_disk(&root);
+    }
+
+    /// A refusal about a real BoingBag would otherwise print 211 paths.
+    #[test]
+    fn a_refusal_names_a_few_paths_and_then_counts_the_rest() {
+        let (dir, media, packages) = package_dirs("many");
+        let root = dir.join("dist");
+
+        // Eight files the base tree does not have, written straight into the
+        // tree so nothing in `distribution.json` claims them.
+        let base_only = install_request(&media, &packages, &root, &[]);
+        apply(&planned_over(&base_only), &root, &NoProgress).unwrap();
+
+        let mut rows: Vec<(String, Vec<u8>)> = Vec::new();
+        for n in 0..8 {
+            let name = format!("Cmd{n}");
+            std::fs::write(root.join("C").join(&name), b"the user's own").unwrap();
+            rows.push((format!("TestPack/C/{name}"), b"package".to_vec()));
+        }
+        let refs: Vec<(&str, &[u8])> = rows
+            .iter()
+            .map(|(n, b)| (n.as_str(), b.as_slice()))
+            .collect();
+        let archive = packages.join("many.zip");
+        std::fs::write(
+            &archive,
+            crate::core::archive::zip::tests::make_zip_with(&refs),
+        )
+        .unwrap();
+
+        let err = add_package(
+            &root,
+            &fixtures::package_test_package(),
+            &archive,
+            &NoProgress,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            err.contains("8 file(s)"),
+            "the count is always exact: {err}"
+        );
+        assert!(err.contains("and 3 more"), "and the list is not: {err}");
+        assert_eq!(
+            err.matches("C/Cmd").count(),
+            REFUSAL_PATHS_SHOWN,
+            "exactly {REFUSAL_PATHS_SHOWN} paths are named: {err}"
+        );
+        assert!(
+            err.contains(MANIFEST_FILE_NAME),
+            "an unrecorded file is a different problem from an undeclared \
+             override, and the sentence has to say which: {err}"
         );
     }
 

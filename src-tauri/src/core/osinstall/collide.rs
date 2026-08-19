@@ -460,14 +460,19 @@ pub fn preview(tree_root: &Path, incoming: &[Incoming<'_>]) -> CoreResult<Vec<Co
     // able to *remove* an earlier row, not just fail to add a new one. See
     // this function's own doc comment on the dedup rule.
     let mut slots: Vec<Option<CollisionReport>> = Vec::new();
+    // Keyed by `destination_key`, not by the path as spelled (F11): this is
+    // the quiet form of the same defect `plan::detect_collisions` and
+    // `apply::undeclared_overwrites` both carried — two entries that the
+    // filesystem and AmigaDOS agree are one file would otherwise get two
+    // slots here, and the row the user reads would describe the loser.
     let mut index_by_path: HashMap<String, usize> = HashMap::new();
 
     for entry in incoming {
         let row = classify_incoming(tree_root, entry, &mut manifest)?;
-        match index_by_path.get(entry.to.as_str()) {
+        match index_by_path.get(super::destination_key(&entry.to).as_str()) {
             Some(&at) => slots[at] = row,
             None => {
-                index_by_path.insert(entry.to.clone(), slots.len());
+                index_by_path.insert(super::destination_key(&entry.to), slots.len());
                 slots.push(row);
             }
         }
@@ -517,7 +522,11 @@ fn declared_override(
         .expect("just populated above if it was empty")
         .files
         .iter()
-        .find(|file| file.path == to)
+        // The manifest records whatever the release media spelled and the
+        // package spells whatever its payload does — see
+        // `destination_key`'s own doc comment on why an exact match found no
+        // owner for all ~211 files of a real BoingBag.
+        .find(|file| super::same_destination(&file.path, to))
         .map(|file| file.component.as_str());
 
     let Some(owner) = owner else {

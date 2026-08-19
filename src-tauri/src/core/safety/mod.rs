@@ -38,6 +38,27 @@ pub fn guarded_write(
     Ok(backup)
 }
 
+/// Delete a file ART itself put there, backing it up first per `policy`.
+///
+/// **A removal is a write.** This module's whole rule is that the user's
+/// existing data never disappears without ART having made a copy first, and a
+/// deletion is the most complete form of disappearing there is — so it goes
+/// through the same gate, rather than being the one `std::fs` call that
+/// bypasses it because it happens not to produce any bytes.
+///
+/// Returns the backup path when one was taken. A file that is not there is
+/// `Ok(None)`, not an error: the caller wanted it gone and it is gone, which
+/// is the same rule [`backup_file`] already applies to a file it has nothing
+/// to preserve.
+pub fn guarded_remove(path: &Path, policy: BackupPolicy) -> CoreResult<Option<PathBuf>> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let backup = backup_file(path, policy)?;
+    std::fs::remove_file(path)?;
+    Ok(backup)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -51,6 +72,42 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("art-guarded-{tag}-{s}"));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_removal_backs_up_before_it_deletes() {
+        let dir = scratch("remove");
+        let target = dir.join("thing.uaem");
+        fs::write(
+            &target,
+            b"--p-rwed 2026-08-19 14:59:16.00 
+",
+        )
+        .unwrap();
+
+        let backup = guarded_remove(&target, BackupPolicy::CONFIG)
+            .unwrap()
+            .expect("a removal preserves what it removes");
+
+        assert!(!target.exists(), "the file is gone");
+        assert_eq!(
+            fs::read(&backup).unwrap(),
+            b"--p-rwed 2026-08-19 14:59:16.00 
+",
+            "and what it said is not"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn removing_what_is_not_there_is_not_an_error() {
+        let dir = scratch("remove-absent");
+        assert!(
+            guarded_remove(&dir.join("never-existed"), BackupPolicy::CONFIG)
+                .unwrap()
+                .is_none()
+        );
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
