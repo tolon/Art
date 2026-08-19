@@ -34,4 +34,18 @@ describe("hostParentDir", () => {
   it("has no answer for an empty string", () => {
     expect(hostParentDir("")).toBeNull();
   });
+
+  it("takes the folder off a UNC path", () => {
+    expect(hostParentDir("\\\\server\\share\\iso\\AmigaOS39.iso")).toBe(
+      "\\\\server\\share\\iso"
+    );
+  });
+
+  // A path that already names a folder (trailing separator) loses that
+  // separator rather than climbing up a further level — there is nothing
+  // after the last separator to cut off, so the folder is everything before
+  // it, exactly as for any other path.
+  it("drops a trailing separator instead of climbing a further level", () => {
+    expect(hostParentDir("E:\\amiga\\iso\\")).toBe("E:\\amiga\\iso");
+  });
 });

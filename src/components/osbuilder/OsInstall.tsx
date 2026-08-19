@@ -121,7 +121,16 @@ function groupByComponent(plan: InstallPlan): { component: string; items: Instal
   return order.map((component) => ({ component, items: byComponent.get(component)! }));
 }
 
-export function OsInstall({ droppedMedia = null }: { droppedMedia?: string | null }) {
+/**
+ * One arrival of a disc dropped on the panel. `arrivalKey` is
+ * `location.key` from `OsBuilder` — unique per navigation, so a second drop
+ * of the exact same `path` is still a distinct value the effect below can
+ * react to. `path` alone cannot do that: two drops of the same file produce
+ * value-equal strings, which a dependency array treats as no change.
+ */
+export type DroppedMedia = { path: string; arrivalKey: string } | null;
+
+export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia }) {
   const { t } = useTranslation();
 
   // --- what the user chose, remembered -------------------------------------
@@ -138,10 +147,15 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: string | nul
   //
   // Do NOT clear `mediaFolder` when `droppedMedia` is null — arriving at this
   // screen without a drop must leave the remembered folder alone (ART-089).
+  //
+  // Depends on `arrivalKey`, not just `path`: dropping the same disc twice —
+  // with the folder changed by hand in between — must set it back, and a
+  // dependency array keyed only on the (unchanged) path string would never
+  // re-run for that second, identical-looking drop.
   useEffect(() => {
-    const folder = droppedMedia ? hostParentDir(droppedMedia) : null;
+    const folder = droppedMedia ? hostParentDir(droppedMedia.path) : null;
     if (folder) setMediaFolder(folder);
-  }, [droppedMedia, setMediaFolder]);
+  }, [droppedMedia?.path, droppedMedia?.arrivalKey, setMediaFolder]);
   const [romPath, setRomPath] = useRemembered<string | null>("osinstall.rom", isTextOrNothing, null);
   const [destination, setDestination] = useRemembered<string | null>(
     "osinstall.destination",

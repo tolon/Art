@@ -71,12 +71,24 @@ export function OsBuilder() {
 
   const location = useLocation();
   // A disc dropped on the panel routes here (`os.install-from-disc`). Keyed on
-  // `location.state` the way AdfBrowser does it, so dropping a second disc
-  // while this screen is open is a second arrival, not a no-op.
-  const droppedMedia = (location.state as { path?: string } | null)?.path ?? null;
+  // `location.state` itself — not on the path derived from it — the way
+  // AdfBrowser does it: React Router hands out a fresh state object on every
+  // navigation, even a second drop of the exact same file, so depending on
+  // the derived *string* instead (which is unchanged when the path repeats)
+  // would silently swallow a repeat arrival.
   useEffect(() => {
-    if (droppedMedia) setKind("install");
-  }, [droppedMedia, setKind]);
+    const state = location.state as { path?: string } | null;
+    if (state?.path) setKind("install");
+  }, [location.state, setKind]);
+  const droppedPath = (location.state as { path?: string } | null)?.path ?? null;
+  // `OsInstall` receives its own derived string prop, which by itself has the
+  // same repeat-arrival problem this effect just avoided — a second drop of
+  // the same path is a value-equal string, so nothing downstream would
+  // re-run. `location.key` is unique per navigation (React Router assigns a
+  // fresh one on every `navigate()`, including two drops of the same file),
+  // so pairing it with the path gives `OsInstall` something that actually
+  // changes on every arrival.
+  const droppedMedia = droppedPath ? { path: droppedPath, arrivalKey: location.key } : null;
 
   const [profiles, setProfiles] = useState<DistroProfile[]>([]);
   const [selectedId, setSelectedId] = useRemembered<string | null>(

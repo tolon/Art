@@ -321,10 +321,34 @@ describe("a disc dropped on the panel", () => {
     // which is an ordinary function argument) — passed as a bare attribute,
     // the brief's literal path would arrive with doubled backslashes. The
     // `{...}` expression form is what makes this an actual JS string.
-    render(<OsInstall droppedMedia={"E:\\amiga\\Amigatolon\\iso\\AmigaOS39.iso"} />);
+    render(
+      <OsInstall
+        droppedMedia={{ path: "E:\\amiga\\Amigatolon\\iso\\AmigaOS39.iso", arrivalKey: "k1" }}
+      />
+    );
     await waitFor(() =>
       expect(scanMediaMock).toHaveBeenCalledWith("E:\\amiga\\Amigatolon\\iso")
     );
+  });
+
+  it("takes effect again when the same disc is dropped a second time", async () => {
+    const PATH = "E:\\amiga\\Amigatolon\\iso\\AmigaOS39.iso";
+    const FOLDER = "E:\\amiga\\Amigatolon\\iso";
+
+    const { rerender } = render(<OsInstall droppedMedia={{ path: PATH, arrivalKey: "k1" }} />);
+    await waitFor(() => expect(scanMediaMock).toHaveBeenCalledWith(FOLDER));
+    scanMediaMock.mockClear();
+
+    // The user changes the media folder by hand in between — the same
+    // remembered-setter path a Browse click goes through.
+    seedRemembered({ "osinstall.mediaFolder": "E:\\somewhere-else" });
+
+    // A second drop of the *same* disc: the path string is identical to the
+    // first arrival, so only a change in `arrivalKey` can make this visible.
+    // Keying the effect on the path alone (the bug the review caught) would
+    // leave the hand-picked folder in place and never re-scan.
+    rerender(<OsInstall droppedMedia={{ path: PATH, arrivalKey: "k2" }} />);
+    await waitFor(() => expect(scanMediaMock).toHaveBeenCalledWith(FOLDER));
   });
 });
 
