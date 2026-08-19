@@ -1248,27 +1248,24 @@ mod tests {
         assert_eq!(src.read("C/Assign").unwrap(), b"assign");
     }
 
-    /// **ART-168, pinned by a test rather than by a real run.**
+    /// **ART-168, fixed — this test used to assert the wrong answer.**
     ///
     /// `BoingBag39-2-turkce.lha` carries its payload at
     /// `LocaleUpdate/locale/catalogs/türkçe/…`, whose drawer name is the
-    /// Latin-1 bytes `74 FC 72 6B E7 65`. `core::lha::entry_path` reads a
+    /// Latin-1 bytes `74 FC 72 6B E7 65`. `core::lha::entry_path` read a
     /// level-0/1 name with `String::from_utf8_lossy`, so every high-bit byte
-    /// becomes U+FFFD and the drawer ART writes is `t<U+FFFD>rk<U+FFFD>e` —
+    /// became U+FFFD and the drawer ART wrote was `t<U+FFFD>rk<U+FFFD>e` —
     /// a name AmigaDOS cannot see at all. The booted system listed 20
     /// drawers where the host held 21.
     ///
-    /// **This test asserts the wrong answer on purpose**, because ART-168 is
-    /// deliberately open: the same function feeds every LHA path in ART,
-    /// WHDLoad extraction included, and its own doc comment warns that
-    /// changing level 0/1 decoding "would rename files that extract
-    /// correctly today". That is a change with its own task, its own oracle
-    /// run and its own tests. What this pins is the *shape* — that a
-    /// high-bit name reaches `ArchiveSource` mangled rather than decoded —
-    /// so the fix, when it lands, has to come here and rewrite this
-    /// assertion rather than quietly leave the LHA reader untested again.
+    /// `entry_path` now decodes Latin-1, for the reason its own doc comment
+    /// gives (AmigaDOS's native charset, the same decision ART-155 made in
+    /// the ISO9660 reader). This is the *source-layer* half of that fix:
+    /// `core::lha`'s own test pins the reader, and this one pins that the
+    /// decoded name survives `ArchiveSource`'s walk — the path the install
+    /// engine actually takes.
     #[test]
-    fn art_168_an_lha_name_s_latin_1_bytes_arrive_mangled_not_decoded() {
+    fn art_168_an_lha_name_s_latin_1_bytes_arrive_decoded() {
         let dir = scratch("archive-lha-latin1");
         // `LocaleUpdate/locale/catalogs/türkçe/sys.catalog`, Latin-1.
         let mut name: Vec<u8> = b"LocaleUpdate/locale/catalogs/".to_vec();
@@ -1282,13 +1279,18 @@ mod tests {
         assert!(
             paths
                 .iter()
-                .any(|p| p == "locale/catalogs/t\u{FFFD}rk\u{FFFD}e"),
-            "ART-168's measured shape, not the correct one: {paths:?}"
+                .any(|p| p == "locale/catalogs/t\u{FC}rk\u{E7}e"),
+            "the drawer must arrive as türkçe: {paths:?}"
         );
         assert!(
-            !paths.iter().any(|p| p.contains("türkçe")),
-            "if this fires, ART-168 is fixed — rewrite this test to assert the \
-             decoded name and close the issue: {paths:?}"
+            paths
+                .iter()
+                .any(|p| p == "locale/catalogs/t\u{FC}rk\u{E7}e/sys.catalog"),
+            "and so must the catalog under it: {paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|p| p.contains('\u{FFFD}')),
+            "no name may carry a replacement character: {paths:?}"
         );
     }
 }

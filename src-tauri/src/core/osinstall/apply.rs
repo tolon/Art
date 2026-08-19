@@ -4096,11 +4096,18 @@ mod tests {
     /// package result is byte-for-byte the same, which is what keeps the two
     /// rounds' findings separable.
     ///
-    /// This test **fails on purpose** while ART-166, ART-167 and ART-168
-    /// stand: it is the measurement, and a measurement that passed would be
-    /// claiming the owner's own packages reach the tree when three of them do
-    /// not. The boot the same tree produced was **ART-169**, now fixed — see
+    /// This test **fails on purpose** while ART-166 and ART-167 stand: it is
+    /// the measurement, and a measurement that passed would be claiming the
+    /// owner's own packages reach the tree when two of them do not. The boot
+    /// the same tree produced was **ART-169**, now fixed — see
     /// `layer_the_real_39_overlay_when_asked` below.
+    ///
+    /// **ART-168 is fixed** (`core::lha::entry_path` decodes Latin-1), so the
+    /// U+FFFD sweep below should now report none and the Türkçe row's
+    /// `0 / 0 / 0 / 0` collision count should turn into a real overlap
+    /// against the disc's own `TÜRKÇE` — which is ART-172, the re-measurement
+    /// this fix unblocks. The table above is left as measured on 2026-08-19;
+    /// it is a record of that run, not a prediction of the next one.
     #[test]
     #[ignore = "touches the user's real media and E:\\amiga\\ProjeART; run explicitly, see the doc comment"]
     fn apply_the_real_packages_when_asked() {

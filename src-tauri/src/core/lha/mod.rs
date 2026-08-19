@@ -41,18 +41,62 @@ pub struct LhaInfo {
 /// empty and carry the name in extended headers instead. Reading the field
 /// directly made ART reject those archives outright with "empty entry name".
 ///
-/// The raw field is still preferred when it has something in it. `delharc`'s
-/// parser also percent-encodes non-ASCII bytes, and Amiga archives are full of
-/// Latin-1 names: switching level 0 and 1 over as well would rename files that
-/// extract correctly today, to fix a problem those levels do not have.
+/// The raw field is still preferred when it has something in it, and it is
+/// decoded as **ISO-8859-1 (Latin-1)** — ART-168.
+///
+/// # Why Latin-1 and not UTF-8
+///
+/// An LHA level-0/1 filename field is a byte string with no declared
+/// character set: the format predates Unicode and states no encoding at all.
+/// The archives ART reads are Amiga ones, and **AmigaDOS's own native
+/// character set is ISO-8859-1** — "the developers chose to use the ANSI–ISO
+/// standard ISO-8859-1 (Latin 1), which includes the ASCII character set"
+/// (<https://en.wikipedia.org/wiki/AmigaDOS>). That is the same fact, and the
+/// same decision, as [`decode_iso646`](crate::core::iso::descriptor::decode_iso646)
+/// in the ISO9660 reader, whose module doc carries the full reasoning and the
+/// cross-check against a second implementation; ART-155 fixed it there and
+/// left this reader untouched, which is what ART-168 is.
+///
+/// `String::from_utf8_lossy` was the wrong tool twice over. A Latin-1 byte
+/// sequence is almost never valid UTF-8, so every high-bit byte became
+/// U+FFFD — and U+FFFD is not merely ugly, it **merges distinct names**:
+/// `türkçe` and `tirkçe` both collapse to `t<U+FFFD>rk<U+FFFD>e`. Latin-1 is
+/// `b as char` for the whole 0x80..=0xFF range (Unicode's first 256 code
+/// points *are* Latin-1 by construction), so no table is needed and no two
+/// byte values ever fold together.
+///
+/// Measured, not assumed. The owner's own `BoingBag39-2-turkce.lha` stores
+/// `LocaleUpdate\locale\catalogs\t<FC>rk<E7>e\…` in a **level-0** header
+/// (read straight out of the file's header bytes), and `FC`/`E7` are exactly
+/// the Latin-1 code points for `ü`/`ç`. Under the old decode ART wrote its 36
+/// catalogs into a drawer AmigaDOS cannot see: the booted system listed 20
+/// drawers in `SYS:Locale/Catalogs` where the host directory held 21. Every
+/// non-ASCII name in the owner's whole `.lha` collection — the Turkish,
+/// French, Portuguese and Brazilian BoingBags, `JanoEditor`, `Picasso96` —
+/// sits in a level-0 header, so this branch is the one that carries them.
+///
+/// # What this does *not* change
+///
+/// Level 2/3 names still come from `delharc`'s `parse_pathname_to_str`, which
+/// percent-encodes any byte outside 0x20..0x7E (`ü` → `%fc`). That is wrong
+/// for the same reason, but fixing it means re-parsing the extended headers
+/// by hand instead of using the crate's own path assembly — which is also
+/// where its `..`/separator filtering lives — and no archive in the material
+/// measured above carries a non-ASCII name in a level-2/3 header. Left as is,
+/// deliberately, rather than rewritten blind.
 ///
 /// Either way the result goes through [`safe_join`](crate::core::security::path::safe_join)
 /// before it becomes a path. That choke point does not move.
 pub(crate) fn entry_path(header: &delharc::LhaHeader) -> String {
     if !header.filename.is_empty() {
-        return String::from_utf8_lossy(&header.filename).to_string();
+        return decode_latin1(&header.filename);
     }
     header.parse_pathname_to_str().to_string()
+}
+
+/// Decode a byte string as ISO-8859-1. See [`entry_path`] for why.
+fn decode_latin1(bytes: &[u8]) -> String {
+    bytes.iter().map(|&b| b as char).collect()
 }
 
 fn header_to_entry(header: &delharc::LhaHeader) -> CoreResult<LhaEntry> {
@@ -299,8 +343,8 @@ pub mod tests {
 
     /// The level 0 and 1 path must keep using the raw field. `delharc`'s
     /// parser percent-encodes non-ASCII bytes, and Amiga archives are full of
-    /// Latin-1 names — switching those levels over would rename files that
-    /// extract correctly today.
+    /// Latin-1 names — the raw field is the only place ART can apply the
+    /// right charset itself (ART-168).
     #[test]
     fn a_level_zero_name_still_comes_from_the_raw_field() {
         let dir = std::env::temp_dir().join(format!("art-lha0-{}", std::process::id()));
@@ -313,6 +357,62 @@ pub mod tests {
         assert_eq!(info.entries[0].path, "hi.txt");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **ART-168.** A level-0 name's high-bit bytes are Latin-1, not UTF-8.
+    ///
+    /// The bytes are the owner's own `BoingBag39-2-turkce.lha`'s, read out of
+    /// its header: `74 FC 72 6B E7 65` — `türkçe`, the drawer whose 36
+    /// catalogs AmigaDOS could not see when every high-bit byte arrived as
+    /// U+FFFD. Latin-1 is asserted here as a *name*, not as a byte identity:
+    /// `t\u{FC}rk\u{E7}e` is what a user and AmigaDOS both mean by it.
+    #[test]
+    fn a_level_zero_name_s_high_bit_bytes_decode_as_latin1() {
+        let dir = std::env::temp_dir().join(format!(
+            "art-lha-latin1-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let archive = dir.join("turkce.lha");
+
+        // `LocaleUpdate/locale/catalogs/türkçe/sys.catalog`, Latin-1.
+        let mut name: Vec<u8> = b"LocaleUpdate/locale/catalogs/".to_vec();
+        name.extend_from_slice(&[0x74, 0xFC, 0x72, 0x6B, 0xE7, 0x65]);
+        name.extend_from_slice(b"/sys.catalog");
+        std::fs::write(
+            &archive,
+            make_lha_with_raw_names(&[(&name, b"catalog" as &[u8])]),
+        )
+        .unwrap();
+
+        let info = open_archive(&archive).unwrap();
+        assert_eq!(
+            info.entries[0].path,
+            "LocaleUpdate/locale/catalogs/t\u{FC}rk\u{E7}e/sys.catalog"
+        );
+        assert!(
+            !info.entries[0].path.contains('\u{FFFD}'),
+            "no byte may be replaced: {}",
+            info.entries[0].path
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Latin-1 keeps distinct byte values distinct, which `from_utf8_lossy`
+    /// did not: `FC` and `E9` both used to become the same U+FFFD, so two
+    /// different Amiga drawers collided into one host name.
+    #[test]
+    fn two_names_differing_only_above_ascii_stay_two_names() {
+        assert_eq!(decode_latin1(&[0x74, 0xFC, 0x74]), "t\u{FC}t");
+        assert_eq!(decode_latin1(&[0x74, 0xE9, 0x74]), "t\u{E9}t");
+        assert_ne!(decode_latin1(&[0xFC]), decode_latin1(&[0xE9]));
+        // The whole high range is one-to-one, no table needed.
+        assert_eq!(decode_latin1(&[0x80, 0xFF]), "\u{80}\u{FF}");
     }
 
     #[test]

@@ -73,15 +73,14 @@ it.
 
 The real run reported **0 rows of every collision class** — `rows=0
 upgrade=0 downgrade=0 same-version=0 unversioned=0` — and that number is not
-evidence that the collision does not happen. It is [ART-168](#open): the
+evidence that the collision does not happen. It is [ART-168](#fixed): the
 drawer name arrived as `t<U+FFFD>rk<U+FFFD>e`, so the incoming files were
 compared against a destination nothing had ever written, and every one of
 them classified as *new*. **No comparison against the base `Locale` ever
 took place.**
 
-So the hazard stands unexercised, and it will stay unexercised until
-ART-168 is fixed — at which point this is the first thing to re-measure,
-because the answer flips from "0 collisions" to "~34 of them" and the
+So the hazard stands unexercised. **ART-168 is now fixed (2026-08-20), so
+this is the next thing to re-measure**, because the answer flips from "0 collisions" to "~34 of them" and the
 `declared` column, the `overrides` declaration and the whole five-class
 preview all get their first test against real material with a real overlap.
 
@@ -139,52 +138,6 @@ the update take?" check built on collision classes alone will be confidently
 wrong about the one file that matters.** Reading the version off a booted
 system is not a nicety — see the method note in
 `layer_the_real_39_overlay_when_asked` and in [STATUS.md](STATUS.md).
-
-**ART-168** 🔴 **An LHA entry name's non-ASCII bytes are replaced with U+FFFD
-rather than decoded, so a real Amiga drawer name becomes a name no Amiga can
-see** — *found 2026-08-19 by Task 8's real run and confirmed on the booted
-system, on `content-layer`*
-`src-tauri/src/core/lha/mod.rs:51` (`entry_path`)
-
-`entry_path` reads a level-0/1 LHA header's name with
-`String::from_utf8_lossy(&header.filename)`. Amiga archive names are Latin-1,
-not UTF-8, so every high-bit byte becomes U+FFFD. Measured against the owner's
-own `BoingBag39-2-turkce.lha`, whose payload sits at
-`LocaleUpdate/locale/catalogs/türkçe/…` (bytes `74 FC 72 6B E7 65`): ART wrote
-its 36 catalogs into `Locale/Catalogs/t<U+FFFD>rk<U+FFFD>e`, **beside** the
-disc's own `TÜRKÇE` rather than onto it. `collide::preview` reported
-`rows=0 upgrade=0 downgrade=0 same-version=0 unversioned=0` — a clean install
-by every number the round measures, and wrong.
-
-Confirmed from the booted system, not inferred: `dir` on `SYS:Locale/Catalogs`
-lists **20** drawers (`TÜRKÇE SVENSKA SUOMI SRPSKI SLOVENSKO RUSSIAN
-PORTUGUÊS-BRASIL PORTUGUÊS POLSKI NORSK NEDERLANDS ITALIANO FRANÇAIS ESPAÑOL
-ENGLISH DEUTSCH DANSK CZECH CATALA BOSANSKI`) where the host directory holds
-21. AmigaDOS cannot see the drawer at all, so all 36 catalogs are invisible to
-the system that was supposed to receive them.
-
-This is ART-155 again in the other reader: `core/iso/descriptor.rs::decode_iso646`
-was corrected in Task 5 to decode a high-bit byte as ISO-8859-1 instead of `?`,
-and the LHA path was never given the same treatment. `entry_path`'s own doc
-comment already names the hazard — "Amiga archives are full of Latin-1 names" —
-while doing the lossy thing anyway.
-
-Not fixed here: the same function feeds every LHA path in ART, WHDLoad
-extraction included, and its doc comment warns that changing level 0/1 "would
-rename files that extract correctly today". That is a change that needs its own
-task, its own oracle run and its own tests, not a line changed while reporting
-something else.
-
-**This is a known problem outside ART too, which is worth knowing before the
-fix is designed.** Cloanto's own RetroPlatform knowledge base (KB 19-106)
-names it by description: for *directory-based* distributions, filenames
-carrying characters above 128 — "as used in Amiga locale names", which is
-exactly `türkçe` — are a documented hazard, and AmiKit's answer is to carry
-those files inside an LhA archive and extract them **on the Amiga** rather
-than place them from the host. So decoding the name correctly is the right
-fix for ART's own reader, and it may still not be the whole answer for a
-host-placed tree: what the host writes and what AmigaDOS then reads are two
-questions, and only the second one booted here.
 
 
 **ART-167** 🟠 **Eight of the owner's archives claim the top-level directory
@@ -1135,6 +1088,75 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-168** 🔴 **An LHA entry name's non-ASCII bytes are replaced with U+FFFD
+rather than decoded, so a real Amiga drawer name becomes a name no Amiga can
+see** — *found 2026-08-19 by Task 8's real run and confirmed on the booted
+system, on `content-layer`; fixed 2026-08-20 on `debt-wave-a`*
+`src-tauri/src/core/lha/mod.rs` (`entry_path`)
+
+`entry_path` read a level-0/1 LHA header's name with
+`String::from_utf8_lossy(&header.filename)`. Amiga archive names are Latin-1,
+not UTF-8, so every high-bit byte became U+FFFD. Measured against the owner's
+own `BoingBag39-2-turkce.lha`, whose payload sits at
+`LocaleUpdate/locale/catalogs/türkçe/…` (bytes `74 FC 72 6B E7 65`): ART wrote
+its 36 catalogs into `Locale/Catalogs/t<U+FFFD>rk<U+FFFD>e`, **beside** the
+disc's own `TÜRKÇE` rather than onto it. `collide::preview` reported
+`rows=0 upgrade=0 downgrade=0 same-version=0 unversioned=0` — a clean install
+by every number the round measures, and wrong.
+
+Confirmed from the booted system, not inferred: `dir` on `SYS:Locale/Catalogs`
+listed **20** drawers where the host directory held 21. AmigaDOS could not see
+the drawer at all, so all 36 catalogs were invisible to the system that was
+supposed to receive them.
+
+This was ART-155 again in the other reader: `core/iso/descriptor.rs::decode_iso646`
+was corrected in Task 5 to decode a high-bit byte as ISO-8859-1 instead of `?`,
+and the LHA path was never given the same treatment.
+
+**Fixed 2026-08-20** by decoding the raw `filename` field as ISO-8859-1
+(`b as char` over the whole 0x80..=0xFF range — Unicode's first 256 code
+points *are* Latin-1, so no table is needed), the same decision and the same
+reasoning `decode_iso646` already carries: AmigaDOS's own native character set
+is ISO-8859-1. `entry_path`'s doc comment now says why, and says what U+FFFD
+cost beyond looking wrong — it **merged distinct names**, since every high-bit
+byte folded to the same replacement character.
+
+**Which header levels this covers, measured rather than assumed.** Every one
+of the owner's 41 `.lha` files was parsed straight out of its header bytes:
+all the non-ASCII names — the Turkish, French, Portuguese and Brazilian
+BoingBags (36/33/36/37 entries), `JanoEditor` (8), `Picasso96` (2),
+`BoingBag39-2-Contribution` (3) — sit in **level-0** headers, the branch this
+fix changes. The level-2/3 archives in the same folder (the MUI set, `netio`,
+`bebbossh`) are ASCII throughout. Level 2/3 names still come from `delharc`'s
+`parse_pathname_to_str`, which percent-encodes any byte outside 0x20..0x7E
+(`ü` → `%fc`); that is wrong for the same reason, but fixing it means
+re-parsing the extended headers by hand rather than using the crate's own path
+assembly (which is also where its `..`/separator filtering lives), and no
+measured archive needs it. Recorded in `entry_path`'s doc comment rather than
+rewritten blind.
+
+**The other two archive backends were checked the same way and are genuinely
+different** — neither guesses a charset, because their formats state one:
+
+- `core/archive/zip.rs` reads `entry.name()` from the `zip` crate, which
+  follows APPNOTE.TXT: general-purpose bit 11 set means the name is UTF-8,
+  clear means **CP437**, and the crate implements both branches
+  (`zip-8.6.0/src/read.rs:526-530`, `from_cp437`). A replacement character can
+  only appear when an archive *declares* UTF-8 and then stores invalid UTF-8,
+  which is the archive lying, not ART guessing.
+- `core/archive/sevenz.rs` reads `file.name`, which `sevenz-rust2` decodes
+  with `String::from_utf16` (`sevenz-rust2-0.21.4/src/reader.rs:1229`) — 7z
+  stores names as UTF-16LE by format definition, and a malformed one is an
+  `Err`, not a mangled name.
+
+Tests: `core::lha::tests::a_level_zero_name_s_high_bit_bytes_decode_as_latin1`
+(the real `türkçe` bytes, end to end through `open_archive`),
+`core::lha::tests::two_names_differing_only_above_ascii_stay_two_names` (the
+collision the old decode caused), and
+`core::osinstall::source_archive::tests::art_168_an_lha_name_s_latin_1_bytes_arrive_decoded`
+— which is the test that used to assert the *wrong* answer on purpose,
+rewritten to assert the decoded name as its own doc comment demanded.
 
 **ART-164** ✅ **`core::iso`'s test scratch directory can be shared by two
 threads, so *any* test in the module can read another's fixture — first
