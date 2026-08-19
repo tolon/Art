@@ -149,23 +149,33 @@ undeclared, which is the existing project-wide rule (*no two components may
 claim the same destination without one declaring an `overrides`
 relationship*) reaching the content layer intact.
 
-## 4. Two ways a package is understood
+## 4. Two ways a package is understood, in two rounds
 
-Both, and which one applies is decided per package:
+Both are wanted, and they are not the same size:
 
 - **A curated recipe**, exactly like `amigaos-3.9.json`: data, not code. Used
   where order and overwriting are unforgiving — the BoingBags are official,
   versioned and layered, and getting 39-2 applied before 39-1 is a wrong
-  system, not a warning.
+  system, not a warning. **This round.**
 - **Inspect and propose.** For a package ART has never seen, it reads the
   archive, works out how its paths map onto a system volume, and proposes
   that mapping for the user to accept. Fifty of the owner's fifty-eight
   files will never have a hand-written recipe, and without this they are
-  simply unsupported.
+  simply unsupported. **The next round.**
 
-The proposal is a proposal. ART does not apply a mapping it inferred without
-being told to — the same rule the collection's name suggestions already
-follow: *ART must not guess at a name: it proposes, and the user accepts.*
+The split is the owner's call, and the reasoning is the shape this project
+keeps returning to: everything else here extends an engine that already
+exists, while inference is a new subsystem with its own logic, its own
+screen and its own ways of being wrong. The 3.9 round worked because it made
+one thing work end to end before making it wide, and it ended with a tree
+that boots rather than a half-finished surface.
+
+When it lands, the proposal is a proposal: ART does not apply a mapping it
+inferred without being told to — the same rule the collection's name
+suggestions already follow (*ART must not guess at a name: it proposes, and
+the user accepts*). Nothing in this round should make that harder to add:
+the placer takes a resolved set of rules, and where those rules came from —
+a shipped recipe or an accepted proposal — is not its business.
 
 ## 5. What ART refuses, and says
 
@@ -188,11 +198,19 @@ naming its paths) so the answer is actionable rather than a dead end.
 - **Running anything on the Amiga side.** §5 above.
 - **Fetching packages.** The owner's folder is the source. Aminet is its own
   module and its own decision.
+- **Inspect and propose** (§4). Next round, deliberately, which means this
+  round supports exactly the packages it ships recipes for and must say so on
+  screen rather than appearing to accept any archive.
 
 ## 7. What ships first, and how it is verified
 
 First round: **BoingBag 39-1, BoingBag 39-2, and the Turkish language pack**,
-with curated recipes, plus the inspect-and-propose path for everything else.
+with curated recipes — the three packages that between them exercise both
+archive shapes ART can read (a nested ZIP inside an LHA, and loose files at
+direct paths), an ordering dependency, and the owner's own language. A
+package with no recipe is refused with its reason, exactly as a Shape C
+package is: this round's honest boundary is "the packages ART knows", and
+§89 requires saying that rather than implying more.
 
 Verification is the bar the previous round set and met, applied again:
 
