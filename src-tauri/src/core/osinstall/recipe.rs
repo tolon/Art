@@ -114,6 +114,46 @@ mod tests {
             .expect("the shipped 3.2 recipe must at least deserialise")
     }
 
+    /// Every recipe this project ships, parsed and validated, paired with a
+    /// label for assertion messages.
+    ///
+    /// **A new recipe file (3.9's second component, 3.1, CaffeineOS, …) must
+    /// be added here too.** Nothing makes that automatic — `include_str!`
+    /// gives each recipe its own named constant, and there is no build step
+    /// that walks `recipes/` and discovers new files — so a property this
+    /// project states as holding "over the shipped recipe" (singular in the
+    /// old wording, plural in truth: CLAUDE.md's own destination-collision
+    /// rule and `no_two_components_claim_one_destination_without_declaring_it`'s
+    /// own doc comment both say "the shipped recipe" while only 3.2 existed)
+    /// only actually holds for whatever is listed here. The fix-round finding
+    /// this function exists to close was exactly that: a second recipe
+    /// (3.9) shipped with one component, so the collision test above stayed
+    /// green by construction — dormant, not passing — right up to the day a
+    /// second component gives it something to actually check.
+    fn shipped_recipes() -> Vec<(&'static str, Recipe)> {
+        vec![
+            ("AmigaOS 3.2", recipe()),
+            (
+                "AmigaOS 3.9",
+                parse(AMIGAOS_39_JSON).expect("the shipped 3.9 recipe must parse and validate"),
+            ),
+        ]
+    }
+
+    /// [`shipped_recipes`]'s own raw counterpart — see [`raw_recipe`]'s doc
+    /// comment for why a test that means to police `validate` itself has to
+    /// deserialise directly rather than go through `parse`.
+    fn raw_shipped_recipes() -> Vec<(&'static str, Recipe)> {
+        vec![
+            ("AmigaOS 3.2", raw_recipe()),
+            (
+                "AmigaOS 3.9",
+                serde_json::from_str(AMIGAOS_39_JSON)
+                    .expect("the shipped 3.9 recipe must at least deserialise"),
+            ),
+        ]
+    }
+
     #[test]
     fn the_shipped_recipe_parses() {
         let recipe = recipe();
@@ -185,15 +225,17 @@ mod tests {
     /// `validate` itself has a bug, is the point.
     #[test]
     fn every_destination_is_a_name_amigados_can_store() {
-        for component in &raw_recipe().components {
-            for rule in &component.rules {
-                for segment in rule.to.split('/') {
-                    crate::core::volume::write::dir::check_name(segment).unwrap_or_else(|e| {
-                        panic!(
-                            "{}: destination '{}' segment '{segment}': {e}",
-                            component.id, rule.to
-                        )
-                    });
+        for (release, recipe) in raw_shipped_recipes() {
+            for component in &recipe.components {
+                for rule in &component.rules {
+                    for segment in rule.to.split('/') {
+                        crate::core::volume::write::dir::check_name(segment).unwrap_or_else(|e| {
+                            panic!(
+                                "{release} '{}': destination '{}' segment '{segment}': {e}",
+                                component.id, rule.to
+                            )
+                        });
+                    }
                 }
             }
         }
@@ -219,32 +261,34 @@ mod tests {
     /// own — must never be able to flip a test from green to red.
     #[test]
     fn no_two_components_claim_one_destination_without_declaring_it() {
-        let recipe = recipe();
-        let mut claimants: HashMap<&str, Vec<&Component>> = HashMap::new();
-        for component in &recipe.components {
-            for rule in component.rules.iter().filter(|r| r.kind == RuleKind::File) {
-                claimants
-                    .entry(rule.to.as_str())
-                    .or_default()
-                    .push(component);
+        for (release, recipe) in shipped_recipes() {
+            let mut claimants: HashMap<&str, Vec<&Component>> = HashMap::new();
+            for component in &recipe.components {
+                for rule in component.rules.iter().filter(|r| r.kind == RuleKind::File) {
+                    claimants
+                        .entry(rule.to.as_str())
+                        .or_default()
+                        .push(component);
+                }
             }
-        }
 
-        for (path, claiming) in &claimants {
-            if claiming.len() < 2 {
-                continue;
+            for (path, claiming) in &claimants {
+                if claiming.len() < 2 {
+                    continue;
+                }
+                let resolved = claiming.iter().any(|winner| {
+                    claiming
+                        .iter()
+                        .filter(|other| other.id != winner.id)
+                        .all(|other| winner.overrides.iter().any(|o| o == &other.id))
+                });
+                assert!(
+                    resolved,
+                    "{release}: '{path}' is claimed by {:?} and none of them declares an \
+                     override over all the rest",
+                    claiming.iter().map(|c| c.id.as_str()).collect::<Vec<_>>()
+                );
             }
-            let resolved = claiming.iter().any(|winner| {
-                claiming
-                    .iter()
-                    .filter(|other| other.id != winner.id)
-                    .all(|other| winner.overrides.iter().any(|o| o == &other.id))
-            });
-            assert!(
-                resolved,
-                "'{path}' is claimed by {:?} and none of them declares an override over all the rest",
-                claiming.iter().map(|c| c.id.as_str()).collect::<Vec<_>>()
-            );
         }
     }
 
@@ -284,14 +328,15 @@ mod tests {
 
     #[test]
     fn every_override_names_a_component_that_exists() {
-        let recipe = recipe();
-        for component in &recipe.components {
-            for over in &component.overrides {
-                assert!(
-                    recipe.component(over).is_some(),
-                    "{}: no such component '{over}'",
-                    component.id
-                );
+        for (release, recipe) in shipped_recipes() {
+            for component in &recipe.components {
+                for over in &component.overrides {
+                    assert!(
+                        recipe.component(over).is_some(),
+                        "{release}: {}: no such component '{over}'",
+                        component.id
+                    );
+                }
             }
         }
     }
@@ -300,20 +345,22 @@ mod tests {
     /// `every_destination_is_a_name_amigados_can_store` above.
     #[test]
     fn no_rule_escapes_the_tree() {
-        for component in &raw_recipe().components {
-            for rule in &component.rules {
-                assert!(
-                    !rule.to.starts_with('/'),
-                    "{}: '{}' is absolute",
-                    component.id,
-                    rule.to
-                );
-                assert!(
-                    !rule.to.split('/').any(|s| s == ".."),
-                    "{}: '{}' climbs",
-                    component.id,
-                    rule.to
-                );
+        for (release, recipe) in raw_shipped_recipes() {
+            for component in &recipe.components {
+                for rule in &component.rules {
+                    assert!(
+                        !rule.to.starts_with('/'),
+                        "{release}: {}: '{}' is absolute",
+                        component.id,
+                        rule.to
+                    );
+                    assert!(
+                        !rule.to.split('/').any(|s| s == ".."),
+                        "{release}: {}: '{}' climbs",
+                        component.id,
+                        rule.to
+                    );
+                }
             }
         }
     }
