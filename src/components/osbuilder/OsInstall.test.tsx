@@ -314,6 +314,20 @@ describe("choosing the release re-plans against it", () => {
   });
 });
 
+describe("a disc dropped on the panel", () => {
+  it("takes the folder from a disc dropped on the panel", async () => {
+    // A JSX attribute string literal does not process `\\` as a JS escape
+    // sequence the way a normal string literal does (unlike the call below,
+    // which is an ordinary function argument) — passed as a bare attribute,
+    // the brief's literal path would arrive with doubled backslashes. The
+    // `{...}` expression form is what makes this an actual JS string.
+    render(<OsInstall droppedMedia={"E:\\amiga\\Amigatolon\\iso\\AmigaOS39.iso"} />);
+    await waitFor(() =>
+      expect(scanMediaMock).toHaveBeenCalledWith("E:\\amiga\\Amigatolon\\iso")
+    );
+  });
+});
+
 describe("a refusal renders as a sentence, not a blank", () => {
   it("shows the real, translated refusal text", async () => {
     const refusedPlan: InstallPlan = {

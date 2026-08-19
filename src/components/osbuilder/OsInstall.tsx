@@ -58,6 +58,7 @@ import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
+import { hostParentDir } from "@/lib/hostPath";
 import {
   AMIGAOS_32_COMPONENTS,
   componentLabel,
@@ -120,7 +121,7 @@ function groupByComponent(plan: InstallPlan): { component: string; items: Instal
   return order.map((component) => ({ component, items: byComponent.get(component)! }));
 }
 
-export function OsInstall() {
+export function OsInstall({ droppedMedia = null }: { droppedMedia?: string | null }) {
   const { t } = useTranslation();
 
   // --- what the user chose, remembered -------------------------------------
@@ -129,6 +130,18 @@ export function OsInstall() {
     isTextOrNothing,
     null
   );
+
+  // A disc dropped on the panel names a *file*; the scanner takes the folder
+  // that holds it, which is also where its sibling discs and ADFs live. The
+  // user dropped it, so this is them setting the value — it goes through the
+  // remembered setter and is kept, like every other choice on this screen.
+  //
+  // Do NOT clear `mediaFolder` when `droppedMedia` is null — arriving at this
+  // screen without a drop must leave the remembered folder alone (ART-089).
+  useEffect(() => {
+    const folder = droppedMedia ? hostParentDir(droppedMedia) : null;
+    if (folder) setMediaFolder(folder);
+  }, [droppedMedia, setMediaFolder]);
   const [romPath, setRomPath] = useRemembered<string | null>("osinstall.rom", isTextOrNothing, null);
   const [destination, setDestination] = useRemembered<string | null>(
     "osinstall.destination",

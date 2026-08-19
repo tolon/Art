@@ -17,6 +17,7 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
+import { useLocation } from "react-router-dom";
 
 import {
   distroCheckCard,
@@ -67,6 +68,15 @@ export function OsBuilder() {
     isOneOf<BuildKind>("distro", "boot-card", "install", "prepare-volumes"),
     "boot-card"
   );
+
+  const location = useLocation();
+  // A disc dropped on the panel routes here (`os.install-from-disc`). Keyed on
+  // `location.state` the way AdfBrowser does it, so dropping a second disc
+  // while this screen is open is a second arrival, not a no-op.
+  const droppedMedia = (location.state as { path?: string } | null)?.path ?? null;
+  useEffect(() => {
+    if (droppedMedia) setKind("install");
+  }, [droppedMedia, setKind]);
 
   const [profiles, setProfiles] = useState<DistroProfile[]>([]);
   const [selectedId, setSelectedId] = useRemembered<string | null>(
@@ -212,7 +222,7 @@ export function OsBuilder() {
 
       {kind === "boot-card" && <CardBuilder />}
 
-      {kind === "install" && <OsInstall />}
+      {kind === "install" && <OsInstall droppedMedia={droppedMedia} />}
 
       {kind === "prepare-volumes" && <VolumePreload />}
 
