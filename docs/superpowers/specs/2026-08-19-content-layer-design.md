@@ -123,7 +123,29 @@ into one of four classes:
 | The bytes are identical | Not an overwrite. Not listed, not asked about |
 | Both carry `$VER:`, incoming is newer | `assign 37.4 → 45.9` |
 | Both carry `$VER:`, incoming is **older** | **A downgrade, marked as one** |
+| Both carry `$VER:`, **the same version, different bytes** | `assign 44.1 — same version, different bytes` |
 | No `$VER:` on one or both (69% of files) | `different, 12 KB → 14 KB` — never an invented version |
+
+**The fourth row was added after the third was implemented**, and the reason
+is worth keeping. An implementation reading only the first three rows put
+equal versions into the downgrade class, so re-applying a package rendered
+`44.1 → 44.1` in the colour reserved for going backwards. Equal is not older,
+and scaring a user away from a legitimate update is as much a §89 failure as
+reassuring them about a bad one. The other available answer — treating it as
+unversioned and showing only sizes — is wrong in the opposite direction: both
+sides *do* say what they are, and hiding that they agree throws away the most
+useful thing on the row.
+
+**The comparison is between two files claiming to be the same program.** A
+`$VER:` marker is found by scanning for it, and the first one in a file is
+not always the file's own: a binary can embed another program's version
+string ahead of its own. Compare the **names** before comparing the numbers,
+and treat a mismatch as no comparison at all — the fifth row. Skipping that
+check is how an *older* file renders as an upgrade, which was found by
+construction during this round rather than reasoned about: existing
+`assign 45.9` against an incoming file whose first marker read
+`dos.library 47.0` produced `Upgrade(45.9 → 47.0)` for a file that was in
+fact `assign 37.4`.
 
 **"Newer" needs defining, and the definition is AmigaOS's own.** A `$VER:`
 string is `name version.revision (date)` — `assign 37.4 (25.4.91)`. Compare
