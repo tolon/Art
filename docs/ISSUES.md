@@ -846,6 +846,55 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-162** 🟠 ✅ **The AmigaOS 3.9 recipe placed nothing from the disc's own
+`Locale` drawer, which made the same task's `locale-turkish` package inert —
+no `.language`/`.country` file existed anywhere on the built tree for
+`locale.library` to select *any* non-English locale by, Turkish included** —
+*found 2026-08-19 by Task 4's code review; fixed the same day*
+`src-tauri/src/core/osinstall/recipes/amigaos-3.9.json` ·
+`src-tauri/src/core/osinstall/recipes/packages/locale-turkish.json`
+
+The original round of Task 4 (the three curated package recipes: two
+BoingBags and a Turkish catalog pack) treated the base 3.9 recipe as
+out of scope — it was the previous round's file. But shipping
+`locale-turkish` on top of a tree with no Locale selection mechanism at all
+is exactly a §89 violation by omission: 36 catalog files that install cleanly
+and can never be opened, because nothing on the volume can ever select the
+language they translate into.
+
+Measured against the owner's own `AmigaOS39.iso` (`7z l -slt`):
+`OS-Version3.9/Locale` is a real top-level drawer, sibling to `Workbench3.5`,
+with six of its own — `Catalogs`, `Countries`, `Flags`, `Help`, `Languages`,
+`Providers` — none of which the shipped recipe placed. `Languages` carries
+`türkçe.language`, `Countries` carries `türkiye.country`; without either on
+the volume, Locale prefs has no Turkish entry to offer at all, independent of
+whatever catalogs `locale-turkish` supplies.
+
+**The fix.** `amigaos-3.9.json` gained a `locale-base` component, `required:
+false` (matching the shipped AmigaOS 3.2 recipe's own `locale-base` — a tree
+with no Locale drawer still boots and runs, in English, so nothing forces
+this one on the way `install-libs`'s missing `icon.library` does). It takes
+four of the six drawers — `Catalogs`, `Countries`, `Languages`, `Help`, the
+set `locale.library`'s own selection actually reads — and leaves `Flags`
+(country-picker globe icons) and `Providers` (dial-up ISP presets for
+software this project does not install) out on purpose, as an unmeasured
+guess ART-127 already argues against. `locale-turkish` then genuinely
+collides with `locale-base` at the file level — both place
+`Locale/Catalogs/türkçe/*.catalog`, and the base disc's own copy already
+carries roughly the same ~34 names this update replaces (measured, same
+`7z` pass) — so `locale-turkish` now declares `overrides: ["locale-base"]`,
+resolved by the same `all_shipped_component_ids` fix ART-162's own review
+round made to `recipe.rs` (see the review's other finding on `overrides`,
+folded into this same fix round rather than filed separately).
+
+Covered by `core::osinstall::recipe::tests::the_39_recipe_places_a_locale_component_art_162`
+(the four rules, verbatim, and `required == false`) and the existing
+`every_destination_is_a_name_amigados_can_store` /
+`no_two_components_claim_one_destination_without_declaring_it` /
+`every_override_names_a_component_that_exists` / `no_rule_escapes_the_tree`
+invariant tests, which reach the new component automatically — it is just
+another entry in the same shipped 3.9 recipe, not a new list to remember.
+
 **ART-155** 🟠 ✅ **A real AmigaOS 3.9 disc names files `apply()` could not
 write as literal Windows path segments — three accented letters ART's own
 ISO9660 reader turned into `?`, a character Windows refuses in a path** —
@@ -2804,6 +2853,18 @@ checked by hand: filtering only files (not directories) out of
 `non_ascii_entries` fails the directory test; unconditionally incrementing
 the bound by one off fails the "more" count test; running the same check on
 `copy_in_ffs` fails the FFS test — each reverted afterwards.
+
+**A fresh, concrete instance (Task 4 review, 2026-08-19).** The
+`locale-turkish` package recipe (`recipes/packages/locale-turkish.json`)
+places a `türkçe` catalog drawer — the exact non-ASCII AmigaDOS name this
+entry's own measurement already lists among the 24 that tripped it on
+`dist-3.2`. Applying this package onto a PFS3 volume natively will hit the
+same `CoreError::NonAsciiPfs3Names` refusal and route through the
+`hst-imager` fallback (`commands/preload.rs::run_with_fallback`) — this
+package is real, current confirmation that the gap this entry describes is
+still live, not merely historical. No code changed for this note; recorded
+so the Turkish package's own PFS3-native limitation is written down
+somewhere rather than only implied by this entry's general description.
 
 **ART-114** 🔵 ✅ **`hst-imager`'s `fs copy` extraction silently drops any entry
 whose name matches a Windows/MS-DOS reserved device basename, and the oracle

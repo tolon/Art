@@ -28,6 +28,34 @@
     "If a boot disagrees with either judgement, add the rule then, with the run as",
     "the reason — that is what a real run is for."
   ],
+  "_why_locale_base_ART_162": [
+    "Added in a Task 4 review fix round, not the round that first wrote this",
+    "file — filed as ART-162. The disc carries a whole second top-level drawer,",
+    "sibling to `Workbench3.5`, this recipe placed nothing from at all:",
+    "`OS-Version3.9/Locale` (Catalogs, Countries, Flags, Help, Languages,",
+    "Providers — measured with `7z l -slt` against the owner's own",
+    "AmigaOS39.iso). Without it, `locale.library` has no `.language` or",
+    "`.country` file to select *any* non-English locale by — not just Turkish,",
+    "every one of them — which is what made the `locale-turkish` package (this",
+    "same task) inert: its 36 catalogs would sit on the volume with nothing",
+    "that could ever pick the language they translate.",
+    "",
+    "Four of the six drawers are taken: `Catalogs`, `Countries`, `Languages`,",
+    "`Help` — the set `locale.library`'s own selection actually reads",
+    "(Locale prefs picks a `.country`/`.language` pair and points programs at",
+    "`Locale:Catalogs/<language>/*.catalog`). `Flags` (globe icons for the",
+    "Locale prefs country picker) and `Providers` (dial-up ISP presets for",
+    "Miami-era internet software this project does not install) are left out",
+    "on purpose — cosmetic/unrelated to locale selection itself, and taking",
+    "them without a measured reason would be the same kind of guess ART-127",
+    "already argues against.",
+    "",
+    "`required: false`, matching the shipped AmigaOS 3.2 recipe's own",
+    "`locale-base` component exactly (`recipes/amigaos-3.2.json`): a system",
+    "with no Locale tree still boots and runs in English, the ROM's own",
+    "default — nothing analogous to `install-libs`'s missing `icon.library`",
+    "forces this one on."
+  ],
   "release": "AmigaOS 3.9",
   "components": [
     {
@@ -49,6 +77,17 @@
         { "from": "OS-VERSION3.9/WORKBENCH3.5/SYSTEM",    "to": "System",    "kind": "subtree" },
         { "from": "OS-VERSION3.9/WORKBENCH3.5/TOOLS",     "to": "Tools",     "kind": "subtree" },
         { "from": "OS-VERSION3.9/WORKBENCH3.5/UTILITIES", "to": "Utilities", "kind": "subtree" }
+      ]
+    },
+    {
+      "id": "locale-base",
+      "media": "AmigaOS3.9",
+      "required": false,
+      "rules": [
+        { "from": "OS-VERSION3.9/LOCALE/CATALOGS",  "to": "Locale/Catalogs",  "kind": "subtree" },
+        { "from": "OS-VERSION3.9/LOCALE/COUNTRIES", "to": "Locale/Countries", "kind": "subtree" },
+        { "from": "OS-VERSION3.9/LOCALE/LANGUAGES", "to": "Locale/Languages", "kind": "subtree" },
+        { "from": "OS-VERSION3.9/LOCALE/HELP",      "to": "Locale/Help",      "kind": "subtree" }
       ]
     }
   ]

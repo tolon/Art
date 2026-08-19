@@ -20,31 +20,49 @@
 //! reaching it, and [`order`] sequencing it all fall out for free, the same
 //! way `recipe.rs`'s doc comment on `shipped_recipes` explains for releases.
 //!
-//! ## Why every shipped package's `overrides` is empty
+//! ## `overrides` crosses recipes, and is measured rather than assumed
 //!
-//! BoingBag 3.9-1 and 3.9-2 both write into drawers the base AmigaOS 3.9
-//! recipe's `workbench-base` component already places, and 3.9-2 writes into
-//! every drawer 3.9-1 does. Declaring that in `overrides` would read
-//! naturally, but two things make it either meaningless or unresolvable
-//! today: every rule in all three shipped packages is `subtree`, and
-//! `no_two_components_claim_one_destination_without_declaring_it` — the test
-//! `overrides` exists to satisfy — only polices `file` rules, treating a
-//! Subtree destination as a merge point rather than a claim (see that test's
-//! own comment in `recipe.rs`). And `Component.overrides` is resolved
-//! against **one recipe's own component list** — `recipe.rs`'s
-//! `every_override_names_a_component_that_exists` checks
-//! `recipe.component(over)`, where `recipe` is whichever single package's
-//! own one-component pseudo-recipe `shipped_recipes()` built for it. A
-//! package's `overrides` can therefore only ever name another *package*
-//! (`boingbag-39-2` could legitimately declare `["boingbag-39-1"]`), never a
-//! release recipe's component — `workbench-base` lives in a different
-//! recipe's list and would never resolve there. Since nothing here needs it
-//! resolved (Subtree rules again), every shipped package leaves it empty
-//! rather than declaring something that cannot be checked. Which file wins
-//! when two packages — or a package and the release it sits on top of — both
-//! place the same *named file* inside a shared drawer is a question for the
-//! engine that actually applies a package onto a built tree, which this task
-//! does not build.
+//! **Fix round 1 (Task 4 review) corrected this section outright — the
+//! original draft shipped every package's `overrides` empty, reasoned from
+//! the wrong scope, and review caught it two ways at once.**
+//!
+//! First, the reasoning: `overrides` is not only read by
+//! `no_two_components_claim_one_destination_without_declaring_it` — the one
+//! test that ever consulted it before this round, and the reason the empty
+//! array *looked* consistent (every shipped rule is `subtree`, and that test
+//! only polices `file` rules, treating a Subtree destination as a merge
+//! point rather than a claim). It exists to answer a *file-level* question a
+//! later stage will ask: is a package's file replacing something on purpose,
+//! or landing on a name nobody expected? Measured directly against the
+//! owner's real media (review round): **every one of BoingBag 3.9-1's 210
+//! files, and every one of 3.9-2's 121, sits at a path `workbench-base`
+//! already writes.** An empty `overrides` on data that is 100% overlap does
+//! not mean "no relationship" — it means the field is constant across every
+//! row a reader would ever check it against, which is the exact noise §3
+//! warns against: a flag that never varies separates nothing. So both
+//! BoingBags now declare `overrides: ["workbench-base"]`, and
+//! `locale-turkish` declares `overrides: ["locale-base"]` once ART-162 gave
+//! it a real, measured collision to name (`Locale/Catalogs/türkçe`, written
+//! by both the base disc and this update — see that package's own JSON for
+//! the count).
+//!
+//! Second, the mechanism: `Component.overrides` is checked by
+//! `recipe.rs`'s `every_override_names_a_component_that_exists`, and that
+//! test used to resolve `over` against `recipe.component(over)` — one
+//! recipe's own component list. Every package became its own
+//! one-component pseudo-`Recipe` in `shipped_recipes()`, so an override
+//! naming a *release's* component (`workbench-base`, `locale-base`) could
+//! never resolve there, no matter how true it was. Fixed in `recipe.rs`
+//! by resolving `over` against the union of every shipped id — every
+//! release's components and every package's own — via
+//! `all_shipped_component_ids`, so a package's `overrides` can now
+//! legitimately cross into a release recipe the same way a rule's `from`
+//! or `to` already could.
+//!
+//! What still is not built: which file's bytes actually survive when two
+//! components' subtrees really do collide on one file name is the applying
+//! engine's job, not this task's. `overrides` records the fact for that
+//! engine to read; it does not yet act on it.
 //!
 //! ## `requires` is a dependency, not a suggestion
 //!
@@ -148,10 +166,40 @@ fn parse(json: &str) -> CoreResult<Package> {
     Ok(package)
 }
 
+/// Parse and validate every JSON in `jsons`, then refuse if two share an id
+/// — the package-list counterpart of `recipe::validate`'s own
+/// id-uniqueness check over one recipe's components, which `parse` alone
+/// cannot catch since it only ever sees one JSON at a time. Parameterised
+/// (like [`order_over`]) rather than reading [`SHIPPED_JSON`] directly, so a
+/// test can feed it a deliberately colliding pair without editing the real
+/// shipped list. [`packages`] is the thin wrapper over the real one.
+///
+/// This is what actually catches the failure mode review named: two entries
+/// in `SHIPPED_JSON` naming the same id — the copy-paste that silently drops
+/// a third package while looking, at a glance, like the array still has
+/// three entries.
+fn parse_all(jsons: &[&str]) -> CoreResult<Vec<Package>> {
+    let all: Vec<Package> = jsons
+        .iter()
+        .map(|json| parse(json))
+        .collect::<CoreResult<Vec<Package>>>()?;
+
+    let mut seen = HashSet::new();
+    for package in &all {
+        if !seen.insert(package.id.as_str()) {
+            return Err(CoreError::Malformed {
+                format: "package".into(),
+                detail: format!("two shipped packages share the id '{}'", package.id),
+            });
+        }
+    }
+    Ok(all)
+}
+
 /// Every package ART ships, parsed and validated. Order here is not
 /// application order — see [`order`] for that.
 pub fn packages() -> CoreResult<Vec<Package>> {
-    SHIPPED_JSON.iter().map(|json| parse(json)).collect()
+    parse_all(SHIPPED_JSON)
 }
 
 /// The shipped JSON, deserialised **without** going through
@@ -199,10 +247,28 @@ pub fn by_id(id: &str) -> CoreResult<Package> {
 /// requirement that exists as a package but was not itself chosen is refused
 /// by name rather than silently pulled in, because adding a whole package
 /// the user did not ask for is a bigger surprise than a refusal. What is
-/// left unsorted after the sort — some id whose in-degree never reached zero
-/// — is exactly a cycle, refused by name rather than left to hang whatever
-/// applies the result.
+/// left unsorted after the sort — every id whose in-degree never reached
+/// zero — is exactly a cycle, refused **by name** (review found the first
+/// version of this said "by name" in its own doc comment and then did not
+/// do it) rather than left to hang whatever applies the result.
+///
+/// `chosen` naming the same id twice is refused up front, before any of the
+/// graph bookkeeping below runs — review found, by executing it, that a
+/// duplicate otherwise corrupts the in-degree count kept per id (every
+/// occurrence re-walks that id's own `requires`, inflating its dependents'
+/// in-degree once per repeat) and comes out looking exactly like a cycle:
+/// `result.len() != chosen.len()` fires for the wrong reason, and the actual
+/// mistake — the caller chose the same package twice — is never named.
 fn order_over(chosen: &[String], all: &[Package]) -> CoreResult<Vec<String>> {
+    let mut seen_chosen = HashSet::new();
+    for id in chosen {
+        if !seen_chosen.insert(id.as_str()) {
+            return Err(CoreError::InvalidInput(format!(
+                "'{id}' was chosen more than once"
+            )));
+        }
+    }
+
     let index: HashMap<&str, &Package> = all.iter().map(|p| (p.id.as_str(), p)).collect();
     let chosen_set: HashSet<&str> = chosen.iter().map(|s| s.as_str()).collect();
 
@@ -252,9 +318,20 @@ fn order_over(chosen: &[String], all: &[Package]) -> CoreResult<Vec<String>> {
     }
 
     if result.len() != chosen.len() {
-        return Err(CoreError::InvalidInput(
-            "the chosen packages contain a dependency cycle".to_string(),
-        ));
+        // Every id `chosen` named but the sort never emitted — its in-degree
+        // never reached zero, which is what a cycle looks like. Named
+        // explicitly rather than left as "a cycle exists somewhere": with
+        // `chosen`'s own duplicates already refused above, `result` is a
+        // genuine subset here, not a miscount.
+        let stuck: Vec<&str> = chosen
+            .iter()
+            .map(String::as_str)
+            .filter(|id| !result.iter().any(|done| done == id))
+            .collect();
+        return Err(CoreError::InvalidInput(format!(
+            "the chosen packages contain a dependency cycle: {}",
+            stuck.join(", ")
+        )));
     }
 
     Ok(result)
@@ -373,6 +450,10 @@ mod tests {
     /// cycle in it — a hand-built one is the only way to exercise the cycle
     /// branch at all, which is why this drives [`order_over`] directly
     /// rather than [`order`] itself.
+    ///
+    /// Checks the stuck ids are actually named, not just the word "cycle" —
+    /// the first version of this refusal said "by name" in its own doc
+    /// comment and did not do it (review, Task 4 fix round 1).
     #[test]
     fn a_dependency_cycle_in_hand_built_data_is_refused_rather_than_hung() {
         let x = synthetic("x", &["y"]);
@@ -381,6 +462,63 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("cycle"), "got {err}");
+        assert!(err.contains('x') && err.contains('y'), "got {err}");
+    }
+
+    /// A duplicate `chosen` id used to inflate the in-degree of everything
+    /// that id required, one extra time per repeat, and come out the far end
+    /// misreported as a cycle rather than refused for what it actually is —
+    /// confirmed by executing it (review, Task 4 fix round 1). Refused
+    /// before any graph bookkeeping runs, by name, and distinguishably from
+    /// the cycle error.
+    #[test]
+    fn a_duplicate_chosen_id_is_refused_rather_than_applied_twice_or_misreported_as_a_cycle() {
+        let a = synthetic("a", &[]);
+        let err = super::order_over(&["a".to_string(), "a".to_string()], &[a])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("more than once"), "got {err}");
+        assert!(!err.contains("cycle"), "got {err}");
+    }
+
+    /// Two shipped JSON files naming the same id is the failure mode that
+    /// silently drops a third: a copy-paste of one entry in `SHIPPED_JSON`
+    /// leaves the array's length looking right while one real package
+    /// vanishes. `parse_all` — what `packages()` itself calls — catches it
+    /// directly; this test constructs the collision without touching the
+    /// real shipped list.
+    #[test]
+    fn two_shipped_packages_sharing_an_id_are_refused() {
+        let err = super::parse_all(&[BOINGBAG_39_1_JSON, BOINGBAG_39_1_JSON])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("boingbag-39-1"), "got {err}");
+    }
+
+    /// The other half of the same failure mode: a fourth `recipes/packages/`
+    /// JSON file added but never added to `SHIPPED_JSON`, silently
+    /// unreachable — `recipe.rs`'s own history is exactly this bug for
+    /// releases (AmigaOS 3.9 shipped with one component because nothing
+    /// checked the component list matched what was intended). Filesystem
+    /// truth, not a synthetic fixture, on purpose: what is being checked is
+    /// that the crate's own embedded source tree — the thing `include_str!`
+    /// actually reads from — has not drifted from `SHIPPED_JSON`.
+    #[test]
+    fn every_package_json_file_on_disk_is_wired_into_shipped_json() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/core/osinstall/recipes/packages");
+        let on_disk = std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("reading {}: {e}", dir.display()))
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".json"))
+            .count();
+        assert_eq!(
+            on_disk,
+            SHIPPED_JSON.len(),
+            "recipes/packages/ holds {on_disk} JSON files but SHIPPED_JSON lists {} — \
+             a file was added or removed without updating the other",
+            SHIPPED_JSON.len()
+        );
     }
 
     /// A three-package chain, out of order and with the middle package

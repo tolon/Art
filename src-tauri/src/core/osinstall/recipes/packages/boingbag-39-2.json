@@ -5,15 +5,17 @@
     "same shape. BoingBag 3.9-2's payload ZIP top level is twelve directories,",
     "not thirteen: it carries `Rexxc/`, which 3.9-1 does not, and it carries",
     "neither `Fonts/` nor `Storage/`, which 3.9-1 does. Confirmed with",
-    "`7z l -slt` against the owner's own BoingBag39-2.lha, member",
-    "`AmigaOS-Update` (113 entries, matching the task brief's own count)."
+    "`7z l` against the owner's own BoingBag39-2.lha, member `AmigaOS-Update`:",
+    "121 files, 26 folders (147 entries). The task brief's own '113 entries'",
+    "was the *wrapper* LHA's own entry count, not the payload ZIP's — corrected",
+    "in the Task 4 review round; see `task-4-report.md`'s Fix round 1 section."
   ],
   "id": "boingbag-39-2",
   "name": "BoingBag 3.9-2",
   "media": "BoingBag3.9-2",
   "member": "AmigaOS-Update",
   "requires": ["boingbag-39-1"],
-  "overrides": [],
+  "overrides": ["workbench-base"],
   "rules": [
     { "from": "C",         "to": "C",         "kind": "subtree" },
     { "from": "Classes",   "to": "Classes",   "kind": "subtree" },

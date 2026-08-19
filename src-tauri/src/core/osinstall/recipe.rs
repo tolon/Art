@@ -449,13 +449,41 @@ mod tests {
         }
     }
 
+    /// Every component id anywhere ART ships — every release recipe's own
+    /// components, plus every package's (each a standalone id, since a
+    /// package wraps exactly one component under its own id). Used by
+    /// [`every_override_names_a_component_that_exists`] to resolve an
+    /// `overrides` entry that crosses out of its own recipe — a package
+    /// legitimately overriding a release's component, `boingbag-39-1`
+    /// overriding `workbench-base` being the real case a fix round found
+    /// (review, Task 4): [`shipped_recipes`] wraps each package in its own
+    /// one-component pseudo-`Recipe`, so `recipe.component(over)` alone can
+    /// never see across that boundary, however correct the override itself
+    /// is.
+    fn all_shipped_component_ids() -> std::collections::HashSet<String> {
+        let mut ids = std::collections::HashSet::new();
+        for release in super::releases() {
+            let recipe = super::by_release(release).unwrap_or_else(|e| {
+                panic!("the shipped {release} recipe must parse and validate: {e}")
+            });
+            ids.extend(recipe.components.into_iter().map(|c| c.id));
+        }
+        for package in
+            super::super::package::packages().expect("the shipped packages must parse and validate")
+        {
+            ids.insert(package.id);
+        }
+        ids
+    }
+
     #[test]
     fn every_override_names_a_component_that_exists() {
+        let ids = all_shipped_component_ids();
         for (release, recipe) in shipped_recipes() {
             for component in &recipe.components {
                 for over in &component.overrides {
                     assert!(
-                        recipe.component(over).is_some(),
+                        ids.contains(over.as_str()),
                         "{release}: {}: no such component '{over}'",
                         component.id
                     );
@@ -781,6 +809,58 @@ mod tests {
         for component in &recipe.components {
             assert_eq!(component.media, "AmigaOS3.9", "{}", component.id);
         }
+    }
+
+    /// ART-162 (Task 4 review, fix round 1). The original 3.9 recipe placed
+    /// nothing from `OS-Version3.9/Locale` at all, which made the
+    /// `locale-turkish` package (shipped the same task) inert: no
+    /// `.language`/`.country` file, so `locale.library` could never select
+    /// any non-English locale, Turkish included. Measured against the
+    /// owner's own `AmigaOS39.iso`: `OS-Version3.9/Locale`'s six top-level
+    /// drawers are `Catalogs`, `Countries`, `Flags`, `Help`, `Languages`,
+    /// `Providers`; `locale-base` takes the four `locale.library` selection
+    /// actually reads and leaves the two cosmetic/unrelated ones out
+    /// (`_why_locale_base_ART_162` in `amigaos-3.9.json` has the full
+    /// reasoning). `required: false` matches the shipped 3.2 recipe's own
+    /// `locale-base` exactly — a tree with no Locale drawer still boots and
+    /// runs, in English.
+    #[test]
+    fn the_39_recipe_places_a_locale_component_art_162() {
+        let recipe = parse(AMIGAOS_39_JSON).unwrap();
+        let locale = recipe
+            .component("locale-base")
+            .expect("ART-162: the 3.9 recipe must place a Locale component");
+        assert!(
+            !locale.required,
+            "a tree with no Locale drawer still boots and runs, in English — \
+             matching the shipped 3.2 recipe's own locale-base"
+        );
+        assert_eq!(locale.media, "AmigaOS3.9");
+        assert_eq!(
+            locale.rules,
+            vec![
+                PathRule {
+                    from: "OS-VERSION3.9/LOCALE/CATALOGS".into(),
+                    to: "Locale/Catalogs".into(),
+                    kind: RuleKind::Subtree,
+                },
+                PathRule {
+                    from: "OS-VERSION3.9/LOCALE/COUNTRIES".into(),
+                    to: "Locale/Countries".into(),
+                    kind: RuleKind::Subtree,
+                },
+                PathRule {
+                    from: "OS-VERSION3.9/LOCALE/LANGUAGES".into(),
+                    to: "Locale/Languages".into(),
+                    kind: RuleKind::Subtree,
+                },
+                PathRule {
+                    from: "OS-VERSION3.9/LOCALE/HELP".into(),
+                    to: "Locale/Help".into(),
+                    kind: RuleKind::Subtree,
+                },
+            ]
+        );
     }
 
     // ---- Task 6 — choosing which release to install ----
