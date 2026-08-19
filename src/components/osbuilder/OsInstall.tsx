@@ -415,8 +415,11 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     return () => {
       cancelled = true;
     };
-    // `setChosen`/`setExcludedConditional` are stable identities from
-    // `useRemembered`.
+    // `setChosen`/`setExcludedConditional` are deliberately out of the
+    // dependency list. They are *not* stable identities — `useRemembered`
+    // rebuilds each setter when its key changes, and the component keys are
+    // now per release — but listing them would re-plan on a release switch
+    // twice: once for `release`, once for the setters that changed with it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mediaFolder, romPath, chosen, destination, excludedConditional, release, catalogue]);
 

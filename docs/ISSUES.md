@@ -74,10 +74,13 @@ blocked `apply()` from finishing at all: `plan()` predicts `total_bytes:
 6,108,319` for the shipped recipe's one component; `apply()` actually writes
 `6,054,225` bytes of file content — a difference of exactly `54,094`, which
 is exactly the sum of `PlanItem::bytes` over the plan's 75 directory items
-(confirmed directly, not inferred: every one of the 588 file items' actual
-on-disk size matches its own `PlanItem::bytes` exactly, so the whole
-discrepancy sits in the 75 directories). Reproduced by
-`core::osinstall::apply::tests::find_the_directory_byte_overcount_when_asked`.
+(measured, not inferred: every one of the 588 file items' actual on-disk
+size matches its own `PlanItem::bytes` exactly, so the whole discrepancy sits
+in the 75 directories). Measured by
+`core::osinstall::apply::tests::find_the_directory_byte_overcount_when_asked`,
+which is a **diagnostic** — it prints the arithmetic and asserts nothing, so
+it records the measurement rather than guarding it. The fix that closes this
+issue is what gets the assertion.
 
 Not fixed here — `plan.rs` was out of Task 5's scope (its brief was
 `decode_iso646`'s charset only) and this is a distinct defect, reachable only

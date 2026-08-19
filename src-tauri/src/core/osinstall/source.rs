@@ -80,6 +80,14 @@ pub trait MediaSource {
     /// plan instead of a refusal (§89). This was left unstated once and two
     /// implementations promptly disagreed about it; `source_contract.rs`
     /// now asks every implementation the same questions.
+    ///
+    /// The **casing** of the returned paths is the media's own, not the
+    /// caller's: a disc may hold two names differing only in case, and
+    /// `entry` and `read` have to be able to reach both. Lookup is
+    /// case-insensitive (AmigaDOS semantics) while these answers are not
+    /// case-normalised, so a caller stripping a prefix off one of them must
+    /// strip case-insensitively — `plan::relative_to` does, and a Joliet
+    /// disc built the tree nested under itself for as long as it did not.
     fn walk(&mut self, path: &str) -> CoreResult<Vec<MediaEntry>>;
     /// A file's bytes. A `path` that is missing, or that names a drawer
     /// (including `""`, every media's own root), is refused with
