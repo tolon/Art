@@ -558,6 +558,7 @@ mod tests {
     use crate::core::jobs::NoProgress;
     use crate::core::osinstall::fixtures;
     use crate::core::osinstall::plan::{PlanItem, UserStartupContribution};
+    use crate::core::osinstall::source_cd::CdSource;
 
     /// A plan `apply` can run against directly, without going through
     /// `plan()` — `apply` only ever consumes the `InstallPlan` struct, so a
@@ -1671,6 +1672,213 @@ mod tests {
             println!("--- {volume} ({}) ---", entry.path.display());
             for e in &all {
                 println!("  {}{}", e.path, if e.is_dir { "/" } else { "" });
+            }
+        }
+    }
+
+    /// Throwaway diagnostic (Task 4): lists what the real 3.9 disc actually
+    /// holds near its root, to find the real path the shipped recipe's
+    /// `OS-Version3.9/Workbench3.5/*` rules got wrong. Same env-var gate as
+    /// `build_the_real_39_tree_when_asked`, deleted once its answer is known.
+    #[test]
+    #[ignore = "diagnostic only; touches the user's real media"]
+    fn inspect_real_39_disc_when_asked() {
+        let Ok(iso) = std::env::var("ART_OS39_ISO") else {
+            return;
+        };
+        let mut source = CdSource::open(&PathBuf::from(&iso)).unwrap();
+        println!("volume_name={}", source.volume_name());
+        let mut root = source.walk("").unwrap();
+        root.sort_by(|a, b| a.path.cmp(&b.path));
+        println!("--- OS-VERSION3.9/WORKBENCH3.9 direct children ---");
+        for e in &root {
+            if e.path.starts_with("OS-VERSION3.9/WORKBENCH3.9/") && e.path.matches('/').count() == 2
+            {
+                println!("  {}{}", e.path, if e.is_dir { "/" } else { "" });
+            }
+        }
+        for candidate in [
+            "OS-Version3.9",
+            "OS-Version3.9/Workbench3.5",
+            "Workbench3.5",
+            "OS-VERSION3.9/WORKBENCH3.9",
+            "OS-VERSION3.9/WORKBENCH3.9/C",
+            "OS-VERSION3.9/WORKBENCH3.9/L",
+        ] {
+            match source.entry(candidate) {
+                Ok(Some(e)) => println!("{candidate} -> present, is_dir={}", e.is_dir),
+                Ok(None) => println!("{candidate} -> absent"),
+                Err(e) => println!("{candidate} -> error: {e}"),
+            }
+        }
+
+        println!("--- anywhere on the disc named L, REXXC or EXPANSION ---");
+        for e in &root {
+            let last = e.path.rsplit('/').next().unwrap_or("");
+            if e.is_dir && (last == "L" || last == "REXXC" || last == "EXPANSION") {
+                println!("  {}", e.path);
+            }
+        }
+
+        println!("--- OS-VERSION3.9/WORKBENCH3.5 direct children ---");
+        for e in &root {
+            if e.path.starts_with("OS-VERSION3.9/WORKBENCH3.5/") && e.path.matches('/').count() == 2
+            {
+                println!("  {}{}", e.path, if e.is_dir { "/" } else { "" });
+            }
+        }
+    }
+
+    /// **Task 4 (amigaos-39 plan), the real run.** Drives the whole engine —
+    /// `find_media` (through `plan()`'s own call), `plan()`, `apply()` —
+    /// against the owner's own AmigaOS 3.9 CD image, never a synthetic
+    /// fixture. Modelled exactly on
+    /// `run_the_real_engine_against_the_users_own_media_when_asked` above:
+    /// same env-var-gated skip, same doubled `#[ignore]` belt-and-braces, same
+    /// shape of report.
+    ///
+    /// `ART_OS39_ISO` names the disc image itself; `find_media` is handed its
+    /// **parent folder**, not a folder holding only this one file — the
+    /// owner's real `iso/` folder also holds `AmigaOS3.2CD(ZaP).iso` and other
+    /// discs beside it, on purpose (see the task dispatch), so this run is
+    /// what proves the scan is not confused by the neighbour rather than
+    /// assuming a tidy folder that does not exist on this machine.
+    ///
+    /// No ROM is supplied: the shipped 3.9 recipe's one component
+    /// (`workbench-base`) is `required` and carries no `Condition`, so a plan
+    /// against it needs nothing decided from a Kickstart.
+    ///
+    /// ```text
+    /// cd src-tauri && ART_OS39_ISO="E:\amiga\Amigatolon\iso\AmigaOS39.iso" \
+    ///   ART_OS39_DEST="E:\amiga\ProjeART\dist-3.9" \
+    ///   cargo test build_the_real_39_tree_when_asked -- --nocapture --ignored
+    /// ```
+    ///
+    /// **Measured against the owner's real 469 MiB disc (Task 4, after the
+    /// recipe's `from` paths were rewritten to the disc's own case — see the
+    /// report for the refusal the first run actually produced):**
+    /// `find_media` sees all 4 discs in the shared `iso/` folder and resolves
+    /// `AmigaOS3.9` correctly, never confused by the neighbouring
+    /// `AmigaOS3.2CD(ZaP)`; `plan()` then succeeds clean — 1 component on
+    /// (`workbench-base`), 0 refusals, 663 items, 6 108 319 planned bytes.
+    ///
+    /// `apply()` does **not** succeed yet: it panics with
+    /// `CoreError::UnsupportedFormat` the moment it tries to open the disc,
+    /// because it opens every medium in `plan.media_paths` through
+    /// `AdfSource::open` unconditionally rather than `scan::open_media` —
+    /// filed as **ART-153**. That is an engine defect, not a recipe one (the
+    /// task brief's own line: "if a fix needs engine code rather than recipe
+    /// data, stop and say so"), so it is reported here rather than patched.
+    /// `files`/`directories`/`bytes` written cannot be measured until it is.
+    #[test]
+    #[ignore = "touches the user's real media and E:\\amiga\\ProjeART; run explicitly, see the doc comment"]
+    fn build_the_real_39_tree_when_asked() {
+        let (Ok(iso), Ok(dest)) = (
+            std::env::var("ART_OS39_ISO"),
+            std::env::var("ART_OS39_DEST"),
+        ) else {
+            return;
+        };
+
+        let iso_path = PathBuf::from(&iso);
+        let media_folder = iso_path
+            .parent()
+            .expect("ART_OS39_ISO names a file inside some folder")
+            .to_path_buf();
+
+        let found = crate::core::osinstall::scan::find_media(&media_folder).unwrap();
+        println!(
+            "find_media: {} volume(s) found in {}",
+            found.len(),
+            media_folder.display()
+        );
+        for entry in &found {
+            println!(
+                "  {:?} {} -> {}",
+                entry.kind,
+                entry.volume_name,
+                entry.path.display()
+            );
+        }
+
+        let request = crate::core::osinstall::plan::InstallRequest {
+            media_folder,
+            rom: None,
+            chosen: Vec::new(),
+            excluded: Vec::new(),
+            destination: PathBuf::from(&dest),
+        };
+
+        let recipe = crate::core::osinstall::recipe::amigaos_39().unwrap();
+        let planned = crate::core::osinstall::plan::plan(&request, &recipe).unwrap();
+
+        println!("release={}", planned.release);
+        println!("components_on={:?}", planned.components_on);
+        println!("refusals={:?}", planned.refusals);
+        println!("total_bytes={}", planned.total_bytes);
+        println!("items={}", planned.items.len());
+
+        assert!(
+            planned.refusals.is_empty(),
+            "the real plan refused: {:?}",
+            planned.refusals
+        );
+        assert_eq!(
+            planned.components_on,
+            vec!["workbench-base".to_string()],
+            "the shipped 3.9 recipe carries exactly one component today"
+        );
+
+        // **ART-153.** `plan()` is proven clean above — the plan phase is
+        // exactly what this task owns fixing (recipe data). `apply()` is
+        // not: it opens every medium in `plan.media_paths` through
+        // `AdfSource::open` unconditionally, never `scan::open_media`, so it
+        // cannot read the disc `plan()` just resolved. That is engine code,
+        // out of this task's scope by its own brief ("if a fix needs engine
+        // code rather than recipe data, stop and say so"), so this calls
+        // `apply()` for real — matching what a full run actually does — and
+        // reports the failure by name instead of masking it with an
+        // `Err(_)` match that would make a future, real fix invisible here.
+        let start = std::time::Instant::now();
+        let root = PathBuf::from(&dest);
+        match apply(&planned, &root, &NoProgress) {
+            Ok(outcome) => {
+                let elapsed = start.elapsed();
+                println!(
+                    "apply: files={} directories={} bytes={} in {:.2}s",
+                    outcome.files,
+                    outcome.directories,
+                    outcome.bytes,
+                    elapsed.as_secs_f64()
+                );
+                assert!(
+                    outcome.files > 0 && outcome.directories > 0,
+                    "a real disc must produce a non-empty tree"
+                );
+
+                let manifest_text = std::fs::read_to_string(root.join(MANIFEST_FILE_NAME)).unwrap();
+                let manifest: DistributionManifest = serde_json::from_str(&manifest_text).unwrap();
+                println!(
+                    "manifest: {} file(s) recorded from {} medium/media",
+                    manifest.files.len(),
+                    manifest.built_from.len()
+                );
+                assert_eq!(manifest.files.len(), outcome.files as usize);
+                assert_eq!(manifest.built_from.len(), planned.components_on.len());
+            }
+            Err(err) => {
+                panic!(
+                    "apply() failed against the real disc: {err}\n\n\
+                     This is ART-153 (docs/ISSUES.md), a known engine defect and not a \
+                     recipe problem: apply() opens every medium in `plan.media_paths` via \
+                     `AdfSource::open` unconditionally rather than `scan::open_media`, so it \
+                     cannot read a disc's own bytes even though `plan()` already can (proven \
+                     just above — 0 refusals, 663 items). Filing/fixing it is a different \
+                     task by this task's own brief. If this message ever changes, ART-153 was \
+                     fixed — replace this whole match with the plain `.unwrap()` the 3.2 hook \
+                     above uses, and measure the real files/directories/bytes into this \
+                     test's own doc comment."
+                );
             }
         }
     }

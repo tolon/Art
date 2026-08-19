@@ -84,10 +84,23 @@ pub fn amigaos_32() -> CoreResult<Recipe> {
 }
 
 /// The shipped AmigaOS 3.9 recipe — one component today (`workbench-base`,
-/// the base tree out of `OS-Version3.9/Workbench3.5`). Everything else waits
+/// the base tree out of `OS-VERSION3.9/WORKBENCH3.5`). Everything else waits
 /// for a real boot to say whether the base needs it; see the recipe file's
 /// own comment and CLAUDE.md's "don't claim support that isn't implemented
 /// and tested" rule (spec §89).
+///
+/// **All-caps `from` paths, on purpose (Task 4's real run against the
+/// owner's own disc — see `apply.rs`'s `build_the_real_39_tree_when_asked`).**
+/// The synthetic fixtures every earlier task tested against always build a
+/// Joliet tree, so the recipe was originally written in the mixed case a
+/// Joliet name carries. The owner's real `AmigaOS39.iso` carries no Joliet
+/// supplementary descriptor at all — only a Primary tree, whose names
+/// ISO9660 keeps uppercase (`CdSource`/`IsoImage::open` docs this: "Joliet
+/// wins when it is there"). Every `from` here was refused as
+/// `MediaPathMissing` under the mixed-case spelling before this fix; `to`
+/// stays mixed-case, matching AmigaDOS convention, since it names a
+/// destination in the tree ART writes, never a path resolved against the
+/// disc.
 pub fn amigaos_39() -> CoreResult<Recipe> {
     parse(AMIGAOS_39_JSON)
 }
@@ -642,8 +655,11 @@ mod tests {
         assert!(
             base.rules
                 .iter()
-                .any(|r| r.from == "OS-Version3.9/Workbench3.5/C"),
-            "the rules are written against the CD's own layout"
+                .any(|r| r.from == "OS-VERSION3.9/WORKBENCH3.5/C"),
+            "the rules are written against the CD's own layout — all-caps, \
+             because the owner's real disc (Task 4) carries no Joliet \
+             descriptor at all, so `CdSource` reads its Primary tree, whose \
+             names ISO9660 keeps uppercase"
         );
     }
 

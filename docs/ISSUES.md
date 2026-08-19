@@ -51,6 +51,40 @@ more than the default, and no wasted headroom for one that needs less. Worth
 doing once more than one real title's memory failure has been measured, not
 before.
 
+**ART-153** 🟠 **`apply()` cannot build a distribution tree from disc media —
+it opens every medium `plan.media_paths` names through `AdfSource::open`
+unconditionally, never `scan::open_media`** — *found 2026-08-19, the 3.9
+recipe's Task 4 real run against the owner's own `AmigaOS39.iso`*
+`src-tauri/src/core/osinstall/apply.rs` (`apply()`, the `for (volume, path) in
+&plan.media_paths` loop) ·
+
+`plan()` was fixed for CD media in an earlier task
+(`a_component_whose_media_is_a_disc_is_planned_from_the_disc`,
+`core/osinstall/plan.rs`) and correctly resolves a `Subtree` rule against a
+disc through `scan::open_media`, which dispatches on `FoundMedia::kind`
+(`MediaKind::Floppy` → `AdfSource`, `MediaKind::Disc` → `CdSource`). `apply()`
+never received the same fix: it builds its `sources` map with
+`Box::new(AdfSource::open(path)?)` for every volume in `plan.media_paths`,
+whatever kind of medium it actually is. A plan built entirely from CD content
+therefore plans cleanly (0 refusals) and then fails at the first byte written,
+with `CoreError::UnsupportedFormat("… does not start with a recognisable
+AmigaDOS signature")` — a real ISO9660 image is never a bare AmigaDOS volume,
+so `AdfSource::open` always refuses it.
+
+Reproduced by `core::osinstall::apply::tests::build_the_real_39_tree_when_asked`
+(`#[ignore]`d, environment-gated — see its own doc comment) against the
+owner's real 469 MiB `AmigaOS39.iso`: `plan()` succeeds (`workbench-base`
+only, 0 refusals, 663 items, 6,108,319 planned bytes), and `apply()` panics
+immediately afterward with the error above. Not fixed here — Task 4's own
+brief draws the line explicitly ("if a fix needs engine code rather than
+recipe data, stop and say so — that is a different task and probably a
+different review"), and `plan.media_paths` does not currently carry a
+medium's `MediaKind` at all, so a correct fix has to decide where that travels
+from `find_media` through `InstallPlan` to `apply()` — not a one-line swap of
+`AdfSource::open` for `open_media`, since `open_media` takes a `FoundMedia`,
+which `apply()` does not have, only a bare `PathBuf`. Blocks the AmigaOS 3.9
+recipe from ever producing a real tree until fixed.
+
 **ART-144** 🔵 **Five minors deferred across collection-wave-c's own review
 rounds, folded into one entry — #4 closed by the whole-branch review's fix
 pass, #1/#2/#3/#5 still open** — *found 2026-08-18, Tasks 3/6/6b/8; filed at

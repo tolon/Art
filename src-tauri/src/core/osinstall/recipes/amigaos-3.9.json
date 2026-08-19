@@ -6,20 +6,20 @@
       "media": "AmigaOS3.9",
       "required": true,
       "rules": [
-        { "from": "OS-Version3.9/Workbench3.5/C",         "to": "C",         "kind": "subtree" },
-        { "from": "OS-Version3.9/Workbench3.5/Classes",   "to": "Classes",   "kind": "subtree" },
-        { "from": "OS-Version3.9/Workbench3.5/Devs",      "to": "Devs",      "kind": "subtree" },
-        { "from": "OS-Version3.9/Workbench3.5/Expansion", "to": "Expansion", "kind": "subtree" },
-        { "from": "OS-Version3.9/Workbench3.5/Fonts",     "to": "Fonts",     "kind": "subtree" },
-        { "from": "OS-Version3.9/Workbench3.5/L",         "to": "L",         "kind": "subtree" },
-        { "from": "OS-Version3.9/Workbench3.5/Libs",      "to": "Libs",      "kind": "subtree" },
-        { "from": "OS-Version3.9/Workbench3.5/Prefs",     "to": "Prefs",     "kind": "subtree" },
-        { "from": "OS-Version3.9/Workbench3.5/Rexxc",     "to": "Rexxc",     "kind": "subtree" },
-        { "from": "OS-Version3.9/Workbench3.5/S",         "to": "S",         "kind": "subtree" },
-        { "from": "OS-Version3.9/Workbench3.5/Storage",   "to": "Storage",   "kind": "subtree" },
-        { "from": "OS-Version3.9/Workbench3.5/System",    "to": "System",    "kind": "subtree" },
-        { "from": "OS-Version3.9/Workbench3.5/Tools",     "to": "Tools",     "kind": "subtree" },
-        { "from": "OS-Version3.9/Workbench3.5/Utilities", "to": "Utilities", "kind": "subtree" }
+        { "from": "OS-VERSION3.9/WORKBENCH3.5/C",         "to": "C",         "kind": "subtree" },
+        { "from": "OS-VERSION3.9/WORKBENCH3.5/CLASSES",   "to": "Classes",   "kind": "subtree" },
+        { "from": "OS-VERSION3.9/WORKBENCH3.5/DEVS",      "to": "Devs",      "kind": "subtree" },
+        { "from": "OS-VERSION3.9/WORKBENCH3.5/EXPANSION", "to": "Expansion", "kind": "subtree" },
+        { "from": "OS-VERSION3.9/WORKBENCH3.5/FONTS",     "to": "Fonts",     "kind": "subtree" },
+        { "from": "OS-VERSION3.9/WORKBENCH3.5/L",         "to": "L",         "kind": "subtree" },
+        { "from": "OS-VERSION3.9/WORKBENCH3.5/LIBS",      "to": "Libs",      "kind": "subtree" },
+        { "from": "OS-VERSION3.9/WORKBENCH3.5/PREFS",     "to": "Prefs",     "kind": "subtree" },
+        { "from": "OS-VERSION3.9/WORKBENCH3.5/REXXC",     "to": "Rexxc",     "kind": "subtree" },
+        { "from": "OS-VERSION3.9/WORKBENCH3.5/S",         "to": "S",         "kind": "subtree" },
+        { "from": "OS-VERSION3.9/WORKBENCH3.5/STORAGE",   "to": "Storage",   "kind": "subtree" },
+        { "from": "OS-VERSION3.9/WORKBENCH3.5/SYSTEM",    "to": "System",    "kind": "subtree" },
+        { "from": "OS-VERSION3.9/WORKBENCH3.5/TOOLS",     "to": "Tools",     "kind": "subtree" },
+        { "from": "OS-VERSION3.9/WORKBENCH3.5/UTILITIES", "to": "Utilities", "kind": "subtree" }
       ]
     }
   ]
