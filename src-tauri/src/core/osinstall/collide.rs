@@ -62,23 +62,52 @@
 //! that would otherwise risk reporting `Identical` on two files a metadata
 //! call already proved are not.
 //!
-//! ## A version marker names a program, and the wrong one can be found
+//! ## A version marker must name the file it was found in — not the other file
 //!
-//! Fix round 1, F1 — a real defect, not a hypothetical one. `$VER:` is
-//! found by raw substring search (`amigaver::read`'s own doc comment), so
-//! the *first* marker in a file is not necessarily the marker for the
-//! program the file's own name says it is — a command can embed, or sit
-//! ahead of, another program's own copy of the string. Comparing two
-//! files' version *numbers* without first checking that
-//! [`amigaver::AmigaVersion::name`] agrees on both sides lets an older
-//! `assign` file classify as an *upgrade* purely because whatever marker
-//! `read` happened to find first in the incoming file belonged to
-//! `dos.library`, not `assign` — an older file behind a green arrow, which
-//! is precisely the failure this whole module exists to prevent. So
-//! [`classify_by_version`] compares names before numbers, and a mismatch
-//! is not a downgrade or an upgrade — it is treated exactly like a version
-//! found on only one side: ART has not measured a version *for this
-//! program* in that file, so it says nothing rather than guessing (§89).
+//! Fix round 1, F1 found a real defect: `$VER:` is found by raw substring
+//! search (`amigaver::read`'s own doc comment), so the *first* marker in a
+//! file is not necessarily the marker for the program the file's own name
+//! says it is. Round 1's fix compared the two sides' marker *names to each
+//! other* — but that only asks whether the two files are confused in the
+//! *same* way. The round 2 review found this by reimplementing the
+//! classifier and running the construction: when **both** files carry the
+//! same foreign marker ahead of their own real one, the names agree with
+//! each other, the guard passes, and the numbers compared are still the
+//! wrong ones — a real `assign 45.9 → 37.4` still rendered as an upgrade,
+//! reproducing the original harm through the guard meant to stop it.
+//!
+//! The spec (amended `5f85221`) rules that the anchor has to be the file
+//! itself, not the other side: a marker's own [`amigaver::AmigaVersion::name`]
+//! must name the file it was found in, checked independently on each side
+//! against the one destination path both the existing and the incoming
+//! file share ([`Incoming::to`] — the same path is "this file's own name"
+//! for both, because this is the same destination before and after). A
+//! marker that fails its own file's check is not compared to anything; it
+//! falls to the unversioned class exactly as if no marker had been found
+//! at all — a mismatch is never a verdict, only an absence.
+//!
+//! [`marker_names_its_own_file`] accepts the file's own name, its name
+//! without extension, or its parent drawer's name joined to either
+//! (`Fonts/courier/11` genuinely calls itself `courier11` — this is not a
+//! special case for one file, it is what a font's own `$VER:` says),
+//! matched case-insensitively (AmigaDOS is; `eq_ignore_ascii_case`,
+//! `source_archive.rs`'s own convention for the same reason, ART-012). The
+//! reviewer measured this against the owner's real 3.9 tree before ruling:
+//! 180 markers found, 173 (96%) name their own file. The seven dropped are
+//! explainable — an odd font, `L/FastFileSystem` calling itself `fs`,
+//! three `.country` files whose names truncate at an accented character —
+//! and one, `L/Queue-Handler`, whose first marker reads `Version`: the
+//! exact bypass this rule exists to catch, caught in real material. Seven
+//! files falling from a version label to a size comparison is the
+//! measured cost; no file can be labelled with another program's numbers
+//! is the benefit.
+//!
+//! A useful side effect: because the anchor no longer compares the two
+//! sides' names *to each other*, a legitimate rebuild that merely changed
+//! case or punctuation in its own `$VER:` name (`LoadWB` vs `loadwb`) is no
+//! longer rejected as "the two sides disagree" the way round 1's
+//! cross-comparison would have — each side only has to match its own
+//! file, case-insensitively, which it does.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -186,16 +215,20 @@ fn version_label(version: &amigaver::AmigaVersion) -> String {
 /// Classify what landing `incoming` over `existing` would do, from bytes
 /// already in hand.
 ///
+/// `to` is the one destination path both sides share — the same file
+/// before and after — used to decide whether either side's `$VER:` marker
+/// is even trustworthy; see the module doc comment's anchor section.
+///
 /// `existing == incoming` is checked first and unconditionally: two equal
 /// byte slices are the same file regardless of what either one's `$VER:`
 /// marker says, and answering that question needs the full content of
 /// both — [`preview`] is the one place that decides how much of a real
 /// file is worth reading to reach this call; see the module doc comment.
-pub fn classify(existing: &[u8], incoming: &[u8]) -> Collision {
+pub fn classify(existing: &[u8], incoming: &[u8], to: &str) -> Collision {
     if existing == incoming {
         return Collision::Identical;
     }
-    classify_by_version(existing, incoming)
+    classify_by_version(existing, incoming, to)
 }
 
 /// The version-only half of [`classify`]: never returns
@@ -205,32 +238,32 @@ pub fn classify(existing: &[u8], incoming: &[u8]) -> Collision {
 /// comparison, or its size ceiling) — see the module doc comment for why
 /// that split exists.
 ///
-/// A version is only ever compared between two markers that **name the
-/// same program** — see the module doc comment's last section for the
-/// real input that made this necessary (fix round 1, F1). When the names
-/// agree, [`amigaver::AmigaVersion::compare_version`] decides: strictly
-/// greater is [`Collision::Upgrade`]; strictly less is
-/// [`Collision::Downgrade`]; equal is [`Collision::SameVersion`] (fix
-/// round 1, F2 — neither an upgrade nor a downgrade, and not nothing
-/// either, since both sides do say what they are). Everything else — a
-/// version on only one side, no version on either, or two markers naming
-/// different programs — falls back to sizes, never an invented or
-/// mismatched-program version (§89).
-fn classify_by_version(existing: &[u8], incoming: &[u8]) -> Collision {
-    match (amigaver::read(existing), amigaver::read(incoming)) {
-        (Some(from), Some(to)) if from.name == to.name => match to.compare_version(&from) {
+/// Each side's marker is read through [`read_own_marker`], which discards
+/// it unless it names `to`'s own file — never compared to the *other*
+/// side's name (see the module doc comment's anchor section for why that
+/// was the round 1 defect). When both sides pass their own anchor check,
+/// [`amigaver::AmigaVersion::compare_version`] decides: strictly greater
+/// is [`Collision::Upgrade`]; strictly less is [`Collision::Downgrade`];
+/// equal is [`Collision::SameVersion`] (fix round 1, F2 — neither an
+/// upgrade nor a downgrade, and not nothing either, since both sides do
+/// say what they are). Everything else — a version on only one side, no
+/// version on either, or a marker that named some other file — falls back
+/// to sizes, never an invented or mismatched version (§89).
+fn classify_by_version(existing: &[u8], incoming: &[u8], to: &str) -> Collision {
+    match (read_own_marker(existing, to), read_own_marker(incoming, to)) {
+        (Some(from), Some(to_version)) => match to_version.compare_version(&from) {
             Ordering::Greater => Collision::Upgrade {
                 from: version_label(&from),
-                to: version_label(&to),
+                to: version_label(&to_version),
             },
             Ordering::Equal => Collision::SameVersion {
-                version: version_label(&to),
+                version: version_label(&to_version),
                 from_bytes: existing.len() as u64,
                 to_bytes: incoming.len() as u64,
             },
             Ordering::Less => Collision::Downgrade {
                 from: version_label(&from),
-                to: version_label(&to),
+                to: version_label(&to_version),
             },
         },
         _ => Collision::Unversioned {
@@ -238,6 +271,57 @@ fn classify_by_version(existing: &[u8], incoming: &[u8]) -> Collision {
             to_bytes: incoming.len() as u64,
         },
     }
+}
+
+/// `amigaver::read`, discarding whatever it finds unless the marker's own
+/// name is one `to`'s file could plausibly go by — see
+/// [`marker_names_its_own_file`] and the module doc comment's anchor
+/// section. A marker that fails this is treated exactly like no marker at
+/// all: an absence, never a verdict.
+fn read_own_marker(bytes: &[u8], to: &str) -> Option<amigaver::AmigaVersion> {
+    let version = amigaver::read(bytes)?;
+    marker_names_its_own_file(&version.name, to).then_some(version)
+}
+
+/// Every name `to`'s own file could plausibly go by in its own `$VER:`
+/// marker: its file name, its file name without an extension, and — since
+/// a font's identity is its drawer plus its name (`Fonts/courier/11` calls
+/// itself `courier11`) — its parent drawer's name joined to either. See
+/// the module doc comment's anchor section for the measurement behind
+/// this list.
+fn identity_candidates(to: &str) -> Vec<String> {
+    let mut segments: Vec<&str> = to.split('/').filter(|s| !s.is_empty()).collect();
+    let Some(file_name) = segments.pop() else {
+        return Vec::new();
+    };
+    let parent_name = segments.last().copied();
+    let file_stem = file_name
+        .rsplit_once('.')
+        .map(|(stem, _)| stem)
+        .filter(|stem| !stem.is_empty());
+
+    let mut candidates = vec![file_name.to_string()];
+    if let Some(stem) = file_stem {
+        candidates.push(stem.to_string());
+    }
+    if let Some(parent) = parent_name {
+        candidates.push(format!("{parent}{file_name}"));
+        if let Some(stem) = file_stem {
+            candidates.push(format!("{parent}{stem}"));
+        }
+    }
+    candidates
+}
+
+/// Whether `marker_name` — a `$VER:` marker's own
+/// [`amigaver::AmigaVersion::name`] — is a name `to`'s own file could
+/// plausibly go by, case-insensitively (AmigaDOS is; `eq_ignore_ascii_case`,
+/// matching `source_archive.rs`'s own convention for the same reason,
+/// ART-012).
+fn marker_names_its_own_file(marker_name: &str, to: &str) -> bool {
+    identity_candidates(to)
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(marker_name))
 }
 
 /// Read at most `bound` bytes of `path` — never the whole file when only a
@@ -312,7 +396,7 @@ fn classify_incoming(
         // the module doc comment.
         let existing_bytes = std::fs::read(&target)?;
         let incoming_bytes = std::fs::read(entry.bytes_at)?;
-        classify(&existing_bytes, &incoming_bytes)
+        classify(&existing_bytes, &incoming_bytes, &entry.to)
     } else {
         // Either the lengths already disagree (identity is settled without
         // reading either file whole) or at least one file is too large to
@@ -323,7 +407,7 @@ fn classify_incoming(
         // be reported `Identical`. See the module doc comment.
         let existing_bytes = read_bounded(&target, VERSION_SEARCH_BOUND)?;
         let incoming_bytes = read_bounded(entry.bytes_at, VERSION_SEARCH_BOUND)?;
-        classify_by_version(&existing_bytes, &incoming_bytes)
+        classify_by_version(&existing_bytes, &incoming_bytes, &entry.to)
     };
     let collision = with_real_sizes(collision, existing_len, incoming_len);
 
@@ -466,7 +550,7 @@ mod tests {
     /// been asked a question with no content.
     #[test]
     fn identical_bytes_are_not_an_overwrite() {
-        assert_eq!(classify(b"same", b"same"), Collision::Identical);
+        assert_eq!(classify(b"same", b"same", "C/Assign"), Collision::Identical);
     }
 
     #[test]
@@ -474,7 +558,7 @@ mod tests {
         let old = b"$VER: assign 37.4 (25.4.91)".as_slice();
         let new = b"$VER: assign 45.9 (1.1.99)".as_slice();
         assert_eq!(
-            classify(old, new),
+            classify(old, new, "C/assign"),
             Collision::Upgrade {
                 from: "37.4".into(),
                 to: "45.9".into()
@@ -489,7 +573,10 @@ mod tests {
     fn an_older_version_is_a_downgrade() {
         let new = b"$VER: assign 45.9 (1.1.99)".as_slice();
         let old = b"$VER: assign 37.4 (25.4.91)".as_slice();
-        assert!(matches!(classify(new, old), Collision::Downgrade { .. }));
+        assert!(matches!(
+            classify(new, old, "C/assign"),
+            Collision::Downgrade { .. }
+        ));
     }
 
     /// Equal versions, different bytes: neither older nor newer, and both
@@ -503,7 +590,7 @@ mod tests {
         let a = b"$VER: assign 37.4 (25.4.91)\x00A".as_slice();
         let b = b"$VER: assign 37.4 (25.4.91)\x00B".as_slice();
         assert_eq!(
-            classify(a, b),
+            classify(a, b, "C/assign"),
             Collision::SameVersion {
                 version: "37.4".into(),
                 from_bytes: a.len() as u64,
@@ -518,7 +605,7 @@ mod tests {
         let existing = b"plain bytes".as_slice();
         let incoming = b"$VER: thing 45.1 (1.1.99)".as_slice();
         assert_eq!(
-            classify(existing, incoming),
+            classify(existing, incoming, "L/thing"),
             Collision::Unversioned {
                 from_bytes: existing.len() as u64,
                 to_bytes: incoming.len() as u64
@@ -533,7 +620,7 @@ mod tests {
         let a = b"$VER: thing 44.1 (1.1.99)\x00x".as_slice();
         let b = b"$VER: thing 44.1 (31.12.02)\x00y".as_slice();
         assert_eq!(
-            classify(a, b),
+            classify(a, b, "L/thing"),
             Collision::SameVersion {
                 version: "44.1".into(),
                 from_bytes: a.len() as u64,
@@ -542,16 +629,15 @@ mod tests {
         );
     }
 
-    /// Fix round 1, F1 — the reviewer's own input. `read` finds the
-    /// *first* `$VER:` in a file wherever it sits (`amigaver.rs`'s own
-    /// doc comment), so an incoming file can carry a real, newer-looking
-    /// version number that belongs to an entirely different program —
-    /// here, `dos.library 47.0` sitting ahead of the file's own
-    /// `assign 37.4`. Comparing the raw numbers would call this an
-    /// upgrade from `assign 45.9`; comparing names first must instead
-    /// treat it exactly like no version was found at all.
+    /// Fix round 1, F1 — one side's first marker belongs to another
+    /// program. `read` finds the *first* `$VER:` in a file wherever it
+    /// sits (`amigaver.rs`'s own doc comment), so the incoming file's
+    /// first marker here is `dos.library 47.0`, not its own `assign
+    /// 37.4`. Anchoring to `to` ("C/assign") rejects `dos.library` outright
+    /// — it never even reaches a name-to-name comparison — so this falls
+    /// to `Unversioned` rather than being compared against anything.
     #[test]
-    fn a_different_programs_version_marker_is_never_compared_against_this_ones() {
+    fn a_foreign_marker_on_one_side_is_never_compared_against_the_other() {
         let existing = b"$VER: assign 45.9 (1.1.99)".as_slice();
         let incoming = [
             b"$VER: dos.library 47.0 (1.1.99)\x00".as_slice(),
@@ -560,10 +646,78 @@ mod tests {
         .concat();
 
         assert_eq!(
-            classify(existing, &incoming),
+            classify(existing, &incoming, "C/assign"),
             Collision::Unversioned {
                 from_bytes: existing.len() as u64,
                 to_bytes: incoming.len() as u64
+            }
+        );
+    }
+
+    /// Fix round 2, F1 (the re-reviewer's own construction) — the defect
+    /// round 1's fix missed. Both sides' *first* marker is the same
+    /// foreign `dos.library`, so a name-to-name comparison between the two
+    /// sides agrees and would compare `47.0` against `40.1` as if that
+    /// were the real story — reproducing the original harm, a genuine
+    /// `assign 45.9 → 37.4` downgrade rendering as an upgrade. Anchoring
+    /// each side to `to` independently catches this: `dos.library` never
+    /// names `C/assign`, on either side, so neither marker is trusted and
+    /// the pair falls to `Unversioned` — never reaching a comparison that
+    /// could render the downgrade as anything else.
+    #[test]
+    fn both_sides_sharing_the_same_foreign_marker_still_never_compares() {
+        let existing = [
+            b"$VER: dos.library 40.1 (1.1.90)\x00".as_slice(),
+            b"$VER: assign 45.9 (1.1.99)",
+        ]
+        .concat();
+        let incoming = [
+            b"$VER: dos.library 47.0 (1.1.99)\x00".as_slice(),
+            b"$VER: assign 37.4 (25.4.91)",
+        ]
+        .concat();
+
+        assert_eq!(
+            classify(&existing, &incoming, "C/assign"),
+            Collision::Unversioned {
+                from_bytes: existing.len() as u64,
+                to_bytes: incoming.len() as u64
+            }
+        );
+    }
+
+    /// Fix round 2 — the parent-drawer form. `Fonts/courier/11` genuinely
+    /// calls itself `courier11` in its own `$VER:`; the file name alone
+    /// (`11`) would never match, so the drawer has to be part of the
+    /// identity for a font's version to ever be comparable at all.
+    #[test]
+    fn a_fonts_own_marker_names_its_drawer_plus_its_file() {
+        let old = b"$VER: courier11 44.1 (1.1.99)".as_slice();
+        let new = b"$VER: courier11 45.2 (2.2.99)".as_slice();
+        assert_eq!(
+            classify(old, new, "Fonts/courier/11"),
+            Collision::Upgrade {
+                from: "44.1".into(),
+                to: "45.2".into()
+            }
+        );
+    }
+
+    /// Fix round 2 — the anchor is case-insensitive, matching AmigaDOS
+    /// itself, and this is also the side effect the re-review asked to be
+    /// confirmed: round 1's cross-side name comparison would have rejected
+    /// this pair (`LoadWB` != `loadwb`, byte for byte) as a mismatch even
+    /// though it is a legitimate rebuild; anchoring each side to its own
+    /// file, case-insensitively, compares it instead.
+    #[test]
+    fn a_case_difference_between_the_files_own_name_and_its_marker_still_compares() {
+        let old = b"$VER: loadwb 40.1 (1.1.90)".as_slice();
+        let new = b"$VER: loadwb 45.3 (2.2.99)".as_slice();
+        assert_eq!(
+            classify(old, new, "C/LoadWB"),
+            Collision::Upgrade {
+                from: "40.1".into(),
+                to: "45.3".into()
             }
         );
     }
