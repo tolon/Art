@@ -7,6 +7,7 @@ use super::Recipe;
 use crate::core::error::{CoreError, CoreResult};
 
 const AMIGAOS_32_JSON: &str = include_str!("recipes/amigaos-3.2.json");
+const AMIGAOS_39_JSON: &str = include_str!("recipes/amigaos-3.9.json");
 
 /// Parse and validate a recipe.
 pub fn parse(json: &str) -> CoreResult<Recipe> {
@@ -80,6 +81,15 @@ fn validate(recipe: &Recipe) -> CoreResult<()> {
 /// The shipped AmigaOS 3.2 recipe.
 pub fn amigaos_32() -> CoreResult<Recipe> {
     parse(AMIGAOS_32_JSON)
+}
+
+/// The shipped AmigaOS 3.9 recipe — one component today (`workbench-base`,
+/// the base tree out of `OS-Version3.9/Workbench3.5`). Everything else waits
+/// for a real boot to say whether the base needs it; see the recipe file's
+/// own comment and CLAUDE.md's "don't claim support that isn't implemented
+/// and tested" rule (spec §89).
+pub fn amigaos_39() -> CoreResult<Recipe> {
+    parse(AMIGAOS_39_JSON)
 }
 
 #[cfg(test)]
@@ -555,6 +565,48 @@ mod tests {
                     && r.kind == RuleKind::Subtree),
                 "{id} must carry Help -> Locale/Help"
             );
+        }
+    }
+
+    // ---- AmigaOS 3.9 — first component (base tree) ----
+
+    /// The shipped recipe parses and validates — the same bar the 3.2 recipe
+    /// meets, and the reason a malformed one cannot ship.
+    #[test]
+    fn the_39_recipe_is_valid() {
+        let recipe = parse(AMIGAOS_39_JSON).expect("the shipped 3.9 recipe validates");
+        assert!(
+            recipe.components.iter().any(|c| c.id == "workbench-base"),
+            "the base component is what makes a tree at all"
+        );
+    }
+
+    /// A CD's paths are deeper than a floppy's, and every segment still has to
+    /// be a name AmigaDOS could store — `validate_path` is the gate and this
+    /// pins that the deeper shape passes it.
+    #[test]
+    fn the_39_recipes_deep_media_paths_pass_the_name_gate() {
+        let recipe = parse(AMIGAOS_39_JSON).unwrap();
+        let base = recipe
+            .components
+            .iter()
+            .find(|c| c.id == "workbench-base")
+            .unwrap();
+        assert!(
+            base.rules
+                .iter()
+                .any(|r| r.from == "OS-Version3.9/Workbench3.5/C"),
+            "the rules are written against the CD's own layout"
+        );
+    }
+
+    /// Every component names media the recipe itself declares — the rule
+    /// `validate` already enforces, asserted for this recipe specifically.
+    #[test]
+    fn the_39_recipe_names_one_medium() {
+        let recipe = parse(AMIGAOS_39_JSON).unwrap();
+        for component in &recipe.components {
+            assert_eq!(component.media, "AmigaOS3.9", "{}", component.id);
         }
     }
 }

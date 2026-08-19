@@ -1,0 +1,26 @@
+{
+  "release": "AmigaOS 3.9",
+  "components": [
+    {
+      "id": "workbench-base",
+      "media": "AmigaOS3.9",
+      "required": true,
+      "rules": [
+        { "from": "OS-Version3.9/Workbench3.5/C",         "to": "C",         "kind": "subtree" },
+        { "from": "OS-Version3.9/Workbench3.5/Classes",   "to": "Classes",   "kind": "subtree" },
+        { "from": "OS-Version3.9/Workbench3.5/Devs",      "to": "Devs",      "kind": "subtree" },
+        { "from": "OS-Version3.9/Workbench3.5/Expansion", "to": "Expansion", "kind": "subtree" },
+        { "from": "OS-Version3.9/Workbench3.5/Fonts",     "to": "Fonts",     "kind": "subtree" },
+        { "from": "OS-Version3.9/Workbench3.5/L",         "to": "L",         "kind": "subtree" },
+        { "from": "OS-Version3.9/Workbench3.5/Libs",      "to": "Libs",      "kind": "subtree" },
+        { "from": "OS-Version3.9/Workbench3.5/Prefs",     "to": "Prefs",     "kind": "subtree" },
+        { "from": "OS-Version3.9/Workbench3.5/Rexxc",     "to": "Rexxc",     "kind": "subtree" },
+        { "from": "OS-Version3.9/Workbench3.5/S",         "to": "S",         "kind": "subtree" },
+        { "from": "OS-Version3.9/Workbench3.5/Storage",   "to": "Storage",   "kind": "subtree" },
+        { "from": "OS-Version3.9/Workbench3.5/System",    "to": "System",    "kind": "subtree" },
+        { "from": "OS-Version3.9/Workbench3.5/Tools",     "to": "Tools",     "kind": "subtree" },
+        { "from": "OS-Version3.9/Workbench3.5/Utilities", "to": "Utilities", "kind": "subtree" }
+      ]
+    }
+  ]
+}
