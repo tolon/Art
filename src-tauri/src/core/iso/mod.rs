@@ -1313,14 +1313,26 @@ mod tests {
     use super::*;
     use std::fs;
 
+    /// A scratch directory no other test can be handed.
+    ///
+    /// The process id and a nanosecond stamp are **not** enough: two threads
+    /// entering here close enough together get the same name, and then one
+    /// test reads another's disc. That is measured, not hypothetical — 5
+    /// failures across 4 different tests in 40 runs, one of them comparing
+    /// an accented volume name against a different fixture's, which is two
+    /// discs meeting in one directory (ART-164). The counter is what makes
+    /// the name unique; the stamp only makes it readable.
     fn tmp() -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
         let d = std::env::temp_dir().join(format!(
-            "art-iso-{}-{}",
+            "art-iso-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir_all(&d).unwrap();
         d

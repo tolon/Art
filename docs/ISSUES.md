@@ -219,49 +219,6 @@ does not — so the first fact was true and the second was inferred from it. The
 first thing that ever asked for bytes was Task 8's run.
 
 
-**ART-164** 🔵 **`core::iso`'s test scratch directory can be shared by two
-threads, so *any* test in the module can read another's fixture — first
-measured at about one full-suite run in thirty, and re-measured at four
-different tests failing this way** — *found 2026-08-19 on `main`; re-measured
-2026-08-19 while closing the content-layer round*
-`src-tauri/src/core/iso/mod.rs:1316`
-
-`tmp()` keys its directory on process id plus a nanosecond timestamp, and two
-threads entering it close enough together get the same name, so one test reads
-the other's fixture. This is ART-059 again in a different module —
-`core/osinstall`'s own fixtures already solved it with an atomic counter, and
-the fix here is the same one line.
-
-**The blast radius is wider than this entry first said, and that is the part
-worth correcting.** It was filed naming one test,
-`a_mode2_form2_track_is_refused_rather_than_misread`. Re-measured by running
-`cargo test core::iso::` forty times in a row, **five runs failed and four
-*different* tests were the one that failed** — `a_descriptor_that_loses_its_identifier_is_an_error`
-(twice), `a_directory_claiming_a_length_past_the_end_of_the_file_is_an_error`
-(twice), and `a_minimal_iso_reports_its_volume_name_and_root`, which failed
-with the clearest possible symptom of the mechanism:
-
-```
-assertion `left == right` failed
-  left: "Amiga Tëst"
- right: "AMIGA_TEST"
-```
-
-— one test's disc read under another test's name. So there is no single
-"flaky test" to quarantine; every test in the module that writes a fixture is
-exposed, and which one loses the race is arbitrary. The rate depends on how
-much other work fills the runner: a whole-suite run failed once in eleven,
-while the module on its own — 56 tests and little else to interleave with —
-failed five times in forty.
-
-Left open rather than fixed on sight because it belongs to `core/iso` and was
-found during unrelated work; it is small, and it is exactly the kind of
-intermittent failure `CLAUDE.md` says trains people to re-run until green.
-**It is now also the one thing standing between this branch and an honest
-"the suite is green"**, so it should be the next thing fixed rather than the
-smallest.
-
-
 **ART-152** 🔵 **ART sizes a WHDLoad launch's Fast RAM from a fixed setting,
 never from what the slave itself states it needs** — *filed 2026-08-18,
 alongside ART-151's fix, deliberately not built there*
@@ -1081,6 +1038,50 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-164** ✅ **`core::iso`'s test scratch directory can be shared by two
+threads, so *any* test in the module can read another's fixture — first
+measured at about one full-suite run in thirty, and re-measured at four
+different tests failing this way** — *found 2026-08-19 on `main`; re-measured
+2026-08-19 while closing the content-layer round*
+`src-tauri/src/core/iso/mod.rs:1316`
+
+`tmp()` keys its directory on process id plus a nanosecond timestamp, and two
+threads entering it close enough together get the same name, so one test reads
+the other's fixture. This is ART-059 again in a different module —
+`core/osinstall`'s own fixtures already solved it with an atomic counter, and
+the fix here is the same one line.
+
+**The blast radius is wider than this entry first said, and that is the part
+worth correcting.** It was filed naming one test,
+`a_mode2_form2_track_is_refused_rather_than_misread`. Re-measured by running
+`cargo test core::iso::` forty times in a row, **five runs failed and four
+*different* tests were the one that failed** — `a_descriptor_that_loses_its_identifier_is_an_error`
+(twice), `a_directory_claiming_a_length_past_the_end_of_the_file_is_an_error`
+(twice), and `a_minimal_iso_reports_its_volume_name_and_root`, which failed
+with the clearest possible symptom of the mechanism:
+
+```
+assertion `left == right` failed
+  left: "Amiga Tëst"
+ right: "AMIGA_TEST"
+```
+
+— one test's disc read under another test's name. So there is no single
+"flaky test" to quarantine; every test in the module that writes a fixture is
+exposed, and which one loses the race is arbitrary. The rate depends on how
+much other work fills the runner: a whole-suite run failed once in eleven,
+while the module on its own — 56 tests and little else to interleave with —
+failed five times in forty.
+
+**Fixed 2026-08-19** by giving `tmp()` an atomic counter, the same shape
+`core/gameindex` and `core/layout` already use. Verified the way the defect
+was found: **40 consecutive runs of `cargo test core::iso::`, zero failures**,
+against 5 failures across 4 tests in the 40 runs that measured it. The full
+suite then ran three times at 1875 passed.
+**It is now also the one thing standing between this branch and an honest
+"the suite is green"**, so it should be the next thing fixed rather than the
+smallest.
 
 **ART-169** 🔴 ✅ **`workbench-base` placed only the disc's `Workbench3.5`
 half, never its `Workbench3.9` overlay, so the tree ART called "AmigaOS 3.9"
