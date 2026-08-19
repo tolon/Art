@@ -23,6 +23,12 @@ pub struct LhaEntry {
     pub method: String,
     /// MS-DOS timestamp bits (raw); decoded to unix on the frontend if needed.
     pub last_modified: u32,
+    /// The AmigaDOS file comment, when the archive carried one — see
+    /// [`entry_name`]. Empty for the overwhelming majority of entries, and
+    /// `#[serde(default)]` so a value serialised before this field existed
+    /// still reads back.
+    #[serde(default)]
+    pub comment: String,
 }
 
 /// High-level archive info.
@@ -34,75 +40,256 @@ pub struct LhaInfo {
     pub entries: Vec<LhaEntry>,
 }
 
-/// The entry's path, whichever header level it came from (ART-031).
+/// LHA's own path separator inside a stored path.
 ///
-/// The raw `filename` field is only populated for level 0 and 1 headers. Level
-/// 2 and 3 — what modern tools write, and what Aminet actually hosts — leave it
-/// empty and carry the name in extended headers instead. Reading the field
-/// directly made ART reject those archives outright with "empty entry name".
-///
-/// The raw field is still preferred when it has something in it, and it is
-/// decoded as **ISO-8859-1 (Latin-1)** — ART-168.
-///
-/// # Why Latin-1 and not UTF-8
-///
-/// An LHA level-0/1 filename field is a byte string with no declared
-/// character set: the format predates Unicode and states no encoding at all.
-/// The archives ART reads are Amiga ones, and **AmigaDOS's own native
-/// character set is ISO-8859-1** — "the developers chose to use the ANSI–ISO
-/// standard ISO-8859-1 (Latin 1), which includes the ASCII character set"
-/// (<https://en.wikipedia.org/wiki/AmigaDOS>). That is the same fact, and the
-/// same decision, as [`decode_iso646`](crate::core::iso::descriptor::decode_iso646)
-/// in the ISO9660 reader, whose module doc carries the full reasoning and the
-/// cross-check against a second implementation; ART-155 fixed it there and
-/// left this reader untouched, which is what ART-168 is.
-///
-/// `String::from_utf8_lossy` was the wrong tool twice over. A Latin-1 byte
-/// sequence is almost never valid UTF-8, so every high-bit byte became
-/// U+FFFD — and U+FFFD is not merely ugly, it **merges distinct names**:
-/// `türkçe` and `tirkçe` both collapse to `t<U+FFFD>rk<U+FFFD>e`. Latin-1 is
-/// `b as char` for the whole 0x80..=0xFF range (Unicode's first 256 code
-/// points *are* Latin-1 by construction), so no table is needed and no two
-/// byte values ever fold together.
-///
-/// Measured, not assumed. The owner's own `BoingBag39-2-turkce.lha` stores
-/// `LocaleUpdate\locale\catalogs\t<FC>rk<E7>e\…` in a **level-0** header
-/// (read straight out of the file's header bytes), and `FC`/`E7` are exactly
-/// the Latin-1 code points for `ü`/`ç`. Under the old decode ART wrote its 36
-/// catalogs into a drawer AmigaDOS cannot see: the booted system listed 20
-/// drawers in `SYS:Locale/Catalogs` where the host directory held 21. Every
-/// non-ASCII name in the owner's whole `.lha` collection — the Turkish,
-/// French, Portuguese and Brazilian BoingBags, `JanoEditor`, `Picasso96` —
-/// sits in a level-0 header, so this branch is the one that carries them.
-///
-/// # What this does *not* change
-///
-/// Level 2/3 names still come from `delharc`'s `parse_pathname_to_str`, which
-/// percent-encodes any byte outside 0x20..0x7E (`ü` → `%fc`). That is wrong
-/// for the same reason, but fixing it means re-parsing the extended headers
-/// by hand instead of using the crate's own path assembly — which is also
-/// where its `..`/separator filtering lives — and no archive in the material
-/// measured above carries a non-ASCII name in a level-2/3 header. Left as is,
-/// deliberately, rather than rewritten blind.
-///
-/// Either way the result goes through [`safe_join`](crate::core::security::path::safe_join)
-/// before it becomes a path. That choke point does not move.
-pub(crate) fn entry_path(header: &delharc::LhaHeader) -> String {
-    if !header.filename.is_empty() {
-        return decode_latin1(&header.filename);
-    }
-    header.parse_pathname_to_str().to_string()
+/// Not `/` and not `\\`: the format uses `0xFF`, which is also a perfectly
+/// ordinary Latin-1 character (`ÿ`) — so it has to be recognised as a
+/// separator *before* the bytes are decoded, or `doc<FF>x` reads as `docÿx`.
+/// `/` and `\\` are left alone and handled by
+/// [`safe_join`](crate::core::security::path::safe_join), which already
+/// normalises both and is the layer allowed to refuse.
+const PATH_SEPARATOR_FF: u8 = 0xFF;
+
+/// Extension header type `0x02` — the directory an entry lives in.
+const EXT_HEADER_PATH: u8 = 0x02;
+/// Extension header type `0x01` — the entry's own name.
+const EXT_HEADER_FILENAME: u8 = 0x01;
+
+/// One entry's name, as ART reads it: the path, and the Amiga file comment
+/// when the archive carried one.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct EntryName {
+    /// `/`-separated, relative to the archive root.
+    pub path: String,
+    /// The AmigaDOS file comment, or empty. See [`entry_name`]'s own doc.
+    pub comment: String,
 }
 
-/// Decode a byte string as ISO-8859-1. See [`entry_path`] for why.
+/// The entry's path and comment, whichever header level it came from
+/// (ART-031, ART-168, and this round's F1/F3).
+///
+/// # Where a name actually lives, measured across the owner's 41 archives
+///
+/// 8,016 entries, every one parsed straight out of its header bytes rather
+/// than from a listing tool:
+///
+/// | level | entries | non-ASCII name | `name\0comment` | drawer in a `0x02` header |
+/// |---|---|---|---|---|
+/// | 0 | 4,843 | 483 | 126 | — (the field holds the whole path) |
+/// | 1 | 914 | 0 | 0 | **880** |
+/// | 2 | 2,259 | 0 | 0 | 2,252 |
+///
+/// Three separate things follow from that table, and this function does all
+/// three.
+///
+/// # 1. Latin-1, not UTF-8 (ART-168)
+///
+/// An LHA filename field is a byte string with no declared character set: the
+/// format predates Unicode and states no encoding at all. The archives ART
+/// reads are Amiga ones, and **AmigaDOS's own native character set is
+/// ISO-8859-1** — "the developers chose to use the ANSI–ISO standard
+/// ISO-8859-1 (Latin 1), which includes the ASCII character set"
+/// (<https://en.wikipedia.org/wiki/AmigaDOS>). Same fact, same decision, as
+/// [`decode_iso646`](crate::core::iso::descriptor::decode_iso646) in the
+/// ISO9660 reader, whose module doc carries the full reasoning; ART-155 fixed
+/// it there and left this reader untouched, which is what ART-168 was.
+///
+/// `String::from_utf8_lossy` was wrong twice over. A Latin-1 byte sequence is
+/// almost never valid UTF-8, so every high-bit byte became U+FFFD — and
+/// U+FFFD **merges distinct names**: `türkçe` and `tirkçe` both collapse to
+/// `t<U+FFFD>rk<U+FFFD>e`. Latin-1 is `b as char` across 0x80..=0xFF, so no
+/// table is needed and no two byte values ever fold together.
+///
+/// Measured: `BoingBag39-2-turkce.lha` stores
+/// `LocaleUpdate\locale\catalogs\t<FC>rk<E7>e\…` in a level-0 header, and
+/// `FC`/`E7` are exactly Latin-1 `ü`/`ç`. Under the old decode the booted
+/// system listed 20 drawers in `SYS:Locale/Catalogs` where the host held 21.
+/// All 483 non-ASCII names in the collection are level-0, but that is a fact
+/// about this collection, not about the format — every level decodes the same
+/// way here, so a level-1 archive with an accented name is right too.
+///
+/// # 2. A level-1 entry's drawer lives in an extension header (F1)
+///
+/// A level-1 header's `filename` field holds the **base name only**; the
+/// directory is in extension header `0x02`, separated by `0xFF`. Reading the
+/// field alone and stopping — which is what ART did — flattens the archive:
+/// **880 of the 914 level-1 entries** in the owner's collection lose their
+/// drawer, including all 316 of `AmiSSL-v5-OS3.lha` and all 283 of
+/// `Update3.2.2.lha`, an AmigaOS update this engine is meant to install. Every
+/// one of them would have landed in the archive root, on top of each other.
+///
+/// So the extension headers are read for every level that has them, and the
+/// `0x02` directory is prepended to the name.
+///
+/// # 3. A level-0/1 name can carry an Amiga comment after a NUL (F3)
+///
+/// Amiga LhA stores `name\0comment` in the one field. `delharc` truncates at
+/// the NUL; decoding the whole field does not, so the name came back with a
+/// NUL and the comment glued on — 126 entries in the collection, e.g.
+/// `BoingBag3.9-1\…\spatch` + `6.50 (26.8.93)`. A NUL cannot be part of a
+/// filename on any system ART writes to, so the name is always cut there.
+///
+/// The tail is **kept**, not discarded: an AmigaDOS file comment is real
+/// user-visible metadata, and losing it silently is exactly what
+/// [ART-078](../../../docs/ISSUES.md) is filed about on the ISO9660 side. It
+/// travels as [`EntryName::comment`] and reaches [`LhaEntry::comment`]. (The
+/// `0x3F` comment *extension* header is not read: no archive in the measured
+/// collection carries one, and untested code for an unmeasured case is worse
+/// than none.)
+///
+/// # Why there is no "cannot resolve the drawer" refusal
+///
+/// The obvious guard — refuse a level-1 entry whose extension area cannot be
+/// read, rather than root it — was written, and then removed as unreachable
+/// once `delharc` was read rather than assumed:
+///
+/// * `parser.rs:316-329` walks the **whole** extension chain before building
+///   the header, checks each declared length against the level-1 skip size
+///   (`SkipSizeMismatch`) or the level-2/3 long header length
+///   (`LongSizeMismatch`), and `?`-propagates a short read. A header whose
+///   chain does not add up never reaches this function at all.
+/// * `ExtraHeaderIter::next` (`parser.rs:71-88`) returns `None` **only** when
+///   the remaining length is `0`. So `first_header_len > 0` with an empty
+///   iterator cannot happen, and neither can the `split_at` in it overrun —
+///   which matters, because the release profile aborts on panic.
+///
+/// Probed as well as read: three mutations of a level-1 fixture (`next_ext`
+/// zeroed, huge, and pointing at an empty header) are all rejected by
+/// `delharc`'s own base-header checksum, since `next_ext` sits inside the
+/// checksummed region.
+///
+/// A level-1 entry with **no** `0x02` header is not an error either — it is a
+/// file at the archive root, which 34 of the owner's 914 level-1 entries
+/// genuinely are. So the honest answer is that reading the header is the
+/// whole fix, and a damaged archive is refused by the layer that can actually
+/// tell (`a_level_one_header_with_a_damaged_extension_area_is_refused` pins
+/// that it is refused rather than silently rooted).
+///
+/// Whatever comes back still goes through
+/// [`safe_join`](crate::core::security::path::safe_join) before it becomes a
+/// path. That choke point does not move.
+pub(crate) fn entry_name(header: &delharc::LhaHeader) -> EntryName {
+    // The directory, from extension header 0x02. Present on levels 1..3.
+    let mut directory: Option<String> = None;
+    let mut ext_name: Option<Vec<u8>> = None;
+    for extension in header.iter_extra() {
+        match extension {
+            [EXT_HEADER_PATH, data @ ..] if !data.is_empty() => {
+                directory = Some(decode_path(data));
+            }
+            [EXT_HEADER_FILENAME, data @ ..] if !data.is_empty() => {
+                ext_name = Some(split_at_nul(data).0.to_vec());
+            }
+            _ => {}
+        }
+    }
+
+    // The raw field is preferred when it has something in it: it is the only
+    // place ART can apply the right charset itself, since `delharc`'s own
+    // path assembly percent-encodes every byte outside 0x20..0x7E.
+    let (raw_name, comment) = if !header.filename.is_empty() {
+        let (name, rest) = split_at_nul(&header.filename);
+        (name.to_vec(), decode_latin1(rest))
+    } else if let Some(name) = ext_name {
+        (name, String::new())
+    } else {
+        (Vec::new(), String::new())
+    };
+
+    // A level-0 field holds the whole path; a level-1 field holds one name,
+    // with the drawer in the extension header above. Decoding both the same
+    // way is what makes one rule cover both.
+    let name = decode_path(&raw_name);
+    let path = match directory {
+        // A stored directory ends with its own separator (`doc<FF>`), so the
+        // trailing `/` is the terminator rather than an empty component —
+        // trimmed here, and only here, so nothing else has to know.
+        Some(dir) => {
+            let dir = dir.trim_end_matches('/');
+            match (dir.is_empty(), name.is_empty()) {
+                (true, _) => name,
+                (false, true) => dir.to_string(),
+                (false, false) => format!("{dir}/{name}"),
+            }
+        }
+        None => name,
+    };
+
+    // Nothing above can produce a name for a level-3 header, whose extension
+    // headers use 32-bit lengths `iter_extra` handles but which ART has never
+    // seen in the wild. Fall back to `delharc`'s own assembly rather than
+    // returning nothing at all.
+    let path = if path.is_empty() {
+        header.parse_pathname_to_str().to_string()
+    } else {
+        path
+    };
+
+    EntryName { path, comment }
+}
+
+/// Split a level-0/1 filename field at the first NUL: the name, then whatever
+/// Amiga LhA stored after it as the file comment. See [`entry_name`].
+fn split_at_nul(bytes: &[u8]) -> (&[u8], &[u8]) {
+    match bytes.iter().position(|&b| b == 0) {
+        Some(at) => (&bytes[..at], &bytes[at + 1..]),
+        None => (bytes, &[]),
+    }
+}
+
+/// Decode stored path bytes as Latin-1, turning the format's own `0xFF`
+/// separator into `/` and changing **nothing else**.
+///
+/// # Two drafts of this were wrong in the same way
+///
+/// The first split on every separator, dropped `.`/`..` components the way
+/// `delharc` does, and rejoined. That turned `../../evil.txt` into
+/// `evil.txt`: still inside the destination, but reported as a **successful
+/// extraction** rather than a refused traversal
+/// (`traversal_entry_is_rejected_not_extracted`). The second kept `..` but
+/// still dropped *empty* components, which turned the absolute
+/// `/art-oracle-root-escape.txt` into a relative name that
+/// [`safe_join`](crate::core::security::path::safe_join) then accepted
+/// (`hostile_entries_are_rejected_at_their_real_target_not_just_absent_from_scratch`).
+///
+/// Both are the same mistake: **normalising a hostile name into a benign
+/// one destroys the report**, which is the quiet this whole round is about.
+/// Containment was never in question — `safe_join` had it either way — but a
+/// security boundary that silently rewrites is one nobody can audit.
+///
+/// So this does the one thing the *format* requires and nothing a
+/// *filesystem* might want. `0xFF` is LHA's own separator and has no other
+/// meaning, so it becomes `/`. Everything else — `..`, a leading `/`, a
+/// `C:` prefix, a `\\` — survives verbatim to `safe_join`, which normalises
+/// and **refuses by name**. That is also the smallest possible change from
+/// the behaviour that shipped, which passed the raw field through untouched.
+fn decode_path(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|&b| {
+            if b == PATH_SEPARATOR_FF {
+                '/'
+            } else {
+                b as char
+            }
+        })
+        .collect()
+}
+
+/// Decode a byte string as ISO-8859-1. See [`entry_name`] for why.
 fn decode_latin1(bytes: &[u8]) -> String {
     bytes.iter().map(|&b| b as char).collect()
+}
+
+/// The entry's path alone, for callers with nothing to say about a comment.
+pub(crate) fn entry_path(header: &delharc::LhaHeader) -> String {
+    entry_name(header).path
 }
 
 fn header_to_entry(header: &delharc::LhaHeader) -> CoreResult<LhaEntry> {
     let method = String::from_utf8_lossy(&header.compression).to_string();
     let is_dir = method == "-lhd-";
-    let path = entry_path(header);
+    let EntryName { path, comment } = entry_name(header);
     if path.is_empty() {
         return Err(CoreError::Malformed {
             format: "lha".into(),
@@ -116,6 +303,7 @@ fn header_to_entry(header: &delharc::LhaHeader) -> CoreResult<LhaEntry> {
         uncompressed_size: header.original_size,
         method,
         last_modified: header.last_modified,
+        comment,
     })
 }
 
@@ -159,6 +347,16 @@ pub fn open_archive(path: &std::path::Path) -> CoreResult<LhaInfo> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    /// A scratch directory nothing else in the process will pick — see
+    /// [`crate::core::test_scratch_id`] for why the counter is load-bearing.
+    fn tmp(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("art-{tag}-{}", crate::core::test_scratch_id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
     /// A stored (-lh0-) level-0 archive holding the given files.
     ///
@@ -236,6 +434,62 @@ pub mod tests {
             .fold(0u8, |a, &b| a.wrapping_add(b));
         buf[1] = cks;
         buf.extend_from_slice(content);
+        buf
+    }
+
+    /// A stored (-lh0-) archive with a **level-1** header, whose drawer lives
+    /// in extension header `0x02` and whose `filename` field holds the base
+    /// name alone.
+    ///
+    /// This is the shape 914 of the owner's own entries have, and the shape
+    /// ART used to flatten: 880 of them carry a `0x02` directory that
+    /// `entry_path` never read, so every one would have landed in the archive
+    /// root. Built byte-exact from the level-1 layout:
+    ///
+    /// ```text
+    /// [hsize:1][cks:1][method:5][skip:4][usize:4][time:2][date:2][attr:1]
+    /// [level:1][namelen:1][name:n][crc:2][os:1][next ext size:2][ext…][data]
+    /// ```
+    ///
+    /// `hsize` counts from `method` through `next ext size`, `skip` is the
+    /// compressed size **plus** every extension header byte, and each
+    /// extension header is `[type:1][data…][next size:2]` whose declared size
+    /// covers all three. The directory's own separator is `0xFF`, not `/`.
+    pub fn make_level1_lha(directory: &[u8], name: &[u8], content: &[u8]) -> Vec<u8> {
+        // One extension header: the 0x02 directory, then a zero terminator.
+        let ext_size = (1 + directory.len() + 2) as u16;
+        let mut ext = Vec::new();
+        ext.push(0x02u8);
+        ext.extend_from_slice(directory);
+        ext.extend_from_slice(&0u16.to_le_bytes()); // no further ext header
+
+        let header_len: u8 = (25 + name.len()) as u8;
+        let skip = (content.len() + ext.len()) as u32;
+
+        let mut buf = Vec::new();
+        buf.push(header_len);
+        buf.push(0); // checksum placeholder
+        buf.extend_from_slice(b"-lh0-");
+        buf.extend_from_slice(&skip.to_le_bytes());
+        buf.extend_from_slice(&(content.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&0u16.to_le_bytes()); // dos time
+        buf.extend_from_slice(&((((2025 - 1980) << 9) | (1 << 5) | 1) as u16).to_le_bytes());
+        buf.push(0x20); // attribute
+        buf.push(0x01); // level 1
+        buf.push(name.len() as u8);
+        buf.extend_from_slice(name);
+        buf.extend_from_slice(&0u16.to_le_bytes()); // crc
+        buf.push(b'A'); // OS: Amiga
+        buf.extend_from_slice(&ext_size.to_le_bytes());
+
+        let cks: u8 = buf[2..2 + header_len as usize]
+            .iter()
+            .fold(0u8, |a, &b| a.wrapping_add(b));
+        buf[1] = cks;
+
+        buf.extend_from_slice(&ext);
+        buf.extend_from_slice(content);
+        buf.push(0x00); // end of archive
         buf
     }
 
@@ -327,7 +581,7 @@ pub mod tests {
     /// with "empty entry name". Found by fetching a real AmiSSL release.
     #[test]
     fn a_level_two_header_is_read_from_its_extended_header() {
-        let dir = std::env::temp_dir().join(format!("art-lha2-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("art-lha2-{}", crate::core::test_scratch_id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let archive = dir.join("level2.lha");
@@ -347,7 +601,7 @@ pub mod tests {
     /// right charset itself (ART-168).
     #[test]
     fn a_level_zero_name_still_comes_from_the_raw_field() {
-        let dir = std::env::temp_dir().join(format!("art-lha0-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("art-lha0-{}", crate::core::test_scratch_id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let archive = dir.join("level0.lha");
@@ -370,7 +624,7 @@ pub mod tests {
     fn a_level_zero_name_s_high_bit_bytes_decode_as_latin1() {
         let dir = std::env::temp_dir().join(format!(
             "art-lha-latin1-{}-{}",
-            std::process::id(),
+            crate::core::test_scratch_id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -413,6 +667,215 @@ pub mod tests {
         assert_ne!(decode_latin1(&[0xFC]), decode_latin1(&[0xE9]));
         // The whole high range is one-to-one, no table needed.
         assert_eq!(decode_latin1(&[0x80, 0xFF]), "\u{80}\u{FF}");
+    }
+
+    /// **F1.** A level-1 entry's drawer lives in extension header `0x02`, and
+    /// reading the `filename` field alone flattens the archive.
+    ///
+    /// Measured across the owner's 41 archives: 880 of 914 level-1 entries
+    /// carry one, including all 316 of `AmiSSL-v5-OS3.lha` and all 283 of
+    /// `Update3.2.2.lha`. Every one of them used to come back as a bare base
+    /// name, so an extraction would have piled them all into the root.
+    #[test]
+    fn a_level_one_entry_keeps_the_drawer_from_its_extension_header() {
+        let dir = tmp("lha1");
+        let archive = dir.join("level1.lha");
+        // `doc/ansi2knr.1` — the real shape from `doc.lha`, whose 0x02 header
+        // stores `doc` with a trailing 0xFF separator.
+        std::fs::write(
+            &archive,
+            make_level1_lha(b"doc\xFF", b"ansi2knr.1", b"manual"),
+        )
+        .unwrap();
+
+        let info = open_archive(&archive).unwrap();
+        assert_eq!(info.entries[0].path, "doc/ansi2knr.1");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The same, with a nested drawer and a Latin-1 name in it — the two
+    /// fixes have to compose, not merely coexist.
+    #[test]
+    fn a_level_one_drawer_is_split_on_0xff_and_decoded_as_latin1() {
+        let dir = tmp("lha1-intl");
+        let archive = dir.join("level1.lha");
+        // `Locale/Catalogs/türkçe/sys.catalog`, separators 0xFF.
+        let mut directory: Vec<u8> = b"Locale\xFFCatalogs\xFF".to_vec();
+        directory.splice(
+            directory.len()..directory.len(),
+            [0x74, 0xFC, 0x72, 0x6B, 0xE7, 0x65],
+        );
+        directory.push(0xFF);
+        std::fs::write(
+            &archive,
+            make_level1_lha(&directory, b"sys.catalog", b"cat"),
+        )
+        .unwrap();
+
+        let info = open_archive(&archive).unwrap();
+        assert_eq!(
+            info.entries[0].path,
+            "Locale/Catalogs/t\u{FC}rk\u{E7}e/sys.catalog"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A level-1 entry with **no** `0x02` header is a file at the archive
+    /// root, not an error — 34 of the owner's 914 level-1 entries are exactly
+    /// this, so a refusal here would break real archives.
+    #[test]
+    fn a_level_one_entry_with_no_directory_header_sits_at_the_root() {
+        let dir = tmp("lha1-root");
+        let archive = dir.join("level1.lha");
+        std::fs::write(&archive, make_level1_lha(b"", b"readme.txt", b"hi")).unwrap();
+
+        let info = open_archive(&archive).unwrap();
+        assert_eq!(info.entries[0].path, "readme.txt");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A damaged extension area is **refused**, never silently rooted.
+    ///
+    /// ART has no refusal branch of its own for this — see `entry_name`'s doc
+    /// for why one would be unreachable — so what this pins is the
+    /// *guarantee*, not the layer: whoever notices, the entry must not come
+    /// back as a bare base name in the archive root.
+    #[test]
+    fn a_level_one_header_with_a_damaged_extension_area_is_refused() {
+        let dir = tmp("lha1-damaged");
+        let archive = dir.join("damaged.lha");
+        let mut bytes = make_level1_lha(b"doc\xFF", b"ansi2knr.1", b"manual");
+        // `next ext size` is the last two bytes of the base header.
+        let header_len = bytes[0] as usize;
+        let at = 2 + header_len - 2;
+        bytes[at..at + 2].copy_from_slice(&0u16.to_le_bytes());
+        std::fs::write(&archive, &bytes).unwrap();
+
+        match open_archive(&archive) {
+            Err(err) => assert_eq!(err.code(), "ART-FORMAT-MALFORMED", "{err}"),
+            Ok(info) => assert_ne!(
+                info.entries[0].path, "ansi2knr.1",
+                "a damaged entry must not be quietly placed in the root"
+            ),
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **F3.** Amiga LhA stores `name\0comment` in the one field. Decoding the
+    /// whole field glued the comment onto the name behind a NUL — 126 entries
+    /// in the owner's collection do this, e.g. `…\spatch` + `6.50 (26.8.93)`.
+    #[test]
+    fn a_name_carrying_an_amiga_comment_is_split_at_the_nul() {
+        let dir = tmp("lha-comment");
+        let archive = dir.join("commented.lha");
+        std::fs::write(
+            &archive,
+            make_lha_with_raw_names(&[(b"C/spatch\x006.50 (26.8.93)", b"exe" as &[u8])]),
+        )
+        .unwrap();
+
+        let info = open_archive(&archive).unwrap();
+        assert_eq!(info.entries[0].path, "C/spatch");
+        assert!(
+            !info.entries[0].path.contains('\0'),
+            "no NUL may survive into a path"
+        );
+        // Kept, not discarded: an AmigaDOS file comment is real metadata, and
+        // losing it quietly is what ART-078 is filed about on the disc side.
+        assert_eq!(info.entries[0].comment, "6.50 (26.8.93)");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A comment can itself be Latin-1 — 9 of the 126 are.
+    #[test]
+    fn an_amiga_comment_is_latin1_too() {
+        let dir = tmp("lha-comment-intl");
+        let archive = dir.join("commented.lha");
+        let mut name: Vec<u8> = b"Docs/liesmich\x00Gr".to_vec();
+        name.push(0xFC); // ü
+        name.extend_from_slice(b"\xDFe"); // ße
+        std::fs::write(
+            &archive,
+            make_lha_with_raw_names(&[(&name, b"doc" as &[u8])]),
+        )
+        .unwrap();
+
+        let info = open_archive(&archive).unwrap();
+        assert_eq!(info.entries[0].path, "Docs/liesmich");
+        assert_eq!(info.entries[0].comment, "Gr\u{FC}\u{DF}e");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An entry with no comment reports none, rather than an empty-looking
+    /// something. The overwhelming majority of entries are this.
+    #[test]
+    fn an_ordinary_entry_carries_no_comment() {
+        let dir = tmp("lha-nocomment");
+        let archive = dir.join("plain.lha");
+        std::fs::write(&archive, make_minimal_lha()).unwrap();
+
+        let info = open_archive(&archive).unwrap();
+        assert_eq!(info.entries[0].path, "hi.txt");
+        assert_eq!(info.entries[0].comment, "");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `..` survives assembly so [`safe_join`] can refuse it and *say so*.
+    ///
+    /// An earlier draft of `join_components` dropped `.`/`..` the way
+    /// `delharc` does, which turned `../../evil.txt` into `evil.txt`: still
+    /// contained, but reported as a successful extraction rather than a
+    /// refused traversal. Silently normalising an attack is the same class of
+    /// quiet this whole round is about, so the components are kept and the
+    /// security boundary decides.
+    #[test]
+    fn a_traversal_component_survives_assembly_for_safe_join_to_refuse() {
+        let dir = tmp("lha-trav");
+        let archive = dir.join("trav.lha");
+        std::fs::write(
+            &archive,
+            make_lha_with_raw_names(&[(b"../../evil.txt", b"x" as &[u8])]),
+        )
+        .unwrap();
+
+        let info = open_archive(&archive).unwrap();
+        assert_eq!(info.entries[0].path, "../../evil.txt");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The same rule for an **absolute** name, which a second draft of the
+    /// assembly also normalised away: dropping the empty component a leading
+    /// `/` produces turned `/art-oracle-root-escape.txt` into a relative name
+    /// `safe_join` was happy to accept, and the archives oracle test lost one
+    /// of its three expected refusals.
+    #[test]
+    fn an_absolute_name_survives_assembly_too() {
+        let dir = tmp("lha-abs");
+        let archive = dir.join("abs.lha");
+        std::fs::write(
+            &archive,
+            make_lha_with_raw_names(&[
+                (b"/root-escape.txt", b"x" as &[u8]),
+                (br"C:\drive-escape.txt", b"y" as &[u8]),
+            ]),
+        )
+        .unwrap();
+
+        let info = open_archive(&archive).unwrap();
+        let paths: Vec<&str> = info.entries.iter().map(|e| e.path.as_str()).collect();
+        assert!(paths.contains(&"/root-escape.txt"), "{paths:?}");
+        assert!(
+            paths.iter().any(|p| p.starts_with("C:")),
+            "a drive prefix must reach safe_join intact: {paths:?}"
+        );
     }
 
     #[test]

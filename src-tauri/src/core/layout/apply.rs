@@ -339,8 +339,10 @@ mod tests {
     use crate::core::layout::{ItemKind, LayoutItem, LayoutPlan, Placement};
 
     fn scratch(tag: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("art-layout-apply-{tag}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "art-layout-apply-{tag}-{}",
+            crate::core::test_scratch_id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

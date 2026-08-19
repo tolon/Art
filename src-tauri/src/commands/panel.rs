@@ -224,8 +224,11 @@ pub fn panel_local_roots() -> AppResult<Vec<String>> {
 /// than written into whatever row is under the cursor now.
 pub const DIR_SIZE_EVENT: &str = "dir-size-result";
 
+// No `rename_all`: `job_id` travels snake_case, the same as `LayoutResult`
+// and every other job payload, because `src/lib/jobs.ts::awaitJobResult` is
+// bound on `TPayload extends { job_id: number }` and that helper is what
+// closes the subscribe-after-invoke race (F4).
 #[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct DirSizeResult {
     pub job_id: u64,
     /// Whatever the caller asked under — a path for a local row, a header
@@ -329,7 +332,10 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("art-panel-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "art-panel-{name}-{}",
+            crate::core::test_scratch_id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

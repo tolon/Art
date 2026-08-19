@@ -134,7 +134,10 @@ mod tests {
     use crate::core::jobs::NoProgress;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("art-install-t-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "art-install-t-{name}-{}",
+            crate::core::test_scratch_id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

@@ -695,6 +695,30 @@ impl<'a> TreeWriter<'a> {
     }
 }
 
+/// Refuse a plan whose destinations would collide on the host — ART-160's
+/// corollary. See [`super::host_name_collisions`] for why escaping without
+/// this loses a file silently.
+fn refuse_host_name_collisions(items: &[PlanItem]) -> CoreResult<()> {
+    let pairs: Vec<(String, bool)> = items
+        .iter()
+        .map(|item| (item.to.clone(), item.is_dir))
+        .collect();
+    let clashes = super::host_name_collisions(&pairs);
+    if clashes.is_empty() {
+        return Ok(());
+    }
+    let named: Vec<String> = clashes
+        .iter()
+        .map(|(host, first, second)| format!("'{first}' and '{second}' both become '{host}'"))
+        .collect();
+    Err(CoreError::SafetyRefused(format!(
+        "{} destination(s) cannot be told apart once escaped for this filesystem: {} — \
+         ART will not write one file where the media hold two",
+        clashes.len(),
+        some_of(&named)
+    )))
+}
+
 /// Build the distribution tree `plan` describes under `root`.
 ///
 /// `SAFE_CREATE` first: `root` must not already exist. Every medium named in
@@ -816,6 +840,11 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
             )));
         }
     }
+
+    // Before a byte is written, and before any medium is opened: two
+    // destinations that escape to one host name would silently become one
+    // file (ART-160's corollary — see `host_name_collisions`).
+    refuse_host_name_collisions(&plan.items)?;
 
     std::fs::create_dir_all(root)?;
 
@@ -1095,6 +1124,11 @@ pub fn add_package(
             refusal_summary(&refusals)
         )));
     }
+
+    // The same host-escaping check `apply` runs, for the same reason: a
+    // package's own two files can collide with each other once escaped, and
+    // Add writes through the identical placer.
+    refuse_host_name_collisions(&items)?;
 
     // Nothing is overwritten silently — the round's central rule, and the
     // one Produce enforces through `plan::detect_collisions`. Add has to
@@ -1426,6 +1460,132 @@ mod tests {
             user_startup: Vec::new(),
         };
         (plan, dir)
+    }
+
+    /// **ART-160's corollary (F5): two names, one host file.**
+    ///
+    /// `windows_safe_name` maps every refused character onto the single
+    /// replacement `_`, so `Prices: 1993` and `Prices? 1993` — two different,
+    /// legal AmigaDOS filenames — escape to the same host name. `apply` wrote
+    /// items in order and `atomic_write` replaces, so the second silently
+    /// overwrote the first and the tree held one file where the media held
+    /// two. Refused before anything is written.
+    #[test]
+    fn two_destinations_that_escape_to_one_host_name_are_refused() {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = fixtures::scratch(&format!("apply-hostclash-{n}"));
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        fixtures::media(
+            &folder,
+            "Workbench3.9",
+            "wb.adf",
+            &[("A", b"first", 0x00), ("B", b"second", 0x00)],
+        );
+
+        let mut media_paths = BTreeMap::new();
+        media_paths.insert("Workbench3.9".to_string(), folder.join("wb.adf"));
+
+        let items = vec![
+            PlanItem {
+                component: "workbench-base".into(),
+                media: "Workbench3.9".into(),
+                from: "A".into(),
+                to: "Devs/Prices: 1993".into(),
+                is_dir: false,
+                bytes: 5,
+            },
+            PlanItem {
+                component: "workbench-base".into(),
+                media: "Workbench3.9".into(),
+                from: "B".into(),
+                to: "Devs/Prices? 1993".into(),
+                is_dir: false,
+                bytes: 6,
+            },
+        ];
+        let plan = InstallPlan {
+            release: "AmigaOS 3.9".into(),
+            items,
+            refusals: Vec::new(),
+            packages: Vec::new(),
+            package_media: BTreeMap::new(),
+            total_bytes: 11,
+            components_on: vec!["workbench-base".into()],
+            paired_rom: None,
+            media_paths,
+            user_startup: Vec::new(),
+        };
+
+        let root = dir.join("dist");
+        let err = apply(&plan, &root, &NoProgress).unwrap_err();
+        assert_eq!(err.code(), "ART-SAFETY-REFUSED");
+        let msg = format!("{err}");
+        assert!(msg.contains("Prices: 1993"), "{msg}");
+        assert!(msg.contains("Prices? 1993"), "{msg}");
+        assert!(
+            msg.contains("Prices_ 1993"),
+            "the host name they share: {msg}"
+        );
+
+        // Refused *before* anything was written — not a tree with one file in
+        // it and an error afterwards.
+        assert!(
+            !root.exists(),
+            "a refused plan must leave no tree behind at all"
+        );
+    }
+
+    /// **F6, the same defect from the other side.** A reserved name and a
+    /// genuine `_`-prefixed one collide too — and that pair is worse, because
+    /// the survivor would then be copied onto the volume under the *other*
+    /// one's AmigaDOS name.
+    #[test]
+    fn a_reserved_name_and_a_real_underscore_name_are_refused_together() {
+        let items = vec![
+            ("Storage/DOSDrivers/AUX".to_string(), false),
+            ("Storage/DOSDrivers/_AUX".to_string(), false),
+        ];
+        let clashes = crate::core::osinstall::host_name_collisions(&items);
+        assert_eq!(clashes.len(), 1, "{clashes:?}");
+        assert_eq!(clashes[0].0, "Storage/DOSDrivers/_AUX");
+    }
+
+    /// The ordinary tree is unaffected: nothing escapes, so nothing clashes.
+    #[test]
+    fn destinations_that_escape_to_nothing_do_not_clash() {
+        let items = vec![
+            ("C/LoadModule".to_string(), false),
+            ("C/Other".to_string(), false),
+            ("Libs/icon.library".to_string(), false),
+        ];
+        assert!(crate::core::osinstall::host_name_collisions(&items).is_empty());
+    }
+
+    /// Two spellings of the *same* destination are not a clash — that is the
+    /// ordinary overwrite `FileRecord::overwrote` already records, and
+    /// refusing it would break every package that legitimately replaces a
+    /// base file (the 3.9 disc spells `C/ASSIGN`, a BoingBag `C/Assign`).
+    #[test]
+    fn the_same_destination_spelled_twice_is_not_a_clash() {
+        let items = vec![
+            ("C/ASSIGN".to_string(), false),
+            ("C/Assign".to_string(), false),
+        ];
+        assert!(crate::core::osinstall::host_name_collisions(&items).is_empty());
+    }
+
+    /// Directories are merge points, not claims — the same rule
+    /// `detect_collisions` and `undeclared_overwrites` follow. Two components
+    /// both creating `Storage/DOSDrivers` is normal.
+    #[test]
+    fn two_components_claiming_one_drawer_is_not_a_clash() {
+        let items = vec![
+            ("Storage/AUX".to_string(), true),
+            ("Storage/_AUX".to_string(), true),
+        ];
+        assert!(crate::core::osinstall::host_name_collisions(&items).is_empty());
     }
 
     /// **ART-160.** The tree escapes what the host cannot carry, and the

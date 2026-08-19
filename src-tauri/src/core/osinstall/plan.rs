@@ -1928,10 +1928,36 @@ mod plan_tests {
         }
     }
 
+    /// **F7.** Against the fixture's own bytes, not against the expression
+    /// `plan()` used.
+    ///
+    /// This assertion used to read `assert_eq!(plan.total_bytes,
+    /// content_bytes(&plan.items))`, which computes the identical expression
+    /// on both sides — it agreed with a broken `plan()` exactly as readily as
+    /// with a correct one, which is the same tautology the pre-ART-156
+    /// version had and the same one this test was rewritten to escape.
     #[test]
     fn the_total_is_the_sum_of_what_will_actually_be_written() {
         let plan = plan_with(&["workbench-base"], &["Workbench3.2"]);
-        assert_eq!(plan.total_bytes, content_bytes(&plan.items));
+
+        // Every fixture file is `b"data"` — 4 bytes, from
+        // `fixtures::entries_for` — so the total is grounded in the
+        // fixture's own constant and the number of *file* items, neither of
+        // which is the expression `plan()` evaluated.
+        const FIXTURE_FILE_BYTES: u64 = 4;
+        let files = plan.items.iter().filter(|item| !item.is_dir).count() as u64;
+        let dirs = plan.items.iter().filter(|item| item.is_dir).count();
+
+        assert_eq!(
+            plan.total_bytes,
+            FIXTURE_FILE_BYTES * files,
+            "{files} file item(s) and {dirs} directory item(s): {:#?}",
+            plan.items
+        );
+        // Pinned, so a recipe change is a failure somebody looks at rather
+        // than a number that quietly follows whatever `plan()` now does.
+        assert_eq!(plan.total_bytes, 44);
+        assert_eq!(files, 11);
     }
 
     /// **ART-156.** A directory item's `bytes` never reaches the total, even

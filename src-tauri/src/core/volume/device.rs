@@ -408,7 +408,10 @@ mod tests {
     }
 
     fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("art-device-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "art-device-{name}-{}",
+            crate::core::test_scratch_id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

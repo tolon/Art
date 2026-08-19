@@ -963,6 +963,23 @@ cancelled or failed job emits no result, so the job's own terminal state is
 what drops the row back to `<DIR>` instead of leaving it saying "counting…" for
 the rest of the session.
 
+**F4, fix round 1 — the job id was registered after the answer could already
+have arrived.** The screen invoked the command, and registered the returned job
+id inside `.then()`. Rust's `spawn_job` starts its thread **before** the command
+returns, so a small folder finishes and emits while the frontend is still inside
+`await invoke(...)`: the listener saw an id it did not know yet, dropped the
+event, and the row said "counting…" for the rest of the session. That is the
+same race `src/lib/jobs.ts::awaitJobResult`'s own doc comment records finding in
+`osinstallCollisions`, in a new place, and the helper exists precisely for it.
+
+`countHostDirectory` / `countVolumeDirectory` now wrap `awaitJobResult`, which
+subscribes *first*, buffers anything arriving before the id is known, and
+matches retroactively. They reject on a failed or cancelled job, which retired
+both of the screen's hand-rolled listeners **and** the job-id map: the component
+awaits an ordinary promise and never sees a job id. The Rust payload lost its
+`rename_all` so `job_id` travels snake_case, matching `LayoutResult` and the
+`TPayload extends { job_id: number }` bound the helper is written against.
+
 **ISO and archive panes are not counted, and say nothing rather than
 pretending.** `dirSizeKey` returns `null` for a row with neither a host path
 nor a header block, so Space there does exactly what it did before — marks, and
@@ -1180,14 +1197,41 @@ the defect was found: **40 consecutive runs of `cargo test core::cbm::`, zero
 failures** (against 4 in the 40 that measured it), and 20 of
 `cargo test core::detect::`, zero failures.
 
-**What is still owed, stated rather than swept.** A scan of every test scratch
-helper in `src-tauri/` found **71 of 77** without a counter. Most take a
-per-test `tag`, which makes a collision need the same tag *and* the same tick,
-so they are far less exposed — but "less exposed" is not "safe", and the three
-fixed here are the three that key on nothing but pid and time. The systemic
-sweep is not this issue: it is 71 mechanical edits across the whole suite, and
-it wants its own pass with its own 40-run measurement per module rather than
-being smuggled into a debt wave.
+**F8/F9, fix round 1 — the sweep is finished, and this branch had been adding
+to the problem while fixing it.** Round 0 fixed three helpers and filed the
+rest as owed; it had also *introduced* six new pid-keyed scratch directories of
+its own, in the same round. Both halves are now closed.
+
+`crate::core::test_scratch_id()` (test-only, in `core/mod.rs`) returns the
+process id **plus** a process-wide atomic counter, as a `String`. Every scratch
+helper already formatted `std::process::id()` with `{}`, so the sweep is a
+one-token substitution at each site — no format string changed, and every edit
+reads as a one-word diff.
+
+**How the sites were found, so the next person can re-run it rather than
+re-trust it** (`scripts/scratch-counter-sweep.py`; `--apply` rewrites, no flag
+reports): walk every `.rs` file under
+`src-tauri/src`; find every `std::process::id()`; treat a site as test code
+when it falls after the file's first `#[cfg(test)]`; treat it as already safe
+when `fetch_add` appears inside the enclosing `fn`. Result:
+
+| | sites |
+|---|---|
+| total | 82 |
+| production (skipped — all five already carry their own counter) | 5 |
+| already had a counter | 7 |
+| **rewritten** | **70** |
+
+Re-running the same scan now reports **0** needing a counter.
+
+One behaviour change fell out and is worth naming: `osinstall::fixtures::scratch`
+used to be *stable* per tag — two calls with one tag returned the same
+directory, cleared on entry — and a test asserted exactly that. That contract
+**is** the ART-164 hazard, and `apply.rs`'s `planned()` already appended its own
+counter to the tag to work around it. The helper is now unique per call and the
+test asserts the safe property instead
+(`scratch_gives_every_call_its_own_empty_directory`). Only that test reused a
+tag; every other call site passes a distinct one.
 
 **ART-115** 🔵 **A `core::iso` test flake, seen three times across this
 session, never diagnosed** — *found 2026-08-15/16 (Tasks 3, 7, 8), filed at
@@ -1243,10 +1287,20 @@ the plan's 75 directory items, with all 588 file items byte-exact.
 
 **Fixed 2026-08-20.** `total_bytes` is the sum over items that are **not**
 directories, computed by a named `content_bytes(&items)` rather than an inline
-`sum` — deliberately, so a test can ask the real arithmetic instead of
-restating the same formula and agreeing with itself, which is how the original
-`the_total_is_the_sum_of_what_will_actually_be_written` was satisfied by
-construction. The field's doc comment now says what the number is *for*: a
+`sum`.
+
+**F7, fix round 1 — the test that was supposed to escape the tautology was
+still one.** The rewritten
+`the_total_is_the_sum_of_what_will_actually_be_written` asserted
+`plan.total_bytes == content_bytes(&plan.items)`, which evaluates the identical
+expression `plan()` had just evaluated: it agreed with a broken `plan()` exactly
+as readily as with a correct one, and both this entry and the round-0 report
+claimed it asked "real arithmetic". It now asserts against the fixture's own
+constant — every fixture file is `b"data"`, 4 bytes (`fixtures::entries_for`) —
+times the number of *file* items, and pins the literal `44` across `11` files so
+a recipe change is a failure somebody looks at. Finding the real number was
+itself the point: the tautological version passed while the true total was 44
+and nobody knew. The field's doc comment now says what the number is *for*: a
 progress bar's total, measuring progress through bytes written, so it counts
 what gets written.
 
@@ -1317,6 +1371,46 @@ host name.
    the shape CLAUDE.md prescribes. A folder with no manifest, or one that will
    not parse, renames nothing.
 
+**F5/F6, fix round 1 — escaping was many-to-one, and the second write won
+silently.** The round-0 fix protected a name the host cannot store, and in
+doing so created a way to *merge* two names into one. `windows_safe_name` maps
+every refused character onto the single replacement `_`, and prefixes a
+reserved device name with one, so a medium holding two genuinely different
+names escapes both onto one host file:
+
+| on the medium | on the host |
+|---|---|
+| `Devs/Prices: 1993` | `Devs/Prices_ 1993` |
+| `Devs/Prices? 1993` | `Devs/Prices_ 1993` |
+| `Storage/DOSDrivers/AUX` | `Storage/DOSDrivers/_AUX` |
+| `Storage/DOSDrivers/_AUX` | `Storage/DOSDrivers/_AUX` |
+
+`apply` writes items in order and `atomic_write` replaces, so the second of a
+colliding pair **silently overwrote the first**: the tree held one file where
+the media held two, and `distribution.json` recorded both, each claiming the
+same `hostPath`. F6 is that pair's other end — `core/preload` resolves the map
+by host path, so the single survivor would then be copied onto the volume under
+whichever AmigaDOS name won, renaming a genuine `_AUX` to `AUX`.
+
+Fixed by `osinstall::host_name_collisions`, called from **both** entry points
+(`apply` and `add_package`) before a byte is written or a medium is opened. It
+refuses by name — "'Devs/Prices: 1993' and 'Devs/Prices? 1993' both become
+'Devs/Prices_ 1993'" — the same shape an undeclared overwrite is refused in.
+There is no correct silent answer: renaming further would invent a name no
+medium carried, so the plan is refused and the user is told which two files
+clash. Two spellings of the *same* destination are not a collision (the 3.9
+disc spells `C/ASSIGN`, a BoingBag `C/Assign` — that is the ordinary overwrite
+`FileRecord::overwrote` already records), and directories are merge points, not
+claims, the same rule `detect_collisions` and `undeclared_overwrites` follow.
+
+Round-1 tests: `core::osinstall::apply::tests::two_destinations_that_escape_to_one_host_name_are_refused`
+(end to end through `apply`, and asserting the tree is *not created at all* —
+refused before anything is written, not an error after a partial write),
+`::a_reserved_name_and_a_real_underscore_name_are_refused_together` (F6's own
+pair), `::destinations_that_escape_to_nothing_do_not_clash`,
+`::the_same_destination_spelled_twice_is_not_a_clash` and
+`::two_components_claiming_one_drawer_is_not_a_clash`.
+
 **And the fallback refuses rather than getting it wrong.** `hst-imager` copies
 a folder exactly as it finds it and cannot be told a file's real name, so
 `HstImager::copy_in` now refuses a tree whose manifest records any escaped
@@ -1375,19 +1469,93 @@ is ISO-8859-1. `entry_path`'s doc comment now says why, and says what U+FFFD
 cost beyond looking wrong — it **merged distinct names**, since every high-bit
 byte folded to the same replacement character.
 
-**Which header levels this covers, measured rather than assumed.** Every one
-of the owner's 41 `.lha` files was parsed straight out of its header bytes:
-all the non-ASCII names — the Turkish, French, Portuguese and Brazilian
-BoingBags (36/33/36/37 entries), `JanoEditor` (8), `Picasso96` (2),
-`BoingBag39-2-Contribution` (3) — sit in **level-0** headers, the branch this
-fix changes. The level-2/3 archives in the same folder (the MUI set, `netio`,
-`bebbossh`) are ASCII throughout. Level 2/3 names still come from `delharc`'s
-`parse_pathname_to_str`, which percent-encodes any byte outside 0x20..0x7E
-(`ü` → `%fc`); that is wrong for the same reason, but fixing it means
-re-parsing the extended headers by hand rather than using the crate's own path
-assembly (which is also where its `..`/separator filtering lives), and no
-measured archive needs it. Recorded in `entry_path`'s doc comment rather than
-rewritten blind.
+**The header-level census — corrected in fix round 1, and the correction
+matters more than the original claim did.** The first version of this entry
+said "every non-ASCII name sits in a level-0 header, so this branch is the one
+that carries them", and gave per-archive counts adding to roughly 120. That was
+measured with a parser that read only the **first 200 KB** of each archive and
+stopped after **200 entries** per file, and that desynchronised on level-2
+headers (it added a level-2 header's size without its compressed data). It
+therefore never saw most of the collection. Re-measured over every byte of
+every entry:
+
+| level | entries | non-ASCII name | `name\0comment` | drawer in a `0x02` header |
+|---|---|---|---|---|
+| 0 | 4,843 | 483 | 126 | — (the field holds the whole path) |
+| 1 | 914 | 0 | 0 | **880** |
+| 2 | 2,259 | 0 | 0 | 2,252 |
+
+**8,016 entries across 41 archives.** The *conclusion* survived — all 483
+non-ASCII names really are level-0, so the Latin-1 fix does cover every one of
+them — but the evidence behind it did not, and it hid two further defects in
+the levels the census had skipped ([F1](#fixed) and [F3](#fixed), both fixed in
+round 1 and described under this entry). One number was also a false positive
+worth recording: an early re-run reported 880 non-ASCII level-1 names, which
+was the `0xFF` **separator** inside every `0x02` directory header being counted
+as an accented character.
+
+The census is reproducible rather than quoted: `scripts/lha-header-census.py`
+walks all three header levels over a folder of archives and prints the table
+above.
+
+**Level 2/3 no longer percent-encodes either.** The original entry recorded
+that `delharc`'s `parse_pathname_to_str` maps any byte outside 0x20..0x7E to
+`%fc`-style escapes and left it alone as unmeasured. Reading the extension
+headers for F1 made the same code path serve every level, so all of them now
+decode Latin-1 through one function.
+
+**F1 — a level-1 entry's drawer lives in extension header `0x02`, and was
+being thrown away.** A level-1 header's `filename` field holds the **base name
+only**; the directory is in a `0x02` extension header, separated by `0xFF`.
+`entry_path` returned as soon as the raw field was non-empty, so it never
+looked. **880 of the 914 level-1 entries** in the owner's collection lose their
+drawer that way — all 316 of `AmiSSL-v5-OS3.lha`, all 283 of
+`Update3.2.2.lha` (an AmigaOS update this engine exists to install), all 228 of
+`IconLib_46.4.lha` — every one of them flattened into the archive root, on top
+of each other. Pre-existing, and made *worse* by round 0's doc comment, which
+described the level-0/1 branch as understood and correct.
+
+Fixed by reading the extension headers for every level that has them, and
+prepending the `0x02` directory. A level-1 entry with **no** `0x02` header is
+not an error — it is a file at the archive root, which 34 of the 914 genuinely
+are.
+
+There is deliberately **no** "cannot resolve the drawer" refusal, and the
+reason is recorded rather than assumed: `delharc`'s parser walks the whole
+extension chain before building a header, validates each declared length
+against the level-1 skip size or the level-2/3 long header length, and
+propagates a short read (`parser.rs:316-329`), while `ExtraHeaderIter::next`
+returns `None` only at length zero (`parser.rs:71-88`). A header that claims
+extension headers and carries none cannot reach ART. Probed as well as read —
+three mutations of a level-1 fixture are all rejected by `delharc`'s own
+base-header checksum, since the next-header-size field sits inside the
+checksummed region — so the guard that was written first was deleted as
+unreachable rather than shipped as untestable.
+
+**F3 — a level-0 name can carry an Amiga comment after a NUL.** Amiga LhA
+stores `name\0comment` in the one field; `delharc` truncates at the NUL and
+round 0's whole-field decode did not, so **126 entries** came back with a NUL
+and the comment glued on — `BoingBag3.9-1\…\spatch` + `6.50 (26.8.93)`, and
+similar throughout `BoingBag39-1`, `Euro-Update`, `hippoplayer` and
+`mui38usr`. The name is now cut at the NUL, and the tail is **kept** rather
+than discarded: an AmigaDOS file comment is real metadata, and losing it
+quietly is what [ART-078](#open) is filed about on the ISO9660 side. It travels
+as `LhaEntry::comment`. The `0x3F` comment *extension* header is deliberately
+not read — no archive in the measured collection carries one (the types
+present are `0x00`, `0x01`, `0x02`, `0x50`, `0x51`, `0x54`), and untested code
+for an unmeasured case is worse than none.
+
+**Two drafts of the path assembly were wrong the same way, and the tests
+caught both.** The first split on every separator and dropped `.`/`..`
+components the way `delharc` does — which turned `../../evil.txt` into
+`evil.txt`: still contained by `safe_join`, but reported as a **successful
+extraction** rather than a refused traversal. The second kept `..` and still
+dropped *empty* components, which turned the absolute
+`/art-oracle-root-escape.txt` into a relative name `safe_join` accepted, and
+cost the archives oracle one of its three expected refusals. Both are the same
+mistake — **normalising a hostile name into a benign one destroys the
+report** — so the final version changes exactly one thing, `0xFF` to `/`, and
+lets `safe_join` refuse everything else by name.
 
 **The other two archive backends were checked the same way and are genuinely
 different** — neither guesses a charset, because their formats state one:
@@ -1403,13 +1571,24 @@ different** — neither guesses a charset, because their formats state one:
   stores names as UTF-16LE by format definition, and a malformed one is an
   `Err`, not a mangled name.
 
-Tests: `core::lha::tests::a_level_zero_name_s_high_bit_bytes_decode_as_latin1`
+Tests, round 0: `core::lha::tests::a_level_zero_name_s_high_bit_bytes_decode_as_latin1`
 (the real `türkçe` bytes, end to end through `open_archive`),
-`core::lha::tests::two_names_differing_only_above_ascii_stay_two_names` (the
-collision the old decode caused), and
+`::two_names_differing_only_above_ascii_stay_two_names` (the collision the old
+decode caused), and
 `core::osinstall::source_archive::tests::art_168_an_lha_name_s_latin_1_bytes_arrive_decoded`
-— which is the test that used to assert the *wrong* answer on purpose,
-rewritten to assert the decoded name as its own doc comment demanded.
+— the test that used to assert the *wrong* answer on purpose, rewritten to
+assert the decoded name as its own doc comment demanded.
+
+Tests, round 1: `core::lha::tests::a_level_one_entry_keeps_the_drawer_from_its_extension_header`,
+`::a_level_one_drawer_is_split_on_0xff_and_decoded_as_latin1` (the two fixes
+composing, not merely coexisting), `::a_level_one_entry_with_no_directory_header_sits_at_the_root`
+(the legitimate 34-of-914 case), `::a_level_one_header_with_a_damaged_extension_area_is_refused`,
+`::a_name_carrying_an_amiga_comment_is_split_at_the_nul`,
+`::an_amiga_comment_is_latin1_too`, `::an_ordinary_entry_carries_no_comment`,
+`::a_traversal_component_survives_assembly_for_safe_join_to_refuse` and
+`::an_absolute_name_survives_assembly_too` (the two wrong drafts, pinned so
+neither can come back). New fixture `make_level1_lha`, built byte-exact from
+the level-1 layout.
 
 **ART-164** ✅ **`core::iso`'s test scratch directory can be shared by two
 threads, so *any* test in the module can read another's fixture — first

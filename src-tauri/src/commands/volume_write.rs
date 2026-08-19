@@ -1980,7 +1980,10 @@ mod tests {
     use crate::core::volume::DosType;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("art-cmd-write-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "art-cmd-write-{name}-{}",
+            crate::core::test_scratch_id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

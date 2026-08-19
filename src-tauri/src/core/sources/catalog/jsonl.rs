@@ -166,7 +166,10 @@ mod tests {
     use crate::core::sources::PROVIDER_AMINET;
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("art-catalog-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "art-catalog-{name}-{}",
+            crate::core::test_scratch_id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

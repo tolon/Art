@@ -620,7 +620,10 @@ mod tests {
     use crate::core::volume::device::FileRegionMut;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("art-journal-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "art-journal-{name}-{}",
+            crate::core::test_scratch_id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -1051,8 +1054,10 @@ mod crash_safety {
         };
 
         for point in INJECTION_POINTS {
-            let dir =
-                std::env::temp_dir().join(format!("art-crash-{point}-{}", std::process::id()));
+            let dir = std::env::temp_dir().join(format!(
+                "art-crash-{point}-{}",
+                crate::core::test_scratch_id()
+            ));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
             let image = dir.join("disk.hdf");
@@ -1105,7 +1110,10 @@ mod crash_safety {
             return;
         };
 
-        let dir = std::env::temp_dir().join(format!("art-crash-stale-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "art-crash-stale-{}",
+            crate::core::test_scratch_id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let image = dir.join("disk.hdf");

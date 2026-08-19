@@ -597,8 +597,10 @@ mod tests {
     use crate::core::volume::DosType;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("art-archives-t-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "art-archives-t-{name}-{}",
+            crate::core::test_scratch_id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -1185,7 +1187,10 @@ mod tests {
             }
         }
 
-        let marker = format!("art-oracle-traversal-marker-{}.txt", std::process::id());
+        let marker = format!(
+            "art-oracle-traversal-marker-{}.txt",
+            crate::core::test_scratch_id()
+        );
         let _cleanup = RemoveOnDrop(std::env::temp_dir().join(&marker));
 
         let dir = scratch("traversal-unpack");

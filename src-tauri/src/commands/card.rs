@@ -610,7 +610,8 @@ mod tests {
     fn a_plain_hdf_comes_back_as_one_area_at_offset_zero() {
         use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
 
-        let dir = std::env::temp_dir().join(format!("art-card-cmd-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("art-card-cmd-{}", crate::core::test_scratch_id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("plain.hdf");
@@ -654,7 +655,10 @@ mod tests {
     fn a_partition_with_no_driver_anywhere_on_the_card_is_named() {
         use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
 
-        let dir = std::env::temp_dir().join(format!("art-card-cmd-pfs-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "art-card-cmd-pfs-{}",
+            crate::core::test_scratch_id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("pfs.hdf");
@@ -697,8 +701,10 @@ mod tests {
     const GIB: u64 = 1024 * 1024 * 1024;
 
     fn scratch(name: &str) -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("art-card-build-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "art-card-build-{name}-{}",
+            crate::core::test_scratch_id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

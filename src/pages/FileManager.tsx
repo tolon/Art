@@ -84,7 +84,7 @@ import {
 } from "@/lib/archives";
 import { checkoutEdit, checkoutOpen, volumeIconFor } from "@/lib/checkout";
 import { planFunctionKeys } from "@/lib/functionKeyPlan";
-import { onJobProgress, subscribeSafely, type JobProgress } from "@/lib/jobs";
+import { onJobProgress, type JobProgress } from "@/lib/jobs";
 import { filterEntries, filterEntriesReporting } from "@/lib/mask";
 import { planMove } from "@/lib/movePlan";
 import {
@@ -110,11 +110,10 @@ import {
   panelListLocal,
   panelLocalRoots,
   type PanelEntry,
+  countHostDirectory,
+  countVolumeDirectory,
   dirSizeCell,
   dirSizeKey,
-  onDirSizeResult,
-  panelDirectorySize,
-  volumeDirectorySize,
   type DirSizeState,
 } from "@/lib/panel";
 import { splitName } from "@/lib/panelName";
@@ -1826,12 +1825,26 @@ export function FileManager() {
   //
   // Keyed per pane *and* per row (`dirSizeKey`), so the same folder open in
   // both panes is counted once per pane rather than one pane's answer
-  // appearing in the other's column. The answer is matched back by **job
-  // id**, not by key: a user who walked into another folder while the count
-  // ran must not have it land on whatever row now holds that key.
+  // appearing in the other's column.
+  //
+  // **No job id is tracked here, deliberately.** The first version registered
+  // the id inside `.then()` on the invoke promise and matched the result
+  // event against that map — but `spawn_job` starts its thread before the
+  // command returns, so a small folder could emit before the id was known,
+  // the event was dropped, and the row said "counting…" for the session.
+  // `countHostDirectory`/`countVolumeDirectory` wrap `awaitJobResult`, which
+  // subscribes first and buffers; they also reject on a failed or cancelled
+  // job, which is what retires the second listener this block used to need.
   // -----------------------------------------------------------------------
   const [dirSizes, setDirSizes] = useState<Record<string, DirSizeState>>({});
-  const dirSizeJobs = useRef<Map<number, string>>(new Map());
+
+  const forgetDirSize = useCallback((key: string) => {
+    setDirSizes((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }, []);
 
   const countDirectory = useCallback(
     (side: Side, entry: PanelEntry) => {
@@ -1841,70 +1854,27 @@ export function FileManager() {
       if (!key || dirSizes[key]) return;
 
       const state = pane(side);
-      const start =
+      const counting =
         state.kind === "local" && entry.path
-          ? panelDirectorySize(entry.path)
+          ? countHostDirectory(entry.path)
           : (state.kind === "adf" || state.kind === "hdf") &&
               state.volumeIndex !== null &&
               entry.header_block !== null
-            ? volumeDirectorySize(state.location, state.volumeIndex, entry.header_block)
+            ? countVolumeDirectory(state.location, state.volumeIndex, entry.header_block)
             : null;
-      if (!start) return;
+      if (!counting) return;
 
       setDirSizes((current) => ({ ...current, [key]: { status: "counting" } }));
-      void start
-        .then((jobId) => {
-          dirSizeJobs.current.set(jobId, key);
+      void counting
+        .then((total) => {
+          setDirSizes((current) => ({ ...current, [key]: { status: "done", total } }));
         })
-        .catch(() => {
-          // The command refused before a job even opened — a folder that has
-          // gone away, an image that will not mount. Drop back to `<DIR>`
-          // rather than leaving the row saying "counting…" forever.
-          setDirSizes((current) => {
-            const next = { ...current };
-            delete next[key];
-            return next;
-          });
-        });
+        // Cancelled, failed, or refused before a job even opened. Drop back
+        // to `<DIR>` rather than leaving the row saying "counting…" forever.
+        .catch(() => forgetDirSize(key));
     },
-    [dirSizes, pane]
+    [dirSizes, forgetDirSize, pane]
   );
-
-  useEffect(() => {
-    return subscribeSafely(() =>
-      onDirSizeResult((result) => {
-        const key = dirSizeJobs.current.get(result.jobId);
-        if (!key) return;
-        dirSizeJobs.current.delete(result.jobId);
-        setDirSizes((current) => ({
-          ...current,
-          [key]: { status: "done", total: result.total },
-        }));
-      })
-    );
-  }, []);
-
-  // A count that was cancelled or failed emits no result, so without this the
-  // row would say "counting…" for the rest of the session. Same rule as the
-  // copy/plan jobs below: the job's own terminal state is what stops the wait.
-  useEffect(() => {
-    return subscribeSafely(() =>
-      onJobProgress((job) => {
-        if (job.state.state === "running") return;
-        const key = dirSizeJobs.current.get(job.id);
-        if (!key) return;
-        // `finished` is left to the result event above, which carries the
-        // answer; only a cancellation or a failure has to undo the wait.
-        if (job.state.state === "finished") return;
-        dirSizeJobs.current.delete(job.id);
-        setDirSizes((current) => {
-          const next = { ...current };
-          delete next[key];
-          return next;
-        });
-      })
-    );
-  }, []);
 
   // A job that fails or is cancelled emits no result, so the listeners above
   // alone would leave this screen waiting forever. The job's own terminal

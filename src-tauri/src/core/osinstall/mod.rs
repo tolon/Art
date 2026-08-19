@@ -285,6 +285,65 @@ pub fn host_relative(to: &str) -> String {
         .join("/")
 }
 
+/// Two AmigaDOS destinations that would land on the **same host file** —
+/// ART-160's own corollary, and a silent data loss until it was found.
+///
+/// [`host_relative`] is **many-to-one**. `windows_safe_name` maps every
+/// character a filesystem refuses onto the single replacement `_`, and
+/// prefixes a reserved device name with one, so a medium holding two
+/// genuinely different names can escape both onto one:
+///
+/// | on the medium | on the host |
+/// |---|---|
+/// | `Devs/Prices: 1993` | `Devs/Prices_ 1993` |
+/// | `Devs/Prices? 1993` | `Devs/Prices_ 1993` |
+/// | `Storage/DOSDrivers/AUX` | `Storage/DOSDrivers/_AUX` |
+/// | `Storage/DOSDrivers/_AUX` | `Storage/DOSDrivers/_AUX` |
+///
+/// `apply` writes items in order and `atomic_write` replaces, so the second
+/// of a colliding pair **silently overwrote the first** and the tree ended up
+/// holding one file where the medium had two. Worse, `distribution.json`
+/// recorded both, each claiming the same `hostPath` — so `core/preload` would
+/// then copy that one file onto the volume under whichever AmigaDOS name the
+/// map resolved, renaming a genuine `_AUX` to `AUX`.
+///
+/// Escaping exists to protect a name the host cannot store, never to merge
+/// two names into one. There is no correct silent answer here — renaming
+/// further would invent a name no medium carried — so a collision is
+/// **refused, by name, before a single byte is written**, exactly the way an
+/// undeclared overwrite already is.
+///
+/// Returns the colliding pairs as `(host path, first destination, second
+/// destination)`, in plan order, so a refusal can name what actually clashed
+/// rather than only counting. Destinations that are the *same* place
+/// ([`same_destination`] — the medium spelled one file two ways) are not a
+/// collision: that is the ordinary overwrite `apply` already records through
+/// `FileRecord::overwrote`.
+pub fn host_name_collisions(items: &[(String, bool)]) -> Vec<(String, String, String)> {
+    use std::collections::BTreeMap;
+
+    let mut claimed: BTreeMap<String, String> = BTreeMap::new();
+    let mut clashes = Vec::new();
+    for (to, is_dir) in items {
+        // Directories are merge points, not claims — the same rule
+        // `detect_collisions` and `undeclared_overwrites` already follow.
+        if *is_dir {
+            continue;
+        }
+        let host = host_relative(to);
+        match claimed.get(&host) {
+            Some(first) if !same_destination(first, to) => {
+                clashes.push((host, first.clone(), to.clone()));
+            }
+            Some(_) => {}
+            None => {
+                claimed.insert(host, to.clone());
+            }
+        }
+    }
+    clashes
+}
+
 /// Why ART cannot place a package's files from the host at all — a
 /// property of the *package*, not of the user's folder or their selection.
 ///
@@ -464,13 +523,24 @@ pub(crate) mod fixtures {
     use crate::core::volume::write::{FileMeta, VolumeWriter};
     use crate::core::volume::{DosType, VolumeGeometry};
 
-    /// A fresh, empty directory for one test, named after `tag` and the
-    /// process id so parallel test runs never collide. The repository's own
-    /// convention (`core/archive/extract.rs::scratch`,
+    /// A fresh, empty directory for one call, named after `tag` and
+    /// [`crate::core::test_scratch_id`].
+    ///
+    /// **Per call, not per tag** (ART-173's sweep). This used to key on tag
+    /// plus process id alone, so two tests sharing a tag — or one test
+    /// calling it twice — got the *same* directory, and Cargo runs tests in
+    /// parallel threads of one process. `apply.rs`'s `planned()` already had
+    /// to append its own counter to the tag to work around exactly that. The
+    /// counter is inside the helper now, so no call site has to know.
+    ///
+    /// The repository's own convention (`core/archive/extract.rs::scratch`,
     /// `core/layout/apply.rs::scratch`) — deliberately not `tempfile`, which
     /// is not a dependency of this project.
     pub fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("art-osinstall-{tag}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "art-osinstall-{tag}-{}",
+            crate::core::test_scratch_id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -961,21 +1031,33 @@ pub(crate) mod fixtures {
     mod tests {
         use super::*;
 
+        /// The contract this used to assert was the *opposite* one — that a
+        /// tag plus the pid is a **stable** path, cleared on entry. That is
+        /// precisely the ART-164 hazard: two parallel tests sharing a tag
+        /// share the directory, and whichever writes second hands the other
+        /// its fixture. `scratch` now gives every call its own, so the thing
+        /// worth pinning is that two calls cannot collide.
         #[test]
-        fn scratch_starts_empty_even_on_a_second_call_with_the_same_tag() {
+        fn scratch_gives_every_call_its_own_empty_directory() {
             let dir = scratch("fixture-scratch");
             assert!(dir.is_dir());
             assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
 
-            std::fs::write(dir.join("leftover"), b"from a previous run").unwrap();
+            std::fs::write(dir.join("leftover"), b"from another test").unwrap();
 
             let dir_again = scratch("fixture-scratch");
-            assert_eq!(dir, dir_again, "the tag plus pid must be a stable path");
+            assert_ne!(
+                dir, dir_again,
+                "the same tag twice must not name the same directory"
+            );
             assert_eq!(
                 std::fs::read_dir(&dir_again).unwrap().count(),
                 0,
-                "scratch must clear whatever a previous run left behind"
+                "and the new one is empty, whatever the first now holds"
             );
+            // The first is untouched: a fresh directory is not a cleared one,
+            // and a test still holding a path must keep what it wrote.
+            assert!(dir.join("leftover").is_file());
         }
 
         /// The protection byte is the one thing a test cannot see just by

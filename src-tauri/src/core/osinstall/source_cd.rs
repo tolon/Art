@@ -320,8 +320,10 @@ mod tests {
     // path every test here reads back, exactly as a real AmigaOS 3.9 disc
     // does (test 5 below is the one that makes this load-bearing explicit).
     fn disc(dirname: &str) -> std::path::PathBuf {
-        let folder =
-            std::env::temp_dir().join(format!("art-cdsource-{dirname}-{}", std::process::id()));
+        let folder = std::env::temp_dir().join(format!(
+            "art-cdsource-{dirname}-{}",
+            crate::core::test_scratch_id()
+        ));
         let _ = std::fs::remove_dir_all(&folder);
         std::fs::create_dir_all(&folder).unwrap();
         let bytes = IsoBuilder {
@@ -361,7 +363,7 @@ mod tests {
     fn a_disc_deeper_than_art_will_walk_is_a_limit_not_a_malformed_disc() {
         let folder = std::env::temp_dir().join(format!(
             "art-cdsource-toodeep-{}-{}",
-            std::process::id(),
+            crate::core::test_scratch_id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -481,8 +483,10 @@ mod tests {
     /// written against.
     #[test]
     fn the_long_names_are_the_ones_a_recipe_sees() {
-        let folder =
-            std::env::temp_dir().join(format!("art-cdsource-joliet-{}", std::process::id()));
+        let folder = std::env::temp_dir().join(format!(
+            "art-cdsource-joliet-{}",
+            crate::core::test_scratch_id()
+        ));
         let _ = std::fs::remove_dir_all(&folder);
         std::fs::create_dir_all(&folder).unwrap();
         let bytes = IsoBuilder {
@@ -599,8 +603,10 @@ mod tests {
     /// contents can be walked.
     #[test]
     fn a_mixed_case_path_resolves_case_insensitively() {
-        let folder =
-            std::env::temp_dir().join(format!("art-cdsource-case-fallback-{}", std::process::id()));
+        let folder = std::env::temp_dir().join(format!(
+            "art-cdsource-case-fallback-{}",
+            crate::core::test_scratch_id()
+        ));
         let _ = std::fs::remove_dir_all(&folder);
         std::fs::create_dir_all(&folder).unwrap();
         let bytes = IsoBuilder {
@@ -641,8 +647,10 @@ mod tests {
     /// case-insensitive search happens to reach first.
     #[test]
     fn an_exact_case_match_wins_over_a_differently_cased_entry() {
-        let folder =
-            std::env::temp_dir().join(format!("art-cdsource-exact-wins-{}", std::process::id()));
+        let folder = std::env::temp_dir().join(format!(
+            "art-cdsource-exact-wins-{}",
+            crate::core::test_scratch_id()
+        ));
         let _ = std::fs::remove_dir_all(&folder);
         std::fs::create_dir_all(&folder).unwrap();
         let bytes = IsoBuilder {
@@ -686,8 +694,10 @@ mod tests {
     /// exact-match-first. Only containment is folded.
     #[test]
     fn two_drawers_differing_only_in_case_are_one_drawer_to_amigados() {
-        let folder =
-            std::env::temp_dir().join(format!("art-cdsource-fold-walk-{}", std::process::id()));
+        let folder = std::env::temp_dir().join(format!(
+            "art-cdsource-fold-walk-{}",
+            crate::core::test_scratch_id()
+        ));
         let _ = std::fs::remove_dir_all(&folder);
         std::fs::create_dir_all(&folder).unwrap();
         let bytes = IsoBuilder {

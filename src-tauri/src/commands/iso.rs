@@ -406,7 +406,7 @@ mod tests {
     fn tmp(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!(
             "art-iso-cmd-{name}-{}-{}",
-            std::process::id(),
+            crate::core::test_scratch_id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()

@@ -424,7 +424,10 @@ mod tests {
     const GIB: u64 = 1024 * 1024 * 1024;
 
     fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("art-manifest-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "art-manifest-{name}-{}",
+            crate::core::test_scratch_id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

@@ -389,8 +389,10 @@ mod tests {
 
     impl Fixture {
         fn new(name: &str) -> Self {
-            let dir =
-                std::env::temp_dir().join(format!("art-library-{name}-{}", std::process::id()));
+            let dir = std::env::temp_dir().join(format!(
+                "art-library-{name}-{}",
+                crate::core::test_scratch_id()
+            ));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(dir.join("root")).unwrap();
             Self {

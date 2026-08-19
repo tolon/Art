@@ -4,7 +4,7 @@
 // the one row shape they all produce, so the table does not care which is which.
 
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { awaitJobResult } from "@/lib/jobs";
 
 import { adfList, type AdfEntry } from "@/lib/adf";
 
@@ -104,19 +104,13 @@ export interface DirTotal {
   partial: boolean;
 }
 
-/** The payload `dir-size-result` carries. */
-export interface DirSizeResult {
-  jobId: number;
-  /** The path or block the count was asked about — see the Rust side. */
-  key: string;
-  total: DirTotal;
-}
-
 /**
  * Start counting a local folder. Returns the **job id**, not the answer: the
- * count runs on a job thread and the answer arrives on `dir-size-result`
- * (§54), so a folder of forty thousand files neither blocks the command
- * thread nor becomes unstoppable.
+ * count runs on a job thread (§54), so a folder of forty thousand files
+ * neither blocks the command thread nor becomes unstoppable.
+ *
+ * Prefer {@link countHostDirectory}, which hides the job behind an ordinary
+ * promise and closes the subscribe-after-invoke race.
  */
 export async function panelDirectorySize(path: string): Promise<number> {
   return invoke<number>("panel_directory_size", { path });
@@ -132,11 +126,56 @@ export async function volumeDirectorySize(
   return invoke<number>("volume_directory_size", { path, volumeIndex, dirBlock });
 }
 
-/** Listen for finished counts. Both commands above answer on this one event. */
-export async function onDirSizeResult(
-  handler: (result: DirSizeResult) => void
-): Promise<UnlistenFn> {
-  return listen<DirSizeResult>("dir-size-result", (event) => handler(event.payload));
+/** The event both directory-size commands answer on. */
+export const DIR_SIZE_EVENT = "dir-size-result";
+
+/** The payload `dir-size-result` carries. */
+export interface DirSizeResult {
+  job_id: number;
+  /** The path or block the count was asked about — see the Rust side. */
+  key: string;
+  total: DirTotal;
+}
+
+/**
+ * Count a local folder, as one ordinary promise (ART-087).
+ *
+ * # Why this is not "invoke, then listen"
+ *
+ * The first version of this registered the job id inside `.then()` on the
+ * invoke promise, and matched the result event against that map. Rust's
+ * `spawn_job` starts its thread **before** the command returns the id, so a
+ * small folder finishes and emits while the frontend is still inside
+ * `await invoke(...)` — the listener saw an id it did not know yet, dropped
+ * the event, and the row said "counting…" for the rest of the session. That
+ * is the same race `awaitJobResult`'s own doc comment records finding in
+ * `osinstallCollisions`, in a new place.
+ *
+ * [`awaitJobResult`](@/lib/jobs) is the fix and the reason it exists:
+ * it subscribes *first*, buffers anything that arrives before the id is
+ * known, and matches retroactively. It also rejects on a failed or cancelled
+ * job, which is what lets the caller drop the row back to `<DIR>` instead of
+ * needing a second listener for the terminal state.
+ */
+export function countHostDirectory(path: string): Promise<DirTotal> {
+  return awaitJobResult<DirSizeResult, DirTotal>(
+    DIR_SIZE_EVENT,
+    () => panelDirectorySize(path),
+    (payload) => payload.total
+  );
+}
+
+/** The same, for a directory inside a volume. See {@link countHostDirectory}. */
+export function countVolumeDirectory(
+  path: string,
+  volumeIndex: number,
+  dirBlock: number | null
+): Promise<DirTotal> {
+  return awaitJobResult<DirSizeResult, DirTotal>(
+    DIR_SIZE_EVENT,
+    () => volumeDirectorySize(path, volumeIndex, dirBlock),
+    (payload) => payload.total
+  );
 }
 
 /** Where a counted directory sits in a pane's own map, per side. */

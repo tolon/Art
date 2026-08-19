@@ -275,7 +275,10 @@ mod rename_tests {
     use super::rename_on_disk;
 
     fn tempdir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("art-rename-{}-{name}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "art-rename-{}-{name}",
+            crate::core::test_scratch_id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

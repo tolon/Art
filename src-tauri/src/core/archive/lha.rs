@@ -174,7 +174,7 @@ mod tests {
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "art-lha-backend-{tag}-{}-{}",
-            std::process::id(),
+            crate::core::test_scratch_id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()

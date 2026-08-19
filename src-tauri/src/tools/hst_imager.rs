@@ -356,7 +356,7 @@ mod tests {
     fn a_tree_with_escaped_names_is_refused_before_the_tool_runs() {
         let dir = std::env::temp_dir().join(format!(
             "art-hst-escaped-{}-{}",
-            std::process::id(),
+            crate::core::test_scratch_id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()

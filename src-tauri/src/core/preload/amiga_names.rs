@@ -148,7 +148,7 @@ mod tests {
     fn a_folder_without_a_manifest_renames_nothing() {
         let dir = std::env::temp_dir().join(format!(
             "art-amiganames-none-{}-{}",
-            std::process::id(),
+            crate::core::test_scratch_id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -165,7 +165,7 @@ mod tests {
     fn a_manifest_that_is_not_json_renames_nothing() {
         let dir = std::env::temp_dir().join(format!(
             "art-amiganames-bad-{}-{}",
-            std::process::id(),
+            crate::core::test_scratch_id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()

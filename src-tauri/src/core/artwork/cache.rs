@@ -240,7 +240,10 @@ mod tests {
     /// from the thread, because the harness reuses threads and two tests
     /// sharing a directory fail in a way that looks like a cache bug.
     fn tempdir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("art-artwork-{}-{name}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "art-artwork-{}-{name}",
+            crate::core::test_scratch_id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

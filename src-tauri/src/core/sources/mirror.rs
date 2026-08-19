@@ -523,7 +523,8 @@ pub(crate) mod tests {
     /// The same wind-back must reach a file destination, not just a buffer.
     #[test]
     fn a_file_destination_is_wound_back_too() {
-        let dir = std::env::temp_dir().join(format!("art-restart-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("art-restart-{}", crate::core::test_scratch_id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("download.part");

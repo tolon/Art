@@ -104,6 +104,7 @@ mod tests {
             uncompressed_size: 100,
             method: "-lh0-".into(),
             last_modified: 0,
+            comment: String::new(),
         }
     }
 
