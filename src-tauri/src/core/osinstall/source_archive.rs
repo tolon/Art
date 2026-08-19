@@ -77,6 +77,42 @@
 //! [`crate::core::archive::extract::MAX_ENTRY_OUTPUT`], the same ceiling
 //! every other reader of this codebase's archives is held to, rather than
 //! inventing a second bound for this one caller.
+//!
+//! ## A medium inside a medium: [`ArchiveSource::open_nested`]
+//!
+//! A real BoingBag (`BoingBag39-1.lha`) is a wrapper, not the medium itself:
+//! beside its payload sit `C/Updater` and its catalogs in seventeen
+//! languages — the Amiga-side installer, which ART does not run and does not
+//! treat as part of the install source. The payload the recipe actually
+//! wants is `AmigaOS-Update`, a **ZIP stored uncompressed inside the LHA**
+//! (identical declared and stored size; its first four bytes are the ZIP
+//! signature).
+//!
+//! [`core::archive::open`](crate::core::archive::open) takes a path, and
+//! `ZipBackend` holds a `ZipArchive<BufReader<File>>` — there is no
+//! constructor over bytes, and making every backend generic over its source
+//! just to serve this one caller would be the wrong trade. So
+//! [`open_nested`](ArchiveSource::open_nested) reads the wrapper the same way
+//! [`open`](ArchiveSource::open) does, finds `member` among its
+//! top-level-relative entries, reads it bounded by the same
+//! [`MAX_ENTRY_OUTPUT`] ceiling `read` uses, and writes those bytes to a
+//! throwaway file so the existing machinery — `core::archive::open`,
+//! `core::detect` included — can open *that*. Three things fall out for
+//! free: a member that claims to be a ZIP and is not gets caught by
+//! `core::detect` rather than trusted; every backend stays unchanged; and the
+//! member is bounded on the way out by the gate that already bounds
+//! everything else this module reads. The temporary file is removed whether
+//! the open succeeds or fails — never left for the open to fail *into*.
+//!
+//! **The inner archive gets no single-top-level-directory rule.** The
+//! measured BoingBag payload's top level is thirteen directories (`C`,
+//! `Classes`, `Devs`, `Fonts`, `L`, `Libs`, `Prefs`, `S`, `Storage`, `System`,
+//! `Tools`, `Utilities`, `WBStartup`) — a Workbench volume, not a single
+//! named package. Its paths are already volume-relative, so applying `open`'s
+//! "exactly one top-level directory or refuse" rule to it would refuse every
+//! real BoingBag outright. The nested source's volume name instead comes
+//! from the **outer** archive's own top-level directory — the wrapper's
+//! identity, since the inner archive carries none of its own.
 
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
@@ -112,17 +148,16 @@ impl std::fmt::Debug for ArchiveSource {
 }
 
 impl ArchiveSource {
-    /// Open `path`, list it once, and resolve its single top-level directory.
-    pub fn open(path: &Path) -> CoreResult<Self> {
-        let mut backend = crate::core::archive::open(path)?;
-        let raw_entries = backend.entries()?;
-
-        // Validate every raw name through `safe_join` and keep only its
-        // components — never the joined path itself, which is never written
-        // to disk from this module. A name `safe_join` refuses is dropped,
-        // not fatal to the whole archive: the same "skip what one entry did
-        // wrong" rule `scan::find_media` already follows for a whole
-        // candidate file.
+    /// Validate every raw name through `safe_join` and keep only its
+    /// components — never the joined path itself, which is never written to
+    /// disk from this module. A name `safe_join` refuses is dropped, not
+    /// fatal to the whole archive: the same "skip what one entry did wrong"
+    /// rule `scan::find_media` already follows for a whole candidate file.
+    ///
+    /// Shared by [`open`](Self::open), which turns this into a single
+    /// top-level directory, and [`open_flat`](Self::open_flat), which does
+    /// not — a nested archive's paths are already volume-relative.
+    fn parsed_entries(raw_entries: &[ArchiveEntry]) -> Vec<(Vec<String>, usize)> {
         let virtual_root = Path::new("archive");
         let mut parsed: Vec<(Vec<String>, usize)> = Vec::new();
         for (index, entry) in raw_entries.iter().enumerate() {
@@ -144,6 +179,14 @@ impl ArchiveSource {
             }
             parsed.push((components, index));
         }
+        parsed
+    }
+
+    /// Open `path`, list it once, and resolve its single top-level directory.
+    pub fn open(path: &Path) -> CoreResult<Self> {
+        let mut backend = crate::core::archive::open(path)?;
+        let raw_entries = backend.entries()?;
+        let parsed = Self::parsed_entries(&raw_entries);
 
         // The archive's identity: the single top-level directory. A root
         // file (one segment, not itself a directory — the `.info` icon)
@@ -201,6 +244,103 @@ impl ArchiveSource {
             entries,
             backend,
         })
+    }
+
+    /// Open `path` the same way [`open`](Self::open) does, except every
+    /// entry's path is kept **as-is**, with no single-top-level-directory
+    /// rule applied and no `volume_name` resolved (the caller — only
+    /// [`open_nested`](Self::open_nested)) — sets it from elsewhere. This is
+    /// what an already-volume-relative archive (a BoingBag payload's own
+    /// ZIP) needs: `open`'s rule would see thirteen top-level directories and
+    /// refuse it.
+    fn open_flat(path: &Path) -> CoreResult<Self> {
+        let mut backend = crate::core::archive::open(path)?;
+        let raw_entries = backend.entries()?;
+        let entries: Vec<(String, usize, ArchiveEntry)> = Self::parsed_entries(&raw_entries)
+            .into_iter()
+            .map(|(components, index)| (components.join("/"), index, raw_entries[index].clone()))
+            .collect();
+
+        Ok(Self {
+            path: path.to_path_buf(),
+            volume_name: String::new(),
+            entries,
+            backend,
+        })
+    }
+
+    /// Open `member` out of `outer` as its own medium — the BoingBag shape:
+    /// a payload archive stored inside a wrapper archive.
+    ///
+    /// `outer` is opened and resolved exactly as [`open`](Self::open) does,
+    /// so `member` is looked up **relative to the wrapper's own top-level
+    /// directory** — a recipe names `AmigaOS-Update`, never
+    /// `BoingBag3.9-1/AmigaOS-Update`. The found entry is read bounded by
+    /// [`MAX_ENTRY_OUTPUT`], written to a throwaway file, and opened with
+    /// [`open_flat`](Self::open_flat) rather than [`open`](Self::open) — the
+    /// inner archive's paths are already volume-relative, and the resulting
+    /// `volume_name` is set to the **wrapper's** top-level directory, not
+    /// anything read from inside the payload.
+    pub fn open_nested(outer: &Path, member: &str) -> CoreResult<Self> {
+        let mut wrapper = Self::open(outer)?;
+        let normalized_member = Self::normalized(member);
+        let (index, is_dir) = {
+            let Some((_, index, found)) = Self::find_by_path(&wrapper.entries, &normalized_member)
+            else {
+                return Err(CoreError::InvalidInput(format!(
+                    "'{member}' is not in '{}'",
+                    outer.display()
+                )));
+            };
+            (*index, found.is_dir)
+        };
+        if is_dir {
+            return Err(CoreError::InvalidInput(format!(
+                "'{member}' is a drawer inside '{}', not a payload archive",
+                outer.display()
+            )));
+        }
+
+        // Bounded the same way every other read out of this module's
+        // archives is: a declared size is a claim, never a promise.
+        let bytes = wrapper.backend.read(index, MAX_ENTRY_OUTPUT)?;
+
+        // A throwaway file so `core::archive::open` — `core::detect`
+        // included — can open the member the same way it opens any other
+        // archive on disk; there is no constructor over bytes. Removed on
+        // both the success and the failure path, so a member that turns out
+        // not to be an archive at all never leaves a leftover behind.
+        let tmp = Self::nested_temp_path(member);
+        let opened = (|| -> CoreResult<Self> {
+            std::fs::write(&tmp, &bytes)?;
+            let mut inner = Self::open_flat(&tmp)?;
+            inner.volume_name = wrapper.volume_name().to_string();
+            inner.path = outer.to_path_buf();
+            Ok(inner)
+        })();
+        let _ = std::fs::remove_file(&tmp);
+
+        opened
+    }
+
+    /// A scratch path for [`open_nested`](Self::open_nested)'s extracted
+    /// member — [`crate::core::safety::atomic::atomic_write`]'s own naming
+    /// (a leading dot, the `art-tmp-` marker, a nanosecond stamp so
+    /// concurrent callers never collide), rooted in the system temp
+    /// directory rather than beside a destination file: unlike an atomic
+    /// write, there is no destination here to sit next to, only scratch —
+    /// the same place every other throwaway file in this codebase goes
+    /// (`std::env::temp_dir()`).
+    fn nested_temp_path(member: &str) -> PathBuf {
+        let stem = Path::new(member)
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "art-nested-member".to_string());
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!(".{stem}.art-tmp-{stamp}"))
     }
 
     /// `path`, with no leading, trailing or doubled slash — the same
@@ -423,5 +563,110 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The BoingBag shape: an archive whose payload is another archive.
+    #[test]
+    fn a_nested_member_becomes_the_medium() {
+        let dir = scratch("archive-nested");
+        let inner = crate::core::archive::zip::tests::make_zip_with(&[
+            ("Libs/version.library", b"lib bytes"),
+            ("C/Version", b"cmd bytes"),
+        ]);
+        let outer = package_zip(
+            &dir,
+            "BoingBagLike.zip",
+            &[
+                ("BB/AmigaOS-Update", &inner),
+                ("BB/C/Updater", b"an amiga program ART does not run"),
+            ],
+        );
+
+        let mut src = ArchiveSource::open_nested(&outer, "AmigaOS-Update").unwrap();
+        assert_eq!(src.read("Libs/version.library").unwrap(), b"lib bytes");
+        // The outer archive's own files are *not* visible: the medium is the
+        // payload, and `C/Updater` belongs to the wrapper.
+        assert!(src.entry("C/Updater").unwrap().is_none());
+    }
+
+    /// A member that is not an archive at all is refused, not treated as an
+    /// empty medium — a silently empty medium is a silently short plan.
+    #[test]
+    fn a_member_that_is_not_an_archive_is_refused() {
+        let dir = scratch("archive-nested-bad");
+        let outer = package_zip(
+            &dir,
+            "bad.zip",
+            &[("BB/AmigaOS-Update", b"not an archive, just bytes")],
+        );
+        assert!(ArchiveSource::open_nested(&outer, "AmigaOS-Update").is_err());
+    }
+
+    /// A member the outer archive does not hold is refused by name.
+    #[test]
+    fn a_missing_member_is_refused_by_name() {
+        let dir = scratch("archive-nested-missing");
+        let outer = package_zip(&dir, "x.zip", &[("BB/Something", b"x")]);
+        let err = ArchiveSource::open_nested(&outer, "AmigaOS-Update")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("AmigaOS-Update"), "got {err}");
+    }
+
+    /// Nothing is left behind, whether the open worked or not.
+    ///
+    /// `open_nested`'s scratch file follows `core::safety::atomic`'s own
+    /// naming (`.{stem}.art-tmp-{stamp}`), which is also what
+    /// `atomic::tests::leaves_no_temp_files_behind` greps for — so counting
+    /// entries under the system temp directory whose name contains
+    /// `art-tmp` is the existing convention for "did a temp file survive",
+    /// not a new one invented for this test. The member name here
+    /// (`NestedCleanupCheck`) is folded into the same filter and chosen to
+    /// be unique to this test: `nested_temp_path` derives its stem from the
+    /// member name, cargo runs tests in parallel by default, and the other
+    /// tests in this module open a member literally named `AmigaOS-Update`
+    /// — filtering on that name instead would transiently catch *their*
+    /// temp files too, whichever happened to be mid-flight.
+    #[test]
+    fn the_temporary_extraction_is_cleaned_up_either_way() {
+        const MEMBER: &str = "NestedCleanupCheck";
+
+        fn count_leftover_temp_files() -> usize {
+            std::fs::read_dir(std::env::temp_dir())
+                .into_iter()
+                .flatten()
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    name.contains("art-tmp") && name.contains(MEMBER)
+                })
+                .count()
+        }
+
+        let dir = scratch("archive-nested-cleanup");
+        let inner = crate::core::archive::zip::tests::make_zip_with(&[("C/Version", b"cmd bytes")]);
+        let good = package_zip(&dir, "Good.zip", &[(&format!("BB/{MEMBER}"), &inner)]);
+        let bad = package_zip(
+            &dir,
+            "Bad.zip",
+            &[(&format!("BB/{MEMBER}"), b"not an archive")],
+        );
+
+        let before = count_leftover_temp_files();
+
+        let mut ok = ArchiveSource::open_nested(&good, MEMBER).unwrap();
+        assert_eq!(ok.read("C/Version").unwrap(), b"cmd bytes");
+        assert_eq!(
+            count_leftover_temp_files(),
+            before,
+            "a successful open_nested left its extraction behind"
+        );
+
+        assert!(ArchiveSource::open_nested(&bad, MEMBER).is_err());
+        assert_eq!(
+            count_leftover_temp_files(),
+            before,
+            "a failed open_nested left its extraction behind"
+        );
     }
 }
