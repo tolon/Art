@@ -28,6 +28,27 @@
 //! So the new record names the package *and* carries what it displaced —
 //! see [`FileRecord::overwrote`].
 //!
+//! ## `atomic_write`, never `guarded_write` — a ruled decision, not an omission
+//!
+//! Every write here goes through `core/safety`, so nothing is ever
+//! half-written. None of them takes a **generational backup**, and a reader
+//! who knows the rule ("`guarded_write` for a user's file") should meet the
+//! reasoning here rather than assume it was forgotten.
+//!
+//! `core::safety::backup_file` puts its generations in a `.art-backup/`
+//! directory **beside the file it backs up**. Beside a file in a
+//! distribution tree means *inside the tree* — inside the AmigaOS system
+//! volume this tree becomes, copied onto the card with everything else and
+//! shipped as part of the operating system. That is worse than the thing
+//! backups protect against.
+//!
+//! And the tree is not the original. It is derived, in seconds, from media
+//! the user still has: re-running [`apply`] is the real answer to "undo",
+//! which is the same reasoning `BackupPolicy::LARGE_IMAGE` already applies
+//! to a multi-gigabyte HDF. What the tree owes instead is an honest account
+//! of itself, and that is what [`FileRecord::overwrote`] keeps: the
+//! component, medium, hash and size of every file a package displaced.
+//!
 //! ## `SAFE_CREATE`, before anything else is touched
 //!
 //! A distribution folder already there is somebody's work — possibly a
@@ -514,6 +535,10 @@ impl<'a> TreeWriter<'a> {
                 ))
             })?;
 
+            // `atomic_write`, not `guarded_write` — see the module doc
+            // comment's own section on why a `.art-backup/` here would be
+            // written onto the card as part of the operating system, and
+            // what the tree keeps instead.
             crate::core::safety::atomic::atomic_write(&target, &bytes)?;
 
             // Only when there is something worth recording — see
@@ -789,15 +814,11 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
 
 /// Serialise `manifest` to the tree's own `distribution.json`.
 ///
-/// `atomic_write`, not `guarded_write`, and deliberately: `guarded_write`
-/// puts its generations in a `.art-backup/` directory **beside the file it
-/// backs up**, which here is the distribution root — so every backup would
-/// land *inside the product*, and be copied onto the Amiga volume with
-/// everything else in the tree. A distribution tree is backed up by keeping
-/// a copy of the tree, the same reasoning `BackupPolicy::LARGE_IMAGE`
-/// already applies to a multi-gigabyte HDF; what the manifest itself owes is
-/// that no version of it is ever half-written, which is exactly what
-/// `atomic_write` guarantees.
+/// `atomic_write`, not `guarded_write` — see the module doc comment's own
+/// section. Here specifically: a `.art-backup/` beside `distribution.json`
+/// is a directory at the **distribution root**, i.e. at `SYS:` on the
+/// finished volume. What the manifest itself owes is that no version of it
+/// is ever half-written, which is exactly what `atomic_write` guarantees.
 fn write_manifest(root: &Path, manifest: &DistributionManifest) -> CoreResult<()> {
     let text = serde_json::to_string_pretty(manifest).map_err(|err| CoreError::Malformed {
         format: "distribution manifest".into(),

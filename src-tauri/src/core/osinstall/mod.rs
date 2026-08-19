@@ -721,19 +721,21 @@ pub(crate) mod fixtures {
     /// The `TestPack` archive: the same destination with different bytes,
     /// plus a file only the package brings.
     ///
-    /// The explicit `TestPack/C/` entry is a real directory row, not
-    /// padding: a `Subtree` rule resolves its `from` through
-    /// `MediaSource::entry`, and an archive that stores only leaf files has
-    /// no `C` to resolve. Real LHA packages carry directory headers; a ZIP
-    /// written without them would not, and stating it here keeps the
-    /// fixture honest about what the source actually requires.
+    /// **No directory entries at all, deliberately.** The owner's real
+    /// `BoingBag39-1.lha` payload declares 23 directories and not one of
+    /// them is top-level, while every rule in both shipped BoingBag recipes
+    /// names a top-level drawer — so an archive whose `C` is only *implied*
+    /// by the paths under it is the realistic case, not the awkward one.
+    /// An earlier draft of this fixture wrote an explicit `TestPack/C/` row
+    /// and passed while the engine would have refused every real package;
+    /// `ArchiveSource::with_implicit_directories` is what makes this
+    /// version resolve, and this version is what proves it.
     pub fn package_test_archive(folder: &Path, file_name: &str) -> PathBuf {
         let path = folder.join(file_name);
         std::fs::write(
             &path,
             crate::core::archive::zip::tests::make_zip_with(&[
-                ("TestPack/C/", b"" as &[u8]),
-                ("TestPack/C/LoadModule", b"package LoadModule"),
+                ("TestPack/C/LoadModule", b"package LoadModule" as &[u8]),
                 ("TestPack/C/OnlyPack", b"package only"),
             ]),
         )

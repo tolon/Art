@@ -134,7 +134,15 @@ pub struct ArchiveSource {
     /// Every entry, path **relative to the top-level directory**, with the
     /// backend index that reads it. Listing is cheap and reading is not, so
     /// the listing is held and the bytes are not.
-    entries: Vec<(String, usize, ArchiveEntry)>,
+    ///
+    /// The index is `None` for a **synthesised directory** — a drawer the
+    /// archive never listed but every path under it implies (see
+    /// [`with_implicit_directories`](Self::with_implicit_directories)).
+    /// Such a row is always `is_dir`, so nothing that reads bytes ever
+    /// reaches its missing index; the two refusals that could get near it
+    /// (`read`, `open_nested`) check `is_dir` first and check the `Option`
+    /// again anyway rather than unwrapping a promise the type does not make.
+    entries: Vec<(String, Option<usize>, ArchiveEntry)>,
     backend: Box<dyn ArchiveBackend>,
 }
 
@@ -182,6 +190,71 @@ impl ArchiveSource {
         parsed
     }
 
+    /// Add a directory row for every ancestor path that `rows` implies but
+    /// no entry in the archive actually declares.
+    ///
+    /// **Measured, and the reason this round would otherwise produce
+    /// nothing.** Explicit directory entries are optional in ZIP and LHA
+    /// alike, and archivers routinely omit them. The owner's real
+    /// `BoingBag39-1.lha` payload was listed: 211 file entries, 23 explicit
+    /// directory entries, and **every one of those 23 is second-level or
+    /// deeper** (`Classes\Images`, `Libs\xad`, `Prefs\Presets`, …) — not one
+    /// top-level directory is declared. Every rule in both shipped BoingBag
+    /// recipes names a top-level directory (`{ "from": "Libs", "kind":
+    /// "subtree" }`), and [`entry`](MediaSource::entry) resolves only
+    /// through [`find_by_path`](Self::find_by_path) over listed rows. So
+    /// `entry("Libs")` answered `None`, `plan()` turned that into
+    /// `MediaPathMissing`, and **every rule of both packages would have been
+    /// refused against the real material** — the recipe right, the code
+    /// right, and the output nothing at all.
+    ///
+    /// An entry named `Libs/version.library` *is* the statement that `Libs`
+    /// exists; a caller has no business knowing whether the archiver also
+    /// wrote the row saying so. Every intermediate level is synthesised, not
+    /// only the first, so `Utilities/AMPlifier/skins` resolves from a lone
+    /// `Utilities/AMPlifier/skins/amplifier/theme` just as well.
+    ///
+    /// Each synthesised row is inserted **immediately before the first entry
+    /// that implies it**, so the order is the archive's own and a parent
+    /// always precedes its children — deterministic, and the same order a
+    /// plan then places them in. Dedup is case-insensitive against what the
+    /// archive already declares, matching [`find_by_path`]'s own resolution
+    /// (AmigaDOS is case-insensitive, ART-012): an archive that *does*
+    /// declare `Libs/` never also grows a synthetic `libs`.
+    fn with_implicit_directories(
+        rows: Vec<(String, Option<usize>, ArchiveEntry)>,
+    ) -> Vec<(String, Option<usize>, ArchiveEntry)> {
+        // Seeded with everything the archive really says, so a declared
+        // directory is never duplicated by an implied one.
+        let mut known: std::collections::HashSet<String> = rows
+            .iter()
+            .map(|(path, ..)| path.to_ascii_lowercase())
+            .collect();
+
+        let mut out: Vec<(String, Option<usize>, ArchiveEntry)> = Vec::with_capacity(rows.len());
+        for (path, index, entry) in rows {
+            // Every ancestor, shallowest first, so a parent is always
+            // pushed before the child that revealed it.
+            for (at, _) in path.match_indices('/') {
+                let ancestor = &path[..at];
+                if !known.insert(ancestor.to_ascii_lowercase()) {
+                    continue;
+                }
+                out.push((
+                    ancestor.to_string(),
+                    None,
+                    ArchiveEntry {
+                        name: ancestor.to_string(),
+                        is_dir: true,
+                        declared_bytes: 0,
+                    },
+                ));
+            }
+            out.push((path, index, entry));
+        }
+        out
+    }
+
     /// Open `path`, list it once, and resolve its single top-level directory.
     pub fn open(path: &Path) -> CoreResult<Self> {
         let mut backend = crate::core::archive::open(path)?;
@@ -226,7 +299,7 @@ impl ArchiveSource {
         // after stripping) is dropped too — `entry("")` answers the root
         // synthetically, matching `AdfSource::root_entry` and
         // `CdSource::root_entry`, so it must not also appear as a row here.
-        let mut entries: Vec<(String, usize, ArchiveEntry)> = Vec::new();
+        let mut entries: Vec<(String, Option<usize>, ArchiveEntry)> = Vec::new();
         for (components, index) in parsed {
             if components[0] != volume_name {
                 continue;
@@ -235,8 +308,9 @@ impl ArchiveSource {
             if rest.is_empty() {
                 continue;
             }
-            entries.push((rest.join("/"), index, raw_entries[index].clone()));
+            entries.push((rest.join("/"), Some(index), raw_entries[index].clone()));
         }
+        let entries = Self::with_implicit_directories(entries);
 
         Ok(Self {
             path: path.to_path_buf(),
@@ -256,10 +330,18 @@ impl ArchiveSource {
     fn open_flat(path: &Path) -> CoreResult<Self> {
         let mut backend = crate::core::archive::open(path)?;
         let raw_entries = backend.entries()?;
-        let entries: Vec<(String, usize, ArchiveEntry)> = Self::parsed_entries(&raw_entries)
-            .into_iter()
-            .map(|(components, index)| (components.join("/"), index, raw_entries[index].clone()))
-            .collect();
+        let entries: Vec<(String, Option<usize>, ArchiveEntry)> =
+            Self::parsed_entries(&raw_entries)
+                .into_iter()
+                .map(|(components, index)| {
+                    (
+                        components.join("/"),
+                        Some(index),
+                        raw_entries[index].clone(),
+                    )
+                })
+                .collect();
+        let entries = Self::with_implicit_directories(entries);
 
         Ok(Self {
             path: path.to_path_buf(),
@@ -294,12 +376,15 @@ impl ArchiveSource {
             };
             (*index, found.is_dir)
         };
-        if is_dir {
+        // A synthesised directory carries no index, and neither does a
+        // declared one — both are refused here, by the same sentence, before
+        // anything asks the backend to read a row that has nothing to read.
+        let Some(index) = index.filter(|_| !is_dir) else {
             return Err(CoreError::InvalidInput(format!(
                 "'{member}' is a drawer inside '{}', not a payload archive",
                 outer.display()
             )));
-        }
+        };
 
         // Bounded the same way every other read out of this module's
         // archives is: a declared size is a claim, never a promise.
@@ -444,9 +529,9 @@ impl ArchiveSource {
     /// (AmigaDOS is case-insensitive, ART-012, and a package's rules are
     /// AmigaDOS paths like any other media's).
     fn find_by_path<'a>(
-        entries: &'a [(String, usize, ArchiveEntry)],
+        entries: &'a [(String, Option<usize>, ArchiveEntry)],
         normalized: &str,
-    ) -> Option<&'a (String, usize, ArchiveEntry)> {
+    ) -> Option<&'a (String, Option<usize>, ArchiveEntry)> {
         entries
             .iter()
             .find(|(relative, ..)| relative == normalized)
@@ -515,11 +600,14 @@ impl MediaSource for ArchiveSource {
             };
             (*index, found.is_dir)
         };
-        if is_dir {
+        // `None` means a directory this archive never declared and
+        // `with_implicit_directories` supplied — the same answer a declared
+        // drawer gets, since neither has bytes.
+        let Some(index) = index.filter(|_| !is_dir) else {
             return Err(CoreError::InvalidInput(format!(
                 "'{path}' is a drawer on this media, not a file"
             )));
-        }
+        };
         // Never an unbounded read: a declared size is a claim, and this is
         // the same ceiling every other reader of this codebase's archives is
         // held to.
@@ -768,5 +856,153 @@ mod tests {
             before,
             "a failed open_nested left its extraction behind"
         );
+    }
+
+    // ---- implicit directories (fix round 1) ------------------------------
+
+    /// The measured shape of a real BoingBag payload: files, and not one
+    /// top-level directory entry. Every rule in both shipped BoingBag
+    /// recipes names a top-level drawer, so before this an archive like
+    /// this refused every rule it had.
+    #[test]
+    fn a_top_level_drawer_no_entry_declares_still_resolves() {
+        let dir = scratch("archive-implicit-top");
+        let p = package_zip(
+            &dir,
+            "no-dirs.zip",
+            &[
+                ("BB/Libs/version.library", b"lib"),
+                ("BB/C/Assign", b"assign"),
+            ],
+        );
+        let mut src = ArchiveSource::open(&p).unwrap();
+
+        let libs = src
+            .entry("Libs")
+            .unwrap()
+            .expect("'Libs/version.library' is the statement that 'Libs' exists");
+        assert!(libs.is_dir);
+        assert_eq!(libs.path, "Libs");
+        assert_eq!(libs.size, 0);
+
+        let walked: Vec<String> = src
+            .walk("Libs")
+            .unwrap()
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
+        assert_eq!(walked, vec!["Libs/version.library".to_string()]);
+    }
+
+    /// Every intermediate level, not only the first — the real
+    /// `Utilities/AMPlifier/skins` shape, where only a leaf several levels
+    /// down is ever listed.
+    #[test]
+    fn every_intermediate_drawer_resolves_not_only_the_top_one() {
+        let dir = scratch("archive-implicit-deep");
+        let p = package_zip(
+            &dir,
+            "deep.zip",
+            &[("BB/Utilities/AMPlifier/skins/amplifier/theme", b"skin")],
+        );
+        let mut src = ArchiveSource::open(&p).unwrap();
+
+        for level in [
+            "Utilities",
+            "Utilities/AMPlifier",
+            "Utilities/AMPlifier/skins",
+            "Utilities/AMPlifier/skins/amplifier",
+        ] {
+            let entry = src
+                .entry(level)
+                .unwrap()
+                .unwrap_or_else(|| panic!("'{level}' must resolve"));
+            assert!(entry.is_dir, "'{level}' must be a drawer");
+        }
+
+        let walked: Vec<String> = src
+            .walk("Utilities/AMPlifier")
+            .unwrap()
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
+        assert_eq!(
+            walked,
+            vec![
+                "Utilities/AMPlifier/skins".to_string(),
+                "Utilities/AMPlifier/skins/amplifier".to_string(),
+                "Utilities/AMPlifier/skins/amplifier/theme".to_string(),
+            ],
+            "a walk lists the synthesised drawers under it exactly as it \
+             would list declared ones"
+        );
+    }
+
+    /// Two archives holding the same logical tree — one declaring its
+    /// drawers, one not — must answer identically. Whether the archiver
+    /// bothered to write the rows is not a caller's business.
+    #[test]
+    fn declared_and_undeclared_drawers_produce_the_same_media() {
+        let dir = scratch("archive-implicit-same");
+        let declared = package_zip(
+            &dir,
+            "declared.zip",
+            &[
+                ("BB/C/", b""),
+                ("BB/C/Assign", b"assign"),
+                ("BB/Libs/", b""),
+                ("BB/Libs/version.library", b"lib"),
+            ],
+        );
+        let implied = package_zip(
+            &dir,
+            "implied.zip",
+            &[
+                ("BB/C/Assign", b"assign"),
+                ("BB/Libs/version.library", b"lib"),
+            ],
+        );
+
+        let listing = |path: &std::path::Path| -> Vec<(String, bool)> {
+            let mut all: Vec<(String, bool)> = ArchiveSource::open(path)
+                .unwrap()
+                .walk("")
+                .unwrap()
+                .into_iter()
+                .map(|e| (e.path, e.is_dir))
+                .collect();
+            all.sort();
+            all
+        };
+        assert_eq!(listing(&declared), listing(&implied));
+
+        // And a declared drawer is never duplicated by a synthesised one.
+        let rows = listing(&declared);
+        let drawers = rows.iter().filter(|(path, _)| path == "C").count();
+        assert_eq!(drawers, 1, "{rows:?}");
+    }
+
+    /// A synthesised drawer has no backend row to read, and must refuse the
+    /// same way a declared one does rather than reaching for an index it
+    /// does not have.
+    #[test]
+    fn reading_a_synthesised_drawer_is_refused_as_a_drawer() {
+        let dir = scratch("archive-implicit-read");
+        let p = package_zip(&dir, "implicit-read.zip", &[("BB/C/Assign", b"assign")]);
+        let mut src = ArchiveSource::open(&p).unwrap();
+
+        let err = src.read("C").unwrap_err().to_string();
+        assert!(err.contains("drawer"), "got {err}");
+    }
+
+    /// `open_nested` looks its member up the same way, so it must refuse a
+    /// synthesised drawer as a payload rather than trying to read one.
+    #[test]
+    fn a_synthesised_drawer_is_not_a_payload_archive() {
+        let dir = scratch("archive-implicit-nested");
+        let p = package_zip(&dir, "implicit-nested.zip", &[("BB/C/Assign", b"assign")]);
+
+        let err = ArchiveSource::open_nested(&p, "C").unwrap_err().to_string();
+        assert!(err.contains("drawer"), "got {err}");
     }
 }

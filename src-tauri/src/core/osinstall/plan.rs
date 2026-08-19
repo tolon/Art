@@ -2240,15 +2240,17 @@ mod plan_tests {
     }
 
     /// An archive for [`extra_package`]: one file whose name is the
-    /// package's own, so two of them never claim one destination.
+    /// package's own, so two of them never claim one destination. No
+    /// directory entries, matching a real package archive — see
+    /// `fixtures::package_test_archive`.
     fn extra_archive(folder: &Path, media: &str, file_name: &str) -> PathBuf {
         let path = folder.join(file_name);
         std::fs::write(
             &path,
-            crate::core::archive::zip::tests::make_zip_with(&[
-                (&format!("{media}/C/"), b"" as &[u8]),
-                (&format!("{media}/C/{media}Cmd"), b"cmd"),
-            ]),
+            crate::core::archive::zip::tests::make_zip_with(&[(
+                &format!("{media}/C/{media}Cmd"),
+                b"cmd" as &[u8],
+            )]),
         )
         .unwrap();
         path

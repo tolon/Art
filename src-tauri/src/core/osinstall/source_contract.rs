@@ -29,9 +29,11 @@
 //! | Question | Contract |
 //! |---|---|
 //! | `entry("")` | the media's own root, `is_dir`, path `""` |
+//! | `entry(<a drawer>)` | found, `is_dir`, path as asked |
 //! | `entry(<missing>)` | `Ok(None)` — absence is not an error |
 //! | `entry(<differently cased>)` | found; AmigaDOS is case-insensitive (ART-012) |
 //! | `walk("")` | the whole media |
+//! | `walk(<a drawer>)` | what is under it, not the drawer itself |
 //! | `walk(<missing>)` | `Ok(vec![])` |
 //! | `walk(<an empty drawer>)` | `Ok(vec![])` — and *not* an error |
 //! | `walk(<a file>)` | `Err(InvalidInput)`, "is a file … not a drawer" |
@@ -64,6 +66,13 @@ use super::source_cd::CdSource;
 /// Nothing here is Amiga content — both media are synthesised in a tempdir
 /// at test time, as this project requires.
 const FILE_PATH: &str = "C/LoadModule";
+/// The drawer `FILE_PATH` sits in. A real drawer on the ADF and the ISO;
+/// on the ZIP nothing declares it at all and `ArchiveSource` synthesises it
+/// from the path under it — which is exactly why it is asked about here
+/// rather than only in that source's own tests: an implicit drawer has to
+/// answer the same contract a real one does, or the engine above the trait
+/// can tell them apart.
+const DIR_PATH: &str = "C";
 const FILE_BYTES: &[u8] = b"cmd";
 const EMPTY_DIR: &str = "Empty";
 const MISSING: &str = "Libs/Nothing";
@@ -158,6 +167,29 @@ fn every_source_answers_an_empty_path_with_its_own_root() {
             .unwrap_or_else(|| panic!("{name}: `entry(\"\")` answered None"));
         assert!(entry.is_dir, "{name}: the root is a drawer");
         assert_eq!(entry.path, "", "{name}");
+    }
+}
+
+#[test]
+fn every_source_answers_a_drawer_with_a_directory_entry() {
+    for (name, mut source) in sources("dir-entry") {
+        let entry = source
+            .entry(DIR_PATH)
+            .unwrap_or_else(|e| panic!("{name}: {e}"))
+            .unwrap_or_else(|| panic!("{name}: `entry(\"{DIR_PATH}\")` answered None"));
+        assert!(entry.is_dir, "{name}: '{DIR_PATH}' is a drawer");
+        assert_eq!(entry.path, DIR_PATH, "{name}");
+    }
+}
+
+#[test]
+fn every_source_walks_a_drawer_as_what_is_under_it() {
+    for (name, mut source) in sources("dir-walk") {
+        let walked = source
+            .walk(DIR_PATH)
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        let paths: Vec<&str> = walked.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, vec![FILE_PATH], "{name}");
     }
 }
 
