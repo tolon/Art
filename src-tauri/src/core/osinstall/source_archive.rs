@@ -310,9 +310,8 @@ impl ArchiveSource {
         // archive on disk; there is no constructor over bytes. Removed on
         // both the success and the failure path, so a member that turns out
         // not to be an archive at all never leaves a leftover behind.
-        let tmp = Self::nested_temp_path(member);
+        let tmp = Self::write_nested_temp_file(member, &bytes)?;
         let opened = (|| -> CoreResult<Self> {
-            std::fs::write(&tmp, &bytes)?;
             let mut inner = Self::open_flat(&tmp)?;
             inner.volume_name = wrapper.volume_name().to_string();
             inner.path = outer.to_path_buf();
@@ -323,24 +322,79 @@ impl ArchiveSource {
         opened
     }
 
-    /// A scratch path for [`open_nested`](Self::open_nested)'s extracted
-    /// member — [`crate::core::safety::atomic::atomic_write`]'s own naming
-    /// (a leading dot, the `art-tmp-` marker, a nanosecond stamp so
-    /// concurrent callers never collide), rooted in the system temp
-    /// directory rather than beside a destination file: unlike an atomic
-    /// write, there is no destination here to sit next to, only scratch —
-    /// the same place every other throwaway file in this codebase goes
-    /// (`std::env::temp_dir()`).
-    fn nested_temp_path(member: &str) -> PathBuf {
+    /// How many candidate names [`write_nested_temp_file`](Self::write_nested_temp_file)
+    /// tries before giving up. A collision this many times in a row, each one
+    /// guarded by its own atomic create, means something is actively wrong
+    /// rather than merely unlucky.
+    const NESTED_TEMP_ATTEMPTS: u32 = 8;
+
+    /// Write `bytes` to a fresh scratch file for [`open_nested`](Self::open_nested)
+    /// and return its path.
+    ///
+    /// **Why a timestamp alone is not enough here, unlike
+    /// [`atomic_write`](crate::core::safety::atomic::atomic_write)'s own
+    /// `temp_path_for`.** `atomic_write`'s stem is the real destination
+    /// file's own name — it varies with whichever file the caller happens to
+    /// be writing, so two callers colliding on both the same stem *and* the
+    /// same nanosecond is already remote. `open_nested`'s stem is the
+    /// **member name inside the archive**, and every real BoingBag names its
+    /// payload the same fixed string, `AmigaOS-Update` — not a value that
+    /// varies per call. `core::jobs::spawn_job` runs jobs on independent OS
+    /// threads (an install and a preview can be mid-flight at once), so every
+    /// concurrent `open_nested` call for a real package computes the *same*
+    /// stem at the *same* time — a timestamp only narrows that race, it does
+    /// not close it, and the thing at stake if it loses is one job silently
+    /// reading another job's bytes. So uniqueness here comes from
+    /// [`std::fs::File::create_new`] (`O_EXCL` / `CREATE_NEW`) succeeding,
+    /// never from the name looking unique: a name that turns out to already
+    /// exist is not reused, it is thrown away and a fresh one tried, up to
+    /// [`NESTED_TEMP_ATTEMPTS`](Self::NESTED_TEMP_ATTEMPTS) times.
+    fn write_nested_temp_file(member: &str, bytes: &[u8]) -> CoreResult<PathBuf> {
+        use std::io::Write;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        // A per-process counter *in addition to* the timestamp: two threads
+        // reading `SystemTime::now()` in the same nanosecond is exactly the
+        // case exclusive create exists to survive, but folding the counter
+        // into the candidate name too means the common case never needs a
+        // second attempt.
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
         let stem = Path::new(member)
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "art-nested-member".to_string());
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        std::env::temp_dir().join(format!(".{stem}.art-tmp-{stamp}"))
+
+        for _ in 0..Self::NESTED_TEMP_ATTEMPTS {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let candidate = std::env::temp_dir().join(format!(".{stem}.art-tmp-{stamp}-{counter}"));
+
+            match std::fs::File::create_new(&candidate) {
+                Ok(mut file) => {
+                    let write_result = file.write_all(bytes).and_then(|()| file.sync_all());
+                    if let Err(e) = write_result {
+                        let _ = std::fs::remove_file(&candidate);
+                        return Err(CoreError::Io(e));
+                    }
+                    return Ok(candidate);
+                }
+                // Another caller's exclusive create won this exact name —
+                // never write into or read back what it made; try again
+                // under a fresh one.
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(CoreError::Io(e)),
+            }
+        }
+
+        Err(CoreError::InvalidInput(format!(
+            "could not create a scratch file for '{member}' after \
+             {} attempts — every candidate name was already taken",
+            Self::NESTED_TEMP_ATTEMPTS
+        )))
     }
 
     /// `path`, with no leading, trailing or doubled slash — the same
@@ -583,10 +637,56 @@ mod tests {
         );
 
         let mut src = ArchiveSource::open_nested(&outer, "AmigaOS-Update").unwrap();
+        // The volume name is the *wrapper's* top-level directory ("BB"),
+        // never anything read from inside the payload — swapping outer and
+        // inner identity here would still open, still read, and still be
+        // wrong, so this has to be its own assertion rather than implied by
+        // the reads below succeeding.
+        assert_eq!(src.volume_name(), "BB");
         assert_eq!(src.read("Libs/version.library").unwrap(), b"lib bytes");
         // The outer archive's own files are *not* visible: the medium is the
         // payload, and `C/Updater` belongs to the wrapper.
         assert!(src.entry("C/Updater").unwrap().is_none());
+    }
+
+    /// ART-style callers of `open_nested` are jobs on independent OS
+    /// threads (`core::jobs::spawn_job`) — an install and a preview could be
+    /// mid-flight together — and every real BoingBag names its payload the
+    /// same fixed string, `AmigaOS-Update`. Two concurrent calls for that
+    /// same member name, out of two *different* wrapper archives, must never
+    /// let one see the bytes the other extracted: proof that
+    /// `write_nested_temp_file`'s exclusive create — not a timestamp that
+    /// merely looks unique — is what keeps them apart.
+    #[test]
+    fn two_concurrent_opens_of_the_same_member_name_never_cross_streams() {
+        let dir = scratch("archive-nested-concurrent");
+        let inner_a =
+            crate::core::archive::zip::tests::make_zip_with(&[("C/Version", b"FROM ARCHIVE A")]);
+        let inner_b =
+            crate::core::archive::zip::tests::make_zip_with(&[("C/Version", b"FROM ARCHIVE B")]);
+        let outer_a = package_zip(&dir, "A.zip", &[("BB/AmigaOS-Update", &inner_a)]);
+        let outer_b = package_zip(&dir, "B.zip", &[("BB/AmigaOS-Update", &inner_b)]);
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+        let barrier_a = barrier.clone();
+        let handle_a = std::thread::spawn(move || {
+            barrier_a.wait();
+            let mut src = ArchiveSource::open_nested(&outer_a, "AmigaOS-Update").unwrap();
+            src.read("C/Version").unwrap()
+        });
+
+        let barrier_b = barrier.clone();
+        let handle_b = std::thread::spawn(move || {
+            barrier_b.wait();
+            let mut src = ArchiveSource::open_nested(&outer_b, "AmigaOS-Update").unwrap();
+            src.read("C/Version").unwrap()
+        });
+
+        let got_a = handle_a.join().unwrap();
+        let got_b = handle_b.join().unwrap();
+        assert_eq!(got_a, b"FROM ARCHIVE A");
+        assert_eq!(got_b, b"FROM ARCHIVE B");
     }
 
     /// A member that is not an archive at all is refused, not treated as an
