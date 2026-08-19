@@ -57,7 +57,7 @@ measured on `main`*
 under the parallel test runner. `tmp()` keys its directory on process id plus
 a nanosecond timestamp, and two threads entering it close enough together get
 the same name, so one test reads the other's fixture. This is
-[ART-059](#) again in a different module — `core/osinstall`'s own fixtures
+ART-059 again in a different module — `core/osinstall`'s own fixtures
 already solved it with an atomic counter, and the fix here is the same one
 line.
 
