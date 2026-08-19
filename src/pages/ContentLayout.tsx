@@ -49,15 +49,8 @@ import { subscribeSafely } from "@/lib/jobs";
 import type { Phrase } from "@/lib/phrase";
 import { isTextList, isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
+import { size } from "@/lib/size";
 import { Field } from "@/components/osbuilder/Field";
-
-const GIB = 1024 * 1024 * 1024;
-
-/** A size the way the OS Builder screens print one. */
-function size(bytes: number): string {
-  if (bytes >= GIB) return `${Math.round((bytes / GIB) * 100) / 100} GB`;
-  return `${Math.round((bytes / (1024 * 1024)) * 10) / 10} MB`;
-}
 
 /** The shipped defaults (`core/layout/policy.rs::Policy::default()`), mirrored
  *  here so the request has a policy to send and the retarget dropdown has

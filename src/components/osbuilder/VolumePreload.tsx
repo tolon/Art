@@ -52,15 +52,8 @@ import { isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { usePowerMode } from "@/lib/uxmode";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { size } from "@/lib/size";
 import { Field } from "@/components/osbuilder/Field";
-
-const GIB = 1024 * 1024 * 1024;
-
-/** A size the way the rest of the OS Builder prints one. */
-function size(bytes: number): string {
-  if (bytes >= GIB) return `${Math.round((bytes / GIB) * 100) / 100} GB`;
-  return `${Math.round((bytes / (1024 * 1024)) * 10) / 10} MB`;
-}
 
 export function VolumePreload() {
   const { t } = useTranslation();

@@ -61,9 +61,8 @@ import { subscribeSafely } from "@/lib/jobs";
 import { isOneOf, isText, isTextOrNothing, isWholeNumberBetween } from "@/lib/remembered";
 import { useRemembered, useRememberedShape } from "@/lib/useRemembered";
 import { usePowerMode } from "@/lib/uxmode";
+import { GIB, gibNumber as gb, mibNumber as mib } from "@/lib/size";
 import { Field } from "@/components/osbuilder/Field";
-
-const GIB = 1024 * 1024 * 1024;
 
 /** Card sizes people actually buy. */
 const CARD_SIZES_GB = [2, 4, 8, 16, 32, 64, 128, 256];
@@ -80,14 +79,6 @@ const PI_MODELS = [
   "cm4",
 ] as const;
 const LINES: Emu68Line[] = ["stable", "alpha11"];
-
-function gb(bytes: number): string {
-  return (Math.round((bytes / GIB) * 100) / 100).toString();
-}
-
-function mib(bytes: number): string {
-  return (Math.round((bytes / (1024 * 1024)) * 10) / 10).toString();
-}
 
 export function CardBuilder() {
   const { t } = useTranslation();

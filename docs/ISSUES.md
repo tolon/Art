@@ -663,14 +663,6 @@ already refuses when the *drawer's* destination exists, so an existing icon
 beside a free drawer is a state only a previous partial run can produce. What is
 missing is that the plan never considers the icon's path at all.
 
-**ART-105** 🔵 **`size()` is written three times** — *found 2026-08-15, the
-whole-branch review of SD-2 G11*
-`src/pages/ContentLayout.tsx` · `src/components/osbuilder/VolumePreload.tsx` ·
-`src/components/osbuilder/CardBuilder.tsx` · The same five-line `GIB` constant
-and `size()` byte formatter, now in three screens and identical in all three.
-Two copies was a judgement call; three is where it stops being one. One
-`src/lib/size.ts` is smaller than the next reviewer noticing again.
-
 **ART-101** 🔵 **The sidebar's collapse never fires under Application Size** — *open*
 `src/components/layout/layout.css` · `@media (max-width: 1000px)` collapses the
 sidebar to icons, "below this the sidebar's labels cost more than they give".
@@ -957,6 +949,33 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-105** 🔵 **`size()` is written three times** — *found 2026-08-15, the
+whole-branch review of SD-2 G11; fixed 2026-08-20 on `debt-wave-a`*
+`src/lib/size.ts` (new) · `src/pages/ContentLayout.tsx` ·
+`src/components/osbuilder/VolumePreload.tsx` ·
+`src/components/osbuilder/CardBuilder.tsx`
+
+The same five-line `GIB` constant and `size()` byte formatter sat in three
+screens — identical in `ContentLayout` and `VolumePreload`, and split into
+`gb()`/`mib()` halves in `CardBuilder`, which prints the bare number and lets
+a translated sentence supply the unit.
+
+**Fixed 2026-08-20**: one `src/lib/size.ts` exporting `GIB`, `gibNumber`,
+`mibNumber` and `size`. `CardBuilder` imports the two bare-number helpers
+under its own names, so its call sites are untouched; the other two import
+`size`. Nothing about what any screen prints changed — the test pins the
+values the three copies produced, not the values the new function happens to.
+
+**Not folded into `panel.ts::formatBytes`, and the module comment says why.**
+That one prints a *file's* size for a directory listing (B / KB / MB); these
+print a *volume's*, where the interesting range starts in the hundreds of
+megabytes and runs to hundreds of gigabytes. Two formatters because there are
+two questions.
+
+Test: `src/lib/size.test.ts` — the first test any of the three copies has had,
+covering the GB/MB boundary at exactly one gibibyte, both roundings, and that
+the bare-number helpers carry no unit.
 
 **ART-158** 🔵 **`CoreError::Malformed` covered two different failure classes
 for an ISO9660 disc — a corrupt structure, and a disc merely larger than
