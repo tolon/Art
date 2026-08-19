@@ -26,6 +26,146 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-169** 🔴 **`workbench-base` places only the disc's `Workbench3.5` half,
+never its `Workbench3.9` overlay, so the tree ART calls "AmigaOS 3.9" boots as
+Workbench 44.5 with a Startup-Sequence that fails on its first command** —
+*found 2026-08-19 by Task 8's real run and its boot, on `content-layer`*
+`src-tauri/src/core/osinstall/recipes/amigaos-3.9.json`
+
+The owner's own `AmigaOS39.iso` carries **two** sibling install trees under
+`OS-Version3.9`: `Workbench3.5` (673 entries, 14 drawers placed) and
+`Workbench3.9` (**854 entries**, 13 drawers: `C Classes Devs Fonts Libs Locale
+Prefs S Storage System Tools Utilities WBStartup`). Both counts measured with
+`7z l -slt` against the disc. Every rule in `workbench-base` reads from
+`OS-VERSION3.9/WORKBENCH3.5/…`; nothing anywhere in the recipe reads
+`Workbench3.9`. The real AmigaOS Installer lays the 3.5 tree and then overlays
+the 3.9 one, which is what makes the result AmigaOS 3.9 rather than 3.5.
+
+Booted under WinUAE with the owner's licensed Kickstart 3.1 (V40), the tree
+says so itself, on the boot console before Workbench even opens:
+
+```
+AMIGA ROM Operating System and Libraries
+Copyright © 1985-2000 Amiga International, Inc.
+All Rights Reserved.
+C:LoadMonDrvs: Unknown command
+```
+
+`LoadMonDrvs` is on the disc twice — `Emergency-Boot/C/LoadMonDrvs` and
+`OS-Version3.9/Workbench3.9/C/LoadMonDrvs` — and in neither place the recipe
+reads from. The Startup-Sequence that calls it *is* placed, because it comes
+from `Workbench3.5/S`. `version full` in the boot shell then reports
+`Kickstart 40.68, Workbench 44.5 (18-Aug-00)`.
+
+Not fixed here: this is a base-recipe defect that predates the package round
+and reshapes the whole base tree (every `Workbench3.9` rule lands on a
+destination `Workbench3.5` already claimed, so it needs an `overrides`
+relationship and a component of its own), and Task 8's rule is one measured
+defect per report. `amigaos-3.9.json`'s own `_why_no_T` note already says the
+right thing about this class of question — "If a boot disagrees with either
+judgement, add the rule then, with the run as the reason" — and this is that
+run.
+
+
+**ART-168** 🔴 **An LHA entry name's non-ASCII bytes are replaced with U+FFFD
+rather than decoded, so a real Amiga drawer name becomes a name no Amiga can
+see** — *found 2026-08-19 by Task 8's real run and confirmed on the booted
+system, on `content-layer`*
+`src-tauri/src/core/lha/mod.rs:51` (`entry_path`)
+
+`entry_path` reads a level-0/1 LHA header's name with
+`String::from_utf8_lossy(&header.filename)`. Amiga archive names are Latin-1,
+not UTF-8, so every high-bit byte becomes U+FFFD. Measured against the owner's
+own `BoingBag39-2-turkce.lha`, whose payload sits at
+`LocaleUpdate/locale/catalogs/türkçe/…` (bytes `74 FC 72 6B E7 65`): ART wrote
+its 36 catalogs into `Locale/Catalogs/t<U+FFFD>rk<U+FFFD>e`, **beside** the
+disc's own `TÜRKÇE` rather than onto it. `collide::preview` reported
+`rows=0 upgrade=0 downgrade=0 same-version=0 unversioned=0` — a clean install
+by every number the round measures, and wrong.
+
+Confirmed from the booted system, not inferred: `dir` on `SYS:Locale/Catalogs`
+lists **20** drawers (`TÜRKÇE SVENSKA SUOMI SRPSKI SLOVENSKO RUSSIAN
+PORTUGUÊS-BRASIL PORTUGUÊS POLSKI NORSK NEDERLANDS ITALIANO FRANÇAIS ESPAÑOL
+ENGLISH DEUTSCH DANSK CZECH CATALA BOSANSKI`) where the host directory holds
+21. AmigaDOS cannot see the drawer at all, so all 36 catalogs are invisible to
+the system that was supposed to receive them.
+
+This is ART-155 again in the other reader: `core/iso/descriptor.rs::decode_iso646`
+was corrected in Task 5 to decode a high-bit byte as ISO-8859-1 instead of `?`,
+and the LHA path was never given the same treatment. `entry_path`'s own doc
+comment already names the hazard — "Amiga archives are full of Latin-1 names" —
+while doing the lossy thing anyway.
+
+Not fixed here: the same function feeds every LHA path in ART, WHDLoad
+extraction included, and its doc comment warns that changing level 0/1 "would
+rename files that extract correctly today". That is a change that needs its own
+task, its own oracle run and its own tests, not a line changed while reporting
+something else.
+
+
+**ART-167** 🟠 **Eight of the owner's archives claim the top-level directory
+`LocaleUpdate` and two claim `BoingBag3.9-2`, so `scan::package_for` correctly
+refuses two of the three shipped packages and nothing in the product can pick
+between the candidates** — *found 2026-08-19 by Task 8's real run, on
+`content-layer`*
+`src-tauri/src/core/osinstall/scan.rs:329` (`package_for`) ·
+`src-tauri/src/commands/osinstall.rs` (`resolve_package_archive`)
+
+`find_packages` identifies 27 archives out of the 58 entries in
+`E:\amiga\Amigatolon\paketler` (0.30 s; the 171 MB `.rar` and both `.7z` files
+among them, so the "skip what cannot be opened" rule holds). Of those:
+
+| package | `media` | `package_for` |
+|---|---|---|
+| `boingbag-39-1` | `BoingBag3.9-1` | `Found` |
+| `boingbag-39-2` | `BoingBag3.9-2` | `Ambiguous` — `BoingBag39-2.lha`, `BoingBag39-2-Contribution.lha` |
+| `locale-turkish` | `LocaleUpdate` | `Ambiguous` — all eight `BoingBag39-2-<language>.lha` |
+
+The refusal itself is right, and `package_for`'s own doc comment predicted this
+exact folder. What is missing is the other half: a package's identity is its
+archive's single top-level directory, and eight different language packs share
+one. Nothing in `plan()` or in the Produce screen lets a user say *which*
+`LocaleUpdate` they mean, so `locale-turkish` cannot be selected at all against
+the owner's real folder — the run only measured it by naming the archive
+outright, which `add_package`'s own contract allows ("`archive` is given, not
+looked up") but no user-facing path offers.
+
+
+**ART-166** 🔴 **Both BoingBag payload archives are password-encrypted ZIPs, so
+neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task
+8's real run, on `content-layer`*
+`src-tauri/src/core/osinstall/recipes/packages/boingbag-39-1.json` ·
+`…/boingbag-39-2.json`
+
+Both recipes name `member: "AmigaOS-Update"` — the payload archive stored
+inside the wrapper LHA. That member is a ZIP, and every entry in it is
+**ZipCrypto-encrypted**: 233 of 233 entries in BoingBag 3.9-1's payload
+(210 files, 23 folders) and 147 of 147 in 3.9-2's (121 files, 26 folders).
+Confirmed three independent ways — ART's own reader
+(`entry 42 of this ZIP cannot be read: Password required to decrypt file`;
+entry 128 for 3.9-2), 7-Zip 26.02 (`Encrypted = +`, `Method = ZipCrypto
+Deflate`, and `ERROR: Wrong password` on extraction), and the raw local file
+header, whose general-purpose flag word reads `0x0003` with bit 0 set.
+
+The password belongs to the BoingBag's own `Updater`, which the wrapper LHA
+carries beside the payload (`BoingBag3.9-1/C/Updater`, `C/GetLocale`) — an
+Amiga executable that has to run *on* an Amiga. Nothing about this is a bug in
+`core/archive`: the reader is right and the recipes are asking for bytes that
+are not readable on the host.
+
+Task 4 measured these recipes from the payload's **listing**, which ZipCrypto
+leaves in clear, and every test since has been synthetic — so the first time
+anything asked for the bytes was this run. That is exactly the gap Task 8
+exists to close.
+
+Left open, and deliberately not "fixed": circumventing the encryption is not
+ART's business, and the honest options are all design decisions rather than
+code changes — place the wrapper's loose files and let the Amiga's own
+`Updater` run at first boot, or withdraw both BoingBag recipes until there is
+a path that works. Whichever is chosen, spec §10/§89 says ART must not offer a
+package it cannot apply, and today it offers two.
+
+
 **ART-164** 🔵 **`core::iso`'s test scratch directory can be shared by two
 threads, so one test fails about one run in thirty** — *found 2026-08-19,
 measured on `main`*

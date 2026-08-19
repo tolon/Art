@@ -3915,4 +3915,421 @@ mod tests {
             .unwrap();
         assert_eq!(record.protection, Some(0x42));
     }
+
+    // ---- Task 8: the owner's own packages, onto the owner's own tree ------
+
+    /// One package's collision preview, counted by class.
+    ///
+    /// `Collision::Identical` has no counter because
+    /// `collide::preview` never returns one — it is excluded there by design
+    /// (see that type's own doc comment), so a field for it here would
+    /// always read `0` and say nothing.
+    #[derive(Debug, Default, PartialEq, Eq)]
+    struct CollisionTally {
+        upgrade: usize,
+        downgrade: usize,
+        same_version: usize,
+        unversioned: usize,
+        declared: usize,
+    }
+
+    fn tally(reports: &[crate::core::osinstall::collide::CollisionReport]) -> CollisionTally {
+        use crate::core::osinstall::collide::Collision;
+        let mut out = CollisionTally::default();
+        for report in reports {
+            if report.declared {
+                out.declared += 1;
+            }
+            match report.collision {
+                Collision::Identical => unreachable!("preview() excludes Identical by design"),
+                Collision::Upgrade { .. } => out.upgrade += 1,
+                Collision::Downgrade { .. } => out.downgrade += 1,
+                Collision::SameVersion { .. } => out.same_version += 1,
+                Collision::Unversioned { .. } => out.unversioned += 1,
+            }
+        }
+        out
+    }
+
+    /// Every non-directory file `package` would place, written out as real
+    /// files so `collide::preview` has a `bytes_at` it can read.
+    ///
+    /// Deliberately a small local copy of what
+    /// `commands/osinstall.rs::extract_package_items` does rather than a
+    /// call into it: `commands/` sits above `core/` and a `core/` test must
+    /// not reach up into it (the core-independence rule). What is shared is
+    /// the part that matters — `expand_rules`, the same function `plan()`
+    /// and the real preview both call — so this hook cannot resolve a
+    /// package's rules differently from the way the product does.
+    ///
+    /// Returns a `CoreResult` rather than unwrapping: against real material
+    /// a package's *bytes* can be unreadable even when its listing resolves
+    /// perfectly (ART-166), and a run that panicked here would report one
+    /// package's defect and measure neither of the other two.
+    fn extract_for_preview(
+        package: &crate::core::osinstall::package::Package,
+        archive: &Path,
+        scratch: &Path,
+    ) -> CoreResult<Vec<(String, String, PathBuf)>> {
+        let medium = crate::core::osinstall::scan::PackageMedium {
+            path: archive.to_path_buf(),
+            member: package.member.clone(),
+        };
+        let mut source = crate::core::osinstall::scan::open_package(&medium)?;
+        let mut refusals = Vec::new();
+        let items = crate::core::osinstall::plan::expand_rules(
+            &package.component,
+            source.as_mut(),
+            &mut refusals,
+        )?;
+        assert!(
+            refusals.is_empty(),
+            "'{}' does not resolve against '{}': {refusals:?} — the archive is right and the \
+             recipe is wrong",
+            package.id,
+            archive.display()
+        );
+        let mut out = Vec::new();
+        for (n, item) in items.iter().filter(|item| !item.is_dir).enumerate() {
+            let bytes = source.read(&item.from)?;
+            let at = scratch.join(n.to_string());
+            std::fs::write(&at, &bytes)?;
+            out.push((item.to.clone(), item.component.clone(), at));
+        }
+        Ok(out)
+    }
+
+    /// Which real archive this run should hand [`add_package`] for `package`,
+    /// and how that was decided.
+    ///
+    /// `scan::package_for` is asked first and its answer is always printed —
+    /// that answer is one of this run's findings (ART-167: eight of the
+    /// owner's archives carry the top-level directory `LocaleUpdate`, and
+    /// two carry `BoingBag3.9-2`, so `package_for` correctly refuses both by
+    /// name). When it cannot resolve one, the run falls back to an archive
+    /// named outright by an environment variable, which is exactly what
+    /// [`add_package`]'s own contract allows: "`archive` is given, not
+    /// looked up". That keeps the *ambiguity* a measured finding instead of
+    /// a dead end, without inventing a resolution rule ART does not have.
+    fn archive_for_real_run(
+        package: &crate::core::osinstall::package::Package,
+        found: &[crate::core::osinstall::scan::FoundPackage],
+        named: Option<&str>,
+    ) -> Option<PathBuf> {
+        use crate::core::osinstall::scan::MediaMatch;
+        match crate::core::osinstall::scan::package_for(found, &package.media) {
+            MediaMatch::Found(archive) => {
+                println!("  package_for('{}') -> Found", package.media);
+                Some(archive.path.clone())
+            }
+            MediaMatch::Missing => {
+                println!("  package_for('{}') -> Missing", package.media);
+                named.map(PathBuf::from)
+            }
+            MediaMatch::Ambiguous(candidates) => {
+                println!(
+                    "  package_for('{}') -> Ambiguous, {} candidates:",
+                    package.media,
+                    candidates.len()
+                );
+                for candidate in &candidates {
+                    println!("      {}", candidate.path.display());
+                }
+                match named {
+                    Some(path) => {
+                        println!("      run continues with the explicitly named {path}");
+                        Some(PathBuf::from(path))
+                    }
+                    None => None,
+                }
+            }
+        }
+    }
+
+    /// **Task 8, the real run.** Builds the base AmigaOS 3.9 tree from the
+    /// owner's own disc — with `locale-base` switched on, which
+    /// `build_the_real_39_tree_when_asked` does not do — and then adds the
+    /// owner's own three real packages to it in dependency order, one at a
+    /// time, previewing each against the tree as it actually stands before
+    /// writing it.
+    ///
+    /// ```text
+    /// cd src-tauri && ART_OS39_ISO="E:\amiga\Amigatolon\iso\AmigaOS39.iso" \
+    ///   ART_OS39_PACKAGES="E:\amiga\Amigatolon\paketler" \
+    ///   ART_OS39_PACKAGE_DEST="E:\amiga\ProjeART\dist-3.9-bb" \
+    ///   ART_PKG_BOINGBAG_39_2="E:\amiga\Amigatolon\paketler\BoingBag39-2.lha" \
+    ///   ART_PKG_LOCALE_TURKISH="E:\amiga\Amigatolon\paketler\BoingBag39-2-turkce.lha" \
+    ///   cargo test --release apply_the_real_packages_when_asked -- --nocapture --ignored
+    /// ```
+    ///
+    /// **Release build, deliberately.** The base tree alone takes 20 s
+    /// debug against 6.2 s released; a timing reported off a debug run is a
+    /// number nobody can use.
+    ///
+    /// The package folder is the owner's real one — fifty-eight items,
+    /// including a 171 MB `.rar` and a 248 MB `.7z` — not a folder holding
+    /// only the three archives that have recipes. That `find_packages`
+    /// skips what it cannot open rather than failing the whole scan is a
+    /// claim only a run against that folder can check, and it holds: 27 of
+    /// the 58 identified, in 1.6 s, the `.rar` and the `.7z` among them.
+    ///
+    /// **Every package is attempted, and a failure is recorded rather than
+    /// panicked on.** Two of the three fail against the owner's real
+    /// material for two entirely different reasons (ART-166, ART-167); a
+    /// run that stopped at the first would have measured neither the second
+    /// nor the one that works.
+    ///
+    /// **Measured on 2026-08-19, release build, against the owner's own
+    /// material** (see `.superpowers/sdd/2026-08-19-content-layer/task-8-report.md`
+    /// for the verbatim output):
+    ///
+    /// | | files | drawers | bytes | elapsed | upgrade / downgrade / same / unversioned |
+    /// |---|---|---|---|---|---|
+    /// | base 3.9 (`workbench-base` + `locale-base`) | 1257 | 156 | 10,003,017 | 10.10 s | — |
+    /// | BoingBag 3.9-1 | — | — | — | — | never read — **ART-166** |
+    /// | Türkçe catalogs | 36 | 3 | 161,534 | 0.15 s | 0 / 0 / 0 / 0 — **ART-168** |
+    /// | BoingBag 3.9-2 | — | — | — | — | never read — **ART-166** |
+    ///
+    /// This test **fails on purpose** while ART-166, ART-167 and ART-168
+    /// stand: it is the measurement, and a measurement that passed would be
+    /// claiming the owner's own packages reach the tree when three of them do
+    /// not. The boot the same tree produced is **ART-169**.
+    #[test]
+    #[ignore = "touches the user's real media and E:\\amiga\\ProjeART; run explicitly, see the doc comment"]
+    fn apply_the_real_packages_when_asked() {
+        let (Ok(iso), Ok(packages_at), Ok(dest)) = (
+            std::env::var("ART_OS39_ISO"),
+            std::env::var("ART_OS39_PACKAGES"),
+            std::env::var("ART_OS39_PACKAGE_DEST"),
+        ) else {
+            return;
+        };
+
+        let iso_path = PathBuf::from(&iso);
+        let media_folder = iso_path
+            .parent()
+            .expect("ART_OS39_ISO names a file inside some folder")
+            .to_path_buf();
+        let package_folder = PathBuf::from(&packages_at);
+        let root = PathBuf::from(&dest);
+
+        // ---- the base tree, with `locale-base` on -------------------------
+        //
+        // `locale-turkish` declares `requires_components: ["locale-base"]`
+        // (ART-162): without it, thirty-six catalogs land in a drawer no
+        // running system can open. `build_the_real_39_tree_when_asked`
+        // leaves it off, so this hook cannot reuse that tree even if one
+        // were lying around.
+        let request = crate::core::osinstall::plan::InstallRequest {
+            packages: Vec::new(),
+            package_folder: Some(package_folder.clone()),
+            release: "AmigaOS 3.9".to_string(),
+            media_folder,
+            rom: None,
+            chosen: vec!["locale-base".to_string()],
+            excluded: Vec::new(),
+            destination: root.clone(),
+        };
+        let recipe = crate::core::osinstall::recipe::amigaos_39().unwrap();
+        let planned = crate::core::osinstall::plan::plan(&request, &recipe).unwrap();
+        assert!(
+            planned.refusals.is_empty(),
+            "the real plan refused: {:?}",
+            planned.refusals
+        );
+        println!(
+            "BASE plan: components_on={:?} items={} total_bytes={}",
+            planned.components_on,
+            planned.items.len(),
+            planned.total_bytes
+        );
+
+        let start = std::time::Instant::now();
+        let base = apply(&planned, &root, &NoProgress)
+            .unwrap_or_else(|err| panic!("the base tree failed to build: {err}"));
+        println!(
+            "BASE apply: files={} directories={} bytes={} elapsed={:.2}s",
+            base.files,
+            base.directories,
+            base.bytes,
+            start.elapsed().as_secs_f64()
+        );
+
+        // ---- what is actually in the owner's package folder ---------------
+        let scan_start = std::time::Instant::now();
+        let found = crate::core::osinstall::scan::find_packages(&package_folder).unwrap();
+        println!(
+            "find_packages: {} archive(s) identified out of {} entries in {} in {:.2}s",
+            found.len(),
+            std::fs::read_dir(&package_folder).unwrap().count(),
+            package_folder.display(),
+            scan_start.elapsed().as_secs_f64()
+        );
+        for entry in &found {
+            println!("  {} -> {}", entry.media, entry.path.display());
+        }
+
+        let catalogue = crate::core::osinstall::package::packages().unwrap();
+        let ordered = crate::core::osinstall::package::order(&[
+            "boingbag-39-1".to_string(),
+            "boingbag-39-2".to_string(),
+            "locale-turkish".to_string(),
+        ])
+        .unwrap();
+        println!("order={ordered:?}");
+
+        let mut failures: Vec<String> = Vec::new();
+
+        for id in &ordered {
+            let package = catalogue
+                .iter()
+                .find(|p| &p.id == id)
+                .expect("order() only returns ids from this catalogue");
+            println!("--- {} ('{}') ---", package.id, package.media);
+
+            let named = match id.as_str() {
+                "boingbag-39-1" => std::env::var("ART_PKG_BOINGBAG_39_1").ok(),
+                "boingbag-39-2" => std::env::var("ART_PKG_BOINGBAG_39_2").ok(),
+                "locale-turkish" => std::env::var("ART_PKG_LOCALE_TURKISH").ok(),
+                _ => None,
+            };
+            let Some(archive) = archive_for_real_run(package, &found, named.as_deref()) else {
+                failures.push(format!(
+                    "'{id}': no archive could be resolved for media '{}'",
+                    package.media
+                ));
+                continue;
+            };
+            println!("  archive = {}", archive.display());
+
+            // PREVIEW, against the tree as it actually stands right now —
+            // before this package is written, and after every earlier one
+            // already was.
+            let scratch = fixtures::scratch(&format!("real-package-{id}"));
+            let extracted = match extract_for_preview(package, &archive, &scratch) {
+                Ok(extracted) => extracted,
+                Err(err) => {
+                    println!("  EXTRACT FAILED: {err}");
+                    failures.push(format!("'{id}': its payload cannot be read: {err}"));
+                    let _ = std::fs::remove_dir_all(&scratch);
+                    continue;
+                }
+            };
+            let incoming: Vec<crate::core::osinstall::collide::Incoming> = extracted
+                .iter()
+                .map(
+                    |(to, component, bytes_at)| crate::core::osinstall::collide::Incoming {
+                        to: to.clone(),
+                        component: component.clone(),
+                        bytes_at,
+                    },
+                )
+                .collect();
+            let reports = crate::core::osinstall::collide::preview(&root, &incoming).unwrap();
+            let counts = tally(&reports);
+            println!(
+                "  {id} preview: incoming_files={} rows={} upgrade={} downgrade={} \
+                 same-version={} unversioned={} declared={} (identical excluded by design)",
+                incoming.len(),
+                reports.len(),
+                counts.upgrade,
+                counts.downgrade,
+                counts.same_version,
+                counts.unversioned,
+                counts.declared
+            );
+            for report in &reports {
+                if matches!(
+                    report.collision,
+                    crate::core::osinstall::collide::Collision::Downgrade { .. }
+                ) {
+                    println!("    DOWNGRADE {} {:?}", report.path, report.collision);
+                }
+            }
+            let _ = std::fs::remove_dir_all(&scratch);
+
+            let start = std::time::Instant::now();
+            match add_package(&root, package, &archive, &NoProgress) {
+                Ok(outcome) => println!(
+                    "  {id} apply: files={} directories={} bytes={} elapsed={:.2}s",
+                    outcome.files,
+                    outcome.directories,
+                    outcome.bytes,
+                    start.elapsed().as_secs_f64()
+                ),
+                Err(err) => {
+                    println!("  ADD FAILED: {err}");
+                    failures.push(format!("'{id}': add_package refused: {err}"));
+                    continue;
+                }
+            }
+
+            // A BoingBag that reports no upgrade at all has not been
+            // applied — the brief's own rule, asserted rather than left to
+            // a reader of the numbers above.
+            if id.starts_with("boingbag") && counts.upgrade == 0 {
+                failures.push(format!(
+                    "'{id}' reported zero upgrades: it landed on nothing the base tree placed, \
+                     which means it was not applied to this system at all"
+                ));
+            }
+        }
+
+        let manifest = read_manifest(&root);
+        println!(
+            "manifest: {} file record(s) from {} medium/media",
+            manifest.files.len(),
+            manifest.built_from.len()
+        );
+        for medium in &manifest.built_from {
+            println!("  built_from {}", medium.volume_name);
+        }
+
+        // **ART-168.** A name ART could not decode is a name ART invented:
+        // U+FFFD is not a character any Amiga archive contains, so every
+        // path segment carrying one is a file or drawer whose real name was
+        // thrown away on the way in. It cannot be caught by counting — the
+        // Turkish pack's own numbers (36 files, 3 drawers, 161,534 bytes)
+        // are exactly the same whether its catalogs land in `TÜRKÇE` or
+        // beside it in a drawer nothing will ever open — so this walks the
+        // finished tree and names them.
+        let mut undecodable: Vec<String> = Vec::new();
+        let mut stack = vec![root.clone()];
+        while let Some(dir) = stack.pop() {
+            let Ok(read) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in read.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path.clone());
+                }
+                if entry.file_name().to_string_lossy().contains('\u{fffd}') {
+                    undecodable.push(path.display().to_string());
+                }
+            }
+        }
+        undecodable.sort();
+        println!(
+            "undecodable names in the finished tree: {}",
+            undecodable.len()
+        );
+        for name in undecodable.iter().take(10) {
+            println!("  {name}");
+        }
+        if !undecodable.is_empty() {
+            failures.push(format!(
+                "{} path(s) in the tree carry U+FFFD — a name ART could not decode and \
+                 replaced rather than a name any archive holds (first: {})",
+                undecodable.len(),
+                undecodable[0]
+            ));
+        }
+
+        assert!(
+            failures.is_empty(),
+            "the owner's own packages did not all reach the tree:\n  {}",
+            failures.join("\n  ")
+        );
+    }
 }
