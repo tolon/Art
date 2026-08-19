@@ -4358,12 +4358,12 @@ mod tests {
     /// *before* tree, through `collide::classify` — the same function
     /// `collide::preview` calls once it has both sides' bytes in hand.
     /// `preview` itself is not used, and that is a finding rather than a
-    /// shortcut: its `declared` column resolves the incoming component id
-    /// through `package::by_id`, so it can only ever be asked about a
-    /// **package**. Asked about a recipe component it refuses by name. The
-    /// classification is identical; only the `declared` column is missing,
-    /// and for a layer inside one recipe `detect_collisions` has already
-    /// enforced the same thing at plan time.
+    /// shortcut — **ART-170**: its `declared` column resolves the incoming
+    /// component id through `package::by_id`, so it can only ever be asked
+    /// about a **package**. Asked about a recipe component it refuses by
+    /// name. The classification is identical; only the `declared` column is
+    /// missing, and for a layer inside one recipe `detect_collisions` has
+    /// already enforced the same thing at plan time.
     ///
     /// Filtering one real plan rather than planning twice is deliberate:
     /// `workbench-39` is `required: true`, so `resolve_components_on` will
@@ -4477,6 +4477,13 @@ mod tests {
         let (mut identical, mut brand_new) = (0usize, 0usize);
         let mut downgrades: Vec<String> = Vec::new();
         let mut upgrades: Vec<String> = Vec::new();
+        // Named in full, not sampled (fix round 2, F5). An `Unversioned` row
+        // is a real overwrite the classifier could not put a number on, and
+        // `Libs/WORKBENCH.LIBRARY` — the file `Version FULL` reads — turned
+        // out to be one of them: the boot proved the decisive change and the
+        // classifier could not, because that library carries no `$VER:`.
+        // A count alone would have hidden that.
+        let mut unversioned_names: Vec<String> = Vec::new();
         for item in overlay.iter().filter(|item| !item.is_dir) {
             let existing = match std::fs::read(before.join(&item.to)) {
                 Ok(bytes) => bytes,
@@ -4499,7 +4506,13 @@ mod tests {
                     downgrades.push(format!("{} {from} -> {to}", item.to));
                 }
                 Collision::SameVersion { .. } => same_version += 1,
-                Collision::Unversioned { .. } => unversioned += 1,
+                Collision::Unversioned {
+                    from_bytes,
+                    to_bytes,
+                } => {
+                    unversioned += 1;
+                    unversioned_names.push(format!("{} {from_bytes} -> {to_bytes} bytes", item.to));
+                }
             }
         }
         println!(
@@ -4512,6 +4525,10 @@ mod tests {
         }
         for line in &downgrades {
             println!("  DOWNGRADE {line}");
+        }
+        unversioned_names.sort();
+        for line in &unversioned_names {
+            println!("  UNVERSIONED {line}");
         }
 
         // A layer reporting no upgrade at all has not been applied — the same

@@ -96,11 +96,25 @@ pub fn amigaos_32() -> CoreResult<Recipe> {
     parse(AMIGAOS_32_JSON)
 }
 
-/// The shipped AmigaOS 3.9 recipe — one component today (`workbench-base`,
-/// the base tree out of `OS-VERSION3.9/WORKBENCH3.5`). Everything else waits
-/// for a real boot to say whether the base needs it; see the recipe file's
-/// own comment and CLAUDE.md's "don't claim support that isn't implemented
-/// and tested" rule (spec §89).
+/// The shipped AmigaOS 3.9 recipe — **three components, and the boot that
+/// this comment used to be waiting for has happened** (2026-08-19, Task 8).
+///
+/// `workbench-base` places the disc's `OS-VERSION3.9/WORKBENCH3.5` tree,
+/// `locale-base` its `OS-VERSION3.9/LOCALE` tree (ART-162), and
+/// `workbench-39` — declared last, `required`, overriding both — lays the
+/// disc's `OS-VERSION3.9/WORKBENCH3.9` **overlay** on top. That third one is
+/// exactly what the boot said was missing: without it the tree reached a
+/// clean Workbench but reported `Workbench 44.5 (18-Aug-00)` and its
+/// Startup-Sequence failed on its first command, `C:LoadMonDrvs`. With it,
+/// the same tree under the same licensed V40 ROM reports
+/// `Kickstart 40.68, Workbench 45.1 (13-Nov-00)`. See **ART-169** and
+/// `the_39_overlay_is_declared_last_required_and_over_both_layers`, the test
+/// that keeps all four of those facts pinned.
+///
+/// What still waits for a run rather than a judgement: `WBStartup` from the
+/// 3.5 layer, and `T` (see the recipe file's own `_why_no_T`). CLAUDE.md's
+/// "don't claim support that isn't implemented and tested" rule (spec §89)
+/// is what keeps them out until a boot asks for them.
 ///
 /// **All-caps `from` paths, on purpose (Task 4's real run against the
 /// owner's own disc — see `apply.rs`'s `build_the_real_39_tree_when_asked`).**
@@ -382,6 +396,16 @@ mod tests {
     /// alternative makes the check depend on the components' array
     /// position, and reordering a *set* — which carries no meaning of its
     /// own — must never be able to flip a test from green to red.
+    /// **This sees `RuleKind::File` rules only, and every rule in the
+    /// shipped AmigaOS 3.9 recipe is a `Subtree`** — so for that recipe it
+    /// passes *vacuously*, and would pass just as happily with every
+    /// `overrides` array emptied. That is deliberate rather than an
+    /// oversight (a `Subtree` destination is a merge point, not a claim, and
+    /// two components legitimately merge into `C/`), but it means this test
+    /// is not what protects `workbench-39`'s `overrides` from being dropped.
+    /// `the_39_overlay_is_declared_last_required_and_over_both_layers`
+    /// below is; a guard that passes vacuously is worse than no guard,
+    /// because it reads like protection (Task 8 fix round 2, F1).
     #[test]
     fn no_two_components_claim_one_destination_without_declaring_it() {
         for (release, recipe) in shipped_recipes() {
@@ -413,6 +437,99 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// **ART-169's fix, pinned.** The AmigaOS 3.9 recipe is two layers off
+    /// one disc: `workbench-base` places `OS-Version3.9/Workbench3.5` and
+    /// `workbench-39` places the `Workbench3.9` overlay on top of it. Four
+    /// separate things have to stay true for that to keep working, and
+    /// nothing else in this file or in `plan.rs` can see any of them:
+    ///
+    /// - **`workbench-39` exists.** Deleting it takes the tree back to
+    ///   Workbench 44.5 and a Startup-Sequence that fails on its first
+    ///   command (ART-169's own evidence).
+    /// - **It is declared last.** `plan()` emits items in recipe-declaration
+    ///   order and `apply`'s writer lets the last writer win, so moving this
+    ///   component up the array silently reverts the fix for all 40 files the
+    ///   two layers really do collide on.
+    /// - **It is `required`.** An overlay a user can switch off is a way to
+    ///   build a tree that calls itself 3.9 and is not.
+    /// - **It overrides both** `workbench-base` *and* `locale-base`.
+    ///   `plan::detect_collisions` refuses an undeclared claim at plan time,
+    ///   so dropping either one turns every real install into a refusal —
+    ///   but only for a plan that actually resolves media, which no unit
+    ///   test does.
+    ///
+    /// The rule set is pinned to the disc's own top level (measured with
+    /// `7z l -slt` against the owner's `AmigaOS39.iso`, 2026-08-19: thirteen
+    /// drawers, and *not* the sixteen `Workbench3.5` carries — no `L`, no
+    /// `Expansion`, no `Rexxc`, no `T`, and a `Locale` that 3.5 has not).
+    /// A rule vanishing here is a drawer of the 3.9 layer that stops being
+    /// installed, which nothing downstream would report.
+    ///
+    /// Only a boot notices any of this otherwise, and a boot is not
+    /// something CI does.
+    #[test]
+    fn the_39_overlay_is_declared_last_required_and_over_both_layers() {
+        let recipe = super::amigaos_39().expect("the shipped 3.9 recipe must parse and validate");
+
+        let ids: Vec<&str> = recipe.components.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["workbench-base", "locale-base", "workbench-39"],
+            "the 3.9 overlay must be the last component declared — recipe order is what decides              which layer writes last (see this test's own doc comment)"
+        );
+
+        let overlay = recipe
+            .component("workbench-39")
+            .expect("named in the assertion above");
+        assert!(
+            overlay.required,
+            "the 3.9 overlay is not optional: a tree without it is AmigaOS 3.5 calling itself 3.9"
+        );
+
+        let mut overrides: Vec<&str> = overlay.overrides.iter().map(String::as_str).collect();
+        overrides.sort_unstable();
+        assert_eq!(
+            overrides,
+            vec!["locale-base", "workbench-base"],
+            "the overlay collides with both layers for real — 12 of its 29 C commands replace a              3.5 command, and 32 of its Locale/Countries files are ones locale-base also places"
+        );
+
+        // The disc's own `OS-Version3.9/Workbench3.9` top level, in the
+        // spelling a Joliet-less Primary tree forces on `from` and the
+        // AmigaDOS convention `to` keeps.
+        let expected: Vec<(&str, &str)> = vec![
+            ("OS-VERSION3.9/WORKBENCH3.9/C", "C"),
+            ("OS-VERSION3.9/WORKBENCH3.9/CLASSES", "Classes"),
+            ("OS-VERSION3.9/WORKBENCH3.9/DEVS", "Devs"),
+            ("OS-VERSION3.9/WORKBENCH3.9/FONTS", "Fonts"),
+            ("OS-VERSION3.9/WORKBENCH3.9/LIBS", "Libs"),
+            ("OS-VERSION3.9/WORKBENCH3.9/LOCALE", "Locale"),
+            ("OS-VERSION3.9/WORKBENCH3.9/PREFS", "Prefs"),
+            ("OS-VERSION3.9/WORKBENCH3.9/S", "S"),
+            ("OS-VERSION3.9/WORKBENCH3.9/STORAGE", "Storage"),
+            ("OS-VERSION3.9/WORKBENCH3.9/SYSTEM", "System"),
+            ("OS-VERSION3.9/WORKBENCH3.9/TOOLS", "Tools"),
+            ("OS-VERSION3.9/WORKBENCH3.9/UTILITIES", "Utilities"),
+            ("OS-VERSION3.9/WORKBENCH3.9/WBSTARTUP", "WBStartup"),
+        ];
+        let actual: Vec<(&str, &str)> = overlay
+            .rules
+            .iter()
+            .map(|rule| (rule.from.as_str(), rule.to.as_str()))
+            .collect();
+        assert_eq!(
+            actual, expected,
+            "the overlay's rules must match the disc's own Workbench3.9 top level, drawer for              drawer — a rule missing here is a drawer of the 3.9 layer that stops being installed"
+        );
+        assert!(
+            overlay
+                .rules
+                .iter()
+                .all(|rule| rule.kind == RuleKind::Subtree),
+            "every overlay rule takes a whole drawer"
+        );
     }
 
     /// The ModulesA1200 lesson, generalised. Four disks in this set repeat

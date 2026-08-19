@@ -26,6 +26,42 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-170** 🟡 **`collide::preview` can only be asked about a **package**,
+so a release recipe's own layering cannot be previewed at all** — *found
+2026-08-19 while measuring ART-169's fix; filed rather than fixed, Task 8 fix
+round 2 (F2)*
+`src-tauri/src/core/osinstall/collide.rs` (`declared_override`)
+
+`preview` builds each row's `declared` column through `declared_override`,
+which resolves the incoming item's component id with
+`package::by_id(component)` and **refuses by name** when it resolves to
+nothing:
+
+> `'{component}' does not name a shipped package, so ART cannot say whether it
+> declared an override for '{to}'`
+
+That is right for what the function was built for (a package's `overrides` is
+the only thing that can declare an intent to replace a *tree's* file, and
+answering `false` for an unknown id would make every row read "nothing
+declared" for a reason unrelated to what was declared). The consequence is
+that the preview §3 requires cannot be shown for a recipe component — and
+AmigaOS 3.9 now has one that genuinely layers over another, `workbench-39`
+over `workbench-base`, replacing 40 real files.
+
+Measured around it rather than through it: `layer_the_real_39_overlay_when_asked`
+calls `collide::classify` directly — the same function `preview` calls once it
+has both sides' bytes — and reports the four classes plus `Identical`. Only the
+`declared` column is missing, and for a layer *inside one recipe*
+`plan::detect_collisions` has already enforced the same thing at plan time, so
+nothing is unguarded today.
+
+What it costs: the OS Builder can show a user what a BoingBag would replace and
+cannot show the same user what switching a component on would replace. Fixing
+it means resolving `component` against the union of every shipped id — releases
+and packages together, the way `recipe.rs::all_shipped_component_ids` already
+does for `every_override_names_a_component_that_exists` — rather than against
+`package::by_id` alone.
+
 **ART-168** 🔴 **An LHA entry name's non-ASCII bytes are replaced with U+FFFD
 rather than decoded, so a real Amiga drawer name becomes a name no Amiga can
 see** — *found 2026-08-19 by Task 8's real run and confirmed on the booted
