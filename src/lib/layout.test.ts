@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { layoutBlocker, retarget, type LayoutPlan } from "@/lib/layout";
+import { droppedTotal, layoutBlocker, retarget, type LayoutPlan } from "@/lib/layout";
 
 const PLAN: LayoutPlan = {
   root: "E:\\staging",
@@ -22,6 +22,8 @@ const PLAN: LayoutPlan = {
   ],
   refused: [],
   collisions: [],
+  tooDeep: { paths: [], more: 0 },
+  duplicates: { paths: [], more: 0 },
   bytes: 150,
 };
 
@@ -97,5 +99,42 @@ describe("layoutBlocker", () => {
     expect(layoutBlocker({ ...ready, plan: { ...PLAN, items: [] } })?.key).toBe(
       "layout.blocked.nothingToPlace"
     );
+  });
+});
+
+/**
+ * ART-107. `Dropped.paths` is capped at twenty on the Rust side, so anything
+ * that prints `paths.length` as "how many were dropped" understates it the
+ * moment there are twenty-one. `droppedTotal` is the only number a sentence
+ * may use.
+ */
+describe("droppedTotal", () => {
+  it("counts what was named plus what was not", () => {
+    expect(droppedTotal({ paths: [], more: 0 })).toBe(0);
+    expect(droppedTotal({ paths: ["a", "b"], more: 0 })).toBe(2);
+    expect(droppedTotal({ paths: ["a", "b"], more: 7 })).toBe(9);
+  });
+
+  it("is not the length of the named list", () => {
+    const capped = { paths: Array.from({ length: 20 }, (_, i) => `d${i}`), more: 41 };
+    expect(droppedTotal(capped)).toBe(61);
+    expect(droppedTotal(capped)).not.toBe(capped.paths.length);
+  });
+});
+
+/**
+ * Neither ART-107 report blocks apply. A plan that is short in one corner, or
+ * that dropped a source the user named twice, is still worth applying — the
+ * defect was that it happened in silence, not that it happened.
+ */
+describe("layoutBlocker and the ART-107 reports", () => {
+  it("does not block on a folder that was too deep to look inside", () => {
+    const plan: LayoutPlan = { ...PLAN, tooDeep: { paths: ["E:/deep"], more: 0 } };
+    expect(layoutBlocker({ root: "E:\staging", paths: ["E:\a"], plan })).toBeNull();
+  });
+
+  it("does not block on a source that was added twice", () => {
+    const plan: LayoutPlan = { ...PLAN, duplicates: { paths: ["E:/Games/x.lha"], more: 0 } };
+    expect(layoutBlocker({ root: "E:\staging", paths: ["E:\a"], plan })).toBeNull();
   });
 });

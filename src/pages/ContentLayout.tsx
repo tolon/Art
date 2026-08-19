@@ -32,6 +32,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
 import {
+  droppedTotal,
   kindPhrase,
   layoutApply,
   layoutBlocker,
@@ -533,6 +534,53 @@ export function ContentLayout() {
                     </li>
                   );
                 })}
+              </ul>
+            </div>
+          )}
+
+          {/* **ART-107.** Two ways a scan could quietly not describe what the
+              user dropped. Neither blocks apply — a plan that is short in one
+              corner is still worth applying — but neither is silent any more,
+              which is the whole of the issue: the plan used to come back
+              missing files with nothing on screen admitting it. */}
+          {droppedTotal(plan.tooDeep) > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <h3 style={{ fontSize: 13, margin: "0 0 6px" }}>{t("layout.tooDeep.heading")}</h3>
+              <p className="muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
+                {t("layout.tooDeep.intro", { count: droppedTotal(plan.tooDeep) })}
+              </p>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+                {plan.tooDeep.paths.map((path) => (
+                  <li key={path} className="faint">
+                    <code>{path}</code>
+                  </li>
+                ))}
+                {plan.tooDeep.more > 0 && (
+                  <li className="faint">{t("layout.tooDeep.more", { count: plan.tooDeep.more })}</li>
+                )}
+              </ul>
+            </div>
+          )}
+
+          {droppedTotal(plan.duplicates) > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <h3 style={{ fontSize: 13, margin: "0 0 6px" }}>
+                {t("layout.duplicates.heading")}
+              </h3>
+              <p className="muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
+                {t("layout.duplicates.intro", { count: droppedTotal(plan.duplicates) })}
+              </p>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+                {plan.duplicates.paths.map((path) => (
+                  <li key={path} className="faint">
+                    <code>{leafName(path)}</code>
+                  </li>
+                ))}
+                {plan.duplicates.more > 0 && (
+                  <li className="faint">
+                    {t("layout.duplicates.more", { count: plan.duplicates.more })}
+                  </li>
+                )}
               </ul>
             </div>
           )}

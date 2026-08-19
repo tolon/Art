@@ -107,13 +107,30 @@ pub struct Collision {
     pub sources: Vec<PathBuf>,
 }
 
+// `rename_all` is a no-op for every field that existed before `too_deep`
+// (all one word) and makes the two ART-107 fields read as `tooDeep` and
+// `duplicates` on the wire, which is the casing the frontend uses throughout.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LayoutPlan {
     pub root: PathBuf,
     pub items: Vec<LayoutItem>,
     pub refused: Vec<Refusal>,
     pub collisions: Vec<Collision>,
     pub bytes: u64,
+    /// Folders the scan did not look inside because they sit at
+    /// `scan::MAX_SCAN_DEPTH` — ART-107. Anything under them is missing from
+    /// `items`, and the screen says so rather than showing a plan that is
+    /// quietly short. `#[serde(default)]` because `InstallPlan`-style
+    /// round-tripping applies here too: `layout_apply` takes back the plan the
+    /// screen was shown.
+    #[serde(default)]
+    pub too_deep: crate::core::layout::scan::Dropped,
+    /// Sources dropped because another source in the same scan already covers
+    /// them — ART-107. Dropping a folder and then a file inside it used to put
+    /// that file in the plan twice and make it collide with itself.
+    #[serde(default)]
+    pub duplicates: crate::core::layout::scan::Dropped,
 }
 
 /// What one found thing is.
@@ -175,7 +192,9 @@ pub fn plan(root: &Path, paths: &[PathBuf], policy: &Policy) -> CoreResult<Layou
     let mut items = Vec::new();
     let mut refused = Vec::new();
 
-    for found in gather(paths)? {
+    let scanned = gather(paths)?;
+
+    for found in scanned.found {
         let kind = classify(&found)?;
         let drawer = match drawer_for(&kind, policy) {
             Ok(drawer) => drawer,
@@ -223,6 +242,8 @@ pub fn plan(root: &Path, paths: &[PathBuf], policy: &Policy) -> CoreResult<Layou
         refused,
         collisions,
         bytes,
+        too_deep: scanned.too_deep,
+        duplicates: scanned.duplicates,
     })
 }
 

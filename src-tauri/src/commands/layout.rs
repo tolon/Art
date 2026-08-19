@@ -155,6 +155,8 @@ mod tests {
             }],
             refused: Vec::new(),
             collisions: Vec::new(),
+            too_deep: Default::default(),
+            duplicates: Default::default(),
             bytes: 10,
         };
 

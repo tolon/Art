@@ -1997,6 +1997,18 @@
       "heading": "Dahil edilmeyenler",
       "intro": "Bunların bir Amiga hazırlık ağacında yeri yok, dışarıda bırakıldı:"
     },
+    "tooDeep": {
+      "heading": "İçine bakılmadı",
+      "intro_one": "Bir klasör ART'ın bakacağından daha derinde; içindekiler bu planda yok:",
+      "intro_other": "{{count}} klasör ART'ın bakacağından daha derinde; içindekiler bu planda yok:",
+      "more": "… ve {{count}} tane daha"
+    },
+    "duplicates": {
+      "heading": "İki kez eklendi",
+      "intro_one": "Bir öğe iki kez eklendi — eklediğiniz başka bir şey onu zaten kapsıyor — bu planda bir kez yer alıyor:",
+      "intro_other": "{{count}} öğe iki kez eklendi — eklediğiniz başka bir şey onları zaten kapsıyor — her biri bu planda bir kez yer alıyor:",
+      "more": "… ve {{count}} tane daha"
+    },
     "blocked": {
       "noRoot": "Önce bir hazırlık klasörü seç.",
       "nothingToPlace": "Yerleştirilecek bir şey yok — önce birkaç dosya ya da klasör bırak.",

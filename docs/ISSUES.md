@@ -633,21 +633,6 @@ ART's one drop pipeline cannot route anything there. The design doc does not
 require it and `Navigate { route: "/layout" }` for a dropped `Directory` is its
 own decision — filed because the gap is written down nowhere else.
 
-**ART-107** 🔵 **`scan::gather` drops silently at the depth cap, and counts an
-overlapping input twice** — *found 2026-08-15, the whole-branch review of SD-2
-G11*
-`src-tauri/src/core/layout/scan.rs` · Two ways the plan can quietly not describe
-what the user dropped. `walk` returns `Ok(())` past `MAX_SCAN_DEPTH` and
-`tree_bytes` returns `0`, so files below the cap are absent from the plan with
-nothing on screen saying so, and a drawer's size can read low. The copy path
-does this correctly — `copy_tree` **refuses** past the cap rather than
-truncating — and the scan should at least count what it did not look at, so the
-plan can say "n items were deeper than ART will look".
-
-And `gather` does not dedupe: adding `E:\Games` and then
-`E:\Games\Turrican.lha`, both of which the screen allows, yields the same file
-twice and a self-collision the user can only resolve by removing a source.
-
 **ART-106** 🔵 **A WHDLoad icon's destination is invisible to collision
 analysis** — *found 2026-08-15, the whole-branch review of SD-2 G11*
 `src-tauri/src/core/layout/mod.rs` · `collisions_in` walks `item.destination`
@@ -949,6 +934,61 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-107** 🔵 **`scan::gather` drops silently at the depth cap, and counts an
+overlapping input twice** — *found 2026-08-15, the whole-branch review of SD-2
+G11; fixed 2026-08-20 on `debt-wave-a`*
+`src-tauri/src/core/layout/scan.rs` · `src-tauri/src/core/layout/mod.rs` ·
+`src/lib/layout.ts` · `src/pages/ContentLayout.tsx`
+
+Two ways the plan could quietly not describe what the user dropped. `walk`
+returned `Ok(())` past `MAX_SCAN_DEPTH` and `tree_bytes` returned `0`, so files
+below the cap were absent from the plan with nothing on screen saying so, and a
+drawer's size could read low. And `gather` did not dedupe: adding a folder and
+then a file inside it — both of which the screen allows — yielded the same file
+twice and a self-collision the user could only resolve by removing a source.
+
+**Fixed 2026-08-20**, both halves.
+
+`gather` now returns `Gathered { found, too_deep, duplicates }`. Each of the
+last two is a `Dropped { paths, more }` — the first twenty named, the rest
+counted, the same "name what you can act on, count the rest" shape
+`CoreError::NonAsciiPfs3Names` already uses, so a tree with nine thousand deep
+branches does not put nine thousand paths on screen and does not claim there
+were twenty. `LayoutPlan` carries both through to the UI, which renders them as
+two new sections beside the existing Collisions and Not-included ones.
+
+`walk` and `tree_bytes` both record the folder they stopped at, so a drawer
+whose size reads low says why — the number on screen is what a user decides
+against. It still does **not** refuse: a scan is a preview, and refusing to
+preview a whole folder because one corner of it is 33 levels down would be
+worse than showing the rest and naming the corner. (The *copy* path still
+refuses, which is right — `apply::copy_tree` was always correct here.)
+
+Deduping is by `std::fs::canonicalize`, so a folder and a file inside it are
+recognisably one thing whatever spelling reached the drop; a path the OS will
+not canonicalize falls back to itself, which is no worse than the old
+behaviour for that one entry and never an error for a scan that is otherwise
+fine. The **first** sighting is the one kept, and the tests ask it in both
+orders, because a dedupe that only worked one way round would pass a single
+test.
+
+**Neither report blocks apply.** A plan short in one corner, or one whose
+source list named something twice, is still worth applying — the defect was the
+silence, not the event. `layoutBlocker` is unchanged and there is a test saying
+so, so nobody "tidies" these into blockers later by accident.
+
+Tests: `core::layout::scan::tests::scanning_stops_at_the_depth_limit` (extended
+to assert the report, not just that it returned),
+`::a_drawer_deeper_than_the_cap_says_its_size_is_short`,
+`::a_file_inside_a_folder_that_was_also_added_is_kept_once`,
+`::the_same_overlap_the_other_way_round_is_also_kept_once`,
+`::an_ordinary_scan_reports_nothing_dropped`,
+`::the_report_is_bounded_and_counts_the_rest`, and on the frontend
+`src/lib/layout.test.ts`'s `droppedTotal` and
+`layoutBlocker and the ART-107 reports` blocks. New keys `layout.tooDeep.*`
+and `layout.duplicates.*` in both catalogues, covered by
+`src/i18n/literal-keys.test.ts`.
 
 **ART-105** 🔵 **`size()` is written three times** — *found 2026-08-15, the
 whole-branch review of SD-2 G11; fixed 2026-08-20 on `debt-wave-a`*

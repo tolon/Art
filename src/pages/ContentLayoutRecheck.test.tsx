@@ -37,6 +37,8 @@ const PLAN: LayoutPlan = {
   ],
   refused: [],
   collisions: [],
+  tooDeep: { paths: [], more: 0 },
+  duplicates: { paths: [], more: 0 },
   bytes: 50,
 };
 

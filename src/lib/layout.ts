@@ -81,12 +81,32 @@ export interface Collision {
   sources: string[];
 }
 
+/**
+ * Things a scan did not put in the plan, named rather than dropped in silence
+ * (ART-107). Mirrors `core::layout::scan::Dropped`: `paths` is capped at
+ * twenty, and `more` counts whatever did not fit — so the real total is
+ * `paths.length + more`, never `paths.length`.
+ */
+export interface Dropped {
+  paths: string[];
+  more: number;
+}
+
+/** How many things a {@link Dropped} really stands for. */
+export function droppedTotal(dropped: Dropped): number {
+  return dropped.paths.length + dropped.more;
+}
+
 export interface LayoutPlan {
   root: string;
   items: LayoutItem[];
   refused: Refusal[];
   collisions: Collision[];
   bytes: number;
+  /** Folders the scan did not look inside — see {@link Dropped}. */
+  tooDeep: Dropped;
+  /** Sources another source already covered — see {@link Dropped}. */
+  duplicates: Dropped;
 }
 
 export interface LayoutRequest {

@@ -353,6 +353,8 @@ mod tests {
             items,
             refused: Vec::new(),
             collisions: Vec::new(),
+            too_deep: Default::default(),
+            duplicates: Default::default(),
         }
     }
 

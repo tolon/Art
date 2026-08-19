@@ -1997,6 +1997,18 @@
       "heading": "Not included",
       "intro": "These have no place in an Amiga staging tree and were left out:"
     },
+    "tooDeep": {
+      "heading": "Not looked inside",
+      "intro_one": "One folder is nested deeper than ART will look, so whatever is inside it is missing from this plan:",
+      "intro_other": "{{count}} folders are nested deeper than ART will look, so whatever is inside them is missing from this plan:",
+      "more": "… and {{count}} more"
+    },
+    "duplicates": {
+      "heading": "Added twice",
+      "intro_one": "One thing was added twice — something else you added already covers it — so it is in this plan once:",
+      "intro_other": "{{count}} things were added twice — something else you added already covers them — so each is in this plan once:",
+      "more": "… and {{count}} more"
+    },
     "blocked": {
       "noRoot": "Choose a staging folder first.",
       "nothingToPlace": "Nothing to lay out — drop some files or folders in first.",

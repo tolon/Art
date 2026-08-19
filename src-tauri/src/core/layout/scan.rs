@@ -9,6 +9,8 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use crate::core::error::{CoreError, CoreResult};
 
 /// How deep a scan will descend.
@@ -19,7 +21,7 @@ use crate::core::error::{CoreError, CoreResult};
 pub const MAX_SCAN_DEPTH: usize = 32;
 
 /// One thing the layout will place.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Found {
     pub path: PathBuf,
     /// For a file, its size. For a drawer, its whole tree.
@@ -48,18 +50,90 @@ pub fn is_whdload_drawer(dir: &Path) -> bool {
     })
 }
 
+/// How many dropped paths a scan names before it starts counting instead.
+///
+/// The same shape `CoreError::NonAsciiPfs3Names` already uses: a report that
+/// only says "some things were dropped" answers nothing a user can act on, and
+/// one that lists nine thousand of them is no better.
+pub const MAX_REPORTED_PATHS: usize = 20;
+
+/// Things a scan did not put in the plan, named rather than dropped in
+/// silence (ART-107).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Dropped {
+    /// The first [`MAX_REPORTED_PATHS`], in the order they were met.
+    pub paths: Vec<PathBuf>,
+    /// How many more there were beyond those — `0` when `paths` is all of
+    /// them. The *total* is `paths.len() + more`, which is what a sentence
+    /// should print.
+    pub more: usize,
+}
+
+impl Dropped {
+    fn push(&mut self, path: PathBuf) {
+        if self.paths.len() < MAX_REPORTED_PATHS {
+            self.paths.push(path);
+        } else {
+            self.more += 1;
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.paths.is_empty() && self.more == 0
+    }
+
+    /// How many there really were — never `paths.len()`, which is capped.
+    pub fn total(&self) -> usize {
+        self.paths.len() + self.more
+    }
+}
+
+/// What a scan found, and what it did not.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Gathered {
+    pub found: Vec<Found>,
+    /// Directories ART did not look inside, because they sit at
+    /// [`MAX_SCAN_DEPTH`]. Anything under them is absent from the plan.
+    pub too_deep: Dropped,
+    /// Sources dropped because something else in the same scan already
+    /// covers them.
+    pub duplicates: Dropped,
+}
+
 /// Everything under `paths`, with WHDLoad drawers kept whole.
-pub fn gather(paths: &[PathBuf]) -> CoreResult<Vec<Found>> {
-    let mut out = Vec::new();
+///
+/// # Two ways a scan used to quietly not describe what the user dropped
+///
+/// **The depth cap was silent** (ART-107). `walk` returns at
+/// [`MAX_SCAN_DEPTH`] and `tree_bytes` returns `0` there, so files below the
+/// cap were absent from the plan with nothing on screen saying so, and a
+/// drawer's size could read low for the same reason. The copy path has always
+/// done this correctly — `core::layout::apply::copy_tree` **refuses** past the
+/// cap rather than truncating — and this now at least counts what it did not
+/// look at, so the plan can say so. It still does not refuse: a scan is a
+/// preview, and refusing to preview a folder because one corner of it is 33
+/// levels down would be worse than showing the rest and naming the corner.
+///
+/// **Nothing deduped.** Dropping a folder and then a file inside it — both of
+/// which the screen allows — put the same file in the plan twice, which then
+/// collided with itself, and the only way out was to remove one of the
+/// sources. The second sighting of a path is now dropped and recorded instead.
+/// "The same path" is decided by [`std::fs::canonicalize`] where the OS will
+/// answer, so a folder and a `..`-flavoured spelling of the same file are one
+/// thing, and by the path as written where it will not.
+pub fn gather(paths: &[PathBuf]) -> CoreResult<Gathered> {
+    let mut scan = Scan::default();
     for path in paths {
         if path.is_dir() {
             if is_whdload_drawer(path) {
-                out.push(drawer(path)?);
+                let found = scan.drawer(path)?;
+                scan.keep(found);
             } else {
-                walk(path, 0, &mut out)?;
+                scan.walk(path, 0)?;
             }
         } else if path.is_file() {
-            out.push(file(path)?);
+            let found = file(path)?;
+            scan.keep(found);
         } else {
             return Err(CoreError::InvalidInput(format!(
                 "'{}' is neither a file nor a folder",
@@ -67,37 +141,122 @@ pub fn gather(paths: &[PathBuf]) -> CoreResult<Vec<Found>> {
             )));
         }
     }
-    Ok(out)
+    Ok(scan.into_gathered())
 }
 
-fn walk(dir: &Path, depth: usize, out: &mut Vec<Found>) -> CoreResult<()> {
-    if depth >= MAX_SCAN_DEPTH {
-        return Ok(());
-    }
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Ok(());
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        // `symlink_metadata` does not follow links, so a directory symlink
-        // pointing back up the tree is skipped instead of followed.
-        let is_symlink = std::fs::symlink_metadata(&path)
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false);
-        if is_symlink {
-            continue;
+/// One run of [`gather`]: what it has found, what it has dropped, and the set
+/// of paths it has already seen.
+///
+/// A struct rather than three `&mut` arguments threaded through `walk` and
+/// `tree_bytes` — the seen-set has to be shared across every source in the
+/// same call for deduping to work at all, and four out-parameters is where a
+/// recursive helper stops being readable.
+#[derive(Default)]
+struct Scan {
+    found: Vec<Found>,
+    too_deep: Dropped,
+    duplicates: Dropped,
+    seen: std::collections::HashSet<PathBuf>,
+}
+
+impl Scan {
+    fn into_gathered(self) -> Gathered {
+        Gathered {
+            found: self.found,
+            too_deep: self.too_deep,
+            duplicates: self.duplicates,
         }
-        if path.is_dir() {
-            if is_whdload_drawer(&path) {
-                out.push(drawer(&path)?);
-            } else {
-                walk(&path, depth + 1, out)?;
+    }
+
+    /// Keep `found` unless this scan already has that path.
+    fn keep(&mut self, found: Found) {
+        if self.seen.insert(identity(&found.path)) {
+            self.found.push(found);
+        } else {
+            self.duplicates.push(found.path);
+        }
+    }
+
+    fn walk(&mut self, dir: &Path, depth: usize) -> CoreResult<()> {
+        if depth >= MAX_SCAN_DEPTH {
+            self.too_deep.push(dir.to_path_buf());
+            return Ok(());
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Ok(());
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // `symlink_metadata` does not follow links, so a directory symlink
+            // pointing back up the tree is skipped instead of followed.
+            let is_symlink = std::fs::symlink_metadata(&path)
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false);
+            if is_symlink {
+                continue;
             }
-        } else if path.is_file() {
-            out.push(file(&path)?);
+            if path.is_dir() {
+                if is_whdload_drawer(&path) {
+                    let found = self.drawer(&path)?;
+                    self.keep(found);
+                } else {
+                    self.walk(&path, depth + 1)?;
+                }
+            } else if path.is_file() {
+                let found = file(&path)?;
+                self.keep(found);
+            }
         }
+        Ok(())
     }
-    Ok(())
+
+    fn drawer(&mut self, path: &Path) -> CoreResult<Found> {
+        Ok(Found {
+            path: path.to_path_buf(),
+            bytes: self.tree_bytes(path, 0),
+            is_dir: true,
+        })
+    }
+
+    /// A drawer's whole tree. Stops at [`MAX_SCAN_DEPTH`] like everything else
+    /// here, and **says so** rather than quietly reporting a size that is too
+    /// small — the number on screen is what a user decides against.
+    fn tree_bytes(&mut self, dir: &Path, depth: usize) -> u64 {
+        if depth >= MAX_SCAN_DEPTH {
+            self.too_deep.push(dir.to_path_buf());
+            return 0;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return 0;
+        };
+        let mut total = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if std::fs::symlink_metadata(&path)
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            if path.is_dir() {
+                total += self.tree_bytes(&path, depth + 1);
+            } else if let Ok(meta) = std::fs::metadata(&path) {
+                total += meta.len();
+            }
+        }
+        total
+    }
+}
+
+/// The key two paths are the same file under.
+///
+/// `canonicalize` resolves `.`/`..`, a junction, and Windows' short 8.3 names,
+/// which is what makes "a folder and a file inside it" recognisable as one
+/// thing at all. A path the OS will not canonicalize — deleted between the
+/// walk and here — falls back to itself: no worse than the old behaviour for
+/// that one entry, and never an error for a scan that is otherwise fine.
+fn identity(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn file(path: &Path) -> CoreResult<Found> {
@@ -106,39 +265,6 @@ fn file(path: &Path) -> CoreResult<Found> {
         bytes: std::fs::metadata(path)?.len(),
         is_dir: false,
     })
-}
-
-fn drawer(path: &Path) -> CoreResult<Found> {
-    Ok(Found {
-        path: path.to_path_buf(),
-        bytes: tree_bytes(path, 0),
-        is_dir: true,
-    })
-}
-
-fn tree_bytes(dir: &Path, depth: usize) -> u64 {
-    if depth >= MAX_SCAN_DEPTH {
-        return 0;
-    }
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return 0;
-    };
-    let mut total = 0;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if std::fs::symlink_metadata(&path)
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false)
-        {
-            continue;
-        }
-        if path.is_dir() {
-            total += tree_bytes(&path, depth + 1);
-        } else if let Ok(meta) = std::fs::metadata(&path) {
-            total += meta.len();
-        }
-    }
-    total
 }
 
 #[cfg(test)]
@@ -161,7 +287,7 @@ mod tests {
         std::fs::write(dir.join("a.adf"), vec![0u8; 10]).unwrap();
         std::fs::write(dir.join("sub").join("b.lha"), vec![0u8; 20]).unwrap();
 
-        let mut found = gather(std::slice::from_ref(&dir)).unwrap();
+        let mut found = gather(std::slice::from_ref(&dir)).unwrap().found;
         found.sort_by(|a, b| a.path.cmp(&b.path));
 
         assert_eq!(found.len(), 2, "{found:?}");
@@ -184,7 +310,7 @@ mod tests {
         std::fs::write(game.join("TurricanII.slave"), vec![0u8; 4]).unwrap();
         std::fs::write(game.join("data").join("level1"), vec![0u8; 6]).unwrap();
 
-        let found = gather(std::slice::from_ref(&dir)).unwrap();
+        let found = gather(std::slice::from_ref(&dir)).unwrap().found;
 
         assert_eq!(
             found.len(),
@@ -208,7 +334,7 @@ mod tests {
             std::fs::write(game.join(format!("{name}.slave")), vec![0u8; 4]).unwrap();
         }
 
-        let found = gather(std::slice::from_ref(&dir)).unwrap();
+        let found = gather(std::slice::from_ref(&dir)).unwrap().found;
         assert_eq!(found.len(), 2, "{found:?}");
         assert!(found.iter().all(|f| f.is_dir));
 
@@ -222,7 +348,7 @@ mod tests {
         let file = dir.join("one.adf");
         std::fs::write(&file, vec![0u8; 7]).unwrap();
 
-        let found = gather(std::slice::from_ref(&file)).unwrap();
+        let found = gather(std::slice::from_ref(&file)).unwrap().found;
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].path, file);
         assert_eq!(found[0].bytes, 7);
@@ -262,12 +388,132 @@ mod tests {
         std::fs::create_dir_all(&deep).unwrap();
         std::fs::write(deep.join("buried.adf"), b"x").unwrap();
 
-        let found = gather(std::slice::from_ref(&root)).unwrap();
+        let scanned = gather(std::slice::from_ref(&root)).unwrap();
 
         // The point is that it returned at all; the buried file is out of reach.
-        assert!(found.is_empty(), "found {found:?}");
+        assert!(scanned.found.is_empty(), "found {:?}", scanned.found);
+
+        // **ART-107.** And it says so. The whole complaint was that the plan
+        // came back short with nothing on screen admitting it.
+        assert!(
+            !scanned.too_deep.is_empty(),
+            "the folder ART stopped at must be named"
+        );
+        assert_eq!(scanned.too_deep.total(), 1, "one branch, one report");
+        assert!(
+            scanned.too_deep.paths[0].starts_with(&root),
+            "and it is the folder itself, not some invented path: {:?}",
+            scanned.too_deep.paths[0]
+        );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// **ART-107, the size half.** A WHDLoad drawer deeper than the cap
+    /// reports a total that is too small, and the plan says so rather than
+    /// letting the user decide against a number that is quietly wrong.
+    #[test]
+    fn a_drawer_deeper_than_the_cap_says_its_size_is_short() {
+        let root = scratch("deep-drawer");
+        let game = root.join("TurricanII");
+        std::fs::create_dir_all(&game).unwrap();
+        std::fs::write(game.join("TurricanII.slave"), vec![0u8; 4]).unwrap();
+
+        let mut deep = game.clone();
+        for i in 0..(MAX_SCAN_DEPTH + 2) {
+            deep = deep.join(format!("d{i}"));
+        }
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("buried"), vec![0u8; 1000]).unwrap();
+
+        let scanned = gather(std::slice::from_ref(&root)).unwrap();
+
+        assert_eq!(scanned.found.len(), 1);
+        assert_eq!(
+            scanned.found[0].bytes, 4,
+            "the buried 1000 bytes are past the cap, so they are not counted"
+        );
+        assert!(
+            !scanned.too_deep.is_empty(),
+            "and that is exactly why the short total must be reported"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// **ART-107, the duplicate half.** A folder and a file inside it are both
+    /// things the screen lets a user add, and adding both used to put the file
+    /// in the plan twice — where it then collided with itself, and the only
+    /// way out was to remove one of the sources.
+    #[test]
+    fn a_file_inside_a_folder_that_was_also_added_is_kept_once() {
+        let root = scratch("overlap");
+        let games = root.join("Games");
+        std::fs::create_dir_all(&games).unwrap();
+        let one = games.join("Turrican.lha");
+        std::fs::write(&one, vec![0u8; 12]).unwrap();
+        std::fs::write(games.join("Zool.lha"), vec![0u8; 8]).unwrap();
+
+        let scanned = gather(&[games.clone(), one.clone()]).unwrap();
+
+        assert_eq!(
+            scanned.found.len(),
+            2,
+            "two files, however many ways they were named: {:?}",
+            scanned.found
+        );
+        assert_eq!(scanned.duplicates.total(), 1);
+        assert_eq!(scanned.duplicates.paths[0], one);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The other order, because the first source seen is the one kept and a
+    /// dedupe that only worked one way round would pass the test above.
+    #[test]
+    fn the_same_overlap_the_other_way_round_is_also_kept_once() {
+        let root = scratch("overlap-reversed");
+        let games = root.join("Games");
+        std::fs::create_dir_all(&games).unwrap();
+        let one = games.join("Turrican.lha");
+        std::fs::write(&one, vec![0u8; 12]).unwrap();
+
+        let scanned = gather(&[one.clone(), games.clone()]).unwrap();
+
+        assert_eq!(scanned.found.len(), 1, "{:?}", scanned.found);
+        assert_eq!(scanned.found[0].path, one);
+        assert_eq!(scanned.duplicates.total(), 1);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Nothing to report when there is nothing to report — a plain scan must
+    /// not start showing a "some things were dropped" panel to everyone.
+    #[test]
+    fn an_ordinary_scan_reports_nothing_dropped() {
+        let dir = scratch("clean");
+        std::fs::write(dir.join("a.adf"), vec![0u8; 10]).unwrap();
+
+        let scanned = gather(std::slice::from_ref(&dir)).unwrap();
+        assert_eq!(scanned.found.len(), 1);
+        assert!(scanned.too_deep.is_empty());
+        assert!(scanned.duplicates.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The report is bounded, and says how many it did not name. A folder
+    /// tree with a hundred branches past the cap must not put a hundred paths
+    /// on screen, and must not claim there were twenty.
+    #[test]
+    fn the_report_is_bounded_and_counts_the_rest() {
+        let mut dropped = Dropped::default();
+        for i in 0..(MAX_REPORTED_PATHS + 7) {
+            dropped.push(PathBuf::from(format!("d{i}")));
+        }
+        assert_eq!(dropped.paths.len(), MAX_REPORTED_PATHS);
+        assert_eq!(dropped.more, 7);
+        assert_eq!(dropped.total(), MAX_REPORTED_PATHS + 7);
     }
 
     /// A drawer nested two folders down is still returned whole — the walk
@@ -280,7 +526,7 @@ mod tests {
         std::fs::write(game.join("TurricanII.slave"), vec![0u8; 4]).unwrap();
         std::fs::write(game.join("data").join("level1"), vec![0u8; 6]).unwrap();
 
-        let found = gather(std::slice::from_ref(&root)).unwrap();
+        let found = gather(std::slice::from_ref(&root)).unwrap().found;
 
         assert_eq!(found.len(), 1, "the drawer is one thing: {found:?}");
         assert_eq!(found[0].path, game);
