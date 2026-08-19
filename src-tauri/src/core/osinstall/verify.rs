@@ -677,6 +677,7 @@ mod tests {
                 bytes: content.len() as u64,
                 protection: Some(0x20), // --p-rwed: what apply() actually recorded
                 overwrote: None,
+                host_path: None,
             }],
             paired_rom: None,
         }
@@ -774,6 +775,7 @@ mod tests {
             bytes: 4,
             protection: None,
             overwrote: None,
+            host_path: None,
         });
         let report = verify_volume(&image, None, 1, &manifest).unwrap();
         assert_eq!(report.failed, 1);
@@ -1096,6 +1098,7 @@ mod tests {
                 bytes: content.len() as u64,
                 protection: None,
                 overwrote: None,
+                host_path: None,
             }],
             paired_rom: None,
         };

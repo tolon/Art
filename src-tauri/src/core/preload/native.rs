@@ -100,6 +100,7 @@ use crate::core::adf::checksum::block_checksum;
 use crate::core::card::{read_card, AmigaArea, CardImage};
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
+use crate::core::preload::amiga_names::AmigaNames;
 use crate::core::preload::pfs3dev::ArtBlockDevice;
 use crate::core::preload::{CopySummary, ToolVersion, VolumeFormatter};
 use crate::core::rdb::ParsedPartition;
@@ -720,13 +721,28 @@ fn non_ascii_refusal(entries: &[CopyEntry]) -> Option<CoreError> {
 ///
 /// A `.uaem` sidecar is never included as an entry of its own (§ binding
 /// requirement 1) — it is read later, beside the file it describes.
+///
+/// `CopyEntry::relative` is the **AmigaDOS** path, which is the host path for
+/// every folder a user assembled and for almost every file of a distribution
+/// tree. The exceptions are the names a Windows filesystem will not carry —
+/// `Storage/DOSDrivers/AUX` off the owner's real AmigaOS 3.9 disc is stored
+/// as `_AUX` — and [`AmigaNames`] reads the tree's own `distribution.json` to
+/// put those back (ART-160). A folder with no manifest renames nothing, so
+/// this costs one failed `read_to_string` per copy and changes nothing else.
 fn collect_entries(source: &Path) -> CoreResult<Vec<CopyEntry>> {
     let mut out = Vec::new();
-    collect_into(source, "", &mut out)?;
+    let names = AmigaNames::read(source);
+    collect_into(source, "", "", &names, &mut out)?;
     Ok(out)
 }
 
-fn collect_into(dir: &Path, prefix: &str, out: &mut Vec<CopyEntry>) -> CoreResult<()> {
+fn collect_into(
+    dir: &Path,
+    host_prefix: &str,
+    prefix: &str,
+    names: &AmigaNames,
+    out: &mut Vec<CopyEntry>,
+) -> CoreResult<()> {
     let mut entries: Vec<_> = std::fs::read_dir(dir)?.collect::<std::io::Result<_>>()?;
     entries.sort_by_key(|e| e.file_name());
 
@@ -739,13 +755,21 @@ fn collect_into(dir: &Path, prefix: &str, out: &mut Vec<CopyEntry>) -> CoreResul
             continue;
         }
 
-        let name = entry
+        let host_name = entry
             .file_name()
             .to_str()
             .ok_or(CoreError::NonUtf8Path)?
             .to_string();
+        let host_relative = if host_prefix.is_empty() {
+            host_name.clone()
+        } else {
+            format!("{host_prefix}/{host_name}")
+        };
+        // The Amiga name, which is the host name unless the tree recorded
+        // that it had to store this node under a different one.
+        let name = names.name_for(&host_relative).unwrap_or(&host_name);
         let relative = if prefix.is_empty() {
-            name
+            name.to_string()
         } else {
             format!("{prefix}/{name}")
         };
@@ -758,7 +782,7 @@ fn collect_into(dir: &Path, prefix: &str, out: &mut Vec<CopyEntry>) -> CoreResul
                 is_dir: true,
                 size: 0,
             });
-            collect_into(&path, &relative, out)?;
+            collect_into(&path, &host_relative, &relative, names, out)?;
         } else if file_type.is_file() {
             let size = entry.metadata()?.len();
             out.push(CopyEntry {
@@ -1069,6 +1093,67 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// **ART-160.** `collect_entries` takes the AmigaDOS name off the tree's
+    /// own `distribution.json` when the host had to store a file under a
+    /// different one, so what is copied onto the card is `AUX`, not `_AUX`.
+    ///
+    /// The whole path is checked, not only the leaf: a renamed *drawer* has
+    /// to translate for everything beneath it, and a walk that translated the
+    /// leaf while keeping the escaped parent would place the file in a drawer
+    /// no Amiga names.
+    #[test]
+    fn an_escaped_host_name_is_copied_under_its_amiga_name() {
+        let dir = scratch("amiga-names");
+        let tree = dir.join("dist");
+        std::fs::create_dir_all(tree.join("Storage").join("_CON")).unwrap();
+        std::fs::write(tree.join("Storage").join("_CON").join("_AUX"), b"driver").unwrap();
+        std::fs::write(
+            tree.join("distribution.json"),
+            br#"{"release":"AmigaOS 3.9","builtFrom":[],"files":[
+                 {"path":"Storage/CON/AUX","hostPath":"Storage/_CON/_AUX",
+                  "component":"workbench-base","media":"Workbench3.9",
+                  "sha256":"","bytes":6}]}"#,
+        )
+        .unwrap();
+
+        let entries = collect_entries(&tree).unwrap();
+        let relatives: Vec<&str> = entries.iter().map(|e| e.relative.as_str()).collect();
+        assert!(
+            relatives.contains(&"Storage/CON/AUX"),
+            "the Amiga name, whole path: {relatives:?}"
+        );
+        assert!(
+            relatives.contains(&"Storage/CON"),
+            "including the drawer: {relatives:?}"
+        );
+        assert!(
+            !relatives.iter().any(|r| r.contains('_')),
+            "nothing escaped may survive into the copy: {relatives:?}"
+        );
+        // `distribution.json` itself is still copied — it is a real file of
+        // the tree, and the card carries it.
+        assert!(relatives.contains(&"distribution.json"));
+    }
+
+    /// A folder a user assembled has no manifest, so nothing is translated
+    /// and a genuine `_AUX` stays `_AUX`.
+    #[test]
+    fn a_folder_without_a_manifest_is_copied_verbatim() {
+        let dir = scratch("no-manifest");
+        let tree = dir.join("src");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(tree.join("_AUX"), b"mine").unwrap();
+
+        let entries = collect_entries(&tree).unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|e| e.relative.as_str())
+                .collect::<Vec<_>>(),
+            vec!["_AUX"]
+        );
     }
 
     fn card_with_partition(tag: &str, fs: AmigaHardDiskFs, size_mb: u32) -> PathBuf {

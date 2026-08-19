@@ -106,6 +106,36 @@ pub enum CoreError {
          hst-imager's import_filesystem."
     )]
     ForeignRdbEmbedNotSupported,
+
+    /// A distribution tree whose `distribution.json` records at least one file
+    /// stored under an escaped host name (`Storage/DOSDrivers/AUX` → `_AUX`)
+    /// cannot be copied in by an external tool, because the tool copies the
+    /// folder as it finds it and has no way to be told what a file's real
+    /// AmigaDOS name is (ART-160).
+    ///
+    /// `NativeFormatter` handles this case — it reads the manifest and puts
+    /// the AmigaDOS name back — so this is a capability gap in exactly the
+    /// same sense as [`ForeignRdbEmbedNotSupported`](Self::ForeignRdbEmbedNotSupported),
+    /// only in the other direction: the *fallback* is the one that cannot,
+    /// and the default can. Its own variant for the same reason that one has
+    /// one — `commands/preload.rs` matches on it to say which tool ran a step
+    /// and why — and raised before a single byte is written, never partway.
+    ///
+    /// `pairs` is `host name → AmigaDOS name`, because a refusal that only
+    /// says "some names were escaped" tells the user nothing they can act on.
+    #[error(
+        "this distribution tree stores {} file(s) or drawer(s) under a name Windows forced \
+         ART to change ({}), and hst-imager copies a folder exactly as it finds it — so the \
+         Amiga would receive the escaped name. ART's own writer handles this; use it for \
+         this step.",
+        pairs.len(),
+        pairs
+            .iter()
+            .map(|(host, amiga)| format!("{host} → {amiga}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )]
+    EscapedNamesNeedNativeCopy { pairs: Vec<(String, String)> },
 }
 
 /// The sentence for [`CoreError::NonAsciiPfs3Names`] — pulled out of the
@@ -150,6 +180,7 @@ impl CoreError {
             Self::CancelledPartway { .. } => "ART-CANCELLED-PARTWAY",
             Self::NonAsciiPfs3Names { .. } => "ART-PFS3-NON-ASCII-NAME",
             Self::ForeignRdbEmbedNotSupported => "ART-NATIVE-EMBED-UNSUPPORTED",
+            Self::EscapedNamesNeedNativeCopy { .. } => "ART-ESCAPED-NAME-NEEDS-NATIVE",
         }
     }
 
@@ -189,6 +220,9 @@ mod tests {
                 more: 0,
             },
             CoreError::ForeignRdbEmbedNotSupported,
+            CoreError::EscapedNamesNeedNativeCopy {
+                pairs: vec![("Storage/DOSDrivers/_AUX".into(), "AUX".into())],
+            },
         ];
 
         let mut codes: Vec<&str> = errors.iter().map(|e| e.code()).collect();

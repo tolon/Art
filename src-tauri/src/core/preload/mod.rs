@@ -43,6 +43,7 @@
 //! that filesystem with `fatfs` and has no reader for it at all, so it stays
 //! a blanket `not-checked` in G8's report.
 
+pub mod amiga_names;
 pub mod native;
 pub mod pfs3dev;
 

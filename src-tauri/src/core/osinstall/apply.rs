@@ -173,7 +173,6 @@ use super::startup::merge_user_startup;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::hashing::{sha256_bytes, sha256_file};
 use crate::core::jobs::ProgressSink;
-use crate::core::security::path::safe_join;
 use crate::core::volume::write::copy::sidecar_for;
 use crate::core::volume::write::uaem::{render, sidecar_path};
 
@@ -197,7 +196,11 @@ pub struct MediaRecord {
 /// `path`, `sha256` and `bytes` the composed file actually has. `component`
 /// still names a single component for every other file; for that one path
 /// it names "one of possibly several".
+// `rename_all` is a no-op for every field that existed before `host_path`
+// (all one word), and makes `host_path` read as `hostPath` — the casing the
+// rest of this manifest already uses (`DistributionManifest`, `Overwritten`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FileRecord {
     /// `/`-separated, relative to the distribution root — matches
     /// [`super::plan::PlanItem::to`] exactly, except for `S/User-Startup`.
@@ -249,6 +252,35 @@ pub struct FileRecord {
     /// tree of three thousand files does not carry three thousand `null`s.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overwrote: Option<Overwritten>,
+    /// Where this file actually landed on the **host**, when that is not
+    /// [`path`](Self::path) — ART-160.
+    ///
+    /// [`path`](Self::path) is always the AmigaDOS name, because that is what
+    /// the finished volume must carry and what
+    /// [`verify_volume`](super::verify::verify_volume) looks up on it. A
+    /// Windows filesystem will not carry every AmigaDOS name: `AUX` is one of
+    /// the 22 reserved device names and it is really on the owner's AmigaOS
+    /// 3.9 disc at `Storage/DOSDrivers/AUX`, and a legal AmigaDOS
+    /// `Prices: 1993` is refused outright. [`super::host_destination`]
+    /// escapes those, and this is the record of it — without which the tree
+    /// and the manifest would disagree about which file is which, and
+    /// `core/preload` (which reads the Amiga name off the host filename)
+    /// would put `_AUX` on the card.
+    ///
+    /// `None` for every file whose host name is its Amiga name, which is
+    /// almost all of them — `#[serde(default, skip_serializing_if)]` so a
+    /// tree of three thousand files does not carry three thousand `null`s,
+    /// and a manifest written before this field existed reads back as "the
+    /// host name is the Amiga name", which is what was true of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_path: Option<String>,
+}
+
+/// [`FileRecord::host_path`] for a destination — `None` when the host carries
+/// the AmigaDOS name unchanged, which is the ordinary case.
+fn host_path_of(to: &str) -> Option<String> {
+    let host = super::host_relative(to);
+    (host != to).then_some(host)
 }
 
 /// What a [`FileRecord`] displaced — the previous record's own account of
@@ -586,12 +618,12 @@ impl<'a> TreeWriter<'a> {
             }
             sink.report(done as u64, Some(total), &item.to);
 
-            let target = safe_join(self.root, &item.to).map_err(|err| {
-                CoreError::SafetyRefused(format!(
-                    "'{}' does not stay inside the distribution root: {err}",
-                    item.to
-                ))
-            })?;
+            // The *host* path, which is `item.to` for every destination a
+            // Windows filesystem can carry verbatim and an escaped form for
+            // the handful it cannot (`AUX`, `Prices: 1993`) — ART-160. The
+            // AmigaDOS name stays in `item.to`, which is what every record,
+            // key and map below is built from.
+            let target = super::host_destination(self.root, &item.to)?;
 
             // Both branches below create ancestors, so this sits above both.
             self.count_missing_prefixes(&item.to);
@@ -649,6 +681,7 @@ impl<'a> TreeWriter<'a> {
                 &item.to,
                 FileRecord {
                     path: item.to.clone(),
+                    host_path: host_path_of(&item.to),
                     component: item.component.clone(),
                     media: item.media.clone(),
                     sha256: sha256_bytes(&bytes),
@@ -817,11 +850,10 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
             });
         }
 
-        let target = safe_join(root, USER_STARTUP_PATH).map_err(|err| {
-            CoreError::SafetyRefused(format!(
-                "'{USER_STARTUP_PATH}' does not stay inside the distribution root: {err}"
-            ))
-        })?;
+        // Through `host_destination` like every other item, even though
+        // `S/User-Startup` is a name every filesystem carries — one placer,
+        // one rule (ART-160).
+        let target = super::host_destination(root, USER_STARTUP_PATH)?;
 
         // A missing `S` drawer is created, exactly like every other item's
         // missing parent above — see the module doc comment.
@@ -894,6 +926,7 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
         for contribution in &plan.user_startup {
             files.push(FileRecord {
                 path: USER_STARTUP_PATH.to_string(),
+                host_path: host_path_of(USER_STARTUP_PATH),
                 component: contribution.component.clone(),
                 media: String::new(),
                 sha256: merged_sha256.clone(),
@@ -1170,12 +1203,10 @@ fn undeclared_overwrites(
     let mut undeclared = Vec::new();
     let mut unrecorded = Vec::new();
     for item in items.iter().filter(|item| !item.is_dir) {
-        let target = safe_join(tree_root, &item.to).map_err(|err| {
-            CoreError::SafetyRefused(format!(
-                "'{}' does not stay inside the distribution root: {err}",
-                item.to
-            ))
-        })?;
+        // The host path, not the AmigaDOS one — a file the tree carries
+        // as `_AUX` is `Storage/DOSDrivers/AUX` to everything else here
+        // (ART-160).
+        let target = super::host_destination(tree_root, &item.to)?;
         if !target.is_file() {
             continue;
         }
@@ -1334,6 +1365,146 @@ mod tests {
 
     fn media_folder(dir: &Path) -> PathBuf {
         dir.join("media")
+    }
+
+    /// A plan whose destinations a Windows filesystem will not carry
+    /// verbatim — ART-160.
+    ///
+    /// `Storage/DOSDrivers/AUX` is not invented: it is on the owner's own
+    /// AmigaOS 3.9 disc, and `AUX` is one of the 22 device names Windows has
+    /// reserved since DOS. `Devs/Prices: 1993` is the other half of the same
+    /// problem and the harder one — a colon is legal in an AmigaDOS filename
+    /// and NTFS refuses it outright, so before this fix `apply()` did not
+    /// write it under a wrong name, it failed with a raw OS error partway
+    /// through building the tree.
+    fn planned_with_host_hostile_names() -> (InstallPlan, PathBuf) {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = fixtures::scratch(&format!("apply-hostile-{n}"));
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        fixtures::media(
+            &folder,
+            "Workbench3.9",
+            "wb.adf",
+            &[("AUX", b"aux-driver", 0x00), ("Prices", b"listing", 0x00)],
+        );
+
+        let mut media_paths = BTreeMap::new();
+        media_paths.insert("Workbench3.9".to_string(), folder.join("wb.adf"));
+
+        let items = vec![
+            PlanItem {
+                component: "workbench-base".into(),
+                media: "Workbench3.9".into(),
+                from: "AUX".into(),
+                to: "Storage/DOSDrivers/AUX".into(),
+                is_dir: false,
+                bytes: 10,
+            },
+            PlanItem {
+                component: "workbench-base".into(),
+                media: "Workbench3.9".into(),
+                from: "Prices".into(),
+                to: "Devs/Prices: 1993".into(),
+                is_dir: false,
+                bytes: 7,
+            },
+        ];
+        let total_bytes = items.iter().map(|i| i.bytes).sum();
+
+        let plan = InstallPlan {
+            release: "AmigaOS 3.9".into(),
+            items,
+            refusals: Vec::new(),
+            packages: Vec::new(),
+            package_media: BTreeMap::new(),
+            total_bytes,
+            components_on: vec!["workbench-base".into()],
+            paired_rom: None,
+            media_paths,
+            user_startup: Vec::new(),
+        };
+        (plan, dir)
+    }
+
+    /// **ART-160.** The tree escapes what the host cannot carry, and the
+    /// manifest keeps both names.
+    #[test]
+    fn a_name_windows_reserves_is_escaped_on_disk_and_recorded_in_the_manifest() {
+        let (plan, dir) = planned_with_host_hostile_names();
+        let root = dir.join("dist");
+        apply(&plan, &root, &NoProgress).unwrap();
+
+        // On disk under the escaped name...
+        assert!(root
+            .join("Storage")
+            .join("DOSDrivers")
+            .join("_AUX")
+            .is_file());
+        assert!(!root.join("Storage").join("DOSDrivers").join("AUX").exists());
+        // ...and the colon one exists at all, which is the half that used to
+        // fail with an OS error rather than land wrong.
+        assert!(root.join("Devs").join("Prices_ 1993").is_file());
+
+        let manifest: DistributionManifest =
+            serde_json::from_str(&std::fs::read_to_string(root.join(MANIFEST_FILE_NAME)).unwrap())
+                .unwrap();
+
+        // `path` is always the AmigaDOS name — it is what has to reach the
+        // volume, and what `verify_volume` looks up on it.
+        let aux = manifest
+            .files
+            .iter()
+            .find(|f| f.path == "Storage/DOSDrivers/AUX")
+            .expect("the manifest records the Amiga name");
+        assert_eq!(
+            aux.host_path.as_deref(),
+            Some("Storage/DOSDrivers/_AUX"),
+            "and the host name it actually landed at, beside it"
+        );
+
+        let prices = manifest
+            .files
+            .iter()
+            .find(|f| f.path == "Devs/Prices: 1993")
+            .expect("the manifest records the Amiga name");
+        assert_eq!(prices.host_path.as_deref(), Some("Devs/Prices_ 1993"));
+    }
+
+    /// The round trip that makes the escape safe: `core/preload` reads the
+    /// Amiga name back off the manifest rather than off the host filename,
+    /// so what reaches the card is `AUX`, not `_AUX`.
+    ///
+    /// Asked here, in the module that wrote the manifest, because the pairing
+    /// is only correct if both halves agree — `core/preload`'s own tests pin
+    /// the reader against hand-written records, and this pins the reader
+    /// against a manifest `apply()` actually produced.
+    #[test]
+    fn the_amiga_name_is_recoverable_from_the_tree_apply_wrote() {
+        let (plan, dir) = planned_with_host_hostile_names();
+        let root = dir.join("dist");
+        apply(&plan, &root, &NoProgress).unwrap();
+
+        let names = crate::core::preload::amiga_names::AmigaNames::read(&root);
+        assert_eq!(names.name_for("Storage/DOSDrivers/_AUX"), Some("AUX"));
+        assert_eq!(names.name_for("Devs/Prices_ 1993"), Some("Prices: 1993"));
+    }
+
+    /// A tree with nothing to escape carries no `hostPath` at all — the field
+    /// is absent from the JSON, not `null`, so a three-thousand-file manifest
+    /// is unchanged by this feature existing.
+    #[test]
+    fn an_ordinary_tree_records_no_host_path() {
+        let (plan, dir) = planned();
+        let root = dir.join("dist");
+        apply(&plan, &root, &NoProgress).unwrap();
+
+        let text = std::fs::read_to_string(root.join(MANIFEST_FILE_NAME)).unwrap();
+        assert!(!text.contains("hostPath"), "{text}");
+        let manifest: DistributionManifest = serde_json::from_str(&text).unwrap();
+        assert!(manifest.files.iter().all(|f| f.host_path.is_none()));
+        assert!(crate::core::preload::amiga_names::AmigaNames::read(&root).is_empty());
     }
 
     #[test]

@@ -1422,6 +1422,7 @@ mod tests {
             bytes: 0,
             protection: None,
             overwrote: None,
+            host_path: None,
         }
     }
 
@@ -1764,6 +1765,7 @@ mod tests {
                 bytes: 0,
                 protection: None,
                 overwrote: None,
+                host_path: None,
             }],
         );
 
@@ -2050,6 +2052,7 @@ mod tests {
                 bytes: 3,
                 protection: Some(0x20),
                 overwrote: None,
+                host_path: None,
             }],
             paired_rom: None,
         };

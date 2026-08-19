@@ -422,36 +422,6 @@ leave it unrecorded: a hazard predicted before the work and untouched after
 it should be visible in the register of what ART owes, beside ART-157, rather
 than only in a review nobody reads again.
 
-**ART-160** 🟡 **`osinstall::apply()` writes host filenames without going
-through `windows_safe_name`, and the one machine that measured a reserved
-device name is not every machine** — *found 2026-08-19 by the whole-branch
-review (finding 15); carried until now only in a run ledger, which is not
-where what ART owes is recorded*
-`src-tauri/src/core/osinstall/apply.rs` ·
-`src-tauri/src/core/volume/write/copy.rs:698` (`windows_safe_name`) ·
-
-`copy.rs` holds the list of 22 names Windows reserves for devices (`AUX`,
-`CON`, `NUL`, `COM1`…) and a function that renames around them. `apply()`
-does not call it: every destination goes through `safe_join` — which is the
-security boundary and is not in question — and then straight to the
-filesystem under whatever name the media carried.
-
-ART-155's investigation measured the specific case that prompted this, on
-this machine: a file literally named `AUX`, from
-`Storage/DOSDrivers/AUX` on the owner's real AmigaOS 3.9 disc, **writes and
-reads back correctly** on Windows 11 Pro 26200, by a plain path and by a
-`\\?\` path alike. That measurement is real and it is why nothing is broken
-today. It is also one build of one Windows on one filesystem: ART-155's own
-Fixed entry says plainly that it "does not mean reserved device names are a
-non-issue everywhere", and nothing has measured an older Windows, a network
-share, or a non-NTFS volume.
-
-Not fixed. The fix is not simply "call `windows_safe_name`": renaming a file
-on the way into a distribution tree makes the tree stop matching
-`distribution.json`, and `verify` reads that manifest — so a rename has to be
-recorded, not just performed. That is engine work with its own design, not a
-one-line call.
-
 **ART-161** 🔵 **The same disc is fully walked three to four times per
 install, because `scan::identify` opens a `CdSource` to read one string and
 then drops it** — *found 2026-08-19 by the whole-branch review (finding 12)*
@@ -1088,6 +1058,83 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-160** 🟡 **`osinstall::apply()` writes host filenames without going
+through `windows_safe_name`, and the one machine that measured a reserved
+device name is not every machine** — *found 2026-08-19 by the whole-branch
+review (finding 15); fixed 2026-08-20 on `debt-wave-a`*
+`src-tauri/src/core/osinstall/mod.rs` (`host_destination`, `host_relative`) ·
+`src-tauri/src/core/osinstall/apply.rs` (`FileRecord::host_path`) ·
+`src-tauri/src/core/preload/amiga_names.rs` · `src-tauri/src/tools/hst_imager.rs`
+
+`copy.rs` holds the list of 22 names Windows reserves for devices (`AUX`,
+`CON`, `NUL`, `COM1`…) and a function that renames around them. `apply()` did
+not call it: every destination went through `safe_join` — the security
+boundary, never in question — and then straight to the filesystem under
+whatever name the media carried.
+
+**What the round trip turned out to be, measured before anything changed.**
+The entry warned that a rename "has to be recorded, not just performed", and
+the reason is sharper than it first looked: `core/preload/native.rs`'s
+`collect_into` builds the AmigaDOS path it copies onto the card **out of the
+host filenames it walks**, so a tree that quietly stored `_AUX` would have put
+`_AUX` on the Amiga volume — and `verify_volume`, which looks the manifest's
+`path` up on that volume, would then fail a file that is really there under
+the wrong name. `verify` reads the *volume*, not the host tree, so the
+manifest's `path` must stay the AmigaDOS name; nothing about verify wanted the
+host name.
+
+**Fixed 2026-08-20**, in three parts:
+
+1. **One placer, one rule.** `osinstall::host_destination` is now the only way
+   a destination becomes a host path, and `apply()`, `undeclared_overwrites`
+   and `collide::classify_incoming` all go through it (the last two mattered:
+   both ask `target.is_file()` about a tree `apply` wrote, and asking under
+   the un-escaped name would have reported "nothing there" for a file that
+   is). It asks the two questions in the order
+   `commands/volume_write.rs::folder_destination` already established —
+   containment of the **raw** name first, because `windows_safe_name` turns
+   `..\..\Startup` into a name that passes containment trivially, then host
+   legality of the escaped one — and escapes **segment by segment**, since
+   `windows_safe_name` maps `/` to `_` and would otherwise flatten
+   `Storage/DOSDrivers/AUX` into one filename.
+2. **The Amiga name is recorded, not lost.** `FileRecord::path` is still
+   always the AmigaDOS path; `FileRecord::host_path` (`hostPath`,
+   `#[serde(default, skip_serializing_if)]`) records where the file actually
+   landed, and only when the two differ — a tree with nothing to escape
+   carries no `hostPath` at all, pinned by a test.
+3. **The name reaches the volume.** `core/preload/amiga_names.rs` reads that
+   pairing back and hands `collect_into` the AmigaDOS name per node, so a
+   renamed *drawer* translates once for everything beneath it. It declares its
+   own two-field record rather than importing `core/osinstall`'s manifest type
+   — the lower module reads only what it needs and serde ignores the rest,
+   the shape CLAUDE.md prescribes. A folder with no manifest, or one that will
+   not parse, renames nothing.
+
+**And the fallback refuses rather than getting it wrong.** `hst-imager` copies
+a folder exactly as it finds it and cannot be told a file's real name, so
+`HstImager::copy_in` now refuses a tree whose manifest records any escaped
+name — before the tool is launched, naming every `host → amiga` pair. That is
+the same typed-capability-gap shape as `NonAsciiPfs3Names` and
+`ForeignRdbEmbedNotSupported`, with the default and the fallback the other way
+round: here it is the *fallback* that cannot. New error id
+`ART-ESCAPED-NAME-NEEDS-NATIVE`; nothing existing was renumbered.
+
+Behaviour change worth stating: `Storage/DOSDrivers/AUX` off the owner's real
+AmigaOS 3.9 disc now appears in the tree as `Storage/DOSDrivers/_AUX`, and
+`Devs/Prices: 1993` — a legal AmigaDOS name that NTFS refuses outright, so
+`apply()` used to fail on it with a raw OS error partway through building a
+tree — now lands as `Devs/Prices_ 1993`. Both reach the card under their
+AmigaDOS names.
+
+Tests: `core::osinstall::apply::tests::a_name_windows_reserves_is_escaped_on_disk_and_recorded_in_the_manifest`,
+`core::osinstall::apply::tests::the_amiga_name_is_recoverable_from_the_tree_apply_wrote`
+(the round trip, asked against a manifest `apply()` really wrote),
+`core::osinstall::apply::tests::an_ordinary_tree_records_no_host_path`,
+`core::preload::native::tests::an_escaped_host_name_is_copied_under_its_amiga_name`,
+`core::preload::native::tests::a_folder_without_a_manifest_is_copied_verbatim`,
+the five in `core::preload::amiga_names::tests`, and
+`tools::hst_imager::tests::a_tree_with_escaped_names_is_refused_before_the_tool_runs`.
 
 **ART-168** 🔴 **An LHA entry name's non-ASCII bytes are replaced with U+FFFD
 rather than decoded, so a real Amiga drawer name becomes a name no Amiga can

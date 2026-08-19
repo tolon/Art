@@ -304,6 +304,20 @@ impl VolumeFormatter for HstImager {
         source: &Path,
         sink: &dyn ProgressSink,
     ) -> CoreResult<CopySummary> {
+        // Refused before anything is launched, never partway (ART-160). An
+        // external tool copies the folder as it finds it, so a file the
+        // distribution tree had to store as `_AUX` would reach the Amiga
+        // under that name. `NativeFormatter` reads the tree's own manifest
+        // and puts `AUX` back; this one cannot be told.
+        let names = crate::core::preload::amiga_names::AmigaNames::read(source);
+        if !names.is_empty() {
+            return Err(CoreError::EscapedNamesNeedNativeCopy {
+                pairs: names
+                    .pairs()
+                    .map(|(host, amiga)| (host.to_string(), amiga.to_string()))
+                    .collect(),
+            });
+        }
         self.run(&copy_args(image, slot, drive, source), sink)?;
         // The count comes from asking the volume, not from reading the copy's
         // own log. A listing that fails leaves the copy standing: the files
@@ -325,6 +339,50 @@ mod tests {
 
     fn img() -> PathBuf {
         PathBuf::from("E:").join("cards").join("card.img")
+    }
+
+    /// **ART-160.** A distribution tree that had to escape a name is refused
+    /// **before the tool is launched** — the exe path here does not exist, so
+    /// a version that ran first would fail with "could not run", and the
+    /// refusal this asserts is the one that never got that far.
+    ///
+    /// `hst-imager` copies a folder exactly as it finds it, so a file the
+    /// tree stores as `_AUX` would reach the Amiga under that name.
+    /// `NativeFormatter` reads the tree's manifest and puts `AUX` back; this
+    /// one has no way to be told, which makes it a typed capability gap of
+    /// the same kind as `ForeignRdbEmbedNotSupported`, only with the default
+    /// and the fallback the other way round.
+    #[test]
+    fn a_tree_with_escaped_names_is_refused_before_the_tool_runs() {
+        let dir = std::env::temp_dir().join(format!(
+            "art-hst-escaped-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("distribution.json"),
+            br#"{"release":"AmigaOS 3.9","builtFrom":[],"files":[
+                 {"path":"Storage/DOSDrivers/AUX","hostPath":"Storage/DOSDrivers/_AUX",
+                  "component":"workbench-base","media":"Workbench3.9",
+                  "sha256":"","bytes":6}]}"#,
+        )
+        .unwrap();
+
+        let tool = HstImager::at(dir.join("nothing-here.exe"));
+        let err = tool
+            .copy_in(&img(), None, "DH0", &dir, &crate::core::jobs::NoProgress)
+            .unwrap_err();
+
+        assert_eq!(err.code(), "ART-ESCAPED-NAME-NEEDS-NATIVE");
+        let msg = format!("{err}");
+        assert!(msg.contains("Storage/DOSDrivers/_AUX"), "{msg}");
+        assert!(msg.contains("AUX"), "{msg}");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// The arguments SD-0 ran, in the order it ran them. Pinned because a

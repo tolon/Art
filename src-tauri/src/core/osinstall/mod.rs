@@ -72,6 +72,8 @@ pub mod verify;
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::error::{CoreError, CoreResult};
+
 /// Whether a rule takes one file or a whole subtree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -217,6 +219,70 @@ pub fn destination_key(path: &str) -> String {
 /// [`destination_key`].
 pub fn same_destination(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
+}
+
+/// The **host** path a distribution-tree destination is written at (ART-160).
+///
+/// A distribution tree is an Amiga volume held in a host folder, so its file
+/// names are AmigaDOS names — and AmigaDOS allows names a Windows filesystem
+/// does not. `Storage/DOSDrivers/AUX` is on the owner's own AmigaOS 3.9 disc,
+/// and `AUX` is one of the 22 device names Windows has reserved since DOS;
+/// `Prices: 1993` is a legal AmigaDOS filename that NTFS refuses outright.
+/// Every other "copy out" path in ART already escapes those through
+/// [`windows_safe_name`](crate::core::volume::write::copy::windows_safe_name),
+/// and this module wrote straight through under whatever name the media
+/// carried. It happens to work on Windows 11 Pro 26200 for the reserved
+/// names (measured while closing ART-155, plain path and `\\?\` path alike)
+/// and it is one build of one Windows on one filesystem.
+///
+/// # Two questions, in this order, never merged into one
+///
+/// The same shape `commands/volume_write.rs::folder_destination` already
+/// uses, and for the same reason:
+///
+/// 1. **Containment**, of the *raw* destination. `windows_safe_name` turns
+///    `..\..\Startup` into `_.._..Startup` — a name that passes containment
+///    trivially — so asking containment afterwards would be asking a question
+///    whose answer had already been changed.
+/// 2. **Host legality**, of the escaped path: what the filesystem will
+///    actually accept.
+///
+/// # Segment by segment, because a destination is a path
+///
+/// `windows_safe_name` escapes `/` to `_`, so handing it a whole destination
+/// would flatten `Storage/DOSDrivers/AUX` into one filename. Each segment is
+/// escaped on its own and the `/`s are put back.
+///
+/// # The Amiga name is not lost
+///
+/// A renamed file's *AmigaDOS* name stays in `distribution.json`
+/// ([`apply::FileRecord::path`](apply::FileRecord::path) is always the Amiga
+/// path, never the host one), and the host path it actually landed at is
+/// recorded beside it in [`apply::FileRecord::host_path`](apply::FileRecord::host_path).
+/// That pair is what `core/preload` reads back so the *Amiga* name — not the
+/// escaped host one — is what reaches the finished volume. Escaping without
+/// recording would put `_AUX` on the card and make `verify_volume`, which
+/// looks the manifest's `path` up on the volume, fail a file that is really
+/// there under the wrong name.
+pub fn host_destination(root: &std::path::Path, to: &str) -> CoreResult<std::path::PathBuf> {
+    let refuse = |err: crate::core::security::PathTraversalError| {
+        CoreError::SafetyRefused(format!(
+            "'{to}' does not stay inside the distribution root: {err}"
+        ))
+    };
+    crate::core::security::safe_join(root, to).map_err(refuse)?;
+    crate::core::security::safe_join(root, &host_relative(to)).map_err(refuse)
+}
+
+/// The escaped, `/`-separated form of `to` — see [`host_destination`].
+///
+/// Equal to `to` for every destination a host filesystem can carry verbatim,
+/// which is the overwhelming majority of a real install tree.
+pub fn host_relative(to: &str) -> String {
+    to.split('/')
+        .map(crate::core::volume::write::copy::windows_safe_name)
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Why ART cannot place a package's files from the host at all — a

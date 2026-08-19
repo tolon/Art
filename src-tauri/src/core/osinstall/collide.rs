@@ -120,7 +120,6 @@ use super::apply::{DistributionManifest, MANIFEST_FILE_NAME};
 use super::package;
 use crate::core::amigaver;
 use crate::core::error::{CoreError, CoreResult};
-use crate::core::security::path::safe_join;
 
 /// How much of a size-mismatched (or oversized) pair `preview` reads
 /// looking for a `$VER:` marker — see the module doc comment's "The bound"
@@ -385,12 +384,11 @@ fn classify_incoming(
     entry: &Incoming<'_>,
     manifest: &mut Option<DistributionManifest>,
 ) -> CoreResult<Option<CollisionReport>> {
-    let target = safe_join(tree_root, &entry.to).map_err(|err| {
-        CoreError::SafetyRefused(format!(
-            "'{}' does not stay inside the distribution root: {err}",
-            entry.to
-        ))
-    })?;
+    // The host path, not the AmigaDOS one: a destination the tree had to
+    // escape (`AUX` → `_AUX`) is still there to be compared against, and
+    // asking under its Amiga name would report "nothing to collide with"
+    // for a file that is really present (ART-160).
+    let target = super::host_destination(tree_root, &entry.to)?;
     if !target.is_file() {
         return Ok(None);
     }
@@ -798,6 +796,7 @@ mod tests {
                 bytes: 0,
                 protection: None,
                 overwrote: None,
+                host_path: None,
             }],
             paired_rom: None,
         };
