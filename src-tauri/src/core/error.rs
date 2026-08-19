@@ -136,6 +136,27 @@ pub enum CoreError {
             .join(", ")
     )]
     EscapedNamesNeedNativeCopy { pairs: Vec<(String, String)> },
+
+    /// The input is **well-formed** and larger than a bound ART sets for
+    /// itself — ART-158.
+    ///
+    /// [`Malformed`](Self::Malformed) says "this file is not what it claims
+    /// to be", and it was carrying two quite different meanings: a genuinely
+    /// damaged ISO9660 disc, and a perfectly valid one holding more than
+    /// `core::iso`'s walk caps (`MAX_WALK_ENTRIES` 100,000 entries,
+    /// `MAX_WALK_DEPTH` 16 levels) will read. A user seeing
+    /// `ART-FORMAT-MALFORMED` on the second one is being told their disc is
+    /// broken when the truth is that ART stops early, and the two want
+    /// opposite answers: one is "this medium cannot be used", the other is
+    /// "ART's limit, which could be raised".
+    ///
+    /// `subject` names the limit that was hit in ART's own terms (a caller
+    /// passes something like `"iso9660 walk"`), `detail` says what it is and
+    /// what the consequence would have been. Nothing existing was renumbered
+    /// to add this — only the two limit refusals in
+    /// `core::osinstall::source_cd::CdSource::open` moved onto it.
+    #[error("{subject}: {detail}")]
+    LimitExceeded { subject: String, detail: String },
 }
 
 /// The sentence for [`CoreError::NonAsciiPfs3Names`] — pulled out of the
@@ -181,6 +202,7 @@ impl CoreError {
             Self::NonAsciiPfs3Names { .. } => "ART-PFS3-NON-ASCII-NAME",
             Self::ForeignRdbEmbedNotSupported => "ART-NATIVE-EMBED-UNSUPPORTED",
             Self::EscapedNamesNeedNativeCopy { .. } => "ART-ESCAPED-NAME-NEEDS-NATIVE",
+            Self::LimitExceeded { .. } => "ART-LIMIT-EXCEEDED",
         }
     }
 
@@ -222,6 +244,10 @@ mod tests {
             CoreError::ForeignRdbEmbedNotSupported,
             CoreError::EscapedNamesNeedNativeCopy {
                 pairs: vec![("Storage/DOSDrivers/_AUX".into(), "AUX".into())],
+            },
+            CoreError::LimitExceeded {
+                subject: "iso9660 walk".into(),
+                detail: "x".into(),
             },
         ];
 

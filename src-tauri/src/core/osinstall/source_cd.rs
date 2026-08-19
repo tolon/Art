@@ -75,12 +75,25 @@ impl CdSource {
     /// the file-manager path, either flag is refused rather than carried
     /// through — the one call site allowed to decide "some of the disc is
     /// good enough".
+    ///
+    /// **Refused as [`CoreError::LimitExceeded`], not `Malformed`** —
+    /// ART-158. Both refusals used to carry `ART-FORMAT-MALFORMED`, which is
+    /// the identifier for "this file is not what it claims to be". A disc
+    /// past these caps is exactly what it claims to be; it is ART that stops
+    /// early, and the two failures want opposite answers from whoever reads
+    /// them ("this medium cannot be used" against "ART's own limit, which
+    /// could be raised"). `IsoImage::open`'s own errors above still come back
+    /// as `Malformed`, because a disc that fails *there* really is broken.
     pub fn open(path: &Path) -> CoreResult<Self> {
         let image = IsoImage::open(path)?;
         let walk = image.walk()?;
+        // `LimitExceeded`, not `Malformed` — ART-158. Such a disc is
+        // **valid**; it is ART that stops early, and telling the user their
+        // disc is broken would be telling them the wrong thing about their
+        // own material (§89). `Malformed` stays for a disc that really is.
         if walk.truncated {
-            return Err(CoreError::Malformed {
-                format: "iso9660".into(),
+            return Err(CoreError::LimitExceeded {
+                subject: "iso9660 walk".into(),
                 detail: format!(
                     "this disc holds more than {MAX_WALK_ENTRIES} entries; ART stopped \
                      reading before it reached the end of the tree, so an install plan \
@@ -89,8 +102,8 @@ impl CdSource {
             });
         }
         if walk.depth_limited {
-            return Err(CoreError::Malformed {
-                format: "iso9660".into(),
+            return Err(CoreError::LimitExceeded {
+                subject: "iso9660 walk".into(),
                 detail: format!(
                     "this disc nests directories deeper than {MAX_WALK_DEPTH} levels; ART \
                      stopped descending before it reached the bottom of the tree, so an \
@@ -333,6 +346,80 @@ mod tests {
         let path = folder.join("os39.iso");
         std::fs::write(&path, bytes).unwrap();
         path
+    }
+
+    /// **ART-158.** A disc nested deeper than `MAX_WALK_DEPTH` is refused
+    /// as a **limit**, not as a malformed disc.
+    ///
+    /// It is a perfectly valid ISO9660 image — `IsoImage::open` reads it, and
+    /// `walk()` returns `Ok` with what it found — so `ART-FORMAT-MALFORMED`
+    /// was telling the user their own disc was broken when the truth is that
+    /// ART stops descending at 16 levels. The identifier is asserted, not
+    /// just the variant: `code()` is what a user quotes and a maintainer
+    /// searches for.
+    #[test]
+    fn a_disc_deeper_than_art_will_walk_is_a_limit_not_a_malformed_disc() {
+        let folder = std::env::temp_dir().join(format!(
+            "art-cdsource-toodeep-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+
+        // Twenty levels, past MAX_WALK_DEPTH's sixteen.
+        let mut node = dir("L20", "L20", vec![file("LEAF.;1", "Leaf", b"deep")]);
+        for level in (1..20).rev() {
+            node = dir(&format!("L{level}"), &format!("L{level}"), vec![node]);
+        }
+        let bytes = IsoBuilder {
+            volume: "DEEP".to_string(),
+            joliet_volume: "DEEP".to_string(),
+            joliet: true,
+            children: vec![node],
+            ..Default::default()
+        }
+        .build();
+        let path = folder.join("deep.iso");
+        std::fs::write(&path, bytes).unwrap();
+
+        let err = CdSource::open(&path).unwrap_err();
+        assert_eq!(err.code(), "ART-LIMIT-EXCEEDED");
+        assert!(
+            matches!(err, CoreError::LimitExceeded { .. }),
+            "a valid disc past ART's cap is not malformed: {err}"
+        );
+        let msg = format!("{err}");
+        assert!(msg.contains(&MAX_WALK_DEPTH.to_string()), "{msg}");
+
+        std::fs::remove_dir_all(&folder).ok();
+    }
+
+    /// The other half of ART-158's boundary: a disc that really is damaged
+    /// is still `Malformed`, so the two classes are apart rather than one
+    /// having swallowed the other.
+    ///
+    /// Damaged by truncation, which is a real way a disc image arrives
+    /// broken: the descriptors still read, the root directory record still
+    /// says where its extent is, and that extent is now past the end of the
+    /// file.
+    #[test]
+    fn a_disc_that_is_damaged_is_still_malformed() {
+        let path = disc("truncated");
+        let bytes = std::fs::read(&path).unwrap();
+        // Sector 16 is the Primary descriptor, 17 the Joliet one, 18 the
+        // terminator — keep those and cut everything the root points at.
+        std::fs::write(&path, &bytes[..19 * 2048]).unwrap();
+
+        let err = CdSource::open(&path).unwrap_err();
+        assert_eq!(err.code(), "ART-FORMAT-MALFORMED", "{err}");
+        assert!(
+            !matches!(err, CoreError::LimitExceeded { .. }),
+            "a damaged disc is not a disc past a limit"
+        );
     }
 
     /// The recipe names a volume, never a filename — the same rule

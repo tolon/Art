@@ -322,31 +322,6 @@ the G9 pairing wiring to enforce it — engine code touching `core/osinstall/mod
 (`Condition`, `condition_holds`), `plan.rs` (`rom_requirement`), and the wire
 types (`PairedRom`, `src/lib/osinstall.ts`), its own change, not built here.
 
-**ART-158** 🔵 **`CoreError::Malformed` now covers two different failure
-classes for an ISO9660 disc — a corrupt structure, and a disc merely larger
-than `CdSource`'s own walk limits** — *found 2026-08-19, Task 1, ruled parked
-rather than fixed; recorded here per the plan's ruling at the time (written
-when this documentation task was numbered differently)*
-`src-tauri/src/core/osinstall/source_cd.rs::CdSource::open`,
-`src-tauri/src/core/iso/mod.rs` (`MAX_WALK_ENTRIES`, `MAX_WALK_DEPTH`) ·
-
-`IsoImage::walk()` can stop short of the whole disc and still return `Ok`
-with whatever it found, because its other caller — a file-manager listing —
-would rather show a partial tree than nothing. An install source must not:
-`CdSource::open` now checks `walk.truncated`/`walk.depth_limited` and refuses
-with `CoreError::Malformed { format: "iso9660", .. }`, naming the limit hit,
-rather than silently building a plan from a partial listing. The disc this
-refusal exists for is **valid**, not corrupt — `ART-FORMAT-MALFORMED` is now
-the identifier a user sees for both a genuinely damaged disc and one that
-merely holds more than `CdSource` will read (100,000 entries / 16 levels of
-nesting; the owner's own real disc, 7,609 files / 975 folders, trips neither).
-
-Not fixed — the enum has no limit-shaped variant, and adding one touches
-every module's error surface, which is its own change, not this task's. Cost
-today is zero: nothing this plan tested comes close to either limit. Scoped
-to `CdSource` only; `core/iso`'s other caller (`IsoSource`) has the same gap
-and was deliberately left alone, a different module's contract.
-
 **ART-159** 🟠 **Two of spec §5's three predicted hazards for AmigaOS 3.9 —
 `SetPatch`/the boot sequence, and the three language-variant trees — went
 untouched by every task on the branch and were recorded nowhere** — *found
@@ -982,6 +957,45 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-158** 🔵 **`CoreError::Malformed` covered two different failure classes
+for an ISO9660 disc — a corrupt structure, and a disc merely larger than
+`CdSource`'s own walk limits** — *found 2026-08-19, Task 1, ruled parked
+rather than fixed; fixed 2026-08-20 on `debt-wave-a`*
+`src-tauri/src/core/error.rs` (`CoreError::LimitExceeded`) ·
+`src-tauri/src/core/osinstall/source_cd.rs` (`CdSource::open`)
+
+`IsoImage::walk()` can stop short of the whole disc and still return `Ok` with
+whatever it found, because its other caller — a file-manager listing — would
+rather show a partial tree than nothing. An install source must not, so
+`CdSource::open` checks `walk.truncated`/`walk.depth_limited` and refuses. It
+refused with `CoreError::Malformed { format: "iso9660", .. }`, so
+`ART-FORMAT-MALFORMED` was the identifier a user saw for both a genuinely
+damaged disc and one that merely holds more than `CdSource` will read (100,000
+entries / 16 levels of nesting). The disc that refusal exists for is **valid**,
+and the two failures want opposite answers from whoever reads them: "this
+medium cannot be used" against "ART's own limit, which could be raised".
+
+**Fixed 2026-08-20** with a new variant, `CoreError::LimitExceeded { subject,
+detail }` → **`ART-LIMIT-EXCEEDED`**. `subject` names the limit in ART's own
+terms (`"iso9660 walk"`) and `detail` says what it is and what the consequence
+would have been. **Only the two limit cases moved.** Nothing existing was
+renumbered — `code()`'s ids are user-facing and stable, so `Malformed` keeps
+`ART-FORMAT-MALFORMED` and every other caller of it is untouched, including
+`IsoImage::open`'s own errors one line above the two that moved.
+
+Still scoped to `CdSource`. `core/iso`'s other caller (`IsoSource`) does not
+refuse on these flags at all, which is a different gap in a different module's
+contract and is deliberately still not this issue's.
+
+Tests: `core::osinstall::source_cd::tests::a_disc_deeper_than_art_will_walk_is_a_limit_not_a_malformed_disc`
+(a real 20-level ISO built in a tempdir, asserting `code() ==
+"ART-LIMIT-EXCEEDED"` — the identifier, not just the variant, since the id is
+what a user quotes) and
+`core::osinstall::source_cd::tests::a_disc_that_is_damaged_is_still_malformed`
+(the other side of the boundary: a truncated disc is still
+`ART-FORMAT-MALFORMED`, so one class has not swallowed the other).
+`core::error::tests::every_variant_has_a_distinct_code` covers the new id.
 
 **ART-173** ✅ 🟡 **`core::cbm`'s and `core::detect`'s test scratch
 directories can be shared by two threads, so one test reads another's
