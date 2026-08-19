@@ -22,8 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   component today, `workbench-base`. It is roughly 6 MB of a 469 MB disc,
   and `Contribution/`, `Locale`, PowerPC and `Emergency-Boot` are all
   absent by design — the further components wait on a 3.9 tree actually
-  being booted (see Known limitation below). AmigaOS 3.2's recipe, by
-  contrast, has 26.
+  being booted, which has now happened (see below). AmigaOS 3.2's recipe,
+  by contrast, has 26.
 - **A disc dropped on the "What can I do?" panel now offers the OS
   Builder**, alongside the actions it already offered for a disc image —
   so an install CD works the same way a floppy image already does: drop it
@@ -53,13 +53,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   name on a disc, as it already was on a floppy image, instead of quietly
   producing an install plan missing everything that rule was meant to copy.
 
-#### Known limitation
-- **The AmigaOS 3.9 tree built this way has not yet been booted.** AmigaOS
-  3.2's tree was proven by starting it under an emulator with a licensed
-  Kickstart ROM and watching it reach a clean Workbench desktop; 3.9's has
-  not been tried the same way yet, because that step needs a person
-  sitting at the emulator, not something ART can do on its own. Until
-  someone does that, treat a 3.9 tree as built but unverified.
+- **The tree boots.** A 3.9 tree built this way was started under WinUAE
+  with a licensed Kickstart 3.1 ROM and reached a clean Workbench desktop,
+  with no error along the way — the same proof AmigaOS 3.2's tree was held
+  to. The emulator configuration is the one ART writes itself, not a
+  hand-made one.
+
+#### Fixed after driving it by hand
+- **ART now tells you when it will not install, instead of appearing to do
+  nothing.** If a folder already exists where the tree would go, ART
+  refuses — it never builds over what is already there, which is the right
+  thing and has protected real data. But it was refusing *silently*: the
+  button stopped saying "Installing", nothing else appeared, and the only
+  record was in the operation log. Now an occupied folder is caught while
+  you are choosing it, with a sentence explaining what to do, and any
+  install that fails or is cancelled says so beside the button.
+- **The install shows how far it has got.** A percentage, the file count
+  behind it, and the name of the file being written — instead of the word
+  "Installing" and twenty seconds of nothing changing.
+- **The "Verify against a card" fields explain themselves.** "Amiga volume
+  image" sat beside an empty box with nothing to say what belonged in it.
+  It is the card or `.hdf` the tree was copied *onto* — not the ISO you
+  installed from, and not the folder above it. That whole section is
+  optional and only useful after you have written the tree to a real Amiga
+  volume; it now says so.
 
 ## [0.8.5] - 2026-08-18
 

@@ -683,3 +683,67 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod real_boot_hook {
+    //! Boot a real distribution tree under WinUAE — the bar this project
+    //! sets for a recipe and the one thing its own tests cannot reach.
+    //!
+    //! A 3.2 tree was proved by booting AmigaOS to a clean Workbench with
+    //! the owner's licensed ROM; §89 says a tree that has not booted is not
+    //! a tree ART may call working. This hook builds the config ART itself
+    //! would write — `generate_uae_config`, not a hand-typed `.uae` — mounts
+    //! the tree as a `filesystem2=` directory volume, and launches. What
+    //! happens on screen is the finding.
+    //!
+    //! Gated and `#[ignore]`d: it needs the user's own tree, their own
+    //! licensed Kickstart, and an installed WinUAE, none of which exist in
+    //! CI. Nothing here is written to the repository.
+
+    use super::*;
+    use crate::core::profile::AmigaProfile;
+    use std::path::PathBuf;
+
+    #[test]
+    #[ignore = "needs a real tree, a licensed ROM and WinUAE; run explicitly"]
+    fn boot_a_distribution_tree_when_asked() {
+        let (Ok(tree), Ok(rom)) = (
+            std::env::var("ART_BOOT_TREE"),
+            std::env::var("ART_BOOT_ROM"),
+        ) else {
+            return;
+        };
+
+        let profile = AmigaProfile::a1200_aga();
+        let media = LaunchMedia {
+            floppy_paths: Vec::new(),
+            hardfile_paths: Vec::new(),
+            hardfile_shapes: Vec::new(),
+            kickstart_path: Some(rom.clone()),
+            use_aros: false,
+            write_protect_hardfiles: false,
+            directories: vec![DirMount {
+                host_path: tree.clone(),
+                volume: "DH0".into(),
+                // The label AmigaOS itself expects for a system volume. A
+                // startup-sequence assigns against `SYS:`, which WinUAE binds
+                // to whatever device it booted from, but tools and icons
+                // written by the install refer to the label.
+                label: "Workbench".into(),
+                boot_priority: 0,
+                read_only: false,
+            }],
+        };
+
+        let config = generate_uae_config(&profile, &media).expect("ART must be able to write this");
+        let out = PathBuf::from(&tree).join("..").join("art-boot-39.uae");
+        std::fs::write(&out, &config).unwrap();
+        println!("config written to {}", out.display());
+        println!("--- config ---\n{config}\n--- end ---");
+
+        if let Ok(winuae) = std::env::var("ART_WINUAE") {
+            let pid = launch_winuae(&PathBuf::from(&winuae), &config).expect("WinUAE must start");
+            println!("WinUAE started, pid {pid}");
+        }
+    }
+}
