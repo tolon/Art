@@ -93,8 +93,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::scan::{find_media, media_for, MediaMatch};
-use super::source::{AdfSource, MediaSource};
+use super::scan::{find_media, media_for, open_media, MediaMatch};
 use super::{Condition, Recipe, RefusalReason, RuleKind};
 use crate::core::error::{CoreError, CoreResult};
 
@@ -472,7 +471,7 @@ pub fn plan(request: &InstallRequest, recipe: &Recipe) -> CoreResult<InstallPlan
         };
 
         // Never `if let MediaMatch::Found(..)` — see the module doc comment.
-        let media_path = match media_for(&found, &component.media) {
+        let found_media = match media_for(&found, &component.media) {
             MediaMatch::Missing => {
                 refusals.push(RefusalReason::MediaMissing {
                     component: component.id.clone(),
@@ -491,11 +490,12 @@ pub fn plan(request: &InstallRequest, recipe: &Recipe) -> CoreResult<InstallPlan
                 });
                 continue;
             }
-            MediaMatch::Found(found_media) => found_media.path.clone(),
+            MediaMatch::Found(found_media) => found_media,
         };
+        let media_path = found_media.path.clone();
         media_paths.insert(component.media.clone(), media_path.clone());
 
-        let mut source = AdfSource::open(&media_path)?;
+        let mut source = open_media(found_media)?;
 
         for rule in &component.rules {
             let Some(entry) = source.entry(&rule.from)? else {
@@ -1075,6 +1075,71 @@ mod plan_tests {
             excluded: Vec::new(),
         };
         plan(&request, &recipe).unwrap()
+    }
+
+    /// The planner must open a disc as a disc. Before this, `plan()`
+    /// hardcoded `AdfSource::open` and a found ISO produced a hard error
+    /// rather than a plan — discovery could see media the planner could not
+    /// use.
+    #[test]
+    fn a_component_whose_media_is_a_disc_is_planned_from_the_disc() {
+        use crate::core::iso::fixture::{file, IsoBuilder};
+
+        let dir = crate::core::osinstall::fixtures::scratch("plan-disc-media");
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+
+        // The same fixture shape `source_cd.rs`'s own tests build — Joliet
+        // on, so the volume and file names round-trip exactly as typed,
+        // matching a real AmigaOS 3.9 disc.
+        let bytes = IsoBuilder {
+            volume: "AmigaOS3.9".to_string(),
+            joliet_volume: "AmigaOS3.9".to_string(),
+            joliet: true,
+            children: vec![file("README.;1", "readme.txt", b"install disc")],
+            ..Default::default()
+        }
+        .build();
+        std::fs::write(folder.join("os39.iso"), bytes).unwrap();
+
+        let recipe = Recipe {
+            release: "Test".to_string(),
+            components: vec![Component {
+                id: "a".to_string(),
+                media: "AmigaOS3.9".to_string(),
+                rules: vec![PathRule {
+                    from: "readme.txt".to_string(),
+                    to: "readme.txt".to_string(),
+                    kind: RuleKind::File,
+                }],
+                required: false,
+                condition: None,
+                overrides: vec![],
+                user_startup: vec![],
+                exclusive_group: None,
+                available: true,
+            }],
+        };
+
+        let request = InstallRequest {
+            media_folder: folder,
+            rom: None,
+            chosen: vec!["a".to_string()],
+            destination: dir.join("dist"),
+            excluded: Vec::new(),
+        };
+        let plan = plan(&request, &recipe).unwrap();
+
+        // Assert on the file, not merely on `is_ok()` — a plan that silently
+        // contains nothing would pass an `is_ok()` test.
+        assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
+        assert!(
+            plan.items
+                .iter()
+                .any(|item| item.to == "readme.txt" && !item.is_dir && item.bytes > 0),
+            "{:?}",
+            plan.items
+        );
     }
 
     #[test]

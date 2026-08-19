@@ -28,11 +28,15 @@ import type { Phrase } from "@/lib/phrase";
 // Types, mirroring core::osinstall exactly
 // ---------------------------------------------------------------------------
 
-/** One install disk `osinstallScanMedia` opened successfully. */
+/** Which reader opened this medium. Mirrors `core::osinstall::scan::MediaKind`. */
+export type MediaKind = "floppy" | "disc";
+
+/** One install disk or disc `osinstallScanMedia` opened successfully. */
 export interface FoundMedia {
   path: string;
   /** Read from **inside** the image — never derived from `path`. */
   volumeName: string;
+  kind: MediaKind;
 }
 
 /** What scanning a media folder found, or why it could not be looked at. */

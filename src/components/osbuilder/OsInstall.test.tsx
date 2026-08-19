@@ -183,7 +183,7 @@ const FULL_FIELDS = {
 beforeEach(() => {
   scanMediaMock.mockReset().mockResolvedValue({
     outcome: "found",
-    media: [{ path: "E:\\media\\Disk1.adf", volumeName: "Workbench3.2" }],
+    media: [{ path: "E:\\media\\Disk1.adf", volumeName: "Workbench3.2", kind: "floppy" }],
   } satisfies MediaScanResult);
   planMock.mockReset().mockImplementation((req: InstallRequest) => Promise.resolve(planResultFor(req)));
   applyMock.mockReset().mockResolvedValue(1);

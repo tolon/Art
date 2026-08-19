@@ -643,8 +643,12 @@ mod tests {
             assert_eq!(got, want, "value was: {value}");
         }
 
+        /// The TS mirror (`src/lib/osinstall.ts`) is maintained by hand, not
+        /// generated from this type — nothing here can see it, so this test
+        /// only pins the Rust side's own wire shape, not a cross-check
+        /// against the frontend's declared keys.
         #[test]
-        fn found_media_serializes_with_the_keys_the_frontend_declares() {
+        fn found_media_serializes_with_the_keys_this_test_pins() {
             use crate::core::osinstall::scan::MediaKind;
 
             let media = FoundMedia {
