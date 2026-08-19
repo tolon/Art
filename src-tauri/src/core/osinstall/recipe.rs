@@ -105,6 +105,33 @@ pub fn amigaos_39() -> CoreResult<Recipe> {
     parse(AMIGAOS_39_JSON)
 }
 
+/// Every release ART ships a recipe for, in the order a picker should list
+/// them.
+///
+/// The strings are the recipes' own `release` values, and
+/// `every_offered_release_resolves_to_a_recipe` pins that: this list and the
+/// recipe files are two halves of one fact, and a release in only one of them
+/// is a release the user either cannot reach or cannot install.
+pub fn releases() -> &'static [&'static str] {
+    &["AmigaOS 3.2", "AmigaOS 3.9"]
+}
+
+/// The shipped recipe for `release`.
+///
+/// An unrecognised name is refused rather than defaulted. A default here
+/// would mean a caller asking for one operating system and getting another
+/// written onto their volume — the failure this project's §92 pipeline
+/// exists to prevent.
+pub fn by_release(release: &str) -> CoreResult<Recipe> {
+    match release {
+        "AmigaOS 3.2" => amigaos_32(),
+        "AmigaOS 3.9" => amigaos_39(),
+        other => Err(CoreError::InvalidInput(format!(
+            "ART ships no install recipe for {other}"
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,41 +157,68 @@ mod tests {
     /// Every recipe this project ships, parsed and validated, paired with a
     /// label for assertion messages.
     ///
-    /// **A new recipe file (3.9's second component, 3.1, CaffeineOS, …) must
-    /// be added here too.** Nothing makes that automatic — `include_str!`
-    /// gives each recipe its own named constant, and there is no build step
-    /// that walks `recipes/` and discovers new files — so a property this
-    /// project states as holding "over the shipped recipe" (singular in the
-    /// old wording, plural in truth: CLAUDE.md's own destination-collision
-    /// rule and `no_two_components_claim_one_destination_without_declaring_it`'s
-    /// own doc comment both say "the shipped recipe" while only 3.2 existed)
-    /// only actually holds for whatever is listed here. The fix-round finding
-    /// this function exists to close was exactly that: a second recipe
-    /// (3.9) shipped with one component, so the collision test above stayed
-    /// green by construction — dormant, not passing — right up to the day a
-    /// second component gives it something to actually check.
+    /// **Driven from [`super::releases`] and [`super::by_release`], not
+    /// hand-listed.** The earlier version of this function was a literal
+    /// `vec!["AmigaOS 3.2", "AmigaOS 3.9"]` guarded only by a doc comment
+    /// saying a new recipe file had to be added here too — nothing enforced
+    /// that, so 3.9 shipped with one component and the collision test below
+    /// stayed green by construction, dormant rather than passing, right up
+    /// to the day a second component gave it something to actually check.
+    /// Now the only way to make a recipe reachable from the UI at all is to
+    /// add it to `releases()` (`by_release` refuses anything not named
+    /// there), and that same edit is what puts it in this list — there is no
+    /// second place to remember.
     fn shipped_recipes() -> Vec<(&'static str, Recipe)> {
-        vec![
-            ("AmigaOS 3.2", recipe()),
-            (
-                "AmigaOS 3.9",
-                parse(AMIGAOS_39_JSON).expect("the shipped 3.9 recipe must parse and validate"),
-            ),
-        ]
+        super::releases()
+            .iter()
+            .map(|&release| {
+                (
+                    release,
+                    super::by_release(release).unwrap_or_else(|e| {
+                        panic!("the shipped {release} recipe must parse and validate: {e}")
+                    }),
+                )
+            })
+            .collect()
     }
 
     /// [`shipped_recipes`]'s own raw counterpart — see [`raw_recipe`]'s doc
     /// comment for why a test that means to police `validate` itself has to
     /// deserialise directly rather than go through `parse`.
+    ///
+    /// Also driven from [`super::releases`], for the same reason
+    /// `shipped_recipes` is: every name `releases()` offers has to resolve
+    /// here too. Deserialising raw needs the literal JSON text, which
+    /// `by_release` does not hand back (it returns a validated `Recipe`), so
+    /// `raw_json` below is the one place that still pairs a release name
+    /// with its constant by hand — kept to a single small match, right next
+    /// to the list it must stay in step with, so a release added to
+    /// `releases()` and forgotten here fails loudly (a panic from every test
+    /// that calls this) rather than silently going unchecked the way 3.9
+    /// did before any of this existed.
     fn raw_shipped_recipes() -> Vec<(&'static str, Recipe)> {
-        vec![
-            ("AmigaOS 3.2", raw_recipe()),
-            (
-                "AmigaOS 3.9",
-                serde_json::from_str(AMIGAOS_39_JSON)
-                    .expect("the shipped 3.9 recipe must at least deserialise"),
-            ),
-        ]
+        fn raw_json(release: &str) -> &'static str {
+            match release {
+                "AmigaOS 3.2" => AMIGAOS_32_JSON,
+                "AmigaOS 3.9" => AMIGAOS_39_JSON,
+                other => panic!(
+                    "'{other}' is offered by releases() but raw_shipped_recipes() has no raw \
+                     JSON for it — add it beside by_release's own match arm"
+                ),
+            }
+        }
+
+        super::releases()
+            .iter()
+            .map(|&release| {
+                (
+                    release,
+                    serde_json::from_str(raw_json(release)).unwrap_or_else(|e| {
+                        panic!("the shipped {release} recipe must at least deserialise: {e}")
+                    }),
+                )
+            })
+            .collect()
     }
 
     #[test]
@@ -671,5 +725,41 @@ mod tests {
         for component in &recipe.components {
             assert_eq!(component.media, "AmigaOS3.9", "{}", component.id);
         }
+    }
+
+    // ---- Task 6 — choosing which release to install ----
+
+    /// Every release the picker can offer must actually resolve. This is the
+    /// test that fails when a recipe is added to one list and not the other.
+    #[test]
+    fn every_offered_release_resolves_to_a_recipe() {
+        for release in super::releases() {
+            let recipe = super::by_release(release)
+                .unwrap_or_else(|e| panic!("{release} does not resolve: {e}"));
+            assert_eq!(
+                &recipe.release, release,
+                "the recipe answering to {release} names itself differently"
+            );
+        }
+    }
+
+    /// A release nobody ships is a refusal with the name in it, not a
+    /// fallback to whichever recipe happens to be first — installing 3.2
+    /// because the caller asked for something unknown would write the wrong
+    /// operating system onto the user's volume.
+    #[test]
+    fn an_unknown_release_is_refused_by_name() {
+        let err = super::by_release("AmigaOS 4.1").unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("AmigaOS 4.1"), "got {text}");
+    }
+
+    /// Both shipped recipes are offered. A recipe that exists but is not in
+    /// `releases()` is unreachable from the UI, which is how 3.9 arrived.
+    #[test]
+    fn both_shipped_recipes_are_offered() {
+        let offered = super::releases();
+        assert!(offered.contains(&"AmigaOS 3.2"), "got {offered:?}");
+        assert!(offered.contains(&"AmigaOS 3.9"), "got {offered:?}");
     }
 }
