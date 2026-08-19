@@ -26,6 +26,46 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-163** 🟠 **`pnpm test` exits non-zero while every test passes, so CI's
+own verdict disagrees with its own output** — *found 2026-08-19 during the
+content-layer round, and present on `main`*
+`src/**/*.test.tsx` · `vite.config.ts`
+
+The frontend suite reports `Test Files 54 passed (54)` and `Tests 619 passed
+(619)`, and then exits `1`. Vitest catches **10 unhandled rejections** during
+the run — the first is `TypeError: Cannot read properties of undefined
+(reading 'transformCallback')`, a Tauri shim reached at teardown — and its own
+message is the point: *"This might cause false positive tests."*
+
+Two costs, and the second is the reason this is 🟠 rather than 🔵. CI runs
+`pnpm test` as a blocking step (see `CLAUDE.md`), so the step's verdict has
+been decided by teardown noise rather than by the tests. And a person reading
+the run sees the reassuring line and stops — which happened here: this issue
+was **first reported correctly by an implementer, and I told it the report was
+wrong** after reading `Tests 619 passed` and not the exit code. It withdrew a
+true finding on my say-so. Restored, and filed.
+
+Verified on `main` with this round's work stashed: same exit code, same ten
+errors, so it is not this round's doing.
+
+**ART-164** 🔵 **`core::iso`'s test scratch directory can be shared by two
+threads, so one test fails about one run in thirty** — *found 2026-08-19,
+measured on `main`*
+`src-tauri/src/core/iso/mod.rs:1316`
+
+`a_mode2_form2_track_is_refused_rather_than_misread` fails intermittently
+under the parallel test runner. `tmp()` keys its directory on process id plus
+a nanosecond timestamp, and two threads entering it close enough together get
+the same name, so one test reads the other's fixture. This is
+[ART-059](#) again in a different module — `core/osinstall`'s own fixtures
+already solved it with an atomic counter, and the fix here is the same one
+line.
+
+Left open rather than fixed on sight because it belongs to `core/iso` and was
+found during unrelated work; it is small, and it is exactly the kind of
+intermittent failure `CLAUDE.md` says trains people to re-run until green.
+
+
 **ART-152** 🔵 **ART sizes a WHDLoad launch's Fast RAM from a fixed setting,
 never from what the slave itself states it needs** — *filed 2026-08-18,
 alongside ART-151's fix, deliberately not built there*
