@@ -143,6 +143,91 @@ today is zero: nothing this plan tested comes close to either limit. Scoped
 to `CdSource` only; `core/iso`'s other caller (`IsoSource`) has the same gap
 and was deliberately left alone, a different module's contract.
 
+**ART-159** 🟠 **Two of spec §5's three predicted hazards for AmigaOS 3.9 —
+`SetPatch`/the boot sequence, and the three language-variant trees — went
+untouched by every task on the branch and were recorded nowhere** — *found
+2026-08-19 by the whole-branch review (findings 8 and its §5 notes); filed in
+the fix pass, deliberately not built there*
+`src-tauri/src/core/osinstall/recipes/amigaos-3.9.json` ·
+
+The design spec named three hazards a 3.9 recipe would hit. One was met
+honestly and filed (ART-157, the Kickstart minimum). The other two produced
+no component, no test, no issue and no line in FEATURES/STATUS:
+
+1. **`SetPatch` and the boot sequence.** The spec named the disc's own
+   `First-Install` tree as carrying `c/SetPatch`, `loadwb`, `iprefs` and
+   `mount`, and warned that "the boot path is part of what must be placed".
+   The shipped recipe places `OS-VERSION3.9/WORKBENCH3.5/S` — the
+   Startup-Sequence itself — and nothing from `First-Install`. A
+   Startup-Sequence whose first line runs a `SetPatch` that is not in `C:`
+   is the single most likely reason a 3.9 tree fails to boot when somebody
+   finally tries, which is why this is High and not Low.
+2. **Language variants.** `Locale`, `Locale.Euro` and `Special-Locale` are
+   unaddressed. Whatever locale content lands does so incidentally, inside
+   the `STORAGE` subtree. AmigaOS 3.2's real run already showed this is the
+   class of mistake only a running system reveals (ART-127: a tree that
+   built and verified clean, and was missing `icon.library`).
+
+Not fixed here. Both belong to the recipe's second and third steps, which
+the spec itself makes conditional on the boot test in §4 — and no 3.9 tree
+has been booted (see FEATURES.md's 🟡 row). The point of this entry is that
+"blocked on a boot" is a reason to record something as owed, not a reason to
+leave it unrecorded: a hazard predicted before the work and untouched after
+it should be visible in the register of what ART owes, beside ART-157, rather
+than only in a review nobody reads again.
+
+**ART-160** 🟡 **`osinstall::apply()` writes host filenames without going
+through `windows_safe_name`, and the one machine that measured a reserved
+device name is not every machine** — *found 2026-08-19 by the whole-branch
+review (finding 15); carried until now only in a run ledger, which is not
+where what ART owes is recorded*
+`src-tauri/src/core/osinstall/apply.rs` ·
+`src-tauri/src/core/volume/write/copy.rs:698` (`windows_safe_name`) ·
+
+`copy.rs` holds the list of 22 names Windows reserves for devices (`AUX`,
+`CON`, `NUL`, `COM1`…) and a function that renames around them. `apply()`
+does not call it: every destination goes through `safe_join` — which is the
+security boundary and is not in question — and then straight to the
+filesystem under whatever name the media carried.
+
+ART-155's investigation measured the specific case that prompted this, on
+this machine: a file literally named `AUX`, from
+`Storage/DOSDrivers/AUX` on the owner's real AmigaOS 3.9 disc, **writes and
+reads back correctly** on Windows 11 Pro 26200, by a plain path and by a
+`\\?\` path alike. That measurement is real and it is why nothing is broken
+today. It is also one build of one Windows on one filesystem: ART-155's own
+Fixed entry says plainly that it "does not mean reserved device names are a
+non-issue everywhere", and nothing has measured an older Windows, a network
+share, or a non-NTFS volume.
+
+Not fixed. The fix is not simply "call `windows_safe_name`": renaming a file
+on the way into a distribution tree makes the tree stop matching
+`distribution.json`, and `verify` reads that manifest — so a rename has to be
+recorded, not just performed. That is engine work with its own design, not a
+one-line call.
+
+**ART-161** 🔵 **The same disc is fully walked three to four times per
+install, because `scan::identify` opens a `CdSource` to read one string and
+then drops it** — *found 2026-08-19 by the whole-branch review (finding 12)*
+`src-tauri/src/core/osinstall/scan.rs:148` (`identify`) ·
+`src-tauri/src/core/osinstall/apply.rs:301` ·
+
+`CdSource::open` walks a disc's entire directory tree once, at open, and
+holds the result. `scan::identify` opens one purely to read the volume name —
+the one thing `find_media` needs to match a recipe's `media` — and then drops
+the whole walk. `open_media` immediately re-opens and re-walks the same file.
+`find_media` does this for **every** candidate in the media folder (the
+owner's holds four ISOs), and `apply()` does it again per medium, so the
+owner's own 469 MiB disc is walked three to four times in one install.
+
+Not a memory problem and not a correctness problem: every walk is bounded
+(`MAX_WALK_ENTRIES` 100,000, `MAX_WALK_DEPTH` 16, refused rather than
+truncated — ART-158), and the measured cost is inside the ~20 seconds a real
+3.9 build already takes. Low, and recorded rather than fixed because the
+honest fix — letting `identify` answer from a descriptor read alone, or
+handing the already-open source forward instead of a path — is a change to
+`scan.rs`'s contract with both of its callers.
+
 **ART-144** 🔵 **Five minors deferred across collection-wave-c's own review
 rounds, folded into one entry — #4 closed by the whole-branch review's fix
 pass, #1/#2/#3/#5 still open** — *found 2026-08-18, Tasks 3/6/6b/8; filed at

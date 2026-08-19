@@ -784,8 +784,19 @@ mod tests {
     fn browsing_a_disc_is_listed_before_installing_from_it() {
         let d = detection(FormatCategory::OpticalImage, "iso9660", false);
         let ids = ids_for(&d);
-        let browse = ids.iter().position(|i| *i == "iso.browse");
-        let install = ids.iter().position(|i| *i == "os.install-from-disc");
+        // Both unwrapped before comparing. As two `Option<usize>` this read
+        // `None < Some(n)`, which is `true` — so the test passed, asserting
+        // nothing, if `iso.browse` ever stopped being offered at all.
+        let browse = ids
+            .iter()
+            .position(|i| *i == "iso.browse")
+            .unwrap_or_else(|| panic!("iso.browse must be offered for a disc at all: {ids:?}"));
+        let install = ids
+            .iter()
+            .position(|i| *i == "os.install-from-disc")
+            .unwrap_or_else(|| {
+                panic!("os.install-from-disc must be offered for a disc at all: {ids:?}")
+            });
         assert!(
             browse < install,
             "iso.browse must precede os.install-from-disc: {ids:?}"

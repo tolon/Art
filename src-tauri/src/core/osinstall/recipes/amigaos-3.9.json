@@ -1,4 +1,33 @@
 {
+  "_why_no_T": [
+    "JSON has no comment syntax and `Recipe` does not deny unknown fields, so this",
+    "array is how this file records a decision a reader would otherwise have to guess",
+    "at. It is data nothing reads.",
+    "",
+    "The disc's `OS-Version3.9/Workbench3.5` holds 16 top-level drawers; the rules",
+    "below place 14. `T` and `WBStartup` are the two left out, and both are",
+    "deliberate rather than overlooked:",
+    "",
+    "`T` is AmigaDOS's temporary directory, and on a running 3.9 system it is not",
+    "on SYS: at all. Measured on the owner's own AmigaOS39.iso (2026-08-19): the",
+    "disc's own `S/Startup-Sequence` — the file this recipe *does* place — runs",
+    "`C:MakeDir RAM:T RAM:Clipboards RAM:ENV RAM:ENV/Sys` and then",
+    "`Assign >NIL: T: RAM:T`, so `T:` is made in RAM at every boot and the disc's",
+    "copy is never consulted. The disc's `T` drawer is also empty (0 entries, by",
+    "7-Zip). AmigaOS 3.2's tree, which ART built and which booted to a clean",
+    "Workbench under WinUAE, likewise carries no `T` and its own Startup-Sequence",
+    "does the identical two lines. Copying an empty drawer whose assign points",
+    "elsewhere would place a directory the system never looks at.",
+    "",
+    "`WBStartup` belongs to the second, unwritten half of this recipe rather than",
+    "to `workbench-base`: it is where a system's own startup programs are chosen,",
+    "and which ones a 3.9 tree should carry is one of the things the boot test",
+    "(spec section 4) was meant to establish and did not, because no 3.9 tree has",
+    "been booted yet.",
+    "",
+    "If a boot disagrees with either judgement, add the rule then, with the run as",
+    "the reason — that is what a real run is for."
+  ],
   "release": "AmigaOS 3.9",
   "components": [
     {

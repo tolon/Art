@@ -10,19 +10,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### AmigaOS 3.9 joins 3.2 — build it from your own CD (2026-08-19)
 
 #### Added
-- **ART can now build an AmigaOS 3.9 distribution from your own install
-  CD**, the same way it already does from AmigaOS 3.2 floppy images: point
-  it at your media, and it reads what components your disc actually
+- **ART can now build the base of an AmigaOS 3.9 system from your own
+  install CD**, the same way it already does from AmigaOS 3.2 floppy
+  images: point it at your media, and it reads what your disc actually
   offers, checks for name collisions, and builds the tree. A new release
   picker on the OS Builder screen lets you choose which AmigaOS you're
-  installing; picking one you don't have media for is refused by name, not
-  silently swapped for another.
+  installing, and the component list you tick is that release's own — not
+  another's; picking a release you don't have media for is refused by
+  name, not silently swapped for another.
+  **What "the base" means, precisely:** the 3.9 recipe ships **one**
+  component today, `workbench-base`. It is roughly 6 MB of a 469 MB disc,
+  and `Contribution/`, `Locale`, PowerPC and `Emergency-Boot` are all
+  absent by design — the further components wait on a 3.9 tree actually
+  being booted (see Known limitation below). AmigaOS 3.2's recipe, by
+  contrast, has 26.
 - **A disc dropped on the "What can I do?" panel now offers the OS
   Builder**, alongside the actions it already offered for a disc image —
   so an install CD works the same way a floppy image already does: drop it
   in, and ART offers to build from it.
-- Tested against a real, physical AmigaOS 3.9 CD: the full 588-file,
-  75-directory system tree built from it, start to finish.
+- Tested against a real AmigaOS 3.9 disc image — the owner's own 469 MB
+  ISO file, not a synthetic fixture (no optical drive was involved; ART
+  reads a disc image, not a drive). All 588 files and 75 directories that
+  one component plans were built from it, start to finish.
 
 #### Known limitation
 - **The AmigaOS 3.9 tree built this way has not yet been booted.** AmigaOS
