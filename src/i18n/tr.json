@@ -1303,6 +1303,8 @@
     },
     "tc": {
       "dirSize": "<DIR>",
+      "counting": "sayılıyor…",
+      "partialCount": "En az bu kadar: ART derinlik sınırında saymayı bıraktı ya da ağacın bir bölümünü okuyamadı.",
       "freeOfTotal": "{{total}} k içinden {{free}} k boş",
       "statusLine": "{{selectedBytes}} k / {{totalBytes}} k — {{selectedFiles}} / {{totalFiles}} dosya, {{selectedDirs}} / {{totalDirs}} dizin",
       "maskPlaceholder": "*.*",

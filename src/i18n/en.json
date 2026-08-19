@@ -1303,6 +1303,8 @@
     },
     "tc": {
       "dirSize": "<DIR>",
+      "counting": "counting…",
+      "partialCount": "At least this much: ART stopped counting at its depth limit, or could not read part of the tree.",
       "freeOfTotal": "{{free}} k of {{total}} k free",
       "statusLine": "{{selectedBytes}} k / {{totalBytes}} k in {{selectedFiles}} / {{totalFiles}} file(s), {{selectedDirs}} / {{totalDirs}} dir(s)",
       "maskPlaceholder": "*.*",

@@ -97,6 +97,53 @@ pub fn volume_list(
     })
 }
 
+/// Count what a directory inside a volume holds (ART-087) — the other side of
+/// the file manager's fence from [`super::panel::panel_directory_size`].
+///
+/// A job for the same reason that one is, and read-only for the same reason:
+/// nothing here writes, so nothing is logged.
+///
+/// `dir_block` is the header block the pane already carries for the row
+/// (`PanelEntry::header_block`), so the caller needs nothing new. `None` means
+/// the volume's root, matching [`volume_list`].
+#[tauri::command]
+pub fn volume_directory_size(
+    path: String,
+    volume_index: usize,
+    dir_block: Option<u32>,
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, std::sync::Arc<crate::commands::jobs::JobRegistry>>,
+) -> AppResult<u64> {
+    let image = PathBuf::from(path.trim());
+    // Resolved before the job starts, so a bad image or index is an error the
+    // caller sees rather than a job that opens and immediately fails.
+    let entry = pick(&image, volume_index)?;
+    let (_, geometry) = mount(&image, &entry)?;
+    let block = dir_block.unwrap_or(geometry.root_block);
+
+    let key = block.to_string();
+    let registry = std::sync::Arc::clone(&registry);
+    let emit_app = app.clone();
+    let title = format!("Counting block {block} in {}", entry.name);
+
+    let id = super::jobs::spawn_job(&app, registry, &title, move |job_id, progress| {
+        // Re-opened inside the job: the device the check above produced
+        // borrows nothing that can cross a thread, and re-opening is cheap
+        // beside the walk itself.
+        let entry = pick(&image, volume_index)?;
+        let (device, _) = mount(&image, &entry)?;
+        let total = crate::core::dirsize::volume_total(&device, block, progress)?;
+        let _ = tauri::Emitter::emit(
+            &emit_app,
+            super::panel::DIR_SIZE_EVENT,
+            super::panel::DirSizeResult { job_id, key, total },
+        );
+        Ok(())
+    });
+
+    Ok(id)
+}
+
 /// Copy one file out of a volume to a local folder.
 ///
 /// The bytes go host-side to host-side; a partition can hold files far larger

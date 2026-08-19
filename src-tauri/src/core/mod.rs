@@ -17,6 +17,7 @@ pub mod cbm;
 pub mod compatibility;
 pub mod conversion;
 pub mod detect;
+pub mod dirsize;
 pub mod distro;
 pub mod error;
 pub mod fat32;

@@ -698,28 +698,6 @@ which release line, which is the part they cannot work out for themselves.
 
 Recorded 2026-08-13 as owed work, not a defect.
 
-**ART-087** 🔵 **Space marks a row but does not compute a directory's size**
-`src/pages/FileManager.tsx` · `src/lib/selection.ts::spaceToggle` · The brief
-(§3.2) asks for Total Commander's `CountSpace=1`: Space on a **directory**
-marks it *and* walks it, replacing the `<DIR>` in the Size column with the real
-total. ART marks; it does not count.
-
-The reason is the phase's own rule. There is no primitive to count with:
-`panel_list_local` lists one level, `scan_collection_directory` looks for Amiga
-files rather than totalling bytes, and `volume_plan_copy` computes a size only
-against a destination volume. A recursive walk is new engine capability — small
-and read-only, but new — and phase 2b's plan says a gap found on the way is
-filed rather than smuggled in.
-
-Fixing it means one command per side of the fence: a depth-limited local walk
-(the same guards `scan_collection_directory` already has — bounded depth, no
-symlink following) and a volume-side directory total, both as jobs, because a
-directory of forty thousand files must not block the command thread and must
-be stoppable. The Size column then needs a third state — not just a number or
-`<DIR>`, but "counting…".
-
-Found while building phase 2b task 5.
-
 **ART-081** 🟡 **A single file cannot be moved between two images, because the primitive underneath addresses a directory**
 `src-tauri/src/commands/volume_write.rs::volume_copy_between` ·
 `src/lib/movePlan.ts` · The command takes a *directory* block at both ends and
@@ -939,6 +917,67 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-087** 🔵 **Space marks a row but does not compute a directory's size** —
+*found while building phase 2b task 5; fixed 2026-08-20 on `debt-wave-a`*
+`src-tauri/src/core/dirsize.rs` (new) ·
+`src-tauri/src/commands/panel.rs` (`panel_directory_size`) ·
+`src-tauri/src/commands/volume.rs` (`volume_directory_size`) ·
+`src/lib/panel.ts` · `src/pages/FileManager.tsx`
+
+The brief (§3.2) asks for Total Commander's `CountSpace=1`: Space on a
+**directory** marks it *and* walks it, replacing the `<DIR>` in the Size column
+with the real total. ART marked and did not count, because there was no
+primitive to count with — `panel_list_local` lists one level,
+`scan_collection_directory` looks for Amiga files rather than totalling bytes,
+and `volume_plan_copy` computes a size only against a destination volume.
+
+**Fixed 2026-08-20**, as the entry itself scoped it: one primitive, one command
+per side of the fence, both as jobs, and a third state in the Size column.
+
+`core::dirsize` is the primitive — `host_total` and `volume_total`, one module
+because the *answer* is the same shape whichever side asked. Both are bounded
+at 32 levels and neither follows a symlink (`symlink_metadata`, the ART-028
+rule), both take a `ProgressSink` and check `is_cancelled` between whole
+entries, and neither writes anything.
+
+**A total that stopped short says so.** `DirTotal::partial` is set when the
+walk hit its depth cap or could not read a directory it met, and the number is
+then a **floor**, not a total — rendered as `≥ 1,234` with a tooltip rather
+than as the answer. A Size column printing a floor as a total would be quietly
+wrong by however much it did not look at, which is exactly the silence ART-107
+was about on the layout side. A subdirectory ART cannot read makes the count
+partial rather than failing the whole drawer: a floor that admits it is one
+beats refusing to count a tree because one corner is locked.
+
+`panel_directory_size` and `volume_directory_size` return a job id (§54) and
+answer on one shared `dir-size-result` event. Neither writes, so neither
+touches the operation log. The volume one resolves the image and index
+*before* opening the job, so a bad image is an error the caller sees rather
+than a job that opens and immediately fails.
+
+The screen keys a count by pane **and** row (`dirSizeKey`), and matches the
+answer back by **job id**, not by key — a user who walked into another folder
+while the count ran must not have it land on whatever row now holds that key. A
+cancelled or failed job emits no result, so the job's own terminal state is
+what drops the row back to `<DIR>` instead of leaving it saying "counting…" for
+the rest of the session.
+
+**ISO and archive panes are not counted, and say nothing rather than
+pretending.** `dirSizeKey` returns `null` for a row with neither a host path
+nor a header block, so Space there does exactly what it did before — marks, and
+nothing else. There is no command that counts one, and a key for a job that
+will never start would leave the row counting forever (§89).
+
+Tests: seven in `core::dirsize::tests` — a host tree totalled at every depth, a
+tree past the cap reporting a floor with `partial` set, a file refused as not a
+folder, cancellation returning `Cancelled` rather than a short number, a real
+FFS volume built in a tempdir totalled whole and by subdirectory, and a block
+that is not a directory coming back partial rather than fatal. On the frontend,
+`src/lib/panel.test.ts` covers `dirSizeKey` (per-pane keying, files refused,
+uncountable rows refused, block `0` not confused with no block) and
+`dirSizeCell`'s three states including `partial`. New keys `files.tc.counting`
+and `files.tc.partialCount` in both catalogues.
 
 **ART-101** 🔵 **The sidebar's collapse never fires under Application Size** —
 *found 2026-08-13 while closing ART-099; fixed 2026-08-20 on `debt-wave-a`*

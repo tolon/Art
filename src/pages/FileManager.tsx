@@ -84,7 +84,7 @@ import {
 } from "@/lib/archives";
 import { checkoutEdit, checkoutOpen, volumeIconFor } from "@/lib/checkout";
 import { planFunctionKeys } from "@/lib/functionKeyPlan";
-import { onJobProgress, type JobProgress } from "@/lib/jobs";
+import { onJobProgress, subscribeSafely, type JobProgress } from "@/lib/jobs";
 import { filterEntries, filterEntriesReporting } from "@/lib/mask";
 import { planMove } from "@/lib/movePlan";
 import {
@@ -110,6 +110,12 @@ import {
   panelListLocal,
   panelLocalRoots,
   type PanelEntry,
+  dirSizeCell,
+  dirSizeKey,
+  onDirSizeResult,
+  panelDirectorySize,
+  volumeDirectorySize,
+  type DirSizeState,
 } from "@/lib/panel";
 import { splitName } from "@/lib/panelName";
 import {
@@ -1809,6 +1815,97 @@ export function FileManager() {
     };
   }, []);
 
+  // -----------------------------------------------------------------------
+  // How big a drawer really is (ART-087, brief §3.2 `CountSpace=1`).
+  //
+  // Space on a **directory** marks it *and* counts it, replacing the `<DIR>`
+  // in the Size column with the real total. ART marked and did not count,
+  // because there was no primitive to count with; `core::dirsize` is it, and
+  // it runs as a job because a drawer of forty thousand files must not block
+  // the command thread and must be stoppable (§54, §55).
+  //
+  // Keyed per pane *and* per row (`dirSizeKey`), so the same folder open in
+  // both panes is counted once per pane rather than one pane's answer
+  // appearing in the other's column. The answer is matched back by **job
+  // id**, not by key: a user who walked into another folder while the count
+  // ran must not have it land on whatever row now holds that key.
+  // -----------------------------------------------------------------------
+  const [dirSizes, setDirSizes] = useState<Record<string, DirSizeState>>({});
+  const dirSizeJobs = useRef<Map<number, string>>(new Map());
+
+  const countDirectory = useCallback(
+    (side: Side, entry: PanelEntry) => {
+      const key = dirSizeKey(side, entry);
+      // Not a countable row, or already counted/counting. Re-asking a folder
+      // ART has an answer for would make Space toggle between two numbers.
+      if (!key || dirSizes[key]) return;
+
+      const state = pane(side);
+      const start =
+        state.kind === "local" && entry.path
+          ? panelDirectorySize(entry.path)
+          : (state.kind === "adf" || state.kind === "hdf") &&
+              state.volumeIndex !== null &&
+              entry.header_block !== null
+            ? volumeDirectorySize(state.location, state.volumeIndex, entry.header_block)
+            : null;
+      if (!start) return;
+
+      setDirSizes((current) => ({ ...current, [key]: { status: "counting" } }));
+      void start
+        .then((jobId) => {
+          dirSizeJobs.current.set(jobId, key);
+        })
+        .catch(() => {
+          // The command refused before a job even opened — a folder that has
+          // gone away, an image that will not mount. Drop back to `<DIR>`
+          // rather than leaving the row saying "counting…" forever.
+          setDirSizes((current) => {
+            const next = { ...current };
+            delete next[key];
+            return next;
+          });
+        });
+    },
+    [dirSizes, pane]
+  );
+
+  useEffect(() => {
+    return subscribeSafely(() =>
+      onDirSizeResult((result) => {
+        const key = dirSizeJobs.current.get(result.jobId);
+        if (!key) return;
+        dirSizeJobs.current.delete(result.jobId);
+        setDirSizes((current) => ({
+          ...current,
+          [key]: { status: "done", total: result.total },
+        }));
+      })
+    );
+  }, []);
+
+  // A count that was cancelled or failed emits no result, so without this the
+  // row would say "counting…" for the rest of the session. Same rule as the
+  // copy/plan jobs below: the job's own terminal state is what stops the wait.
+  useEffect(() => {
+    return subscribeSafely(() =>
+      onJobProgress((job) => {
+        if (job.state.state === "running") return;
+        const key = dirSizeJobs.current.get(job.id);
+        if (!key) return;
+        // `finished` is left to the result event above, which carries the
+        // answer; only a cancellation or a failure has to undo the wait.
+        if (job.state.state === "finished") return;
+        dirSizeJobs.current.delete(job.id);
+        setDirSizes((current) => {
+          const next = { ...current };
+          delete next[key];
+          return next;
+        });
+      })
+    );
+  }, []);
+
   // A job that fails or is cancelled emits no result, so the listeners above
   // alone would leave this screen waiting forever. The job's own terminal
   // state is what says "stop waiting", and it carries the error id (§68).
@@ -3108,6 +3205,7 @@ export function FileManager() {
       side,
       state,
       sortedEntries: paneEntries(side),
+      dirSizes,
       // Asked of the filter itself rather than worked out from two counts
       // downstream (ART-068).
       maskHidEverything: filterEntriesReporting(state.entries, filter[side]).hidEverything,
@@ -3410,7 +3508,17 @@ export function FileManager() {
   // Space marks where you stand; the numpad marks by mask and inverts.
   useMarkKeys(
     {
-      onSpace: () => applySelection(focused, spaceToggle(selection[focused], anchor[focused])),
+      onSpace: () => {
+        applySelection(focused, spaceToggle(selection[focused], anchor[focused]));
+        // …and count, if the row under the cursor is a drawer (ART-087).
+        // Marking is unconditional and immediate; counting is the extra the
+        // brief asks for, and it never changes what is marked.
+        const name = anchor[focused];
+        const entry = name
+          ? paneEntries(focused).find((candidate) => candidate.name === name)
+          : undefined;
+        if (entry?.is_dir) countDirectory(focused, entry);
+      },
       onMarkByMask: () => void markBy(true),
       onUnmarkByMask: () => void markBy(false),
       onInvert: () =>
@@ -3930,6 +4038,7 @@ function Pane({
   onNewFolder,
   onDragOut,
   onDropped,
+  dirSizes,
 }: {
   side: Side;
   state: PaneState;
@@ -3937,6 +4046,9 @@ function Pane({
    * `FileManager` for why this and not `state.entries` is what the row list
    * below renders. */
   sortedEntries: PanelEntry[];
+  /** Counted directories, keyed by `dirSizeKey` — the Size column's third
+   *  state (ART-087). Empty until a user presses Space on a drawer. */
+  dirSizes: Record<string, DirSizeState>;
   /** Whether the mask is the reason there is nothing to show — see
    * `@/lib/mask`'s `FilteredEntries` (ART-068). */
   maskHidEverything: boolean;
@@ -4350,7 +4462,11 @@ function Pane({
                 </span>
                 <span className="tc-cell tc-cell-ext">{ext}</span>
                 <span className="tc-cell tc-cell-size">
-                  {entry.is_dir ? t("files.tc.dirSize") : formatGroupedSize(entry.bytes, i18n.language)}
+                  {entry.is_dir ? (
+                    <TcDirSize side={side} entry={entry} dirSizes={dirSizes} />
+                  ) : (
+                    formatGroupedSize(entry.bytes, i18n.language)
+                  )}
                 </span>
                 <span className="tc-cell tc-cell-date">{formattedDate ?? "—"}</span>
                 <span className="tc-cell tc-cell-attr">{entry.attrs ?? "—"}</span>
@@ -4410,6 +4526,38 @@ function Pane({
  * copy/delete buttons — an ART addition with no reference equivalent — and
  * carries no label.
  */
+/**
+ * A directory row's Size cell: `<DIR>`, "counting…", or the real total
+ * (ART-087, brief §3.2).
+ *
+ * The `≥` on a partial count is not decoration. `core::dirsize` stops at its
+ * depth cap and skips what it cannot read, and a number printed as the answer
+ * when it is a floor is worse than no number at all — the same rule ART-107
+ * settled for the layout scan.
+ */
+function TcDirSize({
+  side,
+  entry,
+  dirSizes,
+}: {
+  side: Side;
+  entry: PanelEntry;
+  dirSizes: Record<string, DirSizeState>;
+}) {
+  const { t, i18n } = useTranslation();
+  const key = dirSizeKey(side, entry);
+  const cell = dirSizeCell(key ? dirSizes[key] : undefined);
+
+  if (cell.kind === "counting") return <span className="faint">{t("files.tc.counting")}</span>;
+  if (cell.kind === "dir") return <>{t("files.tc.dirSize")}</>;
+  const size = formatGroupedSize(cell.bytes, i18n.language);
+  return (
+    <span title={cell.partial ? t("files.tc.partialCount") : undefined}>
+      {cell.partial ? `\u2265 ${size}` : size}
+    </span>
+  );
+}
+
 function TcHeaderRow({
   sort,
   onSortChange,

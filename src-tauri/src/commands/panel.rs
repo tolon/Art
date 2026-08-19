@@ -215,6 +215,63 @@ pub fn panel_local_roots() -> AppResult<Vec<String>> {
     Ok(roots)
 }
 
+/// The event a finished directory-size job puts its answer on.
+///
+/// A job returns an id, not a result (§54), so the answer has to arrive
+/// separately — the same shape `LAYOUT_EVENT` already uses. `jobId` ties it
+/// back to the job the pane started, and `key` is the row it was started for,
+/// so an answer that arrives after the user has moved on can be dropped rather
+/// than written into whatever row is under the cursor now.
+pub const DIR_SIZE_EVENT: &str = "dir-size-result";
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirSizeResult {
+    pub job_id: u64,
+    /// Whatever the caller asked under — a path for a local row, a header
+    /// block written as a string for a volume row. Opaque here on purpose:
+    /// this module has no business knowing how a pane keys its rows.
+    pub key: String,
+    pub total: crate::core::dirsize::DirTotal,
+}
+
+/// Count what a local folder holds (ART-087, brief §3.2 `CountSpace=1`).
+///
+/// A job, not a plain command: a drawer of forty thousand files must not block
+/// the command thread and must be stoppable (§54, §55). Returns the job id;
+/// the answer arrives on [`DIR_SIZE_EVENT`].
+///
+/// Read-only, so nothing is logged to the operation log — that records what
+/// changes user data, and this changes nothing.
+#[tauri::command]
+pub fn panel_directory_size(
+    path: String,
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, std::sync::Arc<crate::commands::jobs::JobRegistry>>,
+) -> AppResult<u64> {
+    let dir = PathBuf::from(path.trim());
+    if !dir.is_dir() {
+        return Err(CoreError::InvalidInput(format!("'{}' is not a folder", dir.display())).into());
+    }
+
+    let key = dir.to_string_lossy().to_string();
+    let registry = std::sync::Arc::clone(&registry);
+    let emit_app = app.clone();
+    let title = format!("Counting {key}");
+
+    let id = super::jobs::spawn_job(&app, registry, &title, move |job_id, progress| {
+        let total = crate::core::dirsize::host_total(&dir, progress)?;
+        let _ = tauri::Emitter::emit(
+            &emit_app,
+            DIR_SIZE_EVENT,
+            DirSizeResult { job_id, key, total },
+        );
+        Ok(())
+    });
+
+    Ok(id)
+}
+
 /// Where an ADF entry was written on the host.
 #[derive(Debug, Clone, Serialize)]
 pub struct ExtractedTo {
