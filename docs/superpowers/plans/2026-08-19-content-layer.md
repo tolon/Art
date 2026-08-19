@@ -436,17 +436,59 @@ pub struct ArchiveSource {
 
 `open` lists once, finds the single top-level directory, strips it from every path, and keeps the index alongside. `read` calls `backend.read(index, limit)` with a limit — never an unbounded read. `walk` returns the listing; `entry("")` answers a synthetic root, matching `AdfSource::root_entry` and `CdSource::root_entry`. `walk` on a path naming a file **refuses**, as both siblings do.
 
-- [ ] **Step 4: Join the contract test**
+- [ ] **Step 4: Find a package archive in a folder**
+
+Nothing does this today. `scan::find_media` tries `AdfSource::open` and then
+`CdSource::open` on every file in a folder; a `.lha` is neither, so it is
+skipped. And the owner's own layout keeps the two apart —
+`E:\amiga\Amigatolon\iso` holds install media, `E:\amiga\Amigatolon\paketler`
+holds fifty-eight packages — so packages are not simply more files in the
+media folder.
+
+Add, in `scan.rs` beside `find_media`:
+
+```rust
+/// Every package archive in `folder`, identified from **inside** each file.
+///
+/// Deliberately separate from `find_media` rather than a third arm of its
+/// probe. Install media and packages are different questions asked of
+/// different folders — the owner keeps discs in one and archives in another —
+/// and folding them together would mean opening every 469 MiB disc in the
+/// package folder to find out it is not a package.
+///
+/// A file that is not an archive, or is an archive of a shape
+/// `ArchiveSource` refuses, is **skipped rather than fatal** — the same rule
+/// `find_media` follows, and for the same reason: one unreadable candidate
+/// in a folder of fifty-eight must not fail the scan.
+pub fn find_packages(folder: &Path) -> CoreResult<Vec<FoundPackage>>;
+
+/// One archive `find_packages` opened, and the name it gave for itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FoundPackage {
+    pub path: PathBuf,
+    /// The archive's single top-level directory — never its filename.
+    pub media: String,
+}
+```
+
+Tests: a folder holding one valid package and one file that is not an
+archive reports the valid one and does not fail; a folder holding two
+packages reports both **in a deterministic order** (`find_media` sorts its
+entries and says why — do the same); an unreadable folder is an error, not
+an empty list.
+
+- [ ] **Step 5: Join the contract test**
 
 Add `ArchiveSource` to `core/osinstall/source_contract.rs`'s list of implementations. Read that file first: it exists because three divergences between `AdfSource` and `CdSource` were found one at a time, and a fourth implementation joining without being asked the same questions would be the fourth.
 
-- [ ] **Step 5: Green, and commit**
+- [ ] **Step 6: Green, and commit**
 
 Run: `cd src-tauri && cargo test osinstall && cargo fmt && cargo clippy --all-targets -- -D warnings`
 
 ```bash
-git add src-tauri/src/core/osinstall/source_archive.rs src-tauri/src/core/osinstall/mod.rs src-tauri/src/core/osinstall/source_contract.rs
-git commit -m "feat(osinstall): a package archive is a medium"
+git add -A
+git commit -m "feat(osinstall): a package archive is a medium, and can be found"
 ```
 
 ---
@@ -854,10 +896,32 @@ git commit -m "feat(osinstall): say what a package would land on before it lands
 - Test: inline in both
 
 **Interfaces:**
-- Consumes: everything from Tasks 2–5.
-- Produces: `InstallRequest.packages: Vec<String>`; `pub fn add_package(tree_root: &Path, package: &Package, sink: &dyn ProgressSink) -> CoreResult<ApplyOutcome>`.
+- Consumes: everything from Tasks 2–5, including `scan::find_packages` and `scan::FoundPackage`.
+- Produces: `InstallRequest.packages: Vec<String>`, `InstallRequest.package_folder: Option<PathBuf>`; `pub fn add_package(tree_root: &Path, package: &Package, archive: &Path, sink: &dyn ProgressSink) -> CoreResult<ApplyOutcome>`.
 
-**Produce** extends the existing path: `InstallRequest` gains `packages`, `plan()` resolves them in `order()`'s order after the release's own components, and `apply()` places them in that order. **Add** takes an existing tree and one package, and writes into it.
+`add_package` takes the archive's path rather than looking it up: **Add**
+works on one package the caller already resolved, and a second discovery
+pass inside it would be a second place for "which file is this package" to
+be decided.
+
+**`InstallRequest` gains two fields, not one.** `packages: Vec<String>` says
+which, and **`package_folder: Option<PathBuf>`** says where to look — the
+owner keeps discs in `Amigatolon\iso` and archives in `Amigatolon\paketler`,
+so the media folder cannot answer it. `None` means no packages were asked
+for; a request naming packages with no folder is a refusal that says so, not
+an empty result.
+
+Resolution mirrors what already exists: `find_packages(folder)` gives
+`Vec<FoundPackage>`, a package's `media` is matched against it, and the
+existing `MediaMatch` shape answers **missing** and **ambiguous** — two
+archives in one folder claiming the same top-level directory is a real case
+(the owner has `BoingBag39-2.lha` and eight language variants beside it) and
+must be refused by name rather than resolved by whichever sorted first.
+
+**Produce** extends the existing path: `plan()` resolves the chosen packages
+in `order()`'s order, after the release's own components, and `apply()`
+places them in that order. **Add** takes an existing tree and one package,
+and writes into it.
 
 Both must record what they did in `distribution.json`: a file that a package overwrote records the package as its source **and** what it overwrote, so the manifest stays a true account of where every byte came from.
 
@@ -960,7 +1024,8 @@ Run: `cd src-tauri && cargo test osinstall::plan osinstall::apply`
 Three, each with a test:
 
 - A package whose `requires` is not satisfied — refused by name (Task 4's `order` already does this; make sure the refusal reaches the plan's `refusals` rather than becoming a hard error).
-- A package whose media is not in the media folder — the existing `MediaMissing` shape.
+- A package whose archive is not in the package folder — the existing `MediaMissing` shape, and its **ambiguous** sibling for two archives claiming one name.
+- A request naming packages with no `package_folder` — refused saying which packages were asked for.
 - **Add** onto a tree that has no `distribution.json` — refused. Without the manifest ART cannot say what it is overwriting, and the whole preview rests on knowing.
 
 - [ ] **Step 4: Green, and commit**
@@ -991,7 +1056,14 @@ git commit -m "feat(osinstall): build with packages, or add one to a built tree"
 
 - [ ] **Step 1: The two read-only commands**
 
-Both take no destructive argument and write nothing. `osinstall_collisions` takes the tree root and the chosen package ids and returns `Vec<CollisionReport>`.
+Both take no destructive argument and write nothing. `osinstall_packages`
+takes the package folder and returns the shipped packages **paired with
+whether each one's archive was actually found there** — a checkbox for a
+package whose file is absent is a promise ART cannot keep.
+`osinstall_collisions` takes the tree root, the package folder and the chosen
+package ids, and returns `Vec<CollisionReport>`. It has to build the plan
+items to do that; it must build them the same way `plan()` does rather than
+growing a second, nearly-identical resolver.
 
 Register both in `invoke_handler![]` **and** add typed wrappers in `src/lib/osinstall.ts`. Mirror `Collision` and `CollisionReport` exactly, including the `kind` tag.
 
