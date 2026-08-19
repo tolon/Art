@@ -44,12 +44,16 @@
 //! and `package` ([`package::Package`] — what a package archive actually
 //! contains and where each of its files goes, the same [`Component`] shape a
 //! release recipe already uses, driven through the identical
-//! `recipe.rs`-established `include_str!` + shipped-list mechanism) exist so
-//! far — this module tree lands one task at a time, each adding its own
-//! `pub mod` line, so the crate compiles at the end of every task rather than
-//! only at the end of the feature.
+//! `recipe.rs`-established `include_str!` + shipped-list mechanism) and now
+//! `collide` ([`collide::preview`] — entirely read-only: what every planned
+//! item in a package would land on inside a tree already built, so a
+//! downgrade or an undeclared overwrite is a fact seen before it happens
+//! rather than after) exist so far — this module tree lands one task at a
+//! time, each adding its own `pub mod` line, so the crate compiles at the
+//! end of every task rather than only at the end of the feature.
 
 pub mod apply;
+pub mod collide;
 pub mod package;
 pub mod plan;
 pub mod recipe;
