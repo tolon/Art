@@ -50,6 +50,7 @@ import i18n from "i18next";
 import { changeLanguage } from "@/i18n";
 import { useSettingsStore } from "@/stores/settingsStore";
 import type {
+  ComponentDef,
   InstallPlan,
   InstallRequest,
   MediaScanResult,
@@ -60,6 +61,7 @@ import type {
 import type { RomInfo } from "@/lib/pistorm";
 
 const scanMediaMock = vi.hoisted(() => vi.fn());
+const componentsMock = vi.hoisted(() => vi.fn());
 const planMock = vi.hoisted(() => vi.fn());
 const applyMock = vi.hoisted(() => vi.fn());
 const verifyMock = vi.hoisted(() => vi.fn());
@@ -70,6 +72,7 @@ const dialogOpenMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/osinstall", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/osinstall")>()),
   osinstallScanMedia: scanMediaMock,
+  osinstallComponents: componentsMock,
   osinstallPlan: planMock,
   osinstallApply: applyMock,
   osinstallVerify: verifyMock,
@@ -119,6 +122,67 @@ const ROM: RomInfo = {
   compatible_models: ["a1200"],
   file_path: "E:\\roms\\kick.rom",
 };
+
+/**
+ * What `osinstallComponents` answers, per release — the two shipped recipes
+ * cut down to what this screen actually reasons about.
+ *
+ * Two things here are the point rather than the setup. The lists **differ**,
+ * and both carry a `workbench-base` naming **different media**: that is the
+ * defect the checklist used to have, where a hardcoded AmigaOS 3.2
+ * catalogue was rendered whatever the picker said, so 3.9 showed 26
+ * components for a one-component recipe and labelled its base component
+ * `Workbench3.2`.
+ */
+const COMPONENTS_32: ComponentDef[] = [
+  {
+    id: "workbench-base",
+    media: "Workbench3.2",
+    required: true,
+    available: true,
+    conditionMajor: null,
+    exclusiveGroup: null,
+  },
+  {
+    id: "install-libs",
+    media: "Install3.2",
+    required: true,
+    available: true,
+    conditionMajor: null,
+    exclusiveGroup: null,
+  },
+  {
+    id: "extras",
+    media: "Extras3.2",
+    required: false,
+    available: true,
+    conditionMajor: null,
+    exclusiveGroup: null,
+  },
+  {
+    id: "modules-a1200",
+    media: "ModulesA1200_3.2",
+    required: false,
+    available: true,
+    conditionMajor: 47,
+    exclusiveGroup: "modules",
+  },
+];
+
+const COMPONENTS_39: ComponentDef[] = [
+  {
+    id: "workbench-base",
+    media: "AmigaOS3.9",
+    required: true,
+    available: true,
+    conditionMajor: null,
+    exclusiveGroup: null,
+  },
+];
+
+function componentsFor(release: string): ComponentDef[] {
+  return release === "AmigaOS 3.9" ? COMPONENTS_39 : COMPONENTS_32;
+}
 
 const ITEM_WORKBENCH: PlanItem = {
   component: "workbench-base",
@@ -185,6 +249,9 @@ beforeEach(() => {
     outcome: "found",
     media: [{ path: "E:\\media\\Disk1.adf", volumeName: "Workbench3.2", kind: "floppy" }],
   } satisfies MediaScanResult);
+  componentsMock
+    .mockReset()
+    .mockImplementation((release: string) => Promise.resolve(componentsFor(release)));
   planMock.mockReset().mockImplementation((req: InstallRequest) => Promise.resolve(planResultFor(req)));
   applyMock.mockReset().mockResolvedValue(1);
   verifyMock.mockReset();
@@ -201,6 +268,9 @@ async function renderFull() {
   const utils = render(<OsInstall />);
   await waitFor(() => expect(planMock).toHaveBeenCalled());
   await screen.findByText(i18n.t("osinstall.plan.heading"));
+  // The checklist is loaded, not hardcoded, so it arrives on its own round
+  // trip — wait for it rather than racing it.
+  await screen.findByRole("checkbox", { name: "Extras3.2" });
   return utils;
 }
 
@@ -216,9 +286,10 @@ describe("OsInstall renders past its headings", () => {
     expect(screen.getByText(i18n.t("osinstall.destination.label"))).toBeTruthy();
 
     // The component checklist is the screen's real input (requirement 4) —
-    // more than one entry, matching the 26-component shipped recipe.
+    // one row per component of the release's own loaded recipe. `+ 1` is the
+    // confirmation tickbox in the run card, which is not a component.
     const checkboxes = screen.getAllByRole("checkbox");
-    expect(checkboxes.length).toBeGreaterThan(1);
+    expect(checkboxes.length).toBe(COMPONENTS_32.length + 1);
 
     expect(screen.getByRole("button", { name: i18n.t("osinstall.run.run") })).toBeTruthy();
     expect(screen.getByRole("button", { name: i18n.t("osinstall.verify.run") })).toBeTruthy();
@@ -311,6 +382,55 @@ describe("choosing the release re-plans against it", () => {
     await waitFor(() =>
       expect(planMock).toHaveBeenCalledWith(expect.objectContaining({ release: "AmigaOS 3.9" }))
     );
+  });
+
+  it("shows the chosen release's own components, not the previous release's", async () => {
+    // The Major finding a whole-branch review called the worst on its list:
+    // the picker changed the plan and left a hardcoded AmigaOS 3.2 checklist
+    // on screen, so the user was shown one operating system's parts while
+    // ART installed another's (§89). The old test asserted only that
+    // `planMock` was called with the new release — it never looked at the
+    // checklist, which is why this survived.
+    await renderFull();
+    expect(screen.getByRole("checkbox", { name: "Extras3.2" })).toBeTruthy();
+
+    const picker = screen.getByRole("combobox", {
+      name: i18n.t("osinstall.release.label"),
+    }) as HTMLSelectElement;
+    await userEvent.selectOptions(picker, "AmigaOS 3.9");
+
+    // The list is re-read for the release actually chosen...
+    await waitFor(() => expect(componentsMock).toHaveBeenCalledWith("AmigaOS 3.9"));
+    // ...3.2's own components are gone...
+    await waitFor(() => expect(screen.queryByRole("checkbox", { name: "Extras3.2" })).toBeNull());
+    // ...and 3.9's base component is labelled with 3.9's media, not 3.2's,
+    // even though both recipes call it `workbench-base`.
+    expect(screen.getByRole("checkbox", { name: /AmigaOS3\.9/ })).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: /Workbench3\.2/ })).toBeNull();
+  });
+
+  it("keeps each release's own ticks when the user switches away and back", async () => {
+    // "Nothing changes unless the user changes it", applied to a choice made
+    // for a release the user then looked away from. The remembered set is
+    // keyed per release (`rememberedComponentKey`), so 3.9 — whose recipe
+    // holds none of 3.2's ids — cannot sanitize them away.
+    await renderFull();
+
+    const extras = screen.getByRole("checkbox", { name: "Extras3.2" }) as HTMLInputElement;
+    await userEvent.click(extras);
+    expect(extras.checked).toBe(true);
+
+    const picker = screen.getByRole("combobox", {
+      name: i18n.t("osinstall.release.label"),
+    }) as HTMLSelectElement;
+    await userEvent.selectOptions(picker, "AmigaOS 3.9");
+    await waitFor(() => expect(screen.queryByRole("checkbox", { name: "Extras3.2" })).toBeNull());
+
+    await userEvent.selectOptions(picker, "AmigaOS 3.2");
+    const backAgain = (await screen.findByRole("checkbox", {
+      name: "Extras3.2",
+    })) as HTMLInputElement;
+    expect(backAgain.checked).toBe(true);
   });
 });
 

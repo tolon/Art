@@ -703,7 +703,7 @@
       "bootCard": "Sadece önyükleme kartı",
       "bootCardHint": "Pi'nin ürün yazılımı, senin Kickstart'ın ve Amiga'nın görebileceği bir bölüm tablosu — kendi Emu68 sürümünden kurulur. Üzerinde AmigaOS yok; o bir sonraki adım.",
       "install": "AmigaOS kur",
-      "installHint": "Kendi AmigaOS 3.2 kurulum disklerinden bir dağıtım ağacı oluştur — bir kartın Amiga birimlerine kopyalanmaya hazır.",
+      "installHint": "Kendi AmigaOS kurulum disklerinden ya da diskinden bir dağıtım ağacı oluştur — bir kartın Amiga birimlerine kopyalanmaya hazır.",
       "prepareVolumes": "Bir kartın Amiga birimlerini hazırla",
       "prepareVolumesHint": "Elindeki kartın bölümlerini biçimlendir ve içeriğini kopyala; kart ilk açılışta kendini biçimlendirmeyi önermek yerine hazır gelsin. hst-imager gerekir, onu sen sağlıyorsun.",
       "distro": "Tam bir dağıtım",
@@ -2050,14 +2050,14 @@
       "ruleKindMismatch": "{{component}}'in {{from}} için kuralı bir {{expected}} bekliyordu, ama medya bir {{found}} taşıyor."
     },
     "heading": "AmigaOS Kur",
-    "intro": "Kendi AmigaOS 3.2 kurulum disklerinden, gerçek bir Amiga birimine kopyalanmaya hazır bir dağıtım ağacı oluştur.",
+    "intro": "Kendi AmigaOS kurulum disklerinden ya da diskinden, gerçek bir Amiga birimine kopyalanmaya hazır bir dağıtım ağacı oluştur.",
     "release": {
       "label": "AmigaOS sürümü"
     },
     "media": {
       "label": "Kurulum diskleri klasörü",
       "none": "Klasör seçilmedi.",
-      "chooseTitle": "AmigaOS 3.2 kurulum disk imgelerinin bulunduğu klasörü seç",
+      "chooseTitle": "AmigaOS kurulum disk ya da CD imgelerinin bulunduğu klasörü seç",
       "unreadable": "ART bu klasörü okuyamadı — yolu kontrol et.",
       "empty": "Bu klasörde kurulum diski bulunamadı.",
       "found_one": "{{count}} kurulum diski bulundu: {{names}}.",
@@ -2078,8 +2078,10 @@
     },
     "components": {
       "heading": "Bileşenler",
-      "intro": "Workbench3.2 her zaman kurulur. Geri kalan her şey isteğe bağlıdır, ya da eşlenen Kickstart ihtiyaç duyduğunda kendiliğinden açılır.",
+      "intro": "Yukarıda seçilen sürümün bileşenleri. Bazıları her zaman kurulur; geri kalanı isteğe bağlıdır, ya da eşlenen Kickstart ihtiyaç duyduğunda kendiliğinden açılır.",
       "required": "Zorunlu",
+      "loading": "Bu sürümün bileşenleri okunuyor…",
+      "unavailable": "ART bu sürümün bileşenlerini okuyamadı.",
       "reason": {
         "required": "Her zaman açık — çalışan bir sistem buna ihtiyaç duyar.",
         "romNeeded": "Bunun kendiliğinden açılıp açılmayacağını bilmek için önce eşlenen Kickstart'ı seç.",

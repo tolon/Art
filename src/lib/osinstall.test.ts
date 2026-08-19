@@ -2,16 +2,23 @@
 // (an excluded component's media staying in `mediaPaths`, so `apply()`'s
 // manifest lied about what a tree was built from) shipped inside code no
 // test could reach, because it lived only in a component. This file is the
-// coverage that would have caught it, plus the parity check that keeps
-// `AMIGAOS_32_COMPONENTS` from silently drifting away from the recipe it
-// mirrors.
+// coverage that would have caught it.
+//
+// The parity suite that used to sit here guarded `AMIGAOS_32_COMPONENTS`, a
+// hand-written copy of the AmigaOS 3.2 recipe, against the recipe it
+// mirrored. That constant is gone — the checklist is now a projection of
+// whichever release's recipe the user chose (`osinstallComponents`), so
+// there is no second copy left to drift. What survives from it is the part a
+// projection cannot guarantee: the assumptions the *screen* makes about what
+// a recipe may contain, asserted over **every** shipped recipe rather than
+// only over 3.2, since 3.9 arriving is exactly what turned a hand-mirror
+// from redundant into wrong.
 
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import {
-  AMIGAOS_32_COMPONENTS,
   componentDef,
   componentLabel,
   confirmComponentOff,
@@ -22,27 +29,20 @@ import {
   parseOptionalSlot,
   parsePartitionIndex,
   pruneStaleExclusions,
+  rememberedComponentKey,
   sanitizeChosen,
   toggleChosen,
   withoutExcluded,
+  INSTALL_RELEASES,
+  type ComponentDef,
   type InstallPlan,
 } from "@/lib/osinstall";
 
 // ---------------------------------------------------------------------------
-// Parity against the Rust recipe — review point 6 (fix round)
+// What the screen assumes about a recipe — checked over every shipped one
 // ---------------------------------------------------------------------------
 
-const RECIPE_PATH = resolve(
-  __dirname,
-  "..",
-  "..",
-  "src-tauri",
-  "src",
-  "core",
-  "osinstall",
-  "recipes",
-  "amigaos-3.2.json"
-);
+const RECIPE_DIR = resolve(__dirname, "..", "..", "src-tauri", "src", "core", "osinstall", "recipes");
 
 interface RecipeComponent {
   id: string;
@@ -58,78 +58,103 @@ interface Recipe {
   components: RecipeComponent[];
 }
 
-function recipe(): Recipe {
-  return JSON.parse(readFileSync(RECIPE_PATH, "utf8")) as Recipe;
+/** Every recipe file ART ships, by the filename `recipe.rs` includes it
+ *  under. Listed rather than globbed so a file added without being wired
+ *  into `by_release` does not quietly join the suite. */
+const RECIPE_FILES = ["amigaos-3.2.json", "amigaos-3.9.json"];
+
+function recipes(): Recipe[] {
+  return RECIPE_FILES.map(
+    (name) => JSON.parse(readFileSync(resolve(RECIPE_DIR, name), "utf8")) as Recipe
+  );
 }
 
-describe("AMIGAOS_32_COMPONENTS mirrors the shipped recipe", () => {
-  it("has components to check", () => {
+/** A recipe's components in the shape the command projects them into — the
+ *  same mapping `ComponentSummary::from` performs on the Rust side, so the
+ *  helpers below are exercised against real recipe data rather than a
+ *  hand-typed catalogue that could be wrong in the same direction. */
+function catalogueOf(recipe: Recipe): ComponentDef[] {
+  return recipe.components.map((c) => ({
+    id: c.id,
+    media: c.media,
+    required: c.required ?? false,
+    available: c.available ?? true,
+    conditionMajor: c.condition?.major ?? null,
+    exclusiveGroup: c.exclusive_group ?? null,
+  }));
+}
+
+describe("every shipped recipe", () => {
+  it("parses and has components to check", () => {
     // A recipe that failed to parse, or one emptied by a bad edit, would
     // make every assertion below vacuously true.
-    expect(recipe().components.length).toBeGreaterThan(0);
+    for (const recipe of recipes()) {
+      expect(recipe.components.length, recipe.release).toBeGreaterThan(0);
+    }
   });
 
-  it("names exactly the same ids, in the same order", () => {
-    expect(AMIGAOS_32_COMPONENTS.map((c) => c.id)).toEqual(recipe().components.map((c) => c.id));
+  it("is reachable from the release picker, and the picker offers nothing else", () => {
+    // Review finding 11's boundary, now actually crossed by a test:
+    // `INSTALL_RELEASES` is what the picker lists, and a release listed but
+    // unshipped (or shipped but unlisted) is a release the user either
+    // cannot install or cannot reach.
+    expect([...INSTALL_RELEASES].sort()).toEqual(recipes().map((r) => r.release).sort());
   });
 
-  it("agrees on media, required, available, condition and exclusive_group for every id", () => {
-    const mismatches: string[] = [];
-    for (const rc of recipe().components) {
-      const mirrored = componentDef(rc.id);
-      if (!mirrored) {
-        mismatches.push(`${rc.id}: missing from AMIGAOS_32_COMPONENTS entirely`);
-        continue;
-      }
-      if (mirrored.media !== rc.media) {
-        mismatches.push(`${rc.id}: media ${mirrored.media} !== ${rc.media}`);
-      }
-      const required = rc.required ?? false;
-      if (mirrored.required !== required) {
-        mismatches.push(`${rc.id}: required ${mirrored.required} !== ${required}`);
-      }
-      const available = rc.available ?? true;
-      if (mirrored.available !== available) {
-        mismatches.push(`${rc.id}: available ${mirrored.available} !== ${available}`);
-      }
-      const conditionMajor = rc.condition?.major ?? null;
-      if (mirrored.conditionMajor !== conditionMajor) {
-        mismatches.push(`${rc.id}: conditionMajor ${mirrored.conditionMajor} !== ${conditionMajor}`);
-      }
-      // ART-119 (#3): `ComponentDef.conditionMajor` mirrors one specific
-      // variant, `Condition::RomOlderThan { major }` — its own doc comment
-      // says so. Matching on `major` alone means a future condition kind
-      // that also happens to carry a `major` field would pass this parity
-      // check while `conditionalReason`'s callers still assumed
-      // rom-older-than and rendered "below Kickstart V47" regardless.
-      if (rc.condition && rc.condition.condition !== "rom-older-than") {
-        mismatches.push(
-          `${rc.id}: condition kind is "${rc.condition.condition}", not "rom-older-than" — ` +
-            `ComponentDef.conditionMajor only mirrors rom-older-than and the screen only knows how to explain that one`
-        );
-      }
-      const exclusiveGroup = rc.exclusive_group ?? null;
-      if (mirrored.exclusiveGroup !== exclusiveGroup) {
-        mismatches.push(`${rc.id}: exclusiveGroup ${mirrored.exclusiveGroup} !== ${exclusiveGroup}`);
+  it("carries no condition the screen does not know how to explain", () => {
+    // ART-119 (#3), widened from 3.2 alone. `ComponentDef.conditionMajor`
+    // flattens one specific variant, `Condition::RomOlderThan { major }`.
+    // A future condition kind that also happened to carry a `major` would
+    // otherwise render as "below Kickstart V47" regardless of what it
+    // actually meant, and `conditionalReason`'s whole four-branch
+    // vocabulary is written in those terms.
+    const offenders: string[] = [];
+    for (const recipe of recipes()) {
+      for (const component of recipe.components) {
+        if (component.condition && component.condition.condition !== "rom-older-than") {
+          offenders.push(`${recipe.release}/${component.id}: "${component.condition.condition}"`);
+        }
       }
     }
-    expect(mismatches).toEqual([]);
+    expect(offenders).toEqual([]);
   });
 
-  it("carries no id the recipe does not also have", () => {
-    // The other direction: a component removed from the recipe but left
-    // behind here would render a checkbox for something `osinstallPlan`
-    // can never actually switch on.
-    const recipeIds = new Set(recipe().components.map((c) => c.id));
-    const extra = AMIGAOS_32_COMPONENTS.map((c) => c.id).filter((id) => !recipeIds.has(id));
-    expect(extra).toEqual([]);
+  it("names each component id at most once, so a label can resolve", () => {
+    for (const recipe of recipes()) {
+      const ids = recipe.components.map((c) => c.id);
+      expect(new Set(ids).size, recipe.release).toBe(ids.length);
+    }
+  });
+
+  it("uses one component id for different media in different releases — which is why the list must be loaded", () => {
+    // The concrete reason a hardcoded catalogue was wrong rather than merely
+    // redundant: both shipped recipes carry `workbench-base`, and it is not
+    // the same volume in each, so a label resolved against the wrong recipe
+    // names media that has nothing to do with what is being installed.
+    const media = recipes().map((r) => r.components.find((c) => c.id === "workbench-base")?.media);
+    expect(media.every((m) => m !== undefined)).toBe(true);
+    expect(new Set(media).size).toBe(media.length);
   });
 });
 
 describe("componentLabel", () => {
-  it("is the media name for a known id, the id itself otherwise", () => {
-    expect(componentLabel("workbench-base")).toBe("Workbench3.2");
-    expect(componentLabel("not-a-real-component")).toBe("not-a-real-component");
+  it("is the media name for an id the loaded release holds, the id itself otherwise", () => {
+    const catalogue = catalogueOf(recipes()[0]);
+    expect(componentLabel(catalogue, "workbench-base")).toBe("Workbench3.2");
+    // Never a fabricated volume name for something this release does not
+    // hold — including an id that belongs to the *other* release.
+    expect(componentLabel(catalogue, "not-a-real-component")).toBe("not-a-real-component");
+    expect(componentLabel([], "workbench-base")).toBe("workbench-base");
+  });
+});
+
+describe("componentDef", () => {
+  it("resolves against the list it is given, not a module constant", () => {
+    const [threeTwo, threeNine] = recipes().map(catalogueOf);
+    expect(componentDef(threeTwo, "workbench-base")?.media).not.toBe(
+      componentDef(threeNine, "workbench-base")?.media
+    );
+    expect(componentDef(threeNine, "extras")).toBeUndefined();
   });
 });
 
@@ -139,9 +164,45 @@ describe("sanitizeChosen", () => {
     // running system named its own wallpaper path (ART-127), so the
     // unavailable example is `update-3.2.1`, which is still registered and
     // still not implemented.
+    const catalogue = catalogueOf(recipes()[0]);
     expect(
-      sanitizeChosen(["workbench-base", "extras", "not-a-real-id", "update-3.2.1", "backdrops"])
+      sanitizeChosen(catalogue, [
+        "workbench-base",
+        "extras",
+        "not-a-real-id",
+        "update-3.2.1",
+        "backdrops",
+      ])
     ).toEqual(["workbench-base", "extras", "backdrops"]);
+  });
+
+  it("drops everything against an empty catalogue — which is why the screen must not call it before one loads", () => {
+    // Stated as a test rather than only as a comment: this is the ART-089
+    // shape. `OsInstall.tsx` holds `null` for "not loaded yet" and passes
+    // the remembered ids through untouched until a real list arrives.
+    expect(sanitizeChosen([], ["workbench-base", "extras"])).toEqual([]);
+  });
+});
+
+describe("rememberedComponentKey", () => {
+  it("keeps the unsuffixed key for the release that existed before the picker did", () => {
+    // Anyone upgrading into the release picker finds the selection they last
+    // made still ticked, rather than an empty list under a key nothing ever
+    // wrote.
+    expect(rememberedComponentKey("osinstall.chosen", "AmigaOS 3.2")).toBe("osinstall.chosen");
+  });
+
+  it("gives every other release its own key, so switching does not destroy the other's choices", () => {
+    expect(rememberedComponentKey("osinstall.chosen", "AmigaOS 3.9")).toBe(
+      "osinstall.chosen.AmigaOS 3.9"
+    );
+    expect(rememberedComponentKey("osinstall.excludedConditional", "AmigaOS 3.9")).toBe(
+      "osinstall.excludedConditional.AmigaOS 3.9"
+    );
+    // Two releases never share a key — otherwise one release's ids would be
+    // sanitized out of the other's remembered set on every switch.
+    const keys = INSTALL_RELEASES.map((r) => rememberedComponentKey("osinstall.chosen", r));
+    expect(new Set(keys).size).toBe(keys.length);
   });
 });
 
@@ -161,30 +222,45 @@ function planWith(componentsOn: string[]): InstallPlan {
   };
 }
 
+/** The AmigaOS 3.2 catalogue, as the command would project it — every test
+ *  below reasons about `modules-a1200`, which only that recipe declares. */
+const CATALOGUE = catalogueOf(recipes()[0]);
+
 describe("isForcedOnByCondition", () => {
   it("is true only for a non-required component on by the plan but not chosen", () => {
     const plan = planWith(["workbench-base", "modules-a1200"]);
-    expect(isForcedOnByCondition(plan, [], "modules-a1200")).toBe(true);
+    expect(isForcedOnByCondition(CATALOGUE, plan, [], "modules-a1200")).toBe(true);
     // Required: never "forced by condition", even though it is in componentsOn.
-    expect(isForcedOnByCondition(plan, [], "workbench-base")).toBe(false);
+    expect(isForcedOnByCondition(CATALOGUE, plan, [], "workbench-base")).toBe(false);
     // Explicitly chosen: the user's own choice, not the condition's.
-    expect(isForcedOnByCondition(plan, ["modules-a1200"], "modules-a1200")).toBe(false);
+    expect(isForcedOnByCondition(CATALOGUE, plan, ["modules-a1200"], "modules-a1200")).toBe(false);
   });
 
   it("is false when there is no plan, or the id is unknown, or the id is not on", () => {
-    expect(isForcedOnByCondition(null, [], "modules-a1200")).toBe(false);
-    expect(isForcedOnByCondition(planWith([]), [], "not-a-real-id")).toBe(false);
-    expect(isForcedOnByCondition(planWith([]), [], "modules-a1200")).toBe(false);
+    expect(isForcedOnByCondition(CATALOGUE, null, [], "modules-a1200")).toBe(false);
+    expect(isForcedOnByCondition(CATALOGUE, planWith([]), [], "not-a-real-id")).toBe(false);
+    expect(isForcedOnByCondition(CATALOGUE, planWith([]), [], "modules-a1200")).toBe(false);
+  });
+
+  it("is false against a release whose recipe does not hold the id at all", () => {
+    // The 3.9 recipe has no `modules-a1200`. A plan that somehow named it
+    // must not make a row light up in a release that cannot install it —
+    // the "unknown id" branch, reached the way the release picker reaches it.
+    const threeNine = catalogueOf(recipes()[1]);
+    const plan = planWith(["workbench-base", "modules-a1200"]);
+    expect(isForcedOnByCondition(threeNine, plan, [], "modules-a1200")).toBe(false);
   });
 });
 
 describe("pruneStaleExclusions", () => {
   it("keeps an exclusion only while the component is still forced on", () => {
     const stillOn = planWith(["workbench-base", "modules-a1200"]);
-    expect(pruneStaleExclusions(stillOn, [], ["modules-a1200"])).toEqual(["modules-a1200"]);
+    expect(pruneStaleExclusions(CATALOGUE, stillOn, [], ["modules-a1200"])).toEqual([
+      "modules-a1200",
+    ]);
 
     const noLongerOn = planWith(["workbench-base"]);
-    expect(pruneStaleExclusions(noLongerOn, [], ["modules-a1200"])).toEqual([]);
+    expect(pruneStaleExclusions(CATALOGUE, noLongerOn, [], ["modules-a1200"])).toEqual([]);
   });
 });
 
@@ -253,11 +329,14 @@ describe("toggleChosen", () => {
     // `modules-a1200` is the only member of the "modules" group today, so
     // this proves the mechanism rather than a real conflict — the same
     // note Task 1's own review left on `exclusive_group` itself.
-    expect(toggleChosen(["extras"], "modules-a1200")).toEqual(["extras", "modules-a1200"]);
+    expect(toggleChosen(CATALOGUE, ["extras"], "modules-a1200")).toEqual([
+      "extras",
+      "modules-a1200",
+    ]);
   });
 
   it("removes an id already present", () => {
-    expect(toggleChosen(["extras", "fonts"], "extras")).toEqual(["fonts"]);
+    expect(toggleChosen(CATALOGUE, ["extras", "fonts"], "extras")).toEqual(["fonts"]);
   });
 });
 

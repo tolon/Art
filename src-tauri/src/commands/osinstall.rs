@@ -2,7 +2,7 @@
 //! layer over `core::osinstall`. Thin only: deserialize, call core, serialize
 //! back.
 //!
-//! Four commands. `osinstall_scan_media` and `osinstall_plan` both end up
+//! Five commands. `osinstall_scan_media` and `osinstall_plan` both end up
 //! opening every candidate in the media folder — directly, or through
 //! `plan::plan`'s own call to `scan::find_media` — and a missing or
 //! unreadable folder is the single most likely mistake after a bad ROM
@@ -14,6 +14,10 @@
 //! happens only on this side of the wire, the same way `commands/adf.rs`
 //! and `commands/layout.rs` keep their own core modules free of anything
 //! Tauri-shaped.
+//!
+//! `osinstall_components` is the fifth, and the newest: the checklist the
+//! user ticks is now a projection of the chosen release's own recipe rather
+//! than a list hand-written in the screen. Read-only, opens no media.
 //!
 //! `osinstall_apply` takes the plan it is given, the way `layout_apply` does
 //! and `preload_run` does not (see `commands/layout.rs`'s own module note):
@@ -145,6 +149,73 @@ pub fn osinstall_plan(request: InstallRequest) -> AppResult<PlanResult> {
     Ok(PlanResult::Planned {
         plan: Box::new(plan(&request, &recipe)?),
     })
+}
+
+// ---------------------------------------------------------------------------
+// osinstall_components
+// ---------------------------------------------------------------------------
+
+/// One component of a shipped recipe, in the shape the checklist on screen
+/// needs — never the whole [`Component`], whose `rules`, `overrides` and
+/// `user_startup` the screen has no use for and would only be able to
+/// misrepresent.
+///
+/// This exists because the screen used to carry its own hand-written copy of
+/// the AmigaOS 3.2 catalogue and render it whatever release was chosen: with
+/// 3.9 selected the user saw 26 components for a recipe that holds one, and
+/// 3.9's own base component was labelled `Workbench3.2` — one operating
+/// system's parts shown while another's were installed, which is §89 on the
+/// screen itself. A projection of the recipe cannot drift from the recipe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentSummary {
+    pub id: String,
+    /// The volume name inside the image (`Workbench3.2`) — what the Amiga
+    /// side calls it, shown untranslated as the row's own label.
+    pub media: String,
+    pub required: bool,
+    pub available: bool,
+    /// [`Condition::RomOlderThan`]'s `major`, flattened — `None` for an
+    /// unconditional component. Flattened rather than mirrored because the
+    /// screen's whole conditional-reason vocabulary is written in terms of a
+    /// major number; the `match` below is exhaustive, so a second `Condition`
+    /// variant is a compile error here and cannot silently arrive on screen
+    /// as "unconditional".
+    pub condition_major: Option<u16>,
+    pub exclusive_group: Option<String>,
+}
+
+impl From<&crate::core::osinstall::Component> for ComponentSummary {
+    fn from(component: &crate::core::osinstall::Component) -> Self {
+        use crate::core::osinstall::Condition;
+        Self {
+            id: component.id.clone(),
+            media: component.media.clone(),
+            required: component.required,
+            available: component.available,
+            condition_major: component.condition.map(|condition| match condition {
+                Condition::RomOlderThan { major } => major,
+            }),
+            exclusive_group: component.exclusive_group.clone(),
+        }
+    }
+}
+
+/// Which components `release`'s own shipped recipe holds, in recipe order —
+/// the order `plan()` itself walks them in, so the checklist and the file
+/// list below it agree without either sorting.
+///
+/// Read-only: parses shipped JSON, opens no media, writes nothing. An
+/// unknown release is refused by [`recipe::by_release`], never defaulted,
+/// for the reason that function's own doc comment gives.
+#[tauri::command]
+pub fn osinstall_components(release: String) -> AppResult<Vec<ComponentSummary>> {
+    let recipe = recipe::by_release(&release)?;
+    Ok(recipe
+        .components
+        .iter()
+        .map(ComponentSummary::from)
+        .collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -354,8 +425,80 @@ mod tests {
         assert_eq!(request.excluded, vec!["modules-a1200".to_string()]);
     }
 
-    /// The request carries the release, and an unknown one is refused before
-    /// any media is touched.
+    /// The checklist is the recipe, not a copy of one release's. Asserted
+    /// against both shipped releases at once: they must differ, and each
+    /// must be its own recipe's components in its own recipe's order. The
+    /// defect this replaces was a hardcoded 3.2 list rendered for 3.9 —
+    /// 26 rows for a one-component recipe, with 3.9's base component
+    /// labelled `Workbench3.2`.
+    #[test]
+    fn the_component_list_is_the_chosen_releases_own_recipe() {
+        for release in recipe::releases() {
+            let recipe = recipe::by_release(release).unwrap();
+            let listed = osinstall_components(release.to_string()).unwrap();
+            assert_eq!(
+                listed.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+                recipe
+                    .components
+                    .iter()
+                    .map(|c| c.id.as_str())
+                    .collect::<Vec<_>>(),
+                "{release}: same ids, same order as the recipe"
+            );
+            for (summary, component) in listed.iter().zip(&recipe.components) {
+                assert_eq!(summary.media, component.media, "{release}/{}", summary.id);
+                assert_eq!(
+                    summary.required, component.required,
+                    "{release}/{}",
+                    summary.id
+                );
+                assert_eq!(
+                    summary.available, component.available,
+                    "{release}/{}",
+                    summary.id
+                );
+            }
+        }
+
+        // The specific mislabelling the screen showed: both recipes carry a
+        // component called `workbench-base`, and its media is *not* the same
+        // volume in each.
+        let base_media = |release: &str| -> String {
+            osinstall_components(release.to_string())
+                .unwrap()
+                .into_iter()
+                .find(|c| c.id == "workbench-base")
+                .expect("every shipped recipe has a base component")
+                .media
+        };
+        assert_ne!(
+            base_media("AmigaOS 3.2"),
+            base_media("AmigaOS 3.9"),
+            "the two releases' base components name different media; a list \
+             hardcoded to one of them labels the other wrongly"
+        );
+    }
+
+    /// An unknown release is refused rather than answered with a default
+    /// catalogue — the same rule `osinstall_plan` follows, and the reason
+    /// this command takes a release at all instead of a boolean.
+    #[test]
+    fn an_unknown_release_has_no_component_list() {
+        assert!(osinstall_components("AmigaOS 5.0".to_string()).is_err());
+    }
+
+    /// The request carries the release **on the wire** — that, and only
+    /// that, is what this test checks: `InstallRequest.release` has no
+    /// `#[serde(default)]`, so a payload omitting it fails to deserialise
+    /// rather than quietly planning 3.2.
+    ///
+    /// The refusal of an *unknown* release is not here and was never here,
+    /// though this comment used to claim it: the guarantee lives one layer
+    /// down, in `recipe::by_release`'s exhaustive match, and is tested there
+    /// (`recipe::tests::an_unknown_release_is_refused_by_name`).
+    /// `osinstall_plan` and `osinstall_components` both reach it with `?`
+    /// and neither adds a fallback of its own — which is the whole of what
+    /// this adapter contributes to the guarantee.
     #[test]
     fn a_plan_request_names_the_release_it_wants() {
         let json = r#"{
@@ -680,6 +823,37 @@ mod tests {
             let value = serde_json::to_value(&media).unwrap();
             expect_keys(&value, &["path", "volumeName", "kind"]);
             assert_eq!(value["kind"], "floppy");
+        }
+
+        /// `ComponentSummary` is the checklist on screen, so a key renamed
+        /// on one side only would empty a row rather than fail a build —
+        /// `src/lib/osinstall.ts`'s `ComponentDef` declares exactly these
+        /// six.
+        #[test]
+        fn component_summary_serializes_with_the_keys_the_checklist_reads() {
+            let recipe = recipe::by_release("AmigaOS 3.2").unwrap();
+            let modules = recipe
+                .components
+                .iter()
+                .find(|c| c.id == "modules-a1200")
+                .expect("the shipped 3.2 recipe carries the conditional component");
+            let value = serde_json::to_value(ComponentSummary::from(modules)).unwrap();
+            expect_keys(
+                &value,
+                &[
+                    "id",
+                    "media",
+                    "required",
+                    "available",
+                    "conditionMajor",
+                    "exclusiveGroup",
+                ],
+            );
+            // A real conditional, exclusive-group component — so both
+            // optional fields are pinned as values, not merely as present
+            // nulls.
+            assert_eq!(value["conditionMajor"], 47);
+            assert_eq!(value["exclusiveGroup"], "modules");
         }
 
         /// The regression this whole module exists to prevent: without

@@ -145,6 +145,7 @@ pub fn run() {
             commands::layout::layout_apply,
             commands::osinstall::osinstall_scan_media,
             commands::osinstall::osinstall_plan,
+            commands::osinstall::osinstall_components,
             commands::osinstall::osinstall_apply,
             commands::osinstall::osinstall_verify,
             commands::gotek::gotek_scan,

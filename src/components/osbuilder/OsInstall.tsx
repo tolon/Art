@@ -7,14 +7,21 @@
 //
 // Three rules shape it, named directly in the brief:
 //
+//   - **The checklist is the chosen release's own recipe.** `osinstallComponents`
+//     loads it whenever the release changes; nothing here is hardcoded. It
+//     used to be: a literal copy of the AmigaOS 3.2 catalogue, rendered
+//     whatever the picker said, so choosing 3.9 showed 26 components for a
+//     one-component recipe and labelled 3.9's base component `Workbench3.2`.
+//     A whole-branch review called that the worst finding on its list, and it
+//     was right — showing one operating system's parts while installing
+//     another's is §89 on the screen itself.
 //   - **Every conditional tick states its reason.** A tick ART decided and
-//     did not explain is a tick the user cannot argue with. `AMIGAOS_32_COMPONENTS`
-//     (`@/lib/osinstall`) carries which components are `required` and which
-//     carry a `conditionMajor` (today, only `modules-a1200`'s "below
-//     Kickstart V47"), and `conditionalReason` decides, from primitives, one
-//     of exactly four reasons for every conditional row — never none, which
-//     is the shape a review found this screen could render in its first
-//     round (see below).
+//     did not explain is a tick the user cannot argue with. The loaded
+//     catalogue carries which components are `required` and which carry a
+//     `conditionMajor` (today, only 3.2's `modules-a1200`, "below Kickstart
+//     V47"), and `conditionalReason` decides, from primitives, one of exactly
+//     four reasons for every conditional row — never none, which is the shape
+//     a review found this screen could render in its first round (see below).
 //   - **Turning a condition-satisfied component off is a confirmation, not a
 //     refusal.** It is the user's machine. **This is now the engine's own
 //     job, not this screen's.** The first version filtered a returned
@@ -39,8 +46,10 @@
 //     Components are the only edit; the list itself has no controls.
 //
 // Remembered between runs, through `@/lib/remembered`'s guards: the media
-// folder, the ROM, the destination, and the component selection (`chosen`
-// plus `excludedConditional`). Nothing here arms a destructive action the
+// folder, the ROM, the destination, the release, and the component selection
+// (`chosen` plus `excludedConditional`) — the last two **per release**, since
+// a component id means nothing outside the recipe that declares it and
+// switching release must not destroy the choices made for the other one. Nothing here arms a destructive action the
 // way the preload screen's partition picks do — building a distribution
 // tree only ever writes a *new* folder and refuses one that already exists
 // (`SAFE_CREATE`), so there is nothing of that shape to protect against by
@@ -60,7 +69,6 @@ import { useTranslation } from "react-i18next";
 
 import { hostParentDir } from "@/lib/hostPath";
 import {
-  AMIGAOS_32_COMPONENTS,
   componentLabel,
   confirmComponentOff,
   conditionalReason,
@@ -72,6 +80,7 @@ import {
   isVerified,
   onOsInstallResult,
   osinstallApply,
+  osinstallComponents,
   osinstallBlocker,
   osinstallPlan,
   osinstallScanMedia,
@@ -80,6 +89,7 @@ import {
   parsePartitionIndex,
   pruneStaleExclusions,
   refusalPhrase,
+  rememberedComponentKey,
   sanitizeChosen,
   toggleChosen,
   withoutExcluded,
@@ -174,7 +184,19 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     isInstallRelease,
     "AmigaOS 3.2"
   );
-  const [chosen, setChosen] = useRemembered<string[]>("osinstall.chosen", isTextList, []);
+  /**
+   * The components the user ticked, remembered **per release** — see
+   * `rememberedComponentKey`. A component id means something only inside the
+   * recipe that declares it (both shipped recipes carry a `workbench-base`,
+   * for different media), so one shared set would either send 3.2's ids into
+   * a 3.9 plan or destroy them the moment the user looked at 3.9. Switching
+   * release and switching back now finds the earlier selection untouched.
+   */
+  const [chosen, setChosen] = useRemembered<string[]>(
+    rememberedComponentKey("osinstall.chosen", release),
+    isTextList,
+    []
+  );
   /**
    * Condition-satisfied components the user has explicitly, with
    * confirmation, turned off — sent to the engine as
@@ -183,12 +205,36 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    * doc comment on the remembered set as a whole).
    */
   const [excludedConditional, setExcludedConditional] = useRemembered<string[]>(
-    "osinstall.excludedConditional",
+    rememberedComponentKey("osinstall.excludedConditional", release),
     isTextList,
     []
   );
 
   // --- what the screen is doing --------------------------------------------
+  /**
+   * The chosen release's own component catalogue, loaded from its recipe —
+   * **carrying the release it describes**, never a bare list.
+   *
+   * `null` means "not loaded yet", and it is a distinct state from `[]` on
+   * purpose: everything that filters a remembered id against this list —
+   * `sanitizeChosen`, `pruneStaleExclusions` — would drop *everything*
+   * against an empty list and persist the drop, which is a setting changing
+   * without the user changing it (ART-089's shape, from the other side).
+   *
+   * The `release` field is the same guard against a subtler version of the
+   * same thing, and it is not hypothetical — a test caught it: for one render
+   * after the picker changes, `release` is already the new one (so `chosen`
+   * is read from the new release's remembered key) while this state still
+   * holds the *old* release's catalogue. Sanitizing the one against the other
+   * writes an empty list over a selection the user never touched. So nothing
+   * below reads `components` directly; everything reads `catalogue`, which is
+   * `null` until the two agree.
+   */
+  const [components, setComponents] = useState<{ release: string; list: ComponentDef[] } | null>(
+    null
+  );
+  const [componentsError, setComponentsError] = useState(false);
+  const catalogue = components?.release === release ? components.list : null;
   const [mediaScan, setMediaScan] = useState<MediaScanResult | null>(null);
   const [rom, setRom] = useState<RomInfo | null>(null);
   const [romError, setRomError] = useState(false);
@@ -231,6 +277,30 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   const [verifying, setVerifying] = useState(false);
   const [verifyReport, setVerifyReport] = useState<VerifyReport | null>(null);
   const [verifyError, setVerifyError] = useState<string | null>(null);
+
+  // The checklist is the chosen release's recipe, fetched when the release
+  // changes. `setComponents(null)` first, so a switch shows "loading" rather
+  // than the previous release's components for as long as the round trip
+  // takes — a stale checklist is the exact defect this replaces, and showing
+  // it for 20 ms is showing it.
+  //
+  // The `cancelled` flag is what keeps a slow load for a release the user has
+  // since switched away from out of the state it no longer describes.
+  useEffect(() => {
+    let cancelled = false;
+    setComponents(null);
+    setComponentsError(false);
+    osinstallComponents(release)
+      .then((list) => {
+        if (!cancelled) setComponents({ release, list });
+      })
+      .catch(() => {
+        if (!cancelled) setComponentsError(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [release]);
 
   // Re-scan whatever folder was remembered, so one since emptied or moved is
   // noticed rather than shown as still holding what it held last run.
@@ -291,10 +361,18 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     }
     let cancelled = false;
 
-    const sanitized = sanitizeChosen(chosen);
+    // Only sanitize against a catalogue that has actually arrived. Against
+    // `null` the remembered ids are passed through untouched and nothing is
+    // written back: dropping every id because a fetch has not landed yet
+    // would be ART-089 exactly — a setting changing without the user
+    // changing it.
+    const sanitized = catalogue ? sanitizeChosen(catalogue, chosen) : chosen;
     if (sanitized.length !== chosen.length) {
-      // A stale remembered id (renamed or removed since) actually clears,
-      // rather than being filtered again on every read.
+      // A stale remembered id — one this release's recipe does not hold, or
+      // holds as Coming Later — actually clears, rather than being filtered
+      // again on every read. Safe to persist now that the key is per
+      // release: this can only ever drop an id from the release it was
+      // chosen for, never from the one the user just switched away from.
       setChosen(sanitized);
     }
 
@@ -321,8 +399,8 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         // the plan is always fresh rather than sometimes stale.
         setConfirmed(false);
         setPendingExclusion(null);
-        if (base.outcome === "planned") {
-          const pruned = pruneStaleExclusions(base.plan, sanitized, excludedConditional);
+        if (base.outcome === "planned" && catalogue) {
+          const pruned = pruneStaleExclusions(catalogue, base.plan, sanitized, excludedConditional);
           if (pruned.length !== excludedConditional.length) {
             setExcludedConditional(pruned);
           }
@@ -340,7 +418,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     // `setChosen`/`setExcludedConditional` are stable identities from
     // `useRemembered`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mediaFolder, romPath, chosen, destination, excludedConditional, release]);
+  }, [mediaFolder, romPath, chosen, destination, excludedConditional, release, catalogue]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -387,9 +465,9 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     if (typeof picked === "string") setDestination(picked);
   }
 
-  function toggleConditional(def: ComponentDef) {
+  function toggleConditional(def: ComponentDef, catalogue: ComponentDef[]) {
     const excluded = excludedConditional.includes(def.id);
-    const forcedOn = isForcedOnByCondition(basePlan, chosen, def.id);
+    const forcedOn = isForcedOnByCondition(catalogue, basePlan, chosen, def.id);
     switch (conditionalToggleAction(excluded, forcedOn)) {
       case "undo-exclusion":
         setExcludedConditional(withoutExcluded(excludedConditional, def.id));
@@ -403,7 +481,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         // Off, and not because of the condition: either an ordinary opt-in
         // (the condition does not currently hold) or undoing that same
         // opt-in.
-        setChosen(toggleChosen(chosen, def.id));
+        setChosen(toggleChosen(catalogue, chosen, def.id));
     }
   }
 
@@ -549,8 +627,19 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           {t("osinstall.components.intro")}
         </p>
 
+        {componentsError && (
+          <p className="badge badge-err" style={{ fontSize: 11, margin: "0 0 12px", display: "inline-block" }}>
+            {t("osinstall.components.unavailable")}
+          </p>
+        )}
+        {!componentsError && catalogue === null && (
+          <p className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
+            {t("osinstall.components.loading")}
+          </p>
+        )}
+
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {AMIGAOS_32_COMPONENTS.map((def) => {
+          {(catalogue ?? []).map((def) => {
             const excluded = excludedConditional.includes(def.id);
             const checked = def.required
               ? true
@@ -561,12 +650,16 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
                   : chosen.includes(def.id);
             const disabled = def.required || !def.available;
 
+            // Non-null inside this map by construction — `catalogue ?? []`
+            // above yields no rows at all while it is loading.
+            const loaded = catalogue ?? [];
+
             function handleChange() {
               if (disabled) return;
               if (def.conditionMajor !== null) {
-                toggleConditional(def);
+                toggleConditional(def, loaded);
               } else {
-                setChosen(toggleChosen(chosen, def.id));
+                setChosen(toggleChosen(loaded, chosen, def.id));
               }
             }
 
@@ -586,7 +679,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
               def.conditionMajor !== null && !def.required && def.available
                 ? conditionalReason(
                     def.conditionMajor,
-                    isForcedOnByCondition(basePlan, chosen, def.id),
+                    isForcedOnByCondition(loaded, basePlan, chosen, def.id),
                     excluded,
                     baseRomUnknown,
                     rom?.name ?? null
@@ -717,7 +810,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
             {groupByComponent(effectivePlan).map(({ component, items }) => (
               <div key={component} style={{ marginBottom: 8 }}>
                 <div className="muted" style={{ fontSize: 11, fontWeight: 600, margin: "6px 0 2px" }}>
-                  {componentLabel(component)}
+                  {componentLabel(catalogue ?? [], component)}
                 </div>
                 {items.map((item, i) => (
                   <div

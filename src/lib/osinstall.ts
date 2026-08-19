@@ -342,17 +342,28 @@ export function hasRomUnknownRefusal(plan: InstallPlan): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// The AmigaOS 3.2 component catalogue
+// The component catalogue — the chosen release's own recipe, loaded
 //
-// Mirrors `src-tauri/src/core/osinstall/recipes/amigaos-3.2.json`, component
-// by component — id, `required`, `condition` and `exclusive_group` all have
-// to agree with the shipped recipe, because this list is what the OS
-// Install screen turns into checkboxes. `osinstall.test.ts` parses that
-// JSON file directly and asserts every field here against it, so a hand
-// edit to either side that drifts from the other fails the build in the
-// same commit, rather than silently — the fix-round answer to a review
-// finding this needed a fifth Tauri command exposing the recipe: a passing
-// parity test removes the urgency without adding one.
+// **Not a hand-written mirror any more.** This module used to carry
+// `AMIGAOS_32_COMPONENTS`, a literal copy of
+// `src-tauri/src/core/osinstall/recipes/amigaos-3.2.json`, and the OS Install
+// screen rendered it whatever release the picker had selected. With
+// "AmigaOS 3.9" chosen the user saw 26 components for a recipe that holds
+// one, and 3.9's own `workbench-base` was labelled `Workbench3.2` — both
+// recipes use that component id, so a label resolved against the wrong
+// recipe named a floppy volume that has nothing to do with the disc being
+// installed from. Nothing was ever written wrongly (the engine is the
+// authority and ignores an id its recipe does not hold), but showing one
+// operating system's parts while installing another's is §89 on the screen
+// itself.
+//
+// A parity test cannot fix that, only a second copy of the same mistake:
+// the list has to *be* the recipe. `osinstallComponents` asks the Rust side,
+// which projects the chosen release's own `Recipe` and refuses a release it
+// ships no recipe for. Everything below therefore takes the loaded list as
+// its first argument rather than reaching for a module constant — a
+// component id means nothing without knowing which release is being
+// installed.
 // ---------------------------------------------------------------------------
 
 export interface ComponentDef {
@@ -364,102 +375,68 @@ export interface ComponentDef {
   media: string;
   required: boolean;
   available: boolean;
-  /** `Condition::RomOlderThan { major }`, mirrored — the only condition
-   *  shape the recipe carries today. `null` for an unconditional component. */
+  /** `Condition::RomOlderThan { major }`, flattened by the command — `null`
+   *  for an unconditional component. The Rust side's `match` is exhaustive,
+   *  so a second `Condition` variant is a compile error there rather than a
+   *  silent `null` here. */
   conditionMajor: number | null;
   exclusiveGroup: string | null;
 }
 
-export const AMIGAOS_32_COMPONENTS: ComponentDef[] = [
-  {
-    id: "workbench-base",
-    media: "Workbench3.2",
-    required: true,
-    available: true,
-    conditionMajor: null,
-    exclusiveGroup: null,
-  },
-  {
-    id: "install-libs",
-    media: "Install3.2",
-    required: true,
-    available: true,
-    conditionMajor: null,
-    exclusiveGroup: null,
-  },
-  { id: "extras", media: "Extras3.2", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-base", media: "Locale", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-de", media: "Locale-DE", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-dk", media: "Locale-DK", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-en", media: "Locale-EN", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-es", media: "Locale-ES", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-fr", media: "Locale-FR", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-gr", media: "Locale-GR", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-it", media: "Locale-IT", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-nl", media: "Locale-NL", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-no", media: "Locale-NO", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-pl", media: "Locale-PL", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-pt", media: "Locale-PT", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-ru", media: "Locale-RU", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-se", media: "Locale-SE", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-tr", media: "Locale-TR", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "locale-uk", media: "Locale-UK", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  {
-    id: "modules-a1200",
-    media: "ModulesA1200_3.2",
-    required: false,
-    available: true,
-    conditionMajor: 47,
-    exclusiveGroup: "modules",
-  },
-  {
-    id: "update-3.2.1",
-    media: "Update3.2.1",
-    required: false,
-    available: false,
-    conditionMajor: null,
-    exclusiveGroup: null,
-  },
-  { id: "fonts", media: "Fonts", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "classes", media: "Classes3.2", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  {
-    id: "glowicons",
-    media: "GlowIcons3.2",
-    required: false,
-    available: true,
-    conditionMajor: null,
-    exclusiveGroup: null,
-  },
-  {
-    id: "backdrops",
-    media: "Backdrops3.2",
-    required: false,
-    available: true,
-    conditionMajor: null,
-    exclusiveGroup: null,
-  },
-  { id: "diskdoctor", media: "DiskDoctor", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "mmulibs", media: "MMULibs", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "hdtools", media: "HDSetup3.2", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-  { id: "storage", media: "Storage3.2", required: false, available: true, conditionMajor: null, exclusiveGroup: null },
-];
-
-export function componentDef(id: string): ComponentDef | undefined {
-  return AMIGAOS_32_COMPONENTS.find((c) => c.id === id);
+/**
+ * Which components `release`'s own shipped recipe holds, in recipe order.
+ *
+ * Read-only: parses shipped JSON, opens no media, writes nothing. An unknown
+ * release rejects rather than answering with a default catalogue.
+ */
+export async function osinstallComponents(release: string): Promise<ComponentDef[]> {
+  return invoke<ComponentDef[]>("osinstall_components", { release });
 }
 
-export function componentLabel(id: string): string {
-  return componentDef(id)?.media ?? id;
+/**
+ * Where one release's component picks are remembered.
+ *
+ * **Per release, not shared.** A component id means something only inside
+ * the recipe that declares it, and the two shipped recipes both use
+ * `workbench-base` for different media. Sharing one remembered set would
+ * mean either carrying ids the current release cannot install, or dropping
+ * ids the *other* release legitimately holds the moment the user switched —
+ * and a choice destroyed by switching away and back is exactly the thing
+ * this project's remembered-settings rule forbids.
+ *
+ * `AmigaOS 3.2` keeps the unsuffixed key it has always used. It is the only
+ * release that existed before there was a picker, so anyone upgrading into
+ * this version finds the selection they last made still ticked, rather than
+ * an empty list under a key nothing ever wrote.
+ */
+const RELEASE_BEFORE_THE_PICKER = "AmigaOS 3.2";
+
+export function rememberedComponentKey(base: string, release: string): string {
+  return release === RELEASE_BEFORE_THE_PICKER ? base : `${base}.${release}`;
 }
 
-/** `chosen`, with anything that is not a real, available component id
- *  dropped — a stale remembered id (an old ART's component that was
- *  renamed or removed) or an unavailable one (Coming Later) can never
- *  reach `InstallRequest.chosen`, and calling this on every plan lets a
- *  stale entry actually clear from what gets remembered, not just be
- *  filtered again on the next read. */
-export function sanitizeChosen(chosen: string[]): string[] {
-  return chosen.filter((id) => componentDef(id)?.available === true);
+export function componentDef(components: ComponentDef[], id: string): ComponentDef | undefined {
+  return components.find((c) => c.id === id);
+}
+
+/** A component's own label — the volume name the recipe names, or the bare
+ *  id when the loaded release does not hold it (a plan item from a release
+ *  whose list has not arrived yet, never a fabricated volume name). */
+export function componentLabel(components: ComponentDef[], id: string): string {
+  return componentDef(components, id)?.media ?? id;
+}
+
+/** `chosen`, with anything that is not a real, available component id of
+ *  `components` dropped — a stale remembered id (an old ART's component that
+ *  was renamed or removed) or an unavailable one (Coming Later) can never
+ *  reach `InstallRequest.chosen`.
+ *
+ *  **Only call this with a list that has actually loaded.** Against an empty
+ *  `components` it drops everything, and persisting that would be a setting
+ *  changing without the user changing it (ART-089's shape). The screen holds
+ *  `null` for "not loaded yet" and does not sanitize until it is a list. */
+export function sanitizeChosen(components: ComponentDef[], chosen: string[]): string[] {
+  return chosen.filter((id) => componentDef(components, id)?.available === true);
 }
 
 // ---------------------------------------------------------------------------
@@ -493,8 +470,13 @@ export function sanitizeChosen(chosen: string[]): string[] {
  * for the file list and for `osinstallApply`; one with none, purely to
  * reason about what *would* be on.
  */
-export function isForcedOnByCondition(basePlan: InstallPlan | null, chosen: string[], id: string): boolean {
-  const def = componentDef(id);
+export function isForcedOnByCondition(
+  components: ComponentDef[],
+  basePlan: InstallPlan | null,
+  chosen: string[],
+  id: string
+): boolean {
+  const def = componentDef(components, id);
   if (!basePlan || !def || def.required) return false;
   return basePlan.componentsOn.includes(id) && !chosen.includes(id);
 }
@@ -508,11 +490,12 @@ export function isForcedOnByCondition(basePlan: InstallPlan | null, chosen: stri
  * the user changes it" read backwards.
  */
 export function pruneStaleExclusions(
+  components: ComponentDef[],
   basePlan: InstallPlan,
   chosen: string[],
   excluded: string[]
 ): string[] {
-  return excluded.filter((id) => isForcedOnByCondition(basePlan, chosen, id));
+  return excluded.filter((id) => isForcedOnByCondition(components, basePlan, chosen, id));
 }
 
 /** Why a conditional component's row is ticked or not — always exactly one
@@ -570,10 +553,12 @@ export function conditionalToggleAction(excluded: boolean, forcedOn: boolean): C
  *  component (and the opt-in half of a conditional one's own toggle, when
  *  its condition does not currently hold) — clears any other member of the
  *  same `exclusiveGroup` on the way in. */
-export function toggleChosen(chosen: string[], id: string): string[] {
+export function toggleChosen(components: ComponentDef[], chosen: string[], id: string): string[] {
   if (chosen.includes(id)) return chosen.filter((c) => c !== id);
-  const group = componentDef(id)?.exclusiveGroup ?? null;
-  const withoutGroup = group ? chosen.filter((c) => componentDef(c)?.exclusiveGroup !== group) : chosen;
+  const group = componentDef(components, id)?.exclusiveGroup ?? null;
+  const withoutGroup = group
+    ? chosen.filter((c) => componentDef(components, c)?.exclusiveGroup !== group)
+    : chosen;
   return [...withoutGroup, id];
 }
 

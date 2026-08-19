@@ -703,7 +703,7 @@
       "bootCard": "A boot-only card",
       "bootCardHint": "The Pi's firmware, your Kickstart and a partition table an Amiga can see — built from your own Emu68 release. No AmigaOS on it; that comes next.",
       "install": "Install AmigaOS",
-      "installHint": "Build a distribution tree from your own AmigaOS 3.2 install disks, ready to copy onto a card's Amiga volumes.",
+      "installHint": "Build a distribution tree from your own AmigaOS install disks or disc, ready to copy onto a card's Amiga volumes.",
       "prepareVolumes": "Prepare a card's Amiga volumes",
       "prepareVolumesHint": "Format the partitions on a card you already have and copy your content in, so it arrives ready instead of offering to format itself on first boot. Needs hst-imager, which you supply.",
       "distro": "A complete distribution",
@@ -2050,14 +2050,14 @@
       "ruleKindMismatch": "{{component}}'s rule for {{from}} expected a {{expected}}, but the media holds a {{found}}."
     },
     "heading": "Install AmigaOS",
-    "intro": "Build a distribution tree from your own AmigaOS 3.2 install disks, ready to copy onto a real Amiga volume.",
+    "intro": "Build a distribution tree from your own AmigaOS install disks or disc, ready to copy onto a real Amiga volume.",
     "release": {
       "label": "AmigaOS release"
     },
     "media": {
       "label": "Install disks folder",
       "none": "No folder chosen.",
-      "chooseTitle": "Choose the folder holding your AmigaOS 3.2 install disk images",
+      "chooseTitle": "Choose the folder holding your AmigaOS install disk or disc images",
       "unreadable": "ART could not read that folder — check the path.",
       "empty": "No install disks found in that folder.",
       "found_one": "{{count}} install disk found: {{names}}.",
@@ -2078,8 +2078,10 @@
     },
     "components": {
       "heading": "Components",
-      "intro": "Workbench3.2 is always installed. Everything else is optional, or switches on by itself when the paired Kickstart needs it.",
+      "intro": "The components of the release chosen above. Some are always installed; the rest are optional, or switch on by themselves when the paired Kickstart needs them.",
       "required": "Required",
+      "loading": "Reading this release's components…",
+      "unavailable": "ART could not read this release's components.",
       "reason": {
         "required": "Always on — a working system needs it.",
         "romNeeded": "Choose the paired Kickstart to know whether this switches on by itself.",
