@@ -25,7 +25,7 @@
   },
   "dashboard": {
     "dropHere": "DROP AMIGA FILES HERE",
-    "dropHint": "ADF • ADZ • DMS • HDF • LHA • ROM • FOLDER",
+    "dropHint": "ADF • ADZ • DMS • HDF • ISO • LHA • ROM • FOLDER",
     "dropSubhint": "ART will analyze them.",
     "recent": "Recent",
     "noRecent": "No recent files yet. Drop something to begin.",

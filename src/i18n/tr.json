@@ -25,7 +25,7 @@
   },
   "dashboard": {
     "dropHere": "AMIGA DOSYALARINI BURAYA BIRAKIN",
-    "dropHint": "ADF • ADZ • DMS • HDF • LHA • ROM • KLASÖR",
+    "dropHint": "ADF • ADZ • DMS • HDF • ISO • LHA • ROM • KLASÖR",
     "dropSubhint": "ART bunları çözümleyecek.",
     "recent": "Son Kullanılanlar",
     "noRecent": "Henüz dosya yok. Başlamak için bir şey bırakın.",
