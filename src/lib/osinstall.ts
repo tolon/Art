@@ -70,6 +70,31 @@ export interface InstallRequest {
    */
   excluded: string[];
   destination: string;
+  /** Which shipped recipe to plan from — a `Recipe.release` string. */
+  release: string;
+}
+
+/**
+ * The releases ART ships a recipe for, in the order the picker lists them.
+ *
+ * Hand-maintained against `core::osinstall::recipe::releases()`. The Rust
+ * side refuses a name it does not know rather than defaulting, so a stale
+ * entry here surfaces as a refusal on screen and never as the wrong
+ * operating system being written.
+ */
+export const INSTALL_RELEASES = ["AmigaOS 3.2", "AmigaOS 3.9"] as const;
+
+export type InstallRelease = (typeof INSTALL_RELEASES)[number];
+
+/**
+ * Whether a persisted value is still one of the releases ART ships.
+ *
+ * Takes `unknown`, not `string` — this is what `useRemembered` needs to call
+ * it as a `Guard<InstallRelease>` against a raw settings-file value, which
+ * may not even be a string (a hand-edited or stale settings file).
+ */
+export function isInstallRelease(value: unknown): value is InstallRelease {
+  return typeof value === "string" && (INSTALL_RELEASES as readonly string[]).includes(value);
 }
 
 /** Whether a rule takes one file or a whole subtree. */

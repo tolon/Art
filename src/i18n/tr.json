@@ -2051,6 +2051,9 @@
     },
     "heading": "AmigaOS Kur",
     "intro": "Kendi AmigaOS 3.2 kurulum disklerinden, gerçek bir Amiga birimine kopyalanmaya hazır bir dağıtım ağacı oluştur.",
+    "release": {
+      "label": "AmigaOS sürümü"
+    },
     "media": {
       "label": "Kurulum diskleri klasörü",
       "none": "Klasör seçilmedi.",

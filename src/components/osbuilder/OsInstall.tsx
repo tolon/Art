@@ -65,7 +65,9 @@ import {
   conditionalReason,
   conditionalToggleAction,
   hasRomUnknownRefusal,
+  INSTALL_RELEASES,
   isForcedOnByCondition,
+  isInstallRelease,
   isVerified,
   onOsInstallResult,
   osinstallApply,
@@ -82,6 +84,7 @@ import {
   withoutExcluded,
   type ComponentDef,
   type InstallPlan,
+  type InstallRelease,
   type InstallRequest,
   type MediaScanResult,
   type OsInstallResult,
@@ -131,6 +134,18 @@ export function OsInstall() {
     "osinstall.destination",
     isTextOrNothing,
     null
+  );
+  /**
+   * Which shipped recipe to plan from. `"AmigaOS 3.2"` is the fallback on
+   * purpose: it is what this screen has always planned, so nobody's
+   * remembered setup changes meaning because a second recipe arrived.
+   * `isInstallRelease` turns a hand-edited or since-removed value back into
+   * that default instead of putting it on screen.
+   */
+  const [release, setRelease] = useRemembered<InstallRelease>(
+    "osinstall.release",
+    isInstallRelease,
+    "AmigaOS 3.2"
   );
   const [chosen, setChosen] = useRemembered<string[]>("osinstall.chosen", isTextList, []);
   /**
@@ -261,6 +276,7 @@ export function OsInstall() {
       rom: romPath,
       chosen: sanitized,
       destination: destination ?? "",
+      release,
     };
     const baseRequest: InstallRequest = { ...shared, excluded: [] };
     const effectiveRequest: InstallRequest = { ...shared, excluded: excludedConditional };
@@ -297,7 +313,7 @@ export function OsInstall() {
     // `setChosen`/`setExcludedConditional` are stable identities from
     // `useRemembered`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mediaFolder, romPath, chosen, destination, excludedConditional]);
+  }, [mediaFolder, romPath, chosen, destination, excludedConditional, release]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -427,6 +443,24 @@ export function OsInstall() {
         <p className="muted" style={{ fontSize: 12, margin: "4px 0 12px" }}>
           {t("osinstall.intro")}
         </p>
+
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 12 }}>
+          <span className="muted" style={{ fontSize: 12 }}>
+            {t("osinstall.release.label")}
+          </span>
+          <select
+            className="btn"
+            style={{ maxWidth: "16em" }}
+            value={release}
+            onChange={(e) => setRelease(e.target.value as InstallRelease)}
+          >
+            {INSTALL_RELEASES.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </label>
 
         <Field
           label={t("osinstall.media.label")}

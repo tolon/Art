@@ -2051,6 +2051,9 @@
     },
     "heading": "Install AmigaOS",
     "intro": "Build a distribution tree from your own AmigaOS 3.2 install disks, ready to copy onto a real Amiga volume.",
+    "release": {
+      "label": "AmigaOS release"
+    },
     "media": {
       "label": "Install disks folder",
       "none": "No folder chosen.",

@@ -296,6 +296,24 @@ describe("ticking a component changes what the screen will do", () => {
   });
 });
 
+describe("choosing the release re-plans against it", () => {
+  it("plans the release the user chose", async () => {
+    await renderFull();
+
+    const picker = screen.getByRole("combobox", {
+      name: i18n.t("osinstall.release.label"),
+    }) as HTMLSelectElement;
+    expect(picker.value).toBe("AmigaOS 3.2");
+
+    await userEvent.selectOptions(picker, "AmigaOS 3.9");
+    expect(picker.value).toBe("AmigaOS 3.9");
+
+    await waitFor(() =>
+      expect(planMock).toHaveBeenCalledWith(expect.objectContaining({ release: "AmigaOS 3.9" }))
+    );
+  });
+});
+
 describe("a refusal renders as a sentence, not a blank", () => {
   it("shows the real, translated refusal text", async () => {
     const refusedPlan: InstallPlan = {
