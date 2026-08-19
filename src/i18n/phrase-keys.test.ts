@@ -83,8 +83,10 @@ import {
   DEFAULT_HARDWARE,
 } from "@/lib/pistorm";
 import {
+  collisionPhrase,
   osinstallBlocker,
   refusalPhrase as osinstallRefusalPhrase,
+  type Collision,
   type PlanResult,
   type RefusalReason as OsInstallRefusalReason,
 } from "@/lib/osinstall";
@@ -874,12 +876,48 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
         expected: "file",
         found: "subtree",
       },
+      // Task 7 (SD-2 · G5's content layer, packages): six variants
+      // `plan()`'s own package block could already raise, unreachable until
+      // packages became selectable.
+      { refusal: "package-unknown", package: "locale-turkish" },
+      { refusal: "package-folder-missing", packages: ["locale-turkish"] },
+      {
+        refusal: "package-requirement-missing",
+        package: "boingbag-39-2",
+        requires: "boingbag-39-1",
+      },
+      {
+        refusal: "package-component-missing",
+        package: "locale-turkish",
+        component: "locale-base",
+      },
+      { refusal: "package-archive-missing", package: "locale-turkish", media: "LocaleUpdate" },
+      {
+        refusal: "package-archive-ambiguous",
+        package: "locale-turkish",
+        media: "LocaleUpdate",
+        paths: ["a", "b"],
+      },
     ];
     for (const reason of reasons) {
       const phrase = osinstallRefusalPhrase(reason);
       expect(isLeafKey(phrase.key), phrase.key).toBe(true);
     }
   });
+
+  it("collisionPhrase: every Collision variant resolves", () => {
+    const collisions: Collision[] = [
+      { kind: "upgrade", from: "37.4", to: "45.9" },
+      { kind: "downgrade", from: "45.9", to: "37.4" },
+      { kind: "same-version", version: "44.1", fromBytes: 100, toBytes: 102 },
+      { kind: "unversioned", fromBytes: 1024, toBytes: 2048 },
+    ];
+    for (const collision of collisions) {
+      const phrase = collisionPhrase(collision);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
   it("provenancePhrase: every Provenance variant resolves", () => {
     // `ALL_PROVENANCES` mirrors `core::gameindex::record::Provenance`, and
     // `gameindex.test.ts` pins that list to the four the core defines. What

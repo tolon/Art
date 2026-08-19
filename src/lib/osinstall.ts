@@ -120,6 +120,24 @@ export type RefusalReason =
       from: string;
       expected: RuleKind;
       found: RuleKind;
+    }
+  // ---- Packages (Task 7) — the six variants `plan()` could already raise
+  // but nothing on screen could reach until packages became selectable.
+  // `rename_all = "kebab-case"` on `RefusalReason` renames the `refusal` tag
+  // only, never a struct variant's own field names (see
+  // `commands/osinstall.rs`'s `refusal_reason_tag_and_field_spellings_for_every_variant`,
+  // which pins exactly this) — so every field below stays spelled as Rust
+  // wrote it, same as the seven above.
+  | { refusal: "package-unknown"; package: string }
+  | { refusal: "package-folder-missing"; packages: string[] }
+  | { refusal: "package-requirement-missing"; package: string; requires: string }
+  | { refusal: "package-component-missing"; package: string; component: string }
+  | { refusal: "package-archive-missing"; package: string; media: string }
+  | {
+      refusal: "package-archive-ambiguous";
+      package: string;
+      media: string;
+      paths: string[];
     };
 
 /** One file or directory `osinstallApply` would place in the distribution
@@ -269,6 +287,181 @@ export async function osinstallVerify(
 }
 
 // ---------------------------------------------------------------------------
+// Update packages — landing an official (or unofficial) package on a
+// distribution tree that already exists (Task 7). `Collision`/`CollisionReport`
+// mirror `core::osinstall::collide` exactly, including the `kind` tag —
+// `Collision::SameVersion`/`::Unversioned` carry an explicit
+// `#[serde(rename)]` on their byte counts (`collide.rs`'s own doc comment
+// explains why `rename_all = "kebab-case"` alone would not have camelCased
+// them), so `fromBytes`/`toBytes` here really is what crosses the wire.
+// ---------------------------------------------------------------------------
+
+/** What landing one incoming file over an existing one would actually do —
+ *  mirrors `core::osinstall::collide::Collision`. `Identical` never reaches
+ *  this type: the core excludes it before a `CollisionReport` is ever built
+ *  (see `preview`'s own doc comment), so there is nothing to render it as. */
+export type Collision =
+  | { kind: "upgrade"; from: string; to: string }
+  | { kind: "downgrade"; from: string; to: string }
+  | { kind: "same-version"; version: string; fromBytes: number; toBytes: number }
+  | { kind: "unversioned"; fromBytes: number; toBytes: number };
+
+/** One planned item that would land on something already in the tree —
+ *  mirrors `core::osinstall::collide::CollisionReport`. */
+export interface CollisionReport {
+  /** Where in the tree, `/`-separated. */
+  path: string;
+  collision: Collision;
+  /** Whether the package's own recipe declared it may write over what is
+   *  there (its `overrides`). An `undeclared` row is not necessarily wrong —
+   *  it just was not promised, and the panel says so beside the row rather
+   *  than silently treating every collision alike. */
+  declared: boolean;
+}
+
+/** One package ART ships a recipe for, in the shape the checklist needs.
+ *  Mirrors `commands::osinstall::PackageSummary`. */
+export interface PackageSummary {
+  id: string;
+  /** Shown on screen, unlocalized — a package's own name (ART-060). */
+  name: string;
+  /** Other **packages** this one needs applied first (`BoingBag 3.9-2`
+   *  needs `BoingBag 3.9-1`) — dependency order, not the order ticked. */
+  requires: string[];
+  /** Recipe **components** this package needs switched on on the tree it
+   *  lands on (`locale-turkish` needs `locale-base`, ART-162) — a different
+   *  relationship from `requires`: this names a component, never a package. */
+  requiresComponents: string[];
+  /** Whether an archive carrying this package's own top-level directory
+   *  name was actually found in the package folder. `false` is not "ART
+   *  cannot install this" — every shipped package always can — it is "the
+   *  file is not here yet", and a checkbox for a package whose file is
+   *  absent is a promise ART cannot keep. */
+  available: boolean;
+}
+
+/** Every package ART ships a recipe for, paired with whether its own archive
+ *  was actually found in `packageFolder` — never assumed from the shipped
+ *  list alone. Read-only; an unreadable folder answers the same way an empty
+ *  one would (every package `available: false`) rather than refusing, so the
+ *  checklist itself always renders. */
+export async function osinstallPackages(packageFolder: string): Promise<PackageSummary[]> {
+  return invoke<PackageSummary[]>("osinstall_packages", { packageFolder });
+}
+
+/**
+ * What landing the chosen packages on `treeRoot` would actually do to the
+ * files already there (§3's PREVIEW) — writes nothing. `packages` empty
+ * answers `[]` without opening either folder, matching the panel's own rule
+ * that the preview only appears once at least one package is chosen.
+ */
+export async function osinstallCollisions(
+  treeRoot: string,
+  packageFolder: string,
+  packages: string[]
+): Promise<CollisionReport[]> {
+  return invoke<CollisionReport[]>("osinstall_collisions", { treeRoot, packageFolder, packages });
+}
+
+/**
+ * Add every chosen package to a distribution tree that already exists.
+ * Returns a job id (§54) — one job for the whole set, never one per package
+ * and never one per file, matching the panel's single confirmation for the
+ * whole set. Progress is the ordinary `job-progress` event, filtered by this
+ * id, the same way `osinstallApply`'s own install job is tracked.
+ */
+export async function osinstallAddPackage(
+  treeRoot: string,
+  packageFolder: string,
+  packages: string[]
+): Promise<number> {
+  return invoke<number>("osinstall_add_package", { treeRoot, packageFolder, packages });
+}
+
+/**
+ * The order [`PackagePanel`](@/components/osbuilder/PackagePanel) groups the
+ * preview in — downgrades first ("a downgrade is what the user most needs
+ * to see"), then upgrades, then same-version, then unversioned. `same-version`
+ * is never folded into `unversioned` here or anywhere else: the two mean
+ * different things (both sides agree on a version vs. neither side says
+ * anything at all).
+ */
+const COLLISION_CLASS_ORDER: Record<Collision["kind"], number> = {
+  downgrade: 0,
+  upgrade: 1,
+  "same-version": 2,
+  unversioned: 3,
+};
+
+/** `reports`, grouped by class in `COLLISION_CLASS_ORDER`'s order. A stable
+ *  sort, so two rows of the same class keep the order the core reported
+ *  them in — `Array.prototype.sort` is stable per the ECMAScript spec, so
+ *  this needs no secondary key. */
+export function sortCollisionsForPreview(reports: CollisionReport[]): CollisionReport[] {
+  return [...reports].sort(
+    (a, b) => COLLISION_CLASS_ORDER[a.collision.kind] - COLLISION_CLASS_ORDER[b.collision.kind]
+  );
+}
+
+/** How many of each class `reports` holds — the preview heading's own
+ *  counts, shown before the list so its shape ("3 downgrades, 41 upgrades,
+ *  13 unversioned") is legible before the list itself is read. */
+export interface CollisionCounts {
+  downgrades: number;
+  upgrades: number;
+  sameVersion: number;
+  unversioned: number;
+}
+
+export function collisionCounts(reports: CollisionReport[]): CollisionCounts {
+  const counts: CollisionCounts = { downgrades: 0, upgrades: 0, sameVersion: 0, unversioned: 0 };
+  for (const report of reports) {
+    switch (report.collision.kind) {
+      case "downgrade":
+        counts.downgrades++;
+        break;
+      case "upgrade":
+        counts.upgrades++;
+        break;
+      case "same-version":
+        counts.sameVersion++;
+        break;
+      case "unversioned":
+        counts.unversioned++;
+        break;
+    }
+  }
+  return counts;
+}
+
+/** The sentence for one row's own collision — what it would replace and
+ *  with what, or the sizes alone when neither side names a version. */
+export function collisionPhrase(collision: Collision): Phrase {
+  switch (collision.kind) {
+    case "upgrade":
+      return {
+        key: "osinstall.packages.collision.versioned",
+        params: { from: collision.from, to: collision.to },
+      };
+    case "downgrade":
+      return {
+        key: "osinstall.packages.collision.versioned",
+        params: { from: collision.from, to: collision.to },
+      };
+    case "same-version":
+      return {
+        key: "osinstall.packages.collision.sameVersion",
+        params: { version: collision.version },
+      };
+    case "unversioned":
+      return {
+        key: "osinstall.packages.collision.unversioned",
+        params: { fromBytes: collision.fromBytes, toBytes: collision.toBytes },
+      };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // What the screen holds, and the rules over it
 // ---------------------------------------------------------------------------
 
@@ -360,6 +553,33 @@ export function refusalPhrase(reason: RefusalReason): Phrase {
           expected: reason.expected,
           found: reason.found,
         },
+      };
+    case "package-unknown":
+      return { key: "osinstall.refusal.packageUnknown", params: { package: reason.package } };
+    case "package-folder-missing":
+      return {
+        key: "osinstall.refusal.packageFolderMissing",
+        params: { packages: reason.packages.join(", ") },
+      };
+    case "package-requirement-missing":
+      return {
+        key: "osinstall.refusal.packageRequirementMissing",
+        params: { package: reason.package, requires: reason.requires },
+      };
+    case "package-component-missing":
+      return {
+        key: "osinstall.refusal.packageComponentMissing",
+        params: { package: reason.package, component: reason.component },
+      };
+    case "package-archive-missing":
+      return {
+        key: "osinstall.refusal.packageArchiveMissing",
+        params: { package: reason.package, media: reason.media },
+      };
+    case "package-archive-ambiguous":
+      return {
+        key: "osinstall.refusal.packageArchiveAmbiguous",
+        params: { package: reason.package, media: reason.media, paths: reason.paths.join(", ") },
       };
   }
 }

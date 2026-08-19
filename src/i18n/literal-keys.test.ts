@@ -273,6 +273,17 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // reads `notePhrase()`. Its three variants are enumerated in
     // `phrase-keys.test.ts` (`launch mountNotePhrase: every MountNote variant
     // resolves`).
-    expect(dynamicCalls).toBe(109);
+    // 109 → 111 (Task 7, content layer — the packages screen):
+    // `PackagePanel.tsx` gained two dynamic sites. One reads
+    // `t(phrase.key, phrase.params)` from `collisionPhrase()` in
+    // `@/lib/osinstall`, the same `Phrase` shape every other mapper here
+    // reads — its four variants are enumerated in `phrase-keys.test.ts`
+    // (`collisionPhrase: every Collision variant resolves`). The other is
+    // `t(busy ? "osinstall.packages.apply.running" : "osinstall.packages.apply.run")`,
+    // the same ternary-over-two-literals shape `OsInstall.tsx`'s own run
+    // button already uses (`t(busy ? "osinstall.run.running" : "osinstall.run.run")`)
+    // — the `t(` is not immediately followed by a quote, so the regex above
+    // counts it as dynamic even though both branches are literal strings.
+    expect(dynamicCalls).toBe(111);
   });
 });

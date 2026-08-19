@@ -45,11 +45,17 @@ use tauri::{AppHandle, Emitter, State};
 use crate::core::error::CoreError;
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome, OperationRecord};
 use crate::core::osinstall::apply::{
-    apply, ApplyOutcome, DistributionManifest, MANIFEST_FILE_NAME,
+    add_package, apply, ApplyOutcome, DistributionManifest, MANIFEST_FILE_NAME,
 };
-use crate::core::osinstall::plan::{plan, InstallPlan, InstallRequest};
+use crate::core::osinstall::collide::{self, CollisionReport, Incoming};
+use crate::core::osinstall::package::{self, Package};
+use crate::core::osinstall::plan::{
+    detect_package_refusals, expand_rules, plan, InstallPlan, InstallRequest,
+};
 use crate::core::osinstall::recipe;
-use crate::core::osinstall::scan::{find_media, FoundMedia};
+use crate::core::osinstall::scan::{
+    find_media, find_packages, open_package, package_for, FoundMedia, MediaMatch, PackageMedium,
+};
 use crate::core::osinstall::verify::{verify_volume, VerifyReport};
 use crate::error::{AppError, AppResult};
 
@@ -235,6 +241,401 @@ pub fn osinstall_components(release: String) -> AppResult<Vec<ComponentSummary>>
         .iter()
         .map(ComponentSummary::from)
         .collect())
+}
+
+// ---------------------------------------------------------------------------
+// osinstall_packages
+// ---------------------------------------------------------------------------
+
+/// One shipped package, in the shape the checklist on screen needs.
+///
+/// `available` is **not** "ART knows how to install this" (every shipped
+/// package always does, or it would not be shipped) — it is "an archive
+/// carrying this package's own top-level directory name was actually found
+/// in `package_folder`". A checkbox for a package whose file is absent is a
+/// promise ART cannot keep, so the screen needs this before it ever offers
+/// the tick.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageSummary {
+    pub id: String,
+    /// Shown on screen, unlocalized — a package's own name, not ART's
+    /// sentence about it (ART-060).
+    pub name: String,
+    pub requires: Vec<String>,
+    pub requires_components: Vec<String>,
+    pub available: bool,
+}
+
+/// Every package ART ships a recipe for, paired with whether its archive was
+/// actually found in `package_folder` — never just the shipped list on its
+/// own (spec §5: this round installs the packages it ships recipes for and
+/// nothing else, and even one of those three needs its own archive present
+/// to be truthfully offered).
+///
+/// Read-only: an unreadable `package_folder` is answered the same way an
+/// empty one would be — every package `available: false` — rather than
+/// refused, so the checklist itself always renders and only the ticks
+/// reflect what could actually be found. `osinstall_collisions` and
+/// `osinstall_add_package` are what actually open the folder for real and
+/// refuse by name when they cannot.
+#[tauri::command]
+pub fn osinstall_packages(package_folder: PathBuf) -> AppResult<Vec<PackageSummary>> {
+    let found = find_packages(&package_folder).unwrap_or_default();
+    let packages = package::packages()?;
+    Ok(packages
+        .into_iter()
+        .map(|p| {
+            let available = found.iter().any(|f| f.media == p.media);
+            PackageSummary {
+                id: p.id,
+                name: p.name,
+                requires: p.requires,
+                requires_components: p.requires_components,
+                available,
+            }
+        })
+        .collect())
+}
+
+// ---------------------------------------------------------------------------
+// osinstall_collisions
+// ---------------------------------------------------------------------------
+
+/// A fresh scratch directory under the system temp folder, named after `tag`
+/// plus the process id and a nanosecond timestamp — the same convention
+/// `core::osinstall::fixtures::scratch` uses for tests, applied here for a
+/// real run: unique enough that two previews mid-flight on independent job
+/// threads (`core::jobs::spawn_job` runs each on its own) never share one.
+fn scratch_dir(tag: &str) -> AppResult<PathBuf> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir = std::env::temp_dir().join(format!(
+        "art-osinstall-{tag}-{}-{stamp}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).map_err(CoreError::Io)?;
+    Ok(dir)
+}
+
+/// One extracted incoming file: its destination (`to`), the id of the
+/// component (package) it would come from, and a real path to its bytes.
+type ExtractedItem = (String, String, PathBuf);
+
+/// Every non-directory item a chosen, ordered package set would place,
+/// written to a real file under a fresh scratch directory — what
+/// `collide.rs`'s own module doc comment asks the command layer to build:
+/// [`Incoming::bytes_at`] needs a real, directly-readable path, and a
+/// package's payload lives inside an archive until something reads it out.
+///
+/// Resolves each package's archive and expands its rules through
+/// [`expand_rules`] — the same function `plan()` itself calls — rather than
+/// a second, nearly-identical resolver (the module doc comment on
+/// `core::osinstall::plan::expand_rules`'s own `pub(crate)` widening states
+/// this rule explicitly). The caller is responsible for removing the
+/// returned directory once its preview has run.
+fn extract_incoming_for_preview(
+    package_folder: &Path,
+    ordered: &[String],
+    catalogue: &[Package],
+) -> AppResult<(Vec<ExtractedItem>, PathBuf)> {
+    let found = find_packages(package_folder)?;
+    let scratch = scratch_dir("collisions")?;
+
+    let result = (|| -> AppResult<Vec<ExtractedItem>> {
+        let mut incoming = Vec::new();
+        let mut counter: u64 = 0;
+
+        for id in ordered {
+            let package = catalogue
+                .iter()
+                .find(|p| &p.id == id)
+                .expect("order() only ever returns ids it read from this same catalogue");
+
+            let archive = match package_for(&found, &package.media) {
+                MediaMatch::Found(f) => f,
+                MediaMatch::Missing => {
+                    return Err(CoreError::InvalidInput(format!(
+                        "no archive in '{}' carries '{}', the media '{}' names",
+                        package_folder.display(),
+                        package.media,
+                        package.id
+                    ))
+                    .into())
+                }
+                MediaMatch::Ambiguous(matches) => {
+                    return Err(CoreError::InvalidInput(format!(
+                        "more than one archive in '{}' carries '{}': {}",
+                        package_folder.display(),
+                        package.media,
+                        matches
+                            .iter()
+                            .map(|m| m.path.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))
+                    .into())
+                }
+            };
+
+            let medium = PackageMedium {
+                path: archive.path.clone(),
+                member: package.member.clone(),
+            };
+            let mut source = open_package(&medium)?;
+
+            let mut refusals = Vec::new();
+            let items = expand_rules(&package.component, source.as_mut(), &mut refusals)?;
+            if !refusals.is_empty() {
+                return Err(CoreError::InvalidInput(format!(
+                    "'{}' does not resolve against '{}': {} rule(s) did not match",
+                    package.id,
+                    archive.path.display(),
+                    refusals.len()
+                ))
+                .into());
+            }
+
+            for item in items.into_iter().filter(|item| !item.is_dir) {
+                let bytes = source.read(&item.from)?;
+                let path = scratch.join(counter.to_string());
+                counter += 1;
+                std::fs::write(&path, &bytes).map_err(CoreError::Io)?;
+                incoming.push((item.to, item.component, path));
+            }
+        }
+
+        Ok(incoming)
+    })();
+
+    match result {
+        Ok(incoming) => Ok((incoming, scratch)),
+        Err(err) => {
+            let _ = std::fs::remove_dir_all(&scratch);
+            Err(err)
+        }
+    }
+}
+
+/// What landing the chosen packages on `tree_root` would actually do to the
+/// files already there (spec §3's PREVIEW) — never listed, only shown when
+/// at least one package is chosen. Writes nothing: every incoming byte is
+/// read into a scratch copy purely so [`collide::preview`] has a real path
+/// to compare against, and that scratch copy is removed again before this
+/// returns.
+///
+/// Built the same way `plan()` builds a package's items — see
+/// [`extract_incoming_for_preview`] — never a second resolver.
+#[tauri::command]
+pub fn osinstall_collisions(
+    tree_root: PathBuf,
+    package_folder: PathBuf,
+    packages: Vec<String>,
+) -> AppResult<Vec<CollisionReport>> {
+    if packages.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let catalogue = package::packages()?;
+    let ordered = package::order(&packages)?;
+    let (incoming, scratch) = extract_incoming_for_preview(&package_folder, &ordered, &catalogue)?;
+
+    let entries: Vec<Incoming> = incoming
+        .iter()
+        .map(|(to, component, bytes_at)| Incoming {
+            to: to.clone(),
+            component: component.clone(),
+            bytes_at,
+        })
+        .collect();
+    let result = collide::preview(&tree_root, &entries);
+    let _ = std::fs::remove_dir_all(&scratch);
+    Ok(result?)
+}
+
+// ---------------------------------------------------------------------------
+// osinstall_add_package
+// ---------------------------------------------------------------------------
+
+/// The selection-resolution half of [`osinstall_add_package`], pulled out so
+/// it can be unit-tested directly without a live `AppHandle`/`State` — the
+/// same shape `osinstall_verify`'s own `verify_at` is factored out in, and
+/// for the same reason: a `#[tauri::command]` needs a running Tauri app to
+/// construct its `State` arguments, so the logic worth testing on its own
+/// has to live somewhere a plain `#[test]` can reach.
+///
+/// Refuses, before anything is opened for writing, in three ways:
+/// [`package::order`]'s own English-sentence refusal (an id ART ships no
+/// recipe for, or a `requires` that was not itself chosen — ART-060 is not
+/// fully paid off for this path yet), [`detect_package_refusals`]'s typed
+/// [`crate::core::osinstall::RefusalReason::PackageComponentMissing`] (a
+/// `requires_components` this tree's own `distribution.json` does not
+/// record — there is no recipe left to resolve once a tree already exists,
+/// so the manifest is the only record of what is really on it), or a
+/// missing/ambiguous archive in `package_folder`.
+fn resolve_packages_for_add(
+    tree_root: &Path,
+    package_folder: &Path,
+    packages: &[String],
+) -> AppResult<Vec<(Package, PathBuf)>> {
+    if packages.is_empty() {
+        return Err(CoreError::InvalidInput("no packages were chosen".into()).into());
+    }
+
+    let catalogue = package::packages()?;
+    let ordered = package::order(packages)?;
+
+    let manifest = read_manifest(tree_root)?;
+    let components_on: Vec<String> = {
+        let mut set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for file in &manifest.files {
+            set.insert(file.component.clone());
+        }
+        set.into_iter().collect()
+    };
+    let refusals = detect_package_refusals(&ordered, &catalogue, &components_on);
+    if !refusals.is_empty() {
+        return Err(CoreError::InvalidInput(format!(
+            "{} package selection problem(s) found before anything was written: {}",
+            refusals.len(),
+            refusals
+                .iter()
+                .map(|r| format!("{r:?}"))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ))
+        .into());
+    }
+
+    let found = find_packages(package_folder)?;
+    let mut resolved: Vec<(Package, PathBuf)> = Vec::new();
+    for id in &ordered {
+        let package = catalogue
+            .iter()
+            .find(|p| &p.id == id)
+            .expect("order() only ever returns ids it read from this same catalogue")
+            .clone();
+        let archive = match package_for(&found, &package.media) {
+            MediaMatch::Found(f) => f.path.clone(),
+            MediaMatch::Missing => {
+                return Err(CoreError::InvalidInput(format!(
+                    "no archive in '{}' carries '{}', the media '{}' names",
+                    package_folder.display(),
+                    package.media,
+                    package.id
+                ))
+                .into())
+            }
+            MediaMatch::Ambiguous(matches) => {
+                return Err(CoreError::InvalidInput(format!(
+                    "more than one archive in '{}' carries '{}': {}",
+                    package_folder.display(),
+                    package.media,
+                    matches
+                        .iter()
+                        .map(|m| m.path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+                .into())
+            }
+        };
+        resolved.push((package, archive));
+    }
+
+    Ok(resolved)
+}
+
+/// Add every chosen package to a distribution tree that already exists — one
+/// job for the whole set, not one per package and never one per file: the
+/// screen asks its own single confirmation before this is ever called (spec
+/// §3), and a job that stopped to ask again per file would teach a user to
+/// click through it. Returns a job id (§54); progress is the ordinary
+/// `job-progress` event, filtered by that id, exactly like
+/// `osinstall_apply`'s own install job.
+///
+/// Refused **before anything is written** when the selection itself cannot
+/// be satisfied: an id ART ships no recipe for or a `requires` that was not
+/// itself chosen (both from [`package::order`]'s own English-sentence
+/// refusal — ART-060 is not fully paid off for this path yet, only the
+/// component-level refusal below is typed), or a `requires_components` that
+/// is not on this tree ([`crate::core::osinstall::plan::detect_package_refusals`],
+/// checked against the set of component ids this tree's own
+/// `distribution.json` actually records — there is no recipe left to
+/// resolve once a tree already exists, so the manifest is the only record
+/// of what is really on it). Every per-file collision refusal —
+/// `add_package`'s own undeclared-overwrite check — is `core`'s, unchanged;
+/// this command adds nothing on top of it.
+#[tauri::command]
+pub fn osinstall_add_package(
+    tree_root: PathBuf,
+    package_folder: PathBuf,
+    packages: Vec<String>,
+    app: AppHandle,
+    registry: State<'_, Arc<JobRegistry>>,
+    oplog: State<'_, JsonlOperationLog>,
+) -> AppResult<u64> {
+    let resolved = resolve_packages_for_add(&tree_root, &package_folder, &packages)?;
+
+    let root = tree_root.clone();
+    let for_log = tree_root.display().to_string();
+    let package_names: Vec<String> = resolved.iter().map(|(p, _)| p.id.clone()).collect();
+    let title = format!("Adding {} package(s) to {for_log}", resolved.len());
+    let log_path = oplog.path().to_path_buf();
+
+    let id = spawn_job(
+        &app,
+        Arc::clone(&registry),
+        &title,
+        move |_job_id, progress| {
+            let mut total = ApplyOutcome {
+                root: root.clone(),
+                files: 0,
+                directories: 0,
+                bytes: 0,
+            };
+            let mut failure: Option<CoreError> = None;
+            for (package, archive) in &resolved {
+                match add_package(&root, package, archive, progress) {
+                    Ok(outcome) => {
+                        total.files += outcome.files;
+                        total.directories += outcome.directories;
+                        total.bytes += outcome.bytes;
+                    }
+                    Err(err) => {
+                        failure = Some(err);
+                        break;
+                    }
+                }
+            }
+
+            let record = user_operation("Add update package(s) to an AmigaOS distribution tree")
+                .source(package_folder.display().to_string())
+                .destination(&for_log)
+                .detail("Packages", package_names.join(", "));
+            let record = match &failure {
+                None => record
+                    .detail("Files", total.files.to_string())
+                    .detail("Directories", total.directories.to_string())
+                    .detail("Bytes", total.bytes.to_string())
+                    // A distribution tree is only ever verified against a real
+                    // volume (`osinstall_verify`, run after the tree is copied
+                    // onto one) — nothing has been read back here either.
+                    .outcome(OperationOutcome::verified(false)),
+                Some(err) => record.failure(err.code(), err.to_string()),
+            };
+            write_to_path(&log_path, &record);
+
+            if let Some(err) = failure {
+                return Err(err);
+            }
+            Ok(())
+        },
+    );
+
+    Ok(id)
 }
 
 // ---------------------------------------------------------------------------
@@ -566,6 +967,248 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    // -------------------------------------------------------------------
+    // osinstall_packages / osinstall_collisions / osinstall_add_package
+    // (Task 7 — the screen packages became reachable from)
+    // -------------------------------------------------------------------
+
+    /// A minimal `distribution.json`, naming whichever files the test needs
+    /// — the same shape `collide.rs`'s own `write_manifest` test helper
+    /// uses, duplicated here rather than shared because that one is
+    /// `#[cfg(test)]`-private to a different module.
+    fn write_test_manifest(tree: &Path, files: Vec<crate::core::osinstall::apply::FileRecord>) {
+        let manifest = DistributionManifest {
+            release: "AmigaOS 3.9".into(),
+            built_from: vec![crate::core::osinstall::apply::MediaRecord {
+                volume_name: "OS-Version3.9".into(),
+                sha256: "0".repeat(64),
+            }],
+            files,
+            paired_rom: None,
+        };
+        std::fs::write(
+            tree.join(MANIFEST_FILE_NAME),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn locale_base_file_record(path: &str) -> crate::core::osinstall::apply::FileRecord {
+        crate::core::osinstall::apply::FileRecord {
+            path: path.into(),
+            component: "locale-base".into(),
+            media: "OS-Version3.9".into(),
+            sha256: "0".repeat(64),
+            bytes: 0,
+            protection: None,
+            overwrote: None,
+        }
+    }
+
+    /// `locale-turkish`'s own archive, shaped exactly like the real one
+    /// measured against `BoingBag39-2-turkce.lha` (`locale-turkish.json`'s
+    /// own doc comment): loose files (no nested `member`) under
+    /// `locale/catalogs`, lower-case, inside a top-level `LocaleUpdate`
+    /// drawer (the package's own `media`).
+    fn write_locale_turkish_archive(folder: &Path, file_name: &str, catalog_bytes: &[u8]) {
+        std::fs::write(
+            folder.join(file_name),
+            crate::core::archive::zip::tests::make_zip_with(&[(
+                "LocaleUpdate/locale/catalogs/x.catalog",
+                catalog_bytes,
+            )]),
+        )
+        .unwrap();
+    }
+
+    /// The checklist always lists all three shipped packages, and never
+    /// claims one is available when its own archive was never provided —
+    /// "a checkbox for a package whose file is absent is a promise ART
+    /// cannot keep."
+    #[test]
+    fn osinstall_packages_reports_whether_each_archive_was_actually_found() {
+        let dir = scratch("packages-availability");
+        let folder = dir.join("packages");
+        std::fs::create_dir_all(&folder).unwrap();
+        write_locale_turkish_archive(&folder, "turkish.zip", b"catalog bytes");
+
+        let summaries = osinstall_packages(folder).unwrap();
+        assert_eq!(summaries.len(), 3, "ART ships exactly three packages today");
+
+        let turkish = summaries
+            .iter()
+            .find(|p| p.id == "locale-turkish")
+            .expect("locale-turkish is one of the three");
+        assert!(turkish.available, "its own archive is right there");
+        assert_eq!(turkish.requires_components, vec!["locale-base".to_string()]);
+
+        for other in summaries.iter().filter(|p| p.id != "locale-turkish") {
+            assert!(
+                !other.available,
+                "'{}' was never given an archive of its own",
+                other.id
+            );
+        }
+    }
+
+    /// An unreadable/nonexistent package folder is answered the same way an
+    /// empty one is — every package `available: false` — never refused: the
+    /// checklist itself must still render.
+    #[test]
+    fn osinstall_packages_over_a_missing_folder_lists_nothing_as_available() {
+        let dir = scratch("packages-missing-folder");
+        let missing = dir.join("does-not-exist");
+
+        let summaries = osinstall_packages(missing).unwrap();
+        assert_eq!(summaries.len(), 3);
+        assert!(summaries.iter().all(|p| !p.available));
+    }
+
+    /// The preview a chosen package would produce against a tree that
+    /// already exists — built the same way `plan()` builds a package's own
+    /// items (`expand_rules`), and marked `declared` because
+    /// `locale-turkish` names `overrides: ["locale-base"]` over exactly the
+    /// component `distribution.json` records as this file's owner.
+    #[test]
+    fn osinstall_collisions_previews_a_real_package_against_an_existing_tree() {
+        let dir = scratch("collisions-preview");
+        let tree = dir.join("tree");
+        std::fs::create_dir_all(tree.join("Locale").join("Catalogs")).unwrap();
+        std::fs::write(
+            tree.join("Locale").join("Catalogs").join("x.catalog"),
+            b"$VER: x.catalog 1.0 (1.1.20)",
+        )
+        .unwrap();
+        write_test_manifest(
+            &tree,
+            vec![locale_base_file_record("Locale/Catalogs/x.catalog")],
+        );
+
+        let packages_dir = dir.join("packages");
+        std::fs::create_dir_all(&packages_dir).unwrap();
+        write_locale_turkish_archive(
+            &packages_dir,
+            "turkish.zip",
+            b"$VER: x.catalog 2.0 (1.1.21)",
+        );
+
+        let reports =
+            osinstall_collisions(tree, packages_dir, vec!["locale-turkish".to_string()]).unwrap();
+
+        assert_eq!(reports.len(), 1, "{reports:?}");
+        assert_eq!(reports[0].path, "Locale/Catalogs/x.catalog");
+        assert!(
+            reports[0].declared,
+            "locale-turkish declares overrides: [locale-base]"
+        );
+        assert!(
+            matches!(
+                reports[0].collision,
+                crate::core::osinstall::collide::Collision::Upgrade { .. }
+            ),
+            "{:?}",
+            reports[0].collision
+        );
+    }
+
+    /// No packages chosen previews as nothing to report, without opening
+    /// either folder — the empty selection is the common case every time
+    /// the panel loads before a checkbox is ticked.
+    #[test]
+    fn osinstall_collisions_with_nothing_chosen_is_empty() {
+        let dir = scratch("collisions-empty");
+        let tree = dir.join("does-not-exist-tree");
+        let packages = dir.join("does-not-exist-packages");
+
+        assert_eq!(
+            osinstall_collisions(tree, packages, Vec::new()).unwrap(),
+            Vec::new()
+        );
+    }
+
+    /// ART-162's own rule, reachable from this command: `locale-turkish`
+    /// needs `locale-base` switched on, and a tree whose manifest never
+    /// recorded that component is refused **before** anything is written —
+    /// checked directly against [`resolve_packages_for_add`], the way
+    /// `osinstall_verify`'s own `verify_at` is tested, since the real
+    /// command needs a live Tauri `AppHandle`/`State` this test has none of.
+    #[test]
+    fn resolve_packages_for_add_refuses_locale_turkish_without_locale_base() {
+        let dir = scratch("add-missing-component");
+        let tree = dir.join("tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        // A manifest that names no `locale-base` component at all.
+        write_test_manifest(
+            &tree,
+            vec![crate::core::osinstall::apply::FileRecord {
+                path: "C/List".into(),
+                component: "workbench-base".into(),
+                media: "OS-Version3.9".into(),
+                sha256: "0".repeat(64),
+                bytes: 0,
+                protection: None,
+                overwrote: None,
+            }],
+        );
+
+        let packages_dir = dir.join("packages");
+        std::fs::create_dir_all(&packages_dir).unwrap();
+        write_locale_turkish_archive(&packages_dir, "turkish.zip", b"catalog bytes");
+
+        let err = resolve_packages_for_add(&tree, &packages_dir, &["locale-turkish".to_string()])
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains("PackageComponentMissing"),
+            "{err}"
+        );
+    }
+
+    /// The positive case beside it: once `locale-base` really is on the
+    /// tree, the same selection resolves to exactly one package, ready for
+    /// `add_package` to place.
+    #[test]
+    fn resolve_packages_for_add_resolves_locale_turkish_once_locale_base_is_on_the_tree() {
+        let dir = scratch("add-component-present");
+        let tree = dir.join("tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        write_test_manifest(
+            &tree,
+            vec![locale_base_file_record("Locale/Languages/turkish.language")],
+        );
+
+        let packages_dir = dir.join("packages");
+        std::fs::create_dir_all(&packages_dir).unwrap();
+        write_locale_turkish_archive(&packages_dir, "turkish.zip", b"catalog bytes");
+
+        let resolved =
+            resolve_packages_for_add(&tree, &packages_dir, &["locale-turkish".to_string()])
+                .unwrap();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].0.id, "locale-turkish");
+        assert_eq!(resolved[0].1, packages_dir.join("turkish.zip"));
+    }
+
+    /// A missing archive is refused by name, not left for `add_package` to
+    /// discover partway through a job.
+    #[test]
+    fn resolve_packages_for_add_refuses_a_missing_archive() {
+        let dir = scratch("add-missing-archive");
+        let tree = dir.join("tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        write_test_manifest(
+            &tree,
+            vec![locale_base_file_record("Locale/Catalogs/x.catalog")],
+        );
+
+        let packages_dir = dir.join("packages");
+        std::fs::create_dir_all(&packages_dir).unwrap();
+        // No archive ever written here.
+
+        let err = resolve_packages_for_add(&tree, &packages_dir, &["locale-turkish".to_string()])
+            .unwrap_err();
+        assert!(format!("{err}").contains("LocaleUpdate"), "{err}");
     }
 
     /// The carried-forward review point: a media folder that does not exist

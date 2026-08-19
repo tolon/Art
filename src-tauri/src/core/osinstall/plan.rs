@@ -548,7 +548,14 @@ fn detect_collisions(
 /// so a package's own `media` (the archive's single top-level directory)
 /// travels the same way a floppy's volume name does — `package::RawPackage`
 /// sets `component.media` to exactly that.
-pub(super) fn expand_rules(
+///
+/// `pub(crate)`, not `pub(super)`: `commands::osinstall::osinstall_collisions`
+/// (Task 7) needs exactly this expansion to build the preview it shows
+/// against a tree that already exists — the module doc comment's own rule
+/// ("build them the same way `plan()` does rather than growing a second,
+/// nearly-identical resolver") applies across the `core`/`commands`
+/// boundary too, not only within `core::osinstall`.
+pub(crate) fn expand_rules(
     component: &Component,
     source: &mut dyn MediaSource,
     refusals: &mut Vec<RefusalReason>,
@@ -647,7 +654,16 @@ pub(super) fn expand_rules(
 /// sentences (ART-060) and stops at the first problem, and this module's
 /// own rule is that every refusal reaches the screen at once. `order` is
 /// still what decides the *order*; this decides what is refusable.
-fn detect_package_refusals(
+///
+/// `pub(crate)`: `commands::osinstall::osinstall_add_package` (Task 7) calls
+/// this directly, against `components_on` derived from an existing tree's
+/// own `distribution.json` rather than from a fresh `plan()`'s resolved
+/// set — there is no recipe left to resolve once a tree already exists, so
+/// the manifest is the only record of which components actually put files
+/// there. Reusing this function rather than a second copy is what keeps
+/// `PackageComponentMissing` (ART-162's own rule) meaning the same thing in
+/// both places it can fire.
+pub(crate) fn detect_package_refusals(
     chosen: &[String],
     all: &[Package],
     components_on: &[String],

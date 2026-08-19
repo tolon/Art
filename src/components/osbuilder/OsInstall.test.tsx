@@ -68,6 +68,7 @@ const verifyMock = vi.hoisted(() => vi.fn());
 const onResultMock = vi.hoisted(() => vi.fn());
 const identifyRomMock = vi.hoisted(() => vi.fn());
 const dialogOpenMock = vi.hoisted(() => vi.fn());
+const onJobProgressMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/osinstall", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/osinstall")>()),
@@ -77,6 +78,16 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   osinstallApply: applyMock,
   osinstallVerify: verifyMock,
   onOsInstallResult: onResultMock,
+}));
+
+// `PackagePanel` (Task 7) is now mounted inside this screen, and both it and
+// this screen's own install job subscribe to `onJobProgress` on mount — real
+// `listen()` has no Tauri IPC bridge to reach in jsdom and rejects, which
+// Vitest counts as an unhandled rejection at teardown (ART-163's own shape).
+// Mocked here for the same reason `osinstallPlan`/`osinstallApply` above are.
+vi.mock("@/lib/jobs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/jobs")>()),
+  onJobProgress: onJobProgressMock,
 }));
 
 vi.mock("@/lib/pistorm", async (importOriginal) => ({
@@ -260,6 +271,7 @@ beforeEach(() => {
   onResultMock.mockReset().mockResolvedValue(() => {});
   identifyRomMock.mockReset().mockResolvedValue(ROM);
   dialogOpenMock.mockReset().mockResolvedValue(null);
+  onJobProgressMock.mockReset().mockResolvedValue(() => {});
   useSettingsStore.setState({ loaded: false, settings: DEFAULT_SETTINGS });
 });
 

@@ -135,6 +135,17 @@ const VERSION_SEARCH_BOUND: u64 = 1024 * 1024;
 const MAX_COLLISION_FILE: u64 = 64 * 1024 * 1024;
 
 /// What landing `incoming` over `existing` would actually do.
+///
+/// **`from_bytes`/`to_bytes` carry an explicit `#[serde(rename)]` each.**
+/// `rename_all = "kebab-case"` on an enum renames the *variant* — the
+/// `kind` tag — only; it does not cascade into a struct variant's own
+/// field names (`RefusalReason`'s own `refusal_reason_tag_and_field_spellings_for_every_variant`
+/// test, in `commands/osinstall.rs`, pins that same fact and explains why
+/// *that* type keeps its fields snake_case on purpose). `Collision` has no
+/// such reason: every other field on this wire is camelCase, and leaving
+/// these two as bare `from_bytes`/`to_bytes` was an oversight caught before
+/// anything shipped depending on it — `Collision` is `Serialize` only, so
+/// there is no `Deserialize` round trip this rename could break.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Collision {
@@ -157,14 +168,21 @@ pub enum Collision {
     /// throw away the one useful fact the row has — that they agree.
     SameVersion {
         version: String,
+        #[serde(rename = "fromBytes")]
         from_bytes: u64,
+        #[serde(rename = "toBytes")]
         to_bytes: u64,
     },
     /// One side or both says nothing **about the same program** — no
     /// marker at all, or the two sides' markers name different programs
     /// (see the module doc comment's last section). Sizes, and no invented
     /// version.
-    Unversioned { from_bytes: u64, to_bytes: u64 },
+    Unversioned {
+        #[serde(rename = "fromBytes")]
+        from_bytes: u64,
+        #[serde(rename = "toBytes")]
+        to_bytes: u64,
+    },
 }
 
 /// One planned item that would land on something already in the tree.
@@ -552,6 +570,37 @@ mod tests {
     use super::*;
     use crate::core::osinstall::apply::{FileRecord, MediaRecord};
     use crate::core::osinstall::fixtures;
+
+    // ---- the wire, pinned ----
+
+    /// `Collision::SameVersion`/`::Unversioned` carry an explicit
+    /// `#[serde(rename)]` on `from_bytes`/`to_bytes` — see the type's own
+    /// doc comment for why `rename_all = "kebab-case"` alone does not
+    /// camelCase them. Pinned the same way `commands/osinstall.rs`'s own
+    /// `wire_shapes` module pins every other type on this wire, so a future
+    /// edit that drops the rename fails a test instead of shipping a field
+    /// `src/lib/osinstall.ts`'s `Collision` type cannot see.
+    #[test]
+    fn same_version_and_unversioned_serialize_byte_counts_as_camelcase() {
+        let same = Collision::SameVersion {
+            version: "1.0".into(),
+            from_bytes: 1,
+            to_bytes: 2,
+        };
+        let value = serde_json::to_value(&same).unwrap();
+        assert_eq!(value["fromBytes"], 1);
+        assert_eq!(value["toBytes"], 2);
+        assert!(value.get("from_bytes").is_none(), "{value}");
+        assert!(value.get("to_bytes").is_none(), "{value}");
+
+        let unversioned = Collision::Unversioned {
+            from_bytes: 3,
+            to_bytes: 4,
+        };
+        let value = serde_json::to_value(&unversioned).unwrap();
+        assert_eq!(value["fromBytes"], 3);
+        assert_eq!(value["toBytes"], 4);
+    }
 
     // ---- `classify` ----
 

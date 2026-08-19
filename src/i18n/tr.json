@@ -2048,7 +2048,13 @@
       "destinationCollision": "{{path}} birden fazla bileşen tarafından isteniyor ({{components}}) ve hiçbiri diğerinin üzerine yazabileceğini belirtmiyor.",
       "mediaAmbiguous": "Medya klasöründe {{component}}'in ihtiyaç duyduğu {{volume}} birim adını taşıyan birden fazla dosya var: {{paths}}.",
       "exclusiveGroupConflict": "{{components}} aynı anda açık olamaz — {{group}} grubundan yalnızca biri seçilebilir.",
-      "ruleKindMismatch": "{{component}}'in {{from}} için kuralı bir {{expected}} bekliyordu, ama medya bir {{found}} taşıyor."
+      "ruleKindMismatch": "{{component}}'in {{from}} için kuralı bir {{expected}} bekliyordu, ama medya bir {{found}} taşıyor.",
+      "packageUnknown": "\"{{package}}\", ART'ın tarifini gönderdiği bir paket değil.",
+      "packageFolderMissing": "Paketler seçildi ({{packages}}), ama bir güncelleme paketleri klasörü verilmedi.",
+      "packageRequirementMissing": "\"{{package}}\", önce \"{{requires}}\"in uygulanmasına ihtiyaç duyuyor, ve o seçilmedi.",
+      "packageComponentMissing": "\"{{package}}\", \"{{component}}\" bileşeninin açık olmasına ihtiyaç duyuyor, ve açık değil.",
+      "packageArchiveMissing": "Paket klasöründe, \"{{package}}\"in ihtiyaç duyduğu \"{{media}}\" medyasını taşıyan bir arşiv yok.",
+      "packageArchiveAmbiguous": "Paket klasöründe \"{{package}}\"in ihtiyaç duyduğu {{media}} medya adını taşıyan birden fazla arşiv var: {{paths}}."
     },
     "heading": "AmigaOS Kur",
     "intro": "Kendi AmigaOS kurulum disklerinden ya da diskinden, gerçek bir Amiga birimine kopyalanmaya hazır bir dağıtım ağacı oluştur.",
@@ -2153,6 +2159,50 @@
         "notChecked": "Bakılmadı"
       },
       "error": "ART doğrulayamadı: {{message}}"
+    },
+    "packages": {
+      "heading": "Güncelleme paketleri",
+      "intro": "ART'ın ya da senin zaten kurduğun bir dağıtım ağacına resmi bir güncelleme — bir BoingBag, ya da Türkçe katalog paketi gibi resmi olmayan bir paket — ekle.",
+      "scopeNote": "ART, tarifini gönderdiği {{count}} güncelleme paketini yerleştirebilir. Tarifi olmayan bir paket, ya da kurulumu bir Amiga Installer betiği olan bir paket, bu sürümde yerleştirilemez.",
+      "treeRoot": {
+        "label": "Dağıtım ağacı",
+        "none": "Dağıtım ağacı seçilmedi.",
+        "chooseTitle": "Dağıtım ağacının kendi kökünü seç — distribution.json'ın yazıldığı yer",
+        "hint": "distribution.json'ı tutan klasör — aşağıdaki Doğrula bölümünün baktığı aynı ağaç."
+      },
+      "packageFolder": {
+        "label": "Güncelleme paketleri klasörü",
+        "none": "Klasör seçilmedi.",
+        "chooseTitle": "Güncelleme paketi arşivlerinin bulunduğu klasörü seç",
+        "hint": "Kurulum disklerinden farklı bir klasör — BoingBag'lerinin ve diğer güncelleme arşivlerinin bulunduğu yer."
+      },
+      "catalogue": {
+        "unavailable": "ART gönderilen paket listesini okuyamadı.",
+        "needsFolder": "Hangi arşivlerin gerçekten burada olduğunu görmek için güncelleme paketleri klasörünü seç."
+      },
+      "archiveMissing": "Arşiv bulunamadı",
+      "requiresPackages": "Önce {{list}} uygulanmasına ihtiyaç duyuyor.",
+      "requiresComponents": "{{list}} bileşeninin açık olmasına ihtiyaç duyuyor.",
+      "preview": {
+        "loading": "Bunun neyin yerini alacağı kontrol ediliyor…",
+        "heading": "{{downgrades}} eski sürüm, {{upgrades}} yeni sürüm, {{sameVersion}} aynı sürüm, {{unversioned}} sürümsüz",
+        "nothing": "Ağaçta hiçbir şeyin yerine geçilmeyecek."
+      },
+      "collision": {
+        "versioned": "{{from}} → {{to}}",
+        "sameVersion": "{{version}}, farklı baytlar",
+        "unversioned": "{{fromBytes}} → {{toBytes}} bayt"
+      },
+      "undeclared": "Belirtilmemiş — bu paketin kendi tarifi bu dosyanın yerine geçebileceğini hiç söylemedi",
+      "confirm": "Bu {{count}} paketlik kümenin yukarıda listelenen dosyaların yerine geçeceğini onaylıyorum.",
+      "apply": {
+        "run": "Seçilen paketleri ekle",
+        "running": "Ekleniyor…",
+        "done": "Eklendi.",
+        "cancelled": "Yarıda iptal edildi.",
+        "progressStarting": "Başlıyor…",
+        "progressPercent": "%{{percent}} — {{total}} dosyadan {{done}} tanesi"
+      }
     }
   },
   "gameindex": {
