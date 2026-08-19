@@ -143,6 +143,9 @@ pub struct ArchiveSource {
     /// (`read`, `open_nested`) check `is_dir` first and check the `Option`
     /// again anyway rather than unwrapping a promise the type does not make.
     entries: Vec<(String, Option<usize>, ArchiveEntry)>,
+    /// Every entry name [`safe_join`] refused, verbatim — see
+    /// [`refused_names`](Self::refused_names).
+    refused_names: Vec<String>,
     backend: Box<dyn ArchiveBackend>,
 }
 
@@ -165,14 +168,24 @@ impl ArchiveSource {
     /// Shared by [`open`](Self::open), which turns this into a single
     /// top-level directory, and [`open_flat`](Self::open_flat), which does
     /// not — a nested archive's paths are already volume-relative.
-    fn parsed_entries(raw_entries: &[ArchiveEntry]) -> Vec<(Vec<String>, usize)> {
+    fn parsed_entries(raw_entries: &[ArchiveEntry]) -> (Vec<(Vec<String>, usize)>, Vec<String>) {
         let virtual_root = Path::new("archive");
         let mut parsed: Vec<(Vec<String>, usize)> = Vec::new();
+        // **A refused name is a finding, not a non-event.** An archive that
+        // says `..\..\Startup` is telling you something about itself, and
+        // dropping the row without keeping the name meant nobody could ever
+        // say what had been refused or how much: a hostile package and a
+        // merely odd one looked identical from outside. Kept verbatim, never
+        // sanitised — the same rule `ArchiveTree` follows, since a
+        // harmless-looking `_.._.Startup` is not what the archive said.
+        let mut refused: Vec<String> = Vec::new();
         for (index, entry) in raw_entries.iter().enumerate() {
             let Ok(joined) = safe_join(virtual_root, &entry.name) else {
+                refused.push(entry.name.clone());
                 continue;
             };
             let Ok(relative) = joined.strip_prefix(virtual_root) else {
+                refused.push(entry.name.clone());
                 continue;
             };
             let components: Vec<String> = relative
@@ -183,11 +196,12 @@ impl ArchiveSource {
                 })
                 .collect();
             if components.is_empty() {
+                refused.push(entry.name.clone());
                 continue;
             }
             parsed.push((components, index));
         }
-        parsed
+        (parsed, refused)
     }
 
     /// Add a directory row for every ancestor path that `rows` implies but
@@ -259,7 +273,7 @@ impl ArchiveSource {
     pub fn open(path: &Path) -> CoreResult<Self> {
         let mut backend = crate::core::archive::open(path)?;
         let raw_entries = backend.entries()?;
-        let parsed = Self::parsed_entries(&raw_entries);
+        let (parsed, refused_names) = Self::parsed_entries(&raw_entries);
 
         // The archive's identity: the single top-level directory. A root
         // file (one segment, not itself a directory — the `.info` icon)
@@ -316,8 +330,29 @@ impl ArchiveSource {
             path: path.to_path_buf(),
             volume_name,
             entries,
+            refused_names,
             backend,
         })
+    }
+
+    /// Every entry name in this archive that [`safe_join`] refused — a `..`,
+    /// an absolute path, a Windows prefix — exactly as the archive spelled
+    /// it.
+    ///
+    /// Such a row is dropped rather than sanitised (see the module doc
+    /// comment), which is the right handling and used to be the whole of it:
+    /// the name went nowhere and was counted nowhere, so an archive holding
+    /// `..\..\etc\passwd` was indistinguishable from one holding nothing
+    /// unusual. Recording them does not change what is read; it makes the
+    /// fact available to whoever should say something about it.
+    ///
+    /// **Nothing surfaces this to the user yet** (§89 — this claims no more
+    /// than it does). It is a value a command layer can read and a test can
+    /// assert; a package archive that carries traversing names is a fact
+    /// worth putting on a confirmation screen, and that screen is a later
+    /// task.
+    pub fn refused_names(&self) -> &[String] {
+        &self.refused_names
     }
 
     /// Open `path` the same way [`open`](Self::open) does, except every
@@ -330,23 +365,24 @@ impl ArchiveSource {
     fn open_flat(path: &Path) -> CoreResult<Self> {
         let mut backend = crate::core::archive::open(path)?;
         let raw_entries = backend.entries()?;
-        let entries: Vec<(String, Option<usize>, ArchiveEntry)> =
-            Self::parsed_entries(&raw_entries)
-                .into_iter()
-                .map(|(components, index)| {
-                    (
-                        components.join("/"),
-                        Some(index),
-                        raw_entries[index].clone(),
-                    )
-                })
-                .collect();
+        let (parsed, refused_names) = Self::parsed_entries(&raw_entries);
+        let entries: Vec<(String, Option<usize>, ArchiveEntry)> = parsed
+            .into_iter()
+            .map(|(components, index)| {
+                (
+                    components.join("/"),
+                    Some(index),
+                    raw_entries[index].clone(),
+                )
+            })
+            .collect();
         let entries = Self::with_implicit_directories(entries);
 
         Ok(Self {
             path: path.to_path_buf(),
             volume_name: String::new(),
             entries,
+            refused_names,
             backend,
         })
     }
@@ -400,6 +436,14 @@ impl ArchiveSource {
             let mut inner = Self::open_flat(&tmp)?;
             inner.volume_name = wrapper.volume_name().to_string();
             inner.path = outer.to_path_buf();
+            // The wrapper is discarded here, so anything `safe_join` refused
+            // in *it* would be discarded with it — a traversing name in the
+            // outer archive is a fact about the same package, and the
+            // wrapper's own findings come first because that is the order
+            // they were read in.
+            let mut refused = std::mem::take(&mut wrapper.refused_names);
+            refused.append(&mut inner.refused_names);
+            inner.refused_names = refused;
             Ok(inner)
         })();
         let _ = std::fs::remove_file(&tmp);
@@ -524,6 +568,19 @@ impl ArchiveSource {
         }
     }
 
+    /// Whether `path` sits under `prefix` (which always ends in `/`),
+    /// compared without regard to case — the containment counterpart of
+    /// [`find_by_path`](Self::find_by_path)'s case-insensitive lookup.
+    ///
+    /// `get`, not a slice: `prefix.len()` may land mid-character in a
+    /// multi-byte path, which indexing would panic on and which cannot be a
+    /// case-insensitive ASCII match anyway. The same care `plan::relative_to`
+    /// takes for the same reason.
+    fn starts_with_ignoring_case(path: &str, prefix: &str) -> bool {
+        path.get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+    }
+
     /// Resolve `normalized` against `entries` — an exact match first, falling
     /// back to a case-insensitive one, matching `CdSource::find_by_path`
     /// (AmigaDOS is case-insensitive, ART-012, and a package's rules are
@@ -576,11 +633,18 @@ impl MediaSource for ArchiveSource {
                 "'{path}' is a file on this media, not a drawer"
             )));
         }
+        // Case-**insensitively**, matching `find_by_path`'s own resolution
+        // and AmigaDOS's (ART-012). A plain `starts_with` under-reports the
+        // moment an archive spells one drawer two ways: with `Libs/x` and
+        // `libs/y` both present, the drawer row is whichever came first, and
+        // a case-sensitive prefix silently drops every entry spelled the
+        // other way — a short walk, which is a short plan, which is a file
+        // missing from the volume with nothing said about it (§89).
         let prefix = format!("{base}/");
         Ok(self
             .entries
             .iter()
-            .filter(|(relative, ..)| relative.starts_with(&prefix))
+            .filter(|(relative, ..)| Self::starts_with_ignoring_case(relative, &prefix))
             .map(|(relative, _, entry)| Self::to_media_entry(relative, entry))
             .collect())
     }
@@ -1004,5 +1068,113 @@ mod tests {
 
         let err = ArchiveSource::open_nested(&p, "C").unwrap_err().to_string();
         assert!(err.contains("drawer"), "got {err}");
+    }
+
+    // ---- fix round 2 ----------------------------------------------------
+
+    /// An archive that spells one drawer two ways has one drawer, and a walk
+    /// of it must list everything under it however each entry was spelled.
+    ///
+    /// The synthesis keeps a single row (`Libs`, the first spelling seen) and
+    /// `find_by_path` resolves `libs` onto it — but the walk built its prefix
+    /// with a case-*sensitive* `starts_with`, so `libs/y` fell out of every
+    /// answer. A short walk is a short plan, which is a file missing from the
+    /// volume with nothing said about it (§89).
+    #[test]
+    fn a_drawer_spelled_two_ways_walks_as_one_drawer() {
+        let dir = scratch("archive-mixed-case");
+        let p = package_zip(
+            &dir,
+            "mixed.zip",
+            &[
+                ("BB/Libs/version.library", b"one"),
+                ("BB/libs/xad.library", b"two"),
+            ],
+        );
+        let mut src = ArchiveSource::open(&p).unwrap();
+
+        // One drawer, whichever way it is asked for.
+        assert!(src.entry("Libs").unwrap().unwrap().is_dir);
+        assert!(src.entry("libs").unwrap().unwrap().is_dir);
+
+        for asked in ["Libs", "libs", "LIBS"] {
+            let mut walked: Vec<String> = src
+                .walk(asked)
+                .unwrap()
+                .into_iter()
+                .map(|e| e.path)
+                .collect();
+            walked.sort();
+            assert_eq!(
+                walked,
+                vec![
+                    "Libs/version.library".to_string(),
+                    "libs/xad.library".to_string(),
+                ],
+                "walk({asked}) must list both spellings"
+            );
+        }
+    }
+
+    /// A name `safe_join` refused is dropped from the listing — and kept as
+    /// a finding. Before this it went nowhere and was counted nowhere, so an
+    /// archive carrying `..\..\etc\passwd` looked exactly like one carrying
+    /// nothing unusual.
+    #[test]
+    fn a_refused_entry_name_is_reported_verbatim_not_merely_dropped() {
+        let dir = scratch("archive-refused-reported");
+        let p = package_zip(
+            &dir,
+            "hostile.zip",
+            &[("BB/../../etc/passwd", b"x"), ("BB/C/Assign", b"assign")],
+        );
+        let Ok(mut src) = ArchiveSource::open(&p) else {
+            // `open` refusing the whole archive is the other acceptable
+            // outcome and is covered by `a_traversing_entry_name_is_refused`.
+            return;
+        };
+
+        // Still dropped from what a caller can read — never sanitised into
+        // a path that looks harmless.
+        assert!(src.walk("").unwrap().iter().all(|e| !e.path.contains("..")));
+
+        // And now reported, exactly as the archive spelled it.
+        assert_eq!(
+            src.refused_names(),
+            &["BB/../../etc/passwd".to_string()],
+            "a refused name is a finding, not a non-event"
+        );
+    }
+
+    /// An ordinary archive has nothing to report, so the list separates a
+    /// real finding from the everyday case rather than always being full.
+    #[test]
+    fn an_ordinary_archive_reports_no_refused_names() {
+        let dir = scratch("archive-refused-none");
+        let p = package_zip(&dir, "ordinary.zip", &[("BB/C/Assign", b"assign")]);
+        assert!(ArchiveSource::open(&p).unwrap().refused_names().is_empty());
+    }
+
+    /// The wrapper is discarded when a nested member becomes the medium, so
+    /// a traversing name in the *outer* archive would be discarded with it.
+    /// It is a fact about the same package and survives.
+    #[test]
+    fn a_nested_medium_keeps_the_wrappers_refused_names_too() {
+        let dir = scratch("archive-refused-nested");
+        let inner = crate::core::archive::zip::tests::make_zip_with(&[("C/Version", b"cmd")]);
+        let outer = package_zip(
+            &dir,
+            "wrapper.zip",
+            &[
+                ("BB/../../outside", b"x"),
+                ("BB/Payload", &inner),
+                ("BB/C/Updater", b"installer"),
+            ],
+        );
+
+        let Ok(src) = ArchiveSource::open_nested(&outer, "Payload") else {
+            return;
+        };
+        assert_eq!(src.refused_names(), &["BB/../../outside".to_string()]);
     }
 }

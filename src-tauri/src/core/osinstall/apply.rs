@@ -472,6 +472,72 @@ impl<'a> TreeWriter<'a> {
         }
     }
 
+    /// Settle the `.uaem` sidecar beside a file just written, and answer
+    /// the protection the manifest must record for it.
+    ///
+    /// **The manifest and the sidecar have to say the same thing** — they
+    /// are two halves of one claim about the file, and `verify_volume` reads
+    /// the manifest while the card gets the sidecar. Returning the value
+    /// that was actually settled on, rather than letting the caller record
+    /// `entry.protection` independently, is what makes disagreeing between
+    /// them impossible rather than merely unlikely.
+    ///
+    /// **A medium that states nothing does not erase what a medium that did
+    /// state something said.** An archive carries no AmigaDOS protection,
+    /// date or comment at all — `source_archive.rs`'s own module doc calls
+    /// its values *declared defaults, never a reading*, and §89 forbids
+    /// treating them as evidence. So when a package overwrites a file the
+    /// release media placed, the sidecar already beside it is still the only
+    /// statement anyone has made about that path, and it stands. Dropping it
+    /// would take `--p-rwed` off `C/Assign` on a real BoingBag, and
+    /// AmigaOS 3.2's `Startup-Sequence` runs `Resident C:Assign PURE` — the
+    /// exact bit `uaem.rs`'s own module doc calls load-bearing.
+    ///
+    /// Before this, neither half was right: the stale sidecar was left
+    /// saying `--p-rwed` while the manifest recorded the archive's default
+    /// `0`, so the tree contradicted itself and the two entry points were
+    /// wrong in the same way — which is why the equivalence test could not
+    /// see it.
+    ///
+    /// A sidecar ART cannot parse is removed rather than kept: it no longer
+    /// describes the file that is there, and ART cannot say what it claims.
+    fn settle_sidecar(
+        &self,
+        target: &Path,
+        entry: &crate::core::osinstall::source::MediaEntry,
+    ) -> CoreResult<u32> {
+        let beside = sidecar_path(target);
+
+        // The medium stated something. It wins, and overwrites whatever was
+        // there — this is the ordinary case for a floppy or a disc.
+        //
+        // Never itself copied as a file: it is written beside `target`,
+        // under a name `uaem::sidecar_path` builds by appending `.uaem`
+        // rather than replacing the extension. A medium that genuinely
+        // carried a file literally called `X.uaem` next to `X` would still
+        // collide with `X`'s own sidecar — vanishingly unlikely on real
+        // Amiga media, but the code does not rule it out, so this comment
+        // shouldn't claim more than it does.
+        if let Some(sidecar) = sidecar_for(entry.protection, entry.date, &entry.comment) {
+            crate::core::safety::atomic::atomic_write(&beside, render(&sidecar).as_bytes())?;
+            return Ok(entry.protection);
+        }
+
+        // The medium stated nothing. Whatever stands beside the file is the
+        // last thing anybody did state about this path.
+        match std::fs::read_to_string(&beside) {
+            Ok(text) => match crate::core::volume::write::uaem::parse(&text) {
+                Ok(previous) => Ok(previous.protection),
+                Err(_) => {
+                    std::fs::remove_file(&beside)?;
+                    Ok(entry.protection)
+                }
+            },
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(entry.protection),
+            Err(err) => Err(CoreError::Io(err)),
+        }
+    }
+
     /// Place `items` under the root, in order, reading each one's bytes out
     /// of `sources`.
     ///
@@ -550,12 +616,7 @@ impl<'a> TreeWriter<'a> {
             // with `X`'s own sidecar — vanishingly unlikely on real Amiga
             // media, but the code does not rule it out, so this comment
             // shouldn't claim more than it does.
-            if let Some(sidecar) = sidecar_for(entry.protection, entry.date, &entry.comment) {
-                crate::core::safety::atomic::atomic_write(
-                    &sidecar_path(&target),
-                    render(&sidecar).as_bytes(),
-                )?;
-            }
+            let protection = self.settle_sidecar(&target, &entry)?;
 
             self.record(
                 &item.to,
@@ -565,7 +626,7 @@ impl<'a> TreeWriter<'a> {
                     media: item.media.clone(),
                     sha256: sha256_bytes(&bytes),
                     bytes: bytes.len() as u64,
-                    protection: Some(entry.protection),
+                    protection: Some(protection),
                     overwrote: None,
                 },
             );
@@ -635,6 +696,21 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
                 path.display()
             ))
         })?;
+        // `identify` answers with the name read from **inside** the image,
+        // so this is the question the sentence above only implied: the file
+        // at that path still opens, *and* it is still the volume this plan
+        // keyed it under. A disc swapped for another disc between `plan()`
+        // and here would otherwise be read as if it were the first one, with
+        // `built_from` recording the right name against the wrong medium.
+        // `add_package` asks its own archive exactly this; the two now
+        // agree.
+        if identified.volume_name != *volume {
+            return Err(CoreError::InvalidInput(format!(
+                "'{}' now carries volume '{}', not '{volume}' — it was replaced since this                  plan was made",
+                path.display(),
+                identified.volume_name
+            )));
+        }
         let sha256 = sha256_file(path)?;
         built_from.push(MediaRecord {
             volume_name: volume.clone(),
@@ -652,15 +728,22 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
     // files came out of, and it is no more kept around afterwards than a
     // floppy is.
     for (media, medium) in &plan.package_media {
+        // The same question asked of a package archive, whose identity is
+        // its single top-level directory read from inside the file.
+        let opened = super::scan::open_package(medium)?;
+        if opened.volume_name() != media {
+            return Err(CoreError::InvalidInput(format!(
+                "'{}' now carries '{}', not '{media}' — it was replaced since this plan was                  made",
+                medium.path.display(),
+                opened.volume_name()
+            )));
+        }
         let sha256 = sha256_file(&medium.path)?;
         built_from.push(MediaRecord {
             volume_name: media.clone(),
             sha256,
         });
-        if sources
-            .insert(media.clone(), super::scan::open_package(medium)?)
-            .is_some()
-        {
+        if sources.insert(media.clone(), opened).is_some() {
             // A package whose top-level directory happens to be spelled
             // exactly like a release volume in the same plan: `item.media`
             // could then reach either medium, and which one it got would
@@ -953,12 +1036,34 @@ pub fn add_package(
         )));
     }
 
+    // Nothing is overwritten silently — the round's central rule, and the
+    // one Produce enforces through `plan::detect_collisions`. Add has to
+    // reach the same verdict on the same facts, or the two entry points
+    // disagree about whether an install is allowed at all.
+    let undeclared = undeclared_overwrites(tree_root, package, &items, &manifest)?;
+    if !undeclared.is_empty() {
+        return Err(CoreError::SafetyRefused(format!(
+            "'{}' would write over {} file(s) it never declared it may replace: {} —              a package overwrites only what its own `overrides` names",
+            package.id,
+            undeclared.len(),
+            undeclared.join(", ")
+        )));
+    }
+
     let sha256 = sha256_file(archive)?;
     let mut sources: BTreeMap<String, Box<dyn MediaSource>> = BTreeMap::new();
     sources.insert(package.media.clone(), source);
 
     let mut writer = TreeWriter::new(tree_root, std::mem::take(&mut manifest.files));
-    writer.place(&items, &mut sources, sink)?;
+    // **The manifest is updated whatever happened.** `apply` can leave no
+    // manifest at all when it stops early, because a half-built tree that
+    // claims nothing is honest. Add cannot: the tree already had a manifest,
+    // files on disk have already changed, and leaving the old one in place
+    // would make `distribution.json` describe bytes that are no longer
+    // there — the one thing this file exists to prevent. So a cancellation
+    // (or any other failure) still writes what actually landed, and only
+    // then reports itself.
+    let placed = writer.place(&items, &mut sources, sink);
     let TreeWriter { outcome, files, .. } = writer;
     manifest.files = files;
 
@@ -981,9 +1086,74 @@ pub fn add_package(
     // Last, for the reason the module doc comment gives: until this line the
     // tree still describes itself as what it was, which is true right up
     // until it is not.
-    write_manifest(tree_root, &manifest)?;
+    let recorded = write_manifest(tree_root, &manifest);
+
+    // The placer's own failure explains the run, so it is reported first; a
+    // manifest that could not be written is the next-worst thing to know and
+    // is never swallowed.
+    placed?;
+    recorded?;
 
     Ok(outcome)
+}
+
+/// Every destination in `items` that already holds a file `package` never
+/// declared it may replace — Add's half of `plan::detect_collisions`.
+///
+/// The other claimant is not another item here; it is the tree, and
+/// `distribution.json` is what says who put each file there. So the question
+/// is the same one Produce asks and the answer comes from a different place:
+/// a destination whose manifest record names some other component needs that
+/// component in the package's own `overrides`.
+///
+/// Read from `package.component.overrides` directly rather than through
+/// `package::by_id` (which `collide::declared_override` uses): the caller
+/// already resolved this package, and looking it up again would be a second
+/// place for "which package is this" to be answered — and would refuse a
+/// package that is not in the shipped list at all.
+///
+/// **A file the manifest never recorded is undeclared too.** Nothing in the
+/// tree claims it, so nothing could have declared an override over it; it is
+/// most likely something the user put there themselves, which is exactly the
+/// case where writing over it silently would be worst.
+///
+/// Directories are not claims — the same rule `detect_collisions` follows,
+/// where a coinciding `Subtree` destination is a merge point rather than an
+/// overwrite.
+fn undeclared_overwrites(
+    tree_root: &Path,
+    package: &super::package::Package,
+    items: &[PlanItem],
+    manifest: &DistributionManifest,
+) -> CoreResult<Vec<String>> {
+    let mut undeclared = Vec::new();
+    for item in items.iter().filter(|item| !item.is_dir) {
+        let target = safe_join(tree_root, &item.to).map_err(|err| {
+            CoreError::SafetyRefused(format!(
+                "'{}' does not stay inside the distribution root: {err}",
+                item.to
+            ))
+        })?;
+        if !target.is_file() {
+            continue;
+        }
+        let owner = manifest
+            .files
+            .iter()
+            .find(|file| file.path == item.to)
+            .map(|file| file.component.as_str());
+        let allowed = match owner {
+            // This package rewriting its own file — adding the same package
+            // twice, which is a replacement, not a surprise.
+            Some(owner) if owner == package.id => true,
+            Some(owner) => package.component.overrides.iter().any(|over| over == owner),
+            None => false,
+        };
+        if !allowed {
+            undeclared.push(item.to.clone());
+        }
+    }
+    Ok(undeclared)
 }
 
 // ---------------------------------------------------------------------------
@@ -2639,25 +2809,34 @@ mod tests {
     /// everything it says about the tree's contents is checked separately
     /// below. Every other file, `.uaem` sidecars included, must match
     /// exactly.
-    fn tree_contents(root: &std::path::Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    fn tree_contents(
+        root: &std::path::Path,
+    ) -> std::collections::BTreeMap<String, Option<Vec<u8>>> {
         let mut out = std::collections::BTreeMap::new();
         let mut stack = vec![root.to_path_buf()];
         while let Some(dir) = stack.pop() {
             for entry in std::fs::read_dir(&dir).unwrap() {
                 let path = entry.unwrap().path();
-                if path.is_dir() {
-                    stack.push(path);
-                    continue;
-                }
                 let rel = path
                     .strip_prefix(root)
                     .unwrap()
                     .to_string_lossy()
                     .replace('\\', "/");
+                if path.is_dir() {
+                    // Recorded as `None` rather than skipped (fix round 2,
+                    // F5): a drawer the two paths disagree about — one
+                    // creates an empty `Storage/Monitors`, the other does
+                    // not — is a real difference between the trees, and an
+                    // Amiga volume built from one of them would differ. A
+                    // files-only map could not see it.
+                    out.insert(rel, None);
+                    stack.push(path);
+                    continue;
+                }
                 if rel == MANIFEST_FILE_NAME {
                     continue;
                 }
-                out.insert(rel, std::fs::read(&path).unwrap());
+                out.insert(rel, Some(std::fs::read(&path).unwrap()));
             }
         }
         out
@@ -2675,8 +2854,17 @@ mod tests {
     /// describe the file's content, which `tree_contents` already compares
     /// byte for byte, and `protection` likewise reaches disk as a `.uaem`
     /// sidecar. What only the manifest can answer is *provenance*, and that
-    /// is what this projects. Sorted per path, so a difference in record
-    /// order is not reported as a difference in what the tree says.
+    /// is what this projects.
+    ///
+    /// **Sorted per path, and that is a real equivalence, not a blind spot**
+    /// (fix round 2, F5). More than one record for one path happens in
+    /// exactly one place — `S/User-Startup`, one record per contributing
+    /// component (see the module doc comment) — and those records describe
+    /// one file's one content; which contributor is listed first says
+    /// nothing about the tree. Ordering *between* paths is a different
+    /// question and is not sorted away: the caller asserts
+    /// `left.files == right.files` outright, so a difference in the
+    /// manifest's own record order fails the test rather than hiding here.
     #[allow(clippy::type_complexity)]
     fn sources_by_path(
         manifest: &DistributionManifest,
@@ -2730,15 +2918,70 @@ mod tests {
         }
     }
 
+    /// The catalogue every equivalence test below plans against — both
+    /// synthetic packages, so one helper serves the one-package and the
+    /// two-package forms.
+    fn test_catalogue() -> Vec<crate::core::osinstall::package::Package> {
+        vec![
+            fixtures::package_test_package(),
+            fixtures::package_test_package_two(),
+        ]
+    }
+
     fn planned_over(request: &crate::core::osinstall::plan::InstallRequest) -> InstallPlan {
         let plan = crate::core::osinstall::plan::plan_over(
             request,
             &fixtures::package_test_recipe(),
-            &[fixtures::package_test_package()],
+            &test_catalogue(),
         )
         .unwrap();
         assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
         plan
+    }
+
+    /// Two trees must be the same tree: every path, every byte, every
+    /// drawer, and everything `distribution.json` says about where the bytes
+    /// came from.
+    ///
+    /// Shared by both equivalence tests so the one-package and two-package
+    /// forms are held to exactly the same standard — a weaker comparison in
+    /// one of them would be a hole with a test sitting over it.
+    fn assert_trees_agree(left: &Path, right: &Path) {
+        let a = tree_contents(left);
+        let b = tree_contents(right);
+
+        // Name what differs rather than asserting equality over a wall of
+        // bytes: the first line of a failure should be a path.
+        let only_left: Vec<&String> = a.keys().filter(|k| !b.contains_key(*k)).collect();
+        let only_right: Vec<&String> = b.keys().filter(|k| !a.contains_key(*k)).collect();
+        assert!(
+            only_left.is_empty(),
+            "only in the built tree: {only_left:?}"
+        );
+        assert!(
+            only_right.is_empty(),
+            "only in the added tree: {only_right:?}"
+        );
+        for (path, left_bytes) in &a {
+            assert_eq!(left_bytes, &b[path], "{path} differs between the two paths");
+        }
+
+        // The manifest's account of the tree must agree even though its
+        // timestamps do not: every file records the same source component
+        // and the same thing overwritten.
+        let left_manifest = read_manifest(left);
+        let right_manifest = read_manifest(right);
+        assert_eq!(
+            sources_by_path(&left_manifest),
+            sources_by_path(&right_manifest)
+        );
+        // Outright, records and order included (fix round 2, F5): whatever
+        // `sources_by_path` sorts or projects away is caught here instead of
+        // going unexamined.
+        assert_eq!(left_manifest.files, right_manifest.files);
+        // And the same media, in the same order — a package archive is a
+        // medium this tree came out of exactly as a floppy is.
+        assert_eq!(left_manifest.built_from, right_manifest.built_from);
     }
 
     /// `produce(base + A)` and `add(produce(base), A)` must give the same
@@ -2773,45 +3016,97 @@ mod tests {
         )
         .unwrap();
 
-        let a = tree_contents(&left);
-        let b = tree_contents(&right);
-
         // The premise, checked rather than assumed: the package really did
         // land on a file the base had already written.
         assert_eq!(
-            a.get(fixtures::OVERWRITTEN_PATH).map(Vec::as_slice),
-            Some(b"package LoadModule" as &[u8]),
+            std::fs::read(left.join("C").join("LoadModule")).unwrap(),
+            b"package LoadModule",
             "the fixture must overwrite a base file, or this test proves nothing"
         );
 
-        // Name what differs rather than asserting equality over a wall of
-        // bytes: the first line of a failure should be a path.
-        let only_left: Vec<&String> = a.keys().filter(|k| !b.contains_key(*k)).collect();
-        let only_right: Vec<&String> = b.keys().filter(|k| !a.contains_key(*k)).collect();
-        assert!(
-            only_left.is_empty(),
-            "only in the built tree: {only_left:?}"
-        );
-        assert!(
-            only_right.is_empty(),
-            "only in the added tree: {only_right:?}"
-        );
-        for (path, left_bytes) in &a {
-            assert_eq!(left_bytes, &b[path], "{path} differs between the two paths");
-        }
+        assert_trees_agree(&left, &right);
+    }
 
-        // The manifest's account of the tree must agree even though its
-        // timestamps do not: every file records the same source component
-        // and the same thing overwritten.
-        let left_manifest = read_manifest(&left);
-        let right_manifest = read_manifest(&right);
-        assert_eq!(
-            sources_by_path(&left_manifest),
-            sources_by_path(&right_manifest)
+    /// Spec §2's own form: `produce(base + A + B) == add(produce(base + A), B)`.
+    ///
+    /// **The one-package form above is the weaker statement** (fix round 2,
+    /// F4). It never adds onto a tree that already holds a package, so it
+    /// never exercises the case where the file being overwritten was put
+    /// there by *another package* rather than by the release — which is both
+    /// the shape a real user meets (BoingBag 3.9-1, then 3.9-2) and the shape
+    /// where Add's own rules have to reach the same verdict Produce reaches.
+    ///
+    /// `test-package-two` writes `C/LoadModule` for the third time and
+    /// declares `overrides: ["base-c", "test-package"]`, so both claimants
+    /// are named; the test asserts the third writer's bytes actually won,
+    /// because an equivalence over two trees that both failed to apply B
+    /// would pass while proving nothing.
+    #[test]
+    fn producing_with_two_packages_equals_adding_the_second_afterwards() {
+        let (dir, media, packages) = package_dirs("equivalence-two");
+        fixtures::package_test_archive(&packages, "pack.zip");
+        let second = fixtures::package_test_archive_two(&packages, "pack2.zip");
+        let left = dir.join("produced");
+        let right = dir.join("added");
+
+        // produce(base + A + B)
+        let both = install_request(
+            &media,
+            &packages,
+            &left,
+            &["test-package", "test-package-two"],
         );
-        // And the same media, in the same order — a package archive is a
-        // medium this tree came out of exactly as a floppy is.
-        assert_eq!(left_manifest.built_from, right_manifest.built_from);
+        let planned = planned_over(&both);
+        apply(&planned, &left, &NoProgress).unwrap();
+
+        // add(produce(base + A), B)
+        let first_only = install_request(&media, &packages, &right, &["test-package"]);
+        let first_plan = planned_over(&first_only);
+        apply(&first_plan, &right, &NoProgress).unwrap();
+        add_package(
+            &right,
+            &fixtures::package_test_package_two(),
+            &second,
+            &NoProgress,
+        )
+        .unwrap();
+
+        // B really did land, over A's own copy of the same path.
+        assert_eq!(
+            std::fs::read(left.join("C").join("LoadModule")).unwrap(),
+            b"second package LoadModule",
+            "the second package must win the path both earlier writers claimed"
+        );
+        assert!(
+            right.join("C").join("OnlyPack").is_file(),
+            "A's own file survives"
+        );
+        assert!(
+            right.join("C").join("OnlyPack2").is_file(),
+            "B's own file lands"
+        );
+
+        assert_trees_agree(&left, &right);
+
+        // What B displaced was A's file, not the base's — the manifest keeps
+        // the chain rather than flattening it to the original.
+        let manifest = read_manifest(&right);
+        let record = manifest
+            .files
+            .iter()
+            .find(|f| f.path == fixtures::OVERWRITTEN_PATH)
+            .unwrap();
+        assert_eq!(record.component, "test-package-two");
+        let displaced = record.overwrote.as_ref().expect("B overwrote A");
+        assert_eq!(displaced.component, "test-package");
+        assert_eq!(
+            displaced
+                .overwrote
+                .as_ref()
+                .expect("and A had overwritten the base")
+                .component,
+            "base-c"
+        );
     }
 
     /// The other half of the equivalence: the package's own files are
@@ -3022,21 +3317,28 @@ mod tests {
         assert_eq!(tree_contents(&root), before);
     }
 
-    /// Cancellation behaves exactly as it does for a whole install: between
-    /// whole items, never inside one, so the tree only ever holds whole
-    /// files — and the manifest is not rewritten at all, so it still
-    /// describes the tree that is actually there.
+    /// Cancellation stops between whole items, never inside one — and then
+    /// the manifest is brought into line with what actually landed.
+    ///
+    /// **This is the opposite of `apply`'s rule, deliberately** (fix round
+    /// 2, F6). A cancelled `apply` leaves no `distribution.json` at all,
+    /// which is honest: a half-built tree that claims nothing cannot lie. A
+    /// cancelled Add cannot do that — the tree already had a manifest, files
+    /// on disk have already changed, and leaving the old one standing would
+    /// make `distribution.json` describe bytes that are no longer there.
+    /// That is the single thing this file exists to prevent, so the manifest
+    /// is written before the cancellation is reported.
     #[test]
-    fn a_cancelled_add_leaves_whole_files_and_the_previous_manifest() {
+    fn a_cancelled_add_leaves_the_manifest_describing_what_actually_landed() {
         let (dir, media, packages) = package_dirs("cancel");
         let archive = fixtures::package_test_archive(&packages, "pack.zip");
         let root = dir.join("dist");
 
         let base_only = install_request(&media, &packages, &root, &[]);
         apply(&planned_over(&base_only), &root, &NoProgress).unwrap();
-        let manifest_before = std::fs::read(root.join(MANIFEST_FILE_NAME)).unwrap();
 
-        // The package's items are `C` (a drawer), then its two files.
+        // The package's items are `C` (a drawer), then its two files. Two
+        // reports in, one file has landed and one has not.
         let err = add_package(
             &root,
             &fixtures::package_test_package(),
@@ -3052,10 +3354,218 @@ mod tests {
             "got {err:?}"
         );
 
-        assert_eq!(
-            std::fs::read(root.join(MANIFEST_FILE_NAME)).unwrap(),
-            manifest_before,
-            "a cancelled add never rewrites the manifest"
+        // Every file the manifest names holds exactly the bytes it claims —
+        // whatever the run got through, the record and the tree agree.
+        let manifest = read_manifest(&root);
+        for record in &manifest.files {
+            let bytes =
+                std::fs::read(root.join(record.path.replace('/', "\\"))).unwrap_or_else(|e| {
+                    panic!(
+                        "the manifest names '{}', which is not there: {e}",
+                        record.path
+                    )
+                });
+            assert_eq!(
+                sha256_bytes(&bytes),
+                record.sha256,
+                "'{}' does not hold what the manifest says it holds",
+                record.path
+            );
+            assert_eq!(bytes.len() as u64, record.bytes, "{}", record.path);
+        }
+
+        // And it is not simply the old manifest: at least one file the
+        // package carries landed and is recorded as the package's.
+        assert!(
+            manifest.files.iter().any(|f| f.component == "test-package"),
+            "the cancelled run wrote a file, so the manifest must say so: {:?}",
+            manifest.files
         );
+    }
+
+    /// **Nothing is overwritten silently** — the rule Produce enforces
+    /// through `plan::detect_collisions`, and which Add ignored entirely
+    /// until fix round 2 (F1): the same package, the same tree, refused by
+    /// one entry point and written by the other.
+    ///
+    /// The equivalence test could not see it because its fixture *declares*
+    /// the override, so the refusing branch was never taken. This test takes
+    /// it, on both paths at once, and asserts they reach the same verdict.
+    #[test]
+    fn a_package_that_never_declared_the_override_is_refused_by_both_paths() {
+        let (dir, media, packages) = package_dirs("undeclared-add");
+        let archive = fixtures::package_test_archive(&packages, "pack.zip");
+        let root = dir.join("dist");
+
+        let mut undeclaring = fixtures::package_test_package();
+        undeclaring.component.overrides.clear();
+
+        // Produce refuses it.
+        let produce = crate::core::osinstall::plan::plan_over(
+            &install_request(&media, &packages, &dir.join("produced"), &["test-package"]),
+            &fixtures::package_test_recipe(),
+            std::slice::from_ref(&undeclaring),
+        )
+        .unwrap();
+        assert!(
+            produce.refusals.iter().any(|r| matches!(
+                r,
+                crate::core::osinstall::RefusalReason::DestinationCollision { .. }
+            )),
+            "{:?}",
+            produce.refusals
+        );
+
+        // Add must reach the same verdict on the same facts.
+        let base_only = install_request(&media, &packages, &root, &[]);
+        apply(&planned_over(&base_only), &root, &NoProgress).unwrap();
+        let before = tree_contents(&root);
+
+        let err = add_package(&root, &undeclaring, &archive, &NoProgress).unwrap_err();
+        assert!(matches!(err, CoreError::SafetyRefused(_)), "got {err:?}");
+        assert!(
+            err.to_string().contains(fixtures::OVERWRITTEN_PATH),
+            "the refusal names the file it would have written over: {err}"
+        );
+        assert_eq!(
+            tree_contents(&root),
+            before,
+            "a refused add writes nothing at all"
+        );
+    }
+
+    /// A file the manifest never recorded is undeclared too — most likely
+    /// something the user put there themselves, which is exactly the case
+    /// where writing over it silently would be worst.
+    #[test]
+    fn a_package_landing_on_a_file_the_manifest_never_recorded_is_refused() {
+        let (dir, media, packages) = package_dirs("unrecorded");
+        let archive = fixtures::package_test_archive(&packages, "pack.zip");
+        let root = dir.join("dist");
+
+        let base_only = install_request(&media, &packages, &root, &[]);
+        apply(&planned_over(&base_only), &root, &NoProgress).unwrap();
+        // Nothing in `distribution.json` claims this one.
+        std::fs::write(root.join("C").join("OnlyPack"), b"the user's own file").unwrap();
+
+        let err = add_package(
+            &root,
+            &fixtures::package_test_package(),
+            &archive,
+            &NoProgress,
+        )
+        .unwrap_err();
+        assert!(matches!(err, CoreError::SafetyRefused(_)), "got {err:?}");
+        assert!(err.to_string().contains("C/OnlyPack"), "got {err}");
+        assert_eq!(
+            std::fs::read(root.join("C").join("OnlyPack")).unwrap(),
+            b"the user's own file"
+        );
+    }
+
+    /// **The sidecar and the manifest are two halves of one claim** (fix
+    /// round 2, F2). An archive states no AmigaDOS protection, date or
+    /// comment — `source_archive.rs` calls its values declared defaults,
+    /// never a reading — so a package overwriting a file the release media
+    /// placed leaves the release's own statement standing, and the manifest
+    /// records *that*, not the archive's zero.
+    ///
+    /// Before this, `C/LoadModule.uaem` said `--p-rwed` while the manifest
+    /// recorded `protection: 0`: the tree contradicting itself, on both
+    /// paths identically, which is why the equivalence test was green over
+    /// it. Asserting the sidecar's **content** rather than its presence is
+    /// the difference.
+    ///
+    /// Not cosmetic: `--p-rwed`'s `p` is the pure bit, and AmigaOS 3.2's
+    /// `Startup-Sequence` runs `Resident C:Assign PURE`.
+    #[test]
+    fn an_overwritten_files_sidecar_and_manifest_agree_about_its_protection() {
+        let (dir, media, packages) = package_dirs("sidecar");
+        let archive = fixtures::package_test_archive(&packages, "pack.zip");
+        let left = dir.join("produced");
+        let right = dir.join("added");
+
+        let with_package = install_request(&media, &packages, &left, &["test-package"]);
+        apply(&planned_over(&with_package), &left, &NoProgress).unwrap();
+
+        let base_only = install_request(&media, &packages, &right, &[]);
+        apply(&planned_over(&base_only), &right, &NoProgress).unwrap();
+        add_package(
+            &right,
+            &fixtures::package_test_package(),
+            &archive,
+            &NoProgress,
+        )
+        .unwrap();
+
+        for root in [&left, &right] {
+            let sidecar =
+                std::fs::read_to_string(root.join("C").join(format!("LoadModule.{}", "uaem")))
+                    .expect("the overwritten file keeps the statement made about it");
+            assert!(
+                sidecar.starts_with("--p-rwed"),
+                "the pure bit survives the overwrite: {sidecar:?}"
+            );
+            let parsed = crate::core::volume::write::uaem::parse(&sidecar).unwrap();
+            assert_eq!(parsed.protection, 0x20);
+
+            let manifest = read_manifest(root);
+            let record = manifest
+                .files
+                .iter()
+                .find(|f| f.path == fixtures::OVERWRITTEN_PATH)
+                .unwrap();
+            assert_eq!(record.component, "test-package");
+            assert_eq!(
+                record.protection,
+                Some(parsed.protection),
+                "the manifest and the sidecar must say the same thing"
+            );
+        }
+    }
+
+    /// The other direction, so the rule above is "the medium's statement
+    /// wins when it makes one", not "sidecars are never rewritten": a
+    /// medium that does state metadata overwrites whatever stood there.
+    #[test]
+    fn a_medium_that_states_metadata_overwrites_the_previous_sidecar() {
+        let (dir, media, packages) = package_dirs("sidecar-wins");
+        let root = dir.join("dist");
+        let base_only = install_request(&media, &packages, &root, &[]);
+        apply(&planned_over(&base_only), &root, &NoProgress).unwrap();
+
+        // A second medium that *does* carry protection bits, writing the
+        // same destination.
+        let other = fixtures::media(
+            &media,
+            "Restater",
+            "restater.adf",
+            &[("C/LoadModule", b"restated", 0x42)],
+        );
+        let mut sources: BTreeMap<String, Box<dyn MediaSource>> = BTreeMap::new();
+        sources.insert(
+            "Restater".into(),
+            Box::new(AdfSource::open(&other).unwrap()),
+        );
+
+        let items = vec![PlanItem {
+            component: "restater".into(),
+            media: "Restater".into(),
+            from: "C/LoadModule".into(),
+            to: fixtures::OVERWRITTEN_PATH.into(),
+            is_dir: false,
+            bytes: 8,
+        }];
+        let mut writer = TreeWriter::new(&root, read_manifest(&root).files);
+        writer.place(&items, &mut sources, &NoProgress).unwrap();
+
+        let sidecar = std::fs::read_to_string(root.join("C").join("LoadModule.uaem")).unwrap();
+        assert!(sidecar.starts_with("-s--rw-d"), "got {sidecar:?}");
+        let record = writer
+            .files
+            .iter()
+            .find(|f| f.path == fixtures::OVERWRITTEN_PATH)
+            .unwrap();
+        assert_eq!(record.protection, Some(0x42));
     }
 }

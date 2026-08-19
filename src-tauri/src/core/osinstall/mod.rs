@@ -743,6 +743,61 @@ pub(crate) mod fixtures {
         path
     }
 
+    /// A **second** package, over the first — the shape a real user meets:
+    /// BoingBag 3.9-1, then 3.9-2. It `requires` the first (so `order`
+    /// sequences them) and overrides both the base component and the first
+    /// package, because it lands on `C/LoadModule` for the third time.
+    ///
+    /// This exists because spec §2's equivalence is
+    /// `produce(base + A + B) == add(produce(base + A), B)`, and the
+    /// one-package form never adds onto a tree that already holds a package
+    /// — which is precisely where Add's own rules have to agree with
+    /// Produce's about a file two things already claimed.
+    pub fn package_test_package_two() -> super::package::Package {
+        let component = super::Component {
+            id: "test-package-two".to_string(),
+            media: "TestPack2".to_string(),
+            rules: vec![super::PathRule {
+                from: "C".to_string(),
+                to: "C".to_string(),
+                kind: super::RuleKind::Subtree,
+            }],
+            required: false,
+            condition: None,
+            overrides: vec!["base-c".to_string(), "test-package".to_string()],
+            user_startup: Vec::new(),
+            exclusive_group: None,
+            available: true,
+        };
+        super::package::Package {
+            id: "test-package-two".to_string(),
+            name: "Test package two".to_string(),
+            media: "TestPack2".to_string(),
+            member: None,
+            requires: vec!["test-package".to_string()],
+            requires_components: Vec::new(),
+            component,
+        }
+    }
+
+    /// The `TestPack2` archive. No directory entries, for the reason
+    /// [`package_test_archive`] gives.
+    pub fn package_test_archive_two(folder: &Path, file_name: &str) -> PathBuf {
+        let path = folder.join(file_name);
+        std::fs::write(
+            &path,
+            crate::core::archive::zip::tests::make_zip_with(&[
+                (
+                    "TestPack2/C/LoadModule",
+                    b"second package LoadModule" as &[u8],
+                ),
+                ("TestPack2/C/OnlyPack2", b"second package only"),
+            ]),
+        )
+        .unwrap();
+        path
+    }
+
     /// Tasks 2 through 10 build their evidence on these helpers, so the
     /// helpers get their own coverage rather than trusting a one-off
     /// exercise that was run once by hand and then deleted. `entries_for`

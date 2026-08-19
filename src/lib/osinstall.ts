@@ -157,8 +157,13 @@ export interface InstallPlan {
   /** Volume name -> the image it was found in. */
   mediaPaths: Record<string, string>;
   /** The chosen package ids, in the order the engine applies them — which
-   *  is dependency order, not the order the boxes were ticked in. Carried
-   *  even when the plan refuses, the same way `componentsOn` is. */
+   *  is dependency order, not the order the boxes were ticked in.
+   *
+   *  Carried even when the plan refuses, the same way `componentsOn` is, so
+   *  a screen can tell "no packages asked for" from "these were asked for
+   *  and refused". When a refusal stopped the plan before the order could be
+   *  worked out, this is the request's own list as given — the Rust side
+   *  states no order for a run that will not happen. */
   packages: string[];
   /** Package media name -> the archive it was found in, and the member
    *  inside it that holds the payload. The package half of `mediaPaths`;

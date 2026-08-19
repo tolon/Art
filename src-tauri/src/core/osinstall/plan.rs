@@ -240,10 +240,17 @@ pub struct InstallPlan {
     /// order `apply` places them in, which is not the order the user ticked
     /// the boxes in. Empty when none were asked for.
     ///
-    /// Populated even when the plan as a whole refuses, the same rule
+    /// **Populated even when the plan as a whole refuses**, the same rule
     /// [`InstallPlan::components_on`] follows and for the same reason: a
-    /// refusal naming a package reads better beside the list it came from.
-    /// `items` and `package_media` are the fields that go empty.
+    /// screen must be able to tell "no packages were asked for" from "these
+    /// packages were asked for and refused", and an empty list reads as the
+    /// first. `items` and `package_media` are the fields that go empty.
+    ///
+    /// When a refusal stopped the plan before the ordering could be worked
+    /// out, this is the request's own list as given rather than a dependency
+    /// order — there is no order to state for a selection ART has already
+    /// said it cannot apply, and inventing one would be a claim about a run
+    /// that will not happen.
     ///
     /// `#[serde(default)]` for the same reason `paired_rom` carries one: an
     /// `InstallPlan` round-trips through the wire, and a plan serialised
@@ -776,7 +783,12 @@ pub(super) fn plan_over(
     // last-writer-wins rule `apply` already applies to be the right way
     // round. `order()` decides the order among them (BoingBag 3.9-2 after
     // 3.9-1 whatever order the boxes were ticked in).
-    let mut packages: Vec<String> = Vec::new();
+    // Seeded with what was asked for, so a refused plan still names the
+    // packages the refusal is about — the same rule `components_on`
+    // follows, and what this field's own doc comment promises. Replaced by
+    // `order()`'s answer once the selection resolved well enough to have
+    // one.
+    let mut packages: Vec<String> = request.packages.clone();
     let mut package_media: BTreeMap<String, PackageMedium> = BTreeMap::new();
     let mut chosen_packages: Vec<&Package> = Vec::new();
 
@@ -2389,6 +2401,7 @@ mod plan_tests {
                 package: "test-package".to_string(),
                 media: "TestPack".to_string(),
             }));
+        assert_eq!(plan.packages, vec!["test-package".to_string()]);
     }
 
     /// The real case: one package archive beside its language variants. Two
@@ -2444,6 +2457,10 @@ mod plan_tests {
                 requires: "pack-a".to_string(),
             }));
         assert!(plan.items.is_empty());
+        // Refused before the ordering could be worked out, so this is the
+        // request's own list rather than a dependency order — stated in the
+        // field's doc comment, and checked here so the two cannot drift.
+        assert_eq!(plan.packages, vec!["pack-b".to_string()]);
     }
 
     /// ART-162 arriving through the selection: the Turkish catalogs without
