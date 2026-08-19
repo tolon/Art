@@ -2105,7 +2105,11 @@
       "heading": "Build",
       "confirm": "I have reviewed the file list above.",
       "run": "Build the distribution tree",
-      "running": "Building…"
+      "running": "Building…",
+      "progress": {
+        "starting": "Starting…",
+        "percent": "{{percent}}% — {{done}} of {{total}} files"
+      }
     },
     "result": {
       "heading": "Built",

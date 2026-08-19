@@ -63,7 +63,7 @@
 // component." This screen is now the thin rendering layer that diagnosis
 // asked for.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
@@ -105,6 +105,7 @@ import {
 import { pistormIdentifyRom, type RomInfo } from "@/lib/pistorm";
 import { isTextList, isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
+import { fraction, onJobProgress, type JobProgress } from "@/lib/jobs";
 import { Field } from "@/components/osbuilder/Field";
 
 const GIB = 1024 * 1024 * 1024;
@@ -139,6 +140,64 @@ function groupByComponent(plan: InstallPlan): { component: string; items: Instal
  * value-equal strings, which a dependency array treats as no change.
  */
 export type DroppedMedia = { path: string; arrivalKey: string } | null;
+
+/**
+ * How far the install has got, beside the button that started it.
+ *
+ * Three things, and each is there because its absence was the complaint:
+ * a percentage, the file count behind it, and the file landing right now.
+ * "Installing…" on its own says a job exists, not that it is moving — a
+ * 588-file tree took twenty seconds with nothing on screen changing, and a
+ * frozen application and a working one looked identical.
+ *
+ * A job with no total gets a fixed sliver and no percentage rather than a
+ * bar that pretends to know how far along it is — the same choice `JobBar`
+ * makes, for the same reason (§89: ART does not state what it has not
+ * measured).
+ */
+function InstallProgress({ progress }: { progress: JobProgress | null }) {
+  const { t } = useTranslation();
+  const pct = progress ? fraction(progress) : null;
+  return (
+    <div style={{ flex: 1, minWidth: 160, maxWidth: 420 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, gap: 8 }}>
+        <span>
+          {pct === null
+            ? t("osinstall.run.progress.starting")
+            : t("osinstall.run.progress.percent", {
+                percent: Math.round(pct * 100),
+                done: progress?.done ?? 0,
+                total: progress?.total ?? 0,
+              })}
+        </span>
+      </div>
+      <div
+        aria-hidden
+        style={{
+          height: 4,
+          marginTop: 4,
+          borderRadius: 2,
+          background: "var(--border)",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            height: "100%",
+            width: pct === null ? "25%" : `${pct * 100}%`,
+            background: "var(--accent)",
+            transition: "width 120ms linear",
+          }}
+        />
+      </div>
+      {progress?.message && (
+        <div className="faint" style={{ fontSize: 11, marginTop: 2, wordBreak: "break-all" }}>
+          {progress.message}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia }) {
   const { t } = useTranslation();
@@ -266,6 +325,17 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    *  shape works. */
   const [pendingExclusion, setPendingExclusion] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /**
+   * The install job this screen started, and its latest progress.
+   *
+   * `apply()` already reports per file — `sink.report(done, total, item.to)`
+   * — and that has always reached the webview as `job-progress`. Nothing
+   * here listened, so the screen said "Installing…" and nothing else for
+   * however long a 588-file tree takes. A ref rather than state for the id:
+   * it is read inside the listener and must not re-subscribe on every tick.
+   */
+  const installJob = useRef<number | null>(null);
+  const [progress, setProgress] = useState<JobProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<OsInstallResult | null>(null);
 
@@ -430,6 +500,28 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
       setBusy(false);
       setConfirmed(false);
       setVerifyDistRoot(r.destination);
+      installJob.current = null;
+      setProgress(null);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, []);
+
+  // The install's own progress. `job-progress` is application-wide, so every
+  // update is checked against this screen's job id — an Aminet download
+  // running alongside must not move this bar. A cancelled or failed job never
+  // sends an `osinstall-result`, so the terminal states are cleared here too,
+  // otherwise the bar would sit at its last percentage for ever.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void onJobProgress((job) => {
+      if (job.id !== installJob.current) return;
+      setProgress(job);
+      if (job.state.state !== "running") {
+        installJob.current = null;
+        setBusy(false);
+      }
     }).then((fn) => {
       unlisten = fn;
     });
@@ -499,12 +591,19 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     if (!destination || !effectivePlan) return;
     setBusy(true);
     setError(null);
+    setProgress(null);
     try {
-      await osinstallApply(effectivePlan, destination);
+      // The job id is what tells this screen's progress from every other
+      // job's: `job-progress` is a single application-wide event, and an
+      // install running beside an Aminet download would otherwise drive
+      // this bar with the download's numbers.
+      installJob.current = await osinstallApply(effectivePlan, destination);
       // `busy` clears on the result event, or here if the job never starts.
     } catch (e) {
       setError(String(e));
       setBusy(false);
+      installJob.current = null;
+      setProgress(null);
     }
   }
 
@@ -862,6 +961,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           <button className="btn btn-primary" onClick={() => void runInstall()} disabled={busy || !confirmed || !!blocker}>
             {t(busy ? "osinstall.run.running" : "osinstall.run.run")}
           </button>
+          {busy && <InstallProgress progress={progress} />}
           {blocker && (
             <span className="faint" style={{ fontSize: 11 }}>
               {t(blocker.key, blocker.params)}

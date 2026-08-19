@@ -2105,7 +2105,11 @@
       "heading": "Kur",
       "confirm": "Yukarıdaki dosya listesini inceledim.",
       "run": "Dağıtım ağacını kur",
-      "running": "Kuruluyor…"
+      "running": "Kuruluyor…",
+      "progress": {
+        "starting": "Başlıyor…",
+        "percent": "%{{percent}} — {{total}} dosyadan {{done}} tanesi"
+      }
     },
     "result": {
       "heading": "Kuruldu",
