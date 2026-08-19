@@ -817,7 +817,12 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
         userStartup: [],
       },
     };
-    const ready = { mediaFolder: "E:\\media", destination: "E:\\dist", plan: planned };
+    const ready = {
+      mediaFolder: "E:\media",
+      destination: "E:\dist",
+      destinationTaken: false,
+      plan: planned,
+    };
 
     const blockers = [
       osinstallBlocker({ ...ready, mediaFolder: null }),
@@ -838,6 +843,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
         ...ready,
         plan: { ...planned, plan: { ...planned.plan, items: [] } },
       }),
+      osinstallBlocker({ ...ready, destinationTaken: true }),
     ];
     for (const blocker of blockers) {
       expect(blocker).not.toBeNull();

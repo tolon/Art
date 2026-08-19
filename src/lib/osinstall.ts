@@ -264,13 +264,29 @@ export async function osinstallVerify(
  * A reason rather than a boolean: a disabled button that does not say why is
  * the defect ART-100 was.
  */
+/**
+ * Whether something already sits where the tree would go.
+ *
+ * Read-only. `apply()` refuses an existing destination and always has; this
+ * exists so the screen can say so *before* the button rather than after.
+ */
+export async function osinstallDestinationTaken(destination: string): Promise<boolean> {
+  return invoke<boolean>("osinstall_destination_taken", { destination });
+}
+
 export function osinstallBlocker(input: {
   mediaFolder: string | null;
   destination: string | null;
+  destinationTaken: boolean;
   plan: PlanResult | null;
 }): Phrase | null {
   if (!input.mediaFolder?.trim()) return { key: "osinstall.blocked.noFolder" };
   if (!input.destination?.trim()) return { key: "osinstall.blocked.noDestination" };
+  // Before the plan, because it is true regardless of what the plan says and
+  // is the one blocker the user can fix without understanding any of the rest.
+  if (input.destinationTaken) {
+    return { key: "osinstall.blocked.destinationExists", params: { path: input.destination } };
+  }
   if (!input.plan) return { key: "osinstall.blocked.notPlanned" };
   if (input.plan.outcome === "folder-unreadable") {
     return { key: "osinstall.blocked.folderUnreadable" };

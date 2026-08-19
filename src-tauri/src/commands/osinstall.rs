@@ -88,6 +88,25 @@ pub enum MediaScanResult {
 /// relabelled any future, differently-shaped error the same way; matching
 /// the one variant that can occur means a new kind of failure surfaces as
 /// itself instead of being folded into "bad folder".
+/// Whether something already sits where the tree would be built.
+///
+/// Read-only, and asked while the destination is being chosen rather than
+/// after the button is pressed. `apply()` refuses an existing destination —
+/// `SAFE_CREATE`: a distribution tree is never built over one already there,
+/// and that refusal has protected real data. But a refusal the user only
+/// meets *after* committing to a long operation reads as the application
+/// doing nothing: three consecutive attempts in one session's operation log
+/// were refused for this exact reason, each one silent on screen. The engine
+/// keeps the refusal; this lets the screen say it first.
+///
+/// A path that cannot be examined answers `false` — not because it is known
+/// to be free, but because `apply()` is the one that decides, and guessing
+/// "taken" here would block an install the engine would have allowed.
+#[tauri::command]
+pub fn osinstall_destination_taken(destination: PathBuf) -> AppResult<bool> {
+    Ok(destination.try_exists().unwrap_or(false))
+}
+
 #[tauri::command]
 pub fn osinstall_scan_media(folder: PathBuf) -> AppResult<MediaScanResult> {
     match find_media(&folder) {

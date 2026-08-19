@@ -82,6 +82,7 @@ import {
   osinstallApply,
   osinstallComponents,
   osinstallBlocker,
+  osinstallDestinationTaken,
   osinstallPlan,
   osinstallScanMedia,
   osinstallVerify,
@@ -518,19 +519,59 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     void onJobProgress((job) => {
       if (job.id !== installJob.current) return;
       setProgress(job);
-      if (job.state.state !== "running") {
-        installJob.current = null;
-        setBusy(false);
+      if (job.state.state === "running") return;
+
+      installJob.current = null;
+      setBusy(false);
+      // A finished install announces itself through `osinstall-result`. A
+      // **failed or cancelled** one never sends that event, so without this
+      // the screen simply stopped saying "Installing…" and said nothing at
+      // all — the user's own report: "it did something, but did it install?
+      // what did it install? there is no feedback on screen." A job that
+      // ended badly has to say so where the button is.
+      if (job.state.state === "failed") {
+        setError(`${job.state.message} (${job.state.error_code})`);
+      } else if (job.state.state === "cancelled") {
+        setError(
+          t("osinstall.run.cancelled", {
+            files: job.state.files_landed ?? 0,
+          })
+        );
       }
     }).then((fn) => {
       unlisten = fn;
     });
     return () => unlisten?.();
-  }, []);
+  }, [t]);
+
+  // Is the destination already occupied? Asked while it is being chosen, so
+  // the refusal `apply()` would raise is on screen before the button, not
+  // after a long operation appears to have done nothing.
+  const [destinationTaken, setDestinationTaken] = useState(false);
+  useEffect(() => {
+    if (!destination) {
+      setDestinationTaken(false);
+      return;
+    }
+    let cancelled = false;
+    void osinstallDestinationTaken(destination)
+      .then((taken) => {
+        if (!cancelled) setDestinationTaken(taken);
+      })
+      // A path ART cannot examine is not a path ART may declare occupied:
+      // `apply()` decides, and blocking here would refuse an install the
+      // engine would have allowed.
+      .catch(() => {
+        if (!cancelled) setDestinationTaken(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [destination, result]);
 
   const basePlan = basePlanResult?.outcome === "planned" ? basePlanResult.plan : null;
   const effectivePlan = effectivePlanResult?.outcome === "planned" ? effectivePlanResult.plan : null;
-  const blocker = osinstallBlocker({ mediaFolder, destination, plan: effectivePlanResult });
+  const blocker = osinstallBlocker({ mediaFolder, destination, destinationTaken, plan: effectivePlanResult });
   const baseRomUnknown = basePlan ? hasRomUnknownRefusal(basePlan) : false;
 
   async function chooseMediaFolder() {
@@ -1001,6 +1042,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           empty={t("osinstall.verify.distRoot.none")}
           onChoose={() => void chooseVerifyDistRoot()}
           choose={t("common.browse")}
+          hint={t("osinstall.verify.distRoot.hint")}
         />
         <Field
           label={t("osinstall.verify.image.label")}
@@ -1008,6 +1050,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           empty={t("osinstall.verify.image.none")}
           onChoose={() => void chooseVerifyImage()}
           choose={t("common.browse")}
+          hint={t("osinstall.verify.image.hint")}
         />
 
         <div style={{ display: "flex", gap: 16, marginBottom: 12, flexWrap: "wrap" }}>

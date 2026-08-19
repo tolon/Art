@@ -2038,7 +2038,8 @@
       "notPlanned": "Preview it first — nothing is built before you have seen what would be.",
       "folderUnreadable": "ART could not read that folder — check the path.",
       "refusals": "Resolve the refusal(s) first — nothing is built while the plan cannot proceed.",
-      "nothingToInstall": "Nothing would be installed — choose at least one component."
+      "nothingToInstall": "Nothing would be installed — choose at least one component.",
+      "destinationExists": "Something already exists at {{path}}. ART never builds a distribution tree over what is already there — choose a name that does not exist yet, or move the old one aside."
     },
     "refusal": {
       "mediaMissing": "{{component}} needs {{volume}}, and no file in the media folder carries that volume name.",
@@ -2109,7 +2110,8 @@
       "progress": {
         "starting": "Starting…",
         "percent": "{{percent}}% — {{done}} of {{total}} files"
-      }
+      },
+      "cancelled": "Install cancelled. {{files}} file(s) were already written and are still on disk."
     },
     "result": {
       "heading": "Built",
@@ -2119,16 +2121,18 @@
     },
     "verify": {
       "heading": "Verify against a card",
-      "intro": "Once this tree has been copied onto a real Amiga volume, check it against the manifest ART wrote here.",
+      "intro": "Optional, and only useful after this tree has been copied onto a real Amiga volume. ART compares the volume against the distribution.json it wrote here, file by file, and tells you what does not match. Nothing is written.",
       "distRoot": {
         "label": "Distribution tree",
         "none": "No distribution tree chosen.",
-        "chooseTitle": "Choose the distribution tree's own root — where distribution.json was written"
+        "chooseTitle": "Choose the distribution tree's own root — where distribution.json was written",
+        "hint": "The folder ART installed into — the one holding distribution.json. Filled in for you after an install."
       },
       "image": {
         "label": "Amiga volume image",
         "none": "No image chosen.",
-        "chooseTitle": "Choose the card or hard disk image the tree was copied onto"
+        "chooseTitle": "Choose the card or hard disk image the tree was copied onto",
+        "hint": "The card or hard-disk image the tree was copied onto: an .hdf, or a PiStorm card image. Not the ISO you installed from, and not the folder above — this is the Amiga side, after you have written it."
       },
       "slot": {
         "label": "Slot",

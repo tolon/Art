@@ -2038,7 +2038,8 @@
       "notPlanned": "Önce önizle — ne olacağını görmeden hiçbir şey kurulmaz.",
       "folderUnreadable": "ART bu klasörü okuyamadı — yolu kontrol et.",
       "refusals": "Önce reddedilen(ler)i çöz — plan ilerleyemezken hiçbir şey kurulmaz.",
-      "nothingToInstall": "Hiçbir şey kurulmayacak — en az bir bileşen seç."
+      "nothingToInstall": "Hiçbir şey kurulmayacak — en az bir bileşen seç.",
+      "destinationExists": "{{path}} yolunda zaten bir şey var. ART, var olanın üzerine dağıtım ağacı kurmaz — henüz var olmayan bir ad seçin ya da eskisini kenara alın."
     },
     "refusal": {
       "mediaMissing": "{{component}}, {{volume}} istiyor ve medya klasöründe bu birim adını taşıyan bir dosya yok.",
@@ -2109,7 +2110,8 @@
       "progress": {
         "starting": "Başlıyor…",
         "percent": "%{{percent}} — {{total}} dosyadan {{done}} tanesi"
-      }
+      },
+      "cancelled": "Kurulum iptal edildi. {{files}} dosya zaten yazılmıştı ve diskte duruyor."
     },
     "result": {
       "heading": "Kuruldu",
@@ -2119,16 +2121,18 @@
     },
     "verify": {
       "heading": "Bir karta karşı doğrula",
-      "intro": "Bu ağaç gerçek bir Amiga birimine kopyalandıktan sonra, ART'ın buraya yazdığı manifesto karşı burada denetle.",
+      "intro": "İsteğe bağlı, ve ancak bu ağaç gerçek bir Amiga birimine kopyalandıktan sonra işe yarar. ART, birimi buraya yazdığı distribution.json ile dosya dosya karşılaştırır ve uyuşmayanı söyler. Hiçbir şey yazılmaz.",
       "distRoot": {
         "label": "Dağıtım ağacı",
         "none": "Dağıtım ağacı seçilmedi.",
-        "chooseTitle": "Dağıtım ağacının kendi kökünü seç — distribution.json'ın yazıldığı yer"
+        "chooseTitle": "Dağıtım ağacının kendi kökünü seç — distribution.json'ın yazıldığı yer",
+        "hint": "ART’ın kurduğu klasör — distribution.json’ın bulunduğu yer. Bir kurulumdan sonra kendiliğinden dolar."
       },
       "image": {
         "label": "Amiga birim imgesi",
         "none": "İmge seçilmedi.",
-        "chooseTitle": "Ağacın kopyalandığı kart ya da sabit disk imgesini seç"
+        "chooseTitle": "Ağacın kopyalandığı kart ya da sabit disk imgesini seç",
+        "hint": "Ağacın kopyalandığı kart ya da sabit disk imgesi: bir .hdf ya da bir PiStorm kart imgesi. Kurulum yaptığınız ISO değil, yukarıdaki klasör de değil — bu, yazdıktan sonraki Amiga tarafı."
       },
       "slot": {
         "label": "Yuva",
