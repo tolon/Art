@@ -3,7 +3,7 @@
 //! `include_str!` for the same three reasons `core/distro` uses it: reviewable
 //! in a diff, shipped without a network, and unable to grow a code path.
 
-use super::Recipe;
+use super::{Component, Recipe};
 use crate::core::error::{CoreError, CoreResult};
 
 const AMIGAOS_32_JSON: &str = include_str!("recipes/amigaos-3.2.json");
@@ -51,10 +51,32 @@ fn validate_path(component_id: &str, field: &str, path: &str, allow_empty: bool)
     Ok(())
 }
 
-/// Everything a recipe must get right before ART trusts it: no two
-/// components sharing an id, every component naming real media, and every
-/// path — media-side `from` as well as tree-side `to` — a name AmigaDOS can
+/// One component's own share of [`validate`]: real media, and every path —
+/// media-side `from` as well as tree-side `to` — a name AmigaDOS can
 /// actually store, inside the tree it's rooted in.
+///
+/// `pub(super)` rather than private: `package.rs` needs the identical gate
+/// for the single component a package wraps — a package's rules are AmigaDOS
+/// paths exactly like a release recipe's, and `parse`'s validation shape is
+/// what a package's own parser is required to follow (Task 4). Splitting
+/// this out of [`validate`] is what makes that possible without a second,
+/// drifting copy of the same checks.
+pub(super) fn validate_component(component: &Component) -> CoreResult<()> {
+    if component.media.trim().is_empty() {
+        return Err(CoreError::Malformed {
+            format: "recipe".into(),
+            detail: format!("'{}' names no media", component.id),
+        });
+    }
+    for rule in &component.rules {
+        validate_path(&component.id, "from", &rule.from, true)?;
+        validate_path(&component.id, "to", &rule.to, false)?;
+    }
+    Ok(())
+}
+
+/// Everything a recipe must get right before ART trusts it: no two
+/// components sharing an id, plus [`validate_component`] for each one.
 fn validate(recipe: &Recipe) -> CoreResult<()> {
     let mut seen_ids = std::collections::HashSet::new();
     for component in &recipe.components {
@@ -64,16 +86,7 @@ fn validate(recipe: &Recipe) -> CoreResult<()> {
                 detail: format!("two components share the id '{}'", component.id),
             });
         }
-        if component.media.trim().is_empty() {
-            return Err(CoreError::Malformed {
-                format: "recipe".into(),
-                detail: format!("'{}' names no media", component.id),
-            });
-        }
-        for rule in &component.rules {
-            validate_path(&component.id, "from", &rule.from, true)?;
-            validate_path(&component.id, "to", &rule.to, false)?;
-        }
+        validate_component(component)?;
     }
     Ok(())
 }
@@ -168,18 +181,44 @@ mod tests {
     /// add it to `releases()` (`by_release` refuses anything not named
     /// there), and that same edit is what puts it in this list — there is no
     /// second place to remember.
-    fn shipped_recipes() -> Vec<(&'static str, Recipe)> {
-        super::releases()
+    ///
+    /// **Widened for packages (Task 4).** Every shipped package's own
+    /// component is appended too, each as its own single-component pseudo
+    /// `Recipe` labelled by the package's id, driven directly from
+    /// [`super::super::package::packages`] rather than a second hand-typed
+    /// list — the same "one list, no second place to remember" reasoning
+    /// this function's doc comment already gives for releases, so a fourth
+    /// package JSON is inside these four invariant tests the moment it is
+    /// added to `package.rs`'s own shipped list. A package's `overrides`
+    /// therefore only resolves against its *own* component here — never a
+    /// release recipe's — which is why every shipped package ships an empty
+    /// `overrides` today; see `package.rs` module doc for why that is
+    /// correct rather than a gap.
+    fn shipped_recipes() -> Vec<(String, Recipe)> {
+        let mut all: Vec<(String, Recipe)> = super::releases()
             .iter()
             .map(|&release| {
                 (
-                    release,
+                    release.to_string(),
                     super::by_release(release).unwrap_or_else(|e| {
                         panic!("the shipped {release} recipe must parse and validate: {e}")
                     }),
                 )
             })
-            .collect()
+            .collect();
+
+        for package in
+            super::super::package::packages().expect("the shipped packages must parse and validate")
+        {
+            all.push((
+                package.id.clone(),
+                Recipe {
+                    release: package.id.clone(),
+                    components: vec![package.component],
+                },
+            ));
+        }
+        all
     }
 
     /// [`shipped_recipes`]'s own raw counterpart — see [`raw_recipe`]'s doc
@@ -196,7 +235,13 @@ mod tests {
     /// `releases()` and forgotten here fails loudly (a panic from every test
     /// that calls this) rather than silently going unchecked the way 3.9
     /// did before any of this existed.
-    fn raw_shipped_recipes() -> Vec<(&'static str, Recipe)> {
+    ///
+    /// Widened for packages the same way [`shipped_recipes`] is, and for the
+    /// same reason: [`super::super::package::raw_packages`] deserialises
+    /// without calling [`validate_component`], so a test built on this
+    /// function actually exercises `validate_component` rather than trusting
+    /// it already ran.
+    fn raw_shipped_recipes() -> Vec<(String, Recipe)> {
         fn raw_json(release: &str) -> &'static str {
             match release {
                 "AmigaOS 3.2" => AMIGAOS_32_JSON,
@@ -208,17 +253,28 @@ mod tests {
             }
         }
 
-        super::releases()
+        let mut all: Vec<(String, Recipe)> = super::releases()
             .iter()
             .map(|&release| {
                 (
-                    release,
+                    release.to_string(),
                     serde_json::from_str(raw_json(release)).unwrap_or_else(|e| {
                         panic!("the shipped {release} recipe must at least deserialise: {e}")
                     }),
                 )
             })
-            .collect()
+            .collect();
+
+        for package in super::super::package::raw_packages() {
+            all.push((
+                package.id.clone(),
+                Recipe {
+                    release: package.id.clone(),
+                    components: vec![package.component],
+                },
+            ));
+        }
+        all
     }
 
     #[test]

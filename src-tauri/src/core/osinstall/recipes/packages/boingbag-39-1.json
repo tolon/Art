@@ -1,0 +1,40 @@
+{
+  "_why_empty_overrides": [
+    "BoingBag 3.9-1 supersedes files the base AmigaOS 3.9 recipe's own",
+    "`workbench-base` component already places (C, Classes, Devs, Fonts, L,",
+    "Libs, Prefs, S, Storage, System, Tools, Utilities, WBStartup) — but every",
+    "rule below is `subtree`, not `file`, so nothing here is a claim in the",
+    "sense the shipped-recipe collision test polices (see",
+    "`no_two_components_claim_one_destination_without_declaring_it`'s own",
+    "comment: a Subtree destination is a merge point, not a claim). And",
+    "`Component.overrides` is checked within one recipe's own component list",
+    "(`recipe.rs`'s `every_override_names_a_component_that_exists`) — a",
+    "package and a release recipe are not the same list, so an override",
+    "naming `workbench-base` would not resolve there. Which component's copy",
+    "of a same-named file actually survives on a real distribution tree is a",
+    "question for the engine that applies a package onto an already-built",
+    "tree, which this task does not build — that engine will get the same",
+    "measured, not-guessed treatment ART-127 got, when it exists."
+  ],
+  "id": "boingbag-39-1",
+  "name": "BoingBag 3.9-1",
+  "media": "BoingBag3.9-1",
+  "member": "AmigaOS-Update",
+  "requires": [],
+  "overrides": [],
+  "rules": [
+    { "from": "C",         "to": "C",         "kind": "subtree" },
+    { "from": "Classes",   "to": "Classes",   "kind": "subtree" },
+    { "from": "Devs",      "to": "Devs",      "kind": "subtree" },
+    { "from": "Fonts",     "to": "Fonts",     "kind": "subtree" },
+    { "from": "L",         "to": "L",         "kind": "subtree" },
+    { "from": "Libs",      "to": "Libs",      "kind": "subtree" },
+    { "from": "Prefs",     "to": "Prefs",     "kind": "subtree" },
+    { "from": "S",         "to": "S",         "kind": "subtree" },
+    { "from": "Storage",   "to": "Storage",   "kind": "subtree" },
+    { "from": "System",    "to": "System",    "kind": "subtree" },
+    { "from": "Tools",     "to": "Tools",     "kind": "subtree" },
+    { "from": "Utilities", "to": "Utilities", "kind": "subtree" },
+    { "from": "WBStartup", "to": "WBStartup", "kind": "subtree" }
+  ]
+}

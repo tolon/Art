@@ -1,0 +1,31 @@
+{
+  "_why_this_differs_from_boingbag_39_1": [
+    "Measured separately (Task 4) rather than copied from BoingBag 3.9-1's own",
+    "top level, per the task brief's own warning that the two were never the",
+    "same shape. BoingBag 3.9-2's payload ZIP top level is twelve directories,",
+    "not thirteen: it carries `Rexxc/`, which 3.9-1 does not, and it carries",
+    "neither `Fonts/` nor `Storage/`, which 3.9-1 does. Confirmed with",
+    "`7z l -slt` against the owner's own BoingBag39-2.lha, member",
+    "`AmigaOS-Update` (113 entries, matching the task brief's own count)."
+  ],
+  "id": "boingbag-39-2",
+  "name": "BoingBag 3.9-2",
+  "media": "BoingBag3.9-2",
+  "member": "AmigaOS-Update",
+  "requires": ["boingbag-39-1"],
+  "overrides": [],
+  "rules": [
+    { "from": "C",         "to": "C",         "kind": "subtree" },
+    { "from": "Classes",   "to": "Classes",   "kind": "subtree" },
+    { "from": "Devs",      "to": "Devs",      "kind": "subtree" },
+    { "from": "L",         "to": "L",         "kind": "subtree" },
+    { "from": "Libs",      "to": "Libs",      "kind": "subtree" },
+    { "from": "Prefs",     "to": "Prefs",     "kind": "subtree" },
+    { "from": "Rexxc",     "to": "Rexxc",     "kind": "subtree" },
+    { "from": "S",         "to": "S",         "kind": "subtree" },
+    { "from": "System",    "to": "System",    "kind": "subtree" },
+    { "from": "Tools",     "to": "Tools",     "kind": "subtree" },
+    { "from": "Utilities", "to": "Utilities", "kind": "subtree" },
+    { "from": "WBStartup", "to": "WBStartup", "kind": "subtree" }
+  ]
+}

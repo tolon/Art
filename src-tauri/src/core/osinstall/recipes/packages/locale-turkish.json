@@ -1,0 +1,26 @@
+{
+  "_why_locale_catalogs_not_all_caps": [
+    "The real archive's own paths (7z against BoingBag39-2-turkce.lha) are",
+    "lower-case: `locale/catalogs/türkçe/*.catalog` — matched here on `from`",
+    "exactly as measured. `to` is written mixed-case, `Locale/Catalogs`,",
+    "matching the AmigaDOS convention every other component in every shipped",
+    "recipe already uses for a destination it writes (`Locale/Countries`,",
+    "`Locale/Languages`, `Locale/Help` in the 3.2 recipe) — never the all-caps",
+    "spelling a Joliet-less disc's own Primary tree happens to force on a",
+    "`from`. AmigaDOS resolves a path case-insensitively, so this cannot",
+    "collide with anything; nothing in the shipped AmigaOS 3.9 recipe writes a",
+    "`Locale` drawer of its own yet (see that recipe's own `_why_no_T` note),",
+    "so there is no existing sibling spelling on the built tree to match",
+    "either way here — `Locale/Catalogs` is chosen for consistency with the",
+    "3.2 recipe's own Locale destinations and with AmigaDOS convention",
+    "generally, not because anything already on disk demands it."
+  ],
+  "id": "locale-turkish",
+  "name": "Türkçe catalogs (BoingBag 3.9-2)",
+  "media": "LocaleUpdate",
+  "requires": [],
+  "overrides": [],
+  "rules": [
+    { "from": "locale/catalogs", "to": "Locale/Catalogs", "kind": "subtree" }
+  ]
+}
