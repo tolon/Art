@@ -2054,7 +2054,10 @@
       "packageRequirementMissing": "\"{{package}}\", önce \"{{requires}}\"in uygulanmasına ihtiyaç duyuyor — onu da tikle, ya da \"{{package}}\"in tikini tek başına kaldır.",
       "packageComponentMissing": "\"{{package}}\", \"{{component}}\" bileşenine ihtiyaç duyuyor, ve bu ağaç onunla kurulmadı. \"{{package}}\"in tikini kaldır, ya da \"{{component}}\" açıkken yeni bir ağaç kur ve \"{{package}}\"i o ağaca ekle.",
       "packageArchiveMissing": "Güncelleme paketleri klasöründe, \"{{package}}\"in ihtiyaç duyduğu \"{{media}}\" medyasını taşıyan bir arşiv yok — o arşivi klasöre koy ve yeniden dene.",
-      "packageArchiveAmbiguous": "Güncelleme paketleri klasöründe \"{{package}}\"in ihtiyaç duyduğu {{media}} medya adını taşıyan birden fazla arşiv var: {{paths}}. İstediğin biri dışında hepsini kaldır."
+      "packageArchiveAmbiguous": "Güncelleme paketleri klasöründe \"{{package}}\"in ihtiyaç duyduğu {{media}} medya adını taşıyan birden fazla arşiv var: {{paths}}. İstediğin biri dışında hepsini kaldır.",
+      "packageNotPlaceableOnHost": {
+        "encryptedPayload": "\"{{package}}\" Windows üzerinden yerleştirilemez: dosyaları kilitli ve anahtar yalnızca paketin kendi Amiga tarafındaki Updater'ında. Tikini kaldır ve onun yerine Amiga'da o Updater ile kur."
+      }
     },
     "heading": "AmigaOS Kur",
     "intro": "Kendi AmigaOS kurulum disklerinden ya da diskinden, gerçek bir Amiga birimine kopyalanmaya hazır bir dağıtım ağacı oluştur.",
@@ -2163,7 +2166,8 @@
     "packages": {
       "heading": "Güncelleme paketleri",
       "intro": "ART'ın ya da senin zaten kurduğun bir dağıtım ağacına resmi bir güncelleme — bir BoingBag, ya da Türkçe katalog paketi gibi resmi olmayan bir paket — ekle.",
-      "scopeNote": "ART, tarifini gönderdiği {{count}} güncelleme paketini yerleştirebilir — her biri dosyaların ve kendi hedeflerinin elle yazılmış bir listesidir. Böyle bir tarifi olmayan bir paket, ya da kurulumu gerçek donanımda çalışma anında karar veren bir Amiga Installer betiği olan bir paket burada yerleştirilemez: ART'ın o kararı yeniden üretecek hiçbir şeyi yok.",
+      "scopeNote": "ART {{count}} güncelleme paketi için tarif gönderiyor — her biri dosyaların ve kendi hedeflerinin elle yazılmış bir listesidir — ve başka hiçbir arşive dokunmaz. Böyle bir tarifi olmayan bir paket, ya da kurulumu gerçek donanımda çalışma anında karar veren bir Amiga Installer betiği olan bir paket burada yerleştirilemez: ART'ın o kararı yeniden üretecek hiçbir şeyi yok.",
+      "scopeBlocked": "Bunlardan {{count}} tanesi, arşivin kaç kopyası elinde olursa olsun, Windows üzerinden hiç yerleştirilemez — her biri nedenini aşağıda kendi satırında söylüyor.",
       "treeRoot": {
         "label": "Dağıtım ağacı",
         "none": "Dağıtım ağacı seçilmedi.",
@@ -2181,6 +2185,12 @@
         "needsFolder": "Hangi arşivlerin gerçekten burada olduğunu görmek için güncelleme paketleri klasörünü seç."
       },
       "archiveMissing": "Arşiv bulunamadı",
+      "blocked": {
+        "badge": "Windows üzerinden yerleştirilemez",
+        "encryptedPayload": "Bu paketin içindeki dosyalar kilitli ve anahtar yalnızca paketin kendi Amiga tarafındaki Updater'ında. O Updater bir Amiga programı: Amiga'nın kendisinde çalışmak zorunda — diğer bütün dağıtım kurucuları da bu paketi böyle kuruyor. ART kilidi kırmaz, dolayısıyla buradan tek bir dosya bile yerleştiremez — arşivi Amiga'na koy ve kendi Updater'ını orada çalıştır.",
+        "chosen": "{{names}} Windows üzerinden yerleştirilemez, bu yüzden bu seçim için hiçbir şey önizlenemez ve eklenemez. Tikini kaldır, ya da paketin kendi Updater'ı ile Amiga'da ekle."
+      },
+      "refusedNames": "Bu arşiv, ART'ın kullanmayı reddettiği {{count}} giriş adı taşıyor; çünkü ait oldukları klasörün dışını gösteriyorlar: {{names}}. Onlardan hiçbir şey yerleştirilmeyecek — arşivin geri kalanı bundan etkilenmez.",
       "archiveGone": "Bu paket, sen seçtiğin için tikli kalıyor, ama arşivi artık güncelleme paketleri klasöründe değil — onun için hiçbir şey eklenmeyecek. Tikini kaldır, ya da arşivi geri koy; o zaman yeniden sunulur.",
       "unknown": "Burada sunulmuyor",
       "unknownHint": "Bu kimlik daha önceki bir seçimden hatırlandı, ama ART'ın bugün gönderdiği paketlerden biri değil — büyük olasılıkla eski bir sürümden kalma bir seçim. Tikini kaldır; ne olursa olsun onun için hiçbir şey eklenmeyecek.",

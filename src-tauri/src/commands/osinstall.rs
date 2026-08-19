@@ -101,7 +101,7 @@ use crate::core::osinstall::scan::{
     PackageMedium,
 };
 use crate::core::osinstall::verify::{verify_volume, VerifyReport};
-use crate::core::osinstall::RefusalReason;
+use crate::core::osinstall::{HostPlacementBlock, RefusalReason};
 use crate::error::{AppError, AppResult};
 
 use super::jobs::{spawn_job, JobRegistry};
@@ -294,12 +294,20 @@ pub fn osinstall_components(release: String) -> AppResult<Vec<ComponentSummary>>
 
 /// One shipped package, in the shape the checklist on screen needs.
 ///
-/// `available` is **not** "ART knows how to install this" (every shipped
-/// package always does, or it would not be shipped) — it is "an archive
-/// carrying this package's own top-level directory name was actually found
-/// in `package_folder`". A checkbox for a package whose file is absent is a
-/// promise ART cannot keep, so the screen needs this before it ever offers
-/// the tick.
+/// `available` is **not** "ART knows how to install this" — it is "an
+/// archive carrying this package's own top-level directory name was
+/// actually found in `package_folder`". A checkbox for a package whose file
+/// is absent is a promise ART cannot keep, so the screen needs this before
+/// it ever offers the tick.
+///
+/// `host_placement_block` is the *other* half of that promise, and it is
+/// deliberately a separate field rather than a second reason to say
+/// `available: false` (M3 of the final whole-branch review): "your archive
+/// is not in this folder" and "this package cannot be placed from Windows
+/// at all, however many copies of it you have" are different sentences, and
+/// folding them into one boolean is what produced a screen saying "Archive
+/// not found" about a file sitting right there. `Some` here means the row
+/// must not be tickable at all — see [`HostPlacementBlock`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PackageSummary {
@@ -310,6 +318,22 @@ pub struct PackageSummary {
     pub requires: Vec<String>,
     pub requires_components: Vec<String>,
     pub available: bool,
+    /// `Some` when ART cannot place this package's files from the host at
+    /// all — never a folder problem, always a property of the package.
+    pub host_placement_block: Option<HostPlacementBlock>,
+    /// Every entry name this package's own archive carries that
+    /// [`safe_join`](crate::core::security::safe_join) refused — a `..`, an
+    /// absolute path, a Windows prefix — exactly as the archive spelled it,
+    /// and empty for the ordinary archive (m6 of the final whole-branch
+    /// review: `ArchiveSource` has collected these since Task 6 and nothing
+    /// had ever shown them, so a package carrying `..\..\Startup` read on
+    /// screen as an ordinary package).
+    ///
+    /// The **outer** archive's, since that is the one `find_packages`
+    /// opens to learn a package's identity at all; a nested payload's own
+    /// refused names are not visible without extracting it, which the
+    /// checklist deliberately does not do.
+    pub refused_names: Vec<String>,
 }
 
 /// Every package ART ships a recipe for, paired with whether its archive was
@@ -331,13 +355,32 @@ pub fn osinstall_packages(package_folder: PathBuf) -> AppResult<Vec<PackageSumma
     Ok(packages
         .into_iter()
         .map(|p| {
-            let available = found.iter().any(|f| f.media == p.media);
+            // Through `package_for`, not a hand-written comparison: the
+            // checklist and the two paths that actually open an archive
+            // (`plan()` and `resolve_package_archive`) must not be able to
+            // disagree about what "found" means — which is exactly what the
+            // old `f.media == p.media` did once `package_for` learnt to
+            // fold case (m5).
+            let matched: Vec<&FoundPackage> = match package_for(&found, &p.media) {
+                MediaMatch::Missing => Vec::new(),
+                MediaMatch::Found(one) => vec![one],
+                MediaMatch::Ambiguous(many) => many,
+            };
             PackageSummary {
                 id: p.id,
                 name: p.name,
                 requires: p.requires,
                 requires_components: p.requires_components,
-                available,
+                available: !matched.is_empty(),
+                host_placement_block: p.host_placement_block,
+                // Every claimant's, not only the first: an ambiguous name
+                // is still offered as available (the refusal comes later,
+                // by name), so saying nothing about the *other* claimant's
+                // traversing entries would be the same silence m6 is about.
+                refused_names: matched
+                    .iter()
+                    .flat_map(|f| f.refused_names.iter().cloned())
+                    .collect(),
             }
         })
         .collect())
@@ -526,6 +569,23 @@ fn resolve_package_archive<'a>(
     }
 }
 
+/// A plain-English sentence for a package ART cannot place from the host —
+/// the preview path's own `CoreError` text, for the same reason and with
+/// the same caveat as [`describe_package_refusal`] below: Rust-side strings
+/// stay English whatever the chosen language (ART-060). The *translated*
+/// sentence a user actually reads comes from `HostPlacementBlock` reaching
+/// the screen as a value, through [`PackageSummary::host_placement_block`]
+/// and through `RefusalReason::PackageNotPlaceableOnHost`.
+fn describe_host_placement_block(package: &str, block: HostPlacementBlock) -> String {
+    match block {
+        HostPlacementBlock::EncryptedPayload => format!(
+            "'{package}' cannot be placed from Windows: its payload archive is \
+             password-encrypted, and only the package's own Amiga-side Updater \
+             holds the password (ART-166)"
+        ),
+    }
+}
+
 /// A plain-English sentence for one package refusal — used only for the
 /// preview path's own `CoreError` (the add path sends the `RefusalReason`
 /// itself across the wire as data; see [`AddPackageResult`]). Rust-side
@@ -701,6 +761,24 @@ fn preview_collisions(
 ) -> CoreResult<Vec<CollisionReport>> {
     if ordered.is_empty() {
         return Ok(Vec::new());
+    }
+    // The backstop for M3. The screen refuses the tick and never sends a
+    // blocked package here, and `osinstall_add_package` refuses it by type
+    // (`PackageNotPlaceableOnHost`) — but this command is reachable on its
+    // own, and the whole point of ART-166 is that the *first* thing said
+    // about such a package must name what it needs, not whatever its
+    // payload's reader happened to fail on. Checked before a single archive
+    // is opened.
+    for id in ordered {
+        let Some(package) = catalogue.iter().find(|p| &p.id == id) else {
+            continue;
+        };
+        if let Some(block) = package.host_placement_block {
+            return Err(CoreError::InvalidInput(describe_host_placement_block(
+                &package.id,
+                block,
+            )));
+        }
     }
     sweep_stale_preview_scratch_dirs();
     let incoming = extract_incoming_for_preview(package_folder, ordered, catalogue, progress)?;
@@ -2346,7 +2424,7 @@ mod tests {
             // below until that review, and a plain `Vec` cannot itself
             // notice a missing entry). This match has no body worth
             // running; its only job is to fail to *compile* the moment a
-            // fourteenth `RefusalReason` variant exists without an arm
+            // fifteenth `RefusalReason` variant exists without an arm
             // here, which is the signal to add its own case below too.
             #[allow(dead_code)]
             fn every_variant_is_matched(reason: RefusalReason) {
@@ -2363,7 +2441,8 @@ mod tests {
                     | RefusalReason::PackageRequirementMissing { .. }
                     | RefusalReason::PackageComponentMissing { .. }
                     | RefusalReason::PackageArchiveMissing { .. }
-                    | RefusalReason::PackageArchiveAmbiguous { .. } => {}
+                    | RefusalReason::PackageArchiveAmbiguous { .. }
+                    | RefusalReason::PackageNotPlaceableOnHost { .. } => {}
                 }
             }
 
@@ -2467,6 +2546,14 @@ mod tests {
                     },
                     "package-archive-ambiguous",
                     &["refusal", "package", "media", "paths"],
+                ),
+                (
+                    RefusalReason::PackageNotPlaceableOnHost {
+                        package: "boingbag-39-1".into(),
+                        block: HostPlacementBlock::EncryptedPayload,
+                    },
+                    "package-not-placeable-on-host",
+                    &["refusal", "package", "block"],
                 ),
             ];
 

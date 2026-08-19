@@ -295,6 +295,13 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // for the refused-selection list (F2) rather than only `collisionPhrase()` —
     // its own variants are already enumerated in `phrase-keys.test.ts`
     // (`osinstall refusalPhrase: every RefusalReason variant resolves`).
-    expect(dynamicCalls).toBe(113);
+    // 113 → 114 (final whole-branch review, M3): `PackagePanel.tsx` gained
+    // one more, `t(hostPlacementBlockKey(pkg.hostPlacementBlock))` — the
+    // sentence explaining why a package cannot be placed from the host at
+    // all (ART-166). Key-only, from a `switch` over `HostPlacementBlock` in
+    // `@/lib/osinstall` that is exhaustive by its own return type, and its
+    // single value today is enumerated in `phrase-keys.test.ts`
+    // (`hostPlacementBlockKey: every HostPlacementBlock resolves`).
+    expect(dynamicCalls).toBe(114);
   });
 });

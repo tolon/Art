@@ -219,6 +219,35 @@ pub fn same_destination(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
 }
 
+/// Why ART cannot place a package's files from the host at all — a
+/// property of the *package*, not of the user's folder or their selection.
+///
+/// A value, never a sentence (ART-060), and a **closed enum on purpose**:
+/// the checklist and the refusal both `match` on it, so a second kind of
+/// block is a compile error at every place that has to say something about
+/// it rather than a silent "unavailable, no reason given".
+///
+/// This exists because of ART-166, and because §10/§89 say ART must not
+/// offer what it cannot do. Both shipped BoingBag recipes name a payload
+/// (`member: "AmigaOS-Update"`) that is a **password-encrypted ZIP** — 233
+/// of 233 entries in BoingBag 3.9-1 and 147 of 147 in 3.9-2, measured three
+/// independent ways. The password belongs to the BoingBag's own `Updater`,
+/// an Amiga executable that has to run on an Amiga; every established
+/// distribution builder installs a BoingBag by running exactly that inside
+/// an emulator rather than by decrypting anything, and the owner's recorded
+/// decision is that ART will not bypass it. So the fact is not "this
+/// archive is missing" and not "this failed while running" — it is a fixed,
+/// knowable property of the package, and the screen has to say it *before*
+/// the tick, in the user's own language, rather than let a raw ZIP error
+/// arrive after they confirmed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HostPlacementBlock {
+    /// The package's payload archive is encrypted, and only the package's
+    /// own Amiga-side `Updater` holds the password (ART-166).
+    EncryptedPayload,
+}
+
 /// Why an install cannot proceed. A value, never a sentence — the UI
 /// translates it (ART-060).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -333,6 +362,17 @@ pub enum RefusalReason {
         package: String,
         media: String,
         paths: Vec<String>,
+    },
+    /// A chosen package ART ships a recipe for but **cannot place from the
+    /// host at all** — see [`HostPlacementBlock`]. Refused from the
+    /// selection itself, before any archive is opened, so the sentence the
+    /// user reads names what the package needs rather than reporting
+    /// whatever the reader happened to fail on first (ART-166: that was a
+    /// raw, English `Password required to decrypt file` arriving *after*
+    /// the confirmation).
+    PackageNotPlaceableOnHost {
+        package: String,
+        block: HostPlacementBlock,
     },
 }
 
@@ -745,6 +785,7 @@ pub(crate) mod fixtures {
             member: None,
             requires: Vec::new(),
             requires_components: Vec::new(),
+            host_placement_block: None,
             component,
         }
     }
@@ -821,6 +862,7 @@ pub(crate) mod fixtures {
             member: None,
             requires: vec!["test-package".to_string()],
             requires_components: Vec::new(),
+            host_placement_block: None,
             component,
         }
     }

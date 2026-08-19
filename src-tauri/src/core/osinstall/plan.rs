@@ -678,6 +678,18 @@ pub(crate) fn detect_package_refusals(
             });
             continue;
         };
+        // Before anything about the folder, the archives or the other
+        // packages: this one is a property of the package itself, so it is
+        // true whatever else the selection looks like, and it is the
+        // sentence the user actually needs (ART-166, M3 of the final
+        // whole-branch review — the screen used to accept the tick and let
+        // a raw English ZIP error arrive after the confirmation).
+        if let Some(block) = package.host_placement_block {
+            refusals.push(RefusalReason::PackageNotPlaceableOnHost {
+                package: id.clone(),
+                block,
+            });
+        }
         for need in &package.requires {
             if !chosen_set.contains(need.as_str()) {
                 refusals.push(RefusalReason::PackageRequirementMissing {
@@ -2271,6 +2283,7 @@ mod plan_tests {
             member: None,
             requires: requires.iter().map(|s| s.to_string()).collect(),
             requires_components: Vec::new(),
+            host_placement_block: None,
             component,
         }
     }
@@ -2512,6 +2525,61 @@ mod plan_tests {
         assert!(
             plan.items.is_empty(),
             "the catalogs must not be planned into a tree that cannot read them"
+        );
+    }
+
+    /// **M3 / ART-166.** A package ART cannot place from the host at all is
+    /// refused by *type*, from the selection alone — before the package
+    /// folder is scanned, before its archive is opened, and whatever else
+    /// is wrong or right about the request. That ordering is the whole
+    /// point: the sentence the user reads has to name what the package
+    /// needs (its own Amiga-side `Updater`), not whatever the payload's
+    /// reader happened to fail on first.
+    #[test]
+    fn a_package_that_cannot_be_placed_from_the_host_is_refused_by_type() {
+        use super::super::HostPlacementBlock;
+
+        let (dir, media, packages) = package_dirs("host-blocked");
+        fixtures::package_test_archive(&packages, "pack.zip");
+
+        let mut package = fixtures::package_test_package();
+        package.host_placement_block = Some(HostPlacementBlock::EncryptedPayload);
+
+        let request = package_request(&dir, &media, Some(&packages), &["test-package"]);
+        let plan = plan_over(&request, &fixtures::package_test_recipe(), &[package]).unwrap();
+
+        assert!(plan
+            .refusals
+            .contains(&RefusalReason::PackageNotPlaceableOnHost {
+                package: "test-package".to_string(),
+                block: HostPlacementBlock::EncryptedPayload,
+            }));
+        assert!(
+            plan.items.is_empty(),
+            "nothing of a package ART cannot place may reach the item list"
+        );
+    }
+
+    /// The same request with the block removed plans cleanly — so the
+    /// refusal above is about the block and not about the fixture.
+    #[test]
+    fn the_same_package_without_a_block_plans_cleanly() {
+        let (dir, media, packages) = package_dirs("host-unblocked");
+        fixtures::package_test_archive(&packages, "pack.zip");
+
+        let package = fixtures::package_test_package();
+        assert_eq!(package.host_placement_block, None);
+
+        let request = package_request(&dir, &media, Some(&packages), &["test-package"]);
+        let plan = plan_over(&request, &fixtures::package_test_recipe(), &[package]).unwrap();
+
+        assert!(
+            !plan
+                .refusals
+                .iter()
+                .any(|r| matches!(r, RefusalReason::PackageNotPlaceableOnHost { .. })),
+            "{:?}",
+            plan.refusals
         );
     }
 

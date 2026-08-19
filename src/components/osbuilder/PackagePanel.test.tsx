@@ -52,15 +52,34 @@ afterEach(() => {
  *  of an empty list: an empty list is not a real backend answer (there are
  *  always exactly three), and using one here would silently mask the F9/F1
  *  fix-round assertion below that reads the count straight from what
- *  loaded. */
+ *  loaded.
+ *
+ *  **One deliberate difference from the shipped data, stated rather than
+ *  hidden (M4's lesson about over-helpful fixtures):** the two real
+ *  BoingBags carry `hostPlacementBlock: "encrypted-payload"` (ART-166) and
+ *  these stand-ins do not, because almost every test in this file is about
+ *  the preview and the confirmation — machinery a blocked package never
+ *  reaches. The blocked behaviour is not therefore untested: it has its own
+ *  fixtures and its own tests under "M3" below, and those use the real
+ *  block. */
 const PACKAGES: PackageSummary[] = [
-  { id: "boingbag-39-1", name: "BoingBag 3.9-1", requires: [], requiresComponents: [], available: true },
+  {
+    id: "boingbag-39-1",
+    name: "BoingBag 3.9-1",
+    requires: [],
+    requiresComponents: [],
+    available: true,
+    hostPlacementBlock: null,
+    refusedNames: [],
+  },
   {
     id: "boingbag-39-2",
     name: "BoingBag 3.9-2",
     requires: ["boingbag-39-1"],
     requiresComponents: [],
     available: true,
+    hostPlacementBlock: null,
+    refusedNames: [],
   },
   {
     id: "locale-turkish",
@@ -68,6 +87,8 @@ const PACKAGES: PackageSummary[] = [
     requires: [],
     requiresComponents: ["locale-base"],
     available: true,
+    hostPlacementBlock: null,
+    refusedNames: [],
   },
 ];
 
@@ -202,7 +223,15 @@ describe("F2 — a refused add shows the real sentence, never starts a job", () 
 describe("F3 — a remembered pick whose archive vanished can still be unticked", () => {
   it("does not disable the checkbox for a checked-but-unavailable package", async () => {
     packagesMock.mockResolvedValue([
-      { id: "boingbag-39-1", name: "BoingBag 3.9-1", requires: [], requiresComponents: [], available: false },
+      {
+        id: "boingbag-39-1",
+        name: "BoingBag 3.9-1",
+        requires: [],
+        requiresComponents: [],
+        available: false,
+        hostPlacementBlock: null,
+        refusedNames: [],
+      },
     ]);
     render(
       <PackagePanel treeRoot="E:/tree" packageFolder="E:/packages" chosen={["boingbag-39-1"]} />
@@ -263,5 +292,105 @@ describe("N4 — an unknown remembered id is visible and untickable", () => {
     expect(box.checked).toBe(true);
     expect(box.disabled).toBe(false);
     expect(screen.getByText(/not one of the packages ART ships today/i)).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Final whole-branch review
+// ---------------------------------------------------------------------------
+
+/** The catalogue as `osinstall_packages` really answers it for the owner's
+ *  own folder: both BoingBags found *and* unplaceable (ART-166), the
+ *  Turkish pack neither. This is the shipped data, not a stand-in. */
+const REAL_PACKAGES: PackageSummary[] = [
+  {
+    id: "boingbag-39-1",
+    name: "BoingBag 3.9-1",
+    requires: [],
+    requiresComponents: [],
+    available: true,
+    hostPlacementBlock: "encrypted-payload",
+    refusedNames: [],
+  },
+  {
+    id: "locale-turkish",
+    name: "Türkçe catalogs (BoingBag 3.9-2)",
+    requires: [],
+    requiresComponents: ["locale-base"],
+    available: true,
+    hostPlacementBlock: null,
+    refusedNames: [],
+  },
+];
+
+describe("M3 — a package ART cannot place is not offered as though it can", () => {
+  it("refuses the tick and says what the package needs, before anything is chosen", async () => {
+    packagesMock.mockResolvedValue(REAL_PACKAGES);
+    render(<PackagePanel treeRoot="E:/tree" packageFolder="E:/packages" chosen={[]} />);
+
+    const box = (await screen.findByRole("checkbox", {
+      name: /BoingBag 3\.9-1/,
+    })) as HTMLInputElement;
+    expect(box.disabled).toBe(true);
+    // Not "Archive not found" — the archive is right there. The sentence
+    // has to name the package's own Amiga-side Updater.
+    expect(screen.queryByText(/Archive not found/i)).toBeNull();
+    expect(screen.getByText(/Updater/)).toBeTruthy();
+  });
+
+  it("previews nothing and refuses to run for a remembered blocked pick", async () => {
+    packagesMock.mockResolvedValue(REAL_PACKAGES);
+    render(
+      <PackagePanel
+        treeRoot="E:/tree"
+        packageFolder="E:/packages"
+        chosen={["boingbag-39-1"]}
+      />
+    );
+
+    await screen.findByText("BoingBag 3.9-1");
+    // The whole M3 defect in one assertion: the old panel asked the engine,
+    // and the engine answered with a raw English ZIP error *after* the user
+    // had committed to the selection.
+    expect(collisionsMock).not.toHaveBeenCalled();
+    const run = screen.getByRole("button", { name: /add the chosen packages/i });
+    expect((run as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("still lets a blocked package be ticked off again", async () => {
+    packagesMock.mockResolvedValue(REAL_PACKAGES);
+    render(
+      <PackagePanel
+        treeRoot="E:/tree"
+        packageFolder="E:/packages"
+        chosen={["boingbag-39-1"]}
+      />
+    );
+    const box = (await screen.findByRole("checkbox", {
+      name: /BoingBag 3\.9-1/,
+    })) as HTMLInputElement;
+    // F3's rule, unchanged by M3: only *checking* is refused. A dead end
+    // that cannot be cleared is the bug F3 was filed for.
+    expect(box.checked).toBe(true);
+    expect(box.disabled).toBe(false);
+  });
+});
+
+describe("m6 — an entry name safe_join refused is shown, not only counted", () => {
+  it("names it on the package's own row, before the tick", async () => {
+    packagesMock.mockResolvedValue([
+      {
+        id: "locale-turkish",
+        name: "Türkçe catalogs (BoingBag 3.9-2)",
+        requires: [],
+        requiresComponents: [],
+        available: true,
+        hostPlacementBlock: null,
+        refusedNames: ["../../Startup"],
+      },
+    ] satisfies PackageSummary[]);
+    render(<PackagePanel treeRoot="E:/tree" packageFolder="E:/packages" chosen={[]} />);
+
+    expect(await screen.findByText(/\.\.\/\.\.\/Startup/)).toBeTruthy();
   });
 });

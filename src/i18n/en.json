@@ -2054,7 +2054,10 @@
       "packageRequirementMissing": "\"{{package}}\" needs \"{{requires}}\" applied first — tick that one too, or untick \"{{package}}\" on its own.",
       "packageComponentMissing": "\"{{package}}\" needs the \"{{component}}\" component, and this tree was not built with it. Untick \"{{package}}\", or build a new tree with \"{{component}}\" switched on and add \"{{package}}\" to that one instead.",
       "packageArchiveMissing": "No archive in the update packages folder carries \"{{media}}\", the media \"{{package}}\" needs — put that archive in the folder and try again.",
-      "packageArchiveAmbiguous": "More than one archive in the update packages folder carries the media name {{media}} that \"{{package}}\" needs: {{paths}}. Remove all but the one you want."
+      "packageArchiveAmbiguous": "More than one archive in the update packages folder carries the media name {{media}} that \"{{package}}\" needs: {{paths}}. Remove all but the one you want.",
+      "packageNotPlaceableOnHost": {
+        "encryptedPayload": "\"{{package}}\" cannot be placed from Windows: its files are locked and only the package's own Amiga-side Updater has the key. Untick it, and install it on the Amiga with that Updater instead."
+      }
     },
     "heading": "Install AmigaOS",
     "intro": "Build a distribution tree from your own AmigaOS install disks or disc, ready to copy onto a real Amiga volume.",
@@ -2163,7 +2166,8 @@
     "packages": {
       "heading": "Update packages",
       "intro": "Add an official update — a BoingBag, or an unofficial pack like the Turkish catalogs — onto a distribution tree ART, or you, already built.",
-      "scopeNote": "ART can place the {{count}} update packages it ships a recipe for — each one a hand-written list of files and their own destinations. A package with no such recipe, or one whose own installer is an Amiga Installer script deciding what to do at run time on real hardware, cannot be placed here: there is nothing for ART to reproduce that decision with.",
+      "scopeNote": "ART ships a recipe for {{count}} update packages — each one a hand-written list of files and their own destinations — and will touch no other archive. A package with no such recipe, or one whose own installer is an Amiga Installer script deciding what to do at run time on real hardware, cannot be placed here: there is nothing for ART to reproduce that decision with.",
+      "scopeBlocked": "{{count}} of them cannot be placed from Windows at all, however many copies of the archive you have — each says why on its own row below.",
       "treeRoot": {
         "label": "Distribution tree",
         "none": "No distribution tree chosen.",
@@ -2181,6 +2185,12 @@
         "needsFolder": "Choose the update packages folder to see which archives are actually here."
       },
       "archiveMissing": "Archive not found",
+      "blocked": {
+        "badge": "Cannot be placed from Windows",
+        "encryptedPayload": "The files inside this package are locked, and only the package's own Amiga-side Updater has the key. That Updater is an Amiga program: it has to run on the Amiga itself, which is how every other distribution builder installs this package too. ART will not break the lock, so it cannot place a single file from here — put the archive on your Amiga and run its own Updater there instead.",
+        "chosen": "{{names}} cannot be placed from Windows, so nothing can be previewed or added for this selection. Untick it, or add it on the Amiga with the package's own Updater."
+      },
+      "refusedNames": "This archive carries {{count}} entry name(s) ART refuses to use, because they point outside the folder they belong in: {{names}}. Nothing will ever be placed from them — the rest of the archive is unaffected.",
       "archiveGone": "This package stays ticked because you chose it, but its archive is no longer in the update packages folder — nothing will be added for it. Untick it, or put the archive back and it will be offered again.",
       "unknown": "Not offered here",
       "unknownHint": "This id was remembered from an earlier choice, but it is not one of the packages ART ships today — a stale pick, most likely from an older version. Untick it; nothing will be added for it either way.",

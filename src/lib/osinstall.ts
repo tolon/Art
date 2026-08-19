@@ -104,6 +104,25 @@ export type RuleKind = "file" | "subtree";
 
 /** Why an install cannot proceed. A value, never a sentence (ART-060) — the
  *  screen translates it. */
+/**
+ * Why ART cannot place a package's files from the host at all — a property
+ * of the *package*, never of the user's folder. Mirrors
+ * `core::osinstall::HostPlacementBlock`.
+ *
+ * A union of string literals rather than a `string`, so every place that
+ * has to say something about a block (`refusalPhrase` below, the checklist
+ * row in `PackagePanel`) fails to compile rather than silently rendering
+ * "unavailable, no reason given" when a second kind arrives.
+ *
+ * `"encrypted-payload"` is ART-166: both shipped BoingBag recipes name a
+ * payload archive whose every entry is password-encrypted, and the password
+ * belongs to the BoingBag's own Amiga-side `Updater`. ART will not bypass
+ * it (the owner's recorded decision), so the tick must be refused with a
+ * sentence naming the Updater rather than accepted and answered later with
+ * a raw English ZIP error.
+ */
+export type HostPlacementBlock = "encrypted-payload";
+
 export type RefusalReason =
   | { refusal: "media-missing"; component: string; volume_name: string }
   | { refusal: "media-path-missing"; component: string; media: string; path: string }
@@ -140,7 +159,9 @@ export type RefusalReason =
       package: string;
       media: string;
       paths: string[];
-    };
+    }
+  // ---- M3 / ART-166: a package ART cannot place from the host at all.
+  | { refusal: "package-not-placeable-on-host"; package: string; block: HostPlacementBlock };
 
 /** One file or directory `osinstallApply` would place in the distribution
  *  tree. */
@@ -367,6 +388,19 @@ export interface PackageSummary {
    *  file is not here yet", and a checkbox for a package whose file is
    *  absent is a promise ART cannot keep. */
   available: boolean;
+  /** `null` for the ordinary package. Non-null means ART cannot place this
+   *  package's files from the host **at all** — not "your archive is
+   *  missing", which is what `available: false` says. A row with a block
+   *  must not be tickable: the user has to learn this before committing to
+   *  it, not after (M3, ART-166). */
+  hostPlacementBlock: HostPlacementBlock | null;
+  /** Every entry name this package's own archive carries that `safe_join`
+   *  refused — a `..`, an absolute path, a Windows prefix — exactly as the
+   *  archive spelled it, and `[]` for the ordinary archive. Shown beside
+   *  the row: a package holding `..\..\Startup` is a fact worth seeing
+   *  before a confirmation, and until now it was collected and shown
+   *  nowhere (m6). */
+  refusedNames: string[];
 }
 
 /** Every package ART ships a recipe for, paired with whether its own archive
@@ -700,7 +734,40 @@ export function refusalPhrase(reason: RefusalReason): Phrase {
         key: "osinstall.refusal.packageArchiveAmbiguous",
         params: { package: reason.package, media: reason.media, paths: reason.paths.join(", ") },
       };
+    case "package-not-placeable-on-host":
+      // Keyed on the block, not on the refusal alone: what the user has to
+      // be told is what the *package* needs, and a second kind of block
+      // would need a different sentence entirely.
+      return {
+        key: `osinstall.refusal.packageNotPlaceableOnHost.${hostPlacementBlockSuffix(reason.block)}`,
+        params: { package: reason.package },
+      };
   }
+}
+
+/**
+ * The catalogue-key fragment naming one [`HostPlacementBlock`] — the single
+ * `switch` every sentence about a block is built from, so a second kind
+ * cannot arrive with one of its two sentences missing.
+ *
+ * Two keys, not one shared sentence: the checklist row explains the block
+ * with no package name (it is already sitting under the package's own name),
+ * while the refusal list needs `{{package}}` because several refusals can
+ * appear at once. Handing the row a sentence carrying `{{package}}` with no
+ * parameter would render the literal braces on screen — the exact bug
+ * `PartialPhrase` exists to catch elsewhere.
+ */
+export function hostPlacementBlockSuffix(block: HostPlacementBlock): string {
+  switch (block) {
+    case "encrypted-payload":
+      return "encryptedPayload";
+  }
+}
+
+/** The i18n key explaining one [`HostPlacementBlock`] on a checklist row —
+ *  no parameters; see [`hostPlacementBlockSuffix`]. */
+export function hostPlacementBlockKey(block: HostPlacementBlock): string {
+  return `osinstall.packages.blocked.${hostPlacementBlockSuffix(block)}`;
 }
 
 /** Whether a plan's own refusals include the one that means "the paired

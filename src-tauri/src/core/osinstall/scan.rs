@@ -252,6 +252,7 @@ pub fn find_packages(folder: &Path) -> CoreResult<Vec<FoundPackage>> {
         found.push(FoundPackage {
             path,
             media: source.volume_name().to_string(),
+            refused_names: source.refused_names().to_vec(),
         });
     }
 
@@ -265,6 +266,16 @@ pub struct FoundPackage {
     pub path: PathBuf,
     /// The archive's single top-level directory — never its filename.
     pub media: String,
+    /// Every entry name in this archive that
+    /// [`safe_join`](crate::core::security::safe_join) refused, verbatim —
+    /// see [`ArchiveSource::refused_names`]. Carried up from the scan
+    /// because this is the one place ART opens every candidate archive in
+    /// a folder, so it is the cheapest place to learn the fact and the
+    /// earliest place that can say it: the checklist renders it beside the
+    /// package's own row, before the tick, rather than after a
+    /// confirmation (m6 of the final whole-branch review — the names were
+    /// collected from Task 6 onwards and shown nowhere).
+    pub refused_names: Vec<String>,
 }
 
 /// What resolving a volume name against a scanned folder found.
@@ -308,10 +319,35 @@ pub enum MediaMatch<'a, T = FoundMedia> {
 /// two, and matching on [`MediaMatch`] forces that decision to be made
 /// explicitly at the call site instead of being made implicitly, once, in
 /// here.
+/// Whether a name a medium gave for **itself** — a volume label off a root
+/// block, an archive's single top-level directory — is the name a recipe
+/// asked for.
+///
+/// **Case-insensitively, and that is a ruling rather than an accident**
+/// (m5 of the final whole-branch review: `package_for` was the one identity
+/// comparison in this module tree still exact-case, and the choice was
+/// stated nowhere). Both sides of this comparison are AmigaDOS names, and
+/// AmigaDOS itself compares them without regard to case (ART-012) — the
+/// same rule `destination_key` applies to destinations, `find_entry`
+/// applies inside a volume, and all three `MediaSource` implementations
+/// apply to a rule's `from`. An exact comparison here made this the one
+/// place a user's own `workbench3.2`-labelled disk, or an archive repacked
+/// under `boingbag3.9-1/`, was reported as simply not present.
+///
+/// Folding cannot turn a refusal into a wrong file: two candidates whose
+/// names differ only in case become [`MediaMatch::Ambiguous`], which is a
+/// named refusal listing both, never an arbitrary winner.
+///
+/// ASCII-only, matching `eq_ignore_ascii_case` — the same fold
+/// [`super::destination_key`] documents at length and for the same reason.
+fn same_identity(found: &str, wanted: &str) -> bool {
+    found.eq_ignore_ascii_case(wanted)
+}
+
 pub fn media_for<'a>(found: &'a [FoundMedia], volume_name: &str) -> MediaMatch<'a> {
     let matches: Vec<&FoundMedia> = found
         .iter()
-        .filter(|f| f.volume_name == volume_name)
+        .filter(|f| same_identity(&f.volume_name, volume_name))
         .collect();
     match matches.len() {
         0 => MediaMatch::Missing,
@@ -327,7 +363,10 @@ pub fn media_for<'a>(found: &'a [FoundMedia], volume_name: &str) -> MediaMatch<'
 /// variants, so two archives claiming one top-level name is a real case that
 /// must be refused by name rather than resolved by whichever sorted first.
 pub fn package_for<'a>(found: &'a [FoundPackage], media: &str) -> MediaMatch<'a, FoundPackage> {
-    let matches: Vec<&FoundPackage> = found.iter().filter(|f| f.media == media).collect();
+    let matches: Vec<&FoundPackage> = found
+        .iter()
+        .filter(|f| same_identity(&f.media, media))
+        .collect();
     match matches.len() {
         0 => MediaMatch::Missing,
         1 => MediaMatch::Found(matches[0]),

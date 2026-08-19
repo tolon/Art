@@ -209,8 +209,39 @@ or FS-UAE emulator to run the installation process"*). So the supported path
 exists and it is an Amiga-side one. That becomes **its own round**, not a
 continuation of this one, and it is cheaper than it sounds because
 `core/winuae::launch_winuae` already exists — what is missing is running it
-unattended and reading the result back. Until that round happens, both
-BoingBag recipes stay shipped-but-unplaceable and the screen says so.
+unattended and reading the result back.
+
+**What the screen does today, checked in the code rather than assumed
+(corrected 2026-08-19 by the final whole-branch review's M3 — the sentence
+that stood here said "the screen says so" and the screen did not).** When
+this was first written, `osinstall_packages` set `available` from
+`found.iter().any(|f| f.media == p.media)` alone, so a user with the real
+`BoingBag39-1.lha` in the folder got a live checkbox, no warning, and — on
+confirming — the reader's own raw English sentence, `entry 42 of this ZIP
+cannot be read: Password required to decrypt file`, whatever language they
+had chosen. The entry was right in its body about §10/§89 and wrong in its
+last line.
+
+Both are now true instead:
+
+- Both BoingBag recipes declare `"host_placement_block": "encrypted-payload"`
+  in their own JSON — data, not code, so the day the Amiga-side round lands
+  the block is deleted rather than an `if` hunted down.
+- The checklist gives such a package its own badge and its own sentence,
+  in both catalogues, naming what it needs (*its own Amiga-side Updater*)
+  rather than reporting that ART failed — and the row is **untickable**.
+  "Archive not found" is deliberately not reused: the archive is right
+  there.
+- A pick remembered from an earlier run still arrives checked, so the
+  preview is suppressed for that selection and the Add button is disabled;
+  the row stays tickable *off*, which is F3's rule and is not weakened.
+- `plan()` refuses the selection by type
+  (`RefusalReason::PackageNotPlaceableOnHost`) before the package folder is
+  even scanned, and `osinstall_collisions` refuses before opening an
+  archive — so a caller reaching the commands directly gets the same
+  answer, not the ZIP reader's.
+
+So the shipped BoingBag recipes stay, unplaceable and **said to be** so.
 
 Also worth recording as *my own* mistake rather than the material's: the
 payload's 234 entries were listed with 7-Zip early in the round and read as

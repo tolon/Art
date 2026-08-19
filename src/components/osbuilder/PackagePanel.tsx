@@ -69,6 +69,26 @@
 // once a run finishes, the same way `OsInstall.tsx`'s own run confirmation
 // does not survive its build.
 //
+// ## Final whole-branch review
+//
+// **M3 — a package ART cannot place is no longer offered as though it can.**
+// `PackageSummary.hostPlacementBlock` is a *separate* field from
+// `available`, because "your archive is not in this folder" and "this
+// cannot be placed from Windows at all" are different sentences and folding
+// them into one boolean produced a screen saying "Archive not found" about
+// a file sitting right there. A blocked row is untickable, says why in the
+// user's own language, and names what the package actually needs (its own
+// Amiga-side Updater — ART-166). A *remembered* blocked pick can still
+// arrive checked, so the preview is suppressed and the Add button disabled
+// for that selection too — the raw English ZIP error that used to arrive
+// after the confirmation is now unreachable from this screen.
+//
+// **m6 — a refused entry name is shown.** `ArchiveSource` has recorded
+// every name `safe_join` refused since Task 6 and nothing had ever
+// displayed them, so a package carrying `..\..\Startup` read on screen as
+// an ordinary package. The names now sit on the package's own row, before
+// the tick.
+//
 // ## Fix round 2 (the re-review)
 //
 // **N4 — a stale remembered id is now a row, not a gap.** A `chosen` id the
@@ -87,6 +107,7 @@ import {
   collisionGroupHeadingKey,
   collisionPhrase,
   groupCollisionsForPreview,
+  hostPlacementBlockKey,
   onOsInstallAddPackageResult,
   osinstallAddPackage,
   osinstallCollisions,
@@ -177,6 +198,15 @@ export function PackagePanel({
     };
   }, [packageFolder]);
 
+  // Every chosen package the loaded catalogue says cannot be placed from
+  // the host at all. Computed from the catalogue rather than from a
+  // hardcoded id list, so the day ART-166's Amiga-side round lands and the
+  // recipes drop their block, this screen changes with them.
+  const blockedChosen = (catalogue ?? []).filter(
+    (pkg) => chosen.includes(pkg.id) && pkg.hostPlacementBlock !== null
+  );
+  const blockedCount = (catalogue ?? []).filter((pkg) => pkg.hostPlacementBlock !== null).length;
+
   // The preview: read-only (§3's PREVIEW), recomputed whenever the request
   // changes, and only once at least one package is chosen — an empty
   // selection previews nothing rather than asking the engine a question
@@ -187,6 +217,24 @@ export function PackagePanel({
     setApplyOutcome(null);
     setRefusals(null);
     if (!treeRoot || chosen.length === 0 || !packageFolder) {
+      setCollisions(null);
+      setCollisionsError(null);
+      return;
+    }
+    // M3: never ask the engine to preview a selection it has already said
+    // it cannot place. Without this the call reaches the payload's own
+    // reader and comes back as a raw, English `Password required to decrypt
+    // file` — after the user has already committed to the selection, in a
+    // language they may not read.
+    //
+    // `!catalogue` is part of the same guard, not a separate nicety: the
+    // catalogue and this preview are two independent async loads started by
+    // the same `packageFolder` change, so previewing before the catalogue
+    // has landed is previewing without knowing what is placeable — which is
+    // exactly the race that would let a *remembered* blocked pick through
+    // on the very first render. `catalogue` is in the dependency list below
+    // so the preview runs the moment it does land.
+    if (!catalogue || blockedChosen.length > 0) {
       setCollisions(null);
       setCollisionsError(null);
       return;
@@ -209,7 +257,7 @@ export function PackagePanel({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [treeRoot, packageFolder, chosen]);
+  }, [treeRoot, packageFolder, chosen, catalogue]);
 
   // The add job's own progress — `job-progress` is application-wide, so
   // every update is checked against this panel's own job id first.
@@ -315,6 +363,16 @@ export function PackagePanel({
       <p className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
         {t("osinstall.packages.scopeNote", { count: shippedCount })}
       </p>
+      {/* M3: the scope note used to say ART "can place" all three, which
+          against the owner's real material was true of none of them. It now
+          states only what ART ships a recipe for; how many of those cannot
+          be placed from the host is a separate, measured sentence, rendered
+          only once the catalogue has actually said so. */}
+      {blockedCount > 0 && (
+        <p className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
+          {t("osinstall.packages.scopeBlocked", { count: blockedCount })}
+        </p>
+      )}
 
       <Field
         label={t("osinstall.packages.treeRoot.label")}
@@ -352,7 +410,11 @@ export function PackagePanel({
           // unchecking it. The old `disabled={!pkg.available}` disabled
           // both directions at once, so a remembered pick whose archive had
           // since vanished could never be cleared from the screen.
-          const disabled = !pkg.available && !checked;
+          // M3: a blocked package is untickable for the same reason an
+          // absent archive is — and, like it, only in the *checking*
+          // direction, so a remembered pick can always be cleared (F3).
+          const blocked = pkg.hostPlacementBlock !== null;
+          const disabled = (!pkg.available || blocked) && !checked;
           return (
             <div
               key={pkg.id}
@@ -371,15 +433,39 @@ export function PackagePanel({
                   onChange={() => toggle(pkg.id)}
                 />
                 <strong>{pkg.name}</strong>
-                {!pkg.available && (
+                {blocked && (
+                  <span className="badge badge-warn" style={{ fontSize: 10 }}>
+                    {t("osinstall.packages.blocked.badge")}
+                  </span>
+                )}
+                {!pkg.available && !blocked && (
                   <span className="badge badge-muted" style={{ fontSize: 10 }}>
                     {t("osinstall.packages.archiveMissing")}
                   </span>
                 )}
               </label>
-              {checked && !pkg.available && (
+              {/* Always, not only when checked: the whole point of M3 is
+                  that the user learns this *before* committing to the
+                  package, and the sentence names what the package needs
+                  rather than only that ART failed. */}
+              {pkg.hostPlacementBlock !== null && (
+                <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+                  {t(hostPlacementBlockKey(pkg.hostPlacementBlock))}
+                </p>
+              )}
+              {checked && !pkg.available && !blocked && (
                 <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
                   {t("osinstall.packages.archiveGone")}
+                </p>
+              )}
+              {/* m6: what this archive said that `safe_join` refused —
+                  collected since Task 6 and shown nowhere until now. */}
+              {pkg.refusedNames.length > 0 && (
+                <p className="badge badge-warn" style={{ fontSize: 10, margin: "4px 0 0", display: "block" }}>
+                  {t("osinstall.packages.refusedNames", {
+                    count: pkg.refusedNames.length,
+                    names: pkg.refusedNames.join(", "),
+                  })}
                 </p>
               )}
               {pkg.requires.length > 0 && (
@@ -433,15 +519,34 @@ export function PackagePanel({
 
       {chosen.length > 0 && (
         <div style={{ marginTop: 8 }}>
-          <h3 style={{ fontSize: 14, margin: "0 0 8px" }}>
-            {counts
-              ? t("osinstall.packages.preview.heading", { ...counts })
-              : t("osinstall.packages.preview.loading")}
-          </h3>
+          {/* No heading at all while the selection is blocked: neither
+              "checking…" nor a count of nothing is true of a preview that
+              is never going to run (M3). The reason sits below instead. */}
+          {blockedChosen.length === 0 && (
+            <h3 style={{ fontSize: 14, margin: "0 0 8px" }}>
+              {counts
+                ? t("osinstall.packages.preview.heading", { ...counts })
+                : t("osinstall.packages.preview.loading")}
+            </h3>
+          )}
 
           {previewNeedsFolder && (
             <p className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
               {t("osinstall.packages.needsFolderToPreview", { count: chosen.length })}
+            </p>
+          )}
+
+          {/* M3: a remembered pick can still arrive checked for a package
+              ART cannot place, so the dead end is explained here rather
+              than met as a failed preview. */}
+          {blockedChosen.length > 0 && (
+            <p
+              className="badge badge-err"
+              style={{ display: "block", padding: "6px 12px", fontSize: 12, marginBottom: 12 }}
+            >
+              {t("osinstall.packages.blocked.chosen", {
+                names: blockedChosen.map((pkg) => pkg.name).join(", "),
+              })}
             </p>
           )}
 
@@ -565,7 +670,9 @@ export function PackagePanel({
             <button
               className="btn btn-primary"
               onClick={() => void runApply()}
-              disabled={busy || !confirmed || !treeRoot || !packageFolder}
+              disabled={
+                busy || !confirmed || !treeRoot || !packageFolder || blockedChosen.length > 0
+              }
             >
               {t(busy ? "osinstall.packages.apply.running" : "osinstall.packages.apply.run")}
             </button>

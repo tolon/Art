@@ -105,7 +105,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use serde::Deserialize;
 
 use super::recipe::validate_component;
-use super::{Component, PathRule};
+use super::{Component, HostPlacementBlock, PathRule};
 use crate::core::error::{CoreError, CoreResult};
 
 const BOINGBAG_39_1_JSON: &str = include_str!("recipes/packages/boingbag-39-1.json");
@@ -134,6 +134,15 @@ pub struct Package {
     /// packages; see the module doc comment's "`requires_components` is not
     /// `requires`" section.
     pub requires_components: Vec<String>,
+    /// `Some` when ART **cannot place this package's files from the host at
+    /// all**, whatever the user's folder holds — see
+    /// [`HostPlacementBlock`]. `None` is the ordinary case.
+    ///
+    /// Recipe data rather than code, for the same reason every other fact
+    /// about a package is: the day an Amiga-side install round lands, both
+    /// BoingBags stop being blocked by deleting one line from each JSON,
+    /// not by finding the `if` that named them.
+    pub host_placement_block: Option<HostPlacementBlock>,
     /// The rules and `overrides`, in the shape the placer already takes.
     pub component: Component,
 }
@@ -152,6 +161,8 @@ struct RawPackage {
     requires: Vec<String>,
     #[serde(default)]
     requires_components: Vec<String>,
+    #[serde(default)]
+    host_placement_block: Option<HostPlacementBlock>,
     #[serde(default)]
     overrides: Vec<String>,
     rules: Vec<PathRule>,
@@ -183,6 +194,7 @@ impl RawPackage {
             member: self.member,
             requires: self.requires,
             requires_components: self.requires_components,
+            host_placement_block: self.host_placement_block,
             component,
         }
     }
@@ -419,6 +431,41 @@ mod tests {
         assert!(two.requires.contains(&"boingbag-39-1".to_string()));
     }
 
+    /// **ART-166, as shipped data rather than as prose.** Both BoingBag
+    /// recipes name a payload ART cannot read on the host, so neither may
+    /// be offered as placeable; the Turkish catalog pack has no such block
+    /// and must not acquire one by accident. Asserted in both directions
+    /// because a block that spreads to every package would silently turn
+    /// the whole feature off and still look "safe".
+    #[test]
+    fn both_boingbags_declare_the_encrypted_payload_block_and_the_catalog_pack_does_not() {
+        use super::super::HostPlacementBlock;
+        for id in ["boingbag-39-1", "boingbag-39-2"] {
+            assert_eq!(
+                super::by_id(id).unwrap().host_placement_block,
+                Some(HostPlacementBlock::EncryptedPayload),
+                "{id} names an encrypted payload and cannot be placed from the host"
+            );
+        }
+        assert_eq!(
+            super::by_id("locale-turkish").unwrap().host_placement_block,
+            None,
+        );
+    }
+
+    /// A package that declares nothing about placement is placeable — the
+    /// field's default, pinned so a `#[serde(default)]` that ever became a
+    /// `Some` could not go unnoticed.
+    #[test]
+    fn a_package_that_says_nothing_about_placement_is_placeable() {
+        let package = parse(
+            r#"{ "id": "x", "name": "X", "media": "X",
+                 "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ] }"#,
+        )
+        .unwrap();
+        assert_eq!(package.host_placement_block, None);
+    }
+
     /// An unknown id is refused by name, never defaulted to some other
     /// package — the same rule `recipe::by_release` follows, for the same
     /// reason.
@@ -463,6 +510,7 @@ mod tests {
             member: None,
             requires: requires.iter().map(|s| s.to_string()).collect(),
             requires_components: Vec::new(),
+            host_placement_block: None,
             component: Component {
                 id: id.to_string(),
                 media: "SyntheticMedia".to_string(),

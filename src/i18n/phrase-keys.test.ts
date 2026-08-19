@@ -85,9 +85,11 @@ import {
 import {
   collisionGroupHeadingKey,
   collisionPhrase,
+  hostPlacementBlockKey,
   osinstallBlocker,
   refusalPhrase as osinstallRefusalPhrase,
   type Collision,
+  type HostPlacementBlock,
   type PlanResult,
   type RefusalReason as OsInstallRefusalReason,
 } from "@/lib/osinstall";
@@ -899,10 +901,25 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
         media: "LocaleUpdate",
         paths: ["a", "b"],
       },
+      {
+        refusal: "package-not-placeable-on-host",
+        package: "boingbag-39-1",
+        block: "encrypted-payload",
+      },
     ];
     for (const reason of reasons) {
       const phrase = osinstallRefusalPhrase(reason);
       expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  // M3, ART-166: the *other* sentence about the same fact — the one the
+  // checklist row shows before the tick. Two keys, one `switch`, so a
+  // second kind of block cannot arrive with one of them missing.
+  it("hostPlacementBlockKey: every HostPlacementBlock resolves", () => {
+    const blocks: HostPlacementBlock[] = ["encrypted-payload"];
+    for (const block of blocks) {
+      expect(isLeafKey(hostPlacementBlockKey(block)), hostPlacementBlockKey(block)).toBe(true);
     }
   });
 
