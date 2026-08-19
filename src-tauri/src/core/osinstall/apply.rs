@@ -130,10 +130,10 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::plan::InstallPlan;
-use super::source::{AdfSource, MediaSource};
+use super::source::MediaSource;
 use super::startup::merge_user_startup;
 use crate::core::error::{CoreError, CoreResult};
-use crate::core::hashing::sha256_bytes;
+use crate::core::hashing::{sha256_bytes, sha256_file};
 use crate::core::jobs::ProgressSink;
 use crate::core::security::path::safe_join;
 use crate::core::volume::write::copy::sidecar_for;
@@ -278,18 +278,39 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
     }
 
     // Every medium the plan resolved, opened once — read-only, per
-    // `source.rs`'s own module doc — and hashed whole from its raw bytes, so
-    // `distribution.json` can say exactly which physical image each
-    // component came out of.
+    // `source.rs`'s own module doc — and hashed by streaming
+    // (`hashing::sha256_file`), never read whole into memory: CLAUDE.md's
+    // own rule ("never read a whole user file into memory when only its
+    // header is needed") applies with more force here than anywhere else in
+    // this module — a floppy image is under 1 MB, but a real AmigaOS 3.9
+    // disc is 469 MB, and `std::fs::read` used to pull the whole thing into
+    // a `Vec` purely to feed `sha256_bytes`. `distribution.json` still ends
+    // up saying exactly which physical image each component came out of.
+    //
+    // Opened through `scan::identify` — the same floppy-then-disc probe
+    // `find_media` itself uses — rather than `AdfSource::open`
+    // unconditionally (ART-153): `plan.media_paths` carries a path, never a
+    // `MediaKind`, so `apply()` has to ask the same question `find_media`
+    // already answered once, at plan time, on media that has since gone
+    // stale (removed, replaced, or simply never was what the plan thinks it
+    // is) is a real failure at apply time, not a skip — named by path so the
+    // user knows which medium moved.
     let mut sources: BTreeMap<String, Box<dyn MediaSource>> = BTreeMap::new();
     let mut built_from = Vec::new();
     for (volume, path) in &plan.media_paths {
-        let raw = std::fs::read(path)?;
+        let identified = super::scan::identify(path).ok_or_else(|| {
+            CoreError::InvalidInput(format!(
+                "'{}' no longer identifies as install media (expected volume '{volume}') — it \
+                 may have been moved, replaced or removed since this plan was made",
+                path.display()
+            ))
+        })?;
+        let sha256 = sha256_file(path)?;
         built_from.push(MediaRecord {
             volume_name: volume.clone(),
-            sha256: sha256_bytes(&raw),
+            sha256,
         });
-        sources.insert(volume.clone(), Box::new(AdfSource::open(path)?));
+        sources.insert(volume.clone(), super::scan::open_media(&identified)?);
     }
 
     std::fs::create_dir_all(root)?;
@@ -558,7 +579,33 @@ mod tests {
     use crate::core::jobs::NoProgress;
     use crate::core::osinstall::fixtures;
     use crate::core::osinstall::plan::{PlanItem, UserStartupContribution};
+    use crate::core::osinstall::source::AdfSource;
     use crate::core::osinstall::source_cd::CdSource;
+
+    /// Diagnostic-only, for `build_the_real_39_tree_when_asked`'s failure
+    /// path: count what actually landed under `root` after a partial
+    /// `apply()` run — a real, measured number rather than a guess about
+    /// how far it got.
+    fn count_tree(root: &Path) -> (u64, u64) {
+        let mut files = 0u64;
+        let mut dirs = 0u64;
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let Ok(read) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in read.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    dirs += 1;
+                    stack.push(path);
+                } else {
+                    files += 1;
+                }
+            }
+        }
+        (files, dirs)
+    }
 
     /// A plan `apply` can run against directly, without going through
     /// `plan()` — `apply` only ever consumes the `InstallPlan` struct, so a
@@ -1729,6 +1776,49 @@ mod tests {
         }
     }
 
+    /// Throwaway diagnostic (Task 4, fix round 1): `apply()`'s real write
+    /// against the disc failed with Windows error 123 (`InvalidFilename`) —
+    /// this walks every name `workbench-base`'s rules actually resolve to
+    /// under `OS-VERSION3.9/WORKBENCH3.5` and flags anything Windows'
+    /// `CreateFile` would refuse: the reserved characters
+    /// (`< > : " | ? *`), a trailing dot or space in any segment, or one of
+    /// the reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`,
+    /// `LPT1-9`), matching or not matching its extension.
+    #[test]
+    #[ignore = "diagnostic only; touches the user's real media"]
+    fn find_windows_illegal_names_when_asked() {
+        let Ok(iso) = std::env::var("ART_OS39_ISO") else {
+            return;
+        };
+        let mut source = CdSource::open(&PathBuf::from(&iso)).unwrap();
+        let all = source.walk("OS-VERSION3.9/WORKBENCH3.5").unwrap();
+
+        const RESERVED: &[&str] = &[
+            "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+            "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        ];
+
+        let mut flagged = 0;
+        for e in &all {
+            for segment in e.path.split('/') {
+                let bad_char = segment
+                    .chars()
+                    .any(|c| "<>:\"|?*".contains(c) || (c as u32) < 32);
+                let trailing = segment.ends_with('.') || segment.ends_with(' ');
+                let stem = segment.split('.').next().unwrap_or(segment);
+                let reserved = RESERVED.iter().any(|r| r.eq_ignore_ascii_case(stem));
+                if bad_char || trailing || reserved {
+                    flagged += 1;
+                    println!(
+                        "FLAGGED: {} (segment '{segment}': bad_char={bad_char} trailing={trailing} reserved={reserved})",
+                        e.path
+                    );
+                }
+            }
+        }
+        println!("{flagged} flagged segment(s) out of {} entries", all.len());
+    }
+
     /// **Task 4 (amigaos-39 plan), the real run.** Drives the whole engine —
     /// `find_media` (through `plan()`'s own call), `plan()`, `apply()` —
     /// against the owner's own AmigaOS 3.9 CD image, never a synthetic
@@ -1754,22 +1844,23 @@ mod tests {
     ///   cargo test build_the_real_39_tree_when_asked -- --nocapture --ignored
     /// ```
     ///
-    /// **Measured against the owner's real 469 MiB disc (Task 4, after the
-    /// recipe's `from` paths were rewritten to the disc's own case — see the
-    /// report for the refusal the first run actually produced):**
+    /// **Measured against the owner's real 469 MiB disc (Task 4, fix round
+    /// 1 — after ART-153 was fixed so `apply()` can open a disc at all):**
     /// `find_media` sees all 4 discs in the shared `iso/` folder and resolves
     /// `AmigaOS3.9` correctly, never confused by the neighbouring
-    /// `AmigaOS3.2CD(ZaP)`; `plan()` then succeeds clean — 1 component on
+    /// `AmigaOS3.2CD(ZaP)`; `plan()` succeeds clean — 1 component on
     /// (`workbench-base`), 0 refusals, 663 items, 6 108 319 planned bytes.
     ///
-    /// `apply()` does **not** succeed yet: it panics with
-    /// `CoreError::UnsupportedFormat` the moment it tries to open the disc,
-    /// because it opens every medium in `plan.media_paths` through
-    /// `AdfSource::open` unconditionally rather than `scan::open_media` —
-    /// filed as **ART-153**. That is an engine defect, not a recipe one (the
-    /// task brief's own line: "if a fix needs engine code rather than recipe
-    /// data, stop and say so"), so it is reported here rather than patched.
-    /// `files`/`directories`/`bytes` written cannot be measured until it is.
+    /// `apply()` gets measurably further than before ART-153 was fixed —
+    /// 1,020 files and 71 directories actually land under `root` — but still
+    /// does not finish: it hits **ART-155**, a real disc name it cannot
+    /// write as a literal Windows path segment (`Storage/DOSDrivers/AUX`,
+    /// which Windows treats as a reserved device regardless of extension,
+    /// and three `Storage/Locale/Countries-Euro/*.country` files whose
+    /// accented letters ART's own ISO9660 reader already, and correctly,
+    /// renders as `?` — a character Windows also refuses in a path). Not a
+    /// recipe problem and not a one-file fix — see ART-155 in
+    /// `docs/ISSUES.md` and the report's "Fix round 1" section.
     #[test]
     #[ignore = "touches the user's real media and E:\\amiga\\ProjeART; run explicitly, see the doc comment"]
     fn build_the_real_39_tree_when_asked() {
@@ -1829,16 +1920,10 @@ mod tests {
             "the shipped 3.9 recipe carries exactly one component today"
         );
 
-        // **ART-153.** `plan()` is proven clean above — the plan phase is
-        // exactly what this task owns fixing (recipe data). `apply()` is
-        // not: it opens every medium in `plan.media_paths` through
-        // `AdfSource::open` unconditionally, never `scan::open_media`, so it
-        // cannot read the disc `plan()` just resolved. That is engine code,
-        // out of this task's scope by its own brief ("if a fix needs engine
-        // code rather than recipe data, stop and say so"), so this calls
-        // `apply()` for real — matching what a full run actually does — and
-        // reports the failure by name instead of masking it with an
-        // `Err(_)` match that would make a future, real fix invisible here.
+        // ART-153 fixed (fix round 1): `apply()` now opens each medium
+        // through `scan::identify`/`scan::open_media`, the same probe
+        // `find_media` uses, so this reaches a real write against the disc
+        // rather than failing at the first byte.
         let start = std::time::Instant::now();
         let root = PathBuf::from(&dest);
         match apply(&planned, &root, &NoProgress) {
@@ -1850,6 +1935,24 @@ mod tests {
                     outcome.directories,
                     outcome.bytes,
                     elapsed.as_secs_f64()
+                );
+                // The plan's own `total_bytes` is the sum of `PlanItem::bytes`
+                // for every file — a number read off the disc's directory
+                // records at plan time. `apply()`'s `outcome.bytes` is the sum
+                // of what was actually written. They read the same underlying
+                // disc, so a real disagreement here is worth knowing, not
+                // rounding — printed either way, asserted equal because
+                // nothing between planning and writing should change a
+                // file's size.
+                println!(
+                    "plan.total_bytes={} vs apply.outcome.bytes={} (difference={})",
+                    planned.total_bytes,
+                    outcome.bytes,
+                    outcome.bytes as i64 - planned.total_bytes as i64
+                );
+                assert_eq!(
+                    outcome.bytes, planned.total_bytes,
+                    "apply() wrote a different byte total than plan() predicted"
                 );
                 assert!(
                     outcome.files > 0 && outcome.directories > 0,
@@ -1867,17 +1970,32 @@ mod tests {
                 assert_eq!(manifest.built_from.len(), planned.components_on.len());
             }
             Err(err) => {
+                // ART-153 is fixed — this is a *different* failure, reached
+                // only once `apply()` can actually open the disc and starts
+                // writing real names from it. `root` is left as `apply()`
+                // stopped it (writes commit as they land, never rolled
+                // back), so a real, measured partial count is possible even
+                // though the run did not finish — matching spec §89 ("report
+                // what happened, including what did not work").
+                let (files_written, dirs_written) = count_tree(&root);
+                println!(
+                    "apply failed partway: files_written={files_written} directories_written={dirs_written}"
+                );
                 panic!(
                     "apply() failed against the real disc: {err}\n\n\
-                     This is ART-153 (docs/ISSUES.md), a known engine defect and not a \
-                     recipe problem: apply() opens every medium in `plan.media_paths` via \
-                     `AdfSource::open` unconditionally rather than `scan::open_media`, so it \
-                     cannot read a disc's own bytes even though `plan()` already can (proven \
-                     just above — 0 refusals, 663 items). Filing/fixing it is a different \
-                     task by this task's own brief. If this message ever changes, ART-153 was \
-                     fixed — replace this whole match with the plain `.unwrap()` the 3.2 hook \
-                     above uses, and measure the real files/directories/bytes into this \
-                     test's own doc comment."
+                     This is ART-155 (docs/ISSUES.md), found by this same run, distinct from \
+                     ART-153 (fixed above): the real disc's Storage component carries names \
+                     `apply()` cannot write as literal Windows path segments — `AUX` (a \
+                     DOSDrivers entry, colliding with a reserved Windows device name) and \
+                     three COUNTRIES-EURO `.country` files whose accented letter ART's own \
+                     ISO9660 reader already renders as `?` (`decode_iso646`'s documented \
+                     high-bit fallback, `core/iso/descriptor.rs`), which Windows also refuses \
+                     in a path. Both are perfectly legal AmigaDOS names; neither is a recipe \
+                     problem. Fixing this means deciding a host-filesystem-safe escaping \
+                     scheme for `core/osinstall/apply.rs`'s distribution tree (and where the \
+                     real AmigaDOS name then has to live — a `.uaem` sidecar, `distribution.json`, \
+                     or both) — a design decision, not a one-file fix, so it is reported here \
+                     rather than made unilaterally."
                 );
             }
         }

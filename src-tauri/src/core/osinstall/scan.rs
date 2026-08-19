@@ -127,6 +127,38 @@ pub fn open_media(found: &FoundMedia) -> CoreResult<Box<dyn MediaSource>> {
     })
 }
 
+/// Identify one candidate file as install media, or `None` if it is neither.
+///
+/// A floppy is tried first: it is the cheaper open (a bounded signature
+/// scan, see the module doc's "Cost" section) and by far the commoner case
+/// in a real media folder — never because a file could plausibly be both.
+/// Anything either refuses (not an Amiga volume at all, an RDB, an ISO
+/// whose walk hit ART's own limits) comes back `None`.
+///
+/// The one place this decision is made — [`find_media`] calls it once per
+/// candidate in a folder scan, and `apply()` (`core::osinstall::apply`)
+/// calls it again per medium a plan already resolved, so `plan.media_paths`
+/// (volume name -> path, with no [`MediaKind`] of its own) can still be
+/// opened the right way rather than assumed to be a floppy. Before this was
+/// pulled out, only `find_media`'s own loop carried the try-floppy-then-disc
+/// order, and `apply()` opened every medium through `AdfSource::open`
+/// unconditionally — which a real AmigaOS 3.9 disc refuses outright
+/// (ART-153).
+pub fn identify(path: &Path) -> Option<FoundMedia> {
+    let (volume_name, kind) = if let Ok(source) = AdfSource::open(path) {
+        (source.volume_name().to_string(), MediaKind::Floppy)
+    } else if let Ok(source) = CdSource::open(path) {
+        (source.volume_name().to_string(), MediaKind::Disc)
+    } else {
+        return None;
+    };
+    Some(FoundMedia {
+        path: path.to_path_buf(),
+        volume_name,
+        kind,
+    })
+}
+
 /// Every install disk found directly inside `folder`, duplicates included.
 ///
 /// Opens each regular file one directory level deep (no recursion, no
@@ -164,25 +196,13 @@ pub fn find_media(folder: &Path) -> CoreResult<Vec<FoundMedia>> {
             continue;
         }
 
-        // A floppy is tried first: it is the cheaper open (a bounded
-        // signature scan, see the module doc's "Cost" section) and by far
-        // the commoner case in a real media folder — never because a file
-        // could plausibly be both. Anything either refuses (not an Amiga
-        // volume at all, an RDB, an ISO whose walk hit ART's own limits) is
-        // skipped exactly like today: one unreadable candidate must not
-        // fail the whole scan.
-        let (volume_name, kind) = if let Ok(source) = AdfSource::open(&path) {
-            (source.volume_name().to_string(), MediaKind::Floppy)
-        } else if let Ok(source) = CdSource::open(&path) {
-            (source.volume_name().to_string(), MediaKind::Disc)
-        } else {
+        // `identify` tries floppy then disc and comes back `None` for
+        // anything neither opens — one unreadable candidate must not fail
+        // the whole scan, so that is skipped exactly like today.
+        let Some(media) = identify(&path) else {
             continue;
         };
-        found.push(FoundMedia {
-            path,
-            volume_name,
-            kind,
-        });
+        found.push(media);
     }
 
     Ok(found)

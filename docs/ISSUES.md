@@ -51,39 +51,53 @@ more than the default, and no wasted headroom for one that needs less. Worth
 doing once more than one real title's memory failure has been measured, not
 before.
 
-**ART-153** 🟠 **`apply()` cannot build a distribution tree from disc media —
-it opens every medium `plan.media_paths` names through `AdfSource::open`
-unconditionally, never `scan::open_media`** — *found 2026-08-19, the 3.9
-recipe's Task 4 real run against the owner's own `AmigaOS39.iso`*
-`src-tauri/src/core/osinstall/apply.rs` (`apply()`, the `for (volume, path) in
-&plan.media_paths` loop) ·
+**ART-155** 🟠 **A real AmigaOS 3.9 disc names files `apply()` cannot write as
+literal Windows path segments — a reserved device name and three accented
+letters ART's own ISO9660 reader already renders as `?`** — *found 2026-08-19,
+the same Task 4 real run that found and closed ART-153, immediately after
+ART-153 was fixed and `apply()` could reach real disc content for the first
+time*
+`src-tauri/src/core/osinstall/apply.rs` (the distribution tree is a literal
+host-OS folder tree — see the module doc comment on `core/osinstall`'s
+"distribution tree, not a volume") ·
 
-`plan()` was fixed for CD media in an earlier task
-(`a_component_whose_media_is_a_disc_is_planned_from_the_disc`,
-`core/osinstall/plan.rs`) and correctly resolves a `Subtree` rule against a
-disc through `scan::open_media`, which dispatches on `FoundMedia::kind`
-(`MediaKind::Floppy` → `AdfSource`, `MediaKind::Disc` → `CdSource`). `apply()`
-never received the same fix: it builds its `sources` map with
-`Box::new(AdfSource::open(path)?)` for every volume in `plan.media_paths`,
-whatever kind of medium it actually is. A plan built entirely from CD content
-therefore plans cleanly (0 refusals) and then fails at the first byte written,
-with `CoreError::UnsupportedFormat("… does not start with a recognisable
-AmigaDOS signature")` — a real ISO9660 image is never a bare AmigaDOS volume,
-so `AdfSource::open` always refuses it.
+Two distinct real names inside `workbench-base`'s own `Storage` rule, both
+perfectly legal AmigaDOS names:
 
-Reproduced by `core::osinstall::apply::tests::build_the_real_39_tree_when_asked`
-(`#[ignore]`d, environment-gated — see its own doc comment) against the
-owner's real 469 MiB `AmigaOS39.iso`: `plan()` succeeds (`workbench-base`
-only, 0 refusals, 663 items, 6,108,319 planned bytes), and `apply()` panics
-immediately afterward with the error above. Not fixed here — Task 4's own
-brief draws the line explicitly ("if a fix needs engine code rather than
-recipe data, stop and say so — that is a different task and probably a
-different review"), and `plan.media_paths` does not currently carry a
-medium's `MediaKind` at all, so a correct fix has to decide where that travels
-from `find_media` through `InstallPlan` to `apply()` — not a one-line swap of
-`AdfSource::open` for `open_media`, since `open_media` takes a `FoundMedia`,
-which `apply()` does not have, only a bare `PathBuf`. Blocks the AmigaOS 3.9
-recipe from ever producing a real tree until fixed.
+1. `Storage/DOSDrivers/AUX` (and `AUX.info`) — `AUX` is a Windows reserved
+   device name; `CreateFile("...\AUX")` never creates a file by that name
+   regardless of extension or ancestor path.
+2. `Storage/Locale/Countries-Euro/?STERREICH.country`, `BELGI?.country`,
+   `ESPA?A.country` (ART's own `?` substitution for the disc's own accented
+   letters — presumably `ÖSTERREICH`, a Belgian name, and `ESPAÑA`) —
+   the disc carries no Joliet descriptor (see ART-153's own entry, and the
+   3.9 recipe's case fix, Task 4), so `CdSource` reads these through the
+   Primary tree's ISO 646 identifiers, where a byte with the high bit set
+   is not a legal identifier character. `core/iso/descriptor.rs::decode_iso646`
+   already documents turning that into `?` on purpose, matching
+   `write_bcpl_string`'s identical choice in the ADF core — the right call
+   for *reading* the disc, but `?` is one of the characters Windows refuses
+   in a path (`< > : " | ? *`), so a name ART decoded correctly still cannot
+   be written as a literal Windows path segment.
+
+Reproduced by `core::osinstall::apply::tests::build_the_real_39_tree_when_asked`,
+which — once ART-153 no longer blocks it — gets measurably further (1,020
+files, 71 directories actually written to `E:\amiga\ProjeART\dist-3.9`) before
+failing with `os error 123` (`ERROR_INVALID_NAME`) partway through `Storage`.
+Confirmed by a throwaway diagnostic,
+`find_windows_illegal_names_when_asked`, which walks every name
+`workbench-base`'s rules resolve to and flags the 5 that collide with a
+Windows reserved name or a disallowed character.
+
+Not fixed here. Neither name is a recipe mistake — both are real content on
+real media — and neither is a one-file engine fix: a correct answer needs a
+host-filesystem-safe escaping scheme for `core/osinstall/apply.rs`'s
+distribution tree, plus a decision about where the true AmigaDOS name then
+lives (a `.uaem` sidecar, `distribution.json`, or both) so nothing is lost.
+That is a design decision, reported here rather than made unilaterally under
+this task's own instruction to stop at engine code. Blocks the AmigaOS 3.9
+recipe from ever producing a complete real tree on a Windows host until
+fixed.
 
 **ART-144** 🔵 **Five minors deferred across collection-wave-c's own review
 rounds, folded into one entry — #4 closed by the whole-branch review's fix
@@ -699,6 +713,62 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-154** 🟠 ✅ **`apply()` hashed a whole medium into memory just to record
+its SHA-256 — 469 MB for the real AmigaOS 3.9 disc, against CLAUDE.md's own
+rule that ART never reads a whole user file into memory** — *found and fixed
+2026-08-19, alongside ART-153, in the same three-line loop the coordinator's
+review of Task 4 pointed at directly*
+`src-tauri/src/core/osinstall/apply.rs` (the `for (volume, path) in
+&plan.media_paths` loop) ·
+
+`built_from.push(MediaRecord { sha256: sha256_bytes(&raw), .. })` needed
+`raw`, and the only way `raw` existed was `let raw = std::fs::read(path)?;` —
+harmless for an 880 KB ADF, and exactly the whole-file read
+`core/hashing.rs::sha256_file` exists to avoid for anything bigger. Nothing
+else in scope used `raw`. → replaced with `sha256_file(path)`, which streams
+in 64 KiB chunks (`core/hashing.rs`) and never holds the medium whole.
+Covered by the same real run as ART-153 —
+`core::osinstall::apply::tests::build_the_real_39_tree_when_asked` — which
+now hashes the real 469 MiB disc without the process's memory tracking it.
+
+**ART-153** 🟠 ✅ **`apply()` cannot build a distribution tree from disc
+media — it opens every medium `plan.media_paths` names through
+`AdfSource::open` unconditionally, never `scan::open_media`** — *found
+2026-08-19, the 3.9 recipe's Task 4 real run against the owner's own
+`AmigaOS39.iso`; fixed the same day after the coordinator overruled the
+task's own "stop at engine code" brief on this one point*
+`src-tauri/src/core/osinstall/apply.rs`, `src-tauri/src/core/osinstall/scan.rs` ·
+
+`plan()` was fixed for CD media in an earlier task
+(`a_component_whose_media_is_a_disc_is_planned_from_the_disc`,
+`core/osinstall/plan.rs`) and correctly resolves a `Subtree` rule against a
+disc through `scan::open_media`, which dispatches on `FoundMedia::kind`
+(`MediaKind::Floppy` → `AdfSource`, `MediaKind::Disc` → `CdSource`). `apply()`
+never received the same fix: it built its `sources` map with
+`Box::new(AdfSource::open(path)?)` for every volume in `plan.media_paths`,
+whatever kind of medium it actually is. A plan built entirely from CD content
+therefore planned cleanly (0 refusals) and then failed at the first byte
+written, with `CoreError::UnsupportedFormat("… does not start with a
+recognisable AmigaDOS signature")` — a real ISO9660 image is never a bare
+AmigaDOS volume, so `AdfSource::open` always refused it.
+
+The obstacle to a one-line fix was that `plan.media_paths` is a bare
+`BTreeMap<String, PathBuf>`, carrying no `MediaKind`, while `scan::open_media`
+takes a `&FoundMedia`. → the floppy-then-disc identification `find_media`'s
+own loop already did was pulled out into a named function,
+`scan::identify(path: &Path) -> Option<FoundMedia>` — the one place that
+decision is made, called by both `find_media` (its loop body, unchanged in
+behaviour) and `apply()` (per medium in `plan.media_paths`, re-identifying it
+rather than trusting a stale assumption). A path that no longer identifies as
+anything at apply time — moved, replaced, removed since the plan was made —
+is now a typed `CoreError::InvalidInput` naming the path, not a silent skip.
+
+Reproduced and now covered by
+`core::osinstall::apply::tests::build_the_real_39_tree_when_asked`: `apply()`
+opens the real 469 MiB `AmigaOS39.iso` through `CdSource` and proceeds into
+the real write loop, 1,020 files and 71 directories past where it used to
+fail immediately, before running into the unrelated ART-155.
 
 **ART-151** 🟠 ✅ **A WHDLoad launch got the stock A500 profile completely
 unmodified — 512 KB Chip, 512 KB Slow, no Fast RAM at all — and WHDLoad itself
