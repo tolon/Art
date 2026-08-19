@@ -7,6 +7,7 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import {
   belongsToFileListing,
+  shellWidthClasses,
   stepZoom,
   zoomCssValue,
   ZOOM_DEFAULT,
@@ -74,6 +75,34 @@ export function Layout() {
       root.style.removeProperty("--app-zoom");
     };
   }, [zoom]);
+
+  // ---------------------------------------------------------------------
+  // How wide the shell *thinks* it is (ART-101).
+  //
+  // The sidebar's collapse-to-icons breakpoint used to be a media query, and
+  // a media query is evaluated against the real viewport while everything
+  // inside `.app-shell` lays out in zoomed CSS pixels — so the rule never
+  // fired at 130 % or 200 %, which is exactly when the sidebar is widest
+  // relative to the glass. `shellWidthClasses` asks `innerWidth / zoom`.
+  //
+  // Tracked on `resize` rather than measured from the DOM: `innerWidth` is
+  // the one number involved that React does not already have, and reading it
+  // needs no layout pass. `zoom` is a dependency, so changing the
+  // Application Size re-evaluates the breakpoints immediately — the case the
+  // whole issue is about.
+  // ---------------------------------------------------------------------
+  const [viewportWidth, setViewportWidth] = useState(() =>
+    typeof window === "undefined" ? 0 : window.innerWidth
+  );
+
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const widthClasses = shellWidthClasses(viewportWidth, zoom);
 
   const stepAppZoom = useCallback(
     (direction: number) => {
@@ -146,7 +175,7 @@ export function Layout() {
     <div
       className={`app-shell${dragOver ? " app-shell-dragover" : ""}${
         collapsed ? " app-shell-collapsed" : ""
-      }`}
+      }${widthClasses ? ` ${widthClasses}` : ""}`}
     >
       <Sidebar />
       <div className="app-main">

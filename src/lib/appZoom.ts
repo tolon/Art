@@ -96,3 +96,46 @@ export function zoomLabel(percent: number): string {
 export function belongsToFileListing(target: Element | null): boolean {
   return target?.closest?.(".tc-commander") != null;
 }
+
+/**
+ * The width, in the CSS pixels the shell actually lays out in, of a viewport
+ * `viewportWidth` real pixels wide at `zoomPercent` (ART-101).
+ *
+ * `zoom` on `.app-shell` means every length inside it is divided by the zoom
+ * ratio: a 1258 px window at 200 % gives the layout 629 px to work with. A
+ * media query cannot see this — media queries are evaluated against the real
+ * viewport, so `@media (max-width: 1000px)` asks a question about a window the
+ * layout does not live in, and the answer is "no" exactly when the layout is
+ * most cramped.
+ */
+export function shellWidth(viewportWidth: number, zoomPercent: number): number {
+  return viewportWidth / (clampZoom(zoomPercent) / 100);
+}
+
+/**
+ * Below this the sidebar's labels cost more than they give, and it collapses
+ * to icons.
+ *
+ * The number is the one the design already agreed on in `layout.css`; only the
+ * width it is compared against has changed.
+ */
+export const SIDEBAR_ICONS_BELOW = 1000;
+
+/** Below this the quick-action grid drops to two columns. */
+export const QUICK_ACTIONS_STACK_BELOW = 760;
+
+/**
+ * The width-dependent classes `.app-shell` carries, as one space-joined
+ * string (empty when the shell is wide enough for neither).
+ *
+ * Classes rather than media queries because of the above. Named for what they
+ * mean rather than for a pixel count, so the thresholds can move without
+ * every rule that reads them having to.
+ */
+export function shellWidthClasses(viewportWidth: number, zoomPercent: number): string {
+  const width = shellWidth(viewportWidth, zoomPercent);
+  const classes: string[] = [];
+  if (width < SIDEBAR_ICONS_BELOW) classes.push("app-shell-narrow");
+  if (width < QUICK_ACTIONS_STACK_BELOW) classes.push("app-shell-tight");
+  return classes.join(" ");
+}

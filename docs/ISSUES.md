@@ -26,6 +26,30 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-174** 🔵 **Two more breakpoints ask the real viewport a question about
+the zoomed layout** — *found 2026-08-20 on `debt-wave-a`, while fixing
+[ART-101](#fixed); filed rather than fixed, a different screen's contract*
+`src/pages/CollectionStudio.tsx:1010` · `src/pages/FileManager.css:542`
+
+ART-101 was the shell's own `@media (max-width: 1000px)`, and it is fixed:
+`.app-shell` carries `zoom`, so a media query is evaluated against a window the
+layout does not live in, and `@/lib/appZoom::shellWidthClasses` now asks
+`innerWidth / zoom` instead. Two other rules in the codebase have the identical
+defect at the identical 1000 px threshold — the Collection Studio's
+detail-pane split, and the file manager's row degrading to fewer columns.
+
+Not fixed here, and not for lack of a mechanism: `.app-shell-narrow` is on an
+ancestor of both, so each is a one-line selector change. The file manager's is
+the reason to stop and think — its widths are in `em` and the commander has its
+*own* independent Ctrl+wheel zoom (`@/lib/dockLayout`), so "how wide is this
+row, really" is a different question there than "how wide is the shell", and
+answering it with the shell's class would be a plausible-looking guess rather
+than a measurement. That wants its own look at the commander, with the
+`scripts/zoom-check.py` measurement the shell's own fix had.
+
+Cost today: the same as ART-101's was — nothing is broken or unreachable, the
+layouts are merely denser than the design intended at 130 % and above.
+
 **ART-171** 🟠 **The content layer's spec §8.3 hazard — `WBStartup` and
 `Devs` arriving on a tree for the first time — was never exercised, because
 no package file ever reached a tree** — *filed 2026-08-19 by the final
@@ -648,25 +672,6 @@ already refuses when the *drawer's* destination exists, so an existing icon
 beside a free drawer is a state only a previous partial run can produce. What is
 missing is that the plan never considers the icon's path at all.
 
-**ART-101** 🔵 **The sidebar's collapse never fires under Application Size** — *open*
-`src/components/layout/layout.css` · `@media (max-width: 1000px)` collapses the
-sidebar to icons, "below this the sidebar's labels cost more than they give".
-Media queries are evaluated against the **real viewport**, and Application Size
-is a `zoom` on an element inside it — so the rule asks a question about a
-window the layout does not live in. Measured while closing ART-099: in a
-1258 px window the sidebar is 224 real px at 100 %, 291 at 130 % and **448 at
-200 %** — over a third of the glass — while the layout itself has only 629 CSS
-px to work with, which is well under the 1000 the design says it wants icons
-at. So the breakpoint the design already agreed on is exactly the one that
-cannot fire when it is most needed.
-
-Not a defect in the sense of anything being wrong or unreachable: the sidebar
-is merely wide, and every screen still fits (`over=0` at every size). Fixing it
-means deciding *where* the breakpoint belongs — the honest answer is that it
-should be asked of `innerWidth / zoom` rather than of `innerWidth`, which means
-a class from `@/lib/appZoom` rather than a media query, and that is a design
-choice worth making deliberately rather than while fixing something else.
-
 **ART-093** 🟡 **ART cannot fetch an Emu68 kernel update; it can only tell you which one you need**
 `core/pistorm/` · `net/` · The fix round's F4 asked for two things. The reading
 half is built: the card's `Emu68.img` is identified from the `$VER:` string its
@@ -934,6 +939,42 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-101** 🔵 **The sidebar's collapse never fires under Application Size** —
+*found 2026-08-13 while closing ART-099; fixed 2026-08-20 on `debt-wave-a`*
+`src/lib/appZoom.ts` (`shellWidth`, `shellWidthClasses`) ·
+`src/components/layout/layout.css` · `src/components/layout/Layout.tsx`
+
+`@media (max-width: 1000px)` collapsed the sidebar to icons, "below this the
+sidebar's labels cost more than they give". Media queries are evaluated against
+the **real viewport**, and Application Size is a `zoom` on an element inside it
+— so the rule asked a question about a window the layout does not live in.
+Measured while closing ART-099: in a 1258 px window the sidebar is 224 real px
+at 100 %, 291 at 130 % and **448 at 200 %** — over a third of the glass — while
+the layout itself has only 629 CSS px to work with, well under the 1000 the
+design says it wants icons at. The breakpoint the design already agreed on was
+exactly the one that could not fire when it was most needed.
+
+**Fixed 2026-08-20** the way the entry itself said it should be: the question
+is asked of `innerWidth / zoom`, and the answer arrives as a class rather than
+a media query. `shellWidthClasses` (pure, in `@/lib/appZoom`, so it is pinned
+by a test rather than by squinting at a screenshot) returns
+`app-shell-narrow` below 1000 and `app-shell-tight` below 760; `Layout.tsx`
+tracks `innerWidth` on `resize` and puts them on `.app-shell`, with `zoom` as a
+dependency so changing the Application Size re-evaluates immediately — the case
+the whole issue is about. **Both thresholds are unchanged**; only the width
+they are compared against is, so this changes when the design's own decision
+fires and never what it decides.
+
+Tests: `src/lib/appZoom.test.ts` — `shellWidth` (including that an impossible
+zoom is clamped rather than divided by) and `shellWidthClasses`, whose central
+case is the measured 1258 px window: nothing at 100 %, `app-shell-narrow` at
+130 % and both classes at 200 %, where the old media query said "no" at all
+three.
+
+Two other rules in the codebase have the same defect at the same threshold;
+filed as [ART-174](#open) rather than changed here, because the file manager's
+is not the same question (see that entry).
 
 **ART-107** 🔵 **`scan::gather` drops silently at the depth cap, and counts an
 overlapping input twice** — *found 2026-08-15, the whole-branch review of SD-2

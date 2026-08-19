@@ -92,27 +92,33 @@
   max-width: 100%;
 }
 
-/* Below this the sidebar's labels cost more than they give. */
-@media (max-width: 1000px) {
-  .app-shell {
-    grid-template-columns: 60px 1fr;
-  }
-  .sidebar-brand,
-  .sidebar-link span:not(.sidebar-icon) {
-    display: none;
-  }
-  .sidebar-link {
-    justify-content: center;
-  }
-  .app-content {
-    padding: 16px 14px;
-  }
+/* Below this the sidebar's labels cost more than they give.
+
+   **A class, not a media query** — ART-101. `.app-shell` carries `zoom`, so
+   everything inside it lays out in CSS pixels the viewport does not have:
+   a 1258 px window at 200 % gives the layout 629 px. Media queries are
+   evaluated against the *real* viewport, so `@media (max-width: 1000px)` was
+   asking a question about a window the layout does not live in, and answered
+   "no" at exactly the sizes where the sidebar takes over a third of the glass.
+   `@/lib/appZoom::shellWidthClasses` asks `innerWidth / zoom` instead and
+   `Layout.tsx` puts the answer on the shell. The two thresholds are unchanged;
+   only the width they are compared against is. */
+.app-shell-narrow {
+  grid-template-columns: 60px 1fr;
+}
+.app-shell-narrow .sidebar-brand,
+.app-shell-narrow .sidebar-link span:not(.sidebar-icon) {
+  display: none;
+}
+.app-shell-narrow .sidebar-link {
+  justify-content: center;
+}
+.app-shell-narrow .app-content {
+  padding: 16px 14px;
 }
 
-@media (max-width: 760px) {
-  .quick-actions {
-    grid-template-columns: repeat(2, 1fr);
-  }
+.app-shell-tight .quick-actions {
+  grid-template-columns: repeat(2, 1fr);
 }
 
 /* ---- Sidebar --------------------------------------------------------- */

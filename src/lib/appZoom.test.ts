@@ -8,6 +8,9 @@ import { describe, expect, it } from "vitest";
 import {
   belongsToFileListing,
   clampZoom,
+  shellWidth,
+  shellWidthClasses,
+  SIDEBAR_ICONS_BELOW,
   stepZoom,
   zoomCssValue,
   zoomLabel,
@@ -109,5 +112,65 @@ describe("belongsToFileListing", () => {
 
     expect(belongsToFileListing(row)).toBe(true);
     expect(belongsToFileListing(outer)).toBe(false);
+  });
+});
+
+/**
+ * ART-101. The sidebar's collapse-to-icons breakpoint was a media query, and a
+ * media query is evaluated against the real viewport while everything inside
+ * `.app-shell` lays out in zoomed CSS pixels — so the rule the design already
+ * agreed on could not fire at exactly the sizes it was written for.
+ *
+ * The numbers below are the ones measured while closing ART-099, on a real
+ * 1258 px window: the sidebar is 224 real px at 100 %, 291 at 130 % and 448 at
+ * 200 %, over a third of the glass, while the layout has 629 CSS px to work
+ * with — well under the 1000 the design says it wants icons at.
+ */
+describe("shellWidth", () => {
+  it("is the viewport at 100 %", () => {
+    expect(shellWidth(1258, 100)).toBe(1258);
+  });
+
+  it("shrinks as the application is drawn bigger", () => {
+    expect(shellWidth(1258, 200)).toBe(629);
+    expect(shellWidth(1258, 130)).toBeCloseTo(967.7, 1);
+  });
+
+  it("grows below 100 %, because the setting goes both ways", () => {
+    expect(shellWidth(1000, 70)).toBeCloseTo(1428.6, 1);
+  });
+
+  it("clamps an impossible zoom rather than dividing by it", () => {
+    // A settings file edited by hand, or a 0 that would otherwise be Infinity.
+    expect(Number.isFinite(shellWidth(1258, 0))).toBe(true);
+    expect(Number.isFinite(shellWidth(1258, Number.NaN))).toBe(true);
+  });
+});
+
+describe("shellWidthClasses", () => {
+  it("leaves a wide shell alone", () => {
+    expect(shellWidthClasses(1600, 100)).toBe("");
+  });
+
+  it("collapses the sidebar the moment the shell is under the threshold", () => {
+    expect(shellWidthClasses(SIDEBAR_ICONS_BELOW + 1, 100)).toBe("");
+    expect(shellWidthClasses(SIDEBAR_ICONS_BELOW - 1, 100)).toBe("app-shell-narrow");
+  });
+
+  it("fires on the measured window that used to be missed entirely", () => {
+    // 1258 px, the window ART-099 was measured in. At 100 % the sidebar's
+    // labels are affordable; at 130 % and 200 % they are not, and the old
+    // media query said "no" at all three.
+    expect(shellWidthClasses(1258, 100)).toBe("");
+    expect(shellWidthClasses(1258, 130)).toBe("app-shell-narrow");
+    expect(shellWidthClasses(1258, 200)).toContain("app-shell-narrow");
+  });
+
+  it("adds the tighter class only when the shell is tighter still", () => {
+    // 1900 / 2 = 950: under the sidebar's 1000, over the grid's 760.
+    expect(shellWidthClasses(1900, 200)).toBe("app-shell-narrow");
+    // 1258 / 2 = 629, under both — which is what a maximised 1258 px window
+    // at 200 % really is, and why the old media query missing this mattered.
+    expect(shellWidthClasses(1258, 200)).toBe("app-shell-narrow app-shell-tight");
   });
 });
