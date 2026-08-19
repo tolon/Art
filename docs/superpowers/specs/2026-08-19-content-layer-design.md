@@ -139,13 +139,39 @@ useful thing on the row.
 **The comparison is between two files claiming to be the same program.** A
 `$VER:` marker is found by scanning for it, and the first one in a file is
 not always the file's own: a binary can embed another program's version
-string ahead of its own. Compare the **names** before comparing the numbers,
-and treat a mismatch as no comparison at all — the fifth row. Skipping that
-check is how an *older* file renders as an upgrade, which was found by
-construction during this round rather than reasoned about: existing
-`assign 45.9` against an incoming file whose first marker read
-`dos.library 47.0` produced `Upgrade(45.9 → 47.0)` for a file that was in
-fact `assign 37.4`.
+string ahead of its own. Skipping that check is how an *older* file renders
+as an upgrade, which was found by construction during this round rather than
+reasoned about: existing `assign 45.9` against an incoming file whose first
+marker read `dos.library 47.0` produced `Upgrade(45.9 → 47.0)` for a file
+that was in fact `assign 37.4`.
+
+Comparing the two files' marker **names to each other** is not enough, and
+that too was found by construction: if both files carry the *same* foreign
+marker ahead of their own, the names agree and the numbers being compared are
+still the wrong ones. **The marker must name the file it was found in.** A
+marker whose name is anything else means ART has not measured a version for
+that file, and the row falls to the unversioned class — a mismatch is never a
+verdict, only an absence.
+
+"Names the file" is matched case-insensitively (AmigaDOS is), against the
+file's name, its name without extension, or its parent drawer's name joined
+to either. That last form is not a special case for one file: a font is
+`Fonts/courier/11` and calls itself `courier11`, which is genuinely its
+identity.
+
+Measured on the real 3.9 tree, which is what settled the rule rather than
+taste:
+
+```
+markers found                  : 180
+marker names its own file      : 173  (96%)
+dropped                        :   7
+```
+
+and among the seven is `L/Queue-Handler`, whose first marker reads `Version`
+— the bypass occurring in real material, caught. The cost of the rule is that
+seven files fall from a version label to a size comparison; the benefit is
+that no file can be labelled with another program's numbers.
 
 **"Newer" needs defining, and the definition is AmigaOS's own.** A `$VER:`
 string is `name version.revision (date)` — `assign 37.4 (25.4.91)`. Compare
