@@ -51,53 +51,44 @@ more than the default, and no wasted headroom for one that needs less. Worth
 doing once more than one real title's memory failure has been measured, not
 before.
 
-**ART-155** 🟠 **A real AmigaOS 3.9 disc names files `apply()` cannot write as
-literal Windows path segments — a reserved device name and three accented
-letters ART's own ISO9660 reader already renders as `?`** — *found 2026-08-19,
-the same Task 4 real run that found and closed ART-153, immediately after
-ART-153 was fixed and `apply()` could reach real disc content for the first
+**ART-156** 🟡 **`plan()`'s `total_bytes` counts a CD-sourced directory's own
+ISO9660 extent length as if it were file content, so it overstates what
+`apply()` actually writes to disk** — *found 2026-08-19, the same Task 5 real
+run that fixed ART-155's real cause and let `apply()` finish for the first
 time*
-`src-tauri/src/core/osinstall/apply.rs` (the distribution tree is a literal
-host-OS folder tree — see the module doc comment on `core/osinstall`'s
-"distribution tree, not a volume") ·
+`src-tauri/src/core/osinstall/plan.rs` (`total_bytes = items.iter().map(|item|
+item.bytes).sum()`, unconditional over every `PlanItem`, files and
+directories alike) ·
 
-Two distinct real names inside `workbench-base`'s own `Storage` rule, both
-perfectly legal AmigaDOS names:
+`PlanItem::bytes` for a directory sourced from an ADF is `0` (an AmigaDOS
+directory block carries no byte-length field the way a file does), so the sum
+was never visibly wrong before — but a directory sourced from a CD gets its
+`bytes` from `IsoEntry::bytes`, the ISO9660 directory record's own declared
+extent length: a real, nonzero, sector-rounded number, because on a CD a
+directory *is* stored as an extent with a length. `apply()` turns such an
+item into a plain host folder with no content of its own, so those bytes are
+real to the disc and imaginary to the distribution tree.
 
-1. `Storage/DOSDrivers/AUX` (and `AUX.info`) — `AUX` is a Windows reserved
-   device name; `CreateFile("...\AUX")` never creates a file by that name
-   regardless of extension or ancestor path.
-2. `Storage/Locale/Countries-Euro/?STERREICH.country`, `BELGI?.country`,
-   `ESPA?A.country` (ART's own `?` substitution for the disc's own accented
-   letters — presumably `ÖSTERREICH`, a Belgian name, and `ESPAÑA`) —
-   the disc carries no Joliet descriptor (see ART-153's own entry, and the
-   3.9 recipe's case fix, Task 4), so `CdSource` reads these through the
-   Primary tree's ISO 646 identifiers, where a byte with the high bit set
-   is not a legal identifier character. `core/iso/descriptor.rs::decode_iso646`
-   already documents turning that into `?` on purpose, matching
-   `write_bcpl_string`'s identical choice in the ADF core — the right call
-   for *reading* the disc, but `?` is one of the characters Windows refuses
-   in a path (`< > : " | ? *`), so a name ART decoded correctly still cannot
-   be written as a literal Windows path segment.
+Measured against the owner's real AmigaOS 3.9 CD, once ART-155 no longer
+blocked `apply()` from finishing at all: `plan()` predicts `total_bytes:
+6,108,319` for the shipped recipe's one component; `apply()` actually writes
+`6,054,225` bytes of file content — a difference of exactly `54,094`, which
+is exactly the sum of `PlanItem::bytes` over the plan's 75 directory items
+(confirmed directly, not inferred: every one of the 588 file items' actual
+on-disk size matches its own `PlanItem::bytes` exactly, so the whole
+discrepancy sits in the 75 directories). Reproduced by
+`core::osinstall::apply::tests::find_the_directory_byte_overcount_when_asked`.
 
-Reproduced by `core::osinstall::apply::tests::build_the_real_39_tree_when_asked`,
-which — once ART-153 no longer blocks it — gets measurably further (1,020
-files, 71 directories actually written to `E:\amiga\ProjeART\dist-3.9`) before
-failing with `os error 123` (`ERROR_INVALID_NAME`) partway through `Storage`.
-Confirmed by a throwaway diagnostic,
-`find_windows_illegal_names_when_asked`, which walks every name
-`workbench-base`'s rules resolve to and flags the 5 that collide with a
-Windows reserved name or a disallowed character.
-
-Not fixed here. Neither name is a recipe mistake — both are real content on
-real media — and neither is a one-file engine fix: a correct answer needs a
-host-filesystem-safe escaping scheme for `core/osinstall/apply.rs`'s
-distribution tree, plus a decision about where the true AmigaDOS name then
-lives (a `.uaem` sidecar, `distribution.json`, or both) so nothing is lost.
-That is a design decision, reported here rather than made unilaterally under
-this task's own instruction to stop at engine code. Blocks the AmigaOS 3.9
-recipe from ever producing a complete real tree on a Windows host until
-fixed.
+Not fixed here — `plan.rs` was out of Task 5's scope (its brief was
+`decode_iso646`'s charset only) and this is a distinct defect, reachable only
+once ART-155 stopped hiding it. `core::osinstall::apply::tests::
+build_the_real_39_tree_when_asked` now asserts against the sum of *file*
+items only, not `total_bytes`, and says why in a comment at the assertion.
+Fixing this for real means deciding what `total_bytes` is *for* — a progress
+bar's total, most likely — and either excluding directories from the sum or
+giving a CD-sourced directory `bytes: 0` the same declared-default way
+`core/osinstall/source_cd.rs` already gives a disc's un-measurable protection
+and comment fields, matching what an ADF-sourced directory reports today.
 
 **ART-144** 🔵 **Five minors deferred across collection-wave-c's own review
 rounds, folded into one entry — #4 closed by the whole-branch review's fix
@@ -713,6 +704,66 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-155** 🟠 ✅ **A real AmigaOS 3.9 disc names files `apply()` could not
+write as literal Windows path segments — three accented letters ART's own
+ISO9660 reader turned into `?`, a character Windows refuses in a path** —
+*found 2026-08-19 by Task 4's real run; corrected and fixed 2026-08-19 by
+Task 5, one day later*
+
+**This entry's own diagnosis was half wrong, and that half is corrected here
+rather than deleted.** It originally named two causes: a reserved DOS device
+name (`Storage/DOSDrivers/AUX`) and the three accented `.country` files.
+Task 5 measured the first claim directly, on this machine (Windows 11 Pro
+26200): a file named literally `AUX` inside a directory writes and lists back
+fine, by a plain path and by a `\\?\` path alike. `Storage/DOSDrivers/AUX`
+was never what failed — this task's own real re-run confirms it: the file
+is present on disk (`Storage/DOSDrivers/AUX`, `AUX.INFO`, `AUX-HANDLER` under
+`L/`) in the same tree the `?` fix completed. **This does not mean reserved
+device names are a non-issue everywhere** — only that they did not bite on
+this one real machine and API; an older Windows or a different write path
+could still refuse one, and that would be a new, separately-measured finding,
+not a reason to doubt this correction.
+
+The real cause was the second half: `Storage/Locale/Countries-Euro/*.country`
+— `core/iso/descriptor.rs::decode_iso646` mapped every byte with the high bit
+set to `?`, and `?` is one of the characters (`< > : " | ? *`) Windows
+refuses in a path, regardless of what the byte actually meant.
+`src-tauri/src/core/iso/descriptor.rs` ·
+
+**The fix.** The three real bytes behind the `?`s — measured verbatim from
+the disc by a throwaway diagnostic,
+`core::osinstall::apply::tests::read_the_raw_country_name_bytes_when_asked`
+— are `0xD6`, `0xCB`, `0xD1`: exactly the ISO-8859-1 (Latin-1) code points for
+`Ö`, `Ë`, `Ñ`, the accented letters `Österreich`, a Belgian name and `España`
+need. That is not a coincidence: AmigaDOS's own native character set is
+ISO-8859-1 (<https://en.wikipedia.org/wiki/AmigaDOS>), the same
+byte-transparent choice `write_bcpl_string` already makes in the ADF core,
+and it is independently confirmed by a second implementation sharing no code
+with ART's own — 7-Zip, this project's own ISO9660 oracle
+(`scripts/iso-oracle-check.py`) — which reads this exact disc's Rock Ridge
+alternate names for the same three files as lower-case `ö`/`ë`/`ñ`, the
+lower-case Latin-1 pairing of the identical bytes. (`amitools`, ART's chosen
+*ADF/HDF* oracle, has no ISO9660 support at all to consult — checked
+directly.) ECMA-119 itself restricts a Primary-tree identifier to upper-case
+letters, digits, underscore and a dot
+(<https://en.wikipedia.org/wiki/ISO_9660>), so a high-bit byte there is
+genuinely out of spec — this disc's mastering tool wrote one anyway, real
+material a spec citation does not make go away. `decode_iso646` now decodes
+every byte as ISO-8859-1 (`b as char`, since Unicode's first 256 code points
+are Latin-1 by construction) instead of masking anything above ASCII to `?`
+— see the function's own doc comment for the full case, including what this
+changes for a non-Amiga disc that happens to carry the same kind of
+out-of-spec byte.
+
+Covered by `core::iso::descriptor::tests::a_real_disc_countries_euro_name_decodes_as_latin1`
+(the verbatim bytes above) and `a_byte_above_ascii_decodes_as_latin1` (every
+byte 0x80..=0xFF, the general case). Reproduced end to end by
+`core::osinstall::apply::tests::build_the_real_39_tree_when_asked`, which now
+completes against the real disc: 588 files, 75 directories, all 663 planned
+items, `Storage/DOSDrivers/AUX` included. (That same real run found a
+second, distinct defect once it could finally run to completion — ART-156,
+filed separately, not fixed here.)
 
 **ART-154** 🟠 ✅ **`apply()` hashed a whole medium into memory just to record
 its SHA-256 — 469 MB for the real AmigaOS 3.9 disc, against CLAUDE.md's own

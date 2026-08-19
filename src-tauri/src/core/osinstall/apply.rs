@@ -1819,6 +1819,168 @@ mod tests {
         println!("{flagged} flagged segment(s) out of {} entries", all.len());
     }
 
+    /// Throwaway diagnostic (Task 5, Step 1): the exact bytes behind the
+    /// three `?`-bearing `.country` names ART-155 names. `CdSource`/
+    /// `IsoImage::list` already decode a name before handing it back, so
+    /// this walks the same directory *underneath* that decoding — reading
+    /// the raw sector by hand and printing each flagged identifier's own
+    /// bytes in hex beside what `decode_iso646` made of them — because
+    /// Step 2's charset question can only be answered from the bytes the
+    /// disc actually carries, never from ART's own already-lossy `?`.
+    #[test]
+    #[ignore = "diagnostic only; touches the user's real media"]
+    fn read_the_raw_country_name_bytes_when_asked() {
+        let Ok(iso) = std::env::var("ART_OS39_ISO") else {
+            return;
+        };
+        let image = crate::core::iso::IsoImage::open(&PathBuf::from(&iso)).unwrap();
+
+        // Descend by name. Every segment down to COUNTRIES-EURO itself is
+        // plain ASCII (confirmed by ART-155's own report), so decoding loses
+        // nothing before the leaf directory this diagnostic actually cares
+        // about — matched case-insensitively because the disc's Primary
+        // tree mixes case (`OS-VERSION3.9` beside `STORAGE`) rather than
+        // sticking to strict ISO9660 Level 1 uppercase.
+        let (mut extent, mut length) = image.root();
+        for segment in [
+            "OS-VERSION3.9",
+            "WORKBENCH3.5",
+            "STORAGE",
+            "LOCALE",
+            "COUNTRIES-EURO",
+        ] {
+            let entries = image.list(extent, length).unwrap();
+            let found = entries
+                .iter()
+                .find(|e| e.name.eq_ignore_ascii_case(segment))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{segment} not found; entries here: {:?}",
+                        entries.iter().map(|e| &e.name).collect::<Vec<_>>()
+                    )
+                });
+            assert!(found.is_dir, "{segment} is not a directory");
+            extent = found.extent;
+            length = found.bytes as u32;
+        }
+
+        // `extent`/`length` now name COUNTRIES-EURO itself. Read its raw
+        // sectors and walk records by hand — the same record shape
+        // `directory::parse_directory_extent` walks, but keeping the
+        // identifier bytes instead of feeding them through `decode_iso646`,
+        // which is exactly the step this diagnostic exists to look behind.
+        use std::io::{Read, Seek, SeekFrom};
+        let layout = image.layout();
+        let sector = crate::core::iso::LOGICAL_SECTOR_SIZE as u64;
+        let sectors = (length as u64).div_ceil(sector);
+        let mut file = std::fs::File::open(&iso).unwrap();
+        let mut buf = vec![0u8; (sectors * sector) as usize];
+        file.seek(SeekFrom::Start(layout.data_offset_of(extent).unwrap()))
+            .unwrap();
+        file.read_exact(&mut buf).unwrap();
+
+        let mut pos = 0usize;
+        let mut printed = 0;
+        while pos < buf.len() {
+            let len = buf[pos] as usize;
+            if len == 0 {
+                // Padding to the next sector, not a record — same rule
+                // `directory::parse_directory_extent` follows.
+                pos = pos.div_ceil(2048) * 2048;
+                continue;
+            }
+            let id_len = buf[pos + 32] as usize;
+            let id = &buf[pos + 33..pos + 33 + id_len];
+            let is_dot_or_dotdot = id_len == 1 && (id[0] == 0x00 || id[0] == 0x01);
+            if !is_dot_or_dotdot {
+                let decoded = crate::core::iso::descriptor::decode_iso646(id);
+                if decoded.contains('?') {
+                    let hex: Vec<String> = id.iter().map(|b| format!("{b:02x}")).collect();
+                    println!("decoded={decoded:?} raw_hex=[{}]", hex.join(" "));
+                    printed += 1;
+                }
+            }
+            pos += len;
+        }
+        println!("{printed} entries with '?' found under COUNTRIES-EURO");
+    }
+
+    /// Throwaway investigation (Task 5, Step 5), kept as the evidence for
+    /// **ART-156**: `build_the_real_39_tree_when_asked` wrote 54,094 fewer
+    /// bytes than `plan()` predicted even though every one of the 663
+    /// planned items became a real file or a real directory and every real
+    /// *file*'s size matches its `PlanItem::bytes` exactly (checked below,
+    /// per item, against the previous run's output — never deleted, so
+    /// `ART_OS39_DEST` still holds it). The 75 directory items are the
+    /// difference: `PlanItem::bytes` for a directory sourced from a CD is
+    /// `IsoEntry::bytes` — the ISO9660 directory record's own declared
+    /// extent length, a real, nonzero, sector-rounded number, not the `0`
+    /// an `AdfSource` directory reports — but a directory becomes a plain
+    /// host folder with no "content" of its own, so `plan::total_bytes`
+    /// (`items.iter().map(|i| i.bytes).sum()`, unconditionally over every
+    /// item) counts bytes for 75 directories that `apply()` correctly never
+    /// writes anywhere. Not a naming defect and not `decode_iso646` — a
+    /// distinct, pre-existing miscount in `core/osinstall/plan.rs` that
+    /// this task's fix to ART-155 simply let `apply()` run far enough to
+    /// expose for the first time. Not fixed here (out of this task's scope
+    /// — `plan.rs` is not in its file list — and "one measured defect per
+    /// task").
+    #[test]
+    #[ignore = "diagnostic only; touches the user's real media and a prior real run's output"]
+    fn find_the_directory_byte_overcount_when_asked() {
+        let (Ok(iso), Ok(dest)) = (
+            std::env::var("ART_OS39_ISO"),
+            std::env::var("ART_OS39_DEST"),
+        ) else {
+            return;
+        };
+        let iso_path = PathBuf::from(&iso);
+        let media_folder = iso_path.parent().unwrap().to_path_buf();
+        let request = crate::core::osinstall::plan::InstallRequest {
+            media_folder,
+            rom: None,
+            chosen: Vec::new(),
+            excluded: Vec::new(),
+            destination: PathBuf::from(&dest),
+        };
+        let recipe = crate::core::osinstall::recipe::amigaos_39().unwrap();
+        let planned = crate::core::osinstall::plan::plan(&request, &recipe).unwrap();
+
+        let root = PathBuf::from(&dest);
+        let mut sum_file_bytes: u64 = 0;
+        let mut sum_dir_bytes: u64 = 0;
+        let mut mismatches = 0;
+        for item in &planned.items {
+            if item.is_dir {
+                sum_dir_bytes += item.bytes;
+                continue;
+            }
+            sum_file_bytes += item.bytes;
+            match std::fs::metadata(root.join(&item.to)) {
+                Ok(meta) if meta.len() == item.bytes => {}
+                Ok(meta) => {
+                    mismatches += 1;
+                    println!(
+                        "MISMATCH {} planned={} actual={}",
+                        item.to,
+                        item.bytes,
+                        meta.len()
+                    );
+                }
+                Err(err) => {
+                    mismatches += 1;
+                    println!("MISSING {} ({err})", item.to);
+                }
+            }
+        }
+        println!(
+            "sum_file_bytes={sum_file_bytes} sum_dir_bytes={sum_dir_bytes} \
+             total_bytes={} (= sum_file_bytes + sum_dir_bytes: {}) per-file mismatches={mismatches}",
+            planned.total_bytes,
+            sum_file_bytes + sum_dir_bytes == planned.total_bytes
+        );
+    }
+
     /// **Task 4 (amigaos-39 plan), the real run.** Drives the whole engine —
     /// `find_media` (through `plan()`'s own call), `plan()`, `apply()` —
     /// against the owner's own AmigaOS 3.9 CD image, never a synthetic
@@ -1851,16 +2013,28 @@ mod tests {
     /// `AmigaOS3.2CD(ZaP)`; `plan()` succeeds clean — 1 component on
     /// (`workbench-base`), 0 refusals, 663 items, 6 108 319 planned bytes.
     ///
-    /// `apply()` gets measurably further than before ART-153 was fixed —
-    /// 1,020 files and 71 directories actually land under `root` — but still
-    /// does not finish: it hits **ART-155**, a real disc name it cannot
-    /// write as a literal Windows path segment (`Storage/DOSDrivers/AUX`,
-    /// which Windows treats as a reserved device regardless of extension,
-    /// and three `Storage/Locale/Countries-Euro/*.country` files whose
-    /// accented letters ART's own ISO9660 reader already, and correctly,
-    /// renders as `?` — a character Windows also refuses in a path). Not a
-    /// recipe problem and not a one-file fix — see ART-155 in
-    /// `docs/ISSUES.md` and the report's "Fix round 1" section.
+    /// At that point `apply()` reached 1,020 files and 71 directories before
+    /// hitting **ART-155**: a real disc name it could not write as a literal
+    /// Windows path segment — three `Storage/Locale/Countries-Euro/*.country`
+    /// files whose accented letters `core/iso/descriptor.rs::decode_iso646`
+    /// rendered as `?`, a character Windows refuses in a path.
+    ///
+    /// **Task 5 fixed ART-155's real cause** (`decode_iso646` now decodes a
+    /// high-bit byte as ISO-8859-1 instead of `?` — see that function's own
+    /// doc comment for the full case) **and corrected its other named
+    /// cause**: a reserved DOS device name, `Storage/DOSDrivers/AUX`, was
+    /// measured on this machine (Windows 11 Pro 26200) to write and list
+    /// back just fine — it was never what failed. Re-run against the same
+    /// disc, `apply()` now completes: 588 files, 75 directories, exactly the
+    /// 663 planned items, every file's bytes matching its plan exactly. The
+    /// one number that does *not* match is `planned.total_bytes` itself —
+    /// 6,108,319 against 6,054,225 actually written — and that turned out to
+    /// be a second, distinct, previously-unreachable defect: `total_bytes`
+    /// sums `PlanItem::bytes` over directories too, and a CD-sourced
+    /// directory's `bytes` is its ISO9660 extent length, not `0`. Filed as
+    /// **ART-156**, not fixed here — see
+    /// `find_the_directory_byte_overcount_when_asked` above and ART-156 in
+    /// `docs/ISSUES.md`.
     #[test]
     #[ignore = "touches the user's real media and E:\\amiga\\ProjeART; run explicitly, see the doc comment"]
     fn build_the_real_39_tree_when_asked() {
@@ -1936,28 +2110,43 @@ mod tests {
                     outcome.bytes,
                     elapsed.as_secs_f64()
                 );
-                // The plan's own `total_bytes` is the sum of `PlanItem::bytes`
-                // for every file — a number read off the disc's directory
-                // records at plan time. `apply()`'s `outcome.bytes` is the sum
-                // of what was actually written. They read the same underlying
-                // disc, so a real disagreement here is worth knowing, not
-                // rounding — printed either way, asserted equal because
-                // nothing between planning and writing should change a
-                // file's size.
+                // `planned.total_bytes` is *not* compared against
+                // `outcome.bytes` here — that is ART-156
+                // (`find_the_directory_byte_overcount_when_asked` above): a
+                // CD-sourced directory's `PlanItem::bytes` is its ISO9660
+                // extent length, not `0`, so `total_bytes` (summed over every
+                // item, files and directories alike) overstates what
+                // `apply()` actually writes as file content by exactly the
+                // 75 directories' worth of extent bytes. Comparing
+                // `outcome.bytes` against the sum of *file* items only is the
+                // invariant that actually holds — checked below.
                 println!(
                     "plan.total_bytes={} vs apply.outcome.bytes={} (difference={})",
                     planned.total_bytes,
                     outcome.bytes,
                     outcome.bytes as i64 - planned.total_bytes as i64
                 );
+                let planned_file_bytes: u64 = planned
+                    .items
+                    .iter()
+                    .filter(|item| !item.is_dir)
+                    .map(|item| item.bytes)
+                    .sum();
                 assert_eq!(
-                    outcome.bytes, planned.total_bytes,
-                    "apply() wrote a different byte total than plan() predicted"
+                    outcome.bytes, planned_file_bytes,
+                    "apply() wrote a different byte total than plan()'s file items predicted"
                 );
-                assert!(
-                    outcome.files > 0 && outcome.directories > 0,
-                    "a real disc must produce a non-empty tree"
-                );
+
+                // This disc is real, fixed material (the owner's own AmigaOS
+                // 3.9 CD): these exact counts are pinned, not just checked
+                // non-zero, the same way
+                // `run_the_real_engine_against_the_users_own_media_when_asked`
+                // pins its own real media's counts — a change here means the
+                // media folder or the recipe genuinely changed, worth
+                // knowing rather than a flaky assertion to loosen.
+                assert_eq!(outcome.files, 588, "files written");
+                assert_eq!(outcome.directories, 75, "directories written");
+                assert_eq!(outcome.bytes, 6_054_225, "file bytes written");
 
                 let manifest_text = std::fs::read_to_string(root.join(MANIFEST_FILE_NAME)).unwrap();
                 let manifest: DistributionManifest = serde_json::from_str(&manifest_text).unwrap();
@@ -1970,32 +2159,23 @@ mod tests {
                 assert_eq!(manifest.built_from.len(), planned.components_on.len());
             }
             Err(err) => {
-                // ART-153 is fixed — this is a *different* failure, reached
-                // only once `apply()` can actually open the disc and starts
-                // writing real names from it. `root` is left as `apply()`
-                // stopped it (writes commit as they land, never rolled
-                // back), so a real, measured partial count is possible even
-                // though the run did not finish — matching spec §89 ("report
-                // what happened, including what did not work").
+                // ART-153 and ART-155 are both fixed as of this task — a
+                // failure reaching here is a *new*, as-yet-unfiled defect,
+                // not either of those. `root` is left as `apply()` stopped
+                // it (writes commit as they land, never rolled back), so a
+                // real, measured partial count is possible even though the
+                // run did not finish — matching spec §89 ("report what
+                // happened, including what did not work").
                 let (files_written, dirs_written) = count_tree(&root);
                 println!(
                     "apply failed partway: files_written={files_written} directories_written={dirs_written}"
                 );
                 panic!(
                     "apply() failed against the real disc: {err}\n\n\
-                     This is ART-155 (docs/ISSUES.md), found by this same run, distinct from \
-                     ART-153 (fixed above): the real disc's Storage component carries names \
-                     `apply()` cannot write as literal Windows path segments — `AUX` (a \
-                     DOSDrivers entry, colliding with a reserved Windows device name) and \
-                     three COUNTRIES-EURO `.country` files whose accented letter ART's own \
-                     ISO9660 reader already renders as `?` (`decode_iso646`'s documented \
-                     high-bit fallback, `core/iso/descriptor.rs`), which Windows also refuses \
-                     in a path. Both are perfectly legal AmigaDOS names; neither is a recipe \
-                     problem. Fixing this means deciding a host-filesystem-safe escaping \
-                     scheme for `core/osinstall/apply.rs`'s distribution tree (and where the \
-                     real AmigaDOS name then has to live — a `.uaem` sidecar, `distribution.json`, \
-                     or both) — a design decision, not a one-file fix, so it is reported here \
-                     rather than made unilaterally."
+                     Neither ART-153 nor ART-155 (docs/ISSUES.md) — both are fixed as of this \
+                     task, and this run's failure is something else. File it as a new ART-NNN \
+                     with what actually happened, the same rigour ART-155 itself was filed \
+                     with, rather than assuming it is one of the two closed causes above."
                 );
             }
         }

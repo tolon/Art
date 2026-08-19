@@ -256,17 +256,82 @@ pub fn parse_volume_descriptor(sector: &[u8], kind: DescriptorKind) -> CoreResul
     })
 }
 
-/// Decode an ISO 646 (7-bit ASCII) identifier.
+/// Decode an ISO 646 (7-bit ASCII) identifier — except that real discs put
+/// bytes there the standard does not allow, and turning every one of them
+/// into `?` was a worse answer than deciding what they mean.
 ///
-/// A byte with the high bit set is not a legal identifier character. Rather
-/// than guess an 8-bit code page the disc never named, it becomes `?` — a
-/// visible mark that something was there, which is what `write_bcpl_string`
-/// does for the same reason in the ADF core.
+/// # What the spec says, and what a real disc does anyway
+///
+/// ECMA-119 (ISO 9660's own text) restricts a directory or file identifier
+/// in the mandatory (non-Joliet, non-Rock-Ridge) tree to upper-case letters,
+/// digits, underscore and a dot — "All levels restrict file names in the
+/// mandatory file hierarchy to upper case letters, digits, underscores, and
+/// a dot" (<https://en.wikipedia.org/wiki/ISO_9660>). A byte with the high
+/// bit set is genuinely out of spec there, at every interchange level. So
+/// the disc measured below is non-conformant — and it is real material, not
+/// a hypothetical: the owner's own AmigaOS 3.9 CD
+/// (`OS-VERSION3.9/WORKBENCH3.5/STORAGE/LOCALE/COUNTRIES-EURO`) carries
+/// three filenames whose identifier holds exactly one byte with the high
+/// bit set — `0xD6`, `0xCB`, `0xD1` — where the country's name needs
+/// `Ö`, `Ë`, `Ñ` (measured verbatim by
+/// `core::osinstall::apply::tests::read_the_raw_country_name_bytes_when_asked`,
+/// pinned below as `a_real_disc_countries_euro_name_decodes_as_latin1`).
+/// Those three bytes are exactly the ISO-8859-1 (Latin-1) code points for
+/// those three letters.
+///
+/// That is not a coincidence to guess past. AmigaDOS's own native character
+/// set is ISO-8859-1: "the developers chose to use the ANSI–ISO standard
+/// ISO-8859-1 (Latin 1), which includes the ASCII character set"
+/// (<https://en.wikipedia.org/wiki/AmigaDOS>) — the same byte-transparent
+/// choice `write_bcpl_string` already makes in the ADF core, so an Amiga
+/// filename's accented letters were Latin-1 before this disc's mastering
+/// tool ever copied them, unchanged, into a d-string field the standard
+/// says they do not belong in. And this is independently confirmed by a
+/// second implementation sharing no code with ART's: this project's own
+/// ISO9660 oracle, 7-Zip (`scripts/iso-oracle-check.py`), reads this exact
+/// disc's Rock Ridge alternate names for the same three files as
+/// lower-case `ö` (`0xF6`), `ë` (`0xEB`), `ñ` (`0xF1`) — the lower-case
+/// Latin-1 pairing of the very same three bytes found in the Primary tree.
+/// (amitools, this project's chosen *ADF/HDF* oracle, has no ISO9660
+/// support to consult at all — checked directly, not assumed.)
+///
+/// # The decision
+///
+/// Decode every byte as ISO-8859-1, which for the 0x80..=0xFF range is
+/// simply `b as char` — Unicode's first 256 code points are Latin-1 by
+/// construction, so no table is needed. This also repairs a real defect the
+/// `?` behaviour had, not only a cosmetic one: `Österreich` and a
+/// differently-accented name both folded to the same `?`-led string, an
+/// actual collision, where Latin-1 keeps every byte value distinct.
+///
+/// It is still a guess for a disc mastered in some other 8-bit code page —
+/// ECMA-119 leaves those bytes formally undefined, so there is no
+/// spec-correct answer for *any* choice here — but Latin-1 was the
+/// overwhelmingly common choice for 8-bit bytes smuggled into a non-Joliet
+/// identifier in this disc's era, it is what AmigaOS itself assumes, and
+/// unlike `?` it never merges two distinct names into one.
+///
+/// # This decodes every ISO9660 disc's Primary tree, not only Amiga ones
+///
+/// A non-Amiga disc that happens to carry an out-of-spec high-bit byte in a
+/// Primary identifier now decodes it as a specific Latin-1 character
+/// instead of `?`. For a disc actually mastered in Latin-1 or the
+/// closely-related Windows-1252 (the common case for Western European
+/// software of this era) that is a strictly better answer. For one mastered
+/// in some other 8-bit encoding — Cyrillic, Greek, Shift-JIS — it produces
+/// a specific, plausible-looking, wrong character rather than a visibly
+/// uninformative `?`. ART has no way to know which case it is looking at:
+/// nothing in the Primary Volume Descriptor names a code page for this
+/// field, which is exactly why the standard forbids using it for anything
+/// but the restricted d-character set in the first place.
+/// `a_byte_above_ascii_decodes_as_latin1` (below) pins the general,
+/// non-Amiga case; `a_real_disc_countries_euro_name_decodes_as_latin1` pins
+/// the real disc that motivated the change.
 pub fn decode_iso646(bytes: &[u8]) -> String {
     bytes
         .iter()
         .take_while(|&&b| b != 0)
-        .map(|&b| if b < 0x80 { b as char } else { '?' })
+        .map(|&b| b as char)
         .collect()
 }
 
@@ -358,8 +423,61 @@ mod tests {
         // sequence it would give one character where the disc had two. The
         // decoder is explicit, so the count is always the byte count.
         let s = decode_iso646(&[b'A', 0xFC, 0xDF, b'Z']);
-        assert_eq!(s, "A??Z");
         assert_eq!(s.chars().count(), 4);
+        // Was "A??Z" before this task: every non-ASCII byte became `?`.
+        // `decode_iso646`'s doc comment records why that changed — this
+        // assertion is updated, not just the code under it, because 0xFC
+        // and 0xDF are themselves the Latin-1 code points for `ü` and `ß`.
+        assert_eq!(s, "AüßZ");
+    }
+
+    #[test]
+    fn a_byte_above_ascii_decodes_as_latin1() {
+        // The general case `decode_iso646`'s doc comment discusses: any
+        // ISO9660 disc, not only an Amiga one, that puts an out-of-spec
+        // high-bit byte in a Primary identifier. Unicode's first 256 code
+        // points are Latin-1 by construction, so byte value and code point
+        // coincide across the whole 0x80..=0xFF range, not just the two
+        // bytes the sibling test happens to use.
+        for b in 0x80u8..=0xFF {
+            let s = decode_iso646(&[b]);
+            assert_eq!(s.chars().count(), 1);
+            assert_eq!(s.chars().next().unwrap() as u32, b as u32);
+        }
+    }
+
+    #[test]
+    fn a_real_disc_countries_euro_name_decodes_as_latin1() {
+        // Verbatim raw identifier bytes from the owner's real AmigaOS 3.9
+        // CD (`AmigaOS39.iso`, volume `AmigaOS3.9`),
+        // `OS-VERSION3.9/WORKBENCH3.5/STORAGE/LOCALE/COUNTRIES-EURO`,
+        // measured by
+        // `core::osinstall::apply::tests::read_the_raw_country_name_bytes_when_asked`
+        // (Task 5, Step 1) — not invented, and not the same bytes the
+        // sibling tests above use. This is ART-155's own evidence: three
+        // real names ART decoded as `?STERREICH.COUNTRY`, `BELGI?.COUNTRY`
+        // and `ESPA?A.COUNTRY` before this task.
+        assert_eq!(
+            decode_iso646(&[
+                0xd6, 0x53, 0x54, 0x45, 0x52, 0x52, 0x45, 0x49, 0x43, 0x48, b'.', b'C', b'O', b'U',
+                b'N', b'T', b'R', b'Y', b';', b'1'
+            ]),
+            "ÖSTERREICH.COUNTRY;1"
+        );
+        assert_eq!(
+            decode_iso646(&[
+                0x42, 0x45, 0x4c, 0x47, 0x49, 0xcb, b'.', b'C', b'O', b'U', b'N', b'T', b'R', b'Y',
+                b';', b'1'
+            ]),
+            "BELGIË.COUNTRY;1"
+        );
+        assert_eq!(
+            decode_iso646(&[
+                0x45, 0x53, 0x50, 0x41, 0xd1, 0x41, b'.', b'C', b'O', b'U', b'N', b'T', b'R', b'Y',
+                b';', b'1'
+            ]),
+            "ESPAÑA.COUNTRY;1"
+        );
     }
 
     #[test]
