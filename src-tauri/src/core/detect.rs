@@ -588,14 +588,21 @@ mod tests {
         }
     }
 
+    /// A fresh scratch directory per call — see `core::cbm::d64`'s own
+    /// `write` for the measurement behind the counter (ART-173). This helper
+    /// takes no tag at all, so pid plus a timestamp was the only thing
+    /// keeping two of its twenty-odd callers apart.
     fn tmp() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
         let d = std::env::temp_dir().join(format!(
-            "art-detect-{}-{}",
+            "art-detect-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir_all(&d).unwrap();
         d

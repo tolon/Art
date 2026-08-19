@@ -413,14 +413,31 @@ mod tests {
     use super::fixture::D64Builder;
     use super::*;
 
+    /// A fresh scratch directory per call, every time.
+    ///
+    /// **The counter is the whole point (ART-173).** Keying on pid plus a
+    /// nanosecond timestamp is not enough: Cargo runs these tests in parallel
+    /// threads of one process, `SystemTime::now()` on Windows does not
+    /// advance between two calls that land in the same clock tick, and every
+    /// caller writes to the same `disk.d64` inside the directory it gets. Two
+    /// tests then share one file — measured at **4 failures in 40 runs** of
+    /// `cargo test core::cbm::`, with
+    /// `a_disk_reports_its_name_and_id` failing on
+    /// `UnsupportedFormat("1000 bytes is not a Commodore disk image")`, which
+    /// is `a_file_that_is_not_a_disk_image_is_refused_at_open`'s fixture read
+    /// under this test's name. Same mechanism and same one-line fix as
+    /// ART-164 in `core::iso`.
     fn write(bytes: &[u8]) -> (PathBuf, PathBuf) {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "art-cbm-{}-{}",
+            "art-cbm-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("disk.d64");

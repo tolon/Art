@@ -604,40 +604,6 @@ first looks: embedding a PFS3 driver into a **foreign** card's existing RDB
 `hst-imager` does it; that is named in the refusal text. Not fixed — filed as
 future work, not implied to already work.
 
-**ART-115** 🔵 **A `core::iso` test flake, seen three times across this
-session, never diagnosed** — *found 2026-08-15/16 (Tasks 3, 7, 8), filed at
-Task 14*
-`src-tauri/src/core/iso/mod.rs` ·
-`extract_tree_does_not_follow_a_directory_that_points_back_at_the_root` failed
-on one of several full-suite runs on three separate days of this session's
-work (Task 3's second run, Task 7's first run — two failures at once — and
-Task 8), always this one test, always in `core::iso`, always passing in
-isolation, and never in code any of those tasks' diffs touched. **This is not
-ART-059**, which is `net/`'s test-server race — a different module entirely.
-The obvious cause was checked and ruled out: `core::iso`'s `tmp()` keys on
-both the process id and a nanosecond timestamp, so a scratch-path collision
-between parallel tests is not it. Two different modules flaking in one
-session (this one and ART-059) may point at something environmental — this
-machine, or `cargo test`'s default parallelism — rather than two unrelated
-defects, but that is a guess, not a finding. Task 14's own two full-suite runs
-(1382 passed, 0 failed, 3 ignored, both times) did **not** reproduce it.
-**A deliberate reproduction attempt on 2026-08-16 failed to provoke it**: six
-runs of `cargo test core::iso` in isolation and three of the full parallel
-suite, all clean — nine consecutive green runs on the machine that produced
-all three sightings, on the merged tree. So it is real (three independent
-agents saw it, one of them twice in a single run) and it is rare enough that
-nine runs do not catch it, which is the worst frequency for diagnosis and the
-reason this entry records the negative result rather than quietly dropping it.
-
-What is now known, so the next attempt does not start over: it is not a
-scratch-path collision, it is not reproducible in isolation, it needs the
-full suite's parallelism, and it survived the merge to `main`. What would
-actually settle it is the failure output, which nobody has captured — every
-sighting was reported second-hand as "2 failed, both `core::iso`". **The next
-person to see it should save the panic message before re-running.** Until then
-this stays open and undiagnosed; re-running until green is exactly what this
-project's standing rule forbids.
-
 **ART-110** 🔵 **A partial layout apply cannot be resumed, and the screen stays
 busy** — *found 2026-08-15, the whole-branch review of SD-2 G11*
 `src-tauri/src/core/layout/apply.rs` · `src/pages/ContentLayout.tsx` · Any
@@ -1016,6 +982,90 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-173** ✅ 🟡 **`core::cbm`'s and `core::detect`'s test scratch
+directories can be shared by two threads, so one test reads another's
+fixture — measured at 4 failures in 40 runs** — *found and fixed 2026-08-20 on
+`debt-wave-a`, while verifying ART-115*
+`src-tauri/src/core/cbm/d64.rs` (`write`) · `src-tauri/src/core/cbm/t64.rs`
+(`write`) · `src-tauri/src/core/detect.rs` (`tmp`)
+
+This is [ART-164](#fixed) again, in three more modules, and it was found the
+way that one was: a full-suite run failed on
+`core::cbm::d64::tests::a_file_that_is_not_a_disk_image_is_refused_at_open`
+while closing ART-156, in code that run's diff did not touch.
+
+`write()` keyed its directory on process id plus a nanosecond timestamp and
+every caller then wrote to the same `disk.d64` inside it. Cargo runs these
+tests in parallel threads of one process and `SystemTime::now()` on Windows
+does not advance between two calls landing in the same clock tick, so two
+tests share one file.
+
+**Measured, not inferred: 4 failures in 40 runs of `cargo test core::cbm::`,
+across two different tests**, with the decisive one naming the mechanism
+outright —
+
+```
+---- core::cbm::d64::tests::a_disk_reports_its_name_and_id stdout ----
+called `Result::unwrap()` on an `Err` value: UnsupportedFormat("1000 bytes is
+not a Commodore disk image ART recognises. …")
+```
+
+— 1000 bytes being exactly the fixture
+`a_file_that_is_not_a_disk_image_is_refused_at_open` writes, read under
+another test's name. The other three sightings were that test failing on its
+own assertion, which is the same collision from the other side.
+
+`core/cbm/t64.rs::write` has the identical shape (`tape.t64` in a directory
+keyed the same way) and `core/detect.rs::tmp()` takes no tag at all, so pid
+plus a timestamp was the only thing keeping its twenty-odd callers apart.
+Both were fixed with the same line rather than waiting for them to be seen.
+
+**Fixed 2026-08-20** by adding an atomic counter to all three, the same shape
+`core/iso`, `core/gameindex` and `core/layout` already use. Verified the way
+the defect was found: **40 consecutive runs of `cargo test core::cbm::`, zero
+failures** (against 4 in the 40 that measured it), and 20 of
+`cargo test core::detect::`, zero failures.
+
+**What is still owed, stated rather than swept.** A scan of every test scratch
+helper in `src-tauri/` found **71 of 77** without a counter. Most take a
+per-test `tag`, which makes a collision need the same tag *and* the same tick,
+so they are far less exposed — but "less exposed" is not "safe", and the three
+fixed here are the three that key on nothing but pid and time. The systemic
+sweep is not this issue: it is 71 mechanical edits across the whole suite, and
+it wants its own pass with its own 40-run measurement per module rather than
+being smuggled into a debt wave.
+
+**ART-115** 🔵 **A `core::iso` test flake, seen three times across this
+session, never diagnosed** — *found 2026-08-15/16 (Tasks 3, 7, 8), filed at
+Task 14; closed 2026-08-20 on `debt-wave-a` as fixed by commit `7e77609`*
+`src-tauri/src/core/iso/mod.rs`
+
+`extract_tree_does_not_follow_a_directory_that_points_back_at_the_root` failed
+on one of several full-suite runs on three separate days, always in
+`core::iso`, always passing in isolation, and never in code any of those
+tasks' diffs touched. Two deliberate reproduction attempts (nine consecutive
+green runs on the machine that produced all three sightings) failed to provoke
+it, and the entry recorded that negative result rather than dropping the
+issue.
+
+**It was ART-164 all along**, filed later and diagnosed properly: `core::iso`'s
+`tmp()` keyed its scratch directory on pid plus a nanosecond timestamp, two
+parallel tests could get the same one, and *any* test in the module was
+exposed — re-measuring ART-164 found 5 failures across 40 runs and **four
+different tests**, one of them comparing an accented volume name against
+another fixture's disc. That is exactly this entry's symptom: a single named
+test was only ever the one that happened to lose the race, which is why
+quarantining it and running it in isolation both said nothing.
+
+**Closed 2026-08-20 as fixed by `7e77609`** ("fix(iso): give each test its own
+scratch directory"), which gave `tmp()` an atomic counter. Verified here with
+the same measurement that closed ART-164: **40 consecutive runs of
+`cargo test core::iso::`, zero failures**, on the branch this wave is built
+on. No separate fix was needed and none was invented.
+
+Test: the module's own 56 tests, run 40 times — the measurement *is* the
+verification for a race, and there is no single test that can assert one.
 
 **ART-156** 🟡 **`plan()`'s `total_bytes` counts a CD-sourced directory's own
 ISO9660 extent length as if it were file content, so it overstates what

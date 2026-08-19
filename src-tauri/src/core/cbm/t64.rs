@@ -273,14 +273,21 @@ mod tests {
     use super::fixture::{build, record, Record};
     use super::*;
 
+    /// A fresh scratch directory per call — see `d64.rs`'s own `write` for
+    /// what the counter is for and what it was measured costing (ART-173).
+    /// This helper has the identical shape and the identical exposure: every
+    /// caller writes to the same `tape.t64` inside whatever directory it got.
     fn write(bytes: &[u8]) -> (PathBuf, PathBuf) {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "art-t64-{}-{}",
+            "art-t64-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("tape.t64");
