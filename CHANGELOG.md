@@ -33,6 +33,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads a disc image, not a drive). All 588 files and 75 directories that
   one component plans were built from it, start to finish.
 
+#### Fixed
+- **The component list now belongs to the release you picked.** Choosing
+  "AmigaOS 3.9" planned from the 3.9 recipe but left AmigaOS 3.2's
+  26-component checklist on screen, with 3.9's own base component labelled
+  "Workbench3.2" — a floppy volume that has nothing to do with the disc
+  being installed from. Nothing was ever installed wrongly, but ART was
+  showing you one operating system's parts while building another's. The
+  list is now read from whichever release's recipe you chose. Your ticks
+  are remembered **per release**, so switching to 3.9 and back finds your
+  3.2 selection exactly as you left it.
+- **A disc whose folder names are in mixed case builds its tree in the
+  right place.** On a disc pressed with Joliet long names — where the
+  names read `OS-Version3.9` rather than `OS-VERSION3.9` — ART found the
+  files but built the system three levels deep underneath itself, without
+  saying anything was wrong. It now matches folder names the way AmigaOS
+  does, when finding them and when placing them.
+- Pointing ART at a *file* where a drawer was expected is now refused by
+  name on a disc, as it already was on a floppy image, instead of quietly
+  producing an install plan missing everything that rule was meant to copy.
+
 #### Known limitation
 - **The AmigaOS 3.9 tree built this way has not yet been booted.** AmigaOS
   3.2's tree was proven by starting it under an emulator with a licensed
