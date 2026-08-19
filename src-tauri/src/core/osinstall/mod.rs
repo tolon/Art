@@ -554,6 +554,7 @@ pub(crate) mod fixtures {
 
         let rom = rom_major.map(|major| fake_rom(&dir, major));
         let request = crate::core::osinstall::plan::InstallRequest {
+            release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom,
             chosen: chosen.iter().map(|s| s.to_string()).collect(),

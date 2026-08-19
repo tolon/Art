@@ -953,6 +953,7 @@ mod tests {
             fixtures::media(&folder, "ModulesA1200_3.2", "modules.adf", &modules_refs);
 
         let request = crate::core::osinstall::plan::InstallRequest {
+            release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: Some(fixtures::fake_rom(&dir, 40)), // pre-V47: the condition holds
             chosen: vec!["workbench-base".to_string()],
@@ -1602,6 +1603,7 @@ mod tests {
         .collect();
 
         let request = crate::core::osinstall::plan::InstallRequest {
+            release: "AmigaOS 3.2".to_string(),
             media_folder: PathBuf::from(&media),
             rom: Some(PathBuf::from(&rom)),
             chosen,
@@ -1937,6 +1939,11 @@ mod tests {
         let iso_path = PathBuf::from(&iso);
         let media_folder = iso_path.parent().unwrap().to_path_buf();
         let request = crate::core::osinstall::plan::InstallRequest {
+            // Inert here — `plan()` takes its `release` label from the
+            // `recipe` argument below, never from the request — but naming
+            // it accurately keeps this diagnostic honest about which recipe
+            // it is actually planning against.
+            release: "AmigaOS 3.9".to_string(),
             media_folder,
             rom: None,
             chosen: Vec::new(),
@@ -2067,6 +2074,9 @@ mod tests {
         }
 
         let request = crate::core::osinstall::plan::InstallRequest {
+            // Inert here — see the same note on
+            // `find_the_directory_byte_overcount_when_asked` above.
+            release: "AmigaOS 3.9".to_string(),
             media_folder,
             rom: None,
             chosen: Vec::new(),

@@ -249,6 +249,10 @@ pub struct InstallRequest {
     /// `required` cannot be excluded.
     pub excluded: Vec<String>,
     pub destination: PathBuf,
+    /// Which shipped recipe to plan from. Named by the release string, not by
+    /// an index — a numbered choice would silently mean a different operating
+    /// system the moment a recipe is added between two others.
+    pub release: String,
 }
 
 /// `entry_path`, relative to `from` rather than to the media root. `from`
@@ -811,6 +815,7 @@ mod plan_tests {
         crate::core::osinstall::fixtures::media(&folder, "Extras3.2", "extras.adf", &extras_refs);
 
         let request = InstallRequest {
+            release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
             chosen: vec!["extras".to_string()],
@@ -883,6 +888,7 @@ mod plan_tests {
         };
 
         let request = InstallRequest {
+            release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: None,
             chosen: vec!["subtree-owner".to_string(), "file-writer".to_string()],
@@ -925,6 +931,7 @@ mod plan_tests {
         };
 
         let request = InstallRequest {
+            release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: None,
             chosen: vec!["a".to_string()],
@@ -962,6 +969,7 @@ mod plan_tests {
         };
 
         let request = InstallRequest {
+            release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: None,
             chosen: vec!["a".to_string()],
@@ -1004,6 +1012,7 @@ mod plan_tests {
         };
 
         let request = InstallRequest {
+            release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: None,
             chosen: vec!["a".to_string(), "b".to_string()],
@@ -1066,6 +1075,7 @@ mod plan_tests {
         };
 
         let request = InstallRequest {
+            release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             // major 40 < 47, so `modules-b` switches on by its own
             // condition — never named in `chosen`.
@@ -1122,6 +1132,7 @@ mod plan_tests {
         };
 
         let request = InstallRequest {
+            release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: None,
             chosen: vec!["a".to_string()],
@@ -1316,6 +1327,7 @@ mod plan_tests {
         crate::core::osinstall::fixtures::required_media(&folder, &recipe, &["Workbench3.2"]);
 
         let request = InstallRequest {
+            release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 40)),
             chosen: vec!["workbench-base".to_string()],
@@ -1362,6 +1374,7 @@ mod plan_tests {
         crate::core::osinstall::fixtures::media(&folder, "Workbench3.2", "wb.adf", &wb_refs);
 
         let request = InstallRequest {
+            release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
             chosen: vec!["workbench-base".to_string(), "extras".to_string()],
@@ -1391,6 +1404,7 @@ mod plan_tests {
         crate::core::osinstall::fixtures::media(&folder, "Workbench3.2", "wb.adf", &wb_refs);
 
         let request = InstallRequest {
+            release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
             chosen: vec![],
@@ -1492,6 +1506,7 @@ mod plan_tests {
 
         let recipe = crate::core::osinstall::recipe::amigaos_32().unwrap();
         let request = InstallRequest {
+            release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: Some(bad_rom),
             chosen: vec!["workbench-base".to_string()],
@@ -1527,6 +1542,7 @@ mod plan_tests {
         crate::core::osinstall::fixtures::media(&folder, "Workbench3.2", "wb-copy-2.adf", &wb_refs);
 
         let request = InstallRequest {
+            release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
             chosen: vec!["workbench-base".to_string()],
@@ -1599,6 +1615,7 @@ mod plan_tests {
         };
 
         let request = InstallRequest {
+            release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: None,
             // Reverse of the recipe's own declaration order — see the doc

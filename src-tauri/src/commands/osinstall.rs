@@ -115,10 +115,11 @@ pub enum PlanResult {
 /// What installing the chosen components would do — or every reason it
 /// cannot. Writes nothing (§92's PREVIEW).
 ///
-/// Always the shipped AmigaOS 3.2 recipe today — `core/osinstall/mod.rs`'s
-/// own module doc names `AmigaOS 3.9 / an ISO source` as the case that would
-/// need a recipe id on the request; that recipe does not exist yet, so
-/// nothing here guesses at its shape.
+/// `request.release` names which shipped recipe to plan from
+/// (`recipe::by_release`) — refused, never defaulted, when it names a
+/// release ART ships no recipe for: a default here would mean a caller
+/// asking for one operating system and getting another written onto the
+/// user's volume.
 ///
 /// **Opens the media folder twice** — once in the guard below, once again
 /// inside `plan()`'s own call to `find_media`. Accepted rather than fixed:
@@ -140,7 +141,7 @@ pub fn osinstall_plan(request: InstallRequest) -> AppResult<PlanResult> {
             folder: request.media_folder.display().to_string(),
         });
     }
-    let recipe = recipe::amigaos_32()?;
+    let recipe = recipe::by_release(&request.release)?;
     Ok(PlanResult::Planned {
         plan: Box::new(plan(&request, &recipe)?),
     })
@@ -345,11 +346,29 @@ mod tests {
             "rom": "E:\\kick.rom",
             "chosen": ["workbench-base", "extras"],
             "excluded": ["modules-a1200"],
-            "destination": "E:\\dist"
+            "destination": "E:\\dist",
+            "release": "AmigaOS 3.2"
         }"#;
         let request: InstallRequest = serde_json::from_str(json).unwrap();
         assert_eq!(request.chosen.len(), 2);
         assert_eq!(request.excluded, vec!["modules-a1200".to_string()]);
+    }
+
+    /// The request carries the release, and an unknown one is refused before
+    /// any media is touched.
+    #[test]
+    fn a_plan_request_names_the_release_it_wants() {
+        let json = r#"{
+            "mediaFolder": "C:\\nowhere",
+            "rom": null,
+            "chosen": [],
+            "excluded": [],
+            "destination": "C:\\nowhere\\dist",
+            "release": "AmigaOS 3.9"
+        }"#;
+        let request: InstallRequest =
+            serde_json::from_str(json).expect("the wire shape must carry release");
+        assert_eq!(request.release, "AmigaOS 3.9");
     }
 
     /// The wire in the other direction: the plan `osinstall_plan` hands the
@@ -430,6 +449,7 @@ mod tests {
         let missing = dir.join("does-not-exist");
 
         let result = osinstall_plan(InstallRequest {
+            release: "AmigaOS 3.2".to_string(),
             media_folder: missing.clone(),
             rom: None,
             chosen: vec!["workbench-base".to_string()],
@@ -452,6 +472,7 @@ mod tests {
         crate::core::osinstall::fixtures::workbench(&dir);
 
         let result = osinstall_plan(InstallRequest {
+            release: "AmigaOS 3.2".to_string(),
             media_folder: dir.clone(),
             rom: None,
             chosen: vec!["workbench-base".to_string()],
