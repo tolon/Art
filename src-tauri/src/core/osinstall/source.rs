@@ -88,11 +88,49 @@ pub trait MediaSource {
     /// case-normalised, so a caller stripping a prefix off one of them must
     /// strip case-insensitively — `plan::relative_to` does, and a Joliet
     /// disc built the tree nested under itself for as long as it did not.
+    /// The rule applies **whole**: the drawer's own segments as much as the
+    /// names under them, and to [`entry`](Self::entry) as much as to this
+    /// (M1 — `AdfSource` answered with the caller's spelling for both until
+    /// the contract asked).
+    ///
+    /// **Containment is decided without regard to case, too.** What `path`
+    /// names is an AmigaDOS drawer, and a medium that can hold `Libs/x`
+    /// beside `libs/y` — an archive's flat name list, a Joliet tree — holds
+    /// one drawer as far as AmigaDOS is concerned, so `walk` yields both.
+    /// This was M2, and the two implementations that have a flat list to
+    /// filter had argued it in opposite directions in their own files. The
+    /// deciding argument is that the failure modes are not symmetrical:
+    /// over-including is loud (the extra entries are in the plan, and a real
+    /// clash raises `DestinationCollision`, which folds case itself), while
+    /// under-including is silent — a short walk is a short plan is a file
+    /// missing from the volume with nothing said about it (§89).
+    /// [`starts_with_ignoring_case`] is the one test both use.
     fn walk(&mut self, path: &str) -> CoreResult<Vec<MediaEntry>>;
     /// A file's bytes. A `path` that is missing, or that names a drawer
     /// (including `""`, every media's own root), is refused with
     /// [`CoreError::InvalidInput`] rather than answered with bytes.
     fn read(&mut self, path: &str) -> CoreResult<Vec<u8>>;
+}
+
+/// Whether `path` sits under `prefix` (which always ends in `/`), compared
+/// without regard to case.
+///
+/// **The one prefix test every `MediaSource` implementation that has a flat
+/// list of paths to filter uses** — `CdSource::walk` and
+/// `ArchiveSource::walk`, which each had their own and, until M2 of the
+/// final whole-branch review, disagreed about the answer. `AdfSource` needs
+/// none: it walks the volume's real directory tree, where containment is
+/// structural rather than textual.
+///
+/// The rule and its reason are in [`MediaSource::walk`]'s own doc comment.
+///
+/// `get`, not a slice: `prefix.len()` may land mid-character in a multi-byte
+/// path, which indexing would panic on and which cannot be a
+/// case-insensitive ASCII match anyway. The same care `plan::relative_to`
+/// takes for the same reason.
+pub(super) fn starts_with_ignoring_case(path: &str, prefix: &str) -> bool {
+    path.get(..prefix.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
 }
 
 /// [`MediaSource`] for a floppy image — any bare AmigaDOS volume
@@ -159,16 +197,39 @@ impl AdfSource {
 
     /// Walk `path` one segment at a time from the root, stopping the moment
     /// a segment is not found. `""` resolves to the root itself.
-    fn resolve(&self, path: &str) -> CoreResult<Option<u32>> {
+    ///
+    /// Answers the block **and the volume's own spelling** of the path that
+    /// reached it — every segment as `dir::find_entry` found it stored, not
+    /// as the caller asked for it.
+    ///
+    /// That second half is M1 of the final whole-branch review, and it was
+    /// the fourth `MediaSource` divergence: the trait doc has always said
+    /// "the casing of the returned paths is the media's own, not the
+    /// caller's", `CdSource` and `ArchiveSource` both did that, and this
+    /// type answered `entry("c/loadmodule")` with `path: "c/loadmodule"`
+    /// while the other two answered `"C/LoadModule"`. `walk` had the same
+    /// shape one level down — its descendants carried the media's names but
+    /// were prefixed with the caller's spelling of the drawer. Nothing in
+    /// production reads `MediaEntry::path` off an `entry()` result today,
+    /// which is exactly what made it survive; the contract now asks.
+    ///
+    /// `find_entry` already lowercases both sides to match (AmigaDOS is
+    /// case-insensitive, ART-012), so the lookup is unchanged — only what
+    /// is reported back is.
+    fn resolve(&self, path: &str) -> CoreResult<Option<(u32, String)>> {
         let set = BlockSet::new(self.geometry.block_size);
         let mut current = self.geometry.root_block;
+        let mut spelled: Vec<String> = Vec::new();
         for segment in Self::segments(path) {
             match dir::find_entry(&self.device, &set, &self.geometry, current, segment)? {
-                Some(found) => current = found.block,
+                Some(found) => {
+                    current = found.block;
+                    spelled.push(found.name);
+                }
                 None => return Ok(None),
             }
         }
-        Ok(Some(current))
+        Ok(Some((current, spelled.join("/"))))
     }
 
     /// Whether `block` is a directory header.
@@ -359,18 +420,18 @@ impl MediaSource for AdfSource {
     }
 
     fn entry(&mut self, path: &str) -> CoreResult<Option<MediaEntry>> {
-        let normalized = Self::normalized(path);
-        if normalized.is_empty() {
+        if Self::normalized(path).is_empty() {
             return Ok(Some(self.root_entry()));
         }
-        let Some(block) = self.resolve(path)? else {
+        // `spelled`, never the caller's `normalized` — see `resolve`.
+        let Some((block, spelled)) = self.resolve(path)? else {
             return Ok(None);
         };
-        Ok(Some(self.entry_at(&normalized, block)?))
+        Ok(Some(self.entry_at(&spelled, block)?))
     }
 
     fn walk(&mut self, path: &str) -> CoreResult<Vec<MediaEntry>> {
-        let Some(block) = self.resolve(path)? else {
+        let Some((block, spelled)) = self.resolve(path)? else {
             return Ok(Vec::new());
         };
         if !self.is_directory_block(block)? {
@@ -380,12 +441,16 @@ impl MediaSource for AdfSource {
         }
         let mut out = Vec::new();
         let mut visited = HashSet::new();
-        self.walk_dir(block, &Self::normalized(path), 0, &mut visited, &mut out)?;
+        // The prefix is the volume's own spelling of the drawer, so every
+        // path in the answer is the media's from end to end — the
+        // descendants' names always were (`walk_dir` reads `found.name`),
+        // and now the part in front of them is too (M1).
+        self.walk_dir(block, &spelled, 0, &mut visited, &mut out)?;
         Ok(out)
     }
 
     fn read(&mut self, path: &str) -> CoreResult<Vec<u8>> {
-        let Some(block) = self.resolve(path)? else {
+        let Some((block, _)) = self.resolve(path)? else {
             return Err(CoreError::InvalidInput(format!(
                 "'{path}' is not on this media"
             )));
@@ -719,7 +784,7 @@ mod tests {
 
         let payload_block = {
             let source = AdfSource::open(&image).unwrap();
-            source.resolve("Payload.bin").unwrap().unwrap()
+            source.resolve("Payload.bin").unwrap().unwrap().0
         };
 
         let mut raw = std::fs::read(&image).unwrap();

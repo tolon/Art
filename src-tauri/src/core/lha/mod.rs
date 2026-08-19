@@ -119,13 +119,49 @@ pub mod tests {
     /// A stored (-lh0-) level-0 archive holding the given files.
     ///
     /// Names may contain `/`, which is how an Amiga archive carries a folder —
-    /// so this builds the nested-directory fixtures too.
+    /// so this builds the nested-directory fixtures too. A name ending in `/`
+    /// becomes an explicit **directory entry** (`-lhd-`, no payload), the same
+    /// convention `sevenz::tests::make_7z_with` follows and the only way to
+    /// express a genuinely empty drawer in an archive.
     pub fn make_lha_with(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let raw: Vec<(&[u8], &[u8])> = files
+            .iter()
+            .map(|(name, content)| (name.as_bytes(), *content))
+            .collect();
+        make_lha_with_raw_names(&raw)
+    }
+
+    /// The same, over **raw name bytes**.
+    ///
+    /// An LHA entry name is bytes, not UTF-8, and Amiga archives are full of
+    /// Latin-1 ones: `BoingBag39-2-turkce.lha` spells its own drawer
+    /// `t FC r k E7 e`. A `&str` fixture cannot express that at all, which is
+    /// precisely why nothing in the suite ever did — and why ART-168 (an
+    /// entry name's high-bit bytes replaced with U+FFFD) survived every test
+    /// and was found only by a real run.
+    pub fn make_lha_with_raw_names(files: &[(&[u8], &[u8])]) -> Vec<u8> {
         let mut buf = Vec::new();
         for (name, content) in files {
-            buf.extend_from_slice(&level0_entry(name.as_bytes(), content));
+            match name.strip_suffix(b"/") {
+                Some(dir_name) => buf.extend_from_slice(&level0_dir_entry(dir_name)),
+                None => buf.extend_from_slice(&level0_entry(name, content)),
+            }
         }
         buf.push(0x00); // end of archive
+        buf
+    }
+
+    /// One level-0 **directory** header — `-lhd-`, zero sizes, no payload.
+    /// `core::lha::header_to_entry` reads exactly the method field to decide
+    /// `is_dir`, and so does `core::archive::lha`'s backend.
+    fn level0_dir_entry(name: &[u8]) -> Vec<u8> {
+        let mut buf = level0_entry(name, b"");
+        buf[2..7].copy_from_slice(b"-lhd-");
+        let header_len = buf[0] as usize;
+        let cks: u8 = buf[2..2 + header_len]
+            .iter()
+            .fold(0u8, |a, &b| a.wrapping_add(b));
+        buf[1] = cks;
         buf
     }
 

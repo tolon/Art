@@ -13,6 +13,16 @@
 //!    `AdfSource` (ART-012's rule).
 //! 3. `walk(<a file>)` — `Err` on `AdfSource`, `Ok(vec![])` on `CdSource`.
 //!
+//! A fourth and a fifth were then found the same way, by the final
+//! whole-branch review reading three files side by side, and both are now
+//! questions below rather than paragraphs in a review:
+//!
+//! 4. `entry()`'s returned casing — the caller's on `AdfSource`, the
+//!    media's on `CdSource`/`ArchiveSource`, with the trait doc naming
+//!    `entry` in the rule the whole time.
+//! 5. `walk`'s descendant prefix — exact-case on `CdSource`, folded on
+//!    `ArchiveSource`, each argued convincingly in its own file.
+//!
 //! Each was harmless the day it was found only because the one caller that
 //! reached it happened to guard against it, and each would have become a
 //! silently short or silently wrong install plan the day a second caller
@@ -32,6 +42,8 @@
 //! | `entry(<a drawer>)` | found, `is_dir`, path as asked |
 //! | `entry(<missing>)` | `Ok(None)` — absence is not an error |
 //! | `entry(<differently cased>)` | found; AmigaDOS is case-insensitive (ART-012) |
+//! | `entry(<differently cased>)`'s answer | the **media's** own casing, never the caller's |
+//! | `walk(<differently cased drawer>)` | the same entries, spelled the media's way |
 //! | `walk("")` | the whole media |
 //! | `walk(<a drawer>)` | what is under it, not the drawer itself |
 //! | `walk(<missing>)` | `Ok(vec![])` |
@@ -43,9 +55,16 @@
 //!
 //! The media are built independently — a real blank ADF written through
 //! `VolumeWriter`, a real Joliet ISO9660 image through `IsoBuilder`, and a
-//! real ZIP through the same writer `core::archive::zip`'s own tests use —
-//! so agreement here is agreement about behaviour, not a shared fixture
-//! agreeing with itself.
+//! real ZIP, a real LHA and a real 7z through the same writers each
+//! format's own tests use — so agreement here is agreement about
+//! behaviour, not a shared fixture agreeing with itself.
+//!
+//! **Three archive formats, not one (M4).** `ArchiveSource` is one
+//! implementation of the trait over three quite different readers, and
+//! every archive fixture on this branch was a ZIP while two of the three
+//! shipped recipes name a `.lha`. That is how ART-168 — `core::lha`
+//! replacing an entry name's high-bit bytes with U+FFFD — passed the whole
+//! suite and was found by a real run instead.
 //!
 //! Adding a further `MediaSource` means adding one line to [`sources`]. That
 //! is deliberately the cheapest thing in this file to do — `ArchiveSource`
@@ -130,31 +149,83 @@ fn disc(tag: &str) -> Box<dyn MediaSource> {
     Box::new(CdSource::open(&path).unwrap())
 }
 
+/// The shared tree as a package archive's entry list — one file under a
+/// single top-level directory, plus an explicitly declared empty drawer.
+///
+/// A trailing-slash name is how every one of the three formats marks a
+/// directory, and it is the archive equivalent of the empty drawer
+/// `floppy`/`disc` each make with their own writer.
+const ARCHIVE_ENTRIES: &[(&str, &[u8])] = &[
+    ("Workbench3.2/C/LoadModule", FILE_BYTES),
+    ("Workbench3.2/Empty/", b""),
+];
+
+/// One `ArchiveSource` over `bytes`, written to a scratch file named
+/// `file_name`. `core::archive::open` decides the format from the file's own
+/// bytes, so the extension here is documentation rather than dispatch.
+fn archive_source(tag: &str, file_name: &str, bytes: Vec<u8>) -> Box<dyn MediaSource> {
+    let scratch = super::fixtures::scratch(&format!("contract-{tag}"));
+    let path = scratch.join(file_name);
+    std::fs::write(&path, bytes).unwrap();
+    Box::new(ArchiveSource::open(&path).unwrap())
+}
+
 /// A ZIP package archive carrying the shared tree under a single top-level
 /// directory — the volume name an `ArchiveSource` states about itself, and
-/// the shape a real BoingBag or catalog pack has.
-fn archive(tag: &str) -> Box<dyn MediaSource> {
-    let scratch = super::fixtures::scratch(&format!("contract-archive-{tag}"));
-    let bytes = crate::core::archive::zip::tests::make_zip_with(&[
-        ("Workbench3.2/C/LoadModule", FILE_BYTES),
-        // A trailing-slash name is how a ZIP marks a directory (`is_dir()`
-        // reads the name itself) — the archive equivalent of the empty
-        // drawer `floppy`/`disc` each make with their own writer.
-        ("Workbench3.2/Empty/", b""),
-    ]);
-    let path = scratch.join("package.zip");
-    std::fs::write(&path, bytes).unwrap();
+/// the shape a real catalog pack has.
+fn zip_archive(tag: &str) -> Box<dyn MediaSource> {
+    archive_source(
+        &format!("archive-zip-{tag}"),
+        "package.zip",
+        crate::core::archive::zip::tests::make_zip_with(ARCHIVE_ENTRIES),
+    )
+}
 
-    Box::new(ArchiveSource::open(&path).unwrap())
+/// The same tree as an **LHA**.
+///
+/// `ArchiveSource` is one type over three formats, and until this every
+/// fixture in the branch — the contract's, `source_archive.rs`'s, `scan.rs`'s,
+/// `apply.rs`'s and the command layer's — was a ZIP, while **two of the three
+/// shipped recipes name a `.lha`**. That is not a gap in coverage of an
+/// unused path: it is the mechanism by which ART-168 (`core::lha::entry_path`
+/// replacing an entry name's high-bit bytes with U+FFFD) survived the whole
+/// suite and was found only by a real run against the owner's own
+/// `BoingBag39-2-turkce.lha`. A fixture whose *format* is more helpful than
+/// reality hides exactly as much as one whose contents are.
+fn lha_archive(tag: &str) -> Box<dyn MediaSource> {
+    archive_source(
+        &format!("archive-lha-{tag}"),
+        "package.lha",
+        crate::core::lha::tests::make_lha_with(ARCHIVE_ENTRIES),
+    )
+}
+
+/// The same tree as a **7z** — the third format `core::archive::open`
+/// dispatches to, and the third `ArchiveSource` claims in its own module doc
+/// ("LHA, ZIP or 7z"). Reachable the same way the other two are, so it is
+/// asked the same questions rather than left as a claim.
+fn sevenz_archive(tag: &str) -> Box<dyn MediaSource> {
+    archive_source(
+        &format!("archive-7z-{tag}"),
+        "package.7z",
+        crate::core::archive::sevenz::tests::make_7z_with(ARCHIVE_ENTRIES),
+    )
 }
 
 /// Every implementation, named. **Add a line here when adding a
 /// `MediaSource`** — every test below runs over all of them.
+///
+/// `ArchiveSource` appears three times, once per archive format: it is one
+/// implementation of the trait, but three different readers underneath it,
+/// and the contract's whole premise is that a caller written against the
+/// trait cannot tell its backings apart.
 fn sources(tag: &str) -> Vec<(&'static str, Box<dyn MediaSource>)> {
     vec![
         ("AdfSource", floppy(tag)),
         ("CdSource", disc(tag)),
-        ("ArchiveSource", archive(tag)),
+        ("ArchiveSource/zip", zip_archive(tag)),
+        ("ArchiveSource/lha", lha_archive(tag)),
+        ("ArchiveSource/7z", sevenz_archive(tag)),
     ]
 }
 
@@ -219,6 +290,69 @@ fn every_source_resolves_a_path_case_insensitively() {
                 .is_some(),
             "{name}: a differently-cased path must still resolve"
         );
+    }
+}
+
+/// **The fourth divergence (M1), and the first this file catches rather
+/// than a reviewer.** The trait doc names `entry` in its casing rule — "the
+/// casing of the returned paths is the media's own, not the caller's" —
+/// and `AdfSource` returned the *caller's* while `CdSource` and
+/// `ArchiveSource` returned the media's. `entry("c/loadmodule")` answered
+/// `path: "c/loadmodule"` on a floppy and `path: "C/LoadModule"` on a disc
+/// or an archive.
+///
+/// It was latent only because no production caller reads
+/// `MediaEntry::path` off an `entry()` result today (`plan::expand_rules`
+/// takes `is_dir` and `size`; `apply` takes `is_dir` and the sidecar
+/// fields) — which is exactly what the first three divergences had going
+/// for them too, right up until a second caller arrived.
+///
+/// The contract asserts the media's own spelling, not merely "some
+/// spelling": a path a caller can hand straight back to `read` on a medium
+/// that distinguishes case is the whole reason the rule was written that
+/// way, and `is_some()` — all this test used to check — passes for either
+/// answer.
+#[test]
+fn every_source_answers_with_the_medias_own_casing_never_the_callers() {
+    for (name, mut source) in sources("case-answer") {
+        let entry = source
+            .entry("c/loadmodule")
+            .unwrap_or_else(|e| panic!("{name}: {e}"))
+            .unwrap_or_else(|| panic!("{name}: a differently-cased path must still resolve"));
+        assert_eq!(entry.path, FILE_PATH, "{name}: the media's own casing");
+
+        let drawer = source
+            .entry("c")
+            .unwrap_or_else(|e| panic!("{name}: {e}"))
+            .unwrap_or_else(|| panic!("{name}: a differently-cased drawer must still resolve"));
+        assert_eq!(drawer.path, DIR_PATH, "{name}: the media's own casing");
+    }
+}
+
+/// **The fifth (M2).** Asking for a drawer in the wrong case must not
+/// change *what* the walk contains or *how* its entries are spelled — the
+/// prefix a `walk` filters by is the medium's own, so the answer is
+/// identical to asking in the medium's own case.
+///
+/// This is the half of M2 every implementation can be asked. The other half
+/// — a medium genuinely holding `Libs/x` beside `libs/y`, where the folded
+/// prefix is what makes `walk` yield both — cannot be asked here, because a
+/// real AmigaDOS volume cannot express it: `VolumeWriter` refuses the
+/// second name (`dir::ensure_available`, case-insensitive, "AmigaDOS would
+/// treat `Readme` and `README` as the same entry"). So it is pinned in the
+/// two implementations that *can* express it, in their own files —
+/// `source_cd.rs`'s `two_drawers_differing_only_in_case_are_one_drawer_to_amigados`
+/// and `source_archive.rs`'s
+/// `a_drawer_spelled_two_ways_walks_as_one_drawer`. Not a gap in the contract:
+/// a question whose answer is undefined for one implementation does not
+/// belong in a file whose whole premise is that every implementation
+/// answers every question.
+#[test]
+fn every_source_walks_a_drawer_the_same_whatever_case_it_is_asked_in() {
+    for (name, mut source) in sources("case-walk") {
+        let asked = source.walk("c").unwrap_or_else(|e| panic!("{name}: {e}"));
+        let paths: Vec<&str> = asked.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, vec![FILE_PATH], "{name}");
     }
 }
 

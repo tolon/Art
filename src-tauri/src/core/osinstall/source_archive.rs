@@ -123,7 +123,7 @@ use crate::core::error::{CoreError, CoreResult};
 use crate::core::security::safe_join;
 use crate::core::volume::write::file::default_protection;
 
-use super::source::{MediaEntry, MediaSource};
+use super::source::{starts_with_ignoring_case, MediaEntry, MediaSource};
 
 /// [`MediaSource`] for a package archive — the third implementation the
 /// engine above (`core::osinstall::plan`, `::apply`) is written against by
@@ -568,19 +568,6 @@ impl ArchiveSource {
         }
     }
 
-    /// Whether `path` sits under `prefix` (which always ends in `/`),
-    /// compared without regard to case — the containment counterpart of
-    /// [`find_by_path`](Self::find_by_path)'s case-insensitive lookup.
-    ///
-    /// `get`, not a slice: `prefix.len()` may land mid-character in a
-    /// multi-byte path, which indexing would panic on and which cannot be a
-    /// case-insensitive ASCII match anyway. The same care `plan::relative_to`
-    /// takes for the same reason.
-    fn starts_with_ignoring_case(path: &str, prefix: &str) -> bool {
-        path.get(..prefix.len())
-            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
-    }
-
     /// Resolve `normalized` against `entries` — an exact match first, falling
     /// back to a case-insensitive one, matching `CdSource::find_by_path`
     /// (AmigaDOS is case-insensitive, ART-012, and a package's rules are
@@ -644,7 +631,7 @@ impl MediaSource for ArchiveSource {
         Ok(self
             .entries
             .iter()
-            .filter(|(relative, ..)| Self::starts_with_ignoring_case(relative, &prefix))
+            .filter(|(relative, ..)| starts_with_ignoring_case(relative, &prefix))
             .map(|(relative, _, entry)| Self::to_media_entry(relative, entry))
             .collect())
     }
@@ -1176,5 +1163,132 @@ mod tests {
             return;
         };
         assert_eq!(src.refused_names(), &["BB/../../outside".to_string()]);
+    }
+
+    // ---- M4: the other two formats ----------------------------------------
+    //
+    // Every fixture above this line is a ZIP, and **two of the three shipped
+    // recipes name a `.lha`** (`boingbag-39-1.json`, `locale-turkish.json`).
+    // `ArchiveSource` is one type over three readers, and its own module doc
+    // says so; until the final whole-branch review nothing in the branch ever
+    // opened either of the other two through it.
+    //
+    // That is not a theoretical gap. It is the mechanism by which ART-168 —
+    // `core::lha::entry_path` replacing an entry name's high-bit bytes with
+    // U+FFFD — passed 1875 tests and was found only by a real run against the
+    // owner's own `BoingBag39-2-turkce.lha`. A fixture whose *format* is more
+    // helpful than reality hides exactly as much as one whose contents are.
+
+    /// Build an LHA in a tempdir, the counterpart of [`package_zip`].
+    fn package_lha(dir: &std::path::Path, name: &str, files: &[(&str, &[u8])]) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, crate::core::lha::tests::make_lha_with(files)).unwrap();
+        path
+    }
+
+    /// The same, over raw name bytes — an LHA name is bytes, not UTF-8.
+    fn package_lha_raw(dir: &std::path::Path, name: &str, files: &[(&[u8], &[u8])]) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(
+            &path,
+            crate::core::lha::tests::make_lha_with_raw_names(files),
+        )
+        .unwrap();
+        path
+    }
+
+    /// Build a 7z in a tempdir.
+    fn package_7z(dir: &std::path::Path, name: &str, files: &[(&str, &[u8])]) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(
+            &path,
+            crate::core::archive::sevenz::tests::make_7z_with(files),
+        )
+        .unwrap();
+        path
+    }
+
+    /// The shape a real BoingBag has, read out of an **LHA** rather than a
+    /// ZIP: identity from the single top-level directory, paths relative to
+    /// it, synthesised drawers, bytes.
+    #[test]
+    fn an_lha_answers_everything_a_zip_does() {
+        let dir = scratch("archive-lha");
+        let p = package_lha(
+            &dir,
+            "BoingBag39-1.lha",
+            &[
+                ("BoingBag3.9-1.info", b"icon"),
+                ("BoingBag3.9-1/C/Assign", b"assign"),
+                ("BoingBag3.9-1/Libs/x.library", b"lib"),
+            ],
+        );
+        let mut src = ArchiveSource::open(&p).unwrap();
+        assert_eq!(src.volume_name(), "BoingBag3.9-1");
+        // `C` is declared by nothing in this archive — synthesised from the
+        // path under it, exactly as it is for the real payload.
+        assert!(src.entry("C").unwrap().unwrap().is_dir);
+        assert_eq!(src.read("C/Assign").unwrap(), b"assign");
+        assert!(src.entry("BoingBag3.9-1/C/Assign").unwrap().is_none());
+    }
+
+    /// The same for **7z**, the third format `core::archive::open`
+    /// dispatches to and the third `ArchiveSource`'s own module doc claims.
+    #[test]
+    fn a_7z_answers_everything_a_zip_does() {
+        let dir = scratch("archive-7z");
+        let p = package_7z(
+            &dir,
+            "pack.7z",
+            &[("BB/C/Assign", b"assign"), ("BB/Libs/x.library", b"lib")],
+        );
+        let mut src = ArchiveSource::open(&p).unwrap();
+        assert_eq!(src.volume_name(), "BB");
+        assert!(src.entry("Libs").unwrap().unwrap().is_dir);
+        assert_eq!(src.read("C/Assign").unwrap(), b"assign");
+    }
+
+    /// **ART-168, pinned by a test rather than by a real run.**
+    ///
+    /// `BoingBag39-2-turkce.lha` carries its payload at
+    /// `LocaleUpdate/locale/catalogs/türkçe/…`, whose drawer name is the
+    /// Latin-1 bytes `74 FC 72 6B E7 65`. `core::lha::entry_path` reads a
+    /// level-0/1 name with `String::from_utf8_lossy`, so every high-bit byte
+    /// becomes U+FFFD and the drawer ART writes is `t<U+FFFD>rk<U+FFFD>e` —
+    /// a name AmigaDOS cannot see at all. The booted system listed 20
+    /// drawers where the host held 21.
+    ///
+    /// **This test asserts the wrong answer on purpose**, because ART-168 is
+    /// deliberately open: the same function feeds every LHA path in ART,
+    /// WHDLoad extraction included, and its own doc comment warns that
+    /// changing level 0/1 decoding "would rename files that extract
+    /// correctly today". That is a change with its own task, its own oracle
+    /// run and its own tests. What this pins is the *shape* — that a
+    /// high-bit name reaches `ArchiveSource` mangled rather than decoded —
+    /// so the fix, when it lands, has to come here and rewrite this
+    /// assertion rather than quietly leave the LHA reader untested again.
+    #[test]
+    fn art_168_an_lha_name_s_latin_1_bytes_arrive_mangled_not_decoded() {
+        let dir = scratch("archive-lha-latin1");
+        // `LocaleUpdate/locale/catalogs/türkçe/sys.catalog`, Latin-1.
+        let mut name: Vec<u8> = b"LocaleUpdate/locale/catalogs/".to_vec();
+        name.extend_from_slice(&[0x74, 0xFC, 0x72, 0x6B, 0xE7, 0x65]); // türkçe
+        name.extend_from_slice(b"/sys.catalog");
+        let p = package_lha_raw(&dir, "turkce.lha", &[(&name, b"catalog")]);
+
+        let mut src = ArchiveSource::open(&p).unwrap();
+        let paths: Vec<String> = src.walk("").unwrap().into_iter().map(|e| e.path).collect();
+
+        assert!(
+            paths
+                .iter()
+                .any(|p| p == "locale/catalogs/t\u{FFFD}rk\u{FFFD}e"),
+            "ART-168's measured shape, not the correct one: {paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|p| p.contains("türkçe")),
+            "if this fires, ART-168 is fixed — rewrite this test to assert the \
+             decoded name and close the issue: {paths:?}"
+        );
     }
 }

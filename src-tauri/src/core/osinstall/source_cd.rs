@@ -47,7 +47,7 @@ use crate::core::iso::{IsoImage, IsoWalkEntry, MAX_WALK_DEPTH, MAX_WALK_ENTRIES}
 use crate::core::volume::write::file::default_protection;
 use crate::core::volume::write::layout::amiga_from_unix;
 
-use super::source::{MediaEntry, MediaSource};
+use super::source::{starts_with_ignoring_case, MediaEntry, MediaSource};
 
 /// [`MediaSource`] for an ISO9660 disc — a CD or DVD image, Joliet-aware
 /// through [`IsoImage`] itself.
@@ -225,13 +225,9 @@ impl MediaSource for CdSource {
                 "'{path}' is a file on this media, not a drawer"
             )));
         }
-        // The prefix has to be built from the entry's *own* casing, not
-        // necessarily `path`'s: `find_by_path` may have matched `path`
-        // case-insensitively, and a `starts_with` prefix test is exact-case
-        // itself, so building it from `normalized` would silently drop
-        // every descendant again the moment `path` and the disc disagree on
-        // case. What consumes these paths — `plan::relative_to` — strips
-        // the rule's `from` case-insensitively for the same reason.
+        // The prefix is built from the entry's *own* casing, so every path
+        // in the answer is the disc's from end to end (the trait's casing
+        // rule; `AdfSource` and `ArchiveSource` do the same).
         let base = found.path.clone();
         // Strict descendants only, matching `AdfSource::walk`: the
         // directory named by `path` is never included in its own listing,
@@ -239,10 +235,32 @@ impl MediaSource for CdSource {
         // exact shape ("`walk` yields only what is *inside* `from`, never
         // `from` itself").
         let prefix = format!("{base}/");
+        // Case-**insensitively**, matching `find_by_path`'s own resolution
+        // and `ArchiveSource::walk`'s prefix test.
+        //
+        // **M2 of the final whole-branch review, and a reversal of what
+        // stood here.** The exact-case filter had a real argument behind
+        // it: ISO9660 puts no case-folding rule on Joliet names, so a disc
+        // can legitimately hold `Locale` and `locale` at one level, and an
+        // exact prefix walks precisely the subtree that was resolved.
+        // `ArchiveSource` argued the opposite way, in its own file, just as
+        // convincingly. Two implementations of one trait answering one
+        // question two ways is the condition `source_contract.rs` exists to
+        // make impossible, so it is settled rather than left balanced.
+        //
+        // Folded wins for two reasons. A rule's `from` names an **AmigaDOS**
+        // drawer, and the drawer AmigaDOS would see if this disc were copied
+        // is the union of both spellings — not whichever one `find_by_path`
+        // happened to land on. And the two failure modes are not
+        // symmetrical: over-including is loud (the extra files appear in the
+        // plan, and a genuine clash between them raises
+        // `DestinationCollision`, which folds case itself), while
+        // under-including is silent — a short walk, a short plan, a file
+        // missing from the volume with nothing said about it (§89).
         Ok(self
             .entries
             .iter()
-            .filter(|e| e.path.starts_with(&prefix))
+            .filter(|e| starts_with_ignoring_case(&e.path, &prefix))
             .map(Self::to_media_entry)
             .collect())
     }
@@ -558,6 +576,62 @@ mod tests {
         let entry = source.entry("Same").unwrap().unwrap();
         assert_eq!(entry.path, "Same", "the exactly-cased entry, not \"SAME\"");
         assert_eq!(source.read("Same").unwrap(), b"exact-bytes");
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// **M2, the half `source_contract.rs` cannot ask.** A Joliet disc may
+    /// legitimately hold `Locale` and `locale` side by side; a real
+    /// AmigaDOS volume cannot (`dir::ensure_available` refuses the second
+    /// name), so this question is only answerable by the two media that can
+    /// express it, and it is pinned here and in
+    /// `source_archive.rs::a_drawer_spelled_two_ways_walks_as_one_drawer`.
+    ///
+    /// A rule's `from` names an **AmigaDOS** drawer, and the drawer
+    /// AmigaDOS would see if this disc were copied is both of them. `walk`
+    /// used to filter descendants with an exact-case `starts_with` built
+    /// from whichever spelling `find_by_path` resolved, so half the drawer
+    /// silently disappeared from the plan — while `ArchiveSource`, asked
+    /// the identical question, answered with the union.
+    ///
+    /// Note what does *not* change: `entry` and `read` still reach each
+    /// spelling exactly (the test above), because resolution is
+    /// exact-match-first. Only containment is folded.
+    #[test]
+    fn two_drawers_differing_only_in_case_are_one_drawer_to_amigados() {
+        let folder =
+            std::env::temp_dir().join(format!("art-cdsource-fold-walk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        let bytes = IsoBuilder {
+            volume: "AMIGAOS39".to_string(),
+            joliet_volume: "AmigaOS3.9".to_string(),
+            joliet: true,
+            children: vec![
+                dir("LOCALE1", "Locale", vec![file("ONE.;1", "One", b"one")]),
+                dir("LOCALE2", "locale", vec![file("TWO.;1", "Two", b"two")]),
+            ],
+            ..Default::default()
+        }
+        .build();
+        let path = folder.join("os39.iso");
+        std::fs::write(&path, bytes).unwrap();
+
+        let mut source = CdSource::open(&path).unwrap();
+        for asked in ["Locale", "locale", "LOCALE"] {
+            let mut walked: Vec<String> = source
+                .walk(asked)
+                .unwrap()
+                .into_iter()
+                .map(|e| e.path)
+                .collect();
+            walked.sort();
+            assert_eq!(
+                walked,
+                vec!["Locale/One".to_string(), "locale/Two".to_string()],
+                "walk({asked:?}) must list the whole drawer AmigaDOS would see"
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&folder);
     }
