@@ -205,17 +205,34 @@ impl MediaSource for CdSource {
             // directory). So the whole disc is exactly every entry there is.
             return Ok(self.entries.iter().map(Self::to_media_entry).collect());
         }
+        // Nothing on the disc by that name: an empty `Vec`, not an error —
+        // the trait's own contract, and the same answer `AdfSource::walk`
+        // gives for a path it cannot resolve.
+        let Some(found) = Self::find_by_path(&self.entries, &normalized) else {
+            return Ok(Vec::new());
+        };
+        // A path naming a *file* is refused, word for word as
+        // `AdfSource::walk` refuses it. Without this the walk answered
+        // `Ok(vec![])` — indistinguishable from an empty drawer, and from a
+        // missing path — so a `Subtree` rule aimed at a file by mistake
+        // would produce a silently short plan on a disc where the identical
+        // mistake raises on a floppy. Two implementations of one trait must
+        // answer one question one way (this is the third such divergence
+        // found on this branch; see `source_contract.rs`, which now asks
+        // both of them the same questions).
+        if !found.entry.is_dir {
+            return Err(CoreError::InvalidInput(format!(
+                "'{path}' is a file on this media, not a drawer"
+            )));
+        }
         // The prefix has to be built from the entry's *own* casing, not
         // necessarily `path`'s: `find_by_path` may have matched `path`
         // case-insensitively, and a `starts_with` prefix test is exact-case
         // itself, so building it from `normalized` would silently drop
         // every descendant again the moment `path` and the disc disagree on
-        // case. When nothing matches at all, fall back to `normalized`
-        // unchanged — the same "path not on this media" answer as before,
-        // an empty `Vec`, not an error (see the trait doc comment).
-        let base = Self::find_by_path(&self.entries, &normalized)
-            .map(|e| e.path.clone())
-            .unwrap_or(normalized);
+        // case. What consumes these paths — `plan::relative_to` — strips
+        // the rule's `from` case-insensitively for the same reason.
+        let base = found.path.clone();
         // Strict descendants only, matching `AdfSource::walk`: the
         // directory named by `path` is never included in its own listing,
         // only what is inside it — `core::osinstall::plan` relies on this
@@ -232,6 +249,16 @@ impl MediaSource for CdSource {
 
     fn read(&mut self, path: &str) -> CoreResult<Vec<u8>> {
         let normalized = Self::normalized(path);
+        // `""` names the disc's own root, which is never one of
+        // `self.entries` — so without this it fell through to "is not on
+        // this media", while `AdfSource::read("")` resolves to the root
+        // block and answers "is a drawer … not a file". Same question, same
+        // answer: the root of any media is a drawer, and it is *present*.
+        if normalized.is_empty() {
+            return Err(CoreError::InvalidInput(format!(
+                "'{path}' is a drawer on this media, not a file"
+            )));
+        }
         let found = Self::find_by_path(&self.entries, &normalized)
             .ok_or_else(|| CoreError::InvalidInput(format!("'{path}' is not on this media")))?;
         if found.entry.is_dir {
@@ -410,6 +437,46 @@ mod tests {
 
         let err = source.read("OS-Version3.9/Workbench3.5/C").unwrap_err();
         assert!(err.to_string().contains("not a file"), "{err}");
+    }
+
+    // ---- whole-branch review: findings 2 and 5 ----
+
+    /// The third divergence. `AdfSource::walk` refuses a file by name;
+    /// `CdSource::walk` used to answer `Ok(vec![])` — indistinguishable from
+    /// an empty drawer and from a missing path, so a `Subtree` rule aimed at
+    /// a file by mistake would produce a silently short plan on a disc where
+    /// the identical mistake raises on a floppy. See `source_contract.rs`,
+    /// which now asks both implementations this and seven other questions.
+    #[test]
+    fn walk_refuses_a_path_that_names_a_file() {
+        let path = disc("walk-a-file");
+        let mut source = CdSource::open(&path).unwrap();
+
+        let err = source
+            .walk("OS-Version3.9/Workbench3.5/C/List")
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("is a file on this media, not a drawer"),
+            "{err}"
+        );
+    }
+
+    /// `read("")` names the media's own root, which is a drawer and is
+    /// *present* — the answer `AdfSource::read("")` gives. `CdSource` used
+    /// to say "is not on this media", which is a different fact about the
+    /// same call.
+    #[test]
+    fn read_of_the_root_says_it_is_a_drawer_not_that_it_is_absent() {
+        let path = disc("read-root");
+        let mut source = CdSource::open(&path).unwrap();
+
+        let err = source.read("").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("is a drawer on this media, not a file"),
+            "{err}"
+        );
     }
 
     // ---- Task 5 fix round 1: review item 1 (case-insensitive resolution) ----

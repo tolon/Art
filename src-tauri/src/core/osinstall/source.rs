@@ -71,8 +71,19 @@ pub trait MediaSource {
     /// answer a real, empty drawer would give. `walk` does not distinguish
     /// "missing" from "empty"; a caller that needs to tell them apart calls
     /// `entry` first.
+    ///
+    /// A `path` that names a **file**, though, is a different thing
+    /// entirely and is refused with [`CoreError::InvalidInput`]: the caller
+    /// asked for the contents of something that has no contents, and
+    /// answering `Ok(vec![])` would make that mistake indistinguishable
+    /// from an empty drawer and from a missing path — a silently short
+    /// plan instead of a refusal (§89). This was left unstated once and two
+    /// implementations promptly disagreed about it; `source_contract.rs`
+    /// now asks every implementation the same questions.
     fn walk(&mut self, path: &str) -> CoreResult<Vec<MediaEntry>>;
-    /// A file's bytes.
+    /// A file's bytes. A `path` that is missing, or that names a drawer
+    /// (including `""`, every media's own root), is refused with
+    /// [`CoreError::InvalidInput`] rather than answered with bytes.
     fn read(&mut self, path: &str) -> CoreResult<Vec<u8>>;
 }
 

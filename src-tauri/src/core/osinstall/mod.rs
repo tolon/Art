@@ -48,6 +48,12 @@ pub mod recipe;
 pub mod scan;
 pub mod source;
 pub mod source_cd;
+/// One set of questions asked of **every** [`source::MediaSource`]
+/// implementation — tests only. Three divergences between `AdfSource` and
+/// `CdSource` were found one at a time by reading the two files side by
+/// side; this is where the fourth fails a test instead.
+#[cfg(test)]
+mod source_contract;
 pub mod startup;
 pub mod verify;
 

@@ -259,13 +259,37 @@ pub struct InstallRequest {
 /// itself maps to `""`, matching what a [`RuleKind::Subtree`] rule's own
 /// root entry resolves to — so a rule's own directory lands at `to` and
 /// everything under it lands at `to/…`.
+///
+/// **The strip is case-insensitive, because resolution is.** A
+/// `MediaSource` resolves a recipe's `from` against the media
+/// case-insensitively (AmigaDOS is, ART-012) but answers with paths in the
+/// *media's* own casing: `CdSource::walk("STORAGE")` on a Joliet-pressed
+/// disc yields `Storage/Aux`. A plain `strip_prefix` then fails to match
+/// its own rule's `from`, and the `None` arm below hands the whole
+/// media-rooted path to `destination_for` — so `to: "C"` over a walk of
+/// `OS-VERSION3.9/WORKBENCH3.5/C` builds
+/// `C/OS-Version3.9/Workbench3.5/C/List`: the system tree nested three
+/// levels under itself, silently, with no refusal. Resolving one way and
+/// stripping another is what made that possible; both are ASCII
+/// case-insensitive now, matching `CdSource::find_by_path`.
+///
+/// The `None` arm is kept for a prefix that genuinely does not match — it
+/// cannot be reached from a `walk` result, whose every path starts with the
+/// resolved `from` by construction, and a caller passing something else is
+/// better served by an unchanged path than by a panic.
 fn relative_to(entry_path: &str, from: &str) -> String {
     if from.is_empty() {
         return entry_path.to_string();
     }
-    match entry_path.strip_prefix(from) {
-        Some(rest) => rest.strip_prefix('/').unwrap_or(rest).to_string(),
-        None => entry_path.to_string(),
+    // `get`, not a slice: `from.len()` may land mid-character in a
+    // multi-byte path, which indexing would panic on and which cannot be a
+    // case-insensitive match anyway.
+    match entry_path.get(..from.len()) {
+        Some(head) if head.eq_ignore_ascii_case(from) => {
+            let rest = &entry_path[from.len()..];
+            rest.strip_prefix('/').unwrap_or(rest).to_string()
+        }
+        _ => entry_path.to_string(),
     }
 }
 
@@ -541,10 +565,11 @@ pub fn plan(request: &InstallRequest, recipe: &Recipe) -> CoreResult<InstallPlan
                 }
                 RuleKind::Subtree if !entry.is_dir => {
                     // A `Subtree` rule resolving to a file: `source.walk`
-                    // would refuse this itself (it only walks a directory
-                    // block), but the wrong-shape rule deserves a typed
-                    // refusal naming it, not the `CoreError` `walk` would
-                    // raise on the way there.
+                    // refuses this itself — the trait says so and both
+                    // implementations now do it — but the wrong-shape rule
+                    // deserves a typed refusal naming the component and the
+                    // rule, not the bare `CoreError` `walk` would raise on
+                    // the way there.
                     refusals.push(RefusalReason::RuleKindMismatch {
                         component: component.id.clone(),
                         from: rule.from.clone(),
@@ -1150,6 +1175,81 @@ mod plan_tests {
                 .any(|item| item.to == "readme.txt" && !item.is_dir && item.bytes > 0),
             "{:?}",
             plan.items
+        );
+    }
+
+    /// The Joliet case. A disc pressed with Joliet carries its names in
+    /// their natural mixed case (`OS-Version3.9`), the shipped recipe spells
+    /// its `from` in the uppercase the Primary tree uses, and resolution
+    /// bridges the two case-insensitively — so `walk` answers in the
+    /// **disc's** casing. `relative_to` used to strip `from` case-sensitively
+    /// against that, fail, and fall through to the media-rooted path, so
+    /// `to: "C"` landed the whole subtree at `C/OS-Version3.9/Workbench3.5/C/…`
+    /// — nested under itself, with no refusal. The exact-case disc plan test
+    /// above cannot see this; only a fixture whose casing differs from the
+    /// rule's can.
+    #[test]
+    fn a_subtree_from_a_disc_cased_unlike_the_recipe_lands_at_to_not_under_itself() {
+        use crate::core::iso::fixture::{dir, file, IsoBuilder};
+
+        let scratch = crate::core::osinstall::fixtures::scratch("plan-disc-case");
+        let folder = scratch.join("media");
+        std::fs::create_dir(&folder).unwrap();
+
+        // Joliet names in mixed case; the recipe below asks in uppercase.
+        let bytes = IsoBuilder {
+            volume: "AmigaOS3.9".to_string(),
+            joliet_volume: "AmigaOS3.9".to_string(),
+            joliet: true,
+            children: vec![dir(
+                "OS-VERSION3.9",
+                "OS-Version3.9",
+                vec![dir(
+                    "WORKBENCH3.5",
+                    "Workbench3.5",
+                    vec![dir("C", "C", vec![file("LIST.;1", "List", b"list-bytes")])],
+                )],
+            )],
+            ..Default::default()
+        }
+        .build();
+        std::fs::write(folder.join("os39.iso"), bytes).unwrap();
+
+        let recipe = Recipe {
+            release: "Test".to_string(),
+            components: vec![Component {
+                id: "a".to_string(),
+                media: "AmigaOS3.9".to_string(),
+                rules: vec![PathRule {
+                    from: "OS-VERSION3.9/WORKBENCH3.5/C".to_string(),
+                    to: "C".to_string(),
+                    kind: RuleKind::Subtree,
+                }],
+                required: false,
+                condition: None,
+                overrides: vec![],
+                user_startup: vec![],
+                exclusive_group: None,
+                available: true,
+            }],
+        };
+
+        let request = InstallRequest {
+            release: "AmigaOS 3.2".to_string(),
+            media_folder: folder,
+            rom: None,
+            chosen: vec!["a".to_string()],
+            destination: scratch.join("dist"),
+            excluded: Vec::new(),
+        };
+        let plan = plan(&request, &recipe).unwrap();
+
+        assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
+        let destinations: Vec<&str> = plan.items.iter().map(|i| i.to.as_str()).collect();
+        assert!(destinations.contains(&"C/List"), "{destinations:?}");
+        assert!(
+            !destinations.iter().any(|d| d.contains("C/OS-Version")),
+            "the subtree landed nested under itself: {destinations:?}"
         );
     }
 
