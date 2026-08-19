@@ -45,6 +45,7 @@ import {
   type LayoutResult,
   type Policy,
 } from "@/lib/layout";
+import { subscribeSafely } from "@/lib/jobs";
 import type { Phrase } from "@/lib/phrase";
 import { isTextList, isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
@@ -138,19 +139,21 @@ export function ContentLayout() {
     }
   }, [fingerprint]);
 
+  // `subscribeSafely` (ART-165): the bare `.then((fn) => { unlisten = fn })`
+  // shape this used to have could both leak the real Tauri listener (an
+  // unmount before the promise resolved left nothing to call) and surface
+  // an unhandled rejection (no IPC bridge to reach, e.g. under test).
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void onLayoutResult((done) => {
-      setResult(done);
-      setBusy(false);
-      // It has been laid out. A second run needs a second preview.
-      setPlan(null);
-      setChecked(new Set());
-      setCollisionsUnknown(false);
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => unlisten?.();
+    return subscribeSafely(() =>
+      onLayoutResult((done) => {
+        setResult(done);
+        setBusy(false);
+        // It has been laid out. A second run needs a second preview.
+        setPlan(null);
+        setChecked(new Set());
+        setCollisionsUnknown(false);
+      })
+    );
   }, []);
 
   async function chooseRoot() {

@@ -2182,6 +2182,8 @@
       },
       "archiveMissing": "Archive not found",
       "archiveGone": "This package stays ticked because you chose it, but its archive is no longer in the update packages folder — nothing will be added for it. Untick it, or put the archive back and it will be offered again.",
+      "unknown": "Not offered here",
+      "unknownHint": "This id was remembered from an earlier choice, but it is not one of the packages ART ships today — a stale pick, most likely from an older version. Untick it; nothing will be added for it either way.",
       "needsFolderToPreview": "Choose the update packages folder above to preview what these {{count}} package(s) would replace.",
       "requiresPackages": "Needs {{list}} applied first.",
       "requiresComponents": "Needs the {{list}} component switched on.",

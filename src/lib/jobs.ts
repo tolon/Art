@@ -152,9 +152,22 @@ export function subscribeSafely(subscribe: () => Promise<UnlistenFn>): () => voi
  * Wait for exactly one job to finish, resolving with the value its own
  * result event carries — or rejecting with a readable sentence if the job
  * fails or is cancelled first. `resultEvent` is a Tauri event name whose
- * payload always carries `job_id`; only a payload naming `jobId` settles
- * this promise, so a different job's own result event (or `job-progress`
- * update) can never resolve or reject the wrong caller's wait.
+ * payload always carries `job_id`.
+ *
+ * **`start` is what actually invokes the command, and it runs *after* both
+ * listeners below are already registered — not before.** A re-review of the
+ * first version of this function (which took a bare `jobId: number` and
+ * subscribed only once the caller already had it) found a real race: Rust's
+ * `spawn_job` starts its background thread *before* the `#[tauri::command]`
+ * even returns the job id, so a fast job — a cache hit especially, see
+ * `commands/osinstall.rs`'s own preview cache — can finish and emit its
+ * result event while the frontend is still sitting inside `await invoke(...)`,
+ * strictly before `awaitJobResult` had a `jobId` to filter on at all. The old
+ * shape lost that event forever: the promise never settled (no timeout
+ * either), and both listeners leaked. Subscribing first closes the window
+ * entirely — nothing this job does can happen before this function is
+ * already listening for it — at the cost of not yet knowing which job id to
+ * filter on, which the buffering below exists to resolve.
  *
  * What lets `osinstallCollisions` keep its original `Promise<CollisionReport[]>`
  * shape even though the work behind it moved onto a background job (F4 —
@@ -162,21 +175,51 @@ export function subscribeSafely(subscribe: () => Promise<UnlistenFn>): () => voi
  * function is the part that hides the job underneath an ordinary promise.
  */
 export function awaitJobResult<TPayload extends { job_id: number }, TValue>(
-  jobId: number,
   resultEvent: string,
+  start: () => Promise<number>,
   extract: (payload: TPayload) => TValue
 ): Promise<TValue> {
   return new Promise<TValue>((resolve, reject) => {
     let settled = false;
+    // `null` until `start()` resolves — an event or a progress update that
+    // arrives before then cannot yet be matched to a job id, so it is kept
+    // rather than dropped, and matched retroactively the moment the id is
+    // known (see `start().then(...)` below).
+    let jobId: number | null = null;
+    const bufferedResults: TPayload[] = [];
+    const bufferedProgress: JobProgress[] = [];
+
     const teardown: (() => void)[] = [];
     const cleanup = () => {
       for (const fn of teardown.splice(0)) fn();
     };
 
+    /** `"finished"` is not itself a rejection or a resolution — the result
+     *  event is what carries the actual value, and it is expected to arrive
+     *  at essentially the same moment (the Rust side emits it immediately
+     *  before returning `Ok(())`). Only the two failure states settle here. */
+    function settleFromProgress(job: JobProgress) {
+      if (settled || job.state.state === "running") return;
+      if (job.state.state === "failed") {
+        settled = true;
+        cleanup();
+        reject(new Error(`${job.state.message} (${job.state.error_code})`));
+      } else if (job.state.state === "cancelled") {
+        settled = true;
+        cleanup();
+        reject(new Error("cancelled"));
+      }
+    }
+
     teardown.push(
       subscribeSafely(() =>
         listen<TPayload>(resultEvent, (event) => {
-          if (settled || event.payload.job_id !== jobId) return;
+          if (settled) return;
+          if (jobId === null) {
+            bufferedResults.push(event.payload);
+            return;
+          }
+          if (event.payload.job_id !== jobId) return;
           settled = true;
           cleanup();
           resolve(extract(event.payload));
@@ -187,22 +230,39 @@ export function awaitJobResult<TPayload extends { job_id: number }, TValue>(
     teardown.push(
       subscribeSafely(() =>
         onJobProgress((job) => {
-          if (settled || job.id !== jobId || job.state.state === "running") return;
-          if (job.state.state === "failed") {
-            settled = true;
-            cleanup();
-            reject(new Error(`${job.state.message} (${job.state.error_code})`));
-          } else if (job.state.state === "cancelled") {
-            settled = true;
-            cleanup();
-            reject(new Error("cancelled"));
+          if (settled) return;
+          if (jobId === null) {
+            bufferedProgress.push(job);
+            return;
           }
-          // `"finished"` is not itself a rejection or a resolution — the
-          // result event above is what carries the actual value, and it is
-          // expected to arrive at essentially the same moment (the Rust
-          // side emits it immediately before returning `Ok(())`).
+          if (job.id !== jobId) return;
+          settleFromProgress(job);
         })
       )
     );
+
+    start()
+      .then((id) => {
+        if (settled) return;
+        jobId = id;
+        // Catch up on whatever arrived in the gap between subscribing and
+        // learning the id — the whole reason this is buffered rather than
+        // simply filtered from the start.
+        const matchedResult = bufferedResults.find((payload) => payload.job_id === id);
+        if (matchedResult) {
+          settled = true;
+          cleanup();
+          resolve(extract(matchedResult));
+          return;
+        }
+        const matchedProgress = bufferedProgress.find((job) => job.id === id);
+        if (matchedProgress) settleFromProgress(matchedProgress);
+      })
+      .catch((e: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(e instanceof Error ? e : new Error(String(e)));
+      });
   });
 }

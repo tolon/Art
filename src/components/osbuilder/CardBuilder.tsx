@@ -57,6 +57,7 @@ import {
   HARDWARE_SPEC,
   isEmu68Line,
 } from "@/lib/pistormOptions";
+import { subscribeSafely } from "@/lib/jobs";
 import { isOneOf, isText, isTextOrNothing, isWholeNumberBetween } from "@/lib/remembered";
 import { useRemembered, useRememberedShape } from "@/lib/useRemembered";
 import { usePowerMode } from "@/lib/uxmode";
@@ -212,20 +213,22 @@ export function CardBuilder() {
     }
   }, [fingerprint]);
 
+  // `subscribeSafely` (ART-165): the bare `.then((fn) => { unlisten = fn })`
+  // shape this used to have could both leak the real Tauri listener (an
+  // unmount before the promise resolved left nothing to call) and surface
+  // an unhandled rejection (no IPC bridge to reach, e.g. under test).
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void onCardBuildResult((built) => {
-      setResult(built);
-      setBusy(false);
-      // A report describes the card it was run against, and this is a new
-      // one. It goes with the old result rather than sitting under a new card.
-      setReport(null);
-      // The card is there now; the plan that described it no longer applies.
-      setPlan(null);
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => unlisten?.();
+    return subscribeSafely(() =>
+      onCardBuildResult((built) => {
+        setResult(built);
+        setBusy(false);
+        // A report describes the card it was run against, and this is a new
+        // one. It goes with the old result rather than sitting under a new card.
+        setReport(null);
+        // The card is there now; the plan that described it no longer applies.
+        setPlan(null);
+      })
+    );
   }, []);
 
   // G15: the drop pipeline is global (`Layout.tsx`), and this is the screen

@@ -310,6 +310,19 @@ export async function osinstallVerify(
 // that behind its own unchanged `Promise<CollisionReport[]>` shape by
 // awaiting [`OSINSTALL_COLLISIONS_EVENT`] through [`awaitJobResult`] — no
 // caller of this function had to change.
+//
+// ## Fix round 2 (N1, the re-review)
+//
+// `awaitJobResult` used to take a `jobId: number` directly, which meant
+// `osinstallCollisions` had to `await invoke(...)` *before* calling it — a
+// real race: a fast job (a cache hit especially) can finish and emit its
+// result event while that `await` is still in flight, strictly before
+// `awaitJobResult` had a job id to filter on at all, losing the event
+// forever with no timeout. `awaitJobResult` now takes `start`, a function
+// that performs the `invoke` itself, and calls it only after its own
+// listeners are already registered — see its own doc comment in
+// `@/lib/jobs.ts` for the buffering that lets a job id learned *after* an
+// event still match it.
 // ---------------------------------------------------------------------------
 
 /** What landing one incoming file over an existing one would actually do —
@@ -393,14 +406,14 @@ export async function osinstallCollisions(
   packages: string[]
 ): Promise<CollisionReport[]> {
   if (!treeRoot || !packageFolder || packages.length === 0) return [];
-  const jobId = await invoke<number>("osinstall_collisions", {
-    treeRoot,
-    packageFolder,
-    packages,
-  });
+  // `awaitJobResult` itself subscribes before calling `start` (the `invoke`
+  // below) — see its own doc comment (N1, Task 7's re-review): a fast job,
+  // a cache hit especially, can finish before the frontend even learns its
+  // own job id, and subscribing only after `invoke` resolved lost that
+  // event outright.
   return awaitJobResult<OsInstallCollisionsResult, CollisionReport[]>(
-    jobId,
     OSINSTALL_COLLISIONS_EVENT,
+    () => invoke<number>("osinstall_collisions", { treeRoot, packageFolder, packages }),
     (payload) => payload.reports
   );
 }

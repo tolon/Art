@@ -36,6 +36,7 @@ import {
   type LocalOutcome,
   type SourceOutcome,
 } from "@/lib/artwork";
+import { subscribeSafely } from "@/lib/jobs";
 import { isOneOf } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -554,23 +555,24 @@ export function CollectionStudio() {
     }
   }
 
+  // `subscribeSafely` (ART-165): all three listeners here already guarded
+  // against a leak on early unmount by hand (`if (cancelled) stop() else
+  // unlisten = stop`), but none of the three async IIFEs had a `try`/`catch`
+  // — a rejected `listen()` (no IPC bridge to reach, e.g. under test) became
+  // an unhandled rejection from a `void`-discarded promise, once per
+  // listener. The helper folds the same guard into one call per listener and
+  // catches the rejection too.
   useEffect(() => {
     void reload();
 
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    let unlistenArt: (() => void) | undefined;
-    let unlistenLocal: (() => void) | undefined;
-    void (async () => {
-      const stop = await onCatalogueRefreshed(() => {
+    const unsubscribeCatalogue = subscribeSafely(() =>
+      onCatalogueRefreshed(() => {
         setBusy(false);
         void reload();
-      });
-      if (cancelled) stop();
-      else unlisten = stop;
-    })();
-    void (async () => {
-      const stop = await onArtworkResult((result) => {
+      })
+    );
+    const unsubscribeArt = subscribeSafely(() =>
+      onArtworkResult((result) => {
         setBusy(false);
         setArtBusy(false);
         setStatusMsg(null);
@@ -582,12 +584,10 @@ export function CollectionStudio() {
           void loadArtwork(rows);
           return rows;
         });
-      });
-      if (cancelled) stop();
-      else unlistenArt = stop;
-    })();
-    void (async () => {
-      const stop = await onArtworkLocalResult((result) => {
+      })
+    );
+    const unsubscribeLocal = subscribeSafely(() =>
+      onArtworkLocalResult((result) => {
         setBusy(false);
         setArtBusy(false);
         setStatusMsg(null);
@@ -598,16 +598,13 @@ export function CollectionStudio() {
           void loadArtwork(rows);
           return rows;
         });
-      });
-      if (cancelled) stop();
-      else unlistenLocal = stop;
-    })();
+      })
+    );
 
     return () => {
-      cancelled = true;
-      unlisten?.();
-      unlistenArt?.();
-      unlistenLocal?.();
+      unsubscribeCatalogue();
+      unsubscribeArt();
+      unsubscribeLocal();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

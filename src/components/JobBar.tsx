@@ -9,6 +9,7 @@ import {
   jobList,
   jobStatusLabel,
   onJobProgress,
+  subscribeSafely,
   type JobProgress,
 } from "@/lib/jobs";
 
@@ -25,9 +26,15 @@ export function JobBar() {
   const { t } = useTranslation();
   const [jobs, setJobs] = useState<JobProgress[]>([]);
 
+  // `subscribeSafely` (ART-165): `onJobProgress` here used to be awaited
+  // inside the same async IIFE as `jobList()`, with no `try`/`catch` of its
+  // own — a rejected `listen()` (no IPC bridge to reach, e.g. under test)
+  // became an unhandled rejection from a discarded (`void`) promise.
+  // `jobList()`'s own fetch keeps its own `try`/`catch`; only the
+  // subscription moves to the helper, and it no longer has to wait for
+  // `jobList()` to settle first — it can only ever start observing sooner.
   useEffect(() => {
     let cancelled = false;
-    let unlisten: (() => void) | undefined;
 
     void (async () => {
       // Pick up anything already running — the bar may mount mid-job.
@@ -37,8 +44,10 @@ export function JobBar() {
       } catch {
         // A missing job registry is not worth surfacing to the user.
       }
+    })();
 
-      const stop = await onJobProgress((update) => {
+    const unsubscribe = subscribeSafely(() =>
+      onJobProgress((update) => {
         setJobs((current) => {
           const index = current.findIndex((j) => j.id === update.id);
           if (index === -1) return [...current, update];
@@ -46,15 +55,12 @@ export function JobBar() {
           next[index] = update;
           return next;
         });
-      });
-
-      if (cancelled) stop();
-      else unlisten = stop;
-    })();
+      })
+    );
 
     return () => {
       cancelled = true;
-      unlisten?.();
+      unsubscribe();
     };
   }, []);
 

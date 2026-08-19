@@ -865,34 +865,53 @@ re-audits them without reason:
 ## Fixed
 
 **ART-165** 🟡 ✅ **Every `on*` subscription wrapper's fire-and-forget
-`.then((fn) => { unlisten = fn })` pattern could both leak a live Tauri
-listener and surface an unhandled promise rejection — the product-code
-defect ART-163's own test symptom was standing in front of** — *found
-reviewing ART-163's root cause, 2026-08-19; fixed the same round (Task 7's
-own fix round, packages screen)*
+`.then((fn) => { unlisten = fn })` pattern (or an async-IIFE variant of the
+same shape) could leak a live Tauri listener, surface an unhandled promise
+rejection, or both — the product-code defect ART-163's own test symptom was
+standing in front of** — *found reviewing ART-163's root cause, 2026-08-19;
+fixed the same round, in two passes (Task 7's own fix round, packages
+screen, then its re-review — the first pass converted two screens and
+closed this entry on that partial scope, which the re-review correctly
+called over-closed; the second pass finished the sweep)*
 `src/lib/jobs.ts` · `src/components/osbuilder/OsInstall.tsx` ·
-`src/components/osbuilder/PackagePanel.tsx`
+`src/components/osbuilder/PackagePanel.tsx` ·
+`src/components/osbuilder/CardBuilder.tsx` ·
+`src/components/osbuilder/VolumePreload.tsx` · `src/components/JobBar.tsx` ·
+`src/components/layout/Layout.tsx` · `src/pages/ContentLayout.tsx` ·
+`src/pages/CollectionStudio.tsx`
 
-Neither half was hypothetical. **The leak:** an effect's cleanup function is
-only ever the `unlisten` closure captured *at the moment the subscribe
-promise resolves* — a component unmounted before that (a fast navigation, or
-a test's own `cleanup()`) runs the returned cleanup with `unlisten` still
-`undefined`, so the real listener already registered with Tauri is never
-removed. **The rejection:** `listen()`'s own promise rejects whenever there
-is no IPC bridge to reach it through, and nothing downstream of the bare
-`.then()` ever added a `.catch()` — this is production code, not only a test
-artefact; ART-163 only ever showed the test-environment symptom of it.
+Neither half was hypothetical, and not every site had both. **The leak:** an
+effect's cleanup function is only ever the `unlisten` closure captured *at
+the moment the subscribe promise resolves* — a component unmounted before
+that (a fast navigation, or a test's own `cleanup()`) runs the returned
+cleanup with `unlisten` still `undefined`, so the real listener already
+registered with Tauri is never removed. Some sites (`Layout.tsx`,
+`CollectionStudio.tsx`) already guarded this by hand, correctly. **The
+rejection:** `listen()`'s own promise rejects whenever there is no IPC
+bridge to reach it through, and nothing downstream of the bare `.then()` (or
+the un-`try`/`catch`ed `await` inside a `void`-discarded async IIFE) ever
+added a `.catch()` — this is production code, not only a test artefact;
+ART-163 only ever showed the test-environment symptom of one instance of it.
+`JobBar.tsx` had only this half (its own leak guard was already correct);
+`CardBuilder.tsx`, `VolumePreload.tsx`, `ContentLayout.tsx` had both, in the
+same shape `OsInstall.tsx` originally did.
 
 **The fix.** `subscribeSafely()` (`src/lib/jobs.ts`) wraps any
 `() => Promise<UnlistenFn>` subscribe call with a `cancelled` flag — a
 listener that resolves after teardown is unregistered the instant it
 arrives, never stored — and a `.catch()` that absorbs a failed subscribe
-instead of leaving it unhandled. `OsInstall.tsx`'s own `onJobProgress` and
-`PackagePanel.tsx`'s `onJobProgress`/`onOsInstallAddPackageResult`
-subscriptions all go through it now.
+instead of leaving it unhandled. Every subscription site the codebase had at
+the time of the second pass now goes through it — `OsInstall.tsx`,
+`PackagePanel.tsx`, `CardBuilder.tsx`, `VolumePreload.tsx`, `JobBar.tsx`,
+`Layout.tsx`'s drag-and-drop listener, `ContentLayout.tsx`, and
+`CollectionStudio.tsx`'s three (catalogue refresh, artwork enrichment,
+local-artwork). A grep for the two shapes this entry names
+(`let unlisten` / `.then((fn) => {`) across `src/**/*.{ts,tsx}` finds no
+further site outside `subscribeSafely`'s own implementation and one
+documentation comment.
 
-Covered indirectly by every component test that mounts either screen without
-tripping an unhandled-rejection failure — the same evidence ART-163's own
+Covered indirectly by every component test that mounts an affected screen
+without tripping an unhandled-rejection failure — the same evidence ART-163's own
 fix below cites. There is no dedicated unit test for the leak half
 specifically: proving a real Tauri listener handle was released needs a seam
 into Tauri's own internal listener registry that this test suite does not

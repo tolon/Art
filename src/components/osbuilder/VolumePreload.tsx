@@ -46,6 +46,7 @@ import {
   type PreloadPlan,
   type PreloadResult,
 } from "@/lib/preload";
+import { subscribeSafely } from "@/lib/jobs";
 import { useRomPairing } from "@/lib/useRomPairing";
 import { isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
@@ -149,18 +150,20 @@ export function VolumePreload() {
   // only renders what it says.
   const pairing = useRomPairing(imagePath, picks);
 
+  // `subscribeSafely` (ART-165): the bare `.then((fn) => { unlisten = fn })`
+  // shape this used to have could both leak the real Tauri listener (an
+  // unmount before the promise resolved left nothing to call) and surface
+  // an unhandled rejection (no IPC bridge to reach, e.g. under test).
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void onPreloadResult((done) => {
-      setResult(done);
-      setBusy(false);
-      // It has been run. A second run needs a second preview.
-      setPlan(null);
-      setConfirmed(false);
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => unlisten?.();
+    return subscribeSafely(() =>
+      onPreloadResult((done) => {
+        setResult(done);
+        setBusy(false);
+        // It has been run. A second run needs a second preview.
+        setPlan(null);
+        setConfirmed(false);
+      })
+    );
   }, []);
 
   async function chooseTool() {

@@ -12,6 +12,7 @@ import {
   ZOOM_DEFAULT,
 } from "@/lib/appZoom";
 import { setupDragDrop, type DropHandler } from "@/lib/dnd";
+import { subscribeSafely } from "@/lib/jobs";
 import { useRecentFilesStore } from "@/stores/recentFilesStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import type { DroppedAnalysis } from "@/types";
@@ -134,16 +135,11 @@ export function Layout() {
         }
       },
     };
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void setupDragDrop(handler).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
+    // `subscribeSafely` (ART-165): the guard against a leak on early
+    // unmount already existed here (`if (cancelled) fn() else unlisten = fn`),
+    // but `setupDragDrop`'s own promise had no `.catch()` — a rejection (no
+    // IPC bridge to reach, e.g. under test) reached the console unhandled.
+    return subscribeSafely(() => setupDragDrop(handler));
   }, [record, reloadRecent]);
 
   return (

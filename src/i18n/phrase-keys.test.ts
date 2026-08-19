@@ -83,6 +83,7 @@ import {
   DEFAULT_HARDWARE,
 } from "@/lib/pistorm";
 import {
+  collisionGroupHeadingKey,
   collisionPhrase,
   osinstallBlocker,
   refusalPhrase as osinstallRefusalPhrase,
@@ -915,6 +916,16 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     for (const collision of collisions) {
       const phrase = collisionPhrase(collision);
       expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  it("collisionGroupHeadingKey: every Collision kind resolves (N3, Task 7's re-review)", () => {
+    // `PackagePanel.tsx`'s own group headings — unpinned by any test until
+    // this, unlike every other key-returning mapper on this list.
+    const kinds: Collision["kind"][] = ["downgrade", "upgrade", "same-version", "unversioned"];
+    for (const kind of kinds) {
+      const key = collisionGroupHeadingKey(kind);
+      expect(isLeafKey(key), key).toBe(true);
     }
   });
 

@@ -242,3 +242,26 @@ describe("F10 — the add job's own outcome reaches the screen", () => {
     expect(await screen.findByText(/211 files, 12 directories/)).toBeTruthy();
   });
 });
+
+describe("N4 — an unknown remembered id is visible and untickable", () => {
+  it("renders a row for a chosen id the loaded catalogue does not recognise", async () => {
+    render(
+      <PackagePanel
+        treeRoot="E:/tree"
+        packageFolder="E:/packages"
+        chosen={["some-old-package-id"]}
+      />
+    );
+
+    // The catalogue has to actually load first — `packagesMock` resolves
+    // `PACKAGES` (three real ids, none of them this one).
+    await screen.findByText("BoingBag 3.9-1");
+
+    const box = (await screen.findByRole("checkbox", {
+      name: /some-old-package-id/,
+    })) as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    expect(box.disabled).toBe(false);
+    expect(screen.getByText(/not one of the packages ART ships today/i)).toBeTruthy();
+  });
+});

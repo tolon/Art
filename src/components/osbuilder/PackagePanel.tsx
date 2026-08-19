@@ -68,6 +68,15 @@
 // carries the files/directories/bytes actually written; `confirmed` clears
 // once a run finishes, the same way `OsInstall.tsx`'s own run confirmation
 // does not survive its build.
+//
+// ## Fix round 2 (the re-review)
+//
+// **N4 — a stale remembered id is now a row, not a gap.** A `chosen` id the
+// loaded catalogue does not recognise (an old ART's choice, or a package
+// since removed) used to render nothing at all — invisible, and so
+// untickable, since `toggle` needs a row's own checkbox to call it from. It
+// now gets its own row, always checked, always tickable off, once the
+// catalogue has actually loaded.
 
 import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -388,6 +397,38 @@ export function PackagePanel({
             </div>
           );
         })}
+        {/* N4, Task 7's re-review: a remembered id the loaded catalogue does
+            not recognise (a stale choice from an older ART, or a package
+            since removed) used to render no row at all — invisible, and so
+            untickable, since `toggle` needs a row with a checkbox to call it
+            from. Only once the catalogue has actually loaded (`catalogue`,
+            not `catalogue ?? []`): while it is still `null`, every chosen id
+            looks "unknown" for a moment that says nothing true. */}
+        {catalogue &&
+          chosen
+            .filter((id) => !catalogue.some((pkg) => pkg.id === id))
+            .map((id) => (
+              <div
+                key={id}
+                style={{
+                  border: "1px solid var(--border)",
+                  borderRadius: 4,
+                  padding: "6px 10px",
+                  background: "var(--bg-hover)",
+                }}
+              >
+                <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
+                  <input type="checkbox" checked={true} onChange={() => toggle(id)} />
+                  <strong style={{ fontFamily: "monospace" }}>{id}</strong>
+                  <span className="badge badge-warn" style={{ fontSize: 10 }}>
+                    {t("osinstall.packages.unknown")}
+                  </span>
+                </label>
+                <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+                  {t("osinstall.packages.unknownHint")}
+                </p>
+              </div>
+            ))}
       </div>
 
       {chosen.length > 0 && (

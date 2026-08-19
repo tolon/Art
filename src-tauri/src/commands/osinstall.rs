@@ -76,7 +76,7 @@
 //!   install; before this the counts were written to the oplog and nowhere
 //!   else, so the screen could say only "Added." with no numbers behind it.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -85,6 +85,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::core::error::{CoreError, CoreResult};
+use crate::core::jobs::ProgressSink;
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome, OperationRecord};
 use crate::core::osinstall::apply::{
     add_package, apply, ApplyOutcome, DistributionManifest, MANIFEST_FILE_NAME,
@@ -442,6 +443,15 @@ fn preview_cache_dir(key: &PreviewCacheKey) -> PathBuf {
     std::env::temp_dir().join(format!("{PREVIEW_SCRATCH_PREFIX}{:016x}", hasher.finish()))
 }
 
+/// A ceiling on how many distinct archive identities [`PreviewCache`] keeps
+/// at once (N2, Task 7's re-review: the cache was unbounded, so every
+/// archive a user previewed across a whole run of ART stayed in memory, and
+/// on disk, until [`sweep_stale_preview_scratch_dirs`]'s hourly sweep
+/// eventually caught up). Generous: even a long session cycling through
+/// every shipped package's own archive many times over touches far fewer
+/// than this many distinct identities.
+const MAX_PREVIEW_CACHE_ENTRIES: usize = 64;
+
 /// The in-process cache: an archive's identity -> the items already
 /// extracted for it. Reused across preview calls within one run of ART;
 /// not persisted, and not needed to be — [`preview_cache_dir`]'s own
@@ -449,10 +459,42 @@ fn preview_cache_dir(key: &PreviewCacheKey) -> PathBuf {
 /// same directory on disk if [`sweep_stale_preview_scratch_dirs`] has not
 /// yet reaped it, and [`extract_package_items`] verifies every cached path
 /// still exists before trusting it either way.
-static PREVIEW_CACHE: OnceLock<Mutex<HashMap<PreviewCacheKey, Vec<ExtractedItem>>>> =
-    OnceLock::new();
+///
+/// Bounded at [`MAX_PREVIEW_CACHE_ENTRIES`], evicted oldest-inserted-first.
+/// `order` exists only because `HashMap` itself remembers no insertion
+/// order to evict by; eviction only ever drops the in-memory entry, never
+/// the directory `preview_cache_dir` names for it — that stays for
+/// `sweep_stale_preview_scratch_dirs` to reap by age, which is what keeps a
+/// re-inserted identity (evicted, then asked for again) able to find its
+/// own bytes still on disk rather than starting cold.
+#[derive(Default)]
+struct PreviewCache {
+    entries: HashMap<PreviewCacheKey, Vec<ExtractedItem>>,
+    order: VecDeque<PreviewCacheKey>,
+}
 
-fn preview_cache() -> &'static Mutex<HashMap<PreviewCacheKey, Vec<ExtractedItem>>> {
+impl PreviewCache {
+    fn get(&self, key: &PreviewCacheKey) -> Option<&Vec<ExtractedItem>> {
+        self.entries.get(key)
+    }
+
+    fn insert(&mut self, key: PreviewCacheKey, value: Vec<ExtractedItem>) {
+        if !self.entries.contains_key(&key) {
+            self.order.push_back(key.clone());
+        }
+        self.entries.insert(key, value);
+        while self.entries.len() > MAX_PREVIEW_CACHE_ENTRIES {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            self.entries.remove(&oldest);
+        }
+    }
+}
+
+static PREVIEW_CACHE: OnceLock<Mutex<PreviewCache>> = OnceLock::new();
+
+fn preview_cache() -> &'static Mutex<PreviewCache> {
     PREVIEW_CACHE.get_or_init(Default::default)
 }
 
@@ -515,11 +557,19 @@ fn describe_package_refusal(reason: &RefusalReason) -> String {
 /// — reusing a cached extraction when the archive has not changed since the
 /// last preview (F4), and refusing rather than continuing once either of
 /// [`MAX_PREVIEW_FILES`]/[`MAX_PREVIEW_BYTES`] is crossed.
+///
+/// Checks `progress.is_cancelled()` once per file (N5, Task 7's re-review:
+/// the extraction previously ignored the job's own cancel flag entirely,
+/// which meant asking to stop a two-hundred-file preview did nothing until
+/// it finished on its own). Each file is a whole unit of work — written in
+/// full or not opened at all — so this can never leave a half-written one,
+/// the same discipline every other cancellable job in this codebase follows.
 fn extract_package_items(
     package: &Package,
     archive: &FoundPackage,
     total_files: &mut usize,
     total_bytes: &mut u64,
+    progress: &dyn ProgressSink,
 ) -> CoreResult<Vec<ExtractedItem>> {
     let key = preview_cache_key(&archive.path, package.member.as_deref())?;
 
@@ -561,6 +611,9 @@ fn extract_package_items(
     let mut extracted = Vec::new();
     let items: Vec<_> = items.into_iter().filter(|item| !item.is_dir).collect();
     for (counter, item) in items.into_iter().enumerate() {
+        if progress.is_cancelled() {
+            return Err(CoreError::Cancelled);
+        }
         *total_files += 1;
         if *total_files > MAX_PREVIEW_FILES {
             return Err(CoreError::InvalidInput(format!(
@@ -576,6 +629,7 @@ fn extract_package_items(
         }
         let path = dir.join(counter.to_string());
         std::fs::write(&path, &bytes)?;
+        progress.report(*total_files as u64, None, &item.to);
         extracted.push((item.to, item.component, path));
     }
 
@@ -597,6 +651,7 @@ fn extract_incoming_for_preview(
     package_folder: &Path,
     ordered: &[String],
     catalogue: &[Package],
+    progress: &dyn ProgressSink,
 ) -> CoreResult<Vec<ExtractedItem>> {
     let found = find_packages(package_folder)?;
     let mut total_files = 0usize;
@@ -604,6 +659,12 @@ fn extract_incoming_for_preview(
     let mut incoming = Vec::new();
 
     for id in ordered {
+        // Checked once per package too, not only once per file inside
+        // `extract_package_items` — a cache hit resolves a whole package in
+        // one call with no file-level loop of its own to check from.
+        if progress.is_cancelled() {
+            return Err(CoreError::Cancelled);
+        }
         let package = catalogue
             .iter()
             .find(|p| &p.id == id)
@@ -615,6 +676,7 @@ fn extract_incoming_for_preview(
             archive,
             &mut total_files,
             &mut total_bytes,
+            progress,
         )?);
     }
 
@@ -635,12 +697,13 @@ fn preview_collisions(
     package_folder: &Path,
     ordered: &[String],
     catalogue: &[Package],
+    progress: &dyn ProgressSink,
 ) -> CoreResult<Vec<CollisionReport>> {
     if ordered.is_empty() {
         return Ok(Vec::new());
     }
     sweep_stale_preview_scratch_dirs();
-    let incoming = extract_incoming_for_preview(package_folder, ordered, catalogue)?;
+    let incoming = extract_incoming_for_preview(package_folder, ordered, catalogue, progress)?;
     let entries: Vec<Incoming> = incoming
         .iter()
         .map(|(to, component, bytes_at)| Incoming {
@@ -692,8 +755,9 @@ pub fn osinstall_collisions(
     let emit_app = app.clone();
     let registry = Arc::clone(&registry);
 
-    let id = spawn_job(&app, registry, &title, move |job_id, _progress| {
-        let reports = preview_collisions(&tree_root, &package_folder, &ordered, &catalogue)?;
+    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+        let reports =
+            preview_collisions(&tree_root, &package_folder, &ordered, &catalogue, progress)?;
         let _ = emit_app.emit(
             OSINSTALL_COLLISIONS_EVENT,
             OsInstallCollisionsResult { job_id, reports },
@@ -1102,6 +1166,7 @@ pub fn osinstall_verify(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::jobs::NoProgress;
 
     /// **The wire, written down.** `src/lib/osinstall.ts` builds this object
     /// by hand; nothing else in either build checks that the two agree.
@@ -1376,7 +1441,8 @@ mod tests {
         // `osinstall_verify`'s own `verify_at` already are.
         let catalogue = package::packages().unwrap();
         let ordered = package::order(&["locale-turkish".to_string()]).unwrap();
-        let reports = preview_collisions(&tree, &packages_dir, &ordered, &catalogue).unwrap();
+        let reports =
+            preview_collisions(&tree, &packages_dir, &ordered, &catalogue, &NoProgress).unwrap();
 
         assert_eq!(reports.len(), 1, "{reports:?}");
         assert_eq!(reports[0].path, "Locale/Catalogs/x.catalog");
@@ -1404,7 +1470,8 @@ mod tests {
         let packages_dir = dir.join("does-not-exist-packages");
 
         let catalogue = package::packages().unwrap();
-        let reports = preview_collisions(&tree, &packages_dir, &[], &catalogue).unwrap();
+        let reports =
+            preview_collisions(&tree, &packages_dir, &[], &catalogue, &NoProgress).unwrap();
         assert_eq!(reports, Vec::new());
     }
 
@@ -1427,7 +1494,8 @@ mod tests {
 
         let mut files = 0usize;
         let mut bytes = 0u64;
-        let first = extract_package_items(package, archive, &mut files, &mut bytes).unwrap();
+        let first =
+            extract_package_items(package, archive, &mut files, &mut bytes, &NoProgress).unwrap();
         assert_eq!(first.len(), 1);
         assert!(first[0].2.is_file());
 
@@ -1460,8 +1528,94 @@ mod tests {
 
         let mut files2 = 0usize;
         let mut bytes2 = 0u64;
-        let second = extract_package_items(package, archive, &mut files2, &mut bytes2).unwrap();
+        let second =
+            extract_package_items(package, archive, &mut files2, &mut bytes2, &NoProgress).unwrap();
         assert_eq!(second, first, "the cached extraction, unchanged");
+    }
+
+    /// N5, Task 7's re-review: the extraction used to ignore the job's own
+    /// cancel flag entirely. `CancelAfter::new(0)` is cancelled from the
+    /// first check, so this proves the flag is actually read, not just
+    /// threaded through unused — and that nothing is written before it is.
+    #[test]
+    fn extract_package_items_stops_at_the_first_cancellation_check() {
+        let dir = scratch("preview-cancel-file-level");
+        let packages_dir = dir.join("packages");
+        std::fs::create_dir_all(&packages_dir).unwrap();
+        write_locale_turkish_archive(&packages_dir, "turkish.zip", b"catalog bytes");
+
+        let catalogue = package::packages().unwrap();
+        let package = catalogue.iter().find(|p| p.id == "locale-turkish").unwrap();
+        let found = crate::core::osinstall::scan::find_packages(&packages_dir).unwrap();
+        let archive = resolve_package_archive(package, &found).unwrap();
+
+        let mut files = 0usize;
+        let mut bytes = 0u64;
+        let cancel = crate::core::osinstall::fixtures::CancelAfter::new(0);
+        let err =
+            extract_package_items(package, archive, &mut files, &mut bytes, &cancel).unwrap_err();
+        assert!(matches!(err, CoreError::Cancelled), "{err}");
+    }
+
+    /// The same check one level up: `extract_incoming_for_preview` stops
+    /// before ever opening the first package's own archive, not only inside
+    /// a package already being read.
+    #[test]
+    fn extract_incoming_for_preview_stops_before_opening_the_first_package() {
+        let dir = scratch("preview-cancel-package-level");
+        let packages_dir = dir.join("packages");
+        std::fs::create_dir_all(&packages_dir).unwrap();
+        write_locale_turkish_archive(&packages_dir, "turkish.zip", b"catalog bytes");
+
+        let catalogue = package::packages().unwrap();
+        let cancel = crate::core::osinstall::fixtures::CancelAfter::new(0);
+        let err = extract_incoming_for_preview(
+            &packages_dir,
+            &["locale-turkish".to_string()],
+            &catalogue,
+            &cancel,
+        )
+        .unwrap_err();
+        assert!(matches!(err, CoreError::Cancelled), "{err}");
+    }
+
+    /// N2, Task 7's re-review: `PREVIEW_CACHE` was unbounded — every archive
+    /// identity a session ever previewed stayed in memory for the life of
+    /// the process. Exercised against a fresh, private `PreviewCache`
+    /// rather than the shared process-global `preview_cache()`: the global
+    /// one is touched by every other test in this module, some of which run
+    /// concurrently, and evicting an entry another test still expects would
+    /// make this test flaky about the wrong thing.
+    #[test]
+    fn preview_cache_evicts_the_oldest_entry_once_the_bound_is_crossed() {
+        let mut cache = PreviewCache::default();
+        for i in 0..(MAX_PREVIEW_CACHE_ENTRIES + 3) {
+            let key: PreviewCacheKey = (PathBuf::from(format!("archive-{i}")), 0, 0, None);
+            cache.insert(key, Vec::new());
+        }
+        assert_eq!(cache.entries.len(), MAX_PREVIEW_CACHE_ENTRIES);
+
+        // The first three inserted are the ones evicted — FIFO, not LRU;
+        // `PreviewCache`'s own doc comment names that as the deliberate
+        // choice (simplicity over hit-rate optimality for a cache this
+        // small).
+        for i in 0..3 {
+            let evicted: PreviewCacheKey = (PathBuf::from(format!("archive-{i}")), 0, 0, None);
+            assert!(
+                cache.get(&evicted).is_none(),
+                "archive-{i} should have been evicted"
+            );
+        }
+        let newest: PreviewCacheKey = (
+            PathBuf::from(format!("archive-{}", MAX_PREVIEW_CACHE_ENTRIES + 2)),
+            0,
+            0,
+            None,
+        );
+        assert!(
+            cache.get(&newest).is_some(),
+            "the most recent insert must survive"
+        );
     }
 
     /// F4's own "no sweep" finding: a preview scratch directory older than

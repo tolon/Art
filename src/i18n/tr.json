@@ -2182,6 +2182,8 @@
       },
       "archiveMissing": "Arşiv bulunamadı",
       "archiveGone": "Bu paket, sen seçtiğin için tikli kalıyor, ama arşivi artık güncelleme paketleri klasöründe değil — onun için hiçbir şey eklenmeyecek. Tikini kaldır, ya da arşivi geri koy; o zaman yeniden sunulur.",
+      "unknown": "Burada sunulmuyor",
+      "unknownHint": "Bu kimlik daha önceki bir seçimden hatırlandı, ama ART'ın bugün gönderdiği paketlerden biri değil — büyük olasılıkla eski bir sürümden kalma bir seçim. Tikini kaldır; ne olursa olsun onun için hiçbir şey eklenmeyecek.",
       "needsFolderToPreview": "Bu {{count}} paketin neyin yerine geçeceğini önizlemek için yukarıdan güncelleme paketleri klasörünü seç.",
       "requiresPackages": "Önce {{list}} uygulanmasına ihtiyaç duyuyor.",
       "requiresComponents": "{{list}} bileşeninin açık olmasına ihtiyaç duyuyor.",
