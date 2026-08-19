@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Update packages — and the AmigaOS 3.9 tree turns out to have been 3.5 (2026-08-19)
+
+#### Fixed
+- **The AmigaOS 3.9 tree ART built was AmigaOS 3.5. It is now really 3.9.**
+  Earlier the same day this changelog said "the tree boots", and it did —
+  to a clean Workbench, with no error. What nobody had done was **ask the
+  running system which Workbench it was**. Asked, it answered
+  `Workbench 44.5 (18-Aug-00)`, which is AmigaOS 3.5; the published
+  AmigaOS version history gives 45.1 for 3.9. The cause: your 3.9 CD
+  carries **two** install folders, `Workbench3.5` and `Workbench3.9`, and
+  the second is an *overlay* — only the files that changed — which is why
+  a 3.9 disc has a 3.5 folder on it at all. ART was laying the first and
+  stopping. It now lays both, in the right order, and the booted system
+  answers **`Kickstart 40.68, Workbench 45.1 (13-Nov-00)`**. The tree
+  grows from 1257 files to 1879 — all 622 of them things the base
+  install never had at all: Locale, the new Preferences editors, the
+  `xad` tools, AMPlifier, ViNCEd. Nineteen files it *does* replace are
+  provably newer versions and none is older. The boot error that used
+  to scroll past on the way in (`C:LoadMonDrvs: Unknown command`) is
+  gone, and the desktop shows the real 3.9 icons instead of generic
+  floppies.
+  *Why this is written down rather than quietly corrected: a claim that
+  was wrong and was caught by measuring is worth more to you than one
+  that was always right. The copyright line on the Workbench screen
+  proves the screen came from the tree — nothing more. It says the same
+  thing on 3.5.*
+- **The whole frontend test suite was reporting a pass and failing.**
+  `pnpm test` printed "619 passed" and exited with an error code, which
+  the build system treats as a failed build. Ten tests were leaving
+  unfinished background work behind. Fixed, and the underlying pattern
+  it was standing in front of — every screen that subscribes to
+  background-job progress could leak a listener or swallow an error —
+  was fixed across nine files rather than the two that showed symptoms.
+
+#### Added
+- **ART can now add an update package onto a distribution tree it (or
+  you) already built** — without rebuilding the tree. Two ways in, and
+  they produce exactly the same result: build the base *with* the
+  packages in one pass, or add one to a tree that already exists. ART
+  proves they agree by building both and comparing the files byte for
+  byte.
+- **Nothing is overwritten silently.** Before anything is added, ART
+  reads what each file would land on and tells you which of five things
+  it is: identical (not an overwrite at all, and not listed), an
+  **upgrade** (`44.23 → 45.9`, read out of the files' own version
+  strings), a **downgrade** (marked as one, with its own heading, its own
+  word and its own badge — it does not just look different, it says so),
+  the **same version with different bytes**, or a file where neither side
+  states a version and only the sizes can be compared. It asks once for
+  the whole set, not once per file — a real update package replaces
+  hundreds of files, and asking every time teaches you to click through.
+- **Update packages are read from their own folder**, kept separate from
+  your install disks. ART looked through a real 58-item folder — a 171 MB
+  RAR and a 248 MB 7z among them — and identified the 27 archives it
+  could open, in under a third of a second, without unpacking anything.
+
+#### Known — please read before you go looking for these
+- **ART ships recipes for three packages and can place one of them.**
+  It supports exactly the packages it knows by hand — BoingBag 3.9-1,
+  BoingBag 3.9-2 and the Turkish catalog pack — and says so on screen.
+  Working out for itself how an unknown archive maps onto a system
+  volume is a separate piece of work that has not been started. If you
+  point it at one of your other archives, it will refuse and tell you
+  why, rather than half-installing it.
+- **Neither BoingBag can be installed, and this is not going to be fixed
+  by a bug fix.** The files inside a BoingBag are **password-protected**,
+  and the password lives inside the BoingBag's own `Updater` — an Amiga
+  program, meant to run on an Amiga. Every other tool that installs
+  BoingBags (HstWB Installer, AmiKit, AmigaSYS, ClassicWB) does it by
+  starting an emulator and running that `Updater`. ART places files from
+  Windows and does not run anything on the Amiga side, so it cannot read
+  them. **The decision, taken deliberately: ART will not break the
+  password.** Running an Amiga-side install step properly is its own
+  piece of work, and it is not happening next week.
+- **The Turkish catalogs install but the Amiga cannot see them.** They go
+  into a drawer called `türkçe`, and ART is currently mangling the two
+  accented letters when it reads them out of the archive, so the drawer
+  lands beside the real one instead of on top of it. Everything reports
+  success. Nothing works. It is filed for a fix of its own rather than
+  patched here, because the same code reads every LHA archive ART opens,
+  WHDLoad included, and changing it could rename files that extract
+  correctly today.
+- **A package whose installer is an Amiga Installer script cannot be
+  placed, ever.** Not a gap — a boundary. Those scripts decide what to do
+  while running on the real machine, and ART has nothing to reproduce
+  that decision with. It refuses and says so.
+
 ### AmigaOS 3.9 joins 3.2 — build it from your own CD (2026-08-19)
 
 #### Added

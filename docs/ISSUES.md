@@ -62,6 +62,18 @@ and packages together, the way `recipe.rs::all_shipped_component_ids` already
 does for `every_override_names_a_component_that_exists` — rather than against
 `package::by_id` alone.
 
+**A second, harder limit sits beside this one, and widening `declared` will
+not touch it.** `Libs/WORKBENCH.LIBRARY` carries no `$VER:` marker at all, so
+the 3.9 overlay's replacement of it (193,400 → 199,852 bytes) classifies as
+`Unversioned` — a size comparison — while being the single change that turns
+`Workbench 44.5` into `Workbench 45.1`. **The boot proved the decisive change
+and the classifier could not.** Generalised: if `workbench.library` carries no
+readable marker, other decisive files will not either, so **any future "did
+the update take?" check built on collision classes alone will be confidently
+wrong about the one file that matters.** Reading the version off a booted
+system is not a nicety — see the method note in
+`layer_the_real_39_overlay_when_asked` and in [STATUS.md](STATUS.md).
+
 **ART-168** 🔴 **An LHA entry name's non-ASCII bytes are replaced with U+FFFD
 rather than decoded, so a real Amiga drawer name becomes a name no Amiga can
 see** — *found 2026-08-19 by Task 8's real run and confirmed on the booted
@@ -97,6 +109,17 @@ rename files that extract correctly today". That is a change that needs its own
 task, its own oracle run and its own tests, not a line changed while reporting
 something else.
 
+**This is a known problem outside ART too, which is worth knowing before the
+fix is designed.** Cloanto's own RetroPlatform knowledge base (KB 19-106)
+names it by description: for *directory-based* distributions, filenames
+carrying characters above 128 — "as used in Amiga locale names", which is
+exactly `türkçe` — are a documented hazard, and AmiKit's answer is to carry
+those files inside an LhA archive and extract them **on the Amiga** rather
+than place them from the host. So decoding the name correctly is the right
+fix for ART's own reader, and it may still not be the whole answer for a
+host-placed tree: what the host writes and what AmigaDOS then reads are two
+questions, and only the second one booted here.
+
 
 **ART-167** 🟠 **Eight of the owner's archives claim the top-level directory
 `LocaleUpdate` and two claim `BoingBag3.9-2`, so `scan::package_for` correctly
@@ -124,6 +147,21 @@ one. Nothing in `plan()` or in the Produce screen lets a user say *which*
 the owner's real folder — the run only measured it by naming the archive
 outright, which `add_package`'s own contract allows ("`archive` is given, not
 looked up") but no user-facing path offers.
+
+**State: open, and it is the cheapest of this round's four to close** —
+`add_package` already takes a named archive, so what is missing is a way for
+the *user* to name one when `package_for` answers `Ambiguous`: the refusal
+already carries the candidate list, and the screen needs to offer it as a
+choice rather than render it as a dead end.
+
+**What the screen does today, checked in the code rather than assumed:**
+`osinstall_packages` sets `available` with `found.iter().any(|f| f.media ==
+p.media)` (`commands/osinstall.rs`), and all eight language archives *do*
+carry `media == "LocaleUpdate"` — so the package is offered as available, the
+tick is accepted, and the `PackageArchiveAmbiguous` refusal fires when the
+preview or the add resolves the archive. Nothing is ever placed from the
+wrong archive, which is the safer half of getting this wrong, but the user
+meets the dead end one step later than they could.
 
 
 **ART-166** 🔴 **Both BoingBag payload archives are password-encrypted ZIPs, so
@@ -160,23 +198,68 @@ code changes — place the wrapper's loose files and let the Amiga's own
 a path that works. Whichever is chosen, spec §10/§89 says ART must not offer a
 package it cannot apply, and today it offers two.
 
+**The owner's decision, taken 2026-08-19 after external research and recorded
+here so nobody re-opens it by accident: no bypass of the password will be
+written.** The research is what settled it rather than taste — every
+established distribution builder (HstWB Installer, AmiKit, AmigaSYS,
+ClassicWB) installs a BoingBag by running the package's **own `Updater` inside
+an emulator**, where the password already lives, rather than by decrypting
+anything; HstWB's own README says so outright (*"HstWB Installer uses WinUAE
+or FS-UAE emulator to run the installation process"*). So the supported path
+exists and it is an Amiga-side one. That becomes **its own round**, not a
+continuation of this one, and it is cheaper than it sounds because
+`core/winuae::launch_winuae` already exists — what is missing is running it
+unattended and reading the result back. Until that round happens, both
+BoingBag recipes stay shipped-but-unplaceable and the screen says so.
+
+Also worth recording as *my own* mistake rather than the material's: the
+payload's 234 entries were listed with 7-Zip early in the round and read as
+plain files. **ZipCrypto does not encrypt names** — listing works, extraction
+does not — so the first fact was true and the second was inferred from it. The
+first thing that ever asked for bytes was Task 8's run.
+
 
 **ART-164** 🔵 **`core::iso`'s test scratch directory can be shared by two
-threads, so one test fails about one run in thirty** — *found 2026-08-19,
-measured on `main`*
+threads, so *any* test in the module can read another's fixture — first
+measured at about one full-suite run in thirty, and re-measured at four
+different tests failing this way** — *found 2026-08-19 on `main`; re-measured
+2026-08-19 while closing the content-layer round*
 `src-tauri/src/core/iso/mod.rs:1316`
 
-`a_mode2_form2_track_is_refused_rather_than_misread` fails intermittently
-under the parallel test runner. `tmp()` keys its directory on process id plus
-a nanosecond timestamp, and two threads entering it close enough together get
-the same name, so one test reads the other's fixture. This is
-ART-059 again in a different module — `core/osinstall`'s own fixtures
-already solved it with an atomic counter, and the fix here is the same one
-line.
+`tmp()` keys its directory on process id plus a nanosecond timestamp, and two
+threads entering it close enough together get the same name, so one test reads
+the other's fixture. This is ART-059 again in a different module —
+`core/osinstall`'s own fixtures already solved it with an atomic counter, and
+the fix here is the same one line.
+
+**The blast radius is wider than this entry first said, and that is the part
+worth correcting.** It was filed naming one test,
+`a_mode2_form2_track_is_refused_rather_than_misread`. Re-measured by running
+`cargo test core::iso::` forty times in a row, **five runs failed and four
+*different* tests were the one that failed** — `a_descriptor_that_loses_its_identifier_is_an_error`
+(twice), `a_directory_claiming_a_length_past_the_end_of_the_file_is_an_error`
+(twice), and `a_minimal_iso_reports_its_volume_name_and_root`, which failed
+with the clearest possible symptom of the mechanism:
+
+```
+assertion `left == right` failed
+  left: "Amiga Tëst"
+ right: "AMIGA_TEST"
+```
+
+— one test's disc read under another test's name. So there is no single
+"flaky test" to quarantine; every test in the module that writes a fixture is
+exposed, and which one loses the race is arbitrary. The rate depends on how
+much other work fills the runner: a whole-suite run failed once in eleven,
+while the module on its own — 56 tests and little else to interleave with —
+failed five times in forty.
 
 Left open rather than fixed on sight because it belongs to `core/iso` and was
 found during unrelated work; it is small, and it is exactly the kind of
 intermittent failure `CLAUDE.md` says trains people to re-run until green.
+**It is now also the one thing standing between this branch and an honest
+"the suite is green"**, so it should be the next thing fixed rather than the
+smallest.
 
 
 **ART-152** 🔵 **ART sizes a WHDLoad launch's Fast RAM from a fixed setting,
