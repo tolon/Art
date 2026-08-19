@@ -39,17 +39,21 @@
 //! | `read(<missing>)` | `Err(InvalidInput)`, "is not on this media" |
 //! | `read(<a file>)` | the bytes |
 //!
-//! The two media are built independently — a real blank ADF written through
-//! `VolumeWriter`, and a real Joliet ISO9660 image through `IsoBuilder` — so
-//! agreement here is agreement about behaviour, not a shared fixture
+//! The media are built independently — a real blank ADF written through
+//! `VolumeWriter`, a real Joliet ISO9660 image through `IsoBuilder`, and a
+//! real ZIP through the same writer `core::archive::zip`'s own tests use —
+//! so agreement here is agreement about behaviour, not a shared fixture
 //! agreeing with itself.
 //!
-//! Adding a third `MediaSource` means adding one line to [`sources`]. That
-//! is deliberately the cheapest thing in this file to do.
+//! Adding a further `MediaSource` means adding one line to [`sources`]. That
+//! is deliberately the cheapest thing in this file to do — `ArchiveSource`
+//! is the first one to actually do it, joining `AdfSource` and `CdSource`
+//! rather than just being asked to.
 
 use crate::core::error::CoreError;
 
 use super::source::{AdfSource, MediaSource};
+use super::source_archive::ArchiveSource;
 use super::source_cd::CdSource;
 
 /// The logical media every implementation below is given:
@@ -117,10 +121,32 @@ fn disc(tag: &str) -> Box<dyn MediaSource> {
     Box::new(CdSource::open(&path).unwrap())
 }
 
+/// A ZIP package archive carrying the shared tree under a single top-level
+/// directory — the volume name an `ArchiveSource` states about itself, and
+/// the shape a real BoingBag or catalog pack has.
+fn archive(tag: &str) -> Box<dyn MediaSource> {
+    let scratch = super::fixtures::scratch(&format!("contract-archive-{tag}"));
+    let bytes = crate::core::archive::zip::tests::make_zip_with(&[
+        ("Workbench3.2/C/LoadModule", FILE_BYTES),
+        // A trailing-slash name is how a ZIP marks a directory (`is_dir()`
+        // reads the name itself) — the archive equivalent of the empty
+        // drawer `floppy`/`disc` each make with their own writer.
+        ("Workbench3.2/Empty/", b""),
+    ]);
+    let path = scratch.join("package.zip");
+    std::fs::write(&path, bytes).unwrap();
+
+    Box::new(ArchiveSource::open(&path).unwrap())
+}
+
 /// Every implementation, named. **Add a line here when adding a
 /// `MediaSource`** — every test below runs over all of them.
 fn sources(tag: &str) -> Vec<(&'static str, Box<dyn MediaSource>)> {
-    vec![("AdfSource", floppy(tag)), ("CdSource", disc(tag))]
+    vec![
+        ("AdfSource", floppy(tag)),
+        ("CdSource", disc(tag)),
+        ("ArchiveSource", archive(tag)),
+    ]
 }
 
 #[test]

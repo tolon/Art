@@ -81,6 +81,7 @@ use serde::Serialize;
 use crate::core::error::CoreResult;
 
 use super::source::{AdfSource, MediaSource};
+use super::source_archive::ArchiveSource;
 use super::source_cd::CdSource;
 
 /// Which reader a piece of found media needs — the fact `find_media` learns
@@ -206,6 +207,64 @@ pub fn find_media(folder: &Path) -> CoreResult<Vec<FoundMedia>> {
     }
 
     Ok(found)
+}
+
+/// Every package archive in `folder`, identified from **inside** each file.
+///
+/// Deliberately separate from [`find_media`] rather than a third arm of its
+/// probe. Install media and packages are different questions asked of
+/// different folders — the owner keeps discs in one and archives in another
+/// — and folding them together would mean opening every 469 MiB disc in the
+/// package folder to find out it is not a package.
+///
+/// A file that is not an archive, or is an archive of a shape
+/// [`ArchiveSource`] refuses, is **skipped rather than fatal** — the same
+/// rule `find_media` follows, and for the same reason: one unreadable
+/// candidate in a folder of fifty-eight must not fail the scan.
+///
+/// Sorted by path, the same deterministic order `find_media` promises and
+/// for the same reason: a caller's report of what it found must not depend
+/// on a directory listing's own, filesystem-dependent order.
+pub fn find_packages(folder: &Path) -> CoreResult<Vec<FoundPackage>> {
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(folder)?
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<std::io::Result<_>>()?;
+    entries.sort();
+
+    let mut found: Vec<FoundPackage> = Vec::new();
+
+    for path in entries {
+        // `symlink_metadata`, not `metadata` — a symlink is never followed,
+        // matching `find_media`'s own rule for the same reason.
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+
+        // Anything that is not an archive, or an archive `ArchiveSource`
+        // refuses (no single top-level directory, or more than one), is
+        // simply not a package — skipped, not a scan failure.
+        let Ok(source) = ArchiveSource::open(&path) else {
+            continue;
+        };
+        found.push(FoundPackage {
+            path,
+            media: source.volume_name().to_string(),
+        });
+    }
+
+    Ok(found)
+}
+
+/// One archive [`find_packages`] opened, and the name it gave for itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FoundPackage {
+    pub path: PathBuf,
+    /// The archive's single top-level directory — never its filename.
+    pub media: String,
 }
 
 /// What resolving a volume name against a scanned folder found.
@@ -436,5 +495,60 @@ mod tests {
         std::fs::write(dir.join("notes.txt"), b"not an image").unwrap();
 
         assert!(find_media(&dir).unwrap().is_empty());
+    }
+
+    // ---- Task 2: a package archive is found too, but by a separate scan ----
+
+    /// A package archive in a folder, built the same shape `source_archive`'s
+    /// own tests use: a single top-level directory, identified from inside.
+    fn package(dir: &Path, filename: &str, top: &str, files: &[(&str, &[u8])]) -> PathBuf {
+        let path = dir.join(filename);
+        let nested: Vec<(String, &[u8])> = files
+            .iter()
+            .map(|(name, bytes)| (format!("{top}/{name}"), *bytes))
+            .collect();
+        let refs: Vec<(&str, &[u8])> = nested.iter().map(|(n, b)| (n.as_str(), *b)).collect();
+        std::fs::write(
+            &path,
+            crate::core::archive::zip::tests::make_zip_with(&refs),
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn a_valid_package_is_found_and_a_non_archive_file_is_skipped_not_fatal() {
+        let dir = scratch("packages-mixed");
+        std::fs::write(dir.join("readme.txt"), b"not an archive").unwrap();
+        package(&dir, "bb1.zip", "BoingBag3.9-1", &[("C/Assign", b"a")]);
+
+        let found = find_packages(&dir).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].media, "BoingBag3.9-1");
+    }
+
+    /// Two packages, reported in deterministic (sorted-path) order — the
+    /// same contract `find_media`'s own duplicate-name test pins.
+    #[test]
+    fn two_packages_are_both_reported_in_deterministic_order() {
+        let dir = scratch("packages-two");
+        // Written in the *opposite* of lexicographic order, for the same
+        // reason `find_media`'s duplicate-name test is: passing by
+        // coincidence whenever creation order already matches sorted order
+        // would not prove `entries.sort()` is load-bearing.
+        let second = package(&dir, "z-second.zip", "LocaleUpdate", &[("Locale/x", b"x")]);
+        let first = package(&dir, "a-first.zip", "BoingBag3.9-1", &[("C/Assign", b"a")]);
+
+        let found = find_packages(&dir).unwrap();
+        let paths: Vec<&PathBuf> = found.iter().map(|f| &f.path).collect();
+        assert_eq!(paths, vec![&first, &second]);
+    }
+
+    #[test]
+    fn an_unreadable_folder_is_an_error_not_an_empty_list() {
+        let dir = scratch("packages-unreadable");
+        let missing = dir.join("does-not-exist");
+
+        assert!(find_packages(&missing).is_err());
     }
 }

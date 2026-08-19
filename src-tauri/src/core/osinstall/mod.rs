@@ -35,18 +35,22 @@
 //! — `apply`'s own last step, composing `S:User-Startup` from every
 //! switched-on component's own lines), `verify` ([`verify::verify_volume`]
 //! — reading the finished PFS3 or FFS volume back and checking it against
-//! the manifest, §92's own VERIFY step) and now `source_cd`
+//! the manifest, §92's own VERIFY step), `source_cd`
 //! ([`source_cd::CdSource`] — a second [`source::MediaSource`], an ISO9660
 //! disc rather than an ADF, so AmigaOS 3.9's own install CD is install media
-//! too) exist so far — this module tree lands one task at a time, each
-//! adding its own `pub mod` line, so the crate compiles at the end of every
-//! task rather than only at the end of the feature.
+//! too) and now `source_archive` ([`source_archive::ArchiveSource`] — a
+//! third [`source::MediaSource`], a package archive (`BoingBag39-1.lha`, a
+//! Turkish catalog pack) so an official update package is install media too)
+//! exist so far — this module tree lands one task at a time, each adding its
+//! own `pub mod` line, so the crate compiles at the end of every task rather
+//! than only at the end of the feature.
 
 pub mod apply;
 pub mod plan;
 pub mod recipe;
 pub mod scan;
 pub mod source;
+pub mod source_archive;
 pub mod source_cd;
 /// One set of questions asked of **every** [`source::MediaSource`]
 /// implementation — tests only. Three divergences between `AdfSource` and
