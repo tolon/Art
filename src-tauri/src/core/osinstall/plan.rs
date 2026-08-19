@@ -213,8 +213,26 @@ pub struct InstallPlan {
     pub release: String,
     pub items: Vec<PlanItem>,
     pub refusals: Vec<RefusalReason>,
-    /// The sum of `items[].bytes` — `0` whenever `items` is empty, which is
-    /// always true together, never computed separately.
+    /// How many bytes of **file content** [`apply`](super::apply::apply) will
+    /// write — the sum of `bytes` over the `items` that are files, and `0`
+    /// whenever `items` is empty (the two are always true together, never
+    /// computed separately).
+    ///
+    /// **Directories are excluded, and that is the whole of ART-156.** The
+    /// sum used to run over every item. An ADF-sourced directory reports
+    /// `bytes: 0` — an AmigaDOS directory block carries no byte-length field
+    /// the way a file header does — so nothing was visibly wrong until a
+    /// disc: on a CD a directory *is* an extent, and `IsoEntry::bytes` hands
+    /// back its declared, sector-rounded extent length. `apply()` turns such
+    /// an item into a plain host folder with no content of its own, so those
+    /// bytes are real to the disc and imaginary to the tree. Measured against
+    /// the owner's own AmigaOS 3.9 CD: `6,108,319` predicted against
+    /// `6,054,225` written, a difference of exactly `54,094` — the sum over
+    /// the plan's 75 directory items, every one of the 588 file items being
+    /// byte-exact.
+    ///
+    /// This is a progress bar's total, and the thing it is measuring progress
+    /// through is bytes written, so it counts what gets written.
     pub total_bytes: u64,
     /// Every component id that is switched on — required, explicitly
     /// chosen, or turned on by its own [`Condition`] — regardless of
@@ -726,6 +744,21 @@ pub(crate) fn detect_package_refusals(
 /// [`MediaSource::walk`]. Then check the whole walked-out item list for
 /// file-level collisions, and sum. See the module doc comment for why
 /// refusals never stop the walk and why any refusal empties `items`.
+/// [`InstallPlan::total_bytes`] — the bytes of **file content** `apply()`
+/// will write, which is every item that is not a directory (ART-156).
+///
+/// Its own function rather than an inline `sum`, so a test can ask the real
+/// arithmetic instead of restating it: the defect this closes was one where
+/// the plan and a test recomputing the same formula agreed with each other
+/// and with nothing that was actually written.
+fn content_bytes(items: &[PlanItem]) -> u64 {
+    items
+        .iter()
+        .filter(|item| !item.is_dir)
+        .map(|item| item.bytes)
+        .sum()
+}
+
 pub fn plan(request: &InstallRequest, recipe: &Recipe) -> CoreResult<InstallPlan> {
     plan_over(request, recipe, &super::package::packages()?)
 }
@@ -938,7 +971,7 @@ pub(super) fn plan_over(
         // that could not be resolved, is not something to preview either.
         (Vec::new(), BTreeMap::new(), BTreeMap::new())
     };
-    let total_bytes = items.iter().map(|item| item.bytes).sum();
+    let total_bytes = content_bytes(&items);
 
     let paired_rom = rom_facts.map(|facts| super::PairedRom {
         name: facts.info.name.clone(),
@@ -1898,9 +1931,44 @@ mod plan_tests {
     #[test]
     fn the_total_is_the_sum_of_what_will_actually_be_written() {
         let plan = plan_with(&["workbench-base"], &["Workbench3.2"]);
+        assert_eq!(plan.total_bytes, content_bytes(&plan.items));
+    }
+
+    /// **ART-156.** A directory item's `bytes` never reaches the total, even
+    /// when it is not zero.
+    ///
+    /// A directory sourced from an ADF reports `0`, so this could not be
+    /// asked of the ADF fixtures at all — it was a CD that made the defect
+    /// visible, where a directory is an extent with a declared length. Asked
+    /// here of the arithmetic directly, over a hand-built item list carrying
+    /// exactly the shape a disc produces, rather than only of the gated hook
+    /// that needs the owner's own 469 MiB disc to run.
+    #[test]
+    fn a_directory_item_s_own_extent_length_is_not_content() {
+        let items = vec![
+            PlanItem {
+                component: "workbench-base".into(),
+                media: "AmigaOS39".into(),
+                from: "C".into(),
+                to: "C".into(),
+                is_dir: true,
+                // What an ISO9660 directory record declares for itself: a
+                // real, sector-rounded number.
+                bytes: 2048,
+            },
+            PlanItem {
+                component: "workbench-base".into(),
+                media: "AmigaOS39".into(),
+                from: "C/Assign".into(),
+                to: "C/Assign".into(),
+                is_dir: false,
+                bytes: 100,
+            },
+        ];
         assert_eq!(
-            plan.total_bytes,
-            plan.items.iter().map(|i| i.bytes).sum::<u64>()
+            content_bytes(&items),
+            100,
+            "the drawer's 2048 extent bytes are not content"
         );
     }
 

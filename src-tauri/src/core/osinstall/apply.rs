@@ -2754,9 +2754,12 @@ mod tests {
     /// writes anywhere. Not a naming defect and not `decode_iso646` — a
     /// distinct, pre-existing miscount in `core/osinstall/plan.rs` that
     /// this task's fix to ART-155 simply let `apply()` run far enough to
-    /// expose for the first time. Not fixed here (out of this task's scope
-    /// — `plan.rs` is not in its file list — and "one measured defect per
-    /// task").
+    /// expose for the first time.
+    ///
+    /// **Fixed 2026-08-20** (`plan::content_bytes`): `total_bytes` now sums
+    /// file items only. This diagnostic is kept as the evidence it always
+    /// was, and re-running it should now print `sum_dir_bytes=54094` with
+    /// `total_bytes` equal to `sum_file_bytes` alone.
     #[test]
     #[ignore = "diagnostic only; touches the user's real media and a prior real run's output"]
     fn find_the_directory_byte_overcount_when_asked() {
@@ -2871,9 +2874,9 @@ mod tests {
     /// be a second, distinct, previously-unreachable defect: `total_bytes`
     /// sums `PlanItem::bytes` over directories too, and a CD-sourced
     /// directory's `bytes` is its ISO9660 extent length, not `0`. Filed as
-    /// **ART-156**, not fixed here — see
-    /// `find_the_directory_byte_overcount_when_asked` above and ART-156 in
-    /// `docs/ISSUES.md`.
+    /// **ART-156** and fixed 2026-08-20, so the assertion below is now a
+    /// direct `outcome.bytes == planned.total_bytes` rather than the
+    /// file-items-only work-around it was written with.
     #[test]
     #[ignore = "touches the user's real media and E:\\amiga\\ProjeART; run explicitly, see the doc comment"]
     fn build_the_real_39_tree_when_asked() {
@@ -2954,31 +2957,24 @@ mod tests {
                     outcome.bytes,
                     elapsed.as_secs_f64()
                 );
-                // `planned.total_bytes` is *not* compared against
-                // `outcome.bytes` here — that is ART-156
-                // (`find_the_directory_byte_overcount_when_asked` above): a
-                // CD-sourced directory's `PlanItem::bytes` is its ISO9660
-                // extent length, not `0`, so `total_bytes` (summed over every
-                // item, files and directories alike) overstates what
-                // `apply()` actually writes as file content by exactly the
-                // 75 directories' worth of extent bytes. Comparing
-                // `outcome.bytes` against the sum of *file* items only is the
-                // invariant that actually holds — checked below.
+                // **ART-156 is fixed, so this is now a direct comparison.**
+                // It used to compare `outcome.bytes` against the sum of
+                // *file* items only, because `total_bytes` ran over every
+                // item and a CD-sourced directory's `PlanItem::bytes` is its
+                // ISO9660 extent length rather than `0` — 6,108,319 predicted
+                // against 6,054,225 written, a difference of exactly the 75
+                // directory items' 54,094 bytes. `total_bytes` now means what
+                // that work-around meant, so the work-around is gone and the
+                // plan's own number is what gets checked.
                 println!(
                     "plan.total_bytes={} vs apply.outcome.bytes={} (difference={})",
                     planned.total_bytes,
                     outcome.bytes,
                     outcome.bytes as i64 - planned.total_bytes as i64
                 );
-                let planned_file_bytes: u64 = planned
-                    .items
-                    .iter()
-                    .filter(|item| !item.is_dir)
-                    .map(|item| item.bytes)
-                    .sum();
                 assert_eq!(
-                    outcome.bytes, planned_file_bytes,
-                    "apply() wrote a different byte total than plan()'s file items predicted"
+                    outcome.bytes, planned.total_bytes,
+                    "apply() wrote a different byte total than plan() predicted"
                 );
 
                 // This disc is real, fixed material (the owner's own AmigaOS

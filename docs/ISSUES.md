@@ -294,48 +294,6 @@ more than the default, and no wasted headroom for one that needs less. Worth
 doing once more than one real title's memory failure has been measured, not
 before.
 
-**ART-156** 🟡 **`plan()`'s `total_bytes` counts a CD-sourced directory's own
-ISO9660 extent length as if it were file content, so it overstates what
-`apply()` actually writes to disk** — *found 2026-08-19, the same Task 5 real
-run that fixed ART-155's real cause and let `apply()` finish for the first
-time*
-`src-tauri/src/core/osinstall/plan.rs` (`total_bytes = items.iter().map(|item|
-item.bytes).sum()`, unconditional over every `PlanItem`, files and
-directories alike) ·
-
-`PlanItem::bytes` for a directory sourced from an ADF is `0` (an AmigaDOS
-directory block carries no byte-length field the way a file does), so the sum
-was never visibly wrong before — but a directory sourced from a CD gets its
-`bytes` from `IsoEntry::bytes`, the ISO9660 directory record's own declared
-extent length: a real, nonzero, sector-rounded number, because on a CD a
-directory *is* stored as an extent with a length. `apply()` turns such an
-item into a plain host folder with no content of its own, so those bytes are
-real to the disc and imaginary to the distribution tree.
-
-Measured against the owner's real AmigaOS 3.9 CD, once ART-155 no longer
-blocked `apply()` from finishing at all: `plan()` predicts `total_bytes:
-6,108,319` for the shipped recipe's one component; `apply()` actually writes
-`6,054,225` bytes of file content — a difference of exactly `54,094`, which
-is exactly the sum of `PlanItem::bytes` over the plan's 75 directory items
-(measured, not inferred: every one of the 588 file items' actual on-disk
-size matches its own `PlanItem::bytes` exactly, so the whole discrepancy sits
-in the 75 directories). Measured by
-`core::osinstall::apply::tests::find_the_directory_byte_overcount_when_asked`,
-which is a **diagnostic** — it prints the arithmetic and asserts nothing, so
-it records the measurement rather than guarding it. The fix that closes this
-issue is what gets the assertion.
-
-Not fixed here — `plan.rs` was out of Task 5's scope (its brief was
-`decode_iso646`'s charset only) and this is a distinct defect, reachable only
-once ART-155 stopped hiding it. `core::osinstall::apply::tests::
-build_the_real_39_tree_when_asked` now asserts against the sum of *file*
-items only, not `total_bytes`, and says why in a comment at the assertion.
-Fixing this for real means deciding what `total_bytes` is *for* — a progress
-bar's total, most likely — and either excluding directories from the sum or
-giving a CD-sourced directory `bytes: 0` the same declared-default way
-`core/osinstall/source_cd.rs` already gives a disc's un-measurable protection
-and comment fields, matching what an ADF-sourced directory reports today.
-
 **ART-157** 🟡 **The recipe format cannot state a Kickstart *minimum*, only a
 maximum, so AmigaOS 3.9's real requirement (V40 or newer) goes unstated and
 unchecked** — *found 2026-08-19, Task 3, answering the plan's own instruction
@@ -1058,6 +1016,51 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-156** 🟡 **`plan()`'s `total_bytes` counts a CD-sourced directory's own
+ISO9660 extent length as if it were file content, so it overstates what
+`apply()` actually writes to disk** — *found 2026-08-19, the Task 5 real run
+that fixed ART-155's real cause and let `apply()` finish for the first time;
+fixed 2026-08-20 on `debt-wave-a`*
+`src-tauri/src/core/osinstall/plan.rs` (`content_bytes`)
+
+`total_bytes` was `items.iter().map(|item| item.bytes).sum()`, unconditional
+over every `PlanItem`, files and directories alike. `PlanItem::bytes` for a
+directory sourced from an ADF is `0` (an AmigaDOS directory block carries no
+byte-length field the way a file does), so the sum was never visibly wrong
+before — but on a CD a directory *is* an extent, and `IsoEntry::bytes` hands
+back its declared, sector-rounded length. `apply()` turns such an item into a
+plain host folder with no content of its own, so those bytes are real to the
+disc and imaginary to the distribution tree.
+
+Measured against the owner's real AmigaOS 3.9 CD: `plan()` predicted
+`total_bytes: 6,108,319` and `apply()` wrote `6,054,225` bytes of file
+content — a difference of exactly `54,094`, the sum of `PlanItem::bytes` over
+the plan's 75 directory items, with all 588 file items byte-exact.
+
+**Fixed 2026-08-20.** `total_bytes` is the sum over items that are **not**
+directories, computed by a named `content_bytes(&items)` rather than an inline
+`sum` — deliberately, so a test can ask the real arithmetic instead of
+restating the same formula and agreeing with itself, which is how the original
+`the_total_is_the_sum_of_what_will_actually_be_written` was satisfied by
+construction. The field's doc comment now says what the number is *for*: a
+progress bar's total, measuring progress through bytes written, so it counts
+what gets written.
+
+`build_the_real_39_tree_when_asked` (the disc-gated hook) asserted against the
+sum of *file* items only, with a comment saying why; that work-around is gone
+and it now asserts `outcome.bytes == planned.total_bytes` directly.
+`find_the_directory_byte_overcount_when_asked` is kept as the evidence it
+always was — re-running it should now print `total_bytes` equal to
+`sum_file_bytes` with `sum_dir_bytes=54094` beside it.
+
+Tests: `core::osinstall::plan::tests::a_directory_item_s_own_extent_length_is_not_content`
+(a hand-built item list carrying the shape a disc produces, so the arithmetic
+is pinned without the owner's 469 MiB disc) and
+`core::osinstall::plan::tests::the_total_is_the_sum_of_what_will_actually_be_written`,
+now asking `content_bytes` rather than restating it. The disc-gated
+`core::osinstall::apply::tests::build_the_real_39_tree_when_asked` carries the
+direct comparison against the real disc.
 
 **ART-160** 🟡 **`osinstall::apply()` writes host filenames without going
 through `windows_safe_name`, and the one machine that measured a reserved
