@@ -15,7 +15,7 @@
   "media": "BoingBag3.9-2",
   "member": "AmigaOS-Update",
   "requires": ["boingbag-39-1"],
-  "overrides": ["workbench-base"],
+  "overrides": ["workbench-base", "boingbag-39-1"],
   "rules": [
     { "from": "C",         "to": "C",         "kind": "subtree" },
     { "from": "Classes",   "to": "Classes",   "kind": "subtree" },
