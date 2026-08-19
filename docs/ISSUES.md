@@ -26,47 +26,6 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-169** 🔴 **`workbench-base` places only the disc's `Workbench3.5` half,
-never its `Workbench3.9` overlay, so the tree ART calls "AmigaOS 3.9" boots as
-Workbench 44.5 with a Startup-Sequence that fails on its first command** —
-*found 2026-08-19 by Task 8's real run and its boot, on `content-layer`*
-`src-tauri/src/core/osinstall/recipes/amigaos-3.9.json`
-
-The owner's own `AmigaOS39.iso` carries **two** sibling install trees under
-`OS-Version3.9`: `Workbench3.5` (673 entries, 14 drawers placed) and
-`Workbench3.9` (**854 entries**, 13 drawers: `C Classes Devs Fonts Libs Locale
-Prefs S Storage System Tools Utilities WBStartup`). Both counts measured with
-`7z l -slt` against the disc. Every rule in `workbench-base` reads from
-`OS-VERSION3.9/WORKBENCH3.5/…`; nothing anywhere in the recipe reads
-`Workbench3.9`. The real AmigaOS Installer lays the 3.5 tree and then overlays
-the 3.9 one, which is what makes the result AmigaOS 3.9 rather than 3.5.
-
-Booted under WinUAE with the owner's licensed Kickstart 3.1 (V40), the tree
-says so itself, on the boot console before Workbench even opens:
-
-```
-AMIGA ROM Operating System and Libraries
-Copyright © 1985-2000 Amiga International, Inc.
-All Rights Reserved.
-C:LoadMonDrvs: Unknown command
-```
-
-`LoadMonDrvs` is on the disc twice — `Emergency-Boot/C/LoadMonDrvs` and
-`OS-Version3.9/Workbench3.9/C/LoadMonDrvs` — and in neither place the recipe
-reads from. The Startup-Sequence that calls it *is* placed, because it comes
-from `Workbench3.5/S`. `version full` in the boot shell then reports
-`Kickstart 40.68, Workbench 44.5 (18-Aug-00)`.
-
-Not fixed here: this is a base-recipe defect that predates the package round
-and reshapes the whole base tree (every `Workbench3.9` rule lands on a
-destination `Workbench3.5` already claimed, so it needs an `overrides`
-relationship and a component of its own), and Task 8's rule is one measured
-defect per report. `amigaos-3.9.json`'s own `_why_no_T` note already says the
-right thing about this class of question — "If a boot disagrees with either
-judgement, add the rule then, with the run as the reason" — and this is that
-run.
-
-
 **ART-168** 🔴 **An LHA entry name's non-ASCII bytes are replaced with U+FFFD
 rather than decoded, so a real Amiga drawer name becomes a name no Amiga can
 see** — *found 2026-08-19 by Task 8's real run and confirmed on the booted
@@ -1003,6 +962,83 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-169** 🔴 ✅ **`workbench-base` placed only the disc's `Workbench3.5`
+half, never its `Workbench3.9` overlay, so the tree ART called "AmigaOS 3.9"
+booted as Workbench 44.5 with a Startup-Sequence that failed on its first
+command** — *found 2026-08-19 by Task 8's real run and its boot; fixed the
+same day, in Task 8's fix round 1*
+`src-tauri/src/core/osinstall/recipes/amigaos-3.9.json` ·
+`core::osinstall::apply::tests::layer_the_real_39_overlay_when_asked`
+
+The owner's own `AmigaOS39.iso` carries **two** sibling install trees under
+`OS-Version3.9`, and the ruling that fixed this came from measuring both
+rather than from assuming the recipe pointed at the wrong one:
+
+| | rows | top-level drawers |
+|---|---:|---|
+| `Workbench3.5` | 673 | `C Classes Devs Expansion Fonts L Libs Prefs Rexxc S Storage System T Tools Utilities WBStartup` |
+| `Workbench3.9` | 854 | `C Classes Devs Fonts Libs Locale Prefs S Storage System Tools Utilities WBStartup` |
+
+`Workbench3.9` has no `L`, no `Expansion`, no `Rexxc` and no `T`; its own `S`
+holds `bg`, `fg`, `fork`, `History`, `SetFont`, `SetKeyboard` and three ARexx
+scripts and **no `Startup-Sequence`**; there is no `Workbench3.9/C/Version`
+at all; its `C` holds 29 commands where 3.5's holds 52, 12 of them
+replacements and 17 new; and its `Libs/workbench.library` is 199,852 bytes
+against 3.5's 193,400 — a different, larger file. It ships only what changed.
+
+So it is an **overlay over `Workbench3.5`**, which is why a 3.9 CD carries a
+`Workbench3.5` drawer at all, and the recipe was never installing the wrong
+tree — it was stopping after the first layer. Fixed by adding a second
+component, `workbench-39`, declared **last** (`plan()` emits items in recipe
+order and the last writer wins), `required: true`, with
+`overrides: ["workbench-base", "locale-base"]` and thirteen rules read off
+the disc's own `Workbench3.9` listing rather than copied from
+`workbench-base`'s.
+
+**Measured, release build, against the owner's own disc** — the overlay is
+854 items (792 files, 62 drawers), and the tree it produces:
+
+| | files | drawers | bytes | elapsed |
+|---|---:|---:|---:|---:|
+| before (3.5 layer only) | 1257 | 156 | 10,003,017 | 10.57 s |
+| after (both layers) | 1879 | 181 | 18,813,726 | 17.90 s |
+| delta | +622 | +25 | +8,810,709 | |
+
+**What the layer does to the files already there**, classified with
+`collide::classify` — the same function `collide::preview` calls once it has
+both sides' bytes:
+
+```
+upgrade=19  downgrade=0  same-version=0  unversioned=21
+identical=130 (excluded by preview's own rule)  new files=622
+```
+
+`C/IPREFS 44.23 -> 45.9`, `Prefs/ICONTROL 44.11 -> 45.2`,
+`Prefs/INPUT 44.19 -> 45.1`, `Prefs/OVERSCAN 44.13 -> 45.1`,
+`Prefs/REACTION 44.10 -> 45.1` — 44.x to 45.x, read out of the files' own
+`$VER:` strings by ART's own classifier. Zero downgrades.
+
+**And the booted system says so.** Same WinUAE profile, same licensed
+Kickstart 3.1 (V40), same `generate_uae_config`:
+
+```
+1> version full
+Kickstart 40.68, Workbench 45.1 (13-Nov-00)
+```
+
+against `Kickstart 40.68, Workbench 44.5 (18-Aug-00)` before. `C:LoadMonDrvs:
+Unknown command` is gone from the boot console, Workbench reaches a clean
+screen with no requester, and its icons are the 3.9 ones where the 3.5-only
+tree showed generic floppies.
+
+**One thing left open by the fix, deliberately.** The rule places `Locale`
+whole, so `Locale/Flags` (61 rows, Countries *and* Keymaps) and
+`Locale/Providers` (4) now reach the volume, which `locale-base`'s own
+`_why_locale_base_ART_162` note left off as cosmetic. That judgement was made
+about a different source tree; this is the 3.9 layer as the disc ships it. If
+the owner wants them off it is a rule to narrow, with a run as the reason —
+see the component's own `_why_overrides_and_why_last` note.
 
 **ART-165** 🟡 ✅ **Every `on*` subscription wrapper's fire-and-forget
 `.then((fn) => { unlisten = fn })` pattern (or an async-IIFE variant of the

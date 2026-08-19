@@ -4085,15 +4085,22 @@ mod tests {
     ///
     /// | | files | drawers | bytes | elapsed | upgrade / downgrade / same / unversioned |
     /// |---|---|---|---|---|---|
-    /// | base 3.9 (`workbench-base` + `locale-base`) | 1257 | 156 | 10,003,017 | 10.10 s | — |
+    /// | base 3.9, before ART-169 (`workbench-base` + `locale-base`) | 1257 | 156 | 10,003,017 | 10.10 s | — |
+    /// | base 3.9, after ART-169 (`…` + `workbench-39`) | 1879 | 181 | 18,813,726 | 17.92 s | — |
     /// | BoingBag 3.9-1 | — | — | — | — | never read — **ART-166** |
     /// | Türkçe catalogs | 36 | 3 | 161,534 | 0.15 s | 0 / 0 / 0 / 0 — **ART-168** |
     /// | BoingBag 3.9-2 | — | — | — | — | never read — **ART-166** |
     ///
+    /// Re-run unchanged after ART-169's fix landed (the base row above gains
+    /// `workbench-39`, which is `required: true` and so always on): every
+    /// package result is byte-for-byte the same, which is what keeps the two
+    /// rounds' findings separable.
+    ///
     /// This test **fails on purpose** while ART-166, ART-167 and ART-168
     /// stand: it is the measurement, and a measurement that passed would be
     /// claiming the owner's own packages reach the tree when three of them do
-    /// not. The boot the same tree produced is **ART-169**.
+    /// not. The boot the same tree produced was **ART-169**, now fixed — see
+    /// `layer_the_real_39_overlay_when_asked` below.
     #[test]
     #[ignore = "touches the user's real media and E:\\amiga\\ProjeART; run explicitly, see the doc comment"]
     fn apply_the_real_packages_when_asked() {
@@ -4330,6 +4337,235 @@ mod tests {
             failures.is_empty(),
             "the owner's own packages did not all reach the tree:\n  {}",
             failures.join("\n  ")
+        );
+    }
+
+    // ---- Task 8 fix round 1: ART-169, the 3.9 overlay ---------------------
+
+    /// **ART-169's measurement, and the run that proves the layer landed.**
+    ///
+    /// `workbench-39` is an overlay over `workbench-base`, not a replacement
+    /// for it — see that component's own `_why` notes in
+    /// `recipes/amigaos-3.9.json`. This hook builds the tree **twice** from
+    /// one real `plan()`:
+    ///
+    /// - **before** — every item whose component is not `workbench-39`, which
+    ///   is exactly the tree ART built before this fix;
+    /// - **after** — the whole plan, the real product, which is what gets
+    ///   booted.
+    ///
+    /// Between the two it classifies every file the overlay would land on the
+    /// *before* tree, through `collide::classify` — the same function
+    /// `collide::preview` calls once it has both sides' bytes in hand.
+    /// `preview` itself is not used, and that is a finding rather than a
+    /// shortcut: its `declared` column resolves the incoming component id
+    /// through `package::by_id`, so it can only ever be asked about a
+    /// **package**. Asked about a recipe component it refuses by name. The
+    /// classification is identical; only the `declared` column is missing,
+    /// and for a layer inside one recipe `detect_collisions` has already
+    /// enforced the same thing at plan time.
+    ///
+    /// Filtering one real plan rather than planning twice is deliberate:
+    /// `workbench-39` is `required: true`, so `resolve_components_on` will
+    /// not let `excluded` turn it off (by design — a required component is
+    /// not a preference). Hand-building an `InstallPlan` from items a real
+    /// `plan()` produced is the same shape `planned()` above already uses,
+    /// and every item in the *before* tree is a real item off the real disc.
+    ///
+    /// ```text
+    /// cd src-tauri && ART_OS39_ISO="E:\amiga\Amigatolon\iso\AmigaOS39.iso" \
+    ///   ART_OS39_LAYER_BEFORE="E:\amiga\ProjeART\dist-3.9-l0" \
+    ///   ART_OS39_LAYER_AFTER="E:\amiga\ProjeART\dist-3.9-l1" \
+    ///   cargo test --release layer_the_real_39_overlay_when_asked -- --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore = "touches the user's real media and E:\\amiga\\ProjeART; run explicitly, see the doc comment"]
+    fn layer_the_real_39_overlay_when_asked() {
+        use crate::core::osinstall::collide::{classify, Collision};
+
+        let (Ok(iso), Ok(before_at), Ok(after_at)) = (
+            std::env::var("ART_OS39_ISO"),
+            std::env::var("ART_OS39_LAYER_BEFORE"),
+            std::env::var("ART_OS39_LAYER_AFTER"),
+        ) else {
+            return;
+        };
+
+        let iso_path = PathBuf::from(&iso);
+        let media_folder = iso_path
+            .parent()
+            .expect("ART_OS39_ISO names a file inside some folder")
+            .to_path_buf();
+        let before = PathBuf::from(&before_at);
+        let after = PathBuf::from(&after_at);
+
+        let request = crate::core::osinstall::plan::InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.9".to_string(),
+            media_folder,
+            rom: None,
+            chosen: vec!["locale-base".to_string()],
+            excluded: Vec::new(),
+            destination: after.clone(),
+        };
+        let recipe = crate::core::osinstall::recipe::amigaos_39().unwrap();
+        let planned = crate::core::osinstall::plan::plan(&request, &recipe).unwrap();
+        assert!(
+            planned.refusals.is_empty(),
+            "the real plan refused: {:?}",
+            planned.refusals
+        );
+        println!(
+            "plan: components_on={:?} items={} total_bytes={}",
+            planned.components_on,
+            planned.items.len(),
+            planned.total_bytes
+        );
+        assert!(
+            planned.components_on.iter().any(|id| id == "workbench-39"),
+            "workbench-39 is required — a plan without it is not this recipe"
+        );
+
+        let overlay: Vec<PlanItem> = planned
+            .items
+            .iter()
+            .filter(|item| item.component == "workbench-39")
+            .cloned()
+            .collect();
+        let base_items: Vec<PlanItem> = planned
+            .items
+            .iter()
+            .filter(|item| item.component != "workbench-39")
+            .cloned()
+            .collect();
+        println!(
+            "items: base={} overlay={} (overlay files={} drawers={})",
+            base_items.len(),
+            overlay.len(),
+            overlay.iter().filter(|i| !i.is_dir).count(),
+            overlay.iter().filter(|i| i.is_dir).count()
+        );
+
+        // ---- the tree as it stood before ART-169 --------------------------
+        let mut before_plan = planned.clone();
+        before_plan.items = base_items;
+        before_plan.components_on = planned
+            .components_on
+            .iter()
+            .filter(|id| id.as_str() != "workbench-39")
+            .cloned()
+            .collect();
+        let start = std::time::Instant::now();
+        let base = apply(&before_plan, &before, &NoProgress)
+            .unwrap_or_else(|err| panic!("the before tree failed to build: {err}"));
+        println!(
+            "BEFORE apply: files={} directories={} bytes={} elapsed={:.2}s",
+            base.files,
+            base.directories,
+            base.bytes,
+            start.elapsed().as_secs_f64()
+        );
+
+        // ---- what the layer would do to it --------------------------------
+        let mut source = crate::core::osinstall::scan::open_media(
+            &crate::core::osinstall::scan::identify(&iso_path)
+                .expect("the disc must identify as media"),
+        )
+        .unwrap();
+        let (mut upgrade, mut downgrade, mut same_version, mut unversioned) = (0usize, 0, 0, 0);
+        let (mut identical, mut brand_new) = (0usize, 0usize);
+        let mut downgrades: Vec<String> = Vec::new();
+        let mut upgrades: Vec<String> = Vec::new();
+        for item in overlay.iter().filter(|item| !item.is_dir) {
+            let existing = match std::fs::read(before.join(&item.to)) {
+                Ok(bytes) => bytes,
+                Err(_) => {
+                    brand_new += 1;
+                    continue;
+                }
+            };
+            let incoming = source.read(&item.from).unwrap();
+            match classify(&existing, &incoming, &item.to) {
+                Collision::Identical => identical += 1,
+                Collision::Upgrade { from, to } => {
+                    upgrade += 1;
+                    if upgrades.len() < 8 {
+                        upgrades.push(format!("{} {from} -> {to}", item.to));
+                    }
+                }
+                Collision::Downgrade { from, to } => {
+                    downgrade += 1;
+                    downgrades.push(format!("{} {from} -> {to}", item.to));
+                }
+                Collision::SameVersion { .. } => same_version += 1,
+                Collision::Unversioned { .. } => unversioned += 1,
+            }
+        }
+        println!(
+            "LAYER collisions: upgrade={upgrade} downgrade={downgrade} same-version={same_version} \
+             unversioned={unversioned} · identical={identical} (excluded by preview's own rule) \
+             · new files (no existing destination)={brand_new}"
+        );
+        for line in &upgrades {
+            println!("  UPGRADE {line}");
+        }
+        for line in &downgrades {
+            println!("  DOWNGRADE {line}");
+        }
+
+        // A layer reporting no upgrade at all has not been applied — the same
+        // rule this task's package hook applies to a BoingBag, and the one
+        // number that cannot be satisfied by a layer that silently landed
+        // nowhere.
+        assert!(
+            upgrade > 0,
+            "the 3.9 overlay reported zero upgrades: it landed on nothing the 3.5 layer placed, \
+             which means it is not an overlay of it at all"
+        );
+
+        // ---- the real product ---------------------------------------------
+        let start = std::time::Instant::now();
+        let full = apply(&planned, &after, &NoProgress)
+            .unwrap_or_else(|err| panic!("the layered tree failed to build: {err}"));
+        println!(
+            "AFTER apply: files={} directories={} bytes={} elapsed={:.2}s",
+            full.files,
+            full.directories,
+            full.bytes,
+            start.elapsed().as_secs_f64()
+        );
+        println!(
+            "delta: files {:+} directories {:+} bytes {:+}",
+            full.files as i64 - base.files as i64,
+            full.directories as i64 - base.directories as i64,
+            full.bytes as i64 - base.bytes as i64
+        );
+
+        // ART-169's own evidence, inverted: the command whose absence the boot
+        // console reported must now be in the tree, and it must have come off
+        // the overlay rather than from nowhere.
+        let load_mon_drvs = after.join("C").join("LoadMonDrvs");
+        assert!(
+            load_mon_drvs.exists(),
+            "{} is what ART-169 was: the Startup-Sequence's first command",
+            load_mon_drvs.display()
+        );
+
+        let manifest = read_manifest(&after);
+        let from_overlay = manifest
+            .files
+            .iter()
+            .filter(|f| f.component == "workbench-39")
+            .count();
+        println!(
+            "manifest: {} file record(s), {from_overlay} of them from workbench-39",
+            manifest.files.len()
+        );
+        assert_eq!(
+            manifest.files.len(),
+            full.files as usize,
+            "one record per file in the tree (ART-124)"
         );
     }
 }
