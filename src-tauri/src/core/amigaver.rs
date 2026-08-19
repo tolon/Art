@@ -30,20 +30,36 @@ pub struct AmigaVersion {
     pub revision: u32,
 }
 
-impl PartialOrd for AmigaVersion {
-    /// Version, then revision. **The date is deliberately not compared**: a
-    /// rebuilt binary can carry a later date and the same version, and
-    /// calling that an update would put a downgrade behind a green arrow.
+impl AmigaVersion {
+    /// Compare by version, then revision — a named method rather than
+    /// `PartialOrd`/`Ord`, and deliberately not either.
+    ///
+    /// `PartialOrd` promises (Rust's own documented contract) that
+    /// `a == b` iff `partial_cmp(a, b) == Some(Equal)`. This type's derived
+    /// `PartialEq` compares every field, `name` included, while the
+    /// comparison that matters for an upgrade/downgrade decision compares
+    /// only `version` and `revision` — two records for different programs
+    /// that happen to share a version number must stay `!=` while still
+    /// comparing `Equal` here. An operator (`>`, `<`) that silently means
+    /// less than it looks like is exactly the trap: something that sorts,
+    /// dedups, or takes a `max` of `AmigaVersion` values via `PartialOrd`
+    /// would see two different programs collapse into one. A named method
+    /// makes every call site say what it is comparing instead. It also
+    /// isn't really partial — the comparison never has an incomparable
+    /// case — so `Ordering` rather than `Option<Ordering>` says that
+    /// honestly.
+    ///
+    /// **The date is deliberately not compared**: a rebuilt binary can
+    /// carry a later date and the same version, and calling that an update
+    /// would put a downgrade behind a green arrow.
     ///
     /// Names are not compared either. Whether two files are the same thing
     /// is decided by where they land in the tree, not by what they call
     /// themselves — `LoadWB` and `loadwb` are one file to AmigaDOS.
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(
-            self.version
-                .cmp(&other.version)
-                .then(self.revision.cmp(&other.revision)),
-        )
+    pub fn compare_version(&self, other: &Self) -> Ordering {
+        self.version
+            .cmp(&other.version)
+            .then(self.revision.cmp(&other.revision))
     }
 }
 
@@ -83,10 +99,36 @@ pub fn read(bytes: &[u8]) -> Option<AmigaVersion> {
     parse(&text)
 }
 
+/// Is every character in a candidate name one AmigaDOS would plausibly put
+/// in a program identifier?
+///
+/// `$VER:` is found by raw substring search over bytes ART has no other
+/// reason to trust — unlike `core::iso::descriptor`'s ISO9660 identifiers,
+/// which sit in a field the volume descriptor structurally guarantees is
+/// text, a `$VER:` match can land anywhere inside an arbitrary binary, so
+/// nothing but the bytes that happen to follow it says this is a version
+/// string rather than four coincidental ASCII bytes in compiled code or
+/// packed data. Requiring valid UTF-8 used to be an incidental filter
+/// against exactly that: binary noise decoded to `Err` far more often than
+/// it decoded to a plausible name. Decoding as Latin-1 unconditionally
+/// (see `decode_latin1`) removes that filter — Latin-1 never fails — so
+/// this restores an equivalent one that does not depend on the encoding:
+/// reject a name containing a control character (C0 `0x00..=0x1F`, `0x7F`,
+/// or C1 `0x80..=0x9F`, all of which `char::is_control` recognises for
+/// Latin-1's code-point-for-byte-value range). A genuine AmigaDOS program
+/// name is printable text; binary noise that happens to contain a `NN.NN`
+/// shape after four accidental `$VER:` bytes is not.
+fn is_plausible_name(name: &str) -> bool {
+    !name.chars().any(|c| c.is_control())
+}
+
 /// The text after the marker: ` name version.revision (date)`.
 fn parse(text: &str) -> Option<AmigaVersion> {
     let mut words = text.split_whitespace();
     let name = words.next()?;
+    if !is_plausible_name(name) {
+        return None;
+    }
     let number = words.next()?;
     let (version, revision) = number.split_once('.')?;
     Some(AmigaVersion {
@@ -159,13 +201,30 @@ mod tests {
         let newer_version = read(b"$VER: assign 45.1 (1.1.99)").unwrap();
         let rebuilt = read(b"$VER: assign 37.4 (31.12.99)").unwrap();
 
-        assert!(newer_revision > older);
-        assert!(newer_version > newer_revision);
-        assert!(
-            rebuilt <= older,
+        assert_eq!(newer_revision.compare_version(&older), Ordering::Greater);
+        assert_eq!(
+            newer_version.compare_version(&newer_revision),
+            Ordering::Greater
+        );
+        assert_ne!(
+            rebuilt.compare_version(&older),
+            Ordering::Greater,
             "a later date alone is not a newer version"
         );
-        assert!(older <= rebuilt);
+        assert_ne!(older.compare_version(&rebuilt), Ordering::Greater);
+    }
+
+    /// The `PartialEq`/`compare_version` split findings 1 and 2 asked for:
+    /// two records for different programs that happen to share a version
+    /// number compare `Equal` under `compare_version` but stay `!=` under
+    /// the derived `PartialEq`, because `PartialEq` still compares `name`.
+    #[test]
+    fn compare_version_ignores_name_but_partial_eq_does_not() {
+        let assign = read(b"$VER: assign 37.4 (25.4.91)").unwrap();
+        let other = read(b"$VER: other 37.4 (25.4.91)").unwrap();
+
+        assert_eq!(assign.compare_version(&other), Ordering::Equal);
+        assert_ne!(assign, other, "different programs are not the same file");
     }
 
     /// A version marker can run to the end of the file with no date and no
@@ -198,6 +257,19 @@ mod tests {
         let got = read(&bytes).unwrap();
         assert_eq!(got.name, "caf\u{e9}");
         assert_eq!((got.version, got.revision), (37, 4));
+    }
+
+    /// A coincidental `$VER:` match inside binary noise — four bytes that
+    /// happen to line up, not a real version marker — must not be reported
+    /// just because what follows happens to have a `NN.NN` shape.
+    /// `is_plausible_name`'s doc comment explains why control bytes are the
+    /// filter: real AmigaDOS program names are printable text.
+    #[test]
+    fn binary_noise_with_a_coincidental_number_shape_is_rejected() {
+        let mut bytes = b"$VER: ".to_vec();
+        bytes.extend_from_slice(&[0x01, 0x02, 0x03]);
+        bytes.extend_from_slice(b" 12.34 (1.1.99)");
+        assert!(read(&bytes).is_none());
     }
 
     /// The 31% figure the spec rests on, re-measurable rather than quoted.
@@ -236,7 +308,9 @@ mod tests {
                 // it can never carry a `$VER:` marker. Counting it as a file
                 // here would silently double the denominator against a
                 // distribution-tree export and understate the real 31%.
-                let is_sidecar = path.extension().is_some_and(|ext| ext == "uaem")
+                let is_sidecar = path
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("uaem"))
                     || path
                         .file_name()
                         .is_some_and(|name| name == "distribution.json");
