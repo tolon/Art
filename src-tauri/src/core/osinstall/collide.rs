@@ -739,6 +739,7 @@ mod tests {
                 sha256: "0".repeat(64),
                 bytes: 0,
                 protection: None,
+                overwrote: None,
             }],
             paired_rom: None,
         };

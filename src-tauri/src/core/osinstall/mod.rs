@@ -251,6 +251,44 @@ pub enum RefusalReason {
         expected: RuleKind,
         found: RuleKind,
     },
+    /// A chosen package id ART ships no recipe for — a selection saved
+    /// against an older build, most likely. Refused rather than skipped:
+    /// silently installing one fewer package than the user ticked is the
+    /// same class of quiet wrongness `MediaMissing` exists to prevent.
+    PackageUnknown { package: String },
+    /// Packages were chosen and `InstallRequest::package_folder` is `None`.
+    /// Names every package that was asked for, because the folder is the
+    /// one thing the user has to supply to make any of them resolvable —
+    /// and the media folder cannot stand in for it: the owner keeps discs
+    /// in `Amigatolon\iso` and archives in `Amigatolon\paketler`.
+    PackageFolderMissing { packages: Vec<String> },
+    /// A package needs another package that was not itself chosen. Pulling
+    /// it in silently would install something the user never asked for
+    /// (`package::order`'s own rule, surfaced as a typed refusal rather
+    /// than its English sentence — ART-060).
+    PackageRequirementMissing { package: String, requires: String },
+    /// A package needs a **recipe component** that is not switched on —
+    /// `locale-turkish` without `locale-base`, which lands thirty-six
+    /// catalogs into a `Locale/Catalogs` drawer nothing can open (ART-162
+    /// arriving through the selection instead of through the recipe).
+    /// `requires` cannot express this: it relates packages to packages, and
+    /// a component is not a package.
+    PackageComponentMissing { package: String, component: String },
+    /// No archive in the package folder carries this package's own
+    /// top-level directory name. The package counterpart of
+    /// [`RefusalReason::MediaMissing`], and separate from it because the
+    /// folder it names is a different folder.
+    PackageArchiveMissing { package: String, media: String },
+    /// More than one archive in the package folder claims this package's
+    /// top-level directory name — `BoingBag39-2.lha` sitting beside its
+    /// eight language variants is the real case. Every claimant is carried,
+    /// for the reason [`RefusalReason::MediaAmbiguous`] already gives:
+    /// the user's next question is always "which two files?".
+    PackageArchiveAmbiguous {
+        package: String,
+        media: String,
+        paths: Vec<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -573,6 +611,8 @@ pub(crate) mod fixtures {
 
         let rom = rom_major.map(|major| fake_rom(&dir, major));
         let request = crate::core::osinstall::plan::InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom,
@@ -583,6 +623,122 @@ pub(crate) mod fixtures {
 
         let plan = crate::core::osinstall::plan::plan(&request, &recipe).unwrap();
         (plan, dir)
+    }
+
+    // -----------------------------------------------------------------
+    // Task 6: one base release and one package that lands on it.
+    //
+    // Shared between `plan.rs` (which resolves and orders packages) and
+    // `apply.rs` (which places them, and proves both entry points agree),
+    // for the reason every fixture in this module exists: a second copy of
+    // a fixture builder is how two tests start disagreeing about what a
+    // tree looks like.
+    //
+    // Deliberately **not** the shipped recipe or the shipped packages. The
+    // property under test is "a package overwrote a base file and the two
+    // entry points agree about the result", and that needs a base file, a
+    // package file over it, a file only the base has and a file only the
+    // package has — four facts stated in twenty lines here, rather than
+    // inferred from a 26-component recipe and a 210-file BoingBag nobody
+    // may redistribute.
+    // -----------------------------------------------------------------
+
+    /// The base file both sides write, and the one thing that makes
+    /// `producing_with_a_package_equals_adding_it_afterwards` prove
+    /// anything: a package that only *added* files would pass it while
+    /// saying nothing about the case this whole round is about.
+    pub const OVERWRITTEN_PATH: &str = "C/LoadModule";
+
+    /// A one-component release: everything in `C` off a floppy called
+    /// `TestBase`.
+    pub fn package_test_recipe() -> super::Recipe {
+        super::Recipe {
+            release: "Test OS".to_string(),
+            components: vec![super::Component {
+                id: "base-c".to_string(),
+                media: "TestBase".to_string(),
+                rules: vec![super::PathRule {
+                    from: "C".to_string(),
+                    to: "C".to_string(),
+                    kind: super::RuleKind::Subtree,
+                }],
+                required: true,
+                condition: None,
+                overrides: Vec::new(),
+                user_startup: Vec::new(),
+                exclusive_group: None,
+                available: true,
+            }],
+        }
+    }
+
+    /// A package over that release, shaped exactly like a shipped one: one
+    /// `Subtree` rule, and an `overrides` naming the component whose files
+    /// it lands on — without which `plan::detect_collisions` refuses the
+    /// combination, which is the correct answer for an *undeclared*
+    /// overwrite and the wrong one here.
+    pub fn package_test_package() -> super::package::Package {
+        let component = super::Component {
+            id: "test-package".to_string(),
+            media: "TestPack".to_string(),
+            rules: vec![super::PathRule {
+                from: "C".to_string(),
+                to: "C".to_string(),
+                kind: super::RuleKind::Subtree,
+            }],
+            required: false,
+            condition: None,
+            overrides: vec!["base-c".to_string()],
+            user_startup: Vec::new(),
+            exclusive_group: None,
+            available: true,
+        };
+        super::package::Package {
+            id: "test-package".to_string(),
+            name: "Test package".to_string(),
+            media: "TestPack".to_string(),
+            member: None,
+            requires: Vec::new(),
+            requires_components: Vec::new(),
+            component,
+        }
+    }
+
+    /// The `TestBase` floppy: the file the package overwrites, plus one the
+    /// package never touches (so a test can see the base survive).
+    pub fn package_test_media(folder: &Path) -> PathBuf {
+        media(
+            folder,
+            "TestBase",
+            "base.adf",
+            &[
+                (OVERWRITTEN_PATH, b"base LoadModule", 0x20),
+                ("C/OnlyBase", b"base only", 0x00),
+            ],
+        )
+    }
+
+    /// The `TestPack` archive: the same destination with different bytes,
+    /// plus a file only the package brings.
+    ///
+    /// The explicit `TestPack/C/` entry is a real directory row, not
+    /// padding: a `Subtree` rule resolves its `from` through
+    /// `MediaSource::entry`, and an archive that stores only leaf files has
+    /// no `C` to resolve. Real LHA packages carry directory headers; a ZIP
+    /// written without them would not, and stating it here keeps the
+    /// fixture honest about what the source actually requires.
+    pub fn package_test_archive(folder: &Path, file_name: &str) -> PathBuf {
+        let path = folder.join(file_name);
+        std::fs::write(
+            &path,
+            crate::core::archive::zip::tests::make_zip_with(&[
+                ("TestPack/C/", b"" as &[u8]),
+                ("TestPack/C/LoadModule", b"package LoadModule"),
+                ("TestPack/C/OnlyPack", b"package only"),
+            ]),
+        )
+        .unwrap();
+        path
     }
 
     /// Tasks 2 through 10 build their evidence on these helpers, so the

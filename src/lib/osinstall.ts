@@ -156,6 +156,15 @@ export interface InstallPlan {
   componentsOn: string[];
   /** Volume name -> the image it was found in. */
   mediaPaths: Record<string, string>;
+  /** The chosen package ids, in the order the engine applies them — which
+   *  is dependency order, not the order the boxes were ticked in. Carried
+   *  even when the plan refuses, the same way `componentsOn` is. */
+  packages: string[];
+  /** Package media name -> the archive it was found in, and the member
+   *  inside it that holds the payload. The package half of `mediaPaths`;
+   *  kept apart because the two are found by different scans of different
+   *  folders. */
+  packageMedia: Record<string, { path: string; member: string | null }>;
   userStartup: UserStartupContribution[];
 }
 

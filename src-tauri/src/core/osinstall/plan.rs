@@ -81,6 +81,25 @@
 //! "on" on a V47 ROM wastes 800 KB installing modules nothing loads. Neither
 //! is ART's to choose for the user, so neither is chosen.
 //!
+//! ## Packages are placed last, from a second folder
+//!
+//! An update package exists to land on top of what the release put down, so
+//! its items are expanded **after** every switched-on component's, in
+//! [`super::package::order`]'s order rather than the order the boxes were
+//! ticked in. `apply` writes items in plan order and lets the last writer
+//! win, so "after" is the whole mechanism by which a BoingBag's `C/Assign`
+//! replaces the base disc's rather than the other way round.
+//!
+//! They come from a **second folder** ([`InstallRequest::package_folder`]),
+//! never the media folder: the owner keeps discs in `Amigatolon\iso` and
+//! archives in `Amigatolon\paketler`, so one path cannot answer both
+//! questions, and [`super::scan::find_packages`] is a different scan asking
+//! a different question of a different kind of file. Naming packages with no
+//! folder is [`RefusalReason::PackageFolderMissing`], never an empty result
+//! — the difference between "you did not give me the folder" and "there was
+//! nothing to do" is the difference between a fixable mistake and a silent
+//! one.
+//!
 //! ## Two functions, kept apart on purpose
 //!
 //! `condition_holds` is pure — it takes the facts already read, never a
@@ -93,8 +112,13 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::scan::{find_media, media_for, open_media, MediaMatch};
-use super::{Condition, Recipe, RefusalReason, RuleKind};
+use super::package::Package;
+use super::scan::{
+    find_media, find_packages, media_for, open_media, open_package, package_for, MediaMatch,
+    PackageMedium,
+};
+use super::source::MediaSource;
+use super::{Component, Condition, Recipe, RefusalReason, RuleKind};
 use crate::core::error::{CoreError, CoreResult};
 
 /// What a planning decision needs to know about the paired Kickstart.
@@ -212,6 +236,28 @@ pub struct InstallPlan {
     /// and so the plan that was previewed is the plan that runs, even if
     /// the folder changed underneath it.
     pub media_paths: BTreeMap<String, PathBuf>,
+    /// The chosen packages, in [`super::package::order`]'s order — the
+    /// order `apply` places them in, which is not the order the user ticked
+    /// the boxes in. Empty when none were asked for.
+    ///
+    /// Populated even when the plan as a whole refuses, the same rule
+    /// [`InstallPlan::components_on`] follows and for the same reason: a
+    /// refusal naming a package reads better beside the list it came from.
+    /// `items` and `package_media` are the fields that go empty.
+    ///
+    /// `#[serde(default)]` for the same reason `paired_rom` carries one: an
+    /// `InstallPlan` round-trips through the wire, and a plan serialised
+    /// before this field existed must still deserialise.
+    #[serde(default)]
+    pub packages: Vec<String>,
+    /// Package media name -> the archive it was found in, and the member
+    /// inside it that holds the payload. The package half of
+    /// [`InstallPlan::media_paths`], kept separate rather than folded into
+    /// it because the two are opened by different readers and answered by
+    /// different scans — see [`PackageMedium`]'s own doc comment for why a
+    /// package is not a third `scan::MediaKind`.
+    #[serde(default)]
+    pub package_media: BTreeMap<String, PackageMedium>,
     /// Every member of `components_on` that carries its own `S:User-Startup`
     /// lines, in the same recipe order `components_on` itself is built in —
     /// which is also the order `apply` folds them into the file. Populated
@@ -248,6 +294,19 @@ pub struct InstallRequest {
     /// the same way a satisfied `Condition` always wins over neither; only
     /// `required` cannot be excluded.
     pub excluded: Vec<String>,
+    /// Package ids the user picked, in whatever order the boxes were
+    /// ticked. Reordered by [`super::package::order`] before anything is
+    /// placed. `#[serde(default)]` so a caller that knows nothing about
+    /// packages (`src/lib/osinstall.ts` today) keeps working unchanged.
+    #[serde(default)]
+    pub packages: Vec<String>,
+    /// Where the package archives are. **A second folder, not the media
+    /// folder**: the owner keeps discs in `Amigatolon\iso` and archives in
+    /// `Amigatolon\paketler`, so one path cannot answer both. `None` means
+    /// no packages were asked for; naming packages without it is
+    /// [`RefusalReason::PackageFolderMissing`], never an empty result.
+    #[serde(default)]
+    pub package_folder: Option<PathBuf>,
     pub destination: PathBuf,
     /// Which shipped recipe to plan from. Named by the release string, not by
     /// an index — a numbered choice would silently mean a different operating
@@ -408,7 +467,21 @@ fn detect_exclusive_group_conflicts(
 /// `no_two_components_claim_one_destination_without_declaring_it` applies
 /// to the rules themselves, applied here to the walked-out file list
 /// `plan` actually produces.
-fn detect_collisions(items: &[PlanItem], recipe: &Recipe) -> Vec<RefusalReason> {
+///
+/// `components` is a lookup over **every** component that could have
+/// claimed a destination in `items` — the recipe's own, plus the chosen
+/// packages' (a package is one [`Component`] under the package's own id).
+/// Resolving `overrides` against the recipe alone was correct while only a
+/// recipe could produce items; with packages in the same list it would
+/// report every BoingBag file as an undeclared collision with
+/// `workbench-base`, since `recipe.component("boingbag-39-1")` is `None` and
+/// a claimant that cannot be resolved can never be the winner. This is the
+/// same boundary `recipe.rs`'s `all_shipped_component_ids` had to cross for
+/// the static half of the identical check.
+fn detect_collisions(
+    items: &[PlanItem],
+    components: &BTreeMap<&str, &Component>,
+) -> Vec<RefusalReason> {
     let mut claimants: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for item in items.iter().filter(|item| !item.is_dir) {
         let claiming = claimants.entry(item.to.clone()).or_default();
@@ -424,7 +497,7 @@ fn detect_collisions(items: &[PlanItem], recipe: &Recipe) -> Vec<RefusalReason> 
         }
 
         let resolved = claiming.iter().any(|winner| {
-            let Some(winner_component) = recipe.component(winner) else {
+            let Some(winner_component) = components.get(winner.as_str()) else {
                 return false;
             };
             claiming
@@ -445,6 +518,160 @@ fn detect_collisions(items: &[PlanItem], recipe: &Recipe) -> Vec<RefusalReason> 
     refusals
 }
 
+/// Expand one component's rules against its already-opened medium into the
+/// items that component contributes, collecting a typed refusal for every
+/// rule that does not resolve.
+///
+/// Extracted from [`plan`]'s own loop (Task 6) because a package is placed
+/// through exactly this expansion — a package *is* one [`Component`] over
+/// one medium — and because `apply::add_package` has to reproduce it
+/// file-for-file on a tree that already exists. Two copies of "what does
+/// this rule turn into" is precisely how the two entry points this round
+/// adds would start disagreeing about what a package puts on a volume.
+///
+/// `component.media` is the volume name every emitted [`PlanItem`] carries,
+/// so a package's own `media` (the archive's single top-level directory)
+/// travels the same way a floppy's volume name does — `package::RawPackage`
+/// sets `component.media` to exactly that.
+pub(super) fn expand_rules(
+    component: &Component,
+    source: &mut dyn MediaSource,
+    refusals: &mut Vec<RefusalReason>,
+) -> CoreResult<Vec<PlanItem>> {
+    let mut items = Vec::new();
+
+    for rule in &component.rules {
+        let Some(entry) = source.entry(&rule.from)? else {
+            // The media is here and the path the recipe expects is not
+            // — a refusal, not a skip (see the module doc comment and
+            // the `RefusalReason::MediaPathMissing` doc comment).
+            refusals.push(RefusalReason::MediaPathMissing {
+                component: component.id.clone(),
+                media: component.media.clone(),
+                path: rule.from.clone(),
+            });
+            continue;
+        };
+
+        match rule.kind {
+            RuleKind::File if entry.is_dir => {
+                // A `File` rule resolving to a directory: emitting it
+                // anyway would carry `is_dir: true`, which
+                // `detect_collisions` filters out entirely (it only
+                // looks at files) — a wrong recipe would silently
+                // escape the one check meant to catch it. Refused by
+                // name instead; see the `RuleKindMismatch` doc comment.
+                refusals.push(RefusalReason::RuleKindMismatch {
+                    component: component.id.clone(),
+                    from: rule.from.clone(),
+                    expected: RuleKind::File,
+                    found: RuleKind::Subtree,
+                });
+            }
+            RuleKind::File => {
+                items.push(PlanItem {
+                    component: component.id.clone(),
+                    media: component.media.clone(),
+                    from: rule.from.clone(),
+                    to: rule.to.clone(),
+                    is_dir: false,
+                    bytes: entry.size,
+                });
+            }
+            RuleKind::Subtree if !entry.is_dir => {
+                // A `Subtree` rule resolving to a file: `source.walk`
+                // refuses this itself — the trait says so and both
+                // implementations now do it — but the wrong-shape rule
+                // deserves a typed refusal naming the component and the
+                // rule, not the bare `CoreError` `walk` would raise on
+                // the way there.
+                refusals.push(RefusalReason::RuleKindMismatch {
+                    component: component.id.clone(),
+                    from: rule.from.clone(),
+                    expected: RuleKind::Subtree,
+                    found: RuleKind::File,
+                });
+            }
+            RuleKind::Subtree => {
+                // The subtree's own root, so an empty drawer still gets
+                // created — `walk` yields only what is *inside* `from`,
+                // never `from` itself.
+                items.push(PlanItem {
+                    component: component.id.clone(),
+                    media: component.media.clone(),
+                    from: rule.from.clone(),
+                    to: rule.to.clone(),
+                    is_dir: true,
+                    bytes: 0,
+                });
+                for walked in source.walk(&rule.from)? {
+                    let relative = relative_to(&walked.path, &rule.from);
+                    items.push(PlanItem {
+                        component: component.id.clone(),
+                        media: component.media.clone(),
+                        from: walked.path.clone(),
+                        to: destination_for(&rule.to, &relative),
+                        is_dir: walked.is_dir,
+                        bytes: walked.size,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(items)
+}
+
+/// Every reason a chosen package set cannot be applied that is about the
+/// *selection* rather than about the folder it would be read from — an id
+/// ART ships nothing for, a `requires` that was not itself chosen, a
+/// `requires_components` that is not switched on.
+///
+/// Typed, and computed here rather than read out of
+/// [`super::package::order`]'s own `Err`: `order` answers in English
+/// sentences (ART-060) and stops at the first problem, and this module's
+/// own rule is that every refusal reaches the screen at once. `order` is
+/// still what decides the *order*; this decides what is refusable.
+fn detect_package_refusals(
+    chosen: &[String],
+    all: &[Package],
+    components_on: &[String],
+) -> Vec<RefusalReason> {
+    let mut refusals = Vec::new();
+    let chosen_set: HashSet<&str> = chosen.iter().map(String::as_str).collect();
+
+    for id in chosen {
+        let Some(package) = all.iter().find(|p| &p.id == id) else {
+            refusals.push(RefusalReason::PackageUnknown {
+                package: id.clone(),
+            });
+            continue;
+        };
+        for need in &package.requires {
+            if !chosen_set.contains(need.as_str()) {
+                refusals.push(RefusalReason::PackageRequirementMissing {
+                    package: id.clone(),
+                    requires: need.clone(),
+                });
+            }
+        }
+        // Against the **resolved** set, never `InstallRequest::chosen` — a
+        // component can be switched on by `required` or by its own
+        // `Condition` without ever being chosen, the same reasoning
+        // `detect_exclusive_group_conflicts` states for itself.
+        for need in &package.requires_components {
+            if !components_on.iter().any(|on| on == need) {
+                refusals.push(RefusalReason::PackageComponentMissing {
+                    package: id.clone(),
+                    component: need.clone(),
+                });
+            }
+        }
+    }
+
+    refusals
+}
+
 /// Turn a recipe, a media folder and (optionally) a ROM into a description
 /// of what would be written — or into every reason it cannot proceed.
 ///
@@ -457,6 +684,21 @@ fn detect_collisions(items: &[PlanItem], recipe: &Recipe) -> Vec<RefusalReason> 
 /// file-level collisions, and sum. See the module doc comment for why
 /// refusals never stop the walk and why any refusal empties `items`.
 pub fn plan(request: &InstallRequest, recipe: &Recipe) -> CoreResult<InstallPlan> {
+    plan_over(request, recipe, &super::package::packages()?)
+}
+
+/// [`plan`]'s own body, parameterised over the package catalogue — so a
+/// test can plan against a small, hand-built [`Package`] set instead of the
+/// three shipped ones, which is the only way the two entry points this
+/// round adds can be compared over a package built to overwrite a known
+/// base file. Exactly the reason [`super::package::order_over`] and
+/// `package::parse_all` are parameterised, applied one level up; [`plan`]
+/// is the thin wrapper that passes the real catalogue.
+pub(super) fn plan_over(
+    request: &InstallRequest,
+    recipe: &Recipe,
+    catalogue: &[Package],
+) -> CoreResult<InstallPlan> {
     let mut refusals: Vec<RefusalReason> = Vec::new();
 
     let rom_facts = match &request.rom {
@@ -524,88 +766,105 @@ pub fn plan(request: &InstallRequest, recipe: &Recipe) -> CoreResult<InstallPlan
         media_paths.insert(component.media.clone(), media_path.clone());
 
         let mut source = open_media(found_media)?;
+        items.extend(expand_rules(component, source.as_mut(), &mut refusals)?);
+    }
 
-        for rule in &component.rules {
-            let Some(entry) = source.entry(&rule.from)? else {
-                // The media is here and the path the recipe expects is not
-                // — a refusal, not a skip (see the module doc comment and
-                // the `RefusalReason::MediaPathMissing` doc comment).
-                refusals.push(RefusalReason::MediaPathMissing {
-                    component: component.id.clone(),
-                    media: component.media.clone(),
-                    path: rule.from.clone(),
-                });
-                continue;
-            };
+    // ---- packages, after the release's own components -------------------
+    //
+    // After, deliberately: an update package exists to land on top of what
+    // the release put down, so its items have to be placed later for the
+    // last-writer-wins rule `apply` already applies to be the right way
+    // round. `order()` decides the order among them (BoingBag 3.9-2 after
+    // 3.9-1 whatever order the boxes were ticked in).
+    let mut packages: Vec<String> = Vec::new();
+    let mut package_media: BTreeMap<String, PackageMedium> = BTreeMap::new();
+    let mut chosen_packages: Vec<&Package> = Vec::new();
 
-            match rule.kind {
-                RuleKind::File if entry.is_dir => {
-                    // A `File` rule resolving to a directory: emitting it
-                    // anyway would carry `is_dir: true`, which
-                    // `detect_collisions` filters out entirely (it only
-                    // looks at files) — a wrong recipe would silently
-                    // escape the one check meant to catch it. Refused by
-                    // name instead; see the `RuleKindMismatch` doc comment.
-                    refusals.push(RefusalReason::RuleKindMismatch {
-                        component: component.id.clone(),
-                        from: rule.from.clone(),
-                        expected: RuleKind::File,
-                        found: RuleKind::Subtree,
-                    });
-                }
-                RuleKind::File => {
-                    items.push(PlanItem {
-                        component: component.id.clone(),
-                        media: component.media.clone(),
-                        from: rule.from.clone(),
-                        to: rule.to.clone(),
-                        is_dir: false,
-                        bytes: entry.size,
-                    });
-                }
-                RuleKind::Subtree if !entry.is_dir => {
-                    // A `Subtree` rule resolving to a file: `source.walk`
-                    // refuses this itself — the trait says so and both
-                    // implementations now do it — but the wrong-shape rule
-                    // deserves a typed refusal naming the component and the
-                    // rule, not the bare `CoreError` `walk` would raise on
-                    // the way there.
-                    refusals.push(RefusalReason::RuleKindMismatch {
-                        component: component.id.clone(),
-                        from: rule.from.clone(),
-                        expected: RuleKind::Subtree,
-                        found: RuleKind::File,
-                    });
-                }
-                RuleKind::Subtree => {
-                    // The subtree's own root, so an empty drawer still gets
-                    // created — `walk` yields only what is *inside* `from`,
-                    // never `from` itself.
-                    items.push(PlanItem {
-                        component: component.id.clone(),
-                        media: component.media.clone(),
-                        from: rule.from.clone(),
-                        to: rule.to.clone(),
-                        is_dir: true,
-                        bytes: 0,
-                    });
-                    for walked in source.walk(&rule.from)? {
-                        let relative = relative_to(&walked.path, &rule.from);
-                        items.push(PlanItem {
-                            component: component.id.clone(),
-                            media: component.media.clone(),
-                            from: walked.path.clone(),
-                            to: destination_for(&rule.to, &relative),
-                            is_dir: walked.is_dir,
-                            bytes: walked.size,
-                        });
-                    }
+    if !request.packages.is_empty() {
+        refusals.extend(detect_package_refusals(
+            &request.packages,
+            catalogue,
+            &components_on,
+        ));
+
+        match &request.package_folder {
+            None => refusals.push(RefusalReason::PackageFolderMissing {
+                packages: request.packages.clone(),
+            }),
+            Some(folder) if refusals.is_empty() => {
+                // Only once the selection itself is sound: `order` refuses
+                // an unsatisfied `requires` with an English sentence, and
+                // `detect_package_refusals` has already named that case
+                // properly above. What can still come back `Err` here is a
+                // duplicate id or a cycle in the shipped data — neither a
+                // user situation, both a bug in whoever built the request or
+                // in the shipped JSON, so both stay hard errors.
+                packages = super::package::order_over(&request.packages, catalogue)?;
+                let found = find_packages(folder)?;
+
+                for id in &packages {
+                    let package = catalogue
+                        .iter()
+                        .find(|p| &p.id == id)
+                        .expect("detect_package_refusals refused every unknown id above");
+
+                    // Never `if let MediaMatch::Found(..)` — see the module
+                    // doc comment; the rule is the enum's, not `FoundMedia`'s.
+                    let archive = match package_for(&found, &package.media) {
+                        MediaMatch::Missing => {
+                            refusals.push(RefusalReason::PackageArchiveMissing {
+                                package: package.id.clone(),
+                                media: package.media.clone(),
+                            });
+                            continue;
+                        }
+                        MediaMatch::Ambiguous(matches) => {
+                            refusals.push(RefusalReason::PackageArchiveAmbiguous {
+                                package: package.id.clone(),
+                                media: package.media.clone(),
+                                paths: matches
+                                    .iter()
+                                    .map(|m| m.path.display().to_string())
+                                    .collect(),
+                            });
+                            continue;
+                        }
+                        MediaMatch::Found(archive) => archive,
+                    };
+
+                    let medium = PackageMedium {
+                        path: archive.path.clone(),
+                        member: package.member.clone(),
+                    };
+                    let mut source = open_package(&medium)?;
+                    items.extend(expand_rules(
+                        &package.component,
+                        source.as_mut(),
+                        &mut refusals,
+                    )?);
+                    package_media.insert(package.media.clone(), medium);
+                    chosen_packages.push(package);
                 }
             }
+            // The selection already refused above; resolving archives for a
+            // set ART has already said it cannot apply would only add noise
+            // about files nobody is going to read.
+            Some(_) => {}
         }
     }
 
-    refusals.extend(detect_collisions(&items, recipe));
+    // Every component that could have claimed a destination in `items` —
+    // see `detect_collisions`'s own doc comment for why a package's has to
+    // be in here.
+    let mut claimable: BTreeMap<&str, &Component> = recipe
+        .components
+        .iter()
+        .map(|component| (component.id.as_str(), component))
+        .collect();
+    for package in &chosen_packages {
+        claimable.insert(package.id.as_str(), &package.component);
+    }
+    refusals.extend(detect_collisions(&items, &claimable));
 
     // Same source as `components_on` itself (`recipe.component`), and in
     // the same order — resolved regardless of whether the plan as a whole
@@ -622,10 +881,14 @@ pub fn plan(request: &InstallRequest, recipe: &Recipe) -> CoreResult<InstallPlan
         })
         .collect();
 
-    let (items, media_paths) = if refusals.is_empty() {
-        (items, media_paths)
+    let (items, media_paths, package_media) = if refusals.is_empty() {
+        (items, media_paths, package_media)
     } else {
-        (Vec::new(), BTreeMap::new())
+        // Any refusal at all empties everything a preview would act on —
+        // see the module doc comment. `package_media` follows `media_paths`
+        // for the same reason: half a package's files, with none of the ones
+        // that could not be resolved, is not something to preview either.
+        (Vec::new(), BTreeMap::new(), BTreeMap::new())
     };
     let total_bytes = items.iter().map(|item| item.bytes).sum();
 
@@ -645,6 +908,8 @@ pub fn plan(request: &InstallRequest, recipe: &Recipe) -> CoreResult<InstallPlan
         components_on,
         paired_rom,
         media_paths,
+        packages,
+        package_media,
         user_startup,
     })
 }
@@ -840,6 +1105,8 @@ mod plan_tests {
         crate::core::osinstall::fixtures::media(&folder, "Extras3.2", "extras.adf", &extras_refs);
 
         let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
@@ -913,6 +1180,8 @@ mod plan_tests {
         };
 
         let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: None,
@@ -956,6 +1225,8 @@ mod plan_tests {
         };
 
         let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: None,
@@ -994,6 +1265,8 @@ mod plan_tests {
         };
 
         let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: None,
@@ -1037,6 +1310,8 @@ mod plan_tests {
         };
 
         let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: None,
@@ -1100,6 +1375,8 @@ mod plan_tests {
         };
 
         let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             // major 40 < 47, so `modules-b` switches on by its own
@@ -1157,6 +1434,8 @@ mod plan_tests {
         };
 
         let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: None,
@@ -1235,6 +1514,8 @@ mod plan_tests {
         };
 
         let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: None,
@@ -1427,6 +1708,8 @@ mod plan_tests {
         crate::core::osinstall::fixtures::required_media(&folder, &recipe, &["Workbench3.2"]);
 
         let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 40)),
@@ -1474,6 +1757,8 @@ mod plan_tests {
         crate::core::osinstall::fixtures::media(&folder, "Workbench3.2", "wb.adf", &wb_refs);
 
         let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
@@ -1504,6 +1789,8 @@ mod plan_tests {
         crate::core::osinstall::fixtures::media(&folder, "Workbench3.2", "wb.adf", &wb_refs);
 
         let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
@@ -1606,6 +1893,8 @@ mod plan_tests {
 
         let recipe = crate::core::osinstall::recipe::amigaos_32().unwrap();
         let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: Some(bad_rom),
@@ -1642,6 +1931,8 @@ mod plan_tests {
         crate::core::osinstall::fixtures::media(&folder, "Workbench3.2", "wb-copy-2.adf", &wb_refs);
 
         let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: Some(crate::core::osinstall::fixtures::fake_rom(&dir, 47)),
@@ -1715,6 +2006,8 @@ mod plan_tests {
         };
 
         let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: folder,
             rom: None,
@@ -1877,5 +2170,378 @@ mod plan_tests {
         assert_eq!(rom_facts(&path).unwrap().major, 47);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- packages (Task 6) ----------------------------------------------
+
+    use crate::core::osinstall::fixtures;
+
+    /// A scratch directory with the media folder and the package folder as
+    /// two separate directories — which is the point: the owner keeps discs
+    /// in one folder and archives in another, so a fixture that put them in
+    /// one place would be testing a folder layout nobody has.
+    fn package_dirs(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = fixtures::scratch(&format!("plan-packages-{tag}-{n}"));
+        let media = dir.join("media");
+        let packages = dir.join("packages");
+        std::fs::create_dir(&media).unwrap();
+        std::fs::create_dir(&packages).unwrap();
+        fixtures::package_test_media(&media);
+        (dir, media, packages)
+    }
+
+    fn package_request(
+        dir: &Path,
+        media: &Path,
+        package_folder: Option<&Path>,
+        packages: &[&str],
+    ) -> InstallRequest {
+        InstallRequest {
+            release: "Test OS".to_string(),
+            media_folder: media.to_path_buf(),
+            rom: None,
+            chosen: Vec::new(),
+            excluded: Vec::new(),
+            packages: packages.iter().map(|s| s.to_string()).collect(),
+            package_folder: package_folder.map(Path::to_path_buf),
+            destination: dir.join("dist"),
+        }
+    }
+
+    /// One more package of the same shape, so ordering and dependencies can
+    /// be exercised without three more fixtures.
+    fn extra_package(id: &str, media: &str, requires: &[&str]) -> Package {
+        let component = Component {
+            id: id.to_string(),
+            media: media.to_string(),
+            rules: vec![PathRule {
+                from: "C".to_string(),
+                to: "C".to_string(),
+                kind: RuleKind::Subtree,
+            }],
+            required: false,
+            condition: None,
+            overrides: Vec::new(),
+            user_startup: Vec::new(),
+            exclusive_group: None,
+            available: true,
+        };
+        Package {
+            id: id.to_string(),
+            name: id.to_string(),
+            media: media.to_string(),
+            member: None,
+            requires: requires.iter().map(|s| s.to_string()).collect(),
+            requires_components: Vec::new(),
+            component,
+        }
+    }
+
+    /// An archive for [`extra_package`]: one file whose name is the
+    /// package's own, so two of them never claim one destination.
+    fn extra_archive(folder: &Path, media: &str, file_name: &str) -> PathBuf {
+        let path = folder.join(file_name);
+        std::fs::write(
+            &path,
+            crate::core::archive::zip::tests::make_zip_with(&[
+                (&format!("{media}/C/"), b"" as &[u8]),
+                (&format!("{media}/C/{media}Cmd"), b"cmd"),
+            ]),
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn a_chosen_package_is_planned_after_the_releases_own_components() {
+        let (dir, media, packages) = package_dirs("after");
+        fixtures::package_test_archive(&packages, "pack.zip");
+
+        let request = package_request(&dir, &media, Some(&packages), &["test-package"]);
+        let plan = plan_over(
+            &request,
+            &fixtures::package_test_recipe(),
+            &[fixtures::package_test_package()],
+        )
+        .unwrap();
+
+        assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
+        assert_eq!(plan.packages, vec!["test-package".to_string()]);
+        assert_eq!(
+            plan.package_media
+                .get("TestPack")
+                .expect("the archive must be resolved onto the plan")
+                .path,
+            packages.join("pack.zip")
+        );
+
+        // The order is the whole mechanism by which a package's file wins:
+        // `apply` writes in plan order and lets the last writer win.
+        let base_at = plan
+            .items
+            .iter()
+            .rposition(|i| i.component == "base-c")
+            .expect("the base component must contribute items");
+        let package_at = plan
+            .items
+            .iter()
+            .position(|i| i.component == "test-package")
+            .expect("the package must contribute items");
+        assert!(
+            package_at > base_at,
+            "every package item must come after every component item"
+        );
+
+        // And it really is the same destination, or the ordering proves
+        // nothing.
+        assert!(plan
+            .items
+            .iter()
+            .any(|i| i.component == "test-package" && i.to == fixtures::OVERWRITTEN_PATH));
+    }
+
+    #[test]
+    fn packages_are_planned_in_dependency_order_not_the_order_they_were_chosen() {
+        let (dir, media, packages) = package_dirs("order");
+        extra_archive(&packages, "PackA", "a.zip");
+        extra_archive(&packages, "PackB", "b.zip");
+        let catalogue = vec![
+            extra_package("pack-a", "PackA", &[]),
+            extra_package("pack-b", "PackB", &["pack-a"]),
+        ];
+
+        // Chosen the wrong way round on purpose.
+        let request = package_request(&dir, &media, Some(&packages), &["pack-b", "pack-a"]);
+        let plan = plan_over(&request, &fixtures::package_test_recipe(), &catalogue).unwrap();
+
+        assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
+        assert_eq!(
+            plan.packages,
+            vec!["pack-a".to_string(), "pack-b".to_string()]
+        );
+        let a_at = plan
+            .items
+            .iter()
+            .position(|i| i.component == "pack-a")
+            .unwrap();
+        let b_at = plan
+            .items
+            .iter()
+            .position(|i| i.component == "pack-b")
+            .unwrap();
+        assert!(a_at < b_at, "pack-a's items must be placed first");
+    }
+
+    #[test]
+    fn packages_named_with_no_package_folder_are_refused_saying_which() {
+        let (dir, media, _packages) = package_dirs("no-folder");
+
+        let request = package_request(&dir, &media, None, &["test-package"]);
+        let plan = plan_over(
+            &request,
+            &fixtures::package_test_recipe(),
+            &[fixtures::package_test_package()],
+        )
+        .unwrap();
+
+        assert!(plan
+            .refusals
+            .contains(&RefusalReason::PackageFolderMissing {
+                packages: vec!["test-package".to_string()],
+            }));
+        assert!(plan.items.is_empty(), "a refused plan carries no items");
+    }
+
+    /// No packages asked for is not the same thing: it plans, and it is
+    /// silent about a folder nobody needed.
+    #[test]
+    fn no_packages_and_no_folder_is_not_a_refusal() {
+        let (dir, media, _packages) = package_dirs("none");
+
+        let request = package_request(&dir, &media, None, &[]);
+        let plan = plan_over(&request, &fixtures::package_test_recipe(), &[]).unwrap();
+
+        assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
+        assert!(plan.packages.is_empty());
+        assert!(!plan.items.is_empty());
+    }
+
+    #[test]
+    fn a_package_whose_archive_is_not_in_the_folder_is_refused_by_name() {
+        let (dir, media, packages) = package_dirs("missing");
+        // The folder exists and holds nothing this package answers to.
+
+        let request = package_request(&dir, &media, Some(&packages), &["test-package"]);
+        let plan = plan_over(
+            &request,
+            &fixtures::package_test_recipe(),
+            &[fixtures::package_test_package()],
+        )
+        .unwrap();
+
+        assert!(plan
+            .refusals
+            .contains(&RefusalReason::PackageArchiveMissing {
+                package: "test-package".to_string(),
+                media: "TestPack".to_string(),
+            }));
+    }
+
+    /// The real case: one package archive beside its language variants. Two
+    /// archives claiming one top-level name must be refused by name, never
+    /// resolved by whichever sorted first.
+    #[test]
+    fn two_archives_claiming_one_package_name_are_ambiguous_not_a_guess() {
+        let (dir, media, packages) = package_dirs("ambiguous");
+        fixtures::package_test_archive(&packages, "pack.zip");
+        fixtures::package_test_archive(&packages, "pack-copy.zip");
+
+        let request = package_request(&dir, &media, Some(&packages), &["test-package"]);
+        let plan = plan_over(
+            &request,
+            &fixtures::package_test_recipe(),
+            &[fixtures::package_test_package()],
+        )
+        .unwrap();
+
+        match plan
+            .refusals
+            .iter()
+            .find(|r| matches!(r, RefusalReason::PackageArchiveAmbiguous { .. }))
+        {
+            Some(RefusalReason::PackageArchiveAmbiguous { package, paths, .. }) => {
+                assert_eq!(package, "test-package");
+                assert_eq!(paths.len(), 2, "every claimant is named: {paths:?}");
+            }
+            other => panic!("expected an ambiguity refusal, got {other:?}"),
+        }
+        assert!(plan.items.is_empty());
+    }
+
+    /// `package::order` refuses this too, with an English sentence. It has
+    /// to arrive as a typed refusal on the plan instead — a screen showing
+    /// every problem at once cannot show one that was raised as an error.
+    #[test]
+    fn a_requirement_that_was_not_chosen_reaches_refusals_not_a_hard_error() {
+        let (dir, media, packages) = package_dirs("requires");
+        extra_archive(&packages, "PackB", "b.zip");
+        let catalogue = vec![
+            extra_package("pack-a", "PackA", &[]),
+            extra_package("pack-b", "PackB", &["pack-a"]),
+        ];
+
+        let request = package_request(&dir, &media, Some(&packages), &["pack-b"]);
+        let plan = plan_over(&request, &fixtures::package_test_recipe(), &catalogue).unwrap();
+
+        assert!(plan
+            .refusals
+            .contains(&RefusalReason::PackageRequirementMissing {
+                package: "pack-b".to_string(),
+                requires: "pack-a".to_string(),
+            }));
+        assert!(plan.items.is_empty());
+    }
+
+    /// ART-162 arriving through the selection: the Turkish catalogs without
+    /// the Locale component is thirty-six catalogs in a drawer nothing can
+    /// open. `requires` cannot say this — `locale-base` is a recipe
+    /// component, not a package — so the plan refuses the combination by
+    /// name.
+    #[test]
+    fn a_package_needing_a_component_that_is_off_is_refused_by_name() {
+        let (dir, media, packages) = package_dirs("needs-component");
+        fixtures::package_test_archive(&packages, "pack.zip");
+
+        let mut package = fixtures::package_test_package();
+        package.requires_components = vec!["locale-base".to_string()];
+
+        let request = package_request(&dir, &media, Some(&packages), &["test-package"]);
+        let plan = plan_over(&request, &fixtures::package_test_recipe(), &[package]).unwrap();
+
+        assert!(plan
+            .refusals
+            .contains(&RefusalReason::PackageComponentMissing {
+                package: "test-package".to_string(),
+                component: "locale-base".to_string(),
+            }));
+        assert!(
+            plan.items.is_empty(),
+            "the catalogs must not be planned into a tree that cannot read them"
+        );
+    }
+
+    /// The same package, with the component it needs switched on, plans
+    /// cleanly — so the refusal above is about the missing component and
+    /// not about the declaration itself.
+    #[test]
+    fn a_package_needing_a_component_that_is_on_plans_cleanly() {
+        let (dir, media, packages) = package_dirs("has-component");
+        fixtures::package_test_archive(&packages, "pack.zip");
+
+        let mut package = fixtures::package_test_package();
+        package.requires_components = vec!["base-c".to_string()];
+
+        let request = package_request(&dir, &media, Some(&packages), &["test-package"]);
+        let plan = plan_over(&request, &fixtures::package_test_recipe(), &[package]).unwrap();
+
+        assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
+    }
+
+    #[test]
+    fn an_unknown_package_id_is_refused_rather_than_skipped() {
+        let (dir, media, packages) = package_dirs("unknown");
+
+        let request = package_request(&dir, &media, Some(&packages), &["no-such-package"]);
+        let plan = plan_over(&request, &fixtures::package_test_recipe(), &[]).unwrap();
+
+        assert!(plan.refusals.contains(&RefusalReason::PackageUnknown {
+            package: "no-such-package".to_string(),
+        }));
+    }
+
+    /// A package landing on a base file it never declared it may replace is
+    /// the same defect two components colliding is — and it can only be seen
+    /// once `detect_collisions` can resolve a *package's* own `overrides`,
+    /// which is not in the recipe at all.
+    #[test]
+    fn a_package_overwriting_a_base_file_without_declaring_it_is_a_collision() {
+        let (dir, media, packages) = package_dirs("undeclared");
+        fixtures::package_test_archive(&packages, "pack.zip");
+
+        let mut package = fixtures::package_test_package();
+        package.component.overrides.clear();
+
+        let request = package_request(&dir, &media, Some(&packages), &["test-package"]);
+        let plan = plan_over(&request, &fixtures::package_test_recipe(), &[package]).unwrap();
+
+        assert!(
+            plan.refusals
+                .contains(&RefusalReason::DestinationCollision {
+                    path: fixtures::OVERWRITTEN_PATH.to_string(),
+                    components: vec!["base-c".to_string(), "test-package".to_string()],
+                }),
+            "{:?}",
+            plan.refusals
+        );
+    }
+
+    /// And with the declaration, it is not — which is what makes the
+    /// declaration mean something rather than being decoration.
+    #[test]
+    fn a_declared_package_override_is_not_a_collision() {
+        let (dir, media, packages) = package_dirs("declared");
+        fixtures::package_test_archive(&packages, "pack.zip");
+
+        let request = package_request(&dir, &media, Some(&packages), &["test-package"]);
+        let plan = plan_over(
+            &request,
+            &fixtures::package_test_recipe(),
+            &[fixtures::package_test_package()],
+        )
+        .unwrap();
+
+        assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
     }
 }

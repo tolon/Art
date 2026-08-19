@@ -31,6 +31,19 @@
   "name": "Türkçe catalogs (BoingBag 3.9-2)",
   "media": "LocaleUpdate",
   "requires": [],
+  "_why_requires_components_locale_base": [
+    "ART-162, arriving through the selection instead of through the recipe.",
+    "This package writes ~36 catalogs into `Locale/Catalogs`. Without",
+    "`locale-base` switched on, nothing on the volume puts `Locale/Languages`",
+    "or the locale preferences there, so those catalogs sit in a drawer no",
+    "running system can open — a silent no-op dressed up as a successful",
+    "install. `requires` cannot say this: it relates packages to packages,",
+    "and `locale-base` is a release recipe's component (it exists under that",
+    "id in both `amigaos-3.9.json` and `amigaos-3.2.json`), so naming it",
+    "there would refuse a correct selection by name. `plan()` refuses the",
+    "combination instead — see `package.rs`'s own module doc comment."
+  ],
+  "requires_components": ["locale-base"],
   "overrides": ["locale-base"],
   "rules": [
     { "from": "locale/catalogs", "to": "Locale/Catalogs", "kind": "subtree" }

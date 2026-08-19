@@ -72,6 +72,33 @@
 //! user ticked boxes in is not the order that gets applied — and refuses,
 //! by name, either a requirement that was not itself chosen or a cycle in
 //! the shipped data (which would otherwise hang whatever applies them).
+//!
+//! ## `requires_components` is not `requires`, and the difference is ART-162
+//!
+//! `requires` relates a package to another **package**; `locale-turkish`
+//! does not depend on a package at all. It depends on `locale-base`, a
+//! **component of a release recipe** — the thing that puts
+//! `Locale/Catalogs` (and `Locale/Languages`, and the locale preferences
+//! that read them) on the volume in the first place. Ticking the Turkish
+//! pack without it lands thirty-six catalogs into a drawer nothing can
+//! open: exactly ART-162, arriving through the selection instead of through
+//! the recipe.
+//!
+//! Expressing that as a `requires` entry cannot work — there is no package
+//! called `locale-base`, so [`order`] would refuse a correct selection by
+//! name — and leaving it undeclared makes it a silent no-op, which is the
+//! outcome the whole round exists to prevent. So a package may declare
+//! [`Package::requires_components`], and `plan()` refuses the combination
+//! by name ([`super::RefusalReason::PackageComponentMissing`]) when one of
+//! them is not in the resolved `components_on`. It is checked against the
+//! *resolved* set, never against `InstallRequest::chosen`, for the same
+//! reason `detect_exclusive_group_conflicts` is: a component can be
+//! switched on without ever being chosen.
+//!
+//! `overrides` and `requires_components` say two different things about the
+//! same id and both are true of `locale-turkish` → `locale-base`: the first
+//! says "when we land on the same file, mine wins"; the second says "there
+//! is no point in mine at all unless yours is there".
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -103,6 +130,10 @@ pub struct Package {
     /// a second archive. `None` for loose files at direct paths.
     pub member: Option<String>,
     pub requires: Vec<String>,
+    /// Recipe **component** ids this package needs switched on — not
+    /// packages; see the module doc comment's "`requires_components` is not
+    /// `requires`" section.
+    pub requires_components: Vec<String>,
     /// The rules and `overrides`, in the shape the placer already takes.
     pub component: Component,
 }
@@ -119,6 +150,8 @@ struct RawPackage {
     member: Option<String>,
     #[serde(default)]
     requires: Vec<String>,
+    #[serde(default)]
+    requires_components: Vec<String>,
     #[serde(default)]
     overrides: Vec<String>,
     rules: Vec<PathRule>,
@@ -149,6 +182,7 @@ impl RawPackage {
             media: self.media,
             member: self.member,
             requires: self.requires,
+            requires_components: self.requires_components,
             component,
         }
     }
@@ -259,7 +293,7 @@ pub fn by_id(id: &str) -> CoreResult<Package> {
 /// in-degree once per repeat) and comes out looking exactly like a cycle:
 /// `result.len() != chosen.len()` fires for the wrong reason, and the actual
 /// mistake — the caller chose the same package twice — is never named.
-fn order_over(chosen: &[String], all: &[Package]) -> CoreResult<Vec<String>> {
+pub(super) fn order_over(chosen: &[String], all: &[Package]) -> CoreResult<Vec<String>> {
     let mut seen_chosen = HashSet::new();
     for id in chosen {
         if !seen_chosen.insert(id.as_str()) {
@@ -428,6 +462,7 @@ mod tests {
             media: "SyntheticMedia".to_string(),
             member: None,
             requires: requires.iter().map(|s| s.to_string()).collect(),
+            requires_components: Vec::new(),
             component: Component {
                 id: id.to_string(),
                 media: "SyntheticMedia".to_string(),
@@ -535,5 +570,40 @@ mod tests {
             ordered,
             vec!["a".to_string(), "b".to_string(), "c".to_string()]
         );
+    }
+
+    /// ART-162, declared in the data rather than left to the user to
+    /// notice: the Turkish catalogs need the Locale component, and a
+    /// component is not a package — so it cannot be, and is not, a
+    /// `requires` entry.
+    #[test]
+    fn the_turkish_catalogs_declare_the_locale_component_they_need() {
+        let package = by_id("locale-turkish").unwrap();
+        assert_eq!(
+            package.requires_components,
+            vec!["locale-base".to_string()],
+            "without locale-base this package writes catalogs nothing can open"
+        );
+        assert!(
+            package.requires.is_empty(),
+            "'locale-base' is a recipe component, not a package — naming it in \
+             `requires` would make `order` refuse a correct selection by name"
+        );
+    }
+
+    /// Every other shipped package says it needs no component, and says so
+    /// by carrying an empty list rather than by the field being absent from
+    /// the type — so a reader can tell "nothing needed" from "nobody
+    /// thought about it" only by reading the JSON, which is why this test
+    /// pins the measured answer for all three.
+    #[test]
+    fn only_the_turkish_catalogs_need_a_component_today() {
+        let with_components: Vec<String> = packages()
+            .unwrap()
+            .into_iter()
+            .filter(|p| !p.requires_components.is_empty())
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(with_components, vec!["locale-turkish".to_string()]);
     }
 }

@@ -676,6 +676,7 @@ mod tests {
                 sha256: sha256_bytes(content),
                 bytes: content.len() as u64,
                 protection: Some(0x20), // --p-rwed: what apply() actually recorded
+                overwrote: None,
             }],
             paired_rom: None,
         }
@@ -772,6 +773,7 @@ mod tests {
             sha256: "0".repeat(64),
             bytes: 4,
             protection: None,
+            overwrote: None,
         });
         let report = verify_volume(&image, None, 1, &manifest).unwrap();
         assert_eq!(report.failed, 1);
@@ -1093,6 +1095,7 @@ mod tests {
                 sha256: sha256_bytes(content),
                 bytes: content.len() as u64,
                 protection: None,
+                overwrote: None,
             }],
             paired_rom: None,
         };

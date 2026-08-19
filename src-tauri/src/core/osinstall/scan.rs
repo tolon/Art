@@ -278,18 +278,26 @@ pub struct FoundPackage {
 /// an incomplete pattern instead of a bare `Option`. This call decides
 /// which bytes become part of somebody's operating system; every arm needs
 /// to be handled on purpose.
+/// Generic over what was matched (Task 6) rather than fixed to
+/// [`FoundMedia`]: a package archive is resolved by exactly the same
+/// three-way question — none, one, or several files claiming one name — and
+/// two enums of identical shape would be two places for the
+/// arbitrary-winner rule to drift apart. The default type parameter keeps
+/// every existing `MediaMatch<'a>` spelling meaning what it always did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use]
-pub enum MediaMatch<'a> {
-    /// No file in `found` carries this volume name.
+pub enum MediaMatch<'a, T = FoundMedia> {
+    /// No file in `found` carries this name.
     Missing,
     /// Exactly one file does — the ordinary case.
-    Found(&'a FoundMedia),
-    /// More than one file claims this volume name, in `find_media`'s own
-    /// (sorted-path) order. The caller decides what to do — typically
-    /// [`super::RefusalReason::MediaAmbiguous`] for the one component that
-    /// actually names this volume.
-    Ambiguous(Vec<&'a FoundMedia>),
+    Found(&'a T),
+    /// More than one file claims this name, in `find_media`'s (or
+    /// [`find_packages`]'s) own sorted-path order. The caller decides what
+    /// to do — typically [`super::RefusalReason::MediaAmbiguous`] for the
+    /// one component that actually names this volume, or
+    /// [`super::RefusalReason::PackageArchiveAmbiguous`] for the one package
+    /// that names this archive.
+    Ambiguous(Vec<&'a T>),
 }
 
 /// Resolve `volume_name` against `found`.
@@ -310,6 +318,52 @@ pub fn media_for<'a>(found: &'a [FoundMedia], volume_name: &str) -> MediaMatch<'
         1 => MediaMatch::Found(matches[0]),
         _ => MediaMatch::Ambiguous(matches),
     }
+}
+
+/// Resolve a package's own `media` name — its archive's single top-level
+/// directory — against what [`find_packages`] found, with exactly the
+/// semantics [`media_for`] gives a volume name, and for exactly the same
+/// reason: the owner keeps `BoingBag39-2.lha` beside eight language
+/// variants, so two archives claiming one top-level name is a real case that
+/// must be refused by name rather than resolved by whichever sorted first.
+pub fn package_for<'a>(found: &'a [FoundPackage], media: &str) -> MediaMatch<'a, FoundPackage> {
+    let matches: Vec<&FoundPackage> = found.iter().filter(|f| f.media == media).collect();
+    match matches.len() {
+        0 => MediaMatch::Missing,
+        1 => MediaMatch::Found(matches[0]),
+        _ => MediaMatch::Ambiguous(matches),
+    }
+}
+
+/// A package archive resolved to a real file, plus the member inside it that
+/// actually holds the payload.
+///
+/// **This is the [`MediaKind`] bridge.** `MediaKind` names what
+/// [`identify`] can learn by probing a file — `Floppy` or `Disc` — and a
+/// package is not something probing can answer: which archive is a package
+/// comes from [`find_packages`] (a different folder, scanned by a different
+/// question), and whether its payload sits at the archive's own paths or
+/// inside a nested member comes from the package *recipe*
+/// ([`super::package::Package::member`]), which no amount of looking at the
+/// file can tell you. So a package travels on a plan as its own kind of
+/// resolved medium rather than as a third `MediaKind`, and
+/// [`open_package`] is the counterpart to [`open_media`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageMedium {
+    pub path: PathBuf,
+    /// The nested payload archive, from the package's own recipe. `None`
+    /// when the package's files sit at the archive's own paths.
+    pub member: Option<String>,
+}
+
+/// Open a package archive as a [`MediaSource`] — the package counterpart of
+/// [`open_media`], and the one place the `member` distinction is acted on.
+pub fn open_package(medium: &PackageMedium) -> CoreResult<Box<dyn MediaSource>> {
+    Ok(match &medium.member {
+        Some(member) => Box::new(ArchiveSource::open_nested(&medium.path, member)?),
+        None => Box::new(ArchiveSource::open(&medium.path)?),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -550,5 +604,80 @@ mod tests {
         let missing = dir.join("does-not-exist");
 
         assert!(find_packages(&missing).is_err());
+    }
+
+    // ---- resolving a package to its archive (Task 6) ---------------------
+
+    #[test]
+    fn a_package_is_resolved_by_the_name_inside_its_archive() {
+        let dir = scratch("packages-resolve");
+        crate::core::osinstall::fixtures::package_test_archive(&dir, "renamed-by-the-user.zip");
+        let found = find_packages(&dir).unwrap();
+
+        match package_for(&found, "TestPack") {
+            MediaMatch::Found(package) => {
+                assert_eq!(package.path, dir.join("renamed-by-the-user.zip"))
+            }
+            other => panic!("expected one match, got {other:?}"),
+        }
+        assert_eq!(package_for(&found, "NotHere"), MediaMatch::Missing);
+    }
+
+    /// The real case this enum exists for: one archive beside a copy of
+    /// itself. Every claimant is reported, never one of them chosen.
+    #[test]
+    fn two_archives_claiming_one_name_come_back_ambiguous() {
+        let dir = scratch("packages-ambiguous-resolve");
+        crate::core::osinstall::fixtures::package_test_archive(&dir, "a.zip");
+        crate::core::osinstall::fixtures::package_test_archive(&dir, "b.zip");
+        let found = find_packages(&dir).unwrap();
+
+        match package_for(&found, "TestPack") {
+            MediaMatch::Ambiguous(matches) => assert_eq!(matches.len(), 2),
+            other => panic!("expected an ambiguity, got {other:?}"),
+        }
+    }
+
+    /// `member` is the whole reason a package cannot be a third
+    /// `MediaKind`: nothing about the file on disk says whether its payload
+    /// sits at the archive's own paths or inside a nested archive — the
+    /// package recipe says, and `open_package` is where that is acted on.
+    #[test]
+    fn open_package_opens_the_nested_member_when_the_recipe_names_one() {
+        let dir = scratch("packages-open-nested");
+        let inner = crate::core::archive::zip::tests::make_zip_with(&[
+            ("C/", b"" as &[u8]),
+            ("C/Version", b"cmd bytes"),
+        ]);
+        let outer = dir.join("wrapper.zip");
+        std::fs::write(
+            &outer,
+            crate::core::archive::zip::tests::make_zip_with(&[
+                ("Wrapper/", b"" as &[u8]),
+                ("Wrapper/Payload", &inner),
+                ("Wrapper/C/Updater", b"an amiga program ART does not run"),
+            ]),
+        )
+        .unwrap();
+
+        // Without the member: the wrapper's own paths, installer and all.
+        let mut wrapper = open_package(&PackageMedium {
+            path: outer.clone(),
+            member: None,
+        })
+        .unwrap();
+        assert_eq!(
+            wrapper.read("C/Updater").unwrap(),
+            b"an amiga program ART does not run"
+        );
+
+        // With it: the payload's paths, and the wrapper's identity.
+        let mut payload = open_package(&PackageMedium {
+            path: outer,
+            member: Some("Payload".to_string()),
+        })
+        .unwrap();
+        assert_eq!(payload.volume_name(), "Wrapper");
+        assert_eq!(payload.read("C/Version").unwrap(), b"cmd bytes");
     }
 }

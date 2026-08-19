@@ -611,6 +611,8 @@ mod tests {
         let missing = dir.join("does-not-exist");
 
         let result = osinstall_plan(InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: missing.clone(),
             rom: None,
@@ -634,6 +636,8 @@ mod tests {
         crate::core::osinstall::fixtures::workbench(&dir);
 
         let result = osinstall_plan(InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
             release: "AmigaOS 3.2".to_string(),
             media_folder: dir.clone(),
             rom: None,
@@ -773,6 +777,7 @@ mod tests {
                 sha256: "0".repeat(64),
                 bytes: 3,
                 protection: Some(0x20),
+                overwrote: None,
             }],
             paired_rom: None,
         };
@@ -951,6 +956,8 @@ mod tests {
                     "componentsOn",
                     "pairedRom",
                     "mediaPaths",
+                    "packages",
+                    "packageMedia",
                     "userStartup",
                 ],
             );

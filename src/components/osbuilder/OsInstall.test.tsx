@@ -218,6 +218,8 @@ function planResultFor(req: InstallRequest): PlanResult {
       // forced on — the "condition-off" reasoning branch, not "rom-needed".
       componentsOn: ["workbench-base", "install-libs", ...req.chosen],
       mediaPaths: { "Workbench3.2": "E:\\media\\Disk1.adf" },
+      packages: [],
+      packageMedia: {},
       userStartup: [],
     },
   };
@@ -481,6 +483,8 @@ describe("a refusal renders as a sentence, not a blank", () => {
       totalBytes: 0,
       componentsOn: ["workbench-base", "install-libs"],
       mediaPaths: {},
+      packages: [],
+      packageMedia: {},
       userStartup: [],
     };
     planMock.mockReset().mockResolvedValue({ outcome: "planned", plan: refusedPlan } satisfies PlanResult);

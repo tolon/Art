@@ -476,6 +476,40 @@ mod tests {
         ids
     }
 
+    /// Every component id a **release recipe** ships — packages
+    /// deliberately excluded, unlike [`all_shipped_component_ids`].
+    /// `Package::requires_components` says "this recipe component has to be
+    /// switched on", and a package is not something `plan()` can switch on:
+    /// resolving one against a package id would let `requires_components:
+    /// ["boingbag-39-1"]` pass this test and then refuse forever at plan
+    /// time, since no `components_on` can ever contain it.
+    fn release_component_ids() -> std::collections::HashSet<String> {
+        let mut ids = std::collections::HashSet::new();
+        for release in super::releases() {
+            let recipe = super::by_release(release).unwrap_or_else(|e| {
+                panic!("the shipped {release} recipe must parse and validate: {e}")
+            });
+            ids.extend(recipe.components.into_iter().map(|c| c.id));
+        }
+        ids
+    }
+
+    #[test]
+    fn every_required_component_a_package_names_is_a_real_recipe_component() {
+        let ids = release_component_ids();
+        for package in
+            super::super::package::packages().expect("the shipped packages must parse and validate")
+        {
+            for need in &package.requires_components {
+                assert!(
+                    ids.contains(need.as_str()),
+                    "{}: no release recipe ships a component '{need}'",
+                    package.id
+                );
+            }
+        }
+    }
+
     #[test]
     fn every_override_names_a_component_that_exists() {
         let ids = all_shipped_component_ids();

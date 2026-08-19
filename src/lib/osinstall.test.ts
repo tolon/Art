@@ -218,6 +218,8 @@ function planWith(componentsOn: string[]): InstallPlan {
     totalBytes: 0,
     componentsOn,
     mediaPaths: {},
+    packages: [],
+    packageMedia: {},
     userStartup: [],
   };
 }
