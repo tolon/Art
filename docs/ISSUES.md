@@ -26,6 +26,72 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-171** 🟠 **The content layer's spec §8.3 hazard — `WBStartup` and
+`Devs` arriving on a tree for the first time — was never exercised, because
+no package file ever reached a tree** — *filed 2026-08-19 by the final
+whole-branch review (m4), deliberately not built there*
+`src-tauri/src/core/osinstall/recipes/packages/boingbag-39-1.json` ·
+`src-tauri/src/core/osinstall/apply.rs`
+
+The design spec predicted it: a BoingBag's payload carries `WBStartup` and
+`Devs` drawers that a base 3.9 tree may not have at all, so applying one is
+the first time `apply` creates a **new top-level drawer** on an existing
+tree rather than writing into one the release already made — including its
+`.uaem` sidecar, its manifest rows, and whatever `S:User-Startup` expects to
+find beside it.
+
+Nothing about that was measured, and the reason is ART-166: both BoingBag
+payloads are password-encrypted, so **not one file of either package has
+ever been placed**. The synthetic tests write into drawers the fixture tree
+already has; the one real run got as far as opening the payload.
+
+This is the same bookkeeping [ART-159](#open) does for the *previous*
+round's unexercised §5 hazards, and it is filed for the same reason: a
+predicted hazard that produced no component, no test and no issue is
+indistinguishable, six months later, from one that was handled.
+
+**What would close it.** Not a synthetic fixture — one exists and proves
+nothing about the real payload's shape. Either the Amiga-side install round
+ART-166 names, or a package whose files ART *can* read that genuinely
+introduces a top-level drawer (`locale-turkish` does not; it lands inside
+`Locale/`, which `locale-base` already makes).
+
+
+**ART-172** 🟠 **The content layer's spec §8.4 hazard — a language pack
+colliding with the base `Locale` — was never exercised either, and the run
+that looked like it did was measuring a mangled name** — *filed 2026-08-19
+by the final whole-branch review (m4), deliberately not built there*
+`src-tauri/src/core/osinstall/recipes/packages/locale-turkish.json` ·
+`src-tauri/src/core/osinstall/collide.rs`
+
+The spec predicted that a language pack lands on top of catalogs the base
+release already placed: `AmigaOS39.iso`'s own
+`OS-Version3.9/Locale/Catalogs/türkçe` carries roughly the same ~34 catalog
+names `BoingBag39-2-turkce.lha` updates, measured with 7-Zip, and
+`locale-turkish` declares `overrides: ["locale-base"]` precisely because of
+it.
+
+The real run reported **0 rows of every collision class** — `rows=0
+upgrade=0 downgrade=0 same-version=0 unversioned=0` — and that number is not
+evidence that the collision does not happen. It is [ART-168](#open): the
+drawer name arrived as `t<U+FFFD>rk<U+FFFD>e`, so the incoming files were
+compared against a destination nothing had ever written, and every one of
+them classified as *new*. **No comparison against the base `Locale` ever
+took place.**
+
+So the hazard stands unexercised, and it will stay unexercised until
+ART-168 is fixed — at which point this is the first thing to re-measure,
+because the answer flips from "0 collisions" to "~34 of them" and the
+`declared` column, the `overrides` declaration and the whole five-class
+preview all get their first test against real material with a real overlap.
+
+**Why this is filed separately from ART-168** rather than folded into it:
+ART-168 is a defect in one function in `core/lha` with a known fix and a
+known blast radius. This is a *verification* gap in the content layer, it
+outlives that fix, and nothing in the record would otherwise say that the
+cleanest-looking number the round produced was measuring the wrong thing.
+
+
 **ART-170** 🟡 **`collide::preview` can only be asked about a **package**,
 so a release recipe's own layering cannot be previewed at all** — *found
 2026-08-19 while measuring ART-169's fix; filed rather than fixed, Task 8 fix

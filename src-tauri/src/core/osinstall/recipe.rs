@@ -532,36 +532,90 @@ mod tests {
         );
     }
 
-    /// The ModulesA1200 lesson, generalised. Four disks in this set repeat
-    /// `workbench-base`'s own `C/` almost entirely; a component that declares
-    /// an override and then lazily takes the whole drawer would pass the
-    /// collision test above and still downgrade the user's commands.
+    /// The ModulesA1200 lesson, generalised. Four disks in the 3.2 set
+    /// repeat `workbench-base`'s own `C/` almost entirely, and a component
+    /// that lazily takes the whole drawer passes the collision test above
+    /// (which sees `File` rules only) while downgrading the user's
+    /// commands.
+    ///
+    /// **Widened from a hardcoded list of five 3.2 component ids (m1 of the
+    /// final whole-branch review).** The original never saw `workbench-39`
+    /// — thirteen `Subtree` rules over drawers `workbench-base` owns, which
+    /// is exactly and literally the shape it describes — nor either
+    /// BoingBag, whose every rule is the same. The round shipped the
+    /// described shape three times and the "generalised" guard saw none of
+    /// them, which is the "reads like protection" pattern Task 8's F1 was
+    /// filed for.
+    ///
+    /// So the set is derived, not written down: **every** component of
+    /// **every** shipped release recipe, plus **every** shipped package's
+    /// own component (a package legitimately overlays a release's drawers,
+    /// so it has to be asked the same question), checked against the
+    /// drawers that recipe's own base layer takes — the first `required`
+    /// component with `Subtree` rules, read from the data rather than named.
+    ///
+    /// **What the exemption is, and what it is not.** Taking a whole drawer
+    /// the base owns is allowed exactly when the component *declares* an
+    /// override over the base: that is what separates a deliberate layer
+    /// (`workbench-39` over 3.9's base, a BoingBag over both) or a
+    /// supplementary disk that really does merge (`extras`, `classes`,
+    /// `glowicons`) from a toolkit disk that took the easy route. It does
+    /// **not** mean a declaring component cannot still downgrade something:
+    /// nothing in a recipe can know whose copy of a file is newer. That is
+    /// measured rather than declared — `plan::detect_collisions` and
+    /// `collide::preview`'s downgrade rows are what catch it, against real
+    /// media, and `layer_the_real_39_overlay_when_asked` is where the 3.9
+    /// overlay's 19 upgrades and 0 downgrades were actually counted. This
+    /// test only guarantees that no component takes a base drawer *without
+    /// saying so*.
     #[test]
     fn no_toolkit_disk_takes_a_whole_drawer_the_base_already_owns() {
-        let recipe = recipe();
-        let base: std::collections::HashSet<&str> = recipe
-            .component("workbench-base")
-            .unwrap()
-            .rules
-            .iter()
-            .map(|r| r.to.as_str())
-            .collect();
+        let packages = super::super::package::packages().expect("the shipped packages must parse");
 
-        for id in [
-            "modules-a1200",
-            "diskdoctor",
-            "mmulibs",
-            "hdtools",
-            "storage",
-        ] {
-            let component = recipe.component(id).unwrap();
-            for rule in &component.rules {
-                assert!(
-                    !(base.contains(rule.to.as_str()) && rule.kind == RuleKind::Subtree),
-                    "{id} takes the whole '{}' drawer, which workbench-base owns — \
-                     take the files that are actually new instead",
-                    rule.to
-                );
+        for release in super::releases() {
+            let recipe = super::by_release(release)
+                .unwrap_or_else(|e| panic!("the shipped {release} recipe must parse: {e}"));
+
+            // The base layer, from the data: the first `required` component
+            // that actually takes drawers. Named nowhere, so a recipe whose
+            // base is called something other than `workbench-base` is
+            // policed just the same.
+            let base = recipe
+                .components
+                .iter()
+                .find(|c| c.required && c.rules.iter().any(|r| r.kind == RuleKind::Subtree))
+                .unwrap_or_else(|| {
+                    panic!("{release}: a release recipe must declare a required base layer")
+                });
+            let owned: std::collections::HashSet<&str> = base
+                .rules
+                .iter()
+                .filter(|r| r.kind == RuleKind::Subtree)
+                .map(|r| r.to.as_str())
+                .collect();
+
+            let claimants = recipe
+                .components
+                .iter()
+                .chain(packages.iter().map(|p| &p.component));
+
+            for component in claimants {
+                if component.id == base.id {
+                    continue;
+                }
+                let declared = component.overrides.iter().any(|over| over == &base.id);
+                for rule in &component.rules {
+                    if rule.kind != RuleKind::Subtree || !owned.contains(rule.to.as_str()) {
+                        continue;
+                    }
+                    assert!(
+                        declared,
+                        "{release}: {} takes the whole '{}' drawer, which {} owns, without \
+                         declaring an override over it — take the files that are actually \
+                         new instead, or say outright that this layer replaces them",
+                        component.id, rule.to, base.id
+                    );
+                }
             }
         }
     }

@@ -10,6 +10,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Update packages — and the AmigaOS 3.9 tree turns out to have been 3.5 (2026-08-19)
 
 #### Fixed
+- **A BoingBag no longer offers you a tick it cannot honour.** Both
+  BoingBags sat in the update-packages list with a live checkbox, and
+  ticking one and confirming got you an English error out of a ZIP
+  reader — *"Password required to decrypt file"* — whatever language
+  you had chosen, after you had already agreed to the change. The files
+  inside a BoingBag are locked, and only the package's own Amiga-side
+  `Updater` has the key. So ART now says that **on the row, before you
+  tick anything**, in your own language, and the tick is refused. It
+  does not say "Archive not found" — the archive is right there; what
+  cannot be done is the placing, from Windows, at all. Put the archive
+  on your Amiga and run its own `Updater` there, which is what every
+  other distribution builder does too.
+  *A pick you made in an earlier run and ART remembered still shows,
+  still checked, and can still be unticked — a remembered choice is
+  never quietly dropped, and never a dead end.*
+- **An update archive that carries a suspicious file name now says so.**
+  ART has always refused an entry name that tries to point outside the
+  folder it belongs in (`..\..\Startup` and friends) — it just refused
+  it silently, so an archive holding one looked exactly like an ordinary
+  package. The names are now listed on the package's own row, before you
+  commit to anything. Nothing about what gets placed has changed; what
+  changed is that you can see it.
 - **The AmigaOS 3.9 tree ART built was AmigaOS 3.5. It is now really 3.9.**
   Earlier the same day this changelog said "the tree boots", and it did —
   to a clean Workbench, with no error. What nobody had done was **ask the
