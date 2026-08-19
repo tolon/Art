@@ -90,6 +90,59 @@ giving a CD-sourced directory `bytes: 0` the same declared-default way
 `core/osinstall/source_cd.rs` already gives a disc's un-measurable protection
 and comment fields, matching what an ADF-sourced directory reports today.
 
+**ART-157** 🟡 **The recipe format cannot state a Kickstart *minimum*, only a
+maximum, so AmigaOS 3.9's real requirement (V40 or newer) goes unstated and
+unchecked** — *found 2026-08-19, Task 3, answering the plan's own instruction
+to report this rather than invent an encoding for it; recorded here per the
+plan's ruling at the time (written when this documentation task was numbered
+differently)*
+`src-tauri/src/core/osinstall/mod.rs:77-85` (`Condition`) ·
+
+`Condition` has exactly one variant, `RomOlderThan { major: u16 }` — "switch
+this component on when the paired Kickstart's own stated major is *below*
+this," which the 3.2 recipe uses to add `modules-a1200` back for a pre-V47
+ROM. AmigaOS 3.9 needs the opposite fact stated — "this release requires *at
+least* a 3.1/V40 ROM" — and there is no condition kind, recipe field, or
+`PairedRom` field that reads a stated minimum today. `workbench-base`, 3.9's
+only component, carries no `condition` at all, so G9's pairing check has
+nothing to enforce for this release: a plan built against it will never raise
+`RomUnknown` or any Kickstart-related refusal for this reason, which is
+`NotChecked`, not a pass.
+
+Not fixed, and nothing was repurposed to approximate it — asserting a false
+minimum through `rom-older-than` would be worse than stating none. The honest
+fix is a new condition kind (`Condition::RomAtLeast { major: u16 }`, or a
+release-wide `minimum_rom_major` outside any single component's on/off
+switch, since this is a fact about the release rather than one component) plus
+the G9 pairing wiring to enforce it — engine code touching `core/osinstall/mod.rs`
+(`Condition`, `condition_holds`), `plan.rs` (`rom_requirement`), and the wire
+types (`PairedRom`, `src/lib/osinstall.ts`), its own change, not built here.
+
+**ART-158** 🔵 **`CoreError::Malformed` now covers two different failure
+classes for an ISO9660 disc — a corrupt structure, and a disc merely larger
+than `CdSource`'s own walk limits** — *found 2026-08-19, Task 1, ruled parked
+rather than fixed; recorded here per the plan's ruling at the time (written
+when this documentation task was numbered differently)*
+`src-tauri/src/core/osinstall/source_cd.rs::CdSource::open`,
+`src-tauri/src/core/iso/mod.rs` (`MAX_WALK_ENTRIES`, `MAX_WALK_DEPTH`) ·
+
+`IsoImage::walk()` can stop short of the whole disc and still return `Ok`
+with whatever it found, because its other caller — a file-manager listing —
+would rather show a partial tree than nothing. An install source must not:
+`CdSource::open` now checks `walk.truncated`/`walk.depth_limited` and refuses
+with `CoreError::Malformed { format: "iso9660", .. }`, naming the limit hit,
+rather than silently building a plan from a partial listing. The disc this
+refusal exists for is **valid**, not corrupt — `ART-FORMAT-MALFORMED` is now
+the identifier a user sees for both a genuinely damaged disc and one that
+merely holds more than `CdSource` will read (100,000 entries / 16 levels of
+nesting; the owner's own real disc, 7,609 files / 975 folders, trips neither).
+
+Not fixed — the enum has no limit-shaped variant, and adding one touches
+every module's error surface, which is its own change, not this task's. Cost
+today is zero: nothing this plan tested comes close to either limit. Scoped
+to `CdSource` only; `core/iso`'s other caller (`IsoSource`) has the same gap
+and was deliberately left alone, a different module's contract.
+
 **ART-144** 🔵 **Five minors deferred across collection-wave-c's own review
 rounds, folded into one entry — #4 closed by the whole-branch review's fix
 pass, #1/#2/#3/#5 still open** — *found 2026-08-18, Tasks 3/6/6b/8; filed at

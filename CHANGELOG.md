@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### AmigaOS 3.9 joins 3.2 — build it from your own CD (2026-08-19)
+
+#### Added
+- **ART can now build an AmigaOS 3.9 distribution from your own install
+  CD**, the same way it already does from AmigaOS 3.2 floppy images: point
+  it at your media, and it reads what components your disc actually
+  offers, checks for name collisions, and builds the tree. A new release
+  picker on the OS Builder screen lets you choose which AmigaOS you're
+  installing; picking one you don't have media for is refused by name, not
+  silently swapped for another.
+- **A disc dropped on the "What can I do?" panel now offers the OS
+  Builder**, alongside the actions it already offered for a disc image —
+  so an install CD works the same way a floppy image already does: drop it
+  in, and ART offers to build from it.
+- Tested against a real, physical AmigaOS 3.9 CD: the full 588-file,
+  75-directory system tree built from it, start to finish.
+
+#### Known limitation
+- **The AmigaOS 3.9 tree built this way has not yet been booted.** AmigaOS
+  3.2's tree was proven by starting it under an emulator with a licensed
+  Kickstart ROM and watching it reach a clean Workbench desktop; 3.9's has
+  not been tried the same way yet, because that step needs a person
+  sitting at the emulator, not something ART can do on its own. Until
+  someone does that, treat a 3.9 tree as built but unverified.
+
 ## [0.8.5] - 2026-08-18
 
 ### A WHDLoad game from your own collection now starts (2026-08-18)
