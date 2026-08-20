@@ -51,3 +51,10 @@ Desktop.ini
 # Python bytecode from the scripts/ helpers
 __pycache__/
 *.py[cod]
+
+# Machine-local: points the test suite's scratch off the system drive.
+# Not committed — the path is this machine's own, and a hardcoded local path
+# would break CI, which has no such drive. See ART-184 for the leak this works
+# around; the owner's rule is that nothing deletes from C:, so C: must not be
+# where test scratch accumulates in the first place.
+src-tauri/.cargo/config.toml

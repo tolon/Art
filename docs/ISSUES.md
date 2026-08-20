@@ -26,6 +26,46 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-184** 🟠 **The test fixtures leak a scratch directory per run, for
+ever, and filled a 2 TB drive** — *found 2026-08-20 when the suite began
+failing with `StorageFull`*
+`src-tauri/src/core/osinstall/mod.rs::fixtures::scratch` and every helper
+shaped like it
+
+**Measured, not inferred.** `%TEMP%` held **169,291** `art-*` directories
+averaging **6.1 MB** — roughly **987 GB**, on a system drive with 70 MB left.
+The oldest was stamped 01:49 and the newest 19:22 the same day, so this is one
+session's output. Hundreds of tests then failed with
+`Os { code: 112, kind: StorageFull }`, and every suite measurement taken that
+evening was worthless until the cause was found.
+
+Three things compound:
+
+1. **Every run gets a new name.** `fixtures::scratch` builds
+   `art-osinstall-{tag}-{pid}-{counter}`, then calls `remove_dir_all` on
+   *that* name — a name that by construction has never existed. Nothing
+   touches the previous run's directories.
+2. **Not every test removes its own.** `core/osinstall/apply.rs` creates
+   twelve and removes three. One measured run of its 49 tests left **41**
+   directories behind.
+3. **Nothing sweeps.** `core/osinstall`'s *production* code has
+   `sweep_stale_preview_scratch_dirs`, which removes its own scratch
+   directories after an hour. The test fixtures have no equivalent.
+
+A missing `remove_dir_all` is also skipped whenever a test panics, so a red
+suite leaks far more than a green one — which is the worst time for it.
+
+**What would close it.** Not a bigger disk and not a manual clean: a fixture
+that removes its directory on `Drop` rather than at the end of the happy path,
+so a panicking test cleans up too, plus the same hourly sweep the production
+side already has. Both are the shapes this codebase already uses elsewhere.
+
+**Worked around, not fixed:** `src-tauri/.cargo/config.toml` (git-ignored,
+machine-local) points `TMP`/`TEMP` at the project disk, because the owner's
+standing rule is that nothing deletes from `C:` — so `C:` must not be where
+this piles up. The leak is unchanged; it now accumulates somewhere that does
+not stop the machine.
+
 **ART-183** 🔵 **A misspelled key in a release recipe is still dropped in
 silence** — *found while fixing the same hole in packages, 2026-08-20*
 `src-tauri/src/core/osinstall/recipe.rs`
