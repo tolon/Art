@@ -65,17 +65,33 @@ So the loop is assembled almost entirely from parts that ran today:
 3. Boot with the licensed ROM.
 4. Read the result file from the host, then terminate the process ART started.
 
-## The one unknown, and it must be measured before any spec
+## The one unknown — measured 2026-08-20, and the answer is the good one
 
 **Does a file the Amiga writes into a `filesystem2=` directory mount appear on
-the host promptly, or only when the emulator exits?** Step 4 rests entirely on
-this and nothing in today's work touched it — the tree was read *after*
-WinUAE closed.
+the host promptly, or only when the emulator exits?** Step 4 rested entirely on
+this, and nothing before today had touched it: the 3.9 tree was read *after*
+WinUAE closed, which is consistent with either answer.
 
-Measure it before designing: boot a tree whose `Startup-Sequence` writes a
-file, and watch the host folder while it runs. If the write is only visible on
-exit, the host has to wait for exit rather than poll, which changes the shape
-of the whole step.
+**Measured: the write is visible live.** A copy of the real 3.9 tree was given
+a `Startup-Sequence` with `Echo >SYS:probe-early.txt "early marker"` inserted
+at its second line, mounted through the config ART itself generates
+(`filesystem2=rw,DH0:Workbench:…,0`) and booted with the owner's licensed
+Kickstart 3.1. The host watched the folder while it ran: the file appeared
+with its 13 bytes, and **WinUAE was confirmed still running at that moment**
+(pid alive), so this is not a post-exit flush. The probe tree and its config
+were removed afterwards.
+
+So the host can **poll** rather than wait for exit, and step 4 keeps its shape:
+the Amiga writes a result file, the host reads it while the machine is still
+up, and ART terminates the process it started. Nothing here needs the Amiga to
+be able to quit the emulator.
+
+**One thing the probe also showed, worth carrying into the design:** a line
+appended *after* the Startup-Sequence's own end never ran — the sequence
+finishes with `LoadWB`/`EndCLI`. So a script that must report back has to run
+**before** the sequence hands over to Workbench, or be started as its own
+thing. Where the result is written from is a design decision, not a free
+choice.
 
 ## A second mechanism worth knowing, not yet needed
 
