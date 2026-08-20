@@ -143,9 +143,38 @@ export interface LayoutResult {
 // The commands
 // ---------------------------------------------------------------------------
 
-/** What laying these out would do. Writes nothing (§92's PREVIEW). */
-export async function layoutPlan(request: LayoutRequest): Promise<LayoutPlan> {
-  return invoke<LayoutPlan>("layout_plan", { request });
+export const LAYOUT_PLAN_EVENT = "layout-plan-result";
+
+export interface LayoutPlanResult {
+  job_id: number;
+  plan: LayoutPlan;
+}
+
+/**
+ * What laying these out would do. Writes nothing (§92's PREVIEW). Returns a
+ * **job id**; the plan arrives on {@link onLayoutPlanResult}.
+ *
+ * A job because planning is no longer cheap. Since ART-177 the preview
+ * compares destination **content**, so a plan over a staging tree that
+ * already holds its output — the resume case, which is what the feature is
+ * for — reads every one of those files in full. Measured on the owner's own
+ * collection (1 697 WHDLoad HDFs, 3.74 GB): 797 ms for a first plan and
+ * **138 898 ms** for a resume. That is not something to do on the command
+ * thread (§54), and `archivesPlanInstall` took the same route for the same
+ * reason (ART-066).
+ *
+ * A cancelled or failed job never sends the event; `onJobProgress` is where
+ * the screen learns that.
+ */
+export async function layoutPlan(request: LayoutRequest): Promise<number> {
+  return invoke<number>("layout_plan", { request });
+}
+
+/** Subscribe to finished plans. */
+export async function onLayoutPlanResult(
+  handler: (result: LayoutPlanResult) => void
+): Promise<UnlistenFn> {
+  return listen<LayoutPlanResult>(LAYOUT_PLAN_EVENT, (event) => handler(event.payload));
 }
 
 /**

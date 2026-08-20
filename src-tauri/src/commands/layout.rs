@@ -16,7 +16,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::core::layout::apply::apply;
 use crate::core::layout::policy::Policy;
-use crate::core::layout::{plan, Collision, LayoutPlan};
+use crate::core::layout::{Collision, LayoutPlan};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::error::AppResult;
 
@@ -30,10 +30,56 @@ pub struct LayoutRequest {
     pub policy: Policy,
 }
 
+pub const LAYOUT_PLAN_EVENT: &str = "layout-plan-result";
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LayoutPlanResult {
+    pub job_id: u64,
+    pub plan: LayoutPlan,
+}
+
 /// What laying these out would do. Writes nothing (§92's PREVIEW).
+///
+/// **A job, and the reason is a number** (§54). Planning is read-only, which
+/// is why it ran on the command thread for as long as it did; what changed is
+/// how much reading it does. Since ART-177's G1, `presence_of` compares
+/// **content**, so a plan whose destinations already exist — the resume case,
+/// which is the one this feature was built for — reads every one of them in
+/// full.
+///
+/// Measured on the owner's own collection (1 697 WHDLoad HDFs, 3.74 GB):
+/// **797 ms** for the first plan and **138 898 ms** for the plan over a
+/// staging tree that already held it. Two and a quarter minutes on the
+/// command thread is a frozen window, so this is a job with progress, like
+/// every other long operation here — `archives_plan_install` took the same
+/// route for the same reason (ART-066).
+///
+/// The plan arrives on [`LAYOUT_PLAN_EVENT`]; a cancelled or failed job never
+/// sends one, and the screen learns that from `onJobProgress`.
 #[tauri::command]
-pub fn layout_plan(request: LayoutRequest) -> AppResult<LayoutPlan> {
-    Ok(plan(&request.root, &request.paths, &request.policy)?)
+pub fn layout_plan(
+    request: LayoutRequest,
+    app: AppHandle,
+    registry: State<'_, Arc<JobRegistry>>,
+) -> AppResult<u64> {
+    let registry = Arc::clone(&registry);
+    let emit_app = app.clone();
+    let title = format!("Working out what {} sources need", request.paths.len());
+
+    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+        let plan = crate::core::layout::plan_with(
+            &request.root,
+            &request.paths,
+            &request.policy,
+            progress,
+        )?;
+        // Nothing is logged: §53 is about operations that change user data,
+        // and this one writes nothing at all.
+        let _ = emit_app.emit(LAYOUT_PLAN_EVENT, LayoutPlanResult { job_id, plan });
+        Ok(())
+    });
+
+    Ok(id)
 }
 
 /// Recompute collisions for `plan`'s **current** destinations against disk.

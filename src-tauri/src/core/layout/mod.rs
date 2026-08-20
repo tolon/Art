@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::core::detect::{detect, FormatCategory};
-use crate::core::error::CoreResult;
+use crate::core::error::{CoreError, CoreResult};
 use crate::core::layout::policy::{drawer_for, Policy, WhdloadPlacement};
 use crate::core::layout::scan::{gather, Found};
 use crate::core::security::path::safe_join;
@@ -242,13 +242,52 @@ fn name_of(path: &Path) -> String {
 }
 
 /// What laying these paths out under `root` would do. Writes nothing.
+///
+/// The thin wrapper, for callers with no job to report through — the same
+/// shape `scan_collection_directory` / `_with` uses.
 pub fn plan(root: &Path, paths: &[PathBuf], policy: &Policy) -> CoreResult<LayoutPlan> {
+    plan_with(root, paths, policy, &crate::core::jobs::NoProgress)
+}
+
+/// [`plan`], reporting progress and stopping when asked.
+///
+/// **This is a long operation and it is measured** (§54). On the owner's own
+/// collection — 1 697 WHDLoad HDFs, 3.74 GB, at `E:\amiga\Amigatolon\WHDload`:
+///
+/// | | items | time |
+/// |---|---|---|
+/// | first plan, nothing at the destination | 1 702 | 797 ms warm, 2 804 ms cold-cache |
+/// | plan over a staging tree that already holds it — the **resume** case | 1 702 | **138 898 ms** |
+///
+/// 81.6 ms an item on the resume, because `presence_of` compares **content**
+/// (ART-177's G1): every destination that already exists is read in full and
+/// matched against its source, which for that collection is 3.74 GB read
+/// twice. That is the right comparison — a cheaper one is how a wrong file
+/// gets skipped — and it is emphatically not something to run on the command
+/// thread. `commands::layout::layout_plan` is a job because of this number.
+///
+/// Re-run it with `core::layout::tests::layout_plan_timing_over_a_real_collection`
+/// rather than trusting the table above.
+///
+/// Cancellation is checked **between whole items**, never inside a comparison.
+pub fn plan_with(
+    root: &Path,
+    paths: &[PathBuf],
+    policy: &Policy,
+    sink: &dyn crate::core::jobs::ProgressSink,
+) -> CoreResult<LayoutPlan> {
     let mut items = Vec::new();
     let mut refused = Vec::new();
 
+    sink.report(0, None, "looking at what was dropped");
     let scanned = gather(paths)?;
+    let total = scanned.found.len() as u64;
 
-    for found in scanned.found {
+    for (done, found) in scanned.found.into_iter().enumerate() {
+        if sink.is_cancelled() {
+            return Err(CoreError::Cancelled);
+        }
+        sink.report(done as u64, Some(total), &found.path.to_string_lossy());
         let kind = classify(&found)?;
         let drawer = match drawer_for(&kind, policy) {
             Ok(drawer) => drawer,
@@ -292,7 +331,7 @@ pub fn plan(root: &Path, paths: &[PathBuf], policy: &Policy) -> CoreResult<Layou
         });
     }
 
-    let (collisions, already_in_place) = settled_in(root, &items);
+    let (collisions, already_in_place) = settled_in_with(root, &items, sink)?;
     // Folded with a checked running total, never a plain `.sum()`, for the
     // same reason `declared_bytes` below is: an item's `bytes` can come from
     // an archive's own declared size, which is an adversarial claim.
@@ -354,11 +393,30 @@ pub fn collisions_in(root: &Path, items: &[LayoutItem]) -> Vec<Collision> {
 /// exactly what this item would place is **not** a collision — reporting it
 /// as one is what made a half-finished apply a dead end.
 pub fn settled_in(root: &Path, items: &[LayoutItem]) -> (Vec<Collision>, Vec<String>) {
+    settled_in_with(root, items, &crate::core::jobs::NoProgress).expect("NoProgress never cancels")
+}
+
+/// [`settled_in`], reporting progress and stopping when asked.
+///
+/// This is where a plan spends its time on a resume: every destination that
+/// already exists is compared byte for byte. See [`plan_with`] for the
+/// measurement. Cancellation is checked between whole items — never inside a
+/// comparison, which would mean a half-read answer.
+pub fn settled_in_with(
+    root: &Path,
+    items: &[LayoutItem],
+    sink: &dyn crate::core::jobs::ProgressSink,
+) -> CoreResult<(Vec<Collision>, Vec<String>)> {
     use crate::core::layout::presence::{presence_of, Presence};
 
+    let total = items.len() as u64;
     let mut already: Vec<String> = Vec::new();
     let mut by_destination: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
-    for item in items {
+    for (done, item) in items.iter().enumerate() {
+        if sink.is_cancelled() {
+            return Err(CoreError::Cancelled);
+        }
+        sink.report(done as u64, Some(total), &item.destination);
         match presence_of(root, item) {
             Presence::AlreadyInPlace => {
                 already.push(item.destination.clone());
@@ -412,7 +470,7 @@ pub fn settled_in(root: &Path, items: &[LayoutItem]) -> (Vec<Collision>, Vec<Str
         })
         .collect();
 
-    (collisions, already)
+    Ok((collisions, already))
 }
 
 #[cfg(test)]
@@ -820,6 +878,36 @@ mod tests {
 
     // ---- The measurement, checked in so the number can be re-run ----------
 
+    /// A plan stops between whole items when it is asked to, and never
+    /// inside a comparison — the rule `core/jobs` states, and the reason a
+    /// two-minute preview is safe to cancel rather than merely slow.
+    #[test]
+    fn a_plan_stops_when_asked_and_between_whole_items() {
+        struct StopAtOnce;
+        impl crate::core::jobs::ProgressSink for StopAtOnce {
+            fn report(&self, _done: u64, _total: Option<u64>, _message: &str) {}
+            fn is_cancelled(&self) -> bool {
+                true
+            }
+        }
+
+        let dir = scratch("cancel");
+        let root = dir.join("staging");
+        adf(&dir.join("Workbench.adf"));
+
+        let err = plan_with(
+            &root,
+            &[dir.join("Workbench.adf")],
+            &Policy::default(),
+            &StopAtOnce,
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "ART-CANCELLED", "{err}");
+        assert!(!root.exists(), "planning writes nothing, cancelled or not");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Time `plan()` over a real collection, cold and on a resume.
     ///
     /// `#[ignore]`d because it needs the owner's own material, which ART never
@@ -864,13 +952,26 @@ mod tests {
             cold_ms
         );
 
+        // A real collection contains real refusals — a pack that still holds
+        // its `Install` script, say — so a partial apply is the ordinary
+        // outcome here and not a failure of the measurement. What matters is
+        // that most destinations now exist.
         let started = Instant::now();
-        let outcome = crate::core::layout::apply::apply(&cold, &crate::core::jobs::NoProgress)
-            .expect("the staging root is empty, so this places everything");
+        let placed = match crate::core::layout::apply::apply(&cold, &crate::core::jobs::NoProgress)
+        {
+            Ok(outcome) => outcome.placed,
+            Err(crate::core::error::CoreError::PartiallyApplied {
+                placed,
+                item,
+                reason,
+            }) => {
+                eprintln!("apply stopped at '{item}': {reason}");
+                placed as usize
+            }
+            Err(err) => panic!("{err}"),
+        };
         eprintln!(
-            "apply: {} placed, {} skipped, {} ms",
-            outcome.placed,
-            outcome.skipped,
+            "apply: {placed} placed, {} ms",
             started.elapsed().as_millis()
         );
 
@@ -892,10 +993,15 @@ mod tests {
             warm_ms as f64 / warm.items.len().max(1) as f64
         );
 
-        assert_eq!(
-            warm.already_in_place.len(),
-            cold.items.len(),
-            "everything the apply placed must be recognised on the re-plan"
+        // `>=`, not `==`: a real folder can already hold a destination this
+        // plan wants (`paketler` holds two sources whose `Unsorted/` names
+        // collide), and that one is recognised as already-in-place without
+        // this apply having placed it. What must hold is that nothing the
+        // apply *did* place comes back unrecognised.
+        assert!(
+            warm.already_in_place.len() >= placed,
+            "everything the apply placed must be recognised on the re-plan: {} < {placed}",
+            warm.already_in_place.len()
         );
 
         let _ = std::fs::remove_dir_all(&root);

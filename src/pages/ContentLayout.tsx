@@ -39,6 +39,7 @@ import {
   layoutBlocker,
   layoutPlan,
   layoutRecheck,
+  onLayoutPlanResult,
   onLayoutResult,
   refusalPhrase,
   retarget,
@@ -122,6 +123,20 @@ export function ContentLayout() {
    * re-run after a failure.
    */
   const pendingApply = useRef<number | null>(null);
+  /**
+   * The preview job that is running, for the same reason `pendingApply` above
+   * exists — and it exists at all because planning stopped being cheap.
+   *
+   * Comparing a destination's **content** (ART-177) means a plan over a
+   * staging tree that already holds its output reads every one of those files
+   * in full: 138 898 ms on the owner's own 1 697-item collection, against
+   * 797 ms for a first plan. Two and a quarter minutes on the command thread
+   * is a frozen window (§54), so `layoutPlan` is a job and the plan arrives
+   * on an event.
+   */
+  const pendingPlan = useRef<number | null>(null);
+  /** The request the running preview was started for. */
+  const plannedFor = useRef<string | null>(null);
 
   // What Apply will actually copy: every item that is not already exactly
   // where it is going. Derived rather than stored, so a retarget cannot leave
@@ -170,17 +185,37 @@ export function ContentLayout() {
   }, [location.state]);
 
   // A job that ended without a result: cancelled, or failed (ART-110). Only
-  // this stops the screen waiting — `onLayoutResult` fires on success alone.
+  // this stops the screen waiting — the two result events fire on success
+  // alone. Both jobs this screen starts are watched here, because a preview
+  // that fails halfway through a 1 700-item collection has to release the
+  // buttons exactly as a failed apply does.
   useEffect(() => {
     return subscribeSafely(() =>
       onJobProgress((job) => {
         if (job.state.state === "running") return;
-        if (job.id !== pendingApply.current) return;
-        pendingApply.current = null;
+        const waiting = job.id === pendingApply.current || job.id === pendingPlan.current;
+        if (!waiting) return;
+        if (job.id === pendingApply.current) pendingApply.current = null;
+        if (job.id === pendingPlan.current) pendingPlan.current = null;
         setBusy(false);
         if (job.state.state === "failed") {
           setError(`${job.state.message} (${job.state.error_code})`);
         }
+      })
+    );
+  }, []);
+
+  // The plan itself, when the preview job finishes.
+  useEffect(() => {
+    return subscribeSafely(() =>
+      onLayoutPlanResult((result) => {
+        if (result.job_id !== pendingPlan.current) return;
+        pendingPlan.current = null;
+        setPlan(result.plan);
+        setChecked(new Set());
+        setCollisionsUnknown(false);
+        lastPlanned.current = plannedFor.current;
+        setBusy(false);
       })
     );
   }, []);
@@ -239,15 +274,16 @@ export function ContentLayout() {
     setError(null);
     setResult(null);
     try {
-      const made = await layoutPlan(request);
-      setPlan(made);
-      setChecked(new Set());
-      setCollisionsUnknown(false);
-      lastPlanned.current = fingerprint;
+      // The plan arrives on `onLayoutPlanResult`; `busy` stays set until it
+      // does, or until the job-progress listener sees the job end some other
+      // way. Deliberately no `setBusy(false)` here — the work has only just
+      // started.
+      plannedFor.current = fingerprint;
+      pendingPlan.current = await layoutPlan(request);
     } catch (e) {
+      pendingPlan.current = null;
       setPlan(null);
       setError(String(e));
-    } finally {
       setBusy(false);
     }
   }

@@ -869,6 +869,49 @@ dropping directories from the walk, and treating a missing icon as
 already-in-place fails exactly the corresponding tests (5 failed / 57 passed);
 restored, 62 pass.
 
+**Fix round 3 (wave-C1 re-review): measured, and it is a job now.**
+
+Comparing content is not free, and "if it proves too slow" is how a freeze
+ships. Measured on the owner's own collection —
+`E:\amiga\Amigatolon\WHDload`, **1 697 WHDLoad HDFs, 3.74 GB**, release
+build, by `core::layout::tests::layout_plan_timing_over_a_real_collection`
+(checked in and `#[ignore]`d, so the number can be re-run rather than
+re-trusted):
+
+| | items | time |
+|---|---|---|
+| first plan, nothing at the destination | 1 702 | **797 ms** (2 804 ms with a cold file cache) |
+| apply | 1 698 placed | 58 978 ms |
+| plan over a staging tree that already holds it — the **resume** | 1 702 | **138 898 ms** |
+
+81.6 ms an item on the resume, because every destination that exists is read
+in full and matched against its source: 3.74 GB read twice. Two and a quarter
+minutes on the command thread is a frozen window, and even the *first* plan at
+797 ms is past the point where §54 applies.
+
+So `layout_plan` is a job (`spawn_job`), like `archives_plan_install` before
+it (ART-066): it reports progress per item, the plan arrives on
+`layout-plan-result`, and a cancelled or failed preview releases the screen
+through `onJobProgress` exactly as a failed apply does. `plan_with` and
+`settled_in_with` take a `&dyn ProgressSink` with thin `NoProgress` wrappers —
+the `scan_collection_directory` / `_with` shape — and **cancellation is
+checked between whole items, never inside a comparison**, which would mean
+deciding on a half-read file.
+
+The comparison was not weakened to buy the time back. A cheaper one is how a
+wrong file gets skipped, which is the defect G1 was filed for.
+
+Covered by `core::layout::tests::a_plan_stops_when_asked_and_between_whole_items`
+(and it asserts the staging root does not exist afterwards: planning writes
+nothing, cancelled or not). The measurement lives in `plan_with`'s own doc
+comment as well, so the next person meets the number rather than the worry.
+
+**A second folder, for shape rather than for the headline:**
+`E:\amiga\Amigatolon\paketler` — 5 652 items, 0.93 GB of mostly small
+files — planned in 9 417 ms cold and 7 550 ms on the re-plan, 1.3–1.7 ms an
+item either way. The resume cost is dominated by **bytes**, not by item count:
+3.74 GB of HDFs costs 81.6 ms an item and 0.93 GB of small files costs 1.3 ms.
+
 **ART-069** 🔵 **No frontend test renders `FileManager.tsx`**
 `src/pages/FileManager.tsx` · It calls Tauri commands (`onVolumeWriteResult`,
 `onJobProgress`, panel listing, …) on mount, which is why every phase-1a
