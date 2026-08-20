@@ -20,6 +20,7 @@ function base(): MoveInput {
     targetWritable: true,
     entries: [dir("Lotus")],
     takenNames: [],
+    sameImage: false,
   };
 }
 
@@ -93,20 +94,45 @@ describe("planMove", () => {
     });
   });
 
-  it("refuses several entries between two images — ART-064's gap, not a move bug", () => {
+  it("allows several entries between two images — ART-081", () => {
+    // Both halves have the same shape and the same guarantee now:
+    // `volumeCopyBetweenMany` stages exactly what was marked into one
+    // operation (ART-176), and `volumeDeleteMany` removes exactly those names
+    // as one journalled operation that rolls back whole on either write
+    // strategy (ART-073). The refusal that stood here was for want of the
+    // second, not of the first.
     expect(
       planMove({ ...base(), targetKind: "adf", entries: [dir("Lotus"), dir("Turrican")] })
-    ).toEqual({ kind: "refused", reason: { key: "files.err.batchBetweenVolumes" } });
+    ).toEqual({ kind: "move", entries: [dir("Lotus"), dir("Turrican")] });
   });
 
-  it("refuses a lone file between two images — ART-081, whose delete half is missing", () => {
-    // The *copy* half works since ART-176: one route between two images, and
-    // it stages exactly what was marked. What a move also needs is the
-    // delete, sequenced after the destination verifies — recorded rather than
-    // improvised, so this refusal stands.
+  it("allows a lone file between two images — ART-081, and by the same route", () => {
+    // The whole of the owner's ruling on this area: a single entry is a
+    // one-entry batch through the route the batch uses, never a second path
+    // with its own promises. A file and a folder are the same case here.
     expect(planMove({ ...base(), targetKind: "adf", entries: [file("Readme")] })).toEqual({
+      kind: "move",
+      entries: [file("Readme")],
+    });
+  });
+
+  it("refuses a move between two directories of the *same* image", () => {
+    // ART-081's own new hazard, and the reason it needed a guard rather than
+    // just a lifted restriction: a move within one image is a relink, not a
+    // copy-and-delete. Doing it the long way stages the tree out, writes it
+    // back into the same volume and then removes the original — twice the
+    // free space, and a failure between the halves losing the only copy. F5
+    // has always refused this; F6 could reach it and did not, which only
+    // stopped mattering because F6 was restricted to one directory until now.
+    expect(planMove({ ...base(), targetKind: "adf", sameImage: true })).toEqual({
       kind: "refused",
-      reason: { key: "files.move.refuseFileBetweenImages" },
+      reason: { key: "files.err.sameImage" },
+    });
+    // ...and out to a host folder it is not the same case at all, so it must
+    // still be allowed.
+    expect(planMove({ ...base(), targetKind: "local", sameImage: true })).toEqual({
+      kind: "move",
+      entries: [dir("Lotus")],
     });
   });
 

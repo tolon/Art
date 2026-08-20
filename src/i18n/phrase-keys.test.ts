@@ -414,6 +414,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       targetWritable: true,
       entries: [{ name: "Lotus", isDir: true }],
       takenNames: [],
+      sameImage: false,
     };
     const refusals: MoveInput[] = [
       { ...base, entries: [] },
@@ -422,15 +423,11 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       { ...base, sourceWritable: false },
       { ...base, targetKind: "archive" },
       { ...base, targetKind: "hdf", targetWritable: false },
-      {
-        ...base,
-        targetKind: "hdf",
-        entries: [
-          { name: "Lotus", isDir: true },
-          { name: "Turrican", isDir: true },
-        ],
-      },
-      { ...base, targetKind: "hdf", entries: [{ name: "Readme", isDir: false }] },
+      // ART-081: the two "between two images" refusals are gone (a selection
+      // is a batch like any other now), and this one replaced them — a move
+      // between two directories of the *same* image is a relink, not a
+      // copy-and-delete.
+      { ...base, targetKind: "hdf", sameImage: true },
       { ...base, takenNames: ["Lotus"] },
     ];
     for (const input of refusals) {

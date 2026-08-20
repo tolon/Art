@@ -1371,7 +1371,6 @@
       "refuseSourceNotWritable": "Bu birim yazma kabul etmiyor, dolayısıyla öğeler ondan kaldırılamaz. Bunun yerine F5 ile kopyalayın.",
       "refuseReadOnlyTarget": "Diğer bölme salt okunur, oraya hiçbir şey taşınamaz.",
       "refuseTargetNotWritable": "Önce diğer tarafta yazma kabul eden bir birim açın.",
-      "refuseFileBetweenImages": "Tek bir dosyayı iki imaj arasında taşımak henüz desteklenmiyor — bir klasör taşınabilir, bir dosya ise F5 ile kopyalanabilir.",
       "refuseCollision_one": "{{names}} zaten orada. Taşıma hiçbir zaman üzerine yazmaz ve sessizce atlamaz — önce birinin adını değiştirin.",
       "refuseCollision_other": "Bu adlardan {{count}} tanesi zaten orada ({{names}}). Taşıma hiçbir zaman üzerine yazmaz ve sessizce atlamaz — önce adlarını değiştirin."
     },
@@ -1392,7 +1391,6 @@
       "sameImage": "Bu, her iki tarafta da aynı imaj. Bunun yerine Taşı veya Adlandır kullanın.",
       "noLocalPath": "Bu öğenin diskinizde bir yolu yok.",
       "openPartitionFirst": "Önce bir bölüm açın.",
-      "batchBetweenVolumes": "Birden çok öğeyi iki imaj arasında tek seferde taşımak henüz desteklenmiyor — F5 ile kopyalayıp asıllarını silin.",
       "mixedArchiveSelection": "Bir imaja kopyalarken yalnızca .lha arşivleri seçin, ya da hiçbirini — ikisinin karışımını değil."
     },
     "status": {

@@ -318,47 +318,9 @@ first looks: embedding a PFS3 driver into a **foreign** card's existing RDB
 `hst-imager` does it; that is named in the refusal text. Not fixed — filed as
 future work, not implied to already work.
 
-**ART-081** 🟡 **A single file cannot be moved between two images, because the primitive underneath addresses a directory**
-`src-tauri/src/commands/volume_write.rs::volume_copy_between` ·
-`src/lib/movePlan.ts` · The command takes a *directory* block at both ends and
-copies that directory's tree. F5 on a lone file between two images already
-passes the pane's own `dirBlock` and therefore copies the whole folder the file
-happens to be in — noisy, but harmless, because F5 deletes nothing. F6 (Move)
-cannot use that: it would copy twenty files, delete the one that was marked, and
-report a move.
-
-So `planMove` refuses it by name (`files.move.refuseFileBetweenImages`), and
-the test `refuses a lone file between two images` pins the refusal. Folders
-move between images; files move out to a host folder; a file between two images
-is copied with F5 for now.
-
-Fixing it means a command that stages one *entry* — extract to a scratch path,
-then `put_file` into the destination volume, inside one write session at each
-end so the backup and journal guarantees hold.
-
-**The copy half is built; the delete half is not.** [ART-064](#fixed) built
-`core::volume::write::copy::extract_selection_from_volume`, which stages a
-named set of entries — one of them included — out of a volume, and
-`volume_copy_between_many` carries the result into the other image under one
-backup and one commit. [ART-176](#fixed) then removed the single-entry route
-entirely, so there is **one** path between two images and it stages exactly
-what was marked: a lone file is a one-entry batch and nothing beside it rides
-along. `one_file_between_two_images_copies_that_file_and_nothing_else` pins
-it. The F5 whole-folder surprise this entry described is therefore gone.
-
-What is still missing, and what keeps this open, is the **delete**. A move is
-a copy *and* a delete, and the decision is in the sequencing rather than in
-either half: the destination has to verify before the source is touched, and
-something has to say what happens when the copy lands and the delete then
-fails — a file that now exists twice, which is the safe failure, but only if
-the user is told. `planMove` refuses a lone file between two images until that
-is decided deliberately, and its doc comment now says this rather than the
-old (and no longer true) "the primitive copies a folder".
-
-Found while building F6 in phase 2b task 3; recorded rather than smuggled into
-a UI task, which is what that task's plan requires.
-
-**ART-080** 🔵 **ART cannot delete a file on the user's own disk, so nothing can be moved *off* a host folder**
+**ART-080** 🔵 **ART cannot delete a file on the user's own disk, so nothing
+can be moved *off* a host folder** — *found in phase 2b task 3; **still open**
+after `debt-wave-c2`, deliberately — see "what is decided and what is not"*
 `src/lib/movePlan.ts` · `src-tauri/src/commands/panel.rs` · Every delete ART
 owns goes *into* a disk image through `core/volume/write`; there is no command
 that removes a file from the user's own filesystem, and that is deliberate —
@@ -370,11 +332,44 @@ game off `D:\downloads` and onto a floppy image — is a copy, and the original
 stays. F6 says so (`files.move.refuseLocalSource`) instead of being disabled
 with no explanation, and points at F5.
 
-Fixing it is not a line of code but a decision: a host-side delete needs its own
-`Safety` class, its own confirmation, its own oplog entry, and a policy on
-recycle bin versus unlink. Worth doing deliberately, if at all.
+**What is decided.** The *shape* is settled and is now the rule everywhere
+else in this area ([ART-081](#fixed)): one route, and a single-entry operation
+is a one-entry batch through it. Whatever a host delete looks like, it takes a
+list of names, previews them, logs through `commands/oplog.rs`, and refuses
+rather than guesses.
 
-Found while building F6 in phase 2b task 3.
+**What is not, and why this stayed open.** Where a deleted host file *goes*.
+This entry has always named it (`a policy on recycle bin versus unlink`) and
+it is a decision about the user's own disk, not an implementation detail:
+
+- **Recycle Bin** is the Explorer behaviour this entry itself invokes, and the
+  only one where "undo" means something a user already knows how to do. It
+  needs a new third-party dependency that performs deletions on the user's
+  filesystem (`trash`, or a Windows shell binding) — which under `deny.toml`'s
+  own policy is a licence and audit decision made deliberately, in the same
+  commit as `THIRD_PARTY_LICENSES.md`, not as a side effect of a debt round.
+  It also cannot be honoured everywhere: network drives and some removable
+  media have none, so ART would have to refuse on exactly the paths a user is
+  most likely to be clearing.
+- **Unlink with a `core/safety` backup first** needs no dependency and reuses
+  ART's own stated rule ("every write goes through `core/safety`, and a delete
+  is a write"). But `backup_file` puts its generations in `.art-backup/`
+  **beside the file** — which means ART writing folders into the user's own
+  `D:\downloads`, and duplicating a multi-gigabyte ISO to move it. That is a
+  visible product consequence, not a safety detail.
+- **Permanent unlink** is the only option with no cost and no recovery. It is
+  also the one this project's own rules argue hardest against (§92, and
+  "never destroy the original before successful validation" read at its
+  widest).
+
+None of the three is ART's to pick on the owner's behalf, and the wave that
+met this refused to pick one. **What would close it:** the owner naming which
+of the three, and — if the Recycle Bin — accepting the dependency and what
+ART should do on a path that has none. The rest is a day's work: a
+`panel_delete_many` alongside `panel_copy_many`, previewed and confirmed,
+logged, and **per-entry** in its report rather than all-or-nothing, because a
+host filesystem has no journal to roll back and the honest thing is to say
+exactly what was removed and what was not.
 
 **ART-062** 🔵 **No language has been checked on screen**
 `src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
@@ -442,6 +437,68 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-081** 🟡 **A single file cannot be moved between two images, because
+the primitive underneath addresses a directory** — *found in phase 2b task 3;
+fixed 2026-08-20 on `debt-wave-c2`*
+`src/lib/movePlan.ts` · `src/lib/deletePlan.ts` (new) ·
+`src/pages/FileManager.tsx` · `src/lib/volumeWrite.ts` ·
+`src-tauri/src/commands/volume_write.rs`
+
+The copy half was already built ([ART-064](#fixed), [ART-176](#fixed)); the
+**delete** half is what kept this open, and the decision was in the sequencing
+rather than in either half. Both are settled now, and the ruling behind them
+is one sentence: **a single-entry operation goes through the route the batch
+uses, never a second path with its own promises.**
+
+**What the second route cost.** `volume_delete` committed per call;
+`volume_delete_many` accumulates the whole set into one `BlockSet` and one
+journalled commit that rolls back whole on either write strategy
+([ART-073](#fixed)). So the *commoner* case — one file — took the weaker
+guarantee. The place that hurt most was F8 on a file that has a Workbench
+icon: the screen deleted the file, **then** asked about `Turrican.info`, then
+deleted it in a second committed operation. A failure between the two left the
+file gone and an icon that opens nothing — the exact §7.1 clutter the icon
+question exists to prevent. The icon question is asked before anything is
+deleted now, and both names go in one batch. `volume_delete` is deleted, root
+and branch: the Rust command, its `invoke_handler` registration and its TS
+wrapper, the same way wave C1 removed the copy path's second route.
+
+**What F6 can do now.** `planMove`'s two "between two images" refusals are
+gone — a selection between two images is a batch like any other, files
+included. The sequencing that made this a decision is unchanged and is what
+makes it safe: the destination is **re-listed** and every name looked for
+before a single delete runs, so the worst a failed move can leave is a
+duplicate, never a gap. What the batch adds is that the delete cannot
+half-happen either.
+
+**A hazard the lifted restriction created, and its guard.** F6 could now reach
+a move between two directories of the **same image** — which is a relink, not
+a copy-and-delete: doing it the long way stages the tree out, writes it back
+into the same volume and then removes the original, needing twice the free
+space and losing the only copy if it fails between the halves. F5 has always
+refused this (`files.err.sameImage`); F6 could reach it and did not, which
+only stopped mattering because F6 was restricted to one directory. `planMove`
+takes `sameImage` and refuses on it.
+
+`files.move.refuseFileBetweenImages` and `files.err.batchBetweenVolumes` are
+removed from both catalogues: both said "not supported yet", and both are now
+false.
+
+Tests: `src/lib/deletePlan.test.ts` — nine, of which
+`"puts the file and its icon in ONE batch — ART-081"` is the defect itself and
+`"a one-entry selection is exactly a one-entry batch"` is the ruling; and
+`src/lib/movePlan.test.ts`'s `"allows several entries between two images —
+ART-081"`, `"allows a lone file between two images — ART-081, and by the same
+route"` and `"refuses a move between two directories of the *same* image"`.
+Vacuity checked both ways: dropping the icon from the batch fails one, and
+removing the same-image guard fails two (the second in
+`phrase-keys.test.ts`, which enumerates every refusal `planMove` can produce).
+
+**Not closed by this, and it is the other half of the original ask:** moving
+*off* a host folder is still refused, because ART still cannot delete a file
+on the user's own disk. That is [ART-080](#open), and it is open on a decision
+rather than on work — see its entry.
 
 **ART-175** 🟡 **The OS Builder can preview what a package would replace and
 still cannot preview what switching a recipe component on would replace** —
@@ -853,7 +910,7 @@ stages `from_dir`'s *contents* and copies those into `to_dir`, so F5 on
 `Tools` drawer at all. That is the behaviour
 `a_tree_copies_between_two_images_through_the_command_pipeline` has asserted
 since phase 1a — it is tested, not accidental — and it is also what
-[ART-081](#open) means by "F5 on a lone file … copies the whole folder the
+[ART-081](#fixed) means by "F5 on a lone file … copies the whole folder the
 file happens to be in", seen from the folder end.
 
 So the two paths disagree, and the disagreement is new: before ART-064 the
@@ -1466,12 +1523,14 @@ Two smaller things fell out and are worth naming:
    — the same shape and the same case-insensitive comparison
   `HostSelection::check_for_name_collisions` uses (ART-072).
 
-**What did *not* change, deliberately.** F6 (Move) still refuses several
-entries between two images: a move is a copy *and* a delete, and the delete
-half is ART-081's missing single-entry primitive, not this one.
-`files.err.batchBetweenVolumes` survives for that refusal and its text was
-rewritten in both catalogues to talk about **moving** rather than copying,
-because the sentence it used to carry is now false.
+**What did *not* change here, deliberately.** F6 (Move) still refused several
+entries between two images at the time: a move is a copy *and* a delete, and
+the delete half was ART-081's, not this one. `files.err.batchBetweenVolumes`
+survived for that refusal and its text was rewritten in both catalogues to
+talk about **moving** rather than copying. *(Both are gone as of
+[ART-081](#fixed), 2026-08-20: `volumeDeleteMany` is that delete half, F6
+takes a selection like F5 does, and a key saying "not supported yet" would now
+be false.)*
 
 Covered by `commands::volume_write::tests::a_selection_copies_out_of_a_volume_as_one_operation`,
 `…::a_cancelled_selection_copy_out_says_so_in_one_report`,

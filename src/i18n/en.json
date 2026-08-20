@@ -1371,7 +1371,6 @@
       "refuseSourceNotWritable": "This volume does not take writes, so the entries cannot be removed from it. Copy with F5 instead.",
       "refuseReadOnlyTarget": "The other pane is read-only, so nothing can be moved into it.",
       "refuseTargetNotWritable": "Open a volume that takes writes on the other side first.",
-      "refuseFileBetweenImages": "Moving a single file between two images is not supported yet — a folder can be moved, and a file can be copied with F5.",
       "refuseCollision_one": "{{names}} is already there. A move never overwrites and never silently skips — rename one of them first.",
       "refuseCollision_other": "{{count}} of these names are already there ({{names}}). A move never overwrites and never silently skips — rename them first."
     },
@@ -1392,7 +1391,6 @@
       "sameImage": "That is the same image on both sides. Use Move or Rename instead.",
       "noLocalPath": "That item has no path on your disk.",
       "openPartitionFirst": "Open a partition first.",
-      "batchBetweenVolumes": "Moving several entries between two images at once is not supported yet — copy them with F5, then delete the originals.",
       "mixedArchiveSelection": "Select only .lha archives, or none, when copying into a volume — not a mix of the two."
     },
     "status": {

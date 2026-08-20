@@ -250,7 +250,6 @@ pub fn run() {
             commands::volume_write::volume_plan_copy_many,
             commands::volume_write::volume_make_dir,
             commands::volume_write::volume_rename,
-            commands::volume_write::volume_delete,
             commands::volume_write::volume_delete_many,
             commands::volume_write::volume_put_file,
             commands::volume_write::volume_copy_in,

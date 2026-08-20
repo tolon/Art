@@ -44,6 +44,19 @@ export interface MoveInput {
    *  destination's *unfiltered* listing, since a filename mask hiding a
    *  colliding name must not make the collision invisible. */
   takenNames: string[];
+  /**
+   * Whether both panes address the same image file (ART-081).
+   *
+   * A move between two *directories of one image* is not a copy-and-delete at
+   * all — it is a relink, and doing it as copy-then-delete would stage the
+   * tree out, write it back into the same volume, and then remove the
+   * original: twice the free space needed, and a failure between the two
+   * halves losing the only copy. F5 has always refused this
+   * (`files.err.sameImage`); F6 could reach it and did not, which mattered
+   * only while F6 was restricted to one directory. It is refused here now
+   * that it is not.
+   */
+  sameImage: boolean;
 }
 
 /** The three pane kinds ART only ever reads. Nothing can be moved *out* of
@@ -77,19 +90,22 @@ export function collidingNames(names: string[], takenNames: string[]): string[] 
  *   disk image through `core/volume/write`. Moving *out* of a folder would
  *   need one (recorded as ART-080), and inventing it inside a UI task is
  *   exactly the "smuggled in" engine work this phase's plan rules out.
- * - **Several entries between two images at once** is ART-064's gap seen from
- *   the *move* side. The copy half exists now (`volumeCopyBetweenMany`, one
- *   staged batch under one backup and one commit); what a move also needs is
- *   a batch delete of the source entries with the same all-or-nothing
- *   guarantee, sequenced after the destination verifies. Until that is built
- *   deliberately, this refuses.
- * - **A single *file* between two images** is ART-081. Its copy half exists
- *   now too: since ART-176 there is one route between two images and it
- *   stages exactly what was marked, so a lone file is a one-entry batch and
- *   nothing beside it rides along. What is still missing is the *delete*
- *   half — a move is a copy **and** a delete, and sequencing those safely
- *   (verify, then remove, and what to do when the second fails) is the
- *   decision ART-081 records. This refusal stays until it is made.
+ * - **Between two images** used to be refused for anything but a single
+ *   directory (ART-081), and is not any more. Both halves now have the same
+ *   shape and the same guarantee: `volumeCopyBetweenMany` stages exactly what
+ *   was marked into one operation with one backup and one commit (ART-176),
+ *   and `volumeDeleteMany` removes exactly those names as one journalled
+ *   operation that rolls back whole on either write strategy (ART-073). A
+ *   single entry is a one-entry batch through the same route, which is the
+ *   rule this whole area now follows rather than keeping a second path for
+ *   the common case.
+ *
+ *   The sequencing that made this a decision rather than a line of code is in
+ *   `FileManager.tsx`'s own `moveSelection`, unchanged by this: the
+ *   destination is **re-listed** and every name looked for before anything is
+ *   deleted, so the worst a failed move can leave is a duplicate — never a
+ *   gap. What a batch adds is that the delete is one operation, so it cannot
+ *   half-happen either.
  *
  * A name already taken at the destination is refused rather than resolved by
  * the overwrite policy. "Leave it alone" would skip the copy and then delete
@@ -121,13 +137,8 @@ export function planMove(input: MoveInput): MovePlan {
     return { kind: "refused", reason: { key: "files.move.refuseTargetNotWritable" } };
   }
 
-  if (targetKind !== "local") {
-    if (entries.length > 1) {
-      return { kind: "refused", reason: { key: "files.err.batchBetweenVolumes" } };
-    }
-    if (!entries[0].isDir) {
-      return { kind: "refused", reason: { key: "files.move.refuseFileBetweenImages" } };
-    }
+  if (targetKind !== "local" && input.sameImage) {
+    return { kind: "refused", reason: { key: "files.err.sameImage" } };
   }
 
   const collisions = collidingNames(names, input.takenNames);

@@ -584,57 +584,6 @@ pub fn volume_rename(
     result
 }
 
-/// F8 — delete an entry.
-///
-/// `Destructive` (§63): the frontend double-confirms before calling this. A
-/// directory must be empty, so deleting a tree is the caller's loop and each
-/// entry is its own journalled operation.
-///
-/// `override_protection` says the user was shown the *third* question — the
-/// one about an entry the Amiga itself protects — and said yes. False is the
-/// safe answer, and it is what any caller that has not asked will send
-/// (ART-088).
-#[tauri::command]
-pub fn volume_delete(
-    path: String,
-    volume_index: usize,
-    dir_block: Option<u32>,
-    entry_block: u32,
-    override_protection: bool,
-    oplog: State<'_, JsonlOperationLog>,
-) -> AppResult<MutationResult> {
-    let image = PathBuf::from(path.trim());
-    let parent = dir_block.unwrap_or(0);
-    let protection = if override_protection {
-        DeleteProtection::Override
-    } else {
-        DeleteProtection::Honour
-    };
-
-    let result = with_writer(&image, volume_index, |writer| {
-        writer.delete_with(parent, entry_block, protection)
-    })
-    .map(|(outcome, strategy, backup)| {
-        let block_size = outcome_block_size(&image, volume_index);
-        result_of(outcome, strategy, backup, block_size)
-    })
-    .map_err(AppError::from);
-
-    write_result(
-        &oplog,
-        user_operation("Delete from volume").source(format!("{path}:{entry_block}")),
-        &result,
-        |record, made: &MutationResult| {
-            record
-                .detail("Blocks touched", made.blocks_touched.to_string())
-                .detail("Strategy", made.strategy.clone())
-                .outcome(OperationOutcome::verified(made.verified))
-        },
-    );
-
-    result
-}
-
 /// What a batch delete did.
 #[derive(Debug, Clone, Serialize)]
 pub struct DeleteManyResult {

@@ -97,6 +97,7 @@ import {
   paneWidthClasses,
   stepPaneFontSize,
 } from "@/lib/dockLayout";
+import { planDelete, planDeleteSelection } from "@/lib/deletePlan";
 import { deleteProtectedNames, isDeleteProtected } from "@/lib/protection";
 import {
   colourFor,
@@ -196,7 +197,6 @@ import {
   volumeCopyInMany,
   volumeCopyOut,
   volumeExtractMany,
-  volumeDelete,
   volumeDeleteMany,
   volumeMakeDir,
   volumePlanCopy,
@@ -2493,6 +2493,26 @@ export function FileManager() {
    * carries the same field, so one helper serves all of them rather than each
    * call site remembering.
    */
+  /**
+   * Whether both panes are looking into the **same image file** (ART-081).
+   *
+   * A move between two directories of one image is a relink, not a
+   * copy-and-delete: doing it the long way would stage the tree out, write it
+   * back into the same volume and then remove the original — twice the free
+   * space, and a failure between the halves losing the only copy. F5 has
+   * always refused it by comparing these two paths (`files.err.sameImage`);
+   * F6 could reach it and did not, which only stopped mattering because F6
+   * was restricted to a single directory until now.
+   *
+   * Compared case-insensitively: Windows will happily open `E:\Disk.hdf` and
+   * `e:\disk.hdf` as two panes onto one file.
+   */
+  function sameImageAsEachOther(a: PaneState, b: PaneState): boolean {
+    if (a.kind === "local" || b.kind === "local") return false;
+    if (!a.location || !b.location) return false;
+    return a.location.toLowerCase() === b.location.toLowerCase();
+  }
+
   function noteDamage(outcome: { pre_existing_damage?: string[] } | null | undefined) {
     setDamage(outcome?.pre_existing_damage ?? []);
   }
@@ -2661,9 +2681,8 @@ export function FileManager() {
 
     // ---- two volumes: one staged batch (ART-064) ----
     //
-    // This branch used to be `setError(t("files.err.batchBetweenVolumes"))` —
-    // an honest refusal for a gap that was real, because there was no way to
-    // stage more than one tree. `volumeCopyBetweenMany` stages the whole
+    // This branch used to refuse outright — an honest refusal for a gap that
+    // was real, because there was no way to stage more than one tree. `volumeCopyBetweenMany` stages the whole
     // selection into one temp folder and inserts it as one operation, so the
     // destination takes one backup and one commit, and a stopped batch
     // commits nothing.
@@ -2735,47 +2754,54 @@ export function FileManager() {
       return;
     }
 
+    // Its icon, if it has one: an orphan `.info` left behind clutters
+    // Workbench with an icon that opens nothing (§7.1).
+    //
+    // **Asked before anything is deleted, and deleted in the same operation**
+    // (ART-081). This used to delete the file, then ask, then delete the icon
+    // in a *second* committed operation — so a failure between the two left
+    // the file gone and its icon behind, which is the half-done state §92's
+    // all-or-nothing promise exists to prevent. It is the same reasoning
+    // `moveSelection` already gives for asking about icons before its own
+    // copy half rather than after.
+    const icon = await volumeIconFor(
+      target.path,
+      target.volumeIndex,
+      target.dirBlock,
+      entry.name
+    ).catch(() => null);
+    const alsoIcon =
+      icon !== null &&
+      (await confirm(t("files.dialog.delete.confirmIcon", { icon: icon.icon_name })));
+
+    // **One route, and a single entry is a one-entry batch** (ART-081).
+    // `volumeDelete` is gone: it committed per call, so it and
+    // `volumeDeleteMany` made different promises about the same act and the
+    // commoner case took the weaker one. What to remove is decided in
+    // `@/lib/deletePlan`, where a test can reach it; this is the dispatch.
+    const plan = planDelete(
+      { name: entry.name, deleteProtected: isDeleteProtected(entry.attrs) },
+      icon ? { name: icon.icon_name } : null,
+      alsoIcon
+    );
+
     setError(null);
     setHint(null);
     setBusy(t("files.status.deleting", { name: entry.name }));
     try {
-      // Its icon, if it has one: an orphan `.info` left behind clutters
-      // Workbench with an icon that opens nothing (§7.1).
-      const icon = await volumeIconFor(
-        target.path,
-        target.volumeIndex,
-        target.dirBlock,
-        entry.name
-      ).catch(() => null);
-
       // The writer honours the `d` bit now (ART-088); the last argument is the
       // answer to the question asked above, and nothing else may send it.
-      const outcome = await volumeDelete(
+      const outcome = await volumeDeleteMany(
         target.path,
         target.volumeIndex,
         target.dirBlock,
-        entry.header_block,
-        isDeleteProtected(entry.attrs)
+        plan.names,
+        plan.overrideProtection
       );
-
-      let alsoIcon = false;
-      if (icon && (await confirm(t("files.dialog.delete.confirmIcon", { icon: icon.icon_name })))) {
-        // The icon goes with the file it belongs to: asking a second time
-        // about `Turrican.info` after the user has just agreed to delete
-        // `Turrican` would be a question with no new information in it.
-        await volumeDelete(
-          target.path,
-          target.volumeIndex,
-          target.dirBlock,
-          icon.icon_block,
-          true
-        );
-        alsoIcon = true;
-      }
 
       noteDamage(outcome);
       setMessage(
-        alsoIcon
+        plan.withIcon
           ? outcome.backup
             ? t("files.status.deletedWithIconBackedUp", { name: entry.name })
             : t("files.status.deletedWithIcon", { name: entry.name })
@@ -2814,7 +2840,17 @@ export function FileManager() {
     const target = writableVolume(state);
     if (!target) return;
 
-    const names = entries.map((entry) => entry.name);
+    // The same planner the single case uses, with more names — one route
+    // (ART-081). `deleteProtected` here is what the confirmation below asks
+    // about, so the plan carries the answer rather than the page recomputing
+    // it beside the question.
+    const plan = planDeleteSelection(
+      entries.map((entry) => ({
+        name: entry.name,
+        deleteProtected: isDeleteProtected(entry.attrs),
+      }))
+    );
+    const names = plan.names;
     const totalBytes = entries.reduce((sum, entry) => sum + entry.bytes, 0);
 
     if (
@@ -2852,8 +2888,8 @@ export function FileManager() {
         target.path,
         target.volumeIndex,
         target.dirBlock,
-        names,
-        protectedNames.length > 0
+        plan.names,
+        plan.overrideProtection
       );
       noteDamage(outcome);
       setMessage(
@@ -2953,6 +2989,7 @@ export function FileManager() {
       targetWritable: writableVolume(target) !== null,
       entries: moving.map((entry) => ({ name: entry.name, isDir: entry.is_dir })),
       takenNames: target.entries.map((entry) => entry.name),
+      sameImage: sameImageAsEachOther(source, target),
     });
     if (plan.kind === "refused") {
       setError(t(plan.reason.key, plan.reason.params));
@@ -3020,17 +3057,19 @@ export function FileManager() {
           }
         }
       } else {
-        // Exactly one directory, and `planMove` is what guarantees that.
-        // One entry through the batch command, which is the only route
-        // between two images now (ART-176): the drawer keeps its own name at
-        // the destination whether one row is marked or ten.
+        // **The whole selection, through the one route between two images**
+        // (ART-081). This used to take `moving[0]` alone, because `planMove`
+        // refused anything but a single directory here — the copy half could
+        // stage a batch (ART-064/ART-176) and the *move* could not, for want
+        // of a delete with the same guarantee. `volumeDeleteMany` is that
+        // delete, so the restriction is gone and F6 stages exactly what was
+        // marked, the same as F5.
         const destination = writableVolume(target);
-        const entry = moving[0];
-        if (!destination || entry.header_block === null) {
+        if (!destination) {
           setError(writeRefusal(target, t));
           return;
         }
-        const picks = selectedEntriesForBatch([entry]);
+        const picks = selectedEntriesForBatch(moving);
         if (picks === null) {
           setError(writeRefusal(target, t));
           return;
@@ -3068,23 +3107,22 @@ export function FileManager() {
       }
 
       // ---- and only now the delete half ----
+      //
+      // One route, whatever the count (ART-081). This used to send a lone
+      // entry through `volumeDelete`, which committed on its own and so made
+      // a *different* promise from the batch it stood in for — and it was the
+      // commoner case that got the weaker one. `volumeDeleteMany` is
+      // all-or-nothing on both write strategies (ART-073), so a move of one
+      // file and a move of ten fail the same way: with the source untouched
+      // and a duplicate at the destination, never with a gap.
       const names = moving.map((entry) => entry.name);
-      const outcome =
-        names.length === 1 && moving[0].header_block !== null
-          ? await volumeDelete(
-              volume.path,
-              volume.volumeIndex,
-              volume.dirBlock,
-              moving[0].header_block,
-              movingProtected.length > 0
-            )
-          : await volumeDeleteMany(
-              volume.path,
-              volume.volumeIndex,
-              volume.dirBlock,
-              names,
-              movingProtected.length > 0
-            );
+      const outcome = await volumeDeleteMany(
+        volume.path,
+        volume.volumeIndex,
+        volume.dirBlock,
+        names,
+        movingProtected.length > 0
+      );
 
       noteDamage(outcome);
       setMessage(
@@ -3444,6 +3482,7 @@ export function FileManager() {
       isDir: entry.is_dir,
     })),
     takenNames: moveTarget.entries.map((entry) => entry.name),
+    sameImage: sameImageAsEachOther(focusedPane, moveTarget),
   });
 
   const actions: FunctionAction[] = [
