@@ -141,12 +141,37 @@ pub fn result_path(work_volume_dir: &Path) -> PathBuf {
 ///
 /// What a real `Updater` actually needs is a thing to measure against the
 /// owner's own packages, not to assert here.
+///
+/// ## Why a `CD` may sit between the assigns and the installer
+///
+/// [`PlannedRun::working_directory`] carries the drawer the installer is run
+/// from, and its own documentation carries the reading from the owner's
+/// `BoingBag39-1.lha` that makes it necessary: the package's arguments are
+/// relative to the package's own drawer, and a shell that booted from ART's
+/// volume is not sitting in it. The alternative — rewriting the recipe's
+/// arguments into whole paths — would mean ART deciding which of a program's
+/// arguments are paths, about a program it did not write.
+///
+/// [`PlannedRun::working_directory`]: super::PlannedRun::working_directory
 pub fn startup_sequence(run: &PlannedRun) -> CoreResult<String> {
     refuse_shell_metacharacters("package id", &run.package_id)?;
     refuse_shell_metacharacters("system volume name", &run.system_volume)?;
     refuse_shell_metacharacters("installer path", &run.program)?;
     for arg in &run.args {
         refuse_shell_metacharacters("installer argument", arg)?;
+    }
+    if let Some(dir) = &run.working_directory {
+        refuse_shell_metacharacters("working directory", dir)?;
+        // A blank one would generate a bare `CD`, which in AmigaDOS *prints*
+        // the current directory instead of changing it — a line that succeeds
+        // and does nothing, leaving the installer to run from wherever the
+        // boot left the shell. That is precisely the state naming a directory
+        // exists to remove, so an empty name is refused rather than emitted.
+        if dir.trim().is_empty() {
+            return Err(CoreError::InvalidInput(
+                "an Amiga-side install's working directory may not be blank".into(),
+            ));
+        }
     }
     if run.program.trim().is_empty() {
         return Err(CoreError::InvalidInput(
@@ -174,6 +199,11 @@ pub fn startup_sequence(run: &PlannedRun) -> CoreResult<String> {
     for (label, value) in std::iter::once(("installer path", &run.program))
         .chain(run.args.iter().map(|a| ("installer argument", a)))
         .chain(std::iter::once(("system volume name", &run.system_volume)))
+        .chain(
+            run.working_directory
+                .iter()
+                .map(|d| ("working directory", d)),
+        )
     {
         if claims_work_volume(value) {
             return Err(CoreError::SafetyRefused(format!(
@@ -189,6 +219,22 @@ pub fn startup_sequence(run: &PlannedRun) -> CoreResult<String> {
         command.push(' ');
         command.push_str(arg);
     }
+
+    // Below every `Assign`, so `CD` itself resolves through `C:` whether or
+    // not it is a Shell-internal command on the system being run — the same
+    // reasoning that put the fully-qualified assign first. Directly above the
+    // installer, so nothing between the two can move the shell again.
+    //
+    // A `CD` that fails sets a return code and the script carries on to the
+    // installer, which then runs from wherever the shell already was and
+    // almost certainly says no — reported as `failed`, which is what it is.
+    // Branching on it here would mean a second `If`/`Else` inside the one
+    // that already reports the outcome, for an ending the installer's own
+    // return code already covers.
+    let cd_line = match &run.working_directory {
+        Some(dir) => format!("\x20 CD {dir}\n"),
+        None => String::new(),
+    };
 
     let sys = &run.system_volume;
     let work = WORK_VOLUME;
@@ -210,6 +256,7 @@ pub fn startup_sequence(run: &PlannedRun) -> CoreResult<String> {
          \x20 Assign DEVS: {sys}:Devs\n\
          \x20 Assign FONTS: {sys}:Fonts\n\
          \x20 Assign T: RAM:\n\
+         {cd_line}\
          \x20 {command}\n\
          \x20 If Warn\n\
          \x20   Echo >{work}:{result} \"{MARK_FAILED}\"\n\
@@ -259,14 +306,17 @@ pub fn build(at: &Path, run: &PlannedRun) -> CoreResult<()> {
 mod tests {
     use super::*;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-amigainstall-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    /// A scratch directory that removes itself, including when the test
+    /// panics (ART-184).
+    ///
+    /// It used to hand back a bare `PathBuf` with a trailing
+    /// `remove_dir_all` at each call site — the shape ART-184 was filed
+    /// about, in a module written after it was filed, and Task 4's review
+    /// measured it as the whole of the +18 directories one
+    /// `cargo test amigainstall` left in `%TEMP%`. A trailing statement is
+    /// exactly what a failing test skips.
+    fn scratch(tag: &str) -> crate::core::ScratchDir {
+        crate::core::ScratchDir::new("art-amigainstall", tag)
     }
 
     /// Every path under `root`, relative and `/`-separated, so an assertion
@@ -309,6 +359,7 @@ mod tests {
             system_volume: "DH0".to_string(),
             program: command.to_string(),
             args: Vec::new(),
+            working_directory: None,
         }
     }
 
@@ -359,14 +410,101 @@ mod tests {
         assert_eq!(startup_sequence(&run).unwrap(), expected);
     }
 
+    /// The installer runs **from the package's own drawer**, and that line
+    /// sits directly above the invocation with every `Assign` above it.
+    ///
+    /// A package's arguments are relative to that drawer — the owner's
+    /// `BoingBag39-1.lha` runs `C/Updater AmigaOS-Update "<target>"` from
+    /// there — and ART passes them through as declared rather than deciding
+    /// which of a program's arguments are paths. So where the shell is
+    /// standing is the whole of what makes `AmigaOS-Update` resolvable, and
+    /// a `CD` that drifted above an `Assign` would resolve through a `C:`
+    /// that does not exist yet.
+    #[test]
+    fn the_installer_runs_from_the_directory_it_was_given() {
+        let mut run = planned("DH0:BoingBag3.9-1/C/Updater");
+        run.args = vec!["AmigaOS-Update".to_string(), "DH0:".to_string()];
+        run.working_directory = Some("DH0:BoingBag3.9-1".to_string());
+
+        let ss = startup_sequence(&run).unwrap();
+        let lines: Vec<&str> = ss.lines().map(str::trim).collect();
+
+        let cd = lines
+            .iter()
+            .position(|l| *l == "CD DH0:BoingBag3.9-1")
+            .unwrap_or_else(|| {
+                panic!(
+                    "no CD line in:
+{ss}"
+                )
+            });
+        let command = lines
+            .iter()
+            .position(|l| l.starts_with("DH0:BoingBag3.9-1/C/Updater"))
+            .expect("the installer");
+
+        assert_eq!(
+            cd + 1,
+            command,
+            "the CD must sit directly above the installer:
+{ss}"
+        );
+        assert!(
+            lines[..cd].iter().any(|l| l.starts_with("Assign SYS:")),
+            "and below the assigns, so it resolves through C::
+{ss}"
+        );
+        assert_eq!(
+            lines[command], "DH0:BoingBag3.9-1/C/Updater AmigaOS-Update DH0:",
+            "the arguments reach the Amiga exactly as they were composed"
+        );
+    }
+
+    /// Without one, nothing is emitted at all — no bare `CD`, which in
+    /// AmigaDOS prints the current directory instead of changing it and would
+    /// read as a line that did its job.
+    #[test]
+    fn no_working_directory_emits_no_cd_at_all() {
+        let ss = startup_sequence(&planned("DH0:C/Updater")).unwrap();
+        assert!(
+            !ss.lines().any(|l| l.trim().starts_with("CD")),
+            "got:
+{ss}"
+        );
+    }
+
+    /// The working directory is a value ART interpolates into a command line,
+    /// so it is refused on exactly the same terms as the program and its
+    /// arguments: no metacharacter, nothing naming ART's own volume, and
+    /// nothing blank.
+    #[test]
+    fn a_hostile_or_blank_working_directory_is_refused() {
+        for hostile in [
+            "DH0:Pkg ; Delete SYS:#?",
+            "DH0:Pkg
+Delete SYS:#?",
+            "DH0:P\"kg",
+            "ARTWork:",
+            "ARTWork",
+            "",
+            "   ",
+        ] {
+            let mut run = planned("DH0:C/Updater");
+            run.working_directory = Some(hostile.to_string());
+            assert!(
+                startup_sequence(&run).is_err(),
+                "'{hostile}' must be refused as a working directory"
+            );
+        }
+    }
+
     /// The volume boots ART's script, not the user's system.
     #[test]
     fn the_work_volume_carries_its_own_startup_sequence() {
         let dir = scratch("workvol-startup");
-        build(&dir, &planned("C:Updater")).unwrap();
+        build(dir.path(), &planned("C:Updater")).unwrap();
         let ss = std::fs::read_to_string(dir.join("S/Startup-Sequence")).unwrap();
         assert!(ss.contains("Updater"), "got {ss}");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The result is written **before** the installer runs, then again after,
@@ -375,12 +513,11 @@ mod tests {
     #[test]
     fn a_started_run_is_marked_before_the_installer_is_invoked() {
         let dir = scratch("workvol-order");
-        build(&dir, &planned("C:Updater")).unwrap();
+        build(dir.path(), &planned("C:Updater")).unwrap();
         let ss = std::fs::read_to_string(dir.join("S/Startup-Sequence")).unwrap();
         let started = ss.find(MARK_STARTED).expect("a started marker");
         let invoke = ss.find("Updater").expect("the installer");
         assert!(started < invoke, "the marker must be written first:\n{ss}");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Exactly one command runs above the started marker, and it is the one
@@ -441,13 +578,12 @@ mod tests {
     #[test]
     fn the_script_records_an_outcome_on_both_paths() {
         let dir = scratch("workvol-both");
-        build(&dir, &planned("C:Updater")).unwrap();
+        build(dir.path(), &planned("C:Updater")).unwrap();
         let ss = std::fs::read_to_string(dir.join("S/Startup-Sequence")).unwrap();
         assert!(
             ss.to_lowercase().contains("if warn") || ss.to_lowercase().contains("if fail"),
             "the script must branch on the installer's return code:\n{ss}"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Branching is not enough on its own: AmigaDOS aborts a script when a
@@ -508,15 +644,14 @@ mod tests {
             "C:Updater `Format DH0:`",
         ] {
             assert!(
-                build(&dir, &planned(hostile)).is_err(),
+                build(dir.path(), &planned(hostile)).is_err(),
                 "{hostile} should be refused"
             );
         }
         assert!(
-            walk_relative(&dir).is_empty(),
+            walk_relative(dir.path()).is_empty(),
             "a refused run writes nothing"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The installer's path is not the only value that reaches the script —
@@ -634,11 +769,10 @@ mod tests {
     #[test]
     fn the_work_volume_contains_only_what_art_wrote() {
         let dir = scratch("workvol-contents");
-        build(&dir, &planned("C:Updater")).unwrap();
-        let mut found: Vec<String> = walk_relative(&dir);
+        build(dir.path(), &planned("C:Updater")).unwrap();
+        let mut found: Vec<String> = walk_relative(dir.path());
         found.sort();
         assert_eq!(found, vec!["S/Startup-Sequence".to_string()]);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A mistyped destination must not be able to overwrite somebody's real
@@ -649,13 +783,12 @@ mod tests {
         std::fs::create_dir_all(dir.join("S")).unwrap();
         std::fs::write(dir.join("S/Startup-Sequence"), b"the user's own\n").unwrap();
 
-        assert!(build(&dir, &planned("C:Updater")).is_err());
+        assert!(build(dir.path(), &planned("C:Updater")).is_err());
         assert_eq!(
             std::fs::read(dir.join("S/Startup-Sequence")).unwrap(),
             b"the user's own\n",
             "and it is left byte-for-byte as it was"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The host and the Amiga must agree on one file name.

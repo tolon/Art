@@ -114,6 +114,27 @@ pub struct PlannedRun {
     /// Arguments, **each a separate string** — never one line to be split, so
     /// nothing can be reinterpreted as a second command.
     pub args: Vec<String>,
+    /// The AmigaDOS directory the installer is run **from**, e.g.
+    /// `DH0:BoingBag3.9-1`. `None` runs it wherever the boot left the shell.
+    ///
+    /// It exists because a package's arguments are its own, and a package's
+    /// own installer script runs them **from the package's drawer**. The
+    /// owner's `BoingBag39-1.lha` carries `Install` line 858 —
+    /// `(run (cat "C/Updater AmigaOS-Update \"" #target "\""))` — where both
+    /// `C/Updater` and `AmigaOS-Update` are relative to that drawer, and the
+    /// second is an argument ART must pass through *exactly as declared*
+    /// rather than rewrite: ART cannot tell a recipe's path argument from a
+    /// keyword like `QUIET`, and guessing which is which would be inventing a
+    /// rule about a program it did not write.
+    ///
+    /// A shell ART's own volume booted has no reason to be sitting in the
+    /// package's drawer, so without this the run's outcome would depend on
+    /// where the boot happened to leave it. Naming the directory removes the
+    /// dependence rather than betting on it.
+    ///
+    /// Composed by the command layer, like [`program`](Self::program), and
+    /// validated here with exactly the same guards.
+    pub working_directory: Option<String>,
 }
 
 /// What a run ended as. **Four endings, not two** — and they are four values

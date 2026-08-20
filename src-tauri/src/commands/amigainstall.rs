@@ -1,0 +1,1107 @@
+//! Running a package's own installer on the Amiga — the command layer.
+//!
+//! Everything this module joins was built without it: the work volume and its
+//! generated script ([`crate::core::amigainstall::workvol`]), the declaration
+//! of what a package runs
+//! ([`crate::core::osinstall::package::AmigaInstaller`]), the run itself
+//! behind two injected seams ([`crate::core::amigainstall::run`]), and the
+//! copy the install happens against
+//! ([`crate::core::amigainstall::stage`]). **Nothing here decrypts anything
+//! and no protection is bypassed**: the package's own program runs on the
+//! machine it was written for, which is the owner's recorded decision.
+//!
+//! Two commands, the shape §92 gives every data-changing operation:
+//!
+//! - [`amiga_install_preview`] — **read-only**. What would run, on which
+//!   tree, with which package, and whether the two things ART cannot supply
+//!   (the user's Kickstart, an emulator) are there. It launches nothing and
+//!   writes nothing, and a test proves the directory it was asked about is
+//!   untouched afterwards.
+//! - [`amiga_install_run`] — a job (§54/§55), returning a job id at once.
+//!
+//! ## What this module actually decides
+//!
+//! `PlannedRun::program`'s own documentation hands one job here and names it:
+//! a recipe declares a path **inside the package** (`C/Updater`) and refuses
+//! to name a volume at all, so the whole AmigaDOS path — and the proof that
+//! it stayed inside the volume ART mounted — is composed here, in
+//! [`compose`], and pinned by tests here. Three things are composed and
+//! nothing else:
+//!
+//! 1. **Where the package is.** `{volume}:{package_dir}`, from the volume the
+//!    tree is mounted as plus the drawer the caller says the package's own
+//!    files sit in. Every segment of that drawer is checked: no `:` (a recipe
+//!    or a caller may not decide which volume the run reaches), no `..` or
+//!    `.`, no empty segment (AmigaDOS reads a leading or doubled `/` as the
+//!    parent directory), no `\`.
+//! 2. **The installer's whole path**, that location joined to the recipe's
+//!    declared program.
+//! 3. **The target argument.** `boingbag-39-1.json`'s own reading of the
+//!    package's `Install` script — `C/Updater AmigaOS-Update "<target>"` —
+//!    records that the last argument is the volume being installed into, and
+//!    that it is deliberately *not* in the recipe because it is a fact about
+//!    the run rather than about the package. So `{volume}:` is appended here.
+//!
+//! Everything else the recipe declares passes through **exactly as written**.
+//! ART cannot tell a path argument from a keyword like `QUIET` in a program it
+//! did not write, so it rewrites none of them; what it does instead is run the
+//! installer from the package's own drawer
+//! ([`PlannedRun::working_directory`]), which is where the package's own
+//! script runs it from and what makes a relative argument resolve.
+//!
+//! ## One token, because the generated line cannot quote
+//!
+//! `refuse_shell_metacharacters` refuses `"` — deliberately, since a quote
+//! changes where a string ends — and the generated script joins the program
+//! and its arguments with spaces. So a value carrying a space would arrive at
+//! the Amiga as two arguments and there is no way to say otherwise. Every
+//! value **this module composes** is therefore refused if it carries
+//! whitespace ([`one_token`]), rather than quietly generating a line that
+//! means something else. AmigaDOS names legitimately contain spaces, which is
+//! why this is a refusal with a sentence and not a silent rewrite.
+//!
+//! ## The four endings, and what happens to the copy
+//!
+//! [`RunOutcome`] has four variants and only `Succeeded` promotes the copy
+//! over the user's tree. The other three leave the original untouched **and
+//! the copy in place**, and [`SettlementReport`] carries both paths so the
+//! report can say both halves: your system at *X* is exactly as it was, what
+//! the installer did is at *Y*.
+//!
+//! A **cancellation is not a fourth ending** — the run produced no answer —
+//! and it is the one path where the copy does not survive:
+//! [`perform`] calls `discard()` on it. `Staged` has no `Drop` on purpose
+//! (a discarding one would destroy the evidence a failed run exists to keep),
+//! so that decision is made explicitly on every path out of this module.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, State};
+
+use super::jobs::{spawn_job, JobRegistry};
+use super::oplog::{user_operation, write_to_path};
+use crate::core::amigainstall::run::{run, RunLimits, RunRequest};
+use crate::core::amigainstall::stage::{settle, stage_with, Settlement};
+use crate::core::amigainstall::{workvol, PlannedRun, RunOutcome, RESULT_FILE, WORK_VOLUME};
+use crate::core::error::{CoreError, CoreResult};
+use crate::core::jobs::{JobId, ProgressSink};
+use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
+use crate::core::osinstall::package;
+use crate::core::profile::AmigaProfile;
+use crate::core::sources::install::Scratch;
+use crate::core::winuae::detect_winuae;
+use crate::error::AppResult;
+
+/// The volume a distribution tree is mounted as when the caller says nothing.
+///
+/// `DH0` is what `core::amigainstall::run`'s own tests and the WHDLoad launch
+/// path already use for a directory mounted as a system volume.
+pub const DEFAULT_SYSTEM_VOLUME: &str = "DH0";
+
+/// The machine an Amiga-side install runs on when the caller says nothing.
+///
+/// AmigaOS 3.9 — the release both BoingBags update — needs a 68020 or better,
+/// so an A500 preset would refuse to boot the very tree this exists to
+/// install into. A named default rather than a silent one: an id ART does not
+/// ship is refused by name instead of falling back to something.
+pub const DEFAULT_PROFILE_ID: &str = "a1200-aga";
+
+// ---------------------------------------------------------------------------
+// The wire
+// ---------------------------------------------------------------------------
+
+/// What the screen asks for, for both the preview and the run.
+///
+/// One type for the two commands on purpose: a preview that could describe a
+/// run the following command would not perform is worse than no preview.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AmigaInstallRequest {
+    /// The distribution tree. Never written to — the install runs against a
+    /// copy, and the copy replaces this only on success (§92).
+    pub tree: PathBuf,
+    /// A package ART ships a recipe for. Anything else is refused: this round
+    /// does not make ART able to run whatever a user points at.
+    pub package_id: String,
+    /// The Amiga volume the tree is mounted as. `None` means
+    /// [`DEFAULT_SYSTEM_VOLUME`]. A name, never a name with a colon — ART
+    /// adds that itself.
+    #[serde(default)]
+    pub system_volume: Option<String>,
+    /// Where the package's **own** files sit inside that tree,
+    /// `/`-separated — `BoingBag3.9-1` for an archive extracted whole into
+    /// the tree. `None` means the volume's root.
+    #[serde(default)]
+    pub package_dir: Option<String>,
+    /// The user's own licensed Kickstart. ART ships none and never will.
+    pub kickstart: PathBuf,
+    /// A machine preset id (`AmigaProfile::all_presets`). `None` means
+    /// [`DEFAULT_PROFILE_ID`].
+    #[serde(default)]
+    pub profile: Option<String>,
+}
+
+/// What would run, on which tree, with which package — and what is missing.
+///
+/// Read-only (§92's PREVIEW). Every field is either recipe data, something
+/// this module composed, or the answer to an `is_file` question.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AmigaInstallPreview {
+    pub package_id: String,
+    /// The package's own name, untranslated — a package's name is its own,
+    /// the way a volume's is (ART-060).
+    pub package_name: String,
+    pub tree: PathBuf,
+    pub system_volume: String,
+    /// The drawer the installer is run from, as AmigaDOS will see it.
+    pub working_directory: Option<String>,
+    /// The installer's whole AmigaDOS path.
+    pub program: String,
+    /// Its arguments, each its own token, in the order they will be passed.
+    pub args: Vec<String>,
+    /// ART's own volume, mounted alongside the tree at the highest boot
+    /// priority — the screen should say a second volume exists, because the
+    /// user will see it on the Workbench.
+    pub work_volume: String,
+    /// The file the Amiga writes and the host polls.
+    pub result_file: String,
+    /// How long the run may go without an answer before ART ends the
+    /// emulator it started.
+    pub deadline_seconds: u64,
+    pub kickstart: PathBuf,
+    /// Whether that Kickstart is actually there. The run refuses without one
+    /// rather than falling back to AROS, so a preview that did not ask this
+    /// would be describing a run that cannot start.
+    pub kickstart_present: bool,
+    /// The emulator ART would start, or `None` when it found none. **A person
+    /// should not be surprised by a machine window** (design §4), so the
+    /// screen has to be able to name it before anything is confirmed.
+    pub emulator: Option<String>,
+    pub profile_id: String,
+    pub profile_name: String,
+}
+
+/// What [`settle`] did, on the wire.
+///
+/// A command-layer type rather than `Settlement` serialized: turning one
+/// module's representation into another's is this layer's job, and `core/` is
+/// meant to stay promotable without the frontend's naming conventions in it.
+///
+/// **The inner `rename_all` is load-bearing.** `#[serde(rename_all)]` on an
+/// enum renames the *variants*, not the fields of a struct variant — that was
+/// a real wire bug in this project this week — so `left_behind` would go out
+/// as `left_behind` without the second attribute. `settlement_is_camel_case_
+/// on_the_wire_including_inside_a_variant` pins it.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum SettlementReport {
+    /// The run succeeded and the copy is now the tree.
+    #[serde(rename_all = "camelCase")]
+    Promoted {
+        tree: PathBuf,
+        /// The previous tree, when it could not be removed after the swap —
+        /// something held it open. Not an error: the promotion happened. The
+        /// screen names it so the user can delete it.
+        left_behind: Option<PathBuf>,
+    },
+    /// The run did not succeed. Both paths, because the sentence the user
+    /// needs has two halves.
+    Kept { copy: PathBuf, original: PathBuf },
+}
+
+impl From<Settlement> for SettlementReport {
+    fn from(settlement: Settlement) -> Self {
+        match settlement {
+            Settlement::Promoted(committed) => Self::Promoted {
+                tree: committed.tree,
+                left_behind: committed.left_behind,
+            },
+            Settlement::Kept { copy, original } => Self::Kept { copy, original },
+        }
+    }
+}
+
+/// The event a finished run's own answer arrives on.
+pub const AMIGA_INSTALL_EVENT: &str = "amiga-install-result";
+
+// Deliberately not camelCased — `job_id` matches `OsInstallResult` and every
+// other job result in ART, and `src/lib/amigainstall.ts` declares `job_id` to
+// match.
+#[derive(Debug, Clone, Serialize)]
+pub struct AmigaInstallResult {
+    pub job_id: u64,
+    /// Which of the four endings it was. Mirrored exactly in TypeScript.
+    pub outcome: RunOutcome,
+    pub settlement: SettlementReport,
+}
+
+// ---------------------------------------------------------------------------
+// Composing the run
+// ---------------------------------------------------------------------------
+
+/// A validated run plus the one thing about the package a report needs that
+/// the plan does not carry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Composed {
+    plan: PlannedRun,
+    package_name: String,
+}
+
+/// Refuse a value that cannot survive being written into the generated line.
+///
+/// See the module documentation: the line joins its parts with spaces and
+/// cannot quote, so anything this module composes has to be one token.
+fn one_token(label: &str, value: &str) -> CoreResult<()> {
+    if value.chars().any(char::is_whitespace) {
+        return Err(CoreError::InvalidInput(format!(
+            "'{value}' cannot be used as {label}: ART's generated AmigaDOS line separates its \
+             arguments with spaces and cannot quote one, so every part of it must be a single \
+             word"
+        )));
+    }
+    Ok(())
+}
+
+/// The volume name the tree is mounted as.
+///
+/// A bare name: the colon is ART's to add, and a caller that could write one
+/// could write a second path component after it.
+fn system_volume(raw: Option<&str>) -> CoreResult<String> {
+    let name = raw
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(DEFAULT_SYSTEM_VOLUME);
+    if name.contains(':') {
+        return Err(CoreError::InvalidInput(format!(
+            "'{name}' is a volume name, not a path: write it without a colon"
+        )));
+    }
+    one_token("a volume name", name)?;
+    Ok(name.to_string())
+}
+
+/// `{volume}:` or `{volume}:{dir}` — where the package's own files are, as
+/// AmigaDOS will see them.
+///
+/// **This is the containment proof `PlannedRun::program` says it cannot make
+/// itself.** The result begins with the volume ART mounted the tree under, and
+/// nothing in `dir` may take it back out of that volume: no `:` (which would
+/// name a different one), no empty segment (AmigaDOS reads a leading or
+/// doubled `/` as the parent directory), no `..` or `.`, no `\`.
+fn package_location(volume: &str, dir: Option<&str>) -> CoreResult<String> {
+    let Some(dir) = dir.map(str::trim).filter(|d| !d.is_empty()) else {
+        return Ok(format!("{volume}:"));
+    };
+    for segment in dir.split('/') {
+        if segment.is_empty() {
+            return Err(CoreError::InvalidInput(format!(
+                "'{dir}' is not a path inside the tree: a leading, doubled or trailing '/' is \
+                 AmigaDOS's own parent-directory notation"
+            )));
+        }
+        if segment == ".." || segment == "." {
+            return Err(CoreError::InvalidInput(format!(
+                "'{dir}' is not a path inside the tree: '{segment}' leaves it"
+            )));
+        }
+        if segment.contains(':') || segment.contains('\\') {
+            return Err(CoreError::InvalidInput(format!(
+                "'{dir}' is not a path inside the tree: the volume it is reached under is ART's \
+                 to decide"
+            )));
+        }
+        one_token("a package directory", segment)?;
+    }
+    Ok(format!("{volume}:{dir}"))
+}
+
+/// Join an AmigaDOS location to a path below it. A location ending in `:` is
+/// a volume root and takes no separator.
+fn join_amigados(location: &str, tail: &str) -> String {
+    if location.ends_with(':') {
+        format!("{location}{tail}")
+    } else {
+        format!("{location}/{tail}")
+    }
+}
+
+/// Turn a request into the run it describes, or say why there is none.
+///
+/// Ends by generating the script through
+/// [`workvol::startup_sequence`] and throwing the text away. That is not a
+/// second copy of its guards — it *is* those guards, run early: a preview
+/// that answered where the run would refuse would be a preview of something
+/// that cannot happen, and a shell metacharacter or a value naming ART's own
+/// work volume must be refused before a screen offers a confirm button, not
+/// after.
+fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
+    let package = package::by_id(request.package_id.trim())?;
+    let Some(installer) = package.amiga_installer.clone() else {
+        return Err(CoreError::InvalidInput(format!(
+            "ART ships no Amiga-side installer for '{}'; this is not a package it can run on \
+             the Amiga",
+            package.id
+        )));
+    };
+
+    let volume = system_volume(request.system_volume.as_deref())?;
+    let location = package_location(&volume, request.package_dir.as_deref())?;
+
+    let program = join_amigados(&location, installer.program.trim());
+    one_token("an installer path", &program)?;
+
+    let mut args = installer.args.clone();
+    for arg in &args {
+        one_token("an installer argument", arg)?;
+    }
+    // The target volume. See the module documentation: the package's own
+    // `Install` script passes it, and the recipe deliberately does not carry
+    // it because it is a fact about the run.
+    args.push(format!("{volume}:"));
+
+    let plan = PlannedRun {
+        package_id: package.id.clone(),
+        system_volume: volume,
+        program,
+        args,
+        working_directory: Some(location),
+    };
+
+    workvol::startup_sequence(&plan)?;
+
+    Ok(Composed {
+        plan,
+        package_name: package.name,
+    })
+}
+
+/// The machine the installer runs on.
+fn profile_for(id: Option<&str>) -> CoreResult<AmigaProfile> {
+    let wanted = id
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(DEFAULT_PROFILE_ID);
+    AmigaProfile::all_presets()
+        .into_iter()
+        .find(|p| p.id == wanted)
+        .ok_or_else(|| {
+            CoreError::InvalidInput(format!("ART has no machine profile called '{wanted}'"))
+        })
+}
+
+// ---------------------------------------------------------------------------
+// The run
+// ---------------------------------------------------------------------------
+
+/// Copy the tree, run something against the copy, and decide what happens to
+/// it — the whole of the §92 pipeline this command owns.
+///
+/// `run` is a parameter for the same reason `run_with` takes a launcher and a
+/// clock: **no test in this file may open an emulator window on the owner's
+/// desktop**, and every ending — the four outcomes, a cancellation, and an
+/// error part way — has to be reachable without one.
+///
+/// Cancellation is checked once here, *before* the copy is made, which is the
+/// cheapest place to stop: nothing has been written, so there is nothing to
+/// undo. `stage_with` checks again between whole files, and `run` between
+/// whole polls. None of the three is inside a write.
+fn perform(
+    tree: &Path,
+    sink: &dyn ProgressSink,
+    run: impl FnOnce(&Path, &dyn ProgressSink) -> CoreResult<RunOutcome>,
+) -> CoreResult<(RunOutcome, SettlementReport)> {
+    if sink.is_cancelled() {
+        return Err(CoreError::Cancelled);
+    }
+
+    let staged = stage_with(tree, sink)?;
+
+    match run(staged.copy_path(), sink) {
+        Ok(outcome) => {
+            let settlement = settle(staged, &outcome)?;
+            Ok((outcome, SettlementReport::from(settlement)))
+        }
+        // The one path where the copy does not survive (design §4). `Staged`
+        // has no `Drop`, so nothing else would remove it — and a cancelled
+        // run that left a half-installed tree beside the user's own would be
+        // ART leaving litter nobody asked for.
+        //
+        // A discard that itself fails must not turn a cancellation into a
+        // failure: the user asked for this, and the job bar must not go red
+        // for it. It is reported instead, so the copy is never left on disk
+        // with nobody saying so.
+        Err(CoreError::Cancelled) => {
+            if let Err(err) = staged.discard() {
+                sink.report(
+                    0,
+                    None,
+                    &format!("The cancelled run's copy could not be removed: {err}"),
+                );
+            }
+            Err(CoreError::Cancelled)
+        }
+        // Not one of the four endings and not a cancellation: something went
+        // wrong while the run was under way. The copy stays — the emulator
+        // may have changed it, and that is evidence — and the original was
+        // never opened for writing at all. The error keeps its own code; what
+        // is added is where to look.
+        Err(err) => {
+            sink.report(
+                0,
+                None,
+                &format!(
+                    "'{}' was not touched; the copy ART installed into is at '{}'",
+                    staged.original_path().display(),
+                    staged.copy_path().display()
+                ),
+            );
+            Err(err)
+        }
+    }
+}
+
+/// Build ART's work volume, then [`perform`] the run against a copy.
+///
+/// The work volume is built **before** the copy, so nothing that goes wrong
+/// with it can leave one behind. It lives in a scratch directory that removes
+/// itself, because it is ART's own and holds one generated script plus the
+/// Amiga's one-word answer, which has already been read by the time this
+/// returns.
+fn install(
+    plan: &PlannedRun,
+    tree: &Path,
+    profile: &AmigaProfile,
+    kickstart: &Path,
+    emulator: &Path,
+    sink: &dyn ProgressSink,
+) -> CoreResult<(RunOutcome, SettlementReport)> {
+    let work = Scratch::new()?;
+    workvol::build(work.path(), plan)?;
+
+    perform(tree, sink, |copy, sink| {
+        let request = RunRequest {
+            plan,
+            work_volume_dir: work.path(),
+            tree_dir: copy,
+            profile,
+            kickstart_path: kickstart,
+            winuae_path: emulator,
+            limits: RunLimits::default(),
+        };
+        run(&request, sink)
+    })
+}
+
+/// The word the log records for an ending. English, like every other
+/// `CoreError` message (ART-060) — the user's sentence is the screen's.
+fn ending_of(outcome: &RunOutcome) -> &'static str {
+    match outcome {
+        RunOutcome::Succeeded => "succeeded",
+        RunOutcome::Failed => "failed",
+        RunOutcome::TimedOut { .. } => "timed out",
+        RunOutcome::EmulatorClosed { .. } => "the emulator was closed",
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
+
+/// What running this package's own installer would do — §92's PREVIEW.
+///
+/// Reads recipe data and asks two `is_file` questions. It starts no process,
+/// copies nothing, and writes nothing.
+#[tauri::command]
+pub fn amiga_install_preview(
+    request: AmigaInstallRequest,
+    winuae_path: Option<String>,
+) -> AppResult<AmigaInstallPreview> {
+    let composed = compose(&request)?;
+    let profile = profile_for(request.profile.as_deref())?;
+
+    Ok(AmigaInstallPreview {
+        package_id: composed.plan.package_id,
+        package_name: composed.package_name,
+        system_volume: composed.plan.system_volume,
+        working_directory: composed.plan.working_directory,
+        program: composed.plan.program,
+        args: composed.plan.args,
+        work_volume: WORK_VOLUME.to_string(),
+        result_file: RESULT_FILE.to_string(),
+        deadline_seconds: RunLimits::default().deadline.as_secs(),
+        kickstart_present: request.kickstart.is_file(),
+        kickstart: request.kickstart,
+        emulator: detect_winuae(winuae_path.as_deref()).executable_path,
+        profile_id: profile.id,
+        profile_name: profile.name,
+        tree: request.tree,
+    })
+}
+
+/// Run the package's own installer inside an emulator, against a copy of the
+/// tree. Returns a job id (§54); the answer arrives on
+/// [`AMIGA_INSTALL_EVENT`].
+///
+/// Everything that can be refused is refused **here**, before the job starts,
+/// so a bad package id or a missing emulator is a sentence on the screen
+/// rather than a job that goes red a moment later.
+#[tauri::command]
+pub fn amiga_install_run(
+    request: AmigaInstallRequest,
+    winuae_path: Option<String>,
+    app: AppHandle,
+    registry: State<'_, Arc<JobRegistry>>,
+    oplog: State<'_, JsonlOperationLog>,
+) -> AppResult<JobId> {
+    let composed = compose(&request)?;
+    let profile = profile_for(request.profile.as_deref())?;
+    let emulator = detect_winuae(winuae_path.as_deref())
+        .executable_path
+        .ok_or_else(|| {
+            CoreError::InvalidInput(
+                "WinUAE was not found in a standard install location — set its path in Settings"
+                    .to_string(),
+            )
+        })?;
+
+    let plan = composed.plan;
+    let tree = request.tree.clone();
+    let kickstart = request.kickstart.clone();
+    let emulator = PathBuf::from(emulator);
+    let log_path = oplog.path().to_path_buf();
+    let emit_app = app.clone();
+    let title = format!("Installing {} on the Amiga", composed.package_name);
+
+    let for_log = tree.display().to_string();
+    let command_line = std::iter::once(plan.program.clone())
+        .chain(plan.args.iter().cloned())
+        .collect::<Vec<String>>()
+        .join(" ");
+    let package_id = plan.package_id.clone();
+
+    let id = spawn_job(
+        &app,
+        Arc::clone(&registry),
+        &title,
+        move |job_id, progress| {
+            let result = install(&plan, &tree, &profile, &kickstart, &emulator, progress);
+
+            // §53. Best-effort, and never able to fail the operation it
+            // describes.
+            let record = user_operation("Run a package's own installer on the Amiga")
+                .source(package_id)
+                .destination(&for_log)
+                .detail("Command", command_line)
+                .detail("Machine", profile.id.clone());
+            let record = match &result {
+                Ok((outcome, settlement)) => {
+                    let record = record.detail("Ending", ending_of(outcome));
+                    let record = match settlement {
+                        SettlementReport::Promoted { left_behind, .. } => match left_behind {
+                            Some(path) => record.detail("Left behind", path.display().to_string()),
+                            None => record,
+                        },
+                        SettlementReport::Kept { copy, .. } => {
+                            record.detail("Copy kept at", copy.display().to_string())
+                        }
+                    };
+                    // The result file is the Amiga's own report and the only
+                    // check there is: `verified(true)` when it said the
+                    // install worked, `verified(false)` for the three endings
+                    // where it did not — never `success()`, which would read
+                    // as "ART looked and found nothing wrong" about a run ART
+                    // cannot inspect (§89).
+                    record.outcome(OperationOutcome::verified(matches!(
+                        outcome,
+                        RunOutcome::Succeeded
+                    )))
+                }
+                Err(err) => record.failed(err),
+            };
+            write_to_path(&log_path, &record);
+
+            let (outcome, settlement) = result?;
+            let _ = emit_app.emit(
+                AMIGA_INSTALL_EVENT,
+                AmigaInstallResult {
+                    job_id,
+                    outcome,
+                    settlement,
+                },
+            );
+            Ok(())
+        },
+    );
+
+    Ok(id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use crate::core::amigainstall::stage::STAGED_SUFFIX;
+    use crate::core::ScratchDir;
+
+    /// A sink that can be cancelled from the start and counts what it was
+    /// told, so a test can assert *that a message naming the copy was sent*
+    /// rather than only that a path exists.
+    #[derive(Default)]
+    struct Sink {
+        cancelled: AtomicBool,
+        messages: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl Sink {
+        fn cancelled() -> Self {
+            Self {
+                cancelled: AtomicBool::new(true),
+                messages: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn said(&self, needle: &str) -> bool {
+            self.messages
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|m| m.contains(needle))
+        }
+    }
+
+    impl ProgressSink for Sink {
+        fn report(&self, _done: u64, _total: Option<u64>, message: &str) {
+            self.messages.lock().unwrap().push(message.to_string());
+        }
+        fn is_cancelled(&self) -> bool {
+            self.cancelled.load(Ordering::Relaxed)
+        }
+    }
+
+    fn request(tree: &Path) -> AmigaInstallRequest {
+        AmigaInstallRequest {
+            tree: tree.to_path_buf(),
+            package_id: "boingbag-39-1".to_string(),
+            system_volume: None,
+            package_dir: Some("BoingBag3.9-1".to_string()),
+            kickstart: PathBuf::from("kick.rom"),
+            profile: None,
+        }
+    }
+
+    /// A tree with something in it, so the copy is a real copy.
+    fn tree_in(scratch: &ScratchDir) -> PathBuf {
+        let tree = scratch.join("Workbench3.9");
+        std::fs::create_dir_all(tree.join("Libs")).unwrap();
+        std::fs::write(tree.join("Libs/version.library"), b"the original").unwrap();
+        tree
+    }
+
+    /// Everything beside the tree whose name marks it as ART's copy.
+    fn copies_beside(tree: &Path) -> Vec<PathBuf> {
+        let parent = tree.parent().expect("a parent");
+        let mut found: Vec<PathBuf> = std::fs::read_dir(parent)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.contains(STAGED_SUFFIX))
+            })
+            .collect();
+        found.sort();
+        found
+    }
+
+    // -- composing -------------------------------------------------------
+
+    /// The whole composition, pinned against the shipped recipe.
+    ///
+    /// `boingbag-39-1.json` declares `C/Updater` and one argument,
+    /// `AmigaOS-Update`, and refuses to name a volume at all. Everything that
+    /// turns that into a runnable line happens here, so this is where it is
+    /// asserted: the drawer, the whole path, the target argument the
+    /// package's own `Install` script passes, and the directory the installer
+    /// runs from.
+    #[test]
+    fn a_recipe_declaration_becomes_a_whole_amigados_command() {
+        let composed = compose(&request(Path::new("tree"))).unwrap();
+
+        assert_eq!(composed.plan.system_volume, "DH0");
+        assert_eq!(composed.plan.program, "DH0:BoingBag3.9-1/C/Updater");
+        assert_eq!(composed.plan.args, vec!["AmigaOS-Update", "DH0:"]);
+        assert_eq!(
+            composed.plan.working_directory.as_deref(),
+            Some("DH0:BoingBag3.9-1"),
+            "the installer runs from the package's own drawer, because its arguments are \
+             relative to it"
+        );
+        assert_eq!(composed.package_name, "BoingBag 3.9-1");
+    }
+
+    /// With no drawer named, the package's files are at the volume's root and
+    /// the path carries no stray separator.
+    #[test]
+    fn a_package_at_the_volume_root_composes_without_a_separator() {
+        let mut req = request(Path::new("tree"));
+        req.package_dir = None;
+        req.system_volume = Some("  DH3  ".to_string());
+
+        let composed = compose(&req).unwrap();
+
+        assert_eq!(composed.plan.program, "DH3:C/Updater");
+        assert_eq!(composed.plan.working_directory.as_deref(), Some("DH3:"));
+        assert_eq!(composed.plan.args, vec!["AmigaOS-Update", "DH3:"]);
+    }
+
+    /// Nothing a caller writes may take the run out of the volume ART
+    /// mounted, which is the containment `PlannedRun::program` says its own
+    /// module cannot check.
+    #[test]
+    fn a_package_directory_that_leaves_the_volume_is_refused() {
+        for hostile in [
+            "../../Windows",
+            "Pkg/../../..",
+            "DH1:Pkg",
+            "/Pkg",
+            "Pkg//C",
+            "Pkg/",
+            "Pkg\\C",
+            ".",
+            "Boing Bag",
+        ] {
+            let mut req = request(Path::new("tree"));
+            req.package_dir = Some(hostile.to_string());
+            let composed = compose(&req);
+            assert!(
+                composed.is_err(),
+                "'{hostile}' must not compose, got {composed:?}"
+            );
+        }
+    }
+
+    /// A volume name is a name. One carrying a colon would be composing the
+    /// path from both ends, and one carrying a space cannot survive the
+    /// generated line.
+    #[test]
+    fn a_volume_that_is_not_a_bare_name_is_refused() {
+        for hostile in ["DH0:", "DH0:Pkg", "My Volume"] {
+            let mut req = request(Path::new("tree"));
+            req.system_volume = Some(hostile.to_string());
+            assert!(compose(&req).is_err(), "'{hostile}' must not compose");
+        }
+    }
+
+    /// The composition is validated through the same generator the run uses,
+    /// so a preview cannot answer where the run would refuse. `ARTWork` is
+    /// the case that proves it: nothing in this file refuses it, and it must
+    /// still be refused, because ART's own volume carries the running script
+    /// and the result file the host is waiting on.
+    #[test]
+    fn a_run_that_would_reach_into_arts_own_volume_is_refused_at_composition() {
+        let mut req = request(Path::new("tree"));
+        req.system_volume = Some(WORK_VOLUME.to_string());
+
+        let err = compose(&req).unwrap_err();
+
+        assert!(
+            err.to_string().contains(WORK_VOLUME),
+            "the refusal must name it: {err}"
+        );
+    }
+
+    /// This round runs packages ART ships a recipe for and nothing else — the
+    /// boundary the content-layer round drew, unchanged (design §3).
+    #[test]
+    fn a_package_art_cannot_run_on_the_amiga_is_refused_by_name() {
+        let mut req = request(Path::new("tree"));
+        req.package_id = "locale-turkish".to_string();
+        let err = compose(&req).unwrap_err();
+        assert!(err.to_string().contains("locale-turkish"), "got {err}");
+
+        req.package_id = "no-such-package".to_string();
+        assert!(compose(&req).is_err());
+    }
+
+    /// An unknown machine is refused by name rather than quietly becoming the
+    /// default — an installer that failed under hardware the user did not
+    /// choose would be a failure ART invented.
+    #[test]
+    fn an_unknown_machine_profile_is_refused_rather_than_defaulted() {
+        assert_eq!(profile_for(None).unwrap().id, DEFAULT_PROFILE_ID);
+        assert_eq!(profile_for(Some("  ")).unwrap().id, DEFAULT_PROFILE_ID);
+        assert_eq!(profile_for(Some("a500-ocs")).unwrap().id, "a500-ocs");
+
+        let err = profile_for(Some("a5000-turbo")).unwrap_err();
+        assert!(err.to_string().contains("a5000-turbo"), "got {err}");
+    }
+
+    // -- the pipeline ----------------------------------------------------
+
+    /// Cancelling **before** the copy is made stops there: nothing is staged
+    /// and the run is never reached.
+    ///
+    /// **The tree is empty on purpose, and that is the whole point of the
+    /// test.** `stage_with` checks for cancellation between whole files, so a
+    /// tree with anything in it is stopped by *its* guard and this one could
+    /// be deleted without a test noticing — measured, by removing the check in
+    /// `perform` and watching an earlier version of this test still pass. An
+    /// empty tree copies with no entries to check between, so the only thing
+    /// that can stop the emulator being launched after the user pressed Stop
+    /// is the check in `perform`.
+    #[test]
+    fn a_run_cancelled_before_it_starts_copies_nothing() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "pre-cancel");
+        let tree = scratch.join("Workbench3.9");
+        std::fs::create_dir_all(&tree).unwrap();
+        let sink = Sink::cancelled();
+        let ran = AtomicUsize::new(0);
+
+        let result = perform(&tree, &sink, |_, _| {
+            ran.fetch_add(1, Ordering::Relaxed);
+            Ok(RunOutcome::Succeeded)
+        });
+
+        assert!(matches!(result, Err(CoreError::Cancelled)), "{result:?}");
+        assert_eq!(ran.load(Ordering::Relaxed), 0, "nothing may be launched");
+        assert!(
+            copies_beside(&tree).is_empty(),
+            "and nothing may be copied either"
+        );
+    }
+
+    /// A cancellation **during** the run discards the copy — the one path
+    /// where it does not survive (design §4).
+    ///
+    /// `Staged` has no `Drop`, so if `perform` forgets to discard, the copy
+    /// is still on disk when this looks. That is what makes the assertion
+    /// load-bearing rather than one that would hold anyway.
+    #[test]
+    fn a_cancelled_run_discards_the_copy_and_leaves_the_original() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "cancel");
+        let tree = tree_in(&scratch);
+        let sink = Sink::default();
+        let staged_at = std::sync::Mutex::new(PathBuf::new());
+
+        let result = perform(&tree, &sink, |copy, _| {
+            *staged_at.lock().unwrap() = copy.to_path_buf();
+            // The copy exists at this moment, which is what makes its
+            // absence afterwards mean something.
+            assert!(copy.join("Libs/version.library").is_file());
+            Err(CoreError::Cancelled)
+        });
+
+        assert!(matches!(result, Err(CoreError::Cancelled)), "{result:?}");
+        assert!(
+            !staged_at.lock().unwrap().exists(),
+            "a cancelled run leaves no half-installed copy behind"
+        );
+        assert!(copies_beside(&tree).is_empty());
+        assert_eq!(
+            std::fs::read(tree.join("Libs/version.library")).unwrap(),
+            b"the original",
+            "and the original is exactly as it was"
+        );
+    }
+
+    /// The three endings that are not a success: the original is untouched,
+    /// the copy stays, and the report names **both** — a user told "it
+    /// failed" and not told where the evidence went has been given nothing.
+    #[test]
+    fn a_run_that_did_not_succeed_keeps_the_copy_and_names_both_paths() {
+        for outcome in [
+            RunOutcome::Failed,
+            RunOutcome::TimedOut {
+                waited: Duration::from_secs(1200),
+            },
+            RunOutcome::EmulatorClosed {
+                waited: Duration::from_secs(31),
+            },
+        ] {
+            let scratch = ScratchDir::new("art-amigainstall-cmd", "kept");
+            let tree = tree_in(&scratch);
+            let sink = Sink::default();
+            let wanted = outcome.clone();
+
+            let (ending, settlement) = perform(&tree, &sink, move |copy, _| {
+                std::fs::write(copy.join("Libs/version.library"), b"installed").unwrap();
+                Ok(wanted)
+            })
+            .unwrap();
+
+            assert_eq!(ending, outcome);
+            match settlement {
+                SettlementReport::Kept { copy, original } => {
+                    assert_eq!(original, tree, "the report must name the untouched tree");
+                    assert_eq!(
+                        std::fs::read(copy.join("Libs/version.library")).unwrap(),
+                        b"installed",
+                        "and the copy must still hold what the installer did"
+                    );
+                }
+                other => panic!("{outcome:?} must not promote: {other:?}"),
+            }
+            assert_eq!(
+                std::fs::read(tree.join("Libs/version.library")).unwrap(),
+                b"the original",
+                "the original is untouched after {outcome:?}"
+            );
+        }
+    }
+
+    /// Only a success promotes, and the tree ends up holding what the
+    /// installer wrote.
+    #[test]
+    fn a_successful_run_promotes_the_copy_over_the_tree() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "ok");
+        let tree = tree_in(&scratch);
+        let sink = Sink::default();
+
+        let (outcome, settlement) = perform(&tree, &sink, |copy, _| {
+            std::fs::write(copy.join("Libs/version.library"), b"installed").unwrap();
+            Ok(RunOutcome::Succeeded)
+        })
+        .unwrap();
+
+        assert_eq!(outcome, RunOutcome::Succeeded);
+        match &settlement {
+            SettlementReport::Promoted {
+                tree: promoted,
+                left_behind,
+            } => {
+                assert_eq!(promoted, &tree, "the tree keeps its own path");
+                assert_eq!(left_behind, &None, "and the previous one is gone");
+            }
+            other => panic!("a success must promote: {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read(tree.join("Libs/version.library")).unwrap(),
+            b"installed"
+        );
+        assert!(
+            copies_beside(&tree).is_empty(),
+            "and nothing is left beside"
+        );
+    }
+
+    /// An error part way through is not one of the four endings and not a
+    /// cancellation. The copy stays — the emulator may have changed it — and
+    /// the user is told where it is and that their own tree was not touched.
+    #[test]
+    fn an_error_mid_run_keeps_the_copy_and_says_where_it_is() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "error");
+        let tree = tree_in(&scratch);
+        let sink = Sink::default();
+
+        let result = perform(&tree, &sink, |_, _| {
+            Err(CoreError::InvalidInput("the mount went away".into()))
+        });
+
+        assert!(result.is_err());
+        let copies = copies_beside(&tree);
+        assert_eq!(copies.len(), 1, "the copy is evidence and must survive");
+        assert!(
+            sink.said(&copies[0].display().to_string()),
+            "and the user must be told where it is: {:?}",
+            sink.messages.lock().unwrap()
+        );
+        assert!(
+            sink.said(&tree.display().to_string()),
+            "and that their own tree was not touched"
+        );
+        assert_eq!(
+            std::fs::read(tree.join("Libs/version.library")).unwrap(),
+            b"the original"
+        );
+    }
+
+    // -- the wire --------------------------------------------------------
+
+    /// The four endings, exactly as the frontend will receive them.
+    ///
+    /// `src/lib/amigainstall.ts` declares the same four `kind`s and
+    /// `src/lib/amigainstall.test.ts` checks the two lists against each
+    /// other; this pins the JSON itself, including that a struct variant's
+    /// own field does **not** inherit the enum's `rename_all`.
+    #[test]
+    fn every_run_outcome_has_the_shape_the_frontend_reads() {
+        let cases = [
+            (RunOutcome::Succeeded, r#"{"kind":"succeeded"}"#),
+            (RunOutcome::Failed, r#"{"kind":"failed"}"#),
+            (
+                RunOutcome::TimedOut {
+                    waited: Duration::from_secs(1200),
+                },
+                r#"{"kind":"timed-out","waited":{"secs":1200,"nanos":0}}"#,
+            ),
+            (
+                RunOutcome::EmulatorClosed {
+                    waited: Duration::from_secs(31),
+                },
+                r#"{"kind":"emulator-closed","waited":{"secs":31,"nanos":0}}"#,
+            ),
+        ];
+        for (outcome, expected) in cases {
+            assert_eq!(serde_json::to_string(&outcome).unwrap(), expected);
+        }
+    }
+
+    /// `#[serde(rename_all)]` on an enum renames its **variants**, not the
+    /// fields inside a struct variant — a real wire bug in this project this
+    /// week. `left_behind` reaches the frontend as `leftBehind` because the
+    /// variant carries its own attribute, and this is what says so.
+    #[test]
+    fn settlement_is_camel_case_on_the_wire_including_inside_a_variant() {
+        let promoted = SettlementReport::Promoted {
+            tree: PathBuf::from("T"),
+            left_behind: Some(PathBuf::from("P")),
+        };
+        assert_eq!(
+            serde_json::to_string(&promoted).unwrap(),
+            r#"{"kind":"promoted","tree":"T","leftBehind":"P"}"#
+        );
+
+        let kept = SettlementReport::Kept {
+            copy: PathBuf::from("C"),
+            original: PathBuf::from("O"),
+        };
+        assert_eq!(
+            serde_json::to_string(&kept).unwrap(),
+            r#"{"kind":"kept","copy":"C","original":"O"}"#
+        );
+    }
+
+    /// The preview writes nothing and starts nothing — §92's PREVIEW, and the
+    /// property `run_workflow`'s `Safety::ReadOnly` rule exists to protect.
+    #[test]
+    fn the_preview_touches_nothing() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "preview");
+        let tree = tree_in(&scratch);
+        let before = std::fs::read_dir(scratch.path()).unwrap().count();
+
+        let preview = amiga_install_preview(request(&tree), Some("no-such.exe".into())).unwrap();
+
+        assert_eq!(preview.program, "DH0:BoingBag3.9-1/C/Updater");
+        assert_eq!(preview.work_volume, WORK_VOLUME);
+        assert_eq!(preview.result_file, RESULT_FILE);
+        assert!(preview.deadline_seconds > 0, "a deadline is not optional");
+        assert!(!preview.kickstart_present, "and it says what is missing");
+        assert_eq!(preview.profile_id, DEFAULT_PROFILE_ID);
+        assert_eq!(
+            std::fs::read_dir(scratch.path()).unwrap().count(),
+            before,
+            "a preview creates nothing"
+        );
+        assert!(copies_beside(&tree).is_empty(), "and copies nothing");
+        assert_eq!(
+            std::fs::read(tree.join("Libs/version.library")).unwrap(),
+            b"the original"
+        );
+    }
+}

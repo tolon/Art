@@ -728,6 +728,7 @@ mod tests {
                     system_volume: "DH0".to_string(),
                     program: "DH0:Updater".to_string(),
                     args: Vec::new(),
+                    working_directory: None,
                 },
                 profile: AmigaProfile::a1200_aga(),
             }

@@ -21,8 +21,9 @@
 //! closed emulator means the person watching shut the window. All three leave
 //! the original **untouched** — and all three leave the copy **in place**,
 //! because a user told "it failed" and not told where the evidence went has
-//! been given nothing (design §4). [`Settlement::Kept`] carries that path so
-//! the report can name it.
+//! been given nothing (design §4). [`Settlement::Kept`] carries that path —
+//! and the original's, so the report can say both halves of what happened:
+//! the tree is untouched *there*, the evidence is *here*.
 //!
 //! A cancelled run is not an ending at all — [`super::run::run_with`] returns
 //! [`CoreError::Cancelled`] rather than an outcome — and the design is
@@ -102,7 +103,15 @@ pub enum Settlement {
     /// The run did not succeed. **The original was not touched at all** — not
     /// backed up, not rewritten, not read — and the copy is at `copy`, where
     /// the user can look at what the installer did before it stopped.
-    Kept { copy: PathBuf },
+    ///
+    /// Both paths, deliberately. The sentence a report owes the user here is
+    /// two halves — *your system at `original` is exactly as it was, and what
+    /// the installer did is at `copy`* — and a variant carrying only the
+    /// second half makes the first half unsayable without the caller
+    /// remembering a path the type had and dropped. `Staged` is consumed by
+    /// [`settle`], so after it there is nowhere else to ask (Task 4 review,
+    /// handed to Task 5).
+    Kept { copy: PathBuf, original: PathBuf },
 }
 
 /// Copy `tree` beside itself, ready to be installed into.
@@ -169,7 +178,10 @@ pub fn settle(staged: Staged, outcome: &RunOutcome) -> CoreResult<Settlement> {
         // Three different things to tell the user, one thing to do with the
         // filesystem: nothing.
         RunOutcome::Failed | RunOutcome::TimedOut { .. } | RunOutcome::EmulatorClosed { .. } => {
-            Ok(Settlement::Kept { copy: staged.copy })
+            Ok(Settlement::Kept {
+                copy: staged.copy,
+                original: staged.original,
+            })
         }
     }
 }
@@ -647,11 +659,19 @@ mod tests {
             "the fixture only proves that if the installer's file is not in it"
         );
         match settled {
-            Settlement::Kept { copy } => {
+            Settlement::Kept { copy, original } => {
                 assert_eq!(copy, copy_path, "and the report says where the copy is");
                 assert!(
                     copy.join("Libs/boingbag.library").is_file(),
                     "which is still there to look at"
+                );
+                // The other half of the sentence: a report that cannot name
+                // the original cannot say "your system is untouched", which
+                // is the half that answers what the user is actually worried
+                // about (Task 4 review, obligation 2).
+                assert_eq!(
+                    original, tree,
+                    "and it says which tree was left alone, not only where the copy is"
                 );
             }
             other => panic!("a failed run must not promote: {other:?}"),

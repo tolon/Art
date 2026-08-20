@@ -86,6 +86,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   system is moved aside first and removed only once the new one is in
   place, so there is no instant in which a power cut could leave you with
   neither.
+- **The pieces above are now one operation ART can be asked to perform.**
+  There are two things to ask for: a **preview**, which says exactly what
+  would run — which program, from which drawer, with which arguments, on
+  which system, on which emulated machine, and whether your Kickstart and
+  an emulator are actually there — and starts nothing and writes nothing;
+  and the **run**, which happens in the background so the rest of ART keeps
+  working, and can be stopped from the job bar.
+
+  What comes back is the ending, not a verdict ART invented: it succeeded,
+  the installer refused, nobody answered a question it asked, or the
+  emulator window was closed. Only the first replaces your system with the
+  copy. The other three tell you **both** where your untouched system is and
+  where the copy is, so you can look at what the installer did. Cancelling
+  throws the copy away. Every one of those is written into the operation
+  log as it happens.
+
+  The command line handed to the Amiga is assembled by ART from the
+  package's own recipe and nothing else — never from anything inside an
+  archive — and the installer is run from the package's own drawer, which is
+  where the package's own script runs it from and what makes the arguments
+  it was written with resolve.
+
+  **Still no screen** — that is the next step of this round — so nothing you
+  can click starts an emulator yet.
 
 #### Fixed
 - **A mistyped key in a recipe file is now an error instead of silence.**

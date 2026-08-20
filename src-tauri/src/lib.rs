@@ -153,6 +153,8 @@ pub fn run() {
             commands::osinstall::osinstall_add_package,
             commands::osinstall::osinstall_apply,
             commands::osinstall::osinstall_verify,
+            commands::amigainstall::amiga_install_preview,
+            commands::amigainstall::amiga_install_run,
             commands::gotek::gotek_scan,
             commands::gotek::gotek_save,
             commands::distro::distro_profiles,

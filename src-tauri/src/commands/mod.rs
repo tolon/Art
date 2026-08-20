@@ -5,6 +5,7 @@
 //! logic lives here.
 
 pub mod adf;
+pub mod amigainstall;
 pub mod archive;
 pub mod archives;
 pub mod artwork;
