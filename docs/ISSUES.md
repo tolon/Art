@@ -819,6 +819,56 @@ bytes on disk are untouched), and six unit tests in
 most: a check that stopped at the size would call a different disk image of
 the same size "already done" and silently never copy the real one.
 
+**Fix round 2 (wave-C1 re-review, G1 — Critical): the first implementation did
+not keep the rule this entry states, and the review broke it three times.**
+
+The rule was right and the code inferred certainty from **length**:
+
+- A WHDLoad drawer with the **right lengths and the wrong bytes** was judged
+  already-in-place. `same_pack` compared the archive's *declared* sizes
+  against what was on disk and skipped on a match.
+- **Two trees differing only by an empty directory** compared equal, because
+  the map `walk` built held files alone.
+- A resumed apply **never restored a missing `.info`** — presence looked at
+  the drawer and not at the icon ART-106 had just made a destination in this
+  same batch — so a resume produced a tree Workbench cannot see and reported
+  it finished. §82, reached from the resume side.
+
+All three are fixed by comparing **content, never size**:
+
+| placement | what is compared now |
+|---|---|
+| `CopyFile` | length as a cheap *reject*, then byte for byte |
+| `CopyTree` | the same entries both ways, **directories included**, then every file byte for byte |
+| `UnpackWhdload` | every entry inside the pack **decompressed** and compared against the file on disk, in one forward pass through `read_selected` (index-at-a-time is quadratic on a solid 7z) |
+
+A declared size is now used for one thing only: bounding the read. Where the
+content cannot be read in full — an archive that will not open, a file that
+will not read — the answer is `Different` and the item is **written**. That
+asymmetry is the whole design and is now stated at the top of the module: a
+wrong `Different` costs one unnecessary write; a wrong `AlreadyInPlace` leaves
+a wrong file on the user's volume and tells nobody.
+
+`Presence` gained a fourth answer, `IconMissing`: the drawer is exactly right
+and its `.info` is not there. Not a collision — nothing is in the way — and
+not settled either, so it counts as work on screen and `apply` writes the icon
+alone (`Parts::IconOnly`), leaving the verified drawer untouched. An icon that
+is present and is *somebody else's* is `Different`, because writing over it
+would be an overwrite (§93).
+
+The review's three cases are the three new tests:
+`core::layout::presence::tests::a_drawer_with_the_right_lengths_and_the_wrong_bytes_is_different`,
+`…::two_trees_differing_only_by_an_empty_directory_are_different`,
+`…::a_drawer_whose_icon_is_missing_asks_for_the_icon_and_not_a_collision`,
+plus `…::a_drawer_whose_icon_is_someone_elses_is_different`,
+`…::an_archive_that_will_not_open_is_different`, and the end-to-end
+`core::layout::apply::tests::a_resumed_apply_restores_an_icon_the_first_run_never_wrote`.
+
+Mutation-checked against all three: restoring the shape-only pack comparison,
+dropping directories from the walk, and treating a missing icon as
+already-in-place fails exactly the corresponding tests (5 failed / 57 passed);
+restored, 62 pass.
+
 **ART-069** 🔵 **No frontend test renders `FileManager.tsx`**
 `src/pages/FileManager.tsx` · It calls Tauri commands (`onVolumeWriteResult`,
 `onJobProgress`, panel listing, …) on mount, which is why every phase-1a
@@ -1059,6 +1109,13 @@ a different reader path, and therefore a different answer to "what is this
 pack called"), and
 `core::layout::apply::tests::a_level_one_lha_pack_plans_and_applies_under_one_name`
 drives one through `plan` → `apply` alongside the level-0 case.
+
+**What that still does not cover** (G5 of the re-review): the fixture carries
+a level-1 *header* and its payload is still stored `-lh0-`. **No `-lh5-`
+compression path is exercised anywhere in `core/layout`'s tests** — the level
+and the method are independent, and only the level moved. Reading a real
+compressed pack end to end is `core/lha`'s own coverage, not this module's,
+and if that ever stops being true this is the fixture to grow.
 
 **ART-106** 🔵 **A WHDLoad icon's destination is invisible to collision
 analysis** — *found 2026-08-15, the whole-branch review of SD-2 G11*
@@ -1360,6 +1417,25 @@ direction — the gate seeing less than the walk did.
 the 16 MB whole-file cap and **214 ms** on a 2 GB partition with 20 000 files.
 Wiring it into the health badge is affordable on time; the watch item is
 memory, not time.
+
+**Fix round 2 (wave-C1 re-review, G2): F3's fix was still the silence it was
+filed about.** `pre_existing_damage` reached the operation log, the
+application log and the frontend's types — and **nothing drew it**. A field no
+screen renders is the same silence with more code behind it.
+
+`src/components/files/DamageRow.tsx` renders it, in both catalogues
+(`files.damage.foundBeforeWriting`), and says all three things the user needs:
+ART found this damage **before** it wrote, the write still landed, and here is
+what was already wrong. Its own component rather than a fifth thing competing
+for the status line — it is not an error (nothing failed) and not a hint
+(nothing was declined) — and its own component so it can be *rendered in a
+test* without standing a two-pane commander up around it, which is how "this
+reaches the user" gets checked instead of asserted.
+
+Covered by `src/components/files/DamageRow.test.tsx`: the sentence renders in
+English and Turkish with no raw key and no unrendered interpolation, at most
+three findings are shown, and — the half that stops it crying wolf — an empty
+list renders **nothing at all**.
 
 **ART-078** 🟡 **An AmigaOS CD's protection bits and file comments are lost, because Rock Ridge and the Amiga `AS` entry are not read**
 `core/iso/` · ART reads ISO9660 and prefers Joliet when a disc carries it.

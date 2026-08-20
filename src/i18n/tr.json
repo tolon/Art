@@ -1382,6 +1382,10 @@
       "refuseRelative": "Tam bir yol yazın — bölme bir imajın içinde olabilir, orada tek başına bir ad yol değildir.",
       "refuseNotAShell": "Bu satır bir klasöre gider ya da bir filtre uygular. ART buradan program çalıştırmaz."
     },
+    "damage": {
+      "foundBeforeWriting_one": "Bu birim ART yazmadan önce de hasarlıydı — {{count}} sorun bulundu, yazma yine de tamamlandı:",
+      "foundBeforeWriting_other": "Bu birim ART yazmadan önce de hasarlıydı — {{count}} sorun bulundu, yazma yine de tamamlandı:"
+    },
     "err": {
       "bothLocal": "Her iki bölme de yerel klasör — bunun için Explorer'ı kullanın.",
       "openOtherSide": "Önce diğer taraftan bir bölüm açın.",

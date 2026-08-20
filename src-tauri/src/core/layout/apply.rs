@@ -115,13 +115,23 @@ fn place(root: &Path, item: &LayoutItem) -> CoreResult<Placed> {
         // Asked here and not taken from the plan, deliberately: the plan was
         // computed before the confirmation and the disk can have moved on.
         // The screen's count is a preview; this is the decision.
-        if presence_of(root, item) == Presence::AlreadyInPlace {
-            return Ok(Placed::AlreadyThere);
-        }
-        return Err(CoreError::InvalidInput(format!(
-            "'{}' is already there; nothing is overwritten",
-            item.destination
-        )));
+        return match presence_of(root, item) {
+            Presence::AlreadyInPlace => Ok(Placed::AlreadyThere),
+            // The drawer is exactly right and its `.info` is not there —
+            // which a resumed run produces whenever the first one stopped
+            // between the two writes. Nothing is in the way, so this is work
+            // to finish rather than a clash: the icon is written and the
+            // drawer is left alone. Without this a resume produces a tree
+            // Workbench cannot see and calls it done (§82, ART-106).
+            Presence::IconMissing => Ok(Placed::Copied(unpack_whdload_icon_only(
+                &item.source,
+                &target,
+            )?)),
+            _ => Err(CoreError::InvalidInput(format!(
+                "'{}' is already there; nothing is overwritten",
+                item.destination
+            ))),
+        };
     }
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
@@ -130,7 +140,7 @@ fn place(root: &Path, item: &LayoutItem) -> CoreResult<Placed> {
     let bytes = match item.placement {
         Placement::CopyFile => std::fs::copy(&item.source, &target)?,
         Placement::CopyTree => copy_tree(&item.source, &target, 0)?,
-        Placement::UnpackWhdload => unpack_whdload(&item.source, &target)?,
+        Placement::UnpackWhdload => unpack_whdload(&item.source, &target, Parts::DrawerAndIcon)?,
     };
     Ok(Placed::Copied(bytes))
 }
@@ -143,7 +153,23 @@ fn place(root: &Path, item: &LayoutItem) -> CoreResult<Placed> {
 /// two steps are separate because the gate's question is "is this archive
 /// hostile" and `analyse`'s is "where is the game", and neither should be
 /// asked in the other's terms.
-fn unpack_whdload(archive: &Path, target: &Path) -> CoreResult<u64> {
+/// Which halves of a WHDLoad placement [`unpack_whdload`] should write.
+///
+/// A resume that stopped between the drawer and its icon needs the second
+/// without the first — and `place()` will not overwrite, so re-writing the
+/// drawer is not an option even when it would be harmless.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Parts {
+    DrawerAndIcon,
+    IconOnly,
+}
+
+/// Write only the `.info` beside a drawer that is already correct.
+fn unpack_whdload_icon_only(archive: &Path, target: &Path) -> CoreResult<u64> {
+    unpack_whdload(archive, target, Parts::IconOnly)
+}
+
+fn unpack_whdload(archive: &Path, target: &Path, parts: Parts) -> CoreResult<u64> {
     use crate::core::archive::extract::{extract_with_backend, OverwritePolicy};
     use crate::core::archive::open;
     use crate::core::jobs::NoProgress;
@@ -269,7 +295,13 @@ fn unpack_whdload(archive: &Path, target: &Path) -> CoreResult<u64> {
         if let Some(icon) = layout.icon.as_ref().filter(|_| layout.root.is_empty()) {
             skip_from_drawer.push(safe_join_in_scratch(&scratch, icon)?);
         }
-        let mut bytes = copy_tree_excluding(&drawer, target, &skip_from_drawer, 0)?;
+        let mut bytes = match parts {
+            Parts::DrawerAndIcon => copy_tree_excluding(&drawer, target, &skip_from_drawer, 0)?,
+            // The drawer on disk has already been compared byte for byte
+            // against this archive (`presence::same_pack`), so there is
+            // nothing to write and nothing to check again.
+            Parts::IconOnly => 0,
+        };
 
         // §82: beside the drawer, never inside it — and **named after the
         // drawer that landed**, not after the pack name the archive carried.
@@ -1473,6 +1505,59 @@ mod tests {
         assert_eq!(outcome.placed, 1, "only the one that was missing");
         assert_eq!(outcome.skipped, 1, "and the one that was already right");
         assert!(floppies.join("Second.adf").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// G1's third case, end to end: **a resumed apply restores a missing
+    /// `.info`.** A run that stopped between the drawer and its icon leaves a
+    /// drawer Workbench cannot see; re-running the plan has to finish it, and
+    /// before this it reported the drawer as already-in-place and left the
+    /// icon missing for ever.
+    #[test]
+    fn a_resumed_apply_restores_an_icon_the_first_run_never_wrote() {
+        use crate::core::layout::{plan, policy::Policy};
+
+        let dir = scratch("resume-icon");
+        let root = dir.join("staging");
+        let archive = dir.join("Turrican.lha");
+        whdload_lha(&archive);
+
+        let made = plan(&root, std::slice::from_ref(&archive), &Policy::default()).unwrap();
+        apply(&made, &NoProgress).unwrap();
+
+        let games = root.join("Games");
+        let icon = games.join("Turrican.info");
+        assert!(icon.exists());
+
+        // The state a run stopped between the two writes leaves behind.
+        std::fs::remove_file(&icon).unwrap();
+
+        let again = plan(&root, std::slice::from_ref(&archive), &Policy::default()).unwrap();
+        assert!(
+            again.collisions.is_empty(),
+            "the drawer is ours and the icon is missing — nothing is in the way: {:?}",
+            again.collisions
+        );
+        assert!(
+            again.already_in_place.is_empty(),
+            "…and it is not finished either, so it must not be counted as settled"
+        );
+
+        let outcome = apply(&again, &NoProgress).unwrap();
+        assert_eq!(outcome.skipped, 0);
+        assert_eq!(outcome.placed, 1, "the icon was written");
+        assert_eq!(
+            std::fs::read(&icon).unwrap(),
+            b"icon",
+            "§82: the drawer is unreadable to Workbench without it"
+        );
+
+        // The drawer itself was left alone rather than rewritten.
+        assert_eq!(
+            std::fs::read(games.join("Turrican").join("Turrican.slave")).unwrap(),
+            b"slave"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -54,6 +54,7 @@ import { startDrag } from "@crabnebula/tauri-plugin-drag";
 
 import { AttributesDialog } from "@/components/files/AttributesDialog";
 import { CheckoutPanel } from "@/components/files/CheckoutPanel";
+import { DamageRow } from "@/components/files/DamageRow";
 import { CopyPlanDialog } from "@/components/files/CopyPlanDialog";
 import { FileViewer } from "@/components/files/FileViewer";
 import {
@@ -629,6 +630,20 @@ export function FileManager() {
    * one-line form for the commander's status strip (brief §1.4).
    */
   const [hint, setHint] = useState<string | null>(null);
+  /**
+   * Damage ART found in a volume **before** it wrote to it (ART-050, F3/G2).
+   *
+   * The write gate refuses only what the operation introduced, because a disk
+   * that leaked a block in 1993 has to stay writable (§89) — and that is a
+   * rule about refusing, not a licence to write into a cross-linked volume in
+   * silence. The engine already carried this to the operation log; a field
+   * nothing draws is the same silence with more code behind it, so it is on
+   * screen here, in its own row and its own colour: not an error (the write
+   * landed) and not a hint (nothing was declined).
+   *
+   * Cleared by the next operation, like every other line in this row.
+   */
+  const [damage, setDamage] = useState<string[]>([]);
 
   /**
    * What to do about names already taken.
@@ -2260,6 +2275,7 @@ export function FileManager() {
             entry.name,
             policy
           );
+          noteDamage(outcome);
           setMessage(
             outcome.backup
               ? t("files.status.writtenToBackedUp", { name: entry.name, volume: target.volumeName })
@@ -2402,6 +2418,17 @@ export function FileManager() {
    *                        than a disabled key (§96: F5 still *runs*)
    * ```
    */
+  /**
+   * Record what a write found already wrong with the volume it wrote to.
+   *
+   * Every result type that reaches this screen from `core/volume/write`
+   * carries the same field, so one helper serves all of them rather than each
+   * call site remembering.
+   */
+  function noteDamage(outcome: { pre_existing_damage?: string[] } | null | undefined) {
+    setDamage(outcome?.pre_existing_damage ?? []);
+  }
+
   async function copySelectionTo(from: Side, entries: PanelEntry[]) {
     if (entries.length === 0) return;
     if (entries.length === 1) {
@@ -2678,6 +2705,7 @@ export function FileManager() {
         alsoIcon = true;
       }
 
+      noteDamage(outcome);
       setMessage(
         alsoIcon
           ? outcome.backup
@@ -2759,6 +2787,7 @@ export function FileManager() {
         names,
         protectedNames.length > 0
       );
+      noteDamage(outcome);
       setMessage(
         outcome.backup
           ? t("files.status.deletedManyBackedUp", { count: outcome.deleted })
@@ -2989,6 +3018,7 @@ export function FileManager() {
               movingProtected.length > 0
             );
 
+      noteDamage(outcome);
       setMessage(
         outcome.backup
           ? t("files.status.movedBackedUp", { count: names.length })
@@ -3803,6 +3833,15 @@ export function FileManager() {
             {busy ? t("files.busy.suffix", { busy }) : (error ?? hint ?? message)}
           </div>
         )}
+
+        {/*
+         * A fourth level, and its own row rather than a fifth thing competing
+         * for the line above: **the write landed, and the volume was already
+         * damaged before it did** (ART-050's F3/G2). It is not an error —
+         * nothing failed — and not a hint — nothing was declined — so it says
+         * both halves plainly: what ART found, and that it found it first.
+         */}
+        <DamageRow findings={damage} />
 
         {/*
          * The command line (brief §1.4): full width, directly above the F-key

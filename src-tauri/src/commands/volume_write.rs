@@ -1669,7 +1669,8 @@ pub(crate) fn folder_destination(dest_dir: &Path, name: &str) -> CoreResult<Path
 /// folder from `dest_dir` + `name`, then extract into it.
 ///
 /// Its own function, called from the job closure rather than reimplemented in
-/// a test — the same reason [`copy_between_volumes`] below is one. A test that
+/// a test — the same reason [`copy_selection_between_volumes`] below is one. A
+/// test that
 /// rebuilt this sequence for itself could not catch the destination being
 /// resolved the wrong way; calling this can.
 #[allow(clippy::too_many_arguments)]
@@ -1775,7 +1776,8 @@ pub fn volume_copy_out(
 /// as one operation with one report.
 ///
 /// Its own function, called from the job closure rather than reimplemented in
-/// a test — the same reason [`copy_out_folder`] and [`copy_between_volumes`]
+/// a test — the same reason [`copy_out_folder`] and
+/// [`copy_selection_between_volumes`]
 /// are.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn extract_selection_out(

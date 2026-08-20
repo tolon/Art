@@ -1382,6 +1382,10 @@
       "refuseRelative": "Type a full path — the pane may be inside an image, where a name on its own is not one.",
       "refuseNotAShell": "This line goes to a folder or sets a filter. ART does not run programs from it."
     },
+    "damage": {
+      "foundBeforeWriting_one": "This volume was already damaged before ART wrote to it — {{count}} problem found, and the write still went through:",
+      "foundBeforeWriting_other": "This volume was already damaged before ART wrote to it — {{count}} problems found, and the write still went through:"
+    },
     "err": {
       "bothLocal": "Both panes are local folders — use Explorer for that.",
       "openOtherSide": "Open a partition on the other side first.",

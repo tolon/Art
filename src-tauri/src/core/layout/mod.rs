@@ -359,13 +359,23 @@ pub fn settled_in(root: &Path, items: &[LayoutItem]) -> (Vec<Collision>, Vec<Str
     let mut already: Vec<String> = Vec::new();
     let mut by_destination: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
     for item in items {
-        if presence_of(root, item) == Presence::AlreadyInPlace {
-            already.push(item.destination.clone());
-            // Its icon rides with it: `apply` writes that beside the drawer
-            // in the same step, so a drawer that is already right and an icon
-            // that is already there are one settled item, not one settled and
-            // one clashing.
-            continue;
+        match presence_of(root, item) {
+            Presence::AlreadyInPlace => {
+                already.push(item.destination.clone());
+                // Its icon rides with it: `apply` writes that beside the
+                // drawer in the same step, so a drawer that is already right
+                // and an icon that is already there are one settled item, not
+                // one settled and one clashing.
+                continue;
+            }
+            // The drawer is right and the `.info` is missing (ART-106, and
+            // the resume case G1 was filed about). There is nothing in the
+            // way, so it is neither settled nor a clash — it is work still to
+            // do, and it counts as such on screen. Registering the drawer as
+            // a collision here would block Apply on the one run that is
+            // supposed to finish the job.
+            Presence::IconMissing => continue,
+            Presence::Absent | Presence::Different => {}
         }
         by_destination
             .entry(item.destination.clone())

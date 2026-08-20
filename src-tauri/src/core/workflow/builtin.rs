@@ -515,11 +515,16 @@ fn navigation_workflows() -> Vec<NavWorkflow> {
         // file dialog were the only doors into the module ART's one drop
         // pipeline was built to feed.
         //
-        // Registered *below* `dir.scan_collection` on purpose. Both are
-        // starred, so neither is a dead end (§46), but which of "catalogue
-        // this folder" and "lay this folder out onto a card" should be the
-        // first thing offered for a dropped folder is a product judgement,
-        // and this task's job was to open the door, not to reorder the room.
+        // **Ranked** below `dir.scan_collection`, not registered below it.
+        // This entry sits *first* in the list and carries priority 15 against
+        // its 10, and priority is what orders the panel — source order is
+        // not. The old wording read backwards against the code directly under
+        // it (F10 of the wave-C1 review).
+        //
+        // Both are starred, so neither folder action is a dead end (§46);
+        // which of "catalogue this folder" and "lay this folder out onto a
+        // card" should be offered *first* is a product judgement, and this
+        // task's job was to open the door, not to reorder the room.
         nav(
             "dir.organise",
             "Organise onto a card",
