@@ -639,22 +639,29 @@ fn dedupe_case_insensitive(names: &[String]) -> Vec<String> {
 }
 
 /// The batch-delete pipeline, without the Tauri `State` the command wrapper
-/// needs: pre-check every name, then delete everything inside one writer
-/// session so the whole-file strategy takes exactly one backup for the batch.
+/// needs: pre-check every name, then delete the lot as **one** journalled
+/// operation.
 ///
-/// All-or-nothing *for the whole-file strategy* (§92): every name is
-/// resolved and checked *before* the writer session opens, so a batch that
-/// cannot fully succeed deletes nothing rather than stopping partway and
-/// leaving the user unsure which half of their selection is still there —
-/// proven here because every test in this module runs a floppy-sized image.
+/// **All-or-nothing, on both strategies** (§92). It used to be all-or-nothing
+/// only on the whole-file one, because the loop that lived here called
+/// `writer.delete_with` once per name: on a floppy nothing reached the file
+/// until the session committed, so a failure partway left the image alone —
+/// and on a large HDF each of those calls was its own committed, journalled
+/// operation, already durable the instant it returned, so the same failure
+/// left the earlier deletes standing. That was ART-073, and it was a defect
+/// in the promise rather than in the path: an API that says all-or-nothing
+/// and means it for one code path is worse than one that says neither.
 ///
-/// The block-journal strategy (large HDFs) cannot make the same promise:
-/// each delete inside the session below is its own committed, journalled
-/// operation, already durable in the file the moment `writer.delete` returns.
-/// An error partway through the loop after the pre-check passed — a name
-/// resolving differently than it did a moment ago, say — still leaves the
-/// earlier deletes standing. Tracked as an open defect rather than fixed
-/// here; see `docs/ISSUES.md`.
+/// [`VolumeWriter::delete_many`] is what closes it. The whole batch
+/// accumulates into one `BlockSet` and one `Allocator`, and one `commit`
+/// journals it — so a failure anywhere rolls the journal back, whatever the
+/// size of the image.
+///
+/// The name pre-check stays, and is not redundant. It runs against a
+/// read-only mount before the writer session opens, so the common refusals —
+/// a name that is not there, a directory with things still in it — are
+/// reported without a journal ever being written. What changed is the
+/// guarantee when something gets past it.
 fn delete_many(
     image: &Path,
     volume_index: usize,
@@ -677,31 +684,30 @@ fn delete_many(
         check_batch_deletable(&device, &geometry, dir, names)?;
     }
 
-    let (outcomes, strategy, backup) = with_volume(image, volume_index, |writer| {
-        let mut outcomes = Vec::with_capacity(names.len());
+    let (outcome, strategy, backup) = with_volume(image, volume_index, |writer| {
+        // Resolve every name to a block *before* deleting any of them, so a
+        // name that will not resolve refuses the batch rather than being
+        // discovered halfway down it.
+        let mut blocks = Vec::with_capacity(names.len());
         for name in names {
             let Some(found) = writer.find(parent, name)? else {
                 return Err(CoreError::InvalidInput(format!(
                     "'{name}' is not in this directory any more"
                 )));
             };
-            outcomes.push(writer.delete_with(parent, found.block, protection)?);
+            blocks.push(found.block);
         }
-        Ok(outcomes)
+        writer.delete_many(parent, &blocks, protection)
     })?;
 
     let block_size = outcome_block_size(image, volume_index);
-    let deleted = outcomes.len();
-    let blocks_touched = outcomes.iter().map(|o| o.blocks_touched).sum();
-    let verified = outcomes.iter().all(|o| o.verified);
-    let free_blocks = outcomes.last().map(|o| o.free_blocks).unwrap_or(0);
 
     Ok(DeleteManyResult {
-        deleted,
-        blocks_touched,
-        free_blocks,
-        free_bytes: free_blocks as u64 * block_size as u64,
-        verified,
+        deleted: names.len(),
+        blocks_touched: outcome.blocks_touched,
+        free_blocks: outcome.free_blocks,
+        free_bytes: outcome.free_blocks as u64 * block_size as u64,
+        verified: outcome.verified,
         strategy: describe(strategy).into(),
         backup,
     })
@@ -4098,5 +4104,162 @@ mod tests {
         assert!(to.listing().is_empty());
 
         let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    // ---- ART-073: all-or-nothing, on a hard disk too ----
+
+    /// An image big enough that the writer takes the **block-journal** path,
+    /// where every operation is durable in the file the moment it returns.
+    ///
+    /// 33 000 blocks is 16.9 MB — just past `WHOLE_FILE_LIMIT_BYTES`, which is
+    /// the smallest image that exercises this path at all. Asserted rather
+    /// than assumed below: a test that silently ran on the whole-file
+    /// strategy would prove the opposite of what it claims.
+    const JOURNAL_BLOCKS: u32 = 33_000;
+
+    /// Give `block` the AmigaDOS `d`-bit-clear treatment: protected against
+    /// deletion, the way a WHDLoad slave ships.
+    fn protect_from_delete(image: &Image, block: u32) {
+        with_writer(&image.path, 0, |writer| {
+            writer.set_attributes(block, Some(1 << 0), None, None)
+        })
+        .unwrap();
+    }
+
+    /// ART-073. The batch pre-check does not look at protection bits, so a
+    /// delete-protected entry is a failure that gets **past** it and lands
+    /// inside the writer — which is exactly the case the old loop could not
+    /// survive on a large image: each `writer.delete_with` was its own
+    /// committed, journalled operation, so the two entries before the
+    /// protected one were already gone from the user's file when the third
+    /// refused.
+    ///
+    /// The assertion that matters is the last one: the image's bytes.
+    #[test]
+    fn a_batch_delete_that_fails_inside_the_writer_deletes_nothing_on_a_journalled_image() {
+        let image = Image::new("delete-many-journal", JOURNAL_BLOCKS);
+        assert_eq!(
+            WriteStrategy::for_image(std::fs::metadata(&image.path).unwrap().len()),
+            WriteStrategy::BlockJournal,
+            "this test is about the journalled path; a smaller image would not reach it"
+        );
+
+        for name in ["First.txt", "Second.txt", "Locked.txt"] {
+            with_writer(&image.path, 0, |writer| {
+                writer.add_file(0, name, b"payload", Default::default())
+            })
+            .unwrap();
+        }
+        let locked = image
+            .listing()
+            .into_iter()
+            .find(|e| e.name == "Locked.txt")
+            .unwrap();
+        protect_from_delete(&image, locked.block);
+
+        let before = image.bytes();
+
+        let err = delete_many(
+            &image.path,
+            0,
+            None,
+            &[
+                "First.txt".to_string(),
+                "Second.txt".to_string(),
+                "Locked.txt".to_string(),
+            ],
+            DeleteProtection::Honour,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("Locked.txt"), "{err}");
+
+        let names: Vec<String> = image.listing().into_iter().map(|e| e.name).collect();
+        assert_eq!(
+            names.len(),
+            3,
+            "a batch that cannot fully succeed deletes nothing: {names:?}"
+        );
+        assert_eq!(
+            image.bytes(),
+            before,
+            "…and the file it could not finish is byte-for-byte what it was"
+        );
+        assert!(
+            find_journal(&image.path).unwrap().is_none(),
+            "the rolled-back journal must not be left behind for the next write to trip on"
+        );
+    }
+
+    /// The other half: it must refuse only what cannot be done. A batch that
+    /// *can* succeed on the journalled path still removes everything it named,
+    /// in one operation.
+    #[test]
+    fn a_batch_delete_that_can_succeed_still_removes_everything_on_a_journalled_image() {
+        let image = Image::new("delete-many-journal-ok", JOURNAL_BLOCKS);
+        for name in ["First.txt", "Second.txt", "Third.txt"] {
+            with_writer(&image.path, 0, |writer| {
+                writer.add_file(0, name, b"payload", Default::default())
+            })
+            .unwrap();
+        }
+        with_writer(&image.path, 0, |writer| writer.make_dir(0, "Keep")).unwrap();
+
+        let result = delete_many(
+            &image.path,
+            0,
+            None,
+            &[
+                "First.txt".to_string(),
+                "Second.txt".to_string(),
+                "Third.txt".to_string(),
+            ],
+            DeleteProtection::Honour,
+        )
+        .unwrap();
+
+        assert_eq!(result.deleted, 3);
+        assert!(result.verified);
+        assert!(
+            result.backup.is_none(),
+            "the journalled path takes no backup — the journal is the way back"
+        );
+
+        let names: Vec<String> = image.listing().into_iter().map(|e| e.name).collect();
+        assert_eq!(names, vec!["Keep".to_string()]);
+        assert!(find_journal(&image.path).unwrap().is_none());
+    }
+
+    /// The same guarantee on the whole-file path, which always had it — kept
+    /// so that closing ART-073 cannot quietly cost the strategy that was
+    /// already correct.
+    #[test]
+    fn a_batch_delete_that_fails_inside_the_writer_deletes_nothing_on_a_floppy_either() {
+        let image = Image::new("delete-many-floppy", 1760);
+        for name in ["First.txt", "Locked.txt"] {
+            with_writer(&image.path, 0, |writer| {
+                writer.add_file(0, name, b"payload", Default::default())
+            })
+            .unwrap();
+        }
+        let locked = image
+            .listing()
+            .into_iter()
+            .find(|e| e.name == "Locked.txt")
+            .unwrap();
+        protect_from_delete(&image, locked.block);
+        let before = image.bytes();
+
+        delete_many(
+            &image.path,
+            0,
+            None,
+            &["First.txt".to_string(), "Locked.txt".to_string()],
+            DeleteProtection::Honour,
+        )
+        .unwrap_err();
+
+        assert_eq!(image.listing().len(), 2);
+        assert_eq!(image.bytes(), before);
     }
 }

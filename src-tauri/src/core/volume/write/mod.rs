@@ -674,6 +674,124 @@ impl<'a> VolumeWriter<'a> {
         )
     }
 
+    /// Delete several entries from one directory as **one** journalled
+    /// operation — all of them, or none of them (ART-073).
+    ///
+    /// Not a loop over [`delete_with`], and that is the entire point. A loop
+    /// gives each delete its own journal and its own commit, so on the
+    /// block-journal strategy each one is already durable in the user's file
+    /// the instant it returns: an error on the seventh name leaves the first
+    /// six gone and no way back. The whole-file strategy hid that, because
+    /// nothing reaches the file there until the session commits — so the
+    /// all-or-nothing promise `commands::volume_write::delete_many` makes was
+    /// true for a floppy and false for a hard disk, which is a defect in the
+    /// promise rather than in the path.
+    ///
+    /// So the whole batch accumulates into one [`BlockSet`] and one
+    /// [`Allocator`], and [`commit`](Self::commit) journals it once. A failure
+    /// anywhere — a protected entry, a directory that is not empty, a name
+    /// that will not resolve, a block that will not write — happens before or
+    /// during that single commit, and `commit` rolls the journal back. Both
+    /// strategies now make the same promise, and it is the strong one.
+    ///
+    /// Reading through `set` rather than the device is what makes the
+    /// accumulation correct: each entry's unlink sees the hash chain as the
+    /// previous unlinks left it, and a directory emptied earlier in the same
+    /// batch reads as empty when its own turn comes.
+    ///
+    /// Duplicate block numbers are dropped rather than refused — the same
+    /// entry named twice is one entry.
+    pub fn delete_many(
+        &mut self,
+        parent: u32,
+        entry_blocks: &[u32],
+        protection: DeleteProtection,
+    ) -> CoreResult<WriteOutcome> {
+        let parent = self.resolve_directory(parent)?;
+        let mut set = BlockSet::new(self.geometry.block_size);
+
+        // One allocator for the batch. Loading it per entry would read the
+        // bitmap back off the device and lose every block the earlier deletes
+        // in this batch had freed.
+        let mut allocator = Allocator::load(self.device, &self.geometry)?;
+        let mut freed_total: Vec<u32> = Vec::new();
+        let mut names: Vec<String> = Vec::new();
+        let mut seen: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+
+        for &entry_block in entry_blocks {
+            if !seen.insert(entry_block) {
+                continue;
+            }
+
+            let entry = set.view(self.device, entry_block)?;
+            let name = dir::name_of(&entry);
+            let is_dir = dir::is_directory(&entry)?;
+
+            if protection == DeleteProtection::Honour {
+                let bits = layout::get_u32(&entry, layout::PROTECT_OFFSET)?;
+                if is_delete_protected(bits) {
+                    return Err(CoreError::InvalidInput(format!(
+                        "'{name}' is protected against deletion on the Amiga. \
+                         Clear its D bit, or confirm deleting it anyway."
+                    )));
+                }
+            }
+
+            if is_dir
+                && !dir::entries_in(self.device, &set, &self.geometry, entry_block)?.is_empty()
+            {
+                return Err(CoreError::InvalidInput(format!(
+                    "'{name}' still has things in it. Empty it first."
+                )));
+            }
+
+            let freed = if is_dir {
+                vec![entry_block]
+            } else {
+                file::blocks_of(self.device, &set, &self.geometry, entry_block)?.all_blocks()
+            };
+
+            dir::unlink_from(
+                self.device,
+                &mut set,
+                &self.geometry,
+                parent,
+                entry_block,
+                &name,
+            )?;
+
+            allocator.free_blocks(&freed);
+            freed_total.extend(freed);
+            names.push(name);
+        }
+
+        if names.is_empty() {
+            return Err(CoreError::InvalidInput(
+                "this operation would change nothing".into(),
+            ));
+        }
+
+        self.stamp_bitmap(&mut set, &allocator, &freed_total)?;
+
+        let description = if names.len() == 1 {
+            format!("Delete {}", names[0])
+        } else {
+            format!("Delete {} entries", names.len())
+        };
+        let gone = names.clone();
+        self.commit(&description, set, move |device, set, geo| {
+            for name in &gone {
+                if dir::find_entry(device, set, geo, parent, name)?.is_some() {
+                    return Err(CoreError::Malformed {
+                        format: "volume".into(),
+                        detail: format!("'{name}' is still listed after being deleted"),
+                    });
+                }
+            }
+            Ok(())
+        })
+    }
+
     /// Rename an entry inside `parent`.
     ///
     /// Unlink, rename, relink — never rename in place. A new name usually

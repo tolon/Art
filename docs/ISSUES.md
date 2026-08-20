@@ -682,28 +682,6 @@ recycle bin versus unlink. Worth doing deliberately, if at all.
 
 Found while building F6 in phase 2b task 3.
 
-**ART-073** 🟡 **`delete_many`'s all-or-nothing guarantee only holds for the whole-file strategy**
-`src-tauri/src/commands/volume_write.rs::delete_many` (line ~505) · The
-pre-check (`check_batch_deletable`) runs once, against a read-only listing,
-before the writer session opens — for a floppy-sized image (the whole-file
-strategy) that is enough: nothing is written until the whole in-memory
-result validates, so a batch that cannot fully succeed leaves the file
-untouched, and every test in this module exercises that path. On a
-block-journal image (a large HDF) each `writer.delete(...)` inside the
-session's loop is its own committed, journalled operation, already durable
-in the file the instant it returns — there is no whole-image commit step to
-refuse at. An error partway through the loop after the pre-check passed
-(a name resolving differently a moment later, say) leaves the earlier
-deletes in the batch standing rather than none of them, breaking the
-all-or-nothing promise the doc comment now qualifies. Reachable in
-principle whenever a batch delete runs against an HDF rather than an ADF.
-Not reachable through the case-different-name path any more —
-`dedupe_case_insensitive` (added in the same pass that found this) closes
-that specific trigger — but the underlying strategy gap is still open. Fix
-would need the block-journal strategy to buffer its own generation of
-deletes behind one commit point the way the whole-file strategy already
-does, which is a real design change, not a one-line fix.
-
 **ART-069** 🔵 **No frontend test renders `FileManager.tsx`**
 `src/pages/FileManager.tsx` · It calls Tauri commands (`onVolumeWriteResult`,
 `onJobProgress`, panel listing, …) on mount, which is why every phase-1a
@@ -787,6 +765,68 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-073** 🟡 **`delete_many`'s all-or-nothing guarantee only holds for the whole-file strategy**
+`src-tauri/src/commands/volume_write.rs::delete_many` (line ~505) · The
+pre-check (`check_batch_deletable`) runs once, against a read-only listing,
+before the writer session opens — for a floppy-sized image (the whole-file
+strategy) that is enough: nothing is written until the whole in-memory
+result validates, so a batch that cannot fully succeed leaves the file
+untouched, and every test in this module exercises that path. On a
+block-journal image (a large HDF) each `writer.delete(...)` inside the
+session's loop is its own committed, journalled operation, already durable
+in the file the instant it returns — there is no whole-image commit step to
+refuse at. An error partway through the loop after the pre-check passed
+(a name resolving differently a moment later, say) leaves the earlier
+deletes in the batch standing rather than none of them, breaking the
+all-or-nothing promise the doc comment now qualifies. Reachable in
+principle whenever a batch delete runs against an HDF rather than an ADF.
+Not reachable through the case-different-name path any more —
+`dedupe_case_insensitive` (added in the same pass that found this) closes
+that specific trigger — but the underlying strategy gap is still open. Fix
+would need the block-journal strategy to buffer its own generation of
+deletes behind one commit point the way the whole-file strategy already
+does, which is a real design change, not a one-line fix.
+
+**Fixed 2026-08-20 on `debt-wave-c1`.** Made true for both strategies rather
+than narrowed in the doc comment: an API that says all-or-nothing and means it
+for one code path is a defect in the promise, not in the path.
+
+`VolumeWriter::delete_many` replaces the loop over `delete_with`. The whole
+batch accumulates into **one** `BlockSet` and **one** `Allocator`, and a single
+`commit` journals it — so a failure anywhere, at any image size, rolls the
+journal back and leaves the file byte-for-byte as it was. What made that
+possible without a redesign was already there: every read inside the writer
+goes through `set.view(device, block)`, so each entry's unlink sees the hash
+chain as the previous unlinks left it, and a directory emptied earlier in the
+same batch reads as empty when its own turn comes. The allocator is loaded
+once for the batch and stamped once at the end — loading it per entry would
+read the bitmap back off the device and lose every block the earlier deletes
+had freed.
+
+The pre-check (`check_batch_deletable`) stays and is not redundant: it runs
+against a read-only mount before the writer session opens, so the ordinary
+refusals cost no journal at all. What changed is the guarantee for whatever
+gets past it.
+
+**Reproduced before it was fixed, on the path that had the defect.** The
+pre-check does not look at protection bits, so a delete-protected entry is a
+failure that reaches the writer. With the old loop restored and the new test
+run against a 16.9 MB image (33 000 blocks — just past
+`WHOLE_FILE_LIMIT_BYTES`, the smallest image that takes the journalled path at
+all), the batch `["First.txt", "Second.txt", "Locked.txt"]` left exactly
+`["Locked.txt"]` on the volume: the two entries before the refusal were
+already durable in the user's file. Restored, all three survive.
+
+Covered by `commands::volume_write::tests::a_batch_delete_that_fails_inside_the_writer_deletes_nothing_on_a_journalled_image`
+(which asserts the image's **bytes**, the listing, and that no rolled-back
+journal is left behind), with
+`…::a_batch_delete_that_can_succeed_still_removes_everything_on_a_journalled_image`
+as the other half — a gate that refused everything would satisfy the first
+test and destroy the feature — and
+`…::a_batch_delete_that_fails_inside_the_writer_deletes_nothing_on_a_floppy_either`
+so that closing this cannot quietly cost the strategy that was already
+correct.
 
 **ART-065** 🟡 **Volume→local multi-select is several concurrent operations, not one**
 `src/pages/FileManager.tsx::copySelectionTo` (line ~1090) · When the source
