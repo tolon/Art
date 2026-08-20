@@ -259,28 +259,6 @@ leave it unrecorded: a hazard predicted before the work and untouched after
 it should be visible in the register of what ART owes, beside ART-157, rather
 than only in a review nobody reads again.
 
-**ART-161** 🔵 **The same disc is fully walked three to four times per
-install, because `scan::identify` opens a `CdSource` to read one string and
-then drops it** — *found 2026-08-19 by the whole-branch review (finding 12)*
-`src-tauri/src/core/osinstall/scan.rs:148` (`identify`) ·
-`src-tauri/src/core/osinstall/apply.rs:301` ·
-
-`CdSource::open` walks a disc's entire directory tree once, at open, and
-holds the result. `scan::identify` opens one purely to read the volume name —
-the one thing `find_media` needs to match a recipe's `media` — and then drops
-the whole walk. `open_media` immediately re-opens and re-walks the same file.
-`find_media` does this for **every** candidate in the media folder (the
-owner's holds four ISOs), and `apply()` does it again per medium, so the
-owner's own 469 MiB disc is walked three to four times in one install.
-
-Not a memory problem and not a correctness problem: every walk is bounded
-(`MAX_WALK_ENTRIES` 100,000, `MAX_WALK_DEPTH` 16, refused rather than
-truncated — ART-158), and the measured cost is inside the ~20 seconds a real
-3.9 build already takes. Low, and recorded rather than fixed because the
-honest fix — letting `identify` answer from a descriptor read alone, or
-handing the already-open source forward instead of a path — is a change to
-`scan.rs`'s contract with both of its callers.
-
 **ART-144** 🔵 **Five minors deferred across collection-wave-c's own review
 rounds, folded into one entry — #4 closed by the whole-branch review's fix
 pass, #1/#2/#3/#5 still open** — *found 2026-08-18, Tasks 3/6/6b/8; filed at
@@ -797,6 +775,74 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-161** 🔵 **The same disc is fully walked three to four times per
+install, because `scan::identify` opens a `CdSource` to read one string and
+then drops it** — *found 2026-08-19 by the whole-branch review (finding 12)*
+`src-tauri/src/core/osinstall/scan.rs:148` (`identify`) ·
+`src-tauri/src/core/osinstall/apply.rs:301` ·
+
+`CdSource::open` walks a disc's entire directory tree once, at open, and
+holds the result. `scan::identify` opens one purely to read the volume name —
+the one thing `find_media` needs to match a recipe's `media` — and then drops
+the whole walk. `open_media` immediately re-opens and re-walks the same file.
+`find_media` does this for **every** candidate in the media folder (the
+owner's holds four ISOs), and `apply()` does it again per medium, so the
+owner's own 469 MiB disc is walked three to four times in one install.
+
+Not a memory problem and not a correctness problem: every walk is bounded
+(`MAX_WALK_ENTRIES` 100,000, `MAX_WALK_DEPTH` 16, refused rather than
+truncated — ART-158), and the measured cost is inside the ~20 seconds a real
+3.9 build already takes. Low, and recorded rather than fixed because the
+honest fix — letting `identify` answer from a descriptor read alone, or
+handing the already-open source forward instead of a path — is a change to
+`scan.rs`'s contract with both of its callers.
+
+**Fixed 2026-08-20 on `debt-wave-b1`**, by the first of the two options the
+entry named — `identify` answers from a descriptor read alone — because it is
+the one that does not change `scan.rs`'s contract with either caller.
+
+`IsoImage::open` reads the volume descriptors and stops; it is what
+`CdSource::open` itself calls first, before the walk. So the volume name still
+comes from **inside** the medium, which is this module's whole rule and is not
+weakened by reading a smaller part of the inside. What is dropped is only the
+walk — and it still happens, exactly once, in `open_media`, for the disc an
+install actually reads.
+
+**Measured against the owner's own ISO folder** (four discs, warm cache,
+2026-08-20, `identify` timed *first* on each file so the walk never inherits a
+cache the descriptor read paid for):
+
+| disc | size | `CdSource::open` | descriptor only |
+|---|---|---|---|
+| `Amiga Developer CD v1.1 …iso` | 58.6 MiB | 146.4 ms | 1.4 ms |
+| `Amiga Developer CD v2.1.iso` | 258.0 MiB | 525.9 ms | 0.8 ms |
+| `AmigaOS3.2CD(ZaP).iso` | 74.3 MiB | 147.8 ms | 0.8 ms |
+| `AmigaOS39.iso` | 468.1 MiB | 188.7 ms | 0.9 ms |
+| **all four** | | **1,008.8 ms** | **3.9 ms** |
+
+Both columns are ART's own code on the owner's own discs, run once and then
+deleted rather than left as a machine-specific test. Note that `AmigaOS39.iso`
+is the *largest* file and not the slowest walk: the cost is the shape of the
+directory tree, not the size of the disc, which is worth knowing before anyone
+optimises the wrong half of it.
+
+**One consequence, deliberately taken and now pinned by a test.** A disc that
+exceeds ART's own walk bounds (`MAX_WALK_ENTRIES`, `MAX_WALK_DEPTH` — ART-158)
+used to be refused inside `identify`, so it vanished from the scan with nothing
+said about it at all. It now identifies normally and is refused **by name**,
+with the same unchanged `LimitExceeded` sentence, at the point something
+actually tries to read its tree. A named refusal a user can read beats a disc
+that silently is not there (§89); only where it surfaces has moved.
+
+**Test:** `a_disc_is_identified_from_its_descriptor_without_walking_its_tree`
+— a synthetic ISO nested seventeen levels deep, one past `MAX_WALK_DEPTH`. It
+asserts first that `CdSource::open` really does refuse it (without that line
+the test would be measuring a disc ART was perfectly happy with, and proving
+nothing), then that `identify` succeeds anyway with the descriptor's own volume
+name, then that the disc reaches `find_media`. Reverting `identify` to
+`CdSource::open` fails it.
+
 
 **ART-170** 🟡 **`collide::preview` can only be asked about a **package**,
 so a release recipe's own layering cannot be previewed at all** — *found

@@ -133,8 +133,7 @@ pub fn open_media(found: &FoundMedia) -> CoreResult<Box<dyn MediaSource>> {
 /// A floppy is tried first: it is the cheaper open (a bounded signature
 /// scan, see the module doc's "Cost" section) and by far the commoner case
 /// in a real media folder — never because a file could plausibly be both.
-/// Anything either refuses (not an Amiga volume at all, an RDB, an ISO
-/// whose walk hit ART's own limits) comes back `None`.
+/// Anything neither reader recognises comes back `None`.
 ///
 /// The one place this decision is made — [`find_media`] calls it once per
 /// candidate in a folder scan, and `apply()` (`core::osinstall::apply`)
@@ -145,18 +144,54 @@ pub fn open_media(found: &FoundMedia) -> CoreResult<Box<dyn MediaSource>> {
 /// order, and `apply()` opened every medium through `AdfSource::open`
 /// unconditionally — which a real AmigaOS 3.9 disc refuses outright
 /// (ART-153).
+///
+/// ## A disc is identified from its descriptor, not from its whole tree
+///
+/// **ART-161.** This used to build a whole [`CdSource`], read one string off
+/// it and drop it — and `CdSource::open` walks the disc's entire directory
+/// tree at open and holds the result. `find_media` does this for *every*
+/// candidate in the folder (the owner's holds four ISOs), `open_media`
+/// immediately re-opens and re-walks whichever one matched, and `apply()`
+/// repeats both per medium, so one 469 MiB disc was fully walked three to
+/// four times per install and three of those walks existed to produce a
+/// volume label.
+///
+/// [`IsoImage::open`] reads the volume descriptors and stops — it is what
+/// `CdSource::open` itself calls first, before the walk — so the label
+/// still comes from **inside** the medium, which is this module's whole
+/// rule and is not weakened by reading a smaller part of the inside. What
+/// is dropped is only the walk.
+///
+/// **Measured against the owner's own ISO folder** (four discs, warm cache,
+/// 2026-08-20, `identify` timed first so the walk never gets a cache the
+/// descriptor read paid for): identifying all four cost 1,008.8 ms through
+/// `CdSource::open` and costs 3.9 ms through the descriptor. Per disc,
+/// `AmigaOS39.iso` (468 MiB) goes from 188.7 ms to 0.9 ms and
+/// `Amiga Developer CD v2.1.iso` (258 MiB) from 525.9 ms to 0.8 ms. The walk
+/// still happens exactly once, in [`open_media`], for the disc an install
+/// actually reads.
+///
+/// **One consequence, deliberately taken.** A disc that exceeds ART's own
+/// walk bounds (`MAX_WALK_ENTRIES`, `MAX_WALK_DEPTH` — ART-158) used to be
+/// refused here and so vanished from the scan with nothing said about it.
+/// It now identifies normally and is refused by name, with the
+/// `LimitExceeded` sentence that explains what happened, at the point
+/// something actually tries to read its tree. A named refusal a user can
+/// read beats a disc that silently is not there (§89), and the refusal
+/// itself is unchanged — only where it surfaces.
 pub fn identify(path: &Path) -> Option<FoundMedia> {
-    let (volume_name, kind) = if let Ok(source) = AdfSource::open(path) {
-        (source.volume_name().to_string(), MediaKind::Floppy)
-    } else if let Ok(source) = CdSource::open(path) {
-        (source.volume_name().to_string(), MediaKind::Disc)
-    } else {
-        return None;
-    };
+    if let Ok(source) = AdfSource::open(path) {
+        return Some(FoundMedia {
+            path: path.to_path_buf(),
+            volume_name: source.volume_name().to_string(),
+            kind: MediaKind::Floppy,
+        });
+    }
+    let image = crate::core::iso::IsoImage::open(path).ok()?;
     Some(FoundMedia {
         path: path.to_path_buf(),
-        volume_name,
-        kind,
+        volume_name: image.volume_name().to_string(),
+        kind: MediaKind::Disc,
     })
 }
 
@@ -606,6 +641,60 @@ mod tests {
             .find(|m| m.volume_name == "AmigaOS3.9")
             .expect("the disc is media");
         assert_eq!(disc.kind, MediaKind::Disc);
+    }
+
+    /// **ART-161.** `identify` reads a disc's name off its volume descriptor
+    /// and does not walk its directory tree.
+    ///
+    /// Proved by handing it a disc whose tree ART refuses to walk: seventeen
+    /// nested directories, one past `MAX_WALK_DEPTH`. `CdSource::open` — the
+    /// old identification path — refuses such a disc outright (ART-158), so
+    /// the two calls below can only disagree if `identify` never reached the
+    /// walk. Revert `identify` to `CdSource::open` and the second assertion
+    /// fails.
+    ///
+    /// It also pins the behaviour change that falls out, rather than leaving
+    /// it to be discovered: a disc past ART's bounds used to vanish from the
+    /// scan with nothing said about it, and is now listed and refused by
+    /// name, with its `LimitExceeded` sentence, when something actually
+    /// tries to read its tree (§89).
+    #[test]
+    fn a_disc_is_identified_from_its_descriptor_without_walking_its_tree() {
+        use crate::core::iso::fixture::{dir, file, IsoBuilder};
+
+        let scratch_dir = scratch("disc-identify-no-walk");
+        // Seventeen levels; MAX_WALK_DEPTH is 16.
+        let mut node = file("DEEP.TXT", "deep.txt", b"bottom");
+        for level in (0..17).rev() {
+            node = dir(&format!("L{level}"), &format!("L{level}"), vec![node]);
+        }
+        let bytes = IsoBuilder {
+            volume: "AmigaOS3.9".to_string(),
+            joliet_volume: "AmigaOS3.9".to_string(),
+            joliet: true,
+            children: vec![node],
+            ..Default::default()
+        }
+        .build();
+        let path = scratch_dir.join("deep.iso");
+        std::fs::write(&path, bytes).unwrap();
+
+        // The walk really is refused — without this the test would pass for
+        // a disc ART was perfectly happy with, and prove nothing.
+        let refusal = CdSource::open(&path).unwrap_err();
+        assert_eq!(refusal.code(), "ART-LIMIT-EXCEEDED", "{refusal}");
+
+        // And the identification succeeds anyway, with the name read from
+        // inside the medium — the descriptor, not the filename.
+        let found = identify(&path).expect("a disc ART cannot walk is still a disc");
+        assert_eq!(found.volume_name, "AmigaOS3.9");
+        assert_eq!(found.kind, MediaKind::Disc);
+
+        // ... and it reaches the folder scan, where it used to be dropped in
+        // silence.
+        let scanned = find_media(&scratch_dir).unwrap();
+        assert_eq!(scanned.len(), 1);
+        assert_eq!(scanned[0].volume_name, "AmigaOS3.9");
     }
 
     /// And a floppy is still a floppy — this must not reclassify what
