@@ -32,6 +32,7 @@
 //! The install runs against a **copy** of the tree, and the copy replaces the
 //! original only when the result says it succeeded (§92).
 
+pub mod run;
 pub mod workvol;
 
 use std::time::Duration;

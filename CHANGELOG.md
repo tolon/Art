@@ -30,6 +30,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **Not yet reachable from the interface** — there is no screen for it and
   no emulator is started. That is the rest of this round.
+- **The run itself: ART now knows how to start such an install, watch it,
+  and stop it.** It reads the small file the Amiga writes as it goes, so it
+  can tell you what happened while the emulator is still on screen. A run
+  always ends and always says which ending it was: it finished, the
+  installer refused, or nobody was there to answer a question it asked —
+  three different answers, because they are fixed by three different
+  things. A run that is waiting on a question does not wait for ever; after
+  a set time ART closes the emulator it opened, and says it timed out
+  rather than pretending it failed or succeeded. Cancelling stops it at the
+  next safe moment and closes the emulator too. ART only ever closes the
+  emulator **it** started — your own WinUAE window is never touched.
+
+  The time limit is a placeholder for now, deliberately generous so a slow
+  but working install is never cut short. It will be replaced with a real
+  measurement of a real update package on real hardware later in this
+  round.
+
+  **Still not reachable from the interface**, and no emulator is started by
+  anything you can click yet.
 - **Each BoingBag now says, in its own recipe, what the Amiga should
   run.** Both point at the `Updater` the package itself carries, with the
   update file it expects — read out of your own archives and out of each

@@ -351,8 +351,78 @@ pub fn generate_uae_config(profile: &AmigaProfile, media: &LaunchMedia) -> CoreR
     Ok(lines.join("\n"))
 }
 
+/// A WinUAE process **ART started**, and therefore the only one ART may end.
+///
+/// It exists because an Amiga-side install has to be able to stop the emulator
+/// when its deadline expires, and a bare pid is not enough to do that safely.
+/// Terminating by pid alone means asking the operating system to kill a number,
+/// and a number can be reused: between the moment ART reads a pid and the
+/// moment it acts on it, the process can exit and the pid be handed to
+/// something else. Holding the [`std::process::Child`] holds the OS handle
+/// too, so [`terminate`](Self::terminate) can only ever reach the process this
+/// struct was created from — never a stranger that inherited its number, and
+/// never a WinUAE the owner started themselves.
+///
+/// Keeping the child also keeps this platform-independent: `Child::kill` and
+/// `Child::try_wait` are `std`, so `core/` needs no Windows API to own a
+/// process it started (the core-independence rule).
+#[derive(Debug)]
+pub struct WinUaeProcess {
+    child: std::process::Child,
+}
+
+impl WinUaeProcess {
+    /// The process id, for reporting. Never terminate by this — see the type's
+    /// own documentation for why the handle is what does that.
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// Whether the process is still alive.
+    ///
+    /// A poll rather than a wait: an Amiga-side install must keep reading the
+    /// result file while the emulator runs, so it can never afford to block on
+    /// the process.
+    pub fn is_running(&mut self) -> CoreResult<bool> {
+        Ok(self.child.try_wait().map_err(CoreError::Io)?.is_none())
+    }
+
+    /// End the process, and reap it.
+    ///
+    /// Idempotent on purpose: a run terminates the emulator on every ending it
+    /// has, including the ones where the emulator has already gone, so "it was
+    /// not there" is a success rather than something to report.
+    pub fn terminate(&mut self) -> CoreResult<()> {
+        if !self.is_running()? {
+            return Ok(());
+        }
+        self.child.kill().map_err(CoreError::Io)?;
+        self.child.wait().map_err(CoreError::Io)?;
+        Ok(())
+    }
+
+    /// Give up ownership: the process keeps running and ART can no longer end
+    /// it. This is what a fire-and-forget launch is, stated as a deliberate
+    /// act rather than left implicit in a dropped handle.
+    pub fn release(self) -> u32 {
+        self.child.id()
+    }
+}
+
+/// Launch WinUAE with a generated configuration, keeping the process.
+///
+/// The sibling of [`launch_winuae`], which throws the handle away. Anything
+/// that has to be able to *stop* the emulator later must use this one.
+pub fn launch_winuae_process(winuae_path: &Path, config_text: &str) -> CoreResult<WinUaeProcess> {
+    launch_winuae_inner(winuae_path, config_text).map(|child| WinUaeProcess { child })
+}
+
 /// Launch WinUAE with a generated configuration.
 pub fn launch_winuae(winuae_path: &Path, config_text: &str) -> CoreResult<u32> {
+    Ok(launch_winuae_process(winuae_path, config_text)?.release())
+}
+
+fn launch_winuae_inner(winuae_path: &Path, config_text: &str) -> CoreResult<std::process::Child> {
     if !winuae_path.is_file() {
         return Err(CoreError::InvalidInput(format!(
             "WinUAE executable not found at '{}'",
@@ -385,7 +455,7 @@ pub fn launch_winuae(winuae_path: &Path, config_text: &str) -> CoreResult<u32> {
         .spawn()
         .map_err(CoreError::Io)?;
 
-    Ok(child.id())
+    Ok(child)
 }
 
 #[cfg(test)]
