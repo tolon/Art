@@ -33,6 +33,7 @@
 //! original only when the result says it succeeded (§92).
 
 pub mod run;
+pub mod stage;
 pub mod workvol;
 
 use std::time::Duration;

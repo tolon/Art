@@ -69,6 +69,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Still not reachable from the interface, and still no emulator: this is
   the declaration, not the run.
+- **The install runs against a copy of your system, never the system
+  itself.** An update package's installer is an Amiga program ART did not
+  write and cannot watch file by file, so ART copies the whole system it
+  built — beside itself, which takes a few seconds for a 19 MB AmigaOS
+  tree — and lets the installer loose on the copy. The copy takes your
+  system's place **only** when the run reports that it succeeded.
+
+  If the run fails, times out, or you close the emulator window, your
+  system is left exactly as it was, down to the last byte, and the copy
+  stays on disk so you can look at what the installer did before it
+  stopped — ART tells you where it is rather than throwing away the
+  evidence. Cancelling throws the copy away and leaves your system alone.
+
+  The moment the copy takes over is two renames and never a delete: your
+  system is moved aside first and removed only once the new one is in
+  place, so there is no instant in which a power cut could leave you with
+  neither.
 
 #### Fixed
 - **A mistyped key in a recipe file is now an error instead of silence.**
