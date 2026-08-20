@@ -26,6 +26,47 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-186** 🟠 **Nothing enforces the BoingBag order, and nothing refuses
+the `Updater` that cannot run under an emulator** — *both established
+2026-08-21 from the owner's own material and sources*
+`src-tauri/src/core/osinstall/package.rs` · `recipes/packages/*.json` ·
+`src-tauri/src/commands/amigainstall.rs`
+
+Two requirements found together, both by opening the material rather than
+reasoning about it.
+
+**1. The chain is mandatory.** A clean AmigaOS 3.9, then BoingBag 1, then
+BoingBag 2, then optionally the community BoingBag 3 and 4 — which state
+their own requirement as "AmigaOS 3.9+BB2". Nothing in ART enforces it: a run
+of BoingBag 2 against a tree BoingBag 1 never touched would be accepted, and
+the result would boot and be quietly wrong. That is the same failure the
+AmigaOS 3.9 round already produced once, when a tree that booted cleanly
+turned out to be 3.5.
+
+The tree already carries the answer — `distribution.json`, written at its root
+by the OS-install engine, records which component and which medium every file
+came from. A recipe declares what it requires; a run whose prerequisite is
+missing is refused **before anything is copied**, naming what is missing and
+in what order.
+
+**2. BoingBag 1's `Updater` predates emulator support.** Measured against the
+owner's downloads: `BoingBag39-1.lha` carries `C/Updater` at **25,588 bytes,
+dated 2001-04-03**; `BoingBag39-1-UAE.lha` carries **25,732, dated
+2001-04-17**, and its readme says plainly *"You can install the BoingBag on
+UAE now."* The fix shipped 2001-04-20, so the owner's copy does not have it.
+This round launches that installer inside an emulator.
+
+Left alone, BoingBag 1 fails under UAE and the script's `If Warn` writes
+`failed` — so ART would report that the installer ran and refused, when it
+ran and could not work. The readme prescribes the remedy itself: copy the one
+file over. **Decided:** the recipe takes `BoingBag39-1-UAE.lha` as a second
+medium overriding `C/Updater`, and ART refuses to run BoingBag 1 with the old
+`Updater` and no overlay rather than launching something known not to work.
+
+Not yet measured, from the same readme: UAE may not present the AmigaOS 3.9
+CD under the name the installer expects, whose documented workaround is a
+manual `Assign AmigaOS3.9:`. Task 7 measures it.
+
 **ART-184** 🟠 **The test fixtures leak a scratch directory per run, for
 ever, and filled a 2 TB drive** — *found 2026-08-20 when the suite began
 failing with `StorageFull`*

@@ -131,6 +131,25 @@ user **"the installer ran and said no"** about a program that never started.
 A wrong sentence delivered confidently is worse than an error, and §89 forbids
 exactly this.
 
+**Order is not advice — added 2026-08-21, from the owner.** The packages are
+a chain: a clean AmigaOS 3.9, then **BoingBag 1, then BoingBag 2**, and only
+then the optional community BoingBag 3 and 4. The forum thread agrees from
+practice ("BB 1-4, one right after the other, all in a row"), and the
+community BB3&4 release states its own requirement as "AmigaOS 3.9+BB2".
+
+Nothing in this design enforced that. A user could have been allowed to run
+BoingBag 2 against a tree BoingBag 1 had never touched, and the result would
+be a system that boots and is quietly wrong — the same failure the AmigaOS 3.9
+round already produced once by shipping a 3.5 tree that booted cleanly.
+
+So a recipe **declares what it requires**, ART reads what a tree has already
+had applied from the `distribution.json` the OS-install engine already writes
+at the tree's root, and a run whose prerequisite is missing is **refused
+before anything is copied** — named, with what is missing and in what order.
+
+This is the same principle as §3's refusals: ART does not run what it cannot
+vouch for, and it says which of the possible reasons applies.
+
 **What ART refuses:**
 
 - A package it ships no recipe for. This round does not make ART able to run
