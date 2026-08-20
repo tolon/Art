@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Installing on the Amiga side — the groundwork (2026-08-20)
+
+#### Added
+- **The first piece of running a package's own installer inside the
+  emulator.** Some update packages cannot be installed by copying files
+  from Windows: the two AmigaOS BoingBags keep their payload locked with a
+  password that lives in the package's own Amiga program, and others
+  install through an Amiga Installer script. ART will run those where they
+  belong — on the emulated Amiga, on a copy of the system it is building,
+  with your own Kickstart. **Nothing is unlocked or worked around**; the
+  package's own installer does what it always did.
+
+  This release carries the part that had to be right first: the small boot
+  disk ART writes for such a run. It boots ART's own instructions rather
+  than your system's, so your `Startup-Sequence` is never read, edited or
+  appended to; it records that a run started *before* the installer begins,
+  so a run that stalls can be told apart from one that never began; it
+  records an outcome whether the installer succeeds or refuses; and if the
+  installer reboots the Amiga, the second boot does not install a second
+  time.
+
+  **Not yet reachable from the interface** — there is no screen for it and
+  no emulator is started. That is the rest of this round.
+
 ### Archive names, drawer names, and a batch of long-standing debt (2026-08-20)
 
 #### Fixed

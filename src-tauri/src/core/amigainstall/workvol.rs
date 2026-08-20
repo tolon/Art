@@ -43,14 +43,55 @@ pub fn result_path(work_volume_dir: &Path) -> PathBuf {
 /// watching the emulator window and answering the question — so ART must not
 /// report them as the same event.
 ///
-/// It is written before the assigns as well as before the installer, and that
-/// ordering is not cosmetic: **ART-118 was exactly a line that could not run**
-/// — AmigaDOS auto-assigns `C:` only when a `C` drawer exists on the boot
-/// volume, ART's own volume has none, and `Assign` itself lives in `C:`, so
-/// the script's first `Assign` failed and dropped the user at a CLI. Every
-/// `Assign` below is therefore something that might not return, and the rule
-/// the research measured — *write the result before anything that might not
-/// return* — puts the marker above all of them.
+/// It is written before every `Assign` invoked *by name* as well as before
+/// the installer, and that ordering is not cosmetic: **ART-118 was exactly a
+/// line that could not run** — AmigaDOS auto-assigns `C:` only when a `C`
+/// drawer exists on the boot volume, ART's own volume has none, and `Assign`
+/// itself lives in `C:`, so the script's first `Assign` failed and dropped
+/// the user at a CLI. Every command that resolves through `C:` is therefore
+/// something that might not return, and the rule the research measured —
+/// *write the result before anything that might not return* — puts the marker
+/// above all of them.
+///
+/// ## Why the fully-qualified `Assign` is the very first command
+///
+/// Exactly one line sits above the marker, and it is the one line that needs
+/// nothing assigned in order to run: `{sys}:C/Assign C: {sys}:C`, which names
+/// the executable by an explicit path on the mounted tree.
+///
+/// It is first because the alternative rests on an assumption this project is
+/// not entitled to make. `FailAt`, `If`/`Else`/`EndIf` and `Echo` are
+/// **Shell-internal** commands rather than files in `C:`, so on a 2.0+ system
+/// they would run above the assign perfectly well — and that is sourced, not
+/// recalled: all three appear in the internal-command list of *AmigaDOS Inside
+/// and Out* (Kerkloh/Tornsdorf/Zoller, 1991,
+/// <https://archive.org/stream/1991-kerkloh-tornsdorf-zoller-amigados-inside-and-out/1991-kerkloh-tornsdorf-zoller-amigados-inside-and-out_djvu.txt>),
+/// and `FailAt` is described as ROM-resident in a 68k AmigaOS developer thread
+/// (<https://www.forums.hollywood-mal.com/viewtopic.php?t=3357>). But that
+/// list is the **AmigaDOS 2.0** one: under 1.3 these were disk commands, and
+/// ART's audience is real hardware including A500s. Two sources that look like
+/// they would settle it do **not** — neither the AmigaOS Documentation Wiki's
+/// *AmigaDOS Advanced Features* page
+/// (<https://wiki.amigaos.net/wiki/AmigaOS_Manual:_AmigaDOS_Advanced_Features>)
+/// nor amigawiki's command list
+/// (<https://amigawiki.org/doku.php?id=en%3Asystem%3Ados_commands_large>)
+/// marks internal versus external at all, so do not re-walk those two
+/// expecting an answer.
+///
+/// Putting the qualified `Assign` first **removes the need to be right about
+/// any of that**: after it, `C:` exists, and every command below resolves
+/// whether it is an internal or a file. The one remaining single point of
+/// failure is that first line, which is fully qualified and therefore works on
+/// 1.3 as well. The same thread carries a related hazard for later tasks in
+/// this round: ROM-resident commands invoked through `Execute()` are reported
+/// to fail on 3.1.4/3.2/3.9 while working on 3.1 — so nothing here should
+/// reach for `Execute`.
+///
+/// The cost is that a failure of that first line leaves no result file at all,
+/// and the host reports "never began". That is the honest report: the run did
+/// not begin. Moving the marker above it would not help, because under the
+/// hazard being guarded against the `Echo` that writes it is the thing that
+/// cannot run.
 ///
 /// ## Why `FailAt 21`
 ///
@@ -75,15 +116,29 @@ pub fn result_path(work_volume_dir: &Path) -> PathBuf {
 /// ## Why the assigns are here at all
 ///
 /// ART's volume booted, so `SYS:` is ART's volume and the tree's commands,
-/// libraries and devices are not reachable by name. The first line invokes
-/// `Assign` by an explicit path on the tree — the one line here that is
-/// certain, because it is ART-118's actual blocker and nothing after it can
-/// run without it. The rest of the set is reasoned rather than measured, the
-/// same standing as its counterpart in
-/// [`crate::core::launch::whdload_boot::startup_sequence`]: `T:` is included
-/// because the Amiga `Installer` writes temporary files there. What a real
-/// `Updater` actually needs is a thing to measure against the owner's own
-/// packages, not to assert here.
+/// libraries and devices are not reachable by name. The `C:` assign is
+/// ART-118's actual measured blocker and nothing after it can run without it;
+/// the rest of the set is reasoned rather than measured, the same standing as
+/// its counterpart in
+/// [`crate::core::launch::whdload_boot::startup_sequence`], and two members of
+/// it are choices rather than transcription:
+///
+/// - **`Assign T: RAM:`, not the conventional `MakeDir RAM:T` +
+///   `Assign T: RAM:T`.** `T:` is here at all because the Amiga `Installer`
+///   writes temporary files to it. It points at the root of `RAM:` so that no
+///   `MakeDir` is needed first: `MakeDir` on a directory that already exists
+///   sets a return code, and this script's entire job is to report a return
+///   code faithfully — a command whose failure is routine has no place above
+///   the installer.
+/// - **`ENV:` and `ENVARC:` are deliberately absent.** A real
+///   `Startup-Sequence` builds `ENV:` in `RAM:` and copies `ENVARC:` into it,
+///   which is several commands whose failure modes have not been measured
+///   here. If an installer turns out to need `ENV:`, the run will say so and
+///   the fix belongs with that measurement — adding it now would be asserting
+///   a need nobody has observed. Do not add it silently.
+///
+/// What a real `Updater` actually needs is a thing to measure against the
+/// owner's own packages, not to assert here.
 pub fn startup_sequence(run: &PlannedRun) -> CoreResult<String> {
     refuse_shell_metacharacters("package id", &run.package_id)?;
     refuse_shell_metacharacters("system volume name", &run.system_volume)?;
@@ -95,6 +150,44 @@ pub fn startup_sequence(run: &PlannedRun) -> CoreResult<String> {
         return Err(CoreError::InvalidInput(
             "an Amiga-side install needs a program to run".into(),
         ));
+    }
+    // An empty `system_volume` is not a harmless blank: it generates
+    // `:C/Assign C: :C` and `Assign SYS: :`, a script that parses cleanly and
+    // assigns nothing — the ART-118 failure shape again, and this time silent.
+    if run.system_volume.trim().is_empty() {
+        return Err(CoreError::InvalidInput(
+            "an Amiga-side install needs the volume its system tree is mounted as".into(),
+        ));
+    }
+    // ART's own volume is not a place the run may reach into. It holds the
+    // script currently executing and the result file the host is waiting on,
+    // so an installer pointed at it could overwrite either — and the second
+    // would make a run report an outcome nothing produced. This is the one
+    // confinement the type can enforce on its own; see `PlannedRun::program`
+    // for the one it cannot.
+    //
+    // AmigaDOS volume names are case-insensitive, so the comparison is too.
+    // It compares **bytes** rather than slicing the `&str`: `value[..7]` would
+    // panic if byte 7 fell inside a multi-byte character, and `panic = "abort"`
+    // in the release profile turns that into a dead application. Amiga file
+    // names are exactly where non-ASCII shows up in this project.
+    let claims_work_volume = |value: &str| {
+        let value = value.trim().as_bytes();
+        let name = WORK_VOLUME.as_bytes();
+        value.eq_ignore_ascii_case(name)
+            || (value.len() > name.len()
+                && value[..name.len()].eq_ignore_ascii_case(name)
+                && value[name.len()] == b':')
+    };
+    for (label, value) in std::iter::once(("installer path", &run.program))
+        .chain(run.args.iter().map(|a| ("installer argument", a)))
+        .chain(std::iter::once(("system volume name", &run.system_volume)))
+    {
+        if claims_work_volume(value) {
+            return Err(CoreError::SafetyRefused(format!(
+                "'{value}' names ART's own work volume; a {label} may not reach into it"
+            )));
+        }
     }
 
     // Each argument is validated on its own above, so joining them here cannot
@@ -112,12 +205,12 @@ pub fn startup_sequence(run: &PlannedRun) -> CoreResult<String> {
 
     Ok(format!(
         "; Written by ART to install '{package}'. One run, then a result.\n\
+         {sys}:C/Assign C: {sys}:C\n\
          FailAt 21\n\
          If EXISTS {work}:{result}\n\
          \x20 Echo \"ART: this install already ran. Not repeating it.\"\n\
          Else\n\
          \x20 Echo >{work}:{result} \"{MARK_STARTED}\"\n\
-         \x20 {sys}:C/Assign C: {sys}:C\n\
          \x20 Assign SYS: {sys}:\n\
          \x20 Assign S: {sys}:S\n\
          \x20 Assign L: {sys}:L\n\
@@ -137,11 +230,18 @@ pub fn startup_sequence(run: &PlannedRun) -> CoreResult<String> {
 
 /// Build ART's own boot volume into `at`.
 ///
-/// `at` must be a directory ART owns and nothing else has put anything in.
-/// The refusal below is not tidiness: `build` writes a `Startup-Sequence`, and
-/// a mistyped path that happened to point at the user's distribution tree
-/// would overwrite theirs. Refusing anything with content in it means the only
-/// directory this can write into is one that was just created for it.
+/// `at` must be absent or **empty**. The refusal below is not tidiness:
+/// `build` writes a `Startup-Sequence`, and a mistyped path that happened to
+/// point at the user's distribution tree would overwrite theirs. Refusing
+/// anything with content in it means the only directory this can write into
+/// holds nothing anyone would miss.
+///
+/// It is deliberately *empty* rather than *freshly created*: ART cannot tell
+/// the two apart without inventing a marker file, and a marker file would
+/// break `the_work_volume_contains_only_what_art_wrote`'s promise that this
+/// volume holds one file and nothing else. An empty directory the caller
+/// prepared is as safe as one `build` made itself — the property that matters
+/// is that nothing is destroyed, and emptiness is exactly that property.
 pub fn build(at: &Path, run: &PlannedRun) -> CoreResult<()> {
     // Validate before touching the filesystem: whether a hostile string is
     // refused must not depend on what happens to be on disk.
@@ -201,6 +301,16 @@ mod tests {
         out
     }
 
+    /// Every whole line strictly above the one carrying the started marker,
+    /// trimmed. Whole lines, because the marker sits mid-line and a byte
+    /// offset would leave half of its own `Echo` looking like a command that
+    /// ran before it.
+    fn lines_above_the_marker(script: &str) -> Vec<&str> {
+        let at = script.find(MARK_STARTED).expect("a started marker");
+        let line_start = script[..at].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        script[..line_start].lines().map(str::trim).collect()
+    }
+
     fn planned(command: &str) -> PlannedRun {
         PlannedRun {
             package_id: "test-pack".to_string(),
@@ -227,12 +337,12 @@ mod tests {
 
         let expected = [
             "; Written by ART to install 'boingbag-39-1'. One run, then a result.",
+            "DH0:C/Assign C: DH0:C",
             "FailAt 21",
             "If EXISTS ARTWork:art-result.txt",
             "  Echo \"ART: this install already ran. Not repeating it.\"",
             "Else",
             "  Echo >ARTWork:art-result.txt \"started\"",
-            "  DH0:C/Assign C: DH0:C",
             "  Assign SYS: DH0:",
             "  Assign S: DH0:S",
             "  Assign L: DH0:L",
@@ -281,15 +391,57 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The marker also precedes every `Assign`, because ART-118 was exactly an
-    /// `Assign` that could not run — so those lines are among the things that
-    /// might not return, not preliminaries that always succeed.
+    /// Exactly one command runs above the started marker, and it is the one
+    /// that needs nothing assigned in order to run.
+    ///
+    /// Every other line resolves through `C:`, so every other line is
+    /// something that might not return — ART-118 was exactly an `Assign` that
+    /// could not run. Putting the fully-qualified `Assign` first means the
+    /// script never depends on which commands a given Kickstart keeps in ROM;
+    /// a line moved across that boundary breaks this test, which is the point
+    /// of it.
     #[test]
-    fn the_started_marker_precedes_the_assigns_as_well() {
+    fn only_the_fully_qualified_assign_runs_above_the_started_marker() {
         let ss = startup_sequence(&planned("PKG:C/Updater")).unwrap();
-        let started = ss.find(MARK_STARTED).expect("a started marker");
-        let first_assign = ss.find("Assign").expect("the assigns");
-        assert!(started < first_assign, "got:\n{ss}");
+
+        let above: Vec<&str> = lines_above_the_marker(&ss)
+            .into_iter()
+            .filter(|l| !l.is_empty() && !l.starts_with(';'))
+            // `Else` and the re-run arm's `Echo` belong to the guard the
+            // marker lives inside, not to the sequence that precedes it.
+            .filter(|l| *l != "Else" && !l.starts_with("Echo \"ART:"))
+            .collect();
+
+        assert_eq!(
+            above,
+            vec![
+                "DH0:C/Assign C: DH0:C",
+                "FailAt 21",
+                "If EXISTS ARTWork:art-result.txt",
+            ],
+            "got:\n{ss}"
+        );
+        assert!(
+            above[0].starts_with("DH0:C/"),
+            "the first command must name its executable by path, not through C:"
+        );
+    }
+
+    /// Every `Assign` invoked *by name* is below the marker, because each of
+    /// them resolves through the `C:` the first line created.
+    #[test]
+    fn the_started_marker_precedes_every_assign_invoked_by_name() {
+        let ss = startup_sequence(&planned("PKG:C/Updater")).unwrap();
+        for line in lines_above_the_marker(&ss) {
+            assert!(
+                !line.starts_with("Assign "),
+                "'{line}' is an Assign by name above the marker:\n{ss}"
+            );
+        }
+        assert!(
+            ss.contains("Assign SYS:"),
+            "the assigns must still happen:\n{ss}"
+        );
     }
 
     /// The script writes an outcome whether the installer succeeded or not.
@@ -409,6 +561,76 @@ mod tests {
         );
     }
 
+    /// An empty `system_volume` is not a blank that formats away: it produces
+    /// `:C/Assign C: :C` and `Assign SYS: :`, a script that parses cleanly and
+    /// assigns nothing. That is ART-118's failure again, and silent this time.
+    #[test]
+    fn a_run_with_no_system_volume_is_refused() {
+        let mut run = planned("PKG:C/Updater");
+        run.system_volume = "  ".to_string();
+        assert!(startup_sequence(&run).is_err());
+    }
+
+    /// ART's own volume holds the script that is running and the result file
+    /// the host is waiting on. An installer pointed at it could overwrite
+    /// either — and overwriting the result would make a run report an outcome
+    /// that nothing produced.
+    #[test]
+    fn nothing_in_the_run_may_name_arts_own_volume() {
+        let mut run = planned(&format!("{WORK_VOLUME}:S/Startup-Sequence"));
+        assert!(startup_sequence(&run).is_err(), "not as the program");
+
+        // AmigaDOS volume names are case-insensitive, so the guard must be.
+        run = planned("artwork:art-result.txt");
+        assert!(startup_sequence(&run).is_err(), "nor in another case");
+
+        run = planned("PKG:C/Updater");
+        run.args = vec![format!("{WORK_VOLUME}:{RESULT_FILE}")];
+        assert!(startup_sequence(&run).is_err(), "nor as an argument");
+
+        run = planned("PKG:C/Updater");
+        run.system_volume = WORK_VOLUME.to_string();
+        assert!(
+            startup_sequence(&run).is_err(),
+            "nor as the volume the tree is mounted as"
+        );
+    }
+
+    /// The guard refuses a *claim on the volume*, not any name that begins
+    /// with the same letters — refusing `ARTWorkbench:` would be a guard that
+    /// grew past what it was for.
+    #[test]
+    fn a_volume_whose_name_merely_starts_the_same_is_not_refused() {
+        startup_sequence(&planned("ARTWorkbench:C/Updater")).unwrap();
+        startup_sequence(&planned("ARTWork-2:C/Updater")).unwrap();
+    }
+
+    /// A non-ASCII name must not be able to kill the application.
+    ///
+    /// The work-volume comparison looks at a fixed number of leading bytes,
+    /// and slicing a `&str` there would panic if the boundary fell inside a
+    /// multi-byte character. `panic = "abort"` in the release profile makes
+    /// that fatal, and non-ASCII AmigaDOS names are a thing this project
+    /// already meets (ART-113).
+    #[test]
+    fn a_non_ascii_name_is_compared_without_panicking() {
+        // The comparison looks at `WORK_VOLUME.len()` == 7 leading bytes, and
+        // this name puts a two-byte character across bytes 6 and 7 — so byte 7
+        // is a continuation byte and not a character boundary. Slicing the
+        // `&str` there panics; comparing the bytes does not.
+        assert_eq!(
+            "Amigatürk".as_bytes()[7],
+            0xbc,
+            "the fixture must straddle the boundary, or it tests nothing"
+        );
+        startup_sequence(&planned("Amigatürk:C/Updater")).unwrap();
+
+        startup_sequence(&planned("türkçe:C/Updater")).unwrap();
+        let mut run = planned("PKG:C/Updater");
+        run.system_volume = "Amigatürk".to_string();
+        startup_sequence(&run).unwrap();
+    }
+
     /// An empty program would produce a script that reports an outcome for an
     /// installer that never ran.
     #[test]
@@ -444,13 +666,32 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The host and the Amiga must agree on one path for the result.
+    /// The host and the Amiga must agree on one file name.
+    ///
+    /// Not `result_path(d) == d.join(RESULT_FILE)`, which only restates the
+    /// implementation and cannot fail. This reads the name back out of the
+    /// script's own redirections and compares it with the name the host will
+    /// poll — so a script that redirected somewhere else, or a `result_path`
+    /// that appended something, breaks it.
     #[test]
-    fn the_result_path_is_the_file_the_script_writes() {
-        let dir = scratch("workvol-result");
+    fn the_host_polls_the_name_the_script_redirects_to() {
         let ss = startup_sequence(&planned("C:Updater")).unwrap();
-        assert!(ss.contains(&format!("{WORK_VOLUME}:{RESULT_FILE}")));
-        assert_eq!(result_path(&dir), dir.join(RESULT_FILE));
-        let _ = std::fs::remove_dir_all(&dir);
+
+        let redirected: Vec<&str> = ss
+            .split('>')
+            .skip(1)
+            .map(|rest| rest.split_whitespace().next().unwrap_or(""))
+            .collect();
+        assert_eq!(redirected.len(), 3, "started, failed and ok:\n{ss}");
+
+        let polled = result_path(Path::new("host-side"));
+        let polled = polled.file_name().unwrap().to_string_lossy();
+        for target in redirected {
+            assert_eq!(
+                target,
+                format!("{WORK_VOLUME}:{polled}"),
+                "the script writes somewhere the host is not looking:\n{ss}"
+            );
+        }
     }
 }

@@ -91,9 +91,23 @@ pub struct PlannedRun {
     /// volume is the one that booted and carries none of them (ART-118).
     pub system_volume: String,
     /// The installer's AmigaDOS path as it will be reachable at run time, e.g.
-    /// `PKG:C/Updater`. Composed at the command layer from the recipe's
-    /// declaration plus the volume ART mounted the package under — translating
-    /// one module's representation into another's is a command-layer job.
+    /// `PKG:C/Updater`.
+    ///
+    /// **This field is unbounded, and that is an obligation on its caller, not
+    /// a property of this type.** It is a whole AmigaDOS path rather than a
+    /// path relative to the package, because a relative path could not express
+    /// an installer reached any other way. What this module enforces is only
+    /// what it can: no shell metacharacters, and no reference to ART's own
+    /// work volume ([`WORK_VOLUME`], where the running script and the result
+    /// file live). It does **not** and cannot check that the path stays inside
+    /// the volume the package was mounted under.
+    ///
+    /// Discharging that is the job of whoever composes this value — the
+    /// command layer, from the recipe's declaration plus the volume ART
+    /// mounted the package under (`commands/amigainstall.rs`, Task 2/3 of this
+    /// round). Translating one module's representation into another's is a
+    /// command-layer job; so is proving the translation stayed in bounds, and
+    /// the test that pins it belongs there too.
     pub program: String,
     /// Arguments, **each a separate string** — never one line to be split, so
     /// nothing can be reinterpreted as a second command.
