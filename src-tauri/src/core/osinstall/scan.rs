@@ -356,16 +356,70 @@ pub fn media_for<'a>(found: &'a [FoundMedia], volume_name: &str) -> MediaMatch<'
     }
 }
 
-/// Resolve a package's own `media` name — its archive's single top-level
-/// directory — against what [`find_packages`] found, with exactly the
-/// semantics [`media_for`] gives a volume name, and for exactly the same
-/// reason: the owner keeps `BoingBag39-2.lha` beside eight language
-/// variants, so two archives claiming one top-level name is a real case that
-/// must be refused by name rather than resolved by whichever sorted first.
-pub fn package_for<'a>(found: &'a [FoundPackage], media: &str) -> MediaMatch<'a, FoundPackage> {
+/// Does `archive` carry `inner` — a path below its own top-level directory?
+///
+/// The second half of a package's identity (ART-167), asked of the archive
+/// itself rather than of its filename. Re-opens the file rather than
+/// caching a listing on [`FoundPackage`] for two reasons: the listing would
+/// have to cross the wire with the rest of that struct (1,112 entries for
+/// the owner's `BoingBag39-1.lha` alone), and asking through
+/// [`MediaSource::entry`] means the path is resolved by the **one** rule
+/// `ArchiveSource` already uses for every `from` in every recipe — exact
+/// first, then `eq_ignore_ascii_case`, whole path, never a prefix. Two of
+/// the eight language drawers are `português` and `português-brasil`, so a
+/// prefix match would hand the first the second's archive.
+///
+/// The cost is bounded by how many archives claim one top-level name: eight
+/// small `.lha`s (18–155 entries each, measured) for `LocaleUpdate`, two for
+/// `BoingBag3.9-2`, one for everything else in the owner's folder.
+///
+/// **An archive that will not re-open answers `true`.** `find_packages`
+/// opened it moments ago, so a failure here is a genuine anomaly — and the
+/// safe direction for an anomaly is to leave the candidate standing, which
+/// keeps a two-candidate name `Ambiguous` (a refusal) instead of letting the
+/// other candidate win by default. A single surviving candidate that cannot
+/// be opened is no loss either: whatever opens it next fails loudly, with a
+/// real error, instead of this function inventing a quiet `Missing`.
+fn archive_carries(archive: &Path, inner: &str) -> bool {
+    let Ok(mut source) = ArchiveSource::open(archive) else {
+        return true;
+    };
+    match source.entry(inner) {
+        Ok(found) => found.is_some(),
+        Err(_) => true,
+    }
+}
+
+/// Resolve a package's own identity against what [`find_packages`] found:
+/// its `media` — the archive's single top-level directory — **and**, when it
+/// declares one, the path that must exist inside the archive
+/// ([`super::package::Package::distinguished_by`]).
+///
+/// Same three-way semantics [`media_for`] gives a volume name, and for the
+/// same reason. What is new is the second filter, and **it is applied
+/// whether or not `media` alone was ambiguous** — see `package.rs`'s
+/// "Identity needs two things" section for the measurement and for why the
+/// always-on form is the point rather than an optimisation missed: eight of
+/// the owner's archives carry `LocaleUpdate`, and with only the German one
+/// present the Turkish package used to resolve to it with no ambiguity to
+/// warn anybody.
+///
+/// Narrowing never picks a winner. Zero survivors is [`MediaMatch::Missing`]
+/// (no archive here is this package's); more than one is
+/// [`MediaMatch::Ambiguous`] over the narrowed list, which the caller turns
+/// into a refusal naming exactly those candidates.
+pub fn package_for<'a>(
+    found: &'a [FoundPackage],
+    media: &str,
+    distinguished_by: Option<&str>,
+) -> MediaMatch<'a, FoundPackage> {
     let matches: Vec<&FoundPackage> = found
         .iter()
         .filter(|f| same_identity(&f.media, media))
+        .filter(|f| match distinguished_by {
+            Some(inner) => archive_carries(&f.path, inner),
+            None => true,
+        })
         .collect();
     match matches.len() {
         0 => MediaMatch::Missing,
@@ -653,13 +707,13 @@ mod tests {
         crate::core::osinstall::fixtures::package_test_archive(&dir, "renamed-by-the-user.zip");
         let found = find_packages(&dir).unwrap();
 
-        match package_for(&found, "TestPack") {
+        match package_for(&found, "TestPack", None) {
             MediaMatch::Found(package) => {
                 assert_eq!(package.path, dir.join("renamed-by-the-user.zip"))
             }
             other => panic!("expected one match, got {other:?}"),
         }
-        assert_eq!(package_for(&found, "NotHere"), MediaMatch::Missing);
+        assert_eq!(package_for(&found, "NotHere", None), MediaMatch::Missing);
     }
 
     /// The real case this enum exists for: one archive beside a copy of
@@ -671,9 +725,174 @@ mod tests {
         crate::core::osinstall::fixtures::package_test_archive(&dir, "b.zip");
         let found = find_packages(&dir).unwrap();
 
-        match package_for(&found, "TestPack") {
+        match package_for(&found, "TestPack", None) {
             MediaMatch::Ambiguous(matches) => assert_eq!(matches.len(), 2),
             other => panic!("expected an ambiguity, got {other:?}"),
+        }
+    }
+
+    // ---- ART-167: identity needs two things --------------------------
+
+    /// One language pack, shaped like the owner's own.
+    ///
+    /// **Measured, not invented** (`scripts/lha-package-identity.py`,
+    /// 2026-08-20, over all 44 `.lha` archives in the owner's package
+    /// folder). Every real one is a level-0 LHA whose names carry the whole
+    /// path in a single field, separated by `\\`, encoded Latin-1, and
+    /// **declaring no directory entry at all** — `BoingBag39-2-turkce.lha`
+    /// is 40 entries and all 40 are files, so `locale/catalogs/türkçe` only
+    /// ever exists because `ArchiveSource::with_implicit_directories`
+    /// synthesises it. A fixture that wrote explicit drawer rows would be
+    /// the more-helpful-than-reality kind: it would resolve without that
+    /// synthesis, which every real archive needs.
+    ///
+    /// The four entries all eight of the real ones share are included for
+    /// the same reason — they are what makes the archives genuinely
+    /// indistinguishable until the language drawer is looked at.
+    fn language_pack(dir: &Path, filename: &str, language: &[u8]) -> PathBuf {
+        let mut catalog: Vec<u8> = b"LocaleUpdate\\locale\\catalogs\\".to_vec();
+        catalog.extend_from_slice(language);
+        catalog.extend_from_slice(b"\\sys\\workbench.catalog");
+
+        let path = dir.join(filename);
+        std::fs::write(
+            &path,
+            crate::core::lha::tests::make_lha_with_raw_names(&[
+                (b"LocaleUpdate.info", b"icon" as &[u8]),
+                (b"LocaleUpdate\\getlocale", b"amiga program"),
+                (b"LocaleUpdate\\Install Locale", b"installer script"),
+                (b"LocaleUpdate\\Install Locale.info", b"icon"),
+                (&catalog, b"catalog bytes"),
+            ]),
+        )
+        .unwrap();
+        path
+    }
+
+    /// The Turkish pack's own drawer name — Latin-1 `türkçe`, the bytes read
+    /// out of the owner's archive header (`74 FC 72 6B E7 65`, the same ones
+    /// `core::lha`'s ART-168 test pins).
+    const TURKCE: &[u8] = &[0x74, 0xFC, 0x72, 0x6B, 0xE7, 0x65];
+    /// `português` — with `português-brasil` built from it below, the pair
+    /// among the real eight that makes a prefix match unsafe.
+    const PORTUGUES: &[u8] = &[0x70, 0x6F, 0x72, 0x74, 0x75, 0x67, 0x75, 0xEA, 0x73];
+
+    /// **ART-167.** Eight of the owner's archives carry `LocaleUpdate`, so a
+    /// top-level directory alone cannot name one — and everything that
+    /// separates them is inside the archive, never in its filename.
+    ///
+    /// The first assertion is this test's own vacuity guard: asked without a
+    /// distinguisher, the same four archives are still `Ambiguous`, which is
+    /// exactly what `package_for` answered before the fix. Revert the second
+    /// filter and that arm keeps passing while every one below fails.
+    #[test]
+    fn eight_archives_claiming_localeupdate_are_separated_by_what_is_inside_them() {
+        let dir = scratch("packages-language-variants");
+        let turkce = language_pack(&dir, "BoingBag39-2-turkce.lha", TURKCE);
+        language_pack(&dir, "BoingBag39-2-deutsch.lha", b"deutsch");
+        let portugues = language_pack(&dir, "BoingBag39-2-portugues.lha", PORTUGUES);
+        let mut brasil = PORTUGUES.to_vec();
+        brasil.extend_from_slice(b"-brasil");
+        let brasil_path = language_pack(&dir, "BoingBag39-2-portugues-brasil.lha", &brasil);
+
+        let found = find_packages(&dir).unwrap();
+        assert_eq!(found.len(), 4, "all four claim one top-level directory");
+        assert!(found.iter().all(|f| f.media == "LocaleUpdate"));
+
+        // Vacuity guard: the pre-fix question still has the pre-fix answer.
+        match package_for(&found, "LocaleUpdate", None) {
+            MediaMatch::Ambiguous(matches) => assert_eq!(matches.len(), 4),
+            other => panic!("without a distinguisher this must stay ambiguous, got {other:?}"),
+        }
+
+        // The Turkish pack, named by the one thing only it carries.
+        match package_for(
+            &found,
+            "LocaleUpdate",
+            Some("locale/catalogs/t\u{FC}rk\u{E7}e"),
+        ) {
+            MediaMatch::Found(package) => assert_eq!(package.path, turkce),
+            other => panic!("expected the Turkish archive, got {other:?}"),
+        }
+
+        // Whole path, never a prefix: `português` must not claim
+        // `português-brasil`'s archive, nor the other way round.
+        match package_for(
+            &found,
+            "LocaleUpdate",
+            Some("locale/catalogs/portugu\u{EA}s"),
+        ) {
+            MediaMatch::Found(package) => assert_eq!(package.path, portugues),
+            other => panic!("expected the Portuguese archive alone, got {other:?}"),
+        }
+        match package_for(
+            &found,
+            "LocaleUpdate",
+            Some("locale/catalogs/portugu\u{EA}s-brasil"),
+        ) {
+            MediaMatch::Found(package) => assert_eq!(package.path, brasil_path),
+            other => panic!("expected the Brazilian archive alone, got {other:?}"),
+        }
+    }
+
+    /// The half of ART-167 that has nothing to do with ambiguity, and the
+    /// reason the second filter runs unconditionally: with only the German
+    /// archive in the folder there is exactly **one** candidate, so
+    /// `package_for` answered `Found` and the Turkish package would have
+    /// been placed out of a German archive with nothing to warn anybody.
+    #[test]
+    fn a_single_candidate_of_the_wrong_variant_is_missing_not_found() {
+        let dir = scratch("packages-wrong-variant-alone");
+        language_pack(&dir, "BoingBag39-2-deutsch.lha", b"deutsch");
+        let found = find_packages(&dir).unwrap();
+
+        // Vacuity guard from the other side: the media name on its own still
+        // resolves, which is precisely the behaviour being corrected.
+        assert!(matches!(
+            package_for(&found, "LocaleUpdate", None),
+            MediaMatch::Found(_)
+        ));
+        assert_eq!(
+            package_for(
+                &found,
+                "LocaleUpdate",
+                Some("locale/catalogs/t\u{FC}rk\u{E7}e")
+            ),
+            MediaMatch::Missing,
+            "a German archive is not the Turkish package's archive"
+        );
+    }
+
+    /// An ambiguity the distinguisher cannot settle stays a refusal naming
+    /// its candidates — never a winner picked by sort order. The realistic
+    /// shape: the same language pack downloaded twice.
+    #[test]
+    fn an_ambiguity_the_distinguisher_cannot_settle_still_names_both() {
+        let dir = scratch("packages-still-ambiguous");
+        let a = language_pack(&dir, "BoingBag39-2-turkce.lha", TURKCE);
+        let b = language_pack(&dir, "BoingBag39-2-turkce (1).lha", TURKCE);
+        // A third archive of another language sits beside them, so this
+        // test is not vacuous: without the second filter the refusal would
+        // name three candidates including a German pack nobody asked for,
+        // and the assertion below would fail.
+        let german = language_pack(&dir, "BoingBag39-2-deutsch.lha", b"deutsch");
+        let found = find_packages(&dir).unwrap();
+
+        match package_for(
+            &found,
+            "LocaleUpdate",
+            Some("locale/catalogs/t\u{FC}rk\u{E7}e"),
+        ) {
+            MediaMatch::Ambiguous(matches) => {
+                let paths: Vec<&PathBuf> = matches.iter().map(|m| &m.path).collect();
+                assert_eq!(paths.len(), 2, "only the two real claimants: {paths:?}");
+                assert!(paths.contains(&&a) && paths.contains(&&b));
+                assert!(
+                    !paths.contains(&&german),
+                    "a refusal must name the candidates, not every archive sharing the name"
+                );
+            }
+            other => panic!("expected both candidates named, got {other:?}"),
         }
     }
 

@@ -361,11 +361,12 @@ pub fn osinstall_packages(package_folder: PathBuf) -> AppResult<Vec<PackageSumma
             // disagree about what "found" means — which is exactly what the
             // old `f.media == p.media` did once `package_for` learnt to
             // fold case (m5).
-            let matched: Vec<&FoundPackage> = match package_for(&found, &p.media) {
-                MediaMatch::Missing => Vec::new(),
-                MediaMatch::Found(one) => vec![one],
-                MediaMatch::Ambiguous(many) => many,
-            };
+            let matched: Vec<&FoundPackage> =
+                match package_for(&found, &p.media, p.distinguished_by.as_deref()) {
+                    MediaMatch::Missing => Vec::new(),
+                    MediaMatch::Found(one) => vec![one],
+                    MediaMatch::Ambiguous(many) => many,
+                };
             PackageSummary {
                 id: p.id,
                 name: p.name,
@@ -552,7 +553,7 @@ fn resolve_package_archive<'a>(
     package: &Package,
     found: &'a [FoundPackage],
 ) -> Result<&'a FoundPackage, RefusalReason> {
-    match package_for(found, &package.media) {
+    match package_for(found, &package.media, package.distinguished_by.as_deref()) {
         MediaMatch::Found(archive) => Ok(archive),
         MediaMatch::Missing => Err(RefusalReason::PackageArchiveMissing {
             package: package.id.clone(),
@@ -1428,21 +1429,39 @@ mod tests {
         }
     }
 
-    /// `locale-turkish`'s own archive, shaped exactly like the real one
-    /// measured against `BoingBag39-2-turkce.lha` (`locale-turkish.json`'s
-    /// own doc comment): loose files (no nested `member`) under
-    /// `locale/catalogs`, lower-case, inside a top-level `LocaleUpdate`
-    /// drawer (the package's own `media`).
+    /// `locale-turkish`'s own archive, shaped like the real one measured
+    /// against `BoingBag39-2-turkce.lha`: loose files (no nested `member`)
+    /// under `locale/catalogs`, lower-case, inside a top-level
+    /// `LocaleUpdate` drawer (the package's own `media`).
+    ///
+    /// **ART-167 corrected this fixture, and the correction is the point.**
+    /// It used to write `LocaleUpdate/locale/catalogs/x.catalog` — a
+    /// catalog sitting directly in `catalogs`, with no language drawer at
+    /// all. No real language pack looks like that: every one of the owner's
+    /// eight puts its catalogs one level deeper, in a drawer named for the
+    /// language (`scripts/lha-package-identity.py`, 2026-08-20), and that
+    /// drawer is the *only* thing separating the eight from each other.
+    /// A fixture without it could never have shown the bug.
+    ///
+    /// Now a real level-0 LHA with Latin-1 names, exactly as the owner's
+    /// archives are — a ZIP with a UTF-8 name would have exercised a
+    /// decoder no real package archive of this kind goes through.
     fn write_locale_turkish_archive(folder: &Path, file_name: &str, catalog_bytes: &[u8]) {
+        let mut catalog: Vec<u8> = b"LocaleUpdate\\locale\\catalogs\\".to_vec();
+        // `türkçe`, Latin-1 — the bytes in the real archive's own header.
+        catalog.extend_from_slice(&[0x74, 0xFC, 0x72, 0x6B, 0xE7, 0x65]);
+        catalog.extend_from_slice(b"\\x.catalog");
         std::fs::write(
             folder.join(file_name),
-            crate::core::archive::zip::tests::make_zip_with(&[(
-                "LocaleUpdate/locale/catalogs/x.catalog",
-                catalog_bytes,
-            )]),
+            crate::core::lha::tests::make_lha_with_raw_names(&[(&catalog, catalog_bytes)]),
         )
         .unwrap();
     }
+
+    /// Where [`write_locale_turkish_archive`]'s one catalog lands on a
+    /// tree, and where the base disc's own copy of it already sits — the
+    /// destination `locale-turkish.json`'s single `subtree` rule produces.
+    const TURKISH_CATALOG_ON_TREE: &str = "Locale/Catalogs/t\u{FC}rk\u{E7}e/x.catalog";
 
     /// The checklist always lists all three shipped packages, and never
     /// claims one is available when its own archive was never provided —
@@ -1453,7 +1472,7 @@ mod tests {
         let dir = scratch("packages-availability");
         let folder = dir.join("packages");
         std::fs::create_dir_all(&folder).unwrap();
-        write_locale_turkish_archive(&folder, "turkish.zip", b"catalog bytes");
+        write_locale_turkish_archive(&folder, "turkish.lha", b"catalog bytes");
 
         let summaries = osinstall_packages(folder).unwrap();
         assert_eq!(summaries.len(), 3, "ART ships exactly three packages today");
@@ -1496,22 +1515,22 @@ mod tests {
     fn osinstall_collisions_previews_a_real_package_against_an_existing_tree() {
         let dir = scratch("collisions-preview");
         let tree = dir.join("tree");
-        std::fs::create_dir_all(tree.join("Locale").join("Catalogs")).unwrap();
-        std::fs::write(
-            tree.join("Locale").join("Catalogs").join("x.catalog"),
-            b"$VER: x.catalog 1.0 (1.1.20)",
-        )
-        .unwrap();
+        let drawer = tree
+            .join("Locale")
+            .join("Catalogs")
+            .join("t\u{FC}rk\u{E7}e");
+        std::fs::create_dir_all(&drawer).unwrap();
+        std::fs::write(drawer.join("x.catalog"), b"$VER: x.catalog 1.0 (1.1.20)").unwrap();
         write_test_manifest(
             &tree,
-            vec![locale_base_file_record("Locale/Catalogs/x.catalog")],
+            vec![locale_base_file_record(TURKISH_CATALOG_ON_TREE)],
         );
 
         let packages_dir = dir.join("packages");
         std::fs::create_dir_all(&packages_dir).unwrap();
         write_locale_turkish_archive(
             &packages_dir,
-            "turkish.zip",
+            "turkish.lha",
             b"$VER: x.catalog 2.0 (1.1.21)",
         );
 
@@ -1526,7 +1545,7 @@ mod tests {
             preview_collisions(&tree, &packages_dir, &ordered, &catalogue, &NoProgress).unwrap();
 
         assert_eq!(reports.len(), 1, "{reports:?}");
-        assert_eq!(reports[0].path, "Locale/Catalogs/x.catalog");
+        assert_eq!(reports[0].path, TURKISH_CATALOG_ON_TREE);
         assert!(
             reports[0].declared,
             "locale-turkish declares overrides: [locale-base]"
@@ -1566,7 +1585,7 @@ mod tests {
         let dir = scratch("preview-cache-reuse");
         let packages_dir = dir.join("packages");
         std::fs::create_dir_all(&packages_dir).unwrap();
-        write_locale_turkish_archive(&packages_dir, "turkish.zip", b"catalog bytes");
+        write_locale_turkish_archive(&packages_dir, "turkish.lha", b"catalog bytes");
 
         let catalogue = package::packages().unwrap();
         let package = catalogue.iter().find(|p| p.id == "locale-turkish").unwrap();
@@ -1623,7 +1642,7 @@ mod tests {
         let dir = scratch("preview-cancel-file-level");
         let packages_dir = dir.join("packages");
         std::fs::create_dir_all(&packages_dir).unwrap();
-        write_locale_turkish_archive(&packages_dir, "turkish.zip", b"catalog bytes");
+        write_locale_turkish_archive(&packages_dir, "turkish.lha", b"catalog bytes");
 
         let catalogue = package::packages().unwrap();
         let package = catalogue.iter().find(|p| p.id == "locale-turkish").unwrap();
@@ -1646,7 +1665,7 @@ mod tests {
         let dir = scratch("preview-cancel-package-level");
         let packages_dir = dir.join("packages");
         std::fs::create_dir_all(&packages_dir).unwrap();
-        write_locale_turkish_archive(&packages_dir, "turkish.zip", b"catalog bytes");
+        write_locale_turkish_archive(&packages_dir, "turkish.lha", b"catalog bytes");
 
         let catalogue = package::packages().unwrap();
         let cancel = crate::core::osinstall::fixtures::CancelAfter::new(0);
@@ -1773,7 +1792,7 @@ mod tests {
 
         let packages_dir = dir.join("packages");
         std::fs::create_dir_all(&packages_dir).unwrap();
-        write_locale_turkish_archive(&packages_dir, "turkish.zip", b"catalog bytes");
+        write_locale_turkish_archive(&packages_dir, "turkish.lha", b"catalog bytes");
 
         let refusals =
             resolve_packages_for_add(&tree, &packages_dir, &["locale-turkish".to_string()])
@@ -1803,7 +1822,7 @@ mod tests {
 
         let packages_dir = dir.join("packages");
         std::fs::create_dir_all(&packages_dir).unwrap();
-        write_locale_turkish_archive(&packages_dir, "turkish.zip", b"catalog bytes");
+        write_locale_turkish_archive(&packages_dir, "turkish.lha", b"catalog bytes");
 
         let resolved =
             resolve_packages_for_add(&tree, &packages_dir, &["locale-turkish".to_string()])
@@ -1811,7 +1830,7 @@ mod tests {
                 .unwrap();
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].0.id, "locale-turkish");
-        assert_eq!(resolved[0].1, packages_dir.join("turkish.zip"));
+        assert_eq!(resolved[0].1, packages_dir.join("turkish.lha"));
     }
 
     /// A missing archive is refused by name, not left for `add_package` to

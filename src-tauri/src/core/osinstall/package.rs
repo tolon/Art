@@ -100,6 +100,69 @@
 //! says "when we land on the same file, mine wins"; the second says "there
 //! is no point in mine at all unless yours is there".
 
+//! ## Identity needs two things, and the measurement is why (ART-167)
+//!
+//! A package's `media` is its archive's **single top-level directory, read
+//! from inside it** — chosen so a file somebody renamed still identifies
+//! itself, exactly as `AdfSource` reads a volume label off a root block and
+//! `CdSource` reads one off a volume descriptor. That rule is not wrong. It
+//! is **not sufficient on its own**, and the owner's own folder is what
+//! proved it. Every `.lha` in the owner's own package folder was walked
+//! (44 of them, `scripts/lha-package-identity.py`, run 2026-08-20) and asked
+//! what top-level directory ART would read from it:
+//!
+//! ```text
+//! LocaleUpdate    claimed by 8 archives  BoingBag39-2-{deutsch,francais,greek,
+//!                                        italiano,polski,portugues,
+//!                                        portugues-brasil,turkce}.lha
+//! BoingBag3.9-2   claimed by 2 archives  BoingBag39-2.lha,
+//!                                        BoingBag39-2-Contribution.lha
+//! ```
+//!
+//! Eight language packs legitimately carry `LocaleUpdate`; the name is the
+//! *product's*, not the variant's. So `scan::package_for` answered
+//! `Ambiguous` for two of the three shipped packages and the Turkish
+//! catalog pack — the owner's own language — could not be selected at all.
+//!
+//! **The tiebreak is not the filename.** The eight were compared entry by
+//! entry (same script): exactly four entries are common to all eight
+//! (`LocaleUpdate.info`, `LocaleUpdate/Install Locale`, that icon, and
+//! `LocaleUpdate/getlocale`), and each carries **one distinct**
+//! `locale/catalogs/<language>` drawer — `türkçe`, `deutsch`, `français`,
+//! `italiano`, `polski`, `português`, `português-brasil`, `greek`. The two
+//! `BoingBag3.9-2` archives separate the same way: `BoingBag39-2.lha`
+//! carries `AmigaOS-Update`, `BoingBag39-2-Contribution.lha` carries
+//! `Contribution` and no payload member at all. **Every collision in the
+//! owner's real folder is resolvable from inside the archive**, so the
+//! identity rule keeps its whole point and simply grows a second fact:
+//! [`Package::distinguished_by`], a path that must exist inside the archive
+//! below its top-level directory.
+//!
+//! Three consequences worth stating, because each is a behaviour change:
+//!
+//! 1. **The check runs whether or not there is a collision.** Filtering only
+//!    when `package_for` already sees two candidates would leave the worse
+//!    half of the bug in place: with only `BoingBag39-2-deutsch.lha` in the
+//!    folder, `locale-turkish` had exactly one candidate and resolved to it
+//!    — a German archive placed for a user who asked for Turkish. Applied
+//!    always, that case is now `Missing`, which is the truth.
+//! 2. **An unresolvable ambiguity stays a refusal naming the candidates.**
+//!    Narrowing that still leaves two is `MediaMatch::Ambiguous` over the
+//!    *narrowed* list; nothing here ever picks a winner.
+//! 3. **`member` is deliberately not reused as the distinguisher**, even
+//!    though `boingbag-39-2` declares the same string for both. They say
+//!    different things and the measurement shows it: `AmigaOS-Update` is
+//!    carried by `BoingBag39-1.lha` **and** `BoingBag39-2.lha`, so as an
+//!    identity it separates nothing — it only works for `boingbag-39-2`
+//!    because the *other* claimant of `BoingBag3.9-2` happens to lack it.
+//!    `member` says where the payload is; `distinguished_by` says which
+//!    archive this is.
+//!
+//! A package whose `media` was unique across all 44 archives —
+//! `boingbag-39-1` — declares no distinguisher. A condition that is not
+//! needed to separate anything can only add a way to refuse an archive that
+//! would have worked, and §89's rule cuts that way too.
+
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use serde::Deserialize;
@@ -129,6 +192,21 @@ pub struct Package {
     /// The member holding the payload, for a package whose files sit inside
     /// a second archive. `None` for loose files at direct paths.
     pub member: Option<String>,
+    /// The second half of this package's identity: a path that must exist
+    /// **inside** the archive, below its top-level directory, for that
+    /// archive to be this package's — `locale/catalogs/türkçe` for the
+    /// Turkish pack, `AmigaOS-Update` for BoingBag 3.9-2.
+    ///
+    /// `None` when `media` alone separates this package from every archive
+    /// a user is likely to hold beside it. See the module doc comment's
+    /// "Identity needs two things" section for the measurement that made
+    /// this field necessary and for why it is not folded into `member`.
+    ///
+    /// Resolved case-insensitively and **as a whole path**, never as a
+    /// prefix — `português` and `português-brasil` are two of the eight
+    /// language drawers, and a prefix match would let the first claim the
+    /// second's archive.
+    pub distinguished_by: Option<String>,
     pub requires: Vec<String>,
     /// Recipe **component** ids this package needs switched on — not
     /// packages; see the module doc comment's "`requires_components` is not
@@ -157,6 +235,8 @@ struct RawPackage {
     media: String,
     #[serde(default)]
     member: Option<String>,
+    #[serde(default)]
+    distinguished_by: Option<String>,
     #[serde(default)]
     requires: Vec<String>,
     #[serde(default)]
@@ -192,6 +272,7 @@ impl RawPackage {
             name: self.name,
             media: self.media,
             member: self.member,
+            distinguished_by: self.distinguished_by,
             requires: self.requires,
             requires_components: self.requires_components,
             host_placement_block: self.host_placement_block,
@@ -423,6 +504,44 @@ mod tests {
         }
     }
 
+    /// **ART-167, as shipped data.** The two packages whose top-level
+    /// directory is claimed by more than one of the owner's archives declare
+    /// the second identity fact; the one whose is unique declares none.
+    ///
+    /// Both directions on purpose. A missing distinguisher is the bug that
+    /// was filed — the Turkish pack unselectable against a real folder — and
+    /// a distinguisher that spread to every package would be the opposite
+    /// bug: a condition that separates nothing can only refuse an archive
+    /// that would have worked.
+    ///
+    /// The strings are the measurement's, not a guess: 44 `.lha` archives
+    /// walked (`scripts/lha-package-identity.py`, 2026-08-20), `LocaleUpdate`
+    /// claimed by eight, `BoingBag3.9-2` by two, `BoingBag3.9-1` by one.
+    #[test]
+    fn only_the_packages_with_a_shared_top_level_directory_declare_a_distinguisher() {
+        assert_eq!(
+            super::by_id("locale-turkish")
+                .unwrap()
+                .distinguished_by
+                .as_deref(),
+            Some("locale/catalogs/t\u{FC}rk\u{E7}e"),
+            "eight archives carry LocaleUpdate; only the language drawer tells them apart"
+        );
+        assert_eq!(
+            super::by_id("boingbag-39-2")
+                .unwrap()
+                .distinguished_by
+                .as_deref(),
+            Some("AmigaOS-Update"),
+            "BoingBag39-2-Contribution.lha carries the same top-level name and no payload"
+        );
+        assert_eq!(
+            super::by_id("boingbag-39-1").unwrap().distinguished_by,
+            None,
+            "its top-level name is unique; a needless condition can only refuse a good archive"
+        );
+    }
+
     /// BoingBag 2 assumes BoingBag 1. Applying them the other way round is a
     /// wrong system, not a warning (spec §8).
     #[test]
@@ -508,6 +627,7 @@ mod tests {
             name: id.to_string(),
             media: "SyntheticMedia".to_string(),
             member: None,
+            distinguished_by: None,
             requires: requires.iter().map(|s| s.to_string()).collect(),
             requires_components: Vec::new(),
             host_placement_block: None,

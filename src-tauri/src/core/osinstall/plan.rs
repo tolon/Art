@@ -891,7 +891,11 @@ pub(super) fn plan_over(
 
                     // Never `if let MediaMatch::Found(..)` — see the module
                     // doc comment; the rule is the enum's, not `FoundMedia`'s.
-                    let archive = match package_for(&found, &package.media) {
+                    let archive = match package_for(
+                        &found,
+                        &package.media,
+                        package.distinguished_by.as_deref(),
+                    ) {
                         MediaMatch::Missing => {
                             refusals.push(RefusalReason::PackageArchiveMissing {
                                 package: package.id.clone(),
@@ -2375,6 +2379,7 @@ mod plan_tests {
             name: id.to_string(),
             media: media.to_string(),
             member: None,
+            distinguished_by: None,
             requires: requires.iter().map(|s| s.to_string()).collect(),
             requires_components: Vec::new(),
             host_placement_block: None,

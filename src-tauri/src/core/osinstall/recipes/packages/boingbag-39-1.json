@@ -27,6 +27,19 @@
   "id": "boingbag-39-1",
   "name": "BoingBag 3.9-1",
   "media": "BoingBag3.9-1",
+  "_why_no_distinguished_by": [
+    "ART-167 gave a package a second identity fact for archives whose",
+    "top-level directory is shared. This one's is not: across all 44 `.lha`",
+    "archives in the owner's package folder, exactly one carries",
+    "`BoingBag3.9-1` (scripts/lha-package-identity.py, 2026-08-20), while",
+    "`LocaleUpdate` is claimed by eight and `BoingBag3.9-2` by two.",
+    "",
+    "So no `distinguished_by` is declared, deliberately. A condition that",
+    "separates nothing cannot help, and it can hurt: a user whose own copy",
+    "is a repack without the exact inner path named here would be told the",
+    "archive is missing when it is not. Spec §89's rule about not",
+    "claiming more than is true cuts this way too."
+  ],
   "member": "AmigaOS-Update",
   "_why_host_placement_block": [
     "ART-166, measured in Task 8's real run and confirmed three independent",

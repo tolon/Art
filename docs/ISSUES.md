@@ -164,49 +164,6 @@ system is not a nicety — see the method note in
 `layer_the_real_39_overlay_when_asked` and in [STATUS.md](STATUS.md).
 
 
-**ART-167** 🟠 **Eight of the owner's archives claim the top-level directory
-`LocaleUpdate` and two claim `BoingBag3.9-2`, so `scan::package_for` correctly
-refuses two of the three shipped packages and nothing in the product can pick
-between the candidates** — *found 2026-08-19 by Task 8's real run, on
-`content-layer`*
-`src-tauri/src/core/osinstall/scan.rs:329` (`package_for`) ·
-`src-tauri/src/commands/osinstall.rs` (`resolve_package_archive`)
-
-`find_packages` identifies 27 archives out of the 58 entries in
-`E:\amiga\Amigatolon\paketler` (0.30 s; the 171 MB `.rar` and both `.7z` files
-among them, so the "skip what cannot be opened" rule holds). Of those:
-
-| package | `media` | `package_for` |
-|---|---|---|
-| `boingbag-39-1` | `BoingBag3.9-1` | `Found` |
-| `boingbag-39-2` | `BoingBag3.9-2` | `Ambiguous` — `BoingBag39-2.lha`, `BoingBag39-2-Contribution.lha` |
-| `locale-turkish` | `LocaleUpdate` | `Ambiguous` — all eight `BoingBag39-2-<language>.lha` |
-
-The refusal itself is right, and `package_for`'s own doc comment predicted this
-exact folder. What is missing is the other half: a package's identity is its
-archive's single top-level directory, and eight different language packs share
-one. Nothing in `plan()` or in the Produce screen lets a user say *which*
-`LocaleUpdate` they mean, so `locale-turkish` cannot be selected at all against
-the owner's real folder — the run only measured it by naming the archive
-outright, which `add_package`'s own contract allows ("`archive` is given, not
-looked up") but no user-facing path offers.
-
-**State: open, and it is the cheapest of this round's four to close** —
-`add_package` already takes a named archive, so what is missing is a way for
-the *user* to name one when `package_for` answers `Ambiguous`: the refusal
-already carries the candidate list, and the screen needs to offer it as a
-choice rather than render it as a dead end.
-
-**What the screen does today, checked in the code rather than assumed:**
-`osinstall_packages` sets `available` with `found.iter().any(|f| f.media ==
-p.media)` (`commands/osinstall.rs`), and all eight language archives *do*
-carry `media == "LocaleUpdate"` — so the package is offered as available, the
-tick is accepted, and the `PackageArchiveAmbiguous` refusal fires when the
-preview or the add resolves the archive. Nothing is ever placed from the
-wrong archive, which is the safer half of getting this wrong, but the user
-meets the dead end one step later than they could.
-
-
 **ART-166** 🔴 **Both BoingBag payload archives are password-encrypted ZIPs, so
 neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task
 8's real run, on `content-layer`*
@@ -917,6 +874,180 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-167** 🟠 **Eight of the owner's archives claim the top-level directory
+`LocaleUpdate` and two claim `BoingBag3.9-2`, so `scan::package_for` correctly
+refuses two of the three shipped packages and nothing in the product can pick
+between the candidates** — *found 2026-08-19 by Task 8's real run, on
+`content-layer`*
+`src-tauri/src/core/osinstall/scan.rs:329` (`package_for`) ·
+`src-tauri/src/commands/osinstall.rs` (`resolve_package_archive`)
+
+`find_packages` identifies 27 archives out of the 58 entries in
+`E:\amiga\Amigatolon\paketler` (0.30 s; the 171 MB `.rar` and both `.7z` files
+among them, so the "skip what cannot be opened" rule holds). Of those:
+
+| package | `media` | `package_for` |
+|---|---|---|
+| `boingbag-39-1` | `BoingBag3.9-1` | `Found` |
+| `boingbag-39-2` | `BoingBag3.9-2` | `Ambiguous` — `BoingBag39-2.lha`, `BoingBag39-2-Contribution.lha` |
+| `locale-turkish` | `LocaleUpdate` | `Ambiguous` — all eight `BoingBag39-2-<language>.lha` |
+
+The refusal itself is right, and `package_for`'s own doc comment predicted this
+exact folder. What is missing is the other half: a package's identity is its
+archive's single top-level directory, and eight different language packs share
+one. Nothing in `plan()` or in the Produce screen lets a user say *which*
+`LocaleUpdate` they mean, so `locale-turkish` cannot be selected at all against
+the owner's real folder — the run only measured it by naming the archive
+outright, which `add_package`'s own contract allows ("`archive` is given, not
+looked up") but no user-facing path offers.
+
+**State: open, and it is the cheapest of this round's four to close** —
+`add_package` already takes a named archive, so what is missing is a way for
+the *user* to name one when `package_for` answers `Ambiguous`: the refusal
+already carries the candidate list, and the screen needs to offer it as a
+choice rather than render it as a dead end.
+
+**What the screen does today, checked in the code rather than assumed:**
+`osinstall_packages` sets `available` with `found.iter().any(|f| f.media ==
+p.media)` (`commands/osinstall.rs`), and all eight language archives *do*
+carry `media == "LocaleUpdate"` — so the package is offered as available, the
+tick is accepted, and the `PackageArchiveAmbiguous` refusal fires when the
+preview or the add resolves the archive. Nothing is ever placed from the
+wrong archive, which is the safer half of getting this wrong, but the user
+meets the dead end one step later than they could.
+
+**Fixed 2026-08-20 on `debt-wave-b1`**, and the measurement came first.
+
+**The census, in full** — every `.lha` in the owner's package folder, walked
+by a parser that is not ART's (`scripts/lha-package-identity.py`, new, sharing
+`lha-header-census.py`'s header reader), asked what top-level directory ART's
+rule reads from inside it:
+
+| archive | top-level directory read from inside |
+|---|---|
+| `3.2/AmigaOs 3.2/NDK3.2/…/wget-1.10.1/doc.lha` | `doc` |
+| `3.2/Update3.2.2.lha` | `Update3.2.2` |
+| `Amelinium.lha` | *refused: no top-level directory* |
+| `AmiSSL-v5-OS3.lha` | `AmiSSL` |
+| `AmiSpeedTest.lha` | `AmiSpeedTest` |
+| `BoingBag39-1.lha` | `BoingBag3.9-1` |
+| `BoingBag39-2-Contribution.lha` | **`BoingBag3.9-2`** |
+| `BoingBag39-2-deutsch.lha` | **`LocaleUpdate`** |
+| `BoingBag39-2-francais.lha` | **`LocaleUpdate`** |
+| `BoingBag39-2-greek.lha` | **`LocaleUpdate`** |
+| `BoingBag39-2-italiano.lha` | **`LocaleUpdate`** |
+| `BoingBag39-2-polski.lha` | **`LocaleUpdate`** |
+| `BoingBag39-2-portugues-brasil.lha` | **`LocaleUpdate`** |
+| `BoingBag39-2-portugues.lha` | **`LocaleUpdate`** |
+| `BoingBag39-2-turkce.lha` | **`LocaleUpdate`** |
+| `BoingBag39-2.lha` | **`BoingBag3.9-2`** |
+| `Dopus5_MagellanII/DopusPDF/dopus_5_pdf_manual.lha` | `dopus_5_pdf_manual` |
+| `Emu68MeterAlpha2.lha` | `Fonts` |
+| `Ethernet.lha` | *refused: no top-level directory* |
+| `Euro-Update.lha` | `Euro-Update` |
+| `IconLib_46.4.lha` | `IconLib_46.4` |
+| `JanoEditor.lha` | `Jano_v1.01` |
+| `LayersBenchMark.lha` | `LayersBenchMark` |
+| `MCP/mcp1_48.lha` | `MCP1.48` |
+| `MCP/mcp1_49cu.lha` | *refused: no top-level directory* |
+| `MUI-5.0-20210831-os3-contrib.lha` | *refused: 4 (Documentation, MUI, ReleaseNotes, SDK)* |
+| `MUI-5.0-20210831-os3-debug.lha` | *refused: no top-level directory* |
+| `MUI-5.0-20210831-os3.lha` | *refused: 2 (MUI, SDK)* |
+| `MUI-5.0-20210831-os4-contrib.lha` | *refused: 4 (Documentation, MUI, ReleaseNotes, SDK)* |
+| `MUI-5.0-20210831-os4-debug.lha` | *refused: no top-level directory* |
+| `MUI-5.0-20210831-os4.lha` | *refused: 2 (MUI, SDK)* |
+| `NDK39.lha` | `NDK_3.9` |
+| `OS39FAQ-english.lha` | `Archives` |
+| `Picasso96/Picasso96-2_1b.lha` | `picasso96install` |
+| `PoseidonV45.lha` | `PoseidonV4` |
+| `SnoopDos.lha` | *refused: no top-level directory* |
+| `amipkg.lha` | *refused: no top-level directory* |
+| `bebbossh.lha` | `bebbossh` |
+| `changebootpri.lha` | *refused: no top-level directory* |
+| `hippoplayer.lha` | *refused: 2 (HippoPlayer, HippoSupport)* |
+| `mui38usr.lha` | `MUI` |
+| `netio-1.33r4.lha` | `netio` |
+| `pfs3aio.lha` | *refused: no top-level directory* |
+| `zenPrismWifi_v0.4.lha` | `zenPrismWifi` |
+
+44 archives, and exactly two names are claimed more than once: `LocaleUpdate`
+by eight, `BoingBag3.9-2` by two. Everything else is unique, which is why the
+identity rule was never in doubt — it is right, and it is not enough.
+
+**What actually distinguishes the eight, and it is not the filename.** The
+same walk compared them entry by entry. Exactly **four** entries are common to
+all eight — `LocaleUpdate.info`, `LocaleUpdate/Install Locale` and its icon,
+and `LocaleUpdate/getlocale` — and each archive carries **one distinct**
+`locale/catalogs/<language>` drawer: `türkçe`, `deutsch`, `français`,
+`italiano`, `polski`, `português`, `português-brasil`, `greek`. (Two of them
+also bring `devs`, `fonts` and a `wbstartup` drawer — greek and polski — but
+the language drawer is the fact common to all eight.) The two `BoingBag3.9-2`
+claimants separate the same way: `BoingBag39-2.lha`'s second level holds
+`AmigaOS-Update`, `C`, `Install`, `Installer`, `Manuals` and `XAD-Update`;
+`BoingBag39-2-Contribution.lha`'s holds `Contribution` and the readmes, and no
+payload member at all.
+
+So **every collision in the owner's real folder is resolvable from inside the
+archive**, and the tiebreak keeps the whole point of the identity rule rather
+than trading it away for a filename match.
+
+**The fix.** A package recipe may declare a second identity fact —
+`Package::distinguished_by`, a path that must exist inside the archive below
+its top-level directory — and `scan::package_for` takes it as a second filter.
+`locale-turkish` declares `locale/catalogs/türkçe`, `boingbag-39-2` declares
+`AmigaOS-Update`, and `boingbag-39-1` declares none, because its top-level name
+is unique across all 44 archives and a condition that separates nothing can
+only refuse an archive that would have worked.
+
+Three properties that are the design rather than the implementation, each with
+its own doc comment in `package.rs`:
+
+1. **The second filter runs whether or not `media` was ambiguous.** That is
+   the worse half of the same bug: with only `BoingBag39-2-deutsch.lha` in the
+   folder there was exactly *one* candidate, so `package_for` answered `Found`
+   and the Turkish package resolved to a German archive with no ambiguity to
+   warn anybody. That case is now `Missing`, which is true.
+2. **Narrowing never picks a winner.** More than one survivor is still
+   `MediaMatch::Ambiguous` over the narrowed list, and the caller still turns
+   it into a refusal naming exactly those candidates.
+3. **`member` is deliberately not reused as the distinguisher**, even though
+   `boingbag-39-2` declares the same string twice. The same census shows why:
+   `AmigaOS-Update` is carried by `BoingBag39-1.lha` *and* `BoingBag39-2.lha`,
+   so as an identity it separates nothing — it settles this pair only because
+   the other claimant of `BoingBag3.9-2` happens to lack it. Folding the
+   fields would encode a coincidence as a rule.
+
+Matching is whole-path and case-insensitive, through `MediaSource::entry` so
+there is one rule rather than a second copy of it — never a prefix, because
+`português` and `português-brasil` are two of the real eight.
+
+**Tests:**
+`eight_archives_claiming_localeupdate_are_separated_by_what_is_inside_them`
+(the four-archive case, including the `português`/`português-brasil` prefix
+hazard), `a_single_candidate_of_the_wrong_variant_is_missing_not_found` (the
+non-ambiguous half), `an_ambiguity_the_distinguisher_cannot_settle_still_names_both`
+(a refusal that names its candidates and no others), and
+`only_the_packages_with_a_shared_top_level_directory_declare_a_distinguisher`
+(the shipped data, asserted in both directions). All four were run with the
+second filter reverted and all four fail — the third only after a
+different-language archive was added beside the two duplicates, because
+without it it passed either way and was measuring nothing.
+
+**A fixture was corrected in the same commit, and it is why the bug could hide.**
+`commands::osinstall::tests::write_locale_turkish_archive` wrote
+`LocaleUpdate/locale/catalogs/x.catalog` — a catalog sitting directly in
+`catalogs`, with no language drawer at all. No real language pack looks like
+that, and a fixture without the drawer could never have shown the collision.
+It is now a real level-0 LHA with Latin-1 names, the shape all eight of the
+owner's archives actually have (40 entries, 40 files, **no directory entries
+at all**, so the drawer exists only because
+`ArchiveSource::with_implicit_directories` synthesises it).
+
+**What is unchanged:** no user-visible string was added, because the refusals
+this narrows to (`PackageArchiveMissing`, `PackageArchiveAmbiguous`) already
+existed with their own translated sentences.
+
 
 **ART-087** 🔵 **Space marks a row but does not compute a directory's size** —
 *found while building phase 2b task 5; fixed 2026-08-20 on `debt-wave-a`*

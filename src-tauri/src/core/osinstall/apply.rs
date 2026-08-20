@@ -4451,7 +4451,11 @@ mod tests {
         named: Option<&str>,
     ) -> Option<PathBuf> {
         use crate::core::osinstall::scan::MediaMatch;
-        match crate::core::osinstall::scan::package_for(found, &package.media) {
+        match crate::core::osinstall::scan::package_for(
+            found,
+            &package.media,
+            package.distinguished_by.as_deref(),
+        ) {
             MediaMatch::Found(archive) => {
                 println!("  package_for('{}') -> Found", package.media);
                 Some(archive.path.clone())
