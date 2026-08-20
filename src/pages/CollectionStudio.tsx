@@ -1007,10 +1007,17 @@ export function CollectionStudio() {
           gap: 14px;
           align-items: start;
         }
-        @media (max-width: 1000px) {
-          .collection-with-detail {
-            grid-template-columns: 1fr;
-          }
+        /* **A class, not a media query** — ART-174, the same defect ART-101
+           fixed in the shell. \`.app-shell\` carries \`zoom\`, so
+           \`@media (max-width: 1000px)\` is evaluated against a window this
+           layout does not live in: at 200 % the shell has 629 px to work with
+           and the query still answers "wide". \`.app-shell-narrow\` is set from
+           \`innerWidth / zoom\` in \`@/lib/appZoom\`, is on an ancestor of this
+           grid, and carries the identical 1000 px threshold
+           (\`SIDEBAR_ICONS_BELOW\`) — so this stacks exactly when the sidebar
+           collapses, which is what the original rule meant. */
+        .app-shell-narrow .collection-with-detail {
+          grid-template-columns: 1fr;
         }
       `}</style>
       <div className={selectedItem ? "collection-with-detail" : undefined}>

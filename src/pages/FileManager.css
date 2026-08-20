@@ -535,28 +535,36 @@
   background: color-mix(in srgb, var(--tc-text) 12%, transparent);
 }
 
-/* Below the width this app already treats as its floor (App layout collapses
-   the sidebar at 1000px), Date and Attr are the first things that can go
-   without losing anything Name/Ext/Size/the row actions need — the row
-   still degrades to a scrollable list rather than clipping. */
-@media (max-width: 1000px) {
-  .tc-row {
-    grid-template-columns: minmax(0, 1fr) 3.3em 8em 4.8em;
-  }
-  .tc-cell-date,
-  .tc-cell-attr {
-    display: none;
-  }
+/* Below the width the design already treats as this screen's floor, Date and
+   Attr are the first things that can go without losing anything
+   Name/Ext/Size/the row actions need — the row still degrades to a scrollable
+   list rather than clipping.
 
-  /* And the F-key strip drops to keycaps alone rather than wrapping or
-     clipping its labels mid-word. Every key stays clickable and every one of
-     them still names itself on hover. */
-  .tc-fnkey-label {
-    display: none;
-  }
-  .tc-fnkey-cap {
-    margin-right: 0;
-  }
+   **A class, not a media query** — ART-174, which is ART-101's defect a second
+   time and then some. The pane lives inside `.app-shell`, which carries
+   `zoom`, so a media query is evaluated against a viewport the layout is not
+   laid out in. Worse here than in the shell: these columns are `em`, and this
+   screen has a *second*, independent zoom of its own (Ctrl+wheel over the
+   listing, `@/lib/dockLayout`), so the question "does this row still fit" has
+   two inputs and a media query can see neither. `paneWidthClasses` asks the
+   pane its measured `offsetWidth` in `em` of its own text instead; the
+   threshold and where it was measured are in that function's own comment. */
+.tc-commander-narrow .tc-row {
+  grid-template-columns: minmax(0, 1fr) 3.3em 8em 4.8em;
+}
+.tc-commander-narrow .tc-cell-date,
+.tc-commander-narrow .tc-cell-attr {
+  display: none;
+}
+
+/* And the F-key strip drops to keycaps alone rather than wrapping or
+   clipping its labels mid-word. Every key stays clickable and every one of
+   them still names itself on hover. */
+.tc-commander-narrow .tc-fnkey-label {
+  display: none;
+}
+.tc-commander-narrow .tc-fnkey-cap {
+  margin-right: 0;
 }
 
 /* ---------------------------------------------------------------------------

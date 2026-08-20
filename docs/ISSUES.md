@@ -73,30 +73,6 @@ will not be able to say what the change is. That is recorded in ART-170's own
 entry and is not this issue's to fix.
 
 
-**ART-174** 🔵 **Two more breakpoints ask the real viewport a question about
-the zoomed layout** — *found 2026-08-20 on `debt-wave-a`, while fixing
-[ART-101](#fixed); filed rather than fixed, a different screen's contract*
-`src/pages/CollectionStudio.tsx:1010` · `src/pages/FileManager.css:542`
-
-ART-101 was the shell's own `@media (max-width: 1000px)`, and it is fixed:
-`.app-shell` carries `zoom`, so a media query is evaluated against a window the
-layout does not live in, and `@/lib/appZoom::shellWidthClasses` now asks
-`innerWidth / zoom` instead. Two other rules in the codebase have the identical
-defect at the identical 1000 px threshold — the Collection Studio's
-detail-pane split, and the file manager's row degrading to fewer columns.
-
-Not fixed here, and not for lack of a mechanism: `.app-shell-narrow` is on an
-ancestor of both, so each is a one-line selector change. The file manager's is
-the reason to stop and think — its widths are in `em` and the commander has its
-*own* independent Ctrl+wheel zoom (`@/lib/dockLayout`), so "how wide is this
-row, really" is a different question there than "how wide is the shell", and
-answering it with the shell's class would be a plausible-looking guess rather
-than a measurement. That wants its own look at the commander, with the
-`scripts/zoom-check.py` measurement the shell's own fix had.
-
-Cost today: the same as ART-101's was — nothing is broken or unreachable, the
-layouts are merely denser than the design intended at 130 % and above.
-
 **ART-171** 🟠 **The content layer's spec §8.3 hazard — `WBStartup` and
 `Devs` arriving on a tree for the first time — was never exercised, because
 no package file ever reached a tree** — *filed 2026-08-19 by the final
@@ -632,6 +608,76 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-174** 🔵 **Two more breakpoints ask the real viewport a question about
+the zoomed layout** — *found 2026-08-20 on `debt-wave-a`; fixed 2026-08-20 on
+`debt-wave-c2`*
+`src/pages/CollectionStudio.tsx` · `src/pages/FileManager.css` ·
+`src/lib/dockLayout.ts` · `src/pages/FileManager.tsx` ·
+`scripts/zoom-check.py`
+
+Both rules were `@media (max-width: 1000px)` and both sat inside `.app-shell`,
+which carries `zoom` — so each asked about a viewport its layout does not live
+in, exactly as [ART-101](#fixed) did. They are fixed differently because they
+are not the same question.
+
+**The Collection Studio's detail split** is the shell's own question, so it
+gets the shell's own answer: `.app-shell-narrow .collection-with-detail`.
+`shellWidthClasses` already computes that class from `innerWidth / zoom` and
+already carries the identical 1000 px threshold (`SIDEBAR_ICONS_BELOW`), so the
+grid now stacks exactly when the sidebar collapses — which is what the original
+rule meant by 1000 px. Verified in headless Chrome at a 1400×900 window,
+driving the real Ctrl+= gesture rather than setting the variable by hand:
+`100% → shellClass=wide cols=712.656px 356.344px`, `180% → shellClass=NARROW
+cols=669.236px` (one track). The old rule could not have fired at any
+Application Size there — the real viewport is 1400 px throughout.
+
+**The commander's row is a different question**, which is why the original
+entry said so. Its columns are `em`, and the screen has a *second* zoom of its
+own (Ctrl+wheel over the listing, `@/lib/dockLayout`), so "does this row still
+fit" has two inputs and a media query can see neither. `scripts/zoom-check.py`
+grew a `--files` pass that measures the pane in **`em` of its own text**, and
+the threshold is that measurement rather than a number picked near it: at the
+Application Size that puts the shell at exactly the old rule's 1000 px
+(zoom 2.575 of a 2575 px window) one pane measures `pane=355px em=12
+pane_in_em=29.58`, so `PANE_NARROW_BELOW_EM = 29.6` — the next tenth above the
+last narrow width. `paneWidthClasses` puts `tc-commander-narrow` on
+`.tc-commander` and the stylesheet's rules moved under it.
+
+**A second measurement changed the implementation.** A `ResizeObserver` alone
+does not see an Application Size change: asked directly, the browser reported
+`after zoom=2 offsetWidth=496 fires=[]` — the pane went from 1131 px to 496 px
+and the observer said nothing. An observer-only fix would have left the
+commander wide at exactly the sizes this issue is about. So the observer stays
+(window resizes, sidebar collapse) and the Application Size gets its own
+re-read on the next frame.
+
+End-to-end in headless Chrome, both real gestures, 2575×1407:
+
+```
+start                      zoom=1   pane=1131 class=wide   fnkeyLabel=block
+after 6x Ctrl+=            zoom=1.6 pane=653  class=wide   fnkeyLabel=block
++ 10x Ctrl+wheel (text up) zoom=1.6 pane=648  class=NARROW fnkeyLabel=none
+back to 100%, text big     zoom=1   pane=1127 class=wide   fnkeyLabel=block
+```
+
+The third line is the case no media query could ever have reached: same
+2575 px window, same pixels, and the row is genuinely out of room.
+
+**Still true afterwards, and recorded rather than fixed:** the wide row's fixed
+columns total 34.9 em, so at 29.6 em they have already stopped fitting — the
+agreed breakpoint is late, not early. Moving it changes *when* the screen
+degrades, which is a design decision and not this issue's, so it is left. It is
+written into `PANE_NARROW_BELOW_EM`'s own doc comment so the next person meets
+it there.
+
+Tests: `src/lib/dockLayout.test.ts` — six new, of which
+`"degrades at exactly the point the media query it replaces did"` pins the
+measured boundary (355 px narrow, 356 px not) and
+`"sees the case the media query was blind to: the text grew, not the window"`
+pins the case the old rule could not answer. Vacuity checked both ways:
+stubbing `paneWidthClasses` to always-wide fails 2, to always-narrow fails 4,
+and the six together fail under one mutation or the other.
 
 **ART-093** 🟡 **ART cannot fetch an Emu68 kernel update; it can only tell you which one you need**
 `core/pistorm/` · `net/` · The fix round's F4 asked for two things. The reading
@@ -2294,7 +2340,7 @@ case is the measured 1258 px window: nothing at 100 %, `app-shell-narrow` at
 three.
 
 Two other rules in the codebase have the same defect at the same threshold;
-filed as [ART-174](#open) rather than changed here, because the file manager's
+filed as [ART-174](#fixed) rather than changed here, because the file manager's
 is not the same question (see that entry).
 
 **ART-107** 🔵 **`scan::gather` drops silently at the depth cap, and counts an

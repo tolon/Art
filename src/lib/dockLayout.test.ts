@@ -9,6 +9,9 @@ import {
   PANE_FONT_DEFAULT,
   PANE_FONT_MAX,
   PANE_FONT_MIN,
+  PANE_NARROW_BELOW_EM,
+  paneWidthClasses,
+  paneWidthInEm,
   stepPaneFontSize,
 } from "@/lib/dockLayout";
 
@@ -85,5 +88,64 @@ describe("the listing's text size", () => {
   it("does not run off either end", () => {
     expect(stepPaneFontSize(PANE_FONT_MIN, -1)).toBe(PANE_FONT_MIN);
     expect(stepPaneFontSize(PANE_FONT_MAX, 1)).toBe(PANE_FONT_MAX);
+  });
+});
+
+describe("how narrow is a pane, really", () => {
+  // Every figure below is from `python scripts/zoom-check.py --files` at the
+  // 2575x1407 window that script already uses. Nothing here is invented; the
+  // probe printed `pane_in_em` and these are those rows.
+
+  it("measures a pane in em of its own text, not in pixels", () => {
+    // The same 355 px pane is roomy at 10 px text and cramped at 16 px, which
+    // is the whole reason a pixel breakpoint could not answer this.
+    expect(paneWidthInEm(356, 10)).toBeCloseTo(35.6, 1);
+    expect(paneWidthInEm(355, 12)).toBeCloseTo(29.58, 1);
+    expect(paneWidthInEm(353, 16)).toBeCloseTo(22.06, 1);
+  });
+
+  it("degrades at exactly the point the media query it replaces did", () => {
+    // Measured: shell width 1000 px (zoom 2.575 of a 2575 px window) puts one
+    // pane at 355 px with the default 12 px listing text. That was the old
+    // `@media (max-width: 1000px)`'s firing point, and it is still the firing
+    // point for a user who has touched neither zoom.
+    expect(paneWidthClasses(355, 12)).toBe("tc-commander-narrow");
+    // One notch wider and it is not narrow. 356 px at 12 px text is 29.67 em,
+    // which is above the threshold: the boundary is where it was measured,
+    // not a round number chosen near it.
+    expect(paneWidthClasses(356, 12)).toBe("");
+  });
+
+  it("leaves a wide window alone at every text size the wheel can reach", () => {
+    // z=1, window 2575: pane 1132..1124 px across 10..28 px text. None of
+    // these is narrow, and none of them was under the old rule either.
+    expect(paneWidthClasses(1132, 10)).toBe("");
+    expect(paneWidthClasses(1131, 12)).toBe("");
+    expect(paneWidthClasses(1124, 28)).toBe("");
+  });
+
+  it("sees the case the media query was blind to: the text grew, not the window", () => {
+    // z=2, window 2575, so the real viewport is 2575 px and the old
+    // `max-width: 1000px` said "wide" at every text size. Measured panes:
+    // 497 px at 10 px text (49.7 em, genuinely wide) and 492 px at 22 px text
+    // (22.36 em, not remotely). Same window, same pixels, opposite answers.
+    expect(paneWidthClasses(497, 10)).toBe("");
+    expect(paneWidthClasses(492, 22)).toBe("tc-commander-narrow");
+    expect(paneWidthClasses(489, 28)).toBe("tc-commander-narrow");
+  });
+
+  it("says nothing before anything has been measured", () => {
+    // The observer has not fired on the first render. Reporting "narrow" for
+    // a width of zero would flash the degraded layout on every mount.
+    expect(paneWidthClasses(0, 12)).toBe("");
+    expect(paneWidthClasses(-1, 12)).toBe("");
+  });
+
+  it("does not divide by a font size the settings file could not produce", () => {
+    // A hand-edited `settings.json` can carry 0 here; `clampPaneFontSize`
+    // is what keeps this from returning Infinity and calling every pane wide.
+    expect(Number.isFinite(paneWidthInEm(355, 0))).toBe(true);
+    expect(paneWidthInEm(355, 0)).toBe(355 / PANE_FONT_MIN);
+    expect(PANE_NARROW_BELOW_EM).toBeGreaterThan(0);
   });
 });

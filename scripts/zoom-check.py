@@ -22,6 +22,13 @@ Usage:
 
     pnpm dev                     # in another terminal
     python scripts/zoom-check.py
+    python scripts/zoom-check.py --files
+
+`--files` measures the commander instead (ART-174). It prints, per Application
+Size and per listing text size, how wide one pane is **in `em` of its own
+text** — because that, and not the window's width, is what decides whether a
+`.tc-row`'s `em` columns still fit. It reports rather than judges: there is no
+overflow to fail on, only the number the breakpoint is calibrated against.
 
 Requires Chrome (or Edge) and nothing else — no Playwright, no extra
 dependency in package.json. The page measures itself and Chrome's `--dump-dom`
@@ -46,9 +53,19 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # Every screen that is a plain page. The Files screen opts out of the centred
 # column (`.app-content-wide`) and is measured by its own pane rules, so it is
-# not part of this question.
+# not part of this question — it has its own pass below (`--files`).
 ROUTES = ["#/", "#/settings", "#/hard-disk", "#/pistorm", "#/aminet", "#/rom", "#/collection", "#/os-builder"]
 ZOOMS = [1, 1.3, 2]
+
+# The commander's own question, and it is a different one (ART-174). A
+# `.tc-row`'s columns are `em`, not px, because the listing's text size is a
+# setting in its own right (`@/lib/dockLayout`) — so "is this row cramped"
+# depends on two things the shell's own breakpoint knows nothing about: the
+# Application Size the shell is zoomed to, *and* how big the user made the
+# listing's text. The number that matters is neither the window's width nor
+# the pane's width in pixels but **the pane's width in `em` of its own text**,
+# which is what this pass prints.
+PANE_FONTS = [10, 12, 16, 22, 28]
 
 # The user's own window, maximised, from ART-099. Measuring at a small default
 # would miss what a real screen does.
@@ -103,6 +120,45 @@ MEASURE_JS = """
 })()
 """
 
+FILES_JS = """
+(async () => {
+  const out = [];
+  const n = (x) => Math.round(x * 100) / 100;
+  location.hash = "#/files";
+  await new Promise((r) => setTimeout(r, 1200));
+  const grid = document.querySelector(".tc-pane-grid");
+  const pane = document.querySelector(".tc-pane");
+  // A `.tc-row` only exists once a folder is open, and this probe opens
+  // none — so the `em` is read off the pane, which inherits the same
+  // `--tc-font-size` the rows resolve their columns against.
+  if (!grid || !pane) return "NO-COMMANDER (grid=" + !!grid + " pane=" + !!pane + ")";
+  const host = document.querySelector("[style*='--tc-font-size']");
+  if (!host) return "NO-FONT-HOST";
+  for (const z of __ZOOMS__) {
+    document.documentElement.style.setProperty("--app-zoom", String(z));
+    for (const f of __FONTS__) {
+      host.style.setProperty("--tc-font-size", f + "px");
+      document.body.offsetHeight;
+      await new Promise((r) => setTimeout(r, 60));
+      // `getBoundingClientRect` reports in the *outer* coordinate space, so a
+      // zoomed pane measures small there. `offsetWidth` is the layout's own
+      // pixel, which is the one the `em` columns are resolved against.
+      const paneW = pane.offsetWidth;
+      const em = parseFloat(getComputedStyle(pane).fontSize);
+      out.push([
+        "z=" + z, "font=" + f + "px",
+        "pane=" + paneW + "px",
+        "em=" + n(em),
+        "pane_in_em=" + n(paneW / em),
+      ].join(" "));
+    }
+  }
+  document.documentElement.style.removeProperty("--app-zoom");
+  host.style.removeProperty("--tc-font-size");
+  return out.join("\\n");
+})()
+"""
+
 PROBE_HTML = """<!doctype html>
 <html lang="en"><head><meta charset="UTF-8" /><title>zoom-check</title></head>
   <body>
@@ -143,6 +199,8 @@ def main() -> int:
         print(f"No dev server at {DEV_URL}. Start one with `pnpm dev` and run this again.")
         return 2
 
+    # `--files` measures the commander instead of the plain pages (ART-174).
+    files_pass = "--files" in sys.argv
     browser = find_browser()
 
     # Served by Vite from the project root, and removed afterwards whatever
@@ -151,7 +209,11 @@ def main() -> int:
     js = ROOT / "__zoom-check.js"
     html.write_text(PROBE_HTML, encoding="utf-8")
     js.write_text(
-        MEASURE_JS.replace("__ROUTES__", repr(ROUTES)).replace("__ZOOMS__", repr(ZOOMS)),
+        (
+            FILES_JS.replace("__ZOOMS__", repr(ZOOMS)).replace("__FONTS__", repr(PANE_FONTS))
+            if files_pass
+            else MEASURE_JS.replace("__ROUTES__", repr(ROUTES)).replace("__ZOOMS__", repr(ZOOMS))
+        ),
         encoding="utf-8",
     )
 
@@ -187,6 +249,12 @@ def main() -> int:
     body = match.group(1).strip()
     print(f"Window {WINDOW[0]}x{WINDOW[1]}\n")
     print(body)
+
+    if files_pass:
+        # No pass/fail here: this pass *reports* the commander's measurement
+        # (ART-174) rather than judging it. `pane_in_em` is the number the
+        # breakpoint in `@/lib/dockLayout` is calibrated against.
+        return 0
 
     # `over` above zero is the whole point: content the user cannot see. Since
     # ART-099 it is reachable — `.app-content` scrolls sideways — but a screen

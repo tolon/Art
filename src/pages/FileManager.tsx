@@ -94,6 +94,7 @@ import {
   commandLineFontSize,
   DOCK_MIN_HEIGHT,
   PANE_FONT_DEFAULT,
+  paneWidthClasses,
   stepPaneFontSize,
 } from "@/lib/dockLayout";
 import { deleteProtectedNames, isDeleteProtected } from "@/lib/protection";
@@ -699,6 +700,73 @@ export function FileManager() {
   );
   const [dragHeight, setDragHeight] = useState<number | null>(null);
   const commandLineHeight = dragHeight ?? savedCommandLineHeight;
+
+  /**
+   * How wide one pane actually is, in the zoomed pixels it is laid out in
+   * (ART-174).
+   *
+   * **Measured, not computed.** The pane sits under two independent zooms —
+   * the shell's Application Size and this screen's own Ctrl+wheel text size —
+   * so nothing about the window says how much room a `.tc-row`'s `em` columns
+   * have. `offsetWidth` resolves in the same coordinate space those columns
+   * do, and a `ResizeObserver` is what reports it: a `resize` listener would
+   * miss the sidebar collapsing, and a media query cannot see either zoom at
+   * all, which was the whole defect.
+   *
+   * The two panes are the same width by construction (`.tc-pane-grid` is
+   * `minmax(0, 1fr) auto minmax(0, 1fr)`), so measuring the first answers for
+   * both.
+   *
+   * **Two triggers, because one is not enough, and that was measured too.**
+   * `python scripts/zoom-check.py`'s browser was asked directly whether a
+   * `ResizeObserver` fires when only the Application Size changes:
+   *
+   * ```
+   * after zoom=2 offsetWidth=496  fires=[]
+   * after zoom=3 offsetWidth=285  fires=["287/289"]
+   * ```
+   *
+   * The pane went from 1131 px to 496 px and the observer said nothing. So an
+   * observer alone would have left the commander in its wide layout at exactly
+   * the Application Size this issue is about — the original bug wearing a new
+   * hat. The observer stays, because it is what catches the window resizing
+   * and the sidebar collapsing; the Application Size gets its own re-read, on
+   * the frame after the change, since `--app-zoom` is applied by `Layout`'s
+   * own effect and a child's effect runs before its parent's.
+   */
+  const appZoom = useSettingsStore((s) => s.settings.appZoom);
+  const commanderRef = useRef<HTMLDivElement | null>(null);
+  const paneRef = useRef<HTMLElement | null>(null);
+  const [paneWidth, setPaneWidth] = useState(0);
+
+  const measurePane = useCallback(() => {
+    const pane = paneRef.current;
+    if (pane) setPaneWidth(pane.offsetWidth);
+  }, []);
+
+  useEffect(() => {
+    const commander = commanderRef.current;
+    if (!commander) return;
+    const pane = commander.querySelector<HTMLElement>(".tc-pane");
+    if (!pane) return;
+    paneRef.current = pane;
+    measurePane();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measurePane);
+    observer.observe(pane);
+    return () => observer.disconnect();
+  }, [measurePane]);
+
+  useEffect(() => {
+    if (typeof requestAnimationFrame === "undefined") {
+      measurePane();
+      return;
+    }
+    const frame = requestAnimationFrame(measurePane);
+    return () => cancelAnimationFrame(frame);
+  }, [appZoom, measurePane]);
+
+  const commanderWidthClasses = paneWidthClasses(paneWidth, paneFontSize);
   const colourRules: ColourRule[] = isUsableRuleList(storedColourRules)
     ? storedColourRules
     : DEFAULT_COLOUR_RULES;
@@ -3745,7 +3813,8 @@ export function FileManager() {
        * one status strip inside the dock now.
        */}
       <div
-        className="tc-commander"
+        ref={commanderRef}
+        className={`tc-commander${commanderWidthClasses ? ` ${commanderWidthClasses}` : ""}`}
         style={{ ["--tc-font-size" as string]: `${paneFontSize}px` } as React.CSSProperties}
         // Ctrl+wheel over the commander resizes its text — the gesture every
         // browser, editor and map application already taught everyone. Without
