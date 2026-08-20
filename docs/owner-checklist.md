@@ -27,14 +27,25 @@ hiçbir şey açıklamayan bir alan. İkisini de hiçbir test bulmamıştı.
 4. **BoingBag satırlarına özellikle bak.** İşaretlenememeleri ve yanlarında
    Türkçe bir cümle olması gerekiyor — o cümle paketin kendi Amiga tarafındaki
    `Updater`'ını adlandırmalı.
-5. **Türkçe paketini** işaretle, önizlemeye bak.
+5. **Türkçe paketini işaretle** ve önizlemeye bak. Bunun ayrı bir hikâyesi
+   var: ilk ölçümde seçilemiyordu, çünkü sekiz dil varyantının hepsi arşivin
+   içinde `LocaleUpdate` adını taşıyor ve ART hangisinin hangisi olduğunu
+   ayırt edemiyordu. Artık kimlik iki şeye bakıyor — üst düzey klasör **artı**
+   arşiv içinde bildirilmiş bir yol. Yani **bu satırın seçilebilir olması ve
+   Türkçe olanı getirmesi** doğrulanacak şeyin kendisi. Önizlemede
+   `Locale/Catalogs/TÜRKÇE` altında dosyalar görmelisin.
 6. Panelin altındaki "ART yalnızca tarifi olan paketleri kurar" cümlesini oku
    — **anlaşılır mı?** Kendi arşivin teklif edilmiyorsa bunun neden olduğunu
    söylüyor mu?
+7. **Bir kurulum yap ve sonucuna bak.** Sizin diskinizde ölçüldü: 3.9 tabanı
+   `workbench-base` + `locale-base` + `workbench-39` ile geliyor, ve
+   `workbench-39` katmanı 622 yeni dosya, 19 yükseltme, 0 düşürme üretiyor.
+   Önizleme bunu **sınıflara ayırarak** göstermeli, düşürmeler en üstte.
 
 **Tamam sayılır:** Hangi paketlerin sunulduğunu, hangilerinin neden
-sunulmadığını ekrana bakarak anlayabildiysen. Bir yerde "bu ne demek şimdi?"
-dediysen, orası bir kusurdur — bana söyle.
+sunulmadığını ekrana bakarak anlayabildiysen, **ve Türkçe paketi gerçekten
+seçilip önizlenebiliyorsa.** Bir yerde "bu ne demek şimdi?" dediysen, orası
+bir kusurdur — bana söyle.
 
 ---
 
