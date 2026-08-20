@@ -117,7 +117,6 @@ use std::path::Path;
 use serde::Serialize;
 
 use super::apply::{DistributionManifest, MANIFEST_FILE_NAME};
-use super::package;
 use crate::core::amigaver;
 use crate::core::error::{CoreError, CoreResult};
 
@@ -502,6 +501,17 @@ pub fn preview(tree_root: &Path, incoming: &[Incoming<'_>]) -> CoreResult<Vec<Co
 /// sets `component.id` to it) — declares, in its own `overrides`, the
 /// component that put the existing file at `to` there.
 ///
+/// **Resolved against every shipped component, release and package alike
+/// (ART-170).** This used to go through `package::by_id` alone, which was
+/// right for the only caller it had and made the function unusable for the
+/// other half of the same question: a release recipe's own layering could
+/// not be previewed at all, and AmigaOS 3.9 has one that genuinely matters —
+/// `workbench-39` over `workbench-base`, the component that turns a
+/// `Workbench 44.5` tree into `Workbench 45.1`. `overrides` already crosses
+/// the boundary in both directions (`locale-turkish`, a package, declares
+/// the release component `locale-base`), so reading it from one catalogue
+/// was never the whole answer.
+///
 /// The owner is read from `distribution.json`, never guessed (§89):
 /// measured directly, both shipped BoingBags declare
 /// `overrides: ["workbench-base"]` and 100% of their files land on paths
@@ -552,13 +562,13 @@ fn declared_override(
         return Ok(false);
     };
 
-    let package = package::by_id(component).map_err(|err| {
+    let overrides = super::recipe::shipped_component_overrides(component).ok_or_else(|| {
         CoreError::InvalidInput(format!(
-            "'{component}' does not name a shipped package, so ART cannot say whether it \
-             declared an override for '{to}': {err}"
+            "'{component}' does not name a shipped component or package, so ART cannot say \
+             whether it declared an override for '{to}'"
         ))
     })?;
-    Ok(package.component.overrides.iter().any(|over| over == owner))
+    Ok(overrides.iter().any(|over| over == owner))
 }
 
 // ---------------------------------------------------------------------------
@@ -916,8 +926,60 @@ mod tests {
         assert!(reports[0].declared, "workbench-base is workbench-base");
     }
 
-    /// Fix round 1, F5 — an id that names no shipped package is refused,
-    /// not silently read as "nothing declared".
+    /// **ART-170.** The same question asked about a *release recipe's own*
+    /// component, which `preview` could not answer at all: `declared_override`
+    /// resolved the incoming id through `package::by_id`, so a component id
+    /// that is not a package's was refused by name.
+    ///
+    /// The pair asserted here is the real one, not a synthetic id:
+    /// AmigaOS 3.9's `workbench-39` declares `overrides: ["workbench-base",
+    /// "locale-base"]`, and it is the component that turns a `Workbench 44.5`
+    /// tree into `Workbench 45.1` — the single layering in shipped data that
+    /// most needs previewing.
+    ///
+    /// Both directions in one test, because `declared` is only useful if it
+    /// varies: `workbench-base` is declared, and an owner the same component
+    /// does *not* name is not. Before the fix neither line was reached — the
+    /// call returned `Err`.
+    #[test]
+    fn a_release_recipes_own_component_can_be_asked_about_too() {
+        let dir = fixtures::scratch("collide-recipe-component");
+        let tree = dir.join("tree");
+        std::fs::create_dir_all(tree.join("Libs")).unwrap();
+        std::fs::write(tree.join("Libs").join("x.library"), b"old library bytes").unwrap();
+        write_manifest(&tree, "Libs/x.library", "workbench-base");
+
+        let incoming_path = dir.join("incoming-library");
+        std::fs::write(&incoming_path, b"new library bytes, longer").unwrap();
+
+        let item = incoming("workbench-39", &incoming_path, "Libs/x.library");
+        let reports = preview(&tree, std::slice::from_ref(&item)).unwrap();
+        assert_eq!(reports.len(), 1);
+        assert!(
+            reports[0].declared,
+            "workbench-39 declares overrides: [workbench-base, locale-base]"
+        );
+
+        // The other side of the same column, so a `declared` that were simply
+        // always true would fail here.
+        let other = dir.join("tree-other");
+        std::fs::create_dir_all(other.join("Libs")).unwrap();
+        std::fs::write(other.join("Libs").join("x.library"), b"old library bytes").unwrap();
+        write_manifest(&other, "Libs/x.library", "boingbag-39-1");
+        let item = incoming("workbench-39", &incoming_path, "Libs/x.library");
+        let reports = preview(&other, std::slice::from_ref(&item)).unwrap();
+        assert_eq!(reports.len(), 1);
+        assert!(
+            !reports[0].declared,
+            "workbench-39 does not name boingbag-39-1"
+        );
+    }
+
+    /// Fix round 1, F5 — an id that names nothing shipped is refused, not
+    /// silently read as "nothing declared". Still true after ART-170 widened
+    /// the lookup to every release component as well as every package: the
+    /// union is bigger, and an id outside it is still an inconsistency in
+    /// whatever built the item rather than a fact about the file.
     #[test]
     fn an_unresolvable_component_id_is_refused_rather_than_read_as_undeclared() {
         let dir = fixtures::scratch("collide-unresolvable-component");

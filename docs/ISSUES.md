@@ -115,55 +115,6 @@ outlives that fix, and nothing in the record would otherwise say that the
 cleanest-looking number the round produced was measuring the wrong thing.
 
 
-**ART-170** 🟡 **`collide::preview` can only be asked about a **package**,
-so a release recipe's own layering cannot be previewed at all** — *found
-2026-08-19 while measuring ART-169's fix; filed rather than fixed, Task 8 fix
-round 2 (F2)*
-`src-tauri/src/core/osinstall/collide.rs` (`declared_override`)
-
-`preview` builds each row's `declared` column through `declared_override`,
-which resolves the incoming item's component id with
-`package::by_id(component)` and **refuses by name** when it resolves to
-nothing:
-
-> `'{component}' does not name a shipped package, so ART cannot say whether it
-> declared an override for '{to}'`
-
-That is right for what the function was built for (a package's `overrides` is
-the only thing that can declare an intent to replace a *tree's* file, and
-answering `false` for an unknown id would make every row read "nothing
-declared" for a reason unrelated to what was declared). The consequence is
-that the preview §3 requires cannot be shown for a recipe component — and
-AmigaOS 3.9 now has one that genuinely layers over another, `workbench-39`
-over `workbench-base`, replacing 40 real files.
-
-Measured around it rather than through it: `layer_the_real_39_overlay_when_asked`
-calls `collide::classify` directly — the same function `preview` calls once it
-has both sides' bytes — and reports the four classes plus `Identical`. Only the
-`declared` column is missing, and for a layer *inside one recipe*
-`plan::detect_collisions` has already enforced the same thing at plan time, so
-nothing is unguarded today.
-
-What it costs: the OS Builder can show a user what a BoingBag would replace and
-cannot show the same user what switching a component on would replace. Fixing
-it means resolving `component` against the union of every shipped id — releases
-and packages together, the way `recipe.rs::all_shipped_component_ids` already
-does for `every_override_names_a_component_that_exists` — rather than against
-`package::by_id` alone.
-
-**A second, harder limit sits beside this one, and widening `declared` will
-not touch it.** `Libs/WORKBENCH.LIBRARY` carries no `$VER:` marker at all, so
-the 3.9 overlay's replacement of it (193,400 → 199,852 bytes) classifies as
-`Unversioned` — a size comparison — while being the single change that turns
-`Workbench 44.5` into `Workbench 45.1`. **The boot proved the decisive change
-and the classifier could not.** Generalised: if `workbench.library` carries no
-readable marker, other decisive files will not either, so **any future "did
-the update take?" check built on collision classes alone will be confidently
-wrong about the one file that matters.** Reading the version off a booted
-system is not a nicety — see the method note in
-`layer_the_real_39_overlay_when_asked` and in [STATUS.md](STATUS.md).
-
-
 **ART-166** 🔴 **Both BoingBag payload archives are password-encrypted ZIPs, so
 neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task
 8's real run, on `content-layer`*
@@ -846,6 +797,97 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-170** 🟡 **`collide::preview` can only be asked about a **package**,
+so a release recipe's own layering cannot be previewed at all** — *found
+2026-08-19 while measuring ART-169's fix; filed rather than fixed, Task 8 fix
+round 2 (F2)*
+`src-tauri/src/core/osinstall/collide.rs` (`declared_override`)
+
+`preview` builds each row's `declared` column through `declared_override`,
+which resolves the incoming item's component id with
+`package::by_id(component)` and **refuses by name** when it resolves to
+nothing:
+
+> `'{component}' does not name a shipped package, so ART cannot say whether it
+> declared an override for '{to}'`
+
+That is right for what the function was built for (a package's `overrides` is
+the only thing that can declare an intent to replace a *tree's* file, and
+answering `false` for an unknown id would make every row read "nothing
+declared" for a reason unrelated to what was declared). The consequence is
+that the preview §3 requires cannot be shown for a recipe component — and
+AmigaOS 3.9 now has one that genuinely layers over another, `workbench-39`
+over `workbench-base`, replacing 40 real files.
+
+Measured around it rather than through it: `layer_the_real_39_overlay_when_asked`
+calls `collide::classify` directly — the same function `preview` calls once it
+has both sides' bytes — and reports the four classes plus `Identical`. Only the
+`declared` column is missing, and for a layer *inside one recipe*
+`plan::detect_collisions` has already enforced the same thing at plan time, so
+nothing is unguarded today.
+
+What it costs: the OS Builder can show a user what a BoingBag would replace and
+cannot show the same user what switching a component on would replace. Fixing
+it means resolving `component` against the union of every shipped id — releases
+and packages together, the way `recipe.rs::all_shipped_component_ids` already
+does for `every_override_names_a_component_that_exists` — rather than against
+`package::by_id` alone.
+
+**A second, harder limit sits beside this one, and widening `declared` will
+not touch it.** `Libs/WORKBENCH.LIBRARY` carries no `$VER:` marker at all, so
+the 3.9 overlay's replacement of it (193,400 → 199,852 bytes) classifies as
+`Unversioned` — a size comparison — while being the single change that turns
+`Workbench 44.5` into `Workbench 45.1`. **The boot proved the decisive change
+and the classifier could not.** Generalised: if `workbench.library` carries no
+readable marker, other decisive files will not either, so **any future "did
+the update take?" check built on collision classes alone will be confidently
+wrong about the one file that matters.** Reading the version off a booted
+system is not a nicety — see the method note in
+`layer_the_real_39_overlay_when_asked` and in [STATUS.md](STATUS.md).
+
+**Fixed 2026-08-20 on `debt-wave-b1`**, exactly as the entry scoped it:
+`declared_override` now resolves the incoming item's component id against the
+union of every shipped id — releases and packages together — instead of
+against `package::by_id` alone.
+
+`recipe::shipped_component_overrides(id)` is the resolver, and it is the
+runtime counterpart of the union `every_override_names_a_component_that_exists`
+already used for validation. `overrides` crosses the boundary in **both**
+directions in shipped data — `locale-turkish` (a package) declares
+`locale-base` (a release component), `workbench-39` (a release component)
+declares `workbench-base` — so reading it out of one catalogue was never the
+whole answer, and that test knew it before the code did.
+
+The refusal is unchanged in kind: an id in neither catalogue is still refused
+by name, because an id that resolves to nothing is an inconsistency in
+whatever built the item rather than a fact about the file. Only the sentence
+widened, from "does not name a shipped package" to "does not name a shipped
+component or package".
+
+**Tests:** `a_release_recipes_own_component_can_be_asked_about_too` (the real
+pair — `workbench-39` over `workbench-base` — asserted in both directions of
+the `declared` column, so an answer that were simply always true fails),
+`shipped_component_overrides_reads_releases_and_packages_alike` (the resolver
+over both catalogues, over a component that declares no overrides, and over an
+id in neither), and `no_id_is_claimed_by_both_a_release_and_a_package` (the
+precondition the resolver's release-then-package order rests on). The first
+fails with `declared_override` put back on `package::by_id`.
+
+**What this does not do**, said plainly rather than left to be discovered: the
+*command* layer's own incoming-builder (`commands::osinstall::extract_incoming_for_preview`)
+still assembles rows from chosen packages only, so the OS Builder screen has
+nothing to hand `preview` for a recipe component yet. What is removed is the
+block that made it impossible in the core — the layer above can now be widened
+without touching `collide`.
+
+**The second, harder limit recorded above is untouched and stands**: a file
+carrying no `$VER:` marker at all — `Libs/WORKBENCH.LIBRARY` is the measured
+one — classifies as `Unversioned` whatever it actually changes, so no "did the
+update take?" check built on collision classes alone can be trusted about the
+one file that matters. Widening `declared` was never going to reach that, and
+this did not.
+
 
 **ART-157** 🟡 **The recipe format cannot state a Kickstart *minimum*, only a
 maximum, so AmigaOS 3.9's real requirement (V40 or newer) goes unstated and

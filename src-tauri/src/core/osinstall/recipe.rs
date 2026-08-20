@@ -159,6 +159,52 @@ pub fn by_release(release: &str) -> CoreResult<Recipe> {
     }
 }
 
+/// The `overrides` any shipped component declares, whichever kind of recipe
+/// ships it — a release's own component or a package (ART-170).
+///
+/// **Two catalogues, one question.** `overrides` names components across the
+/// boundary in both directions: `locale-turkish` (a package) declares
+/// `locale-base` (a release component), and `workbench-39` (a release
+/// component) declares `workbench-base` (another). Anything that reads the
+/// field therefore has to look in both places, which
+/// `every_override_names_a_component_that_exists` already learnt for the
+/// *validation* side — this is the same union, made available to the code
+/// that reads the field at runtime instead of only to the test that checks
+/// it. `collide::declared_override` used `package::by_id` alone and so could
+/// answer for a package and refuse, by name, for a recipe component: a
+/// release's own layering (`workbench-39` over `workbench-base`, the change
+/// that makes a tree AmigaOS 3.9) could not be previewed at all.
+///
+/// Releases are searched before packages, and the two id spaces are asserted
+/// disjoint by `no_id_is_claimed_by_both_a_release_and_a_package` — so the
+/// order is a statement about determinism rather than a precedence rule
+/// anything relies on.
+///
+/// `None` means no shipped recipe of either kind declares this id. The
+/// caller decides what that is: `declared_override` still refuses by name,
+/// because an id that resolves to nothing is an inconsistency in whatever
+/// built the item, not a fact about the file.
+pub fn shipped_component_overrides(id: &str) -> Option<Vec<String>> {
+    for release in releases() {
+        // A shipped recipe that does not parse is a bug in shipped data, not
+        // a reason to answer "no such component" — every other reader of
+        // these files treats it that way, and swallowing it here would turn
+        // a broken recipe into a silent `declared: false` on every row.
+        let recipe = by_release(release).unwrap_or_else(|e| {
+            panic!("the shipped {release} recipe must parse and validate: {e}")
+        });
+        if let Some(component) = recipe.component(id) {
+            return Some(component.overrides.clone());
+        }
+    }
+    let packages =
+        super::package::packages().expect("the shipped packages must parse and validate");
+    packages
+        .into_iter()
+        .find(|package| package.id == id)
+        .map(|package| package.component.overrides)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -679,6 +725,58 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// **ART-170's precondition.** `shipped_component_overrides` searches
+    /// releases and then packages, and answers with the first id it finds.
+    /// That is only safe while no id is claimed by both — otherwise one
+    /// component's `overrides` would silently answer for another's, and the
+    /// `declared` column would be right about the wrong component.
+    ///
+    /// A data invariant rather than a guard on the fix: it holds today and
+    /// must keep holding, which is exactly the kind of thing nothing else
+    /// would notice breaking.
+    #[test]
+    fn no_id_is_claimed_by_both_a_release_and_a_package() {
+        let release_ids = release_component_ids();
+        let packages = super::super::package::packages()
+            .expect("the shipped packages must parse and validate");
+        // Not vacuous: there are ids on both sides to collide.
+        assert!(!release_ids.is_empty() && !packages.is_empty());
+        for package in packages {
+            assert!(
+                !release_ids.contains(&package.id),
+                "'{}' is both a package and a release recipe's component",
+                package.id
+            );
+        }
+    }
+
+    /// The resolver itself, over both catalogues and over an id in neither.
+    #[test]
+    fn shipped_component_overrides_reads_releases_and_packages_alike() {
+        assert_eq!(
+            super::shipped_component_overrides("workbench-39"),
+            Some(vec![
+                "workbench-base".to_string(),
+                "locale-base".to_string()
+            ]),
+            "a release recipe's own component"
+        );
+        assert_eq!(
+            super::shipped_component_overrides("locale-turkish"),
+            Some(vec!["locale-base".to_string()]),
+            "a package, which is all this used to be able to answer for"
+        );
+        assert_eq!(
+            super::shipped_component_overrides("workbench-base"),
+            Some(Vec::new()),
+            "a real component that declares none is not the same as no component"
+        );
+        assert_eq!(
+            super::shipped_component_overrides("not-shipped-at-all"),
+            None
+        );
     }
 
     #[test]
