@@ -361,12 +361,19 @@ pub fn launch_winuae(winuae_path: &Path, config_text: &str) -> CoreResult<u32> {
     }
 
     // A unique name per launch: a fixed filename means two sessions started
-    // close together overwrite each other's configuration.
+    // close together overwrite each other's configuration — and the stamp
+    // alone does not give one. Two launches can share a nanosecond, which is
+    // the same defect ART-164 and ART-173 were filed for in test fixtures;
+    // this is its production instance, on the path an Amiga-side install run
+    // uses repeatedly. The counter is what makes the name unique; the stamp
+    // only makes it readable.
+    static NEXT_LAUNCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let temp_config_path = std::env::temp_dir().join(format!("art_launch_{stamp}.uae"));
+    let seq = NEXT_LAUNCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temp_config_path = std::env::temp_dir().join(format!("art_launch_{stamp}_{seq}.uae"));
     std::fs::write(&temp_config_path, config_text)?;
 
     // Arguments are passed as a structured argv, never through a shell, so
