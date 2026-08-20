@@ -47,6 +47,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   measurement of a real update package on real hardware later in this
   round.
 
+  A run now also has a **fourth** possible ending: the emulator was closed
+  before it reported anything. That is deliberately not called a timeout —
+  "it timed out" tells you to watch the window and answer the question next
+  time, which is no help at all for a window you closed yourself.
+
+  And if something goes wrong while ART is watching — the folder becomes
+  unreadable, a file cannot be opened — ART now still closes the emulator it
+  opened. It used to report the error and leave the window running with no
+  way for ART to ever close it again.
+
   **Still not reachable from the interface**, and no emulator is started by
   anything you can click yet.
 - **Each BoingBag now says, in its own recipe, what the Amiga should

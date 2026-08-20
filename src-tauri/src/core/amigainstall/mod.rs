@@ -115,32 +115,80 @@ pub struct PlannedRun {
     pub args: Vec<String>,
 }
 
-/// What a run ended as. **Three outcomes, not two.**
+/// What a run ended as. **Four endings, not two** — and they are four values
+/// rather than four wordings of one, because each tells the user to do a
+/// different thing.
 ///
 /// An Amiga Installer is interactive by nature, so a run that stops on a
-/// requester would otherwise wait for ever. A timeout is therefore its own
-/// answer: a failure means the installer said no, a timeout means nobody was
-/// there to answer its question, and the second is fixed by watching the
-/// window rather than by changing anything. Reporting a timeout as either of
-/// the other two would be claiming something that was not observed (§89).
+/// requester would otherwise wait for ever. That is why the last two exist and
+/// why they are not the same:
 ///
-/// The original tree is untouched in all three cases; only [`Succeeded`] lets
+/// - [`Failed`] — the installer ran and said no. Something about the package
+///   or the tree is wrong, and looking at the tree is what fixes it.
+/// - [`TimedOut`] — nobody answered a question it asked. Nothing is wrong;
+///   watching the emulator window and answering is what fixes it.
+/// - [`EmulatorClosed`] — the emulator went away before it reported anything.
+///   Usually because the person watching closed the window, which they are
+///   entitled to do. Telling them to watch the window next time — which is
+///   what a timeout says — is advice pointing the wrong way, and §3 of the
+///   design is explicit that these endings exist *because* they carry
+///   different advice. Reporting any of the four as another would be claiming
+///   something that was not observed (§89).
+///
+/// The original tree is untouched in all four cases; only [`Succeeded`] lets
 /// the copy replace it.
 ///
+/// ## Why the two that "just happened" carry no message
+///
+/// [`Succeeded`] and [`Failed`] carry no text. The Amiga writes exactly one
+/// word — [`MARK_OK`] or [`MARK_FAILED`] — so a `message` field could only
+/// ever hold that word echoed back, and a screen rendering it would show the
+/// user "failed" under a heading that already says the run failed. The
+/// sentence a person reads is the UI's, in their own language (§68); the
+/// engine's job is to say *which* of the four this was, exactly and no more.
+/// If the generated script is ever extended to write a reason, this is where
+/// it lands — and it will be a reason, not a marker.
+///
 /// [`Succeeded`]: Self::Succeeded
+/// [`Failed`]: Self::Failed
+/// [`TimedOut`]: Self::TimedOut
+/// [`EmulatorClosed`]: Self::EmulatorClosed
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum RunOutcome {
-    Succeeded {
-        message: String,
-    },
+    /// The installer ran and returned a non-warning, non-failing code.
+    Succeeded,
     /// The installer ran and said no.
-    Failed {
-        message: String,
-    },
+    Failed,
     /// Nobody answered its question. Not a failure, and explicitly not a
     /// success — the two are fixed by different things.
-    TimedOut {
-        waited: Duration,
-    },
+    TimedOut { waited: Duration },
+    /// The emulator was gone before anything was reported — the window was
+    /// closed, or it quit on its own. Not a timeout: the deadline was never
+    /// reached, and `waited` is the time that actually passed.
+    EmulatorClosed { waited: Duration },
+}
+
+/// Whether `value` names ART's own work volume ([`WORK_VOLUME`]), with or
+/// without a trailing colon.
+///
+/// **One rule, one place.** It started as a closure inside
+/// [`workvol::startup_sequence`] and was then written a second time, weaker,
+/// in [`run::media_for`] — the second copy missed the `ARTWork:` form, so a
+/// name the script generator refused would have produced exactly the
+/// shadowing mount the mount planner's guard exists to prevent. Two guards for
+/// one rule, one of them weaker, is worse than one guard.
+///
+/// AmigaDOS volume names are case-insensitive, so the comparison is too. It
+/// compares **bytes** rather than slicing the `&str`: `value[..7]` would panic
+/// if byte 7 fell inside a multi-byte character, and `panic = "abort"` in the
+/// release profile turns that into a dead application. Amiga file names are
+/// exactly where non-ASCII shows up in this project.
+pub fn claims_work_volume(value: &str) -> bool {
+    let value = value.trim().as_bytes();
+    let name = WORK_VOLUME.as_bytes();
+    value.eq_ignore_ascii_case(name)
+        || (value.len() > name.len()
+            && value[..name.len()].eq_ignore_ascii_case(name)
+            && value[name.len()] == b':')
 }

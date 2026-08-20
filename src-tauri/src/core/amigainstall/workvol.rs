@@ -13,7 +13,9 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{PlannedRun, MARK_FAILED, MARK_OK, MARK_STARTED, RESULT_FILE, WORK_VOLUME};
+use super::{
+    claims_work_volume, PlannedRun, MARK_FAILED, MARK_OK, MARK_STARTED, RESULT_FILE, WORK_VOLUME,
+};
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::safety::atomic_write;
 use crate::core::security::refuse_shell_metacharacters;
@@ -166,19 +168,9 @@ pub fn startup_sequence(run: &PlannedRun) -> CoreResult<String> {
     // confinement the type can enforce on its own; see `PlannedRun::program`
     // for the one it cannot.
     //
-    // AmigaDOS volume names are case-insensitive, so the comparison is too.
-    // It compares **bytes** rather than slicing the `&str`: `value[..7]` would
-    // panic if byte 7 fell inside a multi-byte character, and `panic = "abort"`
-    // in the release profile turns that into a dead application. Amiga file
-    // names are exactly where non-ASCII shows up in this project.
-    let claims_work_volume = |value: &str| {
-        let value = value.trim().as_bytes();
-        let name = WORK_VOLUME.as_bytes();
-        value.eq_ignore_ascii_case(name)
-            || (value.len() > name.len()
-                && value[..name.len()].eq_ignore_ascii_case(name)
-                && value[name.len()] == b':')
-    };
+    // The rule itself lives in `super::claims_work_volume`, because the mount
+    // planner needs the same one and a second copy of it there was weaker
+    // than this one.
     for (label, value) in std::iter::once(("installer path", &run.program))
         .chain(run.args.iter().map(|a| ("installer argument", a)))
         .chain(std::iter::once(("system volume name", &run.system_volume)))

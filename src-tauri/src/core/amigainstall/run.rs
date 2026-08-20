@@ -48,7 +48,9 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use super::{PlannedRun, RunOutcome, MARK_FAILED, MARK_OK, MARK_STARTED, WORK_VOLUME};
+use super::{
+    claims_work_volume, PlannedRun, RunOutcome, MARK_FAILED, MARK_OK, MARK_STARTED, WORK_VOLUME,
+};
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
 use crate::core::profile::AmigaProfile;
@@ -289,13 +291,13 @@ pub fn media_for(request: &RunRequest) -> CoreResult<LaunchMedia> {
     // Two mounts under one device name is one mount: the second would shadow
     // the first, and the shadowed one is ART's own volume — the run would then
     // poll for a result file inside the user's tree, where nothing writes it.
-    // AmigaDOS device names are case-insensitive, so this comparison is too.
-    if request
-        .plan
-        .system_volume
-        .trim()
-        .eq_ignore_ascii_case(WORK_DEVICE)
-    {
+    //
+    // It asks `super::claims_work_volume` rather than comparing here. A second
+    // comparison written in this function did the case-insensitive half and
+    // missed the `ARTWork:` trailing-colon form, so a name `workvol::build`
+    // refuses would have passed *this* guard and produced exactly the
+    // shadowing mount it exists to prevent.
+    if claims_work_volume(&request.plan.system_volume) {
         return Err(CoreError::SafetyRefused(format!(
             "the system tree may not be mounted as '{WORK_DEVICE}'; that is ART's own work volume"
         )));
@@ -360,14 +362,42 @@ pub fn run_with(
     sink.report(0, deadline_units(request), "Starting the emulator");
     let mut session = launcher.launch(&config)?;
 
+    // **Every** ending goes through the two lines below — an answer, the
+    // deadline, a cancellation, and an I/O error mid-poll alike. That is why
+    // the loop is a separate function: inside it `?` is free to propagate,
+    // because the only way out of it is through `end_session` here.
+    //
+    // Written inline, the two `?`s in `poll_until_ending` dropped the session
+    // without terminating it, and `WinUaeProcess` has no `Drop`. A transient
+    // read error on the mount would then have left a WinUAE window ART opened
+    // running on the owner's desktop with the handle to it gone — nothing but
+    // the owner could ever close it. The owner is sitting at this machine; an
+    // emulator window appearing unbidden was a real annoyance in an earlier
+    // round, and one that cannot be closed is worse. Keeping the `Child`
+    // rather than a pid stops ART ending a process it did not start; this is
+    // the same care in the other direction, so ART always ends the one it did.
+    let ending = poll_until_ending(request, session.as_mut(), clock, sink, &result_file);
+    end_session(session.as_mut(), sink);
+    ending
+}
+
+/// The poll loop. Everything it returns — including an error — reaches the
+/// caller through [`run_with`]'s single `end_session`, so `?` is safe here in
+/// a way it is not one level up.
+fn poll_until_ending(
+    request: &RunRequest,
+    session: &mut dyn EmulatorSession,
+    clock: &dyn Clock,
+    sink: &dyn ProgressSink,
+    result_file: &Path,
+) -> CoreResult<RunOutcome> {
     let deadline = request.limits.deadline;
     loop {
         // The result is read first, every time round. An answer that landed
         // during the last sleep outranks both the deadline below it and a
         // cancellation: it is the thing the whole run was waiting for, and
         // discarding it would report "no answer" about a run that gave one.
-        if let Some(outcome) = read_outcome(&result_file)? {
-            end_session(session.as_mut(), sink);
+        if let Some(outcome) = read_outcome(result_file)? {
             return Ok(outcome);
         }
 
@@ -375,27 +405,27 @@ pub fn run_with(
         // and the sleep below has not begun, so stopping here leaves nothing
         // half-done on either side.
         if sink.is_cancelled() {
-            end_session(session.as_mut(), sink);
             return Err(CoreError::Cancelled);
         }
 
-        // The emulator going away without an answer is not a failure — the
-        // installer never said no — and it is not a success. It is the same
-        // not-an-answer the deadline produces, reported with the time actually
-        // waited rather than the deadline that was never reached. Ending here
-        // rather than sleeping out the deadline is the only difference.
+        // The emulator going away without an answer is its own ending, and
+        // deliberately not the deadline's. The deadline says "nobody answered
+        // a question it asked", which tells the user to watch the window next
+        // time; a window they closed themselves is not fixed by that advice,
+        // and §3 of the design says these endings exist precisely because they
+        // carry different advice. One final read first, in case the result
+        // landed in the instant before the process went.
         if !session.is_running()? {
-            if let Some(outcome) = read_outcome(&result_file)? {
+            if let Some(outcome) = read_outcome(result_file)? {
                 return Ok(outcome);
             }
-            return Ok(RunOutcome::TimedOut {
+            return Ok(RunOutcome::EmulatorClosed {
                 waited: clock.elapsed(),
             });
         }
 
         let waited = clock.elapsed();
         if waited >= deadline {
-            end_session(session.as_mut(), sink);
             return Ok(RunOutcome::TimedOut { waited });
         }
 
@@ -416,13 +446,19 @@ fn deadline_units(request: &RunRequest) -> Option<u64> {
     (secs > 0).then_some(secs)
 }
 
-/// End the emulator ART started, on every ending the run has.
+/// End the emulator ART started.
 ///
-/// A run that left WinUAE on the owner's desktop would not have ended, only
-/// stopped watching. Failing to terminate is reported and swallowed: the run
-/// has its answer already, and losing it because the process was gone a
-/// moment earlier than expected would be the report ART owes the user thrown
-/// away for nothing.
+/// Called from exactly one place — [`run_with`], on the single path every
+/// ending takes — so a run cannot leave WinUAE on the owner's desktop with the
+/// handle to it dropped. It is called even when the emulator has already gone,
+/// because [`EmulatorSession::terminate`] is required to be idempotent and
+/// asking a process that has exited to exit costs nothing; the alternative is
+/// a branch that has to *remember* to skip it, which is how the error paths
+/// came to skip it altogether.
+///
+/// Failing to terminate is reported and swallowed: the run has its answer
+/// already, and losing it because the process was gone a moment earlier than
+/// expected would be the report ART owes the user thrown away for nothing.
 fn end_session(session: &mut dyn EmulatorSession, sink: &dyn ProgressSink) {
     let pid = session.pid();
     if let Err(err) = session.terminate() {
@@ -466,13 +502,13 @@ fn read_outcome(result_file: &Path) -> CoreResult<Option<RunOutcome>> {
     let text = String::from_utf8_lossy(&bytes);
     let marker = text.lines().next().unwrap_or("").trim();
 
+    // The marker is matched, not carried. See `RunOutcome`'s own
+    // documentation for why neither answer has a message: echoing "failed"
+    // back into a field called `message` tells a reader nothing the variant
+    // did not already say.
     Ok(match marker {
-        MARK_OK => Some(RunOutcome::Succeeded {
-            message: marker.to_string(),
-        }),
-        MARK_FAILED => Some(RunOutcome::Failed {
-            message: marker.to_string(),
-        }),
+        MARK_OK => Some(RunOutcome::Succeeded),
+        MARK_FAILED => Some(RunOutcome::Failed),
         MARK_STARTED => None,
         _ => None,
     })
@@ -545,6 +581,9 @@ mod tests {
         terminated: Mutex<Vec<u32>>,
         launched_with: Mutex<Vec<String>>,
         liveness_checks: AtomicU32,
+        /// When set, `is_running` returns `Err` instead of an answer — the
+        /// transient I/O failure that used to orphan the emulator.
+        liveness_fails: AtomicBool,
         /// Run at the start of each liveness check, given the number of checks
         /// so far.
         ///
@@ -564,6 +603,7 @@ mod tests {
                 terminated: Mutex::new(Vec::new()),
                 launched_with: Mutex::new(Vec::new()),
                 liveness_checks: AtomicU32::new(0),
+                liveness_fails: AtomicBool::new(false),
                 on_liveness: Box::new(on_liveness),
             }
         }
@@ -584,6 +624,9 @@ mod tests {
             // Before the flag is read, so a hook that clears it is answered on
             // this very check rather than the next one.
             (self.log.on_liveness)(n);
+            if self.log.liveness_fails.load(Ordering::Relaxed) {
+                return Err(CoreError::Io(std::io::Error::other("the handle went away")));
+            }
             Ok(self.log.running.load(Ordering::Relaxed))
         }
 
@@ -764,12 +807,7 @@ mod tests {
 
         let outcome = run_with(&request, &launcher, &clock, &NoProgress).unwrap();
 
-        assert_eq!(
-            outcome,
-            RunOutcome::Succeeded {
-                message: MARK_OK.to_string()
-            }
-        );
+        assert_eq!(outcome, RunOutcome::Succeeded);
         assert_eq!(clock.sleeps(), 3, "it should have polled, not read once");
         assert_eq!(
             *launcher.log.terminated.lock().unwrap(),
@@ -864,12 +902,7 @@ mod tests {
 
         let outcome = run_with(&request, &FakeLauncher::new(), &clock, &NoProgress).unwrap();
 
-        assert_eq!(
-            outcome,
-            RunOutcome::Succeeded {
-                message: MARK_OK.to_string()
-            }
-        );
+        assert_eq!(outcome, RunOutcome::Succeeded);
     }
 
     /// Cancellation between polls stops the run and leaves nothing behind.
@@ -942,12 +975,7 @@ mod tests {
 
         let outcome = run_with(&request, &FakeLauncher::new(), &clock, &NoProgress).unwrap();
 
-        assert_eq!(
-            outcome,
-            RunOutcome::Failed {
-                message: MARK_FAILED.to_string()
-            }
-        );
+        assert_eq!(outcome, RunOutcome::Failed);
     }
 
     /// An answer that lands during the very last sleep still wins: the loop
@@ -976,12 +1004,7 @@ mod tests {
         let outcome = run_with(&request, &FakeLauncher::new(), &clock, &NoProgress).unwrap();
 
         assert_eq!(clock.elapsed(), request.limits.deadline);
-        assert_eq!(
-            outcome,
-            RunOutcome::Succeeded {
-                message: MARK_OK.to_string()
-            }
-        );
+        assert_eq!(outcome, RunOutcome::Succeeded);
     }
 
     /// Bytes ART does not recognise are not an answer. `Echo >file` truncates
@@ -1011,10 +1034,12 @@ mod tests {
         assert!(matches!(outcome, Ok(RunOutcome::TimedOut { .. })));
     }
 
-    /// The owner closing the emulator window is not a success. It is the same
-    /// not-an-answer the deadline reports, with the time actually waited.
+    /// The owner closing the emulator window is its own ending: not a
+    /// success, not a failure, and **not a timeout**. A timeout tells the user
+    /// to watch the window and answer next time, which is the wrong advice for
+    /// a window they closed themselves (design §3).
     #[test]
-    fn an_emulator_that_exits_without_reporting_is_not_a_success() {
+    fn an_emulator_closed_without_reporting_is_its_own_ending() {
         let fx = Fixture::new("exited");
         let (work, tree, kick, exe) = request!(fx);
         let request = with_paths(fx.request(), &work, &tree, &kick, &exe);
@@ -1030,13 +1055,13 @@ mod tests {
         let outcome = run_with(&request, &launcher, &clock, &NoProgress).unwrap();
 
         match outcome {
-            RunOutcome::TimedOut { waited } => {
+            RunOutcome::EmulatorClosed { waited } => {
                 assert!(
                     waited < request.limits.deadline,
                     "it should stop when the emulator goes, not sit out the deadline"
                 );
             }
-            other => panic!("a vanished emulator has answered nothing, got {other:?}"),
+            other => panic!("a closed emulator is its own ending, got {other:?}"),
         }
     }
 
@@ -1072,12 +1097,7 @@ mod tests {
 
         let outcome = run_with(&request, &launcher, &clock, &NoProgress).unwrap();
 
-        assert_eq!(
-            outcome,
-            RunOutcome::Succeeded {
-                message: MARK_OK.to_string()
-            }
-        );
+        assert_eq!(outcome, RunOutcome::Succeeded);
     }
 
     /// ART's own volume boots; the user's tree is mounted as data and cannot.
@@ -1165,6 +1185,79 @@ mod tests {
         // Lower case on purpose: AmigaDOS device names are case-insensitive,
         // so a comparison that is not would let this through.
         fx.plan.system_volume = "artwork".to_string();
+        let (work, tree, kick, exe) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &kick, &exe);
+
+        let err = media_for(&request).unwrap_err();
+        assert!(
+            matches!(err, CoreError::SafetyRefused(ref m) if m.contains(WORK_DEVICE)),
+            "got {err:?}"
+        );
+    }
+
+    /// An I/O error reading the result file must not orphan the emulator.
+    ///
+    /// This is the hole eighteen mutations did not find, because no test drove
+    /// an error path at all: both `?`s in the loop used to drop the session
+    /// without terminating it, and `WinUaeProcess` has no `Drop` — so a
+    /// transient read failure left a WinUAE window ART opened running with the
+    /// handle to it gone.
+    ///
+    /// The error is induced by making the result *file* a directory, which is
+    /// what a `read` refuses with something other than `NotFound`. Any
+    /// non-`NotFound` error would do; this one needs no permissions games and
+    /// behaves the same on every host.
+    #[test]
+    fn an_io_error_reading_the_result_still_ends_the_emulator() {
+        let fx = Fixture::new("read-error");
+        let (work, tree, kick, exe) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &kick, &exe);
+
+        std::fs::create_dir(fx.result_file()).unwrap();
+
+        let launcher = FakeLauncher::new();
+        let err = run_with(&request, &launcher, &TestClock::idle(), &NoProgress).unwrap_err();
+
+        assert!(
+            matches!(err, CoreError::Io(_)),
+            "the error itself must still reach the caller: {err:?}"
+        );
+        assert_eq!(
+            *launcher.log.terminated.lock().unwrap(),
+            vec![launcher.pid],
+            "an error is an ending too; it must not leave the emulator running"
+        );
+    }
+
+    /// The same, for the other `?` in the loop: the liveness check failing.
+    #[test]
+    fn an_io_error_checking_the_emulator_still_ends_it() {
+        let fx = Fixture::new("liveness-error");
+        let (work, tree, kick, exe) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &kick, &exe);
+
+        let launcher = FakeLauncher::new();
+        launcher.log.liveness_fails.store(true, Ordering::Relaxed);
+
+        let err = run_with(&request, &launcher, &TestClock::idle(), &NoProgress).unwrap_err();
+
+        assert!(matches!(err, CoreError::Io(_)), "got {err:?}");
+        assert_eq!(
+            *launcher.log.terminated.lock().unwrap(),
+            vec![launcher.pid],
+            "an error is an ending too; it must not leave the emulator running"
+        );
+    }
+
+    /// The trailing-colon form of ART's own volume name is refused too.
+    ///
+    /// `workvol::build` has always refused `ARTWork:`; the mount planner's own
+    /// second copy of that rule did not, so the one name that could produce a
+    /// shadowing mount was the one name it let through.
+    #[test]
+    fn the_trailing_colon_form_of_arts_own_volume_is_refused_as_a_mount() {
+        let mut fx = Fixture::new("shadow-colon");
+        fx.plan.system_volume = "ARTWork:".to_string();
         let (work, tree, kick, exe) = request!(fx);
         let request = with_paths(fx.request(), &work, &tree, &kick, &exe);
 
