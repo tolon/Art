@@ -2,8 +2,10 @@
 //
 // ART-070: refreshing a pane must not move the keyboard.
 //
-// `FileManager.tsx` calls Tauri on mount and cannot be rendered in a test yet
-// (ART-069), so — following `FileManagerFilter.test.tsx` — this is a harness
+// `FileManager.tsx` calls Tauri on mount, and when this was written nothing
+// could render it (ART-069, closed since — see `FileManager.test.tsx`, which
+// mocks that surface and renders the real page). Following
+// `FileManagerFilter.test.tsx`, this remains a harness
 // wired the way the real screen is rather than a render of it: two panes, a
 // `focused` side, six `open*` functions that each end with `setFocused(side)`
 // because that is right when the *user* opens something, and a `refresh(side)`

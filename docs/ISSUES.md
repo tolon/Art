@@ -640,23 +640,6 @@ recycle bin versus unlink. Worth doing deliberately, if at all.
 
 Found while building F6 in phase 2b task 3.
 
-**ART-069** 🔵 **No frontend test renders `FileManager.tsx`**
-`src/pages/FileManager.tsx` · It calls Tauri commands (`onVolumeWriteResult`,
-`onJobProgress`, panel listing, …) on mount, which is why every phase-1a
-frontend test extracts a pure function or hook instead of rendering the
-page — `@/lib/selection`, `@/lib/functionKeyPlan` (added closing finding 4
-of the phase-1a whole-branch review), `usePaneTab`/`isShortcutBlocked` in
-`FunctionKeys.tsx`, and so on. Each extraction is real, tested logic, but
-none of them proves the page actually *wires* the extracted piece
-correctly — that an F-key's `run` reads the same `target` its `enabled`
-was computed from, that a click handler calls the selection function it
-looks like it calls, that the two `useEffect` result listeners registered
-at mount really are registered before any button can start a job. Closing
-this needs either a mock of the Tauri IPC surface (`@tauri-apps/api/core`'s
-`invoke`, `@tauri-apps/api/event`'s `listen`) sufficient to render the page
-in a test, or splitting `FileManager.tsx` into smaller components each
-small enough to mock individually — a real task, not a quick fix.
-
 **ART-062** 🔵 **No language has been checked on screen**
 `src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
 was verified by `pnpm test`'s key-parity check and by reading the JSON — never
@@ -723,6 +706,61 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-069** 🔵 **No frontend test renders `FileManager.tsx`**
+`src/pages/FileManager.tsx` · It calls Tauri commands (`onVolumeWriteResult`,
+`onJobProgress`, panel listing, …) on mount, which is why every phase-1a
+frontend test extracts a pure function or hook instead of rendering the
+page — `@/lib/selection`, `@/lib/functionKeyPlan` (added closing finding 4
+of the phase-1a whole-branch review), `usePaneTab`/`isShortcutBlocked` in
+`FunctionKeys.tsx`, and so on. Each extraction is real, tested logic, but
+none of them proves the page actually *wires* the extracted piece
+correctly — that an F-key's `run` reads the same `target` its `enabled`
+was computed from, that a click handler calls the selection function it
+looks like it calls, that the two `useEffect` result listeners registered
+at mount really are registered before any button can start a job. Closing
+this needs either a mock of the Tauri IPC surface (`@tauri-apps/api/core`'s
+`invoke`, `@tauri-apps/api/event`'s `listen`) sufficient to render the page
+in a test, or splitting `FileManager.tsx` into smaller components each
+small enough to mock individually — a real task, not a quick fix.
+
+**Fixed 2026-08-20 on `debt-wave-c1`.** `src/pages/FileManager.test.tsx` is the
+first test that renders the real page. The mock is the one the rest of this
+suite already uses — the `@/lib/*` wrappers around `invoke`/`listen`, never
+`@tauri-apps/api` itself — plus `@tauri-apps/plugin-dialog`,
+`@crabnebula/tauri-plugin-drag`, and `@/lib/settings` one layer further down,
+for the reason `OsInstall.test.tsx` records: `useRemembered` writes through
+`saveSettings`, the real `tauri-plugin-store` boundary, which rejects in jsdom
+with nothing to catch it.
+
+The page was rendered rather than split, on the evidence that a mock of that
+surface turned out to be about eighty lines.
+
+What it establishes, which is what the entry above asks for:
+
+- **The screen mounts, with two real panes and a real listing in each** —
+  `useSettingsStore` is seeded `loaded: true` with both default folders set,
+  because the cold-start effect is gated on the settings having arrived
+  (ART-089) and would otherwise leave both panes empty.
+- **Both write-result listeners are subscribed at mount**, with a handler and
+  not merely called — `listen(event, undefined)` would satisfy a bare
+  "was it called".
+- **A click reaches `@/lib/selection`**: clicking a row selects it, Ctrl+click
+  adds to it, and the *other* pane stays unselected. Read off the row's own
+  text colour rather than a test-only attribute, because an attribute added
+  for the test would be a thing the test keeps true rather than a thing the
+  user sees.
+- **An F-key's `run` acts on the pane its enablement was computed from**: F5
+  with two local panes produces the "Both panes are local folders" sentence,
+  which is unreachable unless `run` read the same focused pane.
+- **No raw key and no unrendered `{{interpolation}}`**, in English and in
+  Turkish — ART-062's automatable half. Its other half, whether a longer
+  Turkish label still fits, is not touched: jsdom does no layout.
+
+**Mutation-checked, both wiring tests.** With
+`const isSelected = selectedNames.has(entry.name)` forced to `false` and
+`copyTo`'s `setHint(t("files.err.bothLocal"))` replaced by `setHint(null)`,
+the two wiring tests failed and the other four passed. Restored, all six pass.
 
 **ART-110** 🔵 **A partial layout apply cannot be resumed, and the screen stays
 busy** — *found 2026-08-15, the whole-branch review of SD-2 G11*
