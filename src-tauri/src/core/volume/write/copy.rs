@@ -956,42 +956,196 @@ fn extract_dir<D: BlockDevice + ?Sized>(
             HostTarget::Write(target) => target,
         };
 
-        let data = match super::file::read_file(device, &set, geometry, entry.block) {
-            Ok(data) => data,
-            Err(err) => {
-                report.skipped.push(format!("{} — {err}", entry.name));
-                continue;
-            }
+        write_one_file(
+            device,
+            geometry,
+            &set,
+            entry.block,
+            &entry.name,
+            &target,
+            write_sidecars,
+            report,
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Write one file out of a volume to `target`, sidecar and all.
+///
+/// Lifted out of [`extract_dir`]'s loop because
+/// [`extract_selection_from_volume`] needs exactly this for a *root* the user
+/// picked that happens to be a file, and a second copy of it is how one path
+/// comes to write sidecars and the other not (ART-065).
+#[allow(clippy::too_many_arguments)]
+fn write_one_file<D: BlockDevice + ?Sized>(
+    device: &D,
+    geometry: &VolumeGeometry,
+    set: &BlockSet,
+    block: u32,
+    name: &str,
+    target: &Path,
+    write_sidecars: bool,
+    report: &mut ExtractReport,
+) -> CoreResult<()> {
+    let data = match super::file::read_file(device, set, geometry, block) {
+        Ok(data) => data,
+        Err(err) => {
+            report.skipped.push(format!("{name} — {err}"));
+            return Ok(());
+        }
+    };
+
+    // Through `core/safety`: a truncated file on the way out is still a
+    // file the user will believe is a good copy.
+    crate::core::safety::atomic::atomic_write(target, &data)?;
+    report.files_written += 1;
+    report.bytes_written += data.len() as u64;
+
+    if write_sidecars {
+        let header = set.view(device, block)?;
+        let protection = super::layout::get_u32(&header, PROTECT_OFFSET)?;
+        let date = crate::core::adf::bcpl::AmigaDate {
+            days: super::layout::get_u32(&header, super::layout::DAYS_OFFSET)?,
+            mins: super::layout::get_u32(&header, super::layout::MINS_OFFSET)?,
+            ticks: super::layout::get_u32(&header, super::layout::TICKS_OFFSET)?,
         };
+        let comment =
+            crate::core::adf::bcpl::read_bcpl_string(&header, super::layout::COMMENT_OFFSET)
+                .unwrap_or_default();
 
-        // Through `core/safety`: a truncated file on the way out is still a
-        // file the user will believe is a good copy.
-        crate::core::safety::atomic::atomic_write(&target, &data)?;
-        report.files_written += 1;
-        report.bytes_written += data.len() as u64;
-
-        if write_sidecars {
-            let header = set.view(device, entry.block)?;
-            let protection = super::layout::get_u32(&header, PROTECT_OFFSET)?;
-            let date = crate::core::adf::bcpl::AmigaDate {
-                days: super::layout::get_u32(&header, super::layout::DAYS_OFFSET)?,
-                mins: super::layout::get_u32(&header, super::layout::MINS_OFFSET)?,
-                ticks: super::layout::get_u32(&header, super::layout::TICKS_OFFSET)?,
-            };
-            let comment =
-                crate::core::adf::bcpl::read_bcpl_string(&header, super::layout::COMMENT_OFFSET)
-                    .unwrap_or_default();
-
-            if let Some(sidecar) = sidecar_for(protection, date, &comment) {
-                crate::core::safety::atomic::atomic_write(
-                    &uaem::sidecar_path(&target),
-                    uaem::render(&sidecar).as_bytes(),
-                )?;
-                report.sidecars_written += 1;
-            }
+        if let Some(sidecar) = sidecar_for(protection, date, &comment) {
+            crate::core::safety::atomic::atomic_write(
+                &uaem::sidecar_path(target),
+                uaem::render(&sidecar).as_bytes(),
+            )?;
+            report.sidecars_written += 1;
         }
     }
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// A selection out of one volume — the primitive ART-064 and ART-065 share
+// ---------------------------------------------------------------------------
+
+/// One row the user picked in a volume pane.
+///
+/// Deliberately not a `DirEntry`: the frontend sends what it has on screen —
+/// a header block, a name and whether it is a drawer — and inventing a richer
+/// type here would mean the command layer synthesising fields it did not
+/// receive.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct SelectedEntry {
+    pub header_block: u32,
+    pub name: String,
+    pub is_dir: bool,
+}
+
+/// Extract a **selection** of entries out of one volume into one host folder,
+/// as one operation with one report.
+///
+/// This is the missing primitive both ART-064 and ART-065 named. Before it,
+/// volume→local ran one `volumeCopyOut` job *per selected entry* inside a
+/// `Promise.all`, so a selection of ten where the seventh failed left six on
+/// disk, three never attempted, and no report tying any of it back to "this
+/// was one selection"; and volume→volume refused outright, because staging a
+/// selection is what it had no way to do. One function answers both: the
+/// caller here writes to the user's folder, the caller in [`StagedTree`]
+/// writes to a temp folder and inserts the result into the other image.
+///
+/// Each root keeps its own name at the destination, the same shape
+/// [`HostSelection`] gives a batch going the other way.
+///
+/// Cancellation is checked **between whole entries**, never inside one: a
+/// stopped batch leaves whole files, never a half-written one.
+#[allow(clippy::too_many_arguments)]
+pub fn extract_selection_from_volume<D: BlockDevice + ?Sized>(
+    device: &D,
+    geometry: &VolumeGeometry,
+    entries: &[SelectedEntry],
+    dest: &Path,
+    write_sidecars: bool,
+    policy: OverwritePolicy,
+    sink: &dyn ProgressSink,
+) -> CoreResult<ExtractReport> {
+    check_escaped_name_collisions(entries)?;
+
+    let mut report = ExtractReport::default();
+    std::fs::create_dir_all(dest)?;
+    let set = BlockSet::new(device.block_size());
+
+    for entry in entries {
+        // Between whole entries, never mid-write — the rule `core/jobs`
+        // states and the reason a cancelled batch is safe rather than merely
+        // stopped.
+        if sink.is_cancelled() {
+            report.cancelled = true;
+            return Ok(report);
+        }
+        sink.report(report.files_written as u64, None, &entry.name);
+
+        let block = resolve_block(geometry, entry.header_block);
+        match host_target(dest, &entry.name, entry.is_dir, policy, &mut report)? {
+            HostTarget::Skip => continue,
+            HostTarget::Descend(target) => extract_dir(
+                device,
+                geometry,
+                block,
+                &target,
+                0,
+                write_sidecars,
+                policy,
+                sink,
+                &mut report,
+            )?,
+            HostTarget::Write(target) => write_one_file(
+                device,
+                geometry,
+                &set,
+                block,
+                &entry.name,
+                &target,
+                write_sidecars,
+                &mut report,
+            )?,
+        }
+    }
+
+    Ok(report)
+}
+
+/// `0` means the root, as everywhere else in ART.
+fn resolve_block(geometry: &VolumeGeometry, block: u32) -> u32 {
+    if block == 0 {
+        geometry.root_block
+    } else {
+        block
+    }
+}
+
+/// Refuse a selection whose entries would land under the same host name.
+///
+/// AmigaDOS will not let two entries in one directory share a name, so this
+/// cannot fire on the names as the volume holds them. It fires on the names
+/// **after escaping**: `Prices: 1993` and `Prices_ 1993` are two files there
+/// and one file here, and copying both out would silently overwrite one with
+/// the other. Compared without case for the same reason
+/// [`HostSelection::check_for_name_collisions`] is (ART-072) — NTFS is
+/// case-insensitive too.
+fn check_escaped_name_collisions(entries: &[SelectedEntry]) -> CoreResult<()> {
+    let mut seen: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for entry in entries {
+        let safe = windows_safe_name(&entry.name);
+        if let Some(other) = seen.insert(safe.to_lowercase(), entry.name.clone()) {
+            return Err(CoreError::InvalidInput(format!(
+                "'{}' and '{other}' would both be written as '{safe}' on this disk. \
+                 Copy them one at a time, or rename one first.",
+                entry.name
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -1034,6 +1188,47 @@ impl StagedTree {
             OverwritePolicy::Overwrite,
             sink,
         )?;
+
+        Ok(Self {
+            folder: HostFolder::new(temp.path(), true),
+            _temp: temp,
+        })
+    }
+
+    /// Stage a **selection** of entries rather than one directory (ART-064).
+    ///
+    /// The temp folder ends up holding each picked entry under its own name,
+    /// side by side — which is exactly what [`HostFolder`] then copies into
+    /// the destination directory, so a selection of `Game/` and `Readme.txt`
+    /// arrives as `Game/` and `Readme.txt` and not merged into one drawer.
+    /// That is the same shape [`HostSelection`] gives the local→volume
+    /// direction, reached from the other side.
+    pub fn stage_selection<D: BlockDevice + ?Sized>(
+        device: &D,
+        geometry: &VolumeGeometry,
+        entries: &[SelectedEntry],
+        cache_root: &Path,
+        sink: &dyn ProgressSink,
+    ) -> CoreResult<Self> {
+        let temp = TempFolder::new(cache_root)?;
+        // Sidecars on, always — see [`stage`].
+        let report = extract_selection_from_volume(
+            device,
+            geometry,
+            entries,
+            temp.path(),
+            true,
+            OverwritePolicy::Overwrite,
+            sink,
+        )?;
+        // A staging run the user stopped must not be inserted into the other
+        // image as if it were the whole selection. Said here rather than at
+        // the insert step because this is where the knowledge is: the
+        // destination image has not been opened yet, so nothing has to be
+        // undone.
+        if report.cancelled {
+            return Err(CoreError::Cancelled);
+        }
 
         Ok(Self {
             folder: HostFolder::new(temp.path(), true),

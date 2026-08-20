@@ -1388,7 +1388,7 @@
       "sameImage": "That is the same image on both sides. Use Move or Rename instead.",
       "noLocalPath": "That item has no path on your disk.",
       "openPartitionFirst": "Open a partition first.",
-      "batchBetweenVolumes": "Copying several entries between two images at once is not supported yet — copy them one at a time.",
+      "batchBetweenVolumes": "Moving several entries between two images at once is not supported yet — copy them with F5, then delete the originals.",
       "mixedArchiveSelection": "Select only .lha archives, or none, when copying into a volume — not a mix of the two."
     },
     "status": {
@@ -1406,6 +1406,10 @@
       "copyingOut": "Copying {{name}} out…",
       "copyingSelectionOut_one": "Copying {{count}} item out…",
       "copyingSelectionOut_other": "Copying {{count}} items out…",
+      "copyingSelectionBetween_one": "Copying {{count}} item between images…",
+      "copyingSelectionBetween_other": "Copying {{count}} items between images…",
+      "copyOutStopped_one": "Stopped — {{count}} file had already been written out",
+      "copyOutStopped_other": "Stopped — {{count}} files had already been written out",
       "selectionCopiedOut_one": "{{count}} item copied out",
       "selectionCopiedOut_other": "{{count}} items copied out",
       "selectionCopyOutCancelled": "Stopped — {{done}} of {{total}} copied out",

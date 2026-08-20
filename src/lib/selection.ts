@@ -176,3 +176,34 @@ export function singleSelected(entries: PanelEntry[], selected: Set<string>): Pa
   const [name] = selected;
   return entries.find((e) => e.name === name) ?? null;
 }
+
+/**
+ * The rows of a volume-pane selection, as the batch commands take them
+ * (ART-064, ART-065).
+ *
+ * `null` — not a filtered-down list — when **any** picked row has no header
+ * block. A row without one is a row ART cannot address in the volume, and
+ * quietly dropping it would copy nine of the ten entries the user selected
+ * and report a complete batch. The caller refuses the whole selection
+ * instead, which is the same all-or-nothing promise the commands themselves
+ * make.
+ *
+ * The name goes through untouched: escaping it for the host filesystem and
+ * checking it stays inside the destination are Rust's (`host_target`,
+ * `safe_join`), and a name pre-mangled here would arrive at that boundary
+ * already changed.
+ */
+export function selectedEntriesForBatch(
+  entries: PanelEntry[]
+): { header_block: number; name: string; is_dir: boolean }[] | null {
+  const picks = [];
+  for (const entry of entries) {
+    if (entry.header_block === null || entry.header_block === undefined) return null;
+    picks.push({
+      header_block: entry.header_block,
+      name: entry.name,
+      is_dir: entry.is_dir,
+    });
+  }
+  return picks;
+}

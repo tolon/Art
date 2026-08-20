@@ -488,6 +488,76 @@ export async function volumeCopyOut(
   });
 }
 
+/**
+ * One row the user picked in a volume pane, as the batch commands take it.
+ *
+ * The name goes to Rust as the volume holds it, never escaped or joined here:
+ * `host_target` decides what NTFS will accept and `safe_join` decides whether
+ * it stays inside the folder the user picked. A caller that pre-joined would
+ * be handing that boundary a path it can no longer check — the same reason
+ * `volumeCopyOut` takes `destDir` and `name` apart.
+ */
+export type SelectedEntry = {
+  header_block: number;
+  name: string;
+  is_dir: boolean;
+};
+
+/**
+ * F5 on a multi-selection in a volume pane, out to the user's disk — one job
+ * for the lot (ART-065). Returns a job id.
+ *
+ * This replaced a `Promise.all` of one `volumeCopyOut` job per folder and one
+ * `volumeExtractTo` call per file. Each was safe on its own; the batch was
+ * not — a selection of ten where the seventh failed left six on disk, three
+ * never attempted, and no report tying any of it back to one selection. The
+ * result arrives on `onVolumeWriteResult` as a single `copy_out`.
+ */
+export async function volumeExtractMany(
+  path: string,
+  volumeIndex: number,
+  entries: SelectedEntry[],
+  destDir: string,
+  options?: CopyOptions
+): Promise<number> {
+  return invoke<number>("volume_extract_many", {
+    path,
+    volumeIndex,
+    entries,
+    destDir,
+    options: options ?? null,
+  });
+}
+
+/**
+ * F5 on a multi-selection between two images — one staged batch (ART-064).
+ * Returns a job id.
+ *
+ * Everything picked is staged out of the source volume into one temp folder
+ * and then copied in as a single operation, so the destination gets one
+ * backup and one commit. A cancelled batch commits nothing, the same
+ * guarantee `volumeCopyInMany` gives the other direction.
+ */
+export async function volumeCopyBetweenMany(
+  fromPath: string,
+  fromVolume: number,
+  entries: SelectedEntry[],
+  toPath: string,
+  toVolume: number,
+  toDir: number | null,
+  options?: CopyOptions
+): Promise<number> {
+  return invoke<number>("volume_copy_between_many", {
+    fromPath,
+    fromVolume,
+    entries,
+    toPath,
+    toVolume,
+    toDir,
+    options: options ?? null,
+  });
+}
+
 /** Copy a folder from one image into another (§4.3). Returns a job id. */
 export async function volumeCopyBetween(
   fromPath: string,

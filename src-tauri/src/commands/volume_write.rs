@@ -36,8 +36,8 @@ use crate::core::volume::device::{FileRegionMut, VecDevice};
 use crate::core::volume::journal::find_journal;
 use crate::core::volume::mount::{mount, scan_image, VolumeEntry};
 use crate::core::volume::write::copy::{
-    copy_into_volume, extract_from_volume, windows_safe_name, CopyReport, CopySource,
-    ExtractReport, HostFolder, HostSelection, StagedTree,
+    copy_into_volume, extract_from_volume, extract_selection_from_volume, windows_safe_name,
+    CopyReport, CopySource, ExtractReport, HostFolder, HostSelection, SelectedEntry, StagedTree,
 };
 use crate::core::volume::write::plan::{plan_copy, CopyPlan, SourceEntry};
 use crate::core::volume::write::{
@@ -1687,6 +1687,111 @@ pub fn volume_copy_out(
     Ok(id)
 }
 
+/// The whole of what [`volume_extract_many`]'s job runs: mount the source
+/// volume once and write every picked entry into the folder the user chose,
+/// as one operation with one report.
+///
+/// Its own function, called from the job closure rather than reimplemented in
+/// a test — the same reason [`copy_out_folder`] and [`copy_between_volumes`]
+/// are.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn extract_selection_out(
+    image: &Path,
+    volume_index: usize,
+    entries: &[SelectedEntry],
+    dest_dir: &Path,
+    write_sidecars: bool,
+    policy: OverwritePolicy,
+    progress: &dyn ProgressSink,
+) -> CoreResult<ExtractReport> {
+    let entry = pick(image, volume_index)?;
+    let (device, geometry) = mount(image, &entry)?;
+    extract_selection_from_volume(
+        &device,
+        &geometry,
+        entries,
+        dest_dir,
+        write_sidecars,
+        policy,
+        progress,
+    )
+}
+
+/// F5 on a multi-selection in a volume pane, out to the user's disk — **one**
+/// job for the lot (ART-065).
+///
+/// What it replaces: the frontend used to run one `volume_copy_out` job per
+/// selected folder and one direct `volume_extract_to` call per selected file,
+/// all inside a single `Promise.all`. Each was safe on its own, and the batch
+/// was not: a selection of ten where the seventh failed left the first six on
+/// disk, never attempted the last three, and produced no report tying any of
+/// it back to one selection. One mount, one walk, one `ExtractReport`, one
+/// Stop that stops everything.
+///
+/// The destination folder is the one the user picked; each entry's own name is
+/// joined onto it *here*, by
+/// [`host_target`](crate::core::volume::write::copy::host_target), never by
+/// the caller — the same boundary [`folder_destination`] exists to hold.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn volume_extract_many(
+    path: String,
+    volume_index: usize,
+    entries: Vec<SelectedEntry>,
+    dest_dir: String,
+    options: Option<CopyOptions>,
+    app: AppHandle,
+    registry: State<'_, Arc<JobRegistry>>,
+    oplog: State<'_, JsonlOperationLog>,
+) -> AppResult<JobId> {
+    let image = PathBuf::from(path.trim());
+    let destination = PathBuf::from(dest_dir.trim());
+    let options = options.unwrap_or_default();
+    let policy = options.overwrite.unwrap_or_default();
+    let sidecars = options.sidecars.unwrap_or(true);
+    let count = entries.len();
+
+    let log_path = oplog.path().to_path_buf();
+    let registry = Arc::clone(&registry);
+    let emit_app = app.clone();
+    let title = format!("Copying a selection out of {}", image.display());
+
+    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+        let outcome = extract_selection_out(
+            &image,
+            volume_index,
+            &entries,
+            &destination,
+            sidecars,
+            policy,
+            progress,
+        );
+
+        let record = user_operation("Copy a selection out of a volume")
+            .source(format!("{}:{volume_index}", image.display()))
+            .destination(destination.display().to_string())
+            .detail("Selected", count.to_string());
+        let record = match &outcome {
+            Ok(report) => record
+                .detail("Files", report.files_written.to_string())
+                .detail("Folders", report.directories_created.to_string())
+                .detail("Sidecars", report.sidecars_written.to_string())
+                .outcome(OperationOutcome::verified(report.is_complete())),
+            Err(err) => record.failed(err),
+        };
+        super::oplog::write_to_path(&log_path, &record);
+
+        let report = outcome?;
+        let _ = emit_app.emit(
+            VOLUME_WRITE_EVENT,
+            VolumeWriteResult::CopyOut { job_id, report },
+        );
+        Ok(())
+    });
+
+    Ok(id)
+}
+
 /// The one refusal `volume_copy_between` makes before anything is staged:
 /// both sides naming the same image file.
 ///
@@ -1814,6 +1919,132 @@ pub fn volume_copy_between(
     Ok(id)
 }
 
+/// The whole pipeline `volume_copy_between_many`'s job runs: stage the picked
+/// **selection** out of the source volume, then insert the staged folder into
+/// the destination as one batch (ART-064).
+///
+/// The two halves are the ones that already existed —
+/// [`StagedTree::stage_selection`] on the way out and
+/// [`run_copy_in_staged_with`] on the way in — so the batch inherits the
+/// insert side's whole-file guarantee unchanged: one backup, one commit, and
+/// nothing on the user's image until the whole selection validates.
+///
+/// [`OnCancel::Abandon`], not `KeepWhatLanded`, for the same reason
+/// [`copy_selection_into_volume`] chose it: a batch the user picked by hand
+/// and then stopped must not commit a random prefix of itself and report
+/// success.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn copy_selection_between_volumes(
+    from_image: &Path,
+    from_volume: usize,
+    entries: &[SelectedEntry],
+    to_image: &Path,
+    to_volume: usize,
+    to_dir: u32,
+    policy: OverwritePolicy,
+    cache: &Path,
+    progress: &dyn ProgressSink,
+) -> CoreResult<(CopyReport, Option<String>)> {
+    let entry = pick(from_image, from_volume)?;
+    let (device, geometry) = mount(from_image, &entry)?;
+    let staged = StagedTree::stage_selection(&device, &geometry, entries, cache, progress)?;
+    // The source image is read; hold nothing open across the write.
+    drop(device);
+
+    run_copy_in_staged_with(
+        to_image,
+        to_volume,
+        to_dir,
+        &staged,
+        policy,
+        OnCancel::Abandon,
+        progress,
+    )
+}
+
+/// F5 on a multi-selection between two images — one staged batch (ART-064).
+///
+/// The direction that used to refuse: "Copying several entries between two
+/// images at once is not supported yet." The refusal was honest and the gap
+/// was real — there was no way to stage more than one tree, so a batch would
+/// have meant several separate stage-and-insert round trips with no shared
+/// atomicity, which is the weakness ART-065 filed from the other side. Both
+/// are closed by the same primitive: one staging pass writes every picked
+/// entry into one temp folder, and one insert copies that folder in.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn volume_copy_between_many(
+    from_path: String,
+    from_volume: usize,
+    entries: Vec<SelectedEntry>,
+    to_path: String,
+    to_volume: usize,
+    to_dir: Option<u32>,
+    options: Option<CopyOptions>,
+    app: AppHandle,
+    registry: State<'_, Arc<JobRegistry>>,
+    oplog: State<'_, JsonlOperationLog>,
+) -> AppResult<JobId> {
+    let source_image = PathBuf::from(from_path.trim());
+    let target_image = PathBuf::from(to_path.trim());
+    let policy = options.unwrap_or_default().overwrite.unwrap_or_default();
+    let count = entries.len();
+
+    refuse_same_image(&source_image, &target_image)?;
+
+    let cache = {
+        use tauri::Manager;
+        app.path()
+            .app_cache_dir()
+            .unwrap_or_else(|_| std::env::temp_dir())
+    };
+    let log_path = oplog.path().to_path_buf();
+    let registry = Arc::clone(&registry);
+    let emit_app = app.clone();
+    let title = format!("Copying a selection between {from_path} and {to_path}");
+
+    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+        let outcome = copy_selection_between_volumes(
+            &source_image,
+            from_volume,
+            &entries,
+            &target_image,
+            to_volume,
+            to_dir.unwrap_or(0),
+            policy,
+            &cache,
+            progress,
+        );
+
+        let record = user_operation("Copy a selection between volumes")
+            .source(format!("{from_path}:{from_volume}"))
+            .destination(format!("{to_path}:{to_volume}"))
+            .detail("Selected", count.to_string());
+        let record = match &outcome {
+            Ok((report, _)) => record
+                .detail("Files", report.files_copied.to_string())
+                .outcome(OperationOutcome::verified(
+                    report.files_verified == report.files_copied,
+                )),
+            Err(err) => record.failed(err),
+        };
+        super::oplog::write_to_path(&log_path, &record);
+
+        let (report, backup) = outcome?;
+        let _ = emit_app.emit(
+            VOLUME_WRITE_EVENT,
+            VolumeWriteResult::CopyIn {
+                job_id,
+                report,
+                backup,
+            },
+        );
+        Ok(())
+    });
+
+    Ok(id)
+}
+
 /// The insert half of a volume-to-volume copy.
 fn run_copy_in_staged(
     image: &Path,
@@ -1821,6 +2052,29 @@ fn run_copy_in_staged(
     parent: u32,
     staged: &StagedTree,
     policy: OverwritePolicy,
+    progress: &dyn ProgressSink,
+) -> CoreResult<(CopyReport, Option<String>)> {
+    run_copy_in_staged_with(
+        image,
+        volume_index,
+        parent,
+        staged,
+        policy,
+        OnCancel::KeepWhatLanded,
+        progress,
+    )
+}
+
+/// [`run_copy_in_staged`], with a say in what a cancellation means — the same
+/// distinction [`run_copy_in_folder_with`] draws, and for the same reason.
+#[allow(clippy::too_many_arguments)]
+fn run_copy_in_staged_with(
+    image: &Path,
+    volume_index: usize,
+    parent: u32,
+    staged: &StagedTree,
+    policy: OverwritePolicy,
+    on_cancel: OnCancel,
     progress: &dyn ProgressSink,
 ) -> CoreResult<(CopyReport, Option<String>)> {
     let entry = pick(image, volume_index)?;
@@ -1842,6 +2096,11 @@ fn run_copy_in_staged(
                 let mut writer = session.writer(geometry, image, entry.byte_offset)?;
                 copy_into_volume(&mut writer, parent, staged.source(), policy, progress)?
             };
+            if report.cancelled && on_cancel == OnCancel::Abandon {
+                // Everything so far happened in a buffer; returning before the
+                // session commits leaves the user's image exactly as it was.
+                return Err(CoreError::Cancelled);
+            }
             let backup = session.commit(image, &geometry)?;
             Ok((report, backup))
         }
@@ -1860,6 +2119,18 @@ fn run_copy_in_staged(
             device.sync()?;
             // As in [`with_volume`]: the journal, not a whole-image read, is
             // what makes this safe at hard-disk sizes.
+            if report.cancelled && on_cancel == OnCancel::Abandon {
+                // Synced first: the files that did land are complete,
+                // journalled operations and belong on disk. What is refused is
+                // calling this a success — and it says how many (ART-058).
+                return Err(if report.files_copied > 0 {
+                    CoreError::CancelledPartway {
+                        files: report.files_copied as u64,
+                    }
+                } else {
+                    CoreError::Cancelled
+                });
+            }
             Ok((report, None))
         }
     }
@@ -3566,5 +3837,266 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- ART-064 / ART-065: a selection is one operation, both ways ----
+
+    /// Build a source image holding a drawer with two files in it and one
+    /// loose file at the root — the mixed selection both directions have to
+    /// handle, because a user picks rows, not shapes.
+    fn selection_source(name: &str) -> (Image, Vec<SelectedEntry>) {
+        let image = Image::new(name, 1760);
+        with_writer(&image.path, 0, |writer| writer.make_dir(0, "Game")).unwrap();
+        let game = image
+            .listing()
+            .into_iter()
+            .find(|e| e.name == "Game")
+            .unwrap();
+        with_writer(&image.path, 0, |writer| {
+            writer.add_file(game.block, "Game.exe", b"executable", Default::default())
+        })
+        .unwrap();
+        with_writer(&image.path, 0, |writer| {
+            writer.add_file(game.block, "Data.bin", b"data", Default::default())
+        })
+        .unwrap();
+        with_writer(&image.path, 0, |writer| {
+            writer.add_file(0, "Readme.txt", b"read me", Default::default())
+        })
+        .unwrap();
+
+        let readme = image
+            .listing()
+            .into_iter()
+            .find(|e| e.name == "Readme.txt")
+            .unwrap();
+        let picks = vec![
+            SelectedEntry {
+                header_block: game.block,
+                name: "Game".into(),
+                is_dir: true,
+            },
+            SelectedEntry {
+                header_block: readme.block,
+                name: "Readme.txt".into(),
+                is_dir: false,
+            },
+        ];
+        (image, picks)
+    }
+
+    /// ART-065: one job, one walk, one report — a folder and a file picked
+    /// together arrive side by side under the folder the user chose.
+    ///
+    /// The old shape ran a `volume_copy_out` job per folder and a bare
+    /// `volume_extract_to` per file inside one `Promise.all`; the assertion
+    /// that catches the difference is the single `ExtractReport` counting both
+    /// halves, which no arrangement of separate calls can produce.
+    #[test]
+    fn a_selection_copies_out_of_a_volume_as_one_operation() {
+        let (image, picks) = selection_source("extract-many");
+        let dest = image.dir.join("out");
+
+        let report = extract_selection_out(
+            &image.path,
+            0,
+            &picks,
+            &dest,
+            true,
+            OverwritePolicy::Skip,
+            &NoProgress,
+        )
+        .unwrap();
+
+        assert_eq!(report.files_written, 3, "two inside Game, plus Readme.txt");
+        assert_eq!(report.directories_created, 1, "Game itself");
+        assert!(!report.cancelled);
+        assert!(report.is_complete(), "{report:?}");
+
+        assert_eq!(
+            std::fs::read(dest.join("Game/Game.exe")).unwrap(),
+            b"executable"
+        );
+        assert_eq!(std::fs::read(dest.join("Game/Data.bin")).unwrap(), b"data");
+        assert_eq!(std::fs::read(dest.join("Readme.txt")).unwrap(), b"read me");
+    }
+
+    /// The half of ART-065 that the `Promise.all` shape could not give: a
+    /// stopped selection says so **in the one report**, rather than leaving
+    /// some entries done, some never attempted and nothing tying the two
+    /// together.
+    #[test]
+    fn a_cancelled_selection_copy_out_says_so_in_one_report() {
+        struct StopAtOnce;
+        impl ProgressSink for StopAtOnce {
+            fn report(&self, _done: u64, _total: Option<u64>, _message: &str) {}
+            fn is_cancelled(&self) -> bool {
+                true
+            }
+        }
+
+        let (image, picks) = selection_source("extract-many-cancel");
+        let dest = image.dir.join("out");
+
+        let report = extract_selection_out(
+            &image.path,
+            0,
+            &picks,
+            &dest,
+            true,
+            OverwritePolicy::Skip,
+            &StopAtOnce,
+        )
+        .unwrap();
+
+        assert!(report.cancelled, "the report has to say it was stopped");
+        assert_eq!(report.files_written, 0);
+        assert!(!report.is_complete());
+    }
+
+    /// Two names one volume keeps apart and one host filesystem cannot.
+    /// Refused **before** anything is written, naming both, rather than one
+    /// silently overwriting the other on the way out.
+    #[test]
+    fn a_selection_whose_names_collide_on_the_host_is_refused_before_anything_is_written() {
+        let image = Image::new("extract-many-collide", 1760);
+        let dest = image.dir.join("out");
+
+        let picks = vec![
+            SelectedEntry {
+                header_block: 100,
+                name: "Prices: 1993".into(),
+                is_dir: false,
+            },
+            SelectedEntry {
+                header_block: 101,
+                name: "Prices? 1993".into(),
+                is_dir: false,
+            },
+        ];
+
+        let err = extract_selection_out(
+            &image.path,
+            0,
+            &picks,
+            &dest,
+            true,
+            OverwritePolicy::Overwrite,
+            &NoProgress,
+        )
+        .unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains("Prices: 1993"), "{message}");
+        assert!(message.contains("Prices? 1993"), "{message}");
+        assert!(
+            !dest.exists(),
+            "refused before anything is written means the folder is not even created"
+        );
+    }
+
+    /// ART-064: the direction that used to refuse. A folder and a file picked
+    /// together cross into a second image in **one** staged batch, landing
+    /// side by side inside the destination directory the user was standing in.
+    #[test]
+    fn a_selection_copies_between_two_images_as_one_batch() {
+        let (from, picks) = selection_source("between-many-from");
+        let to = Image::new("between-many-to", 1760);
+        with_writer(&to.path, 0, |writer| writer.make_dir(0, "Dest")).unwrap();
+        let dest = to.listing().into_iter().find(|e| e.name == "Dest").unwrap();
+
+        let cache = scratch("between-many-cache");
+        let (report, backup) = copy_selection_between_volumes(
+            &from.path,
+            0,
+            &picks,
+            &to.path,
+            0,
+            dest.block,
+            OverwritePolicy::Skip,
+            &cache,
+            &NoProgress,
+        )
+        .unwrap();
+
+        assert_eq!(report.files_copied, 3);
+        assert_eq!(report.files_verified, 3);
+        assert!(backup.is_some(), "one backup for the whole batch");
+
+        let root = to.listing();
+        assert_eq!(root.len(), 1, "nothing landed loose at the root: {root:?}");
+
+        let inside = to.listing_of(dest.block);
+        let names: Vec<String> = inside.iter().map(|e| e.name.clone()).collect();
+        assert!(names.contains(&"Game".to_string()), "{names:?}");
+        assert!(names.contains(&"Readme.txt".to_string()), "{names:?}");
+
+        let game = inside.iter().find(|e| e.name == "Game").unwrap();
+        assert!(game.is_dir);
+        let within: Vec<String> = to
+            .listing_of(game.block)
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert_eq!(within.len(), 2, "the drawer kept its contents: {within:?}");
+
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    /// The all-or-nothing half of ART-064, which is the whole reason a batch
+    /// is worth building rather than a loop at the call site: a selection the
+    /// user stops partway commits **nothing** to the destination image.
+    ///
+    /// `OnCancel::Abandon` is what this proves, and an `Err` alone would not
+    /// be enough — the assertion that matters is the destination's bytes.
+    #[test]
+    fn a_cancelled_selection_between_two_images_leaves_the_destination_untouched() {
+        struct StopAfter(std::sync::atomic::AtomicU64, u64);
+        impl ProgressSink for StopAfter {
+            fn report(&self, done: u64, _total: Option<u64>, _message: &str) {
+                self.0.store(done, std::sync::atomic::Ordering::SeqCst);
+            }
+            fn is_cancelled(&self) -> bool {
+                self.0.load(std::sync::atomic::Ordering::SeqCst) >= self.1
+            }
+        }
+
+        let (from, picks) = selection_source("between-many-cancel-from");
+        let to = Image::new("between-many-cancel-to", 1760);
+        let before = to.bytes();
+
+        let cache = scratch("between-many-cancel-cache");
+        // High enough to let staging finish and low enough to stop the insert
+        // partway: the staging pass reports 0 for each of the two roots, and
+        // the insert reports a rising count as files land.
+        let sink = StopAfter(std::sync::atomic::AtomicU64::new(0), 2);
+        let err = copy_selection_between_volumes(
+            &from.path,
+            0,
+            &picks,
+            &to.path,
+            0,
+            0,
+            OverwritePolicy::Skip,
+            &cache,
+            &sink,
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                CoreError::Cancelled | CoreError::CancelledPartway { .. }
+            ),
+            "{err}"
+        );
+        assert_eq!(
+            to.bytes(),
+            before,
+            "a cancelled selection must commit nothing to the destination image"
+        );
+        assert!(to.listing().is_empty());
+
+        let _ = std::fs::remove_dir_all(&cache);
     }
 }

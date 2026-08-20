@@ -26,6 +26,36 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-176** 🔵 **F5 between two images means two different things for one
+entry and for several** — *found 2026-08-20 while closing ART-064*
+`src/pages/FileManager.tsx::copyTo` · `src-tauri/src/commands/volume_write.rs::copy_between_volumes`
+
+Copying **several** entries between two images now keeps each one's own name:
+`Game/` and `Readme.txt` arrive as `Game/` and `Readme.txt`, the shape
+`HostSelection` gives the local→volume direction and the one
+`volume_copy_between_many` was built to match.
+
+Copying **one** folder between two images does not. `copy_between_volumes`
+stages `from_dir`'s *contents* and copies those into `to_dir`, so F5 on
+`Tools` lands `Editor` and `Readme` loose in the destination directory and no
+`Tools` drawer at all. That is the behaviour
+`a_tree_copies_between_two_images_through_the_command_pipeline` has asserted
+since phase 1a — it is tested, not accidental — and it is also what
+[ART-081](#open) means by "F5 on a lone file … copies the whole folder the
+file happens to be in", seen from the folder end.
+
+So the two paths disagree, and the disagreement is new: before ART-064 the
+multi-entry case simply refused, so there was nothing to disagree with.
+Nothing is lost either way and nothing is destroyed — F5 deletes nothing — but
+a user who selects one drawer and a user who selects two get different shapes.
+
+Not fixed here, and deliberately: making the single-entry case keep the
+drawer's name is a **product** decision about what F5 means between two
+images, it contradicts a test that was written on purpose, and it is the same
+call ART-081 has to make about a lone file. Both should be answered in one
+pass, by whoever owns that decision, rather than settled as a side effect of
+a batching task.
+
 **ART-175** 🟡 **The OS Builder can preview what a package would
 replace and still cannot preview what switching a recipe component on would
 replace — `collide::preview` can now answer, and nothing asks it** — *found
@@ -619,9 +649,17 @@ is copied with F5 for now.
 
 Fixing it means a command that stages one *entry* — extract to a scratch path,
 then `put_file` into the destination volume, inside one write session at each
-end so the backup and journal guarantees hold — which is the same missing
-primitive ART-064 needs for batching, and it should be built once for both.
-The F5 whole-folder surprise above is worth fixing in the same pass.
+end so the backup and journal guarantees hold.
+
+**Half of that now exists.** [ART-064](#fixed) built
+`core::volume::write::copy::extract_selection_from_volume`, which stages a
+named set of entries — one of them included — out of a volume, and
+`volume_copy_between_many` carries the result into the other image under one
+backup and one commit. What is still missing is the **delete** half: F6 is a
+move, and moving between two images means deleting the original after the copy
+verifies, which nothing here does yet. So this stays open on the delete, not
+on the staging. The F5 whole-folder surprise above is now
+[ART-176](#open), which has to be answered with it.
 
 Found while building F6 in phase 2b task 3; recorded rather than smuggled into
 a UI task, which is what that task's plan requires.
@@ -682,42 +720,6 @@ this needs either a mock of the Tauri IPC surface (`@tauri-apps/api/core`'s
 `invoke`, `@tauri-apps/api/event`'s `listen`) sufficient to render the page
 in a test, or splitting `FileManager.tsx` into smaller components each
 small enough to mock individually — a real task, not a quick fix.
-
-**ART-065** 🟡 **Volume→local multi-select is several concurrent operations, not one**
-`src/pages/FileManager.tsx::copySelectionTo` (line ~1090) · When the source
-pane is a volume and more than one entry is selected for extraction to a
-local folder, each entry becomes its own concurrent operation inside a
-single `Promise.all` — a subdirectory goes through its own `volumeCopyOut`
-job (awaited individually inside the map callback), a plain file through its
-own direct `volumeExtractTo` call — rather than the one atomic, one-job
-operation `volumeCopyInMany` (local→volume) and `volumeCopyBetween`
-(volume→volume, staged) both give their directions. Each individual
-extraction is still safe on its own — every write is the same
-backup-and-validate pipeline as ever — but the *batch* has none of the
-all-or-nothing guarantee the other two directions do: a selection of ten
-entries where the seventh fails to extract leaves the first six on disk and
-the last three silently never attempted, with no report tying the partial
-result back to "this was one selection." Needs a batched extract primitive
-(`volume_extract_many`, mirroring `volume_copy_in_many`'s shape) rather than
-fixing the concurrency at the call site.
-
-**ART-064** 🟡 **Volume→volume multi-select refuses rather than batching**
-`src/pages/FileManager.tsx::copySelectionTo` (line ~1124) · "Two volumes and
-more than one entry: not supported yet" — `setError(t("files.err.batchBetweenVolumes"))`
-("Copying several entries between two images at once is not supported yet —
-copy them one at a time."). Not a defect in the sense of wrong behaviour: the
-refusal is explicit, immediate, and names the reason, which is exactly what
-§89 asks for when a case is not handled. It is recorded here because it is
-the one direction of the four (local→volume, volume→local, volume→volume
-single-entry, volume→volume batch) Task 8's roadmap self-review calls out by
-name as deliberately not built: there is no `volume_copy_between_many`
-primitive to build a batch on top of — `volume_copy_between` (the command
-`e3035cf` added end-to-end coverage for) stages exactly one directory tree
-through a temp folder per call, and doing several would mean either several
-separate stage-and-insert round trips (no shared atomicity, the same
-weakness as ART-065) or a `HostSelection`-shaped staging step that does not
-exist yet on the extract side. Needs its own task, not a quick fix — see
-`ART-065` for the sibling gap it would need to close at the same time.
 
 **ART-062** 🔵 **No language has been checked on screen**
 `src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
@@ -785,6 +787,101 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-065** 🟡 **Volume→local multi-select is several concurrent operations, not one**
+`src/pages/FileManager.tsx::copySelectionTo` (line ~1090) · When the source
+pane is a volume and more than one entry is selected for extraction to a
+local folder, each entry becomes its own concurrent operation inside a
+single `Promise.all` — a subdirectory goes through its own `volumeCopyOut`
+job (awaited individually inside the map callback), a plain file through its
+own direct `volumeExtractTo` call — rather than the one atomic, one-job
+operation `volumeCopyInMany` (local→volume) and `volumeCopyBetween`
+(volume→volume, staged) both give their directions. Each individual
+extraction is still safe on its own — every write is the same
+backup-and-validate pipeline as ever — but the *batch* has none of the
+all-or-nothing guarantee the other two directions do: a selection of ten
+entries where the seventh fails to extract leaves the first six on disk and
+the last three silently never attempted, with no report tying the partial
+result back to "this was one selection." Needs a batched extract primitive
+(`volume_extract_many`, mirroring `volume_copy_in_many`'s shape) rather than
+fixing the concurrency at the call site.
+
+**Fixed 2026-08-20 on `debt-wave-c1`, together.** They are one gap seen from
+two directions, and the thing missing was the same in both: a way to say
+"these entries, out of this volume, as one operation".
+
+`core::volume::write::copy::extract_selection_from_volume` is that primitive.
+It takes a `&[SelectedEntry]` — header block, name, is-dir, exactly what the
+pane has on screen — mounts once, and writes every picked entry into one host
+folder under one `ExtractReport`. Cancellation is checked between whole
+entries, never inside one.
+
+Both directions are that function with a different destination:
+
+| direction | command | destination |
+|---|---|---|
+| volume → local | `volume_extract_many` | the folder the user picked |
+| volume → volume | `volume_copy_between_many` | a temp folder, then `run_copy_in_staged_with` into the other image |
+
+**What each gained.** ART-065's volume→local path was a `Promise.all` of one
+`volumeCopyOut` job per folder and one bare `volumeExtractTo` per file; each
+was safe alone and the batch had no guarantee at all. It is now one job, one
+walk, one report, one Stop — and a stopped run says so
+(`files.status.copyOutStopped`) rather than reporting the files it happened to
+reach as a finished job. ART-064's volume→volume path refused by name; it now
+stages the whole selection into one temp folder and inserts it in one
+operation, so the destination takes **one** backup and one commit, and
+`OnCancel::Abandon` means a stopped batch commits nothing — the same promise
+`volume_copy_in_many` already gave the opposite direction.
+
+Two smaller things fell out and are worth naming:
+
+- **`run_copy_in_staged` gained an `on_cancel`**, so the staged insert can
+  abandon the way the host-folder insert already could. The single-tree
+  `volume_copy_between` keeps `KeepWhatLanded`; only the batch abandons.
+- **A collision no volume can have and one host folder can.** `Prices: 1993`
+  and `Prices? 1993` are two entries there and one file here, so
+  `check_escaped_name_collisions` refuses the selection up front, naming both
+   — the same shape and the same case-insensitive comparison
+  `HostSelection::check_for_name_collisions` uses (ART-072).
+
+**What did *not* change, deliberately.** F6 (Move) still refuses several
+entries between two images: a move is a copy *and* a delete, and the delete
+half is ART-081's missing single-entry primitive, not this one.
+`files.err.batchBetweenVolumes` survives for that refusal and its text was
+rewritten in both catalogues to talk about **moving** rather than copying,
+because the sentence it used to carry is now false.
+
+Covered by `commands::volume_write::tests::a_selection_copies_out_of_a_volume_as_one_operation`,
+`…::a_cancelled_selection_copy_out_says_so_in_one_report`,
+`…::a_selection_whose_names_collide_on_the_host_is_refused_before_anything_is_written`,
+`…::a_selection_copies_between_two_images_as_one_batch`, and
+`…::a_cancelled_selection_between_two_images_leaves_the_destination_untouched`
+(which asserts the destination's **bytes**, not merely that an `Err` came
+back). The frontend half — refuse the whole selection rather than silently
+dropping a row ART cannot address — is `src/lib/selection.test.ts`'s
+`selectedEntriesForBatch` block.
+
+**ART-064** 🟡 **Volume→volume multi-select refuses rather than batching**
+`src/pages/FileManager.tsx::copySelectionTo` (line ~1124) · "Two volumes and
+more than one entry: not supported yet" — `setError(t("files.err.batchBetweenVolumes"))`
+("Copying several entries between two images at once is not supported yet —
+copy them one at a time."). Not a defect in the sense of wrong behaviour: the
+refusal is explicit, immediate, and names the reason, which is exactly what
+§89 asks for when a case is not handled. It is recorded here because it is
+the one direction of the four (local→volume, volume→local, volume→volume
+single-entry, volume→volume batch) Task 8's roadmap self-review calls out by
+name as deliberately not built: there is no `volume_copy_between_many`
+primitive to build a batch on top of — `volume_copy_between` (the command
+`e3035cf` added end-to-end coverage for) stages exactly one directory tree
+through a temp folder per call, and doing several would mean either several
+separate stage-and-insert round trips (no shared atomicity, the same
+weakness as ART-065) or a `HostSelection`-shaped staging step that does not
+exist yet on the extract side. Needs its own task, not a quick fix — see
+`ART-065` for the sibling gap it would need to close at the same time.
+
+**Fixed 2026-08-20 on `debt-wave-c1`** — see ART-065 immediately above, which
+this was closed with and by the same primitive.
 
 **ART-050** 🟡 **The §92 pre-flight gate does not check bitmap consistency or hash-chain integrity**
 `core/adf/validate.rs::validate_image` · `commit_whole_file` (ART-042) refuses

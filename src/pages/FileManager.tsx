@@ -164,6 +164,7 @@ import {
   markByMask,
   selectOnly,
   selectRange,
+  selectedEntriesForBatch,
   spaceToggle,
   toggleOne,
   toggleSelectAll,
@@ -189,9 +190,11 @@ import {
   describeCopy,
   onVolumeWriteResult,
   volumeCopyBetween,
+  volumeCopyBetweenMany,
   volumeCopyIn,
   volumeCopyInMany,
   volumeCopyOut,
+  volumeExtractMany,
   volumeDelete,
   volumeDeleteMany,
   volumeMakeDir,
@@ -1766,12 +1769,18 @@ export function FileManager() {
       } else {
         const { report } = result;
         setMessage(
-          report.sidecars_written > 0
-            ? t("files.status.filesWrittenOutSidecars", {
-                count: report.files_written,
-                sidecars: report.sidecars_written,
-              })
-            : t("files.status.filesWrittenOut", { count: report.files_written })
+          // A stopped extraction says so rather than reporting the files it
+          // happened to reach as a finished job (ART-065): "8 files written
+          // out" for a selection of ten the user cancelled is the same
+          // dishonesty `describeCopy` already refuses on the way in.
+          report.cancelled
+            ? t("files.status.copyOutStopped", { count: report.files_written })
+            : report.sidecars_written > 0
+              ? t("files.status.filesWrittenOutSidecars", {
+                  count: report.files_written,
+                  sidecars: report.sidecars_written,
+                })
+              : t("files.status.filesWrittenOut", { count: report.files_written })
         );
         if (report.skipped.length > 0) {
           setError(report.skipped.slice(0, 3).join(" · "));
@@ -2512,59 +2521,81 @@ export function FileManager() {
       return;
     }
 
-    // ---- a volume pick, out to the user's disk: each entry its own extract ----
+    // ---- a volume pick, out to the user's disk: one job for the lot ----
+    //
+    // ART-065. This used to be a `Promise.all` of one `volumeCopyOut` job per
+    // folder and one bare `volumeExtractTo` per file. Each was safe on its
+    // own and the *batch* was not: ten entries where the seventh failed left
+    // six on disk, three never attempted, and no report tying any of it back
+    // to one selection. `volumeExtractMany` mounts once, walks once and
+    // returns one `ExtractReport` — the same shape `volumeCopyInMany` gives
+    // the other direction.
     if (source.kind !== "local" && target.kind === "local" && source.volumeIndex !== null) {
-      const volumeIndex = source.volumeIndex;
-      setBusy(t("files.status.copyingSelectionOut", { count: entries.length }));
+      const picks = selectedEntriesForBatch(entries);
+      if (picks === null) {
+        setError(t("files.err.openPartitionFirst"));
+        return;
+      }
+      setBusy(t("files.status.copyingSelectionOut", { count: picks.length }));
       try {
-        // Each outcome is tracked, not just awaited: a job the user cancelled
-        // partway through must not be folded into the same success message
-        // as one that actually finished (finding 3 of the phase-1a
-        // whole-branch review — `runJob` resolving "cancelled" as success was
-        // half the defect; reporting it honestly here is the other half).
-        const outcomes = await Promise.all(
-          entries
-            .filter((entry) => entry.header_block !== null)
-            .map(async (entry): Promise<JobOutcome> => {
-              const headerBlock = entry.header_block as number;
-              if (entry.is_dir) {
-                return runJob(() =>
-                  volumeCopyOut(
-                    source.location,
-                    volumeIndex,
-                    headerBlock,
-                    target.location,
-                    entry.name,
-                    { overwrite: policy, sidecars: powerMode }
-                  )
-                );
-              }
-              await volumeExtractTo(source.location, volumeIndex, headerBlock, target.location);
-              return "finished";
-            })
+        pendingCopy.current = await volumeExtractMany(
+          source.location,
+          source.volumeIndex,
+          picks,
+          target.location,
+          { overwrite: policy, sidecars: powerMode }
         );
-        const cancelled = outcomes.filter((outcome) => outcome === "cancelled").length;
-        if (cancelled > 0) {
-          setMessage(
-            t("files.status.selectionCopyOutCancelled", {
-              done: outcomes.length - cancelled,
-              total: outcomes.length,
-            })
-          );
-        } else {
-          setMessage(t("files.status.selectionCopiedOut", { count: entries.length }));
-        }
-        await refresh(to);
+        copyDestination.current = to;
       } catch (e) {
         setError(String(e));
-      } finally {
         setBusy(null);
       }
       return;
     }
 
-    // Two volumes and more than one entry: not supported yet.
-    setError(t("files.err.batchBetweenVolumes"));
+    // ---- two volumes: one staged batch (ART-064) ----
+    //
+    // This branch used to be `setError(t("files.err.batchBetweenVolumes"))` —
+    // an honest refusal for a gap that was real, because there was no way to
+    // stage more than one tree. `volumeCopyBetweenMany` stages the whole
+    // selection into one temp folder and inserts it as one operation, so the
+    // destination takes one backup and one commit, and a stopped batch
+    // commits nothing.
+    if (source.kind !== "local" && target.kind !== "local" && source.volumeIndex !== null) {
+      const destination = writableVolume(target);
+      if (!destination) {
+        setError(writeRefusal(target, t));
+        return;
+      }
+      if (source.location === destination.path) {
+        setError(t("files.err.sameImage"));
+        return;
+      }
+      const picks = selectedEntriesForBatch(entries);
+      if (picks === null) {
+        setError(t("files.err.openPartitionFirst"));
+        return;
+      }
+      setBusy(t("files.status.copyingSelectionBetween", { count: picks.length }));
+      try {
+        pendingCopy.current = await volumeCopyBetweenMany(
+          source.location,
+          source.volumeIndex,
+          picks,
+          destination.path,
+          destination.volumeIndex,
+          destination.dirBlock,
+          { overwrite: policy, sidecars: powerMode }
+        );
+        copyDestination.current = to;
+      } catch (e) {
+        setError(String(e));
+        setBusy(null);
+      }
+      return;
+    }
+
+    setError(t("files.err.openOtherSide"));
   }
 
   /**

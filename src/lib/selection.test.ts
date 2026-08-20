@@ -14,6 +14,7 @@ import {
   markByMask,
   selectOnly,
   selectRange,
+  selectedEntriesForBatch,
   singleSelected,
   spaceToggle,
   toggleOne,
@@ -230,5 +231,33 @@ describe("spaceToggle", () => {
     const update = spaceToggle(selected, null);
     expect(update.selected).toBe(selected);
     expect(update.anchor).toBeNull();
+  });
+});
+
+describe("selectedEntriesForBatch", () => {
+  it("carries every picked row through, in pane order, name untouched", () => {
+    const picks = selectedEntriesForBatch([
+      entry("Game", { is_dir: true, header_block: 900 }),
+      entry("Prices: 1993", { header_block: 901 }),
+    ]);
+    expect(picks).toEqual([
+      { header_block: 900, name: "Game", is_dir: true },
+      { header_block: 901, name: "Prices: 1993", is_dir: false },
+    ]);
+  });
+
+  it("refuses the whole selection when one row has no header block", () => {
+    // Not "filters that row out": nine of ten copied and reported as a
+    // complete batch is exactly the partial-success ART-064/ART-065 exist to
+    // remove. The caller shows a refusal instead.
+    const picks = selectedEntriesForBatch([
+      entry("Game", { is_dir: true, header_block: 900 }),
+      entry("Ghost", { header_block: null }),
+    ]);
+    expect(picks).toBeNull();
+  });
+
+  it("is an empty batch, not a refusal, for an empty selection", () => {
+    expect(selectedEntriesForBatch([])).toEqual([]);
   });
 });
