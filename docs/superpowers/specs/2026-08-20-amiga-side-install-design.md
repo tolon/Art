@@ -111,6 +111,26 @@ the installer said no, a timeout means nobody was there to answer it, and the
 second is fixed by watching the window rather than by changing anything. The
 original is untouched either way.
 
+**Where the package's own files come from — amended 2026-08-21.** The first
+version of this section said what to run and never said where it runs *from*,
+and the omission survived four tasks because each one was locally correct. The
+run mounts the tree copy and ART's work volume; a BoingBag's `Updater` is in
+neither, because being unable to place it on the host is the whole reason this
+round exists.
+
+So the run mounts a **third** volume: a host directory holding the package's
+own wrapper, unpacked. The wrapper is plain LHA and ART already reads it; only
+the payload inside is encrypted, and that stays encrypted — the `Updater`
+decrypts it on the Amiga, which is the arrangement this design chose from the
+start.
+
+This is stated as its own rule because deferring it does not fail loudly. The
+composed command would run, `CD` would fail, the shell would not find the
+program, the script's `If Warn` would write `failed`, and ART would tell the
+user **"the installer ran and said no"** about a program that never started.
+A wrong sentence delivered confidently is worse than an error, and §89 forbids
+exactly this.
+
 **What ART refuses:**
 
 - A package it ships no recipe for. This round does not make ART able to run

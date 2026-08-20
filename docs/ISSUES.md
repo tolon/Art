@@ -26,6 +26,31 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-185** 🔴 **Nothing mounts the package, so the installer would never
+start — and ART would report that it ran and refused** — *found 2026-08-21 by
+wave D's Task 5 implementer, confirmed in code by its reviewer*
+`src-tauri/src/core/amigainstall/run.rs::media_for`
+
+`media_for` builds exactly two `DirMount`s: the tree copy and ART's own work
+volume. The generated script then emits `CD DH0:BoingBag3.9-1` and
+`DH0:BoingBag3.9-1/C/Updater`, which resolve only if the package sits inside
+the distribution tree. For a BoingBag it never can — not being placeable on
+the host is precisely what this round exists to work around (ART-166).
+
+**A third `DirMount` is necessary and not sufficient.** Nothing anywhere
+unpacks the plain-LHA wrapper to a host directory in the first place. The fix
+is an extraction step, that mount, and a `package_volume` on `RunRequest`.
+
+**Why this is 🔴 rather than a gap to note.** It does not fail loudly. The
+command runs, `CD` fails, the shell cannot find the program, the script's
+`If Warn` writes `failed`, and ART tells the user **"the installer ran and
+said no"** about a program that never started. §89 forbids claiming what is
+not there, and a confident wrong sentence is worse than an error.
+
+It is a **spec** defect, not an implementation slip: §3 said what to run and
+never said where it runs from, and four tasks passed review because each was
+locally correct. The design has been amended.
+
 **ART-184** 🟠 **The test fixtures leak a scratch directory per run, for
 ever, and filled a 2 TB drive** — *found 2026-08-20 when the suite began
 failing with `StorageFull`*
