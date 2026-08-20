@@ -644,32 +644,6 @@ recycle bin versus unlink. Worth doing deliberately, if at all.
 
 Found while building F6 in phase 2b task 3.
 
-**ART-078** 🟡 **An AmigaOS CD's protection bits and file comments are lost, because Rock Ridge and the Amiga `AS` entry are not read**
-`core/iso/` · ART reads ISO9660 and prefers Joliet when a disc carries it.
-Neither carries what an Amiga CD actually says about its files: protection bits
-(`HSPARWED`) and the file comment live in the **Amiga `AS` System Use entry**, a
-Rock Ridge-style extension, and ART reads no System Use area at all. Two
-consequences, both quiet:
-
-- **A WHDLoad-era disc loses its slave's `S` and `P` bits on the way out.** A
-  game copied off a CD onto an HDF can arrive with the right bytes and the
-  wrong protection, which is a game that starts and then does not work — the
-  same class of failure §7.2 records for archives, where ART *does* carry the
-  bits through `.uaem` sidecars.
-- **A Unix-mastered disc with no Joliet descriptor falls back to uppercase
-  8.3 names.** Rock Ridge is where its real names are, so `MyGame.info`
-  becomes `MYGAME.INF` and the icon stops matching the drawer.
-
-Neither is a regression: nothing ever claimed to read them, `FEATURES.md` and
-`format-support-matrix.md` both say so, and the disc still copies. Fixing it
-means reading the System Use area after each directory record, handling the
-`SP`/`CE`/`NM` continuation entries, and mapping `AS` onto the same
-`Protection` type `core/volume/write` already has — at which point the
-existing `.uaem` writer carries the bits out to a folder for free.
-
-Found while closing Phase 2a; recorded rather than fixed because it is a
-format layer of its own, not an omission in the one that landed.
-
 **ART-073** 🟡 **`delete_many`'s all-or-nothing guarantee only holds for the whole-file strategy**
 `src-tauri/src/commands/volume_write.rs::delete_many` (line ~505) · The
 pre-check (`check_batch_deletable`) runs once, against a read-only listing,
@@ -822,6 +796,134 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-078** 🟡 **An AmigaOS CD's protection bits and file comments are lost, because Rock Ridge and the Amiga `AS` entry are not read**
+`core/iso/` · ART reads ISO9660 and prefers Joliet when a disc carries it.
+Neither carries what an Amiga CD actually says about its files: protection bits
+(`HSPARWED`) and the file comment live in the **Amiga `AS` System Use entry**, a
+Rock Ridge-style extension, and ART reads no System Use area at all. Two
+consequences, both quiet:
+
+- **A WHDLoad-era disc loses its slave's `S` and `P` bits on the way out.** A
+  game copied off a CD onto an HDF can arrive with the right bytes and the
+  wrong protection, which is a game that starts and then does not work — the
+  same class of failure §7.2 records for archives, where ART *does* carry the
+  bits through `.uaem` sidecars.
+- **A Unix-mastered disc with no Joliet descriptor falls back to uppercase
+  8.3 names.** Rock Ridge is where its real names are, so `MyGame.info`
+  becomes `MYGAME.INF` and the icon stops matching the drawer.
+
+Neither is a regression: nothing ever claimed to read them, `FEATURES.md` and
+`format-support-matrix.md` both say so, and the disc still copies. Fixing it
+means reading the System Use area after each directory record, handling the
+`SP`/`CE`/`NM` continuation entries, and mapping `AS` onto the same
+`Protection` type `core/volume/write` already has — at which point the
+existing `.uaem` writer carries the bits out to a folder for free.
+
+Found while closing Phase 2a; recorded rather than fixed because it is a
+format layer of its own, not an omission in the one that landed.
+
+**Fixed 2026-08-20 on `debt-wave-b2`.** `core/iso/susp.rs` reads the System Use
+Area of every directory record; `core/iso/directory.rs` lets the Rock Ridge
+`NM` name win over the ISO9660 identifier and hangs the `AS` protection long
+and comment off `IsoEntry`; `IsoImage::list` follows a record's `CE`
+continuation chain, which `directory.rs` cannot because it has no I/O.
+
+**Measured before it was designed.** `scripts/iso-susp-census.py` (checked in,
+so the answer can be re-run rather than re-trusted) walks every directory
+record of every disc in the owner's ISO folder and counts SUSP signatures:
+
+| disc | descriptors | signatures |
+|---|---|---|
+| `AmigaOS39.iso` | `[Primary, Primary, Terminator]` | `RR` 10536 · `PX` 10536 · `NM` 8584 · **`AS` 8584** · `SP` 1 |
+| `Amiga Developer CD v2.1.iso` | `[Primary, Primary, Terminator]` | `RR` 41050 · `PX` 41050 · `NM` 36212 · **`AS` 36212** · `SP` 1 |
+| `Amiga Developer CD v1.1 …iso` | `[Primary, Primary, Terminator]` | `RR` 10451 · `PX` 10451 · `TF` 10451 · `NM` 9111 · `SP` 1 · `CE` 1 · `ER` 1 (**no `AS`**) |
+| `AmigaOS3.2CD(ZaP).iso` | `[Primary, Primary, Terminator]` | **none** — 6963 records, not one System Use Area |
+
+So two of the four discs carry `AS`, one carries POSIX Rock Ridge without it,
+and one carries no System Use data at all. All four ISO9660 discs and none
+Joliet, which is why the names and the bits are only in the primary tree.
+
+**The byte layout came from the disc that describes it.** Amiga Developer CD
+v2.1 carries `Rock_Ridge_Amiga_Specific` v2.4 (1996-12-05, Angela Schmidt with
+Andrew Young) at `/Contributions/Angela_Schmidt/Reference/` — the
+specification itself, read off the owner's own medium. It was cross-checked
+against `ODFileSystem`'s `rr_parse_as` (BSD-2-Clause,
+<https://github.com/reinauer/ODFileSystem>), whose two unit vectors are
+reproduced byte for byte in `core/iso/susp.rs`'s tests, and against all 44 796
+real `AS` entries: every one accounts for its payload exactly, none with bytes
+left over and none the layout fails to fit.
+
+**What the bits turned out to be.** On the 3.9 CD: `0x20` (`p`, pure) 106
+times, `0x40` (`s`, script) 6 times, `0x60` once; on Developer CD v2.1, `0x20`
+39 times, `0x22` 216, `0x42` 14, `0x46` 3. ART reading the real disc now
+reports `OS-Version3.9/Workbench3.5/C/Assign` as `--p-rwed` and
+`S/Start-ACTION.rexx` as `-s--rwed` — the two bits this entry was filed about.
+33 files across the two discs carry a comment (AWeb's cache records the URL it
+fetched each file from; the Developer CD's copy of the specification records
+where it came from).
+
+**What ART does with them.** A disc-sourced file now writes a `.uaem` sidecar
+when — and only when — its record carried an `AS` entry, through the same
+`copy::sidecar_for` an ADF extraction uses, so one file and a whole folder
+dragged off the same disc produce the same sidecars. A recording date alone is
+deliberately *not* enough: writing one for that would put a second file beside
+every file on every plain ISO9660 disc ART has ever extracted, which this entry
+does not ask for. `IsoSource::metadata` hands the same bits to the shared copy
+engine, so a WHDLoad slave copied off a CD onto an HDF keeps its `S` and `P`.
+`osinstall::source_cd` propagates them into `MediaEntry`, so `distribution.json`
+records what the medium said rather than a declared default — that module's own
+doc used to assert ISO9660 "has nowhere to keep" them, and now says why that is
+true of ISO9660 and false of an Amiga-mastered disc. `iso_list` fills the Attr
+column from them through `uaem::format_bits`, never a second formatter.
+
+**Verified by two implementations that are not ART.** 7-Zip is now handed a
+Rock Ridge fixture as well as the plain and Joliet ones
+(`scripts/iso-oracle-check.py`) and agrees on all four mixed-case names — which
+matters because ART's `NM` reader and ART's own fixture builder were written
+from the same reading of SUSP and could have agreed with each other and both
+been wrong. The `CE` case is deliberately *not* handed to 7-Zip: given one it
+lists `Games/Game` where ART lists `Games/Game.slave`, and its own source says
+why (`CPP/7zip/Archive/Iso/IsoItem.h`, `FindSuspRecord` returns the first
+matching inline entry and never looks for `CE`). That case is checked instead
+by a third implementation, `scripts/iso-susp-census.py`, which follows
+continuations and joins the same halves the same way.
+
+**Tests.** `core::iso::susp::tests` (17, including ODFileSystem's own two
+vectors, the shape every real `AS` entry has, a zero-length entry, an entry
+running past its area, a comment length byte of zero, and the entry cap) and,
+in `core::iso::tests`:
+`a_rock_ridge_disc_reads_its_real_names_not_its_8_3_ones`,
+`a_rock_ridge_disc_carries_its_amiga_protection_bits_and_comment`,
+`a_name_and_comment_split_across_a_ce_continuation_are_joined`,
+`a_disc_with_no_sp_entry_is_not_parsed_as_rock_ridge`,
+`the_sp_skip_is_honoured_rather_than_assumed_to_be_zero`,
+`a_disc_sourced_file_carries_its_bits_into_a_uaem_sidecar`,
+`a_disc_sourced_file_carries_its_bits_into_an_amiga_volume`,
+`a_disc_with_no_amiga_metadata_still_writes_no_sidecars`.
+
+The last two exist to stop the others passing vacuously: the first pins that
+the bits reach the *volume* writer and not only the sidecar writer, and the
+second that an ordinary disc still produces no `.uaem` at all.
+
+**What is deliberately still not read**, all four measured against the same
+four discs rather than assumed:
+
+- **`SL`, `RE`, `CL`, `PL`** — Rock Ridge symlinks and deep-directory
+  relocation. No disc in the folder carries one (the signatures present are
+  `SP`, `CE`, `ER`, `RR`, `PX`, `TF`, `NM`, `AS`), and ART has no symlink to
+  map them onto. Untested code for an unmeasured case is worse than none —
+  the same call `core/archive/lha.rs` made about the `0x3F` comment header.
+- **`PX`** — POSIX mode. The specification's TABLE 6 says a filesystem should
+  derive Amiga bits from it when there is no `AS`; ODFileSystem does. ART does
+  not, because every disc here that carries `PX` and no `AS` is the Developer
+  CD v1.1, whose `PX` modes are the mastering host's and not the Amiga's.
+- **A disc carrying both Joliet and Rock Ridge** would still be read as Joliet
+  and so lose its `AS` entries. None of the four does — all are ISO9660-only —
+  so the preference is untouched rather than reversed on a guess.
+- **`AS` on a Joliet tree**. Not looked for: the `SP` probe asks the tree ART
+  actually reads, so a Joliet root answers `None` and no System Use Area is
+  parsed there.
 
 **ART-161** 🔵 **The same disc is fully walked three to four times per
 install, because `scan::identify` opens a `CdSource` to read one string and
@@ -2077,7 +2179,8 @@ and the comment glued on — `BoingBag3.9-1\…\spatch` + `6.50 (26.8.93)`, and
 similar throughout `BoingBag39-1`, `Euro-Update`, `hippoplayer` and
 `mui38usr`. The name is now cut at the NUL, and the tail is **kept** rather
 than discarded: an AmigaDOS file comment is real metadata, and losing it
-quietly is what [ART-078](#open) is filed about on the ISO9660 side. It travels
+quietly is what [ART-078](#fixed) was filed about on the ISO9660 side, and now
+reads there too. It travels
 as `LhaEntry::comment`. The `0x3F` comment *extension* header is deliberately
 not read — no archive in the measured collection carries one (the types
 present are `0x00`, `0x01`, `0x02`, `0x50`, `0x51`, `0x54`), and untested code

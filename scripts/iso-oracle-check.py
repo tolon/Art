@@ -18,6 +18,9 @@ here.
 What it checks, per fixture:
 
   * every name 7-Zip sees, ART sees, and nothing extra on either side
+    — which for the Rock Ridge fixture is the whole point: 7-Zip resolves
+    `NM` entries to mixed-case names, so agreeing on them means ART's
+    System Use Area reading is not merely self-consistent (ART-078)
   * every file's size
   * every file's bytes, by SHA-256 of what each side produced
 
@@ -306,6 +309,7 @@ def main() -> int:
         plain = work / "plain.iso"
         raw = work / "raw.iso"
         raw_xa = work / "raw-xa.iso"
+        rock = work / "rock.iso"
 
         # One invocation writes them all: the fixtures come from ART's own
         # builder, so the script never reimplements the format it is checking.
@@ -316,9 +320,10 @@ def main() -> int:
                 "ART_ISO_PLAIN_OUT": str(plain),
                 "ART_ISO_RAW_OUT": str(raw),
                 "ART_ISO_RAW_XA_OUT": str(raw_xa),
+                "ART_ISO_ROCK_OUT": str(rock),
             },
         )
-        for built in (joliet, plain, raw, raw_xa):
+        for built in (joliet, plain, raw, raw_xa, rock):
             if not built.exists():
                 print(f"  FAIL ART did not write {built.name}")
                 failures.append(f"missing fixture {built.name}")
@@ -331,6 +336,12 @@ def main() -> int:
         strip_raw_sectors(raw_xa, xa_stripped, XA_FORM1_DATA_OFFSET)
 
         check(seven, "A Joliet disc, 2048-byte sectors", joliet, None)
+        # The Rock Ridge disc. ART's reader and ART's fixture builder were
+        # written from the same reading of SUSP, so only an outside
+        # implementation can say whether that reading is right — and 7-Zip
+        # reads Rock Ridge. If it lists `MyGame.info` rather than
+        # `MYGAME.INF`, the `NM` entries ART writes are real ones (ART-078).
+        check(seven, "A Rock Ridge disc, 2048-byte sectors", rock, None)
         check(seven, "An ISO9660-only disc, 2048-byte sectors", plain, None)
         check(
             seven,
