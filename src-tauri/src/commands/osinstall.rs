@@ -990,11 +990,27 @@ fn check_preview_ceilings(files: usize, bytes: u64) -> CoreResult<()> {
 /// preview's staged AmigaOS bytes do not sit in `%TEMP%` after it has
 /// answered.
 fn scratch_root_for() -> PathBuf {
+    use std::hash::{Hash, Hasher};
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    // The thread is in the name as well as the process (ART-182). The counter
+    // alone already makes every root unique, so this is not about collisions:
+    // it is about being able to ask "which work left this behind" of a
+    // directory found in `%TEMP%` after a crash, when previews run on job
+    // threads and several can be in flight at once.
+    //
+    // It also gives the tests a namespace of their own. `cargo test` runs the
+    // whole binary in ONE process on many threads, so a test that filtered on
+    // the process id alone was counting sixteen other tests' in-flight
+    // directories as its own — which is what made
+    // `staging_is_removed_however_the_preview_ends` fail three runs in six.
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::thread::current().id().hash(&mut hasher);
     std::env::temp_dir().join(format!(
-        "{PREVIEW_SCRATCH_PREFIX}component-{}-{}",
+        "{PREVIEW_SCRATCH_PREFIX}component-{}-{:08x}-{}",
         std::process::id(),
+        hasher.finish() as u32,
         NEXT.fetch_add(1, Ordering::Relaxed)
     ))
 }
@@ -2277,9 +2293,47 @@ mod tests {
     /// success *or* on cancellation, which is the exit a cleanup written at
     /// the bottom of the function misses.
     #[test]
+    fn two_threads_never_stage_into_one_namespace() {
+        // ART-182, and **this is the guard**. The flake it was filed for
+        // reproduced three runs in six on one machine and none in six on
+        // another, so "the suite is green now" proves nothing about it. What
+        // can be proved is the property underneath: two threads must not share
+        // a staging namespace, because `cargo test` runs the whole binary in
+        // one process and sixteen tests reach this function.
+        //
+        // Written this way for the same reason ART-181's guard freezes the
+        // clock: a test that waits for a race to happen is a coin toss, and a
+        // test that asserts the invariant the race violates is not.
+        fn namespace_of(root: &Path) -> String {
+            let name = root.file_name().unwrap().to_string_lossy().to_string();
+            // Drop the trailing per-call counter; what must differ is the rest.
+            name.rsplit_once('-').unwrap().0.to_string()
+        }
+
+        let mine = namespace_of(&scratch_root_for());
+        let theirs = std::thread::spawn(|| namespace_of(&scratch_root_for()))
+            .join()
+            .unwrap();
+
+        assert_ne!(
+            mine, theirs,
+            "two threads share a staging namespace, so each counts the other's work as its own",
+        );
+    }
+
+    #[test]
     fn staging_is_removed_however_the_preview_ends() {
         fn staging_dirs() -> Vec<PathBuf> {
-            let prefix = format!("{PREVIEW_SCRATCH_PREFIX}component-{}-", std::process::id());
+            // Keyed on this thread as well as the process, or the count picks
+            // up the other tests running beside this one (ART-182).
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            std::thread::current().id().hash(&mut hasher);
+            let prefix = format!(
+                "{PREVIEW_SCRATCH_PREFIX}component-{}-{:08x}-",
+                std::process::id(),
+                hasher.finish() as u32
+            );
             std::fs::read_dir(std::env::temp_dir())
                 .into_iter()
                 .flatten()
