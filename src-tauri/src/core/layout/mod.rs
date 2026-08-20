@@ -817,4 +817,87 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // ---- The measurement, checked in so the number can be re-run ----------
+
+    /// Time `plan()` over a real collection, cold and on a resume.
+    ///
+    /// `#[ignore]`d because it needs the owner's own material, which ART never
+    /// ships. Run it as:
+    ///
+    /// ```text
+    /// ART_LAYOUT_BENCH="E:\amiga\Amigatolon\WHDload" \
+    /// ART_LAYOUT_BENCH_ROOT="E:\amiga\ProjeART\layout-bench" \
+    ///   cargo test --lib layout_plan_timing -- --ignored --nocapture
+    /// ```
+    ///
+    /// It exists because `presence_of` compares **content** (G1), so the
+    /// second plan — the one a resume runs — reads every byte of every
+    /// destination that already exists. That is the right comparison and it is
+    /// not free, and "if it proves too slow" is how a freeze ships. The number
+    /// this prints is what `layout_plan`'s own doc comment quotes.
+    #[test]
+    #[ignore = "needs the owner's own collection; set ART_LAYOUT_BENCH"]
+    fn layout_plan_timing_over_a_real_collection() {
+        use std::time::Instant;
+
+        let Ok(source) = std::env::var("ART_LAYOUT_BENCH") else {
+            eprintln!("set ART_LAYOUT_BENCH to a directory of real material");
+            return;
+        };
+        let root = PathBuf::from(
+            std::env::var("ART_LAYOUT_BENCH_ROOT")
+                .expect("set ART_LAYOUT_BENCH_ROOT to a scratch staging folder"),
+        );
+        let _ = std::fs::remove_dir_all(&root);
+
+        let paths = vec![PathBuf::from(&source)];
+
+        let started = Instant::now();
+        let cold = plan(&root, &paths, &Policy::default()).unwrap();
+        let cold_ms = started.elapsed().as_millis();
+        eprintln!(
+            "cold plan: {} items, {:.2} GB, {} refused, {} ms",
+            cold.items.len(),
+            cold.bytes as f64 / 1_073_741_824.0,
+            cold.refused.len(),
+            cold_ms
+        );
+
+        let started = Instant::now();
+        let outcome = crate::core::layout::apply::apply(&cold, &crate::core::jobs::NoProgress)
+            .expect("the staging root is empty, so this places everything");
+        eprintln!(
+            "apply: {} placed, {} skipped, {} ms",
+            outcome.placed,
+            outcome.skipped,
+            started.elapsed().as_millis()
+        );
+
+        // The measurement that matters: every destination now exists, so
+        // every item is compared byte for byte.
+        let started = Instant::now();
+        let warm = plan(&root, &paths, &Policy::default()).unwrap();
+        let warm_ms = started.elapsed().as_millis();
+        eprintln!(
+            "resume plan: {} items, {} already in place, {} collisions, {} ms",
+            warm.items.len(),
+            warm.already_in_place.len(),
+            warm.collisions.len(),
+            warm_ms
+        );
+        eprintln!(
+            "per item: cold {:.2} ms, resume {:.2} ms",
+            cold_ms as f64 / cold.items.len().max(1) as f64,
+            warm_ms as f64 / warm.items.len().max(1) as f64
+        );
+
+        assert_eq!(
+            warm.already_in_place.len(),
+            cold.items.len(),
+            "everything the apply placed must be recognised on the re-plan"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

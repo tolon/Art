@@ -94,9 +94,22 @@ user to look at.
 
 ## 3. What runs, and what ART refuses to run
 
-**What runs:** the installer the package's own recipe names. For a BoingBag
-that is its `Updater`; for an Installer-script package it is `Installer` with
-the script the package ships.
+**What runs:** the installer the package's own recipe names. **The recipe
+format gains one declaration for this** — the path, inside the package, of the
+thing to run, and how to run it. For a BoingBag that is its `Updater`; for an
+Installer-script package it is `Installer` with the script the package ships.
+It is data, like every other thing a recipe says, so a fourth package is a
+JSON file rather than a code path — and a package with no such declaration is
+simply not one this round can run.
+
+**A run always ends, and says which ending it was.** An Amiga Installer is
+interactive by nature, so a run that stops on a requester would otherwise wait
+for ever. Every run therefore carries a deadline, and when it expires ART
+terminates the emulator it started and reports **timed out** — not failed, and
+explicitly not succeeded. The distinction matters to a user: a failure means
+the installer said no, a timeout means nobody was there to answer it, and the
+second is fixed by watching the window rather than by changing anything. The
+original is untouched either way.
 
 **What ART refuses:**
 
@@ -145,12 +158,13 @@ reason.
 
 Stated now rather than discovered later:
 
-- **An installer that asks a question.** The Amiga Installer is interactive by
-  nature. A run that stops on a requester and waits forever is the obvious
-  failure, and the host has no way to see a requester — only the absence of a
-  result file. A timeout is therefore not an optimisation, it is a
-  requirement, and what it reports has to distinguish "still working" from
-  "waiting for someone".
+- **An installer that asks a question.** §3's deadline is the answer, but not
+  a complete one: the host sees only the absence of a result file, so it cannot
+  tell a requester from slow work. Picking the deadline is therefore a
+  judgement about real installers on a real machine, and it should be measured
+  against the owner's own packages rather than chosen — a BoingBag's `Updater`
+  on this hardware has a running time, and the deadline should be a multiple of
+  it, recorded with what it was measured from.
 - **The result file is written by a script ART generated but did not run.**
   Whatever writes it has to run even when the installer fails, or a failure and
   a hang look identical.
