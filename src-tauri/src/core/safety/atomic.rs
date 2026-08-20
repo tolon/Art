@@ -19,6 +19,20 @@ use crate::core::error::{CoreError, CoreResult};
 
 /// Build a temp path next to `path` that will not collide with a real file.
 fn temp_path_for(path: &Path) -> CoreResult<PathBuf> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    temp_path_at(path, stamp)
+}
+
+/// The body of [`temp_path_for`] with the clock passed in.
+///
+/// The clock is a parameter for one reason: the property that matters is
+/// "unique **even when the clock does not advance**", and a test cannot
+/// arrange that against a real `SystemTime::now()`. Two calls a nanosecond
+/// apart is luck; two calls with the same stamp is an argument.
+fn temp_path_at(path: &Path, stamp: u128) -> CoreResult<PathBuf> {
     let dir = path.parent().ok_or_else(|| {
         CoreError::InvalidInput(format!("'{}' has no parent directory", path.display()))
     })?;
@@ -27,14 +41,20 @@ fn temp_path_for(path: &Path) -> CoreResult<PathBuf> {
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "art-output".to_string());
 
-    // Nanosecond stamp keeps concurrent writers from colliding. The leading dot
-    // hides the file on Unix and keeps it out of the way on Windows.
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+    // A stamp alone does NOT keep concurrent writers from colliding — that is
+    // what the comment here used to claim, and it was wrong (ART-181). Two
+    // threads can read the same nanosecond, and the open below used to be a
+    // truncating `create`, so both would have written into one file and both
+    // renamed it over the destination. On the one path every user file in ART
+    // is written through, that is a corrupted file, not a flaky test.
+    //
+    // The counter is what makes the name unique within the process; the
+    // exclusive open in `atomic_write` is what makes it unique against
+    // anything else. The stamp only makes it readable.
+    static NEXT_TEMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = NEXT_TEMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-    Ok(dir.join(format!(".{stem}.art-tmp-{stamp}")))
+    Ok(dir.join(format!(".{stem}.art-tmp-{stamp}-{seq}")))
 }
 
 /// Write `bytes` to `path` atomically.
@@ -46,7 +66,10 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> CoreResult<()> {
 
     // Scope the handle so it is closed before the rename (required on Windows).
     let write_result = (|| -> std::io::Result<()> {
-        let mut f = fs::File::create(&tmp)?;
+        // `create_new` and not `create`: an exclusive open turns a name that
+        // is somehow still taken into an error instead of silently truncating
+        // whatever is there. See the counter above.
+        let mut f = fs::File::create_new(&tmp)?;
         f.write_all(bytes)?;
         f.flush()?;
         // Force the bytes out of the OS cache before we swap the file in.
@@ -118,6 +141,82 @@ mod tests {
             leftovers.is_empty(),
             "temp files left behind: {leftovers:?}"
         );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn two_temp_paths_for_one_destination_are_never_equal() {
+        // ART-181, and **this is the guard**. The temp name used to be a bare
+        // nanosecond stamp opened with a truncating `create`: two threads that
+        // read the same nanosecond wrote into ONE file and both renamed it
+        // over the destination, on the path every user file in ART is written
+        // through.
+        //
+        // It is asserted here and not in the threaded test below because this
+        // one fails against the defect *every* time. Collisions are what the
+        // bug produces; distinct names are what the fix guarantees, and only
+        // the second is a property a test can hold to.
+        // The clock is held still on purpose. Against the defect this fails
+        // every run; with a real clock it passed five runs out of five, which
+        // is how the first two attempts at this test were caught being no
+        // test at all.
+        let target = Path::new("C:/nowhere/disk.adf");
+        let frozen = 1_700_000_000_000_000_000u128;
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..64 {
+            assert!(
+                seen.insert(temp_path_at(target, frozen).unwrap()),
+                "two temp names for one destination collided when the clock did not advance",
+            );
+        }
+    }
+
+    #[test]
+    fn concurrent_writers_leave_one_whole_payload() {
+        // A stressor, **not** the guard — it passed five runs out of five
+        // against the ART-181 defect, because two threads landing inside one
+        // nanosecond is luck rather than something a test can arrange. It is
+        // kept because it exercises the real `atomic_write` under real
+        // threads, and the deterministic guard above is what actually holds
+        // the property.
+        //
+        // Each writer's payload is a distinct byte repeated, so a mix is
+        // detectable: a correct result is entirely one byte.
+        let dir = scratch("concurrent");
+        let target = dir.join("contested.adf");
+        const WRITERS: usize = 16;
+        const LEN: usize = 64 * 1024;
+
+        std::thread::scope(|s| {
+            for i in 0..WRITERS {
+                let target = target.clone();
+                s.spawn(move || {
+                    let payload = vec![b'a' + i as u8; LEN];
+                    atomic_write(&target, &payload).unwrap();
+                });
+            }
+        });
+
+        let got = fs::read(&target).unwrap();
+        assert_eq!(got.len(), LEN, "destination is not one whole payload");
+        let first = got[0];
+        assert!(
+            got.iter().all(|&b| b == first),
+            "destination holds a mix of two writers' bytes",
+        );
+        assert!((b'a'..b'a' + WRITERS as u8).contains(&first));
+
+        let leftovers: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains("art-tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "temp files left behind: {leftovers:?}"
+        );
+
         fs::remove_dir_all(&dir).ok();
     }
 
