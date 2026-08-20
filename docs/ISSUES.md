@@ -282,26 +282,6 @@ leave it unrecorded: a hazard predicted before the work and untouched after
 it should be visible in the register of what ART owes, beside ART-157, rather
 than only in a review nobody reads again.
 
-**ART-143** 🟡 **A hand-attached picture is not re-materialised if the
-artwork cache is deleted** — *filed 2026-08-18, collection-wave-c's own
-design (§2) promised this and no task in the wave built it*
-`src-tauri/src/core/gameindex/store.rs::ArtBinding`,
-`src-tauri/src/core/artwork/local.rs` · The binding splits by design: the
-bytes go into the artwork cache — derived data, rebuildable — under source
-`manual`, and the *choice* goes into `RecordOverride`'s user layer, which a
-refresh never touches. `ArtBinding.chosen` is the original path the user
-picked, kept, per the struct's own doc comment, "so the binding can be
-re-materialised if the cache is ever cleared" — but nothing reads it back.
-Deleting the artwork cache, by hand today, leaves every hand-attached
-picture rendering nothing on screen, even though the exact file the user
-pointed at is still named in the override right beside it. Nothing is
-lost — `chosen` survives on disk — but nothing rebuilds the cache entry from
-it either. Filed rather than fixed per the wave's own ruling: inventing the
-re-materialisation mechanism this late in a wave was judged worse than
-naming the gap and letting the user decide whether it earns one of its own.
-
-Design: [2026-08-18-collection-wave-c-design.md](superpowers/specs/2026-08-18-collection-wave-c-design.md) §2.
-
 **ART-130** 🔵 **A game can name the Kickstart it needs, and nothing offers to
 supply it** — *filed 2026-08-17, out of G10's design round; the reading half is
 built by G10, this is the half that was deliberately left out*
@@ -509,6 +489,64 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-143** 🟡 **A hand-attached picture is not re-materialised if the
+artwork cache is deleted** — *filed 2026-08-18 (collection-wave-c's own design
+§2 promised this and no task built it); fixed 2026-08-20 on `debt-wave-c2`*
+`src-tauri/src/core/artwork/rebind.rs` (new) ·
+`src-tauri/src/commands/artwork.rs` · `src/lib/artwork.ts` ·
+`src/pages/CollectionStudio.tsx`
+
+`ArtBinding::chosen` — the file the user originally picked — was kept, per its
+own doc comment, "so the binding can be re-materialised if the cache is ever
+cleared", and nothing ever read it back. The artwork cache is a **sibling** of
+the catalogue directory precisely so a user can delete 1.6 GB of pictures and
+keep the index that took minutes to build; doing so lost every hand-attached
+picture, with the exact file it came from still named in the override right
+beside it.
+
+**What it is now.** `core/artwork/rebind.rs`: for each title the screen is
+showing that carries an `art` override, if the cache has no entry — **or has
+a row whose file is gone**, which is what deleting the pictures and leaving
+`index.json` produces — read `chosen` and put it back. A job
+(`artwork_rebind_manual`), because a full cache deletion can mean hundreds of
+file reads and `atomic_write`s (§54), cancelled only between whole bindings,
+with the index saved before `Cancelled` is returned so what finished is
+genuinely finished. Run from `loadArtwork` on every catalogue load rather than
+behind a button: there is nothing for the user to decide, the choice is
+already theirs and already recorded, and a pass over an intact cache is one
+metadata call per binding and no writes. That is why it is not
+[ART-132](#fixed)'s rule — nothing is fetched and nothing leaves the machine.
+
+**The measured fact from the collection round is the load-bearing one.** The
+cache does **not** normalise internally: `Cache::store`/`Cache::get` take
+whatever key they are handed, and every reader folds through
+`core/artwork/key.rs::normalise` first. A pass that skipped the fold once
+wrote 242 pictures under keys nothing read. So the title arrives from the
+screen as the screen holds it — the *applied* title, which is what
+`attach_picture` was given — and is folded here, exactly once.
+
+**What it refuses rather than guesses.** A `chosen` file that has gone, is no
+longer a PNG/JPEG, has grown past `MAX_PREVIEW_BYTES`, or cannot be read is
+reported as a typed `RebindProblem` and **left alone** — the override is not
+deleted, because the drive may simply not be plugged in today, and quietly
+discarding the user's choice is the one outcome "nothing changes unless the
+user changes it" forbids. Size is checked on the metadata, before the read.
+The screen names each one, with the file it looked for, in both catalogues.
+
+Tests: nine in `core::artwork::rebind::tests` —
+`a_deleted_cache_is_rebuilt_from_the_files_the_user_chose` is the issue
+itself, `the_picture_lands_under_the_key_the_screen_reads_by` is the 242-
+pictures rule, `an_intact_binding_is_left_exactly_as_it_was` is what makes
+running it on every load acceptable, `a_row_whose_file_has_gone_is_rebuilt_too`
+is the half-deleted cache, `one_missing_source_does_not_stop_the_others`,
+`an_oversized_source_is_refused_by_its_size`,
+`a_source_that_is_not_a_drawable_picture_is_refused` and
+`cancelling_keeps_what_it_already_restored`; plus
+`commands::artwork::tests::a_hand_attached_picture_survives_the_artwork_cache_being_deleted`,
+the round trip through the real `attach_picture` override, which is the join
+the unit tests cannot see. Vacuity checked: replacing `normalise(&binding.title)`
+with the raw title fails **six** of them, the command-level one included.
 
 **ART-144** 🔵 **Five minors deferred across collection-wave-c's own review
 rounds, folded into one entry — all five now closed** — *found 2026-08-18; #4

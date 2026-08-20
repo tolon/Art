@@ -1638,6 +1638,18 @@
           "nothingToMount": "Bu başlık takılacak bir disk belirtmiyor — WinUAE'nin yükleyeceği hiçbir şey yok."
         }
       }
+    },
+    "rebind": {
+      "restored_one": "ART, elle eklediğiniz {{count}} resmi asıl seçtiğiniz dosyadan geri koydu.",
+      "restored_other": "ART, elle eklediğiniz {{count}} resmi asıl seçtiğiniz dosyalardan geri koydu.",
+      "missedHeading": "Kendi resimlerinizin bazıları geri konulamadı:",
+      "dismiss": "Kapat",
+      "problem": {
+        "sourceGone": "dosya artık orada değil",
+        "notAPicture": "dosya artık PNG veya JPEG değil",
+        "tooLarge": "dosya kullanılamayacak kadar büyümüş",
+        "unreadable": "dosya okunamadı"
+      }
     }
   },
   "whdload": {

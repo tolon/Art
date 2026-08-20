@@ -312,6 +312,13 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // `phrase-keys.test.ts` (`conditionalReasonText: every ConditionalReason
     // variant resolves`), which is what makes trading four literal sites for
     // one dynamic one a net gain rather than a loss of coverage.
-    expect(dynamicCalls).toBe(115);
+    // 115 → 116 (ART-143, debt-wave-c2): `CollectionStudio.tsx` gained one,
+    // `t(rebindProblemPhrase(miss.problem).key)` — why a picture the user
+    // attached by hand could not be put back after the artwork cache was
+    // deleted. Key-only, from a `switch` over `RebindProblem` in
+    // `@/lib/artwork` that is exhaustive by its own `never` fallthrough, and
+    // its four values are enumerated in `phrase-keys.test.ts`
+    // (`rebindProblemPhrase: every RebindProblem resolves`).
+    expect(dynamicCalls).toBe(116);
   });
 });

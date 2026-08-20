@@ -24,6 +24,7 @@ use crate::core::artwork::config::{self, ConfiguredSource};
 use crate::core::artwork::enrich::{enrich, EnrichOutcome, EnrichRequest};
 use crate::core::artwork::key::normalise;
 use crate::core::artwork::local::{adopt_local, LocalOutcome, LocalPreview, MAX_PREVIEW_BYTES};
+use crate::core::artwork::rebind::{rebind_manual_art, Binding, RebindOutcome};
 use crate::core::artwork::{ArtKind, ArtRef};
 use crate::core::gameindex::store::{read_overrides, set_override, ArtBinding};
 use crate::core::jobs::JobId;
@@ -399,6 +400,102 @@ pub fn artwork_adopt_local(
     Ok(id)
 }
 
+/// Emitted when a re-materialise pass finishes.
+pub const REBIND_RESULT_EVENT: &str = "artwork-rebind-result";
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RebindResult {
+    pub job_id: JobId,
+    pub outcome: RebindOutcome,
+}
+
+/// One title the screen is showing, as it shows it.
+///
+/// **The screen supplies the title, and that is deliberate.** The artwork
+/// cache is keyed by the *applied* title — the one after any override — and
+/// the screen already holds exactly that (it is what it passes to
+/// `artwork_attach` and to `artwork_known`). Reading the catalogue here to
+/// derive it again would be a second reader of the same fact, and CLAUDE.md's
+/// rule about `commands/*` being thin adapters cuts the other way too: the
+/// mapping between a record and its displayed title belongs where it already
+/// is, not duplicated here.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ShownTitle {
+    pub id: String,
+    pub title: String,
+}
+
+/// Put back every hand-attached picture whose cache entry has gone (ART-143).
+///
+/// A job because a user who deleted a full artwork cache may have hundreds of
+/// hand-attached pictures to copy back in, and each is a file read plus an
+/// `atomic_write` (§54). Cheap when there is nothing to do: one metadata call
+/// per binding and no writes at all, which is what makes it safe to run every
+/// time the Collection loads.
+///
+/// **A restore can rename.** If the user replaced their `cover.jpeg` with a
+/// `cover.png` between attaching and now, the cache-relative name derived
+/// from the extension changes — so the override's `cached` half is rewritten
+/// to agree, and only then. Rewriting it unconditionally would take a backup
+/// of `overrides.json` on every catalogue load, which is noise, not safety.
+#[tauri::command]
+pub fn artwork_rebind_manual(
+    titles: Vec<ShownTitle>,
+    app: AppHandle,
+    registry: State<'_, Arc<JobRegistry>>,
+) -> AppResult<JobId> {
+    let dir = artwork_dir_for(&app);
+    let catalogue = catalogue_dir(&app);
+    let registry = Arc::clone(&registry);
+    let emit_app = app.clone();
+
+    let id = spawn_job(
+        &app,
+        registry,
+        "Restoring your own pictures",
+        move |job_id, progress| {
+            let overrides = read_overrides(&catalogue)?;
+            let bindings: Vec<Binding> = titles
+                .iter()
+                .filter_map(|shown| {
+                    let art = overrides.edits.get(&shown.id)?.art.as_ref()?;
+                    Some(Binding {
+                        id: shown.id.clone(),
+                        title: shown.title.clone(),
+                        chosen: PathBuf::from(&art.chosen),
+                        cached: art.cached.clone(),
+                    })
+                })
+                .collect();
+
+            let outcome = rebind_manual_art(&dir, &bindings, progress)?;
+
+            // Only where the name actually moved — see the doc comment.
+            for rebound in &outcome.restored {
+                let Some(binding) = bindings.iter().find(|b| b.id == rebound.id) else {
+                    continue;
+                };
+                if binding.cached == rebound.cached {
+                    continue;
+                }
+                if let Some(mut edit) = read_overrides(&catalogue)?.edits.get(&rebound.id).cloned()
+                {
+                    edit.art = Some(ArtBinding {
+                        chosen: binding.chosen.to_string_lossy().to_string(),
+                        cached: rebound.cached.clone(),
+                    });
+                    set_override(&catalogue, &rebound.id, edit)?;
+                }
+            }
+
+            let _ = emit_app.emit(REBIND_RESULT_EVENT, RebindResult { job_id, outcome });
+            Ok(())
+        },
+    );
+
+    Ok(id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,6 +641,93 @@ mod tests {
         assert!(
             cache.get("turrican ii", ArtKind::Boxart).is_none(),
             "a refused attach must not leave a cache entry behind"
+        );
+    }
+
+    /// **ART-143, the whole round trip.** Attach a picture the way the command
+    /// does, delete the artwork cache the way a user reclaiming disk does, and
+    /// have the binding put it back — reading `ArtBinding::chosen`, which
+    /// nothing read before.
+    ///
+    /// This lives here rather than in `core::artwork::rebind` because the join
+    /// this is really about is the one the unit tests cannot see: the override
+    /// `attach_picture` writes and the `Binding` the rebind pass consumes have
+    /// to agree, and they are built by different modules from different types.
+    /// `artwork_rebind_manual` itself needs an `AppHandle`, so its body's two
+    /// halves are exercised directly.
+    #[test]
+    fn a_hand_attached_picture_survives_the_artwork_cache_being_deleted() {
+        use crate::core::artwork::key::normalise;
+        use crate::core::artwork::rebind::rebind_manual_art;
+        use crate::core::jobs::NoProgress;
+
+        let root = tempdir("rebind-round-trip");
+        let cache_dir = root.join("artwork");
+        let catalogue_dir = root.join("catalogue");
+        std::fs::create_dir_all(&catalogue_dir).unwrap();
+
+        let picture = root.join("cover.png");
+        std::fs::write(&picture, b"PNGDATA").unwrap();
+
+        // The title as the *screen* holds it, deliberately not already folded
+        // — the fold is what the rebind pass has to do for itself.
+        let title = "The Settlers";
+        attach_picture(
+            &cache_dir,
+            &catalogue_dir,
+            title,
+            "some-id",
+            picture.to_string_lossy().to_string(),
+        )
+        .unwrap();
+        assert!(Cache::open(&cache_dir)
+            .unwrap()
+            .best(&normalise(title))
+            .is_some());
+
+        // The user reclaims 1.6 GB. The catalogue's own directory is a
+        // sibling and is untouched — which is the point of the layout.
+        std::fs::remove_dir_all(&cache_dir).unwrap();
+        assert!(
+            Cache::open(&cache_dir)
+                .unwrap()
+                .best(&normalise(title))
+                .is_none(),
+            "sanity: the picture really is gone"
+        );
+
+        // What the command does: read the override, build the binding from
+        // the title the screen supplies, and rebind.
+        let art = read_overrides(&catalogue_dir)
+            .unwrap()
+            .edits
+            .get("some-id")
+            .and_then(|edit| edit.art.clone())
+            .expect("the choice survives in the layer no refresh touches");
+        assert_eq!(art.chosen, picture.to_string_lossy().to_string());
+
+        let bindings = vec![Binding {
+            id: "some-id".to_string(),
+            title: title.to_string(),
+            chosen: PathBuf::from(&art.chosen),
+            cached: art.cached.clone(),
+        }];
+        let outcome = rebind_manual_art(&cache_dir, &bindings, &NoProgress).unwrap();
+
+        assert_eq!(outcome.restored.len(), 1, "{outcome:?}");
+        assert_eq!(outcome.missed, vec![]);
+        // The name is unchanged, so the override needs no rewrite — which is
+        // what keeps this from taking a backup of `overrides.json` on every
+        // catalogue load.
+        assert_eq!(outcome.restored[0].cached, art.cached);
+
+        // And the picture is back where `artwork_known` looks for it.
+        let cache = Cache::open(&cache_dir).unwrap();
+        let restored = cache.best(&normalise(title)).expect("back on screen");
+        assert_eq!(restored.source, "manual");
+        assert_eq!(
+            std::fs::read(cache.dir().join(&restored.file)).unwrap(),
+            b"PNGDATA"
         );
     }
 }

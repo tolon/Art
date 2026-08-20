@@ -28,12 +28,15 @@ import {
   artworkDir,
   artworkEnrich,
   artworkKnown,
+  artworkRebindManual,
   onArtworkLocalResult,
   onArtworkResult,
   outcomePhrase,
+  rebindProblemPhrase,
   sourcePhrase,
   type ConfiguredSource,
   type LocalOutcome,
+  type RebindOutcome,
   type SourceOutcome,
 } from "@/lib/artwork";
 import { subscribeSafely } from "@/lib/jobs";
@@ -315,6 +318,17 @@ export function CollectionStudio() {
   // artwork run should make the screen re-read the artwork cache.
   const [artBusy, setArtBusy] = useState(false);
   const [localOutcome, setLocalOutcome] = useState<LocalOutcome | null>(null);
+  /**
+   * What the last re-materialise pass managed (ART-143), or `null` when there
+   * was nothing to say — which is every ordinary run.
+   *
+   * Shown rather than silent because *something changed on the user's disk
+   * without them asking on this run*. Restoring is honouring a choice they
+   * already made, so it needs no confirmation; but pictures reappearing with
+   * no explanation, and pictures that could **not** reappear disappearing with
+   * none, are both things a person is owed a sentence about.
+   */
+  const [rebindOutcome, setRebindOutcome] = useState<RebindOutcome | null>(null);
 
   const storedSources = useSettingsStore((s) => s.settings.artworkSources);
 
@@ -409,8 +423,42 @@ export function CollectionStudio() {
    * **Reads the cache; fetches nothing.** Rust does the normalising because the
    * two matching rules live there and a copy here would drift from them.
    */
+  /**
+   * Put back any hand-attached picture whose cache entry has gone, then load
+   * the artwork (ART-143).
+   *
+   * **Why this runs on load rather than behind a button.** The artwork cache
+   * is a *sibling* of the catalogue directory precisely so a user can delete
+   * 1.6 GB of pictures and keep the index — and until now, doing so silently
+   * lost every picture they had attached by hand, even though the file each
+   * one came from is still named in the override beside it. There is nothing
+   * for the user to decide here: the choice is already theirs and already
+   * recorded; ART simply stopped honouring it. A pass over an intact cache is
+   * one metadata call per hand-attached title and no writes at all, so this is
+   * not a fetch and is nothing like {@link handleEnrich}, which stays the
+   * user's own action (ART-132).
+   *
+   * Failures are swallowed on purpose: a screen full of rows is worth more
+   * than a screen refusing to open because a picture could not be copied.
+   */
+  async function restoreOwnPictures(rows: Shown[]) {
+    if (rows.length === 0) return;
+    try {
+      const outcome = await artworkRebindManual(
+        rows.map((row) => ({ id: row.id, title: row.title }))
+      );
+      // Silent when there was nothing to do, which is every ordinary run.
+      if (outcome.restored.length > 0 || outcome.missed.length > 0) {
+        setRebindOutcome(outcome);
+      }
+    } catch {
+      // See above.
+    }
+  }
+
   async function loadArtwork(rows: Shown[]) {
     if (rows.length === 0) return;
+    await restoreOwnPictures(rows);
     try {
       const [dir, known] = await Promise.all([
         artworkDir(),
@@ -908,6 +956,40 @@ export function CollectionStudio() {
           </div>
         )}
       </section>
+
+      {/* ART-143. Pictures the user attached by hand, put back from the files
+          they originally chose after the artwork cache went. Dismissible
+          rather than transient: the list of what could *not* be restored names
+          files the user may want to go and find. */}
+      {rebindOutcome && (
+        <div className="card" style={{ margin: "12px 0", padding: "8px 12px", fontSize: 12 }}>
+          {rebindOutcome.restored.length > 0 && (
+            <p style={{ margin: 0 }}>
+              {t("collection.rebind.restored", { count: rebindOutcome.restored.length })}
+            </p>
+          )}
+          {rebindOutcome.missed.length > 0 && (
+            <>
+              <p style={{ margin: "6px 0 4px" }}>{t("collection.rebind.missedHeading")}</p>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {rebindOutcome.missed.map((miss) => (
+                  <li key={miss.id} className="faint">
+                    <strong>{miss.title}</strong> — {t(rebindProblemPhrase(miss.problem).key)} (
+                    {miss.chosen})
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          <button
+            className="btn btn-sm"
+            onClick={() => setRebindOutcome(null)}
+            style={{ marginTop: 6, padding: "2px 8px", fontSize: 10 }}
+          >
+            {t("collection.rebind.dismiss")}
+          </button>
+        </div>
+      )}
 
       {error && <div className="badge badge-err" style={{ margin: "12px 0", padding: "6px 12px" }}>{error}</div>}
       {statusMsg && <div className="badge badge-ok" style={{ margin: "12px 0", padding: "6px 12px" }}>{statusMsg}</div>}

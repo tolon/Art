@@ -11,7 +11,14 @@ import en from "./en.json";
 import { ALL_PROVENANCES, provenancePhrase } from "@/lib/gameindex";
 import { kindPhrase as artworkKindPhrase, mediaPhrase } from "@/lib/collectionDetail";
 import type { Media } from "@/lib/gameindex";
-import { outcomePhrase, sourcePhrase, type ArtKind, type SourceOutcome } from "@/lib/artwork";
+import {
+  outcomePhrase,
+  rebindProblemPhrase,
+  sourcePhrase,
+  type ArtKind,
+  type RebindProblem,
+  type SourceOutcome,
+} from "@/lib/artwork";
 
 import { describeCheckout, type CheckoutRow } from "@/lib/checkout";
 import { jobStatusLabel, type JobProgress } from "@/lib/jobs";
@@ -924,6 +931,22 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     ];
     for (const reason of reasons) {
       const phrase = osinstallRefusalPhrase(reason);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+  });
+
+  // ART-143: why a hand-attached picture could not be put back after the
+  // artwork cache was deleted. Four values, one exhaustive `switch`, so a
+  // fifth cannot arrive with its sentence missing.
+  it("rebindProblemPhrase: every RebindProblem resolves", () => {
+    const problems: RebindProblem[] = [
+      "source-gone",
+      "not-a-picture",
+      "too-large",
+      "unreadable",
+    ];
+    for (const problem of problems) {
+      const phrase = rebindProblemPhrase(problem);
       expect(isLeafKey(phrase.key), phrase.key).toBe(true);
     }
   });

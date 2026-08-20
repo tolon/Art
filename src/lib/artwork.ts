@@ -11,6 +11,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
+import { awaitJobResult } from "./jobs";
 import type { Phrase } from "./phrase";
 
 /** The kinds of picture a source can supply. Mirrors `core::artwork::ArtKind`. */
@@ -249,6 +250,92 @@ export async function onArtworkLocalResult(
 ): Promise<() => void> {
   const { listen } = await import("@tauri-apps/api/event");
   return listen<LocalResult>(ARTWORK_LOCAL_RESULT_EVENT, (e) => handler(e.payload));
+}
+
+/**
+ * Why one hand-attached picture could not be put back. Mirrors
+ * `core::artwork::rebind::RebindProblem`.
+ */
+export type RebindProblem = "source-gone" | "not-a-picture" | "too-large" | "unreadable";
+
+/** One binding that could not be put back, and why. */
+export interface RebindMiss {
+  id: string;
+  title: string;
+  /** The file that was looked for, so "which one?" is already answered. */
+  chosen: string;
+  problem: RebindProblem;
+}
+
+/** One binding that was put back. */
+export interface Rebound {
+  id: string;
+  title: string;
+  cached: string;
+}
+
+/** What a re-materialise pass managed. */
+export interface RebindOutcome {
+  /** Bindings whose cache entry was already there, with its file. */
+  intact: number;
+  restored: Rebound[];
+  missed: RebindMiss[];
+}
+
+export const ARTWORK_REBIND_RESULT_EVENT = "artwork-rebind-result";
+
+/**
+ * Put back every hand-attached picture whose artwork-cache entry has gone
+ * (ART-143).
+ *
+ * The artwork cache is a **sibling** of the catalogue directory precisely so a
+ * user can delete 1.6 GB of pictures and keep the index that took minutes to
+ * build — and doing so used to leave every picture they had attached by hand
+ * rendering nothing, with the exact file it came from still named in the
+ * override right beside it. `ArtBinding.chosen` is that file; this reads it
+ * back.
+ *
+ * `titles` is `{ id, title }` per row **as the screen shows it**: the cache is
+ * keyed by the applied title, which is what `artworkAttach` was given, and the
+ * screen is the only place that already holds both halves.
+ *
+ * A job underneath (hundreds of pictures is a real case), hidden behind an
+ * ordinary promise by `awaitJobResult` — the same shape `osinstallCollisions`
+ * uses. Cheap when there is nothing to do, which is why the Collection can run
+ * it on every load.
+ */
+export async function artworkRebindManual(
+  titles: { id: string; title: string }[]
+): Promise<RebindOutcome> {
+  return awaitJobResult<{ job_id: number; outcome: RebindOutcome }, RebindOutcome>(
+    ARTWORK_REBIND_RESULT_EVENT,
+    () => invoke<number>("artwork_rebind_manual", { titles }),
+    (payload) => payload.outcome
+  );
+}
+
+/**
+ * How a failed re-materialise reads on screen.
+ *
+ * A `Phrase`, and an exhaustive `switch` over the union with a `never`
+ * fallthrough: a fifth problem must be a compile error here rather than a row
+ * that says nothing about why the user's picture did not come back.
+ */
+export function rebindProblemPhrase(problem: RebindProblem): Phrase {
+  switch (problem) {
+    case "source-gone":
+      return { key: "collection.rebind.problem.sourceGone" };
+    case "not-a-picture":
+      return { key: "collection.rebind.problem.notAPicture" };
+    case "too-large":
+      return { key: "collection.rebind.problem.tooLarge" };
+    case "unreadable":
+      return { key: "collection.rebind.problem.unreadable" };
+    default: {
+      const unreachable: never = problem;
+      return unreachable;
+    }
+  }
 }
 
 /**

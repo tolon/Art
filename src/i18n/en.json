@@ -1638,6 +1638,18 @@
           "nothingToMount": "This title names no disk to mount — there is nothing for WinUAE to load."
         }
       }
+    },
+    "rebind": {
+      "restored_one": "ART put back {{count}} picture you had attached by hand, from the file you originally chose.",
+      "restored_other": "ART put back {{count}} pictures you had attached by hand, from the files you originally chose.",
+      "missedHeading": "Some of your own pictures could not be put back:",
+      "dismiss": "Dismiss",
+      "problem": {
+        "sourceGone": "the file is not there any more",
+        "notAPicture": "the file is no longer a PNG or JPEG",
+        "tooLarge": "the file has grown too large to use",
+        "unreadable": "the file could not be read"
+      }
     }
   },
   "whdload": {
