@@ -197,10 +197,7 @@ mod tests {
     use crate::core::rdb::{create_rdb_layout, AmigaHardDiskFs, PartitionSpec};
 
     fn scratch(tag: &str) -> std::path::PathBuf {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
+        let stamp = crate::core::test_scratch_id();
         let dir = std::env::temp_dir().join(format!("art-card-{tag}-{stamp}"));
         std::fs::create_dir_all(&dir).unwrap();
         dir

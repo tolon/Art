@@ -124,10 +124,7 @@ mod tests {
     use super::*;
 
     fn scratch(tag: &str) -> PathBuf {
-        let s = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
+        let s = crate::core::test_scratch_id();
         let dir = std::env::temp_dir().join(format!("art-backup-{tag}-{s}"));
         fs::create_dir_all(&dir).unwrap();
         dir

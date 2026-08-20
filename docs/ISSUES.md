@@ -1222,7 +1222,29 @@ when `fetch_add` appears inside the enclosing `fn`. Result:
 | already had a counter | 7 |
 | **rewritten** | **70** |
 
-Re-running the same scan now reports **0** needing a counter.
+**R2, fix round 2 — that zero was not what it sounded like.** The script
+grepped `std::process::id()` and nothing else, so roughly twenty helpers keyed
+on `SystemTime::now()…as_nanos()` **alone** were invisible to it — and that is
+the *worse* shape, because two threads can genuinely share a nanosecond
+reading (the Windows clock is coarse) where they can never have different pids,
+and unlike a bare pid it *looks* unique. `core/lha/safe_extract.rs`'s own
+`scratch` was one. A script reporting zero while blind to the worse half is a
+guard that passes vacuously, which is the class this round has now filed three
+times.
+
+The script searches both shapes now, and also refuses to touch an `as_nanos()`
+that is not building a path (a timing measurement or a seed). Re-run after
+widening:
+
+| | sites |
+|---|---|
+| total | 55 |
+| production (never touched) | 5 |
+| already had a counter | 24 |
+| **rewritten** | **26** |
+
+All 26 were `as_nanos()`-only. Re-running now reports **0**, and that zero
+covers both shapes.
 
 One behaviour change fell out and is worth naming: `osinstall::fixtures::scratch`
 used to be *stable* per tag — two calls with one tag returned the same
@@ -1403,6 +1425,47 @@ disc spells `C/ASSIGN`, a BoingBag `C/Assign` — that is the ordinary overwrite
 `FileRecord::overwrote` already records), and directories are merge points, not
 claims, the same rule `detect_collisions` and `undeclared_overwrites` follow.
 
+**R1, fix round 2 — the refusal was keyed exact-case while the comparison
+beside it folds case, so the narrowest pair walked straight through.**
+`host_name_collisions` compared destinations with `same_destination`
+(`eq_ignore_ascii_case`) but keyed its map on the host path **as spelled**.
+`Devs/Prices: 1993` claimed `Devs/Prices_ 1993` and `Devs/prices? 1993` claimed
+`Devs/prices_ 1993` — two keys for one file on a case-insensitive filesystem —
+so the pair never met in the map at all. Reproduced end to end by the reviewer:
+`apply` returned `Ok`, wrote **one** file and recorded **two**. Three-way,
+escaped-against-literal and subdirectory collisions were all caught; this was
+the one hole.
+
+Keyed on [`destination_key`](#) now, which is what the comparison already uses
+and what that function's own doc comment warns about: "a `HashMap` or
+`BTreeMap` keyed on a raw destination is the same defect in a quieter form".
+This round was bitten by an exact-case key **four separate times**; using the
+existing helper rather than a fresh fold is what stops a fifth.
+
+**And its corollary: two different drawers merging is refused too, reversing a
+test that had blessed it.** The first version skipped directory items, quoting
+the rule `detect_collisions` and `undeclared_overwrites` follow — "directories
+are merge points, not claims" — and shipped a test asserting that
+`Storage/AUX` beside `Storage/_AUX` is fine. That rule does not transfer:
+those two ask whether *the same drawer* is claimed twice, which is ordinary;
+this asks whether **two different drawers become one**, which is the same loss
+as two files becoming one and reaches further — every file under both lands in
+one host drawer, and `core/preload` resolves that drawer to a single AmigaDOS
+name, so one whole subtree arrives on the volume under the other's name. The
+`is_dir` flag is gone entirely: `same_destination` already tells "the same
+drawer twice" from "two drawers becoming one", which is the question that
+actually matters.
+
+Round-2 tests: `::two_destinations_differing_only_in_case_still_collide` and
+`::a_case_differing_pair_is_refused_by_apply_not_written_once_and_recorded_twice`
+(the reviewer's own case, through `apply`, asserting the tree is never
+created), `::two_different_drawers_that_escape_to_one_are_refused` (replacing
+the test that asserted the opposite),
+`::two_components_creating_the_same_drawer_is_not_a_clash` (the case the old
+test was reaching for) and `::a_drawer_and_a_file_that_escape_to_one_name_are_refused`.
+Both case tests were checked against the old key by reverting it: both fail,
+both pass with `destination_key`.
+
 Round-1 tests: `core::osinstall::apply::tests::two_destinations_that_escape_to_one_host_name_are_refused`
 (end to end through `apply`, and asserting the tree is *not created at all* —
 refused before anything is written, not an error after a partial write),
@@ -1485,7 +1548,10 @@ every entry:
 | 1 | 914 | 0 | 0 | **880** |
 | 2 | 2,259 | 0 | 0 | 2,252 |
 
-**8,016 entries across 41 archives.** The *conclusion* survived — all 483
+**8,016 entries across 44 archives** — 38 in the folder itself and 6 in
+subfolders, which is the script's own output rather than a remembered figure;
+the "41" carried through this round's earlier text came from an older task and
+nobody had re-measured it (R3). The *conclusion* survived — all 483
 non-ASCII names really are level-0, so the Latin-1 fix does cover every one of
 them — but the evidence behind it did not, and it hid two further defects in
 the levels the census had skipped ([F1](#fixed) and [F3](#fixed), both fixed in

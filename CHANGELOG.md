@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Archive names, drawer names, and a batch of long-standing debt (2026-08-20)
+
+#### Fixed
+- **The Turkish catalogs now land in the drawer the Amiga actually
+  reads.** They belong in `türkçe`, and ART was mangling both accented
+  letters on the way out of the archive, so the drawer landed *beside*
+  the real one instead of on top of it — 36 catalogs installed, reported
+  as a clean success, and invisible to the machine. The booted Amiga
+  listed 20 drawers where Windows showed 21. Archive names on an Amiga
+  are Latin-1, and ART now reads them that way, the same as it already
+  did for CDs. The same fix covers 483 accented names across your whole
+  archive collection, not just the Turkish pack.
+- **An archive that stores its folders separately no longer collapses
+  into one heap.** Some archives keep a file's name and the drawer it
+  belongs in as two different pieces, and ART was reading only the
+  first — so every file arrived at the top level, piled on top of the
+  others. Measured against your own collection: 880 files across eight
+  archives, including all 283 of `Update3.2.2.lha` and all 316 of
+  `AmiSSL-v5-OS3.lha`. They now keep their folders.
+- **File comments are no longer glued onto the file name.** An Amiga
+  archive can store a comment right after the name, and ART was treating
+  the whole thing as one name — 126 files in your collection. The name
+  is now the name, and the comment is kept rather than thrown away.
+- **A name Windows cannot store is escaped, and never quietly merged
+  with another.** AmigaOS allows names Windows refuses — `AUX` is
+  reserved, and `Prices: 1993` is illegal outright — so ART now writes
+  those under a safe name and records the real one, putting the true
+  Amiga name back when it copies to the card. Where two different Amiga
+  names would end up as one Windows file, ART **stops and names both**
+  rather than writing one and reporting two.
+- **The size a build predicts now matches what it writes.** Building
+  from a CD, the estimate counted folders as if they held bytes of their
+  own — 6,108,319 predicted against 6,054,225 actually written.
+- **A disc that is simply bigger than ART reads no longer reports as
+  damaged.** It now says it hit ART's own limit, with its own error id,
+  instead of telling you your disc is broken.
+- **The staging screen says what it did not look at.** Folders nested
+  deeper than ART walks were left out of the plan silently, and adding a
+  folder *and* a file inside it counted that file twice and then
+  collided with itself. Both are now shown, and neither blocks the
+  build.
+- **The sidebar collapses to icons when it should.** Under Application
+  Size the rule was asking about the wrong window, so at 130% and 200% —
+  exactly when the sidebar is widest — it never fired.
+
+#### Added
+- **Space on a folder now counts it.** Total Commander's `CountSpace`:
+  marking a drawer with Space also totals what is inside it and replaces
+  `<DIR>` in the Size column with the real figure, on both sides of the
+  file manager — a local folder or a drawer inside a disk image. It runs
+  in the background and can be stopped, and when it has to stop early
+  the number is shown as "at least this much" rather than as a total.
+
+
 ### Update packages — and the AmigaOS 3.9 tree turns out to have been 3.5 (2026-08-19)
 
 #### Fixed
@@ -103,14 +157,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them. **The decision, taken deliberately: ART will not break the
   password.** Running an Amiga-side install step properly is its own
   piece of work, and it is not happening next week.
-- **The Turkish catalogs install but the Amiga cannot see them.** They go
-  into a drawer called `türkçe`, and ART is currently mangling the two
-  accented letters when it reads them out of the archive, so the drawer
-  lands beside the real one instead of on top of it. Everything reports
-  success. Nothing works. It is filed for a fix of its own rather than
-  patched here, because the same code reads every LHA archive ART opens,
-  WHDLoad included, and changing it could rename files that extract
-  correctly today.
 - **A package whose installer is an Amiga Installer script cannot be
   placed, ever.** Not a gap — a boundary. Those scripts decide what to do
   while running on the real machine, and ART has nothing to reproduce

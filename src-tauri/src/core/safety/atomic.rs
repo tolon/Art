@@ -72,10 +72,7 @@ mod tests {
     use super::*;
 
     fn scratch(tag: &str) -> PathBuf {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
+        let stamp = crate::core::test_scratch_id();
         let dir = std::env::temp_dir().join(format!("art-atomic-{tag}-{stamp}"));
         fs::create_dir_all(&dir).unwrap();
         dir

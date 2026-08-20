@@ -649,13 +649,8 @@ mod tests {
     /// Spec §46: every object needs at least one starred (Recommended) action.
     #[test]
     fn every_recognised_format_has_a_recommendation() {
-        let dir = std::env::temp_dir().join(format!(
-            "art-wf-rec-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("art-wf-rec-{}", crate::core::test_scratch_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let adf = dir.join("game.adf");
@@ -917,13 +912,8 @@ mod tests {
         use crate::core::adf::create::create_blank_adf;
         use crate::core::adf::FileSystemType;
 
-        let dir = std::env::temp_dir().join(format!(
-            "art-wf-val-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("art-wf-val-{}", crate::core::test_scratch_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let disk = dir.join("blank.adf");
         std::fs::write(

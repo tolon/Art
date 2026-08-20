@@ -417,13 +417,8 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-scan-{tag}-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("art-scan-{tag}-{}", crate::core::test_scratch_id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

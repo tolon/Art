@@ -48,13 +48,8 @@ mod tests {
     use std::path::PathBuf;
 
     fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-lha-{tag}-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("art-lha-{tag}-{}", crate::core::test_scratch_id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

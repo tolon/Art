@@ -308,13 +308,7 @@ mod tests {
 
     #[test]
     fn create_and_open_rdb_hdf() {
-        let dir = std::env::temp_dir().join(format!(
-            "art-hdf-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = std::env::temp_dir().join(format!("art-hdf-{}", crate::core::test_scratch_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let hdf_path = dir.join("System.hdf");
 
@@ -337,13 +331,8 @@ mod tests {
     }
 
     fn scratch(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-hdf-{tag}-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("art-hdf-{tag}-{}", crate::core::test_scratch_id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

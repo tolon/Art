@@ -880,13 +880,7 @@ pub mod tests {
 
     #[test]
     fn open_minimal_lha_lists_one_entry() {
-        let dir = std::env::temp_dir().join(format!(
-            "art-lha-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = std::env::temp_dir().join(format!("art-lha-{}", crate::core::test_scratch_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let archive = dir.join("test.lha");
         std::fs::write(&archive, make_minimal_lha()).unwrap();
@@ -901,13 +895,8 @@ pub mod tests {
 
     #[test]
     fn rejects_non_archive() {
-        let dir = std::env::temp_dir().join(format!(
-            "art-lha-err-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("art-lha-err-{}", crate::core::test_scratch_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let bad = dir.join("bad.lha");
         std::fs::write(&bad, b"not an lha").unwrap();

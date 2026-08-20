@@ -1,24 +1,50 @@
-"""Find — and optionally fix — every test scratch directory that is keyed on
-`std::process::id()` without a per-call counter.
+"""Find — and optionally fix — every test scratch directory whose name is not
+guaranteed unique within the process.
 
-How it decides, so the next person can re-run this rather than re-trust it:
+Cargo runs tests in parallel threads of **one** process, so two tests that
+build the same directory name share it and whichever writes second hands the
+other its fixture. That has been diagnosed four times in this codebase:
+`net`'s test server (ART-059), `core::iso` (ART-164/ART-115, 5 failures in 40
+runs across four different tests), and `core::cbm` (ART-173, 4 in 40).
+
+## What counts as "not guaranteed unique"
+
+Two shapes, and the second is the worse one:
+
+  * `std::process::id()` — shared by every thread in the run, so on its own it
+    distinguishes nothing between parallel tests.
+  * `SystemTime::now()…as_nanos()` — **worse**: two threads can genuinely land
+    in the same nanosecond reading (the Windows clock is coarse), and unlike
+    the pid it *looks* unique, so it reads as if the problem were solved.
+
+The first version of this script grepped only `std::process::id()` and
+reported a clean zero while ~20 helpers keyed on `as_nanos()` alone were
+invisible to it — a guard that passes vacuously, which is the same class of
+defect it exists to find. Both shapes are searched now.
+
+## How a site is classified
 
   1. Every `.rs` file under `src-tauri/src`.
-  2. Every occurrence of `std::process::id()`.
-  3. A site counts as *test* code when it appears after the first
-     `#[cfg(test)]` in the file — production code that named a file by pid
-     would be a different question and is reported separately, not touched.
-  4. A site is *already safe* when `fetch_add` appears within the enclosing
-     `fn` (walking back to the nearest line matching `fn <name>` at a lower
-     indent, then forward to the next such line).
+  2. Every occurrence of either shape.
+  3. *test* code — the site falls after the file's first `#[cfg(test)]`.
+     Production code that names a file this way is a different question,
+     reported and never touched.
+  4. *already safe* — `fetch_add` or `test_scratch_id` appears inside the
+     enclosing `fn` (walk back to the nearest `fn` at a lower indent, then
+     forward to the next one).
+  5. *path-building* — the enclosing `fn` mentions `temp_dir`, or the site is
+     inside a `format!` whose literal begins `"art-`. An `as_nanos()` used for
+     timing or as a seed is not a scratch name and is left alone.
 
-The fix is one token: `std::process::id()` becomes
-`crate::core::test_scratch_id()`, which is pid **plus** a process-wide
-counter. Every call site formats it with `{}` already, so no format string
-changes and every edit is reviewable as a one-word diff.
+## The fix
 
-Usage:  python scratch_sweep.py            # report only
-        python scratch_sweep.py --apply    # rewrite
+Both shapes are replaced by `crate::core::test_scratch_id()`, which is the
+process id **plus** a process-wide atomic counter. Every call site already
+formats the value with `{}`, so no format string changes and each edit reads
+as a one-expression diff.
+
+Usage:  python scripts/scratch-counter-sweep.py            # report only
+        python scripts/scratch-counter-sweep.py --apply    # rewrite
 """
 
 import io
@@ -26,12 +52,22 @@ import os
 import re
 import sys
 
-ROOT = 'src'
-NEEDLE = 'std::process::id()'
+ROOT = os.path.join('src-tauri', 'src')
+REPLACEMENT = 'crate::core::test_scratch_id()'
+
+PID = re.compile(r'std::process::id\(\)')
+# `SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()`, with or
+# without the `std::time::` prefixes and across any line breaks.
+NANOS = re.compile(
+    r'(?:std::time::)?SystemTime::now\(\)\s*'
+    r'\.duration_since\(\s*(?:std::time::)?UNIX_EPOCH\s*\)\s*'
+    r'\.unwrap\(\)\s*'
+    r'\.as_nanos\(\)'
+)
 FN_RE = re.compile(r'^(\s*)(pub(\([^)]*\))? )?(async )?fn (\w+)')
 
 
-def files():
+def rust_files():
     out = []
     for base, _, names in os.walk(ROOT):
         for name in names:
@@ -59,49 +95,71 @@ def enclosing_fn(lines, index):
 
 def main():
     apply = '--apply' in sys.argv
-    total = safe = fixed = production = 0
+    counts = {'production': 0, 'safe': 0, 'not-a-path': 0, 'fixed': 0}
     report = []
 
-    for path in files():
+    for path in rust_files():
         text = io.open(path, encoding='utf-8', newline='').read()
-        if NEEDLE not in text:
+        if not (PID.search(text) or NANOS.search(text)):
             continue
+
         lines = text.split('\n')
         cfg_test = next((i for i, l in enumerate(lines) if '#[cfg(test)]' in l), None)
+        cfg_off = len('\n'.join(lines[:cfg_test])) if cfg_test is not None else None
+
+        # Collect every match across both shapes, right to left so earlier
+        # offsets stay valid while rewriting.
+        hits = sorted(
+            [(m.start(), m.end(), 'pid') for m in PID.finditer(text)]
+            + [(m.start(), m.end(), 'nanos') for m in NANOS.finditer(text)],
+            reverse=True,
+        )
 
         changed = False
-        for i, line in enumerate(lines):
-            if NEEDLE not in line:
+        for begin, finish, shape in hits:
+            line_no = text.count('\n', 0, begin)
+            if cfg_off is None or begin < cfg_off:
+                counts['production'] += 1
+                report.append(('PRODUCTION', path, line_no + 1, '-', shape))
                 continue
-            total += 1
-            if cfg_test is None or i < cfg_test:
-                production += 1
-                report.append(('PRODUCTION', path, i + 1, '-'))
+
+            name, fn_start, fn_end = enclosing_fn(lines, line_no)
+            body = '\n'.join(lines[fn_start:fn_end])
+
+            if 'fetch_add' in body or 'test_scratch_id' in body:
+                counts['safe'] += 1
+                report.append(('already-safe', path, line_no + 1, name, shape))
                 continue
-            name, start, end = enclosing_fn(lines, i)
-            body = '\n'.join(lines[start:end])
-            if 'fetch_add' in body:
-                safe += 1
-                report.append(('already-safe', path, i + 1, name))
+
+            # Is this a scratch *path* at all?
+            window = text[max(0, begin - 400):finish]
+            if 'temp_dir' not in body and '"art-' not in window:
+                counts['not-a-path'] += 1
+                report.append(('not-a-path', path, line_no + 1, name, shape))
                 continue
-            fixed += 1
-            report.append(('FIXED' if apply else 'needs-counter', path, i + 1, name))
+
+            counts['fixed'] += 1
+            report.append(('FIXED' if apply else 'needs-counter',
+                           path, line_no + 1, name, shape))
             if apply:
-                lines[i] = line.replace(NEEDLE, 'crate::core::test_scratch_id()')
+                text = text[:begin] + REPLACEMENT + text[finish:]
                 changed = True
 
         if apply and changed:
-            io.open(path, 'w', encoding='utf-8', newline='').write('\n'.join(lines))
+            io.open(path, 'w', encoding='utf-8', newline='').write(text)
 
-    for kind, path, line, fn in report:
-        if kind in ('needs-counter', 'FIXED', 'PRODUCTION'):
-            print(f'  {kind:14s} {path}:{line}  fn {fn}')
+    for kind, path, line, fn, shape in sorted(report):
+        if kind in ('needs-counter', 'FIXED', 'PRODUCTION', 'not-a-path'):
+            print(f'  {kind:14s} {shape:6s} {path}:{line}  fn {fn}')
 
+    total = sum(counts.values())
     print()
-    print(f'sites total          : {total}')
-    print(f'  production (skipped): {production}')
-    print(f'  already had counter : {safe}')
-    print(f'  {"rewritten" if apply else "needing a counter"}   : {fixed}')
+    print(f'sites total                 : {total}')
+    print(f'  production (never touched): {counts["production"]}')
+    print(f'  not a scratch path        : {counts["not-a-path"]}')
+    print(f'  already had a counter     : {counts["safe"]}')
+    label = 'rewritten' if apply else 'needing a counter'
+    print(f'  {label:26s}: {counts["fixed"]}')
 
 
 if __name__ == '__main__':

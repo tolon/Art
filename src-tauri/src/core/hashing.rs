@@ -129,13 +129,7 @@ mod tests {
 
     #[test]
     fn file_matches_bytes() {
-        let d = std::env::temp_dir().join(format!(
-            "art-hash-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let d = std::env::temp_dir().join(format!("art-hash-{}", crate::core::test_scratch_id()));
         std::fs::create_dir_all(&d).unwrap();
         let p = d.join("data.bin");
         std::fs::write(&p, b"abc").unwrap();
@@ -147,13 +141,8 @@ mod tests {
     #[test]
     fn large_file_does_not_panic() {
         // 1 MiB of data — ensures the streaming path works.
-        let d = std::env::temp_dir().join(format!(
-            "art-hash-big-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let d =
+            std::env::temp_dir().join(format!("art-hash-big-{}", crate::core::test_scratch_id()));
         std::fs::create_dir_all(&d).unwrap();
         let p = d.join("big.bin");
         let one_mib = vec![0x42u8; 1024 * 1024];

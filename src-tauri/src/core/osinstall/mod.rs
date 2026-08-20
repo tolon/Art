@@ -319,25 +319,54 @@ pub fn host_relative(to: &str) -> String {
 /// ([`same_destination`] — the medium spelled one file two ways) are not a
 /// collision: that is the ordinary overwrite `apply` already records through
 /// `FileRecord::overwrote`.
-pub fn host_name_collisions(items: &[(String, bool)]) -> Vec<(String, String, String)> {
+///
+/// # Drawers are checked too, and that is a reversal
+///
+/// An earlier version skipped directory items, on the reasoning that
+/// "directories are merge points, not claims" — the rule `detect_collisions`
+/// and `undeclared_overwrites` genuinely do follow. It does not transfer.
+/// Those two ask whether *the same drawer* is claimed twice, which is
+/// ordinary; this asks whether **two different drawers become one**, which is
+/// the same loss as two files becoming one and is worse in reach: every file
+/// under `Storage/AUX` and every file under `Storage/_AUX` would land in one
+/// host drawer, and `core/preload` resolves that drawer to a single AmigaDOS
+/// name — so one whole subtree arrives on the volume under the other's name.
+///
+/// Two components creating *the same* drawer is still fine, and stays fine
+/// for the same reason a file does: [`same_destination`] answers that, not
+/// the `is_dir` flag. So no flag is needed and none is taken.
+pub fn host_name_collisions(destinations: &[String]) -> Vec<(String, String, String)> {
     use std::collections::BTreeMap;
 
+    // Keyed on `destination_key`, **not** on the host path as spelled. The
+    // first version keyed the map exact-case while comparing with
+    // `same_destination` (which folds ASCII case), so a pair differing only
+    // in case never met in the map at all: `Devs/Prices: 1993` claimed
+    // `Devs/Prices_ 1993` and `Devs/prices? 1993` claimed `Devs/prices_ 1993`,
+    // two different keys for one file on a case-insensitive filesystem.
+    // `apply` then returned `Ok`, wrote one file and recorded two — the exact
+    // loss this function exists to stop, one fold narrower.
+    //
+    // `destination_key`'s own doc comment says a `BTreeMap` keyed on a raw
+    // destination is the same defect in a quieter form. That warning has now
+    // been earned four times in this round; this is the last place that was
+    // still ignoring it.
     let mut claimed: BTreeMap<String, String> = BTreeMap::new();
     let mut clashes = Vec::new();
-    for (to, is_dir) in items {
-        // Directories are merge points, not claims — the same rule
-        // `detect_collisions` and `undeclared_overwrites` already follow.
-        if *is_dir {
-            continue;
-        }
+    for to in destinations {
         let host = host_relative(to);
-        match claimed.get(&host) {
+        let key = destination_key(&host);
+        match claimed.get(&key) {
+            // Two destinations that are the *same place* are not a collision
+            // — the media spelled one file two ways (`C/ASSIGN` off the 3.9
+            // disc's Primary tree, `C/Assign` off a BoingBag), which is the
+            // ordinary overwrite `FileRecord::overwrote` already records.
             Some(first) if !same_destination(first, to) => {
                 clashes.push((host, first.clone(), to.clone()));
             }
             Some(_) => {}
             None => {
-                claimed.insert(host, to.clone());
+                claimed.insert(key, to.clone());
             }
         }
     }

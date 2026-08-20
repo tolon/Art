@@ -636,13 +636,8 @@ mod tests {
     }
 
     fn card(files: &[(&str, &str)]) -> Card {
-        let dir = std::env::temp_dir().join(format!(
-            "art-pistorm-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("art-pistorm-{}", crate::core::test_scratch_id()));
         std::fs::create_dir_all(&dir).unwrap();
         for (name, contents) in files {
             std::fs::write(dir.join(name), contents).unwrap();

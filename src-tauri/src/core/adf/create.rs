@@ -252,13 +252,8 @@ mod tests {
     /// Creating a disk is SAFE_CREATE: it must never land on an existing file.
     #[test]
     fn save_refuses_to_replace_an_existing_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "art-adf-create-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("art-adf-create-{}", crate::core::test_scratch_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let target = dir.join("Existing.adf");
         std::fs::write(&target, b"a disk the user already made").unwrap();
@@ -275,13 +270,8 @@ mod tests {
 
     #[test]
     fn save_writes_a_new_disk() {
-        let dir = std::env::temp_dir().join(format!(
-            "art-adf-new-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("art-adf-new-{}", crate::core::test_scratch_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let target = dir.join("Fresh.adf");
 

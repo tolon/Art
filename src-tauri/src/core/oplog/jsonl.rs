@@ -130,10 +130,7 @@ mod tests {
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "art-oplog-{tag}-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            crate::core::test_scratch_id()
         ));
         fs::create_dir_all(&dir).unwrap();
         dir

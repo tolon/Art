@@ -699,11 +699,10 @@ impl<'a> TreeWriter<'a> {
 /// corollary. See [`super::host_name_collisions`] for why escaping without
 /// this loses a file silently.
 fn refuse_host_name_collisions(items: &[PlanItem]) -> CoreResult<()> {
-    let pairs: Vec<(String, bool)> = items
-        .iter()
-        .map(|item| (item.to.clone(), item.is_dir))
-        .collect();
-    let clashes = super::host_name_collisions(&pairs);
+    // Every destination, drawers included — see `host_name_collisions` for
+    // why the `is_dir` flag it used to take was the wrong question.
+    let destinations: Vec<String> = items.iter().map(|item| item.to.clone()).collect();
+    let clashes = super::host_name_collisions(&destinations);
     if clashes.is_empty() {
         return Ok(());
     }
@@ -1544,21 +1543,102 @@ mod tests {
     #[test]
     fn a_reserved_name_and_a_real_underscore_name_are_refused_together() {
         let items = vec![
-            ("Storage/DOSDrivers/AUX".to_string(), false),
-            ("Storage/DOSDrivers/_AUX".to_string(), false),
+            "Storage/DOSDrivers/AUX".to_string(),
+            "Storage/DOSDrivers/_AUX".to_string(),
         ];
         let clashes = crate::core::osinstall::host_name_collisions(&items);
         assert_eq!(clashes.len(), 1, "{clashes:?}");
         assert_eq!(clashes[0].0, "Storage/DOSDrivers/_AUX");
     }
 
+    /// **R1, the reviewer's own case.** The collision map used to be keyed
+    /// **exact-case** while the comparison beside it folds ASCII case, so a
+    /// pair differing only in case never met in the map: `apply` returned
+    /// `Ok`, wrote one file and recorded two.
+    ///
+    /// `Devs/Prices: 1993` claims `Devs/Prices_ 1993` and `Devs/prices? 1993`
+    /// claims `Devs/prices_ 1993` — two keys, one file on a case-insensitive
+    /// filesystem. `destination_key` is what both sides use now.
+    #[test]
+    fn two_destinations_differing_only_in_case_still_collide() {
+        let items = vec![
+            "Devs/Prices: 1993".to_string(),
+            "Devs/prices? 1993".to_string(),
+        ];
+        let clashes = crate::core::osinstall::host_name_collisions(&items);
+        assert_eq!(
+            clashes.len(),
+            1,
+            "the case fold must not hide it: {clashes:?}"
+        );
+        assert_eq!(clashes[0].1, "Devs/Prices: 1993");
+        assert_eq!(clashes[0].2, "Devs/prices? 1993");
+    }
+
+    /// The same, end to end: the reviewer reproduced this through `apply`,
+    /// so the test that closes it goes through `apply` too rather than only
+    /// through the detector.
+    #[test]
+    fn a_case_differing_pair_is_refused_by_apply_not_written_once_and_recorded_twice() {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = fixtures::scratch(&format!("apply-hostcase-{n}"));
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        fixtures::media(
+            &folder,
+            "Workbench3.9",
+            "wb.adf",
+            &[("A", b"first", 0x00), ("B", b"second", 0x00)],
+        );
+
+        let mut media_paths = BTreeMap::new();
+        media_paths.insert("Workbench3.9".to_string(), folder.join("wb.adf"));
+
+        let items = vec![
+            PlanItem {
+                component: "workbench-base".into(),
+                media: "Workbench3.9".into(),
+                from: "A".into(),
+                to: "Devs/Prices: 1993".into(),
+                is_dir: false,
+                bytes: 5,
+            },
+            PlanItem {
+                component: "workbench-base".into(),
+                media: "Workbench3.9".into(),
+                from: "B".into(),
+                to: "Devs/prices? 1993".into(),
+                is_dir: false,
+                bytes: 6,
+            },
+        ];
+        let plan = InstallPlan {
+            release: "AmigaOS 3.9".into(),
+            items,
+            refusals: Vec::new(),
+            packages: Vec::new(),
+            package_media: BTreeMap::new(),
+            total_bytes: 11,
+            components_on: vec!["workbench-base".into()],
+            paired_rom: None,
+            media_paths,
+            user_startup: Vec::new(),
+        };
+
+        let root = dir.join("dist");
+        let err = apply(&plan, &root, &NoProgress).unwrap_err();
+        assert_eq!(err.code(), "ART-SAFETY-REFUSED");
+        assert!(!root.exists(), "nothing may be written for a refused plan");
+    }
+
     /// The ordinary tree is unaffected: nothing escapes, so nothing clashes.
     #[test]
     fn destinations_that_escape_to_nothing_do_not_clash() {
         let items = vec![
-            ("C/LoadModule".to_string(), false),
-            ("C/Other".to_string(), false),
-            ("Libs/icon.library".to_string(), false),
+            "C/LoadModule".to_string(),
+            "C/Other".to_string(),
+            "Libs/icon.library".to_string(),
         ];
         assert!(crate::core::osinstall::host_name_collisions(&items).is_empty());
     }
@@ -1569,23 +1649,50 @@ mod tests {
     /// base file (the 3.9 disc spells `C/ASSIGN`, a BoingBag `C/Assign`).
     #[test]
     fn the_same_destination_spelled_twice_is_not_a_clash() {
+        let items = vec!["C/ASSIGN".to_string(), "C/Assign".to_string()];
+        assert!(crate::core::osinstall::host_name_collisions(&items).is_empty());
+    }
+
+    /// **R1's corollary, and this test used to assert the opposite.** It was
+    /// written as "two components claiming one drawer is not a clash", with
+    /// `Storage/AUX` and `Storage/_AUX` as the example — but those are not
+    /// one drawer claimed twice, they are **two different drawers becoming
+    /// one**, and every file under both would land in it. `core/preload`
+    /// resolves a host drawer to a single AmigaDOS name, so one whole subtree
+    /// would arrive on the volume under the other's name.
+    ///
+    /// The rule it was reaching for is real and still holds — see the test
+    /// below.
+    #[test]
+    fn two_different_drawers_that_escape_to_one_are_refused() {
+        let items = vec!["Storage/AUX".to_string(), "Storage/_AUX".to_string()];
+        let clashes = crate::core::osinstall::host_name_collisions(&items);
+        assert_eq!(clashes.len(), 1, "{clashes:?}");
+        assert_eq!(clashes[0].0, "Storage/_AUX");
+    }
+
+    /// Two components creating *the same* drawer is still fine — the case the
+    /// test above was actually reaching for. `same_destination` answers it,
+    /// which is why no `is_dir` flag is needed to tell the two apart.
+    #[test]
+    fn two_components_creating_the_same_drawer_is_not_a_clash() {
         let items = vec![
-            ("C/ASSIGN".to_string(), false),
-            ("C/Assign".to_string(), false),
+            "Storage/DOSDrivers".to_string(),
+            "Storage/DOSDrivers".to_string(),
+            "STORAGE/DOSDRIVERS".to_string(),
         ];
         assert!(crate::core::osinstall::host_name_collisions(&items).is_empty());
     }
 
-    /// Directories are merge points, not claims — the same rule
-    /// `detect_collisions` and `undeclared_overwrites` follow. Two components
-    /// both creating `Storage/DOSDrivers` is normal.
+    /// A drawer and a file that escape onto one name are a collision too —
+    /// nothing about the kinds makes it safer.
     #[test]
-    fn two_components_claiming_one_drawer_is_not_a_clash() {
-        let items = vec![
-            ("Storage/AUX".to_string(), true),
-            ("Storage/_AUX".to_string(), true),
-        ];
-        assert!(crate::core::osinstall::host_name_collisions(&items).is_empty());
+    fn a_drawer_and_a_file_that_escape_to_one_name_are_refused() {
+        let items = vec!["Devs/AUX".to_string(), "Devs/_AUX".to_string()];
+        assert_eq!(
+            crate::core::osinstall::host_name_collisions(&items).len(),
+            1
+        );
     }
 
     /// **ART-160.** The tree escapes what the host cannot carry, and the
