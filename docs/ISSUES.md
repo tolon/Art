@@ -506,6 +506,76 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-182** 🟡 **A blocking-CI flake: sixteen tests shared one staging
+namespace** — *reported by wave D's Task 2 implementer 2026-08-20, fixed the
+same day on `amiga-side-install`*
+`src-tauri/src/commands/osinstall.rs`
+
+`staging_is_removed_however_the_preview_ends` counted directories matching
+`art-osinstall-collisions-component-<pid>-`. `cargo test` runs the whole
+binary in **one process** across many threads, and sixteen tests reach
+`preview_component_collisions` — so the count picked up other tests' in-flight
+directories, and the assertion compared two numbers that were never about the
+same work. It failed **three runs in six** on the machine that found it and
+**none in six** here, which is exactly why CLAUDE.md forbids shipping it: a
+blocking CI that fails at random trains people to re-run until green.
+
+`scratch_root_for` now names the thread as well as the process. The per-call
+counter already made every root unique, so this is not about collisions — it
+makes a directory left under `%TEMP%` after a crash attributable to the work
+that left it.
+
+The guard could not be "the suite is green now", because it was green here
+before the fix. It is `two_threads_never_stage_into_one_namespace`, which
+asserts the invariant the race violates — the same move as ART-181's frozen
+clock. Removing the thread hash fails it every run.
+
+**ART-181** 🔴 **Every user file in ART was written through a temp name that
+two threads could share** — *found by wave D's Task 1 implementer while being
+told not to add an eighth instance, fixed 2026-08-20*
+`src-tauri/src/core/safety/atomic.rs`
+
+`core::safety::atomic::temp_path_for` named its temp file with a bare
+nanosecond stamp and opened it with a **truncating** `create`. Two threads
+that read the same nanosecond wrote into one file and both renamed it over the
+destination. This is the single path every write in ART goes through, so the
+outcome is a corrupted ADF, HDF or config — not a flaky test.
+
+Seventh instance of the counter defect this week (ART-164, ART-173, the
+26-site sweep, `open_nested`, `launch_winuae`, the preview staging root) and
+the **first in production code** rather than test scaffolding. The doc comment
+was itself the false claim: *"Nanosecond stamp keeps concurrent writers from
+colliding."*
+
+The counter makes the name unique inside the process; `create_new` makes it
+unique against anything outside.
+
+Worth preserving: **the first two tests written for this both passed against
+the defect.** A threaded stressor passed five runs out of five, and a
+1000-call uniqueness loop passed because a real clock advances between calls.
+Both were announced as the guard before being measured. The third works
+because the clock became a parameter (`temp_path_at`) and the test holds it
+still; both weaker ones are kept and labelled as stressors.
+
+**ART-180** 🔵 **The dead-key allow-list could not tell an excuse from a
+stale one** — *found 2026-08-20 while checking ART-179's own guard, fixed the
+same day*
+`src/i18n/dead-keys.test.ts`
+
+`dead-keys.test.ts`'s third test is called "the allow-list has no stale
+entries" and its comment says it catches an entry that *"has since gained a
+reader"*. It asserted something else: that the key was still in the catalogue.
+Proved by giving the allow-listed `common.continue` a real reader in
+`CopyPlanDialog.tsx` — **all three tests passed**, and the entry's written
+reason ("a generic affirmative no dialog in ART uses") was now false with
+nothing noticing.
+
+The first half of that test file is sound: a genuinely new dead key is caught
+by name. This was the half that was not. Both are asserted now.
+
+Same shape as ART-181 and the Task 2 Major: **a comment claiming more than its
+assertion does.** Found by mutating the guard, not by reading it.
+
 **ART-080** 🔵 **ART cannot delete a file on the user's own disk, so nothing
 can be moved *off* a host folder** — *found in phase 2b task 3; **the owner
 decided it 2026-08-20** and it was fixed the same day on `debt-wave-c2`

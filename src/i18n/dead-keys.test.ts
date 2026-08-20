@@ -192,10 +192,19 @@ describe("the catalogue has no dead keys", () => {
 
   it("the allow-list has no stale entries", () => {
     // An entry that has since gained a reader is an excuse outliving its
-    // reason, and the next person will read it as still true.
+    // reason, and the next person will read it as still true. Both halves
+    // are asserted, because the first version of this test checked only
+    // that the key still existed — which let an entry whose stated reason
+    // had become false ("a generic affirmative no dialog in ART uses")
+    // survive a screen actually starting to use it. Proved by giving one
+    // allow-listed key a real reader: all three tests passed (ART-180).
     const keys = new Set(leafKeys(en).map((k) => k.replace(/_(one|other|zero|few|many)$/, "")));
     for (const key of Object.keys(KEPT_WITHOUT_A_READER)) {
       expect(keys.has(key), `${key} is allow-listed and no longer in the catalogue`).toBe(true);
+      expect(
+        isReachable(key),
+        `${key} is allow-listed as unrendered but something now renders it — delete the entry`,
+      ).toBe(false);
     }
   });
 });
