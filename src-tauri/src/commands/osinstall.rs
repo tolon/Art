@@ -76,7 +76,7 @@
 //!   install; before this the counts were written to the oplog and nowhere
 //!   else, so the screen could say only "Added." with no numbers behind it.
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -88,20 +88,23 @@ use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome, OperationRecord};
 use crate::core::osinstall::apply::{
-    add_package, apply, ApplyOutcome, DistributionManifest, MANIFEST_FILE_NAME,
+    add_package, apply, ApplyOutcome, DistributionManifest, FileRecord, MANIFEST_FILE_NAME,
 };
 use crate::core::osinstall::collide::{self, CollisionReport, Incoming};
 use crate::core::osinstall::package::{self, Package};
 use crate::core::osinstall::plan::{
-    detect_package_refusals, expand_rules, plan, InstallPlan, InstallRequest,
+    detect_package_refusals, expand_rules, plan, InstallPlan, InstallRequest, PlanItem,
 };
 use crate::core::osinstall::recipe;
 use crate::core::osinstall::scan::{
-    find_media, find_packages, open_package, package_for, FoundMedia, FoundPackage, MediaMatch,
-    PackageMedium,
+    self, find_media, find_packages, open_package, package_for, FoundMedia, FoundPackage,
+    MediaMatch, PackageMedium,
 };
+use crate::core::osinstall::source::MediaSource;
 use crate::core::osinstall::verify::{verify_volume, VerifyReport};
-use crate::core::osinstall::{HostPlacementBlock, RefusalReason};
+use crate::core::osinstall::{
+    destination_key, host_destination, HostPlacementBlock, RefusalReason,
+};
 use crate::error::{AppError, AppResult};
 
 use super::jobs::{spawn_job, JobRegistry};
@@ -263,6 +266,19 @@ pub struct ComponentSummary {
     /// them apart to say either out loud.
     pub requires_rom_major: Option<u16>,
     pub exclusive_group: Option<String>,
+    /// Which components this one declares it may write over (ART-175).
+    ///
+    /// Carried to the screen so it can ask for a preview of exactly the
+    /// components that can be in another's way, and no others: previewing
+    /// every switched-on component would mean reading the whole install off
+    /// media to answer a question about a few dozen files.
+    ///
+    /// Five components declare one in shipped data, read off the recipes
+    /// rather than assumed: AmigaOS 3.2's `extras`, `modules-a1200`,
+    /// `classes` and `glowicons` (which layers over four components at
+    /// once), and AmigaOS 3.9's `workbench-39` — the one that makes a tree
+    /// 3.9 rather than 3.5. `src/lib/osinstall.test.ts` pins that list.
+    pub overrides: Vec<String>,
 }
 
 impl From<&crate::core::osinstall::Component> for ComponentSummary {
@@ -282,6 +298,7 @@ impl From<&crate::core::osinstall::Component> for ComponentSummary {
                 Condition::RomOlderThan { .. } => None,
             }),
             exclusive_group: component.exclusive_group.clone(),
+            overrides: component.overrides.clone(),
         }
     }
 }
@@ -807,6 +824,349 @@ fn preview_collisions(
         })
         .collect();
     collide::preview(tree_root, &entries)
+}
+
+// ---------------------------------------------------------------------------
+// osinstall_component_collisions — ART-175
+// ---------------------------------------------------------------------------
+//
+// The user-facing half of ART-170. `collide::preview` has been able to answer
+// for a *release recipe's* component since `declared_override` started
+// resolving component ids against releases as well as packages
+// (`shipped_component_overrides`), and nothing asked it: the only thing that
+// builds `Incoming` rows is `extract_incoming_for_preview`, which takes
+// package ids and opens package archives.
+//
+// **Why a release component cannot reuse a package's shape, and what replaces
+// it.** A BoingBag is previewed against a tree that already exists, so
+// `preview` has real files to compare against and a `distribution.json`
+// saying which component owns each. A release component has neither: the
+// install screen builds a *new* tree (`apply` is `SAFE_CREATE` and refuses an
+// existing root), so the thing `workbench-39` would replace is not a file on
+// disk at all — it is `workbench-base`'s own item, in the same plan, not yet
+// written anywhere.
+//
+// So the tree to preview against is **staged**, and only the part that
+// matters: for each destination the previewed component claims that an
+// *earlier* component in the same plan also claims, the earlier component's
+// bytes are written into a scratch root at that destination, together with a
+// `distribution.json` naming its owner. That is enough for `classify_incoming`
+// to read both sides honestly and for `declared_override` to answer, and it is
+// forty files for AmigaOS 3.9's overlay rather than the six hundred a full
+// staged tree would cost. Nothing else about `preview` changes.
+//
+// Order is the plan's own order, which is recipe declaration order — the same
+// order `apply` writes in, so "earlier" here means exactly "what `apply` would
+// have put there first".
+
+/// What previewing one or more switched-on components would do.
+///
+/// `reports` is `preview`'s own answer, unchanged. The count beside it exists
+/// because a collision report is, by construction, a list of what *clashes* —
+/// a component that lands six hundred files on nothing produces an empty
+/// report, and "nothing to report" and "nothing to place" must not look the
+/// same on screen (§89). `placed` is every non-directory item the chosen
+/// components would write; `reports.len()` of those land on something another
+/// component already claimed, and the rest are new.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentPreview {
+    pub reports: Vec<CollisionReport>,
+    /// Every non-directory item the chosen components would place.
+    pub placed: usize,
+}
+
+/// Every non-directory `PlanItem` belonging to one of `components`, in plan
+/// order.
+fn items_of<'a>(plan: &'a InstallPlan, components: &[String]) -> Vec<&'a PlanItem> {
+    plan.items
+        .iter()
+        .filter(|item| !item.is_dir && components.iter().any(|id| id == &item.component))
+        .collect()
+}
+
+/// Read one plan item's bytes out of the medium it names.
+///
+/// `sources` is opened lazily and keyed by volume name, the same way
+/// `apply()` opens its own: a component's rules can name a hundred files on
+/// one disk, and re-opening the image per file would re-walk a 469 MB disc a
+/// hundred times (ART-161's own lesson, applied to the preview path).
+fn read_from_media(
+    plan: &InstallPlan,
+    item: &PlanItem,
+    sources: &mut BTreeMap<String, Box<dyn MediaSource>>,
+) -> CoreResult<Vec<u8>> {
+    if !sources.contains_key(&item.media) {
+        let path = plan.media_paths.get(&item.media).ok_or_else(|| {
+            CoreError::InvalidInput(format!(
+                "this plan places '{}' from volume '{}' and records no path for it",
+                item.to, item.media
+            ))
+        })?;
+        // Through `identify`, never `AdfSource::open` — a plan's
+        // `media_paths` carries a path and no `MediaKind`, and a real
+        // AmigaOS 3.9 disc refuses the floppy reader outright (ART-153).
+        let identified = scan::identify(path).ok_or_else(|| {
+            CoreError::InvalidInput(format!(
+                "'{}' no longer identifies as install media (expected volume '{}')",
+                path.display(),
+                item.media
+            ))
+        })?;
+        sources.insert(item.media.clone(), scan::open_media(&identified)?);
+    }
+    let source = sources
+        .get_mut(&item.media)
+        .expect("inserted immediately above if it was absent");
+    source.read(&item.from)
+}
+
+/// The two ceilings, in one place, so the staged half and the incoming half
+/// cannot drift apart on which one they enforce.
+fn check_preview_ceilings(files: usize, bytes: u64) -> CoreResult<()> {
+    if files > MAX_PREVIEW_FILES {
+        return Err(CoreError::InvalidInput(format!(
+            "this preview would read more than {MAX_PREVIEW_FILES} files at once"
+        )));
+    }
+    if bytes > MAX_PREVIEW_BYTES {
+        return Err(CoreError::InvalidInput(format!(
+            "this preview would read more than {MAX_PREVIEW_BYTES} bytes at once"
+        )));
+    }
+    Ok(())
+}
+
+/// Where one component preview stages its scratch tree.
+///
+/// Deterministic in the plan's own media and the components asked about, so
+/// toggling a checkbox back and forth reuses one directory rather than growing
+/// a new one per click — the same reasoning [`preview_cache_dir`] carries,
+/// without its cache: the *contents* here depend on media that may have
+/// changed, so the directory is cleared and re-staged on every call rather
+/// than trusted.
+fn scratch_root_for(plan: &InstallPlan, components: &[String]) -> PathBuf {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    plan.release.hash(&mut hasher);
+    for (volume, path) in &plan.media_paths {
+        volume.hash(&mut hasher);
+        path.hash(&mut hasher);
+    }
+    for id in components {
+        id.hash(&mut hasher);
+    }
+    std::env::temp_dir().join(format!(
+        "{PREVIEW_SCRATCH_PREFIX}component-{:016x}",
+        hasher.finish()
+    ))
+}
+
+/// The read-only work `osinstall_component_collisions` does, pulled out so it
+/// can be unit-tested without a live `AppHandle`/`State`/job registry — the
+/// same shape [`preview_collisions`] and `verify_at` already use.
+///
+/// Bounded by the same [`MAX_PREVIEW_FILES`]/[`MAX_PREVIEW_BYTES`] the package
+/// preview uses, and cancelled between whole files, never mid-write.
+fn preview_component_collisions(
+    plan: &InstallPlan,
+    components: &[String],
+    progress: &dyn ProgressSink,
+) -> CoreResult<ComponentPreview> {
+    let incoming_items = items_of(plan, components);
+    if incoming_items.is_empty() {
+        return Ok(ComponentPreview::default());
+    }
+
+    sweep_stale_preview_scratch_dirs();
+    let scratch = scratch_root_for(plan, components);
+    // A previous run's staging must never be mistaken for this one's: the
+    // whole point of the staged root is that it holds *exactly* what an
+    // earlier component would have put there, and nothing else.
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch)?;
+
+    // What an *earlier* component in the same plan would have put at each of
+    // the previewed items' destinations.
+    //
+    // **Earlier means earlier in plan order, not merely "not selected"** — a
+    // component that writes *after* the one being previewed is not in its
+    // way, it is on top of it, and reporting it as the thing being replaced
+    // inverts the answer (`a_later_component_is_not_what_is_being_replaced`
+    // is the test that caught exactly that). So this is one pass in plan
+    // order: an unselected item records itself as the current owner of its
+    // destination, and a selected item takes whatever owner had been recorded
+    // *by then*.
+    //
+    // Keyed by `destination_key`, not by the path as spelled: two entries the
+    // filesystem and AmigaDOS agree are one file are one destination here too
+    // (the defect `plan::detect_collisions`, `apply::undeclared_overwrites`
+    // and `collide::preview` each had to fix separately).
+    let mut owner_so_far: HashMap<String, &PlanItem> = HashMap::new();
+    let mut replaces: HashMap<usize, &PlanItem> = HashMap::new();
+    let mut incoming_index = 0usize;
+    for item in plan.items.iter().filter(|item| !item.is_dir) {
+        let key = destination_key(&item.to);
+        if components.iter().any(|id| id == &item.component) {
+            if let Some(existing) = owner_so_far.get(&key) {
+                replaces.insert(incoming_index, existing);
+            }
+            incoming_index += 1;
+        } else {
+            owner_so_far.insert(key, item);
+        }
+    }
+
+    let mut sources: BTreeMap<String, Box<dyn MediaSource>> = BTreeMap::new();
+    let mut total_files = 0usize;
+    let mut total_bytes = 0u64;
+
+    // ---- stage the part of the tree that is actually in the way ----
+    let mut manifest_files: Vec<FileRecord> = Vec::new();
+    for (at, item) in incoming_items.iter().enumerate() {
+        let Some(existing) = replaces.get(&at) else {
+            continue;
+        };
+        if progress.is_cancelled() {
+            return Err(CoreError::Cancelled);
+        }
+        let bytes = read_from_media(plan, existing, &mut sources)?;
+        total_files += 1;
+        total_bytes += bytes.len() as u64;
+        check_preview_ceilings(total_files, total_bytes)?;
+
+        // Staged under the **incoming** item's own spelling, not the
+        // owner's. They are the same destination by construction — that is
+        // what put them in `owner_of` — but only up to `destination_key`'s
+        // case fold, and `classify_incoming` will look for the staged file
+        // under `host_destination(root, entry.to)`. Using the incoming
+        // spelling makes the two agree exactly rather than by courtesy of a
+        // case-insensitive filesystem.
+        let target = host_destination(&scratch, &item.to)?;
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&target, &bytes)?;
+        manifest_files.push(FileRecord {
+            path: existing.to.clone(),
+            component: existing.component.clone(),
+            media: existing.media.clone(),
+            // `declared_override` reads only `path` and `component` out of
+            // this. Stating a hash ART did not compute would be a claim about
+            // bytes nobody verified, so the digest is left empty and the byte
+            // count is the real one.
+            sha256: String::new(),
+            bytes: bytes.len() as u64,
+            protection: None,
+            // Nothing was overwritten to get here, and the host name is
+            // whatever `host_destination` made of `to` on both sides alike —
+            // recording one would be describing a tree this scratch root is
+            // not.
+            overwrote: None,
+            host_path: None,
+        });
+    }
+
+    // Written even when empty: its *absence* would reach `declared_override`
+    // as an I/O error rather than as a "nothing was there" answer.
+    let manifest = DistributionManifest {
+        release: plan.release.clone(),
+        built_from: Vec::new(),
+        files: manifest_files,
+        paired_rom: None,
+    };
+    std::fs::write(
+        scratch.join(MANIFEST_FILE_NAME),
+        serde_json::to_vec_pretty(&manifest).map_err(|err| CoreError::Malformed {
+            format: "distribution manifest".into(),
+            detail: err.to_string(),
+        })?,
+    )?;
+
+    // ---- extract the incoming side ----
+    //
+    // Under `__incoming`, which is inside the scratch root but can never be a
+    // destination: `host_destination` refuses anything that leaves the root,
+    // and no AmigaDOS path in a shipped recipe begins with a double
+    // underscore. Keeping both halves under one root is what lets the whole
+    // preview be removed by one `remove_dir_all`.
+    let bytes_dir = scratch.join("__incoming");
+    std::fs::create_dir_all(&bytes_dir)?;
+    let mut extracted: Vec<ExtractedItem> = Vec::with_capacity(incoming_items.len());
+    for (counter, item) in incoming_items.iter().enumerate() {
+        if progress.is_cancelled() {
+            return Err(CoreError::Cancelled);
+        }
+        let bytes = read_from_media(plan, item, &mut sources)?;
+        total_files += 1;
+        total_bytes += bytes.len() as u64;
+        check_preview_ceilings(total_files, total_bytes)?;
+
+        let at = bytes_dir.join(counter.to_string());
+        std::fs::write(&at, &bytes)?;
+        progress.report(total_files as u64, None, &item.to);
+        extracted.push((item.to.clone(), item.component.clone(), at));
+    }
+
+    let entries: Vec<Incoming> = extracted
+        .iter()
+        .map(|(to, component, bytes_at)| Incoming {
+            to: to.clone(),
+            component: component.clone(),
+            bytes_at,
+        })
+        .collect();
+
+    Ok(ComponentPreview {
+        reports: collide::preview(&scratch, &entries)?,
+        placed: extracted.len(),
+    })
+}
+
+/// The event a finished component preview arrives on.
+pub const OSINSTALL_COMPONENT_COLLISIONS_EVENT: &str = "osinstall-component-collisions-result";
+
+// `job_id`, not `jobId` — the same spelling every other result in this module
+// uses, and the one `src/lib/osinstall.ts` declares.
+#[derive(Debug, Clone, Serialize)]
+pub struct OsInstallComponentCollisionsResult {
+    pub job_id: u64,
+    #[serde(flatten)]
+    pub preview: ComponentPreview,
+}
+
+/// What switching these recipe components on would replace, file by file
+/// (ART-175, §92's PREVIEW).
+///
+/// Takes the plan the screen is already showing rather than re-planning:
+/// `osinstall_apply`'s own rule — the user's component choices *are* the plan,
+/// and a screen that previewed one thing must not be able to describe another.
+/// Returns a job id (§54): the preview reads every file the chosen components
+/// would place, off real install media.
+#[tauri::command]
+pub fn osinstall_component_collisions(
+    plan: InstallPlan,
+    components: Vec<String>,
+    app: AppHandle,
+    registry: State<'_, Arc<JobRegistry>>,
+) -> AppResult<u64> {
+    let title = format!(
+        "Previewing {} component(s) of {}",
+        components.len(),
+        plan.release
+    );
+    let emit_app = app.clone();
+    let registry = Arc::clone(&registry);
+
+    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+        let preview = preview_component_collisions(&plan, &components, progress)?;
+        let _ = emit_app.emit(
+            OSINSTALL_COMPONENT_COLLISIONS_EVENT,
+            OsInstallComponentCollisionsResult { job_id, preview },
+        );
+        Ok(())
+    });
+
+    Ok(id)
 }
 
 /// The event a finished collision preview arrives on.
@@ -1575,6 +1935,288 @@ mod tests {
         );
     }
 
+    // ---- ART-175: previewing a release recipe's own component ----
+
+    /// A plan whose two components both claim `C/Format`, built from two real
+    /// ADFs so the bytes really are read off media the way `apply` would read
+    /// them.
+    ///
+    /// `overrider` is the id to put on the *second* component. `workbench-39`
+    /// declares `overrides: ["workbench-base"]` in the shipped AmigaOS 3.9
+    /// recipe; passing anything else is how the undeclared case is reached
+    /// without inventing a recipe.
+    fn plan_over_two_media(
+        tag: &str,
+        overrider: &str,
+        base_bytes: &[u8],
+        overlay_bytes: &[u8],
+    ) -> (PathBuf, InstallPlan) {
+        let dir = scratch(tag);
+        let folder = dir.join("media");
+        std::fs::create_dir_all(&folder).unwrap();
+
+        crate::core::osinstall::fixtures::media(
+            &folder,
+            "BaseDisk",
+            "base.adf",
+            &[("C/Format", base_bytes, 0u32)],
+        );
+        crate::core::osinstall::fixtures::media(
+            &folder,
+            "OverlayDisk",
+            "overlay.adf",
+            &[("C/Format", overlay_bytes, 0u32), ("C/New", b"NEW", 0u32)],
+        );
+
+        let mut media_paths = BTreeMap::new();
+        media_paths.insert("BaseDisk".to_string(), folder.join("base.adf"));
+        media_paths.insert("OverlayDisk".to_string(), folder.join("overlay.adf"));
+
+        let item = |component: &str, media: &str, from: &str, to: &str, bytes: u64| PlanItem {
+            component: component.to_string(),
+            media: media.to_string(),
+            from: from.to_string(),
+            to: to.to_string(),
+            is_dir: false,
+            bytes,
+        };
+
+        let plan = InstallPlan {
+            release: "AmigaOS 3.9".to_string(),
+            // Declaration order is the order `apply` writes in, so the base
+            // component is first here for the same reason it is first there.
+            items: vec![
+                item(
+                    "workbench-base",
+                    "BaseDisk",
+                    "C/Format",
+                    "C/Format",
+                    base_bytes.len() as u64,
+                ),
+                item(
+                    overrider,
+                    "OverlayDisk",
+                    "C/Format",
+                    "C/Format",
+                    overlay_bytes.len() as u64,
+                ),
+                item(overrider, "OverlayDisk", "C/New", "C/New", 3),
+            ],
+            refusals: Vec::new(),
+            total_bytes: 0,
+            components_on: vec!["workbench-base".to_string(), overrider.to_string()],
+            paired_rom: None,
+            media_paths,
+            packages: Vec::new(),
+            package_media: BTreeMap::new(),
+            user_startup: Vec::new(),
+        };
+        (dir, plan)
+    }
+
+    /// **The issue itself.** `collide::preview` could already answer for a
+    /// release recipe's component ([ART-170]) and nothing asked it. This is
+    /// the ask: switching `workbench-39` on and being told, file by file,
+    /// what it would replace.
+    ///
+    /// Two things are asserted that a count alone would not catch — that the
+    /// row is an *upgrade* (so both files' `$VER:` strings were really read,
+    /// off real media, rather than a size being compared), and that the file
+    /// landing on nothing produces no row at all while still being counted in
+    /// `placed`. "Nothing to report" and "nothing to place" must not look the
+    /// same on screen.
+    #[test]
+    fn switching_a_component_on_previews_what_it_would_replace() {
+        let (dir, plan) = plan_over_two_media(
+            "component-preview",
+            "workbench-39",
+            b"$VER: format 44.5 (1.1.99)",
+            b"$VER: format 45.1 (1.1.00)",
+        );
+
+        let preview =
+            preview_component_collisions(&plan, &["workbench-39".to_string()], &NoProgress)
+                .unwrap();
+
+        assert_eq!(preview.placed, 2, "both of the overlay's files are placed");
+        assert_eq!(preview.reports.len(), 1, "{:?}", preview.reports);
+        assert_eq!(preview.reports[0].path, "C/Format");
+        assert!(
+            preview.reports[0].declared,
+            "workbench-39 declares overrides: [workbench-base] in the shipped recipe"
+        );
+        match &preview.reports[0].collision {
+            crate::core::osinstall::collide::Collision::Upgrade { from, to } => {
+                assert_eq!(from, "44.5");
+                assert_eq!(to, "45.1");
+            }
+            other => panic!("expected an upgrade read off both files' own $VER:, got {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The `declared` flag is not decorative: it is the difference between
+    /// "this component said it would do this" and "this component is about to
+    /// stand on another's file without saying so". A component id no shipped
+    /// recipe knows cannot claim an override, and `declared_override` refuses
+    /// rather than assuming one — which is what keeps a preview from
+    /// reassuring a user about a component ART cannot vouch for.
+    #[test]
+    fn a_component_that_declared_no_override_cannot_be_reported_as_declaring_one() {
+        let (dir, plan) = plan_over_two_media(
+            "component-preview-undeclared",
+            "locale-base",
+            b"$VER: format 44.5 (1.1.99)",
+            b"$VER: format 45.1 (1.1.00)",
+        );
+
+        let preview =
+            preview_component_collisions(&plan, &["locale-base".to_string()], &NoProgress).unwrap();
+
+        assert_eq!(preview.reports.len(), 1, "{:?}", preview.reports);
+        assert!(
+            !preview.reports[0].declared,
+            "locale-base declares no override over workbench-base"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Identical bytes are not a collision — the same rule `preview` applies
+    /// to a package, reaching a release component now that one asks. Without
+    /// this, a component that re-places a file byte-for-byte would be
+    /// reported as replacing it, and a user would refuse a build over
+    /// nothing.
+    #[test]
+    fn a_component_that_replaces_a_file_with_the_same_bytes_reports_nothing() {
+        let same = b"$VER: format 44.5 (1.1.99)";
+        let (dir, plan) = plan_over_two_media("component-preview-same", "workbench-39", same, same);
+
+        let preview =
+            preview_component_collisions(&plan, &["workbench-39".to_string()], &NoProgress)
+                .unwrap();
+
+        assert_eq!(preview.reports, Vec::new(), "{:?}", preview.reports);
+        assert_eq!(
+            preview.placed, 2,
+            "and it still placed both files — silence is not absence"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Nothing switched on previews nothing, without opening a single
+    /// medium — the state the screen is in before any box is ticked, and on
+    /// every release whose recipe has no layering component at all.
+    #[test]
+    fn previewing_no_components_opens_no_media() {
+        let dir = scratch("component-preview-empty");
+        let plan = InstallPlan {
+            release: "AmigaOS 3.2".to_string(),
+            items: Vec::new(),
+            refusals: Vec::new(),
+            total_bytes: 0,
+            components_on: Vec::new(),
+            paired_rom: None,
+            // A path that does not exist: reaching for it at all would fail.
+            media_paths: {
+                let mut m = BTreeMap::new();
+                m.insert("Nowhere".to_string(), dir.join("no-such.adf"));
+                m
+            },
+            packages: Vec::new(),
+            package_media: BTreeMap::new(),
+            user_startup: Vec::new(),
+        };
+
+        let preview = preview_component_collisions(&plan, &[], &NoProgress).unwrap();
+        assert_eq!(preview.placed, 0);
+        assert_eq!(preview.reports, Vec::new());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **"Earlier" means earlier in plan order, not merely "not selected".**
+    ///
+    /// This test found a real defect on its first run: previewing the *base*
+    /// component reported it as downgrading `C/Format` from 45.1 to 44.5,
+    /// because the overlay — which writes **after** it — was being staged as
+    /// though it were already on the tree. A component that writes later is
+    /// not in the way; it is on top. Getting this backwards would tell a user
+    /// their base release is about to undo their overlay, which is the exact
+    /// opposite of what would happen.
+    ///
+    /// It also pins the re-staging rule: the scratch root is deterministic (so
+    /// a checkbox toggled back and forth reuses one directory rather than
+    /// growing one per click), which is what makes clearing it on every call
+    /// load-bearing rather than tidy.
+    #[test]
+    fn a_later_component_is_not_what_is_being_replaced() {
+        let (dir, plan) = plan_over_two_media(
+            "component-preview-restage",
+            "workbench-39",
+            b"$VER: format 44.5 (1.1.99)",
+            b"$VER: format 45.1 (1.1.00)",
+        );
+
+        let first = preview_component_collisions(&plan, &["workbench-39".to_string()], &NoProgress)
+            .unwrap();
+        assert_eq!(first.reports.len(), 1);
+
+        // Now preview the *base* component instead. Nothing precedes it, so
+        // nothing is in its way — and the previous call's staged `C/Format`
+        // must not be mistaken for a file already on the tree.
+        let second =
+            preview_component_collisions(&plan, &["workbench-base".to_string()], &NoProgress)
+                .unwrap();
+        assert_eq!(second.placed, 1);
+        assert_eq!(
+            second.reports,
+            Vec::new(),
+            "nothing precedes the base component, so nothing is in its way: {:?}",
+            second.reports
+        );
+
+        // And the same selection again answers the same way, from a root it
+        // re-staged rather than one it accumulated into.
+        let again = preview_component_collisions(&plan, &["workbench-39".to_string()], &NoProgress)
+            .unwrap();
+        assert_eq!(again.reports.len(), 1, "{:?}", again.reports);
+        assert_eq!(again.placed, 2);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Cancelling stops the preview rather than finishing it — the same
+    /// discipline `extract_package_items` follows, checked between whole
+    /// files.
+    #[test]
+    fn a_cancelled_component_preview_stops() {
+        use crate::core::jobs::ProgressSink;
+
+        struct Stopped;
+        impl ProgressSink for Stopped {
+            fn report(&self, _done: u64, _total: Option<u64>, _label: &str) {}
+            fn is_cancelled(&self) -> bool {
+                true
+            }
+        }
+
+        let (dir, plan) = plan_over_two_media(
+            "component-preview-cancel",
+            "workbench-39",
+            b"$VER: format 44.5 (1.1.99)",
+            b"$VER: format 45.1 (1.1.00)",
+        );
+
+        let err = preview_component_collisions(&plan, &["workbench-39".to_string()], &Stopped)
+            .unwrap_err();
+        assert!(matches!(err, CoreError::Cancelled), "{err:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// No packages chosen previews as nothing to report, without opening
     /// either folder — the empty selection is the common case every time
     /// the panel loads before a checkbox is ticked.
@@ -2192,13 +2834,16 @@ mod tests {
                     "conditionMajor",
                     "requiresRomMajor",
                     "exclusiveGroup",
+                    "overrides",
                 ],
             );
             // A real conditional, exclusive-group component — so both
             // optional fields are pinned as values, not merely as present
-            // nulls.
+            // nulls. It also declares an override, which is what ART-175's
+            // preview keys off: `modules-a1200` layers over `storage`.
             assert_eq!(value["conditionMajor"], 47);
             assert_eq!(value["exclusiveGroup"], "modules");
+            assert_eq!(value["overrides"], serde_json::json!(["storage"]));
             assert!(
                 value["requiresRomMajor"].is_null(),
                 "a maximum must never arrive on screen as a minimum"

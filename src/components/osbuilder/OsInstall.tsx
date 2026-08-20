@@ -63,12 +63,14 @@
 // component." This screen is now the thin rendering layer that diagnosis
 // asked for.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
 import { hostParentDir } from "@/lib/hostPath";
 import {
+  collisionGroupHeadingKey,
+  collisionPhrase,
   componentLabel,
   confirmComponentOff,
   conditionalReason,
@@ -78,9 +80,11 @@ import {
   INSTALL_RELEASES,
   isForcedOnByCondition,
   isInstallRelease,
+  groupCollisionsForPreview,
   isVerified,
   onOsInstallResult,
   osinstallApply,
+  osinstallComponentCollisions,
   osinstallComponents,
   osinstallBlocker,
   osinstallDestinationTaken,
@@ -96,6 +100,7 @@ import {
   toggleChosen,
   withoutExcluded,
   type ComponentDef,
+  type ComponentPreview,
   type InstallPlan,
   type InstallRelease,
   type InstallRequest,
@@ -357,6 +362,25 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    *  replaces it, matching how the preload screen's own single-confirmation
    *  shape works. */
   const [pendingExclusion, setPendingExclusion] = useState<string | null>(null);
+  /**
+   * What the switched-on layering components would replace, file by file
+   * (ART-175).
+   *
+   * **Why this needs its own preview at all.** `plan::detect_collisions`
+   * already *refuses* an undeclared overlap at plan time, so nothing is
+   * unguarded — but a component that declares one is allowed to stand on
+   * another's file silently, and AmigaOS 3.9's `workbench-39` is exactly
+   * that: the component that turns a 3.5 tree into a 3.9 one, by replacing
+   * files `workbench-base` placed. §92's PREVIEW is the informed-consent
+   * half, and it was the half nobody built. `collide::preview` has been able
+   * to answer since ART-170 and nothing asked it.
+   *
+   * `null` means "not asked" (nothing layering is switched on, or the plan is
+   * not ready); a value with an empty `reports` means "asked, and nothing is
+   * in the way", which is a different sentence.
+   */
+  const [componentPreview, setComponentPreview] = useState<ComponentPreview | null>(null);
+  const [componentPreviewError, setComponentPreviewError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   /**
    * The install job this screen started, and its latest progress.
@@ -620,6 +644,54 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
       cancelled = true;
     };
   }, [destination, result]);
+
+  /**
+   * Ask what the layering components would replace, whenever the plan
+   * changes (ART-175).
+   *
+   * **Only the components that can be in another's way**, never all of them:
+   * the preview reads every file the components it is asked about would
+   * place, off real install media, and asking about all twenty-six would
+   * mean reading a whole AmigaOS install to answer a question about a few
+   * dozen files. `ComponentDef.overrides` is what the recipe declares, and
+   * `src/lib/osinstall.test.ts` pins which five components carry one.
+   *
+   * Read-only (§92's PREVIEW) and recomputed rather than remembered: a
+   * preview of a plan the user has since changed is worse than none.
+   */
+  const layeringOn = useMemo(() => {
+    const plan = effectivePlanResult?.outcome === "planned" ? effectivePlanResult.plan : null;
+    if (!plan || !catalogue) return [];
+    return catalogue
+      .filter((def) => def.overrides.length > 0 && plan.componentsOn.includes(def.id))
+      .map((def) => def.id);
+  }, [effectivePlanResult, catalogue]);
+
+  useEffect(() => {
+    const plan = effectivePlanResult?.outcome === "planned" ? effectivePlanResult.plan : null;
+    if (!plan || layeringOn.length === 0) {
+      setComponentPreview(null);
+      setComponentPreviewError(null);
+      return;
+    }
+    let cancelled = false;
+    osinstallComponentCollisions(plan, layeringOn)
+      .then((preview) => {
+        if (cancelled) return;
+        setComponentPreview(preview);
+        setComponentPreviewError(null);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setComponentPreview(null);
+        // Named rather than swallowed: a preview that could not be produced
+        // must not look like a preview that found nothing (§89).
+        setComponentPreviewError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [effectivePlanResult, layeringOn]);
 
   const basePlan = basePlanResult?.outcome === "planned" ? basePlanResult.plan : null;
   const effectivePlan = effectivePlanResult?.outcome === "planned" ? effectivePlanResult.plan : null;
@@ -994,6 +1066,94 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
               );
             })}
           </ul>
+        </section>
+      )}
+
+      {/* ART-175. What the switched-on layering components would replace,
+          before the build runs — the informed-consent half of §92's PREVIEW.
+          Above the plan's own file list on purpose: "what will be replaced"
+          is the question a user has before "what will be placed". */}
+      {(componentPreview || componentPreviewError) && (
+        <section className="card" style={{ marginBottom: 16 }}>
+          <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("osinstall.replaces.heading")}</h2>
+          {componentPreviewError && (
+            <p className="badge badge-err" style={{ fontSize: 11, display: "inline-block" }}>
+              {t("osinstall.replaces.failed", { error: componentPreviewError })}
+            </p>
+          )}
+          {componentPreview && (
+            <>
+              <p className="muted" style={{ fontSize: 12, margin: "4px 0 10px" }}>
+                {t("osinstall.replaces.summary", {
+                  components: layeringOn
+                    .map((id) => componentLabel(catalogue ?? [], id))
+                    .join(", "),
+                  placed: componentPreview.placed,
+                  // Every file that lands on nothing another component
+                  // claimed. Stated because an empty report means "nothing is
+                  // in the way", never "nothing happens" (§89).
+                  fresh: componentPreview.placed - componentPreview.reports.length,
+                  replaced: componentPreview.reports.length,
+                })}
+              </p>
+              {componentPreview.reports.length > 0 && (
+                <div
+                  style={{
+                    maxHeight: 260,
+                    overflowY: "auto",
+                    border: "1px solid var(--border)",
+                    borderRadius: 4,
+                    padding: "6px 10px",
+                  }}
+                >
+                  {groupCollisionsForPreview(componentPreview.reports).map((group) => (
+                    <div key={group.kind} style={{ marginBottom: 10 }}>
+                      <div
+                        className={group.kind === "downgrade" ? "badge badge-err" : "muted"}
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 600,
+                          margin: "4px 0",
+                          display: group.kind === "downgrade" ? "inline-block" : "block",
+                        }}
+                      >
+                        {t(collisionGroupHeadingKey(group.kind), { count: group.reports.length })}
+                      </div>
+                      {group.reports.map((report) => {
+                        const phrase = collisionPhrase(report.collision);
+                        return (
+                          <div
+                            key={report.path}
+                            data-testid="component-collision-row"
+                            style={{
+                              fontSize: 11,
+                              padding: "3px 0",
+                              borderBottom: "1px solid var(--border)",
+                              display: "flex",
+                              justifyContent: "space-between",
+                              gap: 8,
+                            }}
+                          >
+                            <span style={{ wordBreak: "break-all" }}>{report.path}</span>
+                            <span
+                              className={group.kind === "downgrade" ? undefined : "faint"}
+                              style={
+                                group.kind === "downgrade"
+                                  ? { color: "var(--err-text)" }
+                                  : undefined
+                              }
+                            >
+                              {t(phrase.key, phrase.params)}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
         </section>
       )}
 

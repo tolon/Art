@@ -2275,6 +2275,11 @@
         "progressStarting": "Başlıyor…",
         "progressPercent": "%{{percent}} — {{total}} dosyadan {{done}} tanesi"
       }
+    },
+    "replaces": {
+      "heading": "Bunun neyin yerine geçeceği",
+      "summary": "{{components}} {{placed}} dosya yerleştirecek: {{fresh}} yeni ve {{replaced}} tanesi bu sürümün başka bir parçasının önce koyduğu dosyaların üzerine.",
+      "failed": "ART bunun neyin yerine geçeceğini hesaplayamadı: {{error}}"
     }
   },
   "gameindex": {

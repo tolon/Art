@@ -319,6 +319,14 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // `@/lib/artwork` that is exhaustive by its own `never` fallthrough, and
     // its four values are enumerated in `phrase-keys.test.ts`
     // (`rebindProblemPhrase: every RebindProblem resolves`).
-    expect(dynamicCalls).toBe(116);
+    // 116 → 118 (ART-175, debt-wave-c2): `OsInstall.tsx` gained two, both in
+    // the new "what this would replace" section and both the same shapes
+    // `PackagePanel.tsx` already uses for the identical rows —
+    // `t(collisionGroupHeadingKey(group.kind), { count })` and
+    // `t(phrase.key, phrase.params)` over `collisionPhrase`. Their variants
+    // are already enumerated in `phrase-keys.test.ts` (`collisionPhrase:
+    // every Collision variant resolves`), and `collisionGroupHeadingKey` is
+    // exhaustive by its own return type.
+    expect(dynamicCalls).toBe(118);
   });
 });

@@ -51,6 +51,7 @@ interface RecipeComponent {
   condition?: { condition: string; major?: number };
   exclusive_group?: string;
   available?: boolean;
+  overrides?: string[];
 }
 
 interface Recipe {
@@ -82,6 +83,7 @@ function catalogueOf(recipe: Recipe): ComponentDef[] {
     conditionMajor: c.condition?.condition === "rom-older-than" ? (c.condition.major ?? null) : null,
     requiresRomMajor: c.condition?.condition === "rom-at-least" ? (c.condition.major ?? null) : null,
     exclusiveGroup: c.exclusive_group ?? null,
+    overrides: c.overrides ?? [],
   }));
 }
 
@@ -100,6 +102,35 @@ describe("every shipped recipe", () => {
     // unshipped (or shipped but unlisted) is a release the user either
     // cannot install or cannot reach.
     expect([...INSTALL_RELEASES].sort()).toEqual(recipes().map((r) => r.release).sort());
+  });
+
+  it("declares its overrides where the screen can see them (ART-175)", () => {
+    // The screen previews exactly the switched-on components whose
+    // `overrides` is non-empty, so a component that declares one and does
+    // not project it is a component whose replacement nobody is shown — the
+    // whole of ART-175.
+    //
+    // The list below is **read off the shipped recipes**, not assumed: the
+    // first version of this test asserted that AmigaOS 3.9's `workbench-39`
+    // was the only layering component in shipped data (ART-175's own entry
+    // says so) and failed immediately — AmigaOS 3.2 has four of its own,
+    // `glowicons` layering over four other components at once. Both halves
+    // are present, so neither direction is vacuous.
+    const declaring: string[] = [];
+    for (const recipe of recipes()) {
+      for (const def of catalogueOf(recipe)) {
+        const raw = recipe.components.find((c) => c.id === def.id)!;
+        expect(def.overrides, `${recipe.release}/${def.id}`).toEqual(raw.overrides ?? []);
+        if (def.overrides.length > 0) declaring.push(`${recipe.release}/${def.id}`);
+      }
+    }
+    expect(declaring).toEqual([
+      "AmigaOS 3.2/extras",
+      "AmigaOS 3.2/modules-a1200",
+      "AmigaOS 3.2/classes",
+      "AmigaOS 3.2/glowicons",
+      "AmigaOS 3.9/workbench-39",
+    ]);
   });
 
   it("carries no condition the screen does not know how to explain", () => {

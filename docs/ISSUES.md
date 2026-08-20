@@ -26,53 +26,6 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-175** 🟡 **The OS Builder can preview what a package would
-replace and still cannot preview what switching a recipe component on would
-replace — `collide::preview` can now answer, and nothing asks it** — *found
-2026-08-20 by the wave-B1 review (F3), filed in fix round 1 as ART-170's
-successor rather than left as a sentence inside a closed entry*
-`src-tauri/src/commands/osinstall.rs` (`extract_incoming_for_preview`,
-`preview_collisions`) · `src/components/osbuilder/OsInstall.tsx`
-
-[ART-170](#fixed) removed the core-level block: `collide::declared_override`
-resolves an incoming item's component id against every shipped id, releases
-and packages alike, so `preview` answers for `workbench-39` over
-`workbench-base` exactly as it does for a BoingBag over a tree. What it did
-not touch is the only thing that *builds* the rows `preview` consumes.
-
-`extract_incoming_for_preview` takes an ordered list of **package** ids, opens
-each one's archive through `resolve_package_archive`, and extracts its files
-to a temporary directory. There is no equivalent for a release recipe's
-component: its bytes come off install media resolved by `plan()`, through a
-`MediaSource` rather than a package archive, and nothing assembles those into
-`Incoming` rows for a preview.
-
-**What it costs.** AmigaOS 3.9's `workbench-39` replaces 40 real files that
-`workbench-base` placed — it is the component that makes a tree AmigaOS 3.9
-rather than 3.5, and the only one in shipped data that layers over another.
-A user can be shown, file by file, what a BoingBag would replace, and cannot
-be shown the same thing for the component that changes what operating system
-they end up with. `plan::detect_collisions` already refuses an *undeclared*
-overlap at plan time, so nothing is unguarded; what is missing is the
-informed-consent half of §92's PREVIEW.
-
-**What it is not.** Not a `collide` change — that half is done and tested
-(`a_release_recipes_own_component_can_be_asked_about_too`). This is a
-command-layer feature: resolve the chosen release's media the way `plan()`
-does, extract the switched-on components' files under the same
-`MAX_PREVIEW_FILES`/`MAX_PREVIEW_BYTES` ceilings and the same cache
-`extract_package_items` already uses, and hand the rows to the same
-`preview`.
-
-**A limit that will still be there afterwards**, and worth knowing before
-anyone builds this: `Libs/WORKBENCH.LIBRARY` carries no `$VER:` marker, so
-the 3.9 overlay's replacement of it (193,400 → 199,852 bytes) classifies as
-`Unversioned` — a size comparison — while being the single change that turns
-`Workbench 44.5` into `Workbench 45.1`. The preview will show the file and
-will not be able to say what the change is. That is recorded in ART-170's own
-entry and is not this issue's to fix.
-
-
 **ART-171** 🟠 **The content layer's spec §8.3 hazard — `WBStartup` and
 `Devs` arriving on a tree for the first time — was never exercised, because
 no package file ever reached a tree** — *filed 2026-08-19 by the final
@@ -489,6 +442,82 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-175** 🟡 **The OS Builder can preview what a package would replace and
+still cannot preview what switching a recipe component on would replace** —
+*found 2026-08-20 by the wave-B1 review (F3); fixed 2026-08-20 on
+`debt-wave-c2`*
+`src-tauri/src/commands/osinstall.rs` (`preview_component_collisions`,
+`osinstall_component_collisions`) · `src/lib/osinstall.ts` ·
+`src/components/osbuilder/OsInstall.tsx`
+
+[ART-170](#fixed) made `collide::preview` able to answer for a release
+recipe's component, and nothing asked it. This is the ask.
+
+**What had to be built, and why it is not the package shape.** A BoingBag is
+previewed against a tree that already exists, so `preview` has real files to
+compare and a `distribution.json` saying which component owns each. A release
+component has neither: `apply` is `SAFE_CREATE` and refuses an existing root,
+so what `workbench-39` would replace is not a file on disk at all — it is
+`workbench-base`'s own item, in the same plan, not yet written anywhere.
+
+So the tree is **staged, and only the part that is actually in the way**: for
+each destination the previewed component claims that an earlier component in
+the same plan also claims, the earlier component's bytes are written into a
+scratch root at that destination, with a `distribution.json` naming its owner.
+That is exactly what `classify_incoming` needs to read both sides honestly and
+what `declared_override` needs to answer — and it is a few dozen files rather
+than the six hundred a fully staged tree would cost. `collide::preview` itself
+is untouched.
+
+**A defect the work found, in itself.** "Earlier" first meant "not in the
+selection", which made previewing the *base* component report it as
+**downgrading** `C/Format` from 45.1 to 44.5 — the overlay, which writes
+after it, staged as though it were already there. A component that writes
+later is not in the way; it is on top. Now one pass in plan order: an
+unselected item records itself as the current owner, a selected item takes
+whatever owner had been recorded by then.
+`a_later_component_is_not_what_is_being_replaced` is the test that caught it.
+
+**A claim in this entry that turned out to be wrong, corrected rather than
+repeated.** This entry said `workbench-39` is "the only one in shipped data
+that layers over another". It is not: AmigaOS **3.2** has four of its own —
+`extras`, `modules-a1200`, `classes`, and `glowicons`, which layers over four
+components at once. Found by the recipe-parity test failing on its first run
+against the real JSON; the assertion now pins all five, and the doc comments
+that had repeated the claim say so.
+
+**What the screen shows.** `ComponentSummary` gained `overrides`, so the
+screen can ask about exactly the switched-on components that can be in
+another's way — previewing all of them would mean reading a whole AmigaOS
+install off media to answer a question about a few dozen files. A "What this
+would replace" section above the plan's own file list, with the same grouped
+rows `PackagePanel` already uses, in both catalogues. It states **placed, new
+and replaced** rather than only the collision rows, because an empty report
+for a component that places six hundred files means "nothing is in the way",
+not "nothing happens" (§89) — and a preview that *failed* says so rather
+than looking like one that found nothing.
+
+**Still true afterwards**, and recorded in ART-170's entry already:
+`Libs/WORKBENCH.LIBRARY` carries no `$VER:` marker, so 3.9's replacement of it
+(193,400 → 199,852 bytes) classifies as `Unversioned` — a size comparison —
+while being the single change that turns `Workbench 44.5` into `Workbench
+45.1`. The preview shows the file and cannot say what the change is.
+
+Tests: six in `commands::osinstall::tests` —
+`switching_a_component_on_previews_what_it_would_replace` (the issue itself,
+asserting an `Upgrade` read off both files' own `$VER:` off real ADFs, and
+that a file landing on nothing produces no row while still counting in
+`placed`), `a_component_that_declared_no_override_cannot_be_reported_as_declaring_one`,
+`a_component_that_replaces_a_file_with_the_same_bytes_reports_nothing`,
+`previewing_no_components_opens_no_media`,
+`a_later_component_is_not_what_is_being_replaced` and
+`a_cancelled_component_preview_stops`; the recipe-parity test
+`"declares its overrides where the screen can see them (ART-175)"` in
+`src/lib/osinstall.test.ts`; and four jsdom tests in `OsInstall.test.tsx`
+covering the request that goes out, the rows that come back, the silence when
+nothing layering is on, and the failed-preview sentence. Vacuity checked:
+stubbing the screen's layering detection to `[]` fails three of the four.
 
 **ART-143** 🟡 **A hand-attached picture is not re-materialised if the
 artwork cache is deleted** — *filed 2026-08-18 (collection-wave-c's own design
@@ -1888,7 +1917,7 @@ nothing to hand `preview` for a recipe component yet. What is removed is the
 block that made it impossible in the core — the layer above can now be widened
 without touching `collide`.
 
-**That half is now [ART-175](#open), filed in fix round 1** rather than left
+**That half is now [ART-175](#fixed), filed in fix round 1** rather than left
 as a sentence inside a closed entry. A half-closed issue with no successor is
 how work disappears, and this one is the user-facing half of what ART-170 was
 about.

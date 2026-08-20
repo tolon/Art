@@ -464,6 +464,63 @@ export async function osinstallCollisions(
   );
 }
 
+/** The event a finished component preview arrives on. */
+export const OSINSTALL_COMPONENT_COLLISIONS_EVENT = "osinstall-component-collisions-result";
+
+/**
+ * What previewing one or more switched-on recipe components would do
+ * (ART-175). Mirrors `commands::osinstall::ComponentPreview`.
+ *
+ * `placed` is here because `reports` is, by construction, a list of what
+ * *clashes*: AmigaOS 3.9's overlay lands hundreds of files on nothing and
+ * replaces a few dozen, so an empty `reports` for a component that places six
+ * hundred files means "nothing is in the way", not "nothing happens". The two
+ * must not read the same on screen (§89).
+ */
+export interface ComponentPreview {
+  reports: CollisionReport[];
+  /** Every non-directory item the chosen components would place. */
+  placed: number;
+}
+
+interface OsInstallComponentCollisionsResult extends ComponentPreview {
+  job_id: number;
+}
+
+/**
+ * What switching these recipe components on would replace, file by file
+ * (ART-175, §92's PREVIEW).
+ *
+ * [ART-170] made `collide::preview` able to answer for a release recipe's
+ * component — resolving its id against the shipped releases as well as the
+ * packages — and nothing asked it. This is the ask. The engine already
+ * *refuses* an undeclared overlap at plan time, so nothing was unguarded;
+ * what was missing is the informed-consent half, and it is the half that
+ * matters most for AmigaOS 3.9, whose `workbench-39` is the component that
+ * makes a tree 3.9 rather than 3.5. It is not the only layering component in
+ * shipped data, though ART-175's own entry says so: AmigaOS 3.2 has four,
+ * `glowicons` layering over four other components at once. The recipe-parity
+ * test pins all five.
+ *
+ * Takes the plan the screen is already showing rather than re-planning:
+ * {@link osinstallApply}'s own rule — the user's component choices *are* the
+ * plan, and a screen that previewed one thing must not describe another. A
+ * job underneath (it reads every file those components would place, off real
+ * install media), hidden behind an ordinary promise the same way
+ * {@link osinstallCollisions} hides its own.
+ */
+export async function osinstallComponentCollisions(
+  plan: InstallPlan,
+  components: string[]
+): Promise<ComponentPreview> {
+  if (components.length === 0) return { reports: [], placed: 0 };
+  return awaitJobResult<OsInstallComponentCollisionsResult, ComponentPreview>(
+    OSINSTALL_COMPONENT_COLLISIONS_EVENT,
+    () => invoke<number>("osinstall_component_collisions", { plan, components }),
+    (payload) => ({ reports: payload.reports, placed: payload.placed })
+  );
+}
+
 /** `osinstall_add_package`'s own answer — either a job started, or every
  *  typed reason it could not (F2). Mirrors `commands::osinstall::AddPackageResult`
  *  exactly, including the `outcome` tag. */
@@ -848,6 +905,16 @@ export interface ComponentDef {
    *  user the reverse of the truth. */
   requiresRomMajor: number | null;
   exclusiveGroup: string | null;
+  /** Which components this one declares it may write over (ART-175).
+   *
+   *  The screen asks for a collision preview of exactly the switched-on
+   *  components whose list is non-empty, and no others — previewing every
+   *  component would mean reading a whole install off media to answer a
+   *  question about a few dozen files. Five components declare one in
+   *  shipped data (3.2's `extras`, `modules-a1200`, `classes` and
+   *  `glowicons`; 3.9's `workbench-39`) — see the recipe-parity test, which
+   *  pins that list rather than trusting it. */
+  overrides: string[];
 }
 
 /**

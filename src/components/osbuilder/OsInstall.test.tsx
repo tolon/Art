@@ -63,6 +63,7 @@ import type { RomInfo } from "@/lib/pistorm";
 const scanMediaMock = vi.hoisted(() => vi.fn());
 const componentsMock = vi.hoisted(() => vi.fn());
 const planMock = vi.hoisted(() => vi.fn());
+const componentCollisionsMock = vi.hoisted(() => vi.fn());
 const applyMock = vi.hoisted(() => vi.fn());
 const verifyMock = vi.hoisted(() => vi.fn());
 const onResultMock = vi.hoisted(() => vi.fn());
@@ -75,6 +76,7 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   osinstallScanMedia: scanMediaMock,
   osinstallComponents: componentsMock,
   osinstallPlan: planMock,
+  osinstallComponentCollisions: componentCollisionsMock,
   osinstallApply: applyMock,
   osinstallVerify: verifyMock,
   onOsInstallResult: onResultMock,
@@ -154,6 +156,7 @@ const COMPONENTS_32: ComponentDef[] = [
     conditionMajor: null,
     requiresRomMajor: null,
     exclusiveGroup: null,
+    overrides: [],
   },
   {
     id: "install-libs",
@@ -163,6 +166,7 @@ const COMPONENTS_32: ComponentDef[] = [
     conditionMajor: null,
     requiresRomMajor: null,
     exclusiveGroup: null,
+    overrides: [],
   },
   {
     id: "extras",
@@ -172,6 +176,7 @@ const COMPONENTS_32: ComponentDef[] = [
     conditionMajor: null,
     requiresRomMajor: null,
     exclusiveGroup: null,
+    overrides: [],
   },
   {
     id: "modules-a1200",
@@ -181,6 +186,7 @@ const COMPONENTS_32: ComponentDef[] = [
     conditionMajor: 47,
     requiresRomMajor: null,
     exclusiveGroup: "modules",
+    overrides: [],
   },
 ];
 
@@ -193,6 +199,22 @@ const COMPONENTS_39: ComponentDef[] = [
     conditionMajor: null,
     requiresRomMajor: null,
     exclusiveGroup: null,
+    overrides: [],
+  },
+  // The component ART-175 is about: the one that makes a tree AmigaOS 3.9
+  // rather than 3.5, by replacing files `workbench-base` placed. Its
+  // `overrides` is what the screen keys the preview off, and the shipped
+  // recipe really declares `["workbench-base", "locale-base"]` for it —
+  // pinned by `src/lib/osinstall.test.ts`'s recipe-parity test.
+  {
+    id: "workbench-39",
+    media: "AmigaOS3.9",
+    required: true,
+    available: true,
+    conditionMajor: null,
+    requiresRomMajor: null,
+    exclusiveGroup: null,
+    overrides: ["workbench-base"],
   },
 ];
 
@@ -232,7 +254,14 @@ function planResultFor(req: InstallRequest): PlanResult {
       totalBytes: items.reduce((sum, item) => sum + item.bytes, 0),
       // ROM is V47 here, so "modules-a1200" (conditionMajor: 47) is not
       // forced on — the "condition-off" reasoning branch, not "rom-needed".
-      componentsOn: ["workbench-base", "install-libs", ...req.chosen],
+      // Release-aware, because ART-175's whole subject is a component that
+      // is switched on *by the recipe* and layers over another: for AmigaOS
+      // 3.9 both `workbench-base` and `workbench-39` are on without being
+      // chosen, exactly as the shipped recipe has them.
+      componentsOn:
+        req.release === "AmigaOS 3.9"
+          ? ["workbench-base", "workbench-39", ...req.chosen]
+          : ["workbench-base", "install-libs", ...req.chosen],
       mediaPaths: { "Workbench3.2": "E:\\media\\Disk1.adf" },
       packages: [],
       packageMedia: {},
@@ -271,6 +300,10 @@ beforeEach(() => {
     .mockReset()
     .mockImplementation((release: string) => Promise.resolve(componentsFor(release)));
   planMock.mockReset().mockImplementation((req: InstallRequest) => Promise.resolve(planResultFor(req)));
+  // Nothing layering is switched on for AmigaOS 3.2, so this is never called
+  // in most tests; an empty preview is the honest default for the ones where
+  // it is.
+  componentCollisionsMock.mockReset().mockResolvedValue({ reports: [], placed: 0 });
   applyMock.mockReset().mockResolvedValue(1);
   verifyMock.mockReset();
   onResultMock.mockReset().mockResolvedValue(() => {});
@@ -507,7 +540,12 @@ describe("choosing the release re-plans against it", () => {
     await waitFor(() => expect(screen.queryByRole("checkbox", { name: "Extras3.2" })).toBeNull());
     // ...and 3.9's base component is labelled with 3.9's media, not 3.2's,
     // even though both recipes call it `workbench-base`.
-    expect(screen.getByRole("checkbox", { name: /AmigaOS3\.9/ })).toBeTruthy();
+    // `getAllBy`, not `getBy`: every component in the shipped AmigaOS 3.9
+    // recipe carries the media name `AmigaOS3.9`, so more than one row
+    // matches — which the fixture only started reflecting when ART-175 added
+    // `workbench-39` to it. A `getBy` here was passing because the fixture
+    // was thinner than the recipe, not because the screen shows one row.
+    expect(screen.getAllByRole("checkbox", { name: /AmigaOS3\.9/ }).length).toBeGreaterThan(0);
     expect(screen.queryByRole("checkbox", { name: /Workbench3\.2/ })).toBeNull();
   });
 
@@ -604,5 +642,90 @@ describe("a refusal renders as a sentence, not a blank", () => {
 
     expect(rendered.textContent?.trim().length).toBeGreaterThan(0);
     expect(KEY_SHAPE.test(rendered.textContent ?? "")).toBe(false);
+  });
+});
+
+describe("the screen says what a layering component would replace (ART-175)", () => {
+  // `collide::preview` has been able to answer for a release recipe's own
+  // component since ART-170, and nothing asked it. These are the ask, from
+  // the screen's side: the request that goes out, and the rows that come
+  // back.
+
+  /** Switch to AmigaOS 3.9, whose fixture carries a layering component. */
+  async function render39() {
+    await renderFull();
+    const picker = screen.getByRole("combobox", {
+      name: i18n.t("osinstall.release.label"),
+    }) as HTMLSelectElement;
+    await userEvent.selectOptions(picker, "AmigaOS 3.9");
+    // The checklist is loaded, not hardcoded, so the 3.9 catalogue arrives on
+    // its own round trip — wait for it rather than racing it.
+    await waitFor(() =>
+      expect(planMock).toHaveBeenCalledWith(expect.objectContaining({ release: "AmigaOS 3.9" }))
+    );
+  }
+
+  it("asks about the layering components only, never the whole checklist", async () => {
+    await render39();
+
+    // The preview reads every file the components it is asked about would
+    // place, off real install media — asking about all of them would mean
+    // reading a whole AmigaOS install to answer a question about a few dozen
+    // files. `workbench-base` declares no override and must not be in here.
+    await waitFor(() => expect(componentCollisionsMock).toHaveBeenCalled());
+    for (const [, components] of componentCollisionsMock.mock.calls as [InstallPlan, string[]][]) {
+      expect(components).toEqual(["workbench-39"]);
+    }
+  });
+
+  it("shows what would be replaced, and what would merely be placed", async () => {
+    componentCollisionsMock.mockResolvedValue({
+      placed: 3,
+      reports: [
+        {
+          path: "Libs/workbench.library",
+          collision: { kind: "upgrade", from: "44.5", to: "45.1" },
+          declared: true,
+        },
+      ],
+    });
+
+    await render39();
+
+    await screen.findByText(i18n.t("osinstall.replaces.heading"));
+    // The row itself, with the version change read off both files.
+    await screen.findByText("Libs/workbench.library");
+    expect(document.querySelectorAll('[data-testid="component-collision-row"]').length).toBe(1);
+
+    // And the sentence that keeps "nothing to report" from reading like
+    // "nothing to place": three files placed, one of them over something.
+    const summary = i18n.t("osinstall.replaces.summary", {
+      components: "AmigaOS3.9",
+      placed: 3,
+      fresh: 2,
+      replaced: 1,
+    });
+    expect(document.body.textContent).toContain(summary);
+  });
+
+  it("says nothing at all when nothing layering is switched on", async () => {
+    // AmigaOS 3.2's fixture has no component declaring an override, so the
+    // section must not appear — and the engine must not be asked either.
+    await renderFull();
+    await waitFor(() => expect(planMock).toHaveBeenCalled());
+
+    expect(screen.queryByText(i18n.t("osinstall.replaces.heading"))).toBeNull();
+    expect(componentCollisionsMock).not.toHaveBeenCalled();
+  });
+
+  it("a preview that failed says so instead of looking like one that found nothing", async () => {
+    componentCollisionsMock.mockRejectedValue(new Error("the disc could not be read"));
+
+    await render39();
+
+    await screen.findByText(
+      i18n.t("osinstall.replaces.failed", { error: "Error: the disc could not be read" })
+    );
+    expect(document.querySelectorAll('[data-testid="component-collision-row"]').length).toBe(0);
   });
 });

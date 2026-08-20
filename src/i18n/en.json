@@ -2275,6 +2275,11 @@
         "progressStarting": "Starting…",
         "progressPercent": "{{percent}}% — {{done}} of {{total}} files"
       }
+    },
+    "replaces": {
+      "heading": "What this would replace",
+      "summary": "{{components}} would place {{placed}} files: {{fresh}} new, and {{replaced}} over files another part of this release puts down first.",
+      "failed": "ART could not work out what this would replace: {{error}}"
     }
   },
   "gameindex": {
