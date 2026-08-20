@@ -30,7 +30,7 @@ use super::oplog::{user_operation, write_result};
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::{JobId, ProgressSink};
 use crate::core::lha::OverwritePolicy;
-use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
+use crate::core::oplog::{JsonlOperationLog, OperationOutcome, OperationRecord};
 use crate::core::safety::{guarded_write, BackupPolicy};
 use crate::core::volume::device::{FileRegionMut, VecDevice};
 use crate::core::volume::journal::find_journal;
@@ -62,6 +62,13 @@ pub struct MutationResult {
     pub strategy: String,
     /// Where the previous image went, for the whole-file strategy.
     pub backup: Option<String>,
+    /// Damage the volume already carried before this write.
+    ///
+    /// The gate refuses only what this operation introduced (§89); it does
+    /// not follow that a volume ART found cross-linked on the way in should
+    /// be written to in silence. Empty is the ordinary case.
+    #[serde(default)]
+    pub pre_existing_damage: Vec<String>,
 }
 
 /// An unfinished operation found next to an image.
@@ -93,7 +100,7 @@ fn with_writer<F>(
     image: &Path,
     volume_index: usize,
     run: F,
-) -> CoreResult<(WriteOutcome, WriteStrategy, Option<String>)>
+) -> CoreResult<(WriteOutcome, WriteStrategy, Committed)>
 where
     F: FnOnce(&mut VolumeWriter<'_>) -> CoreResult<WriteOutcome>,
 {
@@ -115,7 +122,7 @@ pub fn with_volume<F, T>(
     image: &Path,
     volume_index: usize,
     run: F,
-) -> CoreResult<(T, WriteStrategy, Option<String>)>
+) -> CoreResult<(T, WriteStrategy, Committed)>
 where
     F: FnOnce(&mut VolumeWriter<'_>) -> CoreResult<T>,
 {
@@ -174,7 +181,7 @@ where
             // what was written before it commits. No backup path either — the
             // journal is the way back, and a successful commit has already
             // deleted it.
-            Ok((outcome, strategy, None))
+            Ok((outcome, strategy, Committed::default()))
         }
     }
 }
@@ -201,6 +208,29 @@ where
 /// nothing reaches the user's file until the *volume* validates, and the file
 /// is then replaced in one atomic write. For a bare ADF — offset 0, length the
 /// whole file — the slice is the file and the behaviour is exactly what it was.
+/// What a whole-file commit has to tell the caller.
+///
+/// Two things, and the second is why this is a struct rather than the
+/// `Option<String>` it used to be: where the previous version of the file
+/// went, and **what was already wrong with the volume before this write**.
+/// The gate refuses only damage the operation introduced (§89 — a disk that
+/// leaked a block in 1993 must stay writable), which is right for refusing
+/// and was never a reason to proceed in silence.
+#[derive(Debug, Clone, Default)]
+pub struct Committed {
+    pub backup: Option<String>,
+    /// `Problem`-level findings the volume already carried. Empty is the
+    /// ordinary case.
+    pub pre_existing: Vec<String>,
+}
+
+impl Committed {
+    /// One line for the operation log, or `None` when there is nothing wrong.
+    fn damage_detail(&self) -> Option<String> {
+        (!self.pre_existing.is_empty()).then(|| self.pre_existing.join(" · "))
+    }
+}
+
 struct WholeFileVolume {
     /// The file as it was. The volume is spliced back into this, so everything
     /// around it — an RDB, another partition, trailing bytes — survives
@@ -271,17 +301,20 @@ impl WholeFileVolume {
     /// geometry is the caller's, because it is the volume's own and deriving
     /// it a second time here is how a commit comes to disagree with the writer
     /// that produced it.
-    fn commit(self, image: &Path, geometry: &VolumeGeometry) -> CoreResult<Option<String>> {
+    fn commit(self, image: &Path, geometry: &VolumeGeometry) -> CoreResult<Committed> {
         let volume = self.device.bytes();
         validate_volume(image, volume)?;
         // Before the original is consumed by the splice below.
         let was = &self.original[self.start..self.start + volume.len()];
-        deep_check(image, was, volume, geometry)?;
+        let pre_existing = deep_check(image, was, volume, geometry)?;
 
         let mut whole = self.original;
         whole[self.start..self.start + volume.len()].copy_from_slice(volume);
         let backup = guarded_write(image, &whole, BackupPolicy::DISK_IMAGE)?;
-        Ok(backup.map(|path| path.display().to_string()))
+        Ok(Committed {
+            backup: backup.map(|path| path.display().to_string()),
+            pre_existing,
+        })
     }
 }
 
@@ -301,7 +334,12 @@ impl WholeFileVolume {
 /// enough to hold in memory (16 MB, [`crate::core::volume::WHOLE_FILE_LIMIT_BYTES`]).
 /// The block-journal strategy does not come here at all, for the same reason
 /// it has no whole-image validation: see [`with_volume`].
-fn deep_check(image: &Path, was: &[u8], now: &[u8], geometry: &VolumeGeometry) -> CoreResult<()> {
+fn deep_check(
+    image: &Path,
+    was: &[u8],
+    now: &[u8],
+    geometry: &VolumeGeometry,
+) -> CoreResult<Vec<String>> {
     use crate::core::volume::device::SliceDevice;
     use crate::core::volume::integrity;
 
@@ -318,10 +356,25 @@ fn deep_check(image: &Path, was: &[u8], now: &[u8], geometry: &VolumeGeometry) -
     };
 
     let introduced = integrity::newly_broken(&before, &after);
-    if introduced.is_empty() {
-        return Ok(());
+    if !introduced.is_empty() {
+        return Err(refused(image, &introduced.join(" ")));
     }
-    Err(refused(image, &introduced.join(" ")))
+
+    // **Proceeding is not the same as saying nothing.** "Refuse only what the
+    // operation introduced" is the right rule for *refusing*; it was never a
+    // reason to write into a volume ART has just found cross-linked and tell
+    // nobody. Everything that was already wrong is returned to the caller —
+    // which puts it in the operation log (§53) and, for the mutation
+    // commands, in front of the user — and logged here besides, because a
+    // caller that drops it must not be able to make this silent again.
+    let pre_existing = integrity::newly_broken(&[], &before);
+    for problem in &pre_existing {
+        log::warn!(
+            "'{}' was already damaged before this write: {problem}",
+            image.display()
+        );
+    }
+    Ok(pre_existing)
 }
 
 /// Validate a whole in-memory image and only then let it reach the user's file.
@@ -407,10 +460,24 @@ fn pick(image: &Path, index: usize) -> CoreResult<VolumeEntry> {
     })
 }
 
+/// Fold "this volume was already damaged" into an operation-log record.
+///
+/// §53 says every write records what happened. What was already wrong with
+/// the volume is part of what happened — the gate let the write through
+/// because the operation introduced nothing new, not because the disk was
+/// sound (§89), and the difference has to be written down somewhere the user
+/// can go back and read.
+fn damaged(record: OperationRecord, committed: &Committed) -> OperationRecord {
+    match committed.damage_detail() {
+        Some(detail) => record.detail("Pre-existing damage", detail),
+        None => record,
+    }
+}
+
 fn result_of(
     outcome: WriteOutcome,
     strategy: WriteStrategy,
-    backup: Option<String>,
+    committed: Committed,
     block_size: usize,
 ) -> MutationResult {
     MutationResult {
@@ -420,7 +487,8 @@ fn result_of(
         free_bytes: outcome.free_blocks as u64 * block_size as u64,
         verified: outcome.verified,
         strategy: describe(strategy).into(),
-        backup,
+        backup: committed.backup,
+        pre_existing_damage: committed.pre_existing,
     }
 }
 
@@ -578,6 +646,10 @@ pub struct DeleteManyResult {
     pub strategy: String,
     /// Where the previous image went, taken **once** for the whole batch.
     pub backup: Option<String>,
+    /// Damage the volume already carried before this delete. See
+    /// [`MutationResult::pre_existing_damage`].
+    #[serde(default)]
+    pub pre_existing_damage: Vec<String>,
 }
 
 /// Look up every name in `dir`, refusing the whole batch — before anything
@@ -684,7 +756,7 @@ fn delete_many(
         check_batch_deletable(&device, &geometry, dir, names)?;
     }
 
-    let (outcome, strategy, backup) = with_volume(image, volume_index, |writer| {
+    let (outcome, strategy, committed) = with_volume(image, volume_index, |writer| {
         // Resolve every name to a block *before* deleting any of them, so a
         // name that will not resolve refuses the batch rather than being
         // discovered halfway down it.
@@ -709,7 +781,8 @@ fn delete_many(
         free_bytes: outcome.free_blocks as u64 * block_size as u64,
         verified: outcome.verified,
         strategy: describe(strategy).into(),
-        backup,
+        backup: committed.backup,
+        pre_existing_damage: committed.pre_existing,
     })
 }
 
@@ -742,6 +815,10 @@ pub fn volume_delete_many(
             .detail("Count", names.len().to_string()),
         &result,
         |record, made: &DeleteManyResult| {
+            let record = match made.pre_existing_damage.is_empty() {
+                true => record,
+                false => record.detail("Pre-existing damage", made.pre_existing_damage.join(" · ")),
+            };
             record
                 .detail("Deleted", made.deleted.to_string())
                 .detail("Blocks touched", made.blocks_touched.to_string())
@@ -791,7 +868,7 @@ pub fn volume_put_file(
             .unwrap_or_default()
     });
 
-    let result = (|| -> CoreResult<(WriteOutcome, WriteStrategy, Option<String>)> {
+    let result = (|| -> CoreResult<(WriteOutcome, WriteStrategy, Committed)> {
         let size = std::fs::metadata(&source_path)?.len();
         if size > crate::core::volume::write::copy::MAX_COPY_FILE_BYTES {
             return Err(CoreError::InvalidInput(format!(
@@ -1202,7 +1279,7 @@ pub fn volume_copy_in(
             .source(source_path.display().to_string())
             .destination(format!("{}:{volume_index}", image.display()));
         let record = match &outcome {
-            Ok((report, _)) => record
+            Ok((report, committed)) => damaged(record, committed)
                 .detail("Files", report.files_copied.to_string())
                 .detail("Folders", report.directories_created.to_string())
                 .detail("Skipped", report.skipped.len().to_string())
@@ -1213,13 +1290,13 @@ pub fn volume_copy_in(
         };
         super::oplog::write_to_path(&log_path, &record);
 
-        let (report, backup) = outcome?;
+        let (report, committed) = outcome?;
         let _ = emit_app.emit(
             VOLUME_WRITE_EVENT,
             VolumeWriteResult::CopyIn {
                 job_id,
                 report,
-                backup,
+                backup: committed.backup,
             },
         );
         Ok(())
@@ -1247,7 +1324,7 @@ pub(crate) fn copy_selection_into_volume(
     sidecars: bool,
     policy: OverwritePolicy,
     progress: &dyn ProgressSink,
-) -> CoreResult<(CopyReport, Option<String>)> {
+) -> CoreResult<(CopyReport, Committed)> {
     let selection = HostSelection::new(roots, sidecars);
 
     // Abandon, not KeepWhatLanded: a batch the user picked by hand and then
@@ -1315,7 +1392,7 @@ pub fn volume_copy_in_many(
         let record = user_operation("Copy a selection into volume")
             .destination(format!("{}:{volume_index}", image.display()));
         let record = match &outcome {
-            Ok((report, _)) => record
+            Ok((report, committed)) => damaged(record, committed)
                 .detail("Files", report.files_copied.to_string())
                 .detail("Folders", report.directories_created.to_string())
                 .detail("Skipped", report.skipped.len().to_string())
@@ -1326,13 +1403,13 @@ pub fn volume_copy_in_many(
         };
         super::oplog::write_to_path(&log_path, &record);
 
-        let (report, backup) = outcome?;
+        let (report, committed) = outcome?;
         let _ = emit_app.emit(
             VOLUME_WRITE_EVENT,
             VolumeWriteResult::CopyIn {
                 job_id,
                 report,
-                backup,
+                backup: committed.backup,
             },
         );
         Ok(())
@@ -1371,7 +1448,7 @@ pub fn run_copy_in_folder(
     source: &dyn CopySource,
     policy: OverwritePolicy,
     progress: &dyn ProgressSink,
-) -> CoreResult<(CopyReport, Option<String>)> {
+) -> CoreResult<(CopyReport, Committed)> {
     run_copy_in_folder_with(
         image,
         volume_index,
@@ -1403,7 +1480,7 @@ pub fn run_copy_in_folder_with(
     policy: OverwritePolicy,
     on_cancel: OnCancel,
     progress: &dyn ProgressSink,
-) -> CoreResult<(CopyReport, Option<String>)> {
+) -> CoreResult<(CopyReport, Committed)> {
     let entry = pick(image, volume_index)?;
     let geometry = geometry_of(image, &entry)?;
 
@@ -1466,7 +1543,7 @@ pub fn run_copy_in_folder_with(
                     CoreError::Cancelled
                 });
             }
-            Ok((report, None))
+            Ok((report, Committed::default()))
         }
     }
 }
@@ -1534,7 +1611,7 @@ pub(crate) fn install_into_folder(
     source: &dyn CopySource,
     policy: OverwritePolicy,
     progress: &dyn ProgressSink,
-) -> CoreResult<(CopyReport, Option<String>)> {
+) -> CoreResult<(CopyReport, Committed)> {
     let plan = plan_copy_in_folder(image, volume_index, parent, source)?;
     if !plan.fits() {
         return Err(CoreError::SafetyRefused(plan.shortfall().unwrap_or_else(
@@ -1815,115 +1892,22 @@ fn refuse_same_image(from: &Path, to: &Path) -> CoreResult<()> {
     Ok(())
 }
 
-/// The whole pipeline `volume_copy_between`'s job runs: stage the source side
-/// out of `from_image`/`from_volume`/`from_dir`, then insert the staged tree
-/// into `to_image`/`to_volume`/`to_dir`.
-///
-/// Its own function, called from the job closure rather than reimplemented in
-/// a test, so the argument mapping itself — `from_volume` feeding the
-/// *source* mount and `to_volume`/`to_dir` feeding the *destination* insert,
-/// never swapped — is exercised through the exact code the command runs.
-/// Reimplementing the sequence in a test (as Task 8's original test did)
-/// cannot catch two arguments being swapped at this call site; calling this
-/// function can.
-#[allow(clippy::too_many_arguments)]
-fn copy_between_volumes(
-    from_image: &Path,
-    from_volume: usize,
-    from_dir: u32,
-    to_image: &Path,
-    to_volume: usize,
-    to_dir: u32,
-    policy: OverwritePolicy,
-    cache: &Path,
-    progress: &dyn ProgressSink,
-) -> CoreResult<(CopyReport, Option<String>)> {
-    let entry = pick(from_image, from_volume)?;
-    let (device, geometry) = mount(from_image, &entry)?;
-    let staged = StagedTree::stage(&device, &geometry, from_dir, cache, progress)?;
-
-    run_copy_in_staged(to_image, to_volume, to_dir, &staged, policy, progress)
-}
-
-/// Copy a folder from one image into another (§4.3).
-///
-/// Staged through a temp folder rather than streamed: the images can be
-/// gigabytes, and both halves — extract-and-verify, then insert-and-verify —
-/// are already the tested paths above.
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub fn volume_copy_between(
-    from_path: String,
-    from_volume: usize,
-    from_dir: Option<u32>,
-    to_path: String,
-    to_volume: usize,
-    to_dir: Option<u32>,
-    options: Option<CopyOptions>,
-    app: AppHandle,
-    registry: State<'_, Arc<JobRegistry>>,
-    oplog: State<'_, JsonlOperationLog>,
-) -> AppResult<JobId> {
-    let source_image = PathBuf::from(from_path.trim());
-    let target_image = PathBuf::from(to_path.trim());
-    let policy = options.unwrap_or_default().overwrite.unwrap_or_default();
-
-    refuse_same_image(&source_image, &target_image)?;
-
-    // Staged trees live in the app cache directory, so a copy that is
-    // interrupted leaves its temp folder somewhere the OS and the user both
-    // expect to find scratch files.
-    let cache = {
-        use tauri::Manager;
-        app.path()
-            .app_cache_dir()
-            .unwrap_or_else(|_| std::env::temp_dir())
-    };
-    let log_path = oplog.path().to_path_buf();
-    let registry = Arc::clone(&registry);
-    let emit_app = app.clone();
-    let title = format!("Copying between {} and {}", from_path, to_path);
-
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
-        let outcome = copy_between_volumes(
-            &source_image,
-            from_volume,
-            from_dir.unwrap_or(0),
-            &target_image,
-            to_volume,
-            to_dir.unwrap_or(0),
-            policy,
-            &cache,
-            progress,
-        );
-
-        let record = user_operation("Copy between volumes")
-            .source(format!("{from_path}:{from_volume}"))
-            .destination(format!("{to_path}:{to_volume}"));
-        let record = match &outcome {
-            Ok((report, _)) => record
-                .detail("Files", report.files_copied.to_string())
-                .outcome(OperationOutcome::verified(
-                    report.files_verified == report.files_copied,
-                )),
-            Err(err) => record.failed(err),
-        };
-        super::oplog::write_to_path(&log_path, &record);
-
-        let (report, backup) = outcome?;
-        let _ = emit_app.emit(
-            VOLUME_WRITE_EVENT,
-            VolumeWriteResult::CopyIn {
-                job_id,
-                report,
-                backup,
-            },
-        );
-        Ok(())
-    });
-
-    Ok(id)
-}
+// `volume_copy_between` and `copy_between_volumes` were removed here
+// (ART-176). They staged `from_dir`'s **contents**, so F5 on `Tools` between
+// two images landed `Editor` and `Readme` loose in the destination and no
+// `Tools` drawer at all — while the batch form, built one issue earlier,
+// kept each picked entry's own name. Two routes through one operation gave
+// two results, and the one a user is most likely to take gave the wrong one.
+//
+// There is one route now: `volume_copy_between_many`, called with a single
+// entry for a single pick. `Games/Turrican/Turrican.slave` arrives as
+// `DH1:Games/Turrican/Turrican.slave` whether one row is selected or ten.
+//
+// That also gives ART-081 the copy half of its missing primitive: a lone
+// *file* between two images is now an ordinary one-entry batch, staged and
+// inserted under its own name, rather than a whole-folder copy dressed up as
+// one. The **delete** half — what makes F6 a move rather than a copy — is
+// still missing, so ART-081 stays open on that and only that.
 
 /// The whole pipeline `volume_copy_between_many`'s job runs: stage the picked
 /// **selection** out of the source volume, then insert the staged folder into
@@ -1950,7 +1934,7 @@ pub(crate) fn copy_selection_between_volumes(
     policy: OverwritePolicy,
     cache: &Path,
     progress: &dyn ProgressSink,
-) -> CoreResult<(CopyReport, Option<String>)> {
+) -> CoreResult<(CopyReport, Committed)> {
     let entry = pick(from_image, from_volume)?;
     let (device, geometry) = mount(from_image, &entry)?;
     let staged = StagedTree::stage_selection(&device, &geometry, entries, cache, progress)?;
@@ -2027,7 +2011,7 @@ pub fn volume_copy_between_many(
             .destination(format!("{to_path}:{to_volume}"))
             .detail("Selected", count.to_string());
         let record = match &outcome {
-            Ok((report, _)) => record
+            Ok((report, committed)) => damaged(record, committed)
                 .detail("Files", report.files_copied.to_string())
                 .outcome(OperationOutcome::verified(
                     report.files_verified == report.files_copied,
@@ -2036,13 +2020,13 @@ pub fn volume_copy_between_many(
         };
         super::oplog::write_to_path(&log_path, &record);
 
-        let (report, backup) = outcome?;
+        let (report, committed) = outcome?;
         let _ = emit_app.emit(
             VOLUME_WRITE_EVENT,
             VolumeWriteResult::CopyIn {
                 job_id,
                 report,
-                backup,
+                backup: committed.backup,
             },
         );
         Ok(())
@@ -2059,7 +2043,7 @@ fn run_copy_in_staged(
     staged: &StagedTree,
     policy: OverwritePolicy,
     progress: &dyn ProgressSink,
-) -> CoreResult<(CopyReport, Option<String>)> {
+) -> CoreResult<(CopyReport, Committed)> {
     run_copy_in_staged_with(
         image,
         volume_index,
@@ -2073,6 +2057,18 @@ fn run_copy_in_staged(
 
 /// [`run_copy_in_staged`], with a say in what a cancellation means — the same
 /// distinction [`run_copy_in_folder_with`] draws, and for the same reason.
+///
+/// **"A stopped batch commits nothing" is a whole-file promise, and only
+/// that** (F5 of the wave-C1 review). On the whole-file strategy everything
+/// happens in a buffer, so returning before the commit leaves the user's image
+/// byte-for-byte as it was. On the block-journal strategy — an image past
+/// [`WHOLE_FILE_LIMIT_BYTES`](crate::core::volume::WHOLE_FILE_LIMIT_BYTES) —
+/// each file copied in is its own committed, journalled operation, durable
+/// before the next one starts, and nothing can undo them without deleting
+/// files this run legitimately created. What [`OnCancel::Abandon`] buys there
+/// is **honesty, not atomicity**: the job ends `CancelledPartway { files }`
+/// rather than reporting a successful install of a package that is missing
+/// most of itself (ART-058).
 #[allow(clippy::too_many_arguments)]
 fn run_copy_in_staged_with(
     image: &Path,
@@ -2082,7 +2078,7 @@ fn run_copy_in_staged_with(
     policy: OverwritePolicy,
     on_cancel: OnCancel,
     progress: &dyn ProgressSink,
-) -> CoreResult<(CopyReport, Option<String>)> {
+) -> CoreResult<(CopyReport, Committed)> {
     let entry = pick(image, volume_index)?;
     let geometry = geometry_of(image, &entry)?;
 
@@ -2137,7 +2133,7 @@ fn run_copy_in_staged_with(
                     CoreError::Cancelled
                 });
             }
-            Ok((report, None))
+            Ok((report, Committed::default()))
         }
     }
 }
@@ -2405,7 +2401,7 @@ mod tests {
         assert!(outcome.verified);
         assert!(outcome.block.is_some());
         assert!(
-            backup.is_some(),
+            backup.backup.is_some(),
             "the whole-file path backs the image up before replacing it"
         );
 
@@ -2634,6 +2630,74 @@ mod tests {
         assert!(names.contains(&"Tools".to_string()), "{names:?}");
     }
 
+    /// F3 of the wave-C1 review: **proceeding is not the same as saying
+    /// nothing.** The gate refuses only what the operation introduced, which
+    /// is right (§89) — and for a while it then wrote into a volume it had
+    /// just found cross-linked and told nobody at all.
+    ///
+    /// The write goes through; the result names the damage, and so does the
+    /// operation log.
+    #[test]
+    fn a_write_into_an_already_damaged_volume_says_so_while_going_through() {
+        use crate::core::adf::blocks::HASH_TABLE_SIZE;
+        use crate::core::volume::write::layout;
+
+        let image = Image::new("already-damaged-reported", 1760);
+        with_writer(&image.path, 0, |writer| {
+            writer.add_file(0, "Readme.txt", b"hello", Default::default())
+        })
+        .unwrap();
+        let header = image.listing()[0].block;
+
+        // Break it on disk, behind ART's back — the only way a volume gets
+        // into this state, since the gate refuses to create one.
+        let mut bytes = image.bytes();
+        let root = crate::core::volume::VolumeGeometry::root_block_for(1760) as usize;
+        let block = &mut bytes[root * 512..][..512];
+        let right = (0..HASH_TABLE_SIZE)
+            .find(|index| layout::get_u32(block, 24 + index * 4).unwrap_or(0) == header)
+            .unwrap();
+        let wrong = (right + 1) % HASH_TABLE_SIZE;
+        layout::set_u32(block, 24 + right * 4, 0).unwrap();
+        layout::set_u32(block, 24 + wrong * 4, header).unwrap();
+        let checksum = crate::core::adf::checksum::block_checksum(block, 20);
+        layout::set_u32(block, 20, checksum).unwrap();
+        std::fs::write(&image.path, &bytes).unwrap();
+
+        let (_, _, committed) =
+            with_writer(&image.path, 0, |writer| writer.make_dir(0, "Tools")).unwrap();
+
+        assert!(
+            committed
+                .pre_existing
+                .iter()
+                .any(|line| line.contains("hashchain.bucket")),
+            "the write went through and has to name what was already wrong: {:?}",
+            committed.pre_existing
+        );
+        assert!(committed.damage_detail().is_some());
+
+        // …and the write really did land, which is the half §89 protects.
+        let names: Vec<String> = image.listing().into_iter().map(|e| e.name).collect();
+        assert!(names.contains(&"Tools".to_string()), "{names:?}");
+    }
+
+    /// The other side: an ordinary write to a sound volume reports **no**
+    /// damage. A field that was always populated would satisfy the test above
+    /// and mean nothing.
+    #[test]
+    fn a_write_into_a_sound_volume_reports_no_damage() {
+        let image = Image::new("undamaged-reported", 1760);
+        let (_, _, committed) =
+            with_writer(&image.path, 0, |writer| writer.make_dir(0, "Tools")).unwrap();
+        assert!(
+            committed.pre_existing.is_empty(),
+            "{:?}",
+            committed.pre_existing
+        );
+        assert!(committed.damage_detail().is_none());
+    }
+
     /// The other half of the gate: it must refuse *only* what is broken. A
     /// gate that refused everything would satisfy the test above and destroy
     /// the feature.
@@ -2646,7 +2710,7 @@ mod tests {
             with_writer(&image.path, 0, |writer| writer.make_dir(0, "Tools")).unwrap();
 
         assert!(outcome.verified);
-        assert!(backup.is_some());
+        assert!(backup.backup.is_some());
         assert_ne!(image.bytes(), before, "the change has to have landed");
         let names: Vec<String> = image.listing().into_iter().map(|e| e.name).collect();
         assert_eq!(names, vec!["Tools".to_string()]);
@@ -2703,7 +2767,9 @@ mod tests {
         let (_, _, backup) =
             with_writer(&image.path, 0, |writer| writer.make_dir(0, "Tools")).unwrap();
 
-        let backup = backup.expect("the whole-file path must take a backup");
+        let backup = backup
+            .backup
+            .expect("the whole-file path must take a backup");
         assert_eq!(
             std::fs::read(&backup).unwrap(),
             before,
@@ -2888,7 +2954,10 @@ mod tests {
         assert_eq!(report.files_copied, 2);
         assert_eq!(report.files_verified, 2);
         assert_eq!(report.directories_created, 1);
-        assert!(backup.is_some(), "a floppy is backed up before replacement");
+        assert!(
+            backup.backup.is_some(),
+            "a floppy is backed up before replacement"
+        );
 
         let entries = image.listing();
         assert_eq!(entries.len(), 2);
@@ -3011,7 +3080,7 @@ mod tests {
 
         assert!(report.is_complete(), "{report:?}");
         assert_eq!(report.files_copied, 2);
-        assert!(backup.is_some());
+        assert!(backup.backup.is_some());
 
         let entries = image.listing();
         assert_eq!(entries.len(), 2, "Game and Readme.txt land side by side");
@@ -3378,68 +3447,67 @@ mod tests {
         assert!(with_writer(&image.path, 7, |writer| writer.make_dir(0, "X")).is_err());
     }
 
-    // ---- Task 8: `volume_copy_between`'s own pipeline, not just staging ----
+    // ---- One route between two images, whether one row is picked or ten ----
 
-    /// The gap the survey found: `a_tree_copies_from_one_image_to_another`
-    /// (in `core::volume::write::copy`) already proves the bare staging
-    /// primitives — `StagedTree::stage` and `copy_into_volume` against a raw
-    /// device — work. Nothing exercised the pipeline `volume_copy_between`'s
-    /// job closure actually runs: [`copy_between_volumes`], which does
-    /// `pick`/`mount` to find the destination volume and calls
-    /// [`run_copy_in_staged`] — the same journal-check, whole-image-validate,
-    /// guarded-backup path every other write in this module goes through.
+    /// ART-176. A single folder copied between two images keeps **its own
+    /// drawer**, exactly as a batch of two does.
     ///
-    /// Also the fix for the review's Task 8 minor: the test used to
-    /// reimplement `pick`/`mount`/`StagedTree::stage`/`run_copy_in_staged`
-    /// inline instead of calling the actual function, which meant the
-    /// closure's own argument mapping — `from_volume`/`to_volume`,
-    /// `from_dir`/`to_dir` — was never exercised; swapping two of those
-    /// arguments at the real call site would still have passed. Calling
-    /// [`copy_between_volumes`] directly, with a non-root directory on *each*
-    /// side that only the right mapping can satisfy, closes that: the source
-    /// tree lives inside `Tools` (not the source root) and lands inside
-    /// `Dest` (not the destination root) — a `from_dir`/`to_dir` swap would
-    /// either fail to resolve `Dest`'s block number against the *source*
-    /// volume or dump the files at the destination's root instead of inside
-    /// `Dest`, and either way an assertion below catches it.
+    /// This test replaces `a_tree_copies_between_two_images_through_the_command_pipeline`,
+    /// which asserted the opposite and was right about the code at the time:
+    /// `copy_between_volumes` staged `from_dir`'s *contents*, so F5 on
+    /// `Tools` landed `Editor` and `Readme` loose in the destination and no
+    /// `Tools` drawer at all. Then ART-064 built a batch form that kept each
+    /// entry's name, and two routes through one operation gave two results —
+    /// the one a user is most likely to take giving the wrong one. There is
+    /// one route now, and this is it with a single entry.
     ///
-    /// Two writers are never open at once — staging the source into a temp
-    /// folder first is what lets the insert half be an ordinary `with_writer`
-    /// session, rather than holding both images' mutable borrows open across
-    /// a verification step in between.
+    /// The source is a subfolder and the destination is a subfolder, neither
+    /// of them a root: a from/to swap would either fail to resolve `Dest`
+    /// against the source volume or dump the tree at the destination's root,
+    /// and an assertion below catches either.
     #[test]
-    fn a_tree_copies_between_two_images_through_the_command_pipeline() {
-        let from = Image::new("between-from", 1760);
-        let to = Image::new("between-to", 1760);
+    fn one_folder_between_two_images_keeps_its_drawer() {
+        let from = Image::new("between-one-from", 1760);
+        let to = Image::new("between-one-to", 1760);
 
-        // Build the tree inside a subfolder on the source — this is the
-        // volume-to-volume path, not F5's host-to-volume one, which already
-        // has its own coverage above.
-        with_writer(&from.path, 0, |writer| writer.make_dir(0, "Tools")).unwrap();
-        let tools = from
+        with_writer(&from.path, 0, |writer| writer.make_dir(0, "Games")).unwrap();
+        let games = from
             .listing()
             .into_iter()
-            .find(|e| e.name == "Tools")
+            .find(|e| e.name == "Games")
             .unwrap();
         with_writer(&from.path, 0, |writer| {
-            writer.add_file(tools.block, "Editor", b"editor bytes", Default::default())
+            writer.make_dir(games.block, "Turrican")
         })
         .unwrap();
+        let turrican = from
+            .listing_of(games.block)
+            .into_iter()
+            .find(|e| e.name == "Turrican")
+            .unwrap();
         with_writer(&from.path, 0, |writer| {
-            writer.add_file(tools.block, "Readme", b"read me", Default::default())
+            writer.add_file(
+                turrican.block,
+                "Turrican.slave",
+                b"slave",
+                Default::default(),
+            )
         })
         .unwrap();
         let before_source = from.bytes();
 
-        // And an empty subfolder, also not the root, on the destination.
         with_writer(&to.path, 0, |writer| writer.make_dir(0, "Dest")).unwrap();
         let dest = to.listing().into_iter().find(|e| e.name == "Dest").unwrap();
 
-        let cache = scratch("between-cache");
-        let (report, backup) = copy_between_volumes(
+        let cache = scratch("between-one-cache");
+        let (report, committed) = copy_selection_between_volumes(
             &from.path,
             0,
-            tools.block,
+            &[SelectedEntry {
+                header_block: turrican.block,
+                name: "Turrican".into(),
+                is_dir: true,
+            }],
             &to.path,
             0,
             dest.block,
@@ -3449,35 +3517,88 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(report.files_copied, 2);
-        assert_eq!(report.files_verified, 2);
+        assert_eq!(report.files_copied, 1);
+        assert_eq!(report.files_verified, 1);
         assert!(
-            backup.is_some(),
-            "the destination is a floppy, so it takes the whole-file path and is backed up \
-             before being replaced"
+            committed.backup.is_some(),
+            "the destination is a floppy, so it takes the whole-file path and is backed up"
         );
 
         let dest_root = to.listing();
         assert_eq!(
             dest_root.len(),
             1,
-            "only Dest at the destination root — nothing landed loose at the root, which is \
-             what a from_dir/to_dir swap would do: {dest_root:?}"
+            "nothing loose at the root: {dest_root:?}"
         );
         assert_eq!(dest_root[0].name, "Dest");
 
-        let inside_dest = to.listing_of(dest.block);
-        assert_eq!(inside_dest.len(), 2, "Editor and Readme, inside Dest");
-        let editor = inside_dest.iter().find(|e| e.name == "Editor").unwrap();
-        assert_eq!(to.contents(editor.block), b"editor bytes");
-        let readme = inside_dest.iter().find(|e| e.name == "Readme").unwrap();
-        assert_eq!(to.contents(readme.block), b"read me");
+        // The assertion this test exists for: a `Turrican` drawer inside
+        // `Dest`, not `Turrican.slave` loose in it.
+        let inside = to.listing_of(dest.block);
+        assert_eq!(inside.len(), 1, "{inside:?}");
+        assert_eq!(inside[0].name, "Turrican");
+        assert!(inside[0].is_dir, "the drawer survived the trip");
+
+        let within = to.listing_of(inside[0].block);
+        assert_eq!(within.len(), 1);
+        assert_eq!(within[0].name, "Turrican.slave");
+        assert_eq!(to.contents(within[0].block), b"slave");
 
         assert_eq!(
             from.bytes(),
             before_source,
-            "the source image must be byte-for-byte unchanged — the copy out of it is \
-             read-only staging into a temp folder, never a write back to the source"
+            "the source image must be byte-for-byte unchanged — staging out of it is a \
+             read-only walk into a temp folder, never a write back"
+        );
+
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    /// The lone-**file** case, which is the other half of what ART-176's
+    /// removal fixed and which [ART-081](docs/ISSUES.md) named as the missing
+    /// copy primitive: F5 on one file used to pass the pane's own `dirBlock`
+    /// and copy the whole folder that file happened to be in.
+    #[test]
+    fn one_file_between_two_images_copies_that_file_and_nothing_else() {
+        let from = Image::new("between-file-from", 1760);
+        let to = Image::new("between-file-to", 1760);
+
+        for name in ["Wanted.txt", "NotWanted.txt"] {
+            with_writer(&from.path, 0, |writer| {
+                writer.add_file(0, name, b"payload", Default::default())
+            })
+            .unwrap();
+        }
+        let wanted = from
+            .listing()
+            .into_iter()
+            .find(|e| e.name == "Wanted.txt")
+            .unwrap();
+
+        let cache = scratch("between-file-cache");
+        let (report, _) = copy_selection_between_volumes(
+            &from.path,
+            0,
+            &[SelectedEntry {
+                header_block: wanted.block,
+                name: "Wanted.txt".into(),
+                is_dir: false,
+            }],
+            &to.path,
+            0,
+            0,
+            OverwritePolicy::Skip,
+            &cache,
+            &NoProgress,
+        )
+        .unwrap();
+
+        assert_eq!(report.files_copied, 1);
+        let names: Vec<String> = to.listing().into_iter().map(|e| e.name).collect();
+        assert_eq!(
+            names,
+            vec!["Wanted.txt".to_string()],
+            "the file that was marked, and only it: {names:?}"
         );
 
         let _ = std::fs::remove_dir_all(&cache);
@@ -3960,6 +4081,75 @@ mod tests {
         assert!(!report.is_complete());
     }
 
+    /// F4 of the wave-C1 review: a volume→local batch that fails part way
+    /// has already written some of it, and every `?` in the loop used to
+    /// throw the report away — the exact situation `PartiallyApplied` was
+    /// added for one issue earlier.
+    ///
+    /// The failure is arranged from outside ART: the destination for the
+    /// second entry is made a **read-only existing directory of the same
+    /// name**, so the first entry lands and the second cannot.
+    #[test]
+    fn a_selection_copy_out_that_fails_partway_says_how_much_landed() {
+        let (image, picks) = selection_source("extract-many-partway");
+        let dest = image.dir.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+
+        // `Readme.txt` is the second pick. A *directory* of that name is
+        // something `atomic_write` cannot write over.
+        std::fs::create_dir_all(dest.join("Readme.txt")).unwrap();
+
+        let err = extract_selection_out(
+            &image.path,
+            0,
+            &picks,
+            &dest,
+            true,
+            OverwritePolicy::Overwrite,
+            &NoProgress,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code(), "ART-APPLY-PARTIAL", "{err}");
+        match &err {
+            CoreError::PartiallyApplied { placed, item, .. } => {
+                assert_eq!(*placed, 2, "the two files inside Game did land");
+                assert_eq!(item, "Readme.txt");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(
+            dest.join("Game").join("Game.exe").exists(),
+            "…and they are still there, which is why the error has to mention them"
+        );
+    }
+
+    /// The other side: a batch that fails before writing anything reports the
+    /// plain reason. An error always dressed as a partial apply would satisfy
+    /// the test above and send every user looking for a mess.
+    #[test]
+    fn a_selection_copy_out_that_fails_at_once_reports_the_plain_reason() {
+        let (image, mut picks) = selection_source("extract-many-first");
+        let dest = image.dir.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        // Only the file, and its destination is a directory it cannot replace.
+        picks.remove(0);
+        std::fs::create_dir_all(dest.join("Readme.txt")).unwrap();
+
+        let err = extract_selection_out(
+            &image.path,
+            0,
+            &picks,
+            &dest,
+            true,
+            OverwritePolicy::Overwrite,
+            &NoProgress,
+        )
+        .unwrap_err();
+
+        assert_ne!(err.code(), "ART-APPLY-PARTIAL", "{err}");
+    }
+
     /// Two names one volume keeps apart and one host filesystem cannot.
     /// Refused **before** anything is written, naming both, rather than one
     /// silently overwriting the other on the way out.
@@ -4027,7 +4217,7 @@ mod tests {
 
         assert_eq!(report.files_copied, 3);
         assert_eq!(report.files_verified, 3);
-        assert!(backup.is_some(), "one backup for the whole batch");
+        assert!(backup.backup.is_some(), "one backup for the whole batch");
 
         let root = to.listing();
         assert_eq!(root.len(), 1, "nothing landed loose at the root: {root:?}");
@@ -4172,7 +4362,12 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(err.to_string().contains("Locked.txt"), "{err}");
+        let message = err.to_string();
+        assert!(message.contains("Locked.txt"), "{message}");
+        assert!(
+            message.contains("nothing in this batch was deleted"),
+            "the refusal has to say the guarantee held, or the user cannot tell which              half of their selection is gone (F9): {message}"
+        );
 
         let names: Vec<String> = image.listing().into_iter().map(|e| e.name).collect();
         assert_eq!(

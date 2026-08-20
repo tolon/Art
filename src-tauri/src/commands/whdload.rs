@@ -546,7 +546,7 @@ fn run_install(
 
     // One session, so the whole install is one backup rather than three
     // generations of the same image (§1).
-    let ((report, icon_installed), _strategy, backup) = super::volume_write::with_volume(
+    let ((report, icon_installed), _strategy, committed) = super::volume_write::with_volume(
         image,
         volume_index,
         move |writer| -> CoreResult<(CopyReport, bool)> {
@@ -591,7 +591,7 @@ fn run_install(
         verified: report.files_verified,
         icon_installed,
         skipped: report.skipped,
-        backup,
+        backup: committed.backup,
     })
 }
 

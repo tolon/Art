@@ -78,6 +78,13 @@ pub enum CoreError {
     /// `placed` travels as a number and `item` as the destination that
     /// refused, so the UI can say both without parsing the sentence — which
     /// is English, and the UI's is not (§68).
+    ///
+    /// **`placed` counts whole items, and the named one is not among them**
+    /// (F8 of the wave-C1 review). An item that failed part way — a tree copy
+    /// that stopped halfway down, an unpack that got most of a drawer out —
+    /// can have left some of itself at the destination, and no count here
+    /// describes that. It is why `item` is carried at all: the number says
+    /// what finished, and the name says where to look for what did not.
     #[error(
         "{reason} — this stopped at '{item}', and the {placed} item(s) placed before it are \
          still there"

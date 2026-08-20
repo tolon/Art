@@ -237,12 +237,12 @@ pub fn archives_install(
             .source(format!("{} archives", archives.len()))
             .destination(format!("{}:{volume_index}", image_path.display()));
         let record = match &outcome {
-            Ok((report, backup)) => record
+            Ok((report, committed)) => record
                 .detail("Archives", archives.len().to_string())
                 .detail("Files", report.files_copied.to_string())
                 .detail("Folders", report.directories_created.to_string())
                 .detail("Skipped", report.skipped.len().to_string())
-                .backup(backup.clone())
+                .backup(committed.backup.clone())
                 .outcome(OperationOutcome::verified(
                     report.files_verified == report.files_copied,
                 )),
@@ -250,7 +250,7 @@ pub fn archives_install(
         };
         write_to_path(&log_path, &record);
 
-        let (report, backup) = outcome?;
+        let (report, committed) = outcome?;
         // The same event and shape `volume_copy_in_many` emits: installing a
         // batch of archives *is* copying a staged `HostSelection` into a
         // volume, and the Commander's one listener for copy results already
@@ -260,7 +260,7 @@ pub fn archives_install(
             crate::commands::volume_write::VolumeWriteResult::CopyIn {
                 job_id,
                 report,
-                backup,
+                backup: committed.backup,
             },
         );
         Ok(())
@@ -276,7 +276,10 @@ fn install_archives(
     parent: u32,
     policy: OverwritePolicy,
     progress: &dyn ProgressSink,
-) -> CoreResult<(crate::core::volume::write::copy::CopyReport, Option<String>)> {
+) -> CoreResult<(
+    crate::core::volume::write::copy::CopyReport,
+    crate::commands::volume_write::Committed,
+)> {
     let staging = Staging::new()?;
     let (drawers, roots) = prepare_archives(archives, staging.path(), progress)?;
     // Same as `build_plan` above: ART's own staging tree, so the sidecar
@@ -286,7 +289,7 @@ fn install_archives(
     // The same fits-or-nothing, abandon-on-cancel primitive a single-archive
     // install uses — one call, over the whole staged batch, so a cancelled
     // batch is exactly as atomic as a cancelled single install.
-    let (mut report, backup) = crate::commands::volume_write::install_into_folder(
+    let (mut report, committed) = crate::commands::volume_write::install_into_folder(
         image,
         volume_index,
         parent,
@@ -303,7 +306,7 @@ fn install_archives(
         report.skipped.extend(drawer.skipped.iter().cloned());
     }
 
-    Ok((report, backup))
+    Ok((report, committed))
 }
 
 // ---------------------------------------------------------------------------

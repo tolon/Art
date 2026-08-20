@@ -24,6 +24,15 @@ use crate::core::whdload::Entry;
 pub struct ApplyOutcome {
     pub placed: usize,
     pub bytes: u64,
+    /// Items whose destination already held exactly what this plan would put
+    /// there, and which were therefore stepped over (ART-177).
+    ///
+    /// This is what makes a half-finished run resume: re-running the same
+    /// plan places what is missing and skips what is not. It is counted
+    /// rather than hidden, so "nothing happened" and "it was already done"
+    /// never look the same on screen.
+    #[serde(default)]
+    pub skipped: usize,
 }
 
 /// Build the staging tree the plan describes.
@@ -48,10 +57,11 @@ pub fn apply(plan: &LayoutPlan, sink: &dyn ProgressSink) -> CoreResult<ApplyOutc
         sink.report(done as u64, Some(total), &item.destination);
 
         match place(&plan.root, item) {
-            Ok(bytes) => {
+            Ok(Placed::Copied(bytes)) => {
                 outcome.bytes += bytes;
                 outcome.placed += 1;
             }
+            Ok(Placed::AlreadyThere) => outcome.skipped += 1,
             // Everything before this is durably on disk and stays there —
             // `place` refuses to overwrite, so nothing can be rolled back
             // without deleting files this run legitimately created. What was
@@ -60,7 +70,7 @@ pub fn apply(plan: &LayoutPlan, sink: &dyn ProgressSink) -> CoreResult<ApplyOutc
             // ordinary collisions, with nothing marking it as the wreckage of
             // a failed run. Cancelling has said this since ART-058; failing
             // now says it too.
-            Err(err) if outcome.placed > 0 => {
+            Err(err) if outcome.placed > 0 || outcome.skipped > 0 => {
                 return Err(CoreError::PartiallyApplied {
                     placed: outcome.placed as u64,
                     item: item.destination.clone(),
@@ -75,8 +85,26 @@ pub fn apply(plan: &LayoutPlan, sink: &dyn ProgressSink) -> CoreResult<ApplyOutc
     Ok(outcome)
 }
 
-/// Copy one item into `root`, refusing to overwrite anything already there.
-fn place(root: &Path, item: &LayoutItem) -> CoreResult<u64> {
+/// What placing one item did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Placed {
+    Copied(u64),
+    /// The destination already held exactly this. Stepped over (ART-177).
+    AlreadyThere,
+}
+
+/// Copy one item into `root`.
+///
+/// **Never overwrites** (§93), and that has not changed. What changed is what
+/// happens when something is already at the destination: if it is *exactly
+/// what this item would place*, it is stepped over rather than refused, which
+/// is what lets a re-run of a half-finished plan finish it. Anything else is
+/// refused exactly as before — the check is
+/// [`presence::presence_of`](crate::core::layout::presence::presence_of), and
+/// it answers `Different` whenever it cannot be certain.
+fn place(root: &Path, item: &LayoutItem) -> CoreResult<Placed> {
+    use crate::core::layout::presence::{presence_of, Presence};
+
     let target = safe_join(root, &item.destination).map_err(|err| {
         CoreError::SafetyRefused(format!(
             "'{}' does not stay inside the staging folder: {err}",
@@ -84,6 +112,12 @@ fn place(root: &Path, item: &LayoutItem) -> CoreResult<u64> {
         ))
     })?;
     if target.exists() {
+        // Asked here and not taken from the plan, deliberately: the plan was
+        // computed before the confirmation and the disk can have moved on.
+        // The screen's count is a preview; this is the decision.
+        if presence_of(root, item) == Presence::AlreadyInPlace {
+            return Ok(Placed::AlreadyThere);
+        }
         return Err(CoreError::InvalidInput(format!(
             "'{}' is already there; nothing is overwritten",
             item.destination
@@ -93,11 +127,12 @@ fn place(root: &Path, item: &LayoutItem) -> CoreResult<u64> {
         std::fs::create_dir_all(parent)?;
     }
 
-    match item.placement {
-        Placement::CopyFile => Ok(std::fs::copy(&item.source, &target)?),
-        Placement::CopyTree => copy_tree(&item.source, &target, 0),
-        Placement::UnpackWhdload => unpack_whdload(&item.source, &target),
-    }
+    let bytes = match item.placement {
+        Placement::CopyFile => std::fs::copy(&item.source, &target)?,
+        Placement::CopyTree => copy_tree(&item.source, &target, 0)?,
+        Placement::UnpackWhdload => unpack_whdload(&item.source, &target)?,
+    };
+    Ok(Placed::Copied(bytes))
 }
 
 /// Unpack an archive holding a WHDLoad pack into `target`, which is the
@@ -398,6 +433,7 @@ mod tests {
             collisions: Vec::new(),
             too_deep: Default::default(),
             duplicates: Default::default(),
+            already_in_place: Vec::new(),
         }
     }
 
@@ -1176,6 +1212,53 @@ mod tests {
         .unwrap();
     }
 
+    /// F6 of the wave-C1 review. The `.lha` fixture above is stored `-lh0-`
+    /// at **level 0**, and Wave A measured 914 level-1 and 2 259 level-2
+    /// entries in the owner's own archives — so the format the tests exercise
+    /// was the one real packs least often use, which is the "fixture more
+    /// helpful than reality" shape again.
+    ///
+    /// A level-1 header keeps the drawer in an extension header, `0xFF`
+    /// separated rather than `/`, which is a different code path in the
+    /// reader and therefore a different answer to "what is this pack called".
+    /// `plan` reads that name off the entry list and `apply` re-derives it
+    /// from the extracted tree; both have to agree here too.
+    #[test]
+    fn a_level_one_lha_pack_plans_and_applies_under_one_name() {
+        use crate::core::layout::{plan, policy::Policy};
+
+        let dir = scratch("lha-level1");
+        let root = dir.join("staging");
+        let archive = dir.join("Turrican.lha");
+        std::fs::write(
+            &archive,
+            crate::core::lha::tests::make_level1_archive(&[
+                (&b"Turrican"[..], &b"Turrican.slave"[..], &b"slave"[..]),
+                (&b"Turrican\xFFdata"[..], &b"level1"[..], &b"level"[..]),
+                (&b""[..], &b"Turrican.info"[..], &b"icon"[..]),
+            ]),
+        )
+        .unwrap();
+
+        let made = plan(&root, std::slice::from_ref(&archive), &Policy::default()).unwrap();
+        assert_eq!(made.items.len(), 1, "{made:?}");
+        assert_eq!(made.items[0].destination, "Games/Turrican");
+        assert!(made.items[0].writes_icon);
+
+        apply(&made, &NoProgress).unwrap();
+
+        let games = root.join("Games");
+        assert_eq!(
+            std::fs::read(games.join("Turrican").join("Turrican.slave")).unwrap(),
+            b"slave"
+        );
+        assert!(games.join("Turrican").join("data").join("level1").exists());
+        assert_eq!(std::fs::read(games.join("Turrican.info")).unwrap(), b"icon");
+        assert!(!games.join("Turrican").join("Turrican.info").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ART-109. One `.lha` driven end to end through `plan` → `apply`: the
     /// name the entry list gave and the name the extracted tree gives have to
     /// be the same name, or the icon lands under something that is not the
@@ -1336,6 +1419,94 @@ mod tests {
 
         let err = apply(&plan, &NoProgress).unwrap_err();
         assert_ne!(err.code(), "ART-APPLY-PARTIAL", "{err}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ART-177, the whole point: **re-running a half-finished plan finishes
+    /// it.** No "continue" button, no resume mode — the same plan, applied
+    /// again, places what is missing and steps over what is not.
+    #[test]
+    fn re_running_a_half_finished_plan_finishes_it() {
+        use crate::core::layout::{plan, policy::Policy};
+
+        let dir = scratch("resume");
+        let root = dir.join("staging");
+        let first = dir.join("First.adf");
+        let second = dir.join("Second.adf");
+        // A 901 120-byte file starting `DOS\0` is an ADF, and `core/detect`
+        // says so from the bytes. The tail differs between the two so they
+        // are genuinely different images, not two names for one.
+        let adf = |path: &Path, tag: u8| {
+            let mut bytes = vec![0u8; 901_120];
+            bytes[0..4].copy_from_slice(b"DOS\0");
+            bytes[900_000] = tag;
+            std::fs::write(path, bytes).unwrap();
+        };
+        adf(&first, 1);
+        adf(&second, 2);
+
+        let made = plan(&root, &[first.clone(), second.clone()], &Policy::default()).unwrap();
+        assert_eq!(made.items.len(), 2);
+        assert!(made.already_in_place.is_empty(), "nothing is there yet");
+
+        // Simulate the first run stopping after one item: place it by hand,
+        // exactly as `place` would have.
+        let floppies = root.join("Floppies");
+        std::fs::create_dir_all(&floppies).unwrap();
+        std::fs::copy(&first, floppies.join("First.adf")).unwrap();
+
+        // The next preview no longer calls that a collision.
+        let again = plan(&root, &[first, second], &Policy::default()).unwrap();
+        assert!(
+            again.collisions.is_empty(),
+            "the wreckage of a stopped run is not a question for the user: {:?}",
+            again.collisions
+        );
+        assert_eq!(
+            again.already_in_place,
+            vec!["Floppies/First.adf".to_string()]
+        );
+
+        // And applying it finishes the job rather than refusing.
+        let outcome = apply(&again, &NoProgress).unwrap();
+        assert_eq!(outcome.placed, 1, "only the one that was missing");
+        assert_eq!(outcome.skipped, 1, "and the one that was already right");
+        assert!(floppies.join("Second.adf").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other side, and the one that stops this being a licence to
+    /// overwrite: a destination holding something **else** is still refused.
+    #[test]
+    fn a_destination_holding_something_else_is_still_refused() {
+        let dir = scratch("resume-different");
+        let root = dir.join("staging");
+        let source = dir.join("Disk.adf");
+        std::fs::write(&source, b"the real one").unwrap();
+        std::fs::create_dir_all(root.join("Floppies")).unwrap();
+        std::fs::write(root.join("Floppies").join("Disk.adf"), b"someone else").unwrap();
+
+        let made = plan_of(
+            &root,
+            vec![LayoutItem {
+                source,
+                kind: ItemKind::FloppyImage,
+                destination: "Floppies/Disk.adf".into(),
+                placement: Placement::CopyFile,
+                bytes: 12,
+                writes_icon: false,
+            }],
+        );
+
+        let err = apply(&made, &NoProgress).unwrap_err();
+        assert!(err.to_string().contains("already there"), "{err}");
+        assert_eq!(
+            std::fs::read(root.join("Floppies").join("Disk.adf")).unwrap(),
+            b"someone else",
+            "nothing is overwritten (§93)"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

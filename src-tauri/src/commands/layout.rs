@@ -16,7 +16,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::core::layout::apply::apply;
 use crate::core::layout::policy::Policy;
-use crate::core::layout::{collisions_in, plan, Collision, LayoutPlan};
+use crate::core::layout::{plan, Collision, LayoutPlan};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::error::AppResult;
 
@@ -45,9 +45,23 @@ pub fn layout_plan(request: LayoutRequest) -> AppResult<LayoutPlan> {
 /// already exists on disk is a fact only this command has looked at, so the
 /// screen calls it after every retarget rather than blocking Apply on
 /// staleness it cannot itself resolve.
+/// Both answers, from one walk: what clashes, and what is already exactly
+/// right (ART-177). They are the same question asked of the same paths, and
+/// returning them separately is how the screen came to call a stopped run's
+/// own output a collision.
+#[derive(Debug, Clone, Serialize)]
+pub struct RecheckResult {
+    pub collisions: Vec<Collision>,
+    pub already_in_place: Vec<String>,
+}
+
 #[tauri::command]
-pub fn layout_recheck(plan: LayoutPlan) -> AppResult<Vec<Collision>> {
-    Ok(collisions_in(&plan.root, &plan.items))
+pub fn layout_recheck(plan: LayoutPlan) -> AppResult<RecheckResult> {
+    let (collisions, already_in_place) = crate::core::layout::settled_in(&plan.root, &plan.items);
+    Ok(RecheckResult {
+        collisions,
+        already_in_place,
+    })
 }
 
 pub const LAYOUT_EVENT: &str = "layout-result";
@@ -161,13 +175,18 @@ mod tests {
             collisions: Vec::new(),
             too_deep: Default::default(),
             duplicates: Default::default(),
+            already_in_place: Vec::new(),
             bytes: 10,
         };
 
         let collisions = layout_recheck(plan).unwrap();
 
-        assert_eq!(collisions.len(), 1, "{collisions:?}");
-        assert_eq!(collisions[0].destination, "Floppies/Disk.adf");
+        assert_eq!(collisions.collisions.len(), 1, "{collisions:?}");
+        assert_eq!(collisions.collisions[0].destination, "Floppies/Disk.adf");
+        assert!(
+            collisions.already_in_place.is_empty(),
+            "the file on disk is not this item's own output — the fixture writes              `already here` where the source has different bytes"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

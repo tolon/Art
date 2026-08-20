@@ -449,13 +449,13 @@ pub fn iso_copy_to_volume(
         };
         super::oplog::write_to_path(&log_path, &record);
 
-        let (report, backup) = outcome?;
+        let (report, committed) = outcome?;
         let _ = emit_app.emit(
             VOLUME_WRITE_EVENT,
             VolumeWriteResult::CopyIn {
                 job_id,
                 report,
-                backup,
+                backup: committed.backup,
             },
         );
         Ok(())

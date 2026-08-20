@@ -99,10 +99,11 @@ describe("planMove", () => {
     ).toEqual({ kind: "refused", reason: { key: "files.err.batchBetweenVolumes" } });
   });
 
-  it("refuses a lone file between two images — ART-081, the primitive copies a folder", () => {
-    // `volume_copy_between` takes a *directory* block. Moving a file through
-    // it would copy every file beside it and then delete only the one that
-    // was marked.
+  it("refuses a lone file between two images — ART-081, whose delete half is missing", () => {
+    // The *copy* half works since ART-176: one route between two images, and
+    // it stages exactly what was marked. What a move also needs is the
+    // delete, sequenced after the destination verifies — recorded rather than
+    // improvised, so this refusal stands.
     expect(planMove({ ...base(), targetKind: "adf", entries: [file("Readme")] })).toEqual({
       kind: "refused",
       reason: { key: "files.move.refuseFileBetweenImages" },

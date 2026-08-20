@@ -26,63 +26,6 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-177** 🔵 **A layout apply still cannot be resumed — the residue is
-reported, and there is no way to carry on from it** — *found 2026-08-20 while
-closing [ART-110](#fixed), which this is the undecided half of*
-`src-tauri/src/core/layout/apply.rs` · `src/pages/ContentLayout.tsx`
-
-A run that fails part way now says so and names what landed
-(`ART-APPLY-PARTIAL`), and the screen no longer stays busy. What it still
-cannot do is carry on: there is no skip-existing, no resume, and the next
-preview reports the residue as ordinary collisions — true, and unhelpful,
-because they are collisions with the user's own interrupted run.
-
-Nothing is destroyed. `place()` refuses to overwrite, so a retry fails loudly
-rather than replacing anything, and the only way forward is the file manager.
-
-Fixing it means answering a question ART has not answered anywhere else: what
-should a preview *say* about a destination that already holds exactly what
-this plan would put there? "Already done, skip it" is only safe if ART can
-tell that the file on disk is the file this item would write — same bytes, not
-merely the same name — and for an `UnpackWhdload` item that means comparing a
-whole extracted drawer against an archive. "Collision, refuse" is what happens
-today and is honest. "Overwrite" contradicts §93 and the applier's own stated
-rule. Which of those the screen offers, and whether resuming is a mode or a
-per-row choice, is a product decision.
-
-Recorded rather than answered, because answering it as a side effect of a
-debt-clearing pass is how a safety rule gets changed by accident.
-
-**ART-176** 🔵 **F5 between two images means two different things for one
-entry and for several** — *found 2026-08-20 while closing ART-064*
-`src/pages/FileManager.tsx::copyTo` · `src-tauri/src/commands/volume_write.rs::copy_between_volumes`
-
-Copying **several** entries between two images now keeps each one's own name:
-`Game/` and `Readme.txt` arrive as `Game/` and `Readme.txt`, the shape
-`HostSelection` gives the local→volume direction and the one
-`volume_copy_between_many` was built to match.
-
-Copying **one** folder between two images does not. `copy_between_volumes`
-stages `from_dir`'s *contents* and copies those into `to_dir`, so F5 on
-`Tools` lands `Editor` and `Readme` loose in the destination directory and no
-`Tools` drawer at all. That is the behaviour
-`a_tree_copies_between_two_images_through_the_command_pipeline` has asserted
-since phase 1a — it is tested, not accidental — and it is also what
-[ART-081](#open) means by "F5 on a lone file … copies the whole folder the
-file happens to be in", seen from the folder end.
-
-So the two paths disagree, and the disagreement is new: before ART-064 the
-multi-entry case simply refused, so there was nothing to disagree with.
-Nothing is lost either way and nothing is destroyed — F5 deletes nothing — but
-a user who selects one drawer and a user who selects two get different shapes.
-
-Not fixed here, and deliberately: making the single-entry case keep the
-drawer's name is a **product** decision about what F5 means between two
-images, it contradicts a test that was written on purpose, and it is the same
-call ART-081 has to make about a lone file. Both should be answered in one
-pass, by whoever owns that decision, rather than settled as a side effect of
-a batching task.
-
 **ART-175** 🟡 **The OS Builder can preview what a package would
 replace and still cannot preview what switching a recipe component on would
 replace — `collide::preview` can now answer, and nothing asks it** — *found
@@ -565,32 +508,6 @@ first looks: embedding a PFS3 driver into a **foreign** card's existing RDB
 `hst-imager` does it; that is named in the refusal text. Not fixed — filed as
 future work, not implied to already work.
 
-**ART-093** 🟡 **ART cannot fetch an Emu68 kernel update; it can only tell you which one you need**
-`core/pistorm/` · `net/` · The fix round's F4 asked for two things. The reading
-half is built: the card's `Emu68.img` is identified from the `$VER:` string its
-own build compiles in, and the hardware matrix names the archive that belongs on
-it. The **fetching** half is not.
-
-Not built rather than half-built, and the screen offers no button for it — the
-same rule the WiFi panel follows. Three things make it more than an afternoon,
-and each is a decision worth making deliberately:
-
-- **The host policy.** `net/http_mirror.rs` refuses cross-host redirects on
-  purpose (§41.5.7): a followed redirect is a fetch the user never configured.
-  A GitHub release asset redirects to `objects.githubusercontent.com`, so this
-  needs its own client with its own stated policy, not a relaxation of that one.
-- **Which release.** The archive name depends on the release line, and one name
-  means a different board in each ([ART-091](#open)). A fetch that resolves
-  "latest" without the line would be the same defect with a network connection.
-- **Writing it.** Unpacking an archive onto a card that boots somebody's machine
-  is a multi-file write and wants the same preview → backup → verify every other
-  write in ART has, per file.
-
-Until then the screen tells the user exactly which archive to download and from
-which release line, which is the part they cannot work out for themselves.
-
-Recorded 2026-08-13 as owed work, not a defect.
-
 **ART-081** 🟡 **A single file cannot be moved between two images, because the primitive underneath addresses a directory**
 `src-tauri/src/commands/volume_write.rs::volume_copy_between` ·
 `src/lib/movePlan.ts` · The command takes a *directory* block at both ends and
@@ -609,15 +526,24 @@ Fixing it means a command that stages one *entry* — extract to a scratch path,
 then `put_file` into the destination volume, inside one write session at each
 end so the backup and journal guarantees hold.
 
-**Half of that now exists.** [ART-064](#fixed) built
+**The copy half is built; the delete half is not.** [ART-064](#fixed) built
 `core::volume::write::copy::extract_selection_from_volume`, which stages a
 named set of entries — one of them included — out of a volume, and
 `volume_copy_between_many` carries the result into the other image under one
-backup and one commit. What is still missing is the **delete** half: F6 is a
-move, and moving between two images means deleting the original after the copy
-verifies, which nothing here does yet. So this stays open on the delete, not
-on the staging. The F5 whole-folder surprise above is now
-[ART-176](#open), which has to be answered with it.
+backup and one commit. [ART-176](#fixed) then removed the single-entry route
+entirely, so there is **one** path between two images and it stages exactly
+what was marked: a lone file is a one-entry batch and nothing beside it rides
+along. `one_file_between_two_images_copies_that_file_and_nothing_else` pins
+it. The F5 whole-folder surprise this entry described is therefore gone.
+
+What is still missing, and what keeps this open, is the **delete**. A move is
+a copy *and* a delete, and the decision is in the sequencing rather than in
+either half: the destination has to verify before the source is touched, and
+something has to say what happens when the copy lands and the delete then
+fails — a file that now exists twice, which is the safe failure, but only if
+the user is told. `planMove` refuses a lone file between two images until that
+is decided deliberately, and its doc comment now says this rather than the
+old (and no longer true) "the primitive copies a folder".
 
 Found while building F6 in phase 2b task 3; recorded rather than smuggled into
 a UI task, which is what that task's plan requires.
@@ -707,6 +633,192 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-093** 🟡 **ART cannot fetch an Emu68 kernel update; it can only tell you which one you need**
+`core/pistorm/` · `net/` · The fix round's F4 asked for two things. The reading
+half is built: the card's `Emu68.img` is identified from the `$VER:` string its
+own build compiles in, and the hardware matrix names the archive that belongs on
+it. The **fetching** half is not.
+
+Not built rather than half-built, and the screen offers no button for it — the
+same rule the WiFi panel follows. Three things make it more than an afternoon,
+and each is a decision worth making deliberately:
+
+- **The host policy.** `net/http_mirror.rs` refuses cross-host redirects on
+  purpose (§41.5.7): a followed redirect is a fetch the user never configured.
+  A GitHub release asset redirects to `objects.githubusercontent.com`, so this
+  needs its own client with its own stated policy, not a relaxation of that one.
+- **Which release.** The archive name depends on the release line, and one name
+  means a different board in each ([ART-091](#open)). A fetch that resolves
+  "latest" without the line would be the same defect with a network connection.
+- **Writing it.** Unpacking an archive onto a card that boots somebody's machine
+  is a multi-file write and wants the same preview → backup → verify every other
+  write in ART has, per file.
+
+Until then the screen tells the user exactly which archive to download and from
+which release line, which is the part they cannot work out for themselves.
+
+Recorded 2026-08-13 as owed work, not a defect.
+
+**Decided by the owner 2026-08-20 (wave-C1 fix round 1): ART does not fetch
+it, and this is closed as answered rather than left as owed work.**
+
+ART keeps doing the part the user cannot do for themselves — reading the
+card's `Emu68.img` `$VER:` string, naming the archive that belongs on that
+board and saying which release line it comes from — and then stops. There is
+no download button and there will not be one.
+
+**The boundary, written down so it is not re-opened by accident.**
+`net/http_mirror.rs` refuses cross-host redirects on purpose (§41.5.7): a
+followed redirect is a fetch the user never configured, and the guarantee that
+ART only ever reaches configured mirrors is worth exactly as much as that
+refusal. A GitHub release asset redirects to `objects.githubusercontent.com`,
+so fetching one means either relaxing that rule or writing a second client
+with a weaker policy beside it. Relaxing it for convenience would remove the
+reason it exists, and a second client with its own rules is the same
+relaxation wearing a different name.
+
+The other two obstacles recorded above stand as further reasons rather than as
+the deciding one: an archive name means a different board in each release line
+([ART-091](#open)), so a fetch that resolved "latest" without the line would
+be that defect with a network connection; and unpacking an archive onto a card
+that boots somebody's machine is a multi-file write wanting the same
+preview → backup → verify every other write in ART has.
+
+Not deferred, not "later" — this is the answer. If it is ever revisited it
+should be revisited as a decision about §41.5.7, not as an afternoon's work on
+a screen.
+
+**ART-176** 🔵 **F5 between two images means two different things for one
+entry and for several** — *found 2026-08-20 while closing ART-064*
+`src/pages/FileManager.tsx::copyTo` · `src-tauri/src/commands/volume_write.rs::copy_between_volumes`
+
+Copying **several** entries between two images now keeps each one's own name:
+`Game/` and `Readme.txt` arrive as `Game/` and `Readme.txt`, the shape
+`HostSelection` gives the local→volume direction and the one
+`volume_copy_between_many` was built to match.
+
+Copying **one** folder between two images does not. `copy_between_volumes`
+stages `from_dir`'s *contents* and copies those into `to_dir`, so F5 on
+`Tools` lands `Editor` and `Readme` loose in the destination directory and no
+`Tools` drawer at all. That is the behaviour
+`a_tree_copies_between_two_images_through_the_command_pipeline` has asserted
+since phase 1a — it is tested, not accidental — and it is also what
+[ART-081](#open) means by "F5 on a lone file … copies the whole folder the
+file happens to be in", seen from the folder end.
+
+So the two paths disagree, and the disagreement is new: before ART-064 the
+multi-entry case simply refused, so there was nothing to disagree with.
+Nothing is lost either way and nothing is destroyed — F5 deletes nothing — but
+a user who selects one drawer and a user who selects two get different shapes.
+
+Not fixed here, and deliberately: making the single-entry case keep the
+drawer's name is a **product** decision about what F5 means between two
+images, it contradicts a test that was written on purpose, and it is the same
+call ART-081 has to make about a lone file. Both should be answered in one
+pass, by whoever owns that decision, rather than settled as a side effect of
+a batching task.
+
+**Decided by the owner and fixed 2026-08-20 on `debt-wave-c1` (fix round 1):
+the drawer is preserved.** `Games/Turrican/Turrican.slave` arrives as
+`DH1:Games/Turrican/Turrican.slave` whether one row is marked or ten.
+
+Fixed by **removing the second route** rather than by teaching it to agree.
+`volume_copy_between` and `copy_between_volumes` are gone; there is one
+command between two images now, `volume_copy_between_many`, and a single pick
+is a one-entry batch. Two routes through one operation cannot give two results
+if there is one route.
+
+The frontend's F5 and F6 single-entry paths both call it with
+`selectedEntriesForBatch([entry])`.
+
+**It also fixes the lone-*file* case**, which was the same defect wearing
+different clothes: F5 on one file passed the pane's own `dirBlock` and copied
+the whole folder that file happened to be in. It now copies the file.
+
+`a_tree_copies_between_two_images_through_the_command_pipeline` asserted the
+old flattening and was right about the code at the time; it is replaced by
+`commands::volume_write::tests::one_folder_between_two_images_keeps_its_drawer`
+and `…::one_file_between_two_images_copies_that_file_and_nothing_else`.
+
+**ART-177** 🔵 **A layout apply still cannot be resumed — the residue is
+reported, and there is no way to carry on from it** — *found 2026-08-20 while
+closing [ART-110](#fixed), which this is the undecided half of*
+`src-tauri/src/core/layout/apply.rs` · `src/pages/ContentLayout.tsx`
+
+A run that fails part way now says so and names what landed
+(`ART-APPLY-PARTIAL`), and the screen no longer stays busy. What it still
+cannot do is carry on: there is no skip-existing, no resume, and the next
+preview reports the residue as ordinary collisions — true, and unhelpful,
+because they are collisions with the user's own interrupted run.
+
+Nothing is destroyed. `place()` refuses to overwrite, so a retry fails loudly
+rather than replacing anything, and the only way forward is the file manager.
+
+Fixing it means answering a question ART has not answered anywhere else: what
+should a preview *say* about a destination that already holds exactly what
+this plan would put there? "Already done, skip it" is only safe if ART can
+tell that the file on disk is the file this item would write — same bytes, not
+merely the same name — and for an `UnpackWhdload` item that means comparing a
+whole extracted drawer against an archive. "Collision, refuse" is what happens
+today and is honest. "Overwrite" contradicts §93 and the applier's own stated
+rule. Which of those the screen offers, and whether resuming is a mode or a
+per-row choice, is a product decision.
+
+Recorded rather than answered, because answering it as a side effect of a
+debt-clearing pass is how a safety rule gets changed by accident.
+
+**Decided by the owner and fixed 2026-08-20 on `debt-wave-c1` (fix round 1):
+skip, and say so.** A destination that already holds **exactly what this plan
+would put there** is stepped over, and the preview counts it. Re-running a
+half-finished apply therefore resumes by itself — no "continue" button, no
+resume mode, no new state to get out of step.
+
+`core/layout/presence.rs` answers the one question that makes it safe, and its
+rule is the whole design: **when ART cannot be sure, the answer is
+`Different`.** A false "already in place" is a file the user asked for that
+silently never arrives; a false "different" is a collision they have to look
+at. Only the second is survivable, so every branch ends in `Different` unless
+it has positively established sameness.
+
+| placement | "the same" means |
+|---|---|
+| `CopyFile` | same length, then **byte for byte**, streamed in 64 KB chunks |
+| `CopyTree` | the same relative paths both ways, no extras either way, every file compared as above |
+| `UnpackWhdload` | the archive's **entry list** — every entry inside the pack has a file at the matching path whose length is the entry's declared size, and the drawer holds nothing else. No decompression. |
+
+That last row uses a declared size, which ART treats as an adversarial claim
+everywhere else. It is one here too; what differs is which way a lie pushes
+the answer. A lie that makes the check **fail** costs a collision report. A
+lie that makes it **pass** causes ART to write nothing at all, leaving what is
+on disk untouched. Neither writes attacker-chosen bytes, which is why the
+cheap check is right here and wrong at the extraction gate.
+
+**Nothing is overwritten, and that has not moved** (§93). `place()` refuses a
+destination holding anything else, exactly as before; what changed is that it
+recognises its own output. The check is re-asked at apply time rather than
+taken from the plan, because the plan was computed before the confirmation and
+the disk can have moved on in between.
+
+**The screen says three numbers**, and the third is a guarantee rather than a
+statistic: `new 847 · already in place 12 (skipped) · overwrites 0`. ART never
+overwrites, so `overwrites 0` is what that promise looks like on screen. The
+result panel adds "N were already in place and were left alone", so "nothing
+happened" and "it was already done" never read the same.
+
+`layout_recheck` now returns both answers from one walk (`RecheckResult`),
+because they are the same question asked of the same paths — returning only
+collisions is how the screen came to call a stopped run's own output a clash.
+
+Covered by `core::layout::apply::tests::re_running_a_half_finished_plan_finishes_it`
+(plan, place one item by hand, re-plan, and assert **no collisions**, one
+`already_in_place`, then `placed: 1, skipped: 1`),
+`…::a_destination_holding_something_else_is_still_refused` (which asserts the
+bytes on disk are untouched), and six unit tests in
+`core::layout::presence::tests` — of which
+`a_different_file_of_the_same_length_is_different` is the one that matters
+most: a check that stopped at the size would call a different disk image of
+the same size "already done" and silently never copy the real one.
+
 **ART-069** 🔵 **No frontend test renders `FileManager.tsx`**
 `src/pages/FileManager.tsx` · It calls Tauri commands (`onVolumeWriteResult`,
 `onJobProgress`, panel listing, …) on mount, which is why every phase-1a
@@ -762,6 +874,25 @@ What it establishes, which is what the entry above asks for:
 `copyTo`'s `setHint(t("files.err.bothLocal"))` replaced by `setHint(null)`,
 the two wiring tests failed and the other four passed. Restored, all six pass.
 
+**Fix round 1 (wave-C1 review, F1): two of the six tests could not fire, and
+this entry claimed they did.** The raw-key guard was
+`/\bfiles\.[a-z][a-zA-Z]*\.[a-z]/`, and the `\b` made it dead: the
+function-key bar renders its label immediately after the key name, so the
+screen's text reads `…F3files.functionKeys.view…`, and `3` to `f` is not a
+word boundary. The reviewer set `t("files.functionKeys.viewMUTANT")`, watched
+the literal key render on screen, and both language tests still passed.
+
+The anchor is gone and the namespaces are listed instead —
+`/(files|common|components)\.[a-zA-Z]+\.[a-zA-Z]/`, listed rather than
+matched by a generic `a.b.c` shape, which would fire on a filename or a path.
+Re-verified with the reviewer's own mutation: with
+`files.functionKeys.viewMUTANT` in place both string tests fail and the other
+four pass; restored, all six pass.
+
+Test 2 (both listeners subscribed at mount, with a handler) was confirmed real
+by the reviewer, so the shape of these tests was right — only the anchor was
+not.
+
 **ART-110** 🔵 **A partial layout apply cannot be resumed, and the screen stays
 busy** — *found 2026-08-15, the whole-branch review of SD-2 G11*
 `src-tauri/src/core/layout/apply.rs` · `src/pages/ContentLayout.tsx` · Any
@@ -816,6 +947,27 @@ is: skip-existing, resume, and what a re-preview should say about a
 destination that already holds exactly what this plan would put there. That
 decides what "already done" means for a staging tree, and it is not a call to
 make as a side effect of a debt-clearing pass. Filed as ART-177.
+
+**That half is now answered and closed — see [ART-177](#fixed).** The owner's
+decision was *skip, and say so*, so a half-finished apply resumes by itself.
+
+**Fix round 1 (wave-C1 review, F7 and F8).**
+
+- **F7: the icon's name was normalised two ways.** ART-109 unified *which
+  field* both sides read; it did not unify *how they read it*. The plan side
+  split the raw `destination` string and the apply side used the `safe_join`ed
+  target's leaf, so `Games/Turrican/` — which is what a person types into the
+  retarget box — gave `Games/Turrican/.info` on one side and `Turrican.info`
+  on the other. `core::layout::icon_stem` is now the single normalisation both
+  use. Covered by
+  `core::layout::tests::a_destination_with_a_trailing_separator_names_the_icon_the_same_way`,
+  which asks it of `Games/Turrican/`, `Games/Turrican//` and
+  `Games\Turrican\`.
+- **F8: `placed` counts whole items.** An item that fails *part way* — a tree
+  copy that stopped halfway down, an unpack that got most of a drawer out —
+  can leave some of itself behind, and no count describes that. Stated on the
+  `PartiallyApplied` variant rather than papered over: the number says what
+  finished, and `item` says where to look for what did not.
 
 **ART-108** 🔵 **Nothing you drop can reach the layout screen** — *found
 2026-08-15, the whole-branch review of SD-2 G11*
@@ -896,6 +1048,17 @@ without a wrapper, `is_inside` returns true for everything, so `outside` is
 empty by construction. The list stays as belt and braces — the day `analyse`
 marks a file *inside* the pack as outside it, this is what stops it riding
 along — but it is stated as unreachable rather than presented as tested.
+
+**Fix round 1 (wave-C1 review, F6).** The `.lha` fixture was stored `-lh0-` at
+**level 0**, and Wave A measured 914 level-1 and 2 259 level-2 entries in the
+owner's own archives — so the one format the tests exercised was the one real
+packs least often use, which is the same shape this entry was filed for.
+`core::lha::tests::make_level1_archive` builds a multi-entry level-1 archive
+(the drawer lives in an extension header, `0xFF`-separated rather than `/` —
+a different reader path, and therefore a different answer to "what is this
+pack called"), and
+`core::layout::apply::tests::a_level_one_lha_pack_plans_and_applies_under_one_name`
+drives one through `plan` → `apply` alongside the level-0 case.
 
 **ART-106** 🔵 **A WHDLoad icon's destination is invisible to collision
 analysis** — *found 2026-08-15, the whole-branch review of SD-2 G11*
@@ -1070,6 +1233,26 @@ back). The frontend half — refuse the whole selection rather than silently
 dropping a row ART cannot address — is `src/lib/selection.test.ts`'s
 `selectedEntriesForBatch` block.
 
+**Fix round 1 (wave-C1 review, F4 and F5).**
+
+- **F4: a failed volume→local batch dropped its report.** Every `?` in
+  `extract_selection_from_volume`'s loop threw the `ExtractReport` away, which
+  is exactly the situation `CoreError::PartiallyApplied` had been added for
+  one issue earlier. A batch that fails on its seventh entry now names the
+  entry that refused and the count already on disk; one that fails before
+  writing anything still reports the plain reason, because dressing that up
+  would send the user looking for a mess that is not there. Covered by
+  `commands::volume_write::tests::a_selection_copy_out_that_fails_partway_says_how_much_landed`
+  and `…::a_selection_copy_out_that_fails_at_once_reports_the_plain_reason`.
+- **F5: "a stopped batch commits nothing" is a whole-file promise.** On the
+  block-journal strategy — an image past 16 MB — each file copied in is its
+  own committed, journalled operation, durable before the next one starts.
+  `OnCancel::Abandon` there buys **honesty, not atomicity**: the job ends
+  `CancelledPartway { files }` rather than reporting a successful install of a
+  package that is missing most of itself. `run_copy_in_staged_with` says so at
+  both branches, as `run_copy_in_folder_with` already did; the claim in the
+  wave report has been corrected to match.
+
 **ART-064** 🟡 **Volume→volume multi-select refuses rather than batching**
 `src/pages/FileManager.tsx::copySelectionTo` (line ~1124) · "Two volumes and
 more than one entry: not supported yet" — `setError(t("files.err.batchBetweenVolumes"))`
@@ -1145,6 +1328,38 @@ half, and by ten unit tests in `core::volume::integrity::tests` — including
 `a_clean_volume_with_a_multi_page_bitmap_has_nothing_to_report`, without which
 none of the corruption tests would mean anything. Reverting `deep_check`'s call
 site makes the first two fail; that was checked, not assumed.
+
+**Fix round 1 (wave-C1 review, F2 and F3).** Two holes, both in the same
+direction — the gate seeing less than the walk did.
+
+- **F2: a cap on reporting had become a cap on detecting.** Past
+  `MAX_PER_CODE` (8) the overflow folded into a `Warning` `.more` line, so a
+  **ninth** cross-link on a volume that already had eight was invisible to
+  `newly_broken` — eight `Problem`s before, eight after, write allowed. The
+  overflow line now carries the **worst severity folded into it** and its
+  message carries the count, so nine produce a `Problem` saying "1 further"
+  where eight produce none and ten say "2 further" — three different
+  `(code, message)` pairs, which is what `newly_broken` compares on. Covered
+  by `core::volume::integrity::tests::a_finding_past_the_reporting_cap_still_reaches_the_gate`,
+  mutation-checked by forcing the overflow back to `Warning`.
+- **F3: proceeding is not the same as saying nothing.** "Refuse only what the
+  operation introduced" is the right rule for *refusing*, and it was never a
+  reason to write into a volume ART had just found cross-linked and tell
+  nobody. `deep_check` now returns the pre-existing `Problem`s and logs each
+  one; `WholeFileVolume::commit` returns a `Committed { backup, pre_existing }`
+  instead of a bare backup path; and the damage reaches the user twice — as
+  `pre_existing_damage` on `MutationResult`, `DeleteManyResult` and
+  `MutationOutcome`, and as a `Pre-existing damage` detail in the operation
+  log (§53). Covered by
+  `commands::volume_write::tests::a_write_into_an_already_damaged_volume_says_so_while_going_through`
+  (the write still lands — that is the §89 half) and
+  `…::a_write_into_a_sound_volume_reports_no_damage`, without which a field
+  that was always populated would satisfy the first and mean nothing.
+
+**Measured by the reviewer, and worth keeping:** the walk costs **1.85 ms** at
+the 16 MB whole-file cap and **214 ms** on a 2 GB partition with 20 000 files.
+Wiring it into the health badge is affordable on time; the watch item is
+memory, not time.
 
 **ART-078** 🟡 **An AmigaOS CD's protection bits and file comments are lost, because Rock Ridge and the Amiga `AS` entry are not read**
 `core/iso/` · ART reads ISO9660 and prefers Joliet when a disc carries it.

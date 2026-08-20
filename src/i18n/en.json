@@ -1975,7 +1975,15 @@
     },
     "plan": {
       "heading": "What would be laid out",
-      "total": "{{bytes}} total"
+      "total": "{{bytes}} total",
+      "counts": {
+        "new_one": "new {{count}}",
+        "new_other": "new {{count}}",
+        "alreadyInPlace_one": "already in place {{count}} (skipped)",
+        "alreadyInPlace_other": "already in place {{count}} (skipped)",
+        "overwrites_one": "overwrites {{count}}",
+        "overwrites_other": "overwrites {{count}}"
+      }
     },
     "table": {
       "selectAll": "Select all",
@@ -2045,6 +2053,8 @@
       "heading": "Laid out",
       "placed_one": "{{count}} item placed, {{bytes}} total.",
       "placed_other": "{{count}} items placed, {{bytes}} total.",
+      "skipped_one": "{{count}} was already in place and was left alone.",
+      "skipped_other": "{{count}} were already in place and were left alone.",
       "root": "Staging folder: {{root}}",
       "nextStep": "Point the card preparation screen (OS Builder → Prepare Amiga volumes) at this folder to copy it onto a card."
     }

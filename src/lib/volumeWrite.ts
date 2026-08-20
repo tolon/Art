@@ -29,6 +29,15 @@ export interface MutationResult {
   /** Where the previous image went. Null under the block-journal strategy,
    *  where the journal is the way back rather than a whole-file copy. */
   backup: string | null;
+  /**
+   * Damage the volume already carried **before** this write.
+   *
+   * The gate refuses only what the operation introduced, because a disk that
+   * leaked a block in 1993 has to stay writable (§89). That is a rule about
+   * refusing, not a licence to write into a volume ART has just found
+   * cross-linked and say nothing. Empty in the ordinary case.
+   */
+  pre_existing_damage: string[];
 }
 
 export interface RecoveryResult {
@@ -254,6 +263,15 @@ export interface DeleteManyResult {
   strategy: WriteStrategy;
   /** Where the previous image went, taken once for the whole batch. */
   backup: string | null;
+  /**
+   * Damage the volume already carried **before** this write.
+   *
+   * The gate refuses only what the operation introduced, because a disk that
+   * leaked a block in 1993 has to stay writable (§89). That is a rule about
+   * refusing, not a licence to write into a volume ART has just found
+   * cross-linked and say nothing. Empty in the ordinary case.
+   */
+  pre_existing_damage: string[];
 }
 
 /**
@@ -551,27 +569,6 @@ export async function volumeCopyBetweenMany(
     fromPath,
     fromVolume,
     entries,
-    toPath,
-    toVolume,
-    toDir,
-    options: options ?? null,
-  });
-}
-
-/** Copy a folder from one image into another (§4.3). Returns a job id. */
-export async function volumeCopyBetween(
-  fromPath: string,
-  fromVolume: number,
-  fromDir: number | null,
-  toPath: string,
-  toVolume: number,
-  toDir: number | null,
-  options?: CopyOptions
-): Promise<number> {
-  return invoke<number>("volume_copy_between", {
-    fromPath,
-    fromVolume,
-    fromDir,
     toPath,
     toVolume,
     toDir,

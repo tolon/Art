@@ -254,7 +254,6 @@ pub fn run() {
             commands::volume_write::volume_copy_in,
             commands::volume_write::volume_copy_in_many,
             commands::volume_write::volume_copy_out,
-            commands::volume_write::volume_copy_between,
             commands::volume_write::volume_copy_between_many,
             commands::volume_write::volume_extract_many,
             commands::volume_write::volume_recover,

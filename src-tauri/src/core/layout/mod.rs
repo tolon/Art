@@ -8,6 +8,7 @@
 
 pub mod apply;
 pub mod policy;
+pub mod presence;
 pub mod scan;
 
 use std::collections::BTreeMap;
@@ -106,7 +107,20 @@ pub struct LayoutItem {
 /// silent failure §82 exists to prevent.
 pub fn icon_destination(item: &LayoutItem) -> Option<String> {
     item.writes_icon
-        .then(|| format!("{}.info", item.destination))
+        .then(|| format!("{}.info", icon_stem(&item.destination)))
+}
+
+/// The destination's leaf, the way `safe_join` and the filesystem will see it.
+///
+/// Built from the **same** normalisation on both sides of the rule (ART-176's
+/// divergence, found a second time by the wave-C1 review as F7): the plan side
+/// used the raw `destination` string and the apply side used
+/// `target.file_name()`. Those agree until somebody types `Games/Turrican/`
+/// into the retarget box — then the plan says `Games/Turrican/.info` and the
+/// applier says `Turrican.info`, and the icon is once again named something
+/// the drawer is not. Trailing separators go, and the leaf is what is left.
+pub fn icon_stem(destination: &str) -> &str {
+    destination.trim_end_matches(['/', '\\'])
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,6 +171,15 @@ pub struct LayoutPlan {
     /// that file in the plan twice and make it collide with itself.
     #[serde(default)]
     pub duplicates: crate::core::layout::scan::Dropped,
+    /// Destinations that already hold **exactly** what this plan would put
+    /// there — ART-177. Skipped by `apply`, counted by the screen, and
+    /// deliberately *not* listed among `collisions`: a collision is a
+    /// question for the user, and this is not one.
+    ///
+    /// It is what makes a half-finished apply resume by itself: re-running
+    /// the same plan places what is missing and steps over what is not.
+    #[serde(default)]
+    pub already_in_place: Vec<String>,
 }
 
 /// What one found thing is.
@@ -269,7 +292,7 @@ pub fn plan(root: &Path, paths: &[PathBuf], policy: &Policy) -> CoreResult<Layou
         });
     }
 
-    let collisions = collisions_in(root, &items);
+    let (collisions, already_in_place) = settled_in(root, &items);
     // Folded with a checked running total, never a plain `.sum()`, for the
     // same reason `declared_bytes` below is: an item's `bytes` can come from
     // an archive's own declared size, which is an adversarial claim.
@@ -285,6 +308,7 @@ pub fn plan(root: &Path, paths: &[PathBuf], policy: &Policy) -> CoreResult<Layou
         bytes,
         too_deep: scanned.too_deep,
         duplicates: scanned.duplicates,
+        already_in_place,
     })
 }
 
@@ -319,8 +343,30 @@ fn declared_bytes(path: &Path) -> Option<u64> {
 /// places a drawer Workbench cannot see, which is the exact failure §82
 /// exists to prevent, reached from the other side.
 pub fn collisions_in(root: &Path, items: &[LayoutItem]) -> Vec<Collision> {
+    settled_in(root, items).0
+}
+
+/// [`collisions_in`], and the destinations that are already exactly right.
+///
+/// One walk answers both, because they are the same question asked of the
+/// same paths: what is at this destination, and is it this item's own output
+/// from a run that did not finish (ART-177)? A destination that already holds
+/// exactly what this item would place is **not** a collision — reporting it
+/// as one is what made a half-finished apply a dead end.
+pub fn settled_in(root: &Path, items: &[LayoutItem]) -> (Vec<Collision>, Vec<String>) {
+    use crate::core::layout::presence::{presence_of, Presence};
+
+    let mut already: Vec<String> = Vec::new();
     let mut by_destination: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
     for item in items {
+        if presence_of(root, item) == Presence::AlreadyInPlace {
+            already.push(item.destination.clone());
+            // Its icon rides with it: `apply` writes that beside the drawer
+            // in the same step, so a drawer that is already right and an icon
+            // that is already there are one settled item, not one settled and
+            // one clashing.
+            continue;
+        }
         by_destination
             .entry(item.destination.clone())
             .or_default()
@@ -333,7 +379,7 @@ pub fn collisions_in(root: &Path, items: &[LayoutItem]) -> Vec<Collision> {
         }
     }
 
-    by_destination
+    let collisions = by_destination
         .into_iter()
         .filter_map(|(destination, sources)| {
             // Untrusted like an archive entry name: the destination can be
@@ -354,7 +400,9 @@ pub fn collisions_in(root: &Path, items: &[LayoutItem]) -> Vec<Collision> {
                 None
             }
         })
-        .collect()
+        .collect();
+
+    (collisions, already)
 }
 
 #[cfg(test)]
@@ -689,6 +737,40 @@ mod tests {
             "nothing here clashes: {:?}",
             made.collisions
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// F7 of the wave-C1 review: the two halves of the icon rule have to
+    /// **normalise the same way**, not merely read the same field.
+    ///
+    /// The retarget box is free text, and `Games/Turrican/` is what a person
+    /// types. `apply` builds the icon from the *target path*, which
+    /// `safe_join` has already normalised, so it says `Turrican.info`; the
+    /// plan side split the raw string and said `Games/Turrican/.info`. Same
+    /// field, two answers — ART-176's divergence in a second place.
+    #[test]
+    fn a_destination_with_a_trailing_separator_names_the_icon_the_same_way() {
+        let dir = scratch("icon-trailing");
+        let root = dir.join("staging");
+        let archive = dir.join("Turrican.zip");
+        whdload_zip(&archive);
+
+        let mut made = plan(&root, std::slice::from_ref(&archive), &Policy::default()).unwrap();
+        for typed in ["Games/Turrican/", "Games/Turrican//", "Games\\Turrican\\"] {
+            made.items[0].destination = typed.into();
+            let expected = if typed.contains('\\') {
+                "Games\\Turrican.info"
+            } else {
+                "Games/Turrican.info"
+            };
+            assert_eq!(
+                icon_destination(&made.items[0]),
+                Some(expected.to_string()),
+                "typed as {typed:?} — a trailing separator must not become part \
+                 of the icon's name"
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&dir);
     }

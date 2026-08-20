@@ -776,6 +776,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       collisions: [],
       tooDeep: { paths: [], more: 0 },
       duplicates: { paths: [], more: 0 },
+  alreadyInPlace: [],
       bytes: 100,
     };
     const ready = { root: "E:\\staging", paths: ["E:\\a"], plan };

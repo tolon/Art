@@ -77,14 +77,19 @@ export function collidingNames(names: string[], takenNames: string[]): string[] 
  *   disk image through `core/volume/write`. Moving *out* of a folder would
  *   need one (recorded as ART-080), and inventing it inside a UI task is
  *   exactly the "smuggled in" engine work this phase's plan rules out.
- * - **Several entries between two images at once** is ART-064: the batch
- *   primitive does not exist, so a move would fall back to one copy per entry
- *   and lose the all-or-nothing guarantee at the worst possible moment.
- * - **A single *file* between two images** is ART-081. `volume_copy_between`
- *   copies a *directory* — the block it takes is a directory's, and F5 on a
- *   lone file already passes the pane's own `dirBlock` and copies the whole
- *   folder. A move that did that and then deleted one file would be a move
- *   that quietly copied twenty others.
+ * - **Several entries between two images at once** is ART-064's gap seen from
+ *   the *move* side. The copy half exists now (`volumeCopyBetweenMany`, one
+ *   staged batch under one backup and one commit); what a move also needs is
+ *   a batch delete of the source entries with the same all-or-nothing
+ *   guarantee, sequenced after the destination verifies. Until that is built
+ *   deliberately, this refuses.
+ * - **A single *file* between two images** is ART-081. Its copy half exists
+ *   now too: since ART-176 there is one route between two images and it
+ *   stages exactly what was marked, so a lone file is a one-entry batch and
+ *   nothing beside it rides along. What is still missing is the *delete*
+ *   half — a move is a copy **and** a delete, and sequencing those safely
+ *   (verify, then remove, and what to do when the second fails) is the
+ *   decision ART-081 records. This refusal stays until it is made.
  *
  * A name already taken at the destination is refused rather than resolved by
  * the overwrite policy. "Leave it alone" would skip the copy and then delete

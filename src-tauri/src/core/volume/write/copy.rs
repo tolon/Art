@@ -1087,9 +1087,14 @@ pub fn extract_selection_from_volume<D: BlockDevice + ?Sized>(
         sink.report(report.files_written as u64, None, &entry.name);
 
         let block = resolve_block(geometry, entry.header_block);
-        match host_target(dest, &entry.name, entry.is_dir, policy, &mut report)? {
-            HostTarget::Skip => continue,
-            HostTarget::Descend(target) => extract_dir(
+        // Every `?` in this loop used to throw the report away, which is
+        // exactly the situation `CoreError::PartiallyApplied` was added for:
+        // a batch that fails on its seventh entry has six on the user's disk
+        // and nothing was saying so. The count and the entry that refused now
+        // travel with the error.
+        let step = match host_target(dest, &entry.name, entry.is_dir, policy, &mut report) {
+            Ok(HostTarget::Skip) => continue,
+            Ok(HostTarget::Descend(target)) => extract_dir(
                 device,
                 geometry,
                 block,
@@ -1099,8 +1104,8 @@ pub fn extract_selection_from_volume<D: BlockDevice + ?Sized>(
                 policy,
                 sink,
                 &mut report,
-            )?,
-            HostTarget::Write(target) => write_one_file(
+            ),
+            Ok(HostTarget::Write(target)) => write_one_file(
                 device,
                 geometry,
                 &set,
@@ -1109,11 +1114,34 @@ pub fn extract_selection_from_volume<D: BlockDevice + ?Sized>(
                 &target,
                 write_sidecars,
                 &mut report,
-            )?,
+            ),
+            Err(err) => Err(err),
+        };
+        if let Err(err) = step {
+            return Err(partway(err, &report, &entry.name));
         }
     }
 
     Ok(report)
+}
+
+/// Turn a mid-batch failure into one that says how much of the batch is
+/// already on the user's disk.
+///
+/// The same rule `core::layout::apply` follows: a failure on the first entry
+/// reports the plain reason, because dressing that up would send the user
+/// looking for a mess that is not there. `files_written` rather than the
+/// entry index, because that is what is actually on disk — a picked drawer
+/// counts for every file inside it.
+fn partway(err: CoreError, report: &ExtractReport, item: &str) -> CoreError {
+    if report.files_written == 0 && report.directories_created == 0 {
+        return err;
+    }
+    CoreError::PartiallyApplied {
+        placed: report.files_written as u64,
+        item: item.to_string(),
+        reason: err.to_string(),
+    }
 }
 
 /// `0` means the root, as everywhere else in ART.

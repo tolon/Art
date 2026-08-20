@@ -636,7 +636,7 @@ pub(crate) fn install_archive_into_volume(
     // does not (§7.2).
     let folder = crate::core::volume::write::copy::HostFolder::new(scratch.path(), true);
 
-    let (report, backup) = crate::commands::volume_write::install_into_folder(
+    let (report, committed) = crate::commands::volume_write::install_into_folder(
         image,
         volume_index,
         parent,
@@ -653,7 +653,7 @@ pub(crate) fn install_archive_into_volume(
         directories: report.directories_created,
         bytes: report.bytes_copied,
         into: String::new(),
-        backup,
+        backup: committed.backup,
         skipped: left_behind,
     })
 }
@@ -1104,7 +1104,10 @@ mod tests {
 
         assert_eq!(report.files_copied, 2);
         assert_eq!(report.files_verified, 2, "the volume writer verifies");
-        assert!(backup.is_some(), "a floppy is backed up before replacement");
+        assert!(
+            backup.backup.is_some(),
+            "a floppy is backed up before replacement"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1331,7 +1334,7 @@ mod tests {
         assert_eq!(report.files_copied, 2, "nothing was refused for no reason");
         assert_eq!(report.files_copied, report.files_verified);
         assert!(report.skipped.is_empty());
-        assert!(backup.is_some());
+        assert!(backup.backup.is_some());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

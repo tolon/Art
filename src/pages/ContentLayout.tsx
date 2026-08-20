@@ -123,6 +123,11 @@ export function ContentLayout() {
    */
   const pendingApply = useRef<number | null>(null);
 
+  // What Apply will actually copy: every item that is not already exactly
+  // where it is going. Derived rather than stored, so a retarget cannot leave
+  // it disagreeing with the list it summarises.
+  const newCount = plan ? plan.items.length - plan.alreadyInPlace.length : 0;
+
   const policy = DEFAULT_POLICY;
   // The five drawer names, in the same order the plan proposes them —
   // deliberately not `Object.values(policy)`, which would also pick up
@@ -301,13 +306,25 @@ export function ContentLayout() {
     setBusy(true);
     setError(null);
     try {
-      const collisions = await layoutRecheck(retargeted);
+      const rechecked = await layoutRecheck(retargeted);
       // Compared by identity against `retargeted`, not just "is there a
       // plan": if another retarget landed while this recheck was in flight,
       // `plan` has already moved on to a different object, and this answer
       // was computed for a plan that is no longer on screen — applying it
       // now would splice a response into a plan it does not describe.
-      setPlan((current) => (current === retargeted ? { ...current, collisions } : current));
+      // Both halves land together, because the engine computed them from one
+      // walk: a destination that is already exactly right is not a collision,
+      // and splicing only one of the two back would leave the screen holding
+      // a pair that disagree (ART-177).
+      setPlan((current) =>
+        current === retargeted
+          ? {
+              ...current,
+              collisions: rechecked.collisions,
+              alreadyInPlace: rechecked.already_in_place,
+            }
+          : current
+      );
       setCollisionsUnknown(false);
     } catch (e) {
       setError(String(e));
@@ -434,6 +451,19 @@ export function ContentLayout() {
           <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("layout.plan.heading")}</h2>
           <p style={{ fontSize: 12, margin: "0 0 12px" }}>
             {t("layout.plan.total", { bytes: size(plan.bytes) })}
+          </p>
+          {/* ART-177. Three numbers, and the third is a promise rather than a
+              statistic: ART never overwrites, so "overwrites 0" is what that
+              guarantee looks like on screen. "Already in place" is what makes
+              re-running a stopped run finish it — the count says so plainly,
+              so "nothing happened" and "it was already done" never read the
+              same. */}
+          <p style={{ fontSize: 12, margin: "0 0 12px" }}>
+            <strong>{t("layout.plan.counts.new", { count: newCount })}</strong>
+            {" · "}
+            {t("layout.plan.counts.alreadyInPlace", { count: plan.alreadyInPlace.length })}
+            {" · "}
+            {t("layout.plan.counts.overwrites", { count: 0 })}
           </p>
 
           {plan.items.length > 0 && (
@@ -661,6 +691,9 @@ export function ContentLayout() {
               count: result.outcome.placed,
               bytes: size(result.outcome.bytes),
             })}
+            {result.outcome.skipped > 0 && (
+              <> {t("layout.result.skipped", { count: result.outcome.skipped })}</>
+            )}
           </p>
           <p className="muted" style={{ fontSize: 12, margin: "0 0 8px", wordBreak: "break-all" }}>
             {t("layout.result.root", { root: result.root })}

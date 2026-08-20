@@ -24,6 +24,7 @@ const PLAN: LayoutPlan = {
   collisions: [],
   tooDeep: { paths: [], more: 0 },
   duplicates: { paths: [], more: 0 },
+  alreadyInPlace: [],
   bytes: 150,
 };
 

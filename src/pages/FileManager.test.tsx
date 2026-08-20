@@ -261,7 +261,14 @@ describe("FileManager strings", () => {
     const text = container.textContent ?? "";
     expect(text).not.toMatch(/\{\{[a-zA-Z]/);
     // A missing key renders as the key itself: `files.functionKeys.copy`.
-    expect(text).not.toMatch(/\bfiles\.[a-z][a-zA-Z]*\.[a-z]/);
+    //
+    // **No `\b` here.** It was there once, and it made this assertion dead:
+    // the function-key bar renders its label immediately after the key name,
+    // so the screen's text reads `…F3files.functionKeys.view…`, and `3` to
+    // `f` is not a word boundary at all. A genuinely leaked key rendered and
+    // this test passed. The namespaces are listed rather than matched by a
+    // generic `a.b.c` shape, which would fire on a filename or a path.
+    expect(text).not.toMatch(/(files|common|components)\.[a-zA-Z]+\.[a-zA-Z]/);
   });
 });
 

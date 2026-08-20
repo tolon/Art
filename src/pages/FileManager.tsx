@@ -189,7 +189,6 @@ import {
 import {
   describeCopy,
   onVolumeWriteResult,
-  volumeCopyBetween,
   volumeCopyBetweenMany,
   volumeCopyIn,
   volumeCopyInMany,
@@ -2195,12 +2194,24 @@ export function FileManager() {
             setError(t("files.err.sameImage"));
             return;
           }
+          // One entry through the batch command — the only route between two
+          // images (ART-176). It used to be `volumeCopyBetween`, which staged
+          // the *contents* of a directory: F5 on `Tools` landed `Editor` and
+          // `Readme` loose in the destination and no `Tools` drawer at all,
+          // and F5 on a lone *file* passed the pane's `dirBlock` and copied
+          // the whole folder that file happened to be in. Both are now what
+          // the user marked, under its own name.
+          const picks = selectedEntriesForBatch([entry]);
+          if (picks === null) {
+            setError(t("files.err.openPartitionFirst"));
+            return;
+          }
           setBusy(t("files.status.copyingBetween", { name: entry.name }));
           try {
-            pendingCopy.current = await volumeCopyBetween(
+            pendingCopy.current = await volumeCopyBetweenMany(
               source.location,
               source.volumeIndex,
-              entry.is_dir ? entry.header_block : source.dirBlock,
+              picks,
               destination.path,
               destination.volumeIndex,
               destination.dirBlock,
@@ -2912,20 +2923,26 @@ export function FileManager() {
           }
         }
       } else {
-        // Exactly one directory, and `planMove` is what guarantees that:
-        // `volume_copy_between` addresses a *directory*, so anything else
-        // would copy more than was marked.
+        // Exactly one directory, and `planMove` is what guarantees that.
+        // One entry through the batch command, which is the only route
+        // between two images now (ART-176): the drawer keeps its own name at
+        // the destination whether one row is marked or ten.
         const destination = writableVolume(target);
         const entry = moving[0];
         if (!destination || entry.header_block === null) {
           setError(writeRefusal(target, t));
           return;
         }
+        const picks = selectedEntriesForBatch([entry]);
+        if (picks === null) {
+          setError(writeRefusal(target, t));
+          return;
+        }
         const outcome = await runJob(() =>
-          volumeCopyBetween(
+          volumeCopyBetweenMany(
             volume.path,
             volume.volumeIndex,
-            entry.header_block as number,
+            picks,
             destination.path,
             destination.volumeIndex,
             destination.dirBlock,

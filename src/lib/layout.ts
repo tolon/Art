@@ -107,6 +107,15 @@ export interface LayoutPlan {
   tooDeep: Dropped;
   /** Sources another source already covered — see {@link Dropped}. */
   duplicates: Dropped;
+  /**
+   * Destinations that already hold **exactly** what this plan would put
+   * there (ART-177) — skipped by Apply, and counted on screen.
+   *
+   * Deliberately not among `collisions`: a collision is a question for the
+   * user, and this is not one. It is what makes re-running a half-finished
+   * apply finish it, with no "continue" button and no resume mode.
+   */
+  alreadyInPlace: string[];
 }
 
 export interface LayoutRequest {
@@ -118,6 +127,8 @@ export interface LayoutRequest {
 export interface ApplyOutcome {
   placed: number;
   bytes: number;
+  /** Items stepped over because the destination already held exactly them. */
+  skipped: number;
 }
 
 export const LAYOUT_EVENT = "layout-result";
@@ -145,8 +156,14 @@ export async function layoutPlan(request: LayoutRequest): Promise<LayoutPlan> {
  * only knows the plan in front of it, and whether a new destination already
  * exists on disk is a fact only the engine has looked at.
  */
-export async function layoutRecheck(plan: LayoutPlan): Promise<Collision[]> {
-  return invoke<Collision[]>("layout_recheck", { plan });
+export interface RecheckResult {
+  collisions: Collision[];
+  /** Destinations already holding exactly what the plan would put there. */
+  already_in_place: string[];
+}
+
+export async function layoutRecheck(plan: LayoutPlan): Promise<RecheckResult> {
+  return invoke<RecheckResult>("layout_recheck", { plan });
 }
 
 /**
@@ -191,6 +208,10 @@ export function retarget(plan: LayoutPlan, indices: number[], drawer: string): L
     const leaf = item.destination.split("/").pop() ?? item.destination;
     return { ...item, destination: `${drawer}/${leaf}` };
   });
+  // `alreadyInPlace` is carried over untouched: it is a fact about the disk,
+  // and `retarget` has not looked at the disk. The `layoutRecheck` that
+  // follows every retarget replaces both it and `collisions` with answers the
+  // engine computed together — see `ContentLayout.tsx`.
   return { ...plan, items, collisions: collisionsIn(items) };
 }
 

@@ -21,7 +21,7 @@ pub enum HealthStatus {
 
 impl HealthStatus {
     /// Combine two statuses, taking the worse.
-    fn combine(self, other: Self) -> Self {
+    pub(crate) fn combine(self, other: Self) -> Self {
         use HealthStatus::*;
         match (self, other) {
             (Problem, _) | (_, Problem) => Problem,

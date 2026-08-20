@@ -39,11 +39,16 @@ const PLAN: LayoutPlan = {
   collisions: [],
   tooDeep: { paths: [], more: 0 },
   duplicates: { paths: [], more: 0 },
+  alreadyInPlace: [],
   bytes: 50,
 };
 
 /** The slice of `ContentLayout` this is about: `moveChecked` and `blocker`. */
-function Harness({ recheck }: { recheck: (plan: LayoutPlan) => Promise<Collision[]> }) {
+function Harness({
+  recheck,
+}: {
+  recheck: (plan: LayoutPlan) => Promise<{ collisions: Collision[]; already_in_place: string[] }>;
+}) {
   const [plan, setPlan] = useState<LayoutPlan>(PLAN);
   const [collisionsUnknown, setCollisionsUnknown] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -53,8 +58,16 @@ function Harness({ recheck }: { recheck: (plan: LayoutPlan) => Promise<Collision
     setPlan(retargeted);
     setBusy(true);
     try {
-      const collisions = await recheck(retargeted);
-      setPlan((current) => (current === retargeted ? { ...current, collisions } : current));
+      const rechecked = await recheck(retargeted);
+      setPlan((current) =>
+        current === retargeted
+          ? {
+              ...current,
+              collisions: rechecked.collisions,
+              alreadyInPlace: rechecked.already_in_place,
+            }
+          : current
+      );
       setCollisionsUnknown(false);
     } catch {
       setCollisionsUnknown(true);
@@ -98,7 +111,11 @@ describe("a failed layoutRecheck", () => {
     let fail = true;
     render(
       <Harness
-        recheck={() => (fail ? Promise.reject(new Error("offline")) : Promise.resolve([]))}
+        recheck={() =>
+          fail
+            ? Promise.reject(new Error("offline"))
+            : Promise.resolve({ collisions: [], already_in_place: [] })
+        }
       />
     );
 
@@ -117,16 +134,21 @@ describe("a failed layoutRecheck", () => {
 
 describe("two overlapping rechecks", () => {
   it("does not let the first response land on a plan retargeted again meanwhile", async () => {
-    let resolveFirst: ((collisions: Collision[]) => void) | undefined;
+    type Answer = { collisions: Collision[]; already_in_place: string[] };
+    let resolveFirst: ((answer: Answer) => void) | undefined;
     const recheck = vi
-      .fn<(plan: LayoutPlan) => Promise<Collision[]>>()
+      .fn<
+        (plan: LayoutPlan) => Promise<{ collisions: Collision[]; already_in_place: string[] }>
+      >()
       .mockImplementationOnce(
         () =>
           new Promise((resolve) => {
             resolveFirst = resolve;
           })
       )
-      .mockImplementationOnce(() => Promise.resolve([]));
+      .mockImplementationOnce(() =>
+        Promise.resolve({ collisions: [], already_in_place: [] })
+      );
 
     render(<Harness recheck={recheck} />);
 
@@ -140,7 +162,10 @@ describe("two overlapping rechecks", () => {
     // The first recheck now answers, with a collision that would be wrong
     // to apply to the plan on screen — it describes the "Floppies" plan the
     // second retarget already replaced.
-    resolveFirst?.([{ destination: "Floppies/Mega.lha", sources: ["E:\\a\\Mega.lha"] }]);
+    resolveFirst?.({
+      collisions: [{ destination: "Floppies/Mega.lha", sources: ["E:\a\Mega.lha"] }],
+      already_in_place: [],
+    });
 
     // Give the stale promise a turn to (not) take effect.
     await new Promise((r) => setTimeout(r, 0));

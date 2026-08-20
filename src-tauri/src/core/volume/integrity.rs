@@ -90,17 +90,30 @@ pub mod code {
 }
 
 /// Collects findings, folding repeats of the same code into a count.
+///
+/// **The cap is on how much is listed, never on what is detected.** That
+/// distinction is the whole of this type: an earlier version dropped every
+/// finding past the eighth on the floor and summarised them as a `Warning`,
+/// which meant a *ninth* cross-link on an already-broken volume was invisible
+/// to `newly_broken` — the report and the gate both saw eight before and
+/// eight after. So the overflow line carries the **worst severity folded into
+/// it**, and its message carries the count: nine cross-links produce a
+/// `Problem` overflow saying "1 further" where eight produce none at all, and
+/// ten say "2 further". Every one of those is a different `(code, message)`
+/// pair, which is what `newly_broken` compares on.
 #[derive(Default)]
 struct Findings {
     out: Vec<ValidationFinding>,
-    seen: HashMap<&'static str, usize>,
+    /// Per code: how many were seen, and the worst severity among them.
+    seen: HashMap<&'static str, (usize, HealthStatus)>,
 }
 
 impl Findings {
     fn push(&mut self, severity: HealthStatus, code: &'static str, message: String) {
-        let count = self.seen.entry(code).or_insert(0);
-        *count += 1;
-        if *count <= MAX_PER_CODE {
+        let slot = self.seen.entry(code).or_insert((0, HealthStatus::Healthy));
+        slot.0 += 1;
+        slot.1 = slot.1.combine(severity);
+        if slot.0 <= MAX_PER_CODE {
             self.out.push(ValidationFinding {
                 severity,
                 code: code.to_string(),
@@ -110,10 +123,12 @@ impl Findings {
     }
 
     fn finish(mut self) -> Vec<ValidationFinding> {
-        for (code, count) in self.seen.iter() {
+        for (code, (count, severity)) in self.seen.iter() {
             if *count > MAX_PER_CODE {
                 self.out.push(ValidationFinding {
-                    severity: HealthStatus::Warning,
+                    // Not `Warning`. A summary of Problems is a Problem, or
+                    // the gate above stops seeing them past the eighth.
+                    severity: *severity,
                     code: format!("{code}.more"),
                     message: format!(
                         "{} further findings of the same kind were not listed individually.",
@@ -924,6 +939,54 @@ mod tests {
         let geometry = VolumeGeometry::new(BLOCK, TOTAL, RESERVED, DosType(*b"PFS\x03")).unwrap();
         let device = SliceDevice::new(&image, BLOCK).unwrap();
         assert!(check(&device, &geometry).is_empty());
+    }
+
+    /// The cap is on what is **listed**, never on what is **detected**.
+    ///
+    /// Nine cross-links on a volume that already had eight must still refuse
+    /// the write. With the overflow line reported as a `Warning` — which it
+    /// was — `newly_broken` saw eight `Problem`s before and eight after, and
+    /// waved the ninth through: a cap on reporting had quietly become a cap
+    /// on the gate.
+    #[test]
+    fn a_finding_past_the_reporting_cap_still_reaches_the_gate() {
+        let clean = two_file_volume();
+        let first = header_block_of(&clean, "Hello");
+        let shared = get_u32(&clean, first as usize * BLOCK + 16);
+
+        // Point `count` unrelated blocks at a block "Hello" already owns.
+        // Each is its own cross-link finding against the same code.
+        let crosslinked = |count: usize| {
+            let mut image = clean.clone();
+            let second = header_block_of(&image, "Second");
+            for index in 0..count {
+                let victim = second as usize * BLOCK;
+                // One header cannot hold `count` separate claims, so the
+                // extra claims are made by extra data pointers on the same
+                // file — each one is a distinct block claiming `shared`.
+                put_u32(&mut image, victim + (77 - index) * 4, shared);
+            }
+            put_u32(&mut image, second as usize * BLOCK + 8, count as u32);
+            checksum_block(&mut image, second);
+            check_bytes(&image)
+        };
+
+        let before = crosslinked(MAX_PER_CODE);
+        let after = crosslinked(MAX_PER_CODE + 1);
+
+        let problems = |findings: &[ValidationFinding]| {
+            findings
+                .iter()
+                .filter(|f| f.severity == HealthStatus::Problem)
+                .count()
+        };
+        assert!(problems(&before) >= MAX_PER_CODE, "{before:?}");
+
+        let new = newly_broken(&before, &after);
+        assert!(
+            !new.is_empty(),
+            "the ninth cross-link has to refuse the write: before={before:?} after={after:?}"
+        );
     }
 
     #[test]

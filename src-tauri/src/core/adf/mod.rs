@@ -203,6 +203,15 @@ pub struct MutationOutcome {
     pub info: AdfInfo,
     /// Absolute path of the backup taken before writing, when one was made.
     pub backup_path: Option<String>,
+    /// Damage the volume already carried before this write (ART-050/F3).
+    ///
+    /// The write gate refuses only what the *operation* introduced, because a
+    /// disk that leaked a block in 1993 has to stay writable (§89). That is a
+    /// rule about refusing, not a licence to say nothing: a volume ART has
+    /// just found cross-linked is something the user needs told, even when
+    /// the write itself was sound. Empty is the ordinary case.
+    #[serde(default)]
+    pub pre_existing_damage: Vec<String>,
 }
 
 #[cfg(test)]

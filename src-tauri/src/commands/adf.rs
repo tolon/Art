@@ -48,7 +48,7 @@ fn add_file_at(
 ) -> CoreResult<MutationOutcome> {
     let target_dir = dir_block.unwrap_or(0);
 
-    let (info, _, backup) = with_volume(image, 0, |writer| {
+    let (info, _, committed) = with_volume(image, 0, |writer| {
         if writer.find(target_dir, name)?.is_some() {
             return Err(CoreError::InvalidInput(format!(
                 "'{name}' is already there"
@@ -60,7 +60,8 @@ fn add_file_at(
 
     Ok(MutationOutcome {
         info,
-        backup_path: backup,
+        backup_path: committed.backup,
+        pre_existing_damage: committed.pre_existing,
     })
 }
 
@@ -73,13 +74,14 @@ fn create_directory_at(
     name: &str,
 ) -> CoreResult<MutationOutcome> {
     let target_dir = parent_block.unwrap_or(0);
-    let (info, _, backup) = with_volume(image, 0, |writer| {
+    let (info, _, committed) = with_volume(image, 0, |writer| {
         writer.make_dir(target_dir, name.trim())?;
         info_from_session(writer)
     })?;
     Ok(MutationOutcome {
         info,
-        backup_path: backup,
+        backup_path: committed.backup,
+        pre_existing_damage: committed.pre_existing,
     })
 }
 
@@ -90,13 +92,14 @@ fn delete_entry_at(
     header_block: u32,
 ) -> CoreResult<MutationOutcome> {
     let target_dir = parent_block.unwrap_or(0);
-    let (info, _, backup) = with_volume(image, 0, |writer| {
+    let (info, _, committed) = with_volume(image, 0, |writer| {
         writer.delete(target_dir, header_block)?;
         info_from_session(writer)
     })?;
     Ok(MutationOutcome {
         info,
-        backup_path: backup,
+        backup_path: committed.backup,
+        pre_existing_damage: committed.pre_existing,
     })
 }
 
@@ -108,13 +111,14 @@ fn rename_entry_at(
     new_name: &str,
 ) -> CoreResult<MutationOutcome> {
     let target_dir = parent_block.unwrap_or(0);
-    let (info, _, backup) = with_volume(image, 0, |writer| {
+    let (info, _, committed) = with_volume(image, 0, |writer| {
         writer.rename(target_dir, header_block, new_name.trim())?;
         info_from_session(writer)
     })?;
     Ok(MutationOutcome {
         info,
-        backup_path: backup,
+        backup_path: committed.backup,
+        pre_existing_damage: committed.pre_existing,
     })
 }
 

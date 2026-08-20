@@ -1975,7 +1975,15 @@
     },
     "plan": {
       "heading": "Neler nereye gidecek",
-      "total": "Toplam {{bytes}}"
+      "total": "Toplam {{bytes}}",
+      "counts": {
+        "new_one": "yeni {{count}}",
+        "new_other": "yeni {{count}}",
+        "alreadyInPlace_one": "zaten yerinde {{count}} (atlandı)",
+        "alreadyInPlace_other": "zaten yerinde {{count}} (atlandı)",
+        "overwrites_one": "üzerine yazma {{count}}",
+        "overwrites_other": "üzerine yazma {{count}}"
+      }
     },
     "table": {
       "selectAll": "Tümünü seç",
@@ -2045,6 +2053,8 @@
       "heading": "Yerleştirildi",
       "placed_one": "{{count}} öge yerleştirildi, toplam {{bytes}}.",
       "placed_other": "{{count}} öge yerleştirildi, toplam {{bytes}}.",
+      "skipped_one": "{{count}} tanesi zaten yerindeydi ve dokunulmadı.",
+      "skipped_other": "{{count}} tanesi zaten yerindeydi ve dokunulmadı.",
       "root": "Hazırlık klasörü: {{root}}",
       "nextStep": "Bunu bir karta kopyalamak için OS Builder → Amiga birimlerini hazırla ekranını bu klasöre yönlendir."
     }

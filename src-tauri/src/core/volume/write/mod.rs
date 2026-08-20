@@ -727,12 +727,21 @@ impl<'a> VolumeWriter<'a> {
             let name = dir::name_of(&entry);
             let is_dir = dir::is_directory(&entry)?;
 
+            // Both refusals carry the same "nothing was deleted" clause the
+            // pre-check's do (F9 of the wave-C1 review). Same sentence, same
+            // reason: the guarantee is all-or-nothing, and a refusal that does
+            // not say so leaves the user wondering which half of their
+            // selection is gone. These are the ones that actually reach a
+            // user — a protection bit is exactly what `check_batch_deletable`
+            // does *not* look at, so a protected entry gets past it and is
+            // refused here.
             if protection == DeleteProtection::Honour {
                 let bits = layout::get_u32(&entry, layout::PROTECT_OFFSET)?;
                 if is_delete_protected(bits) {
                     return Err(CoreError::InvalidInput(format!(
                         "'{name}' is protected against deletion on the Amiga. \
-                         Clear its D bit, or confirm deleting it anyway."
+                         Clear its D bit, or confirm deleting it anyway — nothing in \
+                         this batch was deleted."
                     )));
                 }
             }
@@ -741,7 +750,8 @@ impl<'a> VolumeWriter<'a> {
                 && !dir::entries_in(self.device, &set, &self.geometry, entry_block)?.is_empty()
             {
                 return Err(CoreError::InvalidInput(format!(
-                    "'{name}' still has things in it. Empty it first."
+                    "'{name}' still has things in it. Empty it first — nothing in this \
+                     batch was deleted."
                 )));
             }
 

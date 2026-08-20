@@ -493,6 +493,33 @@ pub mod tests {
         buf
     }
 
+    /// Several level-1 entries in one archive.
+    ///
+    /// [`make_level1_lha`] builds a one-entry archive, terminator and all, and
+    /// a WHDLoad pack is never one entry. Concatenating them means dropping
+    /// each terminator but the last, which is exactly what an archive is: a
+    /// run of header+payload blocks ending in a zero byte.
+    ///
+    /// Wanted because a fixture that is only ever level-0 is the "fixture
+    /// more helpful than reality" shape (F6 of the wave-C1 review): Wave A
+    /// measured 914 level-1 and 2 259 level-2 entries in the owner's own
+    /// archives, and every WHDLoad fixture in `core/layout` was level-0
+    /// stored.
+    ///
+    /// `directory` is the entry's drawer, `0xFF`-separated as level 1 stores
+    /// it — not `/`.
+    pub fn make_level1_archive(files: &[(&[u8], &[u8], &[u8])]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        for (directory, name, content) in files {
+            let one = make_level1_lha(directory, name, content);
+            // Every block but the last keeps its payload and loses its
+            // terminator.
+            buf.extend_from_slice(&one[..one.len() - 1]);
+        }
+        buf.push(0x00);
+        buf
+    }
+
     /// A minimal stored (-lh0-) LHA archive containing one tiny file, ending
     /// with a 0x00 terminator byte. Built byte-exact per the level-0 spec.
     pub fn make_minimal_lha() -> Vec<u8> {

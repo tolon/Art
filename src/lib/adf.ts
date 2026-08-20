@@ -52,6 +52,15 @@ export interface ValidationReport {
 export interface MutationOutcome {
   info: AdfInfo;
   backup_path: string | null;
+  /**
+   * Damage the volume already carried **before** this write.
+   *
+   * The gate refuses only what the operation introduced, because a disk that
+   * leaked a block in 1993 has to stay writable (§89). That is a rule about
+   * refusing, not a licence to write into a volume ART has just found
+   * cross-linked and say nothing. Empty in the ordinary case.
+   */
+  pre_existing_damage: string[];
 }
 
 export async function adfOpen(path: string): Promise<AdfInfo> {

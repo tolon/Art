@@ -348,7 +348,10 @@ fn copy_into_volume(
     parent: u32,
     policy: OverwritePolicy,
     progress: &dyn ProgressSink,
-) -> CoreResult<(crate::core::volume::write::copy::CopyReport, Option<String>)> {
+) -> CoreResult<(
+    crate::core::volume::write::copy::CopyReport,
+    crate::commands::volume_write::Committed,
+)> {
     let scratch = crate::core::sources::install::Scratch::new()?;
 
     let (mut backend, entries, tree) = open_tree(file)?;
@@ -453,13 +456,13 @@ pub fn archive_copy_to_volume(
         };
         super::oplog::write_to_path(&log_path, &record);
 
-        let (report, backup) = outcome?;
+        let (report, committed) = outcome?;
         let _ = emit_app.emit(
             VOLUME_WRITE_EVENT,
             VolumeWriteResult::CopyIn {
                 job_id,
                 report,
-                backup,
+                backup: committed.backup,
             },
         );
         Ok(())
