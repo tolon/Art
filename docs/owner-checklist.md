@@ -73,6 +73,29 @@ yani o iki oyun hiç yazmadı. Bu, özelliğin çalışmadığı anlamına gelmi
 
 ---
 
+## 3.6 Türkçeyi ekranda gör (ART-062)
+
+**Neden sende:** Bu aşamada inen her Türkçe dize `pnpm test`'in anahtar
+denetiminden ve JSON okumasından geçti — ama **hiçbiri çalışan uygulamada
+ekranda görülmedi.** Anahtarların eşleşmesi, cümlenin doğru olduğunu ya da
+kutuya sığdığını söylemez.
+
+**Ne yap:** Yukarıdaki maddeleri yaparken zaten gezeceğin ekranlarda Türkçeye
+dikkat et. Özellikle bak:
+
+- **Taşan ya da kesilen** cümle var mı — Türkçe İngilizceden uzundur
+- **Çeviri gibi durmayan**, İngilizce cümle yapısıyla yazılmış bir yer var mı
+- **Hiç çevrilmemiş** bir şey görüyor musun — özellikle hata mesajları
+  (bunların bir kısmı bilinçli İngilizce, ART-060; ama hangileri olduğunu
+  görmek istiyorum)
+- Rakam ve tarih biçimleri doğru mu
+
+**Tamam sayılır:** Gezdiğin ekranlarda Türkçenin okunabilir olduğunu
+söyleyebiliyorsan. Tuhaf duran bir cümle görürsen ekranın adıyla birlikte
+söyle — düzeltmesi kolay, bulunması değil.
+
+---
+
 ## 4. Donanım — SD-1'in kalan tek basamağı
 
 **Gereken:** microSD kart, USB kart okuyucu, HDMI kablo.
