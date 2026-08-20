@@ -26,6 +26,46 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-179** 🔵 **Twenty-eight catalogue keys nothing renders** — *found
+2026-08-20 by `src/i18n/dead-keys.test.ts` on the day that check was written
+(ART-080 review, F2); allow-listed there rather than deleted*
+`src/i18n/en.json`, `src/i18n/tr.json` ·
+`src/i18n/dead-keys.test.ts::KEPT_WITHOUT_A_READER`
+
+A dead key is worse than a missing one: the parity test is satisfied, both
+languages agree, the string reads correctly to anyone grepping the JSON, and
+the screen says nothing. `files.hostDelete.confirm` was exactly that — written
+in both languages, never rendered, and a report claimed the user saw it. The
+check that now exists to prevent a repeat found twenty-eight more on its first
+run.
+
+They belong to features outside the round that found them, and each was
+checked by hand: none appears anywhere under `src/` in any form.
+
+| feature | keys |
+|---|---|
+| the home screen's statistics panel | `dashboard.statistics`, `dashboard.noStats` |
+| SD-2's per-distro note panel | ten under `distro.note.*` |
+| artwork wave B | `artwork.enabled`, `artwork.outcome.cachedBefore_one/_other` |
+| G10's empty states | `gameindex.empty`, `gameindex.noMatch`, `gameindex.statedBy` |
+| commander chrome | `files.pane.copyTitle`, `files.pane.deleteTitle`, `files.pane.folderSuffix` |
+| PiStorm card panel | `pistorm.card.configSets`, `pistorm.card.kernelFound` |
+| preload screen | `preload.card.heading`, `preload.tool.heading` |
+| miscellaneous | `app.name`, `common.continue`, `collection.status.indexed` |
+
+**Why they were not simply deleted.** Removing another feature's translated
+sentence — written in two languages, by someone, for a screen that was
+designed — is not a debt round's call to make in passing. Several read like a
+panel that was specified and then cut, and the right answer for those is
+probably "build the panel", not "lose the strings".
+
+**What would close it:** one pass per feature, deciding *render it* or *remove
+it*, and emptying `KEPT_WITHOUT_A_READER` as it goes. The list is closed in the
+meantime: a **new** dead key fails `dead-keys.test.ts`, which is the whole
+point — that cannot happen again without someone adding a line to the
+allow-list on purpose.
+
+
 **ART-178** 🔵 **`useRemembered` hands back a fresh array identity when the
 persisted value lands, so every effect that depends on one runs twice with an
 identical request** — *found 2026-08-20 while measuring [ART-119](#fixed) #1 on
@@ -521,6 +561,58 @@ an unguarded join recycles exactly this: C:\Users\...\art-hostfs-escape-target.a
 assertion failed: bin.seen.borrow().is_empty()      # kernel32.dll was attempted
 ```
 
+**Fix round 2 — what a review found in it.** Four Majors, all of them the
+same shape in different places: a rule stated in one layer and enforced in
+another, or a report saying more than it knew.
+
+- **The drive-root refusal lived only in TypeScript** (F5). `movePlan.ts`
+  refused it and `panel_delete_many` validated only `is_dir()` — so
+  containment was relative to a root the *caller* chose, and the command is
+  reachable without the screen. `core::hostfs::refuse_drive_root` is the rule
+  now, called first inside `recycle_many` (before containment, since
+  containment is relative to the parent) **and** on the command thread before
+  a job starts. The screen keeps its copy as an early answer, never as the
+  guarantee. `a_drive_root_is_refused_before_anything_is_resolved` covers
+  `C:\`, `C:`, a UNC share root and `/`;
+  `the_root_refusal_comes_before_the_containment_check` pins the order.
+- **The confirmation never said where the file goes** (F2).
+  `files.hostDelete.confirm` was written into both catalogues and **nothing
+  rendered it** — so the sentence naming the Recycle Bin was never on screen,
+  and this entry claimed it was. Rendered now, as its own question before the
+  copy half. And because a dead key satisfies every check ART had, a new one
+  was added: `src/i18n/dead-keys.test.ts`. It fails on
+  `files.hostDelete.confirm` the moment the render is removed, and it found
+  twenty-eight more on its first run ([ART-179](#open)).
+- **A cancelled delete reported a success it did not have** (F1). A twelve-name
+  request stopped after three had three rows, all successful — so the log said
+  `verified(true)` and the screen said "3 item(s) went to the Recycle Bin",
+  which is also what a *complete* three-file delete says.
+  `HostDeleteOutcome` carries `asked` and `cancelled` now, `complete()` is what
+  the log records, `untouched` is logged separately from `failed` (a name never
+  attempted is not a name that failed), and the screen has its own sentence:
+  *"Stopped. 3 of 12 went to the Recycle Bin; the other 9 are still there."*
+- **The oplog's destination was a literal** (F10). `"Recycle Bin"`, typed, so a
+  second recycler would have had the first one's destination logged against it.
+  It comes from `outcome.target.log_label()` now, and is `-` when nothing was
+  removed.
+
+Two minors taken with them: a host-to-host move was **planned as allowed and
+then refused by the page after both confirmations** (F8) — refused in
+`planMove` now, because a refusal a plan can reach has to be reached in the
+plan; and `sameImageAsEachOther` compared the image path alone (F9), so `DH0:`
+to `DH1:` of one HDF — two volumes that share a file, and the commonest move
+on a real PiStorm card — was refused as a relink. It compares `volumeIndex`
+too.
+
+**What is guarded and what is not** is now written into `core/hostfs`'s module
+doc rather than left to be discovered (F7): `..`, absolute, UNC and drive
+prefixes are refused for the whole pass; `safe_join`'s containment is
+**lexical**, so a symlink or junction inside the folder whose target is outside
+it passes — bounded by the shell recycling the *link* rather than its target,
+which is a lost shortcut and not a lost tree; `exists()` follows links; and
+there is a check-to-call window, which is why each entry's result is asked of
+the filesystem afterwards rather than assumed.
+
 **The dependency**, since it is the first ART has taken that touches the
 user's own files: `trash` 5.2.6 (MIT), `default-features = false` to drop
 `chrono` — which it needs only to *read* the bin back, something ART never
@@ -650,6 +742,40 @@ and replaced** rather than only the collision rows, because an empty report
 for a component that places six hundred files means "nothing is in the way",
 not "nothing happens" (§89) — and a preview that *failed* says so rather
 than looking like one that found nothing.
+
+**Fix round 2 — two Majors a review found in it.**
+
+- **Two previews of the same thing corrupted each other** (F3). The staging
+  root was a *deterministic* hash of the plan and the components, and the
+  preview `remove_dir_all`s it on entry — so two concurrent previews shared a
+  root and the second wiped the first's staged files. The first then found
+  nothing at the destination and **every Replace row degraded silently to
+  "new"**: a wrong preview, in the screen a user reads before ticking the
+  component that decides which operating system they end up with. And it is not
+  a rare interleaving — [ART-178](#open) makes the plan effect settle twice
+  with an identical request, so two concurrent identical previews are the
+  *normal* case. The root is per call now (process id plus a counter that never
+  repeats — the sixth instance of that class in this codebase and the first
+  outside a test), and a `StagingDir` guard removes it however the call ends,
+  which also stops staged AmigaOS bytes outliving a cancelled preview (F6).
+
+  *A note on the test.* The threaded reproduction **passes against the defect**
+  — the two previews are fast enough that one often finishes before the other
+  clears the directory — so it is not the guard. The guard is
+  `two_previews_never_share_a_staging_root`, which fails deterministically the
+  moment the root goes back to a hash.
+
+- **"New" counted identical files as new** (F4). `collide::preview` drops
+  `Identical` rows before returning — its own rule, and a good one — so
+  `placed - reports.len()` calls a file landing byte-for-byte on another
+  component's copy *new*. On AmigaOS 3.9's overlay that is **130 files**, and
+  it is exactly why this preview's numbers and the 622 that
+  `layer_the_real_39_overlay_when_asked` measured off the real disc could never
+  have matched. `ComponentPreview` carries `contested` now, so the three counts
+  partition what would be placed — `new = placed - contested`,
+  `unchanged = contested - reports.len()`, `replaced = reports.len()` — and the
+  screen says all three. The census hook counts the same way and asserts the
+  sum, so the two hooks are comparable rather than merely both printed.
 
 **Still true afterwards**, and recorded in ART-170's entry already:
 `Libs/WORKBENCH.LIBRARY` carries no `$VER:` marker, so 3.9's replacement of it

@@ -1372,7 +1372,8 @@
       "refuseTargetNotWritable": "Önce diğer tarafta yazma kabul eden bir birim açın.",
       "refuseCollision_one": "{{names}} zaten orada. Taşıma hiçbir zaman üzerine yazmaz ve sessizce atlamaz — önce birinin adını değiştirin.",
       "refuseCollision_other": "Bu adlardan {{count}} tanesi zaten orada ({{names}}). Taşıma hiçbir zaman üzerine yazmaz ve sessizce atlamaz — önce adlarını değiştirin.",
-      "refuseLocalRoot": "ART bir sürücü kökünden öğe taşımaz — önce içindeki bir klasörü açın."
+      "refuseLocalRoot": "ART bir sürücü kökünden öğe taşımaz — önce içindeki bir klasörü açın.",
+      "refuseHostToHost": "Kendi diskinizdeki iki klasör arasında taşımak Explorer'ın işi, ART'ın değil. F5 ile kopyalayın veya Explorer'ı kullanın."
     },
     "commandLine": {
       "ariaLabel": "Komut satırı",
@@ -1473,6 +1474,7 @@
       "confirm": "{{folder}} içinden {{count}} öğe silinsin mi? Geri Dönüşüm Kutusu'na gider, oradan geri alabilirsiniz.",
       "sentTo": "{{count}} öğe {{target}} konumuna gitti.",
       "partial": "{{asked}} öğeden {{removed}} tanesi {{target}} konumuna gitti. Şunlar hâlâ yerinde: {{names}}",
+      "cancelled": "Durduruldu. {{asked}} öğeden {{removed}} tanesi {{target}} konumuna gitti; diğer {{count}} tanesi hâlâ yerinde.",
       "noneRemoved": "Hiçbir şey silinemedi. {{names}}",
       "target": {
         "recycleBin": "Geri Dönüşüm Kutusu"
@@ -2285,7 +2287,7 @@
     },
     "replaces": {
       "heading": "Bunun neyin yerine geçeceği",
-      "summary": "{{components}} {{placed}} dosya yerleştirecek: {{fresh}} yeni ve {{replaced}} tanesi bu sürümün başka bir parçasının önce koyduğu dosyaların üzerine.",
+      "summary": "{{components}} {{placed}} dosya yerleştirecek: {{fresh}} yeni, {{unchanged}} zaten birebir aynı ve {{replaced}} tanesi bu sürümün başka bir parçasının önce koyduğu dosyaların üzerine.",
       "failed": "ART bunun neyin yerine geçeceğini hesaplayamadı: {{error}}"
     }
   },

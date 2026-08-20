@@ -481,6 +481,23 @@ export interface ComponentPreview {
   reports: CollisionReport[];
   /** Every non-directory item the chosen components would place. */
   placed: number;
+  /**
+   * How many of those land on a destination an **earlier** component in the
+   * same plan also claims.
+   *
+   * Without it, "new" is wrong by exactly the number of identical files:
+   * `collide::preview` drops `Identical` rows before returning — its own rule,
+   * and a good one, since an identical file is nothing to warn about — so
+   * `placed - reports.length` counts a file landing byte-for-byte on another
+   * component's copy as *new*. On AmigaOS 3.9's overlay that is 130 files.
+   *
+   * ```text
+   * new       = placed - contested        (landed on nothing)
+   * unchanged = contested - reports.length (landed on identical bytes)
+   * replaced  = reports.length
+   * ```
+   */
+  contested: number;
 }
 
 interface OsInstallComponentCollisionsResult extends ComponentPreview {
@@ -513,11 +530,15 @@ export async function osinstallComponentCollisions(
   plan: InstallPlan,
   components: string[]
 ): Promise<ComponentPreview> {
-  if (components.length === 0) return { reports: [], placed: 0 };
+  if (components.length === 0) return { reports: [], placed: 0, contested: 0 };
   return awaitJobResult<OsInstallComponentCollisionsResult, ComponentPreview>(
     OSINSTALL_COMPONENT_COLLISIONS_EVENT,
     () => invoke<number>("osinstall_component_collisions", { plan, components }),
-    (payload) => ({ reports: payload.reports, placed: payload.placed })
+    (payload) => ({
+      reports: payload.reports,
+      placed: payload.placed,
+      contested: payload.contested,
+    })
   );
 }
 

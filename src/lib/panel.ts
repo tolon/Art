@@ -243,6 +243,12 @@ export interface HostDeleteOutcome {
   /** Where the removed ones went. `null` when nothing was removed — naming a
    *  destination for a delete that did not happen would be an invention. */
   target: RecycleTarget | null;
+  /** How many names were **asked** for, which is not `rows.length` when the
+   *  pass stopped early. */
+  asked: number;
+  /** Whether the user stopped it partway. Without this a twelve-name request
+   *  cancelled after three reads as a complete three-file delete. */
+  cancelled: boolean;
 }
 
 export const HOST_DELETE_EVENT = "panel-host-delete-result";
@@ -289,7 +295,12 @@ export async function panelDeleteMany(
   return awaitJobResult<{ job_id: number } & HostDeleteOutcome, HostDeleteOutcome>(
     HOST_DELETE_EVENT,
     () => invoke<number>("panel_delete_many", { folder, names }),
-    (payload) => ({ rows: payload.rows, target: payload.target })
+    (payload) => ({
+      rows: payload.rows,
+      target: payload.target,
+      asked: payload.asked,
+      cancelled: payload.cancelled,
+    })
   );
 }
 
@@ -319,19 +330,30 @@ export interface HostDeleteMessage {
   targetPhrase: Phrase | null;
 }
 
-export function describeHostDelete(
-  outcome: HostDeleteOutcome,
-  asked: number
-): HostDeleteMessage {
+export function describeHostDelete(outcome: HostDeleteOutcome): HostDeleteMessage {
   const removed = outcome.rows.filter((row) => row.removed).length;
   const failed = outcome.rows.filter((row) => !row.removed).map((row) => row.name);
   const targetPhrase = outcome.target ? recycleTargetPhrase(outcome.target) : null;
+  const asked = outcome.asked;
 
   if (removed === 0) {
     return {
       key: "files.hostDelete.noneRemoved",
       params: { names: failed.slice(0, 3).join(", "), count: failed.length },
       targetPhrase: null,
+    };
+  }
+  // **Stopped is its own sentence** (review F1). A twelve-name request
+  // cancelled after three has three rows, all successful, and every count
+  // derived from `rows` alone then reads "3 item(s) went to the Recycle Bin" —
+  // true of the three, silent about the nine, and indistinguishable from a
+  // complete three-file delete. The count asked for, and the fact that it
+  // stopped, are both part of what happened.
+  if (outcome.cancelled) {
+    return {
+      key: "files.hostDelete.cancelled",
+      params: { removed, asked, count: asked - removed },
+      targetPhrase,
     };
   }
   if (failed.length > 0) {

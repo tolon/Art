@@ -18,6 +18,14 @@ function row(name: string, removed: boolean, problem: string | null = null) {
   return { name, removed, problem };
 }
 
+/** An outcome that reached every name it was asked for. */
+function reached(
+  rows: ReturnType<typeof row>[],
+  target: HostDeleteOutcome["target"]
+): HostDeleteOutcome {
+  return { rows, target, asked: rows.length, cancelled: false };
+}
+
 /** Every leaf key in the catalogue, so a `Phrase` pointing at nothing fails
  *  here rather than rendering the raw key on screen. */
 function isLeafKey(dotted: string): boolean {
@@ -39,11 +47,8 @@ describe("recycleTargetPhrase", () => {
 
 describe("describeHostDelete", () => {
   it("says how many went and WHERE, when all of them went", () => {
-    const outcome: HostDeleteOutcome = {
-      rows: [row("a.adf", true), row("b.adf", true)],
-      target: "windows-recycle-bin",
-    };
-    const said = describeHostDelete(outcome, 2);
+    const outcome = reached([row("a.adf", true), row("b.adf", true)], "windows-recycle-bin");
+    const said = describeHostDelete(outcome);
 
     expect(said.key).toBe("files.hostDelete.sentTo");
     expect(said.params.count).toBe(2);
@@ -59,15 +64,11 @@ describe("describeHostDelete", () => {
     // "Eleven of twelve" is not something a user can act on; the twelfth's
     // name is. A host filesystem has no journal, so this case is not
     // exceptional — it is the one this whole outcome shape exists for.
-    const outcome: HostDeleteOutcome = {
-      rows: [
-        row("a.adf", true),
-        row("locked.adf", false, "the file is in use"),
-        row("c.adf", true),
-      ],
-      target: "windows-recycle-bin",
-    };
-    const said = describeHostDelete(outcome, 3);
+    const outcome = reached(
+      [row("a.adf", true), row("locked.adf", false, "the file is in use"), row("c.adf", true)],
+      "windows-recycle-bin"
+    );
+    const said = describeHostDelete(outcome);
 
     expect(said.key).toBe("files.hostDelete.partial");
     expect(said.params.removed).toBe(2);
@@ -80,11 +81,8 @@ describe("describeHostDelete", () => {
   it("names nowhere when nothing was removed", () => {
     // Reporting a destination for a delete that did not happen would be the
     // same class of invention §89 forbids everywhere else.
-    const outcome: HostDeleteOutcome = {
-      rows: [row("locked.adf", false, "the file is in use")],
-      target: null,
-    };
-    const said = describeHostDelete(outcome, 1);
+    const outcome = reached([row("locked.adf", false, "the file is in use")], null);
+    const said = describeHostDelete(outcome);
 
     expect(said.key).toBe("files.hostDelete.noneRemoved");
     expect(said.targetPhrase).toBeNull();
@@ -94,24 +92,48 @@ describe("describeHostDelete", () => {
   it("caps the named failures at three, and still says how many there are", () => {
     // A message listing forty names is one nobody reads. The count is what
     // tells the user the list is a sample.
-    const outcome: HostDeleteOutcome = {
-      rows: ["a", "b", "c", "d", "e"].map((n) => row(n, false, "no")),
-      target: null,
-    };
-    const said = describeHostDelete(outcome, 5);
+    const outcome = reached(["a", "b", "c", "d", "e"].map((n) => row(n, false, "no")), null);
+    const said = describeHostDelete(outcome);
     expect(said.params.names).toBe("a, b, c");
     expect(said.params.count).toBe(5);
   });
 
+  it("says it was STOPPED, not that it succeeded — review F1", () => {
+    // A twelve-name request cancelled after three has three rows, all
+    // successful. Counting rows alone reads "3 item(s) went to the Recycle
+    // Bin" — true of the three, silent about the nine, and identical to what
+    // a complete three-file delete would say. The number asked for and the
+    // fact that it stopped are both part of what happened.
+    const outcome: HostDeleteOutcome = {
+      rows: [row("a", true), row("b", true), row("c", true)],
+      target: "windows-recycle-bin",
+      asked: 12,
+      cancelled: true,
+    };
+    const said = describeHostDelete(outcome);
+
+    expect(said.key).toBe("files.hostDelete.cancelled");
+    expect(said.params.removed).toBe(3);
+    expect(said.params.asked).toBe(12);
+    expect(said.params.count).toBe(9);
+    // And it still says where the three that did go went.
+    expect(said.targetPhrase).not.toBeNull();
+    expect(en.files.hostDelete.cancelled).toContain("{{target}}");
+    // The sentence it must NOT be.
+    expect(said.key).not.toBe("files.hostDelete.sentTo");
+  });
+
   it("every sentence it can produce resolves to a real catalogue key", () => {
     const cases: HostDeleteOutcome[] = [
-      { rows: [row("a", true)], target: "windows-recycle-bin" },
-      { rows: [row("a", true), row("b", false, "no")], target: "windows-recycle-bin" },
-      { rows: [row("a", false, "no")], target: null },
-      { rows: [], target: null },
+      reached([row("a", true)], "windows-recycle-bin"),
+      reached([row("a", true), row("b", false, "no")], "windows-recycle-bin"),
+      reached([row("a", false, "no")], null),
+      reached([], null),
+      // The stopped case, which is its own sentence (review F1).
+      { rows: [row("a", true)], target: "windows-recycle-bin", asked: 12, cancelled: true },
     ];
     for (const outcome of cases) {
-      const said = describeHostDelete(outcome, outcome.rows.length);
+      const said = describeHostDelete(outcome);
       expect(isLeafKey(said.key), said.key).toBe(true);
     }
   });

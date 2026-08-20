@@ -57,16 +57,23 @@ export interface MoveInput {
    *  colliding name must not make the collision invisible. */
   takenNames: string[];
   /**
-   * Whether both panes address the same image file (ART-081).
+   * Whether both panes address the **same volume** — the same image file *and*
+   * the same partition inside it (ART-081).
    *
-   * A move between two *directories of one image* is not a copy-and-delete at
+   * A move between two *directories of one volume* is not a copy-and-delete at
    * all — it is a relink, and doing it as copy-then-delete would stage the
    * tree out, write it back into the same volume, and then remove the
    * original: twice the free space needed, and a failure between the two
    * halves losing the only copy. F5 has always refused this
    * (`files.err.sameImage`); F6 could reach it and did not, which mattered
-   * only while F6 was restricted to one directory. It is refused here now
-   * that it is not.
+   * only while F6 was restricted to one directory.
+   *
+   * **The same *image* is not enough** (review F9). One HDF holds several
+   * partitions, and `DH0:` to `DH1:` is a move between two volumes that share
+   * a file — real free space is consumed at the destination and real space is
+   * freed at the source, which is exactly the case a copy-and-delete is for.
+   * Refusing it would have refused the commonest move on a real PiStorm card.
+   * The caller compares the partition too.
    */
   sameImage: boolean;
 }
@@ -160,6 +167,18 @@ export function planMove(input: MoveInput): MovePlan {
 
   if (isReadOnlyContainer(targetKind)) {
     return { kind: "refused", reason: { key: "files.move.refuseReadOnlyTarget" } };
+  }
+  // **Host to host is not ART's job** (review F8), and refusing it *here* is
+  // the point: it used to be planned as allowed and then refused by the page
+  // after **both** confirmations — the user answered "yes, move these" and
+  // "yes, overwrite the protected one" and only then learnt ART would not.
+  // A refusal a plan can reach has to be reached in the plan.
+  //
+  // Explorer moves files between folders, and a commander that copies through
+  // ART's volume writer to do it would be a worse Explorer with an extra
+  // failure mode. F5 copies; the OS moves.
+  if (sourceKind === "local" && targetKind === "local") {
+    return { kind: "refused", reason: { key: "files.move.refuseHostToHost" } };
   }
   if (targetKind !== "local" && !input.targetWritable) {
     return { kind: "refused", reason: { key: "files.move.refuseTargetNotWritable" } };

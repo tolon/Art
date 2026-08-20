@@ -874,6 +874,28 @@ pub struct ComponentPreview {
     pub reports: Vec<CollisionReport>,
     /// Every non-directory item the chosen components would place.
     pub placed: usize,
+    /// How many of those land on a destination an **earlier** component in the
+    /// same plan also claims.
+    ///
+    /// **Without this, "new" is a lie by exactly the number of identical
+    /// files** (review F4). `collide::preview` drops `Identical` rows before
+    /// returning — that is its own rule and a good one, since an identical
+    /// file is nothing to warn about — so `placed - reports.len()` counts a
+    /// file that lands byte-for-byte on another component's copy as *new*. On
+    /// AmigaOS 3.9's overlay that is 130 files, and it is the difference
+    /// between this preview's numbers and the ones
+    /// `apply::tests::layer_the_real_39_overlay_when_asked` measured off the
+    /// real disc.
+    ///
+    /// With it, the three counts the screen and the census both want are
+    /// derivable and agree with ART-169's table:
+    ///
+    /// ```text
+    /// new       = placed - contested        (landed on nothing)
+    /// unchanged = contested - reports.len() (landed on identical bytes)
+    /// replaced  = reports.len()
+    /// ```
+    pub contested: usize,
 }
 
 /// Every non-directory `PlanItem` belonging to one of `components`, in plan
@@ -937,28 +959,64 @@ fn check_preview_ceilings(files: usize, bytes: u64) -> CoreResult<()> {
     Ok(())
 }
 
-/// Where one component preview stages its scratch tree.
+/// Where one component preview stages its scratch tree — **unique per call**.
 ///
-/// Deterministic in the plan's own media and the components asked about, so
-/// toggling a checkbox back and forth reuses one directory rather than growing
-/// a new one per click — the same reasoning [`preview_cache_dir`] carries,
-/// without its cache: the *contents* here depend on media that may have
-/// changed, so the directory is cleared and re-staged on every call rather
-/// than trusted.
-fn scratch_root_for(plan: &InstallPlan, components: &[String]) -> PathBuf {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    plan.release.hash(&mut hasher);
-    for (volume, path) in &plan.media_paths {
-        volume.hash(&mut hasher);
-        path.hash(&mut hasher);
-    }
-    for id in components {
-        id.hash(&mut hasher);
-    }
+/// It was deterministic (a hash of the plan's media and the components asked
+/// about), on the reasoning that toggling a checkbox back and forth would
+/// reuse one directory rather than growing one per click. That reasoning was
+/// wrong twice over, and the review (F3) was right to call it: nothing ever
+/// *reused* the directory, because the contents depend on media that may have
+/// changed and so it was `remove_dir_all`'d on entry anyway — and two previews
+/// of the same thing therefore shared a root, with the second wiping the
+/// first's staging out from under it.
+///
+/// That is not a rare interleaving. [ART-178](../../../docs/ISSUES.md) makes
+/// the OS Builder's plan effect settle **twice** with an identical request, so
+/// two concurrent identical previews are the *normal* case, and there is no
+/// `jobCancel` on the first when the second starts. The first preview then
+/// finds its staged files gone, `classify_incoming` finds nothing at the
+/// destination, and every Replace row silently degrades to "new" — a wrong
+/// preview, in the screen a user reads before ticking the component that
+/// decides which operating system they end up with.
+///
+/// So: process id plus a counter that never repeats within the process. That
+/// is the same shape `core::test_scratch_id` uses and for the same measured
+/// reason — a timestamp does not advance between two calls in one clock tick
+/// on Windows, which is how `core::iso`, `core::cbm` and `net`'s test server
+/// each lost a race before it (ART-115, ART-164, ART-173). This is the sixth
+/// instance of that class, and the first outside a test.
+///
+/// Cleaned up by [`StagingDir`] rather than left for the hourly sweep, so a
+/// preview's staged AmigaOS bytes do not sit in `%TEMP%` after it has
+/// answered.
+fn scratch_root_for() -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     std::env::temp_dir().join(format!(
-        "{PREVIEW_SCRATCH_PREFIX}component-{:016x}",
-        hasher.finish()
+        "{PREVIEW_SCRATCH_PREFIX}component-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
     ))
+}
+
+/// A staging root that removes itself, however its call ends.
+///
+/// **Why a guard and not a `remove_dir_all` at the end** (review F6). The
+/// preview has half a dozen exits — two ceiling refusals, a cancel, every
+/// `?` on a media read — and only one of them is the bottom of the function.
+/// A cleanup written there runs on success and on nothing else, which is how
+/// the staged bytes of a *cancelled* preview came to sit in `%TEMP%` until the
+/// hourly sweep. `Drop` runs on all of them.
+///
+/// Best-effort: a directory that cannot be removed is left for
+/// [`sweep_stale_preview_scratch_dirs`], which is what that sweep is for. It
+/// must never turn a good preview into a failed one.
+struct StagingDir(PathBuf);
+
+impl Drop for StagingDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 /// The read-only work `osinstall_component_collisions` does, pulled out so it
@@ -978,11 +1036,13 @@ fn preview_component_collisions(
     }
 
     sweep_stale_preview_scratch_dirs();
-    let scratch = scratch_root_for(plan, components);
-    // A previous run's staging must never be mistaken for this one's: the
-    // whole point of the staged root is that it holds *exactly* what an
-    // earlier component would have put there, and nothing else.
-    let _ = std::fs::remove_dir_all(&scratch);
+    // Unique per call, and removed however this call ends — see
+    // `scratch_root_for` and `StagingDir`. Two concurrent previews of the same
+    // components must not share a root: the second `remove_dir_all` would take
+    // the first's staging with it and every Replace row would degrade to
+    // "new" (review F3).
+    let staging = StagingDir(scratch_root_for());
+    let scratch = staging.0.clone();
     std::fs::create_dir_all(&scratch)?;
 
     // What an *earlier* component in the same plan would have put at each of
@@ -1066,6 +1126,11 @@ fn preview_component_collisions(
         });
     }
 
+    // Counted before the manifest takes ownership of the rows: an item was
+    // contested exactly when an earlier component's bytes were staged for it
+    // to be compared against (review F4).
+    let contested = manifest_files.len();
+
     // Written even when empty: its *absence* would reach `declared_override`
     // as an I/O error rather than as a "nothing was there" answer.
     let manifest = DistributionManifest {
@@ -1119,6 +1184,7 @@ fn preview_component_collisions(
     Ok(ComponentPreview {
         reports: collide::preview(&scratch, &entries)?,
         placed: extracted.len(),
+        contested,
     })
 }
 
@@ -2056,6 +2122,210 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// **An identical file is not a new one** (review F4).
+    ///
+    /// `collide::preview` drops `Identical` rows before returning, which is
+    /// its own rule and a good one — an identical file is nothing to warn
+    /// about. But it means `placed - reports.len()` counts such a file as
+    /// *new*, and on AmigaOS 3.9's overlay that is 130 files: the exact gap
+    /// between this preview's numbers and the 622 that
+    /// `apply::tests::layer_the_real_39_overlay_when_asked` measured off the
+    /// real disc. `contested` is what makes the three counts add up and the
+    /// two hooks comparable.
+    #[test]
+    fn an_identical_file_counts_as_unchanged_and_never_as_new() {
+        let same = b"$VER: format 44.5 (1.1.99)";
+        let (dir, plan) =
+            plan_over_two_media("component-preview-counts", "workbench-39", same, same);
+
+        let preview =
+            preview_component_collisions(&plan, &["workbench-39".to_string()], &NoProgress)
+                .unwrap();
+
+        // Two files placed: `C/Format` lands on `workbench-base`'s identical
+        // copy, `C/New` lands on nothing.
+        assert_eq!(preview.placed, 2);
+        assert_eq!(preview.contested, 1, "one of them had something under it");
+        assert_eq!(
+            preview.reports.len(),
+            0,
+            "and it was identical, so nothing to report"
+        );
+
+        let replaced = preview.reports.len();
+        let unchanged = preview.contested - replaced;
+        let fresh = preview.placed - preview.contested;
+        assert_eq!((fresh, unchanged, replaced), (1, 1, 0));
+
+        // The old arithmetic said two new files, and one of them was a file
+        // that already existed byte-for-byte.
+        assert_ne!(
+            preview.placed - preview.reports.len(),
+            fresh,
+            "this is the miscount the review found"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The three counts always partition what was placed — the property the
+    /// census asserts and the screen renders.
+    #[test]
+    fn the_three_counts_always_add_up_to_what_was_placed() {
+        for (base, overlay) in [
+            (
+                &b"$VER: format 44.5 (1.1.99)"[..],
+                &b"$VER: format 45.1 (1.1.00)"[..],
+            ),
+            (
+                &b"$VER: format 44.5 (1.1.99)"[..],
+                &b"$VER: format 44.5 (1.1.99)"[..],
+            ),
+            (
+                &b"no version here"[..],
+                &b"none here either, and longer"[..],
+            ),
+        ] {
+            let (dir, plan) =
+                plan_over_two_media("component-preview-partition", "workbench-39", base, overlay);
+            let preview =
+                preview_component_collisions(&plan, &["workbench-39".to_string()], &NoProgress)
+                    .unwrap();
+            let replaced = preview.reports.len();
+            assert!(preview.contested >= replaced, "{preview:?}");
+            let unchanged = preview.contested - replaced;
+            let fresh = preview.placed - preview.contested;
+            assert_eq!(fresh + unchanged + replaced, preview.placed, "{preview:?}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// **Two previews of the same components must not corrupt each other**
+    /// (review F3).
+    ///
+    /// The staging root used to be a hash of the plan and the components, and
+    /// it is `remove_dir_all`'d on entry — so two concurrent previews of the
+    /// same thing shared a root and the second wiped the first's staged files.
+    /// The first then found nothing at the destination and every Replace row
+    /// degraded silently to "new": a wrong preview, in the screen a user reads
+    /// before ticking. ART-178 makes that interleaving the normal case rather
+    /// than a rare one.
+    ///
+    /// **The guard is `two_previews_never_share_a_staging_root` below, not
+    /// this test.** This one runs the real thing on two threads and is worth
+    /// having, but it cannot *force* the interleaving — with the old shared
+    /// root it still passes, because the two previews are fast enough that one
+    /// often finishes before the other clears the directory. A test that
+    /// passes against the defect is not a test of the defect, so the property
+    /// that actually fixes it is asserted directly, and this stands beside it
+    /// as a smoke check that concurrent previews work at all.
+    #[test]
+    fn two_concurrent_previews_of_the_same_components_both_answer() {
+        let (dir, plan) = plan_over_two_media(
+            "component-preview-concurrent",
+            "workbench-39",
+            b"$VER: format 44.5 (1.1.99)",
+            b"$VER: format 45.1 (1.1.00)",
+        );
+        let plan = std::sync::Arc::new(plan);
+
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let plan = std::sync::Arc::clone(&plan);
+                std::thread::spawn(move || {
+                    preview_component_collisions(&plan, &["workbench-39".to_string()], &NoProgress)
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            let preview = handle.join().expect("no panic").expect("no error");
+            assert_eq!(
+                preview.reports.len(),
+                1,
+                "a preview whose staging was wiped reports no collision at all: {preview:?}"
+            );
+            assert_eq!(preview.contested, 1);
+            assert_eq!(preview.placed, 2);
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **Two previews never share a staging root** — the property that fixes
+    /// review F3, asserted where it can fail deterministically.
+    ///
+    /// The root used to be a hash of the plan and the components, and the
+    /// preview `remove_dir_all`s it on entry: two previews of the same thing
+    /// therefore shared a directory and the second wiped the first's staged
+    /// files, after which `classify_incoming` found nothing at the destination
+    /// and every Replace row degraded silently to "new". Reverting
+    /// `scratch_root_for` to a hash fails this line and nothing else has to be
+    /// timed for it to.
+    #[test]
+    fn two_previews_never_share_a_staging_root() {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..64 {
+            assert!(
+                seen.insert(scratch_root_for()),
+                "a staging root repeated: {seen:?}"
+            );
+        }
+    }
+
+    /// The staged AmigaOS bytes do not outlive the call (review F6) — on
+    /// success *or* on cancellation, which is the exit a cleanup written at
+    /// the bottom of the function misses.
+    #[test]
+    fn staging_is_removed_however_the_preview_ends() {
+        fn staging_dirs() -> Vec<PathBuf> {
+            let prefix = format!("{PREVIEW_SCRATCH_PREFIX}component-{}-", std::process::id());
+            std::fs::read_dir(std::env::temp_dir())
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.file_name()
+                        .map(|name| name.to_string_lossy().starts_with(&prefix))
+                        .unwrap_or(false)
+                })
+                .collect()
+        }
+
+        struct Stopped;
+        impl ProgressSink for Stopped {
+            fn report(&self, _done: u64, _total: Option<u64>, _label: &str) {}
+            fn is_cancelled(&self) -> bool {
+                true
+            }
+        }
+
+        let (dir, plan) = plan_over_two_media(
+            "component-preview-cleanup",
+            "workbench-39",
+            b"$VER: format 44.5 (1.1.99)",
+            b"$VER: format 45.1 (1.1.00)",
+        );
+
+        let before = staging_dirs().len();
+        preview_component_collisions(&plan, &["workbench-39".to_string()], &NoProgress).unwrap();
+        assert_eq!(
+            staging_dirs().len(),
+            before,
+            "nothing left behind on success"
+        );
+
+        let _ = preview_component_collisions(&plan, &["workbench-39".to_string()], &Stopped);
+        assert_eq!(
+            staging_dirs().len(),
+            before,
+            "nor on the exit a bottom-of-function cleanup never reaches"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The `declared` flag is not decorative: it is the difference between
     /// "this component said it would do this" and "this component is about to
     /// stand on another's file without saying so". A component id no shipped
@@ -2338,11 +2608,31 @@ mod tests {
                     crate::core::osinstall::collide::Collision::Identical => {}
                 }
             }
+            // **The same three counts `layer_the_real_39_overlay_when_asked`
+            // reports**, so the two are comparable rather than merely both
+            // printed (review F4). `new` used to be
+            // `placed - reports.len()`, which counts an identical file as a
+            // new one — 130 of them on the 3.9 overlay, which is exactly why
+            // 622 and this hook's number could never have matched.
+            let replaced = preview.reports.len();
+            let unchanged = preview.contested - replaced;
+            let fresh = preview.placed - preview.contested;
             println!(
-                "\n{id}: placed {}, new {}, replaced {}",
+                "
+{id}: placed {}, new {fresh}, identical {unchanged}, replaced {replaced}",
+                preview.placed
+            );
+            // The arithmetic said out loud, because the point of this hook is
+            // that a reader can check it against ART-169's table without
+            // doing sums in their head.
+            println!(
+                "  check: new {fresh} + identical {unchanged} + replaced {replaced} = {}",
+                fresh + unchanged + replaced
+            );
+            assert_eq!(
+                fresh + unchanged + replaced,
                 preview.placed,
-                preview.placed - preview.reports.len(),
-                preview.reports.len()
+                "every placed file falls in exactly one of the three"
             );
             println!(
                 "  upgrades {upgrades}, downgrades {downgrades}, same-version {same}, unversioned {unversioned}"

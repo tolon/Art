@@ -679,8 +679,13 @@ describe("the screen says what a layering component would replace (ART-175)", ()
   });
 
   it("shows what would be replaced, and what would merely be placed", async () => {
+    // Three files placed: one replaced, one already byte-for-byte identical,
+    // one landing on nothing. The middle one is what review F4 was about —
+    // `collide::preview` drops it, so counting `placed - reports.length` as
+    // "new" would report two new files when there is one.
     componentCollisionsMock.mockResolvedValue({
       placed: 3,
+      contested: 2,
       reports: [
         {
           path: "Libs/workbench.library",
@@ -702,10 +707,23 @@ describe("the screen says what a layering component would replace (ART-175)", ()
     const summary = i18n.t("osinstall.replaces.summary", {
       components: "AmigaOS3.9",
       placed: 3,
-      fresh: 2,
+      fresh: 1,
+      unchanged: 1,
       replaced: 1,
     });
     expect(document.body.textContent).toContain(summary);
+
+    // And explicitly not the miscount: two new files, when one of the two is
+    // a file that already exists byte-for-byte.
+    expect(document.body.textContent).not.toContain(
+      i18n.t("osinstall.replaces.summary", {
+        components: "AmigaOS3.9",
+        placed: 3,
+        fresh: 2,
+        unchanged: 0,
+        replaced: 1,
+      })
+    );
   });
 
   it("says nothing at all when nothing layering is switched on", async () => {

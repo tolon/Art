@@ -41,7 +41,42 @@
 //! to a path in this codebase. A selection is a list of **names in a
 //! directory**, never a list of absolute paths, so nothing the frontend sends
 //! can name a file outside the folder the user is looking at, however it was
-//! built or tampered with on the way.
+//! built or tampered with on the way. A **drive root** is refused outright by
+//! [`refuse_drive_root`]: `C:\` is where `Windows` and `Program Files` live,
+//! and the confirmations a user learns to click through for a game are the
+//! same ones here.
+//!
+//! # What is guarded, and what is not
+//!
+//! Stated plainly rather than left to be discovered, because this is the one
+//! module in ART that removes a user's own file.
+//!
+//! **Guarded.** `..` in any spelling, an absolute path, a UNC path, a Windows
+//! drive prefix, a `RootDir` component — all refused by `safe_join` before the
+//! loop starts, and refused for the *whole* pass rather than skipped. A drive
+//! root as the parent. A name that is not there. A recycler that returns `Ok`
+//! and leaves the file behind.
+//!
+//! **Not guarded, and known.** `safe_join`'s containment is **lexical**: it
+//! reasons about the path as written, not about what the filesystem resolves
+//! it to. A symbolic link or an NTFS junction sitting inside the folder, whose
+//! target is outside it, passes containment and is then handed to the
+//! recycler. What that costs is bounded by what the shell does with a link:
+//! `IFileOperation` recycles the **link**, not the directory it points at — so
+//! the realistic outcome is a lost shortcut rather than a lost tree. It is
+//! bounded, not zero, and it is not checked.
+//!
+//! `Path::exists()` follows links too, so the pre-check answers about the
+//! *target*: a dangling link inside the folder is reported as "not there" and
+//! refuses the pass, which is conservative but not the reason one would want.
+//!
+//! And there is a **check-to-call window**. Every name is resolved and
+//! verified before the first recycle, and the filesystem can change in
+//! between — the same TOCTOU shape every path in this codebase that pre-checks
+//! has, and the reason each entry's result is asked of the filesystem
+//! afterwards rather than assumed. Closing it properly means opening each
+//! entry by handle and operating on that handle, which `trash` does not
+//! expose; recorded here rather than papered over.
 
 use std::path::{Path, PathBuf};
 
@@ -90,6 +125,23 @@ pub enum RecycleTarget {
     WindowsRecycleBin,
 }
 
+impl RecycleTarget {
+    /// The name for the **operation log**, which is English whatever language
+    /// the screen is in (ART-060, the same rule every `CoreError` sentence
+    /// follows).
+    ///
+    /// Deliberately not the screen's sentence: the UI translates
+    /// [`RecycleTarget`] itself through its own catalogue. This exists so the
+    /// log records where a file went by asking the recycler rather than by
+    /// repeating a literal — a second recycler would otherwise log the first
+    /// one's destination.
+    pub fn log_label(self) -> &'static str {
+        match self {
+            Self::WindowsRecycleBin => "Recycle Bin",
+        }
+    }
+}
+
 /// What happened to one named entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -117,6 +169,19 @@ pub struct HostDeleteOutcome {
     /// `None` when nothing was removed — naming a destination for a delete
     /// that did not happen would be the same class of invention §89 forbids.
     pub target: Option<RecycleTarget>,
+    /// How many names the pass was **asked** for, which is not `rows.len()`
+    /// when it stopped early.
+    pub asked: usize,
+    /// Whether the user stopped it partway.
+    ///
+    /// **Without this the outcome reads as a success it did not have.** A
+    /// twelve-name request cancelled after three has three rows, all
+    /// `removed: true`, and every count derived from `rows` alone then says
+    /// "three items went to the Recycle Bin" — true of the three, and silent
+    /// about the nine that did not go and were never attempted. The log said
+    /// `verified(true)` on exactly that. The number that was *asked for* and
+    /// the fact that it stopped are both part of what happened.
+    pub cancelled: bool,
 }
 
 impl HostDeleteOutcome {
@@ -128,6 +193,18 @@ impl HostDeleteOutcome {
         self.rows.len() - self.removed()
     }
 
+    /// Names that were asked for and never attempted, because the pass
+    /// stopped first. Zero unless [`cancelled`](Self::cancelled).
+    pub fn untouched(&self) -> usize {
+        self.asked.saturating_sub(self.rows.len())
+    }
+
+    /// Whether every name asked for was removed. The one condition that
+    /// deserves an unqualified success, in the log or on screen.
+    pub fn complete(&self) -> bool {
+        !self.cancelled && self.failed() == 0 && self.rows.len() == self.asked
+    }
+
     /// The names that did **not** go, in the order they were asked for.
     pub fn failed_names(&self) -> Vec<&str> {
         self.rows
@@ -136,6 +213,40 @@ impl HostDeleteOutcome {
             .map(|row| row.name.as_str())
             .collect()
     }
+}
+
+/// Whether `path` is a **drive root** rather than a folder inside one.
+///
+/// `C:\`, `C:`, `\\server\share`, `/` — anything whose components are a
+/// prefix and a root and nothing else. A folder one level down is not.
+///
+/// **This lives here and not in the screen** (ART-080 review, F5). It was
+/// first written only in `movePlan.ts`, which made it a rule the command
+/// could be reached around: `panel_delete_many` is a Tauri command like any
+/// other, and a refusal that exists only in TypeScript is a refusal that
+/// exists only when the TypeScript runs. This is the first operation in ART
+/// that removes a file from the user's own disk, so its refusals belong where
+/// nothing can route around them. The frontend keeps its own copy as an
+/// *early answer* — it greys the key and explains itself before the user
+/// clicks — never as the guarantee.
+pub fn is_drive_root(path: &Path) -> bool {
+    use std::path::Component;
+    path.components()
+        .all(|component| matches!(component, Component::Prefix(_) | Component::RootDir))
+}
+
+/// Refuse a drive root as the folder to delete from.
+///
+/// Separate from [`is_drive_root`] so the sentence is written once and every
+/// caller refuses with the same words.
+pub fn refuse_drive_root(parent: &Path) -> CoreResult<()> {
+    if is_drive_root(parent) {
+        return Err(CoreError::SafetyRefused(format!(
+            "'{}' is a drive root, not a folder — ART will not delete from one",
+            parent.display()
+        )));
+    }
+    Ok(())
 }
 
 /// Resolve `names` inside `parent`, and send each to `recycler`.
@@ -167,7 +278,13 @@ pub fn recycle_many(
     names: &[String],
     sink: &dyn ProgressSink,
 ) -> CoreResult<HostDeleteOutcome> {
-    // ---- resolve and pre-check, before anything is touched ----
+    // ---- refuse, resolve and pre-check, before anything is touched ----
+    //
+    // The drive root goes first: containment is *relative to `parent`*, so a
+    // `parent` nobody should be deleting from makes every subsequent check
+    // answer the right question about the wrong place.
+    refuse_drive_root(parent)?;
+
     let mut resolved: Vec<(String, PathBuf)> = Vec::with_capacity(names.len());
     for name in names {
         let path = safe_join(parent, name).map_err(|err| {
@@ -186,7 +303,10 @@ pub fn recycle_many(
     }
 
     let total = resolved.len() as u64;
-    let mut outcome = HostDeleteOutcome::default();
+    let mut outcome = HostDeleteOutcome {
+        asked: resolved.len(),
+        ..HostDeleteOutcome::default()
+    };
 
     for (done, (name, path)) in resolved.into_iter().enumerate() {
         // Between whole entries, never during one.
@@ -194,6 +314,12 @@ pub fn recycle_many(
             // Not an error: what has gone has gone, and the caller needs to
             // be told which. A `Cancelled` here would throw away the only
             // record of it.
+            //
+            // **And it is marked as cancelled**, because an outcome that only
+            // counts its own rows cannot tell "three of three" from "three of
+            // twelve, stopped" — and the second one reported as the first is
+            // a success ART did not have (review F1).
+            outcome.cancelled = true;
             outcome.target = recycled_target(recycler, &outcome);
             return Ok(outcome);
         }
@@ -528,6 +654,135 @@ mod tests {
             dir.join("b.adf").is_file(),
             "the second was never attempted"
         );
+        // **And it says it was cut short** (review F1). Without these three
+        // the outcome is indistinguishable from a complete one-file delete,
+        // and the log recorded exactly that: `verified(true)`, "1 item went to
+        // the Recycle Bin", silent about the one that did not.
+        assert!(outcome.cancelled, "a stopped pass has to say so");
+        assert_eq!(outcome.asked, 2, "what was asked for, not what was reached");
+        assert_eq!(outcome.untouched(), 1);
+        assert!(
+            !outcome.complete(),
+            "a cancelled pass is never a complete one, however many rows succeeded"
+        );
+    }
+
+    /// The other side of the same coin: a pass that really did everything is
+    /// `complete()`, so the honest report above cannot be bought by making
+    /// every pass look partial.
+    #[test]
+    fn a_pass_that_removed_everything_is_complete() {
+        let dir = scratch("complete");
+        file(&dir, "a.adf");
+        file(&dir, "b.adf");
+
+        let bin = FakeBin::new();
+        let outcome = recycle_many(
+            &bin,
+            &dir,
+            &["a.adf".to_string(), "b.adf".to_string()],
+            &NoProgress,
+        )
+        .unwrap();
+
+        assert!(outcome.complete());
+        assert!(!outcome.cancelled);
+        assert_eq!(outcome.asked, 2);
+        assert_eq!(outcome.untouched(), 0);
+    }
+
+    /// A pass that reached every name and lost one is **not** complete either
+    /// — `complete()` is about the whole request, not about having tried.
+    #[test]
+    fn a_pass_that_reached_everything_and_failed_one_is_not_complete() {
+        let dir = scratch("incomplete");
+        file(&dir, "a.adf");
+        file(&dir, "locked.adf");
+
+        let bin = FakeBin {
+            fail_on: Some("locked.adf".to_string()),
+            ..FakeBin::new()
+        };
+        let outcome = recycle_many(
+            &bin,
+            &dir,
+            &["a.adf".to_string(), "locked.adf".to_string()],
+            &NoProgress,
+        )
+        .unwrap();
+
+        assert!(!outcome.complete());
+        assert!(!outcome.cancelled, "it was not stopped — it failed");
+        assert_eq!(outcome.untouched(), 0, "every name was reached");
+    }
+
+    // ---- review F5: the drive-root refusal, in Rust ----
+
+    /// A drive root is refused **here**, not only in the screen.
+    ///
+    /// The refusal was first written only in `movePlan.ts`, which made it a
+    /// rule the command could be reached around — `panel_delete_many` is a
+    /// Tauri command like any other, and `recycle_many` is what it calls.
+    /// This is the test that would have caught that.
+    #[test]
+    fn a_drive_root_is_refused_before_anything_is_resolved() {
+        let bin = FakeBin::new();
+        // Every spelling of "a root" this codebase can meet: a drive with
+        // and without its trailing separator, a **UNC share root** (which is
+        // a root even though it has two names in it), and the POSIX one that
+        // `core/` must still answer correctly because `core/` is not allowed
+        // to know it is on Windows.
+        for root in [r"C:\", "C:", r"\\server\share", "/"] {
+            let result = recycle_many(
+                &bin,
+                Path::new(root),
+                &["anything.txt".to_string()],
+                &NoProgress,
+            );
+            assert!(bin.seen.borrow().is_empty(), "{root}");
+            assert!(
+                matches!(result, Err(CoreError::SafetyRefused(_))),
+                "{root}: {result:?}"
+            );
+        }
+    }
+
+    /// ...and a folder inside a root is not a root, or the refusal would ban
+    /// the only case this feature exists for.
+    #[test]
+    fn a_folder_inside_a_root_is_not_a_root() {
+        assert!(is_drive_root(Path::new(r"C:\")));
+        assert!(is_drive_root(Path::new("/")));
+        assert!(!is_drive_root(Path::new(r"C:\downloads")));
+        assert!(!is_drive_root(Path::new(r"C:\downloads\amiga")));
+        assert!(!is_drive_root(Path::new("/home/user")));
+        // A relative path names no root at all.
+        assert!(!is_drive_root(Path::new("downloads")));
+    }
+
+    /// The refusal is checked **before** containment, because containment is
+    /// relative to the parent: a `parent` nobody should delete from makes
+    /// every later check answer the right question about the wrong place.
+    #[test]
+    fn the_root_refusal_comes_before_the_containment_check() {
+        let bin = FakeBin::new();
+        // A name that would *also* fail `safe_join`. If containment ran
+        // first, the error would be about the name; it is about the folder.
+        let result = recycle_many(
+            &bin,
+            Path::new(r"C:\"),
+            &["../escape.txt".to_string()],
+            &NoProgress,
+        );
+        match result {
+            Err(CoreError::SafetyRefused(message)) => {
+                assert!(
+                    message.contains("drive root"),
+                    "the folder is refused first, not the name: {message}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     /// Nothing removed names no destination — a delete that did not happen

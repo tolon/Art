@@ -311,6 +311,12 @@ pub fn panel_delete_many(
     if !dir.is_dir() {
         return Err(CoreError::InvalidInput(format!("'{}' is not a folder", dir.display())).into());
     }
+    // **Refused here, on the command thread, before a job even starts**
+    // (review F5). `recycle_many` refuses it too — that is where the rule
+    // lives — but a caller that reaches this command without the screen
+    // deserves the answer immediately rather than as a failed job, and the
+    // two together mean there is no arrangement of callers that gets past it.
+    crate::core::hostfs::refuse_drive_root(&dir)?;
     if names.is_empty() {
         return Err(CoreError::InvalidInput("nothing was selected".to_string()).into());
     }
@@ -341,12 +347,32 @@ pub fn panel_delete_many(
                 .detail("Asked", asked.to_string())
                 .detail("Removed", outcome.removed().to_string())
                 .detail("Failed", outcome.failed().to_string())
-                .detail("Destination", "Recycle Bin".to_string())
-                // `verified(false)` for a partial pass, not `success()`:
-                // the operation ran and did not do all of what it was asked,
-                // and the log is the one place that has to keep saying so.
+                // Never attempted, because the user stopped it. Distinct from
+                // "failed", which is a name ART tried and could not remove
+                // (review F1) — a log that folded the two together would say
+                // a cancelled pass had failures it never had.
+                .detail("Untouched", outcome.untouched().to_string())
+                .detail("Cancelled", outcome.cancelled.to_string())
+                // Asked of the outcome rather than written as a literal
+                // (review F10): a second recycler would otherwise have the
+                // first one's destination logged against it. Absent when
+                // nothing was removed, which is the one case with nowhere to
+                // name.
+                .detail(
+                    "Destination",
+                    outcome
+                        .target
+                        .map(|target| target.log_label().to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                )
+                // `verified(true)` only for a pass that removed **every name
+                // it was asked for** (review F1). It used to be
+                // `failed() == 0`, which is true of a twelve-name request
+                // cancelled after three — the log then recorded an
+                // unqualified success for a delete that mostly did not
+                // happen.
                 .outcome(crate::core::oplog::OperationOutcome::verified(
-                    outcome.failed() == 0,
+                    outcome.complete(),
                 )),
             Err(err) => super::oplog::user_operation("Delete from host folder")
                 .source(source.clone())

@@ -2509,15 +2509,21 @@ export function FileManager() {
   }
 
   /**
-   * Whether both panes are looking into the **same image file** (ART-081).
+   * Whether both panes are looking into the **same volume** — one image file
+   * *and* one partition inside it (ART-081).
    *
-   * A move between two directories of one image is a relink, not a
+   * A move between two directories of one volume is a relink, not a
    * copy-and-delete: doing it the long way would stage the tree out, write it
    * back into the same volume and then remove the original — twice the free
    * space, and a failure between the halves losing the only copy. F5 has
-   * always refused it by comparing these two paths (`files.err.sameImage`);
-   * F6 could reach it and did not, which only stopped mattering because F6
-   * was restricted to a single directory until now.
+   * always refused it (`files.err.sameImage`); F6 could reach it and did not,
+   * which only stopped mattering because F6 was restricted to one directory.
+   *
+   * **`volumeIndex` is part of the question** (review F9). This compared the
+   * *path* alone, so `DH0:` to `DH1:` of one HDF — two different volumes that
+   * happen to share a file, and the commonest move there is on a real PiStorm
+   * card — was refused as if it were a relink. It is not: real space is
+   * consumed at the destination and real space is freed at the source.
    *
    * Compared case-insensitively: Windows will happily open `E:\Disk.hdf` and
    * `e:\disk.hdf` as two panes onto one file.
@@ -2525,7 +2531,11 @@ export function FileManager() {
   function sameImageAsEachOther(a: PaneState, b: PaneState): boolean {
     if (a.kind === "local" || b.kind === "local") return false;
     if (!a.location || !b.location) return false;
-    return a.location.toLowerCase() === b.location.toLowerCase();
+    if (a.location.toLowerCase() !== b.location.toLowerCase()) return false;
+    // Same file. Same *volume* only if it is also the same partition — and a
+    // pane with no partition open is not a volume anyone is moving out of, so
+    // `null === null` collapsing to "same" is right rather than accidental.
+    return a.volumeIndex === b.volumeIndex;
   }
 
   function noteDamage(outcome: { pre_existing_damage?: string[] } | null | undefined) {
@@ -3038,6 +3048,29 @@ export function FileManager() {
       return;
     }
 
+    // **A host source says where its files will go, before anything moves**
+    // (review F2). The owner chose the Recycle Bin *because* it is the place
+    // people already know to look, and a delete that does not say so is the
+    // option they did not choose. This sentence was in both catalogues and
+    // nothing rendered it, which made the claim that the confirmation named
+    // the destination untrue.
+    //
+    // Its own question rather than folded into the move confirmation above:
+    // that one is about what moves and where it lands, this one about what
+    // happens to the originals — and it is the half that cannot be undone
+    // from inside ART.
+    if (
+      fromHost &&
+      !(await confirm(
+        t("files.hostDelete.confirm", {
+          count: moving.length,
+          folder: source.location,
+        })
+      ))
+    ) {
+      return;
+    }
+
     // Asked **before** the copy half, not after. A move is a copy and then a
     // delete, and the writer now refuses to delete a protected entry
     // (ART-088) — so asking afterwards would mean the copy had already landed
@@ -3190,7 +3223,7 @@ export function FileManager() {
         // `src/lib` has no translator to resolve a nested key with — the
         // `PartialPhrase` shape in `@/lib/phrase`, applied by hand for one
         // parameter.
-        const said = describeHostDelete(outcome, names.length);
+        const said = describeHostDelete(outcome);
         setMessage(
           t(said.key, {
             ...said.params,

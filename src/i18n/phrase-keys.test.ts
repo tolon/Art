@@ -423,6 +423,9 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       // is the one case still refused.
       { ...base, sourceKind: "local", targetKind: "adf", sourceIsRoot: true },
       { ...base, sourceKind: "iso" },
+      // Review F8: host to host, refused in the plan rather than by the page
+      // after two confirmations.
+      { ...base, sourceKind: "local", targetKind: "local" },
       { ...base, sourceWritable: false },
       { ...base, targetKind: "archive" },
       { ...base, targetKind: "hdf", targetWritable: false },

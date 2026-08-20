@@ -64,6 +64,16 @@ describe("planMove", () => {
     ).toEqual({ kind: "move", entries: [dir("Lotus")] });
   });
 
+  it("refuses a host folder to a host folder — review F8", () => {
+    // This used to be *planned as allowed* and then refused by the page after
+    // **both** confirmations: the user answered "yes, move these" and "yes,
+    // overwrite the protected one" and only then learnt ART would not. A
+    // refusal a plan can reach has to be reached in the plan.
+    expect(
+      planMove({ ...base(), sourceKind: "local", targetKind: "local" })
+    ).toEqual({ kind: "refused", reason: { key: "files.move.refuseHostToHost" } });
+  });
+
   it("still refuses to move out of a drive root", () => {
     // `C:\` is where `Windows` and `Program Files` live, and the two
     // confirmations a user learns to click through for a game are the same

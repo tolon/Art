@@ -1089,10 +1089,17 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
                     .map((id) => componentLabel(catalogue ?? [], id))
                     .join(", "),
                   placed: componentPreview.placed,
-                  // Every file that lands on nothing another component
-                  // claimed. Stated because an empty report means "nothing is
-                  // in the way", never "nothing happens" (§89).
-                  fresh: componentPreview.placed - componentPreview.reports.length,
+                  // **`contested`, not `reports.length`** (review F4).
+                  // `collide::preview` drops identical rows before returning,
+                  // so `placed - reports.length` counted a file landing
+                  // byte-for-byte on another component's copy as *new* — 130
+                  // of them on the AmigaOS 3.9 overlay. The three counts
+                  // partition what would be placed, and each is its own fact:
+                  // landed on nothing, landed on identical bytes, replaced
+                  // something. Stated in full because an empty report means
+                  // "nothing is in the way", never "nothing happens" (§89).
+                  fresh: componentPreview.placed - componentPreview.contested,
+                  unchanged: componentPreview.contested - componentPreview.reports.length,
                   replaced: componentPreview.reports.length,
                 })}
               </p>
