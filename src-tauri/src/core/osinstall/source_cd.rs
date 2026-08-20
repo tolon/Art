@@ -16,20 +16,33 @@
 //! [`CdSource::open`] reads the volume name the disc itself carries, so a
 //! renamed ISO still resolves against a recipe's `Component::media`.
 //!
-//! ## Protection and comment: absent from the medium, not measured
+//! ## Protection and comment: read when the disc records them (ART-078)
 //!
-//! ISO9660 has nowhere to keep an AmigaDOS protection byte or a file
-//! comment — ordinary AmigaDOS metadata that simply is not part of this
-//! format. `core::volume::write`'s own convention for "nothing set" is
-//! [`default_protection`] (`----rwed`, i.e. `0`), and
-//! `core::iso::IsoSource::metadata` — the *other* place a disc is read for
-//! the same reason — already answers the same question the same way. So
-//! every [`MediaEntry`] this type produces carries `protection:
-//! default_protection()` and `comment: String::new()` as **declared
-//! defaults**, on the same footing `AdfSource::root_entry` gives its own
-//! unmeasurable fields — never a fact read off the disc, because there is no
-//! such fact on a disc to read. A caller must not treat either as evidence
-//! about the original file (§89).
+//! This module used to say plain ISO9660 "has nowhere to keep an AmigaDOS
+//! protection byte or a file comment". That is true of ISO9660 and false of
+//! an Amiga-mastered disc: both live in the **Amiga `AS` System Use entry**,
+//! which `core::iso::susp` now reads. Two of the four discs measured for
+//! ART-078 carry one on every file — the owner's AmigaOS 3.9 CD and Amiga
+//! Developer CD v2.1, 44 796 entries between them
+//! (`scripts/iso-susp-census.py`).
+//!
+//! So [`MediaEntry::protection`] and [`MediaEntry::comment`] are **read off
+//! the disc when the disc recorded them**, and what
+//! `apply.rs::settle_sidecar` writes into the `.uaem` beside each file and
+//! records in `distribution.json` is that measured value rather than a
+//! declared default. That is the point of the change: `apply.rs`'s own doc
+//! says a manifest must "never state something said", and the manifest can
+//! now say what the medium said.
+//!
+//! When a disc carries no `AS` entry — the AmigaOS 3.2 CD in the same
+//! folder carries no System Use Area at all — the fields stay
+//! [`default_protection`] (`----rwed`, i.e. `0`) and `String::new()` as
+//! **declared defaults**, on the same footing `AdfSource::root_entry` gives
+//! its own unmeasurable fields. A caller must not treat *those* as evidence
+//! about the original file (§89). The two cases are not distinguished in
+//! `MediaEntry` itself, because AmigaDOS has no third state between "these
+//! bits" and "no bits"; what distinguishes them is the disc, and the disc is
+//! recorded in the manifest beside the value.
 //!
 //! The date is different: a disc *does* record one (`IsoEntry::date`, when
 //! the disc did not leave it blank), so it is genuinely read, through the
@@ -129,14 +142,19 @@ impl CdSource {
     }
 
     /// Map one walked disc entry into the shape a recipe reads.
+    /// One walked disc entry as a [`MediaEntry`].
+    ///
+    /// `protection` and `comment` come from the entry's Amiga `AS` System
+    /// Use entry when it has one — see this module's own doc on why that is
+    /// a measured value and not a declared default any more.
     fn to_media_entry(walked: &IsoWalkEntry) -> MediaEntry {
         MediaEntry {
             path: walked.path.clone(),
             is_dir: walked.entry.is_dir,
             size: walked.entry.bytes,
-            protection: default_protection(),
+            protection: walked.entry.protection.unwrap_or_else(default_protection),
             date: walked.entry.date.map(amiga_from_unix).unwrap_or_default(),
-            comment: String::new(),
+            comment: walked.entry.comment.clone().unwrap_or_default(),
         }
     }
 

@@ -104,7 +104,14 @@ pub fn iso_list(path: String, extent: u32, length: u32) -> AppResult<Vec<PanelEn
             iso_extent: Some(entry.extent),
             is_link: false,
             date: entry.date,
-            attrs: None,
+            // `hsparwed` when the disc's own directory record carried an
+            // Amiga `AS` System Use entry, through the one formatter
+            // `PanelEntry::attrs` documents — never a second spelling of the
+            // same bits. `None` for a disc that carries none, which is what
+            // the Attr column already means everywhere else.
+            attrs: entry
+                .protection
+                .map(crate::core::volume::write::uaem::format_bits),
         })
         .collect())
 }
@@ -112,6 +119,7 @@ pub fn iso_list(path: String, extent: u32, length: u32) -> AppResult<Vec<PanelEn
 /// The body of [`iso_extract_file`], without the `State` a Tauri command
 /// needs — so a test can call it directly rather than standing up a real
 /// app just to reach a plain file read and write.
+#[allow(clippy::too_many_arguments)]
 fn extract_file(
     file: &std::path::Path,
     extent: u32,
@@ -119,6 +127,7 @@ fn extract_file(
     name: &str,
     destination: &std::path::Path,
     overwrite: Option<bool>,
+    parent: Option<(u32, u32)>,
 ) -> CoreResult<super::panel::ExtractedTo> {
     // Untrusted the moment it left the disc's own directory record and
     // crossed into a Tauri argument — the same round trip
@@ -140,6 +149,41 @@ fn extract_file(
     let image = IsoImage::open(file)?;
     let data = image.read_file(extent, bytes)?;
     crate::core::safety::atomic::atomic_write(&target, &data)?;
+
+    // The same `.uaem` sidecar the whole-subtree path writes, so one file
+    // dragged out of a disc keeps the Amiga `AS` protection bits and comment
+    // a whole folder dragged out of it keeps (ART-078). The bits are read
+    // from the disc here rather than accepted as an argument: one that
+    // arrived through a Tauri call is one ART did not verify.
+    let record = parent.and_then(|(dir_extent, dir_length)| {
+        image
+            .list(dir_extent, dir_length)
+            .ok()?
+            .into_iter()
+            .find(|e| !e.is_dir && e.extent == extent && e.name == name)
+    });
+    // Only when the record carried an `AS` entry — the same rule
+    // `IsoImage::extract_tree` follows, so one file and a whole folder
+    // dragged out of the same disc produce the same sidecars.
+    let sidecar = record
+        .filter(|e| e.protection.is_some() || e.comment.is_some())
+        .and_then(|e| {
+            crate::core::volume::write::copy::sidecar_for(
+                e.protection
+                    .unwrap_or_else(crate::core::volume::write::file::default_protection),
+                e.date
+                    .map(crate::core::volume::write::layout::amiga_from_unix)
+                    .unwrap_or_default(),
+                e.comment.as_deref().unwrap_or_default(),
+            )
+        });
+    if let Some(sidecar) = sidecar {
+        crate::core::safety::atomic::atomic_write(
+            &crate::core::volume::write::uaem::sidecar_path(&target),
+            crate::core::volume::write::uaem::render(&sidecar).as_bytes(),
+        )?;
+    }
+
     Ok(super::panel::ExtractedTo {
         path: target.to_string_lossy().to_string(),
         bytes: data.len() as u64,
@@ -158,6 +202,7 @@ fn extract_file(
 /// addressable by `extent` alone once split from the listing that produced
 /// it, so the caller passes the one it already has.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn iso_extract_file(
     path: String,
     extent: u32,
@@ -165,12 +210,15 @@ pub fn iso_extract_file(
     name: String,
     dest_dir: String,
     overwrite: Option<bool>,
+    dir_extent: Option<u32>,
+    dir_length: Option<u32>,
     oplog: State<'_, JsonlOperationLog>,
 ) -> AppResult<super::panel::ExtractedTo> {
     let file = PathBuf::from(path.trim());
     let destination = PathBuf::from(dest_dir.trim());
+    let parent = dir_extent.zip(dir_length);
 
-    let result = extract_file(&file, extent, bytes, &name, &destination, overwrite)
+    let result = extract_file(&file, extent, bytes, &name, &destination, overwrite, parent)
         .map_err(crate::error::AppError::from);
 
     write_result(
@@ -293,6 +341,7 @@ pub fn iso_extract(
 /// no subtree, so the only source that could be built for it used to be the
 /// directory it happened to be sitting in — on an install CD, the whole disc
 /// copied across while the status line named one file.
+#[allow(clippy::too_many_arguments)]
 fn disc_source(
     image: IsoImage,
     extent: u32,
@@ -300,13 +349,20 @@ fn disc_source(
     name: &str,
     is_dir: bool,
     date: Option<i64>,
+    parent: Option<(u32, u32)>,
 ) -> CoreResult<IsoSource> {
     if is_dir {
         // A directory's length is a u32 on disc; one claiming more than
         // u32::MAX cannot exist, the same clamp `walk_subtree` uses.
         IsoSource::new(image, extent, bytes.min(u32::MAX as u64) as u32)
     } else {
-        Ok(IsoSource::single_file(image, name, extent, bytes, date))
+        // `parent` is the pane's open directory. A file's Amiga `AS`
+        // protection bits live in its *directory record*, so without it a
+        // single copied file arrives with default bits while the same file
+        // inside a copied folder arrives with its own (ART-078).
+        Ok(IsoSource::single_file(
+            image, name, extent, bytes, date, parent,
+        ))
     }
 }
 
@@ -335,6 +391,8 @@ pub fn iso_copy_to_volume(
     path: String,
     volume_index: usize,
     dir_block: Option<u32>,
+    dir_extent: Option<u32>,
+    dir_length: Option<u32>,
     options: Option<CopyOptions>,
     app: AppHandle,
     registry: State<'_, Arc<JobRegistry>>,
@@ -354,7 +412,15 @@ pub fn iso_copy_to_volume(
     let id = spawn_job(&app, registry, &title, move |job_id, progress| {
         let outcome = (|| -> CoreResult<_> {
             let disc = IsoImage::open(&source_iso)?;
-            let source = disc_source(disc, extent, bytes, &name, is_dir, date)?;
+            let source = disc_source(
+                disc,
+                extent,
+                bytes,
+                &name,
+                is_dir,
+                date,
+                dir_extent.zip(dir_length),
+            )?;
             // Same choice `volume_copy_in` makes for a plain host folder: a
             // cancel keeps whatever already landed rather than abandoning it.
             run_copy_in_folder_with(
@@ -508,6 +574,7 @@ mod tests {
             &readme.name,
             &out,
             None,
+            None,
         )
         .unwrap();
         assert!(!extracted.skipped_existing);
@@ -520,6 +587,7 @@ mod tests {
             readme.bytes,
             &readme.name,
             &out,
+            None,
             None,
         )
         .unwrap();
@@ -539,7 +607,7 @@ mod tests {
         let out = d.join("out");
         std::fs::create_dir_all(&out).unwrap();
 
-        let err = extract_file(&p, u32::MAX, 2048, "x.txt", &out, None).unwrap_err();
+        let err = extract_file(&p, u32::MAX, 2048, "x.txt", &out, None, None).unwrap_err();
         assert_eq!(err.code(), "ART-FORMAT-MALFORMED");
         std::fs::remove_dir_all(&d).ok();
     }
@@ -646,6 +714,7 @@ mod tests {
             &readme.name,
             false,
             readme.date,
+            None,
         )
         .unwrap();
         let picked = crate::core::volume::write::copy::CopySource::entries(&file_source).unwrap();
@@ -660,6 +729,7 @@ mod tests {
             info.root_length as u64,
             "",
             true,
+            None,
             None,
         )
         .unwrap();

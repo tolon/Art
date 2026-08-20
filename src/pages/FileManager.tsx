@@ -1987,7 +1987,12 @@ export function FileManager() {
             destination.path,
             destination.volumeIndex,
             destination.dirBlock,
-            { overwrite: policy }
+            { overwrite: policy },
+            // The source pane's open directory: where the picked file's own
+            // directory record is, and so where its Amiga protection bits
+            // and comment are (ART-078).
+            source.isoExtent,
+            source.isoLength
           );
           copyDestination.current = to;
         } catch (e) {
@@ -2027,7 +2032,12 @@ export function FileManager() {
             entry.iso_extent,
             entry.bytes,
             entry.name,
-            target.location
+            target.location,
+            undefined,
+            // As above: the record carrying the file's bits lives in the
+            // open directory, not in the file.
+            source.isoExtent,
+            source.isoLength
           );
           setMessage(
             outcome.skipped_existing

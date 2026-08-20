@@ -53,6 +53,12 @@ export async function isoList(path: string, extent: number, length: number): Pro
  * HDF: a lone file copies straight through, synchronously, and only a whole
  * directory (`isoExtract`, below) needs a job. `name` is the entry's own
  * name from the listing that found it (`PanelEntry.name`).
+ *
+ * `dirExtent`/`dirLength` are the pane's *open directory* — not the file's.
+ * A file's Amiga protection bits and comment live in its directory record,
+ * so Rust re-reads that record to write the `.uaem` sidecar beside the copy
+ * (ART-078). They are the address of the record, never the bits themselves:
+ * a protection byte sent from here would be one Rust did not verify.
  */
 export async function isoExtractFile(
   path: string,
@@ -60,7 +66,9 @@ export async function isoExtractFile(
   bytes: number,
   name: string,
   destDir: string,
-  overwrite?: boolean
+  overwrite?: boolean,
+  dirExtent?: number | null,
+  dirLength?: number | null
 ): Promise<ExtractedTo> {
   return invoke<ExtractedTo>("iso_extract_file", {
     path,
@@ -69,6 +77,8 @@ export async function isoExtractFile(
     name,
     destDir,
     overwrite: overwrite ?? null,
+    dirExtent: dirExtent ?? null,
+    dirLength: dirLength ?? null,
   });
 }
 
@@ -113,6 +123,11 @@ export async function isoExtract(
  * decide what is copied: a directory carries its whole subtree, a file
  * carries exactly itself — without them a single selected file could only be
  * copied as the directory around it, which on an install CD is the disc.
+ *
+ * `dirExtent`/`dirLength` are the *source* pane's open directory — the
+ * address of the directory record the picked file sits in, which is where its
+ * Amiga protection bits and comment are (ART-078). `dirBlock` is the
+ * destination's; the two are unrelated and deliberately not one field.
  */
 export async function isoCopyToVolume(
   isoPath: string,
@@ -124,7 +139,9 @@ export async function isoCopyToVolume(
   path: string,
   volumeIndex: number,
   dirBlock: number | null,
-  options?: CopyOptions
+  options?: CopyOptions,
+  dirExtent?: number | null,
+  dirLength?: number | null
 ): Promise<number> {
   return invoke<number>("iso_copy_to_volume", {
     isoPath,
@@ -136,6 +153,8 @@ export async function isoCopyToVolume(
     path,
     volumeIndex,
     dirBlock,
+    dirExtent: dirExtent ?? null,
+    dirLength: dirLength ?? null,
     options: options ?? null,
   });
 }
