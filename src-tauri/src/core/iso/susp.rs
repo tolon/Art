@@ -51,11 +51,24 @@
 //! `User | 0 | Multiuser Flags | Protection Bits` — which read big-endian is
 //! exactly the 32-bit protection long AmigaDOS stores in a header block, and
 //! exactly what [`crate::core::volume::write::uaem::Sidecar::protection`]
-//! holds. So they are kept as one `u32` and never narrowed: the specification
-//! says an application reading them "must preserve all four bytes. No bit
-//! shall be cleared or set." The low byte's `RWED` half is inverted, which is
-//! the inversion `uaem::format_bits` already applies — this module does not
-//! apply it a second time.
+//! holds. The specification requires that an application reading them "must
+//! preserve all four bytes. No bit shall be cleared or set", so **this module
+//! keeps all four**, and so does everything that carries the `u32`: the
+//! volume writer stores the whole long in the header block's protection
+//! field.
+//!
+//! **Where that stops is the `.uaem` sidecar.** Its format is eight
+//! characters, `hsparwed`, so it can only spell the low byte — the multiuser
+//! byte and the user byte do not survive a round trip through one. That is
+//! the sidecar's format and not a choice made here, and it costs nothing on
+//! any disc measured for ART-078: all 44 796 real entries record `000000` for
+//! the upper three bytes (`scripts/iso-susp-census.py`). A disc that used
+//! them would keep them on the way into an Amiga volume and lose them on the
+//! way into a Windows folder.
+//!
+//! The low byte's `RWED` half is inverted, which is the inversion
+//! `uaem::format_bits` already applies — this module does not apply it a
+//! second time.
 //!
 //! # Every length here came from a file ART did not write
 //!
@@ -268,11 +281,13 @@ fn read_nm(payload: &[u8], out: &mut SystemUse) {
     }
 
     let text = decode_iso646(bytes);
+    // `insert` rather than assign-then-unwrap: it returns the `&mut` this
+    // needs, so there is no `expect` to reason about. Under `panic = "abort"`
+    // even an unreachable panic is worth not writing.
     let target = if out.name_open {
         out.name.get_or_insert_with(String::new)
     } else {
-        out.name = Some(String::new());
-        out.name.as_mut().expect("just set")
+        out.name.insert(String::new())
     };
     // Truncated at a character boundary, not a byte one: `decode_iso646` maps
     // Latin-1 bytes to `char`, so pushing char by char is what keeps the cap
@@ -327,8 +342,7 @@ fn read_as(payload: &[u8], out: &mut SystemUse) {
         let target = if out.comment_open {
             out.comment.get_or_insert_with(String::new)
         } else {
-            out.comment = Some(String::new());
-            out.comment.as_mut().expect("just set")
+            out.comment.insert(String::new())
         };
         // An AmigaDOS comment is a 80-byte BSTR, so 79 characters is all any
         // destination can hold. Capping here rather than at the point of use

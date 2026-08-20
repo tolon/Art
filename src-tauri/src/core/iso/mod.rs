@@ -300,7 +300,17 @@ impl IsoImage {
             // continuation area is not one — it is the tail of a field that
             // has already been skipped once. Applying it again would eat the
             // first entry of every continuation.
-            susp::parse_into(slice, 0, system_use)?;
+            //
+            // Stopped, not raised — the same rule as the unreadable
+            // continuation above, and for the same reason. `parse_into`
+            // errors when an area holds more than `MAX_SUSP_ENTRIES`, and
+            // that area belongs to *one* record; propagating it would deny
+            // the whole directory listing over one hostile continuation,
+            // which is exactly the trade this function's own doc refuses.
+            // The entry keeps whatever the inline area gave it.
+            if susp::parse_into(slice, 0, system_use).is_err() {
+                break;
+            }
         }
 
         if let Some(name) = system_use.name.clone().filter(|n| !n.is_empty()) {
@@ -988,11 +998,23 @@ pub(crate) mod fixture {
         pub protection: Option<u32>,
         /// The `AS` comment. Empty writes no comment fragment.
         pub comment: String,
-        /// Split the `NM` and the comment across a `CE` continuation area.
-        /// No measured disc does this; it is here because the standard
-        /// allows it and an unexercised continuation reader is an untested
-        /// one.
-        pub continue_in_ce: bool,
+        /// Split the `NM` name across a `CE` continuation area.
+        ///
+        /// Separate from the comment below because 7-Zip can judge one and
+        /// not the other: it reads `NM` and stops at the inline fragment, so
+        /// a split name makes the oracle disagree for 7-Zip's reasons; it
+        /// reads no `AS` at all, so a split *comment* is invisible to it and
+        /// the record can still carry a real `CE` for the oracle to step
+        /// over. No measured disc splits either; both are here because the
+        /// standard allows it and an unexercised continuation reader is an
+        /// untested one.
+        pub split_name_in_ce: bool,
+        /// Split the `AS` comment across a `CE` continuation area.
+        pub split_comment_in_ce: bool,
+        /// Point a `CE` at an area holding more entries than
+        /// [`super::susp::MAX_SUSP_ENTRIES`] — a hostile continuation, so the cost
+        /// of refusing it can be checked. Nothing on a real disc does this.
+        pub flood_ce: bool,
     }
 
     /// A file or directory to put on the synthetic disc.
@@ -1420,8 +1442,10 @@ pub(crate) mod fixture {
     /// its whole job here is to sit between the entries ART *does* read, so
     /// a parser that stopped at an unknown signature would fail.
     ///
-    /// When `continue_in_ce` is set, the `NM` and the comment are cut in half
-    /// and the tail goes into `arena`, reached through a `CE` entry.
+    /// When `split_name_in_ce` or `split_comment_in_ce` is set, that half is
+    /// cut in two and its tail goes into `arena`, reached through a `CE`
+    /// entry. They are separate flags so the oracle fixture can keep a real
+    /// continuation without keeping the one 7-Zip cannot follow.
     fn system_use_for(rock: &RockRidge, skip: usize, arena: &mut CeArena) -> Vec<u8> {
         let mut out = vec![0u8; skip];
         out.extend_from_slice(&[b'R', b'R', 5, 1, 0x89]);
@@ -1429,12 +1453,15 @@ pub(crate) mod fixture {
         px.extend(std::iter::repeat_n(0u8, 32));
         out.extend_from_slice(&px);
 
-        let split = rock.continue_in_ce;
         let mut tail: Vec<u8> = Vec::new();
 
         if !rock.name.is_empty() {
             let bytes = rock.name.as_bytes();
-            let cut = if split { bytes.len() / 2 } else { bytes.len() };
+            let cut = if rock.split_name_in_ce {
+                bytes.len() / 2
+            } else {
+                bytes.len()
+            };
             let (head, rest) = bytes.split_at(cut);
             out.push(b'N');
             out.push(b'M');
@@ -1450,7 +1477,7 @@ pub(crate) mod fixture {
 
         if let Some(protection) = rock.protection {
             let comment = rock.comment.as_bytes();
-            let cut = if split {
+            let cut = if rock.split_comment_in_ce {
                 comment.len() / 2
             } else {
                 comment.len()
@@ -1476,6 +1503,15 @@ pub(crate) mod fixture {
                 cont.extend_from_slice(rest);
                 cont[2] = cont.len() as u8;
                 tail.extend_from_slice(&cont);
+            }
+        }
+
+        if rock.flood_ce {
+            // Enough `RR` entries to trip the per-area cap. `RR` is chosen
+            // because ART steps over it, so what is being checked is the cap
+            // and not some side effect of what the entries said.
+            for _ in 0..(super::susp::MAX_SUSP_ENTRIES + 2) {
+                tail.extend_from_slice(&[b'R', b'R', 5, 1, 0x00]);
             }
         }
 
@@ -1875,9 +1911,11 @@ mod tests {
                             name: "Game.slave".to_string(),
                             protection: Some(0x0000_0060),
                             comment: "a comment that is split in two".to_string(),
-                            // Through a `CE` continuation area, which no
-                            // measured disc uses but the standard allows.
-                            continue_in_ce: true,
+                            // Both through a `CE` continuation area, which
+                            // no measured disc uses but the standard allows.
+                            split_name_in_ce: true,
+                            split_comment_in_ce: true,
+                            flood_ce: false,
                         },
                     )],
                     RockRidge {
@@ -1950,6 +1988,39 @@ mod tests {
             inside[0].comment.as_deref(),
             Some("a comment that is split in two")
         );
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_hostile_continuation_costs_its_own_record_and_not_the_directory() {
+        // `parse_into` refuses an area holding more than `MAX_SUSP_ENTRIES`.
+        // That area belongs to one record, so raising it would deny the
+        // whole listing — the same trade `resolve_continuations` refuses for
+        // a continuation that cannot be read at all.
+        let mut builder = amiga_rock_ridge_builder();
+        for child in builder.children.iter_mut() {
+            if let super::fixture::Node::File { iso, rock, .. } = child {
+                if iso == "ASSIGN" {
+                    rock.as_mut().unwrap().flood_ce = true;
+                }
+            }
+        }
+        let (d, p) = write_image(&builder.build());
+        let iso = IsoImage::open(&p).unwrap();
+        let (extent, length) = iso.root();
+        let entries = iso.list(extent, length).unwrap();
+
+        // Every sibling is still listed, with its own metadata intact.
+        assert_eq!(entries.len(), 4, "{entries:?}");
+        let startup = entries
+            .iter()
+            .find(|e| e.name == "Startup-Sequence")
+            .unwrap();
+        assert_eq!(startup.protection, Some(0x40));
+        // And the poisoned record itself still lists, keeping what its
+        // inline area gave it rather than vanishing.
+        let assign = entries.iter().find(|e| e.name == "Assign").unwrap();
+        assert_eq!(assign.protection, Some(0x20));
         fs::remove_dir_all(&d).ok();
     }
 
@@ -2827,31 +2898,34 @@ mod tests {
         // ones it reads on the owner's AmigaOS 3.9 CD are being read the same
         // way (ART-078).
         if let Ok(dest) = std::env::var("ART_ISO_ROCK_OUT") {
-            // Without the `CE` continuation, and that exclusion was
-            // *measured*, not assumed. Handed the disc with one, 7-Zip lists
-            // `Games/Game` where ART lists `Games/Game.slave`: it reads the
-            // inline `NM` fragment `Game.` and stops, dropping the trailing
-            // dot as an empty extension. Its own source says why —
-            // `CPP/7zip/Archive/Iso/IsoItem.h`, `FindSuspRecord` returns the
-            // *first* matching entry in the inline area and `CE` is not a
-            // signature it looks for at all, so it neither joins `NM`
-            // fragments nor follows a continuation.
+            // The `CE` continuation stays; only the *name* stops being
+            // split across it. That line was measured, not assumed.
             //
-            // So a `CE` fixture here would report a disagreement that is
-            // 7-Zip's limitation and not ART's bug, and this script's own
-            // rule is that only fixtures the oracle can actually judge are
-            // handed to it. The `CE` case is checked instead by a *third*
-            // implementation that does follow continuations:
-            // `scripts/iso-susp-census.py` reads the same synthetic disc and
-            // joins `Game.` + `slave` and the two comment halves the same
-            // way ART does, and `a_name_and_comment_split_across_a_ce_
-            // continuation_are_joined` pins it inside `cargo test`.
+            // Handed a disc whose `NM` was split, 7-Zip listed `Games/Game`
+            // where ART lists `Games/Game.slave`: it reads the inline `NM`
+            // fragment `Game.` and stops, dropping the trailing dot as an
+            // empty extension. Its own source says why —
+            // `CPP/7zip/Archive/Iso/IsoItem.h`, `FindSuspRecord` returns the
+            // *first* matching entry and scans only the inline `SystemUse`;
+            // `CE` is not a signature it looks for at all.
+            //
+            // That costs the oracle the split name and nothing else. 7-Zip
+            // reads no `AS` entry whatsoever, so a comment carried in a `CE`
+            // is invisible to it either way — and the record still carries a
+            // real `CE` the oracle has to step over without losing the file.
+            // Keeping it is the difference between citing a limitation and
+            // dropping continuations wholesale. The split-name case is
+            // checked instead by a *third* implementation that does follow
+            // them: `scripts/iso-susp-census.py` reads the same synthetic
+            // disc and joins `Game.` + `slave` the same way ART does, and
+            // `a_name_and_comment_split_across_a_ce_continuation_are_joined`
+            // pins it inside `cargo test`.
             let mut builder = amiga_rock_ridge_builder();
             for child in builder.children.iter_mut() {
                 if let super::fixture::Node::Dir { children, .. } = child {
                     for grandchild in children.iter_mut() {
                         if let super::fixture::Node::File { rock: Some(r), .. } = grandchild {
-                            r.continue_in_ce = false;
+                            r.split_name_in_ce = false;
                         }
                     }
                 }

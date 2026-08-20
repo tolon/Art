@@ -565,9 +565,11 @@ now ART-079), so it is now one command rather than an idea:
 print a hash per entry rather than a length — the defect gave every file
 exactly the right length.
 
-**Owed, recorded not fixed:** [ART-078](ISSUES.md#open) — Rock Ridge and the
+**Owed, recorded not fixed:** [ART-078](ISSUES.md#fixed) — Rock Ridge and the
 Amiga `AS` System Use entry are not read, so an AmigaOS CD's protection bits
-and file comments are lost on the way out.
+and file comments are lost on the way out. *(Fixed 2026-08-20 on
+`debt-wave-b2`; the line is left as it was written to keep this session's own
+record honest.)*
 
 **Nothing in this phase has been seen on a screen.** Not the disc pane, not
 the archive pane with its virtual tree, not the C64 pane. Every claim above

@@ -66,18 +66,37 @@ phase, treat it as the original plan, not a status claim.
 - `CD001` at sector 16. Where that lands says which sector layout the file has:
   `0x8001` for a plain 2048-byte image, `0x9311` for a raw 2352-byte Mode 1
   track, `0x9319` for Mode 2/XA Form 1 (an 8-byte subheader moves the data).
-- Joliet (UCS-2 big-endian names) is preferred when the disc carries it; the
-  Primary descriptor's uppercase 8.3 names are the fallback.
+- Joliet (UCS-2 big-endian names) is preferred when the disc carries it. When
+  there is no Joliet descriptor, the **System Use Area** is read: a Rock Ridge
+  `NM` name wins over the Primary descriptor's uppercase 8.3 identifier, which
+  is the fallback only when neither is there.
+- The **Amiga `AS` System Use entry** is read (`core/iso/susp.rs`, 2026-08-20,
+  ART-078): the AmigaDOS 32-bit protection long and the file comment. `SP`
+  gates it — a disc that never declared SUSP is never parsed for it — and `CE`
+  continuations are followed under a bounded chain.
+  The bits reach an Amiga volume through the shared copy engine and a Windows
+  folder through a `.uaem` sidecar, written only for a record that carried an
+  `AS` entry.
+  Measured on the owner's own discs (`scripts/iso-susp-census.py`): AmigaOS 3.9
+  and Amiga Developer CD v2.1 carry `AS` on every file (8 584 and 36 212
+  entries); Developer CD v1.1 carries POSIX Rock Ridge without it; the AmigaOS
+  3.2 CD carries no System Use Area at all.
 - Read-only. Mode 2 **Form 2** is refused rather than misread — it carries
   audio or video and no filesystem.
 
 ### Optical images — what is still not implemented
 
-ISO9660 with Joliet is built and read-only (above). These are not:
+ISO9660 with Joliet, Rock Ridge names and the Amiga `AS` entry are built and
+read-only (above). These are not:
 
-- **Rock Ridge**, and the Amiga `AS` System Use entry that carries protection
-  bits and file comments. A Unix-mastered Amiga CD with no Joliet descriptor
-  falls back to uppercase 8.3 names today.
+- **Rock Ridge `SL`, `RE`, `CL`, `PL`** — symlinks and deep-directory
+  relocation. No disc in the owner's folder carries one (the signatures present
+  across all four are `SP`, `CE`, `ER`, `RR`, `PX`, `TF`, `NM`, `AS`), and ART
+  has no symlink concept to map them onto.
+- **Deriving Amiga bits from a `PX` entry** when a record carries no `AS`.
+- **A disc carrying both Joliet and Rock Ridge** still reads as Joliet, so it
+  would not see that disc's `AS` entries. None of the four measured discs has a
+  Joliet descriptor at all.
 - `.cue`+`.bin`, `.nrg`, `.ccd`/`.img`/`.sub`, `.mdf`/`.mds` — container
   formats around the same filesystem.
 - Writing a disc. Not planned; ART reads optical media.

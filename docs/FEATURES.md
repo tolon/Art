@@ -75,13 +75,20 @@ Notes:
     reports what it refused; there is no per-entry checksum verification.
   - ZIP is deflate only; encrypted entries are refused by name. 7z is LZMA.
   - ISO9660 covers Joliet and both raw sector layouts (Mode 1 and Mode 2/XA
-    Form 1); Mode 2 Form 2 is refused rather than misread. Rock Ridge and the
-    Amiga `AS` entry are **not** read — a Unix-mastered Amiga CD with no
-    Joliet descriptor falls back to uppercase 8.3 names.
+    Form 1); Mode 2 Form 2 is refused rather than misread. **Rock Ridge `NM`
+    names and the Amiga `AS` entry are read** (ART-078, 2026-08-20), so a
+    Unix-mastered Amiga CD with no Joliet descriptor keeps its mixed-case
+    names, and a file's AmigaDOS protection bits and comment survive a copy —
+    onto a volume through the copy engine, into a folder through a `.uaem`
+    sidecar. `SL`, `RE`, `CL`, `PL` are not read; no measured disc carries one.
   - Verified against **7-Zip's independent implementation**
-    (`scripts/iso-oracle-check.py`), raw layouts included via
-    sector-stripping. Not against a real Amiga CD filesystem; nothing claims
-    otherwise.
+    (`scripts/iso-oracle-check.py`), raw layouts and a Rock Ridge disc
+    included, the raw ones via sector-stripping. The `AS` entry is beyond what
+    7-Zip reads, so it rests instead on the specification read off the owner's
+    own Developer CD v2.1, on ODFileSystem's unit vectors reproduced byte for
+    byte, and on 44 796 real entries decoding exactly
+    (`scripts/iso-susp-census.py`). Not against a real Amiga CD filesystem
+    running on an Amiga; nothing claims otherwise.
 - **C64 formats — read-only, like every other container ART opens.** D64,
   D71 and D81 (35- and 40-track, with or without error bytes), and T64 tape
   archives, open as panes and copy out to a folder. Writing one is not

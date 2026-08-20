@@ -914,10 +914,18 @@ four discs rather than assumed:
   `SP`, `CE`, `ER`, `RR`, `PX`, `TF`, `NM`, `AS`), and ART has no symlink to
   map them onto. Untested code for an unmeasured case is worse than none —
   the same call `core/archive/lha.rs` made about the `0x3F` comment header.
-- **`PX`** — POSIX mode. The specification's TABLE 6 says a filesystem should
-  derive Amiga bits from it when there is no `AS`; ODFileSystem does. ART does
-  not, because every disc here that carries `PX` and no `AS` is the Developer
-  CD v1.1, whose `PX` modes are the mastering host's and not the Amiga's.
+- **`PX`** — POSIX mode. The specification's TABLE 6 is not a suggestion:
+  *"Filesystems **shall** make use of the required 'PX' entry if no 'AS' entry
+  or no protection bits in that entry are present for an object"*, and it gives
+  the exact mapping. ODFileSystem implements it. **ART deliberately does not**,
+  and the deviation rests on what was measured rather than on reading the
+  requirement down. Exactly one disc here carries `PX` with no `AS`: Developer
+  CD v1.1, whose own `ER` entry declares `RRIP_1991A` — POSIX Rock Ridge, so
+  its modes are the *mastering host's* file permissions and not an Amiga's
+  intent. Deriving from them would manufacture Amiga bits the disc never
+  recorded and present them as read, which §89 forbids more strongly than the
+  specification requires the mapping. If a disc turns up whose `PX` is
+  Amiga-derived, this is the entry to reopen.
 - **A disc carrying both Joliet and Rock Ridge** would still be read as Joliet
   and so lose its `AS` entries. None of the four does — all are ISO9660-only —
   so the preference is untouched rather than reversed on a guess.
