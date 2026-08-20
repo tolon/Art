@@ -26,6 +26,26 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-183** 🔵 **A misspelled key in a release recipe is still dropped in
+silence** — *found while fixing the same hole in packages, 2026-08-20*
+`src-tauri/src/core/osinstall/recipe.rs`
+
+`package.rs` now refuses an unrecognised key **by name** (`serde(flatten)`
+catch-all plus `check_unknown_keys`), because a recipe written
+`"amigaInstaller"` instead of `"amiga_installer"` used to parse to `Ok(None)`
+— silently dropped, and the symptom was "this package is not one this round
+can run", a lie that reads like a design decision.
+
+`recipe.rs`'s release recipes have exactly the same exposure and were left
+alone deliberately: wave D's Task 2 does not touch them, and changing a parser
+nobody measured is how a debt round becomes a defect round. The reasoning is
+recorded in `RawPackage`'s doc comment, where the next editor of either file
+will meet it.
+
+Note `deny_unknown_fields` is **not** the fix here and was tried: every
+shipped recipe carries `_why_…` documentation blocks, which it would reject.
+Whatever closes this has to allow a leading `_` and refuse the rest.
+
 **ART-182** 🟠 **`staging_is_removed_however_the_preview_ends` counts a
 directory namespace it shares with every other test in the process, so it
 fails at random under the full suite** — *found 2026-08-20 by Task 2's fix
