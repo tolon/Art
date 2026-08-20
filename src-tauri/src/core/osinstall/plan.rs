@@ -370,7 +370,10 @@ fn relative_to(entry_path: &str, from: &str) -> String {
     // multi-byte path, which indexing would panic on and which cannot be a
     // case-insensitive match anyway.
     match entry_path.get(..from.len()) {
-        Some(head) if head.eq_ignore_ascii_case(from) => {
+        // International, not ASCII-only (fix round 1, F1) — see
+        // `super::fold_amiga_case`. Byte-length slicing stays valid: a
+        // Latin-1 upper/lower pair is the same width in UTF-8.
+        Some(head) if super::amiga_names_equal(head, from) => {
             let rest = &entry_path[from.len()..];
             rest.strip_prefix('/').unwrap_or(rest).to_string()
         }
@@ -1036,7 +1039,14 @@ pub(super) fn plan_over(
 ///   out does not.
 ///
 /// The maximum across every contributor is the tree's floor.
-fn rom_requirement(recipe: &Recipe, components_on: &[String]) -> Option<u16> {
+///
+/// `pub(crate)` rather than private (fix round 1, F2): the end-to-end test
+/// that this requirement actually reaches G9 has to live in `commands/`,
+/// because `rom_pairing_for` reads two manifests and `core/` may not depend
+/// on `commands/`. The function is pure — a recipe and a list of ids in, a
+/// number out — so widening it costs nothing and buys the one hop the
+/// original test skipped.
+pub(crate) fn rom_requirement(recipe: &Recipe, components_on: &[String]) -> Option<u16> {
     recipe
         .components
         .iter()
@@ -1158,11 +1168,21 @@ mod condition_tests {
         assert_eq!(rom_requirement(&os39, &[]), None);
     }
 
-    /// **A minimum nothing checks is the same as no minimum**, so this walks
-    /// the whole chain the recipe's new declaration exists to feed: shipped
-    /// recipe → `rom_requirement` → the manifest's `PairedRom` → the
-    /// `TreeRom` `commands::preload::rom_pairing_for` maps it to → G9's
-    /// `core::rom::pairing::compare` against a card's own Kickstart.
+    /// **A minimum nothing checks is the same as no minimum.**
+    ///
+    /// **What this test proves, exactly** (fix round 1, F2 — the claim that
+    /// stood here said "the whole chain", and it was not): the shipped 3.9
+    /// recipe → `rom_requirement` → a `TreeRom` carrying the two fields
+    /// `commands::preload::rom_pairing_for` builds one from → G9's
+    /// `core::rom::pairing::compare`. The `TreeRom` here is **hand-built**,
+    /// so the manifest hop — `PairedRom` written into `distribution.json` by
+    /// `apply`, read back and mapped by `rom_pairing_for` — is *not* covered
+    /// by this test. It is covered by
+    /// `commands::preload::tests::a_39_trees_recorded_minimum_survives_the_manifest_and_reaches_g9`,
+    /// which writes a real manifest and calls `rom_pairing_for` itself.
+    ///
+    /// Neither test says anything about a real card or a real boot. Nothing
+    /// on this branch does; see FEATURES.md's 🟡 row and ART-159.
     ///
     /// Before ART-157 the first step answered `None` for every 3.9 tree, so
     /// the last one answered `Suitable` for a card carrying a V37 ROM.

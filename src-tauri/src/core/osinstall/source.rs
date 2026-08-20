@@ -128,9 +128,13 @@ pub trait MediaSource {
 /// path, which indexing would panic on and which cannot be a
 /// case-insensitive ASCII match anyway. The same care `plan::relative_to`
 /// takes for the same reason.
+/// International, not ASCII-only (fix round 1, F1). Slicing by
+/// `prefix.len()` stays correct under the fold: every Latin-1 upper/lower
+/// pair is the same width in UTF-8 (`U+00DC` and `U+00FC` are both two
+/// bytes), so folding never changes how many bytes a prefix occupies.
 pub(super) fn starts_with_ignoring_case(path: &str, prefix: &str) -> bool {
     path.get(..prefix.len())
-        .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+        .is_some_and(|head| super::amiga_names_equal(head, prefix))
 }
 
 /// [`MediaSource`] for a floppy image — any bare AmigaDOS volume

@@ -728,6 +728,94 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// **ART-157, fix round 1 (F2): the hop the first test skipped.**
+    ///
+    /// `a_39_tree_reports_unsuitable_against_a_card_carrying_a_pre_v40_rom`
+    /// hand-builds its `TreeRom`, so it never exercised `PairedRom` being
+    /// written into a manifest and read back out. This does: the number comes
+    /// from the **shipped** 3.9 recipe through `rom_requirement`, goes into a
+    /// real `distribution.json` as a `PairedRom`, and comes back through
+    /// `rom_pairing_for`'s own narrow reader and mapping.
+    ///
+    /// Both directions, so a verdict that were constant fails: a V37 card is
+    /// `Unsuitable` and a V40 card is not.
+    ///
+    /// Still says nothing about a real card or a real boot — see ART-159.
+    #[test]
+    fn a_39_trees_recorded_minimum_survives_the_manifest_and_reaches_g9() {
+        use crate::core::osinstall::{plan::rom_requirement, recipe, PairedRom};
+        use crate::core::rom::pairing::Pairing;
+
+        let recipe = recipe::by_release("AmigaOS 3.9").unwrap();
+        let requires_major = rom_requirement(&recipe, &["workbench-base".to_string()]);
+        assert_eq!(
+            requires_major,
+            Some(40),
+            "the shipped recipe states the floor"
+        );
+
+        let paired = PairedRom {
+            name: "Kickstart 40.68 (A1200)".into(),
+            sha256: "cc".repeat(32),
+            stated_major: Some(40),
+            compatible_models: vec!["A1200".into()],
+            requires_major,
+        };
+
+        let dir = scratch("pairing-39-minimum");
+        let tree = dir.join("dist");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(
+            tree.join(crate::core::osinstall::apply::MANIFEST_FILE_NAME),
+            serde_json::to_string(&serde_json::json!({
+                "release": "AmigaOS 3.9",
+                "builtFrom": [],
+                "files": [],
+                "pairedRom": paired,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let image = dir.join("card.img");
+        std::fs::write(&image, b"not a card; only its manifest is read").unwrap();
+
+        let write_card = |major: u16| {
+            let mut card = crate::core::card::manifest::tests_support::sample_manifest();
+            card.source.kickstart_file = Some("kick.rom".into());
+            card.source.kickstart_stated_major = Some(major);
+            card.boot_files = vec![crate::core::card::manifest::ManifestFile {
+                name: "kick.rom".into(),
+                bytes: 524_288,
+                sha256: "dd".into(),
+            }];
+            std::fs::write(
+                crate::core::card::manifest::manifest_path_for(&image),
+                crate::core::card::manifest::render_manifest(&card).unwrap(),
+            )
+            .unwrap();
+        };
+
+        write_card(37);
+        match rom_pairing_for(&image, &tree).unwrap() {
+            Pairing::Unsuitable { needs, found, .. } => {
+                assert_eq!((needs, found), (40, Some(37)));
+            }
+            other => panic!("a 3.9 tree on a Kickstart 2.0 card must not read as fine: {other:?}"),
+        }
+
+        write_card(40);
+        assert!(
+            matches!(
+                rom_pairing_for(&image, &tree).unwrap(),
+                Pairing::Suitable { .. }
+            ),
+            "and a Kickstart 3.1 card must not be refused"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// **G9, and the reason the narrow struct is safe.** `pairedRom` is the
     /// manifest's *last* field, written after every `FileRecord` — 3950 of
     /// them and a megabyte of JSON on the real `dist-3.2b`. Reading it through

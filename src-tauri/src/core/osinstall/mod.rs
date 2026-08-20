@@ -227,20 +227,95 @@ impl Recipe {
 /// `HashMap` or `BTreeMap` keyed on a raw destination is the same defect in
 /// a quieter form, so those are keyed on this instead.
 ///
-/// ASCII-only folding, matching `eq_ignore_ascii_case` — which is what every
-/// other case comparison in this module tree already uses, and what
-/// `hash::name_hash` folds for AmigaDOS itself. A destination is never
-/// normalised for *storage*: what the manifest records and what the
-/// filesystem holds stays whatever the medium spelled. This is only how two
-/// of them are told apart.
+/// Folded with [`fold_amiga_case`] — **international**, not ASCII-only, and
+/// the correction is measured rather than tidy (fix round 1, F1). A
+/// destination is never normalised for *storage*: what the manifest records
+/// and what the filesystem holds stays whatever the medium spelled. This is
+/// only how two of them are told apart.
 pub fn destination_key(path: &str) -> String {
-    path.to_ascii_lowercase()
+    fold_amiga_case(path)
 }
 
 /// Whether two destination paths name the same place — see
 /// [`destination_key`].
 pub fn same_destination(a: &str, b: &str) -> bool {
-    a.eq_ignore_ascii_case(b)
+    fold_amiga_case(a) == fold_amiga_case(b)
+}
+
+/// One AmigaDOS name folded for comparison — ASCII **and** the Latin-1
+/// accented range, the way an *international* AmigaDOS volume folds.
+///
+/// # Why international, when there is no volume to ask
+///
+/// `hash::name_hash` takes an `international` flag because a real volume
+/// carries one in its bootblock (`DOS\2`/`DOS\3`), and an INTL volume folds
+/// 0xC0–0xDE against 0xE0–0xFE as well as A–Z against a–z. There is no
+/// bootblock behind an archive entry name, a recipe's `from`, or a
+/// destination path, so nothing can be asked — the flag has to be *chosen*,
+/// and this codebase chose ASCII-only by default and never said so.
+///
+/// **International is the right choice here, and it is the owner's own
+/// material that decides it.** Read with ART's own reader, not a third-party
+/// tool (fix round 1): `AmigaOS39.iso` carries **no Joliet descriptor at
+/// all** — its descriptor chain is `[Primary, Primary, Terminator]` — so
+/// `CdSource` reads the Primary tree and answers
+/// `OS-VERSION3.9/LOCALE/CATALOGS/TÜRKÇE` (`T U+00DC R K U+00C7 E`), while
+/// `BoingBag39-2-turkce.lha` spells its own drawer `türkçe`
+/// (`t U+00FC r k U+00E7 e`). Four of the owner's eight language drawers are
+/// non-ASCII (`türkçe`, `français`, `português`, `português-brasil`) and the
+/// disc has an upper-case counterpart for every one of them. Under
+/// `eq_ignore_ascii_case` those are two different names, so:
+///
+/// - the Turkish pack's distinguisher missed an archive that spells its
+///   drawer in upper case, which is ART-167's entire point, and
+/// - `destination_key` reported **no collision** between the base disc's
+///   `Locale/Catalogs/TÜRKÇE` and the package's `Locale/Catalogs/türkçe` —
+///   the ~34 overlapping catalogs ART-169 predicted would appear were still
+///   going to read as zero, for a second and unrelated reason.
+///
+/// A modern AmigaOS volume is an INTL one, the owner's own names need the
+/// fold, and folding *more* can only merge names AmigaDOS already treats as
+/// one. Nothing that folds can turn a refusal into a wrong file: two
+/// candidates that fold together become `MediaMatch::Ambiguous`, which is a
+/// named refusal listing both.
+///
+/// # The rule, exactly
+///
+/// The inverse of [`hash::intl_to_upper`](crate::core::adf::hash): every
+/// ASCII `A`–`Z` and every code point in `0xC0..=0xDE` **except `0xD7`**
+/// (`×`, which has no lower-case form) folds down by 0x20. Expressed over
+/// `char` rather than bytes because Rust strings are UTF-8 and Unicode's
+/// first 256 code points *are* Latin-1 — the same identity `core::lha`'s own
+/// ART-168 fix rests on, so a name decoded from a Latin-1 archive header
+/// folds against a name decoded from an ISO9660 record without either being
+/// re-encoded.
+///
+/// `0xDF` (`ß`) and `0xFF` (`ÿ`) are untouched, because Latin-1 gives
+/// neither an upper-case partner and AmigaDOS's own table does not invent
+/// one. Turkish's dotless `ı`/`İ` are outside Latin-1 entirely and are not
+/// special-cased: this matches what an Amiga does, which is the only thing
+/// it is trying to match.
+pub fn fold_amiga_case(name: &str) -> String {
+    name.chars().map(fold_amiga_char).collect()
+}
+
+/// Whether two AmigaDOS names are the same name — see [`fold_amiga_case`].
+pub fn amiga_names_equal(a: &str, b: &str) -> bool {
+    a.len() == b.len()
+        && a.chars()
+            .map(fold_amiga_char)
+            .eq(b.chars().map(fold_amiga_char))
+}
+
+/// One character folded. See [`fold_amiga_case`] for the rule and its source.
+fn fold_amiga_char(c: char) -> char {
+    let code = c as u32;
+    if c.is_ascii_uppercase() || ((0xC0..=0xDE).contains(&code) && code != 0xD7) {
+        // Safe by construction: both ranges map into valid scalar values.
+        char::from_u32(code + 0x20).unwrap_or(c)
+    } else {
+        c
+    }
 }
 
 /// The **host** path a distribution-tree destination is written at (ART-160).
@@ -562,6 +637,70 @@ pub enum RefusalReason {
 // `partition_offset` reference `core/card/build.rs`, which is still a later
 // task, so they are not written yet.
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod fold_tests {
+    use super::{amiga_names_equal, destination_key, fold_amiga_case};
+
+    /// **Fix round 1, F1.** The fold is the one an *international* AmigaDOS
+    /// volume applies, and every pair below is a name that exists in the
+    /// owner's own material — the AmigaOS 3.9 disc's Primary tree spells its
+    /// language drawers in upper case (`TÜRKÇE`, `FRANÇAIS`), the language
+    /// packs spell them in lower (`türkçe`, `français`).
+    #[test]
+    fn the_fold_covers_the_latin1_accented_range_not_only_ascii() {
+        for (upper, lower) in [
+            ("T\u{DC}RK\u{C7}E", "t\u{FC}rk\u{E7}e"),
+            ("FRAN\u{C7}AIS", "fran\u{E7}ais"),
+            ("PORTUGU\u{CA}S", "portugu\u{EA}s"),
+            ("ESPA\u{D1}OL", "espa\u{F1}ol"),
+            ("POLSKI", "polski"),
+        ] {
+            assert!(
+                amiga_names_equal(upper, lower),
+                "{upper} and {lower} are one AmigaDOS name"
+            );
+            assert_eq!(fold_amiga_case(upper), fold_amiga_case(lower));
+        }
+    }
+
+    /// The two Latin-1 characters that have no case partner, and the one
+    /// that is not a letter at all — folding any of them would invent a
+    /// pairing AmigaDOS's own table does not have.
+    #[test]
+    fn characters_with_no_case_partner_are_left_alone() {
+        // 0xD7 multiplication sign vs 0xF7 division sign: different
+        // characters, and 0xD7 must not fold onto 0xF7.
+        assert!(!amiga_names_equal("\u{D7}", "\u{F7}"));
+        // 0xDF eszett and 0xFF y-diaeresis have no Latin-1 upper/lower pair.
+        assert_eq!(fold_amiga_case("\u{DF}"), "\u{DF}");
+        assert_eq!(fold_amiga_case("\u{FF}"), "\u{FF}");
+    }
+
+    /// Folding must not merge names that are genuinely different, or the
+    /// refusals every caller of this depends on stop meaning anything.
+    #[test]
+    fn different_names_stay_different() {
+        assert!(!amiga_names_equal(
+            "portugu\u{EA}s",
+            "portugu\u{EA}s-brasil"
+        ));
+        assert!(!amiga_names_equal("t\u{FC}rk\u{E7}e", "deutsch"));
+        assert!(!amiga_names_equal("Libs", "Lib"));
+    }
+
+    /// `destination_key` is the collision map's key, and it goes through the
+    /// same fold — the base disc writes `Locale/Catalogs/TÜRKÇE/x.catalog`
+    /// and the Turkish pack writes `Locale/Catalogs/türkçe/x.catalog`, which
+    /// under the old ASCII-only fold were two files.
+    #[test]
+    fn a_destination_the_disc_and_a_package_spell_differently_is_one_place() {
+        let from_disc = "Locale/Catalogs/T\u{DC}RK\u{C7}E/workbench.catalog";
+        let from_pack = "Locale/Catalogs/t\u{FC}rk\u{E7}e/workbench.catalog";
+        assert_eq!(destination_key(from_disc), destination_key(from_pack));
+        assert!(super::same_destination(from_disc, from_pack));
+    }
+}
 
 #[cfg(test)]
 pub(crate) mod fixtures {

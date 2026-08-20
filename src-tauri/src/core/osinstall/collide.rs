@@ -562,7 +562,7 @@ fn declared_override(
         return Ok(false);
     };
 
-    let overrides = super::recipe::shipped_component_overrides(component).ok_or_else(|| {
+    let overrides = super::recipe::shipped_component_overrides(component)?.ok_or_else(|| {
         CoreError::InvalidInput(format!(
             "'{component}' does not name a shipped component or package, so ART cannot say \
              whether it declared an override for '{to}'"

@@ -3,6 +3,8 @@
 //! `include_str!` for the same three reasons `core/distro` uses it: reviewable
 //! in a diff, shipped without a network, and unable to grow a code path.
 
+use std::collections::HashMap;
+
 use super::{Component, Recipe};
 use crate::core::error::{CoreError, CoreResult};
 
@@ -180,29 +182,71 @@ pub fn by_release(release: &str) -> CoreResult<Recipe> {
 /// order is a statement about determinism rather than a precedence rule
 /// anything relies on.
 ///
-/// `None` means no shipped recipe of either kind declares this id. The
+/// `Ok(None)` means no shipped recipe of either kind declares this id. The
 /// caller decides what that is: `declared_override` still refuses by name,
 /// because an id that resolves to nothing is an inconsistency in whatever
 /// built the item, not a fact about the file.
-pub fn shipped_component_overrides(id: &str) -> Option<Vec<String>> {
+///
+/// # It returns an error and does not panic (fix round 1, F10)
+///
+/// The first version reached for `panic!`/`expect` on a shipped recipe that
+/// would not parse, reasoning that such a recipe is a bug in ART's own data
+/// rather than a user situation. That reasoning does not survive the release
+/// profile: `panic = "abort"` means an abort here takes the whole
+/// application down, and this runs **per collision row** — the exact shape
+/// CLAUDE.md's bounds-checking rule names. Shipped data being wrong is still
+/// a bug; it is now a bug that produces a refusal a user can read and a
+/// process that is still running.
+///
+/// # Parsed once, not once per row (fix round 1, F6)
+///
+/// `by_release` re-parses the JSON on every call, and this was called for
+/// every row of every preview — benchmarked at 110 µs against the 16.5 µs
+/// `package::by_id` alone used to cost, ~6.7x per row and unflagged. The
+/// answer is a flat `id -> overrides` map built once per process. The shipped
+/// JSON is `include_str!`-ed into the binary and cannot change under a
+/// running process, so caching it can never go stale; the parse **result**
+/// is what is cached, so a broken recipe is reported identically on the
+/// first call and the thousandth.
+///
+/// `CoreError` is not `Clone`, so the cache holds the failure as its own
+/// text and rebuilds a `CoreError::Malformed` from it. The text is the
+/// original error's, unchanged.
+pub fn shipped_component_overrides(id: &str) -> CoreResult<Option<Vec<String>>> {
+    static OVERRIDES: std::sync::OnceLock<Result<HashMap<String, Vec<String>>, String>> =
+        std::sync::OnceLock::new();
+
+    let built = OVERRIDES.get_or_init(build_shipped_override_map);
+    match built {
+        Ok(map) => Ok(map.get(id).cloned()),
+        Err(detail) => Err(CoreError::Malformed {
+            format: "shipped recipe".into(),
+            detail: detail.clone(),
+        }),
+    }
+}
+
+/// Every shipped component id mapped to its own `overrides`, releases first
+/// then packages — see [`shipped_component_overrides`], which is the only
+/// caller and which caches this.
+fn build_shipped_override_map() -> Result<HashMap<String, Vec<String>>, String> {
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
     for release in releases() {
-        // A shipped recipe that does not parse is a bug in shipped data, not
-        // a reason to answer "no such component" — every other reader of
-        // these files treats it that way, and swallowing it here would turn
-        // a broken recipe into a silent `declared: false` on every row.
-        let recipe = by_release(release).unwrap_or_else(|e| {
-            panic!("the shipped {release} recipe must parse and validate: {e}")
-        });
-        if let Some(component) = recipe.component(id) {
-            return Some(component.overrides.clone());
+        let recipe = by_release(release)
+            .map_err(|e| format!("the shipped {release} recipe does not parse: {e}"))?;
+        for component in recipe.components {
+            // Releases are searched first, so an id a release already claims
+            // is not overwritten by a package's. `no_id_is_claimed_by_both_a_release_and_a_package`
+            // is what keeps that from ever mattering.
+            map.entry(component.id).or_insert(component.overrides);
         }
     }
-    let packages =
-        super::package::packages().expect("the shipped packages must parse and validate");
-    packages
-        .into_iter()
-        .find(|package| package.id == id)
-        .map(|package| package.component.overrides)
+    let packages = super::package::packages()
+        .map_err(|e| format!("the shipped packages do not parse: {e}"))?;
+    for package in packages {
+        map.entry(package.id).or_insert(package.component.overrides);
+    }
+    Ok(map)
 }
 
 #[cfg(test)]
@@ -756,7 +800,7 @@ mod tests {
     #[test]
     fn shipped_component_overrides_reads_releases_and_packages_alike() {
         assert_eq!(
-            super::shipped_component_overrides("workbench-39"),
+            super::shipped_component_overrides("workbench-39").unwrap(),
             Some(vec![
                 "workbench-base".to_string(),
                 "locale-base".to_string()
@@ -764,17 +808,17 @@ mod tests {
             "a release recipe's own component"
         );
         assert_eq!(
-            super::shipped_component_overrides("locale-turkish"),
+            super::shipped_component_overrides("locale-turkish").unwrap(),
             Some(vec!["locale-base".to_string()]),
             "a package, which is all this used to be able to answer for"
         );
         assert_eq!(
-            super::shipped_component_overrides("workbench-base"),
+            super::shipped_component_overrides("workbench-base").unwrap(),
             Some(Vec::new()),
             "a real component that declares none is not the same as no component"
         );
         assert_eq!(
-            super::shipped_component_overrides("not-shipped-at-all"),
+            super::shipped_component_overrides("not-shipped-at-all").unwrap(),
             None
         );
     }

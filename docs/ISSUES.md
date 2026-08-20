@@ -26,6 +26,53 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-175** 🟡 **The OS Builder can preview what a package would
+replace and still cannot preview what switching a recipe component on would
+replace — `collide::preview` can now answer, and nothing asks it** — *found
+2026-08-20 by the wave-B1 review (F3), filed in fix round 1 as ART-170's
+successor rather than left as a sentence inside a closed entry*
+`src-tauri/src/commands/osinstall.rs` (`extract_incoming_for_preview`,
+`preview_collisions`) · `src/components/osbuilder/OsInstall.tsx`
+
+[ART-170](#fixed) removed the core-level block: `collide::declared_override`
+resolves an incoming item's component id against every shipped id, releases
+and packages alike, so `preview` answers for `workbench-39` over
+`workbench-base` exactly as it does for a BoingBag over a tree. What it did
+not touch is the only thing that *builds* the rows `preview` consumes.
+
+`extract_incoming_for_preview` takes an ordered list of **package** ids, opens
+each one's archive through `resolve_package_archive`, and extracts its files
+to a temporary directory. There is no equivalent for a release recipe's
+component: its bytes come off install media resolved by `plan()`, through a
+`MediaSource` rather than a package archive, and nothing assembles those into
+`Incoming` rows for a preview.
+
+**What it costs.** AmigaOS 3.9's `workbench-39` replaces 40 real files that
+`workbench-base` placed — it is the component that makes a tree AmigaOS 3.9
+rather than 3.5, and the only one in shipped data that layers over another.
+A user can be shown, file by file, what a BoingBag would replace, and cannot
+be shown the same thing for the component that changes what operating system
+they end up with. `plan::detect_collisions` already refuses an *undeclared*
+overlap at plan time, so nothing is unguarded; what is missing is the
+informed-consent half of §92's PREVIEW.
+
+**What it is not.** Not a `collide` change — that half is done and tested
+(`a_release_recipes_own_component_can_be_asked_about_too`). This is a
+command-layer feature: resolve the chosen release's media the way `plan()`
+does, extract the switched-on components' files under the same
+`MAX_PREVIEW_FILES`/`MAX_PREVIEW_BYTES` ceilings and the same cache
+`extract_package_items` already uses, and hand the rows to the same
+`preview`.
+
+**A limit that will still be there afterwards**, and worth knowing before
+anyone builds this: `Libs/WORKBENCH.LIBRARY` carries no `$VER:` marker, so
+the 3.9 overlay's replacement of it (193,400 → 199,852 bytes) classifies as
+`Unversioned` — a size comparison — while being the single change that turns
+`Workbench 44.5` into `Workbench 45.1`. The preview will show the file and
+will not be able to say what the change is. That is recorded in ART-170's own
+entry and is not this issue's to fix.
+
+
 **ART-174** 🔵 **Two more breakpoints ask the real viewport a question about
 the zoomed layout** — *found 2026-08-20 on `debt-wave-a`, while fixing
 [ART-101](#fixed); filed rather than fixed, a different screen's contract*
@@ -927,6 +974,39 @@ nothing to hand `preview` for a recipe component yet. What is removed is the
 block that made it impossible in the core — the layer above can now be widened
 without touching `collide`.
 
+**That half is now [ART-175](#open), filed in fix round 1** rather than left
+as a sentence inside a closed entry. A half-closed issue with no successor is
+how work disappears, and this one is the user-facing half of what ART-170 was
+about.
+
+**Fix round 1 (2026-08-20) — two defects in the resolver itself.**
+
+**F10 — `panic!`/`expect` inside `core/`, on a per-row path.** The first
+version reasoned that a shipped recipe that will not parse is ART's own bug
+rather than a user situation, and panicked. That does not survive the release
+profile: `panic = "abort"` makes it take the whole application down, and
+`declared_override` runs for every collision row — the exact shape CLAUDE.md's
+bounds-checking rule names. `shipped_component_overrides` now returns
+`CoreResult<Option<Vec<String>>>`; broken shipped data is still a bug, and it
+is now a bug that produces a refusal a user can read.
+
+**F6 — it re-parsed every shipped recipe per row, and nothing said so.**
+Benchmarked on this machine (release profile, 20,000 calls):
+
+| path | per call |
+|---|---|
+| building the map uncached — what the first version did per row | **116.1 µs** |
+| `package::by_id` alone — what it replaced | 18.5 µs |
+| the cached map, as it now stands | **0.161 µs** |
+
+which reproduces the review's own 110 µs / 16.5 µs and then removes it: the
+`id -> overrides` map is built once per process in a `OnceLock`. The shipped
+JSON is `include_str!`-ed into the binary and cannot change under a running
+process, so the cache can never go stale; the parse **result** is cached, so a
+broken recipe is reported identically on the first call and the thousandth.
+`CoreError` is not `Clone`, so the failure is held as its own text and a
+`CoreError::Malformed` is rebuilt from it unchanged.
+
 **The second, harder limit recorded above is untouched and stands**: a file
 carrying no `$VER:` marker at all — `Libs/WORKBENCH.LIBRARY` is the measured
 one — classifies as `Unversioned` whatever it actually changes, so no "did the
@@ -1019,16 +1099,47 @@ entirely for `rom-older-than` — projecting a floor through it would have told
 the user the reverse of the truth. One new key in both catalogues,
 `osinstall.components.reason.romAtLeast`, renders it on the row.
 
-**Tests:** `a_rom_at_least_condition_holds_from_its_own_major_upwards` (both
-edges of the V40 boundary), `each_condition_kind_contributes_its_requirement_from_its_own_side`
-(over both shipped recipes, both directions),
-`a_39_tree_reports_unsuitable_against_a_card_carrying_a_pre_v40_rom` (the whole
-chain — recipe → `rom_requirement` → `TreeRom` → `pairing::compare` — which is
-what makes this a minimum something checks),
-`component_summary_serializes_with_the_keys_the_checklist_reads` (widened: each
-kind fills exactly one field and nulls the other) and, on the frontend,
-`projects each condition kind into its own field and never the other`. All five
-were run with the recipe's declaration removed; all five fail without it.
+**Tests, and what each one actually guards** (re-measured in fix round 1 —
+the claim "all five fail" was written, not run; three Rust and one frontend
+did, and the fifth, `a_rom_at_least_condition_holds_from_its_own_major_upwards`,
+tests `condition_holds` directly and does not depend on the recipe declaring
+anything):
+
+| test | fails with the recipe's declaration removed? |
+|---|---|
+| `each_condition_kind_contributes_its_requirement_from_its_own_side` | yes |
+| `a_39_tree_reports_unsuitable_against_a_card_carrying_a_pre_v40_rom` | yes |
+| `a_39_trees_recorded_minimum_survives_the_manifest_and_reaches_g9` (new, F2) | yes |
+| `component_summary_serializes_with_the_keys_the_checklist_reads` | yes |
+| frontend `projects each condition kind into its own field and never the other` | yes |
+| `a_rom_at_least_condition_holds_from_its_own_major_upwards` | **no** |
+
+Measured: `1947 passed; 4 failed` in Rust plus one frontend failure. The last
+row is the unit test for the new variant itself — it constructs its own
+`Condition::RomAtLeast { major: 40 }` and asserts both edges of the boundary,
+so no recipe has to declare anything for it to be meaningful. It guards the
+comparison, not the declaration.
+
+**What the chain test proves, and what it does not** (fix round 1, F2 — the
+claim "the whole chain" was not supported). Two tests now cover two different
+lengths of it:
+
+- `a_39_tree_reports_unsuitable_against_a_card_carrying_a_pre_v40_rom` covers
+  shipped recipe → `rom_requirement` → a **hand-built** `TreeRom` →
+  `pairing::compare`. The manifest is not in it.
+- `a_39_trees_recorded_minimum_survives_the_manifest_and_reaches_g9`, added in
+  fix round 1, closes that hop: the number goes from the shipped recipe
+  through `rom_requirement` into a real `distribution.json` as a `PairedRom`,
+  and comes back through `commands::preload::rom_pairing_for`'s own narrow
+  reader and mapping, against a card manifest carrying V37 and then V40.
+  (`plan::rom_requirement` became `pub(crate)` for this, because the test has
+  to live in `commands/` — `core/` may not depend on it.)
+
+**Still unproven, and recorded rather than implied:** `apply` actually writing
+that `PairedRom` into a real tree's manifest (the test writes the JSON
+itself), and everything past the comparison — no card has been written with a
+3.9 tree and no 3.9 tree has been booted. See ART-159 and FEATURES.md's 🟡
+row; this entry claims a recorded, checked requirement, not a working system.
 
 
 **ART-167** 🟠 **Eight of the owner's archives claim the top-level directory
@@ -1178,17 +1289,91 @@ Matching is whole-path and case-insensitive, through `MediaSource::entry` so
 there is one rule rather than a second copy of it — never a prefix, because
 `português` and `português-brasil` are two of the real eight.
 
-**Tests:**
-`eight_archives_claiming_localeupdate_are_separated_by_what_is_inside_them`
-(the four-archive case, including the `português`/`português-brasil` prefix
-hazard), `a_single_candidate_of_the_wrong_variant_is_missing_not_found` (the
-non-ambiguous half), `an_ambiguity_the_distinguisher_cannot_settle_still_names_both`
-(a refusal that names its candidates and no others), and
-`only_the_packages_with_a_shared_top_level_directory_declare_a_distinguisher`
-(the shipped data, asserted in both directions). All four were run with the
-second filter reverted and all four fail — the third only after a
-different-language archive was added beside the two duplicates, because
-without it it passed either way and was measuring nothing.
+**Tests, and what each one actually guards** (re-measured in fix round 1 —
+the claim that stood here, "all four fail", was wrong, and the review was
+right about which one):
+
+| test | fails with the filter reverted? |
+|---|---|
+| `eight_archives_claiming_localeupdate_are_separated_by_what_is_inside_them` | yes |
+| `a_single_candidate_of_the_wrong_variant_is_missing_not_found` | yes |
+| `an_ambiguity_the_distinguisher_cannot_settle_still_names_both` | yes |
+| `a_drawer_spelled_in_upper_case_is_the_same_drawer` (F1) | yes |
+| `an_archive_that_cannot_be_reopened_does_not_satisfy_the_distinguisher` (F7) | yes |
+| `an_empty_declared_drawer_does_not_satisfy_the_distinguisher` (F8) | yes |
+| `only_the_packages_with_a_shared_top_level_directory_declare_a_distinguisher` | **no** |
+
+Measured by replacing the second filter with a no-op and running the whole
+suite: `1945 passed; 6 failed`. The seventh row guards the **shipped JSON** —
+that `locale-turkish` and `boingbag-39-2` declare a distinguisher and
+`boingbag-39-1` does not — and a data assertion cannot fail when the code
+that reads the data is disabled. It is still worth having, and it is not
+evidence about the filter; counting it as such was the same mistake as
+writing a number nobody re-ran.
+
+One of these was vacuous when first written:
+`an_ambiguity_the_distinguisher_cannot_settle_still_names_both` used two
+identical Turkish archives, which are ambiguous with or without the filter.
+A German pack was added beside them and the assertion widened to require it
+*not* be named.
+
+**Fix round 1 (2026-08-20) — three defects the review found in the fix
+itself, all of which let an archive pass a check it should not have.**
+
+**F1, and it is the fifth exact-case defect in two days.** The fold both
+halves of the identity comparison used was `eq_ignore_ascii_case`, and the
+distinction is not ASCII: **four of the owner's eight language drawers are
+non-ASCII** (`türkçe`, `français`, `português`, `português-brasil`). The
+reviewer's case — an archive spelling its drawer `TÜRKÇE` against a recipe
+spelling it `türkçe` — answered `Missing`, while the ASCII pair
+`POLSKI`/`polski` answered `Found`.
+
+**This is not a hypothetical spelling, and finding that out corrected an
+earlier measurement too.** Read with ART's own `CdSource` rather than with
+7-Zip, `AmigaOS39.iso` carries **no Joliet descriptor at all** — its
+descriptor chain is `[Primary, Primary, Terminator]` — so ART reads the
+Primary tree and the disc answers `OS-VERSION3.9/LOCALE/CATALOGS/TÜRKÇE`,
+upper case. `locale-turkish.json`'s own note said the disc spelled it
+`türkçe`, "measured with 7z"; 7-Zip lower-cases plain ISO9660 names as a
+display convention, so the first measurement disagreed with the reader that
+actually does the work. That note is corrected in the same commit.
+
+The consequence reached further than ART-167: `destination_key` folded
+ASCII-only too, so the base component's `Locale/Catalogs/TÜRKÇE/x.catalog`
+and this package's `Locale/Catalogs/türkçe/x.catalog` were **two different
+destinations**. The ~34 overlapping catalogs [ART-169](#fixed) predicted would
+appear once ART-168 was fixed were still going to read as zero, for a second
+and unrelated reason.
+
+Fixed with **one** fold, `core::osinstall::fold_amiga_case` /
+`amiga_names_equal`, applied at every site in this module tree that compares
+one AmigaDOS name to another: `same_identity`, `ArchiveSource::find_by_path`
+and its implicit-directory dedup, `CdSource::find_by_path`,
+`starts_with_ignoring_case`, `plan::relative_to`, and `destination_key` /
+`same_destination`. It is the inverse of `hash::intl_to_upper` — ASCII plus
+`0xC0..=0xDE` except `0xD7` — expressed over `char`, because Unicode's first
+256 code points *are* Latin-1, which is the same identity `core::lha`'s
+ART-168 fix rests on. **International was chosen, not read**: there is no
+bootblock behind an archive entry name to ask, the owner's own names need the
+fold, a modern AmigaOS volume is an INTL one, and folding more can only merge
+names AmigaDOS already treats as one. The reasoning is in that function's own
+doc comment, which is what the old ASCII-only choice never had.
+
+**F7 — the distinguisher check failed open.** An archive that would not
+re-open answered `true`, on the reasoning that leaving a candidate standing
+keeps a *pair* `Ambiguous`. That only held for a pair: with a single
+candidate it restored ART-167 exactly, resolving a package to a file nobody
+could show was its own. It fails closed now — the package reports `Missing`,
+a refusal that names it.
+
+**F8 — an empty declared drawer satisfied the distinguisher.** A repacked
+archive declaring `locale/catalogs/türkçe/` and holding nothing under it
+passed a check that exists to say the archive carries that language's
+catalogs. A directory must now hold at least one entry beneath it.
+
+**F1's own doc-comment claim was false and is corrected**: `same_identity`
+said "ASCII-only, matching `eq_ignore_ascii_case`", which was true of the
+code and wrong about every case that mattered.
 
 **A fixture was corrected in the same commit, and it is why the bug could hide.**
 `commands::osinstall::tests::write_locale_turkish_archive` wrote

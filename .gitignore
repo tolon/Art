@@ -47,3 +47,7 @@ Desktop.ini
 
 # Tauri local settings
 *.tsbuildinfo
+
+# Python bytecode from the scripts/ helpers
+__pycache__/
+*.py[cod]

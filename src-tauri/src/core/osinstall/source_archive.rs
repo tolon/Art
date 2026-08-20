@@ -242,7 +242,7 @@ impl ArchiveSource {
         // directory is never duplicated by an implied one.
         let mut known: std::collections::HashSet<String> = rows
             .iter()
-            .map(|(path, ..)| path.to_ascii_lowercase())
+            .map(|(path, ..)| super::fold_amiga_case(path))
             .collect();
 
         let mut out: Vec<(String, Option<usize>, ArchiveEntry)> = Vec::with_capacity(rows.len());
@@ -251,7 +251,7 @@ impl ArchiveSource {
             // pushed before the child that revealed it.
             for (at, _) in path.match_indices('/') {
                 let ancestor = &path[..at];
-                if !known.insert(ancestor.to_ascii_lowercase()) {
+                if !known.insert(super::fold_amiga_case(ancestor)) {
                     continue;
                 }
                 out.push((
@@ -580,9 +580,14 @@ impl ArchiveSource {
             .iter()
             .find(|(relative, ..)| relative == normalized)
             .or_else(|| {
+                // International, not ASCII-only (fix round 1, F1): this is the
+                // lookup a package's `distinguished_by` goes through, and the
+                // owner's own language drawers are Latin-1 accented names
+                // whose upper- and lower-case spellings both occur in real
+                // material. See `super::fold_amiga_case`.
                 entries
                     .iter()
-                    .find(|(relative, ..)| relative.eq_ignore_ascii_case(normalized))
+                    .find(|(relative, ..)| super::amiga_names_equal(relative, normalized))
             })
     }
 }

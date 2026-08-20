@@ -189,9 +189,11 @@ impl CdSource {
     /// them exactly should never be answered with the other.
     fn find_by_path<'a>(entries: &'a [IsoWalkEntry], normalized: &str) -> Option<&'a IsoWalkEntry> {
         entries.iter().find(|e| e.path == normalized).or_else(|| {
+            // International, not ASCII-only (fix round 1, F1) — this disc's
+            // own `LOCALE/CATALOGS/TÜRKÇE` is exactly the case at issue.
             entries
                 .iter()
-                .find(|e| e.path.eq_ignore_ascii_case(normalized))
+                .find(|e| super::amiga_names_equal(&e.path, normalized))
         })
     }
 }

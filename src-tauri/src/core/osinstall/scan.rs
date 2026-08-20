@@ -373,10 +373,18 @@ pub enum MediaMatch<'a, T = FoundMedia> {
 /// names differ only in case become [`MediaMatch::Ambiguous`], which is a
 /// named refusal listing both, never an arbitrary winner.
 ///
-/// ASCII-only, matching `eq_ignore_ascii_case` — the same fold
-/// [`super::destination_key`] documents at length and for the same reason.
+/// **International, not ASCII-only** (fix round 1, F1). The claim that
+/// stood here — "ASCII-only, matching `eq_ignore_ascii_case`" — was true of
+/// the code and false about the cases that matter: four of the owner's eight
+/// language drawers are non-ASCII, and the AmigaOS 3.9 disc spells every one
+/// of them in upper case (`TÜRKÇE`, measured with ART's own reader) where
+/// the language packs spell them in lower. `super::amiga_names_equal` folds
+/// the Latin-1 accented range the way an international AmigaDOS volume does;
+/// that function's doc comment carries the measurement and the reason the
+/// flag is *chosen* here rather than read off a bootblock that does not
+/// exist behind an archive.
 fn same_identity(found: &str, wanted: &str) -> bool {
-    found.eq_ignore_ascii_case(wanted)
+    super::amiga_names_equal(found, wanted)
 }
 
 pub fn media_for<'a>(found: &'a [FoundMedia], volume_name: &str) -> MediaMatch<'a> {
@@ -400,29 +408,48 @@ pub fn media_for<'a>(found: &'a [FoundMedia], volume_name: &str) -> MediaMatch<'
 /// the owner's `BoingBag39-1.lha` alone), and asking through
 /// [`MediaSource::entry`] means the path is resolved by the **one** rule
 /// `ArchiveSource` already uses for every `from` in every recipe — exact
-/// first, then `eq_ignore_ascii_case`, whole path, never a prefix. Two of
-/// the eight language drawers are `português` and `português-brasil`, so a
-/// prefix match would hand the first the second's archive.
+/// first, then [`super::amiga_names_equal`]'s international fold (fix round
+/// 1, F1: the ASCII-only fold that stood here missed `TÜRKÇE` against
+/// `türkçe`, which is four of the owner's eight drawers), whole path, never
+/// a prefix. Two of the eight language drawers are `português` and
+/// `português-brasil`, so a prefix match would hand the first the second's
+/// archive.
 ///
 /// The cost is bounded by how many archives claim one top-level name: eight
 /// small `.lha`s (18–155 entries each, measured) for `LocaleUpdate`, two for
 /// `BoingBag3.9-2`, one for everything else in the owner's folder.
 ///
-/// **An archive that will not re-open answers `true`.** `find_packages`
-/// opened it moments ago, so a failure here is a genuine anomaly — and the
-/// safe direction for an anomaly is to leave the candidate standing, which
-/// keeps a two-candidate name `Ambiguous` (a refusal) instead of letting the
-/// other candidate win by default. A single surviving candidate that cannot
-/// be opened is no loss either: whatever opens it next fails loudly, with a
-/// real error, instead of this function inventing a quiet `Missing`.
+/// **This check fails closed, and the first version did not** (fix round 1,
+/// F7). An archive that will not re-open, or whose lookup errors, used to
+/// answer `true` — "leave the candidate standing so a pair stays
+/// `Ambiguous`". That reasoning only held for a *pair*: with a single
+/// candidate it restored exactly the bug ART-167 exists to fix, letting an
+/// archive nobody could show carries the Turkish drawer resolve as the
+/// Turkish package. The question this function asks is "can ART see that
+/// this archive carries `inner`", and an archive it cannot read is one it
+/// cannot see that of. So `false`, every time — the package then reports
+/// `Missing`, a refusal that names it, rather than a wrong file.
+///
+/// **An empty drawer does not count either** (F8). A declared but empty
+/// `locale/catalogs/türkçe/` row satisfied "the path exists" while carrying
+/// none of what the path is about, so a stripped or partially-repacked
+/// archive could pass the check. A directory has to hold at least one entry
+/// under it; a file has to be a file. `walk` answers entries **at or under**
+/// the path, so "under" is tested by path length, not by count.
 fn archive_carries(archive: &Path, inner: &str) -> bool {
     let Ok(mut source) = ArchiveSource::open(archive) else {
-        return true;
+        return false;
     };
-    match source.entry(inner) {
-        Ok(found) => found.is_some(),
-        Err(_) => true,
+    let Ok(Some(entry)) = source.entry(inner) else {
+        return false;
+    };
+    if !entry.is_dir {
+        return true;
     }
+    let Ok(under) = source.walk(inner) else {
+        return false;
+    };
+    under.iter().any(|e| e.path.len() > entry.path.len())
 }
 
 /// Resolve a package's own identity against what [`find_packages`] found:
@@ -921,6 +948,139 @@ mod tests {
         ) {
             MediaMatch::Found(package) => assert_eq!(package.path, brasil_path),
             other => panic!("expected the Brazilian archive alone, got {other:?}"),
+        }
+    }
+
+    /// **Fix round 1, F1 — the reviewer's exact case.** An archive that
+    /// spells its own drawer `TÜRKÇE` must resolve against a recipe that
+    /// spells it `türkçe`, and the ASCII-only fold that shipped answered
+    /// `Missing`.
+    ///
+    /// This is not a hypothetical spelling. Read with ART's own reader
+    /// (`CdSource`, not a third-party tool), `AmigaOS39.iso` carries **no
+    /// Joliet descriptor** — its chain is `[Primary, Primary, Terminator]` —
+    /// so the disc answers `OS-VERSION3.9/LOCALE/CATALOGS/TÜRKÇE` while
+    /// `BoingBag39-2-turkce.lha` spells `türkçe`. Both spellings exist in
+    /// the owner's own material, for the same drawer.
+    ///
+    /// The ASCII control is asserted in the same run: `POLSKI` against
+    /// `polski` always worked, so a fold that only handled ASCII would pass
+    /// that arm and fail this one — which is exactly what the review found.
+    #[test]
+    fn a_drawer_spelled_in_upper_case_is_the_same_drawer() {
+        let dir = scratch("packages-intl-fold");
+        // `TÜRKÇE`, Latin-1 upper case: T DC R K C7 E.
+        let upper: &[u8] = &[0x54, 0xDC, 0x52, 0x4B, 0xC7, 0x45];
+        let turkce = language_pack(&dir, "BoingBag39-2-turkce.lha", upper);
+        // The ASCII control, upper-cased the same way.
+        let polski = language_pack(&dir, "BoingBag39-2-polski.lha", b"POLSKI");
+
+        let found = find_packages(&dir).unwrap();
+        assert_eq!(found.len(), 2);
+
+        match package_for(
+            &found,
+            "LocaleUpdate",
+            Some("locale/catalogs/t\u{FC}rk\u{E7}e"),
+        ) {
+            MediaMatch::Found(package) => assert_eq!(package.path, turkce),
+            other => panic!("TÜRKÇE must answer to türkçe, got {other:?}"),
+        }
+        // The arm that always passed, kept so the two cannot drift apart.
+        match package_for(&found, "LocaleUpdate", Some("locale/catalogs/polski")) {
+            MediaMatch::Found(package) => assert_eq!(package.path, polski),
+            other => panic!("POLSKI must answer to polski, got {other:?}"),
+        }
+        // And folding still cannot merge two drawers that are genuinely
+        // different names: `türkçe` must not answer for `polski`'s archive.
+        assert_eq!(
+            package_for(&found, "LocaleUpdate", Some("locale/catalogs/deutsch")),
+            MediaMatch::Missing
+        );
+    }
+
+    /// **Fix round 1, F7 — the check fails closed.** An archive that cannot
+    /// be re-opened is not one ART can see carries anything, and answering
+    /// `true` for it restored the whole of ART-167 whenever there was only
+    /// one candidate: a package resolving to a file nobody could show was
+    /// its own.
+    ///
+    /// Built as the single-candidate case on purpose, because that is the
+    /// one the first version got wrong; with two candidates the old
+    /// behaviour merely produced a refusal.
+    #[test]
+    fn an_archive_that_cannot_be_reopened_does_not_satisfy_the_distinguisher() {
+        let dir = scratch("packages-fails-closed");
+        let path = language_pack(&dir, "BoingBag39-2-turkce.lha", TURKCE);
+        let found = find_packages(&dir).unwrap();
+        assert_eq!(found.len(), 1, "one candidate — the case F7 is about");
+
+        // Corrupted after the scan, exactly the shape a half-written
+        // download or a file replaced under ART's feet has.
+        std::fs::write(&path, vec![0u8; 64]).unwrap();
+
+        assert_eq!(
+            package_for(
+                &found,
+                "LocaleUpdate",
+                Some("locale/catalogs/t\u{FC}rk\u{E7}e")
+            ),
+            MediaMatch::Missing,
+            "an unreadable archive must not be handed to the user as theirs"
+        );
+    }
+
+    /// **Fix round 1, F8 — a declared but empty drawer is not the drawer.**
+    /// The distinguisher exists to say the archive carries this language's
+    /// catalogs; an archive that declares the row and holds nothing under it
+    /// carries none of them, and used to pass.
+    #[test]
+    fn an_empty_declared_drawer_does_not_satisfy_the_distinguisher() {
+        let dir = scratch("packages-empty-drawer");
+
+        // An archive that declares `locale/catalogs/türkçe/` as a directory
+        // row and puts nothing inside it. Real archives can be repacked this
+        // way; `make_lha_with_raw_names` writes a trailing `/` as an `-lhd-`
+        // directory header, the same convention a real archiver uses.
+        let mut drawer: Vec<u8> = b"LocaleUpdate\\locale\\catalogs\\".to_vec();
+        drawer.extend_from_slice(TURKCE);
+        drawer.push(b'/');
+        let hollow = dir.join("BoingBag39-2-turkce.lha");
+        std::fs::write(
+            &hollow,
+            crate::core::lha::tests::make_lha_with_raw_names(&[
+                (b"LocaleUpdate.info", b"icon" as &[u8]),
+                (b"LocaleUpdate\\getlocale", b"amiga program"),
+                (&drawer, b""),
+            ]),
+        )
+        .unwrap();
+
+        let found = find_packages(&dir).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].media, "LocaleUpdate");
+        assert_eq!(
+            package_for(
+                &found,
+                "LocaleUpdate",
+                Some("locale/catalogs/t\u{FC}rk\u{E7}e")
+            ),
+            MediaMatch::Missing,
+            "the drawer is there and the catalogs are not"
+        );
+
+        // The same archive with one catalog in it resolves — so this test is
+        // about the emptiness and not about the fixture being unreadable.
+        let full = scratch("packages-empty-drawer-control");
+        let path = language_pack(&full, "BoingBag39-2-turkce.lha", TURKCE);
+        let found = find_packages(&full).unwrap();
+        match package_for(
+            &found,
+            "LocaleUpdate",
+            Some("locale/catalogs/t\u{FC}rk\u{E7}e"),
+        ) {
+            MediaMatch::Found(package) => assert_eq!(package.path, path),
+            other => panic!("the populated drawer must still resolve, got {other:?}"),
         }
     }
 
