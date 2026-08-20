@@ -117,3 +117,69 @@ belong to a design conversation with the owner, after the measurement above.
 - `uae-configuration` usage — <http://guide.abime.net/wb3.1/miscwhd.htm>
 - amitools `xdftool`, the host-side family ART belongs to —
   <https://amitools.readthedocs.io/en/latest/tools/xdftool.html>
+
+
+## What the material itself said, once someone opened it (2026-08-21)
+
+The owner supplied three sources. All three were read rather than recalled,
+and the first changed what Task 7 has to do.
+
+### 1. The stock `Updater` does not work under UAE, and the owner's copy is the stock one
+
+`BoingBag39-1-UAE.lha` (25.7 KB, from
+<https://www.devili.iki.fi/pub/Commodore/amigaos/updates/3.9/>) contains one
+program and a readme. The readme is unambiguous:
+
+> *"This archive contains a file, Updater 45.15, that fixes the following
+> problem: You can install the BoingBag on UAE now. Tested with AmigaForever
+> 4.0 from Cloanto."*
+
+Measured with 7-Zip against the owner's own downloads:
+
+| Archive | `C/Updater` | Dated |
+|---|---|---|
+| `BoingBag39-1.lha` | 25,588 | **2001-04-03** |
+| `BoingBag39-1-UAE.lha` | 25,732 | 2001-04-17 |
+| `BoingBag39-2.lha` | 42,676 | 2001-11-09 |
+
+The readme says a download made after 2001-04-20 already carries the fix. The
+owner's is dated **2001-04-03**, so it does not. **This round launches that
+installer inside an emulator, so BoingBag 1 would have failed — and the
+failure would have looked like the package refusing, not like a missing
+patch.**
+
+The readme also prescribes the remedy, and it is a shape ART already has:
+*"Simply update your old BoingBag3.9-1 by copying the contents within the
+`BoingBag3.9-1` drawer in this package to it."* That is an overlay of one
+file over another — `overrides`, which `core/osinstall` has had since the
+content-layer round. **Decided 2026-08-21: the recipe takes the second
+archive as a second medium, and ART refuses to run BoingBag 1 with the old
+`Updater` and no overlay** rather than launching something known not to work.
+
+A second hazard from the same readme, not yet handled: UAE may not present
+the AmigaOS 3.9 CD under its expected name, and the readme's own workaround is
+a manual `Assign AmigaOS3.9:`. Worth measuring in Task 7 rather than guessing.
+
+### 2. The chain continues past the official packages
+
+<https://amigan.1emu.net/releases/> carries **Boing Bags #3 & #4 for OS3.9**,
+v1.59, 29/12/2023, 6,058 KB LhA, requiring "AmigaOS 3.9+BB2". Community-made
+and current. **Deliberately not in this round** — BB1 and BB2 work first, and
+BB3&4 then becomes the honest test of the design's claim that a fourth package
+is a JSON file rather than a code path.
+
+### 3. Practitioners: order matters, and keep a fallback
+
+<https://forum.amiga.org/index.php?topic=68483.0>. Two findings worth having:
+
+- The install order is sequential — one reports installing "BB 1-4, one right
+  after the other, all in a row."
+- Several report trouble after BB3&4 ("some things in them that seem to cause
+  scsi troubles"), which developers answer is "a reasonable attempt to fix the
+  bugs left in BB1 & 2" and probably hardware-specific. The practical advice
+  offered is to keep a BB1/2-only copy to fall back on.
+
+**That last one is already this design's §2**, arrived at from §92 rather than
+from the forum: the install runs against a copy and the copy replaces the
+original only on success. What practitioners do by hand — keep something to
+go back to — is the mechanism here, not a precaution the user has to remember.
