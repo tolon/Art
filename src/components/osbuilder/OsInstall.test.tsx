@@ -386,6 +386,89 @@ describe("ticking a component changes what the screen will do", () => {
   });
 });
 
+describe("the screen does not plan the same thing twice", () => {
+  // ART-119 (#1). This screen keeps two plans on purpose — one asked with
+  // nothing excluded, so a conditional component's *true* state is knowable,
+  // and one asked with the real exclusions — but with nothing excluded the
+  // two requests are byte-identical, so the second call planned the same
+  // media over again and threw the answer away. `plan()` opens and walks
+  // every switched-on component's disc image, so that is real work on every
+  // keystroke in the media, ROM and destination fields alike.
+
+  /** How often each distinct request shape was submitted. */
+  function requestCounts(): Map<string, number> {
+    const seen = new Map<string, number>();
+    for (const [req] of planMock.mock.calls as [InstallRequest][]) {
+      const key = JSON.stringify(req);
+      seen.set(key, (seen.get(key) ?? 0) + 1);
+    }
+    return seen;
+  }
+
+  it("asks once for a request shape it has already asked for", async () => {
+    await renderFull();
+
+    // Every request so far carries no exclusions, which is the case where
+    // the base and effective requests are identical.
+    expect(
+      (planMock.mock.calls as [InstallRequest][]).every(([req]) => req.excluded.length === 0)
+    ).toBe(true);
+
+    // Measured, not reasoned about: reverting the dedupe to the old
+    // `Promise.all([plan(base), plan(effective)])` makes this same render
+    // submit **4** requests, all four byte-identical. It is 2 now. (Two and
+    // not one because the effect settles twice — `useRemembered` hands back
+    // a fresh array identity when the persisted value lands, which is its
+    // own duplication and not this one; halving each pass is what this fix
+    // does, and it is the half that was a duplicate *within* a pass.)
+    expect(planMock.mock.calls.length).toBe(2);
+    expect([...requestCounts().values()]).toEqual([2]);
+  });
+
+  it("still asks twice when the two requests genuinely differ", async () => {
+    // `modules-a1200` has to be *forced on by its condition* for excluding
+    // it to mean anything — an unforced component is turned off by plain
+    // unticking, which changes `chosen` and never populates `excluded`. The
+    // default fixture's V47 ROM leaves it off, so this test supplies a plan
+    // where the engine switched it on without it being chosen: exactly what
+    // a pre-V47 ROM produces, and the only state in which the screen offers
+    // "turn it off anyway".
+    planMock.mockImplementation((req: InstallRequest) => {
+      const base = planResultFor(req);
+      if (base.outcome !== "planned" || req.excluded.includes("modules-a1200")) return Promise.resolve(base);
+      return Promise.resolve({
+        ...base,
+        plan: { ...base.plan, componentsOn: [...base.plan.componentsOn, "modules-a1200"] },
+      } satisfies PlanResult);
+    });
+
+    await renderFull();
+
+    const modules = screen.getByRole("checkbox", { name: "ModulesA1200_3.2" }) as HTMLInputElement;
+    expect(modules.checked).toBe(true);
+    await userEvent.click(modules);
+    await userEvent.click(
+      await screen.findByRole("button", { name: i18n.t("osinstall.components.confirmOff.confirm") })
+    );
+
+    // Both requests are made again, because now they differ. The dedupe must
+    // have removed the duplicate, never the second plan — dropping the base
+    // plan would make "is this condition satisfied" and "is this excluded"
+    // indistinguishable, which is the whole reason there are two.
+    await waitFor(() => {
+      const calls = planMock.mock.calls as [InstallRequest][];
+      expect(calls.some(([req]) => req.excluded.includes("modules-a1200"))).toBe(true);
+      expect(
+        calls.some(([req]) => req.excluded.length === 0 && req.chosen.length === 0)
+      ).toBe(true);
+    });
+    // Two distinct shapes, not one — the base plan is still being asked for
+    // alongside the effective one. `requestCounts` has more than one key
+    // exactly when both survived.
+    expect(requestCounts().size).toBeGreaterThan(1);
+  });
+});
+
 describe("choosing the release re-plans against it", () => {
   it("plans the release the user chose", async () => {
     await renderFull();

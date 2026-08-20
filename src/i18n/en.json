@@ -2076,6 +2076,7 @@
     "refusal": {
       "mediaMissing": "{{component}} needs {{volume}}, and no file in the media folder carries that volume name.",
       "mediaPathMissing": "{{component}}'s own {{path}} is missing from {{media}} — this looks like a different revision of that disk.",
+      "mediaUnreadable": "{{volume}} was found for {{component}} at {{path}}, but ART could not read it: {{reason}}",
       "romUnknown": "The Kickstart could not be identified, so ART cannot decide what depends on its version.",
       "destinationCollision": "{{path}} is wanted by more than one component ({{components}}), and neither declares it may override the other.",
       "mediaAmbiguous": "More than one file in the media folder carries the volume name {{volume}} that {{component}} needs: {{paths}}.",

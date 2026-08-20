@@ -302,6 +302,16 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // `@/lib/osinstall` that is exhaustive by its own return type, and its
     // single value today is enumerated in `phrase-keys.test.ts`
     // (`hostPlacementBlockKey: every HostPlacementBlock resolves`).
-    expect(dynamicCalls).toBe(114);
+    // 114 → 115 (ART-119 #2, debt-wave-c2): `OsInstall.tsx` gained one,
+    // `t(reasonText.phrase.key, reasonText.phrase.params)`, and *lost four
+    // literal ones* in the same edit — the four independent `&&` guards that
+    // rendered a conditional component's reason are now one exhaustive
+    // `switch` in `@/lib/osinstall` (`conditionalReasonText`), so a fifth
+    // `ConditionalReason` kind is a compile error rather than a row with no
+    // explanation on it. Its four variants are enumerated in
+    // `phrase-keys.test.ts` (`conditionalReasonText: every ConditionalReason
+    // variant resolves`), which is what makes trading four literal sites for
+    // one dynamic one a net gain rather than a loss of coverage.
+    expect(dynamicCalls).toBe(115);
   });
 });

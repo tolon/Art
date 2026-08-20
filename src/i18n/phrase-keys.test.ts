@@ -85,10 +85,13 @@ import {
 import {
   collisionGroupHeadingKey,
   collisionPhrase,
+  conditionalReason,
+  conditionalReasonText,
   hostPlacementBlockKey,
   osinstallBlocker,
   refusalPhrase as osinstallRefusalPhrase,
   type Collision,
+  type ConditionalReason,
   type HostPlacementBlock,
   type PlanResult,
   type RefusalReason as OsInstallRefusalReason,
@@ -866,6 +869,15 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     const reasons: OsInstallRefusalReason[] = [
       { refusal: "media-missing", component: "extras", volume_name: "Extras3.2" },
       { refusal: "media-path-missing", component: "extras", media: "Extras3.2", path: "L" },
+      // ART-119 (#5): the disk is present and unreadable — a per-component
+      // refusal now, rather than a `CoreError` that failed the whole plan.
+      {
+        refusal: "media-unreadable",
+        component: "extras",
+        volume_name: "Extras3.2",
+        path: "D:\media\Extras3.2.adf",
+        reason: "not an AmigaDOS volume",
+      },
       { refusal: "rom-unknown" },
       { refusal: "destination-collision", path: "C/Assign", components: ["a", "b"] },
       {
@@ -914,6 +926,41 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       const phrase = osinstallRefusalPhrase(reason);
       expect(isLeafKey(phrase.key), phrase.key).toBe(true);
     }
+  });
+
+  // ART-119 (#2): the four reasons a conditional component's row is ticked
+  // or not. This used to be four independent `&&` guards in `OsInstall.tsx`,
+  // where a fifth kind would have rendered nothing at all; it is one
+  // exhaustive `switch` now, and this is what proves all four of its keys
+  // exist rather than only that the switch compiles.
+  it("conditionalReasonText: every ConditionalReason variant resolves", () => {
+    const reasons: ConditionalReason[] = [
+      { kind: "rom-needed" },
+      { kind: "condition-on", rom: "Kickstart 3.1", major: 40 },
+      { kind: "condition-off", rom: "Kickstart 3.2", major: 47 },
+      { kind: "condition-overridden", major: 47 },
+    ];
+    for (const reason of reasons) {
+      const { phrase } = conditionalReasonText(reason);
+      expect(isLeafKey(phrase.key), phrase.key).toBe(true);
+    }
+    // And every one of them is reachable from `conditionalReason` itself —
+    // otherwise this enumerates a union the screen can never actually
+    // produce, which is a fixture more helpful than reality.
+    const produced = new Set(
+      [
+        conditionalReason(47, false, false, true, null).kind,
+        conditionalReason(47, true, true, false, "Kickstart 3.1").kind,
+        conditionalReason(47, true, false, false, "Kickstart 3.1").kind,
+        conditionalReason(47, false, false, false, "Kickstart 3.2").kind,
+      ].map(String)
+    );
+    expect([...produced].sort()).toEqual([
+      "condition-off",
+      "condition-on",
+      "condition-overridden",
+      "rom-needed",
+    ]);
   });
 
   // M3, ART-166: the *other* sentence about the same fact — the one the

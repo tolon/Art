@@ -72,6 +72,7 @@ import {
   componentLabel,
   confirmComponentOff,
   conditionalReason,
+  conditionalReasonText,
   conditionalToggleAction,
   hasRomUnknownRefusal,
   INSTALL_RELEASES,
@@ -488,7 +489,26 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     const baseRequest: InstallRequest = { ...shared, excluded: [] };
     const effectiveRequest: InstallRequest = { ...shared, excluded: excludedConditional };
 
-    Promise.all([osinstallPlan(baseRequest), osinstallPlan(effectiveRequest)])
+    // ART-119 (#1). With nothing excluded — which is every run until the
+    // user confirms an override, and most runs after — the two requests are
+    // *identical*, so the second call planned the same media twice and threw
+    // one answer away. `plan()` opens and walks every switched-on component's
+    // disc image, so that is real work on every keystroke in the media,
+    // ROM and destination fields alike.
+    //
+    // One call, one answer, given to both. Safe because nothing here mutates
+    // a `PlanResult` — every reader takes `.plan`, `.items`, `.refusals` or
+    // `.componentsOn`, and `osinstallApply` receives the effective plan
+    // unmodified — and because nothing compares the two by identity. It also
+    // does not change *when* a round-trip happens: the remaining call is
+    // made in the same effect, in the same tick, on exactly the same
+    // dependency change as before. The moment anything is excluded, both
+    // requests are made again, because then they genuinely differ.
+    const planning = excludedConditional.length === 0
+      ? osinstallPlan(baseRequest).then((both): [PlanResult, PlanResult] => [both, both])
+      : Promise.all([osinstallPlan(baseRequest), osinstallPlan(effectiveRequest)]);
+
+    planning
       .then(([base, effective]) => {
         if (cancelled) return;
         setBasePlanResult(base);
@@ -860,6 +880,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
                     rom?.name ?? null
                   )
                 : null;
+            const reasonText = reason ? conditionalReasonText(reason) : null;
 
             return (
               <div
@@ -907,30 +928,24 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
                   </p>
                 )}
 
-                {reason?.kind === "rom-needed" && (
-                  <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
-                    {t("osinstall.components.reason.romNeeded")}
-                  </p>
-                )}
-                {reason?.kind === "condition-overridden" && (
+                {/* ART-119 (#2). This used to be four independent `&&`
+                    guards, one per kind, so a fifth kind would have rendered
+                    nothing at all — a conditional row ticked with no
+                    explanation, the same defect a review already found here
+                    once. `conditionalReasonText` is an exhaustive `switch`
+                    over the union with a `never` fallthrough, so a fifth kind
+                    is now a compile error instead of a blank line, and there
+                    is one place deciding the wording rather than four. */}
+                {reasonText && (
                   <p
-                    className="badge badge-warn"
-                    style={{ fontSize: 11, margin: "4px 0 0", display: "inline-block" }}
+                    className={reasonText.tone === "warn" ? "badge badge-warn" : "faint"}
+                    style={{
+                      fontSize: 11,
+                      margin: "4px 0 0",
+                      ...(reasonText.tone === "warn" ? { display: "inline-block" as const } : {}),
+                    }}
                   >
-                    {t("osinstall.components.reason.conditionOverridden", { major: reason.major })}
-                  </p>
-                )}
-                {reason?.kind === "condition-on" && (
-                  <p
-                    className="badge badge-warn"
-                    style={{ fontSize: 11, margin: "4px 0 0", display: "inline-block" }}
-                  >
-                    {t("osinstall.components.reason.conditionOn", { rom: reason.rom, major: reason.major })}
-                  </p>
-                )}
-                {reason?.kind === "condition-off" && (
-                  <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
-                    {t("osinstall.components.reason.conditionOff", { rom: reason.rom, major: reason.major })}
+                    {t(reasonText.phrase.key, reasonText.phrase.params)}
                   </p>
                 )}
 

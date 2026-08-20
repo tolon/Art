@@ -126,6 +126,18 @@ export type HostPlacementBlock = "encrypted-payload";
 export type RefusalReason =
   | { refusal: "media-missing"; component: string; volume_name: string }
   | { refusal: "media-path-missing"; component: string; media: string; path: string }
+  // ART-119 (#5). The disk is there and cannot be opened or walked — the
+  // third face of the same per-component fact `media-missing` and
+  // `media-path-missing` already carry, and no longer a hard error that
+  // blanked every other component's plan with it. `reason` is the Rust
+  // reader's own English sentence (ART-060), shown after the translated one.
+  | {
+      refusal: "media-unreadable";
+      component: string;
+      volume_name: string;
+      path: string;
+      reason: string;
+    }
   | { refusal: "rom-unknown" }
   | { refusal: "destination-collision"; path: string; components: string[] }
   | {
@@ -676,6 +688,16 @@ export function refusalPhrase(reason: RefusalReason): Phrase {
         key: "osinstall.refusal.mediaPathMissing",
         params: { component: reason.component, media: reason.media, path: reason.path },
       };
+    case "media-unreadable":
+      return {
+        key: "osinstall.refusal.mediaUnreadable",
+        params: {
+          component: reason.component,
+          volume: reason.volume_name,
+          path: reason.path,
+          reason: reason.reason,
+        },
+      };
     case "rom-unknown":
       return { key: "osinstall.refusal.romUnknown" };
     case "destination-collision":
@@ -981,6 +1003,63 @@ export function conditionalReason(
   if (excluded && forcedOn) return { kind: "condition-overridden", major };
   if (forcedOn) return { kind: "condition-on", rom, major };
   return { kind: "condition-off", rom, major };
+}
+
+/**
+ * How a `ConditionalReason` reads on screen — the catalogue key, and whether
+ * it is a warning badge or a quiet line.
+ *
+ * **Why this exists rather than four `&&` blocks in the JSX (ART-119 #2).**
+ * The screen used to render each kind as its own independent guard, so a
+ * fifth kind would have rendered *nothing at all* — a conditional row ticked
+ * with no explanation, which is the exact defect a review already found here
+ * once (`conditionalReason`'s own doc comment says so). `ConditionalReason`
+ * is a discriminated union, so a `switch` with a `never` fallthrough turns
+ * that into a compile error instead. Living in `src/lib` rather than in the
+ * component is what makes it testable and what puts its keys in front of
+ * `src/i18n/phrase-keys.test.ts`, which is the only thing that catches a
+ * `Phrase` pointing at a key nobody added.
+ *
+ * `tone` is the rendering decision the four guards also disagreed on:
+ * `condition-on` and `condition-overridden` are warnings (something is about
+ * to happen, or has been overridden), the other two are statements of fact.
+ */
+export type ConditionalReasonText = { phrase: Phrase; tone: "warn" | "faint" };
+
+export function conditionalReasonText(reason: ConditionalReason): ConditionalReasonText {
+  switch (reason.kind) {
+    case "rom-needed":
+      return { phrase: { key: "osinstall.components.reason.romNeeded" }, tone: "faint" };
+    case "condition-overridden":
+      return {
+        phrase: {
+          key: "osinstall.components.reason.conditionOverridden",
+          params: { major: reason.major },
+        },
+        tone: "warn",
+      };
+    case "condition-on":
+      return {
+        phrase: {
+          key: "osinstall.components.reason.conditionOn",
+          params: { rom: reason.rom, major: reason.major },
+        },
+        tone: "warn",
+      };
+    case "condition-off":
+      return {
+        phrase: {
+          key: "osinstall.components.reason.conditionOff",
+          params: { rom: reason.rom, major: reason.major },
+        },
+        tone: "faint",
+      };
+    default: {
+      // A fifth kind lands here and fails to compile, which is the point.
+      const unreachable: never = reason;
+      return unreachable;
+    }
+  }
 }
 
 /** What checking or unchecking a conditional component's box should do,

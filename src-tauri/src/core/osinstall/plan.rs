@@ -863,10 +863,39 @@ pub(super) fn plan_over(
             MediaMatch::Found(found_media) => found_media,
         };
         let media_path = found_media.path.clone();
-        media_paths.insert(component.media.clone(), media_path.clone());
 
-        let mut source = open_media(found_media)?;
-        items.extend(expand_rules(component, source.as_mut(), &mut refusals)?);
+        // Never `?` on either of these — ART-119 (#5). A disk that is
+        // present but unreadable is a fact about one component, the same
+        // way `MediaMissing` is; propagating it would fail the whole plan
+        // and blank every other component's file list with it. Both calls
+        // are wrapped, because "the medium cannot be opened" and "the
+        // medium opened and then could not be walked" are the same fact to
+        // a user holding a damaged floppy image. `expand_rules` appends to
+        // `refusals` as it goes, so anything it managed to say before
+        // failing is kept; its *items* are dropped, which is right — a
+        // component built from half an unreadable disk is not a component.
+        let mut source = match open_media(found_media) {
+            Ok(source) => source,
+            Err(e) => {
+                refusals.push(RefusalReason::MediaUnreadable {
+                    component: component.id.clone(),
+                    volume_name: component.media.clone(),
+                    path: media_path.display().to_string(),
+                    reason: e.to_string(),
+                });
+                continue;
+            }
+        };
+        media_paths.insert(component.media.clone(), media_path.clone());
+        match expand_rules(component, source.as_mut(), &mut refusals) {
+            Ok(expanded) => items.extend(expanded),
+            Err(e) => refusals.push(RefusalReason::MediaUnreadable {
+                component: component.id.clone(),
+                volume_name: component.media.clone(),
+                path: media_path.display().to_string(),
+                reason: e.to_string(),
+            }),
+        }
     }
 
     // ---- packages, after the release's own components -------------------
@@ -1925,6 +1954,152 @@ mod plan_tests {
     // component's own items leaves the refusal standing and the whole
     // install still blocked. `excluded` has to be subtracted here, inside
     // `resolve_components_on`, before the media-resolution loop ever runs.
+
+    // ---- ART-119 (#5): a disk that is present and unreadable ----
+
+    /// A damaged medium is a **refusal**, not a `CoreError` that takes the
+    /// screen with it.
+    ///
+    /// This used to be `open_media(found_media)?`, so one unreadable disk
+    /// failed `plan()` outright. The OS Builder made that worse than it
+    /// sounds: it requests two plans through one `Promise.all`, one of them
+    /// deliberately with nothing excluded, so a disk the user had *already
+    /// excluded* still blanked both plans — including the one it was
+    /// excluded from — and the screen showed a raw English `CoreError`
+    /// sentence instead of a refusal card naming the disk (ART-060).
+    ///
+    /// Both halves are asserted here, because the second is the one a user
+    /// meets: with the component excluded, the same folder plans completely.
+    /// (An unexcluded plan's `items` are empty either way — *any* refusal
+    /// empties the preview, which is this module's own pre-existing rule and
+    /// applies to `MediaMissing` identically. What changed is that there now
+    /// *is* a plan, carrying a named refusal, rather than no plan at all.)
+    ///
+    /// **The fixture is a real gap, not a contrived one.** `identify` reads
+    /// a disc's name off its volume descriptor and stops (ART-161), while
+    /// `open_media` walks the tree — so a disc past `MAX_WALK_DEPTH`
+    /// (ART-158) is genuinely found by the scan, genuinely named from inside
+    /// itself, and genuinely refused when something tries to read it. It is
+    /// the same fixture `scan.rs`'s own
+    /// `a_disc_is_identified_from_its_descriptor_without_walking_its_tree`
+    /// uses to prove that gap exists.
+    #[test]
+    fn an_unreadable_disk_is_a_refusal_and_excluding_it_still_plans() {
+        use crate::core::iso::fixture::{dir, file, IsoBuilder};
+
+        let scratch = crate::core::osinstall::fixtures::scratch("plan-media-unreadable");
+        let folder = scratch.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        let recipe = crate::core::osinstall::recipe::amigaos_32().unwrap();
+
+        let wb = crate::core::osinstall::fixtures::entries_for(&recipe, "Workbench3.2");
+        let wb_refs: Vec<(&str, &[u8], u32)> = wb
+            .iter()
+            .map(|(path, bytes, protection)| (path.as_str(), bytes.as_slice(), *protection))
+            .collect();
+        crate::core::osinstall::fixtures::media(&folder, "Workbench3.2", "wb.adf", &wb_refs);
+        crate::core::osinstall::fixtures::required_media(&folder, &recipe, &["Workbench3.2"]);
+
+        // `Extras3.2` as a disc ART can name but cannot walk: seventeen
+        // levels, one past `MAX_WALK_DEPTH`.
+        let mut node = file("DEEP.TXT", "deep.txt", b"bottom");
+        for level in (0..17).rev() {
+            node = dir(&format!("L{level}"), &format!("L{level}"), vec![node]);
+        }
+        let bytes = IsoBuilder {
+            volume: "Extras3.2".to_string(),
+            joliet_volume: "Extras3.2".to_string(),
+            joliet: true,
+            children: vec![node],
+            ..Default::default()
+        }
+        .build();
+        let extras_path = folder.join("extras.iso");
+        std::fs::write(&extras_path, bytes).unwrap();
+
+        let request = |excluded: Vec<String>| InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.2".to_string(),
+            media_folder: folder.clone(),
+            rom: Some(crate::core::osinstall::fixtures::fake_rom(&scratch, 47)),
+            chosen: vec!["extras".to_string()],
+            destination: scratch.join("dist"),
+            excluded,
+        };
+
+        // `Ok`, not `Err` — the whole point. `unwrap` here *is* the
+        // assertion: before this fix it panicked on the `LimitExceeded` the
+        // walk raises.
+        let refused = plan(&request(Vec::new()), &recipe).unwrap();
+
+        let refusal = refused
+            .refusals
+            .iter()
+            .find(|r| matches!(r, RefusalReason::MediaUnreadable { .. }))
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected a MediaUnreadable refusal, got {:?}",
+                    refused.refusals
+                )
+            });
+        match refusal {
+            RefusalReason::MediaUnreadable {
+                component,
+                volume_name,
+                path,
+                reason,
+            } => {
+                assert_eq!(component, "extras");
+                assert_eq!(volume_name, "Extras3.2");
+                assert_eq!(path, &extras_path.display().to_string());
+                // The reader's own sentence, not an empty string — "which
+                // disk, and what is wrong with it" is the user's next
+                // question, and the file name alone does not answer it.
+                assert!(
+                    reason.contains("16 levels"),
+                    "the refusal must carry the reader's own diagnosis, got {reason:?}"
+                );
+            }
+            other => unreachable!("{other:?}"),
+        }
+        // Named once, not once per rule the component declares.
+        assert_eq!(
+            refused
+                .refusals
+                .iter()
+                .filter(|r| matches!(r, RefusalReason::MediaUnreadable { .. }))
+                .count(),
+            1,
+            "{:?}",
+            refused.refusals
+        );
+
+        // And the half a user actually meets: turn the damaged disk's
+        // component off and the same folder plans completely. Before the fix
+        // this plan could not even be requested — the *other* plan the screen
+        // asks for alongside it hard-errored and blanked both.
+        let excluded = plan(&request(vec!["extras".to_string()]), &recipe).unwrap();
+        assert!(
+            excluded.refusals.is_empty(),
+            "excluding the damaged disk must leave nothing refused, {:?}",
+            excluded.refusals
+        );
+        assert!(
+            excluded
+                .items
+                .iter()
+                .any(|i| i.component == "workbench-base"),
+            "the readable disks must still plan, {:?}",
+            excluded.items
+        );
+        assert!(
+            !excluded.items.iter().any(|i| i.component == "extras"),
+            "nothing may be planned from a disk that was never read, {:?}",
+            excluded.items
+        );
+        assert!(!excluded.media_paths.contains_key("Extras3.2"));
+    }
 
     /// Critical 2, at the engine level. Without exclusion, a pre-V47 ROM and
     /// no `ModulesA1200_3.2` in the folder is exactly the review's own

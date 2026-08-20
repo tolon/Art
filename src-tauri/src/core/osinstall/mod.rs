@@ -517,6 +517,36 @@ pub enum RefusalReason {
         media: String,
         path: String,
     },
+    /// The media carrying this component's volume name was found in the
+    /// folder and could not be *opened* — a truncated ADF, a disc image
+    /// deleted between the scan and the plan, a file the reader no longer
+    /// recognises.
+    ///
+    /// **A refusal, not a `CoreError` (ART-119 #5).** `plan()` used to
+    /// propagate `open_media`'s error with `?`, which failed the whole plan
+    /// over one damaged disk: every other component's file list vanished,
+    /// and the OS Builder — which requests *two* plans through one
+    /// `Promise.all`, one of them deliberately with nothing excluded —
+    /// blanked both, including the plan the user had explicitly excluded
+    /// that component from. One unreadable disk is exactly what
+    /// [`RefusalReason::MediaMissing`] and
+    /// [`RefusalReason::MediaPathMissing`] already treat as a per-component
+    /// fact, and this is the third face of the same fact: the disk is
+    /// there, it is not usable, and the other twenty-five components are
+    /// unaffected. It still blocks the install (`osinstallBlocker` reads
+    /// `refusals`) — it just no longer takes the screen with it.
+    ///
+    /// `reason` carries the reader's own sentence, because "which disk, and
+    /// what is wrong with it" is the user's next question and the file name
+    /// alone does not answer it. English, like every `CoreError` `Display`
+    /// (ART-060), and shown after the translated sentence rather than
+    /// instead of it.
+    MediaUnreadable {
+        component: String,
+        volume_name: String,
+        path: String,
+        reason: String,
+    },
     /// The ROM was not identified, so a `Condition` cannot be decided.
     RomUnknown,
     /// Two components claim one destination and neither declared an override.

@@ -2501,6 +2501,7 @@ mod tests {
                 match reason {
                     RefusalReason::MediaMissing { .. }
                     | RefusalReason::MediaPathMissing { .. }
+                    | RefusalReason::MediaUnreadable { .. }
                     | RefusalReason::RomUnknown
                     | RefusalReason::DestinationCollision { .. }
                     | RefusalReason::MediaAmbiguous { .. }
@@ -2533,6 +2534,16 @@ mod tests {
                     },
                     "media-path-missing",
                     &["refusal", "component", "media", "path"],
+                ),
+                (
+                    RefusalReason::MediaUnreadable {
+                        component: "extras".into(),
+                        volume_name: "Extras3.2".into(),
+                        path: r"D:\media\extras.iso".into(),
+                        reason: "walk depth exceeded".into(),
+                    },
+                    "media-unreadable",
+                    &["refusal", "component", "volume_name", "path", "reason"],
                 ),
                 (RefusalReason::RomUnknown, "rom-unknown", &["refusal"]),
                 (

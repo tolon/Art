@@ -363,67 +363,6 @@ belongs beside G9/G16 rather than inside a launcher-metadata round.
 
 Design: [2026-08-17-g10-launcher-metadata-design.md](superpowers/specs/2026-08-17-g10-launcher-metadata-design.md) §6.
 
-**ART-119** 🔵 **Five minors deferred from Task 13's review, folded into one
-entry — two closed, three still open** — *found 2026-08-15/16, Task 13's fix
-round, filed at Task 14; #3 and #4 closed 2026-08-16*
-`src/lib/osinstall.ts`, `src/components/osbuilder/OsInstall.tsx`,
-`src-tauri/src/core/osinstall/plan.rs` · None promoted during Task 13's own
-round because each is one line, harmless today, or both:
-
-1. **Open — not a one-line fix, left as designed.** The two-plan design
-   (`osinstall_plan` called once for the base plan and once more for
-   `excludedConditional`) doubles the work even when `excludedConditional` is
-   empty and the two requests are byte-identical. `OsInstall.tsx`'s own
-   comment on `basePlanResult`/`effectivePlanResult` explains why there are
-   two calls at all (a plan requested *with* a component excluded never
-   carries it in `componentsOn`, so one call cannot answer both "is this
-   condition satisfied" and "is this excluded"); skipping the second call
-   when `excludedConditional` is empty is a real option but changes when a
-   live network/IPC round-trip happens versus a cached one, which is more
-   than a one-line change to reason about correctly. Left for whoever grows
-   this screen next.
-2. **Open — cosmetic today, not a one-line fix.** The JSX renders four
-   `conditionalReason` kinds as independent guards rather than an exhaustive
-   `switch`, so a fifth kind would render no reason at all. All four shipped
-   kinds are covered today, and `conditionalReason`'s own return type is a
-   discriminated union a `switch` would exhaustiveness-check — but rewriting
-   four independent `&&` blocks into one `switch` inside this render is a
-   structural change to the JSX, not a one-liner. Left as-is.
-3. **Closed 2026-08-16.** The recipe-parity test (`src/lib/osinstall.test.ts`)
-   did not assert a `Condition`'s **kind** string, only its `major` — a future
-   condition variant other than `rom-older-than` carrying a `major` field
-   would have passed the parity test while the screen still said "below
-   Kickstart V47". → `"agrees on media, required, available, condition and
-   exclusive_group for every id"` now also asserts
-   `rc.condition.condition === "rom-older-than"` whenever a component carries
-   a `condition` at all, since `ComponentDef.conditionMajor`'s own doc comment
-   already says it mirrors only that one variant.
-4. **Closed 2026-08-16.** The reason block lost its
-   `!def.required && def.available` gate during a fix round; unreachable
-   against the shipped recipe (nothing both `available: false` and
-   non-required needs a reason shown), so not acted on at the time, but the
-   gate's absence was not provably safe against a future recipe that combined
-   the two. → Re-added to the single `reason = …` computation in
-   `OsInstall.tsx` rather than to each of the four JSX guards separately, so
-   there is one place, not four, that can drift out of sync again. No new
-   test: unreachable against today's recipe, as the entry always said, and
-   `OsInstall.tsx` has no render test to add one to yet (`ART-118` — the
-   screen has never been seen rendering past its headings in a headless
-   browser).
-5. **Open — blocked, not judged.** *(Pre-existing, not introduced by
-   Task 13.)* The base plan can hard-error on `AdfSource::open` for an
-   **excluded** component's damaged or vanished disk, blanking both plans —
-   `osinstall_plan` should probably treat a missing/corrupt medium for a
-   component the caller excluded the same way `MediaMissing`/
-   `MediaPathMissing` already treat one for a component the caller never
-   asked about. Lives in `src-tauri/src/core/osinstall/plan.rs`, which another
-   session was actively working in at the time of this pass — left alone
-   rather than risking a collision. Still open; needs its own session.
-Not fixed (#1, #2, #5) — none is data-unsafe; each is a real, small gap worth
-someone's attention before the recipe or the screen grows past what today's
-tests cover. #3 and #4 fixed and verified by `pnpm test` (`osinstall.test.ts`:
-26 passed) and `pnpm lint`.
-
 **ART-118** 🟠 **The OS Builder's install screen has never been driven in a
 real browser past its headings — jsdom now covers what a browser could not,
 the crash itself is still unresolved** — *found 2026-08-15/16, Task 13's
@@ -608,6 +547,81 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-119** 🔵 **Five minors deferred from Task 13's review, folded into one
+entry — all five now closed** — *found 2026-08-15/16; #3 and #4 closed
+2026-08-16; #1, #2 and #5 closed 2026-08-20 on `debt-wave-c2`*
+`src/components/osbuilder/OsInstall.tsx` · `src/lib/osinstall.ts` ·
+`src-tauri/src/core/osinstall/plan.rs` · `src-tauri/src/core/osinstall/mod.rs`
+
+**#1 — the screen planned the same thing twice.** The two-plan design is
+right and stays: a plan requested *with* a component excluded never carries it
+in `componentsOn`, so one call cannot answer both "is this condition
+satisfied" and "is this excluded". But with nothing excluded the two requests
+are byte-identical, and `plan()` opens and walks every switched-on component's
+disc image, so the second call was a full re-plan thrown away — on every
+keystroke in the media, ROM and destination fields. One call now answers both
+when the requests match; both are still made the moment they differ. Safe
+because nothing mutates a `PlanResult` and nothing compares the two by
+identity, and it does not move *when* a round trip happens — the remaining
+call is in the same effect, the same tick, on the same dependency change.
+**Measured, not reasoned about:** reverting to the old `Promise.all` makes
+`OsInstall.test.tsx`'s `renderFull` submit **4** requests, all four
+byte-identical; it submits **2** now.
+
+*Found while measuring, and left alone deliberately:* the remaining factor of
+two is a different duplication — `useRemembered` hands back a fresh array
+identity when the persisted value lands, so the effect settles twice with the
+identical request. That is dependency-identity churn across the screens that
+use `useRemembered`, not this screen's two-plan design, and pinning it to this
+entry would have hidden it. Recorded here and in the test's own comment.
+
+**#2 — four independent guards became one exhaustive `switch`.** A fifth
+`ConditionalReason` kind would have rendered *nothing at all* — a conditional
+row ticked with no explanation, which is the defect a review already found on
+this screen once. `conditionalReasonText` in `@/lib/osinstall` is a `switch`
+over the union with a `never` fallthrough, so a fifth kind is a compile error;
+it lives in `src/lib` rather than the component so its keys are visible to
+`phrase-keys.test.ts`, which is the only thing that catches a `Phrase` pointing
+at a key nobody added. Four literal `t("…")` sites traded for one dynamic one;
+`literal-keys.test.ts`'s ledger records 114 → 115 and why.
+
+**#5 — an unreadable disk is a refusal now, not a `CoreError`.** `plan()` did
+`open_media(found_media)?`, so one damaged disk failed the whole plan. The OS
+Builder made that worse than it sounds: it asks for two plans through one
+`Promise.all`, one deliberately with nothing excluded, so a disk the user had
+*already excluded* blanked both plans — including the one it was excluded
+from — and the screen showed a raw English `CoreError` sentence instead of a
+refusal card (ART-060). New `RefusalReason::MediaUnreadable { component,
+volume_name, path, reason }`, the third face of the per-component fact
+`MediaMissing` and `MediaPathMissing` already carry. It still blocks the
+install; it no longer takes the screen with it. Both catalogues carry
+`osinstall.refusal.mediaUnreadable`.
+
+*Stated rather than implied:* an unexcluded plan's `items` are empty either
+way — **any** refusal empties the preview, which is `plan.rs`'s own
+pre-existing rule and applies to `MediaMissing` identically. What changed is
+that there now *is* a plan, carrying a named refusal, rather than no plan.
+
+*The fixture is a real gap, not a contrived one:* `identify` reads a disc's
+name off its volume descriptor and stops (ART-161) while `open_media` walks the
+tree, so a disc past `MAX_WALK_DEPTH` (ART-158) is genuinely found, genuinely
+named from inside itself, and genuinely refused when read — the same fixture
+`scan.rs`'s `a_disc_is_identified_from_its_descriptor_without_walking_its_tree`
+already uses to prove that gap exists.
+
+Tests: `core::osinstall::plan::plan_tests::an_unreadable_disk_is_a_refusal_and_excluding_it_still_plans`
+(#5 — vacuity checked: restoring the two `?`s makes it panic on the
+`LimitExceeded` the walk raises);
+`commands::osinstall::…::refusal_reason_tag_and_field_spellings_for_every_variant`
+(the wire spelling, and its exhaustive `match` is what caught the new variant
+at compile time);
+`OsInstall.test.tsx`'s `"asks once for a request shape it has already asked
+for"` and `"still asks twice when the two requests genuinely differ"` (#1);
+`phrase-keys.test.ts`'s `"conditionalReasonText: every ConditionalReason
+variant resolves"` (#2), which also asserts all four kinds are reachable from
+`conditionalReason` itself rather than enumerating a union the screen cannot
+produce.
 
 **ART-174** 🔵 **Two more breakpoints ask the real viewport a question about
 the zoomed layout** — *found 2026-08-20 on `debt-wave-a`; fixed 2026-08-20 on
