@@ -226,6 +226,7 @@ pub fn run() {
             commands::sources::sources_install_volume,
             commands::panel::panel_list_local,
             commands::panel::panel_directory_size,
+            commands::panel::panel_delete_many,
             commands::panel::panel_local_roots,
             commands::volume::volume_scan,
             commands::volume::volume_list,

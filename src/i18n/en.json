@@ -1366,13 +1366,13 @@
     },
     "move": {
       "refuseNothing": "Select something to move.",
-      "refuseLocalSource": "ART does not delete files on your own disk, so it cannot move them off it. Copy them with F5 and remove them yourself.",
       "refuseReadOnlySource": "Nothing can be moved out of a disc, an archive or a Commodore image — ART only ever reads them. Copy with F5 instead.",
       "refuseSourceNotWritable": "This volume does not take writes, so the entries cannot be removed from it. Copy with F5 instead.",
       "refuseReadOnlyTarget": "The other pane is read-only, so nothing can be moved into it.",
       "refuseTargetNotWritable": "Open a volume that takes writes on the other side first.",
       "refuseCollision_one": "{{names}} is already there. A move never overwrites and never silently skips — rename one of them first.",
-      "refuseCollision_other": "{{count}} of these names are already there ({{names}}). A move never overwrites and never silently skips — rename them first."
+      "refuseCollision_other": "{{count}} of these names are already there ({{names}}). A move never overwrites and never silently skips — rename them first.",
+      "refuseLocalRoot": "ART will not move things out of a drive root — open a folder inside it first."
     },
     "commandLine": {
       "ariaLabel": "Command line",
@@ -1467,6 +1467,15 @@
         "stopped": "Stopped after copying {{what}}",
         "leftAlone": "Copied {{what}}; {{count}} left alone",
         "allVerified": "Copied {{what}}, all verified"
+      }
+    },
+    "hostDelete": {
+      "confirm": "Delete {{count}} item(s) from {{folder}}? They go to the Recycle Bin, where you can get them back.",
+      "sentTo": "{{count}} item(s) went to {{target}}.",
+      "partial": "{{removed}} of {{asked}} went to {{target}}. These are still there: {{names}}",
+      "noneRemoved": "Nothing could be deleted. {{names}}",
+      "target": {
+        "recycleBin": "the Recycle Bin"
       }
     }
   },

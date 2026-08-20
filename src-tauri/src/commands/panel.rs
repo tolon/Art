@@ -275,6 +275,110 @@ pub fn panel_directory_size(
     Ok(id)
 }
 
+/// Send named entries of a **host folder** to the Recycle Bin (ART-080).
+///
+/// The first command in ART that removes a file from the user's own disk, and
+/// every part of its shape is a consequence of that:
+///
+/// - **A directory plus names, never paths.** `core::hostfs::recycle_many`
+///   resolves each through `safe_join`, so nothing the frontend sends — however
+///   it was assembled — can name a file outside the folder the user is looking
+///   at. A name that escapes, or one that is not there, refuses the **whole**
+///   pass before a single file is touched.
+/// - **Previewed before it happens.** The screen confirms, naming what goes and
+///   where it goes; this command is the APPLY step and asks nothing.
+/// - **Logged.** Through `commands/oplog.rs` like every other write, recording
+///   the folder, the count, and how many actually went — because a partial
+///   result is the one a log most needs to carry.
+/// - **Per entry in its report, not all-or-nothing.** A host filesystem has no
+///   journal (see `core::hostfs`'s own module doc): claiming a guarantee ART
+///   cannot keep would be worse than the honest answer, which is every name and
+///   what became of it.
+///
+/// A job (§54): a selection can be large, each entry is a shell round trip, and
+/// the user must be able to stop. Cancelling is safe in the only sense
+/// available here — it stops between whole entries, and what has already gone
+/// is reported rather than thrown away.
+#[tauri::command]
+pub fn panel_delete_many(
+    folder: String,
+    names: Vec<String>,
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, std::sync::Arc<crate::commands::jobs::JobRegistry>>,
+    oplog: tauri::State<'_, crate::core::oplog::JsonlOperationLog>,
+) -> AppResult<u64> {
+    let dir = PathBuf::from(folder.trim());
+    if !dir.is_dir() {
+        return Err(CoreError::InvalidInput(format!("'{}' is not a folder", dir.display())).into());
+    }
+    if names.is_empty() {
+        return Err(CoreError::InvalidInput("nothing was selected".to_string()).into());
+    }
+
+    // The log's *path*, not its `State`: a job runs on its own thread and
+    // cannot carry one across (see `commands::oplog::write_to_path`).
+    let log_path = oplog.path().to_path_buf();
+    let registry = std::sync::Arc::clone(&registry);
+    let emit_app = app.clone();
+    let title = format!("Deleting {} item(s) from {}", names.len(), dir.display());
+    let source = format!("{}:{}", dir.display(), names.join(", "));
+    let asked = names.len();
+
+    let id = super::jobs::spawn_job(&app, registry, &title, move |job_id, progress| {
+        let result = crate::core::hostfs::recycle_many(
+            &crate::tools::recycle_bin::RecycleBin,
+            &dir,
+            &names,
+            progress,
+        );
+
+        // Logged whichever way it went, and the *partial* case is the one this
+        // record exists for: "asked for 12, removed 11" is the sentence a user
+        // comes back to the log for.
+        let record = match &result {
+            Ok(outcome) => super::oplog::user_operation("Delete from host folder")
+                .source(source.clone())
+                .detail("Asked", asked.to_string())
+                .detail("Removed", outcome.removed().to_string())
+                .detail("Failed", outcome.failed().to_string())
+                .detail("Destination", "Recycle Bin".to_string())
+                // `verified(false)` for a partial pass, not `success()`:
+                // the operation ran and did not do all of what it was asked,
+                // and the log is the one place that has to keep saying so.
+                .outcome(crate::core::oplog::OperationOutcome::verified(
+                    outcome.failed() == 0,
+                )),
+            Err(err) => super::oplog::user_operation("Delete from host folder")
+                .source(source.clone())
+                .detail("Asked", asked.to_string())
+                .failure(err.code(), err.to_string()),
+        };
+        super::oplog::write_to_path(&log_path, &record);
+
+        let outcome = result?;
+        let _ = tauri::Emitter::emit(
+            &emit_app,
+            HOST_DELETE_EVENT,
+            HostDeleteResult { job_id, outcome },
+        );
+        Ok(())
+    });
+
+    Ok(id)
+}
+
+/// The event a finished host delete arrives on.
+pub const HOST_DELETE_EVENT: &str = "panel-host-delete-result";
+
+// `job_id`, not `jobId` — the spelling every other job result in this codebase
+// uses, and the one `src/lib/panel.ts` declares.
+#[derive(Debug, Clone, Serialize)]
+pub struct HostDeleteResult {
+    pub job_id: u64,
+    #[serde(flatten)]
+    pub outcome: crate::core::hostfs::HostDeleteOutcome,
+}
+
 /// Where an ADF entry was written on the host.
 #[derive(Debug, Clone, Serialize)]
 pub struct ExtractedTo {

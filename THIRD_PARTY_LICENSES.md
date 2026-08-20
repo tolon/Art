@@ -51,6 +51,18 @@ ART is built on the following open-source projects:
   weak-copyleft dependency inside `core/`, accepted deliberately in place of a
   second filesystem writer of ART's own — see `deny.toml`'s allow list for the
   reasoning and its cost
+- **trash** — sending a file on the user's own disk to the Windows Recycle
+  Bin (MIT), with `urlencoding` (MIT) and the `windows` 0.56 family —
+  `windows-core`, `windows-implement`, `windows-interface`, `windows-result`
+  (all MIT / Apache-2.0) — beneath it. **Outside `core/`**, in
+  `tools/recycle_bin.rs`, because it calls `IFileOperation`: `core/hostfs`
+  declares the trait and this implements it, the same split
+  `core::preload::VolumeFormatter` and `tools/hst_imager.rs` already have. It
+  is a crate rather than a COM binding of ART's own because the alternative is
+  hand-written `IFileOperation` lifetime management for the one operation in
+  ART that removes a user's file, and `default-features = false` drops
+  `chrono`, which it needs only to *read* the bin back — something ART never
+  does
 - **i18next / react-i18next** — internationalization (MIT)
 - **zustand** — state management (MIT)
 - **react-router-dom** — routing (MIT)

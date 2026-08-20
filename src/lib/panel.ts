@@ -4,6 +4,7 @@
 // the one row shape they all produce, so the table does not care which is which.
 
 import { invoke } from "@tauri-apps/api/core";
+import type { Phrase } from "@/lib/phrase";
 import { awaitJobResult } from "@/lib/jobs";
 
 import { adfList, type AdfEntry } from "@/lib/adf";
@@ -217,4 +218,137 @@ export function dirSizeCell(state: DirSizeState | undefined): DirSizeCell {
   if (!state) return { kind: "dir" };
   if (state.status === "counting") return { kind: "counting" };
   return { kind: "counted", bytes: state.total.bytes, partial: state.total.partial };
+}
+
+// ---------------------------------------------------------------------------
+// Deleting on the user's own disk (ART-080)
+// ---------------------------------------------------------------------------
+
+/** Where a deleted host file goes. Mirrors `core::hostfs::RecycleTarget`. */
+export type RecycleTarget = "windows-recycle-bin";
+
+/** What happened to one named entry. */
+export interface HostDeleteRow {
+  /** The name as the pane listed it — what the user recognises. */
+  name: string;
+  removed: boolean;
+  /** Why not, in the host's own words, when it did not. English (ART-060),
+   *  shown after the translated sentence rather than instead of it. */
+  problem: string | null;
+}
+
+/** What one host delete did. Mirrors `core::hostfs::HostDeleteOutcome`. */
+export interface HostDeleteOutcome {
+  rows: HostDeleteRow[];
+  /** Where the removed ones went. `null` when nothing was removed — naming a
+   *  destination for a delete that did not happen would be an invention. */
+  target: RecycleTarget | null;
+}
+
+export const HOST_DELETE_EVENT = "panel-host-delete-result";
+
+/** The sentence for where a deleted host file went. A `Phrase`, so the
+ *  component translates it — `src/lib` has no i18next singleton.
+ *
+ *  Exhaustive `switch` with a `never` fallthrough: a second target must be a
+ *  compile error here rather than a delete whose destination the screen
+ *  cannot name. "Where did my file go" is the question this whole feature
+ *  turns on — a delete the user cannot find is the same as one they cannot
+ *  undo. */
+export function recycleTargetPhrase(target: RecycleTarget): Phrase {
+  switch (target) {
+    case "windows-recycle-bin":
+      return { key: "files.hostDelete.target.recycleBin" };
+    default: {
+      const unreachable: never = target;
+      return unreachable;
+    }
+  }
+}
+
+/**
+ * Send named entries of a host folder to the Recycle Bin (ART-080).
+ *
+ * **A folder and names, never paths.** `core::hostfs::recycle_many` resolves
+ * each through `safe_join`, so nothing sent from here can name a file outside
+ * the folder the pane is showing — and a name that escapes, or one that is not
+ * there, refuses the whole pass before a file is touched.
+ *
+ * **Not all-or-nothing, and the outcome says so.** A host filesystem has no
+ * journal, so twelve files sent one by one are twelve completed operations and
+ * the thirteenth failing cannot undo them. Every name comes back with what
+ * became of it; the screen names the ones that did not go.
+ *
+ * A job underneath, hidden behind an ordinary promise by `awaitJobResult` —
+ * the same shape `dirTotal` above and `osinstallCollisions` already use.
+ */
+export async function panelDeleteMany(
+  folder: string,
+  names: string[]
+): Promise<HostDeleteOutcome> {
+  return awaitJobResult<{ job_id: number } & HostDeleteOutcome, HostDeleteOutcome>(
+    HOST_DELETE_EVENT,
+    () => invoke<number>("panel_delete_many", { folder, names }),
+    (payload) => ({ rows: payload.rows, target: payload.target })
+  );
+}
+
+/**
+ * What to say after a host delete — including, always, **where the files
+ * went**.
+ *
+ * A delete the user cannot find is the same as one they cannot undo, so the
+ * destination is in every sentence that reports a removal. `target` comes from
+ * the engine and is `null` only when nothing was removed, which is the one
+ * case with nowhere to name.
+ *
+ * Three sentences, not one with holes in it: all of them went, some of them
+ * went, or none did. The middle case names the ones that did **not** — "eleven
+ * of twelve" is not something a user can act on; the twelfth's name is.
+ *
+ * A `PartialPhrase`-free `Phrase`: `target` is itself a key, so this returns
+ * the params it can and the component renders the nested one. `targetPhrase`
+ * is handed back beside it rather than interpolated here, because `src/lib`
+ * has no translator to resolve it with.
+ */
+export interface HostDeleteMessage {
+  key: string;
+  params: Record<string, string | number>;
+  /** The destination's own key, for the caller to translate and pass in as
+   *  `target`. `null` when nothing was removed. */
+  targetPhrase: Phrase | null;
+}
+
+export function describeHostDelete(
+  outcome: HostDeleteOutcome,
+  asked: number
+): HostDeleteMessage {
+  const removed = outcome.rows.filter((row) => row.removed).length;
+  const failed = outcome.rows.filter((row) => !row.removed).map((row) => row.name);
+  const targetPhrase = outcome.target ? recycleTargetPhrase(outcome.target) : null;
+
+  if (removed === 0) {
+    return {
+      key: "files.hostDelete.noneRemoved",
+      params: { names: failed.slice(0, 3).join(", "), count: failed.length },
+      targetPhrase: null,
+    };
+  }
+  if (failed.length > 0) {
+    return {
+      key: "files.hostDelete.partial",
+      params: {
+        removed,
+        asked,
+        names: failed.slice(0, 3).join(", "),
+        count: failed.length,
+      },
+      targetPhrase,
+    };
+  }
+  return {
+    key: "files.hostDelete.sentTo",
+    params: { count: removed },
+    targetPhrase,
+  };
 }

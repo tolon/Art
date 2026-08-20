@@ -415,10 +415,13 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       entries: [{ name: "Lotus", isDir: true }],
       takenNames: [],
       sameImage: false,
+      sourceIsRoot: false,
     };
     const refusals: MoveInput[] = [
       { ...base, entries: [] },
-      { ...base, sourceKind: "local", targetKind: "adf" },
+      // ART-080: a host *folder* is a legitimate source now; a host **root**
+      // is the one case still refused.
+      { ...base, sourceKind: "local", targetKind: "adf", sourceIsRoot: true },
       { ...base, sourceKind: "iso" },
       { ...base, sourceWritable: false },
       { ...base, targetKind: "archive" },

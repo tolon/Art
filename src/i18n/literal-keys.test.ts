@@ -327,6 +327,17 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // are already enumerated in `phrase-keys.test.ts` (`collisionPhrase:
     // every Collision variant resolves`), and `collisionGroupHeadingKey` is
     // exhaustive by its own return type.
-    expect(dynamicCalls).toBe(118);
+    // 118 → 120 (ART-080, debt-wave-c2 fix round 1): `FileManager.tsx` gained
+    // two, and they are one sentence between them —
+    // `t(said.key, { ...said.params, target: t(said.targetPhrase.key) })`,
+    // the message after a host delete. It is two `t(` calls because the
+    // destination is itself a catalogue key: `src/lib` has no translator to
+    // resolve a nested one with (`@/lib/phrase`'s `PartialPhrase` shape,
+    // applied by hand for one parameter). Both mappers are enumerated in
+    // `src/lib/hostDelete.test.ts` — `describeHostDelete`'s four sentences and
+    // `recycleTargetPhrase`'s one target — which also asserts the catalogue
+    // string really interpolates `{{target}}` rather than the parameter being
+    // carried and never used.
+    expect(dynamicCalls).toBe(120);
   });
 });

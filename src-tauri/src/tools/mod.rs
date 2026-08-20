@@ -9,3 +9,4 @@
 //! concatenated into a command line.
 
 pub mod hst_imager;
+pub mod recycle_bin;

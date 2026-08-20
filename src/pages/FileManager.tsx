@@ -98,6 +98,7 @@ import {
   stepPaneFontSize,
 } from "@/lib/dockLayout";
 import { planDelete, planDeleteSelection } from "@/lib/deletePlan";
+import { describeHostDelete, panelDeleteMany } from "@/lib/panel";
 import { deleteProtectedNames, isDeleteProtected } from "@/lib/protection";
 import {
   colourFor,
@@ -2494,6 +2495,20 @@ export function FileManager() {
    * call site remembering.
    */
   /**
+   * Whether a pane is showing a **drive root** rather than a folder inside one
+   * (ART-080).
+   *
+   * `C:\` is where `Windows` and `Program Files` live, and the two
+   * confirmations a user learns to click through for a game are the same two
+   * here. `PanelListing::parent` is `null` at a root and a path everywhere
+   * else, which is the listing's own answer to this question rather than a
+   * second attempt at parsing a path.
+   */
+  function isDriveRoot(state: PaneState): boolean {
+    return state.kind === "local" && state.parent === null;
+  }
+
+  /**
    * Whether both panes are looking into the **same image file** (ART-081).
    *
    * A move between two directories of one image is a relink, not a
@@ -2941,8 +2956,14 @@ export function FileManager() {
     setHint(null);
     setMessage(null);
 
+    // **A host source has no volume, and that is the whole of ART-080.**
+    // Every delete ART owned went into a disk image through
+    // `core/volume/write`; a host folder's delete goes to the Recycle Bin
+    // instead (`panelDeleteMany`), so `writableVolume` is a question about
+    // the *volume* case only.
     const volume = writableVolume(source);
-    if (!volume) {
+    const fromHost = source.kind === "local";
+    if (!volume && !fromHost) {
       setError(writeRefusal(source, t));
       return;
     }
@@ -2952,18 +2973,26 @@ export function FileManager() {
     // right here and has an invisible game on a real Amiga — the same failure
     // §82's install exists to prevent. Offered, not done silently: the user
     // may be moving the icon on purpose.
+    //
+    // Only from a volume: `volumeIconFor` reads an Amiga directory, and a
+    // host folder has no `.info` convention ART is entitled to act on — a
+    // `Game.info` sitting in `D:\downloads` is a file the user may well have
+    // put there on purpose, and pairing it with `Game` would be ART guessing
+    // about a filesystem that is not an Amiga one.
     const marked = new Set(entries.map((entry) => entry.name.toLowerCase()));
     const icons: PanelEntry[] = [];
-    for (const entry of entries) {
-      const icon = await volumeIconFor(
-        volume.path,
-        volume.volumeIndex,
-        volume.dirBlock,
-        entry.name
-      ).catch(() => null);
-      if (!icon || marked.has(icon.icon_name.toLowerCase())) continue;
-      const row = source.entries.find((candidate) => candidate.name === icon.icon_name);
-      if (row) icons.push(row);
+    if (volume) {
+      for (const entry of entries) {
+        const icon = await volumeIconFor(
+          volume.path,
+          volume.volumeIndex,
+          volume.dirBlock,
+          entry.name
+        ).catch(() => null);
+        if (!icon || marked.has(icon.icon_name.toLowerCase())) continue;
+        const row = source.entries.find((candidate) => candidate.name === icon.icon_name);
+        if (row) icons.push(row);
+      }
     }
 
     let moving = entries;
@@ -2985,11 +3014,12 @@ export function FileManager() {
     const plan = planMove({
       sourceKind: source.kind,
       targetKind: target.kind,
-      sourceWritable: true,
+      sourceWritable: volume !== null,
       targetWritable: writableVolume(target) !== null,
       entries: moving.map((entry) => ({ name: entry.name, isDir: entry.is_dir })),
       takenNames: target.entries.map((entry) => entry.name),
       sameImage: sameImageAsEachOther(source, target),
+      sourceIsRoot: isDriveRoot(source),
     });
     if (plan.kind === "refused") {
       setError(t(plan.reason.key, plan.reason.params));
@@ -3028,7 +3058,45 @@ export function FileManager() {
     setBusy(t("files.status.moving", { count: moving.length }));
     try {
       // ---- APPLY: the copy half, through the commands F5 already uses ----
-      if (target.kind === "local") {
+      if (fromHost) {
+        // Host folder -> volume. The copy half is `volumeCopyInMany`, exactly
+        // what F5 runs for the same pair; the delete half below is the
+        // Recycle Bin instead of the volume writer, which is the only
+        // difference ART-080 makes to this pipeline.
+        const destination = writableVolume(target);
+        if (!destination) {
+          setError(writeRefusal(target, t));
+          return;
+        }
+        // Every path or none — the same all-or-nothing rule
+        // `selectedEntriesForBatch` applies to volume rows. A host row
+        // without a path is one ART cannot address, and quietly dropping it
+        // would copy nine of ten and then *delete* all ten.
+        const paths = moving.map((entry) => entry.path);
+        if (paths.some((path) => path === null)) {
+          setError(writeRefusal(source, t));
+          return;
+        }
+        const outcome = await runJob(() =>
+          volumeCopyInMany(
+            destination.path,
+            destination.volumeIndex,
+            destination.dirBlock,
+            paths as string[],
+            { overwrite: policy, sidecars: powerMode }
+          )
+        );
+        if (outcome === "cancelled") {
+          setMessage(t("files.status.moveCancelled"));
+          await refresh(to);
+          return;
+        }
+      } else if (target.kind === "local") {
+        // Unreachable: a non-host source without a writable volume already
+        // stopped at the top of this function, and `planMove` refuses it
+        // besides. Written as a guard rather than a `!` assertion, which
+        // would claim what this can simply prove.
+        if (!volume) return;
         for (const entry of moving) {
           if (entry.header_block === null) continue;
           if (entry.is_dir) {
@@ -3064,6 +3132,7 @@ export function FileManager() {
         // of a delete with the same guarantee. `volumeDeleteMany` is that
         // delete, so the restriction is gone and F6 stages exactly what was
         // marked, the same as F5.
+        if (!volume) return;
         const destination = writableVolume(target);
         if (!destination) {
           setError(writeRefusal(target, t));
@@ -3108,6 +3177,31 @@ export function FileManager() {
 
       // ---- and only now the delete half ----
       //
+      // **A host source recycles rather than writing** (ART-080). The
+      // sequencing above is unchanged and is what makes it safe: the
+      // destination has already been re-listed and every name looked for, so
+      // nothing here runs on a copy's own word. What is different is the
+      // guarantee: a host filesystem has no journal, so this is *not*
+      // all-or-nothing and the outcome names every entry that did not go.
+      if (fromHost) {
+        const names = moving.map((entry) => entry.name);
+        const outcome = await panelDeleteMany(source.location, names);
+        // The destination is translated here and passed in, because
+        // `src/lib` has no translator to resolve a nested key with — the
+        // `PartialPhrase` shape in `@/lib/phrase`, applied by hand for one
+        // parameter.
+        const said = describeHostDelete(outcome, names.length);
+        setMessage(
+          t(said.key, {
+            ...said.params,
+            target: said.targetPhrase ? t(said.targetPhrase.key) : "",
+          })
+        );
+        await refresh(from);
+        await refresh(to);
+        return;
+      }
+      //
       // One route, whatever the count (ART-081). This used to send a lone
       // entry through `volumeDelete`, which committed on its own and so made
       // a *different* promise from the batch it stood in for — and it was the
@@ -3115,6 +3209,7 @@ export function FileManager() {
       // all-or-nothing on both write strategies (ART-073), so a move of one
       // file and a move of ten fail the same way: with the source untouched
       // and a duplicate at the destination, never with a gap.
+      if (!volume) return;
       const names = moving.map((entry) => entry.name);
       const outcome = await volumeDeleteMany(
         volume.path,
@@ -3475,6 +3570,9 @@ export function FileManager() {
   const movePlan = planMove({
     sourceKind: focusedPane.kind,
     targetKind: moveTarget.kind,
+    // A host folder's delete goes to the Recycle Bin, not the volume writer,
+    // so a local pane is a legitimate source whatever `canWrite` says about
+    // volumes (ART-080). `planMove` ignores this for a `local` source.
     sourceWritable: canWrite,
     targetWritable: writableVolume(moveTarget) !== null,
     entries: selectedEntries(focused).map((entry) => ({
@@ -3483,6 +3581,7 @@ export function FileManager() {
     })),
     takenNames: moveTarget.entries.map((entry) => entry.name),
     sameImage: sameImageAsEachOther(focusedPane, moveTarget),
+    sourceIsRoot: isDriveRoot(focusedPane),
   });
 
   const actions: FunctionAction[] = [

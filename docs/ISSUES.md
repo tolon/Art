@@ -26,6 +26,49 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-178** 🔵 **`useRemembered` hands back a fresh array identity when the
+persisted value lands, so every effect that depends on one runs twice with an
+identical request** — *found 2026-08-20 while measuring [ART-119](#fixed) #1 on
+`debt-wave-c2`; filed rather than fixed there, because it is not that screen's
+defect*
+`src/lib/useRemembered.ts` · `src/lib/remembered.ts` · every screen that reads
+an array or object through `useRemembered`
+
+ART-119 #1 was "the OS Builder plans the same thing twice", and fixing it
+halved the count. Measured, in `OsInstall.test.tsx`: the old code submitted
+**4** byte-identical `osinstallPlan` requests for one settled render, and the
+fix took it to **2**. The remaining factor of two is a different cause and is
+this entry.
+
+`useRemembered`'s read is asynchronous. On the first render it returns the
+default — a **fresh** `[]` — and when the persisted value lands it returns
+another array, structurally equal and referentially different. Any `useEffect`
+listing that value as a dependency therefore runs a second time with a request
+that is byte-identical to the first. For the OS Builder that is a full
+re-plan: `plan()` opens and walks every switched-on component's disc image.
+
+**Why this is not ART-119's to fix and not a one-line change.** It is not one
+screen: `useRemembered` is how this project keeps its promise that nothing
+changes unless the user changes it, and it is read for the component
+checklist, the file manager's remembered paths, the collection's source list
+and more. Memoizing inside `useRemembered` would make the identity stable but
+would also make "the value has not arrived yet" and "the value is the default"
+indistinguishable at the point of use, which is [ART-089](#fixed)'s own
+hazard from the other side. Comparing structurally at each call site puts the
+same reasoning in a dozen places. Neither is obviously right, and picking one
+inside a debt round would have hidden the measurement that found it.
+
+**What would close it:** a decision about where the stabilisation lives —
+inside `useRemembered` (one place, but it has to keep "not yet loaded"
+distinguishable) or in a shared dependency-comparison hook the screens opt
+into — and then the measurement re-run. The count is the acceptance test: the
+OS Builder's settled render should submit **1** request, not 2.
+
+*Not data-unsafe.* Nothing is written twice; the duplicate is a read. What it
+costs is real work on every keystroke in a field, on a screen whose plan reads
+real disc images.
+
+
 **ART-171** 🟠 **The content layer's spec §8.3 hazard — `WBStartup` and
 `Devs` arriving on a tree for the first time — was never exercised, because
 no package file ever reached a tree** — *filed 2026-08-19 by the final
@@ -318,59 +361,6 @@ first looks: embedding a PFS3 driver into a **foreign** card's existing RDB
 `hst-imager` does it; that is named in the refusal text. Not fixed — filed as
 future work, not implied to already work.
 
-**ART-080** 🔵 **ART cannot delete a file on the user's own disk, so nothing
-can be moved *off* a host folder** — *found in phase 2b task 3; **still open**
-after `debt-wave-c2`, deliberately — see "what is decided and what is not"*
-`src/lib/movePlan.ts` · `src-tauri/src/commands/panel.rs` · Every delete ART
-owns goes *into* a disk image through `core/volume/write`; there is no command
-that removes a file from the user's own filesystem, and that is deliberate —
-Explorer does that job and a two-pane commander that can silently delete host
-files is a much larger safety surface than one that cannot.
-
-The consequence, once F6 became Move: the most obvious move of all — drag a
-game off `D:\downloads` and onto a floppy image — is a copy, and the original
-stays. F6 says so (`files.move.refuseLocalSource`) instead of being disabled
-with no explanation, and points at F5.
-
-**What is decided.** The *shape* is settled and is now the rule everywhere
-else in this area ([ART-081](#fixed)): one route, and a single-entry operation
-is a one-entry batch through it. Whatever a host delete looks like, it takes a
-list of names, previews them, logs through `commands/oplog.rs`, and refuses
-rather than guesses.
-
-**What is not, and why this stayed open.** Where a deleted host file *goes*.
-This entry has always named it (`a policy on recycle bin versus unlink`) and
-it is a decision about the user's own disk, not an implementation detail:
-
-- **Recycle Bin** is the Explorer behaviour this entry itself invokes, and the
-  only one where "undo" means something a user already knows how to do. It
-  needs a new third-party dependency that performs deletions on the user's
-  filesystem (`trash`, or a Windows shell binding) — which under `deny.toml`'s
-  own policy is a licence and audit decision made deliberately, in the same
-  commit as `THIRD_PARTY_LICENSES.md`, not as a side effect of a debt round.
-  It also cannot be honoured everywhere: network drives and some removable
-  media have none, so ART would have to refuse on exactly the paths a user is
-  most likely to be clearing.
-- **Unlink with a `core/safety` backup first** needs no dependency and reuses
-  ART's own stated rule ("every write goes through `core/safety`, and a delete
-  is a write"). But `backup_file` puts its generations in `.art-backup/`
-  **beside the file** — which means ART writing folders into the user's own
-  `D:\downloads`, and duplicating a multi-gigabyte ISO to move it. That is a
-  visible product consequence, not a safety detail.
-- **Permanent unlink** is the only option with no cost and no recovery. It is
-  also the one this project's own rules argue hardest against (§92, and
-  "never destroy the original before successful validation" read at its
-  widest).
-
-None of the three is ART's to pick on the owner's behalf, and the wave that
-met this refused to pick one. **What would close it:** the owner naming which
-of the three, and — if the Recycle Bin — accepting the dependency and what
-ART should do on a path that has none. The rest is a day's work: a
-`panel_delete_many` alongside `panel_copy_many`, previewed and confirmed,
-logged, and **per-entry** in its report rather than all-or-nothing, because a
-host filesystem has no journal to roll back and the honest thing is to say
-exactly what was removed and what was not.
-
 **ART-062** 🔵 **No language has been checked on screen**
 `src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
 was verified by `pnpm test`'s key-parity check and by reading the JSON — never
@@ -438,6 +428,108 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-080** 🔵 **ART cannot delete a file on the user's own disk, so nothing
+can be moved *off* a host folder** — *found in phase 2b task 3; **the owner
+decided it 2026-08-20** and it was fixed the same day on `debt-wave-c2`
+(fix round 1)*
+`src-tauri/src/core/hostfs.rs` (new) ·
+`src-tauri/src/tools/recycle_bin.rs` (new) ·
+`src-tauri/src/commands/panel.rs` · `src/lib/panel.ts` ·
+`src/lib/movePlan.ts` · `src/pages/FileManager.tsx`
+
+This was never open for want of work. It was open on one question — **where a
+deleted host file goes** — and the owner has answered it: **the Windows
+Recycle Bin.**
+
+**The reasoning, because it is the part worth keeping.** ART invents no
+recovery mechanism of its own and uses the one the operating system already
+has — the one place a user already knows to look. That beats a `.art-backup/`
+directory beside the file, which nobody discovers and which duplicates a
+multi-gigabyte ISO in order to move it, and it beats a permanent delete, which
+nobody can undo.
+
+**The architectural consequence, and it was not optional.** Sending a file to
+the Recycle Bin is `IFileOperation`, a Windows API, and `core/` is
+platform-independent and must not call one. So it takes the shape this project
+already uses for exactly this: **`core/hostfs.rs` declares the
+`HostRecycler` trait** and carries every rule about which files may be named
+and what a partial failure has to say; **`tools/recycle_bin.rs` implements
+it**, outside `core/`, and knows only how to hand one path to the shell. That
+is `core::preload::VolumeFormatter` and `tools/hst_imager.rs` again, and both
+doc comments say so by name. The trait's own doc comment says *why* it is a
+trait rather than leaving the next reader to infer it.
+
+**What it refuses rather than guesses.**
+
+- A **folder and names, never paths**. `recycle_many` resolves each through
+  `safe_join`, so nothing the frontend sends — however assembled — can name a
+  file outside the folder the pane is showing. A name that escapes, or one
+  that is not there, refuses the **whole** pass before one file is touched.
+- A **drive root** is still refused (`files.move.refuseLocalRoot`). `C:\` is
+  where `Windows` and `Program Files` live, and the two confirmations a user
+  learns to click through for a game are the same two here.
+- A volume with **no Recycle Bin** — a network share, some removable media —
+  is a failure ART reports by name, never a silent fall back to a permanent
+  delete. Falling back would be ART picking, on the user's behalf, the one
+  option the owner ruled out.
+
+**It is not all-or-nothing, and the outcome says so.** `delete_many`'s
+guarantee is real because a disk image has a journal; a host filesystem has
+none. Twelve files sent one by one are twelve completed operations and the
+thirteenth failing cannot undo them. Claiming otherwise would be a promise ART
+cannot keep (§89), so `HostDeleteOutcome` carries **every name and what became
+of it**, and the screen names the ones that did not go — "eleven of twelve" is
+not something a user can act on; the twelfth's name is.
+
+**And it says where the file went.** A delete the user cannot find is the same
+as one they cannot undo, so the destination is in every sentence that reports
+a removal — and only in those: nothing removed names nowhere. `RecycleTarget`
+is a value the UI translates, not an English string from Rust (ART-060), and
+both catalogues carry it.
+
+Previewed by the confirmation the screen already shows before a move, and
+logged through `commands/oplog.rs` with the folder, the count asked for, the
+count removed and the count that failed — a partial result is the one a log
+most needs to carry, and it is recorded as `verified(false)` rather than a
+plain success.
+
+Tests: eight in `core::hostfs::tests`, all against a fake recycler because
+that is what the trait is for —
+`a_partial_failure_says_exactly_what_went_and_what_did_not`,
+`a_recycler_that_claims_success_and_leaves_the_file_is_not_believed` (the
+outcome is verified against the filesystem, not against the recycler's word),
+`a_name_that_escapes_the_folder_refuses_the_whole_pass`,
+`an_absolute_path_is_refused_the_same_way`,
+`a_name_that_is_not_there_refuses_before_anything_is_touched`,
+`cancelling_reports_what_had_already_gone`, `nothing_removed_names_nowhere`;
+six in `src/lib/hostDelete.test.ts` for the sentence, including that the
+catalogue string really interpolates `{{target}}` rather than the parameter
+being carried and never used; and four new `planMove` cases.
+`tools::recycle_bin::tests::a_real_file_really_goes_to_the_real_bin` drives
+the actual shell and is `#[ignore]`d, because it puts something in the
+machine's real Recycle Bin — a side effect outside the tempdir every other
+test confines itself to.
+
+**Vacuity checked**, and the first attempt was wrong in the way ART-144 #5
+had just taught: both traversal tests called `.unwrap_err()` before their
+filesystem assertion, so removing `safe_join` failed on the unwrap and the
+security claim was never reached. Reordered, and with the guard removed they
+now fail by name:
+
+```
+an unguarded join recycles exactly this: C:\Users\...\art-hostfs-escape-target.adf
+assertion failed: bin.seen.borrow().is_empty()      # kernel32.dll was attempted
+```
+
+**The dependency**, since it is the first ART has taken that touches the
+user's own files: `trash` 5.2.6 (MIT), `default-features = false` to drop
+`chrono` — which it needs only to *read* the bin back, something ART never
+does. Its four new transitive crates are MIT or MIT OR Apache-2.0, so
+`cargo deny check` passes with no exception (`advisories ok, bans ok, licenses
+ok, sources ok`), unlike `libpfs3`, which needed one. Recorded in
+`THIRD_PARTY_LICENSES.md` in the same commit, as that file's own rule
+requires.
+
 **ART-081** 🟡 **A single file cannot be moved between two images, because
 the primitive underneath addresses a directory** — *found in phase 2b task 3;
 fixed 2026-08-20 on `debt-wave-c2`*
@@ -495,10 +587,14 @@ Vacuity checked both ways: dropping the icon from the batch fails one, and
 removing the same-image guard fails two (the second in
 `phrase-keys.test.ts`, which enumerates every refusal `planMove` can produce).
 
-**Not closed by this, and it is the other half of the original ask:** moving
-*off* a host folder is still refused, because ART still cannot delete a file
-on the user's own disk. That is [ART-080](#open), and it is open on a decision
-rather than on work — see its entry.
+**The other half of the original ask** — moving *off* a host folder — was
+still refused when this landed, because ART could not delete a file on the
+user's own disk. The owner decided that the same day: a host file goes to the
+Windows Recycle Bin, and [ART-080](#fixed) is fixed too. The two share their
+sequencing exactly — copy, re-list the destination, look for every name, and
+only then remove the source — and differ in the one place they must: an image
+delete is all-or-nothing because it has a journal, and a host delete reports
+per entry because it has none.
 
 **ART-175** 🟡 **The OS Builder can preview what a package would replace and
 still cannot preview what switching a recipe component on would replace** —

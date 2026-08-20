@@ -157,6 +157,35 @@ fatfs = { version = "0.3.6", default-features = false, features = ["std", "alloc
 # build rather than the user's trust in the report.
 libpfs3 = "=0.1.3"
 
+# The Windows Recycle Bin, and the only reason ART can delete a file on the
+# user's own disk at all (ART-080).
+#
+# **Why a dependency rather than ART's own mechanism.** The owner's ruling:
+# ART invents no recovery mechanism of its own and uses the one the operating
+# system already has — the one place a user already knows to look. The two
+# alternatives were a `.art-backup/` directory beside the file, which nobody
+# discovers and which duplicates a multi-gigabyte ISO to move it, and a
+# permanent unlink, which nobody can undo.
+#
+# Sending a file to the Recycle Bin is `IFileOperation`, a Windows API, so it
+# cannot live in `core/` (CLAUDE.md's core-independence rule). `core/hostfs`
+# declares the trait; `tools/recycle_bin.rs` is the implementation, the same
+# shape `core::preload::VolumeFormatter` and `tools/hst_imager.rs` already
+# have.
+#
+# `default-features = false` drops `chrono`, which `trash` needs only to list
+# and restore the bin's contents. ART puts things in; it never reads it back.
+# `coinit_apartmentthreaded` is the COM mode `trash`'s own default selects and
+# the one the shell's file-operation interfaces expect.
+#
+# MIT, and its four new transitive crates (`urlencoding`, `windows` 0.56 and
+# its `-core`/`-implement`/`-interface`/`-result` companions) are MIT or
+# MIT OR Apache-2.0 — permissive, which is `deny.toml`'s stated preference and
+# unlike `libpfs3` above needs no exception. Recorded in
+# `THIRD_PARTY_LICENSES.md` in the same commit, as that file's own rule
+# requires.
+trash = { version = "5.2.6", default-features = false, features = ["coinit_apartmentthreaded"] }
+
 [dev-dependencies]
 # The 7z *encoder*, for building test fixtures only. ART ships no archives, so
 # every fixture is written at runtime — and a 7z cannot be hand-assembled the

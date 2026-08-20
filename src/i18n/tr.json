@@ -1366,13 +1366,13 @@
     },
     "move": {
       "refuseNothing": "Taşımak için bir şey seçin.",
-      "refuseLocalSource": "ART kendi diskinizdeki dosyaları silmez, bu yüzden onları oradan taşıyamaz. F5 ile kopyalayıp kendiniz kaldırın.",
       "refuseReadOnlySource": "Bir diskten, arşivden ya da Commodore imajından hiçbir şey taşınamaz — ART onları yalnızca okur. Bunun yerine F5 ile kopyalayın.",
       "refuseSourceNotWritable": "Bu birim yazma kabul etmiyor, dolayısıyla öğeler ondan kaldırılamaz. Bunun yerine F5 ile kopyalayın.",
       "refuseReadOnlyTarget": "Diğer bölme salt okunur, oraya hiçbir şey taşınamaz.",
       "refuseTargetNotWritable": "Önce diğer tarafta yazma kabul eden bir birim açın.",
       "refuseCollision_one": "{{names}} zaten orada. Taşıma hiçbir zaman üzerine yazmaz ve sessizce atlamaz — önce birinin adını değiştirin.",
-      "refuseCollision_other": "Bu adlardan {{count}} tanesi zaten orada ({{names}}). Taşıma hiçbir zaman üzerine yazmaz ve sessizce atlamaz — önce adlarını değiştirin."
+      "refuseCollision_other": "Bu adlardan {{count}} tanesi zaten orada ({{names}}). Taşıma hiçbir zaman üzerine yazmaz ve sessizce atlamaz — önce adlarını değiştirin.",
+      "refuseLocalRoot": "ART bir sürücü kökünden öğe taşımaz — önce içindeki bir klasörü açın."
     },
     "commandLine": {
       "ariaLabel": "Komut satırı",
@@ -1467,6 +1467,15 @@
         "stopped": "{{what}} kopyalandıktan sonra durdu",
         "leftAlone": "{{what}} kopyalandı; {{count}} tanesine dokunulmadı",
         "allVerified": "{{what}} kopyalandı, hepsi doğrulandı"
+      }
+    },
+    "hostDelete": {
+      "confirm": "{{folder}} içinden {{count}} öğe silinsin mi? Geri Dönüşüm Kutusu'na gider, oradan geri alabilirsiniz.",
+      "sentTo": "{{count}} öğe {{target}} konumuna gitti.",
+      "partial": "{{asked}} öğeden {{removed}} tanesi {{target}} konumuna gitti. Şunlar hâlâ yerinde: {{names}}",
+      "noneRemoved": "Hiçbir şey silinemedi. {{names}}",
+      "target": {
+        "recycleBin": "Geri Dönüşüm Kutusu"
       }
     }
   },

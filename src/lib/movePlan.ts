@@ -32,8 +32,20 @@ export interface MoveInput {
   sourceKind: PaneKind;
   targetKind: PaneKind;
   /** `writableVolume(source) !== null` — the source volume accepts writes,
-   *  which for a move means it accepts the *delete* half. */
+   *  which for a move means it accepts the *delete* half. Not consulted when
+   *  the source is a host folder: those are deleted through the Recycle Bin,
+   *  not the volume writer (ART-080). */
   sourceWritable: boolean;
+  /**
+   * Whether the source pane is a **drive root** rather than a folder inside
+   * one (ART-080).
+   *
+   * Only meaningful for a `local` source, and the one case a host move is
+   * still refused in. `C:\` is where `Windows` and `Program Files` live, and
+   * the confirmations a user learns to click through for a game are the same
+   * ones here.
+   */
+  sourceIsRoot: boolean;
   /** `writableVolume(target) !== null`. Not required when the target is a
    *  host folder: ART writes those through the extract path, not the volume
    *  writer. */
@@ -85,11 +97,20 @@ export function collidingNames(names: string[], takenNames: string[]): string[] 
  * Two refusals are worth their own note, because both are ART lacking
  * something rather than the user asking for something silly:
  *
- * - **A host folder cannot be the source.** ART has no command that deletes a
- *   file on the user's own disk, by design — every delete it owns goes into a
- *   disk image through `core/volume/write`. Moving *out* of a folder would
- *   need one (recorded as ART-080), and inventing it inside a UI task is
- *   exactly the "smuggled in" engine work this phase's plan rules out.
+ * - **A host folder can be the source now** (ART-080), and the refusal that
+ *   used to stand here is gone. Every delete ART owned went *into* a disk
+ *   image; removing a file from the user's own disk needed a decision about
+ *   where it goes, and the owner made it: the **Windows Recycle Bin**. ART
+ *   invents no recovery mechanism of its own and uses the one the operating
+ *   system already has — the one place a user already knows to look.
+ *
+ *   Two things about that reach this module rather than staying in the engine.
+ *   A host delete is **not** all-or-nothing — a host filesystem has no journal
+ *   — so the caller has to be ready for a partial result and say which names
+ *   did not go. And the source pane still has to be a *folder*: a host
+ *   **root** (`C:\`) is refused below, because a selection there can name a
+ *   system directory and the confirmation a user clicks through is the same
+ *   one they click through for a game.
  * - **Between two images** used to be refused for anything but a single
  *   directory (ART-081), and is not any more. Both halves now have the same
  *   shape and the same guarantee: `volumeCopyBetweenMany` stages exactly what
@@ -120,13 +141,20 @@ export function planMove(input: MoveInput): MovePlan {
     return { kind: "refused", reason: { key: "files.move.refuseNothing" } };
   }
 
-  if (sourceKind === "local") {
-    return { kind: "refused", reason: { key: "files.move.refuseLocalSource" } };
+  if (sourceKind === "local" && input.sourceIsRoot) {
+    // A drive root is not a folder anyone moves *out of* — it is where
+    // `Windows` and `Program Files` live, and the two confirmations a user
+    // learns to click through for a game are the same two here. Explorer
+    // itself refuses to recycle a drive root's own protected contents; ART
+    // simply does not offer the case.
+    return { kind: "refused", reason: { key: "files.move.refuseLocalRoot" } };
   }
   if (isReadOnlyContainer(sourceKind)) {
     return { kind: "refused", reason: { key: "files.move.refuseReadOnlySource" } };
   }
-  if (!input.sourceWritable) {
+  // A host folder's delete goes through the Recycle Bin, not the volume
+  // writer, so `sourceWritable` is a question about volumes only.
+  if (sourceKind !== "local" && !input.sourceWritable) {
     return { kind: "refused", reason: { key: "files.move.refuseSourceNotWritable" } };
   }
 

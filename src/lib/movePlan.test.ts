@@ -21,6 +21,7 @@ function base(): MoveInput {
     entries: [dir("Lotus")],
     takenNames: [],
     sameImage: false,
+    sourceIsRoot: false,
   };
 }
 
@@ -43,13 +44,41 @@ describe("planMove", () => {
     });
   });
 
-  it("refuses to move out of a host folder — ART deletes nothing on your own disk", () => {
-    // ART-080. Every delete ART owns goes into a disk image; there is no
-    // command that removes a file from the user's own filesystem, and a UI
-    // task is not where one gets invented.
+  it("allows a move out of a host folder — ART-080", () => {
+    // The refusal that stood here was for want of a decision, not of work:
+    // where a deleted host file goes. The owner's ruling is the **Windows
+    // Recycle Bin** — ART invents no recovery mechanism of its own and uses
+    // the one the operating system already has.
     expect(planMove({ ...base(), sourceKind: "local", targetKind: "adf" })).toEqual({
-      kind: "refused",
-      reason: { key: "files.move.refuseLocalSource" },
+      kind: "move",
+      entries: [dir("Lotus")],
+    });
+  });
+
+  it("does not need a writable *volume* when the source is a host folder", () => {
+    // `writableVolume` is null for every local pane by definition, the same
+    // way it already is for a local *target*. A host folder's delete goes to
+    // the Recycle Bin, not through the volume writer.
+    expect(
+      planMove({ ...base(), sourceKind: "local", targetKind: "adf", sourceWritable: false })
+    ).toEqual({ kind: "move", entries: [dir("Lotus")] });
+  });
+
+  it("still refuses to move out of a drive root", () => {
+    // `C:\` is where `Windows` and `Program Files` live, and the two
+    // confirmations a user learns to click through for a game are the same
+    // two here. The one case a host move is still refused in.
+    expect(
+      planMove({ ...base(), sourceKind: "local", targetKind: "adf", sourceIsRoot: true })
+    ).toEqual({ kind: "refused", reason: { key: "files.move.refuseLocalRoot" } });
+  });
+
+  it("a drive root is only about a host source, never a volume one", () => {
+    // A volume pane has no `parent === null` state that means "root" in this
+    // sense — its root directory is an ordinary place to move things out of.
+    expect(planMove({ ...base(), sourceIsRoot: true })).toEqual({
+      kind: "move",
+      entries: [dir("Lotus")],
     });
   });
 

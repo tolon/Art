@@ -2217,6 +2217,154 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// **The overlay census, from the real discs.** ART-175's own figure, and
+    /// the reason this hook exists rather than the figure being quoted.
+    ///
+    /// "622 new files, 19 upgrades, 0 downgrades" has been repeated several
+    /// times about AmigaOS 3.9's `workbench-39`, and nothing checked in
+    /// produced it — which is the exact class of claim this project has been
+    /// caught by more than once. This is the thing that produces it. Run it
+    /// and the numbers are measured; do not run it and there are no numbers to
+    /// quote.
+    ///
+    /// Skipped cleanly unless both environment variables are set, the same
+    /// convention `apply.rs`'s own
+    /// `run_the_real_engine_against_the_users_own_media_when_asked` and
+    /// `core/preload/native.rs`'s oracle hooks already use:
+    ///
+    /// ```text
+    /// ART_OSINSTALL_MEDIA="E:\amiga\Amigatolon\iso" ^
+    /// ART_OSINSTALL_ROM="E:\amiga\Amigatolon\kickstart\Kickstart v3.1 rev 40.68 (1993)(Commodore)(A1200).rom" ^
+    /// cargo test census_the_overlay_against_the_users_own_media_when_asked -- --nocapture --ignored
+    /// ```
+    ///
+    /// (`--ignored` as well as the env gate, belt and braces: a plain
+    /// `cargo test` must never reach outside the repo's own tempdir.)
+    ///
+    /// **Read-only.** It plans and previews; it writes nothing but a scratch
+    /// directory under `%TEMP%` that the preview sweeps itself. The
+    /// destination it hands `plan()` is a path that does not exist and is
+    /// never created.
+    ///
+    /// It prints a census rather than asserting numbers, because the answer
+    /// depends on which discs the user actually has: a hard-coded 622 here
+    /// would pass on a machine with a different pressing and prove nothing on
+    /// any. What it *does* assert is the shape — that the release layers at
+    /// all, and that the preview can say so — and it prints every row, so the
+    /// comparison against ART-169's table is a reading rather than a
+    /// recollection.
+    #[test]
+    #[ignore = "needs the user's own AmigaOS media; set ART_OSINSTALL_MEDIA and ART_OSINSTALL_ROM"]
+    fn census_the_overlay_against_the_users_own_media_when_asked() {
+        let (Ok(media), Ok(rom)) = (
+            std::env::var("ART_OSINSTALL_MEDIA"),
+            std::env::var("ART_OSINSTALL_ROM"),
+        ) else {
+            eprintln!(
+                "skipped: set ART_OSINSTALL_MEDIA and ART_OSINSTALL_ROM to run the overlay census"
+            );
+            return;
+        };
+
+        let release =
+            std::env::var("ART_OSINSTALL_RELEASE").unwrap_or_else(|_| "AmigaOS 3.9".to_string());
+        let recipe = recipe::by_release(&release).unwrap();
+
+        // Every component the recipe marks reachable, so the plan is the one a
+        // user ticking everything would get.
+        let chosen: Vec<String> = recipe
+            .components
+            .iter()
+            .filter(|c| c.available && !c.required)
+            .map(|c| c.id.clone())
+            .collect();
+
+        let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: release.clone(),
+            media_folder: PathBuf::from(&media),
+            rom: Some(PathBuf::from(&rom)),
+            chosen,
+            excluded: Vec::new(),
+            // Never created: `plan()` does not touch it, and nothing here
+            // calls `apply()`.
+            destination: std::env::temp_dir().join("art-overlay-census-no-such-tree"),
+        };
+
+        let plan = plan(&request, &recipe).expect("the plan itself");
+        println!("\n=== {release}: overlay census ===");
+        println!("media folder : {media}");
+        println!(
+            "plan         : {} items, {} refusals",
+            plan.items.len(),
+            plan.refusals.len()
+        );
+        for refusal in &plan.refusals {
+            println!("  refused    : {refusal:?}");
+        }
+
+        // The layering components, from the recipe rather than from a memory
+        // of which they are.
+        let layering: Vec<String> = recipe
+            .components
+            .iter()
+            .filter(|c| !c.overrides.is_empty() && plan.components_on.contains(&c.id))
+            .map(|c| c.id.clone())
+            .collect();
+        println!("layering on  : {layering:?}");
+        assert!(
+            !layering.is_empty(),
+            "this release declares no layering component that is switched on, so there is \
+             nothing to census — check ART_OSINSTALL_RELEASE"
+        );
+
+        for id in &layering {
+            let preview =
+                preview_component_collisions(&plan, std::slice::from_ref(id), &NoProgress)
+                    .expect("the preview");
+            let mut upgrades = 0usize;
+            let mut downgrades = 0usize;
+            let mut same = 0usize;
+            let mut unversioned = 0usize;
+            for report in &preview.reports {
+                match report.collision {
+                    crate::core::osinstall::collide::Collision::Upgrade { .. } => upgrades += 1,
+                    crate::core::osinstall::collide::Collision::Downgrade { .. } => downgrades += 1,
+                    crate::core::osinstall::collide::Collision::SameVersion { .. } => same += 1,
+                    crate::core::osinstall::collide::Collision::Unversioned { .. } => {
+                        unversioned += 1
+                    }
+                    crate::core::osinstall::collide::Collision::Identical => {}
+                }
+            }
+            println!(
+                "\n{id}: placed {}, new {}, replaced {}",
+                preview.placed,
+                preview.placed - preview.reports.len(),
+                preview.reports.len()
+            );
+            println!(
+                "  upgrades {upgrades}, downgrades {downgrades}, same-version {same}, unversioned {unversioned}"
+            );
+            // Every row, so the census is a record and not a summary anyone
+            // has to trust.
+            for report in &preview.reports {
+                println!(
+                    "  {:<48} {:?}{}",
+                    report.path,
+                    report.collision,
+                    if report.declared {
+                        ""
+                    } else {
+                        "  [UNDECLARED]"
+                    }
+                );
+            }
+        }
+        println!("\n=== end of census ===\n");
+    }
+
     /// No packages chosen previews as nothing to report, without opening
     /// either folder — the empty selection is the common case every time
     /// the panel loads before a checkbox is ticked.
