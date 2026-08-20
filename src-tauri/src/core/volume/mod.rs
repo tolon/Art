@@ -27,6 +27,7 @@ pub mod checkout;
 pub mod device;
 #[cfg(test)]
 pub mod fixture;
+pub mod integrity;
 pub mod journal;
 pub mod mount;
 pub mod write;

@@ -149,7 +149,7 @@ where
                 run(&mut writer)?
             };
 
-            let backup = session.commit(image)?;
+            let backup = session.commit(image, &geometry)?;
             Ok((outcome, strategy, backup))
         }
         WriteStrategy::BlockJournal => {
@@ -262,15 +262,66 @@ impl WholeFileVolume {
     /// from. Consumes the session: there is nothing to do with it afterwards,
     /// and a caller that decides *not* to commit — a cancelled copy — simply
     /// drops it and leaves the file untouched.
-    fn commit(self, image: &Path) -> CoreResult<Option<String>> {
+    ///
+    /// Two validations, not one. The shallow one asks whether the result is
+    /// still an AmigaDOS volume at all; the deep one
+    /// ([`crate::core::volume::integrity`]) asks whether *this operation* left
+    /// two files owning the same block, an entry in a bucket AmigaDOS will not
+    /// look in, or a used block the free-space map calls free — ART-050. The
+    /// geometry is the caller's, because it is the volume's own and deriving
+    /// it a second time here is how a commit comes to disagree with the writer
+    /// that produced it.
+    fn commit(self, image: &Path, geometry: &VolumeGeometry) -> CoreResult<Option<String>> {
         let volume = self.device.bytes();
         validate_volume(image, volume)?;
+        // Before the original is consumed by the splice below.
+        let was = &self.original[self.start..self.start + volume.len()];
+        deep_check(image, was, volume, geometry)?;
 
         let mut whole = self.original;
         whole[self.start..self.start + volume.len()].copy_from_slice(volume);
         let backup = guarded_write(image, &whole, BackupPolicy::DISK_IMAGE)?;
         Ok(backup.map(|path| path.display().to_string()))
     }
+}
+
+/// The §57 gate's structural half: refuse a write that *introduced* a defect
+/// the volume did not already have (ART-050).
+///
+/// It compares rather than judging, and that is the whole design. A volume a
+/// user has carried since 1993 may already leak a block or hold an entry in
+/// the wrong bucket; ART refusing every write to it on that ground would take
+/// their disk away from them rather than protect it, which is exactly what
+/// §89 forbids and what the shallow gate's "only `Problem` refuses" rule was
+/// already written to avoid. So the volume is walked twice — as it was, and as
+/// the operation left it — and only a `Problem` finding that is **new**
+/// refuses.
+///
+/// The cost is one extra tree walk of an image that is by definition small
+/// enough to hold in memory (16 MB, [`crate::core::volume::WHOLE_FILE_LIMIT_BYTES`]).
+/// The block-journal strategy does not come here at all, for the same reason
+/// it has no whole-image validation: see [`with_volume`].
+fn deep_check(image: &Path, was: &[u8], now: &[u8], geometry: &VolumeGeometry) -> CoreResult<()> {
+    use crate::core::volume::device::SliceDevice;
+    use crate::core::volume::integrity;
+
+    let before = match SliceDevice::new(was, geometry.block_size) {
+        Ok(device) => integrity::check(&device, geometry),
+        // An original ART cannot even build a device over is not evidence
+        // about the result; treat it as "nothing was wrong before", which is
+        // the strict reading and refuses more, not less.
+        Err(_) => Vec::new(),
+    };
+    let after = match SliceDevice::new(now, geometry.block_size) {
+        Ok(device) => integrity::check(&device, geometry),
+        Err(err) => return Err(refused(image, &err.to_string())),
+    };
+
+    let introduced = integrity::newly_broken(&before, &after);
+    if introduced.is_empty() {
+        return Ok(());
+    }
+    Err(refused(image, &introduced.join(" ")))
 }
 
 /// Validate a whole in-memory image and only then let it reach the user's file.
@@ -1372,7 +1423,7 @@ pub fn run_copy_in_folder_with(
                 // exactly as it was (§57).
                 return Err(CoreError::Cancelled);
             }
-            let backup = session.commit(image)?;
+            let backup = session.commit(image, &geometry)?;
             Ok((report, backup))
         }
         WriteStrategy::BlockJournal => {
@@ -1791,7 +1842,7 @@ fn run_copy_in_staged(
                 let mut writer = session.writer(geometry, image, entry.byte_offset)?;
                 copy_into_volume(&mut writer, parent, staged.source(), policy, progress)?
             };
-            let backup = session.commit(image)?;
+            let backup = session.commit(image, &geometry)?;
             Ok((report, backup))
         }
         WriteStrategy::BlockJournal => {
@@ -2148,6 +2199,162 @@ mod tests {
             1,
             "…and the volume that was there is still readable"
         );
+    }
+
+    /// ART-050, the first of the two structural defects the shallow gate is
+    /// blind to: a volume whose every block is well-formed, whose root block
+    /// is a perfect header block — and in which two files own the same block,
+    /// so writing one destroys the other.
+    ///
+    /// `validate_image` passes this image happily; only the tree walk sees it.
+    #[test]
+    fn a_write_that_would_cross_link_two_files_never_reaches_the_file() {
+        use crate::core::volume::write::layout;
+
+        let image = Image::new("crosslink", 1760);
+        with_writer(&image.path, 0, |writer| {
+            writer.add_file(0, "Alpha.bin", &[1u8; 1024], Default::default())
+        })
+        .unwrap();
+        with_writer(&image.path, 0, |writer| {
+            writer.add_file(0, "Beta.bin", &[2u8; 1024], Default::default())
+        })
+        .unwrap();
+        let before = image.bytes();
+
+        let alpha = image
+            .listing()
+            .into_iter()
+            .find(|entry| entry.name == "Alpha.bin")
+            .unwrap()
+            .block;
+        let beta = image
+            .listing()
+            .into_iter()
+            .find(|entry| entry.name == "Beta.bin")
+            .unwrap()
+            .block;
+
+        let err = with_volume(&image.path, 0, |writer| {
+            let block_size = writer.geometry().block_size;
+            let all = writer.all_bytes()?;
+            let alpha_first =
+                layout::get_u32(&all[alpha as usize * block_size..][..block_size], 16)?;
+
+            // Point Beta's first data pointer at a block Alpha already owns.
+            // Both header blocks stay internally well-formed and correctly
+            // checksummed, which is everything `validate_touched` looks at.
+            let mut bytes = all[beta as usize * block_size..][..block_size].to_vec();
+            layout::set_u32(&mut bytes, 16, alpha_first)?;
+            layout::set_u32(&mut bytes, 77 * 4, alpha_first)?;
+
+            let mut set = layout::BlockSet::new(block_size);
+            set.put(beta, bytes)?;
+            set.checksum(beta, layout::CHECKSUM_OFFSET)?;
+            writer.commit_blocks("Deliberately cross-linked", set)
+        })
+        .unwrap_err();
+
+        let message = err.to_string();
+        assert_eq!(err.code(), "ART-FORMAT-MALFORMED");
+        assert!(message.contains("blocks.crosslinked"), "{message}");
+        assert_eq!(
+            image.bytes(),
+            before,
+            "a cross-linking result must leave the file byte-for-byte unchanged"
+        );
+    }
+
+    /// ART-050, the second: an entry linked into a hash bucket its name does
+    /// not hash to. The file is on the disk, its block is perfect, and no
+    /// AmigaDOS `Dir` will ever list it — the exact failure `core/adf/hash.rs`
+    /// exists to prevent, reached from the write side.
+    #[test]
+    fn a_write_that_would_hide_a_file_from_amigados_never_reaches_the_file() {
+        use crate::core::adf::blocks::HASH_TABLE_SIZE;
+        use crate::core::volume::write::layout;
+
+        let image = Image::new("wrong-bucket", 1760);
+        with_writer(&image.path, 0, |writer| {
+            writer.add_file(0, "Readme.txt", b"hello", Default::default())
+        })
+        .unwrap();
+        let before = image.bytes();
+        let header = image.listing()[0].block;
+
+        let err = with_volume(&image.path, 0, |writer| {
+            let root = writer.geometry().root_block;
+            let block_size = writer.geometry().block_size;
+            let all = writer.all_bytes()?;
+            let mut bytes = all[root as usize * block_size..][..block_size].to_vec();
+
+            let right = (0..HASH_TABLE_SIZE)
+                .find(|index| layout::get_u32(&bytes, 24 + index * 4).unwrap_or(0) == header)
+                .expect("the entry is linked somewhere");
+            let wrong = (right + 1) % HASH_TABLE_SIZE;
+            layout::set_u32(&mut bytes, 24 + right * 4, 0)?;
+            layout::set_u32(&mut bytes, 24 + wrong * 4, header)?;
+
+            let mut set = layout::BlockSet::new(block_size);
+            set.put(root, bytes)?;
+            set.checksum(root, layout::CHECKSUM_OFFSET)?;
+            writer.commit_blocks("Deliberately mis-hashed", set)
+        })
+        .unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains("hashchain.bucket"), "{message}");
+        assert_eq!(image.bytes(), before);
+    }
+
+    /// The §89 half of ART-050, and the reason the gate compares rather than
+    /// judges: a volume that was **already** structurally wrong before ART
+    /// touched it must still be writable. A deep check that refused on the
+    /// state of the volume rather than on what the operation changed would
+    /// lock a user out of a disk they have had for thirty years.
+    #[test]
+    fn a_volume_that_was_already_broken_is_still_writable() {
+        use crate::core::adf::blocks::HASH_TABLE_SIZE;
+        use crate::core::volume::write::layout;
+
+        let image = Image::new("already-broken", 1760);
+        with_writer(&image.path, 0, |writer| {
+            writer.add_file(0, "Readme.txt", b"hello", Default::default())
+        })
+        .unwrap();
+        let header = image.listing()[0].block;
+
+        // Break it *on disk*, behind ART's back — which is the only way a
+        // volume gets into this state, since the gate above refuses to create
+        // one.
+        let mut bytes = image.bytes();
+        let root = crate::core::volume::VolumeGeometry::root_block_for(1760) as usize;
+        let block = &mut bytes[root * 512..][..512];
+        let right = (0..HASH_TABLE_SIZE)
+            .find(|index| layout::get_u32(block, 24 + index * 4).unwrap_or(0) == header)
+            .unwrap();
+        let wrong = (right + 1) % HASH_TABLE_SIZE;
+        layout::set_u32(block, 24 + right * 4, 0).unwrap();
+        layout::set_u32(block, 24 + wrong * 4, header).unwrap();
+        let checksum = crate::core::adf::checksum::block_checksum(block, 20);
+        layout::set_u32(block, 20, checksum).unwrap();
+        std::fs::write(&image.path, &bytes).unwrap();
+
+        // The check itself must agree the volume is broken — otherwise this
+        // test proves nothing about the comparison.
+        let entry = pick(&image.path, 0).unwrap();
+        let (device, geometry) = mount(&image.path, &entry).unwrap();
+        let findings = crate::core::volume::integrity::check(&device, &geometry);
+        assert!(
+            findings.iter().any(|f| f.code == "hashchain.bucket"),
+            "{findings:?}"
+        );
+        drop(device);
+
+        // …and a perfectly ordinary write to it still goes through.
+        with_writer(&image.path, 0, |writer| writer.make_dir(0, "Tools")).unwrap();
+        let names: Vec<String> = image.listing().into_iter().map(|e| e.name).collect();
+        assert!(names.contains(&"Tools".to_string()), "{names:?}");
     }
 
     /// The other half of the gate: it must refuse *only* what is broken. A

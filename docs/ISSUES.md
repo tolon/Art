@@ -767,17 +767,6 @@ some phrasing decisions between Rust and the JSON catalogues. The second keeps
 the sentence and its translation next to each other but adds a resource-lookup
 concept to a crate that currently has none. Neither is decided here.
 
-**ART-050** 🟡 **The §92 pre-flight gate does not check bitmap consistency or hash-chain integrity**
-`core/adf/validate.rs::validate_image` · `commit_whole_file` (ART-042) refuses
-a write when `validate_image` finds a `Problem`, but `validate_image` only
-covers the bootblock signature, its checksum, the block count and the root
-block's type. It does not walk the bitmap against what is actually allocated
-and does not walk a hash chain for consistency, so an operation that leaves
-two files owning the same block, or an entry linked into the wrong bucket,
-still passes the gate and commits. `CHANGELOG.md`'s entry for ART-042 was
-corrected in this pass to stop implying broader coverage than this. Deepening
-`validate_image` to catch these is real work, not a flag to flip.
-
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 
@@ -796,6 +785,61 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-050** 🟡 **The §92 pre-flight gate does not check bitmap consistency or hash-chain integrity**
+`core/adf/validate.rs::validate_image` · `commit_whole_file` (ART-042) refuses
+a write when `validate_image` finds a `Problem`, but `validate_image` only
+covers the bootblock signature, its checksum, the block count and the root
+block's type. It does not walk the bitmap against what is actually allocated
+and does not walk a hash chain for consistency, so an operation that leaves
+two files owning the same block, or an entry linked into the wrong bucket,
+still passes the gate and commits. `CHANGELOG.md`'s entry for ART-042 was
+corrected in this pass to stop implying broader coverage than this. Deepening
+`validate_image` to catch these is real work, not a flag to flip.
+
+**Fixed 2026-08-20 on `debt-wave-c1`.** The deepening is a new module rather
+than a bigger `validate_image`: `core/volume/integrity.rs` walks the volume
+from the root block outwards, claims every block each file and directory
+occupies, and compares that with the free-space map. It lives in `core/volume`
+and not in `core/adf` because it needs `core/volume/write/bitmap`'s `Allocator`
+to read a **multi-page** bitmap — `core/adf`'s own `Bitmap::parse` reads one
+block and stops, which is enough for a floppy and wrong for everything else —
+and `core/adf` may not import upwards.
+
+Four things it now catches that nothing did:
+
+| finding | severity | why |
+|---|---|---|
+| `blocks.crosslinked` | Problem | two files own one block; writing one destroys the other |
+| `hashchain.bucket` | Problem | an entry linked in a bucket its name does not hash to — on the disk, and invisible to every `Dir` |
+| `bitmap.in_use_but_free` | Problem | a block a file occupies that the map calls free: the next allocation hands it out |
+| `bitmap.leaked` | Warning | a block marked used that nothing references — wasteful, and reads perfectly |
+
+**The gate compares; it does not judge.** A volume the user has carried since
+1993 may already leak a block or hold an entry in the wrong bucket, and
+refusing every write to it on that ground would take their disk away from them
+rather than protect it (§89 — the same rule that already made a bad bootblock
+checksum a warning and not a refusal). So `WholeFileVolume::commit` walks the
+volume **twice**, as it was and as the operation left it, and only a `Problem`
+finding the operation *introduced* refuses the write. `integrity::newly_broken`
+compares on `(code, message)` rather than on code alone, so a volume that had
+one cross-link and now has two still refuses.
+
+Scope is stated rather than implied: this is the **whole-file** strategy's
+gate. The block-journal strategy has no whole-image validation at all — it
+exists for images too large to hold in memory — and gains none here; the
+journal and `validate_touched` remain what protect it, exactly as
+[`with_volume`]'s doc comment already said.
+
+Covered by `commands::volume_write::tests::a_write_that_would_cross_link_two_files_never_reaches_the_file`
+and `…::a_write_that_would_hide_a_file_from_amigados_never_reaches_the_file`
+(both assert the file is byte-for-byte unchanged, not merely that an `Err` came
+back), by `…::a_volume_that_was_already_broken_is_still_writable` for the §89
+half, and by ten unit tests in `core::volume::integrity::tests` — including
+`a_clean_volume_has_nothing_to_report` and
+`a_clean_volume_with_a_multi_page_bitmap_has_nothing_to_report`, without which
+none of the corruption tests would mean anything. Reverting `deep_check`'s call
+site makes the first two fail; that was checked, not assumed.
 
 **ART-078** 🟡 **An AmigaOS CD's protection bits and file comments are lost, because Rock Ridge and the Amiga `AS` entry are not read**
 `core/iso/` · ART reads ISO9660 and prefers Joliet when a disc carries it.
