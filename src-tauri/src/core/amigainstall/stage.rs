@@ -488,27 +488,17 @@ mod tests {
     /// A directory that removes itself on `Drop` — **not** at the end of the
     /// happy path, because a panicking test never reaches the happy path and
     /// a red suite is exactly when leaking hurts most (ART-184).
-    struct Scratch(PathBuf);
+    /// ART-184's shared guard, not a second copy of it — one `Drop` that
+    /// removes the directory even when the test panics.
+    struct Scratch(crate::core::ScratchDir);
 
     impl Scratch {
         fn new(tag: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!(
-                "art-amigainstall-stage-{tag}-{}",
-                crate::core::test_scratch_id()
-            ));
-            let _ = fs::remove_dir_all(&dir);
-            fs::create_dir_all(&dir).unwrap();
-            Self(dir)
+            Self(crate::core::ScratchDir::new("art-amigainstall-stage", tag))
         }
 
         fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
+            self.0.path()
         }
     }
 

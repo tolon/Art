@@ -522,14 +522,12 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::{Arc, Mutex};
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "art-amigainstall-run-{tag}-{}",
-            crate::core::test_scratch_id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    /// ART-184: the directory removes itself on `Drop`, so a panicking test
+    /// cleans up too. The previous shape returned a bare `PathBuf` with no
+    /// guard at all, and was measured leaking eighteen directories per run of
+    /// this module alone — in code written *after* ART-184 was filed.
+    fn scratch(tag: &str) -> crate::core::ScratchDir {
+        crate::core::ScratchDir::new("art-amigainstall-run", tag)
     }
 
     /// A clock that never waits.
@@ -703,7 +701,10 @@ mod tests {
 
     /// A whole run's worth of directories and files, with nothing running.
     struct Fixture {
-        root: PathBuf,
+        /// Owns the scratch guard rather than a bare path, so the directory
+        /// goes when the fixture does — including when a test panics between
+        /// here and its last line (ART-184).
+        root: crate::core::ScratchDir,
         plan: PlannedRun,
         profile: AmigaProfile,
     }

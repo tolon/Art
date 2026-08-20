@@ -82,3 +82,47 @@ pub fn test_scratch_id() -> String {
         NEXT.fetch_add(1, Ordering::Relaxed)
     )
 }
+
+/// A test scratch directory that removes itself when it goes out of scope.
+///
+/// **Why this exists rather than a bare `PathBuf` and a trailing
+/// `remove_dir_all`** (ART-184). A trailing statement is skipped whenever the
+/// test panics, and a scratch name is unique per run, so nothing ever removes
+/// a previous run's directory. Those two together put 169,291 directories —
+/// about 987 GB — into `%TEMP%` in a single session and filled a 2 TB system
+/// drive, after which hundreds of tests failed with `StorageFull` and every
+/// measurement taken that evening was worthless.
+///
+/// A red suite is exactly when leaking hurts most, and a trailing cleanup is
+/// exactly what a red suite skips. `Drop` runs on the panicking path too.
+#[cfg(test)]
+pub struct ScratchDir(std::path::PathBuf);
+
+#[cfg(test)]
+impl ScratchDir {
+    pub fn new(prefix: &str, tag: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("{prefix}-{tag}-{}", test_scratch_id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+
+    pub fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    /// Deliberately a method rather than a `Deref<Target = Path>`. `Deref`
+    /// would make `ScratchDir::new(..).join("x")` compile, and that temporary
+    /// drops — deleting the directory — before the joined path is ever used.
+    /// An explicit method keeps the guard's lifetime visible at the call site.
+    pub fn join(&self, tail: impl AsRef<std::path::Path>) -> std::path::PathBuf {
+        self.0.join(tail)
+    }
+}
+
+#[cfg(test)]
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
