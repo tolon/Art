@@ -1585,6 +1585,7 @@
         "remove": "Remove the picture",
         "dialog": "Choose a picture for this title",
         "filter": "Picture (PNG, JPEG)",
+        "backedUp": "The previous version of your catalogue corrections was saved to {{path}}.",
         "rejected": "ART can show PNG and JPEG pictures. This file is neither."
       },
       "play": {

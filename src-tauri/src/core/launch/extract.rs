@@ -193,10 +193,38 @@ mod tests {
         let dir = scratch("unpack-traversal");
         let pkg = package(&dir, "Evil.rp9", &[("../../evil.adf", b"NOPE")]);
 
-        let err = unpack_floppies(&pkg, &["../../evil.adf".into()], &dir.join("out")).unwrap_err();
+        // **The destination is two levels down on purpose (ART-144 #5).**
+        // This test used to unpack into `dir/out` and then assert
+        // `!dir.join("evil.adf").exists()` — but `../../` from `dir/out`
+        // resolves to `dir`'s *parent*, so that assertion looked in a place
+        // an unguarded join would never have written to. It could not fail,
+        // whatever the code did; the test bit only because `.unwrap_err()`
+        // panicked first. Two levels down means the escape lands at
+        // `escaped` below, inside this test's own scratch directory, which
+        // is both checkable and private to this run.
+        let out = dir.join("out").join("disks");
+        let escaped = dir.join("evil.adf");
 
+        let result = unpack_floppies(&pkg, &["../../evil.adf".into()], &out);
+
+        // **The filesystem is asserted before the error is**, and that order
+        // is the rest of ART-144 #5. `unwrap_err()` on the first line would
+        // panic the moment the guard came out, so every assertion after it
+        // was unreachable — the test could only ever fail for one reason,
+        // and it was not the one it claims to check. Asking the disk first
+        // means removing `safe_join` fails *this* line, naming the file it
+        // wrote and where.
+        assert!(
+            !escaped.exists(),
+            "an unguarded join writes exactly here: {}",
+            escaped.display()
+        );
+        // And nothing landed at the legitimate destination either — the
+        // refusal happens before any write, not after a partial one.
+        assert!(!out.join("evil.adf").exists());
+
+        let err = result.unwrap_err();
         assert!(matches!(err, CoreError::InvalidInput(_)), "{err:?}");
-        assert!(!dir.join("evil.adf").exists());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

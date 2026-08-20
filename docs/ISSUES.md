@@ -282,44 +282,6 @@ leave it unrecorded: a hazard predicted before the work and untouched after
 it should be visible in the register of what ART owes, beside ART-157, rather
 than only in a review nobody reads again.
 
-**ART-144** 🔵 **Five minors deferred across collection-wave-c's own review
-rounds, folded into one entry — #4 closed by the whole-branch review's fix
-pass, #1/#2/#3/#5 still open** — *found 2026-08-18, Tasks 3/6/6b/8; filed at
-Task 12 — none promoted at the time because each was small, harmless then, or
-both*
-`src/lib/collectionDetail.ts`, `commands/artwork.rs`,
-`src/components/collection/TitleDetail.tsx`, `core/launch/extract.rs` ·
-
-1. **`collectionDetail.ts:13-21`** — `mediaPhrase`'s third arm switches on
-   `default`, where its sibling `mediaKind()` in `gameindex.ts` uses three
-   explicit cases and no default. A fourth `Media` variant would fall through
-   silently here instead of failing to compile there, as it would over there.
-2. **`commands/artwork.rs`** — `set_override`'s backup path is discarded in
-   both `artwork_attach` and `artwork_detach`. Consistent with the task
-   brief's fixed command signatures, so noted rather than fixed.
-3. **`TitleDetail.tsx:161-177`** — `loadPictures()` has no out-of-order guard.
-   Switching titles quickly can let a slow query for the previous title
-   resolve last and overwrite the current one's pictures on screen. Needs a
-   request id or an `AbortController` if it ever shows up in use.
-4. ~~**`core/launch/extract.rs:66-91`** — `safe_join` ran inside the write
-   loop rather than before it, so a hostile name late in `ordered` was
-   refused only after earlier legitimate disks were already on disk.~~ Fixed
-   by the whole-branch review's fix pass (2026-08-18):
-   `unpack_named` now resolves every entry's index *and* its `safe_join`-
-   checked destination in one loop before any `atomic_write` runs, which also
-   made the module doc comment's "before writing anything" claim true rather
-   than only true of the archive lookup half of it. No new test was needed —
-   `an_entry_that_escapes_the_destination_is_refused` already covers the
-   refusal itself; what changed is only when a multi-entry unpack can be left
-   partially written.
-5. **`core/launch/extract.rs::an_entry_that_escapes_the_destination_is_refused`**
-   (cited by test name, not line number, so this doesn't go stale again) —
-   the traversal test asserts `!dir.join("evil.adf").exists()`, but an
-   unguarded join would land in `dir`'s *parent*, so that assertion alone
-   proves nothing; the test still fails without `safe_join` only because
-   `.unwrap_err()` panics first. This one came from the task's own plan text,
-   not the implementer who wrote it.
-
 **ART-143** 🟡 **A hand-attached picture is not re-materialised if the
 artwork cache is deleted** — *filed 2026-08-18, collection-wave-c's own
 design (§2) promised this and no task in the wave built it*
@@ -547,6 +509,67 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-144** 🔵 **Five minors deferred across collection-wave-c's own review
+rounds, folded into one entry — all five now closed** — *found 2026-08-18; #4
+closed by the whole-branch review; #1, #2, #3 and #5 closed 2026-08-20 on
+`debt-wave-c2`*
+`src/lib/collectionDetail.ts` · `src-tauri/src/commands/artwork.rs` ·
+`src/lib/artwork.ts` · `src/components/collection/TitleDetail.tsx` ·
+`src-tauri/src/core/launch/extract.rs`
+
+**#1 — already true, and checked rather than assumed.** `mediaPhrase`'s
+`default` arm is gone (it went with the WHDLoad reclassification, `acf73b5`);
+it has three explicit cases like its sibling `mediaKind`. Verified by adding a
+fourth `Media` variant and compiling: `tsc` reports **both** functions —
+`src/lib/collectionDetail.ts(13,44): error TS2366` and
+`src/lib/gameindex.ts(301,42): error TS2366` — "Function lacks ending return
+statement and return type does not include 'undefined'." Nothing to change.
+
+**#2 — the backup path is surfaced instead of discarded.** `set_override`
+writes through `core/safety`'s `guarded_write` and returns where it preserved
+the previous `overrides.json`; `artwork_attach` and `artwork_detach` dropped
+it, which made them the only override writers in the collection that did
+(`catalogue_set_override` has always returned it). They return `AttachOutcome
+{ art, backup }` and `DetachOutcome { backup }` now, and `TitleDetail` shows
+`collection.detail.art.backedUp` — both catalogues — with the path. That file
+holds every correction the user has ever made to their catalogue, so
+rewriting it silently is precisely the case CLAUDE.md's rule exists for. The
+note clears on the next action and on every title change, so it can never
+describe a different game's write.
+
+**#3 — `loadPictures()` takes a ticket.** Two round trips with nothing
+serialising them, so clicking down a list faster than the artwork cache
+answers let a slow reply for the *previous* title land last and paint another
+game's box art — no error, nothing to retry. A request counter rather than an
+`AbortController`, because there is nothing to abort: `invoke` has no
+cancellation, so the work happens either way and the only question is whether
+its answer is still wanted. The `catch` arm is guarded too — a stale
+*failure* blanking the current title is the same bug wearing the other face.
+
+**#5 — the traversal test asserted something that could not fail.** It
+unpacked into `dir/out` and checked `!dir.join("evil.adf").exists()`, but
+`../../` from `dir/out` resolves to `dir`'s **parent** — so the assertion
+looked where an unguarded join would never write. It bit only because
+`.unwrap_err()` panicked first, which is a different claim. Two things
+changed: the destination is two levels down, so the escape lands inside the
+test's own scratch directory and is checkable; and **the filesystem is
+asserted before the error is**, so removing `safe_join` now fails the security
+line by name rather than the unwrap. Verified: with `safe_join` replaced by
+`into.join(name)` the test fails with `an unguarded join writes exactly here:
+C:\Users\…\art-launch-unpack-traversal-…\evil.adf`.
+
+Tests: `core::launch::extract::tests::an_entry_that_escapes_the_destination_is_refused`
+(#5, rewritten — the vacuity check above *is* its proof);
+`commands::artwork::tests::a_successful_attach_leaves_the_picture_in_the_cache`
+asserts the first attach reports `backup: None` and the second reports a path
+that is really on disk (#2, Rust side); and a new
+`src/components/collection/TitleDetail.test.tsx` — five jsdom tests, the
+panel's first automated coverage — covering #2 on screen (attach, detach, and
+saying nothing when there was nothing to back up) and #3 both ways (a late
+success and a late failure for the previous title). Vacuity checked: removing
+the two ticket checks fails 2, removing the two `setArtBackup` calls fails a
+different 2.
 
 **ART-119** 🔵 **Five minors deferred from Task 13's review, folded into one
 entry — all five now closed** — *found 2026-08-15/16; #3 and #4 closed

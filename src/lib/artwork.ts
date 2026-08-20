@@ -147,13 +147,33 @@ export async function artworkAttach(
   title: string,
   id: string,
   file: string
-): Promise<ArtRef> {
-  return invoke<ArtRef>("artwork_attach", { title, id, file });
+): Promise<AttachOutcome> {
+  return invoke<AttachOutcome>("artwork_attach", { title, id, file });
 }
 
 /** Undo that. An override with nothing left in it deletes itself. */
-export async function artworkDetach(title: string, id: string): Promise<void> {
-  await invoke("artwork_detach", { title, id });
+export async function artworkDetach(title: string, id: string): Promise<DetachOutcome> {
+  return invoke<DetachOutcome>("artwork_detach", { title, id });
+}
+
+/**
+ * What attaching a picture did (ART-144 #2).
+ *
+ * `backup` is where `core/safety`'s `guarded_write` preserved the previous
+ * `overrides.json` — the file holding every correction the user has ever made
+ * to their catalogue. Both commands used to discard it, which made them the
+ * only override writers in the collection that did (`catalogueSetOverride`
+ * has always returned it). `null` when nothing needed preserving, which is the
+ * first time a title is edited at all.
+ */
+export interface AttachOutcome {
+  art: ArtRef;
+  backup: string | null;
+}
+
+/** What detaching did. No `ArtRef`, because there is no picture left. */
+export interface DetachOutcome {
+  backup: string | null;
 }
 
 /**

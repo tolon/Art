@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
@@ -116,6 +116,17 @@ export function TitleDetail({
   const disks = diskList(record.media);
   const media = mediaPhrase(record.media);
   const [artError, setArtError] = useState<string | null>(null);
+  /**
+   * Where the previous `overrides.json` went, after the last attach or
+   * detach (ART-144 #2).
+   *
+   * `core/safety`'s rule, applied here rather than only in Rust: a write that
+   * takes a backup tells the user where it put it. This file holds every
+   * correction they have ever made to the catalogue, so rewriting it silently
+   * is exactly the case the rule exists for. Cleared on every new action and
+   * on every title change, so it can never describe a different game's write.
+   */
+  const [artBackup, setArtBackup] = useState<string | null>(null);
   const [pictures, setPictures] = useState<{ kind: ArtKind; src: string }[]>([]);
   const [chosenKind, setChosenKind] = useState<ArtKind | null>(null);
 
@@ -258,6 +269,11 @@ export function TitleDetail({
     setPreview(null);
     setLaunchError(null);
     setLaunchedPid(null);
+    // A backup note describes one write to one title's override. Carrying it
+    // onto the next title would point the user at a file that has nothing to
+    // do with what they are now looking at.
+    setArtError(null);
+    setArtBackup(null);
   }, [record.id]);
 
   /**
@@ -266,10 +282,27 @@ export function TitleDetail({
    * through `convertFileSrc`. The chosen kind resets to the first of the
    * list — the preferred one, the picture the grid was already showing.
    */
+  /**
+   * Which `loadPictures()` call is the current one (ART-144 #3).
+   *
+   * The query is two round trips (`artworkDir` and `artworkForTitle`) and
+   * nothing serialises them, so clicking down a list faster than they resolve
+   * lets a slow answer for a *previous* title land last and overwrite the
+   * current title's pictures on screen — a game showing another game's box
+   * art, with no error and nothing to retry. Every call takes a ticket on the
+   * way in and drops its result if the ticket is no longer the latest. A
+   * counter rather than an `AbortController` because there is nothing to
+   * abort: `invoke` has no cancellation, so the work happens either way and
+   * the only question is whether its answer is still wanted.
+   */
+  const pictureRequest = useRef(0);
+
   async function loadPictures() {
+    const ticket = ++pictureRequest.current;
     try {
       const [dir, refs] = await Promise.all([artworkDir(), artworkForTitle(record.title.value)]);
       const { convertFileSrc } = await import("@tauri-apps/api/core");
+      if (ticket !== pictureRequest.current) return;
       const next = refs.map((ref) => ({
         kind: ref.kind,
         src: convertFileSrc(`${dir}/${ref.file}`),
@@ -278,7 +311,10 @@ export function TitleDetail({
       setChosenKind(next[0]?.kind ?? null);
     } catch {
       // A cache that cannot be read is a panel without a switch, not a panel
-      // that fails to open — the `art` prop still stands on its own.
+      // that fails to open — the `art` prop still stands on its own. Guarded
+      // too: a stale *failure* blanking the current title's pictures is the
+      // same bug wearing the other face.
+      if (ticket !== pictureRequest.current) return;
       setPictures([]);
       setChosenKind(null);
     }
@@ -292,6 +328,7 @@ export function TitleDetail({
 
   async function attach() {
     setArtError(null);
+    setArtBackup(null);
     const chosen = await open({
       multiple: false,
       filters: [{ name: t("collection.detail.art.filter"), extensions: ["png", "jpg", "jpeg"] }],
@@ -306,7 +343,8 @@ export function TitleDetail({
       return;
     }
     try {
-      await artworkAttach(record.title.value, record.id, chosen);
+      const outcome = await artworkAttach(record.title.value, record.id, chosen);
+      setArtBackup(outcome.backup);
       onArtChanged();
       void loadPictures();
     } catch (e) {
@@ -316,8 +354,10 @@ export function TitleDetail({
 
   async function detach() {
     setArtError(null);
+    setArtBackup(null);
     try {
-      await artworkDetach(record.title.value, record.id);
+      const outcome = await artworkDetach(record.title.value, record.id);
+      setArtBackup(outcome.backup);
       onArtChanged();
       void loadPictures();
     } catch (e) {
@@ -376,6 +416,11 @@ export function TitleDetail({
       {artError && (
         <div className="badge badge-err" style={{ fontSize: 11 }}>
           {artError}
+        </div>
+      )}
+      {artBackup && (
+        <div className="muted" style={{ fontSize: 11 }}>
+          {t("collection.detail.art.backedUp", { path: artBackup })}
         </div>
       )}
 

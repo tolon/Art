@@ -1585,6 +1585,7 @@
         "remove": "Resmi kaldır",
         "dialog": "Bu başlık için bir resim seç",
         "filter": "Resim (PNG, JPEG)",
+        "backedUp": "Katalog düzeltmelerinizin önceki sürümü {{path}} konumuna kaydedildi.",
         "rejected": "ART, PNG ve JPEG resimleri gösterebilir. Bu dosya ikisi de değil."
       },
       "play": {

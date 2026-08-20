@@ -43,6 +43,36 @@ fn artwork_dir_for(app: &AppHandle) -> PathBuf {
         .join("artwork")
 }
 
+/// What attaching a picture did, including where the previous version of the
+/// catalogue's user layer went (ART-144 #2).
+///
+/// **The backup path is not decoration.** `set_override` writes through
+/// `core/safety`'s `guarded_write`, which returns where it preserved the
+/// previous `overrides.json` — and CLAUDE.md's rule is that commands surface
+/// that to the UI so the user is always told. Both of these commands used to
+/// drop it on the floor, which made them the only override writers in the
+/// collection that did: `catalogue_set_override` has always returned it.
+/// Attaching a picture rewrites a file holding every correction the user has
+/// ever made to their catalogue, so "where did the previous one go" is a fair
+/// question to be able to answer.
+///
+/// A `String`, not a `PathBuf`: `serde`'s `PathBuf` implementation errors on
+/// a non-UTF-8 path, so an outcome built to reassure the user could itself
+/// fail to cross the command boundary on Windows — the same reasoning
+/// `RefusalReason::MediaAmbiguous::paths` already carries.
+#[derive(Debug, Clone, Serialize)]
+pub struct AttachOutcome {
+    pub art: ArtRef,
+    pub backup: Option<String>,
+}
+
+/// What detaching did. Same reasoning as [`AttachOutcome`]; there is no
+/// `ArtRef` because there is no longer a picture to point at.
+#[derive(Debug, Clone, Serialize)]
+pub struct DetachOutcome {
+    pub backup: Option<String>,
+}
+
 /// Emitted when an enrichment job finishes, with what each source managed.
 pub const ARTWORK_RESULT_EVENT: &str = "artwork-result";
 
@@ -213,7 +243,7 @@ fn attach_picture(
     title: &str,
     id: &str,
     file: String,
-) -> AppResult<ArtRef> {
+) -> AppResult<AttachOutcome> {
     let source = PathBuf::from(&file);
     let ext = picture_extension(&source)
         .ok_or("ART can show PNG and JPEG pictures. This file is neither.")?;
@@ -240,7 +270,7 @@ fn attach_picture(
     let art = cache.store(&key, ArtKind::Boxart, "manual", ext, &bytes)?;
     cache.save()?;
 
-    let write_override: AppResult<()> = (|| {
+    let write_override: AppResult<Option<PathBuf>> = (|| {
         let mut edit = read_overrides(catalogue)?
             .edits
             .get(id)
@@ -250,17 +280,22 @@ fn attach_picture(
             chosen: file,
             cached: art.file.clone(),
         });
-        set_override(catalogue, id, edit)?;
-        Ok(())
+        Ok(set_override(catalogue, id, edit)?)
     })();
 
-    if let Err(err) = write_override {
-        let _ = cache.remove(&key, ArtKind::Boxart);
-        let _ = cache.save();
-        return Err(err);
-    }
+    let backup = match write_override {
+        Ok(backup) => backup,
+        Err(err) => {
+            let _ = cache.remove(&key, ArtKind::Boxart);
+            let _ = cache.save();
+            return Err(err);
+        }
+    };
 
-    Ok(art)
+    Ok(AttachOutcome {
+        art,
+        backup: backup.map(|p| p.display().to_string()),
+    })
 }
 
 /// Attach a picture the user picked to a title.
@@ -277,7 +312,7 @@ pub fn artwork_attach(
     id: String,
     file: String,
     app: AppHandle,
-) -> AppResult<ArtRef> {
+) -> AppResult<AttachOutcome> {
     attach_picture(
         &artwork_dir_for(&app),
         &catalogue_dir(&app),
@@ -293,19 +328,22 @@ pub fn artwork_attach(
 /// `set_override`'s existing empty-override rule deletes the record entirely
 /// once nothing else is left in it.
 #[tauri::command]
-pub fn artwork_detach(title: String, id: String, app: AppHandle) -> AppResult<()> {
+pub fn artwork_detach(title: String, id: String, app: AppHandle) -> AppResult<DetachOutcome> {
     let dir = artwork_dir_for(&app);
     let mut cache = Cache::open(&dir)?;
     cache.remove(&normalise(&title), ArtKind::Boxart)?;
     cache.save()?;
 
     let catalogue = catalogue_dir(&app);
+    let mut backup = None;
     if let Some(mut edit) = read_overrides(&catalogue)?.edits.get(&id).cloned() {
         edit.art = None;
-        set_override(&catalogue, &id, edit)?;
+        backup = set_override(&catalogue, &id, edit)?;
     }
 
-    Ok(())
+    Ok(DetachOutcome {
+        backup: backup.map(|p| p.display().to_string()),
+    })
 }
 
 /// The argument shape: a path is a string on the wire, a `PathBuf` in `core`.
@@ -440,7 +478,7 @@ mod tests {
         let picture = root.join("cover.png");
         std::fs::write(&picture, b"PNGDATA").unwrap();
 
-        let art = attach_picture(
+        let first = attach_picture(
             &cache_dir,
             &catalogue_dir,
             "Turrican II",
@@ -449,9 +487,33 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(art.source, "manual");
+        assert_eq!(first.art.source, "manual");
         let cache = Cache::open(&cache_dir).unwrap();
         assert!(cache.get("turrican ii", ArtKind::Boxart).is_some());
+
+        // ART-144 (#2). The first attach writes an `overrides.json` that did
+        // not exist, so `guarded_write` had nothing to preserve and says so.
+        assert_eq!(first.backup, None, "there was no previous version to keep");
+
+        // The second one overwrites a real file, and that is when the user
+        // needs to be told where the previous one went. Discarding this — as
+        // both commands used to — left the collection's two artwork writers
+        // as the only override writers in ART that did not.
+        let second = attach_picture(
+            &cache_dir,
+            &catalogue_dir,
+            "Turrican II",
+            "some-id",
+            picture.to_string_lossy().to_string(),
+        )
+        .unwrap();
+        let backup = second
+            .backup
+            .expect("overwriting an existing overrides.json must report its backup");
+        assert!(
+            std::path::Path::new(&backup).is_file(),
+            "the reported backup must actually be there: {backup}"
+        );
     }
 
     /// A picture the user points at is untrusted the same way an archive
