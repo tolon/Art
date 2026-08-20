@@ -45,63 +45,9 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::core::error::{CoreError, CoreResult};
+use crate::core::error::CoreResult;
 use crate::core::safety::atomic_write;
-
-/// Refuse a value that would change what the generated AmigaShell command
-/// line does, rather than merely what it names.
-///
-/// Every one of `slave`, `system_volume` and `game_volume` is interpolated
-/// straight into the script `startup_sequence` builds, so any of the three
-/// can carry an attack — not only the slave name. The set refused:
-///
-/// - a control character (`\n` or `\r` starts a new script line — a name
-///   ending `...slave\nDelete DH0:#?` adds a command of its own);
-/// - `"` (opens a quoted string, changing where the current one ends);
-/// - `*` — AmigaDOS's escape character, which cancels the special meaning of
-///   whatever follows it;
-/// - `;` — separates multiple commands on one AmigaShell line;
-/// - `>` and `<` — redirect a command's output or input. `>` is how
-///   `Turrican.slave >DH1:C/something` turns `WHDLoad`'s own command line
-///   into a redirection that overwrites an arbitrary file on the game
-///   volume, which is mounted **writable on purpose** so WHDLoad can keep
-///   save games there. `>>` (append) is already refused because it contains
-///   `>`;
-/// - `` ` `` and `$` — refused on a confirmed mechanism, not suspicion. The
-///   AmigaOS Manual's "AmigaDOS Using Scripts" chapter (wiki.amigaos.net)
-///   states that `$` "introduces an environment variable (which also works
-///   outside of a script)", and that "back apostrophes are used to execute
-///   commands from within a string" — "if a string containing a command
-///   enclosed in back apostrophe is printed, the enclosed command is
-///   executed." Both are real Shell features, at the same command-line
-///   level `;`/`>`/`<` act at, so either is as dangerous as those three.
-///   One reservation the source does not settle: it describes backtick
-///   substitution happening *within a string*, while the slave name here is
-///   interpolated **unquoted** into the generated line, so whether an
-///   unquoted occurrence is substituted the same way is not established by
-///   that chapter. The refusal is correct either way — a WHDLoad slave name
-///   almost certainly never needs either character — so this refuses rather
-///   than resolve that open question first.
-///
-/// Considered and not added: AmigaDOS's pattern-matching wildcards (`#?`,
-/// `%`, `(a|b)`) are interpreted per-command by whichever program chooses to
-/// treat its own argument as a pattern — unlike a Unix shell, AmigaDOS does
-/// not expand them while parsing the command line, so they cannot change
-/// *which* command runs or *where its output goes*, only how one already-
-/// chosen command might later read its own argument. That reasoning does
-/// not extend to backtick and `$`, which is exactly why those two are
-/// refused above instead of joining this list.
-fn refuse_shell_metacharacters(label: &str, value: &str) -> CoreResult<()> {
-    if value
-        .chars()
-        .any(|c| c.is_control() || matches!(c, '"' | '*' | ';' | '>' | '<' | '`' | '$'))
-    {
-        return Err(CoreError::InvalidInput(format!(
-            "'{value}' is not a valid {label}"
-        )));
-    }
-    Ok(())
-}
+use crate::core::security::refuse_shell_metacharacters;
 
 /// Build the startup-sequence text that assigns from `system_volume` and runs
 /// `slave` out of `game_volume`.
@@ -112,7 +58,11 @@ fn refuse_shell_metacharacters(label: &str, value: &str) -> CoreResult<()> {
 /// title's drawer and the user's system — so all three go through
 /// [`refuse_shell_metacharacters`] before anything is formatted, rather than
 /// being sanitised: a launcher that silently rewrites what it was told to
-/// run is not one to trust with a startup-sequence.
+/// run is not one to trust with a startup-sequence. That guard —
+/// [`refuse_shell_metacharacters`], with the sources behind each refused
+/// character — lives in [`crate::core::security::amigados`], because ART now
+/// generates AmigaDOS scripts in more than one place and a guard kept in two
+/// of them is a guard that will diverge.
 ///
 /// The assigns come before the `CD` and the `WHDLoad` line, because AmigaDOS
 /// resolves `C:`, `LIBS:` and `DEVS:` for everything that follows — the
