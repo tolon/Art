@@ -78,6 +78,26 @@ describe("the four endings reach the frontend", () => {
     expect(declared?.[1]).toBe(AMIGA_INSTALL_EVENT);
   });
 
+  it("asks for the package's own archive, which ART-185 made required", () => {
+    // The Rust field is not optional — no `#[serde(default)]`, no
+    // `Option` — so a request without it fails to deserialise and the
+    // command rejects before anything runs. TypeScript is the only place
+    // that can say so *before* the call, and only if the field is declared
+    // required here too. Without the archive the installer is on no mounted
+    // volume and the run reports that it said no about a program that never
+    // started, which is the whole of ART-185.
+    expect(COMMAND).toMatch(/pub package_archive: PathBuf,/);
+    expect(COMMAND).not.toMatch(/#\[serde\(default\)\]\s*\r?\n\s*pub package_archive/);
+    expect(WRAPPER).toContain("packageArchive: string;");
+    expect(WRAPPER).not.toContain("packageArchive?");
+
+    // And the third volume the run mounts is named on both sides, because
+    // the user will see it on the Workbench (design §4).
+    const declared = CORE.match(/PACKAGE_VOLUME: &str = "([^"]+)"/);
+    expect(declared?.[1]).toBeTruthy();
+    expect(WRAPPER).toContain("packageVolume: string;");
+  });
+
   it("keeps the fields a struct variant carries, which serde does not rename for free", () => {
     // `#[serde(rename_all)]` on an enum renames variants, not the fields of a
     // struct variant, so `leftBehind` only arrives camelCased because the

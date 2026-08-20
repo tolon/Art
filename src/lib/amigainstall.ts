@@ -1,12 +1,19 @@
 // Running a package's own installer on the Amiga.
 // Mirrors src-tauri/src/commands/amigainstall.rs and
-// src-tauri/src/core/amigainstall/{mod,run,stage,workvol}.rs.
+// src-tauri/src/core/amigainstall/{mod,packagevol,run,stage,workvol}.rs.
 //
 // **Nothing here decrypts anything and no protection is bypassed.** Two
 // AmigaOS BoingBags carry ZipCrypto-encrypted payloads whose password belongs
 // to the package's own Amiga-side `Updater` (ART-166); this runs that Updater
 // where it was always meant to run, inside an emulator, which is what every
 // established distribution builder does.
+//
+// **Three volumes, not two** (ART-185). The run mounts the distribution tree,
+// the package's own wrapper unpacked, and ART's boot volume. The package's
+// wrapper is plain LHA and ART unpacks it itself; the encrypted payload inside
+// stays encrypted and travels as an opaque blob for the Amiga-side Updater.
+// Without the third volume the installer is on no mounted disk, `CD` fails and
+// ART reports that the installer said no about a program that never started.
 //
 // **`amigaInstallPreview` writes nothing and starts nothing** — §92's PREVIEW.
 // It answers what would run, on which tree, with which package, and whether
@@ -70,8 +77,17 @@ export interface AmigaInstallRequest {
   /** The Amiga volume the tree is mounted as, e.g. `DH0`. A bare name with no
    *  colon; `null` takes ART's default. */
   systemVolume?: string | null;
-  /** Where the package's own files sit inside that tree, `/`-separated.
-   *  `null` means the volume's root. */
+  /** The package's **own** archive — the wrapper the user downloaded,
+   *  `BoingBag39-1.lha`. ART unpacks it and mounts that as a third volume.
+   *
+   *  Required, and added by ART-185: a BoingBag's payload cannot be placed
+   *  into the tree from the host at all, which is why this round exists, so
+   *  the installer is on no volume ART mounts unless it comes from here. */
+  packageArchive: string;
+  /** Where the package's own files sit inside that unpacked wrapper,
+   *  `/`-separated — `BoingBag3.9-1`. `null` takes the package's own recipe
+   *  `media`, which is that same drawer as shipped data; `""` means the
+   *  wrapper's own root. */
   packageDir?: string | null;
   /** The user's **own** licensed Kickstart. ART ships none and never will. */
   kickstart: string;
@@ -96,6 +112,17 @@ export interface AmigaInstallPreview {
   /** ART's own volume, mounted alongside the tree and booted first. The user
    *  will see it on the Workbench, so say it exists. */
   workVolume: string;
+  /** The volume the package's own unpacked wrapper is mounted as — the third,
+   *  and the one ART-185 was missing. The user sees this one too. */
+  packageVolume: string;
+  /** The package's own archive, as the user chose it. */
+  packageArchive: string;
+  /** Whether it is actually there. A preview that did not ask would be
+   *  describing a run with nothing to run. */
+  packageArchivePresent: boolean;
+  /** The drawer inside that archive the installer is expected in, or `null`
+   *  for the archive's own root. */
+  packageDir: string | null;
   /** The file the Amiga writes and the host polls. */
   resultFile: string;
   /** How long the run may go without an answer before ART ends the emulator

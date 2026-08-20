@@ -26,31 +26,6 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-185** 🔴 **Nothing mounts the package, so the installer would never
-start — and ART would report that it ran and refused** — *found 2026-08-21 by
-wave D's Task 5 implementer, confirmed in code by its reviewer*
-`src-tauri/src/core/amigainstall/run.rs::media_for`
-
-`media_for` builds exactly two `DirMount`s: the tree copy and ART's own work
-volume. The generated script then emits `CD DH0:BoingBag3.9-1` and
-`DH0:BoingBag3.9-1/C/Updater`, which resolve only if the package sits inside
-the distribution tree. For a BoingBag it never can — not being placeable on
-the host is precisely what this round exists to work around (ART-166).
-
-**A third `DirMount` is necessary and not sufficient.** Nothing anywhere
-unpacks the plain-LHA wrapper to a host directory in the first place. The fix
-is an extraction step, that mount, and a `package_volume` on `RunRequest`.
-
-**Why this is 🔴 rather than a gap to note.** It does not fail loudly. The
-command runs, `CD` fails, the shell cannot find the program, the script's
-`If Warn` writes `failed`, and ART tells the user **"the installer ran and
-said no"** about a program that never started. §89 forbids claiming what is
-not there, and a confident wrong sentence is worse than an error.
-
-It is a **spec** defect, not an implementation slip: §3 said what to run and
-never said where it runs from, and four tasks passed review because each was
-locally correct. The design has been amended.
-
 **ART-184** 🟠 **The test fixtures leak a scratch directory per run, for
 ever, and filled a 2 TB drive** — *found 2026-08-20 when the suite began
 failing with `StorageFull`*
@@ -590,6 +565,65 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-185** 🔴 **Nothing mounted the package, so the installer would
+never have started — and ART would have reported that it ran and refused** —
+*found 2026-08-21 by wave D's Task 5 implementer, confirmed in code by its
+reviewer, fixed the same day on `amiga-side-install`*
+`src-tauri/src/core/amigainstall/run.rs::media_for`
+
+`media_for` built exactly two `DirMount`s: the tree copy and ART's own work
+volume. The generated script then emitted `CD DH0:BoingBag3.9-1` and
+`DH0:BoingBag3.9-1/C/Updater`, which resolve only if the package sits inside
+the distribution tree. For a BoingBag it never can — not being placeable on
+the host is precisely what this round exists to work around (ART-166).
+
+It would not have failed loudly. The command runs, `CD` fails, the shell
+cannot find the program, the script's `If Warn` writes `failed`, and ART tells
+the user **"the installer ran and said no"** about a program that never
+started. §89 forbids claiming what is not there, and a confident wrong
+sentence is worse than an error.
+
+A **spec** defect, not an implementation slip: §3 said what to run and never
+said where it runs from, and four tasks passed review because each was locally
+correct. The design was amended on 2026-08-21 with a section of its own,
+*"Where the package's own files come from"*.
+
+**A third mount was necessary and not sufficient** — nothing anywhere unpacked
+the plain-LHA wrapper to a host directory in the first place. Three things
+landed together:
+
+- `core/amigainstall/packagevol.rs` unpacks the wrapper through
+  `core::archive`'s one security gate (`safe_join`, the output caps, the entry
+  cap) into an empty scratch directory, and then **asks what arrived**: the
+  package's drawer must be there and the recipe's installer must be inside it,
+  or the run is refused by name before an emulator starts. **Nothing decrypts
+  anything** — the wrapper is plain LHA and the ZipCrypto payload inside is
+  copied out as an opaque blob for the Amiga-side `Updater`, which is this
+  design's arrangement from the start.
+- `RunRequest::package_volume_dir` and the third `DirMount`, under
+  `PACKAGE_VOLUME` (`ARTPkg`), mounted as data at the tree's boot priority.
+  `claims_package_volume` refuses a tree that would shadow it, and `media_for`
+  refuses a package directory that is not there.
+- `commands/amigainstall.rs::compose` roots the installer's path in
+  `ARTPkg:` rather than the tree's volume, and the drawer defaults to the
+  package's own recipe `media` instead of the volume root.
+
+Closed by **`the_installer_is_reached_through_the_package_volume_and_not_the_tree`**,
+with `the_package_is_mounted_as_its_own_volume_beside_the_other_two`,
+`a_run_whose_package_was_not_unpacked_is_refused_before_launching` and
+`a_wrong_archive_is_refused_before_the_tree_is_copied` beside it.
+
+Sixteen mutations were put back and every one failed a named test. **Four
+survived the first round**, all four for the reason this session keeps
+finding: an assertion that the defect also satisfies. The drawer check was
+covered only by "it errored", and deleting it left the *installer* check to
+error instead; the traversal test aimed at a path that did not exist, so
+`Path::join` refused it too; the boot-priority assertion compared a constant
+with itself; and the ordering mutation was written as a no-op. All four tests
+were rewritten to assert the property rather than the symptom — the refusal
+now has to *list what the archive really held*, the traversal target is a real
+furnished directory, and the priority is compared against ART's own volume.
 
 **ART-182** 🟡 **A blocking-CI flake: sixteen tests shared one staging
 namespace** — *reported by wave D's Task 2 implementer 2026-08-20, fixed the

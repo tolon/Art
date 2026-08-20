@@ -49,7 +49,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use super::{
-    claims_work_volume, PlannedRun, RunOutcome, MARK_FAILED, MARK_OK, MARK_STARTED, WORK_VOLUME,
+    claims_package_volume, claims_work_volume, PlannedRun, RunOutcome, MARK_FAILED, MARK_OK,
+    MARK_STARTED, PACKAGE_VOLUME, WORK_VOLUME,
 };
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
@@ -92,6 +93,10 @@ pub const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// be wrong instead of two.
 pub const WORK_DEVICE: &str = WORK_VOLUME;
 
+/// The Amiga device name the package's own unpacked wrapper is mounted under,
+/// for the same reason [`WORK_DEVICE`] is the same string as its label.
+pub const PACKAGE_DEVICE: &str = PACKAGE_VOLUME;
+
 /// Boot priority for ART's own volume — the highest an `i8` holds, so nothing
 /// the user's tree could carry outranks it. This is the same mechanism as
 /// "one click starts the game" (`commands/launch.rs`), which gives ART's boot
@@ -104,6 +109,12 @@ const WORK_BOOT_PRIORITY: i8 = 127;
 /// mounted as data and never as the boot device; this is that rule as a
 /// number.
 const TREE_BOOT_PRIORITY: i8 = -128;
+
+/// Boot priority for the package's own unpacked wrapper. Data, exactly like
+/// the tree: it holds a program ART runs *from* a shell that has already
+/// booted, and an unpacked BoingBag has no `S/Startup-Sequence` of its own to
+/// boot from anyway.
+const PACKAGE_BOOT_PRIORITY: i8 = -128;
 
 /// The clock a run measures its deadline against.
 ///
@@ -236,9 +247,10 @@ impl Default for RunLimits {
 /// Everything a run needs that is not the plan itself.
 ///
 /// A struct rather than a long argument list because every field is a *place*
-/// and two of them are directories that must not be confused: `tree_dir` is
+/// and three of them are directories that must not be confused: `tree_dir` is
 /// the copy being installed into, `work_volume_dir` is ART's own volume
-/// carrying the script and the result file.
+/// carrying the script and the result file, and `package_volume_dir` is the
+/// package's own wrapper, unpacked.
 #[derive(Debug, Clone, Copy)]
 pub struct RunRequest<'a> {
     /// What the Amiga will execute. Validated when the work volume was built.
@@ -248,6 +260,16 @@ pub struct RunRequest<'a> {
     /// The **copy** of the distribution tree. Never the original: the copy
     /// replaces it only when the result says the run succeeded (§92).
     pub tree_dir: &'a Path,
+    /// The package's own wrapper, unpacked, as written by
+    /// [`super::packagevol::unpack`] — the host side of the third mount.
+    ///
+    /// **Added by ART-185**, deliberately amending a type an earlier task of
+    /// this round shipped. Without it `media_for` mounted two volumes and the
+    /// program the whole round exists to run was in neither, which does not
+    /// fail loudly: `CD` fails, the shell finds nothing, the script's
+    /// `If Warn` writes [`MARK_FAILED`], and ART reports that the installer
+    /// ran and said no about a program that never started.
+    pub package_volume_dir: &'a Path,
     /// The hardware the installer runs on.
     pub profile: &'a AmigaProfile,
     /// The user's **own** licensed Kickstart. ART ships none and never will,
@@ -261,11 +283,16 @@ pub struct RunRequest<'a> {
     pub limits: RunLimits,
 }
 
-/// The two volumes a run mounts, in the order the config lists them.
+/// The **three** volumes a run mounts, in the order the config lists them.
 ///
 /// Split out from [`run_with`] because it is the half of the launch that can
-/// be asserted without any emulator at all: which directory boots, which one
-/// is data, and that neither can shadow the other.
+/// be asserted without any emulator at all: which directory boots, which ones
+/// are data, and that none of them can shadow another.
+///
+/// It listed two until ART-185. The third — the package's own unpacked
+/// wrapper — is where the installer actually lives, and its absence is the
+/// defect this function is named in: the run started, `CD` failed, and ART
+/// reported an answer from a program that was never on any mounted volume.
 pub fn media_for(request: &RunRequest) -> CoreResult<LaunchMedia> {
     // ART ships no Kickstart. `generate_uae_config` would silently fall back
     // to AROS for a missing one, and a run under a ROM the user did not choose
@@ -303,6 +330,30 @@ pub fn media_for(request: &RunRequest) -> CoreResult<LaunchMedia> {
         )));
     }
 
+    // The same rule for the third mount, and it is not the same rule twice:
+    // a tree mounted as `ARTPkg` shadows the *package*, and a shadowed package
+    // is the installer unreachable — ART-185 arriving through a name instead
+    // of through a missing mount.
+    if claims_package_volume(&request.plan.system_volume) {
+        return Err(CoreError::SafetyRefused(format!(
+            "the system tree may not be mounted as '{PACKAGE_DEVICE}'; that is where ART mounts \
+             the package's own files"
+        )));
+    }
+
+    // The package has to actually be there. An empty or absent directory
+    // mounts perfectly well and produces exactly the silent shape: `CD`
+    // fails, the shell finds no program, and the script reports that the
+    // installer said no. `packagevol::unpack` proves the installer itself
+    // arrived; this is the last gate before the emulator, and it costs one
+    // `is_dir`.
+    if !request.package_volume_dir.is_dir() {
+        return Err(CoreError::InvalidInput(format!(
+            "the package's own files must be unpacked before the run; '{}' is not a directory",
+            request.package_volume_dir.display()
+        )));
+    }
+
     Ok(LaunchMedia {
         kickstart_path: Some(request.kickstart_path.to_string_lossy().to_string()),
         directories: vec![
@@ -312,6 +363,22 @@ pub fn media_for(request: &RunRequest) -> CoreResult<LaunchMedia> {
                 volume: request.plan.system_volume.clone(),
                 label: request.plan.system_volume.clone(),
                 boot_priority: TREE_BOOT_PRIORITY,
+                read_only: false,
+            },
+            // The package's own wrapper, unpacked. Data, like the tree.
+            //
+            // **Writable, deliberately.** Nothing of the user's is here — it
+            // is ART's own scratch copy, discarded when the job ends — and a
+            // read-only mount would make an installer that writes a log or a
+            // temporary file beside itself fail for a reason ART invented,
+            // which is the same mistake as booting AROS because no Kickstart
+            // was given. What the run is *not* allowed to reach is ART's work
+            // volume, and that is guarded above by name.
+            DirMount {
+                host_path: request.package_volume_dir.to_string_lossy().to_string(),
+                volume: PACKAGE_DEVICE.to_string(),
+                label: PACKAGE_VOLUME.to_string(),
+                boot_priority: PACKAGE_BOOT_PRIORITY,
                 read_only: false,
             },
             // ART's own volume: the highest priority of anything mounted, so
@@ -719,6 +786,19 @@ mod tests {
             )
             .unwrap();
             std::fs::create_dir_all(root.join("tree")).unwrap();
+            // The package's own wrapper, unpacked — the third mount, and the
+            // one whose absence was ART-185. It carries the drawer and the
+            // program the plan below names, because an empty directory would
+            // mount just as well and produce exactly the silent failure.
+            std::fs::create_dir_all(root.join("pkg").join("BoingBag3.9-2").join("C")).unwrap();
+            std::fs::write(
+                root.join("pkg")
+                    .join("BoingBag3.9-2")
+                    .join("C")
+                    .join("Updater"),
+                b"the updater",
+            )
+            .unwrap();
             std::fs::write(root.join("kick.rom"), b"rom").unwrap();
             std::fs::write(root.join("winuae.exe"), b"exe").unwrap();
             Self {
@@ -726,9 +806,9 @@ mod tests {
                 plan: PlannedRun {
                     package_id: "boingbag-39-2".to_string(),
                     system_volume: "DH0".to_string(),
-                    program: "DH0:Updater".to_string(),
+                    program: format!("{PACKAGE_DEVICE}:BoingBag3.9-2/C/Updater"),
                     args: Vec::new(),
-                    working_directory: None,
+                    working_directory: Some(format!("{PACKAGE_DEVICE}:BoingBag3.9-2")),
                 },
                 profile: AmigaProfile::a1200_aga(),
             }
@@ -736,6 +816,10 @@ mod tests {
 
         fn work(&self) -> PathBuf {
             self.root.join("work")
+        }
+
+        fn package(&self) -> PathBuf {
+            self.root.join("pkg")
         }
 
         fn result_file(&self) -> PathBuf {
@@ -747,6 +831,7 @@ mod tests {
                 plan: &self.plan,
                 work_volume_dir: Path::new("placeholder"),
                 tree_dir: Path::new("placeholder"),
+                package_volume_dir: Path::new("placeholder"),
                 profile: &self.profile,
                 kickstart_path: Path::new("placeholder"),
                 winuae_path: Path::new("placeholder"),
@@ -764,9 +849,10 @@ mod tests {
         ($fx:expr) => {{
             let work = $fx.work();
             let tree = $fx.root.join("tree");
+            let pkg = $fx.package();
             let kick = $fx.root.join("kick.rom");
             let exe = $fx.root.join("winuae.exe");
-            (work, tree, kick, exe)
+            (work, tree, pkg, kick, exe)
         }};
     }
 
@@ -774,12 +860,14 @@ mod tests {
         base: RunRequest<'a>,
         work: &'a Path,
         tree: &'a Path,
+        pkg: &'a Path,
         kick: &'a Path,
         exe: &'a Path,
     ) -> RunRequest<'a> {
         RunRequest {
             work_volume_dir: work,
             tree_dir: tree,
+            package_volume_dir: pkg,
             kickstart_path: kick,
             winuae_path: exe,
             ..base
@@ -796,8 +884,8 @@ mod tests {
     #[test]
     fn a_result_written_while_running_is_read_and_reported() {
         let fx = Fixture::new("happy");
-        let (work, tree, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &kick, &exe);
+        let (work, tree, pkg, kick, exe) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
 
         let result_file = fx.result_file();
         let clock = TestClock::new(move |n| {
@@ -826,8 +914,8 @@ mod tests {
     #[test]
     fn a_run_that_never_reports_times_out_rather_than_failing() {
         let fx = Fixture::new("deadline");
-        let (work, tree, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &kick, &exe);
+        let (work, tree, pkg, kick, exe) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
 
         let clock = TestClock::idle();
         let launcher = FakeLauncher::new();
@@ -863,8 +951,8 @@ mod tests {
     #[test]
     fn a_started_marker_alone_is_not_treated_as_an_outcome() {
         let fx = Fixture::new("started");
-        let (work, tree, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &kick, &exe);
+        let (work, tree, pkg, kick, exe) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
 
         std::fs::write(fx.result_file(), format!("{MARK_STARTED}\n")).unwrap();
 
@@ -890,8 +978,8 @@ mod tests {
     #[test]
     fn a_started_marker_that_becomes_ok_is_reported_as_success() {
         let fx = Fixture::new("started-then-ok");
-        let (work, tree, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &kick, &exe);
+        let (work, tree, pkg, kick, exe) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
 
         std::fs::write(fx.result_file(), format!("{MARK_STARTED}\n")).unwrap();
 
@@ -911,8 +999,8 @@ mod tests {
     #[test]
     fn cancelling_between_polls_terminates_and_reports_cancelled() {
         let fx = Fixture::new("cancel");
-        let (work, tree, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &kick, &exe);
+        let (work, tree, pkg, kick, exe) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
 
         let clock = TestClock::idle();
         let launcher = FakeLauncher::new();
@@ -945,8 +1033,8 @@ mod tests {
     #[test]
     fn cancelling_before_the_launch_starts_no_emulator() {
         let fx = Fixture::new("cancel-early");
-        let (work, tree, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &kick, &exe);
+        let (work, tree, pkg, kick, exe) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
 
         let launcher = FakeLauncher::new();
         let sink = CancelAfter::new(0);
@@ -965,8 +1053,8 @@ mod tests {
     #[test]
     fn a_failed_marker_is_reported_as_failed_and_not_as_a_timeout() {
         let fx = Fixture::new("failed");
-        let (work, tree, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &kick, &exe);
+        let (work, tree, pkg, kick, exe) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
 
         let result_file = fx.result_file();
         let clock = TestClock::new(move |n| {
@@ -986,8 +1074,8 @@ mod tests {
     #[test]
     fn an_answer_on_the_last_poll_beats_the_deadline() {
         let fx = Fixture::new("last-poll");
-        let (work, tree, kick, exe) = request!(fx);
-        let mut request = with_paths(fx.request(), &work, &tree, &kick, &exe);
+        let (work, tree, pkg, kick, exe) = request!(fx);
+        let mut request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
         request.limits = RunLimits {
             deadline: Duration::from_secs(4),
             poll_interval: Duration::from_secs(2),
@@ -1014,8 +1102,8 @@ mod tests {
     #[test]
     fn an_unrecognised_result_is_not_an_answer() {
         let fx = Fixture::new("partial");
-        let (work, tree, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &kick, &exe);
+        let (work, tree, pkg, kick, exe) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
 
         std::fs::write(fx.result_file(), b"").unwrap();
         let outcome = run_with(
@@ -1043,8 +1131,8 @@ mod tests {
     #[test]
     fn an_emulator_closed_without_reporting_is_its_own_ending() {
         let fx = Fixture::new("exited");
-        let (work, tree, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &kick, &exe);
+        let (work, tree, pkg, kick, exe) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
 
         let launcher = FakeLauncher::new();
         let log = Arc::clone(&launcher.log);
@@ -1078,8 +1166,8 @@ mod tests {
     #[test]
     fn a_result_written_just_before_the_emulator_exits_is_still_read() {
         let fx = Fixture::new("exit-race");
-        let (work, tree, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &kick, &exe);
+        let (work, tree, pkg, kick, exe) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
 
         let result_file = fx.result_file();
         let launcher = FakeLauncher::with_liveness_hook(move |n| {
@@ -1106,8 +1194,8 @@ mod tests {
     #[test]
     fn arts_own_volume_boots_and_the_tree_is_data() {
         let fx = Fixture::new("mounts");
-        let (work, tree, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &kick, &exe);
+        let (work, tree, pkg, kick, exe) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
 
         let media = media_for(&request).unwrap();
 
@@ -1135,14 +1223,184 @@ mod tests {
         );
     }
 
+    /// ART-185: **three** volumes, and the package's own is one of them.
+    ///
+    /// Written so that it cannot pass against the defect. A test that found
+    /// the tree and ART's volume and stopped there is satisfied by two mounts
+    /// — which is exactly what `media_for` produced for four tasks — so this
+    /// asserts the *count*, three distinct device names, and the package
+    /// mount's own host path. Delete the third `DirMount` and the first
+    /// assertion fails; give it the same device name as either of the others
+    /// and the second does.
+    #[test]
+    fn the_package_is_mounted_as_its_own_volume_beside_the_other_two() {
+        let fx = Fixture::new("three-mounts");
+        let (work, tree, pkg, kick, exe) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+
+        let media = media_for(&request).unwrap();
+
+        assert_eq!(
+            media.directories.len(),
+            3,
+            "the tree, the package and ART's own volume: {:?}",
+            media
+                .directories
+                .iter()
+                .map(|d| d.volume.as_str())
+                .collect::<Vec<_>>()
+        );
+        let mut devices: Vec<String> = media
+            .directories
+            .iter()
+            .map(|d| d.volume.to_ascii_lowercase())
+            .collect();
+        devices.sort();
+        devices.dedup();
+        assert_eq!(
+            devices.len(),
+            3,
+            "no two mounts may share a device name; the second would shadow the first"
+        );
+
+        let package = media
+            .directories
+            .iter()
+            .find(|d| d.volume == PACKAGE_DEVICE)
+            .expect("the package's own volume");
+        assert_eq!(
+            package.host_path,
+            pkg.to_string_lossy(),
+            "and it must be the directory the wrapper was unpacked into"
+        );
+        assert_eq!(package.label, PACKAGE_VOLUME);
+
+        // Against ART's own volume, not against `PACKAGE_BOOT_PRIORITY` — a
+        // constant compared with itself is a tautology, and raising it to 127
+        // survived exactly that assertion in the mutation run. What matters is
+        // the *relationship*: ART's script must boot, and a wrapper that
+        // outranked it would hand the machine to whatever the package's own
+        // drawer happens to look like.
+        let art = media
+            .directories
+            .iter()
+            .find(|d| d.volume == WORK_DEVICE)
+            .expect("ART's own volume");
+        assert!(
+            package.boot_priority < art.boot_priority,
+            "the package must never outrank ART's own volume: {} vs {}",
+            package.boot_priority,
+            art.boot_priority
+        );
+        assert_eq!(
+            package.boot_priority, TREE_BOOT_PRIORITY,
+            "data, exactly like the tree"
+        );
+        assert!(
+            !package.read_only,
+            "writable: nothing of the user's is here, and a read-only mount would fail an \
+             installer that writes beside itself for a reason ART invented"
+        );
+    }
+
+    /// The program the script names is really on the volume that was mounted.
+    ///
+    /// The mount is only half of ART-185; the other half is that the drawer
+    /// and the installer actually arrived in it. This asserts the join between
+    /// the two ends — what `media_for` mounted, and what
+    /// `PlannedRun::working_directory` and `program` say — against the real
+    /// filesystem, which is what the emulator will see.
+    #[test]
+    fn the_program_the_plan_names_is_on_the_volume_that_was_mounted() {
+        let fx = Fixture::new("program-present");
+        let (work, tree, pkg, kick, exe) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+
+        let media = media_for(&request).unwrap();
+        let package = media
+            .directories
+            .iter()
+            .find(|d| d.volume == PACKAGE_DEVICE)
+            .expect("the package's own volume");
+
+        // `ARTPkg:BoingBag3.9-2/C/Updater` → the host path below the mount.
+        let tail = fx
+            .plan
+            .program
+            .strip_prefix(&format!("{PACKAGE_DEVICE}:"))
+            .expect("the plan names the package volume");
+        let on_host = Path::new(&package.host_path).join(tail.replace('/', "\\"));
+        assert!(
+            on_host.is_file(),
+            "the installer the script names must exist under the mount: {}",
+            on_host.display()
+        );
+    }
+
+    /// A run whose package was never unpacked is refused **before** the
+    /// emulator starts.
+    ///
+    /// This is ART-185's own shape: an absent or empty directory mounts
+    /// perfectly well, `CD` then fails, the shell finds no program, and the
+    /// script's `If Warn` reports that the installer said no about a program
+    /// that never started. Twenty minutes and a wrong sentence, or one
+    /// `is_dir`.
+    #[test]
+    fn a_run_whose_package_was_not_unpacked_is_refused_before_launching() {
+        let fx = Fixture::new("no-package");
+        let (work, tree, _pkg, kick, exe) = request!(fx);
+        let missing = fx.root.join("never-unpacked");
+        let request = with_paths(fx.request(), &work, &tree, &missing, &kick, &exe);
+
+        let launcher = FakeLauncher::new();
+        let err = run_with(&request, &launcher, &TestClock::idle(), &NoProgress).unwrap_err();
+
+        assert!(
+            matches!(err, CoreError::InvalidInput(ref m) if m.contains("unpacked")),
+            "got {err:?}"
+        );
+        assert!(
+            launcher.log.launched_with.lock().unwrap().is_empty(),
+            "nothing should have been launched"
+        );
+    }
+
+    /// The tree may not take the package's device name: the second mount
+    /// would shadow the first, and the shadowed one carries the installer.
+    #[test]
+    fn a_tree_mounted_under_the_package_device_name_is_refused() {
+        for hostile in [PACKAGE_DEVICE, "artpkg", "ARTPkg:"] {
+            let mut fx = Fixture::new("shadow-package");
+            fx.plan.system_volume = hostile.to_string();
+            let (work, tree, pkg, kick, exe) = request!(fx);
+            let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
+
+            let err = media_for(&request).unwrap_err();
+            assert!(
+                matches!(err, CoreError::SafetyRefused(ref m) if m.contains(PACKAGE_DEVICE)),
+                "'{hostile}' must be refused, got {err:?}"
+            );
+        }
+    }
+
+    /// ART's two own volumes must not be one volume. Both are constants, so
+    /// this is cheap — and a constant changed to collide with the other would
+    /// otherwise show up only as a run whose result file was never written.
+    #[test]
+    fn arts_two_own_volumes_have_different_names() {
+        assert_ne!(WORK_VOLUME, PACKAGE_VOLUME);
+        assert!(!claims_package_volume(WORK_VOLUME));
+        assert!(!claims_work_volume(PACKAGE_VOLUME));
+    }
+
     /// ART ships no Kickstart, so a run without the user's own is refused
     /// rather than quietly booting AROS.
     #[test]
     fn a_run_without_a_licensed_kickstart_is_refused() {
         let fx = Fixture::new("no-kick");
-        let (work, tree, _kick, exe) = request!(fx);
+        let (work, tree, pkg, _kick, exe) = request!(fx);
         let missing = fx.root.join("nothing-here.rom");
-        let request = with_paths(fx.request(), &work, &tree, &missing, &exe);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &missing, &exe);
 
         let err = run_with(
             &request,
@@ -1162,9 +1420,9 @@ mod tests {
     #[test]
     fn a_work_volume_with_no_script_is_refused() {
         let fx = Fixture::new("no-script");
-        let (work, tree, kick, exe) = request!(fx);
+        let (work, tree, pkg, kick, exe) = request!(fx);
         std::fs::remove_file(work.join("S").join("Startup-Sequence")).unwrap();
-        let request = with_paths(fx.request(), &work, &tree, &kick, &exe);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
 
         let launcher = FakeLauncher::new();
         let err = run_with(&request, &launcher, &TestClock::idle(), &NoProgress).unwrap_err();
@@ -1187,8 +1445,8 @@ mod tests {
         // Lower case on purpose: AmigaDOS device names are case-insensitive,
         // so a comparison that is not would let this through.
         fx.plan.system_volume = "artwork".to_string();
-        let (work, tree, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &kick, &exe);
+        let (work, tree, pkg, kick, exe) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
 
         let err = media_for(&request).unwrap_err();
         assert!(
@@ -1212,8 +1470,8 @@ mod tests {
     #[test]
     fn an_io_error_reading_the_result_still_ends_the_emulator() {
         let fx = Fixture::new("read-error");
-        let (work, tree, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &kick, &exe);
+        let (work, tree, pkg, kick, exe) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
 
         std::fs::create_dir(fx.result_file()).unwrap();
 
@@ -1235,8 +1493,8 @@ mod tests {
     #[test]
     fn an_io_error_checking_the_emulator_still_ends_it() {
         let fx = Fixture::new("liveness-error");
-        let (work, tree, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &kick, &exe);
+        let (work, tree, pkg, kick, exe) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
 
         let launcher = FakeLauncher::new();
         launcher.log.liveness_fails.store(true, Ordering::Relaxed);
@@ -1260,8 +1518,8 @@ mod tests {
     fn the_trailing_colon_form_of_arts_own_volume_is_refused_as_a_mount() {
         let mut fx = Fixture::new("shadow-colon");
         fx.plan.system_volume = "ARTWork:".to_string();
-        let (work, tree, kick, exe) = request!(fx);
-        let request = with_paths(fx.request(), &work, &tree, &kick, &exe);
+        let (work, tree, pkg, kick, exe) = request!(fx);
+        let request = with_paths(fx.request(), &work, &tree, &pkg, &kick, &exe);
 
         let err = media_for(&request).unwrap_err();
         assert!(

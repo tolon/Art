@@ -110,8 +110,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **Still no screen** — that is the next step of this round — so nothing you
   can click starts an emulator yet.
+- **ART now unpacks the package's own archive and gives it to the Amiga as a
+  third disk.** Everything above assembled the command that runs the
+  package's installer; nothing had actually put that installer anywhere the
+  emulated Amiga could see it. The run mounted the system being built and
+  ART's own small boot disk, and the installer is in neither — it cannot be
+  copied into the system beforehand, which is the whole reason this round
+  exists.
+
+  So ART now unpacks the archive you point it at into a folder of its own
+  and mounts that alongside, and it checks that what came out really is the
+  package you ticked: the drawer has to be there and the installer has to be
+  inside it, or ART says so and stops **before** any emulator opens, naming
+  what your archive actually held. Pointing at the wrong `.lha` now gets a
+  sentence rather than a twenty-minute run.
+
+  **Nothing is unlocked.** The archive ART unpacks is an ordinary one; the
+  locked file inside it is copied out untouched, for the package's own
+  program to open on the Amiga, exactly as before. Anything inside the
+  archive that tries to write outside the folder ART unpacked into is
+  refused and reported.
 
 #### Fixed
+- **A run would have told you the installer refused, about a program that
+  never started.** The installer was on no disk the emulated Amiga could
+  see, so the change-directory step failed, the shell found nothing to run,
+  and ART's own script recorded a refusal — which ART would then have
+  reported as "the installer ran and said no". A confidently wrong sentence
+  is worse than an error. Fixed by the third disk described above, and the
+  run now refuses to start at all if the package is not there
+  ([ART-185](docs/ISSUES.md)).
 - **A mistyped key in a recipe file is now an error instead of silence.**
   ART reads its package recipes from small text files, and a key it did not
   recognise used to be ignored without a word — so a recipe that named an

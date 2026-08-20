@@ -14,8 +14,10 @@
 //!
 //! ## The shape of a run
 //!
-//! ART mounts the distribution tree as **data** and its own work volume as the
-//! **boot device**, at the highest boot priority — the mechanism
+//! **Three volumes, and the third was missing for four tasks (ART-185).** ART
+//! mounts the distribution tree as **data**, the package's own unpacked wrapper
+//! as **data**, and its own work volume as the **boot device**, at the highest
+//! boot priority — the mechanism
 //! [`crate::core::winuae::DirMount`]'s `boot_priority` documents and that "one
 //! click starts the game" already uses. The work volume carries one generated
 //! AmigaDOS script ([`workvol`]); the script runs the installer the package's
@@ -29,9 +31,29 @@
 //! after a tree's own sequence never runs, because the sequence ends with
 //! `LoadWB`/`EndCLI`.
 //!
+//! ## Where the package's own files come from ([`packagevol`], ART-185)
+//!
+//! A BoingBag's `Updater` is in neither the tree nor ART's work volume, and it
+//! never can be in the tree: **not being placeable on the host is the whole
+//! reason this round exists** (ART-166). So the wrapper is unpacked to a host
+//! directory of ART's own and that directory is the third mount.
+//!
+//! The wrapper is **plain LHA** and ART already reads it; only the payload
+//! inside stays encrypted, and the `Updater` decrypts that on the Amiga, which
+//! is the arrangement this design chose from the start. **Nothing here
+//! decrypts anything and no protection is bypassed.**
+//!
+//! This is stated as a rule rather than left to the reader because deferring
+//! it does not fail loudly. Without the mount the composed command runs, `CD`
+//! fails, the shell cannot find the program, the script's `If Warn` writes
+//! [`MARK_FAILED`], and ART reports *"the installer ran and said no"* about a
+//! program that never started — a confidently wrong sentence, which §89
+//! forbids and which is worse than an error.
+//!
 //! The install runs against a **copy** of the tree, and the copy replaces the
 //! original only when the result says it succeeded (§92).
 
+pub mod packagevol;
 pub mod run;
 pub mod stage;
 pub mod workvol;
@@ -60,6 +82,19 @@ pub const RESULT_FILE: &str = "art-result.txt";
 /// `Work:` assign of its own would shadow ART's volume, and the result file
 /// would then be written somewhere ART is not looking.
 pub const WORK_VOLUME: &str = "ARTWork";
+
+/// The Amiga volume label ART mounts the package's own unpacked wrapper under.
+///
+/// A constant for the same reason [`WORK_VOLUME`] is one: ART owns both ends —
+/// the mount ([`run::media_for`]) and the composed path the script runs
+/// ([`PlannedRun::program`]) — so the two cannot disagree.
+///
+/// Deliberately **not** `PKG`, `Update` or anything else a real Amiga setup
+/// might already assign. It shares `ARTWork`'s reasoning exactly: a
+/// distribution tree carrying an assign of the same name would shadow this
+/// mount, and a shadowed package volume is `CD` failing, which is precisely
+/// the silent shape ART-185 is about.
+pub const PACKAGE_VOLUME: &str = "ARTPkg";
 
 /// Written before the installer is invoked. See [`workvol::startup_sequence`]
 /// for why it exists — on its own it is **not** an outcome.
@@ -201,14 +236,37 @@ pub enum RunOutcome {
 /// shadowing mount the mount planner's guard exists to prevent. Two guards for
 /// one rule, one of them weaker, is worse than one guard.
 ///
+/// The comparison itself is [`claims_volume`], shared with
+/// [`claims_package_volume`] rather than written out a second time here.
+pub fn claims_work_volume(value: &str) -> bool {
+    claims_volume(value, WORK_VOLUME)
+}
+
+/// Whether `value` names ART's package volume ([`PACKAGE_VOLUME`]).
+///
+/// Asked of the **system volume only**, and never of the program or the
+/// working directory — those two are *supposed* to begin `ARTPkg:`, since that
+/// is where the package was mounted. What this refuses is the tree being
+/// mounted under the same device name, which would shadow the package and turn
+/// the run's `CD` into the silent failure ART-185 is about.
+pub fn claims_package_volume(value: &str) -> bool {
+    claims_volume(value, PACKAGE_VOLUME)
+}
+
+/// The rule behind [`claims_work_volume`] and [`claims_package_volume`], once.
+///
+/// Both ART volumes need the identical test and a second hand-written copy of
+/// it is how the weaker one got written the first time (see
+/// [`claims_work_volume`]); a third would have been the same mistake again.
+///
 /// AmigaDOS volume names are case-insensitive, so the comparison is too. It
 /// compares **bytes** rather than slicing the `&str`: `value[..7]` would panic
 /// if byte 7 fell inside a multi-byte character, and `panic = "abort"` in the
 /// release profile turns that into a dead application. Amiga file names are
 /// exactly where non-ASCII shows up in this project.
-pub fn claims_work_volume(value: &str) -> bool {
+fn claims_volume(value: &str, volume: &str) -> bool {
     let value = value.trim().as_bytes();
-    let name = WORK_VOLUME.as_bytes();
+    let name = volume.as_bytes();
     value.eq_ignore_ascii_case(name)
         || (value.len() > name.len()
             && value[..name.len()].eq_ignore_ascii_case(name)

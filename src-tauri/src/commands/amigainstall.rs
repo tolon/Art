@@ -28,12 +28,18 @@
 //! [`compose`], and pinned by tests here. Three things are composed and
 //! nothing else:
 //!
-//! 1. **Where the package is.** `{volume}:{package_dir}`, from the volume the
-//!    tree is mounted as plus the drawer the caller says the package's own
-//!    files sit in. Every segment of that drawer is checked: no `:` (a recipe
-//!    or a caller may not decide which volume the run reaches), no `..` or
-//!    `.`, no empty segment (AmigaDOS reads a leading or doubled `/` as the
-//!    parent directory), no `\`.
+//! 1. **Where the package is.** `ARTPkg:{package_dir}` — the volume ART mounts
+//!    the package's own **unpacked wrapper** under
+//!    ([`crate::core::amigainstall::PACKAGE_VOLUME`]), plus the drawer inside
+//!    that wrapper. **It used to be the system volume, and that was ART-185**:
+//!    a BoingBag cannot be placed into the tree at all — not being placeable
+//!    on the host is the whole reason this round exists — so a path rooted in
+//!    the tree named a program that was never there. The drawer defaults to
+//!    the package's own recipe `media`, the archive's top-level directory and
+//!    shipped data; a caller may override it for a repack. Every segment is
+//!    checked: no `:` (a recipe or a caller may not decide which volume the
+//!    run reaches), no `..` or `.`, no empty segment (AmigaDOS reads a leading
+//!    or doubled `/` as the parent directory), no `\`.
 //! 2. **The installer's whole path**, that location joined to the recipe's
 //!    declared program.
 //! 3. **The target argument.** `boingbag-39-1.json`'s own reading of the
@@ -41,6 +47,14 @@
 //!    records that the last argument is the volume being installed into, and
 //!    that it is deliberately *not* in the recipe because it is a fact about
 //!    the run rather than about the package. So `{volume}:` is appended here.
+//!
+//! **And the wrapper is unpacked**, into a scratch directory of ART's own,
+//! through [`crate::core::amigainstall::packagevol`]. That is the other half
+//! of ART-185, and the reason a third mount was necessary but not sufficient:
+//! nothing anywhere put the package's files on the host in the first place.
+//! The unpack proves the drawer and the installer really arrived, so an
+//! archive that is not this package's is refused **by name**, before the
+//! emulator starts.
 //!
 //! Everything else the recipe declares passes through **exactly as written**.
 //! ART cannot tell a path argument from a keyword like `QUIET` in a program it
@@ -84,7 +98,9 @@ use super::jobs::{spawn_job, JobRegistry};
 use super::oplog::{user_operation, write_to_path};
 use crate::core::amigainstall::run::{run, RunLimits, RunRequest};
 use crate::core::amigainstall::stage::{settle, stage_with, Settlement};
-use crate::core::amigainstall::{workvol, PlannedRun, RunOutcome, RESULT_FILE, WORK_VOLUME};
+use crate::core::amigainstall::{
+    packagevol, workvol, PlannedRun, RunOutcome, PACKAGE_VOLUME, RESULT_FILE, WORK_VOLUME,
+};
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::{JobId, ProgressSink};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
@@ -130,9 +146,22 @@ pub struct AmigaInstallRequest {
     /// adds that itself.
     #[serde(default)]
     pub system_volume: Option<String>,
-    /// Where the package's **own** files sit inside that tree,
-    /// `/`-separated — `BoingBag3.9-1` for an archive extracted whole into
-    /// the tree. `None` means the volume's root.
+    /// The package's **own** archive — the wrapper the user downloaded,
+    /// `BoingBag39-1.lha`. ART unpacks it to a directory of its own and mounts
+    /// that as a third volume.
+    ///
+    /// **Required, and added by ART-185.** Nothing else can supply the
+    /// installer: a BoingBag's payload cannot be placed into the tree from the
+    /// host at all, which is why this round exists (ART-166), so the program
+    /// the run executes is in no volume ART mounts unless it comes from here.
+    pub package_archive: PathBuf,
+    /// Where the package's **own** files sit inside that unpacked wrapper,
+    /// `/`-separated — `BoingBag3.9-1`, which is the drawer every one of the
+    /// owner's real wrappers carries at its top level beside its icon.
+    ///
+    /// `None` takes the package's recipe `media`, which is that same drawer as
+    /// shipped data; an explicit value is for a repack whose drawer somebody
+    /// renamed. An empty string means the wrapper's own root.
     #[serde(default)]
     pub package_dir: Option<String>,
     /// The user's own licensed Kickstart. ART ships none and never will.
@@ -166,6 +195,18 @@ pub struct AmigaInstallPreview {
     /// priority — the screen should say a second volume exists, because the
     /// user will see it on the Workbench.
     pub work_volume: String,
+    /// The volume the package's own unpacked wrapper is mounted as — the
+    /// **third**, and the one ART-185 was missing. Named here for the same
+    /// reason as `work_volume`: the user will see it on the Workbench.
+    pub package_volume: String,
+    /// The package's own archive, as the user chose it.
+    pub package_archive: PathBuf,
+    /// Whether that archive is actually there. A preview that did not ask
+    /// would be describing a run with nothing to run.
+    pub package_archive_present: bool,
+    /// The drawer inside that archive the installer is expected in, or `None`
+    /// for the archive's own root.
+    pub package_dir: Option<String>,
     /// The file the Amiga writes and the host polls.
     pub result_file: String,
     /// How long the run may go without an answer before ART ends the
@@ -248,6 +289,15 @@ pub struct AmigaInstallResult {
 struct Composed {
     plan: PlannedRun,
     package_name: String,
+    /// The drawer inside the unpacked wrapper, `/`-separated, or `None` for
+    /// the wrapper's own root. The AmigaDOS side of it is already in
+    /// `plan.working_directory`; this is the host side, and
+    /// `packagevol::unpack` needs it to prove the drawer really arrived.
+    package_dir: Option<String>,
+    /// The installer's path **inside** that drawer, as the recipe declares it
+    /// (`C/Updater`) — likewise for the unpack's proof, and likewise not the
+    /// same string as `plan.program`, which is the whole AmigaDOS path.
+    installer_in_package: String,
 }
 
 /// Refuse a value that cannot survive being written into the generated line.
@@ -348,9 +398,26 @@ fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
     };
 
     let volume = system_volume(request.system_volume.as_deref())?;
-    let location = package_location(&volume, request.package_dir.as_deref())?;
 
-    let program = join_amigados(&location, installer.program.trim());
+    // The drawer inside the **wrapper**, not inside the tree (ART-185). The
+    // recipe's `media` is that drawer as shipped data — the archive's
+    // top-level directory, which is what `scan::package_for` already requires
+    // an archive to carry to be this package's at all — so a caller who says
+    // nothing gets the right answer instead of the volume's root, which was
+    // right for no real package.
+    let package_dir = request
+        .package_dir
+        .as_deref()
+        .unwrap_or(package.media.as_str())
+        .trim();
+    let package_dir = (!package_dir.is_empty()).then(|| package_dir.to_string());
+
+    // `PACKAGE_VOLUME` and not the system volume: the wrapper is mounted as
+    // its own volume, because a BoingBag cannot be placed into the tree.
+    let location = package_location(PACKAGE_VOLUME, package_dir.as_deref())?;
+
+    let installer_in_package = installer.program.trim().to_string();
+    let program = join_amigados(&location, &installer_in_package);
     one_token("an installer path", &program)?;
 
     let mut args = installer.args.clone();
@@ -375,6 +442,8 @@ fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
     Ok(Composed {
         plan,
         package_name: package.name,
+        package_dir,
+        installer_in_package,
     })
 }
 
@@ -463,29 +532,54 @@ fn perform(
     }
 }
 
-/// Build ART's work volume, then [`perform`] the run against a copy.
+/// Build ART's work volume, unpack the package, then [`perform`] the run
+/// against a copy.
 ///
-/// The work volume is built **before** the copy, so nothing that goes wrong
-/// with it can leave one behind. It lives in a scratch directory that removes
-/// itself, because it is ART's own and holds one generated script plus the
-/// Amiga's one-word answer, which has already been read by the time this
-/// returns.
+/// **Both scratch volumes are built before the copy**, so nothing that goes
+/// wrong with either can leave a half-installed tree behind — and the unpack
+/// is the step most likely to refuse, because it is where the user's own
+/// choice of archive is checked against the package they ticked. Each lives in
+/// a scratch directory that removes itself: one holds a generated script plus
+/// the Amiga's one-word answer, already read by the time this returns; the
+/// other holds a copy of the package's own files, which the user still has.
 fn install(
-    plan: &PlannedRun,
+    composed: &Composed,
     tree: &Path,
+    package_archive: &Path,
     profile: &AmigaProfile,
     kickstart: &Path,
     emulator: &Path,
     sink: &dyn ProgressSink,
 ) -> CoreResult<(RunOutcome, SettlementReport)> {
+    let plan = &composed.plan;
     let work = Scratch::new()?;
     workvol::build(work.path(), plan)?;
+
+    // ART-185. Without this the installer the whole round exists to run is on
+    // no volume the emulator can see.
+    sink.report(0, None, "Unpacking the package's own files");
+    let package = Scratch::new()?;
+    let unpacked = packagevol::unpack(
+        package_archive,
+        package.path(),
+        composed.package_dir.as_deref(),
+        &composed.installer_in_package,
+        sink,
+    )?;
+    for refusal in &unpacked.refused {
+        sink.report(
+            0,
+            None,
+            &format!("The package's archive carries an entry ART would not write — {refusal}"),
+        );
+    }
 
     perform(tree, sink, |copy, sink| {
         let request = RunRequest {
             plan,
             work_volume_dir: work.path(),
             tree_dir: copy,
+            package_volume_dir: unpacked.root.as_path(),
             profile,
             kickstart_path: kickstart,
             winuae_path: emulator,
@@ -512,8 +606,8 @@ fn ending_of(outcome: &RunOutcome) -> &'static str {
 
 /// What running this package's own installer would do — §92's PREVIEW.
 ///
-/// Reads recipe data and asks two `is_file` questions. It starts no process,
-/// copies nothing, and writes nothing.
+/// Reads recipe data and asks three `is_file` questions. It starts no
+/// process, unpacks nothing, copies nothing, and writes nothing.
 #[tauri::command]
 pub fn amiga_install_preview(
     request: AmigaInstallRequest,
@@ -530,6 +624,10 @@ pub fn amiga_install_preview(
         program: composed.plan.program,
         args: composed.plan.args,
         work_volume: WORK_VOLUME.to_string(),
+        package_volume: PACKAGE_VOLUME.to_string(),
+        package_archive_present: request.package_archive.is_file(),
+        package_archive: request.package_archive,
+        package_dir: composed.package_dir,
         result_file: RESULT_FILE.to_string(),
         deadline_seconds: RunLimits::default().deadline.as_secs(),
         kickstart_present: request.kickstart.is_file(),
@@ -567,8 +665,9 @@ pub fn amiga_install_run(
             )
         })?;
 
-    let plan = composed.plan;
+    let plan = composed.plan.clone();
     let tree = request.tree.clone();
+    let package_archive = request.package_archive.clone();
     let kickstart = request.kickstart.clone();
     let emulator = PathBuf::from(emulator);
     let log_path = oplog.path().to_path_buf();
@@ -587,7 +686,15 @@ pub fn amiga_install_run(
         Arc::clone(&registry),
         &title,
         move |job_id, progress| {
-            let result = install(&plan, &tree, &profile, &kickstart, &emulator, progress);
+            let result = install(
+                &composed,
+                &tree,
+                &package_archive,
+                &profile,
+                &kickstart,
+                &emulator,
+                progress,
+            );
 
             // §53. Best-effort, and never able to fail the operation it
             // describes.
@@ -688,10 +795,29 @@ mod tests {
             tree: tree.to_path_buf(),
             package_id: "boingbag-39-1".to_string(),
             system_volume: None,
-            package_dir: Some("BoingBag3.9-1".to_string()),
+            package_archive: PathBuf::from("BoingBag39-1.lha"),
+            package_dir: None,
             kickstart: PathBuf::from("kick.rom"),
             profile: None,
         }
+    }
+
+    /// A wrapper shaped like the owner's own `BoingBag39-1.lha`, measured with
+    /// 7-Zip 26.02 on 2026-08-21: **an icon file beside the drawer at the top
+    /// level, no directory entries at all**, the `Updater` under `C/`, and the
+    /// still-encrypted payload blob beside it.
+    ///
+    /// `core::amigainstall::packagevol` has the same fixture and the same
+    /// reason for it; this one exists because the command layer is where the
+    /// recipe's `media` is turned into that drawer name, and a fixture that
+    /// did not carry the real drawer would let a wrong `media` pass.
+    fn boingbag_lha() -> Vec<u8> {
+        crate::core::lha::tests::make_lha_with(&[
+            ("BoingBag3.9-1.info", b"icon"),
+            ("BoingBag3.9-1/AmigaOS-Update", b"PK encrypted"),
+            ("BoingBag3.9-1/C/Updater", b"the updater"),
+            ("BoingBag3.9-1/Install", b"; the package's own script"),
+        ])
     }
 
     /// A tree with something in it, so the copy is a real copy.
@@ -729,35 +855,116 @@ mod tests {
     /// asserted: the drawer, the whole path, the target argument the
     /// package's own `Install` script passes, and the directory the installer
     /// runs from.
+    ///
+    /// **The program and the target come from two different volumes, and that
+    /// is ART-185.** The installer is on `ARTPkg:`, where ART unpacked the
+    /// wrapper; the volume being installed *into* is `DH0:`, the tree.
+    /// Composing both from the tree named a program that was never there —
+    /// see `the_installer_is_reached_through_the_package_volume_and_not_the_tree`.
     #[test]
     fn a_recipe_declaration_becomes_a_whole_amigados_command() {
         let composed = compose(&request(Path::new("tree"))).unwrap();
 
         assert_eq!(composed.plan.system_volume, "DH0");
-        assert_eq!(composed.plan.program, "DH0:BoingBag3.9-1/C/Updater");
+        assert_eq!(composed.plan.program, "ARTPkg:BoingBag3.9-1/C/Updater");
         assert_eq!(composed.plan.args, vec!["AmigaOS-Update", "DH0:"]);
+        assert_eq!(composed.package_dir.as_deref(), Some("BoingBag3.9-1"));
+        assert_eq!(composed.installer_in_package, "C/Updater");
         assert_eq!(
             composed.plan.working_directory.as_deref(),
-            Some("DH0:BoingBag3.9-1"),
+            Some("ARTPkg:BoingBag3.9-1"),
             "the installer runs from the package's own drawer, because its arguments are \
              relative to it"
         );
         assert_eq!(composed.package_name, "BoingBag 3.9-1");
     }
 
-    /// With no drawer named, the package's files are at the volume's root and
-    /// the path carries no stray separator.
+    /// ART-185, as one assertion: the installer is reached through the volume
+    /// the **package** was mounted under, and the tree's volume appears only
+    /// as the thing being installed into.
+    ///
+    /// Put the defect back — compose the location from `volume` rather than
+    /// `PACKAGE_VOLUME` — and the second assertion fails, because a BoingBag's
+    /// `Updater` is not in the tree and cannot be put there (ART-166).
+    #[test]
+    fn the_installer_is_reached_through_the_package_volume_and_not_the_tree() {
+        let composed = compose(&request(Path::new("tree"))).unwrap();
+
+        assert!(
+            composed
+                .plan
+                .program
+                .starts_with(&format!("{PACKAGE_VOLUME}:")),
+            "the installer lives on the package volume: {}",
+            composed.plan.program
+        );
+        assert!(
+            !composed
+                .plan
+                .program
+                .starts_with(&format!("{}:", composed.plan.system_volume)),
+            "and never on the tree, which cannot carry it: {}",
+            composed.plan.program
+        );
+        assert_eq!(
+            composed.plan.args.last().map(String::as_str),
+            Some("DH0:"),
+            "the tree is what is installed *into*, and only that"
+        );
+    }
+
+    /// A caller who says nothing gets the package's own recipe `media` — the
+    /// archive's top-level drawer, shipped data — rather than the wrapper's
+    /// root, which is right for none of the owner's real archives.
+    #[test]
+    fn no_drawer_named_takes_the_recipe_media_rather_than_the_root() {
+        let mut req = request(Path::new("tree"));
+        req.package_dir = None;
+
+        let composed = compose(&req).unwrap();
+
+        assert_eq!(
+            composed.plan.working_directory.as_deref(),
+            Some("ARTPkg:BoingBag3.9-1"),
+            "and 'BoingBag3.9-1' is what boingbag-39-1.json declares as its media"
+        );
+    }
+
+    /// A package whose files really are at the wrapper's root is expressible,
+    /// and the path carries no stray separator.
     #[test]
     fn a_package_at_the_volume_root_composes_without_a_separator() {
         let mut req = request(Path::new("tree"));
-        req.package_dir = None;
+        req.package_dir = Some("  ".to_string());
         req.system_volume = Some("  DH3  ".to_string());
 
         let composed = compose(&req).unwrap();
 
-        assert_eq!(composed.plan.program, "DH3:C/Updater");
-        assert_eq!(composed.plan.working_directory.as_deref(), Some("DH3:"));
+        assert_eq!(composed.plan.program, "ARTPkg:C/Updater");
+        assert_eq!(composed.plan.working_directory.as_deref(), Some("ARTPkg:"));
         assert_eq!(composed.plan.args, vec!["AmigaOS-Update", "DH3:"]);
+        assert_eq!(composed.package_dir, None);
+    }
+
+    /// The tree may not be mounted under the package's device name either: it
+    /// would shadow the package, and a shadowed package is ART-185 arriving
+    /// through a name instead of through a missing mount.
+    ///
+    /// Lower case on purpose in the second case — AmigaDOS device names are
+    /// case-insensitive, so a comparison that is not would let it through.
+    #[test]
+    fn a_tree_mounted_under_the_package_volumes_name_is_refused_at_composition() {
+        for hostile in [PACKAGE_VOLUME, "artpkg"] {
+            let mut req = request(Path::new("tree"));
+            req.system_volume = Some(hostile.to_string());
+
+            let err = compose(&req).unwrap_err();
+
+            assert!(
+                err.to_string().contains(PACKAGE_VOLUME),
+                "the refusal must name it: {err}"
+            );
+        }
     }
 
     /// Nothing a caller writes may take the run out of the volume ART
@@ -1021,6 +1228,149 @@ mod tests {
         );
     }
 
+    // -- the package actually reaches the run (ART-185) ------------------
+
+    /// The wrapper is unpacked **before** the tree is copied, and a wrong
+    /// archive is refused there — so nothing is staged at all.
+    ///
+    /// Two things at once, and both are load-bearing. Move the unpack after
+    /// `perform` and the second assertion fails: a user who pointed at the
+    /// wrong `.lha` would be left with a copy of their whole tree beside it
+    /// for nothing. Delete the drawer check in `packagevol::unpack` and the
+    /// first fails, because the run would then proceed to an emulator with a
+    /// `Euro-Update` drawer where the script expects `BoingBag3.9-1` — and
+    /// come back saying the installer said no.
+    ///
+    /// **No emulator is opened by this test**: it never gets past the unpack.
+    #[test]
+    fn a_wrong_archive_is_refused_before_the_tree_is_copied() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "wrong-archive");
+        let tree = tree_in(&scratch);
+        let archive = scratch.join("Euro-Update.lha");
+        std::fs::write(
+            &archive,
+            crate::core::lha::tests::make_lha_with(&[
+                ("Euro-Update.info", b"icon"),
+                ("Euro-Update/C/Updater", b"a different package's updater"),
+            ]),
+        )
+        .unwrap();
+
+        let composed = compose(&request(&tree)).unwrap();
+        let err = install(
+            &composed,
+            &tree,
+            &archive,
+            &AmigaProfile::a1200_aga(),
+            Path::new("no-such.rom"),
+            Path::new("no-such.exe"),
+            &Sink::default(),
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("BoingBag3.9-1"),
+            "the refusal must name the drawer the package needs: {err}"
+        );
+        assert!(
+            copies_beside(&tree).is_empty(),
+            "and nothing may have been staged: the unpack comes first"
+        );
+    }
+
+    /// With the right archive the run is reached — proved by the *next* thing
+    /// that refuses being the Kickstart, which `media_for` asks for after the
+    /// three mounts are built.
+    ///
+    /// This is how far the pipeline can be driven without opening an emulator
+    /// on the owner's desktop, and it is far enough to prove the unpack
+    /// succeeded: with the package missing, the error would be about the
+    /// package instead. Remove the unpack call from `install` and this fails
+    /// with a message naming the *package volume* rather than the Kickstart,
+    /// which is `media_for`'s ART-185 guard doing its job one step earlier.
+    #[test]
+    fn the_right_archive_unpacks_and_the_run_gets_as_far_as_the_kickstart() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "unpacks");
+        let tree = tree_in(&scratch);
+        let archive = scratch.join("BoingBag39-1.lha");
+        std::fs::write(&archive, boingbag_lha()).unwrap();
+
+        let composed = compose(&request(&tree)).unwrap();
+        let sink = Sink::default();
+        let err = install(
+            &composed,
+            &tree,
+            &archive,
+            &AmigaProfile::a1200_aga(),
+            Path::new("no-such.rom"),
+            Path::new("no-such.exe"),
+            &sink,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("Kickstart"),
+            "the unpack and all three mounts must have been fine; got {err}"
+        );
+        assert!(
+            !err.to_string().contains("unpacked"),
+            "and it must not be the package that was missing: {err}"
+        );
+        // The copy is evidence and stays; the original is untouched. Same
+        // rule as `an_error_mid_run_keeps_the_copy_and_says_where_it_is`.
+        assert_eq!(
+            std::fs::read(tree.join("Libs/version.library")).unwrap(),
+            b"the original"
+        );
+    }
+
+    /// A package archive with a hostile entry name is unpacked without
+    /// anything escaping, and the run is told about the refusals.
+    ///
+    /// The archive is a real user's file and ART cannot vouch for it. The
+    /// guarantee is `core::archive`'s gate and it is absolute; what this adds
+    /// is that ART **says** an entry was refused rather than unpacking a
+    /// hostile archive in silence.
+    #[test]
+    fn a_hostile_entry_in_the_package_archive_is_reported_and_never_written() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "hostile-entry");
+        let tree = tree_in(&scratch);
+        let archive = scratch.join("BoingBag39-1.lha");
+        std::fs::write(
+            &archive,
+            crate::core::lha::tests::make_lha_with(&[
+                ("BoingBag3.9-1.info", b"icon"),
+                ("BoingBag3.9-1/C/Updater", b"the updater"),
+                ("../../Workbench3.9/Libs/version.library", b"planted"),
+                ("C:/Windows/System32/art.dll", b"planted"),
+            ]),
+        )
+        .unwrap();
+
+        let composed = compose(&request(&tree)).unwrap();
+        let sink = Sink::default();
+        let _ = install(
+            &composed,
+            &tree,
+            &archive,
+            &AmigaProfile::a1200_aga(),
+            Path::new("no-such.rom"),
+            Path::new("no-such.exe"),
+            &sink,
+        );
+
+        assert_eq!(
+            std::fs::read(tree.join("Libs/version.library")).unwrap(),
+            b"the original",
+            "an archive entry may never reach the user's own tree"
+        );
+        assert!(
+            sink.said("would not write"),
+            "and the user must be told an entry was refused: {:?}",
+            sink.messages.lock().unwrap()
+        );
+    }
+
     // -- the wire --------------------------------------------------------
 
     /// The four endings, exactly as the frontend will receive them.
@@ -1087,8 +1437,16 @@ mod tests {
 
         let preview = amiga_install_preview(request(&tree), Some("no-such.exe".into())).unwrap();
 
-        assert_eq!(preview.program, "DH0:BoingBag3.9-1/C/Updater");
+        assert_eq!(preview.program, "ARTPkg:BoingBag3.9-1/C/Updater");
         assert_eq!(preview.work_volume, WORK_VOLUME);
+        assert_eq!(
+            preview.package_volume, PACKAGE_VOLUME,
+            "the user will see a third volume on the Workbench; say so"
+        );
+        assert!(
+            !preview.package_archive_present,
+            "and it says the package's own archive is missing too"
+        );
         assert_eq!(preview.result_file, RESULT_FILE);
         assert!(preview.deadline_seconds > 0, "a deadline is not optional");
         assert!(!preview.kickstart_present, "and it says what is missing");

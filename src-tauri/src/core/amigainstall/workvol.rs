@@ -14,7 +14,8 @@
 use std::path::{Path, PathBuf};
 
 use super::{
-    claims_work_volume, PlannedRun, MARK_FAILED, MARK_OK, MARK_STARTED, RESULT_FILE, WORK_VOLUME,
+    claims_package_volume, claims_work_volume, PlannedRun, MARK_FAILED, MARK_OK, MARK_STARTED,
+    PACKAGE_VOLUME, RESULT_FILE, WORK_VOLUME,
 };
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::safety::atomic_write;
@@ -210,6 +211,21 @@ pub fn startup_sequence(run: &PlannedRun) -> CoreResult<String> {
                 "'{value}' names ART's own work volume; a {label} may not reach into it"
             )));
         }
+    }
+
+    // The **system volume alone** may not be ART's package volume (ART-185).
+    // Deliberately not folded into the loop above: the installer path and the
+    // working directory are *supposed* to begin `ARTPkg:`, because that is
+    // where the package was mounted. What this refuses is the tree taking the
+    // same device name, which shadows the package and leaves the run's `CD`
+    // pointing at a drawer that is not there — the silent shape again, this
+    // time produced by a name rather than by a missing mount.
+    if claims_package_volume(&run.system_volume) {
+        return Err(CoreError::SafetyRefused(format!(
+            "'{}' names '{PACKAGE_VOLUME}', the volume ART mounts the package's own files under; \
+             a system volume may not shadow it",
+            run.system_volume
+        )));
     }
 
     // Each argument is validated on its own above, so joining them here cannot
@@ -721,6 +737,38 @@ Delete SYS:#?",
             startup_sequence(&run).is_err(),
             "nor as the volume the tree is mounted as"
         );
+    }
+
+    /// The **system volume alone** may not name ART's package volume — and
+    /// the installer path and the working directory must still be free to,
+    /// because that is where the package was mounted (ART-185).
+    ///
+    /// Both halves are asserted here on purpose. Folding the package volume
+    /// into the loop above would refuse every real run: `ARTPkg:C/Updater` is
+    /// the correct value, not a hostile one. Leaving the check out altogether
+    /// lets a tree take the package's device name, shadow it, and turn the
+    /// script's `CD` into ART-185's silent failure by another route.
+    #[test]
+    fn only_the_system_volume_is_refused_for_naming_the_package_volume() {
+        let mut run = planned(&format!("{PACKAGE_VOLUME}:BoingBag3.9-1/C/Updater"));
+        run.working_directory = Some(format!("{PACKAGE_VOLUME}:BoingBag3.9-1"));
+        run.args = vec![format!("{PACKAGE_VOLUME}:BoingBag3.9-1/AmigaOS-Update")];
+        startup_sequence(&run).expect("the package's own volume is where the installer is");
+
+        for hostile in [PACKAGE_VOLUME, "artpkg", "ARTPkg:"] {
+            let mut run = planned(&format!("{PACKAGE_VOLUME}:C/Updater"));
+            run.system_volume = hostile.to_string();
+            let err = startup_sequence(&run).unwrap_err();
+            assert!(
+                matches!(err, CoreError::SafetyRefused(ref m) if m.contains(PACKAGE_VOLUME)),
+                "'{hostile}' must be refused by name: {err:?}"
+            );
+        }
+
+        // And the guard is a claim on the volume, not a prefix match.
+        let mut run = planned(&format!("{PACKAGE_VOLUME}:C/Updater"));
+        run.system_volume = "ARTPkgStore".to_string();
+        startup_sequence(&run).unwrap();
     }
 
     /// The guard refuses a *claim on the volume*, not any name that begins
