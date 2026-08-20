@@ -2719,6 +2719,7 @@ mod plan_tests {
             media: media.to_string(),
             member: None,
             distinguished_by: None,
+            amiga_installer: None,
             requires: requires.iter().map(|s| s.to_string()).collect(),
             requires_components: Vec::new(),
             host_placement_block: None,

@@ -30,6 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **Not yet reachable from the interface** — there is no screen for it and
   no emulator is started. That is the rest of this round.
+- **Each BoingBag now says, in its own recipe, what the Amiga should
+  run.** Both point at the `Updater` the package itself carries, with the
+  update file it expects — read out of your own archives and out of each
+  package's own install script, not assumed. It is written in the recipe
+  file rather than in ART's code, so a fourth package that needs the same
+  treatment is a new recipe, not a new version of ART. The Turkish catalog
+  pack declares nothing, because ART already installs it directly.
+
+  Still not reachable from the interface, and still no emulator: this is
+  the declaration, not the run.
 
 ### Archive names, drawer names, and a batch of long-standing debt (2026-08-20)
 

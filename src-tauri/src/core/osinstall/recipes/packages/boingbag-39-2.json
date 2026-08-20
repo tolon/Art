@@ -55,6 +55,36 @@
     "this one key is deleted and nothing else changes."
   ],
   "host_placement_block": "encrypted-payload",
+  "_why_amiga_installer": [
+    "Measured separately from 3.9-1's rather than copied, the same rule this",
+    "file's own top comment follows (2026-08-20, 7-Zip 26.02 against the",
+    "owner's BoingBag39-2.lha). It happens to agree, and the agreement is a",
+    "reading, not an assumption:",
+    "",
+    "  1. `BoingBag3.9-2\\C\\Updater` is a real entry, 42 676 bytes — a",
+    "     different build from 3.9-1's 25 588-byte one — so the path relative",
+    "     to the top-level directory is `C/Updater` here too. This archive",
+    "     also carries `BoingBag3.9-2\\C\\Installer`, which 3.9-1 does not;",
+    "     that is the Installer *engine* the `Install` script needs, not the",
+    "     thing that installs this package.",
+    "",
+    "  2. This package's `Install` script, line 1615, runs",
+    "     `C/Updater AmigaOS-Update \"<target>\"` — identical in shape to",
+    "     3.9-1's line 858.",
+    "",
+    "One thing 3.9-1 has no counterpart for: line 1632 runs the Updater a",
+    "second time, `C/Updater XAD-Update \"<target>\"`, guarded by",
+    "`(if (= #install-xad-update 1) ...)` — a choice the script's own",
+    "requester puts to the user. It is NOT declared here. `AmigaInstaller`",
+    "describes one run, this round installs what the package is (the AmigaOS",
+    "update), and declaring an optional extra as though it were part of the",
+    "package would install something the user was never asked about. The day",
+    "ART offers that choice, it is a second declaration, not a code path."
+  ],
+  "amiga_installer": {
+    "program": "C/Updater",
+    "args": ["AmigaOS-Update"]
+  },
   "requires": ["boingbag-39-1"],
   "overrides": ["workbench-base", "boingbag-39-1"],
   "rules": [

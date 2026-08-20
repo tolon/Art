@@ -30,7 +30,17 @@ pub fn parse(json: &str) -> CoreResult<Recipe> {
 /// is meaningful (the media's own root, for `fonts` and `backdrops`), so
 /// `allow_empty` lets a caller say which fields may be empty and which must
 /// not be.
-fn validate_path(component_id: &str, field: &str, path: &str, allow_empty: bool) -> CoreResult<()> {
+///
+/// `pub(super)` for the same reason [`validate_component`] is: `package.rs`'s
+/// `amiga_installer.program` is a `/`-separated AmigaDOS path inside a
+/// package, held to exactly these rules, and a second copy of them would be
+/// a second copy that drifts.
+pub(super) fn validate_path(
+    component_id: &str,
+    field: &str,
+    path: &str,
+    allow_empty: bool,
+) -> CoreResult<()> {
     if path.is_empty() {
         return if allow_empty {
             Ok(())

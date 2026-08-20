@@ -162,14 +162,47 @@
 //! `boingbag-39-1` — declares no distinguisher. A condition that is not
 //! needed to separate anything can only add a way to refuse an archive that
 //! would have worked, and §89's rule cuts that way too.
+//!
+//! ## `amiga_installer`: the run is data too, and it is not a whole path
+//!
+//! ART places files from the host. Both BoingBags are where that stops
+//! (ART-166): their payload is ZipCrypto-encrypted and the password belongs
+//! to the package's own `Updater`, which runs on an Amiga. Nothing is
+//! decrypted and no protection is bypassed — the package's own program runs
+//! where it was always meant to. What this module gains is the *declaration*
+//! of that, [`AmigaInstaller`], so a fourth package is a JSON file rather
+//! than a code path, the same rule every other fact about a package follows.
+//!
+//! **The one distinction to hold on to.**
+//! `crate::core::amigainstall::PlannedRun::program` is a whole AmigaDOS path
+//! (`PKG:C/Updater`), and its own module refuses any value that names ART's
+//! work volume. [`AmigaInstaller::program`] is a path **inside the package**
+//! (`C/Updater`), and `validate_installer` refuses a `:` in it outright. The
+//! two are one small edit apart in appearance and not at all alike in what
+//! they authorise: the volume a run reaches is ART's decision, made where
+//! the package is mounted, and a recipe that could write a volume here would
+//! be taking that decision from the other end. Composing the whole path from
+//! this one is a command-layer job, and so is proving the result stayed in
+//! bounds.
+//!
+//! **What a declaration is measured against.** `C/Updater` was read out of
+//! the owner's own archives (7-Zip 26.02, 2026-08-20) and the argument out
+//! of each package's own `Install` script, which runs
+//! `C/Updater AmigaOS-Update "<target>"`. `<target>` is not written here: it
+//! is a fact about the run, not about the package. Each JSON's
+//! `_why_amiga_installer` carries the readings; the `#[ignore]`d
+//! `every_declared_installer_exists_in_its_own_archive_when_asked` re-runs
+//! them against the real archives on demand, because the AmigaOS 3.9 recipe
+//! shipped fourteen unread paths and every one was wrong.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-use super::recipe::validate_component;
+use super::recipe::{validate_component, validate_path};
 use super::{Component, HostPlacementBlock, PathRule};
 use crate::core::error::{CoreError, CoreResult};
+use crate::core::security::refuse_shell_metacharacters;
 
 const BOINGBAG_39_1_JSON: &str = include_str!("recipes/packages/boingbag-39-1.json");
 const BOINGBAG_39_2_JSON: &str = include_str!("recipes/packages/boingbag-39-2.json");
@@ -223,6 +256,34 @@ pub struct Package {
     pub host_placement_block: Option<HostPlacementBlock>,
     /// The rules and `overrides`, in the shape the placer already takes.
     pub component: Component,
+    /// What to run on the Amiga when ART cannot place this package's files
+    /// from the host — see [`AmigaInstaller`]. `None` for a package ART
+    /// places directly.
+    ///
+    /// Independent of [`host_placement_block`](Self::host_placement_block)
+    /// on purpose, though today's three packages make the two look like one
+    /// field asked twice. They answer different questions — *can ART place
+    /// this on the host?* and *what would the Amiga run instead?* — and a
+    /// package can honestly say no to the first without ART knowing the
+    /// answer to the second, which is precisely the state both BoingBags
+    /// were in between ART-166 and this round. Folding them into one enum
+    /// would have made that state unrepresentable and so unreportable.
+    pub amiga_installer: Option<AmigaInstaller>,
+}
+
+/// What to run on the Amiga to install this package, when ART cannot place
+/// its files from the host. **Data, not a code path** — a fourth package is a
+/// JSON file. `None` means this package is not one this round can run, which
+/// is the honest answer for a package ART already places directly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AmigaInstaller {
+    /// Where the program sits **inside the package**, `/`-separated.
+    pub program: String,
+    /// Arguments, each a separate string — never one line to be split, so
+    /// nothing can be reinterpreted as a second command.
+    #[serde(default)]
+    pub args: Vec<String>,
 }
 
 /// The flat shape a person actually edits. `id`/`media`/`rules`/`overrides`
@@ -243,6 +304,8 @@ struct RawPackage {
     requires_components: Vec<String>,
     #[serde(default)]
     host_placement_block: Option<HostPlacementBlock>,
+    #[serde(default)]
+    amiga_installer: Option<AmigaInstaller>,
     #[serde(default)]
     overrides: Vec<String>,
     rules: Vec<PathRule>,
@@ -277,8 +340,82 @@ impl RawPackage {
             requires_components: self.requires_components,
             host_placement_block: self.host_placement_block,
             component,
+            amiga_installer: self.amiga_installer,
         }
     }
+}
+
+/// Check one package's [`AmigaInstaller`] declaration, if it has one.
+///
+/// **A recipe is shipped data, and it is still parsed.** The file on disk can
+/// be hand-edited, and what it declares eventually becomes a line in a
+/// generated AmigaDOS script — a command interpreter's input. So the same
+/// guard `workvol` applies to a composed run is applied here, at the boundary
+/// where the JSON is read, rather than trusting the file because ART shipped
+/// one version of it.
+///
+/// Two rules, and the first is the one that keeps this type from quietly
+/// becoming the other one:
+///
+/// - **`program` is a path inside the package, never a whole AmigaDOS path.**
+///   `crate::core::amigainstall::PlannedRun::program` is the whole path, and
+///   its module refuses any value naming ART's own work volume. If a recipe
+///   could write a volume here, it would be composing that whole path from
+///   the other end — the command layer prefixes a volume onto this value, so
+///   a `:` in it means the recipe, not ART, decided what volume the run
+///   reaches. Every segment goes through `validate_path`, which refuses `:`
+///   and `/` inside a segment (so no volume, no empty segment, so neither a
+///   leading nor a doubled `/` — both AmigaDOS's parent-directory notation)
+///   and refuses `..`.
+///
+///   This is deliberately **not** a second copy of `claims_work_volume`.
+///   That guard decides *which* volumes a composed run may name; this one
+///   decides that a recipe may not name a volume **at all**, which is a
+///   strictly narrower question with a single answer, and so cannot drift
+///   away from it.
+///
+/// - **An argument may name a volume**, because an installer's argument
+///   legitimately can (`TO=SYS:`), and deciding which volumes a run may
+///   reach belongs to the one guard that already does it. What is checked
+///   here is only what this layer can honestly answer: an argument is not
+///   empty — an empty one would vanish from the composed line, making a
+///   recipe that declares it indistinguishable from one that does not — and
+///   carries no shell metacharacter.
+fn validate_installer(package: &Package) -> CoreResult<()> {
+    let Some(installer) = &package.amiga_installer else {
+        return Ok(());
+    };
+    // Checked before `validate_path`, which would otherwise refuse this by
+    // the segment it happened to land in: `PKG:C/Updater` would be reported
+    // as a bad name `PKG:C`, which is true and unhelpful. A reader of the
+    // error needs to see the whole thing they wrote.
+    if installer.program.contains(':') {
+        return Err(CoreError::Malformed {
+            format: "package".into(),
+            detail: format!(
+                "'{}': the installer path '{}' names a volume; it must be a path inside \
+                 the package, and the volume it is reached under is ART's to decide",
+                package.id, installer.program
+            ),
+        });
+    }
+    validate_path(
+        &package.id,
+        "amiga_installer.program",
+        &installer.program,
+        false,
+    )?;
+    refuse_shell_metacharacters("installer path", &installer.program)?;
+    for arg in &installer.args {
+        if arg.trim().is_empty() {
+            return Err(CoreError::Malformed {
+                format: "package".into(),
+                detail: format!("'{}': an installer argument is empty", package.id),
+            });
+        }
+        refuse_shell_metacharacters("installer argument", arg)?;
+    }
+    Ok(())
 }
 
 /// Parse and validate one package's JSON — `recipe::parse`'s own validation
@@ -290,6 +427,7 @@ fn parse(json: &str) -> CoreResult<Package> {
     })?;
     let package = raw.into_package();
     validate_component(&package.component)?;
+    validate_installer(&package)?;
     Ok(package)
 }
 
@@ -585,6 +723,266 @@ mod tests {
         assert_eq!(package.host_placement_block, None);
     }
 
+    // -----------------------------------------------------------------
+    // `amiga_installer` — what runs on the Amiga when the host cannot place
+    // this package's files.
+    // -----------------------------------------------------------------
+
+    /// Both BoingBags declare an installer; the Turkish pack does not, because
+    /// ART already places its files directly.
+    #[test]
+    fn the_boingbags_declare_an_installer_and_the_locale_pack_does_not() {
+        assert!(super::by_id("boingbag-39-1")
+            .unwrap()
+            .amiga_installer
+            .is_some());
+        assert!(super::by_id("boingbag-39-2")
+            .unwrap()
+            .amiga_installer
+            .is_some());
+        assert!(super::by_id("locale-turkish")
+            .unwrap()
+            .amiga_installer
+            .is_none());
+    }
+
+    /// The measured command line, pinned. Both BoingBags' own `Install`
+    /// scripts run `C/Updater AmigaOS-Update "<target>"` — read out of the
+    /// owner's real archives on 2026-08-20 with 7-Zip 26.02, line 858 of
+    /// `BoingBag3.9-1/Install` and line 1615 of `BoingBag3.9-2/Install` —
+    /// and `C/Updater` is a real entry in each wrapper LHA (25 588 bytes in
+    /// 3.9-1, 42 676 in 3.9-2), not an assumption.
+    ///
+    /// Pinned rather than left to
+    /// [`the_boingbags_declare_an_installer_and_the_locale_pack_does_not`],
+    /// which only asks whether *something* is declared: the AmigaOS 3.9
+    /// recipe shipped fourteen paths nobody had read out of the medium, and
+    /// every one of them was wrong. A test that says "some path is declared"
+    /// would have passed for all fourteen.
+    #[test]
+    fn the_declared_updater_is_the_one_the_packages_own_install_script_runs() {
+        for id in ["boingbag-39-1", "boingbag-39-2"] {
+            let installer = super::by_id(id).unwrap().amiga_installer.unwrap();
+            assert_eq!(installer.program, "C/Updater", "{id}");
+            assert_eq!(installer.args, vec!["AmigaOS-Update".to_string()], "{id}");
+        }
+    }
+
+    /// **The installer path is inside the package, and only inside it.**
+    /// `PlannedRun::program` is a whole AmigaDOS path; this is not, and the
+    /// difference is load-bearing: a recipe that could write `ARTWork:...`
+    /// here would reach into ART's own work volume — the one thing
+    /// `workvol::script` refuses — by travelling as a *package-relative*
+    /// path that the command layer then prefixes a volume onto.
+    ///
+    /// Refusing every `:` is what keeps the two kinds of path apart. It is
+    /// not a copy of `claims_work_volume`: that guard decides which volumes
+    /// a composed run may name, this one decides that a recipe may not name
+    /// a volume at all.
+    #[test]
+    fn an_installer_path_may_not_name_a_volume() {
+        for program in ["ARTWork:art-install", "artwork:x", "PKG:C/Updater", "SYS:C"] {
+            let err = installer_json(program, &[]).unwrap_err().to_string();
+            assert!(err.contains(program), "{program} was accepted: {err}");
+        }
+    }
+
+    /// Nor climb out of it. A leading or doubled `/` is AmigaDOS's own
+    /// parent-directory notation, so `//C/Updater` is one drawer above the
+    /// package — a path the archive never carried.
+    #[test]
+    fn an_installer_path_may_not_climb_out_of_the_package() {
+        for program in ["/C/Updater", "//C/Updater", "../C/Updater", "C//Updater"] {
+            assert!(
+                installer_json(program, &[]).is_err(),
+                "{program} was accepted"
+            );
+        }
+    }
+
+    /// An empty program is not a declaration, it is an omission spelled
+    /// `""` — refused rather than parsed into a run with nothing to run.
+    #[test]
+    fn an_installer_must_actually_name_a_program() {
+        assert!(installer_json("", &[]).is_err());
+        assert!(installer_json("   ", &[]).is_err());
+    }
+
+    /// **A recipe is parsed, so it is checked.** Shipped data is still data
+    /// on disk: a hand-edited file must not be able to add a second command
+    /// to the script this eventually becomes. The guard is the one
+    /// `workvol::script` uses, applied here so a bad value is refused when
+    /// the JSON is read rather than several layers later.
+    ///
+    /// **Not one of these programs contains a `:`, and that is the point.**
+    /// The first version of this test wrote `C/Updater;Delete SYS:#?`, and
+    /// it passed with `refuse_shell_metacharacters` deleted from the program
+    /// path entirely — the `SYS:` at the end tripped the volume refusal
+    /// above, so the guard the test was named for was never reached. Putting
+    /// that defect back is what found it. Every case below is refusable by
+    /// this guard and by nothing else in `validate_installer`: `;`, `>`, `$`
+    /// and `` ` `` all pass `check_name`, which only polices `:`, `/`,
+    /// control characters and Latin-1.
+    #[test]
+    fn an_installer_may_not_carry_a_shell_metacharacter() {
+        for program in [
+            "C/Updater;Delete SYS",
+            "C/Updater >L/x",
+            "C/$Updater",
+            "C/`Updater`",
+        ] {
+            assert!(
+                installer_json(program, &[]).is_err(),
+                "{program} was accepted"
+            );
+        }
+        for arg in [
+            "AmigaOS-Update >S/x",
+            "a`Delete DH0`",
+            "AmigaOS-Update;Delete",
+            "AmigaOS-Update\nDelete",
+            "$Update",
+        ] {
+            assert!(
+                installer_json("C/Updater", &[arg]).is_err(),
+                "{arg} was accepted"
+            );
+        }
+    }
+
+    /// An empty argument is refused too: it would vanish from the composed
+    /// command line, so a recipe saying it and a recipe not saying it would
+    /// produce the same run.
+    #[test]
+    fn an_installer_argument_may_not_be_empty() {
+        assert!(installer_json("C/Updater", &[""]).is_err());
+    }
+
+    /// The plain case, so every refusal above is refusing something rather
+    /// than refusing everything.
+    #[test]
+    fn an_ordinary_installer_declaration_parses() {
+        let package = installer_json("C/Updater", &["AmigaOS-Update"]).unwrap();
+        let installer = package.amiga_installer.unwrap();
+        assert_eq!(installer.program, "C/Updater");
+        assert_eq!(installer.args, vec!["AmigaOS-Update".to_string()]);
+    }
+
+    /// A package with no `amigaInstaller` key parses to `None` — the honest
+    /// answer for a package ART already places directly, pinned so a
+    /// `#[serde(default)]` that ever grew a value could not go unnoticed.
+    #[test]
+    fn a_package_that_names_no_installer_declares_none() {
+        let package = parse(
+            r#"{ "id": "x", "name": "X", "media": "X",
+                 "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ] }"#,
+        )
+        .unwrap();
+        assert_eq!(package.amiga_installer, None);
+    }
+
+    /// One minimal package JSON carrying an `amigaInstaller`, so the
+    /// refusals above test [`parse`]'s real boundary rather than a
+    /// hand-built `AmigaInstaller` that never went through it.
+    fn installer_json(program: &str, args: &[&str]) -> CoreResult<Package> {
+        let installer = AmigaInstaller {
+            program: program.to_string(),
+            args: args.iter().map(|a| a.to_string()).collect(),
+        };
+        let json = serde_json::json!({
+            "id": "x",
+            "name": "X",
+            "media": "X",
+            "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ],
+            // The key is snake_case, like every other key in a shipped
+            // package JSON (`host_placement_block`, `distinguished_by`):
+            // `RawPackage` declares no `rename_all`, and a recipe file's own
+            // spelling is what a person editing one has to type.
+            "amiga_installer": installer,
+        });
+        parse(&json.to_string())
+    }
+
+    /// The declared program exists inside the archive it belongs to. A path
+    /// nobody checked is how the 3.9 recipe shipped fourteen wrong ones.
+    #[test]
+    #[ignore = "reads the owner's real packages; run explicitly"]
+    fn every_declared_installer_exists_in_its_own_archive_when_asked() {
+        use super::super::scan::{find_packages, package_for, MediaMatch};
+        use super::super::source::MediaSource;
+        use super::super::source_archive::ArchiveSource;
+
+        let Ok(folder) = std::env::var("ART_PACKAGE_FOLDER") else {
+            return;
+        };
+        let found = find_packages(std::path::Path::new(&folder)).expect("the folder must scan");
+
+        let mut checked = 0usize;
+        for package in super::packages().unwrap() {
+            let Some(installer) = package.amiga_installer.as_ref() else {
+                continue;
+            };
+            // The archive this package's own identity resolves to — never
+            // the first `.lha` whose name looks right. Eight of the owner's
+            // archives share one top-level directory.
+            let MediaMatch::Found(archive) =
+                package_for(&found, &package.media, package.distinguished_by.as_deref())
+            else {
+                panic!(
+                    "{}: no single archive in {folder} is this package's",
+                    package.id
+                );
+            };
+
+            // The **wrapper**, opened with `open` rather than `open_nested`:
+            // `C/Updater` sits beside the payload member, not inside it, and
+            // that is the whole reason it can be run at all (ART-166).
+            let mut source = ArchiveSource::open(&archive.path).expect("the archive must open");
+            let entry = source
+                .entry(&installer.program)
+                .expect("looking up a path must not fail")
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{}: '{}' is not in {}",
+                        package.id,
+                        installer.program,
+                        archive.path.display()
+                    )
+                });
+            assert!(
+                !entry.is_dir,
+                "{}: '{}' is a drawer in {}, not a program",
+                package.id,
+                installer.program,
+                archive.path.display()
+            );
+            assert!(
+                entry.size > 0,
+                "{}: '{}' is empty",
+                package.id,
+                installer.program
+            );
+
+            // Every argument that names something inside the package has to
+            // be there too. `AmigaOS-Update` is the payload member, and a
+            // recipe that named the wrong one would run the Updater against
+            // a file the archive does not carry. An argument carrying a `:`
+            // names a volume rather than a path inside the package, so it is
+            // not something this archive could answer for — skipped, not
+            // failed.
+            for arg in installer.args.iter().filter(|a| !a.contains(':')) {
+                assert!(
+                    source.entry(arg).expect("lookup must not fail").is_some(),
+                    "{}: argument '{arg}' is not in {}",
+                    package.id,
+                    archive.path.display()
+                );
+            }
+            checked += 1;
+        }
+        assert!(checked > 0, "no package with an installer was checked");
+    }
+
     /// An unknown id is refused by name, never defaulted to some other
     /// package — the same rule `recipe::by_release` follows, for the same
     /// reason.
@@ -628,6 +1026,7 @@ mod tests {
             media: "SyntheticMedia".to_string(),
             member: None,
             distinguished_by: None,
+            amiga_installer: None,
             requires: requires.iter().map(|s| s.to_string()).collect(),
             requires_components: Vec::new(),
             host_placement_block: None,
