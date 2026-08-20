@@ -275,13 +275,40 @@ pub struct Package {
 /// its files from the host. **Data, not a code path** — a fourth package is a
 /// JSON file. `None` means this package is not one this round can run, which
 /// is the honest answer for a package ART already places directly.
+///
+/// **Spelled snake_case, deliberately, and with no `rename_all`.** The brief
+/// wrote this type with `#[serde(rename_all = "camelCase")]`, which is a
+/// no-op for two single-word fields and was removed in fix round 1 rather
+/// than left as a no-op that reads as intent (review M1). The key that
+/// matters is the *container's* — `amiga_installer` on [`RawPackage`], which
+/// carries no `rename_all` either, so every key in a package JSON is
+/// snake_case and a recipe author has one spelling to learn rather than two.
+/// A `rename_all` here would have obliged a future multi-word field to be
+/// camelCase among snake_case siblings.
+///
+/// This type also derives `Serialize`, and ART's frontend convention is
+/// camelCase — but a recipe is read far more often than this is written, and
+/// turning one module's representation into another's is a command-layer job
+/// (CLAUDE.md), not a reason to make the file on disk harder to write.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct AmigaInstaller {
     /// Where the program sits **inside the package**, `/`-separated.
     pub program: String,
-    /// Arguments, each a separate string — never one line to be split, so
-    /// nothing can be reinterpreted as a second command.
+    /// Arguments, **each its own string**: a recipe cannot hand over one
+    /// line for ART to split, because serde refuses a bare string where this
+    /// list belongs, and no argument may carry a shell metacharacter, so
+    /// none of them can end the command and begin a second one
+    /// (`validate_installer`).
+    ///
+    /// What this does **not** say, because it is not enforced here (review
+    /// m1): whether an argument containing a space arrives at the Amiga as
+    /// one token or two. That is decided by whoever composes and quotes the
+    /// command line — `commands/amigainstall.rs` and
+    /// `core::amigainstall::workvol`, Task 3 of this round. A space is not
+    /// refused here because AmigaDOS names legitimately contain them: the
+    /// owner's own `BoingBag39-1.lha` carries
+    /// `Manuals/English/Guides Vol. 1/`, so a package whose installer sat in
+    /// such a drawer would be undeclarable if this refused one.
     #[serde(default)]
     pub args: Vec<String>,
 }
@@ -289,6 +316,30 @@ pub struct AmigaInstaller {
 /// The flat shape a person actually edits. `id`/`media`/`rules`/`overrides`
 /// fold into [`Package::component`] at parse time — the file on disk should
 /// not have to know the engine's own struct layout.
+///
+/// ## A key serde does not recognise is a refusal, not a shrug
+///
+/// **Fix round 1 (review M1), and the defect was real rather than
+/// hypothetical.** A recipe written `"amigaInstaller": { … }` used to parse
+/// as `Ok`, with the declaration **silently dropped** — the package was
+/// accepted and `amiga_installer` was `None`, so the only symptom would have
+/// been ART reporting that this package is not one it can run: a lie that
+/// reads exactly like a design decision. Two doc comments in this file
+/// recommended that dead spelling at the time, so an author following the
+/// documentation wrote the one form that could not work.
+///
+/// Plain `#[serde(deny_unknown_fields)]` is the usual answer and is **not
+/// usable here**: every shipped package JSON carries `_why_…` keys — the
+/// measurements, with their dates and tools, that make a recipe reviewable
+/// in a diff — and there is no way to enumerate them. So the catch-all below
+/// keeps them and [`RawPackage::check_unknown_keys`] refuses everything else
+/// by name. A key beginning `_` is a note to a human; anything else is a
+/// person trying to tell ART something ART did not hear.
+///
+/// Scoped to packages on purpose: `recipe.rs`'s release recipes have the
+/// same exposure and are not changed here, because this task's evidence is
+/// about packages and a change made without measuring the other file's own
+/// data would be the guess this project keeps paying for.
 #[derive(Debug, Deserialize)]
 struct RawPackage {
     id: String,
@@ -309,6 +360,12 @@ struct RawPackage {
     #[serde(default)]
     overrides: Vec<String>,
     rules: Vec<PathRule>,
+    /// Every key serde did not place in a field above — see this struct's
+    /// own doc comment. Never read as data; only checked, by
+    /// [`check_unknown_keys`](Self::check_unknown_keys), and dropped in
+    /// [`into_package`](Self::into_package).
+    #[serde(flatten)]
+    extra: HashMap<String, serde_json::Value>,
 }
 
 impl RawPackage {
@@ -316,6 +373,35 @@ impl RawPackage {
     /// shared by [`parse`], which validates, and
     /// [`raw_packages`](self::raw_packages), which deliberately does not
     /// (see that function's own doc comment).
+    /// Refuse any key that is neither a field of this struct nor a `_…`
+    /// note. See the struct's own doc comment for why this is not
+    /// `deny_unknown_fields`.
+    ///
+    /// The message names the key **and** what a note looks like, because the
+    /// two mistakes this catches want different fixes: `amigaInstaller` is a
+    /// misspelling of a real field, and `why_this_is_here` is a note whose
+    /// author forgot the underscore.
+    fn check_unknown_keys(&self, id: &str) -> CoreResult<()> {
+        // Sorted, so a file with two bad keys refuses the same way twice
+        // rather than by `HashMap` iteration order.
+        let mut unknown: Vec<&str> = self
+            .extra
+            .keys()
+            .map(String::as_str)
+            .filter(|key| !key.starts_with('_'))
+            .collect();
+        unknown.sort_unstable();
+        if let Some(key) = unknown.first() {
+            return Err(CoreError::Malformed {
+                format: "package".into(),
+                detail: format!(
+                    "'{id}': '{key}' is not a package key (keys are snake_case, and a note to a human must begin with '_')"
+                ),
+            });
+        }
+        Ok(())
+    }
+
     fn into_package(self) -> Package {
         let component = Component {
             id: self.id.clone(),
@@ -399,7 +485,11 @@ fn validate_installer(package: &Package) -> CoreResult<()> {
             ),
         });
     }
+    // The label is this module's, not `recipe.rs`'s: a person who mistypes
+    // a path in a *package* JSON was reading a package file, and an error
+    // announcing `format: "recipe"` sends them to the wrong one (review m3).
     validate_path(
+        "package",
         &package.id,
         "amiga_installer.program",
         &installer.program,
@@ -425,8 +515,12 @@ fn parse(json: &str) -> CoreResult<Package> {
         format: "package".into(),
         detail: e.to_string(),
     })?;
+    // Before `into_package` consumes `raw` and drops what serde could not
+    // place. A key ART did not recognise is refused by name here rather than
+    // vanishing (review M1).
+    raw.check_unknown_keys(&raw.id)?;
     let package = raw.into_package();
-    validate_component(&package.component)?;
+    validate_component("package", &package.component)?;
     validate_installer(&package)?;
     Ok(package)
 }
@@ -868,9 +962,16 @@ mod tests {
         assert_eq!(installer.args, vec!["AmigaOS-Update".to_string()]);
     }
 
-    /// A package with no `amigaInstaller` key parses to `None` — the honest
+    /// A package with no `amiga_installer` key parses to `None` — the honest
     /// answer for a package ART already places directly, pinned so a
     /// `#[serde(default)]` that ever grew a value could not go unnoticed.
+    ///
+    /// **This test cannot tell an absence from a misspelling, and its first
+    /// version claimed it could** (review M1). `None` is what a file with no
+    /// such key gives *and* what a file with a mistyped one used to give, so
+    /// the property that actually matters is pinned next door, by
+    /// [`a_misspelled_key_is_refused_by_name_not_silently_dropped`]. What
+    /// remains here is only what it says: the default is `None`.
     #[test]
     fn a_package_that_names_no_installer_declares_none() {
         let package = parse(
@@ -881,7 +982,112 @@ mod tests {
         assert_eq!(package.amiga_installer, None);
     }
 
-    /// One minimal package JSON carrying an `amigaInstaller`, so the
+    /// **The defect review M1 found, put where it cannot come back.** A
+    /// recipe written `"amigaInstaller"` — the camelCase spelling two doc
+    /// comments in this file used to recommend — parsed as `Ok`, with the
+    /// declaration dropped and nothing said. The package would then have
+    /// been reported as one ART cannot run: a lie that reads like a design
+    /// decision.
+    ///
+    /// Three spellings, because they fail for three different reasons and
+    /// all three have to be refused **by name**: the camelCase one that was
+    /// documented, an ordinary typo, and a note whose author forgot the
+    /// leading underscore. The fourth case is the one that must still be
+    /// accepted — `_why_…`, which is how every shipped recipe carries its
+    /// measurements, and which is why `deny_unknown_fields` could not be
+    /// used.
+    #[test]
+    fn a_misspelled_key_is_refused_by_name_not_silently_dropped() {
+        for key in ["amigaInstaller", "amiga_instaler", "why_no_installer"] {
+            let json = serde_json::json!({
+                "id": "x",
+                "name": "X",
+                "media": "X",
+                "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ],
+                key: { "program": "C/Updater", "args": ["AmigaOS-Update"] },
+            });
+            let err = parse(&json.to_string())
+                .expect_err(&format!("'{key}' must be refused, not dropped"))
+                .to_string();
+            assert!(
+                err.contains(key),
+                "'{key}' was refused without naming it: {err}"
+            );
+        }
+    }
+
+    /// The other half, and it is not decoration: a rule that refused
+    /// everything unknown would break every shipped recipe, since all three
+    /// carry `_why_…` notes.
+    #[test]
+    fn a_note_to_a_human_is_still_allowed_through() {
+        let json = serde_json::json!({
+            "id": "x",
+            "name": "X",
+            "media": "X",
+            "_why_this_exists": ["a note, kept in the file, ignored by ART"],
+            "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ],
+        });
+        parse(&json.to_string()).expect("a `_`-prefixed note must be allowed");
+    }
+
+    /// **A fault in a package file is reported against a package file**
+    /// (review m3). `validate_path` is shared with `recipe.rs` — correctly,
+    /// since a second copy would drift — but it used to label every refusal
+    /// it made `malformed recipe`, so a person who mistyped a path in a
+    /// *package* JSON was sent to a different file to look for a mistake
+    /// that was not there. The label now follows the caller.
+    ///
+    /// Asserted in both directions: this is a `format` field, so a mutation
+    /// that hard-coded `"package"` everywhere would be just as wrong and
+    /// would pass a one-sided test. `recipe::parse` still says `recipe`.
+    #[test]
+    fn a_package_path_fault_is_reported_against_the_package_file() {
+        let json = serde_json::json!({
+            "id": "x",
+            "name": "X",
+            "media": "X",
+            "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ],
+            // `..` climbs out, and `validate_path` is the only thing that
+            // refuses it — so the message under test is one it wrote.
+            "amiga_installer": { "program": "../C/Updater" },
+        });
+        let err = parse(&json.to_string()).unwrap_err().to_string();
+        assert!(err.contains("malformed package"), "got {err}");
+
+        let recipe_err = super::super::recipe::parse(
+            r#"{ "release": "X", "components": [
+                   { "id": "c", "media": "M",
+                     "rules": [ { "from": "..", "to": "C", "kind": "file" } ] } ] }"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(recipe_err.contains("malformed recipe"), "got {recipe_err}");
+    }
+
+    /// **The half of "each its own string" that is enforced here**, pinned
+    /// because the field's doc comment claims it and a claim with no test is
+    /// how ART-180 and ART-181 happened. A recipe cannot hand ART one line
+    /// to split: `args` is a list, and serde refuses a bare string in its
+    /// place at parse time.
+    ///
+    /// The other half — whether an argument that *contains* a space arrives
+    /// as one token or two — is not enforced here and the doc comment now
+    /// says so (review m1). It belongs to whoever quotes the command line.
+    #[test]
+    fn args_given_as_one_line_are_refused_by_the_type() {
+        let json = serde_json::json!({
+            "id": "x",
+            "name": "X",
+            "media": "X",
+            "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ],
+            "amiga_installer": { "program": "C/Updater", "args": "AmigaOS-Update DH0:" },
+        });
+        let err = parse(&json.to_string()).unwrap_err().to_string();
+        assert!(err.contains("invalid type"), "got {err}");
+    }
+
+    /// One minimal package JSON carrying an `amiga_installer`, so the
     /// refusals above test [`parse`]'s real boundary rather than a
     /// hand-built `AmigaInstaller` that never went through it.
     fn installer_json(program: &str, args: &[&str]) -> CoreResult<Package> {
@@ -906,13 +1112,24 @@ mod tests {
     /// The declared program exists inside the archive it belongs to. A path
     /// nobody checked is how the 3.9 recipe shipped fourteen wrong ones.
     #[test]
-    #[ignore = "reads the owner's real packages; run explicitly"]
+    #[ignore = "reads the owner's real packages: set ART_PACKAGE_FOLDER and run with --ignored --nocapture"]
     fn every_declared_installer_exists_in_its_own_archive_when_asked() {
         use super::super::scan::{find_packages, package_for, MediaMatch};
         use super::super::source::MediaSource;
         use super::super::source_archive::ArchiveSource;
 
+        // **A skipped run must not read as a passed one** (review m4). With
+        // no folder this test prints `ok`, exactly like a run that checked
+        // both BoingBags against the owner's real archives — and this is the
+        // one test standing between a recipe and the fourteen-wrong-paths
+        // failure the 3.9 release recipe shipped. It still returns rather
+        // than fails, because every other real-material test in this
+        // codebase gates the same way and because the variable is genuinely
+        // absent on a machine with no packages; what changes is that it says
+        // so. `eprintln!` is captured unless `--nocapture` is passed, which
+        // is why the `#[ignore]` message above names both.
         let Ok(folder) = std::env::var("ART_PACKAGE_FOLDER") else {
+            eprintln!("SKIPPED: ART_PACKAGE_FOLDER is not set, so nothing was checked");
             return;
         };
         let found = find_packages(std::path::Path::new(&folder)).expect("the folder must scan");

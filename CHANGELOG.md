@@ -41,6 +41,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Still not reachable from the interface, and still no emulator: this is
   the declaration, not the run.
 
+#### Fixed
+- **A mistyped key in a recipe file is now an error instead of silence.**
+  ART reads its package recipes from small text files, and a key it did not
+  recognise used to be ignored without a word — so a recipe that named an
+  Amiga-side installer with the wrong spelling was accepted with the
+  installer quietly missing, and the package would then have been reported
+  as one ART cannot install. ART now refuses such a file and names the key
+  it did not understand. Notes written into a recipe for human readers,
+  which begin with an underscore, still pass through untouched.
+- **An error about a package file no longer says "recipe".** A path typed
+  wrongly in a package file was reported as a fault in a recipe — a
+  different file, which the reader would have gone and searched in vain.
+
 ### Archive names, drawer names, and a batch of long-standing debt (2026-08-20)
 
 #### Fixed

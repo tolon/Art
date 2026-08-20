@@ -35,7 +35,14 @@ pub fn parse(json: &str) -> CoreResult<Recipe> {
 /// `amiga_installer.program` is a `/`-separated AmigaDOS path inside a
 /// package, held to exactly these rules, and a second copy of them would be
 /// a second copy that drifts.
+///
+/// `format` is the caller's, not this function's (fix round 1, review m3).
+/// Sharing the checks is right; announcing them all as `format: "recipe"` was
+/// not, because a person who mistyped a path in a *package* JSON was then
+/// told the fault lay in a recipe — a different file, which they would have
+/// gone and read.
 pub(super) fn validate_path(
+    format: &str,
     component_id: &str,
     field: &str,
     path: &str,
@@ -46,7 +53,7 @@ pub(super) fn validate_path(
             Ok(())
         } else {
             Err(CoreError::Malformed {
-                format: "recipe".into(),
+                format: format.into(),
                 detail: format!("'{component_id}': {field} is empty"),
             })
         };
@@ -56,7 +63,7 @@ pub(super) fn validate_path(
     }
     if path.starts_with('/') || path.split('/').any(|s| s == "..") {
         return Err(CoreError::Malformed {
-            format: "recipe".into(),
+            format: format.into(),
             detail: format!("'{component_id}': {field} '{path}' leaves the tree"),
         });
     }
@@ -73,16 +80,20 @@ pub(super) fn validate_path(
 /// what a package's own parser is required to follow (Task 4). Splitting
 /// this out of [`validate`] is what makes that possible without a second,
 /// drifting copy of the same checks.
-pub(super) fn validate_component(component: &Component) -> CoreResult<()> {
+///
+/// `format` names the file the caller was reading — `"recipe"` here,
+/// `"package"` from `package.rs` — for the reason [`validate_path`] spells
+/// out (fix round 1, review m3).
+pub(super) fn validate_component(format: &str, component: &Component) -> CoreResult<()> {
     if component.media.trim().is_empty() {
         return Err(CoreError::Malformed {
-            format: "recipe".into(),
+            format: format.into(),
             detail: format!("'{}' names no media", component.id),
         });
     }
     for rule in &component.rules {
-        validate_path(&component.id, "from", &rule.from, true)?;
-        validate_path(&component.id, "to", &rule.to, false)?;
+        validate_path(format, &component.id, "from", &rule.from, true)?;
+        validate_path(format, &component.id, "to", &rule.to, false)?;
     }
     Ok(())
 }
@@ -98,7 +109,7 @@ fn validate(recipe: &Recipe) -> CoreResult<()> {
                 detail: format!("two components share the id '{}'", component.id),
             });
         }
-        validate_component(component)?;
+        validate_component("recipe", component)?;
     }
     Ok(())
 }

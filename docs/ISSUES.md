@@ -26,6 +26,44 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-182** 🟠 **`staging_is_removed_however_the_preview_ends` counts a
+directory namespace it shares with every other test in the process, so it
+fails at random under the full suite** — *found 2026-08-20 by Task 2's fix
+round, while running the suite the second time as CLAUDE.md requires*
+`src-tauri/src/commands/osinstall.rs::staging_is_removed_however_the_preview_ends`
+
+The test snapshots `staging_dirs().len()` before a preview and asserts the
+same number after. `staging_dirs()` lists `%TEMP%` for
+`art-osinstall-collisions-component-<pid>-*`, and **the pid is the whole test
+binary's** — so every one of the other fifteen tests that calls
+`preview_component_collisions` contributes to that count while its own
+`StagingDir` is alive. Two samples taken around a concurrent test's staging
+root differ by one, and the assertion fires on a directory the test under
+scrutiny neither created nor leaked.
+
+**Measured, not inferred.** `cargo test -- --test-threads=1` passes
+deterministically (2105 passed, 72.06s); the parallel suite failed 3 of 6
+consecutive runs on the branch and then passed 4 in a row, which is the
+signature of a scheduling race rather than a defect in the code under test.
+Six runs at the base commit `dc32374` passed, so Task 2's five new tests
+changed the interleaving without changing anything the test observes — the
+race is in the test and was there before them.
+
+`scratch_root_for` and the `StagingDir` guard are **correct**: one root per
+call, monotonic counter, removed on every exit including cancellation. This
+is the seventh instance of the class ART-115, ART-164, ART-173 and ART-181
+belong to, and the first where the shared thing is a *directory namespace*
+rather than a name.
+
+**What would close it.** Not `--test-threads=1` in CI, which would hide the
+next one and triple the run. Either the test serialises against the other
+fifteen callers on a `static Mutex`, or it stops asking a global question:
+the property is "this call left nothing behind", and it is currently asked as
+"the process leaked nothing", which is a different and unownable claim. Left
+unfixed here deliberately — it is a fifteen-call-site change in a file Task 2
+does not otherwise touch, and doing it inside a fix round scoped to five
+review findings is how an unrelated regression gets in.
+
 **ART-179** 🔵 **Twenty-eight catalogue keys nothing renders** — *found
 2026-08-20 by `src/i18n/dead-keys.test.ts` on the day that check was written
 (ART-080 review, F2); allow-listed there rather than deleted*
