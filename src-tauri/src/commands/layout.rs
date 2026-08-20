@@ -155,6 +155,7 @@ mod tests {
                 destination: "Floppies/Disk.adf".into(),
                 placement: Placement::CopyFile,
                 bytes: 10,
+                writes_icon: false,
             }],
             refused: Vec::new(),
             collisions: Vec::new(),

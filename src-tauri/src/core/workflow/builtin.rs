@@ -38,6 +38,7 @@ mod route {
     pub const FILES: &str = "/files";
     pub const WHDLOAD: &str = "/whdload";
     pub const OS_BUILDER: &str = "/os-builder";
+    pub const LAYOUT: &str = "/layout";
 }
 
 // ---------------------------------------------------------------------------
@@ -507,6 +508,29 @@ fn navigation_workflows() -> Vec<NavWorkflow> {
             is_rom,
         ),
         // --- Dropped folders ---
+        //
+        // ART-108: the layout screen's own framing is "drop four hundred
+        // files, get an organised card", and until this entry existed there
+        // was no way to reach it by dropping anything — the sidebar and a
+        // file dialog were the only doors into the module ART's one drop
+        // pipeline was built to feed.
+        //
+        // Registered *below* `dir.scan_collection` on purpose. Both are
+        // starred, so neither is a dead end (§46), but which of "catalogue
+        // this folder" and "lay this folder out onto a card" should be the
+        // first thing offered for a dropped folder is a product judgement,
+        // and this task's job was to open the door, not to reorder the room.
+        nav(
+            "dir.organise",
+            "Organise onto a card",
+            "Sort this folder's games, floppies and archives into a staging tree \
+             ready to copy onto a PiStorm card.",
+            route::LAYOUT,
+            Recommended,
+            15,
+            true,
+            is_directory,
+        ),
         nav(
             "dir.scan_collection",
             "Scan into Collection",
@@ -610,6 +634,29 @@ mod tests {
         let mut reg = WorkflowRegistry::new();
         register_all(&mut reg);
         reg.candidates_for(d).iter().map(|w| w.info().id).collect()
+    }
+
+    /// ART-108: ART has exactly one drop pipeline, and until `dir.organise`
+    /// existed nothing dropped could reach the layout screen at all — the
+    /// module whose own framing is "drop four hundred files, get an organised
+    /// card" was reachable only from the sidebar and a file dialog.
+    ///
+    /// Asserts the route as well as the id: an entry that pointed somewhere
+    /// else would satisfy a bare "is it registered" check and still leave the
+    /// screen unreachable.
+    #[test]
+    fn a_dropped_folder_can_reach_the_layout_screen() {
+        let d = detection(FormatCategory::Directory, "directory", true);
+        assert!(ids_for(&d).contains(&"dir.organise"), "{:?}", ids_for(&d));
+
+        let entry = navigation_workflows()
+            .into_iter()
+            .find(|w| w.info.id == "dir.organise")
+            .expect("registered");
+        match entry.info.kind {
+            WorkflowKind::Navigate { route } => assert_eq!(route, "/layout"),
+            WorkflowKind::Execute => panic!("the layout screen is navigated to, not executed"),
+        }
     }
 
     /// Spec §91: no recognised object may be a dead end.
@@ -882,6 +929,7 @@ mod tests {
             route::FILES,
             route::WHDLOAD,
             route::OS_BUILDER,
+            route::LAYOUT,
         ];
 
         for w in navigation_workflows() {

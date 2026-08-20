@@ -26,6 +26,33 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-177** 🔵 **A layout apply still cannot be resumed — the residue is
+reported, and there is no way to carry on from it** — *found 2026-08-20 while
+closing [ART-110](#fixed), which this is the undecided half of*
+`src-tauri/src/core/layout/apply.rs` · `src/pages/ContentLayout.tsx`
+
+A run that fails part way now says so and names what landed
+(`ART-APPLY-PARTIAL`), and the screen no longer stays busy. What it still
+cannot do is carry on: there is no skip-existing, no resume, and the next
+preview reports the residue as ordinary collisions — true, and unhelpful,
+because they are collisions with the user's own interrupted run.
+
+Nothing is destroyed. `place()` refuses to overwrite, so a retry fails loudly
+rather than replacing anything, and the only way forward is the file manager.
+
+Fixing it means answering a question ART has not answered anywhere else: what
+should a preview *say* about a destination that already holds exactly what
+this plan would put there? "Already done, skip it" is only safe if ART can
+tell that the file on disk is the file this item would write — same bytes, not
+merely the same name — and for an `UnpackWhdload` item that means comparing a
+whole extracted drawer against an archive. "Collision, refuse" is what happens
+today and is honest. "Overwrite" contradicts §93 and the applier's own stated
+rule. Which of those the screen offers, and whether resuming is a mode or a
+per-row choice, is a product decision.
+
+Recorded rather than answered, because answering it as a side effect of a
+debt-clearing pass is how a safety rule gets changed by accident.
+
 **ART-176** 🔵 **F5 between two images means two different things for one
 entry and for several** — *found 2026-08-20 while closing ART-064*
 `src/pages/FileManager.tsx::copyTo` · `src-tauri/src/commands/volume_write.rs::copy_between_volumes`
@@ -538,75 +565,6 @@ first looks: embedding a PFS3 driver into a **foreign** card's existing RDB
 `hst-imager` does it; that is named in the refusal text. Not fixed — filed as
 future work, not implied to already work.
 
-**ART-110** 🔵 **A partial layout apply cannot be resumed, and the screen stays
-busy** — *found 2026-08-15, the whole-branch review of SD-2 G11*
-`src-tauri/src/core/layout/apply.rs` · `src/pages/ContentLayout.tsx` · Any
-mid-run failure — item 5 of 10, or a `copy_tree` that hits the depth cap partway
-down a tree — leaves what already landed on disk. `copy_tree_excluding` creates
-the destination and then iterates, and files sort in with directories, so the
-residue is real files and not merely empty folders. The next preview reports all
-of it as ordinary collisions with nothing saying it is the wreckage of a failed
-run, and there is no skip-existing and no resume: the only way forward is the
-file manager.
-
-Compounded on the screen, where `busy` is never cleared when a job fails or is
-cancelled — the comment says "a cancelled or failed job is the job bar's to
-report", but nothing clears the flag, so Preview and Apply both stay disabled
-until the user navigates away and back. That half is inherited verbatim from
-`VolumePreload.tsx` and is a pre-existing pattern rather than a new mistake, but
-this is the screen where it bites, because this is the screen you need to re-run
-after a failure.
-
-Nothing is destroyed — `place()` refuses to overwrite, so a retry fails loudly
-rather than replacing anything. Fixing it means deciding what a re-preview should
-say about a destination that already holds exactly what this plan would put
-there, which is a design question and not a patch.
-
-**ART-109** 🔵 **`core/layout`'s WHDLoad tests never use LHA, and its `outside`
-test does not discriminate** — *found 2026-08-15, the whole-branch review of
-SD-2 G11*
-`src-tauri/src/core/layout/{mod,apply}.rs` · Every WHDLoad fixture in the module
-is a ZIP built at runtime; real packs are `.lha`. That is more than a fixture
-nit, because the drawer's name is derived **twice, from two sources**:
-`plan()` reads the archive's entry names through `archive::open`, and `apply()`
-re-runs `analyse` over the *extracted* tree. They must agree, because the drawer
-lands at the destination's leaf while the icon lands at
-`parent.join(layout.icon_name())` — from the second answer. If the two ever
-diverge for a backend, the icon lands under a name that does not match the
-drawer and §82 fails silently, which is the one outcome that function exists to
-prevent. One `.lha` fixture driven through `plan` → `apply` would pin it.
-
-Separately, `a_file_outside_the_pack_is_dropped_rather_than_landing_in_the_drawer`
-passes against the pre-fix code: the wrapped case never walked those paths and
-the wrapper-less case always gets an empty `outside`, so the unification it was
-written for has no observable behaviour to catch. The test documents real
-behaviour and is not worthless, but it must not be counted as covering that
-change.
-
-**ART-108** 🔵 **Nothing you drop can reach the layout screen** — *found
-2026-08-15, the whole-branch review of SD-2 G11*
-`src-tauri/src/core/workflow/builtin.rs` · The module's own framing is "drop four
-hundred files, get an organised card", and the only ways in are the sidebar and
-a file dialog: the workflow catalogue has no entry pointing at `/layout`, so
-ART's one drop pipeline cannot route anything there. The design doc does not
-require it and `Navigate { route: "/layout" }` for a dropped `Directory` is its
-own decision — filed because the gap is written down nowhere else.
-
-**ART-106** 🔵 **A WHDLoad icon's destination is invisible to collision
-analysis** — *found 2026-08-15, the whole-branch review of SD-2 G11*
-`src-tauri/src/core/layout/mod.rs` · `collisions_in` walks `item.destination`
-only, but applying an `UnpackWhdload` item also writes
-`<parent>/<name>.info` beside the drawer (§82). So the preview can report no
-collisions for a staging tree that already holds `Games/Turrican.info`; the
-apply then silently no-ops the icon — `if !to.exists()` — and places a drawer
-Workbench cannot see, which is the exact failure §82 exists to prevent, reached
-from the other side.
-
-The no-op is not the bug and does not need changing on its own: `place()`
-already refuses when the *drawer's* destination exists, so an existing icon
-beside a free drawer is a state only a previous partial run can produce. What is
-missing is that the plan never considers the icon's path at all.
-
 **ART-093** 🟡 **ART cannot fetch an Emu68 kernel update; it can only tell you which one you need**
 `core/pistorm/` · `net/` · The fix round's F4 asked for two things. The reading
 half is built: the card's `Emu68.img` is identified from the `$VER:` string its
@@ -765,6 +723,178 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-110** 🔵 **A partial layout apply cannot be resumed, and the screen stays
+busy** — *found 2026-08-15, the whole-branch review of SD-2 G11*
+`src-tauri/src/core/layout/apply.rs` · `src/pages/ContentLayout.tsx` · Any
+mid-run failure — item 5 of 10, or a `copy_tree` that hits the depth cap partway
+down a tree — leaves what already landed on disk. `copy_tree_excluding` creates
+the destination and then iterates, and files sort in with directories, so the
+residue is real files and not merely empty folders. The next preview reports all
+of it as ordinary collisions with nothing saying it is the wreckage of a failed
+run, and there is no skip-existing and no resume: the only way forward is the
+file manager.
+
+Compounded on the screen, where `busy` is never cleared when a job fails or is
+cancelled — the comment says "a cancelled or failed job is the job bar's to
+report", but nothing clears the flag, so Preview and Apply both stay disabled
+until the user navigates away and back. That half is inherited verbatim from
+`VolumePreload.tsx` and is a pre-existing pattern rather than a new mistake, but
+this is the screen where it bites, because this is the screen you need to re-run
+after a failure.
+
+Nothing is destroyed — `place()` refuses to overwrite, so a retry fails loudly
+rather than replacing anything. Fixing it means deciding what a re-preview should
+say about a destination that already holds exactly what this plan would put
+there, which is a design question and not a patch.
+
+**Partly fixed 2026-08-20 on `debt-wave-c1`. The resume half is a product
+decision and was left open — see ART-177.**
+
+Two things were closed, both of which were plain defects rather than
+questions:
+
+- **The screen no longer stays busy.** `onLayoutResult` fires on success
+  alone, so a job that failed or was cancelled left `busy` set for ever and
+  Preview and Apply both disabled — on the one screen you most need to re-run
+  after a failure. `ContentLayout.tsx` now keeps the apply job's id and clears
+  the flag from `onJobProgress` when that job reaches any terminal state,
+  surfacing the message and its `ART-*` id on a failure. The pattern is
+  `FileManager.tsx`'s, which had it already.
+- **A failed run says how much of it landed.** `CoreError::PartiallyApplied
+  { placed, item, reason }` (`ART-APPLY-PARTIAL`) is the sibling of
+  `CancelledPartway`: cancelling has reported its count since ART-058 and
+  failing did not, which is why the residue was invisible. A run that fails on
+  its fifth item now names the item that refused and the four already on disk,
+  at the moment the user can act on it. A run that fails on its *first* item
+  reports the plain reason — dressing that up as a partial apply would send
+  the user looking for a mess that is not there.
+
+Covered by `core::layout::apply::tests::a_run_that_fails_partway_says_how_much_of_it_landed`
+and `…::a_run_that_fails_on_its_first_item_reports_the_plain_reason`.
+
+**What is still open** is what the entry above calls a design question, and it
+is: skip-existing, resume, and what a re-preview should say about a
+destination that already holds exactly what this plan would put there. That
+decides what "already done" means for a staging tree, and it is not a call to
+make as a side effect of a debt-clearing pass. Filed as ART-177.
+
+**ART-108** 🔵 **Nothing you drop can reach the layout screen** — *found
+2026-08-15, the whole-branch review of SD-2 G11*
+`src-tauri/src/core/workflow/builtin.rs` · The module's own framing is "drop four
+hundred files, get an organised card", and the only ways in are the sidebar and
+a file dialog: the workflow catalogue has no entry pointing at `/layout`, so
+ART's one drop pipeline cannot route anything there. The design doc does not
+require it and `Navigate { route: "/layout" }` for a dropped `Directory` is its
+own decision — filed because the gap is written down nowhere else.
+
+**Fixed 2026-08-20 on `debt-wave-c1`.** `dir.organise` → `Navigate { route:
+"/layout" }` for a dropped `Directory`, and `ContentLayout.tsx` reads the
+dropped path out of router state and adds it to its source list — added, not
+acted on: a drop says what to lay out, not where to lay it out, and the
+staging root stays the user's to choose.
+
+**Registered below `dir.scan_collection`, not above it.** Both are starred, so
+neither folder action is a dead end (§46), but *which* of "catalogue this
+folder" and "lay this folder out onto a card" should be the first thing a
+dropped folder offers is a product judgement. The gap this entry names is that
+the layout screen could not be reached by dropping anything at all; opening
+that door is not the same as reordering the room, and the second was not
+decided here.
+
+Covered by `core::workflow::builtin::tests::a_dropped_folder_can_reach_the_layout_screen`,
+which asserts the **route** and not merely that an entry with that id exists —
+one pointing somewhere else would satisfy a bare registration check and leave
+the screen just as unreachable. `docs/drag-drop-workflows.md`'s folder row
+updated in the same commit.
+
+**ART-109** 🔵 **`core/layout`'s WHDLoad tests never use LHA, and its `outside`
+test does not discriminate** — *found 2026-08-15, the whole-branch review of
+SD-2 G11*
+`src-tauri/src/core/layout/{mod,apply}.rs` · Every WHDLoad fixture in the module
+is a ZIP built at runtime; real packs are `.lha`. That is more than a fixture
+nit, because the drawer's name is derived **twice, from two sources**:
+`plan()` reads the archive's entry names through `archive::open`, and `apply()`
+re-runs `analyse` over the *extracted* tree. They must agree, because the drawer
+lands at the destination's leaf while the icon lands at
+`parent.join(layout.icon_name())` — from the second answer. If the two ever
+diverge for a backend, the icon lands under a name that does not match the
+drawer and §82 fails silently, which is the one outcome that function exists to
+prevent. One `.lha` fixture driven through `plan` → `apply` would pin it.
+
+Separately, `a_file_outside_the_pack_is_dropped_rather_than_landing_in_the_drawer`
+passes against the pre-fix code: the wrapped case never walked those paths and
+the wrapper-less case always gets an empty `outside`, so the unification it was
+written for has no observable behaviour to catch. The test documents real
+behaviour and is not worthless, but it must not be counted as covering that
+change.
+
+**Fixed 2026-08-20 on `debt-wave-c1`**, in both halves, and they turned out to
+be the same half.
+
+**The LHA fixture found a real divergence — by removing the possibility of
+one.** `core::lha::tests::make_lha_with` builds the fixture, and
+`an_lha_whdload_pack_plans_and_applies_under_one_name` drives one `.lha`
+through `plan` → `apply`: the name the entry list gives and the name the
+extracted tree gives have to be the same name. Writing it exposed that the two
+answers were *already* free to diverge without any backend disagreeing at all
+— the drawer lands at the destination's leaf, and the icon used to land at
+`PackLayout::icon_name()`, the pack's own name. Retarget a row from
+`Games/Turrican` to `Games/TurricanII`, which is the one thing that screen
+exists to let you do, and the icon lands as `Games/Turrican.info`: attached to
+no drawer, silently, which is exactly what §82 exists to prevent.
+
+So both sides now derive the icon's name from the **destination** —
+`apply::unpack_whdload` from the target path, `core::layout::icon_destination`
+from the same field — and `a_retargeted_whdload_row_takes_its_icon_with_it`
+pins it. That test fails against the previous code.
+
+**The `outside` test is not counted, and the reason is written down.** Its doc
+comment now says plainly what it does not prove, and the `skip_from_drawer`
+call site carries the argument for why nothing can reach that exclusion today:
+with a wrapper, `layout.outside` holds only paths that are not under
+`layout.root`, and the copy walks `layout.root`, so it never meets them;
+without a wrapper, `is_inside` returns true for everything, so `outside` is
+empty by construction. The list stays as belt and braces — the day `analyse`
+marks a file *inside* the pack as outside it, this is what stops it riding
+along — but it is stated as unreachable rather than presented as tested.
+
+**ART-106** 🔵 **A WHDLoad icon's destination is invisible to collision
+analysis** — *found 2026-08-15, the whole-branch review of SD-2 G11*
+`src-tauri/src/core/layout/mod.rs` · `collisions_in` walks `item.destination`
+only, but applying an `UnpackWhdload` item also writes
+`<parent>/<name>.info` beside the drawer (§82). So the preview can report no
+collisions for a staging tree that already holds `Games/Turrican.info`; the
+apply then silently no-ops the icon — `if !to.exists()` — and places a drawer
+Workbench cannot see, which is the exact failure §82 exists to prevent, reached
+from the other side.
+
+The no-op is not the bug and does not need changing on its own: `place()`
+already refuses when the *drawer's* destination exists, so an existing icon
+beside a free drawer is a state only a previous partial run can produce. What is
+missing is that the plan never considers the icon's path at all.
+
+**Fixed 2026-08-20 on `debt-wave-c1`.** `LayoutItem` gained `writes_icon`, and
+`core::layout::icon_destination` derives the icon's path from the item's own
+`destination`. `collisions_in` now asks about both, so a staging tree already
+holding `Games/Turrican.info` is reported as a collision instead of coming back
+clean and letting `apply` silently no-op the icon.
+
+A **flag** rather than a stored second path, deliberately: the whole point of
+that screen is that the user retargets rows, and a path recorded at plan time
+would answer about where a row used to point. Derived from `destination`, the
+icon follows the row — which is what `layout_recheck` re-asks after every
+retarget.
+
+And it is asked of the archive, not assumed: a pack that ships without an icon
+sets `writes_icon: false`, because claiming a collision for a file that will
+never be written is as wrong as missing one that will.
+
+Covered by `core::layout::tests::an_icon_already_in_the_staging_tree_is_a_collision`
+(whose drawer destination is deliberately *free*, so the icon is the only
+thing that can produce the finding),
+`…::a_pack_with_no_icon_claims_no_icon_destination`, and
+`…::a_retargeted_row_moves_its_icon_destination_with_it`.
 
 **ART-073** 🟡 **`delete_many`'s all-or-nothing guarantee only holds for the whole-file strategy**
 `src-tauri/src/commands/volume_write.rs::delete_many` (line ~505) · The

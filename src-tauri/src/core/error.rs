@@ -65,6 +65,29 @@ pub enum CoreError {
     #[error("operation cancelled after writing {files} file(s)")]
     CancelledPartway { files: u64 },
 
+    /// A multi-item operation that **failed** part way, with the items before
+    /// the failure already on disk.
+    ///
+    /// The sibling of [`CancelledPartway`](Self::CancelledPartway), for the
+    /// other way a run can stop short. Cancelling had a way to say "some of
+    /// this landed" and failing did not, so the residue of a failed
+    /// `core::layout::apply` was invisible: the next preview reported it as
+    /// ordinary collisions, with nothing saying it was the wreckage of a
+    /// previous run (ART-110).
+    ///
+    /// `placed` travels as a number and `item` as the destination that
+    /// refused, so the UI can say both without parsing the sentence — which
+    /// is English, and the UI's is not (§68).
+    #[error(
+        "{reason} — this stopped at '{item}', and the {placed} item(s) placed before it are \
+         still there"
+    )]
+    PartiallyApplied {
+        placed: u64,
+        item: String,
+        reason: String,
+    },
+
     /// A name `libpfs3` 0.1.3 cannot round-trip: `writer.rs` writes it with
     /// `name.as_bytes()` (UTF-8) and `ondisk/direntry.rs` reads it back with
     /// `util::latin1_to_string` (one stored byte, one decoded char) — the two
@@ -199,6 +222,7 @@ impl CoreError {
             Self::IntegrityMismatch(_) => "ART-INTEGRITY-MISMATCH",
             Self::Cancelled => "ART-CANCELLED",
             Self::CancelledPartway { .. } => "ART-CANCELLED-PARTWAY",
+            Self::PartiallyApplied { .. } => "ART-APPLY-PARTIAL",
             Self::NonAsciiPfs3Names { .. } => "ART-PFS3-NON-ASCII-NAME",
             Self::ForeignRdbEmbedNotSupported => "ART-NATIVE-EMBED-UNSUPPORTED",
             Self::EscapedNamesNeedNativeCopy { .. } => "ART-ESCAPED-NAME-NEEDS-NATIVE",

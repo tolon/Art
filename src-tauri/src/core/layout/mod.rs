@@ -81,6 +81,32 @@ pub struct LayoutItem {
     /// What this will occupy once placed. For an unpacked archive this is the
     /// archive's own declared uncompressed total — a claim, and named as one.
     pub bytes: u64,
+    /// True when applying this item also writes an icon **beside** the
+    /// drawer, at [`icon_destination`] (§82).
+    ///
+    /// A flag rather than a second path, deliberately: the user retargets
+    /// `destination` on screen, and a stored icon path would go stale the
+    /// moment they did. Derived from the archive's entry list at plan time —
+    /// a WHDLoad pack that ships without an icon writes none — and
+    /// `#[serde(default)]` because the screen sends the plan back for
+    /// `layout_recheck` and `layout_apply`.
+    #[serde(default)]
+    pub writes_icon: bool,
+}
+
+/// Where this item's icon lands, or `None` when it writes none.
+///
+/// **One answer, from one source.** §82 requires the icon to be named after
+/// the drawer that actually lands, so it is derived from `destination` here
+/// and from the *target path* in `apply::unpack_whdload` — never from the
+/// pack name the archive happened to carry. Those were two answers once
+/// (ART-109), and they diverge the moment a user retargets a row: the drawer
+/// would land as `Games/TurricanII` and the icon as `Games/Turrican.info`,
+/// which is an icon Workbench does not attach to any drawer — the exact
+/// silent failure §82 exists to prevent.
+pub fn icon_destination(item: &LayoutItem) -> Option<String> {
+    item.writes_icon
+        .then(|| format!("{}.info", item.destination))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,22 +177,27 @@ pub fn classify(found: &Found) -> CoreResult<ItemKind> {
         FormatCategory::OpticalImage => ItemKind::OpticalImage,
         FormatCategory::Rom => ItemKind::Rom,
         FormatCategory::Commodore8Bit => ItemKind::Commodore8Bit,
-        FormatCategory::Archive => match whdload_name(&found.path) {
-            Some(name) => ItemKind::WhdloadArchive { name },
+        FormatCategory::Archive => match whdload_pack(&found.path) {
+            Some((name, _)) => ItemKind::WhdloadArchive { name },
             None => ItemKind::Archive,
         },
         FormatCategory::Directory | FormatCategory::Unknown => ItemKind::Unknown,
     })
 }
 
-/// The drawer name an archive would unpack to, if it holds a WHDLoad pack.
+/// The drawer name an archive would unpack to and whether it carries an icon,
+/// if it holds a WHDLoad pack at all.
 ///
 /// Reads the archive's **entry list only** — no decompression — so asking the
 /// question of four hundred files costs four hundred directory reads rather
 /// than four hundred unpacks. `analyse` is the right function here and the
 /// wrong one for a folder: this is precisely the shape it was written for, one
 /// drawer beside its own `.info`.
-fn whdload_name(path: &Path) -> Option<String> {
+///
+/// The icon half is what ART-106 needed: `apply` writes `<parent>/<name>.info`
+/// beside the drawer, and a plan that did not know that could report *no*
+/// collisions for a staging tree that already holds exactly that file.
+fn whdload_pack(path: &Path) -> Option<(String, bool)> {
     let mut backend = crate::core::archive::open(path).ok()?;
     let entries = backend.entries().ok()?;
     let listed: Vec<crate::core::whdload::Entry> = entries
@@ -178,7 +209,7 @@ fn whdload_name(path: &Path) -> Option<String> {
         .collect();
     crate::core::whdload::analyse(&listed)
         .ok()
-        .map(|layout| layout.name)
+        .map(|layout| (layout.name, layout.icon.is_some()))
 }
 
 fn name_of(path: &Path) -> String {
@@ -207,16 +238,25 @@ pub fn plan(root: &Path, paths: &[PathBuf], policy: &Policy) -> CoreResult<Layou
             }
         };
 
-        let (placement, leaf, bytes) = match (&kind, policy.whdload) {
+        let (placement, leaf, bytes, writes_icon) = match (&kind, policy.whdload) {
             (ItemKind::WhdloadArchive { name }, WhdloadPlacement::Unpack) => (
                 Placement::UnpackWhdload,
                 name.clone(),
                 declared_bytes(&found.path).unwrap_or(found.bytes),
+                // Asked of the archive, not assumed: plenty of packs ship
+                // without an icon, and claiming a collision for a file that
+                // will never be written is as wrong as missing one that will.
+                whdload_pack(&found.path).is_some_and(|(_, icon)| icon),
             ),
             (ItemKind::WhdloadDrawer { name }, _) => {
-                (Placement::CopyTree, name.clone(), found.bytes)
+                (Placement::CopyTree, name.clone(), found.bytes, false)
             }
-            _ => (Placement::CopyFile, name_of(&found.path), found.bytes),
+            _ => (
+                Placement::CopyFile,
+                name_of(&found.path),
+                found.bytes,
+                false,
+            ),
         };
 
         items.push(LayoutItem {
@@ -225,6 +265,7 @@ pub fn plan(root: &Path, paths: &[PathBuf], policy: &Policy) -> CoreResult<Layou
             destination: format!("{drawer}/{leaf}"),
             placement,
             bytes,
+            writes_icon,
         });
     }
 
@@ -269,13 +310,27 @@ fn declared_bytes(path: &Path) -> Option<u64> {
 /// `pub` so `commands/layout.rs::layout_recheck` can re-ask this exact
 /// question after the user retargets a row on screen, without re-walking or
 /// re-classifying anything — see that command's own doc comment.
+///
+/// **An item's icon is a destination too** (ART-106). Applying an
+/// `UnpackWhdload` item writes `<parent>/<name>.info` beside the drawer as
+/// well as the drawer itself, and walking `destination` alone reported *no*
+/// collisions for a staging tree that already held `Games/Turrican.info` —
+/// after which `apply` silently no-ops the icon (`if !to.exists()`) and
+/// places a drawer Workbench cannot see, which is the exact failure §82
+/// exists to prevent, reached from the other side.
 pub fn collisions_in(root: &Path, items: &[LayoutItem]) -> Vec<Collision> {
-    let mut by_destination: BTreeMap<&str, Vec<PathBuf>> = BTreeMap::new();
+    let mut by_destination: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
     for item in items {
         by_destination
-            .entry(item.destination.as_str())
+            .entry(item.destination.clone())
             .or_default()
             .push(item.source.clone());
+        if let Some(icon) = icon_destination(item) {
+            by_destination
+                .entry(icon)
+                .or_default()
+                .push(item.source.clone());
+        }
     }
 
     by_destination
@@ -287,12 +342,12 @@ pub fn collisions_in(root: &Path, items: &[LayoutItem]) -> Vec<Collision> {
             // A destination `safe_join` refuses is not reported as a
             // collision here — `apply()` will refuse it on its own, with a
             // clearer reason than "this name is taken".
-            let on_disk = safe_join(root, destination)
+            let on_disk = safe_join(root, &destination)
                 .map(|p| p.exists())
                 .unwrap_or(false);
             if sources.len() > 1 || on_disk {
                 Some(Collision {
-                    destination: destination.to_string(),
+                    destination,
                     sources,
                 })
             } else {
@@ -555,6 +610,118 @@ mod tests {
         assert_eq!(made.items[0].kind, ItemKind::Archive);
         assert_eq!(made.items[0].destination, "Unsorted/stuff.zip");
         assert_eq!(made.items[0].placement, Placement::CopyFile);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- ART-106: an item's icon is a destination too ----
+
+    /// The staging tree already holds `Games/Turrican.info`, and the plan
+    /// would unpack a pack that writes exactly that file beside its drawer.
+    ///
+    /// Before ART-106 the preview reported **no collisions** here: it walked
+    /// `item.destination` only, `Games/Turrican` was free, and the apply then
+    /// silently no-opped the icon (`if !to.exists()`) and placed a drawer
+    /// Workbench cannot see — the exact failure §82 exists to prevent,
+    /// reached from the other side.
+    #[test]
+    fn an_icon_already_in_the_staging_tree_is_a_collision() {
+        let dir = scratch("icon-collision");
+        let root = dir.join("staging");
+        std::fs::create_dir_all(root.join("Games")).unwrap();
+        std::fs::write(root.join("Games").join("Turrican.info"), b"an older icon").unwrap();
+
+        let archive = dir.join("Turrican.zip");
+        whdload_zip(&archive);
+
+        let made = plan(&root, std::slice::from_ref(&archive), &Policy::default()).unwrap();
+
+        assert_eq!(made.items.len(), 1);
+        assert_eq!(made.items[0].destination, "Games/Turrican");
+        assert!(
+            !root.join("Games").join("Turrican").exists(),
+            "the drawer itself is free — the clash is the icon's alone, which is what \
+             makes this test discriminate"
+        );
+
+        let names: Vec<&str> = made
+            .collisions
+            .iter()
+            .map(|c| c.destination.as_str())
+            .collect();
+        assert!(
+            names.contains(&"Games/Turrican.info"),
+            "the icon's destination has to be reported: {names:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A pack that ships **no** icon writes none, so nothing about
+    /// `Games/Whatever.info` is a collision. A check that assumed every
+    /// unpacked item writes an icon would report a clash for a file that will
+    /// never be written, which is as wrong as missing one that will.
+    #[test]
+    fn a_pack_with_no_icon_claims_no_icon_destination() {
+        let dir = scratch("no-icon");
+        let root = dir.join("staging");
+        std::fs::create_dir_all(root.join("Games")).unwrap();
+        std::fs::write(root.join("Games").join("Turrican.info"), b"unrelated").unwrap();
+
+        // The same pack, minus its `.info`.
+        let archive = dir.join("Turrican.zip");
+        {
+            let file = std::fs::File::create(&archive).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            zip.start_file("Turrican/Turrican.slave", options).unwrap();
+            std::io::Write::write_all(&mut zip, b"slave").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let made = plan(&root, std::slice::from_ref(&archive), &Policy::default()).unwrap();
+
+        assert!(!made.items[0].writes_icon);
+        assert_eq!(icon_destination(&made.items[0]), None);
+        assert!(
+            made.collisions.is_empty(),
+            "nothing here clashes: {:?}",
+            made.collisions
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The icon moves with the row. `layout_recheck` re-asks `collisions_in`
+    /// after a retarget, and an icon path stored at plan time would answer
+    /// about where the row *used* to point.
+    #[test]
+    fn a_retargeted_row_moves_its_icon_destination_with_it() {
+        let dir = scratch("icon-retarget");
+        let root = dir.join("staging");
+        let archive = dir.join("Turrican.zip");
+        whdload_zip(&archive);
+
+        let mut made = plan(&root, std::slice::from_ref(&archive), &Policy::default()).unwrap();
+        assert_eq!(
+            icon_destination(&made.items[0]),
+            Some("Games/Turrican.info".to_string())
+        );
+
+        made.items[0].destination = "Games/TurricanII".into();
+        assert_eq!(
+            icon_destination(&made.items[0]),
+            Some("Games/TurricanII.info".to_string()),
+            "derived from the destination, so a retarget carries it"
+        );
+
+        // And the clash follows: put the *new* icon name on disk.
+        std::fs::create_dir_all(root.join("Games")).unwrap();
+        std::fs::write(root.join("Games").join("TurricanII.info"), b"in the way").unwrap();
+        let found = collisions_in(&root, &made.items);
+        let names: Vec<&str> = found.iter().map(|c| c.destination.as_str()).collect();
+        assert_eq!(names, vec!["Games/TurricanII.info"], "{found:?}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

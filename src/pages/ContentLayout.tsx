@@ -28,6 +28,7 @@
 // neither screen has earned.
 
 import { useEffect, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
@@ -46,7 +47,7 @@ import {
   type LayoutResult,
   type Policy,
 } from "@/lib/layout";
-import { subscribeSafely } from "@/lib/jobs";
+import { onJobProgress, subscribeSafely } from "@/lib/jobs";
 import type { Phrase } from "@/lib/phrase";
 import { isTextList, isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
@@ -75,6 +76,7 @@ function leafName(path: string): string {
 
 export function ContentLayout() {
   const { t } = useTranslation();
+  const location = useLocation();
 
   // --- what the user chose, remembered ------------------------------------
   const [root, setRoot] = useRemembered<string | null>("layout.root", isTextOrNothing, null);
@@ -108,6 +110,18 @@ export function ContentLayout() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<LayoutResult | null>(null);
+  /**
+   * The apply job that is running, so a job that ends **without** a result —
+   * cancelled, or failed — can stop the screen waiting for one (ART-110).
+   *
+   * `onLayoutResult` only ever fires on success. The comment that used to sit
+   * in `apply()` said a cancelled or failed job was "the job bar's to
+   * report", which is true of the *message* and was not true of the `busy`
+   * flag: nothing cleared it, so Preview and Apply both stayed disabled until
+   * the user navigated away and back — on the one screen you most need to
+   * re-run after a failure.
+   */
+  const pendingApply = useRef<number | null>(null);
 
   const policy = DEFAULT_POLICY;
   // The five drawer names, in the same order the plan proposes them —
@@ -133,6 +147,39 @@ export function ContentLayout() {
     }
   }, [fingerprint]);
 
+  // A folder that arrived from ART's drop pipeline (ART-108). The workflow
+  // catalogue's `dir.organise` navigates here with the dropped path in router
+  // state, the same way every other studio is reached from a drop; before it
+  // existed nothing dropped could reach this screen at all.
+  //
+  // Added to the source list rather than acted on: a drop says what to lay
+  // out, not where to lay it out, and the staging root is still the user's to
+  // choose. The ref keeps StrictMode's double mount from adding it twice.
+  const arrivedWith = useRef<string | null>(null);
+  useEffect(() => {
+    const wanted = (location.state as { path?: string } | null)?.path;
+    if (!wanted || arrivedWith.current === wanted) return;
+    arrivedWith.current = wanted;
+    if (!paths.includes(wanted)) setPaths([...paths, wanted]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state]);
+
+  // A job that ended without a result: cancelled, or failed (ART-110). Only
+  // this stops the screen waiting — `onLayoutResult` fires on success alone.
+  useEffect(() => {
+    return subscribeSafely(() =>
+      onJobProgress((job) => {
+        if (job.state.state === "running") return;
+        if (job.id !== pendingApply.current) return;
+        pendingApply.current = null;
+        setBusy(false);
+        if (job.state.state === "failed") {
+          setError(`${job.state.message} (${job.state.error_code})`);
+        }
+      })
+    );
+  }, []);
+
   // `subscribeSafely` (ART-165): the bare `.then((fn) => { unlisten = fn })`
   // shape this used to have could both leak the real Tauri listener (an
   // unmount before the promise resolved left nothing to call) and surface
@@ -141,6 +188,7 @@ export function ContentLayout() {
     return subscribeSafely(() =>
       onLayoutResult((done) => {
         setResult(done);
+        pendingApply.current = null;
         setBusy(false);
         // It has been laid out. A second run needs a second preview.
         setPlan(null);
@@ -204,10 +252,12 @@ export function ContentLayout() {
     setBusy(true);
     setError(null);
     try {
-      await layoutApply(plan);
-      // `busy` is cleared by the result event, or here if the job never
-      // starts. A cancelled or failed job is the job bar's to report.
+      // The id is what lets a job that ends *without* a result stop the
+      // waiting: `onLayoutResult` fires on success only, so a cancelled or
+      // failed run reaches the screen through `onJobProgress` above (ART-110).
+      pendingApply.current = await layoutApply(plan);
     } catch (e) {
+      pendingApply.current = null;
       setError(String(e));
       setBusy(false);
     }

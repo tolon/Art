@@ -102,7 +102,7 @@ the file manager instead, which reads all three formats.
 | TAP / PRG / CRT | What is this? | Hex Viewer† · SHA-256 |
 | HDF / HDZ | Open in Hard Disk Studio · Launch in WinUAE | Add to Collection · Hex Viewer† |
 | ROM | Identify in ROM Studio · Use in a Machine Profile | Hex Viewer† |
-| Folder | Scan into Collection · Build an HDF from this folder* | Prepare as Gotek drive |
+| Folder | Scan into Collection · Organise onto a card · Build an HDF from this folder* | Prepare as Gotek drive |
 
 "Copy into a hard disk image" and "Install to a hard disk" both route to the
 two-pane file manager / WHDLoad install screen and copy between real volumes

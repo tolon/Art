@@ -47,8 +47,28 @@ pub fn apply(plan: &LayoutPlan, sink: &dyn ProgressSink) -> CoreResult<ApplyOutc
         }
         sink.report(done as u64, Some(total), &item.destination);
 
-        outcome.bytes += place(&plan.root, item)?;
-        outcome.placed += 1;
+        match place(&plan.root, item) {
+            Ok(bytes) => {
+                outcome.bytes += bytes;
+                outcome.placed += 1;
+            }
+            // Everything before this is durably on disk and stays there —
+            // `place` refuses to overwrite, so nothing can be rolled back
+            // without deleting files this run legitimately created. What was
+            // missing was **saying so** (ART-110): the residue used to come
+            // back as a bare error and turn up in the next preview as
+            // ordinary collisions, with nothing marking it as the wreckage of
+            // a failed run. Cancelling has said this since ART-058; failing
+            // now says it too.
+            Err(err) if outcome.placed > 0 => {
+                return Err(CoreError::PartiallyApplied {
+                    placed: outcome.placed as u64,
+                    item: item.destination.clone(),
+                    reason: err.to_string(),
+                })
+            }
+            Err(err) => return Err(err),
+        }
     }
 
     sink.report(total, Some(total), "done");
@@ -188,14 +208,24 @@ fn unpack_whdload(archive: &Path, target: &Path) -> CoreResult<u64> {
         };
 
         // Anything `analyse` marked `outside` the pack is left out of the
-        // copy in **both** shapes, from the same field, rather than the
-        // wrapped case excluding it by directory boundary alone (incidental)
-        // and the wrapper-less case having no signal for it at all. When
-        // there is no wrapper, `layout.outside` is always empty by that
-        // function's own definition — the whole archive root is the pack —
-        // so this changes nothing observable there; what it removes is two
-        // different mechanisms doing what should be one rule: the pack is
-        // what the user asked for, nothing else rides along.
+        // copy in **both** shapes, from the same field.
+        //
+        // **This is belt and braces, and no test covers it, because nothing
+        // can reach it today** (ART-109). Follow both branches: when there is
+        // a wrapper, `layout.outside` holds only paths that are not under
+        // `layout.root`, and the copy below walks `drawer` — which *is*
+        // `layout.root` — so it never meets them. When there is no wrapper,
+        // `is_inside` returns true for every path, so `layout.outside` is
+        // empty by construction. Either way the list is a no-op.
+        //
+        // It stays because the rule it states is the right one and the
+        // reachability is `analyse`'s to change, not this function's: the day
+        // that function marks a file *inside* the pack as outside it — a
+        // second slave's stray sibling, say — this is what stops it riding
+        // along, and a copy that relied on the directory boundary alone would
+        // not. What must not happen is counting the test below as proof of
+        // it; that test documents that such files do not land, which is true
+        // for the reasons above and not because of this list.
         let mut skip_from_drawer: Vec<PathBuf> = layout
             .outside
             .iter()
@@ -206,11 +236,22 @@ fn unpack_whdload(archive: &Path, target: &Path) -> CoreResult<u64> {
         }
         let mut bytes = copy_tree_excluding(&drawer, target, &skip_from_drawer, 0)?;
 
-        // §82: beside the drawer, never inside it.
+        // §82: beside the drawer, never inside it — and **named after the
+        // drawer that landed**, not after the pack name the archive carried.
+        //
+        // Those were two answers before ART-109: the drawer lands at the
+        // destination's leaf and the icon used to land at
+        // `layout.icon_name()`, from a second `analyse` over the extracted
+        // tree. They agree whenever nobody retargets the row — and the screen
+        // exists to let people retarget rows, at which point the drawer would
+        // be `Games/TurricanII` and the icon `Games/Turrican.info`: an icon
+        // attached to no drawer, which is silent, and which is precisely what
+        // §82 exists to prevent. `core::layout::icon_destination` derives the
+        // plan's side of the same rule from the same field.
         if let Some(icon) = &layout.icon {
             let from = safe_join_in_scratch(&scratch, icon)?;
-            if let Some(parent) = target.parent() {
-                let to = parent.join(layout.icon_name());
+            if let (Some(parent), Some(leaf)) = (target.parent(), target.file_name()) {
+                let to = parent.join(format!("{}.info", leaf.to_string_lossy()));
                 if !to.exists() {
                     bytes += std::fs::copy(&from, &to)?;
                 }
@@ -379,6 +420,7 @@ mod tests {
                 // if the applier only forwarded `bytes`, this test would still
                 // pass at 999, so it must measure the real copy instead.
                 bytes: 999,
+                writes_icon: false,
             }],
         );
 
@@ -421,6 +463,7 @@ mod tests {
                 destination: "Games/Zool".into(),
                 placement: Placement::CopyTree,
                 bytes: 10,
+                writes_icon: false,
             }],
         );
 
@@ -467,6 +510,7 @@ mod tests {
                 destination: "Games/Deep".into(),
                 placement: Placement::CopyTree,
                 bytes: 0,
+                writes_icon: false,
             }],
         );
 
@@ -499,6 +543,7 @@ mod tests {
                 destination: "Floppies/Disk.adf".into(),
                 placement: Placement::CopyFile,
                 bytes: 9,
+                writes_icon: false,
             }],
         );
 
@@ -532,6 +577,7 @@ mod tests {
                     destination: bad.into(),
                     placement: Placement::CopyFile,
                     bytes: 1,
+                    writes_icon: false,
                 }],
             );
             assert!(apply(&plan, &NoProgress).is_err(), "{bad} was allowed");
@@ -571,6 +617,7 @@ mod tests {
                     destination: "Floppies/A.adf".into(),
                     placement: Placement::CopyFile,
                     bytes: 5,
+                    writes_icon: false,
                 },
                 LayoutItem {
                     source: dir.join("B.adf"),
@@ -578,6 +625,7 @@ mod tests {
                     destination: "Floppies/B.adf".into(),
                     placement: Placement::CopyFile,
                     bytes: 6,
+                    writes_icon: false,
                 },
             ],
         )
@@ -725,6 +773,7 @@ mod tests {
                 destination: "Games/Turrican".into(),
                 placement: Placement::UnpackWhdload,
                 bytes: 14,
+                writes_icon: false,
             }],
         );
 
@@ -777,6 +826,7 @@ mod tests {
                 destination: "Games/Turrican".into(),
                 placement: Placement::UnpackWhdload,
                 bytes: 14,
+                writes_icon: false,
             }],
         );
 
@@ -836,6 +886,7 @@ mod tests {
                 destination: "Games/Plain".into(),
                 placement: Placement::UnpackWhdload,
                 bytes: 5,
+                writes_icon: false,
             }],
         );
 
@@ -877,6 +928,7 @@ mod tests {
                 destination: "Games/Evil".into(),
                 placement: Placement::UnpackWhdload,
                 bytes: 2,
+                writes_icon: false,
             }],
         );
 
@@ -923,6 +975,7 @@ mod tests {
                 destination: "Games/Turrican".into(),
                 placement: Placement::UnpackWhdload,
                 bytes: 2,
+                writes_icon: false,
             }],
         );
 
@@ -974,6 +1027,7 @@ mod tests {
                 destination: "Games/Game".into(),
                 placement: Placement::UnpackWhdload,
                 bytes: 11,
+                writes_icon: false,
             }],
         );
 
@@ -1020,6 +1074,7 @@ mod tests {
                 destination: "Games/Big".into(),
                 placement: Placement::UnpackWhdload,
                 bytes: 0,
+                writes_icon: false,
             }],
         );
 
@@ -1037,10 +1092,15 @@ mod tests {
 
     /// **The wrapped and wrapper-less shapes drop the same kind of file the
     /// same way.** A file `analyse` marks `outside` the pack never lands
-    /// anywhere in the staging tree — not inside the drawer, not beside it —
-    /// because both branches now exclude from the one field rather than the
-    /// wrapped case relying on a directory boundary that happens to also
-    /// exclude it.
+    /// anywhere in the staging tree — not inside the drawer, not beside it.
+    ///
+    /// **What this does not prove** (ART-109): it does not cover
+    /// `skip_from_drawer`'s `outside` entries. It passes with that exclusion
+    /// removed, because the wrapped copy walks the drawer directory and these
+    /// files are by definition not in it. The exclusion's own reachability is
+    /// argued at its call site rather than tested here, and this test is not
+    /// evidence for it. What it does pin is real and worth pinning: a readme
+    /// beside the pack lands nowhere at all.
     #[test]
     fn a_file_outside_the_pack_is_dropped_rather_than_landing_in_the_drawer() {
         let dir = scratch("outside");
@@ -1072,6 +1132,7 @@ mod tests {
                 destination: "Games/Turrican".into(),
                 placement: Placement::UnpackWhdload,
                 bytes: 25,
+                writes_icon: false,
             }],
         );
 
@@ -1086,6 +1147,195 @@ mod tests {
             !games.join("Turrican.readme").exists(),
             "the pack is what the user asked for — left out, not placed beside it either"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- ART-109: a real `.lha`, and the icon's one name ----
+
+    /// A `.lha` holding `Turrican/Turrican.slave`, a data file, and
+    /// `Turrican.info` beside the drawer — the shape a real WHDLoad pack ships
+    /// in.
+    ///
+    /// Every WHDLoad fixture in this module used to be a ZIP built at runtime,
+    /// which is the "fixture more helpful than reality" shape this project has
+    /// been bitten by three times: real packs are LHA, and the drawer's name is
+    /// derived **twice from two sources** — `plan` reads the archive's entry
+    /// names through `archive::open`, `apply` re-runs `analyse` over the
+    /// extracted tree. Those two must agree for every backend, and only a
+    /// fixture in the real format asks the question of the real backend.
+    fn whdload_lha(path: &Path) {
+        std::fs::write(
+            path,
+            crate::core::lha::tests::make_lha_with(&[
+                ("Turrican/Turrican.slave", &b"slave"[..]),
+                ("Turrican/data/level1", &b"level"[..]),
+                ("Turrican.info", &b"icon"[..]),
+            ]),
+        )
+        .unwrap();
+    }
+
+    /// ART-109. One `.lha` driven end to end through `plan` → `apply`: the
+    /// name the entry list gave and the name the extracted tree gives have to
+    /// be the same name, or the icon lands under something that is not the
+    /// drawer and §82 fails silently.
+    #[test]
+    fn an_lha_whdload_pack_plans_and_applies_under_one_name() {
+        use crate::core::layout::{plan, policy::Policy};
+
+        let dir = scratch("lha-plan-apply");
+        let root = dir.join("staging");
+        let archive = dir.join("Turrican.lha");
+        whdload_lha(&archive);
+
+        let made = plan(&root, std::slice::from_ref(&archive), &Policy::default()).unwrap();
+        assert_eq!(made.items.len(), 1, "{made:?}");
+        assert_eq!(made.items[0].placement, Placement::UnpackWhdload);
+        assert_eq!(
+            made.items[0].destination, "Games/Turrican",
+            "the name from the entry list"
+        );
+        assert!(
+            made.items[0].writes_icon,
+            "this pack ships an icon, so the plan has to know a second file lands"
+        );
+
+        apply(&made, &NoProgress).unwrap();
+
+        let games = root.join("Games");
+        assert_eq!(
+            std::fs::read(games.join("Turrican").join("Turrican.slave")).unwrap(),
+            b"slave",
+            "the drawer landed under the name the plan proposed"
+        );
+        assert!(games.join("Turrican").join("data").join("level1").exists());
+        assert_eq!(
+            std::fs::read(games.join("Turrican.info")).unwrap(),
+            b"icon",
+            "§82: the icon beside the drawer, under the drawer's own name"
+        );
+        assert!(
+            !games.join("Turrican").join("Turrican.info").exists(),
+            "never inside it"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The divergence ART-109 warned about, made to happen: the screen exists
+    /// to let people retarget a row, and the icon has to follow the drawer.
+    ///
+    /// Before the fix the drawer came from the destination's leaf and the icon
+    /// from `PackLayout::icon_name()` — the pack's own name — so retargeting
+    /// `Games/Turrican` to `Games/TurricanII` left `Games/Turrican.info`
+    /// sitting beside a drawer of a different name, which is an icon Workbench
+    /// attaches to nothing. Both now come from the destination.
+    #[test]
+    fn a_retargeted_whdload_row_takes_its_icon_with_it() {
+        use crate::core::layout::{plan, policy::Policy};
+
+        let dir = scratch("lha-retarget");
+        let root = dir.join("staging");
+        let archive = dir.join("Turrican.lha");
+        whdload_lha(&archive);
+
+        let mut made = plan(&root, std::slice::from_ref(&archive), &Policy::default()).unwrap();
+        // Exactly what the retarget box on the layout screen does.
+        made.items[0].destination = "Games/TurricanII".into();
+
+        apply(&made, &NoProgress).unwrap();
+
+        let games = root.join("Games");
+        assert!(games.join("TurricanII").join("Turrican.slave").exists());
+        assert!(
+            games.join("TurricanII.info").exists(),
+            "the icon is named after the drawer that landed"
+        );
+        assert!(
+            !games.join("Turrican.info").exists(),
+            "and not after the pack name the archive happened to carry"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ART-110. A run that fails on its fifth item has already put four on
+    /// disk, and `place` refuses to overwrite, so they stay. What was missing
+    /// was the error saying so — the residue used to come back as a bare
+    /// refusal and turn up in the next preview as ordinary collisions, with
+    /// nothing marking it as the wreckage of a failed run.
+    ///
+    /// Cancelling has reported its count since ART-058; failing now matches.
+    #[test]
+    fn a_run_that_fails_partway_says_how_much_of_it_landed() {
+        let dir = scratch("partial");
+        let root = dir.join("staging");
+        let good = dir.join("Good.adf");
+        let missing = dir.join("Missing.adf");
+        std::fs::write(&good, b"disk bytes").unwrap();
+        // Not created: `place` reaches `std::fs::copy` and fails on it.
+
+        let plan = plan_of(
+            &root,
+            vec![
+                LayoutItem {
+                    source: good,
+                    kind: ItemKind::FloppyImage,
+                    destination: "Floppies/Good.adf".into(),
+                    placement: Placement::CopyFile,
+                    bytes: 10,
+                    writes_icon: false,
+                },
+                LayoutItem {
+                    source: missing,
+                    kind: ItemKind::FloppyImage,
+                    destination: "Floppies/Missing.adf".into(),
+                    placement: Placement::CopyFile,
+                    bytes: 10,
+                    writes_icon: false,
+                },
+            ],
+        );
+
+        let err = apply(&plan, &NoProgress).unwrap_err();
+        assert_eq!(err.code(), "ART-APPLY-PARTIAL", "{err}");
+        match &err {
+            CoreError::PartiallyApplied { placed, item, .. } => {
+                assert_eq!(*placed, 1);
+                assert_eq!(item, "Floppies/Missing.adf");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(
+            root.join("Floppies").join("Good.adf").exists(),
+            "the item that landed is still there — which is exactly why the error has to              mention it"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other side: a run that fails on its **first** item placed nothing,
+    /// so it must report the plain reason rather than dressing it up as a
+    /// partial apply the user has to go and clean up.
+    #[test]
+    fn a_run_that_fails_on_its_first_item_reports_the_plain_reason() {
+        let dir = scratch("partial-first");
+        let root = dir.join("staging");
+        let plan = plan_of(
+            &root,
+            vec![LayoutItem {
+                source: dir.join("Missing.adf"),
+                kind: ItemKind::FloppyImage,
+                destination: "Floppies/Missing.adf".into(),
+                placement: Placement::CopyFile,
+                bytes: 10,
+                writes_icon: false,
+            }],
+        );
+
+        let err = apply(&plan, &NoProgress).unwrap_err();
+        assert_ne!(err.code(), "ART-APPLY-PARTIAL", "{err}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
