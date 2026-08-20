@@ -246,12 +246,22 @@ pub struct ComponentSummary {
     pub required: bool,
     pub available: bool,
     /// [`Condition::RomOlderThan`]'s `major`, flattened — `None` for an
-    /// unconditional component. Flattened rather than mirrored because the
-    /// screen's whole conditional-reason vocabulary is written in terms of a
-    /// major number; the `match` below is exhaustive, so a second `Condition`
+    /// unconditional component **and for one conditioned the other way**.
+    /// Flattened rather than mirrored because the screen's whole
+    /// conditional-reason vocabulary ("switches on below Kickstart V47",
+    /// "your ROM is newer, so it stays off") is written in terms of this one
+    /// variant; the `match` below is exhaustive, so a further `Condition`
     /// variant is a compile error here and cannot silently arrive on screen
-    /// as "unconditional".
+    /// wearing a sentence that means the opposite.
     pub condition_major: Option<u16>,
+    /// [`Condition::RomAtLeast`]'s `major` (ART-157) — the Kickstart floor
+    /// this component's own files need, `None` when it declares none.
+    ///
+    /// A separate field rather than a second meaning for `condition_major`,
+    /// for the reason that field's own comment gives: the two numbers read
+    /// alike and say opposite things, and the screen has to be able to tell
+    /// them apart to say either out loud.
+    pub requires_rom_major: Option<u16>,
     pub exclusive_group: Option<String>,
 }
 
@@ -263,8 +273,13 @@ impl From<&crate::core::osinstall::Component> for ComponentSummary {
             media: component.media.clone(),
             required: component.required,
             available: component.available,
-            condition_major: component.condition.map(|condition| match condition {
-                Condition::RomOlderThan { major } => major,
+            condition_major: component.condition.and_then(|condition| match condition {
+                Condition::RomOlderThan { major } => Some(major),
+                Condition::RomAtLeast { .. } => None,
+            }),
+            requires_rom_major: component.condition.and_then(|condition| match condition {
+                Condition::RomAtLeast { major } => Some(major),
+                Condition::RomOlderThan { .. } => None,
             }),
             exclusive_group: component.exclusive_group.clone(),
         }
@@ -2148,7 +2163,16 @@ mod tests {
         /// `ComponentSummary` is the checklist on screen, so a key renamed
         /// on one side only would empty a row rather than fail a build —
         /// `src/lib/osinstall.ts`'s `ComponentDef` declares exactly these
-        /// six.
+        /// seven.
+        ///
+        /// **The two `major` fields are pinned against both shipped
+        /// recipes, and against each other (ART-157).** They carry numbers
+        /// that read alike and mean opposite things — "switches on below
+        /// V47" and "needs at least V40" — so a projection that put a
+        /// minimum into `conditionMajor` would render the screen's
+        /// `rom-older-than` vocabulary over a `rom-at-least` fact and say
+        /// the reverse of the truth. Each condition kind must fill exactly
+        /// one of the two and leave the other null.
         #[test]
         fn component_summary_serializes_with_the_keys_the_checklist_reads() {
             let recipe = recipe::by_release("AmigaOS 3.2").unwrap();
@@ -2166,6 +2190,7 @@ mod tests {
                     "required",
                     "available",
                     "conditionMajor",
+                    "requiresRomMajor",
                     "exclusiveGroup",
                 ],
             );
@@ -2174,6 +2199,27 @@ mod tests {
             // nulls.
             assert_eq!(value["conditionMajor"], 47);
             assert_eq!(value["exclusiveGroup"], "modules");
+            assert!(
+                value["requiresRomMajor"].is_null(),
+                "a maximum must never arrive on screen as a minimum"
+            );
+
+            // The other kind, off the other shipped recipe.
+            let os39 = recipe::by_release("AmigaOS 3.9").unwrap();
+            let base = os39
+                .components
+                .iter()
+                .find(|c| c.id == "workbench-base")
+                .expect("the shipped 3.9 recipe carries the Kickstart floor");
+            let value = serde_json::to_value(ComponentSummary::from(base)).unwrap();
+            assert_eq!(
+                value["requiresRomMajor"], 40,
+                "AmigaOS 3.9's own installer: 'You have to install Kickstart 3.1 ROMs'"
+            );
+            assert!(
+                value["conditionMajor"].is_null(),
+                "a minimum must never arrive on screen as a maximum"
+            );
         }
 
         /// The regression this whole module exists to prevent: without

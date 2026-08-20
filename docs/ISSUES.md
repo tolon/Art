@@ -275,34 +275,6 @@ more than the default, and no wasted headroom for one that needs less. Worth
 doing once more than one real title's memory failure has been measured, not
 before.
 
-**ART-157** 🟡 **The recipe format cannot state a Kickstart *minimum*, only a
-maximum, so AmigaOS 3.9's real requirement (V40 or newer) goes unstated and
-unchecked** — *found 2026-08-19, Task 3, answering the plan's own instruction
-to report this rather than invent an encoding for it; recorded here per the
-plan's ruling at the time (written when this documentation task was numbered
-differently)*
-`src-tauri/src/core/osinstall/mod.rs:77-85` (`Condition`) ·
-
-`Condition` has exactly one variant, `RomOlderThan { major: u16 }` — "switch
-this component on when the paired Kickstart's own stated major is *below*
-this," which the 3.2 recipe uses to add `modules-a1200` back for a pre-V47
-ROM. AmigaOS 3.9 needs the opposite fact stated — "this release requires *at
-least* a 3.1/V40 ROM" — and there is no condition kind, recipe field, or
-`PairedRom` field that reads a stated minimum today. `workbench-base`, 3.9's
-only component, carries no `condition` at all, so G9's pairing check has
-nothing to enforce for this release: a plan built against it will never raise
-`RomUnknown` or any Kickstart-related refusal for this reason, which is
-`NotChecked`, not a pass.
-
-Not fixed, and nothing was repurposed to approximate it — asserting a false
-minimum through `rom-older-than` would be worse than stating none. The honest
-fix is a new condition kind (`Condition::RomAtLeast { major: u16 }`, or a
-release-wide `minimum_rom_major` outside any single component's on/off
-switch, since this is a fact about the release rather than one component) plus
-the G9 pairing wiring to enforce it — engine code touching `core/osinstall/mod.rs`
-(`Condition`, `condition_holds`), `plan.rs` (`rom_requirement`), and the wire
-types (`PairedRom`, `src/lib/osinstall.ts`), its own change, not built here.
-
 **ART-159** 🟠 **Two of spec §5's three predicted hazards for AmigaOS 3.9 —
 `SetPatch`/the boot sequence, and the three language-variant trees — went
 untouched by every task on the branch and were recorded nowhere** — *found
@@ -874,6 +846,102 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-157** 🟡 **The recipe format cannot state a Kickstart *minimum*, only a
+maximum, so AmigaOS 3.9's real requirement (V40 or newer) goes unstated and
+unchecked** — *found 2026-08-19, Task 3, answering the plan's own instruction
+to report this rather than invent an encoding for it; recorded here per the
+plan's ruling at the time (written when this documentation task was numbered
+differently)*
+`src-tauri/src/core/osinstall/mod.rs:77-85` (`Condition`) ·
+
+`Condition` has exactly one variant, `RomOlderThan { major: u16 }` — "switch
+this component on when the paired Kickstart's own stated major is *below*
+this," which the 3.2 recipe uses to add `modules-a1200` back for a pre-V47
+ROM. AmigaOS 3.9 needs the opposite fact stated — "this release requires *at
+least* a 3.1/V40 ROM" — and there is no condition kind, recipe field, or
+`PairedRom` field that reads a stated minimum today. `workbench-base`, 3.9's
+only component, carries no `condition` at all, so G9's pairing check has
+nothing to enforce for this release: a plan built against it will never raise
+`RomUnknown` or any Kickstart-related refusal for this reason, which is
+`NotChecked`, not a pass.
+
+Not fixed, and nothing was repurposed to approximate it — asserting a false
+minimum through `rom-older-than` would be worse than stating none. The honest
+fix is a new condition kind (`Condition::RomAtLeast { major: u16 }`, or a
+release-wide `minimum_rom_major` outside any single component's on/off
+switch, since this is a fact about the release rather than one component) plus
+the G9 pairing wiring to enforce it — engine code touching `core/osinstall/mod.rs`
+(`Condition`, `condition_holds`), `plan.rs` (`rom_requirement`), and the wire
+types (`PairedRom`, `src/lib/osinstall.ts`), its own change, not built here.
+
+**Fixed 2026-08-20 on `debt-wave-b1`**, as the entry itself scoped it: the new
+condition kind plus the G9 wiring, and nothing repurposed to approximate it.
+
+**The number was read off the artefact, not recalled.** AmigaOS 3.9's own
+Installer script — `OS-Version3.9/OS3.9Install` on the owner's `AmigaOS39.iso`,
+`$VER: Install 45.0 (24.11.2000)`, extracted with 7-Zip 2026-08-20 — carries
+the refusal string it exits with:
+
+> `You have to install Kickstart 3.1 ROMs before installing Workbench 3.9.`
+
+and, in the German strings beside it, `Sie müssen Kickstart 3.1 und min.
+Workbench 3.0 zur Nutzung von Workbench 3.9 vorinstallieren.` Kickstart 3.1
+is V40. The manual on the same disc (`installation/book-main1.html`) states
+only the *hardware* floor — 68020, 6 MB Chip and 4 MB Fast on pre-A1200 models
+— and names no Kickstart version at all, which is why the installer and not
+the manual is the citation in the recipe.
+
+`Condition::RomAtLeast { major }` is the mirror of `RomOlderThan`, evaluated in
+the same `condition_holds` and by the same rule: the ROM's own header
+(`core::rom::stated_version`), never `KNOWN_ROMS` (ART-104).
+
+**Where the two kinds differ is `rom_requirement`, and that is the whole
+mechanism.** They contribute from opposite sides of the switch and mean the
+same thing about the finished tree:
+
+- `RomOlderThan` contributes when its component is **off** — the fallback
+  (`LIBS:Modules`) is absent, so the tree needs the ROM the condition would
+  have fired for.
+- `RomAtLeast` contributes when its component is **on** — the component's own
+  files are what need the newer ROM.
+
+Declared on 3.9's `workbench-base`, which is `required`, so it is a *statement*
+and not a switch: a `Condition` can only ever turn a component on, and this one
+is on regardless. What it changes is what the tree records —
+`PairedRom::requires_major`, which `commands::preload::rom_pairing_for` maps to
+`core::rom::pairing::TreeRom` and G9 puts to the card's own Kickstart before
+the destructive step.
+
+**One thing was found while wiring it and fixed in the same commit.**
+`resolve_components_on` evaluated a `required` component's condition, which
+could push `RefusalReason::RomUnknown` and refuse the whole plan. For a
+component that is on unconditionally the evaluation can change nothing — the
+`Ok(false)` arm is a no-op — so without the skip, building a 3.9 tree would
+have started demanding a paired ROM purely because the recipe now says out
+loud what the release needs to *boot*. The requirement is still recorded
+(`rom_requirement` reads the recipe, not the resolved set) and still checked,
+where it can be acted on. Building the tree is deliberately not refused: a 3.9
+tree is assembled on the host and the Kickstart it will meet is the card's.
+
+**On screen**, `ComponentSummary` grew `requires_rom_major` beside
+`condition_major` rather than reusing it. The two numbers read alike and say
+opposite things, and `conditionalReason`'s four-branch vocabulary is written
+entirely for `rom-older-than` — projecting a floor through it would have told
+the user the reverse of the truth. One new key in both catalogues,
+`osinstall.components.reason.romAtLeast`, renders it on the row.
+
+**Tests:** `a_rom_at_least_condition_holds_from_its_own_major_upwards` (both
+edges of the V40 boundary), `each_condition_kind_contributes_its_requirement_from_its_own_side`
+(over both shipped recipes, both directions),
+`a_39_tree_reports_unsuitable_against_a_card_carrying_a_pre_v40_rom` (the whole
+chain — recipe → `rom_requirement` → `TreeRom` → `pairing::compare` — which is
+what makes this a minimum something checks),
+`component_summary_serializes_with_the_keys_the_checklist_reads` (widened: each
+kind fills exactly one field and nulls the other) and, on the frontend,
+`projects each condition kind into its own field and never the other`. All five
+were run with the recipe's declaration removed; all five fail without it.
+
 
 **ART-167** 🟠 **Eight of the owner's archives claim the top-level directory
 `LocaleUpdate` and two claim `BoingBag3.9-2`, so `scan::package_for` correctly

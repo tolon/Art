@@ -152,6 +152,7 @@ const COMPONENTS_32: ComponentDef[] = [
     required: true,
     available: true,
     conditionMajor: null,
+    requiresRomMajor: null,
     exclusiveGroup: null,
   },
   {
@@ -160,6 +161,7 @@ const COMPONENTS_32: ComponentDef[] = [
     required: true,
     available: true,
     conditionMajor: null,
+    requiresRomMajor: null,
     exclusiveGroup: null,
   },
   {
@@ -168,6 +170,7 @@ const COMPONENTS_32: ComponentDef[] = [
     required: false,
     available: true,
     conditionMajor: null,
+    requiresRomMajor: null,
     exclusiveGroup: null,
   },
   {
@@ -176,6 +179,7 @@ const COMPONENTS_32: ComponentDef[] = [
     required: false,
     available: true,
     conditionMajor: 47,
+    requiresRomMajor: null,
     exclusiveGroup: "modules",
   },
 ];
@@ -187,6 +191,7 @@ const COMPONENTS_39: ComponentDef[] = [
     required: true,
     available: true,
     conditionMajor: null,
+    requiresRomMajor: null,
     exclusiveGroup: null,
   },
 ];

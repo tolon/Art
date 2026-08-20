@@ -163,6 +163,7 @@ pub fn condition_holds(
     let rom = rom.ok_or(RefusalReason::RomUnknown)?;
     match condition {
         Condition::RomOlderThan { major } => Ok(rom.major < *major),
+        Condition::RomAtLeast { major } => Ok(rom.major >= *major),
     }
 }
 
@@ -426,6 +427,26 @@ fn resolve_components_on(
             continue;
         }
         let mut is_on = component.required || chosen.contains(component.id.as_str());
+        // **A `required` component's condition is not evaluated here, and
+        // that is a decision rather than an oversight (ART-157).** A
+        // `Condition` can only turn a component *on* — the `Ok(false)` arm
+        // below does nothing — so for a component that is already on
+        // unconditionally the evaluation cannot change the outcome. What it
+        // *could* do is push `RefusalReason::RomUnknown` and refuse the
+        // whole plan over a ROM whose answer was never going to matter.
+        //
+        // That became reachable the moment AmigaOS 3.9's `workbench-base`
+        // grew a `RomAtLeast` stating the release's Kickstart floor: without
+        // this skip, building a 3.9 tree would have started requiring a
+        // paired ROM that nothing in the build actually needs, purely
+        // because the recipe now says out loud what the release needs to
+        // *boot*. The requirement is still recorded — `rom_requirement`
+        // reads the recipe directly, not this resolved set — and still
+        // checked, by G9, against the card the tree is written to.
+        if component.required {
+            on.push(component.id.clone());
+            continue;
+        }
         if let Some(condition) = &component.condition {
             match condition_holds(condition, rom_facts) {
                 Ok(true) => is_on = true,
@@ -1001,21 +1022,32 @@ pub(super) fn plan_over(
 
 /// What a tree with these components needs of a future ROM.
 ///
-/// A component with a `RomOlderThan` condition that is **off** is one whose
-/// modules are absent, so the tree needs a ROM the condition would not have
-/// fired for: at least `major`. A component that is *on* brought its modules
-/// with it and needs nothing.
+/// The two condition kinds contribute from **opposite sides of the switch**,
+/// and both mean the same thing about the finished tree — "this needs a
+/// Kickstart of at least `major`":
+///
+/// - [`Condition::RomOlderThan`] contributes when the component is **off**.
+///   The component is the fallback (`modules-a1200` carries `LIBS:Modules`),
+///   so a tree without it needs the ROM the condition would not have fired
+///   for. A tree that *has* it brought its own modules and needs nothing.
+/// - [`Condition::RomAtLeast`] contributes when the component is **on**
+///   (ART-157). The component's own files are what need the newer ROM, so a
+///   tree that carries them carries the requirement; a tree that left them
+///   out does not.
+///
+/// The maximum across every contributor is the tree's floor.
 fn rom_requirement(recipe: &Recipe, components_on: &[String]) -> Option<u16> {
     recipe
         .components
         .iter()
         .filter_map(|component| {
-            component
-                .condition
-                .map(|Condition::RomOlderThan { major }| (component.id.as_str(), major))
+            let is_on = components_on.iter().any(|on| on == &component.id);
+            match component.condition? {
+                Condition::RomOlderThan { major } if !is_on => Some(major),
+                Condition::RomAtLeast { major } if is_on => Some(major),
+                _ => None,
+            }
         })
-        .filter(|(id, _)| !components_on.iter().any(|on| on == id))
-        .map(|(_, major)| major)
         .max()
 }
 
@@ -1063,6 +1095,118 @@ mod condition_tests {
         let facts = fake_rom_facts(47);
         let holds = condition_holds(&Condition::RomOlderThan { major: 47 }, Some(&facts));
         assert_eq!(holds, Ok(false));
+    }
+
+    /// **ART-157.** The mirror of the two above: `RomAtLeast` holds for a
+    /// ROM at or above its major and not below it.
+    ///
+    /// Both edges of the boundary are asserted, because an off-by-one here
+    /// would be invisible — 40 is the number AmigaOS 3.9's own installer
+    /// names ("You have to install Kickstart 3.1 ROMs before installing
+    /// Workbench 3.9", `OS-Version3.9/OS3.9Install`), so a V40 ROM must
+    /// satisfy it and a V39 must not.
+    #[test]
+    fn a_rom_at_least_condition_holds_from_its_own_major_upwards() {
+        for (major, expected) in [(37u16, false), (39, false), (40, true), (47, true)] {
+            let facts = fake_rom_facts(major);
+            assert_eq!(
+                condition_holds(&Condition::RomAtLeast { major: 40 }, Some(&facts)),
+                Ok(expected),
+                "a V{major} ROM against a V40 floor"
+            );
+        }
+    }
+
+    /// The two condition kinds contribute to `rom_requirement` from
+    /// opposite sides of the switch, and this asserts both against the
+    /// **shipped** recipes rather than a synthetic pair — the number that
+    /// matters is the one a real tree records.
+    ///
+    /// Vacuity guard built in: the 3.2 half would pass unchanged if
+    /// `RomAtLeast` had never been added, so the 3.9 half is what the issue
+    /// is about, and the "off" case for 3.9 pins that the contribution
+    /// really is conditional on the component being on rather than a
+    /// constant.
+    #[test]
+    fn each_condition_kind_contributes_its_requirement_from_its_own_side() {
+        let os32 = super::super::recipe::by_release("AmigaOS 3.2").unwrap();
+        // `modules-a1200` off: the tree lacks LIBS:Modules, so it needs the
+        // ROM the condition would have fired for.
+        assert_eq!(
+            rom_requirement(&os32, &["workbench-base".to_string()]),
+            Some(47)
+        );
+        // On: it brought its own modules and needs nothing.
+        assert_eq!(
+            rom_requirement(
+                &os32,
+                &["workbench-base".to_string(), "modules-a1200".to_string()]
+            ),
+            None
+        );
+
+        let os39 = super::super::recipe::by_release("AmigaOS 3.9").unwrap();
+        // `workbench-base` on: its files are what need the newer ROM.
+        assert_eq!(
+            rom_requirement(&os39, &["workbench-base".to_string()]),
+            Some(40),
+            "AmigaOS 3.9 states Kickstart 3.1 (V40) as its own floor"
+        );
+        // Off (not a real selection — `workbench-base` is `required` — but
+        // the direction has to be the opposite one to its sibling's, or the
+        // two kinds are not actually distinguished).
+        assert_eq!(rom_requirement(&os39, &[]), None);
+    }
+
+    /// **A minimum nothing checks is the same as no minimum**, so this walks
+    /// the whole chain the recipe's new declaration exists to feed: shipped
+    /// recipe → `rom_requirement` → the manifest's `PairedRom` → the
+    /// `TreeRom` `commands::preload::rom_pairing_for` maps it to → G9's
+    /// `core::rom::pairing::compare` against a card's own Kickstart.
+    ///
+    /// Before ART-157 the first step answered `None` for every 3.9 tree, so
+    /// the last one answered `Suitable` for a card carrying a V37 ROM.
+    #[test]
+    fn a_39_tree_reports_unsuitable_against_a_card_carrying_a_pre_v40_rom() {
+        use crate::core::rom::pairing::{compare, CardRom, Pairing, TreeRom};
+
+        let os39 = super::super::recipe::by_release("AmigaOS 3.9").unwrap();
+        let requires_major = rom_requirement(&os39, &["workbench-base".to_string()]);
+        assert_eq!(requires_major, Some(40), "the recipe states the floor");
+
+        // The same mapping `commands::preload::rom_pairing_for` performs.
+        let tree = TreeRom {
+            sha256: "a".repeat(64),
+            requires_major,
+        };
+
+        let old_card = CardRom {
+            name: "kick.rom".to_string(),
+            sha256: "b".repeat(64),
+            stated_major: Some(37),
+        };
+        assert_eq!(
+            compare(Some(&tree), Some(&old_card)),
+            Pairing::Unsuitable {
+                needs: 40,
+                found: Some(37),
+                rom: "kick.rom".to_string(),
+            },
+            "a 3.9 tree on a Kickstart 2.0 card must not read as fine"
+        );
+
+        let good_card = CardRom {
+            name: "kick.rom".to_string(),
+            sha256: "b".repeat(64),
+            stated_major: Some(40),
+        };
+        assert_eq!(
+            compare(Some(&tree), Some(&good_card)),
+            Pairing::Suitable {
+                rom: "kick.rom".to_string()
+            },
+            "and a Kickstart 3.1 card must not be refused"
+        );
     }
 
     /// Guessing costs 800 KB, or a system that quits at boot. Neither is ART's

@@ -2109,6 +2109,7 @@
       "reason": {
         "required": "Always on — a working system needs it.",
         "romNeeded": "Choose the paired Kickstart to know whether this switches on by itself.",
+        "romAtLeast": "Needs Kickstart V{{major}} or newer. ART records this with the tree and checks it against the card's own Kickstart before writing.",
         "conditionOn": "On, because the paired Kickstart is {{rom}} and this release's Startup-Sequence quits on anything below V{{major}}.",
         "conditionOff": "Off — the paired Kickstart is {{rom}}, at or above V{{major}}, so this release's own Startup-Sequence does not need it. You can still switch it on yourself.",
         "conditionOverridden": "Off — you turned this off yourself. The paired Kickstart is below V{{major}}: without these files this release's own Startup-Sequence quits and the system will not boot."

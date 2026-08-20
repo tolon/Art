@@ -2109,6 +2109,7 @@
       "reason": {
         "required": "Her zaman açık — çalışan bir sistem buna ihtiyaç duyar.",
         "romNeeded": "Bunun kendiliğinden açılıp açılmayacağını bilmek için önce eşlenen Kickstart'ı seç.",
+        "romAtLeast": "Kickstart V{{major}} veya daha yenisini gerektirir. ART bunu ağaçla birlikte kaydeder ve yazmadan önce kartın kendi Kickstart'ıyla karşılaştırır.",
         "conditionOn": "Açık, çünkü eşlenen Kickstart {{rom}} ve bu sürümün Startup-Sequence'i V{{major}} altındaki her şeyde çıkış yapıyor.",
         "conditionOff": "Kapalı — eşlenen Kickstart {{rom}}, V{{major}} veya üzeri, bu yüzden sürümün kendi Startup-Sequence'i buna ihtiyaç duymuyor. Yine de kendin açabilirsin.",
         "conditionOverridden": "Kapalı — bunu sen kapattın. Eşlenen Kickstart V{{major}} altında: bu dosyalar olmadan sürümün kendi Startup-Sequence'i çıkış yapar ve sistem açılmaz."

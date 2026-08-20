@@ -812,10 +812,19 @@ export interface ComponentDef {
   required: boolean;
   available: boolean;
   /** `Condition::RomOlderThan { major }`, flattened by the command — `null`
-   *  for an unconditional component. The Rust side's `match` is exhaustive,
-   *  so a second `Condition` variant is a compile error there rather than a
-   *  silent `null` here. */
+   *  for an unconditional component **and for one conditioned the other
+   *  way**. The Rust side's `match` is exhaustive, so a further `Condition`
+   *  variant is a compile error there rather than a silent `null` here. */
   conditionMajor: number | null;
+  /** `Condition::RomAtLeast { major }` (ART-157) — the Kickstart floor this
+   *  component's own files need, `null` when it declares none.
+   *
+   *  A separate field, not a second meaning for `conditionMajor`: the two
+   *  numbers read alike and say opposite things ("switches on below V47" vs
+   *  "needs at least V40"), and `conditionalReason`'s whole vocabulary is
+   *  written for the first. Rendering a minimum through it would tell the
+   *  user the reverse of the truth. */
+  requiresRomMajor: number | null;
   exclusiveGroup: string | null;
 }
 

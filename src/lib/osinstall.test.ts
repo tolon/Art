@@ -79,7 +79,8 @@ function catalogueOf(recipe: Recipe): ComponentDef[] {
     media: c.media,
     required: c.required ?? false,
     available: c.available ?? true,
-    conditionMajor: c.condition?.major ?? null,
+    conditionMajor: c.condition?.condition === "rom-older-than" ? (c.condition.major ?? null) : null,
+    requiresRomMajor: c.condition?.condition === "rom-at-least" ? (c.condition.major ?? null) : null,
     exclusiveGroup: c.exclusive_group ?? null,
   }));
 }
@@ -102,21 +103,57 @@ describe("every shipped recipe", () => {
   });
 
   it("carries no condition the screen does not know how to explain", () => {
-    // ART-119 (#3), widened from 3.2 alone. `ComponentDef.conditionMajor`
-    // flattens one specific variant, `Condition::RomOlderThan { major }`.
-    // A future condition kind that also happened to carry a `major` would
-    // otherwise render as "below Kickstart V47" regardless of what it
-    // actually meant, and `conditionalReason`'s whole four-branch
-    // vocabulary is written in those terms.
+    // ART-119 (#3), widened from 3.2 alone, and widened again by ART-157.
+    // Each condition kind has its own field and its own sentence:
+    // `rom-older-than` -> `conditionMajor` and `conditionalReason`'s
+    // four-branch vocabulary; `rom-at-least` -> `requiresRomMajor` and
+    // `reason.romAtLeast`. A third kind that also happened to carry a
+    // `major` would otherwise be projected as one of these two and render a
+    // sentence that means something else — "below Kickstart V47" over a
+    // requirement that is a floor, or the reverse.
+    const KNOWN = ["rom-older-than", "rom-at-least"];
     const offenders: string[] = [];
     for (const recipe of recipes()) {
       for (const component of recipe.components) {
-        if (component.condition && component.condition.condition !== "rom-older-than") {
+        if (component.condition && !KNOWN.includes(component.condition.condition)) {
           offenders.push(`${recipe.release}/${component.id}: "${component.condition.condition}"`);
         }
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it("projects each condition kind into its own field and never the other", () => {
+    // ART-157's real hazard, asserted over the shipped recipes rather than
+    // a hand-typed pair: the two numbers read alike and mean opposite
+    // things, so a maximum leaking into `requiresRomMajor` would have ART
+    // record a Kickstart floor no recipe ever stated, and a minimum leaking
+    // into `conditionMajor` would put the switching vocabulary on screen
+    // over a fact that switches nothing.
+    //
+    // Both kinds are present in shipped data — 3.2's `modules-a1200` is
+    // `rom-older-than 47`, 3.9's `workbench-base` is `rom-at-least 40` —
+    // so neither half of this is vacuous.
+    const seen: string[] = [];
+    for (const recipe of recipes()) {
+      for (const def of catalogueOf(recipe)) {
+        const raw = recipe.components.find((c) => c.id === def.id)!.condition;
+        if (!raw) {
+          expect(def.conditionMajor, def.id).toBeNull();
+          expect(def.requiresRomMajor, def.id).toBeNull();
+          continue;
+        }
+        seen.push(raw.condition);
+        if (raw.condition === "rom-older-than") {
+          expect(def.conditionMajor, def.id).toBe(raw.major);
+          expect(def.requiresRomMajor, def.id).toBeNull();
+        } else {
+          expect(def.requiresRomMajor, def.id).toBe(raw.major);
+          expect(def.conditionMajor, def.id).toBeNull();
+        }
+      }
+    }
+    expect([...new Set(seen)].sort()).toEqual(["rom-at-least", "rom-older-than"]);
   });
 
   it("names each component id at most once, so a label can resolve", () => {

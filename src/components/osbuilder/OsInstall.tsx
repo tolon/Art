@@ -892,6 +892,21 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
                   </p>
                 )}
 
+                {/* ART-157. A Kickstart *minimum* is a fact about what this
+                    component's files need to run, not a switch — it never
+                    turns a row on or off, so it is rendered on its own
+                    rather than through `conditionalReason`, whose four
+                    branches all describe `rom-older-than`'s switching. Shown
+                    for every row that declares one, `required` included:
+                    AmigaOS 3.9's floor sits on `workbench-base`, which is
+                    required, and that is precisely the row a user needs to
+                    read it on. */}
+                {def.requiresRomMajor !== null && (
+                  <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+                    {t("osinstall.components.reason.romAtLeast", { major: def.requiresRomMajor })}
+                  </p>
+                )}
+
                 {reason?.kind === "rom-needed" && (
                   <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
                     {t("osinstall.components.reason.romNeeded")}

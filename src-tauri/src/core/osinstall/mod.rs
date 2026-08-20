@@ -103,6 +103,28 @@ pub enum Condition {
     /// user's licensed A1200 dump is not in `KNOWN_ROMS`, and a condition
     /// resting on that table would misfire on a ROM that is right.
     RomOlderThan { major: u16 },
+    /// The paired Kickstart's own stated major must be **at least** this
+    /// (ART-157).
+    ///
+    /// The mirror of [`Condition::RomOlderThan`], and it exists because the
+    /// recipe format could state a Kickstart *maximum* and not a minimum, so
+    /// AmigaOS 3.9's real requirement — V40 or newer — went unstated and
+    /// therefore unchecked. Approximating it through `rom-older-than` would
+    /// have asserted something false, which is why the gap was filed rather
+    /// than papered over.
+    ///
+    /// **On a `required` component this states the release's own floor, not
+    /// a switch.** A `Condition` can only ever turn a component *on*
+    /// (`plan::resolve_components_on`), so on a component that is on
+    /// regardless it changes nothing about what gets placed — what it
+    /// changes is what the finished tree *records*:
+    /// `plan::rom_requirement` reads it into `PairedRom::requires_major`,
+    /// which is what G9's `core::rom::pairing::compare` puts to the card's
+    /// own Kickstart before anything destructive runs.
+    ///
+    /// Same evidence rule as its sibling: the ROM's own header answers it
+    /// (`core::rom::stated_version`), never `KNOWN_ROMS` (ART-104).
+    RomAtLeast { major: u16 },
 }
 
 /// The Kickstart a distribution tree was planned against, and what it needs
