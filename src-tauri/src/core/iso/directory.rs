@@ -14,6 +14,7 @@
 use serde::Serialize;
 
 use super::descriptor::{decode_iso646, decode_ucs2_be, LOGICAL_SECTOR_SIZE};
+use super::susp::{self, SystemUse};
 use crate::core::error::{CoreError, CoreResult};
 
 /// Smallest legal directory record: 33 bytes of fixed fields plus at least
@@ -47,6 +48,12 @@ pub struct IsoEntry {
     /// Recording time in Unix seconds, or `None` when the disc left the
     /// field blank or filled it with something impossible.
     pub date: Option<i64>,
+    /// The AmigaDOS 32-bit protection long from the record's Amiga `AS`
+    /// System Use entry, `RWED` still inverted, or `None` when the record
+    /// carries no `AS`. See [`super::susp`] for where the layout came from.
+    pub protection: Option<u32>,
+    /// The AmigaDOS file comment from the same `AS` entry.
+    pub comment: Option<String>,
 }
 
 /// Parse every record in a directory's extent.
@@ -56,10 +63,39 @@ pub struct IsoEntry {
 /// `joliet` selects the identifier encoding and must come from the descriptor
 /// the root extent was taken from, never guessed per record.
 ///
+/// `susp_skip` is `Some(n)` when the disc's root declared an `SP` entry, `n`
+/// being the bytes to ignore at the start of every System Use Area. `None`
+/// means the disc has no System Use data and none is looked for — a plain
+/// ISO9660 disc's record padding must never be parsed as Rock Ridge.
+///
 /// `.` and `..` (identifiers `0x00` and `0x01`) are dropped: they are
 /// structure, not contents.
-pub fn parse_directory_extent(buf: &[u8], joliet: bool) -> CoreResult<Vec<IsoEntry>> {
-    let mut out: Vec<IsoEntry> = Vec::new();
+pub fn parse_directory_extent(
+    buf: &[u8],
+    joliet: bool,
+    susp_skip: Option<usize>,
+) -> CoreResult<Vec<IsoEntry>> {
+    Ok(parse_directory_extent_with_susp(buf, joliet, susp_skip)?
+        .into_iter()
+        .map(|(entry, _)| entry)
+        .collect())
+}
+
+/// The same parse, keeping each record's [`SystemUse`] beside its entry.
+///
+/// A `CE` entry says the System Use Area continues in another block, and only
+/// a caller holding the image can read one — so the parser hands its state
+/// back rather than dropping it. The state matters and not just the block
+/// number: an `NM` fragment or an `AS` comment may be left *open* at the end
+/// of the inline area, and a resumed parse has to append to it rather than
+/// start a new one. [`parse_directory_extent`] is the wrapper for the callers
+/// that have no image and no continuations to follow.
+pub fn parse_directory_extent_with_susp(
+    buf: &[u8],
+    joliet: bool,
+    susp_skip: Option<usize>,
+) -> CoreResult<Vec<(IsoEntry, SystemUse)>> {
+    let mut out: Vec<(IsoEntry, SystemUse)> = Vec::new();
 
     // Outer loop: sectors. This is what makes the parse terminate — it
     // advances by a constant whatever the records inside say.
@@ -87,7 +123,7 @@ pub fn parse_directory_extent(buf: &[u8], joliet: bool) -> CoreResult<Vec<IsoEnt
             }
 
             let record = &buf[pos..pos + len];
-            if let Some(entry) = parse_record(record, joliet)? {
+            if let Some(entry) = parse_record(record, joliet, susp_skip)? {
                 if out.len() >= MAX_ENTRIES_PER_DIRECTORY {
                     return Err(malformed(format!(
                         "a directory on this disc lists more than {MAX_ENTRIES_PER_DIRECTORY} entries"
@@ -105,8 +141,13 @@ pub fn parse_directory_extent(buf: &[u8], joliet: bool) -> CoreResult<Vec<IsoEnt
 }
 
 /// Parse one record. `None` means "this record is `.` or `..`" — skipped,
-/// not an error.
-fn parse_record(record: &[u8], joliet: bool) -> CoreResult<Option<IsoEntry>> {
+/// not an error. The [`SystemUse`] beside the entry is the parser's state,
+/// which a caller with the image resumes when it holds a `CE` continuation.
+fn parse_record(
+    record: &[u8],
+    joliet: bool,
+    susp_skip: Option<usize>,
+) -> CoreResult<Option<(IsoEntry, SystemUse)>> {
     let id_len = record[ID_LEN_OFFSET] as usize;
     // 33 fixed bytes then the identifier; the record's own length must cover
     // both. Checked with `checked_add` because both halves are file data.
@@ -131,12 +172,35 @@ fn parse_record(record: &[u8], joliet: bool) -> CoreResult<Option<IsoEntry>> {
     let date = decode_recording_date(&record[18..25]);
     let is_dir = record[25] & FLAG_DIRECTORY != 0;
 
-    let name = if joliet {
-        decode_ucs2_be(id)
-    } else {
-        decode_iso646(id)
+    let mut system_use = SystemUse::default();
+    if let Some(skip) = susp_skip {
+        susp::parse_into(system_use_area(record, id_len), skip, &mut system_use)?;
+    }
+    // Cloned, not taken: an `NM` fragment can be left open at the end of the
+    // inline area, and the caller resuming across a `CE` appends to the copy
+    // still in `system_use`. Moving it out here would give that resumed
+    // parse an empty string to append to and lose the first half of the name.
+    let rock_name = system_use.name.clone().filter(|n| !n.is_empty());
+
+    // The Rock Ridge name wins when there is one. That is the whole of
+    // ART-078's second consequence: a Unix-mastered disc with no Joliet
+    // descriptor keeps its real names only here, and read without them
+    // `MyGame.info` becomes `MYGAME.INF` and stops matching its drawer.
+    //
+    // A Rock Ridge name never carries a `;1`, so the version strip is
+    // applied to the ISO9660 identifier only — running it over an `NM` name
+    // would eat a real character from a file genuinely called `Save;1`.
+    let name = match rock_name {
+        Some(rock) => rock,
+        None => {
+            let raw = if joliet {
+                decode_ucs2_be(id)
+            } else {
+                decode_iso646(id)
+            };
+            strip_version_suffix(&raw, is_dir)
+        }
     };
-    let name = strip_version_suffix(&name, is_dir);
 
     if name.is_empty() {
         return Err(malformed(
@@ -144,13 +208,55 @@ fn parse_record(record: &[u8], joliet: bool) -> CoreResult<Option<IsoEntry>> {
         ));
     }
 
-    Ok(Some(IsoEntry {
-        name,
-        is_dir,
-        bytes,
-        extent,
-        date,
-    }))
+    Ok(Some((
+        IsoEntry {
+            name,
+            is_dir,
+            bytes,
+            extent,
+            date,
+            protection: system_use.protection,
+            comment: system_use.comment.clone().filter(|c| !c.is_empty()),
+        },
+        system_use,
+    )))
+}
+
+/// The System Use Area of a record: whatever follows the identifier.
+///
+/// ISO9660 pads the identifier to an even length, so an identifier of even
+/// length is followed by one pad byte before the area starts. Getting that
+/// off by one shifts every SUSP signature by a byte, which reads as an area
+/// full of nothing — a silent loss, not a visible error, which is why it is
+/// computed here once rather than at each call site.
+pub(super) fn system_use_area(record: &[u8], id_len: usize) -> &[u8] {
+    let mut start = 33 + id_len;
+    if id_len.is_multiple_of(2) {
+        start += 1;
+    }
+    record.get(start..).unwrap_or(&[])
+}
+
+/// Read the `SP` entry out of a directory extent's first record — the `.` of
+/// the root — and answer the skip count for the whole disc.
+///
+/// `None` means this disc carries no System Use data, so none is looked for
+/// anywhere on it. Reading the *first* record specifically is what the SUSP
+/// standard requires; a disc that put an `SP` somewhere else is a disc that
+/// did not declare SUSP.
+pub fn susp_skip_from_root(buf: &[u8]) -> Option<usize> {
+    let len = *buf.first()? as usize;
+    if len < RECORD_MIN_LEN || len > buf.len() {
+        return None;
+    }
+    let record = &buf[..len];
+    let id_len = record[ID_LEN_OFFSET] as usize;
+    if id_len != 1 || record.get(33) != Some(&0x00) {
+        return None;
+    }
+    // Unskipped on purpose: the SP entry is what *declares* the skip, so it
+    // is by definition not behind it.
+    susp::sp_skip(system_use_area(record, id_len))
 }
 
 /// Remove the `;1` a file identifier carries, and the trailing `.` that an
@@ -272,7 +378,7 @@ mod tests {
             record(&[0x01], 20, 2048, true, NO_DATE),
             record(b"README.TXT;1", 30, 11, false, NO_DATE),
         ]);
-        let entries = parse_directory_extent(&buf, false).unwrap();
+        let entries = parse_directory_extent(&buf, false, None).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "README.TXT");
     }
@@ -285,7 +391,7 @@ mod tests {
             record(b"NOVERSION", 32, 5, false, NO_DATE),
             record(b"README.;1", 33, 5, false, NO_DATE),
         ]);
-        let entries = parse_directory_extent(&buf, false).unwrap();
+        let entries = parse_directory_extent(&buf, false, None).unwrap();
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         // The directory keeps its semicolon; the files lose theirs, and the
         // trailing dot of an extension-less 8.3 name goes with it.
@@ -305,7 +411,7 @@ mod tests {
             false,
             NO_DATE,
         )]));
-        let entries = parse_directory_extent(&buf, false).unwrap();
+        let entries = parse_directory_extent(&buf, false, None).unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[1].name, "SECOND.TXT");
     }
@@ -314,7 +420,7 @@ mod tests {
     fn a_record_shorter_than_the_fixed_fields_is_malformed() {
         let mut buf = vec![0u8; LOGICAL_SECTOR_SIZE];
         buf[0] = 12;
-        let err = parse_directory_extent(&buf, false).unwrap_err();
+        let err = parse_directory_extent(&buf, false, None).unwrap_err();
         assert!(err.to_string().contains("smallest legal record"), "{err}");
     }
 
@@ -336,7 +442,7 @@ mod tests {
         let start = pos;
         buf[start..start + r.len()].copy_from_slice(&r);
         buf[start] = 200; // now claims to extend beyond the sector
-        let err = parse_directory_extent(&buf, false).unwrap_err();
+        let err = parse_directory_extent(&buf, false, None).unwrap_err();
         assert!(
             err.to_string().contains("past the end of its sector"),
             "{err}"
@@ -348,7 +454,7 @@ mod tests {
         let mut r = record(b"X.TXT;1", 30, 1, false, NO_DATE);
         r[ID_LEN_OFFSET] = 250;
         let buf = sector_of(&[r]);
-        let err = parse_directory_extent(&buf, false).unwrap_err();
+        let err = parse_directory_extent(&buf, false, None).unwrap_err();
         assert!(err.to_string().contains("does not fit"), "{err}");
     }
 
@@ -359,13 +465,13 @@ mod tests {
             .flat_map(|u| u.to_be_bytes())
             .collect();
         let buf = sector_of(&[record(&name, 40, 7, false, NO_DATE)]);
-        let entries = parse_directory_extent(&buf, true).unwrap();
+        let entries = parse_directory_extent(&buf, true, None).unwrap();
         assert_eq!(entries[0].name, "Grüße.txt");
         // Read as ISO 646 the same bytes are unrecognisable, which is why the
         // flag must come from the descriptor rather than a guess. Here the
         // leading NUL of the first UCS-2 unit makes the name empty, which is
         // rejected outright — either way it is never the Joliet name.
-        match parse_directory_extent(&buf, false) {
+        match parse_directory_extent(&buf, false, None) {
             Ok(entries) => assert_ne!(entries[0].name, "Grüße.txt"),
             Err(e) => assert!(e.to_string().contains("empty name"), "{e}"),
         }
@@ -374,7 +480,9 @@ mod tests {
     #[test]
     fn a_directory_of_pure_padding_is_empty_not_an_error() {
         let buf = vec![0u8; LOGICAL_SECTOR_SIZE * 3];
-        assert!(parse_directory_extent(&buf, false).unwrap().is_empty());
+        assert!(parse_directory_extent(&buf, false, None)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -413,7 +521,7 @@ mod tests {
         for _ in 0..sectors {
             buf.extend_from_slice(&filled);
         }
-        let err = parse_directory_extent(&buf, false).unwrap_err();
+        let err = parse_directory_extent(&buf, false, None).unwrap_err();
         assert!(err.to_string().contains("more than"), "{err}");
         assert_eq!(err.code(), "ART-FORMAT-MALFORMED");
     }

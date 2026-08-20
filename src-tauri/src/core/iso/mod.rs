@@ -22,6 +22,7 @@
 
 pub mod descriptor;
 pub mod directory;
+pub mod susp;
 
 use std::collections::HashSet;
 use std::fs::File;
@@ -31,7 +32,7 @@ use std::path::{Path, PathBuf};
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
 use crate::core::volume::write::copy::{
-    host_target, CopySource, ExtractReport, HostTarget, OverwritePolicy,
+    host_target, sidecar_for, CopySource, ExtractReport, HostTarget, OverwritePolicy,
 };
 use crate::core::volume::write::file::default_protection;
 use crate::core::volume::write::layout::amiga_from_unix;
@@ -40,12 +41,13 @@ use crate::core::volume::write::uaem::Sidecar;
 
 pub use descriptor::{SectorLayout, LOGICAL_SECTOR_SIZE};
 pub use directory::IsoEntry;
+pub use susp::SystemUse;
 
 use descriptor::{
     descriptor_kind, parse_volume_descriptor, DescriptorKind, VolumeInfo, FIRST_DESCRIPTOR_LBA,
     MAX_DESCRIPTORS,
 };
-use directory::parse_directory_extent;
+use directory::{parse_directory_extent_with_susp, susp_skip_from_root};
 
 /// Most bytes ART will read for a single directory extent.
 ///
@@ -73,6 +75,21 @@ pub const MAX_WALK_DEPTH: usize = 16;
 /// Most entries [`IsoImage::walk`] collects across the whole disc.
 pub const MAX_WALK_ENTRIES: usize = 100_000;
 
+/// How many `CE` continuations ART follows for a single directory record.
+///
+/// A System Use Area may continue in another block, and that block's area may
+/// continue again. Real discs do not chain at all — of the four measured by
+/// `scripts/iso-susp-census.py` exactly one carried a single `CE`, on the
+/// root's own record — but a chain that points back at itself is a legal
+/// pair of numbers and an endless read.
+pub const MAX_CONTINUATIONS: usize = 8;
+
+/// Most bytes ART will read for one `CE` continuation area.
+///
+/// A continuation is the tail of one directory record's metadata. Anything
+/// past a few sectors is a length field being used as an allocation request.
+pub const MAX_CONTINUATION_BYTES: u64 = 8 * LOGICAL_SECTOR_SIZE as u64;
+
 /// An open ISO9660 image.
 ///
 /// Holds the path and the sector layout — never the disc's bytes.
@@ -88,6 +105,14 @@ pub struct IsoImage {
     /// UCS-2 big-endian. Decided once, at open, from the descriptor the root
     /// was taken from — never re-guessed per directory.
     joliet: bool,
+    /// `Some(skip)` when the disc's root directory declared SUSP with an `SP`
+    /// entry, so System Use Areas are read; `None` when it did not, so they
+    /// are not looked at anywhere on the disc.
+    ///
+    /// Decided once, at open, for the same reason `joliet` is: a per-record
+    /// guess would make one directory's record padding look like Rock Ridge
+    /// and the next one's not.
+    susp_skip: Option<usize>,
 }
 
 impl IsoImage {
@@ -130,7 +155,7 @@ impl IsoImage {
             )));
         }
 
-        Ok(Self {
+        let mut image = Self {
             path: path.to_path_buf(),
             file_len,
             layout,
@@ -138,7 +163,31 @@ impl IsoImage {
             root_extent: volume.root_extent,
             root_length: volume.root_length,
             joliet: volume.joliet,
-        })
+            susp_skip: None,
+        };
+        image.susp_skip = image.detect_susp();
+        Ok(image)
+    }
+
+    /// Ask the root directory whether this disc carries System Use data.
+    ///
+    /// Reads one sector and looks at one record — the root's `.` — because
+    /// that is the only place SUSP allows the `SP` entry to be. A disc that
+    /// cannot be read here is not an error: it is a disc with no Rock Ridge,
+    /// which every plain ISO9660 disc is, and it still opens and copies.
+    ///
+    /// **This asks the tree ART is actually reading.** When a disc carries a
+    /// Joliet descriptor ART reads the Joliet tree, whose records normally
+    /// carry no System Use Area at all, and this correctly answers `None`
+    /// there. Every Amiga disc measured for ART-078 — AmigaOS 3.9, the two
+    /// Developer CDs — has *no* Joliet descriptor, which is exactly why its
+    /// real names and protection bits are in the primary tree's System Use
+    /// Areas and nowhere else.
+    fn detect_susp(&self) -> Option<usize> {
+        let buf = self
+            .read_payload(self.root_extent, LOGICAL_SECTOR_SIZE as u64)
+            .ok()?;
+        susp_skip_from_root(&buf)
     }
 
     /// The disc's volume identifier.
@@ -186,7 +235,80 @@ impl IsoImage {
         let sectors = sectors_for(length as u64)?;
         let padded = sectors * LOGICAL_SECTOR_SIZE as u64;
         let buf = self.read_payload(extent, padded)?;
-        parse_directory_extent(&buf, self.joliet)
+        let parsed = parse_directory_extent_with_susp(&buf, self.joliet, self.susp_skip)?;
+        parsed
+            .into_iter()
+            .map(|(mut entry, mut state)| {
+                if self.susp_skip.is_some() && state.continuation.is_some() {
+                    self.resolve_continuations(&mut entry, &mut state)?;
+                }
+                Ok(entry)
+            })
+            .collect()
+    }
+
+    /// Follow a record's `CE` chain and merge what it holds into the entry.
+    ///
+    /// Done here rather than in `core::iso::directory` because a continuation
+    /// lives in another block and that module has no I/O — the split is what
+    /// keeps the record parser a pure function over one buffer.
+    ///
+    /// The chain is bounded three ways, because all three numbers came off
+    /// the disc: [`MAX_CONTINUATIONS`] links, [`MAX_CONTINUATION_BYTES`] per
+    /// link, and a set of blocks already visited so a continuation pointing
+    /// at itself is followed once rather than forever. A continuation that
+    /// cannot be read is dropped, not raised: it costs the entry its comment,
+    /// and refusing to list the directory over it would cost the user the
+    /// whole disc.
+    fn resolve_continuations(
+        &self,
+        entry: &mut IsoEntry,
+        system_use: &mut SystemUse,
+    ) -> CoreResult<()> {
+        let mut seen: HashSet<u32> = HashSet::new();
+        let mut followed = 0usize;
+
+        while let Some(area) = system_use.continuation.take() {
+            if followed >= MAX_CONTINUATIONS || !seen.insert(area.block) {
+                break;
+            }
+            followed += 1;
+
+            let length = area.length as u64;
+            let start = area.offset as u64;
+            // An offset is a position *within* a block, so it cannot reach a
+            // sector; a length past the cap is a length field being used as
+            // an allocation request. Both are checked before the read rather
+            // than after, and `checked_add` because both came off the disc.
+            if length == 0 || start >= LOGICAL_SECTOR_SIZE as u64 {
+                break;
+            }
+            let Some(end) = start
+                .checked_add(length)
+                .filter(|&e| e <= MAX_CONTINUATION_BYTES)
+            else {
+                break;
+            };
+            let Ok(buf) = self.read_payload(area.block, end) else {
+                break;
+            };
+            let Some(slice) = buf.get(start as usize..end as usize) else {
+                break;
+            };
+            // Skip zero, not `self.susp_skip`: the `SP` count is what a
+            // *directory record's* System Use field begins with, and a
+            // continuation area is not one — it is the tail of a field that
+            // has already been skipped once. Applying it again would eat the
+            // first entry of every continuation.
+            susp::parse_into(slice, 0, system_use)?;
+        }
+
+        if let Some(name) = system_use.name.clone().filter(|n| !n.is_empty()) {
+            entry.name = name;
+        }
+        entry.protection = system_use.protection;
+        entry.comment = system_use.comment.clone().filter(|c| !c.is_empty());
+        Ok(())
     }
 
     /// Read a file's contents.
@@ -390,6 +512,38 @@ impl IsoImage {
             crate::core::safety::atomic::atomic_write(&target, &data)?;
             report.files_written += 1;
             report.bytes_written += data.len() as u64;
+
+            // The `AS` entry's bits and comment, in the one format that can
+            // hold them on NTFS — the same `.uaem` sidecar an ADF extraction
+            // writes, through the same `sidecar_for`, which declines when the
+            // file has nothing worth recording. Unconditional here rather
+            // than behind a flag: `extract_from_volume` takes one because a
+            // *volume* extraction has a caller that can sensibly say no; a
+            // disc has no writer to round-trip back to, so losing the bits
+            // here loses them for good, which is ART-078 itself.
+            //
+            // Only for a record that actually carried an `AS` entry. A
+            // recording date alone is not Amiga metadata, and writing a
+            // sidecar for it would put a second file beside every file on
+            // every plain ISO9660 disc ART has ever extracted — a visible
+            // change to something ART-078 does not ask about.
+            let carries_amiga_metadata = entry.protection.is_some() || entry.comment.is_some();
+            if let Some(sidecar) = carries_amiga_metadata
+                .then(|| {
+                    sidecar_for(
+                        entry.protection.unwrap_or_else(default_protection),
+                        entry.date.map(amiga_from_unix).unwrap_or_default(),
+                        entry.comment.as_deref().unwrap_or_default(),
+                    )
+                })
+                .flatten()
+            {
+                crate::core::safety::atomic::atomic_write(
+                    &crate::core::volume::write::uaem::sidecar_path(&target),
+                    crate::core::volume::write::uaem::render(&sidecar).as_bytes(),
+                )?;
+                report.sidecars_written += 1;
+            }
         }
 
         Ok(())
@@ -526,6 +680,20 @@ impl IsoSource {
     /// ([`IsoImage::list`]), the same three fields
     /// `commands::iso::iso_extract_file` takes for the local-folder direction.
     ///
+    /// `parent` is that listing's own `(extent, length)`. It is what makes a
+    /// single copied file keep its Amiga `AS` protection bits and comment:
+    /// those live in the *directory record*, not in the file, so the only way
+    /// to have them is to read the record again — and reading it here rather
+    /// than accepting them as arguments is deliberate, because a protection
+    /// byte that arrived from the frontend is a protection byte ART did not
+    /// verify. `None` copies the file with default bits, which is what a disc
+    /// with no System Use Area gives anyway.
+    ///
+    /// A parent that cannot be listed, or that does not hold this record, is
+    /// not an error: the file still copies, without its bits. Refusing a copy
+    /// over metadata would trade the thing the user asked for against the
+    /// thing they did not.
+    ///
     /// [`new`]: IsoSource::new
     pub fn single_file(
         image: IsoImage,
@@ -533,7 +701,15 @@ impl IsoSource {
         extent: u32,
         bytes: u64,
         date: Option<i64>,
+        parent: Option<(u32, u32)>,
     ) -> Self {
+        let found = parent.and_then(|(dir_extent, dir_length)| {
+            image
+                .list(dir_extent, dir_length)
+                .ok()?
+                .into_iter()
+                .find(|e| !e.is_dir && e.extent == extent && e.name == name)
+        });
         Self {
             image,
             entries: vec![IsoWalkEntry {
@@ -544,6 +720,8 @@ impl IsoSource {
                     bytes,
                     extent,
                     date,
+                    protection: found.as_ref().and_then(|e| e.protection),
+                    comment: found.and_then(|e| e.comment),
                 },
             }],
         }
@@ -574,15 +752,53 @@ impl CopySource for IsoSource {
         self.image.read_file(found.entry.extent, found.entry.bytes)
     }
 
+    /// What AmigaDOS metadata this disc has for one entry.
+    ///
+    /// # Why a disc-sourced file now carries protection bits (ART-078)
+    ///
+    /// It used to be true that "a disc carries a recording date and nothing
+    /// else AmigaDOS would call protection bits or a comment". It is not:
+    /// an Amiga-mastered disc records both in the `AS` System Use entry, and
+    /// two of the four discs measured for ART-078 carry one on every file —
+    /// 44 796 entries between them, including 145 with the `p` (pure) bit and
+    /// 20 with the `s` (script) bit set.
+    ///
+    /// Those two bits are the reason this matters rather than a nicety.
+    /// `core::volume::write::uaem`'s own module doc records why: a WHDLoad
+    /// slave copied without its `S` bit is a game that starts and does not
+    /// work, and the AmigaOS 3.9 tree's `Resident C:Assign PURE` needs `p`.
+    /// Copying a game off a CD onto an HDF used to lose exactly those.
+    ///
+    /// So the answer is: **yes, and through the path that already existed.**
+    /// A `Sidecar` is what `CopySource` speaks, `copy.rs` turns it into the
+    /// `FileMeta` the volume writer stores and into a `.uaem` file when the
+    /// destination is a Windows folder, and `copy.rs::sidecar_for` already
+    /// declines to write one for a file whose bits are the default. Nothing
+    /// new was needed downstream — the bits simply had to stop being thrown
+    /// away here.
+    ///
+    /// A file with no `AS` entry still gets [`default_protection`], which is
+    /// the same answer a host file with no `.uaem` beside it gets. That is
+    /// deliberate: absent is not the same as `----rwed`, but AmigaDOS has no
+    /// third state, and inventing restrictive bits for a disc that recorded
+    /// none would break more than it protects.
     fn metadata(&self, relative: &str) -> CoreResult<Option<Sidecar>> {
-        // A disc carries a recording date and nothing else AmigaDOS would
-        // call protection bits or a comment — every file gets the AmigaDOS
-        // default bits, the same as a host file with no `.uaem` beside it.
-        let found = self.entries.iter().find(|e| e.path == relative);
-        Ok(found.and_then(|e| e.entry.date).map(|unix| Sidecar {
-            protection: default_protection(),
-            date: amiga_from_unix(unix),
-            comment: String::new(),
+        let Some(found) = self.entries.iter().find(|e| e.path == relative) else {
+            return Ok(None);
+        };
+        // Nothing at all to say about this entry: no date, no bits, no
+        // comment. `None` keeps the writer's own defaults rather than
+        // stamping an epoch date over them.
+        if found.entry.date.is_none()
+            && found.entry.protection.is_none()
+            && found.entry.comment.is_none()
+        {
+            return Ok(None);
+        }
+        Ok(Some(Sidecar {
+            protection: found.entry.protection.unwrap_or_else(default_protection),
+            date: found.entry.date.map(amiga_from_unix).unwrap_or_default(),
+            comment: found.entry.comment.clone().unwrap_or_default(),
         }))
     }
 }
@@ -744,6 +960,41 @@ pub(crate) mod fixture {
     use super::SectorLayout;
     use std::collections::VecDeque;
 
+    /// The System Use data to write into one record, when the builder is
+    /// making a Rock Ridge disc.
+    ///
+    /// # This copies a real disc's shape, not a convenient one
+    ///
+    /// Measured by `scripts/iso-susp-census.py` over the owner's four discs
+    /// and reproduced here so a passing test means something about real
+    /// material:
+    ///
+    /// - **`RR` first, then `PX`, then `NM`, then `AS`** — the order the
+    ///   AmigaOS 3.9 CD and Amiga Developer CD v2.1 both write, and the
+    ///   reason `PX` is here at all: it is 36 bytes of a signature ART does
+    ///   not read, sitting between the `SP` and the `AS`. A parser that
+    ///   stopped at the first unknown entry would pass every test written
+    ///   without it.
+    /// - **`SP` in the root's `.` record only**, with skip 0 — both discs.
+    /// - **`AS` flags `0x01`** (protection, no comment) on 44 795 of the
+    ///   44 796 real entries; `0x03` (protection and comment) on the rest.
+    /// - **Directories carry `NM` and `AS` too**, not just files.
+    #[derive(Debug, Clone, Default)]
+    pub struct RockRidge {
+        /// The mixed-case name for the `NM` entry. Empty writes no `NM`.
+        pub name: String,
+        /// The AmigaDOS protection long for the `AS` entry, or `None` for a
+        /// record with no `AS` at all.
+        pub protection: Option<u32>,
+        /// The `AS` comment. Empty writes no comment fragment.
+        pub comment: String,
+        /// Split the `NM` and the comment across a `CE` continuation area.
+        /// No measured disc does this; it is here because the standard
+        /// allows it and an unexercised continuation reader is an untested
+        /// one.
+        pub continue_in_ce: bool,
+    }
+
     /// A file or directory to put on the synthetic disc.
     #[derive(Debug, Clone)]
     pub enum Node {
@@ -753,11 +1004,13 @@ pub(crate) mod fixture {
             /// The name in the Joliet tree, if one is being built.
             joliet: String,
             data: Vec<u8>,
+            rock: Option<RockRidge>,
         },
         Dir {
             iso: String,
             joliet: String,
             children: Vec<Node>,
+            rock: Option<RockRidge>,
         },
     }
 
@@ -766,6 +1019,7 @@ pub(crate) mod fixture {
             iso: iso.to_string(),
             joliet: joliet.to_string(),
             data: data.to_vec(),
+            rock: None,
         }
     }
 
@@ -774,6 +1028,27 @@ pub(crate) mod fixture {
             iso: iso.to_string(),
             joliet: joliet.to_string(),
             children,
+            rock: None,
+        }
+    }
+
+    /// The same file, with a System Use Area on its record.
+    pub fn rock_file(iso: &str, data: &[u8], rock: RockRidge) -> Node {
+        Node::File {
+            iso: iso.to_string(),
+            joliet: String::new(),
+            data: data.to_vec(),
+            rock: Some(rock),
+        }
+    }
+
+    /// The same directory, with a System Use Area on its record.
+    pub fn rock_dir(iso: &str, children: Vec<Node>, rock: RockRidge) -> Node {
+        Node::Dir {
+            iso: iso.to_string(),
+            joliet: String::new(),
+            children,
+            rock: Some(rock),
         }
     }
 
@@ -789,6 +1064,16 @@ pub(crate) mod fixture {
         /// the first one's padding, so the reader has to treat a zero-length
         /// record as "next sector" rather than "stop" or "loop".
         pub split_root: bool,
+        /// Declare SUSP: write an `SP` entry into the root's `.` record, so
+        /// System Use Areas on this disc are read at all. A disc with `AS`
+        /// entries and no `SP` is a disc ART deliberately ignores, and a
+        /// fixture that set one without the other would test the wrong thing.
+        pub rock_ridge: bool,
+        /// Bytes of padding before the first SUSP entry of every System Use
+        /// Area *except* the root's `.`, declared through `SP`'s skip field.
+        /// Both measured discs use 0; a non-zero value is what proves the
+        /// skip is applied rather than assumed.
+        pub susp_skip: u8,
     }
 
     impl Default for IsoBuilder {
@@ -800,6 +1085,8 @@ pub(crate) mod fixture {
                 layout: SectorLayout::Cooked,
                 children: Vec::new(),
                 split_root: false,
+                rock_ridge: false,
+                susp_skip: 0,
             }
         }
     }
@@ -810,6 +1097,7 @@ pub(crate) mod fixture {
         parent: usize,
         subdirs: Vec<usize>,
         files: Vec<usize>,
+        rock: Option<RockRidge>,
     }
 
     struct FlatFile {
@@ -817,6 +1105,7 @@ pub(crate) mod fixture {
         joliet: String,
         data: Vec<u8>,
         extent: u32,
+        rock: Option<RockRidge>,
     }
 
     /// A fixed recording date: 1994-05-17 08:30:00 UTC.
@@ -852,6 +1141,18 @@ pub(crate) mod fixture {
                 (a, b)
             } else {
                 (0, 0)
+            };
+
+            // One sector for every `CE` continuation area on the disc,
+            // allocated whether or not it is used — a fixture that moved
+            // every later extent depending on a flag would make two builds
+            // hard to compare.
+            let ce_lba = if self.rock_ridge {
+                let l = next;
+                next += 1;
+                l
+            } else {
+                0
             };
 
             let root_sectors: u32 = if self.split_root { 2 } else { 1 };
@@ -931,8 +1232,17 @@ pub(crate) mod fixture {
                 put(&mut image, jm_path_lba, &jol_m);
             }
 
+            let mut arena = CeArena {
+                lba: ce_lba,
+                buf: Vec::new(),
+            };
             for (i, d) in dirs.iter().enumerate() {
                 let sectors = if i == 0 { root_sectors } else { 1 };
+                let rock = if self.rock_ridge {
+                    Some((self.susp_skip, &mut arena))
+                } else {
+                    None
+                };
                 let extent = directory_extent(
                     d,
                     &dirs,
@@ -942,6 +1252,7 @@ pub(crate) mod fixture {
                     false,
                     sectors,
                     self.split_root && i == 0,
+                    rock,
                 );
                 put(&mut image, iso_dir_lba[i], &extent);
                 if self.joliet {
@@ -954,9 +1265,13 @@ pub(crate) mod fixture {
                         true,
                         sectors,
                         self.split_root && i == 0,
+                        None,
                     );
                     put(&mut image, joliet_dir_lba[i], &extent);
                 }
+            }
+            if self.rock_ridge && !arena.buf.is_empty() {
+                put(&mut image, ce_lba, &arena.buf);
             }
 
             for f in &files {
@@ -976,6 +1291,7 @@ pub(crate) mod fixture {
                 parent: 0,
                 subdirs: Vec::new(),
                 files: Vec::new(),
+                rock: None,
             }];
             let mut files: Vec<FlatFile> = Vec::new();
 
@@ -986,13 +1302,19 @@ pub(crate) mod fixture {
             while let Some((parent, children)) = queue.pop_front() {
                 for child in children {
                     match child {
-                        Node::File { iso, joliet, data } => {
+                        Node::File {
+                            iso,
+                            joliet,
+                            data,
+                            rock,
+                        } => {
                             let index = files.len();
                             files.push(FlatFile {
                                 iso: iso.clone(),
                                 joliet: joliet.clone(),
                                 data: data.clone(),
                                 extent: 0,
+                                rock: rock.clone(),
                             });
                             dirs[parent].files.push(index);
                         }
@@ -1000,6 +1322,7 @@ pub(crate) mod fixture {
                             iso,
                             joliet,
                             children,
+                            rock,
                         } => {
                             let index = dirs.len();
                             dirs.push(FlatDir {
@@ -1008,6 +1331,7 @@ pub(crate) mod fixture {
                                 parent,
                                 subdirs: Vec::new(),
                                 files: Vec::new(),
+                                rock: rock.clone(),
                             });
                             dirs[parent].subdirs.push(index);
                             queue.push_back((index, children));
@@ -1068,13 +1392,13 @@ pub(crate) mod fixture {
     }
 
     /// A directory record. `id` is already encoded for its tree.
-    fn dir_record(id: &[u8], extent: u32, length: u32, is_dir: bool) -> Vec<u8> {
+    fn dir_record(id: &[u8], extent: u32, length: u32, is_dir: bool, system_use: &[u8]) -> Vec<u8> {
         let mut len = 33 + id.len();
         if len % 2 == 1 {
             len += 1;
         }
-        let mut r = vec![0u8; len];
-        r[0] = len as u8;
+        let mut r = vec![0u8; len + system_use.len()];
+        r[0] = r.len() as u8;
         r[2..10].copy_from_slice(&both32(extent));
         r[10..18].copy_from_slice(&both32(length));
         r[18..25].copy_from_slice(&FIXTURE_DATE);
@@ -1082,7 +1406,110 @@ pub(crate) mod fixture {
         r[28..32].copy_from_slice(&both16(1));
         r[32] = id.len() as u8;
         r[33..33 + id.len()].copy_from_slice(id);
+        // The System Use Area starts after the identifier and after the pad
+        // byte an even-length identifier is followed by — which is exactly
+        // what `len` above already rounded up to.
+        r[len..].copy_from_slice(system_use);
         r
+    }
+
+    /// The SUSP entries for one record, laid out the way the measured discs
+    /// lay them out: `RR`, then `PX`, then `NM`, then `AS`.
+    ///
+    /// `PX` is written with its real 36-byte shape and never read by ART —
+    /// its whole job here is to sit between the entries ART *does* read, so
+    /// a parser that stopped at an unknown signature would fail.
+    ///
+    /// When `continue_in_ce` is set, the `NM` and the comment are cut in half
+    /// and the tail goes into `arena`, reached through a `CE` entry.
+    fn system_use_for(rock: &RockRidge, skip: usize, arena: &mut CeArena) -> Vec<u8> {
+        let mut out = vec![0u8; skip];
+        out.extend_from_slice(&[b'R', b'R', 5, 1, 0x89]);
+        let mut px = vec![b'P', b'X', 36, 1];
+        px.extend(std::iter::repeat_n(0u8, 32));
+        out.extend_from_slice(&px);
+
+        let split = rock.continue_in_ce;
+        let mut tail: Vec<u8> = Vec::new();
+
+        if !rock.name.is_empty() {
+            let bytes = rock.name.as_bytes();
+            let cut = if split { bytes.len() / 2 } else { bytes.len() };
+            let (head, rest) = bytes.split_at(cut);
+            out.push(b'N');
+            out.push(b'M');
+            out.push((5 + head.len()) as u8);
+            out.push(1);
+            out.push(if rest.is_empty() { 0x00 } else { 0x01 });
+            out.extend_from_slice(head);
+            if !rest.is_empty() {
+                tail.extend_from_slice(&[b'N', b'M', (5 + rest.len()) as u8, 1, 0x00]);
+                tail.extend_from_slice(rest);
+            }
+        }
+
+        if let Some(protection) = rock.protection {
+            let comment = rock.comment.as_bytes();
+            let cut = if split {
+                comment.len() / 2
+            } else {
+                comment.len()
+            };
+            let (head, rest) = comment.split_at(cut);
+            let mut flags = 0x01u8;
+            if !comment.is_empty() {
+                flags |= 0x02;
+            }
+            if !rest.is_empty() {
+                flags |= 0x04;
+            }
+            let mut entry = vec![b'A', b'S', 0, 1, flags];
+            entry.extend_from_slice(&protection.to_be_bytes());
+            if !comment.is_empty() {
+                entry.push((head.len() + 1) as u8);
+                entry.extend_from_slice(head);
+            }
+            entry[2] = entry.len() as u8;
+            out.extend_from_slice(&entry);
+            if !rest.is_empty() {
+                let mut cont = vec![b'A', b'S', 0, 1, 0x02, (rest.len() + 1) as u8];
+                cont.extend_from_slice(rest);
+                cont[2] = cont.len() as u8;
+                tail.extend_from_slice(&cont);
+            }
+        }
+
+        if !tail.is_empty() {
+            let (block, offset, length) = arena.put(&tail);
+            let mut ce = vec![b'C', b'E', 28, 1];
+            ce.extend_from_slice(&both32(block));
+            ce.extend_from_slice(&both32(offset));
+            ce.extend_from_slice(&both32(length));
+            out.extend_from_slice(&ce);
+        }
+
+        if out.len() % 2 == 1 {
+            out.push(0);
+        }
+        out
+    }
+
+    /// One sector holding every `CE` continuation area the fixture needs.
+    pub struct CeArena {
+        pub lba: u32,
+        pub buf: Vec<u8>,
+    }
+
+    impl CeArena {
+        fn put(&mut self, bytes: &[u8]) -> (u32, u32, u32) {
+            let offset = self.buf.len() as u32;
+            self.buf.extend_from_slice(bytes);
+            assert!(
+                self.buf.len() <= LOGICAL_SECTOR_SIZE,
+                "fixture continuation areas do not fit one sector"
+            );
+            (self.lba, offset, bytes.len() as u32)
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1095,6 +1522,7 @@ pub(crate) mod fixture {
         joliet: bool,
         sectors: u32,
         split: bool,
+        rock: Option<(u8, &mut CeArena)>,
     ) -> Vec<u8> {
         let self_lba = dir_lba[index];
         let parent_lba = dir_lba[d.parent];
@@ -1105,6 +1533,19 @@ pub(crate) mod fixture {
             LOGICAL_SECTOR_SIZE as u32
         };
 
+        // Joliet records never carry System Use data, on the measured discs
+        // or in the standard's intent: Rock Ridge lives on the primary tree.
+        let (skip, mut arena) = match rock {
+            Some((skip, arena)) if !joliet => (skip as usize, Some(arena)),
+            _ => (0, None),
+        };
+        let mut area_for = |node: Option<&RockRidge>| -> Vec<u8> {
+            match (node, arena.as_deref_mut()) {
+                (Some(rock), Some(arena)) => system_use_for(rock, skip, arena),
+                _ => Vec::new(),
+            }
+        };
+
         let mut records: Vec<(Vec<u8>, Vec<u8>)> = Vec::new(); // (sort key, bytes)
         for &sub in &d.subdirs {
             let name = if joliet {
@@ -1113,27 +1554,37 @@ pub(crate) mod fixture {
                 &dirs[sub].iso
             };
             let id = encode_id(name, joliet);
+            let su = area_for(dirs[sub].rock.as_ref());
             records.push((
                 id.clone(),
-                dir_record(&id, dir_lba[sub], LOGICAL_SECTOR_SIZE as u32, true),
+                dir_record(&id, dir_lba[sub], LOGICAL_SECTOR_SIZE as u32, true, &su),
             ));
         }
         for &fi in &d.files {
             let f = &files[fi];
             let name = if joliet { &f.joliet } else { &f.iso };
             let id = encode_id(&format!("{name};1"), joliet);
+            let su = area_for(f.rock.as_ref());
             records.push((
                 id.clone(),
-                dir_record(&id, f.extent, f.data.len() as u32, false),
+                dir_record(&id, f.extent, f.data.len() as u32, false, &su),
             ));
         }
         records.sort_by(|a, b| a.0.cmp(&b.0));
 
+        // `SP` goes in the `.` record of the *root* only, and unskipped: it
+        // is the entry that declares the skip, so it cannot sit behind it.
+        let dot_area: Vec<u8> = if arena.is_some() && index == 0 {
+            vec![b'S', b'P', 7, 1, 0xBE, 0xEF, skip as u8]
+        } else {
+            Vec::new()
+        };
+
         let mut buf = vec![0u8; sectors as usize * LOGICAL_SECTOR_SIZE];
         let mut pos = 0usize;
         for r in [
-            dir_record(&[0x00], self_lba, self_len, true),
-            dir_record(&[0x01], parent_lba, parent_len, true),
+            dir_record(&[0x00], self_lba, self_len, true, &dot_area),
+            dir_record(&[0x01], parent_lba, parent_len, true, &[]),
         ] {
             buf[pos..pos + r.len()].copy_from_slice(&r);
             pos += r.len();
@@ -1230,7 +1681,7 @@ pub(crate) mod fixture {
         s[132..140].copy_from_slice(&both32(path_table_size));
         s[140..144].copy_from_slice(&l_path_lba.to_le_bytes());
         s[148..152].copy_from_slice(&m_path_lba.to_be_bytes());
-        let root = dir_record(&[0x00], root_lba, root_len, true);
+        let root = dir_record(&[0x00], root_lba, root_len, true, &[]);
         s[156..156 + root.len()].copy_from_slice(&root);
 
         let filler: &[(usize, usize)] = &[
@@ -1309,7 +1760,7 @@ pub(crate) mod fixture {
 
 #[cfg(test)]
 mod tests {
-    use super::fixture::{dir, file, IsoBuilder};
+    use super::fixture::{dir, file, rock_dir, rock_file, IsoBuilder, RockRidge};
     use super::*;
     use std::fs;
 
@@ -1355,6 +1806,8 @@ mod tests {
             joliet,
             layout,
             split_root: false,
+            rock_ridge: false,
+            susp_skip: 0,
             children: vec![
                 file("README.TXT", "ReadMe.txt", b"Hello from the disc.\n"),
                 file("STARTUP", "Startup-Sequence", b"echo hello\n"),
@@ -1365,6 +1818,238 @@ mod tests {
                 ),
             ],
         }
+    }
+
+    /// A disc shaped like the owner's own AmigaOS 3.9 CD, as
+    /// `scripts/iso-susp-census.py` measured it: no Joliet descriptor, an
+    /// `SP` entry in the root, and `RR`/`PX`/`NM`/`AS` on every record.
+    ///
+    /// The uppercase 8.3 identifiers and the mixed-case Rock Ridge names are
+    /// deliberately different, because that difference *is* ART-078's second
+    /// consequence — a fixture whose two names matched would pass whether or
+    /// not `NM` was read at all.
+    fn amiga_rock_ridge_builder() -> IsoBuilder {
+        IsoBuilder {
+            volume: "AMIGAOS39".to_string(),
+            joliet: false,
+            rock_ridge: true,
+            children: vec![
+                rock_file(
+                    "MYGAME.INF",
+                    b"icon",
+                    RockRidge {
+                        name: "MyGame.info".to_string(),
+                        // `0x02` — the commonest value on both AS-carrying
+                        // discs: `e` set, so not executable.
+                        protection: Some(0x0000_0002),
+                        ..Default::default()
+                    },
+                ),
+                rock_file(
+                    "STARTUP.SEQ",
+                    b"Resident C:Assign PURE\n",
+                    RockRidge {
+                        name: "Startup-Sequence".to_string(),
+                        // `s` (script), and `e` clear in the same byte.
+                        protection: Some(0x0000_0040),
+                        comment: "the boot script".to_string(),
+                        ..Default::default()
+                    },
+                ),
+                rock_file(
+                    "ASSIGN",
+                    b"binary",
+                    RockRidge {
+                        name: "Assign".to_string(),
+                        // `p` (pure): what `Resident C:Assign PURE` needs.
+                        protection: Some(0x0000_0020),
+                        ..Default::default()
+                    },
+                ),
+                rock_dir(
+                    "GAMES",
+                    vec![rock_file(
+                        "SLAVE.SLV",
+                        b"slave",
+                        RockRidge {
+                            name: "Game.slave".to_string(),
+                            protection: Some(0x0000_0060),
+                            comment: "a comment that is split in two".to_string(),
+                            // Through a `CE` continuation area, which no
+                            // measured disc uses but the standard allows.
+                            continue_in_ce: true,
+                        },
+                    )],
+                    RockRidge {
+                        name: "Games".to_string(),
+                        protection: Some(0),
+                        ..Default::default()
+                    },
+                ),
+            ],
+            ..sample_builder(SectorLayout::Cooked, false)
+        }
+    }
+
+    #[test]
+    fn a_rock_ridge_disc_reads_its_real_names_not_its_8_3_ones() {
+        let (d, p) = write_image(&amiga_rock_ridge_builder().build());
+        let iso = IsoImage::open(&p).unwrap();
+        let (extent, length) = iso.root();
+        let names: Vec<String> = iso
+            .list(extent, length)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert!(names.contains(&"MyGame.info".to_string()), "{names:?}");
+        assert!(names.contains(&"Startup-Sequence".to_string()), "{names:?}");
+        assert!(names.contains(&"Games".to_string()), "{names:?}");
+        // And the 8.3 spelling is gone, not merely joined by the real one.
+        assert!(!names.contains(&"MYGAME.INF".to_string()), "{names:?}");
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_rock_ridge_disc_carries_its_amiga_protection_bits_and_comment() {
+        use crate::core::volume::write::uaem::format_bits;
+        let (d, p) = write_image(&amiga_rock_ridge_builder().build());
+        let iso = IsoImage::open(&p).unwrap();
+        let (extent, length) = iso.root();
+        let entries = iso.list(extent, length).unwrap();
+
+        let by = |name: &str| entries.iter().find(|e| e.name == name).unwrap().clone();
+        assert_eq!(
+            format_bits(by("MyGame.info").protection.unwrap()),
+            "----rw-d"
+        );
+        let startup = by("Startup-Sequence");
+        assert_eq!(format_bits(startup.protection.unwrap()), "-s--rwed");
+        assert_eq!(startup.comment.as_deref(), Some("the boot script"));
+        assert_eq!(format_bits(by("Assign").protection.unwrap()), "--p-rwed");
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_name_and_comment_split_across_a_ce_continuation_are_joined() {
+        let (d, p) = write_image(&amiga_rock_ridge_builder().build());
+        let iso = IsoImage::open(&p).unwrap();
+        let (extent, length) = iso.root();
+        let games = iso
+            .list(extent, length)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.name == "Games")
+            .unwrap();
+        let inside = iso.list(games.extent, LOGICAL_SECTOR_SIZE as u32).unwrap();
+        assert_eq!(inside.len(), 1, "{inside:?}");
+        // Both halves live in a continuation area in another block; reading
+        // only the inline half would give "Game." and "a comment that is".
+        assert_eq!(inside[0].name, "Game.slave");
+        assert_eq!(
+            inside[0].comment.as_deref(),
+            Some("a comment that is split in two")
+        );
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_disc_with_no_sp_entry_is_not_parsed_as_rock_ridge() {
+        // The same tree with the `SP` entry withheld, which is what a disc
+        // that never declared SUSP looks like. ART must read the 8.3 names
+        // and no protection bits.
+        let mut builder = amiga_rock_ridge_builder();
+        builder.rock_ridge = false;
+        let (d, p) = write_image(&builder.build());
+        let iso = IsoImage::open(&p).unwrap();
+        let (extent, length) = iso.root();
+        let entries = iso.list(extent, length).unwrap();
+        assert!(
+            entries.iter().all(|e| e.protection.is_none()),
+            "{entries:?}"
+        );
+        assert!(
+            entries.iter().any(|e| e.name == "MYGAME.INF"),
+            "{entries:?}"
+        );
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn the_sp_skip_is_honoured_rather_than_assumed_to_be_zero() {
+        // Every measured disc declares skip 0, so a reader that ignored the
+        // field entirely would pass every test written from real material.
+        // This disc declares 4, which is legal and which nothing else here
+        // would catch.
+        let mut builder = amiga_rock_ridge_builder();
+        builder.susp_skip = 4;
+        let (d, p) = write_image(&builder.build());
+        let iso = IsoImage::open(&p).unwrap();
+        let (extent, length) = iso.root();
+        let entries = iso.list(extent, length).unwrap();
+        let assign = entries.iter().find(|e| e.name == "Assign").unwrap();
+        assert_eq!(assign.protection, Some(0x20));
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_disc_sourced_file_carries_its_bits_into_a_uaem_sidecar() {
+        use crate::core::jobs::NoProgress;
+        let (d, p) = write_image(&amiga_rock_ridge_builder().build());
+        let iso = IsoImage::open(&p).unwrap();
+        let (extent, length) = iso.root();
+        let out = d.join("out");
+        let report = iso
+            .extract_tree(extent, length, &out, OverwritePolicy::Skip, &NoProgress)
+            .unwrap();
+
+        // Every file here carries either non-default bits, a comment, or a
+        // date; `sidecar_for` is what declines to write one for a file with
+        // none of the three.
+        assert_eq!(report.sidecars_written, report.files_written, "{report:?}");
+        let sidecar = fs::read_to_string(out.join("Startup-Sequence.uaem")).unwrap();
+        assert!(sidecar.starts_with("-s--rwed "), "{sidecar}");
+        assert!(sidecar.trim_end().ends_with("the boot script"), "{sidecar}");
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_disc_sourced_file_carries_its_bits_into_an_amiga_volume() {
+        use crate::core::volume::write::copy::CopySource;
+        let (d, p) = write_image(&amiga_rock_ridge_builder().build());
+        let iso = IsoImage::open(&p).unwrap();
+        let (extent, length) = iso.root();
+        let source = IsoSource::new(iso, extent, length).unwrap();
+
+        // This is the path a WHDLoad slave takes off a CD and onto an HDF:
+        // `copy.rs` turns this `Sidecar` into the `FileMeta` the volume
+        // writer stores, so `s` and `p` surviving here is `s` and `p`
+        // surviving the copy (ART-078).
+        let startup = source.metadata("Startup-Sequence").unwrap().unwrap();
+        assert_eq!(startup.protection, 0x40);
+        assert_eq!(startup.comment, "the boot script");
+        let assign = source.metadata("Assign").unwrap().unwrap();
+        assert_eq!(assign.protection, 0x20);
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_disc_with_no_amiga_metadata_still_writes_no_sidecars() {
+        // The guard the sidecar test needs to not be vacuous: an ordinary
+        // ISO9660 disc must produce the same files and no `.uaem` at all.
+        // The fixture gives every record a date, so this also pins that a
+        // date alone is not treated as Amiga metadata worth a sidecar.
+        use crate::core::jobs::NoProgress;
+        let (d, p) = write_image(&sample_builder(SectorLayout::Cooked, false).build());
+        let iso = IsoImage::open(&p).unwrap();
+        let (extent, length) = iso.root();
+        let out = d.join("out");
+        let report = iso
+            .extract_tree(extent, length, &out, OverwritePolicy::Skip, &NoProgress)
+            .unwrap();
+        assert!(report.files_written > 0);
+        assert_eq!(report.sidecars_written, 0, "{report:?}");
+        fs::remove_dir_all(&d).ok();
     }
 
     #[test]
@@ -1782,8 +2467,14 @@ mod tests {
             .find(|e| e.name == "README.TXT")
             .unwrap();
 
-        let source =
-            IsoSource::single_file(iso, &readme.name, readme.extent, readme.bytes, readme.date);
+        let source = IsoSource::single_file(
+            iso,
+            &readme.name,
+            readme.extent,
+            readme.bytes,
+            readme.date,
+            None,
+        );
         let entries = source.entries().unwrap();
         assert_eq!(entries.len(), 1, "{entries:?}");
         assert_eq!(entries[0].relative, "README.TXT");
@@ -2093,6 +2784,8 @@ mod tests {
                 joliet,
                 layout: SectorLayout::Cooked,
                 split_root: false,
+                rock_ridge: false,
+                susp_skip: 0,
                 children: vec![
                     file("README.TXT", "ReadMe.txt", b"Hello from the disc.\n"),
                     file("STARTUP", "Startup-Sequence", b"echo hello\n"),
@@ -2123,6 +2816,48 @@ mod tests {
         if let Ok(dest) = std::env::var("ART_ISO_RAW_OUT") {
             fs::write(&dest, sample_builder(SectorLayout::Raw2352, true).build()).unwrap();
             println!("wrote synthetic raw 2352-byte Joliet disc to {dest}");
+        }
+        // A Rock Ridge disc, for the same script. This one matters more than
+        // it looks: ART's `NM` reader and ART's own fixture builder were
+        // written from the same reading of SUSP, so they can agree with each
+        // other and both be wrong — exactly the gap ART-032..035 fell
+        // through. 7-Zip reads Rock Ridge with an implementation sharing no
+        // code with either, so if it sees `MyGame.info` where ART sees it,
+        // the System Use Areas ART writes here are really Rock Ridge and the
+        // ones it reads on the owner's AmigaOS 3.9 CD are being read the same
+        // way (ART-078).
+        if let Ok(dest) = std::env::var("ART_ISO_ROCK_OUT") {
+            // Without the `CE` continuation, and that exclusion was
+            // *measured*, not assumed. Handed the disc with one, 7-Zip lists
+            // `Games/Game` where ART lists `Games/Game.slave`: it reads the
+            // inline `NM` fragment `Game.` and stops, dropping the trailing
+            // dot as an empty extension. Its own source says why —
+            // `CPP/7zip/Archive/Iso/IsoItem.h`, `FindSuspRecord` returns the
+            // *first* matching entry in the inline area and `CE` is not a
+            // signature it looks for at all, so it neither joins `NM`
+            // fragments nor follows a continuation.
+            //
+            // So a `CE` fixture here would report a disagreement that is
+            // 7-Zip's limitation and not ART's bug, and this script's own
+            // rule is that only fixtures the oracle can actually judge are
+            // handed to it. The `CE` case is checked instead by a *third*
+            // implementation that does follow continuations:
+            // `scripts/iso-susp-census.py` reads the same synthetic disc and
+            // joins `Game.` + `slave` and the two comment halves the same
+            // way ART does, and `a_name_and_comment_split_across_a_ce_
+            // continuation_are_joined` pins it inside `cargo test`.
+            let mut builder = amiga_rock_ridge_builder();
+            for child in builder.children.iter_mut() {
+                if let super::fixture::Node::Dir { children, .. } = child {
+                    for grandchild in children.iter_mut() {
+                        if let super::fixture::Node::File { rock: Some(r), .. } = grandchild {
+                            r.continue_in_ce = false;
+                        }
+                    }
+                }
+            }
+            fs::write(&dest, builder.build()).unwrap();
+            println!("wrote synthetic Rock Ridge disc to {dest}");
         }
         // Mode 2/XA Form 1 — the layout ART-075 was about. Its data sits at
         // offset 24 rather than 16, so the script strips it with a different
@@ -2165,6 +2900,23 @@ mod tests {
                 let data = iso.read_file(item.entry.extent, item.entry.bytes).unwrap();
                 let digest = crate::core::hashing::sha256_bytes(&data);
                 println!("file={}|{}|{digest}", item.path, item.entry.bytes);
+            }
+            // The Amiga `AS` metadata, on its own line so the oracle script
+            // — which knows only `volume=`, `dir=` and `file=` — ignores it.
+            // 7-Zip cannot judge these (it reads no `AS` entry), so they are
+            // printed for a human to compare against
+            // `scripts/iso-susp-census.py`'s decoding of the same disc, not
+            // diffed automatically.
+            if item.entry.protection.is_some() || item.entry.comment.is_some() {
+                println!(
+                    "meta={}|{}|{}",
+                    item.path,
+                    item.entry
+                        .protection
+                        .map(crate::core::volume::write::uaem::format_bits)
+                        .unwrap_or_default(),
+                    item.entry.comment.as_deref().unwrap_or_default()
+                );
             }
         }
     }
