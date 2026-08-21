@@ -2127,7 +2127,13 @@
       "unreadable": "ART bu klasörü okuyamadı — yolu kontrol et.",
       "empty": "Bu klasörde kurulum diski bulunamadı.",
       "found_one": "{{count}} kurulum diski bulundu: {{names}}.",
-      "found_other": "{{count}} kurulum diski bulundu: {{names}}."
+      "found_other": "{{count}} kurulum diski bulundu: {{names}}.",
+      "reuseScan": "Değişmemiş disklerin son taramasını yeniden kullan",
+      "reuseScanHelp": "ART bir diski yolu, boyutu ve tarihiyle tanır. Yedekten geri alınan bir disk üçünü de koruyabilir ve yine de başka bir disk olabilir — gördüğünüz, taktığınızla uyuşmuyorsa Yeniden tara deyin.",
+      "rescan": "Yeniden tara",
+      "rescanned_one": "{{count}} hatırlanan tarama atıldı. Diskler yeniden okunacak.",
+      "rescanned_other": "{{count}} hatırlanan tarama atıldı. Diskler yeniden okunacak.",
+      "rescannedNone": "Hatırlanan bir şey yoktu. Diskler zaten yeniden okunuyor."
     },
     "rom": {
       "label": "Eşlenen Kickstart",

@@ -93,13 +93,15 @@ use crate::core::osinstall::apply::{
 use crate::core::osinstall::collide::{self, CollisionReport, Incoming};
 use crate::core::osinstall::package::{self, Package};
 use crate::core::osinstall::plan::{
-    detect_package_refusals, expand_rules, plan, InstallPlan, InstallRequest, PlanItem,
+    detect_package_refusals, expand_rules, plan_with_cache, InstallPlan, InstallRequest, PlanItem,
+    ScanCachePolicy,
 };
 use crate::core::osinstall::recipe;
 use crate::core::osinstall::scan::{
     self, find_media, find_packages, open_package, package_for, FoundMedia, FoundPackage,
     MediaMatch, PackageMedium,
 };
+use crate::core::osinstall::scan_cache::ScanCache;
 use crate::core::osinstall::source::MediaSource;
 use crate::core::osinstall::verify::{verify_volume, VerifyReport};
 use crate::core::osinstall::{
@@ -107,7 +109,7 @@ use crate::core::osinstall::{
 };
 use crate::error::{AppError, AppResult};
 
-use super::jobs::{spawn_job, JobRegistry};
+use super::jobs::{spawn_job, spawn_job_in_lane, JobRegistry};
 use super::oplog::{user_operation, write, write_to_path};
 
 // ---------------------------------------------------------------------------
@@ -219,9 +221,50 @@ pub fn osinstall_plan(request: InstallRequest) -> AppResult<PlanResult> {
         });
     }
     let recipe = recipe::by_release(&request.release)?;
+    let cache = scan_cache_for(request.scan_cache);
+    cache.sweep();
     Ok(PlanResult::Planned {
-        plan: Box::new(plan(&request, &recipe)?),
+        plan: Box::new(plan_with_cache(&request, &recipe, &cache)?),
     })
+}
+
+/// The scan cache this shell hands to `core::osinstall` — `%TEMP%`, beside the
+/// extraction cache that `preview_cache_dir` already writes into.
+///
+/// **The directory is chosen here and not in `core/`** (ART-194). Where a
+/// platform keeps scratch files is a shell question; `core::osinstall::plan`
+/// takes a `ScanCache` the way a long core function takes a `ProgressSink`,
+/// and `plan()` itself passes one that is switched off, so nothing in `core/`
+/// writes to a directory nobody chose for it.
+///
+/// `sweep()` at every plan, matching how `sweep_stale_preview_scratch_dirs` is
+/// called: cheap (a `stat` per entry), and the only thing that ever removes an
+/// entry whose medium has gone away for good.
+fn scan_cache_for(policy: ScanCachePolicy) -> ScanCache {
+    match policy {
+        ScanCachePolicy::Reuse => ScanCache::in_dir(std::env::temp_dir()),
+        ScanCachePolicy::Ignore => ScanCache::off(),
+    }
+}
+
+/// Forget every medium listing ART is holding, so the next preview reads the
+/// discs again. Answers how many were dropped.
+///
+/// **ART-194's escape hatch, and it is not a convenience.** The cache is keyed
+/// on `(path, size, mtime)`, which catches a medium changed in place — but a
+/// restored backup can preserve its timestamps, and several AmigaOS 3.9 ISOs
+/// are in circulation. "Same path, same size, same mtime, different disc" is a
+/// real arrangement, and against it the cache would answer with complete
+/// confidence and be wrong. That is this project's most expensive failure
+/// shape: it does not crash, it tells the user something untrue (§89). This
+/// command is what a user reaches for when they suspect it, and it is what
+/// makes the cheap key safe to trust the rest of the time.
+///
+/// Read-only with respect to the user's data — it removes only ART's own
+/// derived files, under this module's own prefix, inside `%TEMP%`.
+#[tauri::command]
+pub fn osinstall_rescan_media() -> AppResult<usize> {
+    Ok(ScanCache::in_dir(std::env::temp_dir()).forget_all())
 }
 
 // ---------------------------------------------------------------------------
@@ -445,6 +488,26 @@ pub fn osinstall_packages(package_folder: PathBuf) -> AppResult<Vec<PackageSumma
 /// selection, not that a legitimate preview needs more room (F4).
 const MAX_PREVIEW_FILES: usize = 20_000;
 const MAX_PREVIEW_BYTES: u64 = 512 * 1024 * 1024;
+
+/// The OS Builder's component preview, and the package preview, each hold a
+/// **lane**: a newer job in one cancels and replaces the unfinished one before
+/// it (`spawn_job_in_lane`).
+///
+/// **ART-195, and the numbers are the owner's own.** Both previews are started
+/// from a `useEffect` that re-runs whenever the selection changes, and neither
+/// cancelled its predecessor. One session left staging roots numbered up to
+/// **2,149** under `%TEMP%` — five of them created inside two seconds — each
+/// job walking the same 468 MB AmigaOS 3.9 ISO, all of them competing for one
+/// drive. The unbounded re-firing itself was `useRemembered` handing back a
+/// fresh array identity every render (`src/lib/useRemembered.ts`); these lanes
+/// are the other half, and the half that still matters once a user simply
+/// clicks four checkboxes quickly.
+///
+/// Two lanes rather than one: a component preview and a package preview answer
+/// different questions about different media, and one lane would have each
+/// cancelling the other.
+const COMPONENT_PREVIEW_LANE: &str = "osinstall-component-preview";
+const PACKAGE_PREVIEW_LANE: &str = "osinstall-package-preview";
 
 /// Every scratch directory this module writes lives under this prefix, so
 /// [`sweep_stale_preview_scratch_dirs`] can find them (and only them) inside
@@ -1255,14 +1318,20 @@ pub fn osinstall_component_collisions(
     let emit_app = app.clone();
     let registry = Arc::clone(&registry);
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
-        let preview = preview_component_collisions(&plan, &components, progress)?;
-        let _ = emit_app.emit(
-            OSINSTALL_COMPONENT_COLLISIONS_EVENT,
-            OsInstallComponentCollisionsResult { job_id, preview },
-        );
-        Ok(())
-    });
+    let id = spawn_job_in_lane(
+        &app,
+        registry,
+        &title,
+        COMPONENT_PREVIEW_LANE,
+        move |job_id, progress| {
+            let preview = preview_component_collisions(&plan, &components, progress)?;
+            let _ = emit_app.emit(
+                OSINSTALL_COMPONENT_COLLISIONS_EVENT,
+                OsInstallComponentCollisionsResult { job_id, preview },
+            );
+            Ok(())
+        },
+    );
 
     Ok(id)
 }
@@ -1307,15 +1376,21 @@ pub fn osinstall_collisions(
     let emit_app = app.clone();
     let registry = Arc::clone(&registry);
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
-        let reports =
-            preview_collisions(&tree_root, &package_folder, &ordered, &catalogue, progress)?;
-        let _ = emit_app.emit(
-            OSINSTALL_COLLISIONS_EVENT,
-            OsInstallCollisionsResult { job_id, reports },
-        );
-        Ok(())
-    });
+    let id = spawn_job_in_lane(
+        &app,
+        registry,
+        &title,
+        PACKAGE_PREVIEW_LANE,
+        move |job_id, progress| {
+            let reports =
+                preview_collisions(&tree_root, &package_folder, &ordered, &catalogue, progress)?;
+            let _ = emit_app.emit(
+                OSINSTALL_COLLISIONS_EVENT,
+                OsInstallCollisionsResult { job_id, reports },
+            );
+            Ok(())
+        },
+    );
 
     Ok(id)
 }
@@ -2670,9 +2745,10 @@ mod tests {
             // Never created: `plan()` does not touch it, and nothing here
             // calls `apply()`.
             destination: std::env::temp_dir().join("art-overlay-census-no-such-tree"),
+            scan_cache: Default::default(),
         };
 
-        let plan = plan(&request, &recipe).expect("the plan itself");
+        let plan = crate::core::osinstall::plan::plan(&request, &recipe).expect("the plan itself");
         println!("\n=== {release}: overlay census ===");
         println!("media folder : {media}");
         println!(
@@ -3119,6 +3195,7 @@ mod tests {
             chosen: vec!["workbench-base".to_string()],
             excluded: Vec::new(),
             destination: dir.join("dist"),
+            scan_cache: Default::default(),
         })
         .unwrap();
 
@@ -3144,6 +3221,7 @@ mod tests {
             chosen: vec!["workbench-base".to_string()],
             excluded: Vec::new(),
             destination: dir.join("dist"),
+            scan_cache: Default::default(),
         })
         .unwrap();
 

@@ -76,10 +76,11 @@
 
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::core::error::CoreResult;
 
+use super::scan_cache;
 use super::source::{AdfSource, MediaSource};
 use super::source_archive::ArchiveSource;
 use super::source_cd::CdSource;
@@ -89,7 +90,7 @@ use super::source_cd::CdSource;
 /// needs to know to hand back the right one without re-probing the file.
 ///
 /// `Serialize`, kebab-case: this crosses the wire alongside [`FoundMedia`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MediaKind {
     Floppy,
@@ -126,6 +127,40 @@ pub fn open_media(found: &FoundMedia) -> CoreResult<Box<dyn MediaSource>> {
         MediaKind::Floppy => Box::new(AdfSource::open(&found.path)?),
         MediaKind::Disc => Box::new(CdSource::open(&found.path)?),
     })
+}
+
+/// [`open_media`], but a medium whose listing `cache` already holds — and
+/// whose `(path, size, mtime)` still match — is answered from that listing
+/// instead of being walked again (ART-194).
+///
+/// **Where the saving is.** `CdSource::open` walks the whole disc; the
+/// AmigaOS 3.9 recipe puts three components on one disc, so one preview walked
+/// the owner's 468 MB `AmigaOS39.iso` three times and every change of
+/// selection did it again. A [`super::scan_cache::CachedSource`] answers
+/// `entry` and `walk` out of the listing and never opens the medium at all
+/// unless somebody asks for **bytes**, which a preview never does.
+///
+/// A miss — no entry, an unreadable or stale one, or a cache that is switched
+/// off — falls through to the real read and then records what it read. A cache
+/// that cannot be trusted costs a walk, never a wrong answer.
+pub fn open_media_cached(
+    found: &FoundMedia,
+    cache: &scan_cache::ScanCache,
+) -> CoreResult<Box<dyn MediaSource>> {
+    if let Some(listing) = cache.lookup(&found.path) {
+        let found = found.clone();
+        return Ok(Box::new(scan_cache::CachedSource::new(
+            listing,
+            move || open_media(&found),
+        )));
+    }
+    let mut source = open_media(found)?;
+    if cache.is_on() {
+        if let Ok(listing) = scan_cache::listing_of(source.as_mut(), found.kind) {
+            cache.store(&found.path, &listing);
+        }
+    }
+    Ok(source)
 }
 
 /// Identify one candidate file as install media, or `None` if it is neither.

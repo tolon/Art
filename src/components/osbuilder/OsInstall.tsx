@@ -89,6 +89,7 @@ import {
   osinstallBlocker,
   osinstallDestinationTaken,
   osinstallPlan,
+  osinstallRescanMedia,
   osinstallScanMedia,
   osinstallVerify,
   parseOptionalSlot,
@@ -96,6 +97,7 @@ import {
   pruneStaleExclusions,
   refusalPhrase,
   rememberedComponentKey,
+  type ScanCachePolicy,
   sanitizeChosen,
   toggleChosen,
   withoutExcluded,
@@ -110,7 +112,7 @@ import {
   type VerifyReport,
 } from "@/lib/osinstall";
 import { pistormIdentifyRom, type RomInfo } from "@/lib/pistorm";
-import { isTextList, isTextOrNothing } from "@/lib/remembered";
+import { isFlag, isTextList, isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { fraction, onJobProgress, subscribeSafely, type JobProgress } from "@/lib/jobs";
 import { Field } from "@/components/osbuilder/Field";
@@ -277,6 +279,36 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     isTextList,
     []
   );
+
+  /**
+   * Whether ART may reuse a medium's listing from an earlier scan (ART-194).
+   *
+   * Remembered, and guarded, like every other choice on this screen: it is
+   * something the user decided, so it comes back tomorrow. `isFlag` is the
+   * guard, so a hand-edited or older `settings.json` holding anything else
+   * falls back to `true` rather than putting a bad value on screen.
+   *
+   * `true` by default — cached is the ordinary path, and no screen should have
+   * to explain why it is not rescanning a disc that has not changed.
+   */
+  const [reuseScan, setReuseScan] = useRemembered<boolean>(
+    "osinstall.reuseScan",
+    isFlag,
+    true
+  );
+  /** How many listings the last "Scan again" dropped, or `null` when the user
+   *  has not asked this session. Session-only: it describes an action just
+   *  taken, not a choice to remember. */
+  const [rescanned, setRescanned] = useState<number | null>(null);
+  /**
+   * Bumped by "Scan again" to make the plan effect run once more.
+   *
+   * A counter and not `setMediaFolder(mediaFolder)`: setting a state to the
+   * value it already holds is a no-op React bails out of, so the effect would
+   * never fire and the button would do nothing visible — which is precisely
+   * the "control that silently ignores the user" this round has been about.
+   */
+  const [rescanNonce, setRescanNonce] = useState(0);
 
   /**
    * The Packages section's own three remembered choices — a distribution
@@ -510,6 +542,10 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
       chosen: sanitized,
       destination: destination ?? "",
       release,
+      // ART-194. Sent every time rather than only when off, so the request
+      // says what it asked for and two plans that differ in this cannot look
+      // identical in a log.
+      scanCache: (reuseScan ? "reuse" : "ignore") as ScanCachePolicy,
     };
     const baseRequest: InstallRequest = { ...shared, excluded: [] };
     const effectiveRequest: InstallRequest = { ...shared, excluded: excludedConditional };
@@ -568,7 +604,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     // now per release — but listing them would re-plan on a release switch
     // twice: once for `release`, once for the setters that changed with it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mediaFolder, romPath, chosen, destination, excludedConditional, release, catalogue]);
+  }, [mediaFolder, romPath, chosen, destination, excludedConditional, release, catalogue, reuseScan, rescanNonce]);
 
   // `subscribeSafely` (Task 7's own fix round, F7/ART-165): the bare
   // `.then((fn) => { unlisten = fn })` shape this used to have could both
@@ -706,6 +742,32 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
       title: t("osinstall.media.chooseTitle"),
     });
     if (typeof picked === "string") setMediaFolder(picked);
+  }
+
+  /**
+   * Drop every remembered listing and re-plan against the discs themselves.
+   *
+   * Two steps on purpose. Forgetting is **durable** — the entries are removed
+   * from disk, so a later preview cannot serve the same stale answer again —
+   * and only then is the plan re-run. A "rescan" that merely skipped the cache
+   * for one call would leave the wrong answer sitting there for the next one.
+   *
+   * `setRescanned` is what makes the button answer for itself: a control that
+   * does its work silently is one the user cannot tell apart from one that
+   * ignored them, and that is the exact defect this round has been chasing.
+   */
+  async function rescanMedia() {
+    try {
+      const dropped = await osinstallRescanMedia();
+      setRescanned(dropped);
+      // Re-plan against what is actually on the discs now. A new object
+      // identity is the point: the plan effect keys on these values, and
+      // nothing else about the request has changed.
+      setRescanNonce((n) => n + 1);
+      if (mediaFolder) void osinstallScanMedia(mediaFolder).then(setMediaScan).catch(() => {});
+    } catch (e) {
+      setPlanError(String(e));
+    }
   }
 
   async function chooseRom() {
@@ -858,6 +920,41 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
               count: mediaScan.media.length,
               names: mediaScan.media.map((m) => m.volumeName).join(", "),
             })}
+          </p>
+        )}
+
+        {/*
+          ART-194's two controls, and they belong together: the toggle says
+          whether ART may trust what it remembers, and the button is what a
+          user reaches for when it should not have. Shown in Beginner mode as
+          well as Power — "the disc I am looking at is not the disc I put in"
+          is not an advanced problem, and `usePowerMode` only ever hides
+          things the user can do without.
+        */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "0 0 4px", flexWrap: "wrap" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+            <input
+              type="checkbox"
+              checked={reuseScan}
+              onChange={(e) => {
+                setReuseScan(e.target.checked);
+                setRescanned(null);
+              }}
+            />
+            {t("osinstall.media.reuseScan")}
+          </label>
+          <button className="btn btn-sm" onClick={() => void rescanMedia()}>
+            {t("osinstall.media.rescan")}
+          </button>
+        </div>
+        <p className="faint" style={{ fontSize: 11, margin: "0 0 4px" }}>
+          {t("osinstall.media.reuseScanHelp")}
+        </p>
+        {rescanned !== null && (
+          <p className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
+            {rescanned === 0
+              ? t("osinstall.media.rescannedNone")
+              : t("osinstall.media.rescanned", { count: rescanned })}
           </p>
         )}
 

@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### The OS Builder stops rescanning your discs (2026-08-21)
+
+#### Fixed
+- **The install preview was starting over and over on its own.** Picking
+  AmigaOS 3.9 and leaving the screen alone was enough: ART kept re-reading your
+  install disc, again and again, for as long as the screen was open. On one
+  session it managed **2,149** reads of the same 468 MB disc. The job list
+  showed a few of them stacked with counts jumping about, which is what a pile
+  of separate reads looks like when only the newest four fit on screen.
+
+  **Stop really did stop** — it always had. What it could not do was keep the
+  next one from starting a moment later. Now nothing starts unless you change
+  something.
+
+- **Starting a new preview now cancels the one before it.** Ticking four
+  components quickly used to leave four reads running at once, competing for
+  the same drive. The older one is stopped and its row leaves the job list, so
+  there is one preview on screen at a time.
+
+#### Added
+- **ART remembers what was on a disc, so it does not read it again.** A disc it
+  has already looked at — same file, same size, same date — is answered from
+  what it read last time. On a 468 MB AmigaOS 3.9 disc that takes the preview
+  from about **207 ms to about 26 ms**, and it happens by itself: there is
+  nothing to switch on.
+
+- **"Scan again", beside the Install disks folder — and it matters.** ART
+  recognises a disc by its path, size and date. A disc restored from a backup
+  can keep all three and still be a *different* disc, and several AmigaOS 3.9
+  images are in circulation. If what ART shows does not match what you put in,
+  **Scan again** throws away everything it remembers and reads the discs from
+  scratch. Beside it, **Reuse the last scan of unchanged discs** turns the
+  whole thing off if you would rather ART always read them — and, like every
+  other choice in ART, it is still set that way tomorrow.
+
 ### One machine for WHDLoad, and it is an A1200 (2026-08-21)
 
 #### Changed

@@ -20,7 +20,18 @@ export type JobState =
    * which is the `null` case and the common one.
    */
   | { state: "cancelled"; files_landed: number | null }
-  | { state: "failed"; error_code: string; message: string };
+  | { state: "failed"; error_code: string; message: string }
+  /**
+   * Cancelled by ART itself because a newer job in the same lane replaced it
+   * (ART-195) — a live preview the screen re-asked for.
+   *
+   * The user did not ask for this one to stop; they asked for the *next* one
+   * to start. So it is not news, and `JobBar` takes the row off the bar
+   * rather than adding a "cancelled" one beside the preview that is still
+   * running. Stopping is the same cancel token and the same `is_cancelled()`
+   * check the Stop button uses — only who has to be told is different.
+   */
+  | { state: "superseded" };
 
 export interface JobProgress {
   id: number;
@@ -84,6 +95,12 @@ export function jobStatusLabel(job: JobProgress): Phrase {
           };
     case "failed":
       return { key: "components.jobBar.status.failed", params: { code: job.state.error_code } };
+    case "superseded":
+      // Never actually rendered — `JobBar` drops a superseded job rather than
+      // showing it — but the switch has to be total, and "cancelled" is the
+      // true word for what happened to it. Deliberately not a catalogue key
+      // of its own: an unused key fails `pnpm test`, and rightly.
+      return { key: "components.jobBar.status.cancelled" };
   }
 }
 

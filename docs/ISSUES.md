@@ -42,7 +42,7 @@ directories and roughly 987 GB into `%TEMP%` and filled a 2 TB system drive,
 after which hundreds of tests failed with `StorageFull` (ART-184). The tests
 were redirected off the system drive with a machine-local
 `.cargo/config.toml`; **the shipped product was not, and cannot be.**
-[ART-195](#open)'s 2,149 preview jobs each staged into `C:` on the owner's own
+[ART-195](#fixed)'s 2,149 preview jobs each staged into `C:` on the owner's own
 machine.
 
 The owner's standing rule is that ART writes nothing to `C:`. Today the
@@ -99,164 +99,6 @@ user waits on a Settings screen is the wrong shape.
 
 The owner's rule stands over all of it: nothing ART writes goes to `C:` once
 they have said otherwise, and nothing deletes from `C:` at all.
-
-**ART-195** 🟠 **Four preview jobs run at once on one medium, and the screen
-stacks all four** — *found 2026-08-21 by the owner driving the release build,
-screenshot in hand*
-`src/components/osbuilder/PackagePanel.tsx` ·
-`src-tauri/src/commands/osinstall.rs:1251`
-
-The owner asked what the changing number beside "Çalışıyor" meant. It is not
-one number changing: **four separate preview jobs were running at once**,
-counts 886 / 897 / 652 / 226, each on a different file
-(`Utilities/Amplifier/skins/OS3.9/eqmain.iff`, `…/titlebar.iff`,
-`Storage/Printers/HP_DeskJet_320`, `Libs/xad/Cpio`), and all four rendered
-stacked. The eye reads that as one figure jumping about.
-
-**Changing the component selection starts another preview and cancels
-nothing.** So every toggle leaves its predecessor running, and on a 468 MB
-AmigaOS 3.9 ISO that is several full walks of the same disc competing for the
-same drive. **This, not the absence of a cache, is why the preview felt
-slow** — [ART-194](#open) would help, but the work was being done four times
-over.
-
-Two more things visible in the same screenshot:
-
-- **Mixed languages in one line.** *"Previewing 1 component(s) of AmigaOS
-  3.9"* is English beside a Turkish *"Çalışıyor"*. The label is built in Rust
-  (`commands/osinstall.rs:1251`) and so is untranslated — [ART-060](#open)'s
-  family, but here it lands mid-sentence next to a translated word rather
-  than in an error nobody expected to read.
-- **`component(s)`** is a written-out plural where the catalogues have proper
-  plural forms.
-
-**What would close it.** A new preview supersedes the one before it —
-cancelled, not merely ignored, since the point is to stop the disk work. The
-job list should show one preview for one medium. `core/jobs` already carries a
-cancel flag and the runner already turns `CoreError::Cancelled` into a
-`Cancelled` state, so the mechanism exists.
-
-Found by driving the screen, which is exactly what the round's own report said
-had never been done: *"no run has ever been launched from the panel — every
-measurement went through the gated hook."*
-
-**Worse than first filed, measured 2026-08-21 minutes later.** The owner
-pressed stop. Their words: *"durdurmadi yeni is acti"* -- it did not stop, it
-started another job.
-
-Two screenshots about a minute apart show the four visible counts going
-**down**: 886 to 876, 897 to 883, 652 to 566, 226 to 139, with different files
-in every row. A count does not fall within a job, so these are **not four jobs
-slowing down -- they are different jobs**. The panel shows the most recent four
-of a growing pile, and stop added to it.
-
-So there are two faults, and the second is the severe one:
-
-1. Preview jobs accumulate without bound; every toggle starts another walk of
-   the same 468 MB medium and cancels nothing.
-2. **The stop control does not cancel and appears to start a new preview.**
-
-Every other defect this round found told the user something untrue. This one
-*does* something untrue, on the one control a user reaches for when they want
-the machine to leave their disk alone. It is the worst instance of the
-session's defining class, and it was invisible to 2239 passing tests because
-nobody had pressed the button.
-
-The cause is not yet established. A missed `cancel` call and a new job
-appearing are different faults, and the owner has already been given two wrong
-explanations for this slowness -- the third has to be the measured one.
-
-**Read out of the shipped build, not the working tree (2026-08-21).** The
-first attempt at this diagnosis read `OsInstall.tsx` from the checkout, which
-an agent was editing at that moment -- the dependency arrays contained
-`reuseScan`/`rescanNonce`, neither of which exists in the 0.8.5 the owner ran.
-Chasing a moving target. The owner stopped it: *"kullanicinin calistirdigi
-kodu okuyup onun uzerinde bug track yapmak lazim."* Everything below is from
-`git show main:`.
-
-**1. The progress bar is a fixed 25% whenever the total is unknown.**
-`JobBar.tsx`: `width: pct === null ? "25%" : ...`, and `fraction()` returns
-`null` because the preview reports `sink.report(done, None, path)` -- it
-cannot know the denominator until it has finished walking. So the bar looks
-like steady progress and carries no information at all. Measured from the
-owner's screenshots before it was read in code: all four bars exactly **800
-pixels**, ending at the same x, while their counts were 886 / 897 / 652 / 226.
-
-**2. The number is the file count**, rendered as `· ${job.done}` -- files read
-so far, with no total.
-
-**3. The stop button is wired correctly.** `onClick={() => void
-jobCancel(job.id)}`. So cancellation is not missing: the job is cancelled and
-**something immediately starts another**. That reframes the fault -- it is not
-a cancel that fails, it is a loop that restarts.
-
-**Two hypotheses tested and eliminated**, recorded so nobody re-walks them:
-`useRemembered` handing back a fresh array identity ([ART-178](#open)) --
-ruled out, it runs through `useStabilised()` and its own text claims *twice*,
-not thousands; and unstable dependencies on the component-preview effect
-itself -- ruled out, `}, [effectivePlanResult, layeringOn]` where one is
-`useState` and the other `useMemo`.
-
-**Where it points.** `effectivePlanResult` is written only by the planning
-effect, and every run of that effect builds a fresh object, which refires the
-preview. So the question is not why the preview refires but **why the planning
-effect keeps running** -- its dependencies on `main` are `[mediaFolder,
-romPath, chosen, destination, excludedConditional, release, catalogue]`.
-
-**ART-194** 🔵 **The OS Builder rescans the whole medium every time, though
-the machinery to avoid it already exists** — *proposed by the owner
-2026-08-21 while watching a real 468 MB ISO preview*
-`src-tauri/src/core/osinstall/scan.rs` ·
-`src-tauri/src/commands/osinstall.rs::preview_cache_key`
-
-Amiga files are small and numerous, so walking a disc is thousands of tiny
-reads and the preview visibly takes its time. The owner's suggestion: settle
-it once and compare against that afterwards.
-
-**Half of it is already built.** Archive extraction for the component preview
-is cached on `preview_cache_key` — `(path, mtime, size, member)` — hashed into
-a deterministic directory, so a second preview of the same archive does not
-extract it again. **The media scan has no equivalent**: `scan.rs` caches
-nothing, so every preview walks the disc from the start.
-
-**Identity from metadata, not from content.** The owner phrased it as taking a
-hash; hashing 468 MB costs about what the scan costs, so it would trade the
-problem for itself. `preview_cache_key`'s shape is the cheap one and it is
-already proven here: path plus size plus mtime is three constant-time reads,
-and all three stay put when a disc has not changed. Content hashing earns its
-keep where the question is "are these two files the same" — not "is this the
-same file I read last time".
-
-**What would close it.** The scan's result keyed the same way, stored beside
-the extraction cache, invalidated by the same three fields. The number that
-should go in this entry is how long the owner's own first scan of
-`AmigaOS39.iso` actually took — measure it rather than assert that it is slow.
-
-**Decided 2026-08-21 by the owner: build it, cached by default, with an
-explicit rescan the user can reach.**
-
-Two requirements, and the second is the sharper one.
-
-**Cached by default, because the wait is not the user's problem to
-understand.** Nobody should sit through a rescan of a disc that has not
-changed, and no screen should have to explain why it is doing it. The fast
-path is the ordinary path.
-
-**And a rescan the user can ask for, because the key can be right and the
-answer still wrong.** `(path, size, mtime)` catches a file that changed in
-place — but **a restored backup can preserve its timestamps**. Several
-AmigaOS 3.9 ISOs are in circulation and people also keep their own backups,
-so "same path, same size, same mtime, different disc" is a real arrangement
-rather than a theoretical one. The cache would then serve a stale answer with
-complete confidence, which is this project's most expensive failure shape —
-it does not crash, it just tells the user something untrue.
-
-So the rescan control is not a convenience. It is the escape hatch for the
-one case the cheap key cannot see, and the reason the cheap key is safe to
-use everywhere else.
-
-Per CLAUDE.md's "nothing changes unless the user changes it": if the user
-turns caching off or forces a rescan, that choice persists.
 
 **ART-187** 🔵 **A cancelled Amiga-side install leaves the last phase line
 on screen under a badge that says nothing about it** — *found 2026-08-21 in
@@ -378,49 +220,6 @@ it*, and emptying `KEPT_WITHOUT_A_READER` as it goes. The list is closed in the
 meantime: a **new** dead key fails `dead-keys.test.ts`, which is the whole
 point — that cannot happen again without someone adding a line to the
 allow-list on purpose.
-
-
-**ART-178** 🔵 **`useRemembered` hands back a fresh array identity when the
-persisted value lands, so every effect that depends on one runs twice with an
-identical request** — *found 2026-08-20 while measuring [ART-119](#fixed) #1 on
-`debt-wave-c2`; filed rather than fixed there, because it is not that screen's
-defect*
-`src/lib/useRemembered.ts` · `src/lib/remembered.ts` · every screen that reads
-an array or object through `useRemembered`
-
-ART-119 #1 was "the OS Builder plans the same thing twice", and fixing it
-halved the count. Measured, in `OsInstall.test.tsx`: the old code submitted
-**4** byte-identical `osinstallPlan` requests for one settled render, and the
-fix took it to **2**. The remaining factor of two is a different cause and is
-this entry.
-
-`useRemembered`'s read is asynchronous. On the first render it returns the
-default — a **fresh** `[]` — and when the persisted value lands it returns
-another array, structurally equal and referentially different. Any `useEffect`
-listing that value as a dependency therefore runs a second time with a request
-that is byte-identical to the first. For the OS Builder that is a full
-re-plan: `plan()` opens and walks every switched-on component's disc image.
-
-**Why this is not ART-119's to fix and not a one-line change.** It is not one
-screen: `useRemembered` is how this project keeps its promise that nothing
-changes unless the user changes it, and it is read for the component
-checklist, the file manager's remembered paths, the collection's source list
-and more. Memoizing inside `useRemembered` would make the identity stable but
-would also make "the value has not arrived yet" and "the value is the default"
-indistinguishable at the point of use, which is [ART-089](#fixed)'s own
-hazard from the other side. Comparing structurally at each call site puts the
-same reasoning in a dozen places. Neither is obviously right, and picking one
-inside a debt round would have hidden the measurement that found it.
-
-**What would close it:** a decision about where the stabilisation lives —
-inside `useRemembered` (one place, but it has to keep "not yet loaded"
-distinguishable) or in a shared dependency-comparison hook the screens opt
-into — and then the measurement re-run. The count is the acceptance test: the
-OS Builder's settled render should submit **1** request, not 2.
-
-*Not data-unsafe.* Nothing is written twice; the duplicate is a read. What it
-costs is real work on every keystroke in a field, on a screen whose plan reads
-real disc images.
 
 
 **ART-171** 🟠 **The content layer's spec §8.3 hazard — `WBStartup` and
@@ -842,6 +641,316 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-178** 🔵 ✅ **`useRemembered` hands back a fresh array identity when the
+persisted value lands, so every effect that depends on one runs twice with an
+identical request** — *found 2026-08-20 while measuring [ART-119](#fixed) #1 on
+`debt-wave-c2`; filed rather than fixed there, because it is not that screen's
+defect. Closed 2026-08-21 alongside [ART-195](#fixed), which is the same defect
+unbounded*
+`src/lib/useRemembered.ts` · `src/lib/remembered.ts` · every screen that reads
+an array or object through `useRemembered`
+
+ART-119 #1 was "the OS Builder plans the same thing twice", and fixing it
+halved the count. Measured, in `OsInstall.test.tsx`: the old code submitted
+**4** byte-identical `osinstallPlan` requests for one settled render, and the
+fix took it to **2**. The remaining factor of two is a different cause and is
+this entry.
+
+`useRemembered`'s read is asynchronous. On the first render it returns the
+default — a **fresh** `[]` — and when the persisted value lands it returns
+another array, structurally equal and referentially different. Any `useEffect`
+listing that value as a dependency therefore runs a second time with a request
+that is byte-identical to the first. For the OS Builder that is a full
+re-plan: `plan()` opens and walks every switched-on component's disc image.
+
+**Why this is not ART-119's to fix and not a one-line change.** It is not one
+screen: `useRemembered` is how this project keeps its promise that nothing
+changes unless the user changes it, and it is read for the component
+checklist, the file manager's remembered paths, the collection's source list
+and more. Memoizing inside `useRemembered` would make the identity stable but
+would also make "the value has not arrived yet" and "the value is the default"
+indistinguishable at the point of use, which is [ART-089](#fixed)'s own
+hazard from the other side. Comparing structurally at each call site puts the
+same reasoning in a dozen places. Neither is obviously right, and picking one
+inside a debt round would have hidden the measurement that found it.
+
+## How it was closed, and why the objection above turned out not to bite
+
+**Inside `useRemembered`**, and inside `useRememberedShape` too — which was
+worse and went unmentioned when this was filed, because `recallInto` builds a
+new object on *every* call, stored value or not. Both now hand back the value
+they handed back last time when `sameRemembered` says it is the same value.
+
+The objection was that memoising here would make "the value has not arrived
+yet" and "the value is the default" indistinguishable. It does not. A stored
+value that *differs* from the default still changes the identity in the render
+it lands in, so every effect depending on it still runs. What stops changing is
+the identity of a value that did not change — and a reference difference with
+no value difference behind it is not information any caller could have used.
+The two cases were already indistinguishable *by value*; only the reference
+told them apart, and no call site ever read it.
+
+**The count, measured, and honestly.** This entry set "1 request, not 2" as the
+acceptance test. The settled render still submits 2 — and that is correct, not
+a miss. The residual pair is `catalogue` arriving: `null` → the loaded list is
+a genuine dependency change, and the two requests are byte-identical only
+because nothing needed sanitising. What this fix removed is the other kind, and
+it was never a factor of two: when the remembered key had **never been
+written** — which is every per-release key on a fresh install — the effect
+re-ran without bound. `OsInstall.test.tsx` measured 25 runs against a ceiling
+of 25 before, and 1 after; the real screen managed 2,149.
+
+*Not data-unsafe.* Nothing was written twice; the duplicate was a read.
+
+Tests: `does not re-run the effect when the persisted read lands holding the
+default (ART-178)` · `does not change on re-render when nothing is stored, so
+an effect depending on it settles` · `still changes when the value itself
+changes, so the effect does run again` · `a remembered shape's identity`
+(`src/lib/useRemembered.test.tsx`).
+
+
+**ART-195** 🟠 ✅ **The OS Builder started a preview on every render, not on
+every user action — 2,149 preview jobs in one session, and pressing Stop
+appeared to start another** — *found 2026-08-21 by the owner driving the
+release build; fixed the same day*
+`src/lib/useRemembered.ts` · `src/lib/remembered.ts::sameRemembered` ·
+`src-tauri/src/commands/jobs.rs::spawn_job_in_lane` · `src/components/JobBar.tsx`
+
+## What was filed, and what it actually was
+
+Filed as "four preview jobs run at once, and changing the selection cancels
+nothing". That was the visible half and it was true, but it was not the cause.
+Two screenshots a minute apart showed the four counts going **down** —
+886→876, 897→883, 652→566, 226→139 — with different files in every row. Counts
+do not fall within a job, so those were not four jobs slowing down; they were
+the most recent four of a growing pile. The pile's size came out of `%TEMP%`
+after the owner closed the app: staging roots numbered to **2,149**, five of
+them created inside two seconds. Nobody toggles a checkbox 2,149 times.
+
+**The stop control was innocent.** `JobBar`'s button is wired straight to
+`jobCancel(job.id)`, `preview_component_collisions` checks `is_cancelled()`
+between whole staged files, and the runner turns `CoreError::Cancelled` into a
+`Cancelled` state. All three worked. What made a *new* job appear is that
+settling the cancelled preview's promise set state — and any state change fed
+the loop below another turn.
+
+## The cause: an identity that changed on every render
+
+`recall` returns the caller's `fallback` when nothing is stored, and every call
+site spells its fallback inline: `useRemembered(key, isTextList, [])`. A fresh
+`[]` per render is a fresh **identity** per render, and `useEffect` compares
+dependencies by identity. `OsInstall.tsx`'s plan effect lists `chosen` and
+`excludedConditional`. So: render → effect → `osinstallPlan` (which walks the
+468 MB ISO once per switched-on component, three times for AmigaOS 3.9) →
+`setState` with a fresh `PlanResult` → render. `recallInto` is worse still — it
+builds a new object on every call, stored value or not, so
+`useRememberedShape` never returned a stable identity at all.
+
+This is [ART-178](#fixed), filed as a factor-of-two duplication and in fact
+unbounded whenever the key had never been written.
+
+**Isolated by measurement, not by reading.** Two hypotheses were offered and
+both had to be tested rather than accepted: that `catalogue` was re-setting
+itself, and that `useRemembered` was *not* the churn because it already
+stabilises its value (it does now — that is this fix; `git show
+main:src/lib/useRemembered.ts` has the bare `recall(stored, key, isValid,
+fallback)` and no `useStabilised`). So the one file was swapped back to the
+shipped 0.8.5 version with everything else left as-is, and
+`does not keep re-planning a release whose remembered keys are empty` was run:
+
+| `src/lib/useRemembered.ts` | plans at settle | plans 250 ms later |
+|---|---|---|
+| shipped 0.8.5 | 27 | **88** |
+| with `sameRemembered` | 27 | **27** |
+
+Sixty-one further plans in a quarter of a second, on a screen nobody was
+touching. `catalogue`, the mocks and every other file were identical between
+the two runs, so the churn is that file and nothing else. In jsdom with mocked
+IPC that is roughly 244 plans a second; on the owner's machine each plan waits
+on the disc instead, which is what turns it into 2,149 in one session rather
+than millions.
+
+**Why every existing test missed it.** `rememberedComponentKey` returns the
+bare key for AmigaOS 3.2 — "the release before there was a picker" — and
+`OsInstall.test.tsx` seeds exactly those bare keys, so on 3.2 both lists are
+stored and nothing loops. On 3.9 the keys are `osinstall.chosen.AmigaOS 3.9`
+and `osinstall.excludedConditional.AmigaOS 3.9`, which nothing had ever
+written. The owner was installing 3.9.
+
+## The fixes, both of them
+
+1. **`useRemembered` and `useRememberedShape` hand back the value they handed
+   back last time when it is structurally the same value** (`sameRemembered`).
+   ART-178's own objection was that memoising here would make "not arrived yet"
+   and "is the default" indistinguishable; it does not — a stored value that
+   *differs* still changes the identity the moment it lands. What stops
+   changing is the identity of a value that did not change, and a reference
+   difference with no value difference behind it is not information any caller
+   could have used.
+2. **A newer preview supersedes the one before it** (`spawn_job_in_lane`). The
+   lane's unfinished job has its cancel token flipped — the same token the Stop
+   button uses, no second mechanism — and its entry is removed from the
+   registry, so the job bar shows one preview rather than a stack.
+   `JobState::Superseded` is what tells the bar to take the row *off*: a
+   superseded job reported as `Cancelled` would have replaced four stacked
+   running rows with four stacked cancelled ones.
+
+## Measured
+
+`plan()` over the owner's `AmigaOS39.iso`, release build
+(`scan_cache::tests::measure_a_real_disc_cold_concurrent_and_warm`):
+
+| | |
+|---|---|
+| one plan, no cache | **370 ms** (first read of the ISO) · **207 ms** (Windows already holding it) |
+| four of them at once | **437 ms** — **1.18x** one plan, not four |
+
+**The four-at-once figure is the interesting one, and it says the opposite of
+what was assumed.** Four concurrent walks of the same disc cost barely more
+than one: they share Windows' own file cache and finish together. So
+contention between jobs was never what made this slow. What made it slow was
+the **count** — 2,149 plans at roughly 207 ms each is about seven and a half
+minutes of continuous disc walking in one session, starting again the instant
+it stopped, for as long as the screen was open. Superseding is still right (it
+is what makes four deliberate clicks cost one walk), but the loop was the
+defect and the pile-up was its symptom.
+
+Tests: `a remembered value's identity` · `a remembered shape's identity`
+(`src/lib/useRemembered.test.tsx`) ·
+`does not keep re-planning a release whose remembered keys are empty`
+(`OsInstall.test.tsx`) · `a_new_job_in_a_lane_cancels_the_one_before_it` ·
+`a_lane_never_holds_more_than_one_unfinished_job` ·
+`a_superseded_job_cannot_come_back_as_cancelled` ·
+`superseding_one_lane_leaves_every_other_job_alone` ·
+`a_finished_job_in_the_lane_is_left_where_it_is` (`commands/jobs.rs`) ·
+`takes a superseded job off the bar instead of restating it` ·
+`still keeps a job the user cancelled, which is news` ·
+`wires its Stop button to jobCancel with that row's own id`
+(`src/components/JobBar.test.tsx`).
+
+The English preview title and its written-out `component(s)` plural were ruled
+out of scope by the owner — *"asıl mesele bu iş çok uzun ve yavaş sürüyor"* —
+and stay with [ART-060](#open).
+
+
+**What was eliminated on the way, including one elimination that was itself
+wrong.** Recorded because a discarded hypothesis is worth writing down, and
+because the owner's rule -- *"hipotez kurmamaliyiz, her zaman en dogru guclu
+kaynaklara bakip elimizdeki bilgiyi teyid etmeliyiz"* -- was earned here.
+
+Four explanations were offered for this slowness before the measured one, and
+**all four were wrong**:
+
+1. *The missing scan cache.* True but small: 207 ms cold to 26 ms warm.
+2. *Four concurrent jobs fighting for the drive.* Wrong. Four concurrent cold
+   plans took 437 ms against 370 ms for one -- **1.18x**. Contention was never
+   the cost; the **count** was, at 2,149 x ~207 ms of continuous walking.
+3. *The stop control is broken.* Wrong. `JobBar` calls `jobCancel`, the
+   registry cancels, and the token is checked between staged files. The button
+   was innocent -- the cancelled promise settling caused a render, and on that
+   build a render was all it took to start another plan.
+4. *[ART-178](#fixed) is not the cause -- `useRemembered` stabilises identity,
+   and its own text says the effect runs* twice. **Wrong, and this is the
+   elimination that cost the most.** `recall` returns the caller's inline `[]`
+   fallback, a fresh identity on **every** render, bypassing the stabiliser
+   entirely. ART-178 was the cause all along, unbounded rather than doubled.
+
+The answer came from an experiment rather than from reading: swapping only
+`main`'s `useRemembered.ts` into the fixed tree produced **27 plans at settle
+and 88 a quarter-second later**; with the fix, 27 and 27. Reading the code had
+produced three plausible wrong answers; running it produced one right one.
+
+**Why 2,239 passing tests never saw it.** `rememberedComponentKey` gives
+AmigaOS 3.2 the bare keys the fixtures seed. The owner was on **3.9**, whose
+keys nothing had ever written -- so the fixtures always took the stabilised
+path and never the fallback.
+
+**ART-194** 🔵 ✅ **The OS Builder walked the whole medium on every preview,
+though the machinery to avoid it already existed** — *proposed by the owner
+2026-08-21 while watching a real 468 MB ISO preview; built the same day*
+`src-tauri/src/core/osinstall/scan_cache.rs` ·
+`src-tauri/src/core/osinstall/scan.rs::open_media_cached` ·
+`src-tauri/src/commands/osinstall.rs::osinstall_rescan_media`
+
+Archive extraction was already cached on `(path, mtime, size, member)`; the
+media scan had no equivalent, so `CdSource::open` walked the disc once per
+switched-on component — three times per plan for AmigaOS 3.9, and again on
+every change of selection.
+
+`core::osinstall::scan_cache` keeps a medium's **listing** (every `MediaEntry`
+its own `walk("")` gave, plus the root entry) in one file per medium path,
+written with `atomic_write`, with `(path, size, mtime)` recorded **inside** the
+file. That last detail is a deliberate difference from `preview_cache_dir`,
+which hashes the identity into the *directory name* and so orphans an entry
+every time an archive changes: here a changed medium overwrites its own entry,
+so repeated use of one disc cannot grow the cache at all. A sweep by age (30
+days) reaps what is left — an entry whose medium has gone away, which nothing
+will ever look up again.
+
+**Identity from metadata, never a hash.** Hashing 468 MB costs about what the
+walk costs. A hash answers "are these two files the same"; this asks "is this
+the same file I read last time".
+
+**Nothing stale is ever partly believed.** Every path out of `lookup` that is
+not "this file parsed, carried this schema, and recorded exactly the identity I
+just stat-ed" is a **miss**: no file, unreadable, oversized, not JSON,
+truncated, another schema, another recorded path, another size, another mtime.
+That is `recall`/`recallInto`'s guarded read on the Rust side. `CachedSource`
+is registered as a sixth implementation in `source_contract.rs`, so it must
+answer all fourteen contract questions exactly as `AdfSource` and `CdSource`
+do — a divergence introduced by a cache would show up only on the *second*
+preview.
+
+**And a rescan the user can reach, because the key can be right and the answer
+still wrong.** A restored backup can preserve its timestamps, and several
+AmigaOS 3.9 ISOs circulate, so "same path, same size, same mtime, different
+disc" is real. **Scan again**, beside the media folder, drops every listing
+durably and re-plans; the **Reuse the last scan of unchanged discs** tickbox
+beside it is remembered through `useRemembered` with an `isFlag` guard, and
+switching it off skips storing as well as looking up.
+
+## Measured
+
+`plan()` over the owner's `AmigaOS39.iso` (468 MB, 8 584 entries, 1 517 plan
+items), release build:
+
+| | |
+|---|---|
+| cold, ART's cache empty | **207 ms** |
+| warm, cache hit | **26 ms** — **8x** faster |
+
+207 ms and not the 370 ms a first-ever read costs, deliberately: the warm run
+has Windows' own file cache behind it, so the cold run it is compared against
+must too, or the number would be measuring the operating system rather than
+this change. Against a genuinely first read the ratio is 14x. Stable across
+three runs (26.1 / 26.4 / 27.4 ms warm; 206.5 / 205.0 / 211.2 ms cold).
+
+Both plans are asserted to agree — same item count, same `total_bytes`, same
+refusals — or the number would mean nothing.
+
+Tests: `a_second_open_is_answered_from_the_cache_and_not_from_the_medium` ·
+`a_rescan_goes_back_to_the_medium_instead_of_the_remembered_listing` ·
+`a_medium_of_the_same_size_with_a_later_mtime_is_a_miss` ·
+`a_medium_that_changed_size_is_a_miss` ·
+`an_unusable_cache_file_is_a_miss_not_an_answer` ·
+`an_oversized_cache_file_is_refused_without_being_read` ·
+`a_medium_that_vanished_is_a_miss_not_a_stale_hit` ·
+`forgetting_removes_the_entry_from_disk_and_the_next_lookup_misses` ·
+`forgetting_touches_only_this_modules_own_files` ·
+`a_cache_that_is_off_neither_reads_nor_writes` ·
+`a_cache_that_is_off_always_reads_the_medium` ·
+`a_cached_source_answers_what_the_real_source_answers` ·
+`walking_a_cached_source_never_opens_the_medium` ·
+`the_sweep_reaps_only_what_is_older_than_the_bound` · the fourteen
+`source_contract` questions, now asked of `CachedSource/adf` and
+`CachedSource/disc` ·
+`plans with the cache on by default, and remembers the user turning it off` ·
+`asks the backend to forget what it remembered, and re-plans against the discs`
+(`OsInstall.test.tsx`).
+
+The cache lives under `%TEMP%`, beside the extraction cache, and so moves with
+[ART-196](#open) when the scratch root becomes a choice.
 
 **ART-152** 🔵 ✅ **ART sized a WHDLoad launch's machine from the catalogue's
 own chipset — the Amiga the *game* was written for, not the Amiga WHDLoad
@@ -1875,7 +1984,7 @@ than looking like one that found nothing.
   nothing at the destination and **every Replace row degraded silently to
   "new"**: a wrong preview, in the screen a user reads before ticking the
   component that decides which operating system they end up with. And it is not
-  a rare interleaving — [ART-178](#open) makes the plan effect settle twice
+  a rare interleaving — [ART-178](#fixed) made the plan effect settle twice
   with an identical request, so two concurrent identical previews are the
   *normal* case. The root is per call now (process id plus a counter that never
   repeats — the sixth instance of that class in this codebase and the first

@@ -59,6 +59,7 @@ pub mod package;
 pub mod plan;
 pub mod recipe;
 pub mod scan;
+pub mod scan_cache;
 pub mod source;
 pub mod source_archive;
 pub mod source_cd;
@@ -1061,6 +1062,7 @@ pub(crate) mod fixtures {
             chosen: chosen.iter().map(|s| s.to_string()).collect(),
             excluded: Vec::new(),
             destination: dir.join("dist"),
+            scan_cache: Default::default(),
         };
 
         let plan = crate::core::osinstall::plan::plan(&request, &recipe).unwrap();

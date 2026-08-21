@@ -70,12 +70,14 @@ const onResultMock = vi.hoisted(() => vi.fn());
 const identifyRomMock = vi.hoisted(() => vi.fn());
 const dialogOpenMock = vi.hoisted(() => vi.fn());
 const onJobProgressMock = vi.hoisted(() => vi.fn());
+const rescanMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/osinstall", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/osinstall")>()),
   osinstallScanMedia: scanMediaMock,
   osinstallComponents: componentsMock,
   osinstallPlan: planMock,
+  osinstallRescanMedia: rescanMock,
   osinstallComponentCollisions: componentCollisionsMock,
   osinstallApply: applyMock,
   osinstallVerify: verifyMock,
@@ -310,6 +312,7 @@ beforeEach(() => {
   identifyRomMock.mockReset().mockResolvedValue(ROM);
   dialogOpenMock.mockReset().mockResolvedValue(null);
   onJobProgressMock.mockReset().mockResolvedValue(() => {});
+  rescanMock.mockReset().mockResolvedValue(1);
   useSettingsStore.setState({ loaded: false, settings: DEFAULT_SETTINGS });
 });
 
@@ -338,13 +341,17 @@ describe("OsInstall renders past its headings", () => {
     expect(screen.getByText(i18n.t("osinstall.destination.label"))).toBeTruthy();
 
     // The component checklist is the screen's real input (requirement 4) —
-    // one row per component of the release's own loaded recipe. `+ 2` is the
-    // two confirmation tickboxes that are not components: the run card's,
-    // and `AmigaInstallPanel`'s own (the Amiga-side install round's task 6).
-    // `PackagePanel`'s confirmation is not among them — it renders only once
-    // a package has been ticked, and nothing here ticks one.
+    // one row per component of the release's own loaded recipe. `+ 3` are the
+    // tickboxes that are not components: the run card's confirmation,
+    // `AmigaInstallPanel`'s own (the Amiga-side install round's task 6), and
+    // the media section's "reuse the last scan" (ART-194). `PackagePanel`'s
+    // confirmation is not among them — it renders only once a package has been
+    // ticked, and nothing here ticks one.
     const checkboxes = screen.getAllByRole("checkbox");
-    expect(checkboxes.length).toBe(COMPONENTS_32.length + 2);
+    expect(checkboxes.length).toBe(COMPONENTS_32.length + 3);
+    expect(
+      screen.getByRole("checkbox", { name: i18n.t("osinstall.media.reuseScan") })
+    ).toBeTruthy();
 
     expect(screen.getByRole("button", { name: i18n.t("osinstall.run.run") })).toBeTruthy();
     expect(screen.getByRole("button", { name: i18n.t("osinstall.verify.run") })).toBeTruthy();
@@ -502,6 +509,101 @@ describe("the screen does not plan the same thing twice", () => {
     // alongside the effective one. `requestCounts` has more than one key
     // exactly when both survived.
     expect(requestCounts().size).toBeGreaterThan(1);
+  });
+});
+
+describe("reusing the last scan, and asking for a fresh one (ART-194)", () => {
+  it("plans with the cache on by default, and remembers the user turning it off", async () => {
+    await renderFull();
+
+    // Cached by default: nobody had to switch this on, and the very first
+    // request the screen ever sends already says so.
+    expect(planMock.mock.calls.length).toBeGreaterThan(0);
+    for (const [req] of planMock.mock.calls as [InstallRequest][]) {
+      expect(req.scanCache).toBe("reuse");
+    }
+
+    const box = screen.getByRole("checkbox", {
+      name: i18n.t("osinstall.media.reuseScan"),
+    }) as HTMLInputElement;
+    expect(box.checked).toBe(true);
+
+    planMock.mockClear();
+    await userEvent.click(box);
+
+    // Two things, and the second is the one that would go unnoticed: the plan
+    // is re-asked *with the new answer*, and the choice was written to the
+    // remembered store so tomorrow's run starts where this one ended.
+    await waitFor(() =>
+      expect(planMock).toHaveBeenCalledWith(expect.objectContaining({ scanCache: "ignore" }))
+    );
+    await waitFor(() => {
+      const bag = useSettingsStore.getState().settings.remembered as Record<string, unknown>;
+      expect(bag["osinstall.reuseScan"]).toBe(false);
+    });
+  });
+
+  it("asks the backend to forget what it remembered, and re-plans against the discs", async () => {
+    await renderFull();
+    planMock.mockClear();
+
+    await userEvent.click(screen.getByRole("button", { name: i18n.t("osinstall.media.rescan") }));
+
+    // It reaches the command that actually deletes the listings — a rescan
+    // that merely skipped the cache for one call would leave the stale answer
+    // sitting there for the next one.
+    await waitFor(() => expect(rescanMock).toHaveBeenCalled());
+    // …and the screen really re-plans afterwards, rather than showing the
+    // answer it already had.
+    await waitFor(() => expect(planMock).toHaveBeenCalled());
+    // …and says what it did, so the button cannot be mistaken for one that
+    // ignored the click.
+    await screen.findByText(i18n.t("osinstall.media.rescanned", { count: 1 }));
+  });
+});
+
+describe("the screen settles instead of re-planning for ever (ART-195)", () => {
+  // What the owner saw, and the number that made it undeniable: the release
+  // build's `%TEMP%` held preview staging roots numbered up to **2,149** from
+  // one session, five of them created inside two seconds. That is not a
+  // component being toggled — it is an effect firing per render.
+  //
+  // The cause is `useRemembered`'s inline `[]` fallback. `recall` hands the
+  // caller's own fallback back when nothing is stored, so an unstored key
+  // yields a *fresh array identity* every render, and the plan effect lists
+  // `chosen` and `excludedConditional` among its dependencies. Each pass
+  // planned (three full walks of a 468 MB ISO), set state, and re-rendered.
+  //
+  // **Why every existing test missed it.** `rememberedComponentKey` returns
+  // the bare key for AmigaOS 3.2 — "the release before there was a picker" —
+  // and `FULL_FIELDS` seeds exactly those bare keys. So on 3.2 both lists are
+  // stored, both identities are stable, and nothing loops. On 3.9 the keys are
+  // `osinstall.chosen.AmigaOS 3.9` and `osinstall.excludedConditional.AmigaOS
+  // 3.9`, which nothing had ever written. The owner was installing 3.9.
+  //
+  // So this test switches to 3.9 and counts. It is deliberately about the
+  // *release the owner used*, not the one the fixture defaults to.
+  it("does not keep re-planning a release whose remembered keys are empty", async () => {
+    await renderFull();
+
+    const picker = screen.getByRole("combobox", {
+      name: i18n.t("osinstall.release.label"),
+    }) as HTMLSelectElement;
+    await userEvent.selectOptions(picker, "AmigaOS 3.9");
+    await waitFor(() =>
+      expect(planMock).toHaveBeenCalledWith(expect.objectContaining({ release: "AmigaOS 3.9" }))
+    );
+
+    // Let the screen settle, then measure how much more work it starts while
+    // nothing at all is happening. Against the defect this climbs without
+    // bound; the assertion is that it climbs by nothing.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const planned = planMock.mock.calls.length;
+    const previewed = componentCollisionsMock.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    expect(planMock.mock.calls.length).toBe(planned);
+    expect(componentCollisionsMock.mock.calls.length).toBe(previewed);
   });
 });
 
