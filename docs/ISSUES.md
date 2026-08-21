@@ -26,6 +26,53 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-199** 🟠 **A step reports itself ready on a folder that is not a
+distribution tree, so the refusal arrives on the button instead of at the
+field** — *found 2026-08-22 by the owner driving wave 1's own screen, minutes
+after it was built*
+`src/lib/buildSteps.ts::readiness` · `src/pages/osbuilder/steps.tsx`
+
+`readiness` asks whether `session.tree.root` is a non-empty string. It does not
+ask whether the folder **is** a tree. So a step whose value points at an
+ordinary AmigaOS folder renders with no warning, looks ready, and answers only
+when the user presses:
+
+> ART bunu çalıştırmayacak
+> `operation refused to protect data: 'E:\amiga\Amigatolon\os39' holds no
+> distribution.json, so ART cannot say which packages it already has; point at
+> a distribution tree ART built` · `ART-SAFETY-REFUSED`
+
+**The refusal itself is correct and is not the defect.** It protects data, it
+names the folder, it says what is missing and what to point at, and nothing was
+copied — `refuse_unless_installable` ([ART-186](#fixed)) doing exactly its job.
+What is wrong is *when* it arrives and *where the user was looking*. This is the
+same class the round exists to close: the screen does not crash, does not warn,
+and leaves the reader not knowing what to do next — arriving through a field
+that looked answered rather than through a sentence.
+
+**It is also the case the design already predicted**, which is why this is filed
+rather than patched in place. §3 of
+[the flow design](superpowers/specs/2026-08-21-os-builder-flow-design.md)
+says a hand-picked folder is validated *at the moment of picking* —
+*"AmigaOS 3.9 tree, 1915 files"*, or *"no `distribution.json` here"* — and
+**never a refusal arriving minutes later**. That is wave 2's `describe_tree`
+command and its picker. Wave 1 deliberately shipped without them; what this
+entry records is that the gap is real on a screen, not only on paper.
+
+**Two things about how it was found are worth keeping.** It came from the
+owner driving the very screen the wave had just been written for, within
+minutes, after 828 frontend tests and a browser layout probe had all passed —
+the project's own pattern, again. And the value it refused on was **correct**:
+the session had faithfully carried the folder the packages panel was already
+pointing at, which is wave 1's migration working. A migration that had quietly
+dropped it would have looked *better* here, and been worse.
+
+**Fix in wave 2**, with `describe_tree`: `readiness` gains a third answer
+between "ready" and "asks" — a folder that is set but does not describe as a
+tree — and the step says so at the field, in the user's own language, before
+the button. Until then the English refusal is the only thing that says it,
+which is [ART-060](#open) as well.
+
 **ART-196** 🟠 **ART writes its scratch to the system drive and the user
 cannot move it** — *raised by the owner 2026-08-21, after their C: had already
 been filled once by ART's own test scratch*
