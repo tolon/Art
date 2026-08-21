@@ -166,6 +166,43 @@ The cause is not yet established. A missed `cancel` call and a new job
 appearing are different faults, and the owner has already been given two wrong
 explanations for this slowness -- the third has to be the measured one.
 
+**Read out of the shipped build, not the working tree (2026-08-21).** The
+first attempt at this diagnosis read `OsInstall.tsx` from the checkout, which
+an agent was editing at that moment -- the dependency arrays contained
+`reuseScan`/`rescanNonce`, neither of which exists in the 0.8.5 the owner ran.
+Chasing a moving target. The owner stopped it: *"kullanicinin calistirdigi
+kodu okuyup onun uzerinde bug track yapmak lazim."* Everything below is from
+`git show main:`.
+
+**1. The progress bar is a fixed 25% whenever the total is unknown.**
+`JobBar.tsx`: `width: pct === null ? "25%" : ...`, and `fraction()` returns
+`null` because the preview reports `sink.report(done, None, path)` -- it
+cannot know the denominator until it has finished walking. So the bar looks
+like steady progress and carries no information at all. Measured from the
+owner's screenshots before it was read in code: all four bars exactly **800
+pixels**, ending at the same x, while their counts were 886 / 897 / 652 / 226.
+
+**2. The number is the file count**, rendered as `· ${job.done}` -- files read
+so far, with no total.
+
+**3. The stop button is wired correctly.** `onClick={() => void
+jobCancel(job.id)}`. So cancellation is not missing: the job is cancelled and
+**something immediately starts another**. That reframes the fault -- it is not
+a cancel that fails, it is a loop that restarts.
+
+**Two hypotheses tested and eliminated**, recorded so nobody re-walks them:
+`useRemembered` handing back a fresh array identity ([ART-178](#open)) --
+ruled out, it runs through `useStabilised()` and its own text claims *twice*,
+not thousands; and unstable dependencies on the component-preview effect
+itself -- ruled out, `}, [effectivePlanResult, layeringOn]` where one is
+`useState` and the other `useMemo`.
+
+**Where it points.** `effectivePlanResult` is written only by the planning
+effect, and every run of that effect builds a fresh object, which refires the
+preview. So the question is not why the preview refires but **why the planning
+effect keeps running** -- its dependencies on `main` are `[mediaFolder,
+romPath, chosen, destination, excludedConditional, release, catalogue]`.
+
 **ART-194** 🔵 **The OS Builder rescans the whole medium every time, though
 the machinery to avoid it already exists** — *proposed by the owner
 2026-08-21 while watching a real 468 MB ISO preview*
