@@ -406,6 +406,12 @@ export interface PackageSummary {
    *  must not be tickable: the user has to learn this before committing to
    *  it, not after (M3, ART-166). */
   hostPlacementBlock: HostPlacementBlock | null;
+  /** Whether this package's own recipe declares an installer ART can run
+   *  **on the Amiga** — the other half of `hostPlacementBlock`. A BoingBag
+   *  cannot be placed from Windows and *can* be run inside an emulator, and
+   *  `AmigaInstallPanel` offers exactly the packages this is true of, read
+   *  from the recipe rather than from a list of ids written here. */
+  amigaInstallable: boolean;
   /** Every entry name this package's own archive carries that `safe_join`
    *  refused — a `..`, an absolute path, a Windows prefix — exactly as the
    *  archive spelled it, and `[]` for the ordinary archive. Shown beside

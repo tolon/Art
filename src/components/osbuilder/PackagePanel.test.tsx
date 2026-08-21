@@ -70,6 +70,7 @@ const PACKAGES: PackageSummary[] = [
     requiresComponents: [],
     available: true,
     hostPlacementBlock: null,
+    amigaInstallable: false,
     refusedNames: [],
   },
   {
@@ -79,6 +80,7 @@ const PACKAGES: PackageSummary[] = [
     requiresComponents: [],
     available: true,
     hostPlacementBlock: null,
+    amigaInstallable: false,
     refusedNames: [],
   },
   {
@@ -88,6 +90,7 @@ const PACKAGES: PackageSummary[] = [
     requiresComponents: ["locale-base"],
     available: true,
     hostPlacementBlock: null,
+    amigaInstallable: false,
     refusedNames: [],
   },
 ];
@@ -230,6 +233,7 @@ describe("F3 — a remembered pick whose archive vanished can still be unticked"
         requiresComponents: [],
         available: false,
         hostPlacementBlock: null,
+        amigaInstallable: false,
         refusedNames: [],
       },
     ]);
@@ -310,6 +314,7 @@ const REAL_PACKAGES: PackageSummary[] = [
     requiresComponents: [],
     available: true,
     hostPlacementBlock: "encrypted-payload",
+    amigaInstallable: false,
     refusedNames: [],
   },
   {
@@ -319,6 +324,7 @@ const REAL_PACKAGES: PackageSummary[] = [
     requiresComponents: ["locale-base"],
     available: true,
     hostPlacementBlock: null,
+    amigaInstallable: false,
     refusedNames: [],
   },
 ];
@@ -386,6 +392,7 @@ describe("m6 — an entry name safe_join refused is shown, not only counted", ()
         requiresComponents: [],
         available: true,
         hostPlacementBlock: null,
+        amigaInstallable: false,
         refusedNames: ["../../Startup"],
       },
     ] satisfies PackageSummary[]);

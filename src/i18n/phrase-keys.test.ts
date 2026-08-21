@@ -104,6 +104,16 @@ import {
   type RefusalReason as OsInstallRefusalReason,
 } from "@/lib/osinstall";
 import {
+  outcomeNextStepPhrase as amigaNextStepPhrase,
+  outcomePhrase as amigaOutcomePhrase,
+  overlayAdvicePhrase,
+  readinessBlockers,
+  settlementPhrase,
+  type AmigaInstallPreview,
+  type RunOutcome,
+  type SettlementReport,
+} from "@/lib/amigainstall";
+import {
   launchKindPhrase,
   machinePhrase,
   mountNotePhrase,
@@ -138,6 +148,64 @@ function resolvesAtRuntime(dotted: string): boolean {
 }
 
 describe("Phrase keys returned by the discriminated-union mappers", () => {
+  it("amigainstall: every ending, every settlement, every blocker resolves", () => {
+    // The four endings are four sentences and four next steps (§89, and the
+    // three defects this round produced); a key nobody added would render as
+    // its own dotted name on screen, which is how a "different sentence per
+    // ending" quietly becomes four raw keys that all look alike.
+    const endings: RunOutcome[] = [
+      { kind: "succeeded" },
+      { kind: "failed" },
+      { kind: "timed-out", waited: { secs: 60, nanos: 0 } },
+      { kind: "emulator-closed", waited: { secs: 60, nanos: 0 } },
+    ];
+    for (const outcome of endings) {
+      expect(resolvesAtRuntime(amigaOutcomePhrase(outcome).key)).toBe(true);
+      expect(resolvesAtRuntime(amigaNextStepPhrase(outcome).key)).toBe(true);
+    }
+
+    const settlements: SettlementReport[] = [
+      { kind: "promoted", tree: "D:/t", leftBehind: null },
+      { kind: "promoted", tree: "D:/t", leftBehind: "D:/t.old" },
+      { kind: "kept", copy: "D:/t.copy", original: "D:/t" },
+    ];
+    for (const settlement of settlements) {
+      expect(resolvesAtRuntime(settlementPhrase(settlement).key)).toBe(true);
+    }
+
+    const preview: AmigaInstallPreview = {
+      packageId: "boingbag-39-1",
+      packageName: "BoingBag 3.9-1",
+      tree: "D:/t",
+      systemVolume: "DH0",
+      workingDirectory: "ARTPkg:BoingBag3.9-1",
+      program: "ARTPkg:BoingBag3.9-1/C/Updater",
+      args: ["AmigaOS-Update", "DH0:"],
+      workVolume: "ARTWork",
+      packageVolume: "ARTPkg",
+      packageArchives: ["a.lha"],
+      packageArchivesPresent: false,
+      declaredOverlays: ["BoingBag3.9-1-UAE/BoingBag3.9-1"],
+      minimumInstallerVersion: "45.15",
+      packageDir: "BoingBag3.9-1",
+      resultFile: "art-result.txt",
+      deadlineSeconds: 1800,
+      kickstart: "D:/kick.rom",
+      kickstartPresent: false,
+      emulator: null,
+      profileId: "a1200-aga",
+      profileName: "Amiga 1200 (AGA)",
+    };
+    for (const blocker of readinessBlockers(preview)) {
+      expect(resolvesAtRuntime(blocker.key)).toBe(true);
+    }
+    for (const archives of [["a.lha"], ["a.lha", "b.lha"]]) {
+      const advice = overlayAdvicePhrase({ ...preview, packageArchives: archives });
+      expect(advice).not.toBeNull();
+      expect(resolvesAtRuntime(advice!.key)).toBe(true);
+    }
+  });
+
   it("describeUpdate: every PackageUpdate.state variant resolves", () => {
     const base = {
       reference: { provider: "aminet", path: "util/libs/AmiSSL.lha" },

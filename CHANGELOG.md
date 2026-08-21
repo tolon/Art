@@ -89,6 +89,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **Still not reachable from the interface**, and no emulator is started by
   anything you can click yet.
+- **And now you can ask for it.** The OS Builder has a new panel: *Run a
+  package's own installer on the Amiga*. Point it at a system folder ART
+  built, pick the package, its own archive and your own Kickstart, and ART
+  copies the folder, opens an emulator, lets the package install itself, and
+  tells you what happened. **Nothing is unlocked or worked around**; the
+  package's own installer does what it always did.
+
+  Four things it is careful about, because each of them is a way of being
+  told something untrue:
+
+  - **It says an emulator window is about to open on your desktop**, before
+    it opens one, and asks you to confirm.
+  - **A run ends four ways and each is its own sentence**: it worked, the
+    installer refused, nobody answered a question it asked, or the window was
+    closed. Each comes with a different thing to do next — being told "it
+    timed out, watch the window next time" about a window you closed yourself
+    is worse than being told nothing.
+  - **If it did not work, it tells you where the copy is.** Your own folder
+    is untouched; the copy the installer worked on is kept exactly as it was
+    left, so you can look at what happened. And on the rare occasion the old
+    folder cannot be deleted after a success, it says where that is too.
+  - **A refusal names what to do about it.** Missing an earlier package? It
+    says which, and in which order. Installer too old to run under an
+    emulator? It names the second archive that fixes it — and says so *before*
+    the run, not after, so one download is the whole fix.
+
+  Beginner mode hides the machinery — the Amiga command line, the volume
+  names — and hides nothing else; the warning, the four answers and the run
+  itself are the same in both modes.
 - **Each BoingBag now says, in its own recipe, what the Amiga should
   run.** Both point at the `Updater` the package itself carries, with the
   update file it expects — read out of your own archives and out of each

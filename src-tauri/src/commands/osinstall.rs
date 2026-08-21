@@ -353,6 +353,20 @@ pub struct PackageSummary {
     /// `Some` when ART cannot place this package's files from the host at
     /// all — never a folder problem, always a property of the package.
     pub host_placement_block: Option<HostPlacementBlock>,
+    /// Whether this package declares an installer of its own that ART can
+    /// run **on the Amiga**
+    /// ([`AmigaInstaller`](crate::core::osinstall::package::AmigaInstaller)),
+    /// which is the other half of [`host_placement_block`](Self::host_placement_block):
+    /// a BoingBag cannot be placed from Windows and *can* be run inside an
+    /// emulator, and the Amiga-side panel offers exactly the packages this
+    /// is true of.
+    ///
+    /// Read from the recipe rather than left for the screen to hardcode.
+    /// Without it the panel would either list three packages and refuse one
+    /// of them a moment later — "ART ships no Amiga-side installer for
+    /// 'locale-turkish'", met after the pick rather than before it — or
+    /// carry a list of ids that a fourth recipe would silently not join.
+    pub amiga_installable: bool,
     /// Every entry name this package's own archive carries that
     /// [`safe_join`](crate::core::security::safe_join) refused — a `..`, an
     /// absolute path, a Windows prefix — exactly as the archive spelled it,
@@ -406,6 +420,7 @@ pub fn osinstall_packages(package_folder: PathBuf) -> AppResult<Vec<PackageSumma
                 requires_components: p.requires_components,
                 available: !matched.is_empty(),
                 host_placement_block: p.host_placement_block,
+                amiga_installable: p.amiga_installer.is_some(),
                 // Every claimant's, not only the first: an ambiguous name
                 // is still offered as available (the refusal comes later,
                 // by name), so saying nothing about the *other* claimant's
@@ -1950,6 +1965,45 @@ mod tests {
                 other.id
             );
         }
+    }
+
+    /// The Amiga-side panel offers exactly the packages whose recipes
+    /// declare an installer, and it reads that from here rather than from a
+    /// list of ids in TypeScript. Asserted **both ways**: the two BoingBags
+    /// declare one, `locale-turkish` does not — a test that only checked
+    /// the `true` side would pass against a field hardcoded to `true`,
+    /// which would put a package on the panel that `compose` refuses by
+    /// name a moment after it is picked.
+    #[test]
+    fn osinstall_packages_says_which_packages_can_be_run_on_the_amiga() {
+        let dir = scratch("packages-amiga-installable");
+        let folder = dir.join("packages");
+        std::fs::create_dir_all(&folder).unwrap();
+
+        let summaries = osinstall_packages(folder).unwrap();
+        for summary in &summaries {
+            let declares = package::by_id(&summary.id)
+                .unwrap()
+                .amiga_installer
+                .is_some();
+            assert_eq!(
+                summary.amiga_installable, declares,
+                "'{}' must report what its own recipe declares",
+                summary.id
+            );
+        }
+        assert!(
+            summaries
+                .iter()
+                .any(|p| p.id == "boingbag-39-1" && p.amiga_installable),
+            "BoingBag 3.9-1 declares C/Updater"
+        );
+        assert!(
+            summaries
+                .iter()
+                .any(|p| p.id == "locale-turkish" && !p.amiga_installable),
+            "a package with no Amiga-side installer must not be offered one"
+        );
     }
 
     /// An unreadable/nonexistent package folder is answered the same way an

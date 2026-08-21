@@ -115,6 +115,7 @@ import { useRemembered } from "@/lib/useRemembered";
 import { fraction, onJobProgress, subscribeSafely, type JobProgress } from "@/lib/jobs";
 import { Field } from "@/components/osbuilder/Field";
 import { PackagePanel } from "@/components/osbuilder/PackagePanel";
+import { AmigaInstallPanel } from "@/components/osbuilder/AmigaInstallPanel";
 
 const GIB = 1024 * 1024 * 1024;
 
@@ -1266,6 +1267,19 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         onPackageFolderChange={setPackagesFolder}
         chosen={packagesChosen}
         onChosenChange={setPackagesChosen}
+      />
+
+      {/* The other half of the same question, and deliberately a second
+          panel rather than a mode of the first: `PackagePanel` places a
+          package's files from Windows, and this runs a package's own
+          installer on the Amiga because its files cannot be placed from
+          Windows at all (ART-166). They share the tree and the archive
+          folder — it is one tree and one folder of downloads — and nothing
+          else. */}
+      <AmigaInstallPanel
+        treeRoot={packagesTreeRoot}
+        onTreeRootChange={setPackagesTreeRoot}
+        packageFolder={packagesFolder}
       />
 
       <section className="card" style={{ marginBottom: 16 }}>

@@ -338,6 +338,21 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // `recycleTargetPhrase`'s one target — which also asserts the catalogue
     // string really interpolates `{{target}}` rather than the parameter being
     // carried and never used.
-    expect(dynamicCalls).toBe(120);
+    // 120 → 126 (the Amiga-side install round, task 6):
+    // `AmigaInstallPanel.tsx` is six of them, and five are the point of the
+    // screen rather than an accident of it. `t(outcome.key, …)`,
+    // `t(nextStep.key)` and `t(settlement.key, …)` render the four endings a
+    // run can have — succeeded, the installer refused, the deadline expired,
+    // the window was closed — as four different sentences with four
+    // different next steps, which is exactly what three separate defects in
+    // that round were filed for collapsing; every variant of all three
+    // mappers is enumerated in `phrase-keys.test.ts` (`amigainstall: every
+    // ending, every settlement, every blocker resolves`) and asserted
+    // *distinct* in `src/lib/amigainstall.test.ts`. `t(blocker.key, …)` and
+    // `t(overlayAdvice.key, …)` are `readinessBlockers` and
+    // `overlayAdvicePhrase`, enumerated in the same place. The sixth is the
+    // run button's `t(busy ? … : …)`, the same shape `PackagePanel.tsx`
+    // already uses for its own.
+    expect(dynamicCalls).toBe(126);
   });
 });

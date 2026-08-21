@@ -338,10 +338,13 @@ describe("OsInstall renders past its headings", () => {
     expect(screen.getByText(i18n.t("osinstall.destination.label"))).toBeTruthy();
 
     // The component checklist is the screen's real input (requirement 4) —
-    // one row per component of the release's own loaded recipe. `+ 1` is the
-    // confirmation tickbox in the run card, which is not a component.
+    // one row per component of the release's own loaded recipe. `+ 2` is the
+    // two confirmation tickboxes that are not components: the run card's,
+    // and `AmigaInstallPanel`'s own (the Amiga-side install round's task 6).
+    // `PackagePanel`'s confirmation is not among them — it renders only once
+    // a package has been ticked, and nothing here ticks one.
     const checkboxes = screen.getAllByRole("checkbox");
-    expect(checkboxes.length).toBe(COMPONENTS_32.length + 1);
+    expect(checkboxes.length).toBe(COMPONENTS_32.length + 2);
 
     expect(screen.getByRole("button", { name: i18n.t("osinstall.run.run") })).toBeTruthy();
     expect(screen.getByRole("button", { name: i18n.t("osinstall.verify.run") })).toBeTruthy();

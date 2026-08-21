@@ -2285,6 +2285,89 @@
         "progressPercent": "{{percent}}% — {{done}} of {{total}} files"
       }
     },
+    "amigaInstall": {
+      "heading": "Run a package's own installer on the Amiga",
+      "intro": "Some update packages cannot be placed from Windows at all: the files inside them are locked, and only the package's own Amiga program has the key. ART does not break that lock. It copies your distribution tree, starts an emulator, and lets the package install itself — which is how every established Amiga distribution builder installs these packages too.",
+      "chainNote": "These go on in order: a clean AmigaOS 3.9, then BoingBag 3.9-1, then BoingBag 3.9-2, and only then the community BoingBag 3 and 4. ART reads the tree's own record before it copies anything, so a package whose predecessor is missing is refused first and told which one to install, in which order.",
+      "emulatorWindow": "This opens a real emulator window on this desktop and drives it. Leave it alone while it works — closing that window ends the run before the installer has said anything.",
+      "copyNote": "The install runs against a copy of your tree, never the tree itself. The copy replaces it only when the installer reports success; if it does not, your tree is left exactly as it was and this screen says where the copy is.",
+      "package": {
+        "label": "Package",
+        "needsFolder": "Choose the update packages folder above to see which packages ART can run on the Amiga.",
+        "none": "None of the packages ART ships carries an installer it can run on the Amiga.",
+        "unavailableHint": "ART could not read the shipped package list."
+      },
+      "archive": {
+        "label": "The package's own archive",
+        "none": "No archive chosen.",
+        "chooseTitle": "Choose the package's own archive — the file you downloaded",
+        "hint": "The archive as you downloaded it, e.g. BoingBag39-1.lha. ART unpacks it and mounts it as its own Amiga volume; the locked part inside stays locked and is handed to the package's own installer."
+      },
+      "overlayArchive": {
+        "label": "The package's update archive (only if it needs one)",
+        "none": "No second archive chosen.",
+        "chooseTitle": "Choose the package's update archive",
+        "hint": "A second archive that replaces part of the first — the fix some packages shipped separately for their own installer. Leave it empty unless the note below asks for it."
+      },
+      "kickstart": {
+        "label": "Your own Kickstart ROM",
+        "none": "No Kickstart chosen.",
+        "chooseTitle": "Choose your own licensed Kickstart ROM",
+        "hint": "The emulator boots the tree with this. ART ships no Kickstart and never will — it has to be your own."
+      },
+      "preview": {
+        "heading": "What will run",
+        "loading": "Working out what would run…",
+        "needsChoices": "Choose a distribution tree, a package, its own archive and your Kickstart, and this will say exactly what would run.",
+        "package": "Package",
+        "tree": "Tree",
+        "emulator": "Emulator",
+        "machine": "Machine",
+        "deadline": "If nothing answers within {{minutes}} minutes, ART ends the emulator it started and reports that nobody answered — it never leaves a run waiting for ever.",
+        "program": "Command",
+        "volumes": "The Amiga will see {{system}}: (your tree), {{package}}: (the package, unpacked) and {{work}}: (ART's own boot volume, which carries the script and nothing of yours).",
+        "resultFile": "The Amiga writes {{file}} on ART's volume and ART reads it back; that file is the installer's own answer, not ART's opinion of it."
+      },
+      "overlay": {
+        "needed": "This package's installer has to state at least {{version}} to work inside an emulator, and the build inside the original download is older than that. If yours is that build, ART refuses the run and copies nothing. The fix is one more download — the package's own update archive, the one carrying {{overlays}}. Choose it as the second archive above and ART copies it over the package's drawer before the run.",
+        "supplied": "ART will copy {{overlays}} out of your second archive over the package's own drawer before the run, so the installer that runs is at least {{version}} — the build that works inside an emulator."
+      },
+      "blocker": {
+        "heading": "Not ready to run yet",
+        "archiveMissing_one": "The archive chosen above is not there any more. ART checked the {{count}} file you chose.",
+        "archiveMissing_other": "One of the archives chosen above is not there any more. ART checked all {{count}} files you chose.",
+        "kickstartMissing": "That Kickstart is not there: {{path}}",
+        "noEmulator": "No emulator was found. Set WinUAE's path in Settings — ART starts an emulator you already have, it does not install one."
+      },
+      "refused": {
+        "heading": "ART will not run this",
+        "nothingCopied": "Nothing has been copied and your own tree has not been touched. The sentence above is ART's own and is written in English whatever language you chose."
+      },
+      "confirm": "I understand: an emulator window will open on this desktop, and my tree is replaced only if the installer itself reports success.",
+      "run": "Run the installer on the Amiga",
+      "running": "Running…",
+      "cancelled": "The run was cancelled. The copy has been discarded and your own tree is untouched.",
+      "report": {
+        "heading": "What happened"
+      },
+      "outcome": {
+        "succeeded": "The package's own installer reported success.",
+        "failed": "The installer ran and said no — it reported a failure of its own.",
+        "timedOut": "Nobody answered. The installer was still waiting {{seconds}} seconds in, so ART ended the emulator it had started.",
+        "emulatorClosed": "The emulator window was closed {{seconds}} seconds in, before the installer had reported anything."
+      },
+      "next": {
+        "succeeded": "Boot the tree and ask the running system what it is — the version it states about itself, not a copyright line on a screen.",
+        "failed": "Look inside the copy: whatever the installer wrote is there, and its own messages are what say why it refused.",
+        "timedOut": "Run it again and watch the emulator window this time. An Amiga installer asks questions, and this one was waiting for an answer nobody gave it.",
+        "emulatorClosed": "Run it again and let the window finish. ART cannot say what the installer would have done, so nothing was decided either way."
+      },
+      "settlement": {
+        "promoted": "Your tree at {{tree}} is the installed one now.",
+        "promotedLeftBehind": "Your tree at {{tree}} is the installed one now. The tree it replaced could not be deleted — something still has it open — and is sitting at {{leftBehind}}; it is yours to remove when you want to.",
+        "kept": "Your own tree at {{original}} was not touched. The copy the installer worked on is at {{copy}}, kept exactly as it was left, so you can look at what happened."
+      }
+    },
     "replaces": {
       "heading": "What this would replace",
       "summary": "{{components}} would place {{placed}} files: {{fresh}} new, {{unchanged}} already identical, and {{replaced}} over files another part of this release puts down first.",

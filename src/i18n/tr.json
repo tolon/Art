@@ -2285,6 +2285,89 @@
         "progressPercent": "%{{percent}} — {{total}} dosyadan {{done}} tanesi"
       }
     },
+    "amigaInstall": {
+      "heading": "Paketin kendi kurucusunu Amiga tarafında çalıştır",
+      "intro": "Bazı güncelleme paketleri Windows tarafından hiç yerleştirilemez: içindeki dosyalar kilitlidir ve anahtar yalnızca paketin kendi Amiga programındadır. ART bu kilidi kırmaz. Dağıtım ağacınızın bir kopyasını alır, bir emülatör başlatır ve paketin kendi kendini kurmasını sağlar — köklü bütün Amiga dağıtım araçları da bu paketleri böyle kurar.",
+      "chainNote": "Bunlar sırayla gider: önce temiz bir AmigaOS 3.9, sonra BoingBag 3.9-1, sonra BoingBag 3.9-2, ancak ondan sonra topluluk yapımı BoingBag 3 ve 4. ART hiçbir şeyi kopyalamadan önce ağacın kendi kaydını okur; bir önceki paketi eksik olan kurulum daha baştan geri çevrilir ve hangisinin, hangi sırayla kurulacağı söylenir.",
+      "emulatorWindow": "Bu, bu masaüstünde gerçek bir emülatör penceresi açar ve onu kendisi yönetir. Çalışırken ona dokunmayın — o pencereyi kapatmak, kurucu daha hiçbir şey söylemeden koşuyu bitirir.",
+      "copyNote": "Kurulum ağacınızın bir kopyası üzerinde koşar, ağacın kendisi üzerinde değil. Kopya, ancak kurucu başarı bildirdiğinde ağacın yerine geçer; bildirmezse ağacınız olduğu gibi kalır ve bu ekran kopyanın nerede olduğunu söyler.",
+      "package": {
+        "label": "Paket",
+        "needsFolder": "ART'ın Amiga tarafında hangi paketleri çalıştırabildiğini görmek için yukarıdan güncelleme paketleri klasörünü seçin.",
+        "none": "ART'ın getirdiği paketlerin hiçbiri Amiga tarafında çalıştırabileceği bir kurucu taşımıyor.",
+        "unavailableHint": "ART, birlikte gelen paket listesini okuyamadı."
+      },
+      "archive": {
+        "label": "Paketin kendi arşivi",
+        "none": "Arşiv seçilmedi.",
+        "chooseTitle": "Paketin kendi arşivini seçin — indirdiğiniz dosyayı",
+        "hint": "İndirdiğiniz hâliyle arşiv, örneğin BoingBag39-1.lha. ART onu açar ve kendi Amiga birimi olarak bağlar; içindeki kilitli bölüm kilitli kalır ve paketin kendi kurucusuna verilir."
+      },
+      "overlayArchive": {
+        "label": "Paketin güncelleme arşivi (yalnızca gerekiyorsa)",
+        "none": "İkinci arşiv seçilmedi.",
+        "chooseTitle": "Paketin güncelleme arşivini seçin",
+        "hint": "Birincinin bir bölümünün yerine geçen ikinci bir arşiv — bazı paketlerin kendi kurucusu için ayrıca yayımladığı düzeltme. Aşağıdaki not istemedikçe boş bırakın."
+      },
+      "kickstart": {
+        "label": "Kendi Kickstart ROM'unuz",
+        "none": "Kickstart seçilmedi.",
+        "chooseTitle": "Kendi lisanslı Kickstart ROM'unuzu seçin",
+        "hint": "Emülatör ağacı bununla açar. ART hiçbir Kickstart getirmez ve getirmeyecek — sizin kendi ROM'unuz olmak zorunda."
+      },
+      "preview": {
+        "heading": "Ne çalışacak",
+        "loading": "Ne çalışacağı hesaplanıyor…",
+        "needsChoices": "Bir dağıtım ağacı, bir paket, paketin kendi arşivi ve Kickstart'ınızı seçin; burası tam olarak neyin çalışacağını söyleyecek.",
+        "package": "Paket",
+        "tree": "Ağaç",
+        "emulator": "Emülatör",
+        "machine": "Makine",
+        "deadline": "{{minutes}} dakika içinde hiçbir yanıt gelmezse ART başlattığı emülatörü sonlandırır ve kimsenin yanıt vermediğini bildirir — bir koşuyu sonsuza dek bekler hâlde bırakmaz.",
+        "program": "Komut",
+        "volumes": "Amiga şunları görecek: {{system}}: (ağacınız), {{package}}: (açılmış hâliyle paket) ve {{work}}: (ART'ın kendi açılış birimi — betiği taşır, sizden hiçbir şey taşımaz).",
+        "resultFile": "Amiga, ART'ın birimine {{file}} dosyasını yazar ve ART onu geri okur; o dosya kurucunun kendi yanıtıdır, ART'ın onun hakkındaki yorumu değil."
+      },
+      "overlay": {
+        "needed": "Bu paketin kurucusunun bir emülatör içinde çalışabilmesi için en az {{version}} sürümünü bildirmesi gerekir ve ilk indirmenin içindeki yapı bundan eskidir. Sizinki o eski yapıysa ART koşuyu geri çevirir ve hiçbir şey kopyalamaz. Çözüm tek bir indirme daha: paketin kendi güncelleme arşivi, yani {{overlays}} taşıyan arşiv. Onu yukarıda ikinci arşiv olarak seçin; ART koşudan önce paketin çekmecesinin üzerine kopyalar.",
+        "supplied": "ART, koşudan önce ikinci arşivinizden {{overlays}} içeriğini paketin kendi çekmecesinin üzerine kopyalayacak; böylece çalışan kurucu en az {{version}} olacak — emülatör içinde çalışan yapı."
+      },
+      "blocker": {
+        "heading": "Henüz çalıştırmaya hazır değil",
+        "archiveMissing_one": "Yukarıda seçilen arşiv artık orada değil. ART seçtiğiniz {{count}} dosyaya baktı.",
+        "archiveMissing_other": "Yukarıda seçilen arşivlerden biri artık orada değil. ART seçtiğiniz {{count}} dosyanın hepsine baktı.",
+        "kickstartMissing": "O Kickstart orada değil: {{path}}",
+        "noEmulator": "Emülatör bulunamadı. WinUAE'nin yolunu Ayarlar'da belirtin — ART zaten sizde olan bir emülatörü başlatır, emülatör kurmaz."
+      },
+      "refused": {
+        "heading": "ART bunu çalıştırmayacak",
+        "nothingCopied": "Hiçbir şey kopyalanmadı ve kendi ağacınıza dokunulmadı. Yukarıdaki cümle ART'ın kendi cümlesidir ve hangi dili seçmiş olursanız olun İngilizce yazılır."
+      },
+      "confirm": "Anlıyorum: bu masaüstünde bir emülatör penceresi açılacak ve ağacım ancak kurucunun kendisi başarı bildirirse değiştirilecek.",
+      "run": "Kurucuyu Amiga tarafında çalıştır",
+      "running": "Çalışıyor…",
+      "cancelled": "Koşu iptal edildi. Kopya atıldı ve kendi ağacınıza dokunulmadı.",
+      "report": {
+        "heading": "Ne oldu"
+      },
+      "outcome": {
+        "succeeded": "Paketin kendi kurucusu başarı bildirdi.",
+        "failed": "Kurucu çalıştı ve hayır dedi — kendi başarısızlığını bildirdi.",
+        "timedOut": "Kimse yanıt vermedi. Kurucu {{seconds}} saniye sonra hâlâ bekliyordu, bu yüzden ART başlattığı emülatörü sonlandırdı.",
+        "emulatorClosed": "Emülatör penceresi {{seconds}} saniye sonra, kurucu daha hiçbir şey bildirmeden kapatıldı."
+      },
+      "next": {
+        "succeeded": "Ağacı açın ve çalışan sisteme ne olduğunu sorun — ekrandaki bir telif satırını değil, sistemin kendisi hakkında söylediği sürümü.",
+        "failed": "Kopyanın içine bakın: kurucunun yazdığı her şey orada ve neden reddettiğini söyleyen şey onun kendi iletileri.",
+        "timedOut": "Yeniden çalıştırın ve bu kez emülatör penceresini izleyin. Amiga kurucuları soru sorar; bu da kimsenin vermediği bir yanıtı bekliyordu.",
+        "emulatorClosed": "Yeniden çalıştırın ve pencerenin işini bitirmesine izin verin. ART kurucunun ne yapacağını söyleyemez, bu yüzden hiçbir yönde bir karar oluşmadı."
+      },
+      "settlement": {
+        "promoted": "{{tree}} konumundaki ağacınız artık kurulmuş olan ağaç.",
+        "promotedLeftBehind": "{{tree}} konumundaki ağacınız artık kurulmuş olan ağaç. Yerine geçtiği ağaç silinemedi — bir şey onu hâlâ açık tutuyor — ve {{leftBehind}} konumunda duruyor; istediğinizde silmek size kalmış.",
+        "kept": "{{original}} konumundaki kendi ağacınıza dokunulmadı. Kurucunun üzerinde çalıştığı kopya {{copy}} konumunda, bırakıldığı hâliyle duruyor; ne olduğuna bakabilirsiniz."
+      }
+    },
     "replaces": {
       "heading": "Bunun neyin yerine geçeceği",
       "summary": "{{components}} {{placed}} dosya yerleştirecek: {{fresh}} yeni, {{unchanged}} zaten birebir aynı ve {{replaced}} tanesi bu sürümün başka bir parçasının önce koyduğu dosyaların üzerine.",

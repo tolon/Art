@@ -31,6 +31,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+import type { Phrase } from "@/lib/phrase";
+
 // ---------------------------------------------------------------------------
 // Types, mirroring the Rust exactly
 // ---------------------------------------------------------------------------
@@ -211,4 +213,166 @@ export async function onAmigaInstallResult(
   handler: (result: AmigaInstallResult) => void
 ): Promise<UnlistenFn> {
   return listen<AmigaInstallResult>(AMIGA_INSTALL_EVENT, (event) => handler(event.payload));
+}
+
+// ---------------------------------------------------------------------------
+// The sentences the screen says
+// ---------------------------------------------------------------------------
+//
+// `src/lib` has no i18next singleton, so everything below answers a `Phrase`
+// and `AmigaInstallPanel` calls `t()` on it. They live here rather than in the
+// component for the reason `OsInstall.tsx`'s own review gave: "no test can
+// reach [it], because it lives inside the component."
+//
+// **The four endings are four, and the refusals name their reason.** That is
+// the whole point of this section. Three separate defects in this round were
+// the same shape — ART telling the user a confidently wrong sentence — so a
+// mapper here that returned one key for two endings, or a component that
+// rendered "it did not work" for all four, is the defect, not a shortcut.
+
+
+/** Whole seconds out of a `Duration` on the wire, rounded to the nearest —
+ *  `nanos` is never large enough to matter to a sentence about minutes, but
+ *  dropping it entirely would print `0` for a run that took 900 ms. */
+export function waitedSeconds(waited: WireDuration): number {
+  return Math.round(waited.secs + waited.nanos / 1_000_000_000);
+}
+
+/**
+ * What happened, in one sentence — **a different key for every ending**.
+ *
+ * `failed` means the package's own installer said no. `timed-out` means it
+ * put a question up and nobody answered it. `emulator-closed` means the
+ * window was shut. Collapsing any two of those tells a user to do the wrong
+ * thing next: "watch the window next time" is useless advice to somebody who
+ * closed it themselves.
+ */
+export function outcomePhrase(outcome: RunOutcome): Phrase {
+  switch (outcome.kind) {
+    case "succeeded":
+      return { key: "osinstall.amigaInstall.outcome.succeeded" };
+    case "failed":
+      return { key: "osinstall.amigaInstall.outcome.failed" };
+    case "timed-out":
+      return {
+        key: "osinstall.amigaInstall.outcome.timedOut",
+        params: { seconds: waitedSeconds(outcome.waited) },
+      };
+    case "emulator-closed":
+      return {
+        key: "osinstall.amigaInstall.outcome.emulatorClosed",
+        params: { seconds: waitedSeconds(outcome.waited) },
+      };
+  }
+}
+
+/** What to do about it — again one per ending, because the next step is what
+ *  actually differs between them. */
+export function outcomeNextStepPhrase(outcome: RunOutcome): Phrase {
+  switch (outcome.kind) {
+    case "succeeded":
+      return { key: "osinstall.amigaInstall.next.succeeded" };
+    case "failed":
+      return { key: "osinstall.amigaInstall.next.failed" };
+    case "timed-out":
+      return { key: "osinstall.amigaInstall.next.timedOut" };
+    case "emulator-closed":
+      return { key: "osinstall.amigaInstall.next.emulatorClosed" };
+  }
+}
+
+/** How the report is coloured. Never the only signal — each ending already
+ *  says which it is in words — but a success and a refusal must not look
+ *  alike at a glance either. */
+export function outcomeTone(outcome: RunOutcome): "ok" | "warn" | "err" {
+  switch (outcome.kind) {
+    case "succeeded":
+      return "ok";
+    case "failed":
+      return "err";
+    case "timed-out":
+    case "emulator-closed":
+      return "warn";
+  }
+}
+
+/**
+ * Where the tree and the copy are now.
+ *
+ * **A user told "it failed" and not told where the evidence went has been
+ * given nothing** — so a `kept` settlement always names the copy *and* says
+ * the original was not touched, and a `promoted` one with a `leftBehind`
+ * names the retired tree ART could not delete rather than staying silent
+ * about a directory the user did not ask for.
+ */
+export function settlementPhrase(settlement: SettlementReport): Phrase {
+  if (settlement.kind === "promoted") {
+    return settlement.leftBehind === null
+      ? { key: "osinstall.amigaInstall.settlement.promoted", params: { tree: settlement.tree } }
+      : {
+          key: "osinstall.amigaInstall.settlement.promotedLeftBehind",
+          params: { tree: settlement.tree, leftBehind: settlement.leftBehind },
+        };
+  }
+  return {
+    key: "osinstall.amigaInstall.settlement.kept",
+    params: { copy: settlement.copy, original: settlement.original },
+  };
+}
+
+/**
+ * What a package's declared minimum installer version means for the archives
+ * the user has picked — ART-186, and the obligation task 4's review handed
+ * this screen.
+ *
+ * BoingBag 3.9-1's shipped `Updater` states 45.13 and cannot install under an
+ * emulator; the fix is 45.15, carried by a **separate** archive
+ * (`BoingBag39-1-UAE.lha`, whose own readme says "You can install the BoingBag
+ * on UAE now"). ART refuses the older build — and a refusal a user could have
+ * avoided with one download must be visible *before* the run, naming the
+ * archive to go and get.
+ *
+ * `null` for a package that declares no minimum: inventing a requirement
+ * nobody stated is the same §89 mistake from the other side.
+ */
+export function overlayAdvicePhrase(preview: AmigaInstallPreview): Phrase | null {
+  if (preview.minimumInstallerVersion === null) return null;
+  const overlays = preview.declaredOverlays.join(", ");
+  return preview.packageArchives.length > 1
+    ? {
+        key: "osinstall.amigaInstall.overlay.supplied",
+        params: { version: preview.minimumInstallerVersion, overlays },
+      }
+    : {
+        key: "osinstall.amigaInstall.overlay.needed",
+        params: { version: preview.minimumInstallerVersion, overlays },
+      };
+}
+
+/**
+ * Everything the previewed run still lacks, each named — never one "not
+ * ready" badge over three different problems, and never a Run button that
+ * starts a job only for the command layer to refuse it a moment later.
+ *
+ * Empty means every one of the three things ART cannot supply itself (the
+ * user's own Kickstart, the package's own archives, an emulator) is there.
+ */
+export function readinessBlockers(preview: AmigaInstallPreview): Phrase[] {
+  const blockers: Phrase[] = [];
+  if (!preview.packageArchivesPresent) {
+    blockers.push({
+      key: "osinstall.amigaInstall.blocker.archiveMissing",
+      params: { count: preview.packageArchives.length },
+    });
+  }
+  if (!preview.kickstartPresent) {
+    blockers.push({
+      key: "osinstall.amigaInstall.blocker.kickstartMissing",
+      params: { path: preview.kickstart },
+    });
+  }
+  if (preview.emulator === null) {
+    blockers.push({ key: "osinstall.amigaInstall.blocker.noEmulator" });
+  }
+  return blockers;
 }
