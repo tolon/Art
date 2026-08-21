@@ -102,8 +102,10 @@ use crate::core::amigainstall::{
     packagevol, workvol, PlannedRun, RunOutcome, PACKAGE_VOLUME, RESULT_FILE, WORK_VOLUME,
 };
 use crate::core::error::{CoreError, CoreResult};
+use crate::core::iso::IsoImage;
 use crate::core::jobs::{JobId, ProgressSink};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
+use crate::core::osinstall::package::RequiredMedium;
 use crate::core::osinstall::{chain, package};
 use crate::core::profile::AmigaProfile;
 use crate::core::sources::install::Scratch;
@@ -174,6 +176,30 @@ pub struct AmigaInstallRequest {
     pub package_dir: Option<String>,
     /// The user's own licensed Kickstart. ART ships none and never will.
     pub kickstart: PathBuf,
+    /// The user's **own** copy of the medium the package's installer verifies
+    /// — an image of the original disc. `None` for a package that requires
+    /// none, and a refusal for one that does (ART-193).
+    ///
+    /// **On the request rather than in the recipe, and the split is the
+    /// point.** The recipe declares *which volume* the installer looks for —
+    /// a fact about the package, readable in the package's own binary, and
+    /// shipped data like every other fact a recipe carries
+    /// ([`RequiredMedium`](crate::core::osinstall::package::RequiredMedium)).
+    /// *Which file on this machine* is that disc is not a fact about the
+    /// package at all: ART ships no Amiga media and never will, and a path in
+    /// a recipe would be one that is true on exactly one computer. It is the
+    /// same division as [`kickstart`](Self::kickstart) and
+    /// [`package_archives`](Self::package_archives) — ART knows what is
+    /// needed, the user supplies what they own.
+    ///
+    /// The two halves are checked against each other before anything is
+    /// copied: [`compose`] opens the image and asks it its own volume name,
+    /// and a disc that does not state the name the recipe declares is refused
+    /// naming both. That is "ask the artefact what it is; never infer it"
+    /// applied to a medium — a filename is consistent with several answers,
+    /// and this project has shipped the wrong tree once for reading one.
+    #[serde(default)]
+    pub medium: Option<PathBuf>,
     /// A machine preset id (`AmigaProfile::all_presets`). `None` means
     /// [`DEFAULT_PROFILE_ID`].
     #[serde(default)]
@@ -218,6 +244,23 @@ pub struct AmigaInstallPreview {
     /// archive that identifies one — so the screen can say what a second file
     /// would have to be before the user goes looking for it (ART-186).
     pub declared_overlays: Vec<String>,
+    /// The medium the run will mount, as the user chose it — `None` when the
+    /// package requires none. A person should not be surprised by a disc
+    /// appearing in the emulated machine any more than by the machine itself
+    /// (design §4).
+    pub medium: Option<PathBuf>,
+    /// The volume that image **states it has** — read from the image, never
+    /// from its filename or from the recipe. It is the whole point of the
+    /// check `compose` makes, so the screen shows the answer rather than the
+    /// question.
+    pub medium_volume: Option<String>,
+    /// What the package's own installer requires — *"the original AmigaOS 3.9
+    /// CD-ROM"* — when it requires one. `None` both for a package that
+    /// verifies no medium and for a disc the user supplied unasked, which are
+    /// two different things the screen never has to tell apart: `compose`
+    /// refuses a required medium that is missing outright, so a preview
+    /// exists only when whatever is required is already there.
+    pub required_medium: Option<String>,
     /// The lowest version the package's installer may state, `"45.15"`, or
     /// `None` when no build of it is known to be unfit. Named on the screen
     /// because it is why a second archive may be needed at all.
@@ -331,6 +374,24 @@ struct Composed {
     minimum_installer_version: Option<(u32, u32)>,
     /// The same thing as the recipe wrote it, for the preview.
     minimum_installer_version_text: Option<String>,
+    /// The medium the run mounts, once `compose` has checked that the file
+    /// the user supplied really is the disc the recipe named. `None` when the
+    /// package requires none *and* the user supplied none.
+    medium: Option<ComposedMedium>,
+}
+
+/// A disc `compose` has opened and vouched for (ART-193).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ComposedMedium {
+    /// The image on the host, as the user chose it.
+    path: PathBuf,
+    /// The volume name **the image itself states** — read with
+    /// [`IsoImage::volume_name`], never taken from the recipe or from the
+    /// filename. This is what the screen shows and what the recipe's
+    /// declaration was checked against.
+    volume: String,
+    /// What the recipe calls this disc in a sentence, when it declared one.
+    declared_as: Option<String>,
 }
 
 /// Refuse a value that cannot survive being written into the generated line.
@@ -509,8 +570,15 @@ fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
         .as_deref()
         .and_then(package::parse_version_pair);
 
+    let medium = compose_medium(
+        &package.id,
+        installer.required_medium.as_ref(),
+        &request.medium,
+    )?;
+
     Ok(Composed {
         plan,
+        medium,
         package_name: package.name,
         package_dir,
         installer_in_package,
@@ -518,6 +586,79 @@ fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
         minimum_installer_version,
         minimum_installer_version_text: installer.minimum_version.clone(),
     })
+}
+
+/// Match what the package's installer requires against what the user
+/// supplied, and ask the supplied image what it actually is (ART-193).
+///
+/// **Three outcomes, and each is a different sentence.**
+///
+/// - The recipe declares a medium and nothing was supplied → refused, naming
+///   the disc and the volume, *before* anything is copied or unpacked. The
+///   alternative is what was measured on 2026-08-21: the installer starts,
+///   finds no volume, opens its own screen and never answers, and ART reports
+///   a timeout — *"nobody answered a question it asked"* — about a program
+///   that was never going to get as far as asking one. §89 forbids that
+///   sentence, so the run does not start.
+/// - Something was supplied → the image is **opened and asked its own volume
+///   name**, and when the recipe declared one they must agree. A filename is
+///   not an identity; this project shipped an AmigaOS 3.5 tree under the name
+///   3.9 for reading one artefact's appearance as proof of what it was.
+/// - Neither → `None`, and the run mounts no CD at all, exactly as before.
+///
+/// Supplying a disc an installer asks for is **meeting** its check, not
+/// bypassing one. ART deliberately does not satisfy such a check by
+/// extracting the handful of files the program happens to name.
+fn compose_medium(
+    package_id: &str,
+    required: Option<&RequiredMedium>,
+    supplied: &Option<PathBuf>,
+) -> CoreResult<Option<ComposedMedium>> {
+    let Some(path) = supplied.as_ref().filter(|p| !p.as_os_str().is_empty()) else {
+        return match required {
+            Some(medium) => Err(CoreError::SafetyRefused(format!(
+                "'{package_id}''s installer verifies {} before it will do anything — it checks \
+                 named files on a volume called '{}:'. Supply an image of your own copy of that \
+                 disc. Without it the installer opens its window and never finishes, and ART \
+                 would have nothing to report but a timeout.",
+                medium.name, medium.volume
+            ))),
+            None => Ok(None),
+        };
+    };
+
+    if !path.is_file() {
+        return Err(CoreError::InvalidInput(format!(
+            "the medium supplied for '{package_id}' is not a file: '{}'",
+            path.display()
+        )));
+    }
+
+    // The disc's own statement about itself. `IsoImage::open` reads a handful
+    // of sectors — a 468 MB disc is not read to answer this.
+    let image = IsoImage::open(path)?;
+    let volume = image.volume_name().trim().to_string();
+
+    if let Some(medium) = required {
+        // AmigaDOS volume names are case-insensitive, so the comparison is
+        // too — the same rule `core::amigainstall::claims_volume` follows.
+        if !volume.eq_ignore_ascii_case(medium.volume.trim()) {
+            return Err(CoreError::SafetyRefused(format!(
+                "'{package_id}''s installer verifies {}, whose volume is '{}'. The image \
+                 supplied — '{}' — states its volume as '{volume}', so it is not that disc and \
+                 the installer would not find what it looks for.",
+                medium.name,
+                medium.volume,
+                path.display()
+            )));
+        }
+    }
+
+    Ok(Some(ComposedMedium {
+        path: path.clone(),
+        volume,
+        declared_as: required.map(|medium| medium.name.clone()),
+    }))
 }
 
 /// The machine the installer runs on.
@@ -665,6 +806,22 @@ fn install(
         sink.report(0, None, &format!("The installer states {version}"));
     }
 
+    // Said before the run for the same reason the overlay line above is: a
+    // run that worked because the user supplied the disc the installer asks
+    // for is not the same run as one without it, and the volume named here is
+    // the image's own, read from the image (ART-193).
+    if let Some(medium) = &composed.medium {
+        sink.report(
+            0,
+            None,
+            &format!(
+                "Mounting '{}' as the CD the installer checks for — it states its volume as '{}'",
+                medium.path.display(),
+                medium.volume
+            ),
+        );
+    }
+
     perform(tree, sink, |copy, sink| {
         let request = RunRequest {
             plan,
@@ -674,6 +831,7 @@ fn install(
             profile,
             kickstart_path: kickstart,
             winuae_path: emulator,
+            cd_image: composed.medium.as_ref().map(|m| m.path.as_path()),
             limits: RunLimits::default(),
         };
         let outcome = run(&request, sink)?;
@@ -762,6 +920,9 @@ pub fn amiga_install_preview(
             .map(|overlay| overlay.from.clone())
             .collect(),
         minimum_installer_version: composed.minimum_installer_version_text,
+        medium: composed.medium.as_ref().map(|m| m.path.clone()),
+        medium_volume: composed.medium.as_ref().map(|m| m.volume.clone()),
+        required_medium: composed.medium.as_ref().and_then(|m| m.declared_as.clone()),
         package_archives: request.package_archives,
         package_dir: composed.package_dir,
         result_file: RESULT_FILE.to_string(),
@@ -923,6 +1084,30 @@ mod tests {
         }
     }
 
+    /// A synthetic disc stating the volume name a BoingBag's `Updater`
+    /// verifies (ART-193), written beside `tree` — which is inside the
+    /// caller's own scratch directory, so it goes away with it.
+    ///
+    /// **Assembled byte by byte, like every fixture in this project.** The
+    /// disc the real run needs is the owner's own 468 MB AmigaOS 3.9 CD, and
+    /// a test may not depend on one: ART ships no Amiga content, ever. What
+    /// this proves is the half that is ART's — that a disc's *own* volume
+    /// name is what gets compared — and the other half is the `#[ignore]`d
+    /// hook, against the owner's real disc.
+    fn disc_beside(tree: &Path, volume: &str) -> PathBuf {
+        use crate::core::iso::fixture::{file as iso_file, IsoBuilder};
+
+        let path = tree.parent().unwrap().join(format!("{volume}.iso"));
+        let bytes = IsoBuilder {
+            volume: volume.to_string(),
+            children: vec![iso_file("ANGELS.AVI", "Angels.avi", b"synthetic")],
+            ..Default::default()
+        }
+        .build();
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
     fn request(tree: &Path) -> AmigaInstallRequest {
         AmigaInstallRequest {
             tree: tree.to_path_buf(),
@@ -931,6 +1116,11 @@ mod tests {
             package_archives: vec![PathBuf::from("BoingBag39-1.lha")],
             package_dir: None,
             kickstart: PathBuf::from("kick.rom"),
+            // Both BoingBags declare a `required_medium`, so every request
+            // shaped like a real one carries the disc — a fixture that did
+            // not would be testing ART's refusal instead of the thing the
+            // test is named for.
+            medium: Some(disc_beside(tree, "AmigaOS3.9")),
             profile: None,
         }
     }
@@ -1667,9 +1857,13 @@ mod tests {
     fn the_preview_touches_nothing() {
         let scratch = ScratchDir::new("art-amigainstall-cmd", "preview");
         let tree = tree_in(&scratch);
+        // The request — and so the disc fixture it carries — is built first,
+        // because what this test is about is that *the preview* creates
+        // nothing, not that a fixture does.
+        let request = request(&tree);
         let before = std::fs::read_dir(scratch.path()).unwrap().count();
 
-        let preview = amiga_install_preview(request(&tree), Some("no-such.exe".into())).unwrap();
+        let preview = amiga_install_preview(request, Some("no-such.exe".into())).unwrap();
 
         assert_eq!(preview.program, "ARTPkg:BoingBag3.9-1/C/Updater");
         assert_eq!(preview.work_volume, WORK_VOLUME);
@@ -1736,6 +1930,110 @@ mod tests {
         assert_eq!(composed.plan.package_id, "boingbag-39-2");
     }
 
+    /// ART-193, the refusal half. A BoingBag's `Updater` verifies the
+    /// original AmigaOS 3.9 CD-ROM before it does anything, and without one
+    /// it opens its own screen and never answers — measured three times
+    /// against the owner's real tree, up to 1 200 s, with not one of 3 795
+    /// files written. ART would then have had nothing to report but a
+    /// timeout, which says *"nobody answered a question it asked"* about a
+    /// program that never got as far as asking. So the run is refused before
+    /// it starts, and the sentence names the disc and the volume.
+    #[test]
+    fn a_package_whose_installer_verifies_a_disc_is_refused_without_one() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "no-disc");
+        let tree = tree_in(&scratch);
+        let mut request = request(&tree);
+        request.medium = None;
+
+        let err = compose(&request).unwrap_err();
+        assert!(matches!(err, CoreError::SafetyRefused(_)), "{err:?}");
+        let text = err.to_string();
+        assert!(text.contains("AmigaOS3.9"), "{text}");
+        assert!(
+            text.contains("AmigaOS 3.9 CD-ROM"),
+            "the sentence names the disc, not just the volume: {text}"
+        );
+    }
+
+    /// **The disc is asked what it is.** A filename is not an identity — this
+    /// project shipped an AmigaOS 3.5 tree under the name 3.9 for reading one
+    /// artefact's appearance as proof of what it was — so `compose` opens the
+    /// image and compares the volume it *states* against the one the recipe
+    /// declares.
+    #[test]
+    fn a_disc_that_states_another_volume_is_refused_and_the_message_names_both() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "wrong-disc");
+        let tree = tree_in(&scratch);
+        let mut request = request(&tree);
+        request.medium = Some(disc_beside(&tree, "AmigaOS3.5"));
+
+        let err = compose(&request).unwrap_err();
+        assert!(matches!(err, CoreError::SafetyRefused(_)), "{err:?}");
+        let text = err.to_string();
+        assert!(text.contains("AmigaOS3.5"), "what was supplied: {text}");
+        assert!(text.contains("AmigaOS3.9"), "and what is needed: {text}");
+    }
+
+    /// The other half: the right disc composes, and the volume that reaches
+    /// the preview is the **image's own**, never the recipe's declaration
+    /// echoed back.
+    #[test]
+    fn the_right_disc_composes_and_the_preview_names_the_volume_the_image_states() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "right-disc");
+        let tree = tree_in(&scratch);
+
+        let preview = amiga_install_preview(request(&tree), Some("no-such.exe".into())).unwrap();
+        assert_eq!(preview.medium_volume.as_deref(), Some("AmigaOS3.9"));
+        assert_eq!(
+            preview.required_medium.as_deref(),
+            Some("the original AmigaOS 3.9 CD-ROM")
+        );
+        assert!(preview.medium.is_some(), "and the screen says which file");
+    }
+
+    /// A disc reaches the emulator as a CD, and by the path the user chose.
+    /// The three volumes ART mounts are directories; this is the fourth
+    /// thing, and it is what the installer runs *against* rather than *from*.
+    #[test]
+    fn the_disc_reaches_the_generated_configuration_as_a_cd() {
+        use crate::core::amigainstall::run::media_for;
+        use crate::core::winuae::generate_uae_config;
+
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "cd-config");
+        let tree = tree_in(&scratch);
+        let request = request(&tree);
+        let composed = compose(&request).unwrap();
+
+        let work = scratch.join("work");
+        workvol::build(&work, &composed.plan).unwrap();
+        let package = scratch.join("pkg");
+        std::fs::create_dir_all(&package).unwrap();
+        let kickstart = scratch.join("kick.rom");
+        std::fs::write(&kickstart, b"rom").unwrap();
+        let profile = profile_for(None).unwrap();
+        let disc = composed.medium.as_ref().unwrap().path.clone();
+
+        let media = media_for(&RunRequest {
+            plan: &composed.plan,
+            work_volume_dir: &work,
+            tree_dir: &tree,
+            package_volume_dir: &package,
+            profile: &profile,
+            kickstart_path: &kickstart,
+            winuae_path: Path::new("winuae64.exe"),
+            cd_image: Some(&disc),
+            limits: RunLimits::default(),
+        })
+        .unwrap();
+
+        assert_eq!(
+            media.cd_image_path.as_deref(),
+            Some(disc.to_string_lossy().as_ref())
+        );
+        let config = generate_uae_config(&profile, &media).unwrap();
+        assert!(config.contains("cdimage0="), "{config}");
+    }
+
     /// **Refused before anything is copied.** The whole tree copy, both
     /// scratch volumes and the unpack all happen after `compose`, so a refused
     /// run leaves the user's folder exactly as it was — no `.art-staged`
@@ -1744,9 +2042,10 @@ mod tests {
     fn a_refused_chain_copies_nothing_at_all() {
         let scratch = ScratchDir::new("art-amigainstall-cmd", "chain-nothing");
         let tree = tree_with_manifest(&scratch, &["workbench-base"]);
+        let request = request_for(&tree, "boingbag-39-2");
         let before = std::fs::read_dir(scratch.path()).unwrap().count();
 
-        assert!(compose(&request_for(&tree, "boingbag-39-2")).is_err());
+        assert!(compose(&request).is_err());
 
         assert!(
             copies_beside(&tree).is_empty(),
@@ -2083,6 +2382,12 @@ mod real_install_hook {
             package_archives: archives.clone(),
             package_dir: None,
             kickstart: PathBuf::from(&rom),
+            // The disc the package's own installer verifies (ART-193).
+            // `ART_AMIGA_CD` is optional here rather than required: a package
+            // that declares no `required_medium` needs none, and one that does
+            // is refused by name when it is absent, which is itself a path
+            // this hook exists to walk.
+            medium: std::env::var("ART_AMIGA_CD").ok().map(PathBuf::from),
             profile: None,
         };
 

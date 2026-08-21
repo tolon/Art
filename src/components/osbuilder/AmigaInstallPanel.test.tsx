@@ -126,6 +126,11 @@ function preview(over: Partial<AmigaInstallPreview> = {}): AmigaInstallPreview {
     declaredOverlays: ["BoingBag3.9-1-UAE/BoingBag3.9-1"],
     minimumInstallerVersion: "45.15",
     packageDir: "BoingBag3.9-1",
+    // ART-193. The disc the package's own installer verifies, and the volume
+    // the image itself states — never its filename.
+    medium: "E:/amiga/os39/AmigaOS39.iso",
+    mediumVolume: "AmigaOS3.9",
+    requiredMedium: "the original AmigaOS 3.9 CD-ROM",
     resultFile: "art-result.txt",
     deadlineSeconds: 1800,
     kickstart: "D:/roms/kick31.rom",
@@ -509,6 +514,10 @@ describe("the run itself", () => {
       // Wrapper first, overlay second — the order is the wire's own.
       packageArchives: ["D:/pkg/BoingBag39-1.lha", "D:/pkg/BoingBag39-1-UAE.lha"],
       kickstart: "D:/roms/kick31.rom",
+      // ART-193. Chosen by nobody in this test, and sent as `null` rather
+      // than omitted: whether the package needs a disc is the recipe's
+      // answer, and Rust refuses by name when one is required and missing.
+      medium: null,
     });
     expect(runMock.mock.calls[0][1]).toBe("C:/WinUAE/winuae64.exe");
   });

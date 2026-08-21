@@ -91,6 +91,15 @@ use crate::core::winuae::{
 /// had been would be exactly the *"guessed number wearing the clothes of a
 /// measured one"* this round was told not to produce.
 ///
+/// ## Re-measured on 2026-08-21, with the disc mounted
+///
+/// ART-193's missing CD was supplied — `CD0: 467M ... AmigaOS3.9`, confirmed
+/// on the running machine — and **nothing changed**: 400 s through this exact
+/// path with none of the 3 795 files written, and 180 s in a probe where the
+/// `Updater` printed not one byte. So there is still no successful install to
+/// take a multiple of, and this constant is deliberately **not** adjusted:
+/// changing it would be dressing the same guess in a newer date.
+///
 /// So the value below is anchored to the one real over-run rather than to a
 /// successful install: 20 minutes was the guess, and the first real package to
 /// meet it exceeded it. Tripling it puts the deadline well clear of the
@@ -312,6 +321,22 @@ pub struct RunRequest<'a> {
     /// The emulator ART will start. Unused by [`run_with`], which is given a
     /// launcher directly.
     pub winuae_path: &'a Path,
+    /// The user's **own** copy of the medium the package's installer verifies,
+    /// as a CD image — `None` for a package that requires none.
+    ///
+    /// **The fourth thing a run needs, and ART-193 is why.** The three fields
+    /// above say what runs and where it runs *from*; this says what it runs
+    /// *against*. A BoingBag's `Updater` checks named files on a volume called
+    /// `AmigaOS3.9:` and, without it, opens its screen and never finishes.
+    ///
+    /// It is a path and nothing more here, on purpose. Whether the image is
+    /// really the disc the package asked for is decided where the file can be
+    /// opened and its own volume name read — `commands/amigainstall.rs`, from
+    /// the recipe's
+    /// [`RequiredMedium`](crate::core::osinstall::package::RequiredMedium) —
+    /// and travels here already vouched for, the same shape as
+    /// [`crate::core::winuae::LaunchMedia::hardfile_shapes`].
+    pub cd_image: Option<&'a Path>,
     pub limits: RunLimits,
 }
 
@@ -386,8 +411,23 @@ pub fn media_for(request: &RunRequest) -> CoreResult<LaunchMedia> {
         )));
     }
 
+    // A disc that is not there mounts as nothing at all, and the run would
+    // then reach exactly the ending ART-193 is: an installer that opens its
+    // window, finds no medium and never answers, reported as a timeout. One
+    // `is_file` costs nothing and turns it into a sentence before the launch.
+    if let Some(cd) = request.cd_image {
+        if !cd.is_file() {
+            return Err(CoreError::InvalidInput(format!(
+                "the medium this package's installer checks for must be an image file; '{}' is \
+                 not one",
+                cd.display()
+            )));
+        }
+    }
+
     Ok(LaunchMedia {
         kickstart_path: Some(request.kickstart_path.to_string_lossy().to_string()),
+        cd_image_path: request.cd_image.map(|cd| cd.to_string_lossy().to_string()),
         directories: vec![
             // The user's tree: data, explicitly not bootable.
             DirMount {
@@ -867,6 +907,7 @@ mod tests {
                 profile: &self.profile,
                 kickstart_path: Path::new("placeholder"),
                 winuae_path: Path::new("placeholder"),
+                cd_image: None,
                 limits: RunLimits {
                     deadline: Duration::from_secs(60),
                     poll_interval: Duration::from_secs(2),

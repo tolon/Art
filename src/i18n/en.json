@@ -2326,7 +2326,8 @@
         "deadline": "If nothing answers within {{minutes}} minutes, ART ends the emulator it started and reports that nobody answered — it never leaves a run waiting for ever.",
         "program": "Command",
         "volumes": "The Amiga will see {{system}}: (your tree), {{package}}: (the package, unpacked) and {{work}}: (ART's own boot volume, which carries the script and nothing of yours).",
-        "resultFile": "The Amiga writes {{file}} on ART's volume and ART reads it back; that file is the installer's own answer, not ART's opinion of it."
+        "resultFile": "The Amiga writes {{file}} on ART's volume and ART reads it back; that file is the installer's own answer, not ART's opinion of it.",
+        "medium": "Disc: {{volume}}"
       },
       "overlay": {
         "needed": "This package's installer has to state at least {{version}} to work inside an emulator, and the build inside the original download is older than that. If yours is that build, ART refuses the run and copies nothing. The fix is one more download — the package's own update archive, the one carrying {{overlays}}. Choose it as the second archive above and ART copies it over the package's drawer before the run.",
@@ -2366,6 +2367,12 @@
         "promoted": "Your tree at {{tree}} is the installed one now.",
         "promotedLeftBehind": "Your tree at {{tree}} is the installed one now. The tree it replaced could not be deleted — something still has it open — and is sitting at {{leftBehind}}; it is yours to remove when you want to.",
         "kept": "Your own tree at {{original}} was not touched. The copy the installer worked on is at {{copy}}, kept exactly as it was left, so you can look at what happened."
+      },
+      "medium": {
+        "label": "AmigaOS 3.9 CD-ROM (disc image)",
+        "none": "Not chosen",
+        "hint": "Some packages verify the disc they shipped on before they will install. Both BoingBags check named files on a volume called AmigaOS3.9:. Choose your own copy of that disc as an .iso and ART puts it in the emulated machine's CD drive.",
+        "chooseTitle": "Choose the disc image the installer checks for"
       }
     },
     "replaces": {

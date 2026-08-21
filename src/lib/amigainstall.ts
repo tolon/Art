@@ -101,6 +101,19 @@ export interface AmigaInstallRequest {
   packageDir?: string | null;
   /** The user's **own** licensed Kickstart. ART ships none and never will. */
   kickstart: string;
+  /** The user's **own** copy of the medium the package's installer verifies,
+   *  as a disc image (ART-193). `null` for a package that requires none, and
+   *  a refusal for one that does.
+   *
+   *  Both AmigaOS 3.9 BoingBags check named files on a volume called
+   *  `AmigaOS3.9:` before they will do anything; without it the installer
+   *  opens its own window and never finishes. Supplying the disc is meeting
+   *  that check, not bypassing one — nothing here decrypts anything.
+   *
+   *  ART opens the image and compares the volume it *states* against the one
+   *  the package's recipe declares, so the wrong disc is refused by name
+   *  rather than discovered inside the emulator. */
+  medium?: string | null;
   /** A machine preset id (`profileList`). `null` takes ART's default. */
   profile?: string | null;
 }
@@ -143,6 +156,17 @@ export interface AmigaInstallPreview {
   /** The drawer inside that archive the installer is expected in, or `null`
    *  for the archive's own root. */
   packageDir: string | null;
+  /** The disc the run will put in the emulated machine's CD drive, or `null`
+   *  when the package needs none. A person should not be surprised by a disc
+   *  appearing any more than by the machine window itself. */
+  medium: string | null;
+  /** The volume that image **states it has** — read from the image, never
+   *  from its filename. */
+  mediumVolume: string | null;
+  /** What the package's own installer requires — *"the original AmigaOS 3.9
+   *  CD-ROM"* — when it requires one. `null` for a package that verifies no
+   *  medium, and for a disc supplied unasked. */
+  requiredMedium: string | null;
   /** The file the Amiga writes and the host polls. */
   resultFile: string;
   /** How long the run may go without an answer before ART ends the emulator

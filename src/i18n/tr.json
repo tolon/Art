@@ -2326,7 +2326,8 @@
         "deadline": "{{minutes}} dakika içinde hiçbir yanıt gelmezse ART başlattığı emülatörü sonlandırır ve kimsenin yanıt vermediğini bildirir — bir koşuyu sonsuza dek bekler hâlde bırakmaz.",
         "program": "Komut",
         "volumes": "Amiga şunları görecek: {{system}}: (ağacınız), {{package}}: (açılmış hâliyle paket) ve {{work}}: (ART'ın kendi açılış birimi — betiği taşır, sizden hiçbir şey taşımaz).",
-        "resultFile": "Amiga, ART'ın birimine {{file}} dosyasını yazar ve ART onu geri okur; o dosya kurucunun kendi yanıtıdır, ART'ın onun hakkındaki yorumu değil."
+        "resultFile": "Amiga, ART'ın birimine {{file}} dosyasını yazar ve ART onu geri okur; o dosya kurucunun kendi yanıtıdır, ART'ın onun hakkındaki yorumu değil.",
+        "medium": "Disk: {{volume}}"
       },
       "overlay": {
         "needed": "Bu paketin kurucusunun bir emülatör içinde çalışabilmesi için en az {{version}} sürümünü bildirmesi gerekir ve ilk indirmenin içindeki yapı bundan eskidir. Sizinki o eski yapıysa ART koşuyu geri çevirir ve hiçbir şey kopyalamaz. Çözüm tek bir indirme daha: paketin kendi güncelleme arşivi, yani {{overlays}} taşıyan arşiv. Onu yukarıda ikinci arşiv olarak seçin; ART koşudan önce paketin çekmecesinin üzerine kopyalar.",
@@ -2366,6 +2367,12 @@
         "promoted": "{{tree}} konumundaki ağacınız artık kurulmuş olan ağaç.",
         "promotedLeftBehind": "{{tree}} konumundaki ağacınız artık kurulmuş olan ağaç. Yerine geçtiği ağaç silinemedi — bir şey onu hâlâ açık tutuyor — ve {{leftBehind}} konumunda duruyor; istediğinizde silmek size kalmış.",
         "kept": "{{original}} konumundaki kendi ağacınıza dokunulmadı. Kurucunun üzerinde çalıştığı kopya {{copy}} konumunda, bırakıldığı hâliyle duruyor; ne olduğuna bakabilirsiniz."
+      },
+      "medium": {
+        "label": "AmigaOS 3.9 CD-ROM'u (disk kalıbı)",
+        "none": "Seçilmedi",
+        "hint": "Bazı paketler kurulmadan önce birlikte geldikleri diski doğrular. Her iki BoingBag da AmigaOS3.9: adlı bir birimdeki belirli dosyalara bakar. O diskin kendi kopyanızı .iso olarak seçin; ART onu öykünücünün CD sürücüsüne takar.",
+        "chooseTitle": "Kurucunun aradığı disk kalıbını seçin"
       }
     },
     "replaces": {

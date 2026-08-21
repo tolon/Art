@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Installing on the Amiga side — the disc a package asks for (2026-08-21)
+
+#### Added
+- **ART can now put a disc in the emulated machine, and it checks that it is
+  the right one.** Some packages will not install until they have seen the
+  medium they were shipped on: both AmigaOS 3.9 BoingBags look for named files
+  on a volume called `AmigaOS3.9:` before they do anything. The Amiga-side
+  install screen has a new field for your own copy of that disc, remembered
+  like every other choice you make.
+
+  Nothing here decrypts anything or works around any protection — giving an
+  installer the disc it asks for is meeting its check, not avoiding it. ART
+  ships no Amiga media and never will; the disc is yours, exactly as the
+  Kickstart and the package archives are.
+
+  Before anything is copied, ART **opens the image and asks it its own name**.
+  A disc that calls itself something else is refused, naming both what the
+  package needs and what you supplied — a filename is not proof of what is on
+  a disc. The preview shows the volume the image itself states, so you can see
+  what the machine will get before you start it.
+
+- **A package that needs a disc and has none is refused before the run, and
+  the refusal says which disc.** Previously such a run would have started, sat
+  there, and been reported as having timed out — which would have been true
+  and useless.
+
+#### Known limitation
+- **The AmigaOS 3.9 BoingBags still do not install.** With the right disc
+  mounted under the right name — confirmed on the running Amiga, its icon on
+  the Workbench — the package's own `Updater` starts and then does nothing:
+  no output, no window, and no file written, on either BoingBag's installer.
+  It stops *before* its own CD check, and behaves exactly the same with the
+  disc absent, so the disc is not what it is waiting on and ART does not yet
+  know what is. The refusals above are honest, your own tree is never touched,
+  and ART does not claim an install it cannot perform.
+
 ### Installing on the Amiga side — the first run against real packages (2026-08-21)
 
 #### Fixed

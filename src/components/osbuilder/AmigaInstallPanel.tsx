@@ -131,6 +131,14 @@ export function AmigaInstallPanel({
     isTextOrNothing,
     null
   );
+  /** The user's own copy of the disc a package's installer verifies
+   *  (ART-193). Remembered like every other choice on this screen: nothing
+   *  the user chose resets itself between runs. */
+  const [medium, setMedium] = useRemembered<string | null>(
+    "amigaInstall.medium",
+    isTextOrNothing,
+    null
+  );
 
   const [catalogue, setCatalogue] = useState<PackageSummary[] | null>(null);
   const [catalogueError, setCatalogueError] = useState(false);
@@ -189,9 +197,15 @@ export function AmigaInstallPanel({
     [archive, overlayArchive]
   );
 
+  // The disc is **not** part of the "have you chosen enough to preview"
+  // test. Whether this package needs one is the recipe's answer, not this
+  // screen's, and Rust refuses by name when it is required and missing — a
+  // sentence that says which disc and which volume. Requiring it here would
+  // replace that with a silent grey panel for every package, including the
+  // ones that need no disc at all.
   const request: AmigaInstallRequest | null =
     treeRoot && packageId && archive && kickstart
-      ? { tree: treeRoot, packageId, packageArchives: archives, kickstart }
+      ? { tree: treeRoot, packageId, packageArchives: archives, kickstart, medium }
       : null;
 
   // The catalogue. Loaded whenever the package folder changes, `null` (never
@@ -322,6 +336,15 @@ export function AmigaInstallPanel({
       filters: [{ name: "Package archive", extensions: ["lha", "lzh", "zip", "7z"] }],
     });
     if (typeof picked === "string") set(picked);
+  }
+
+  async function chooseMedium() {
+    const picked = await open({
+      multiple: false,
+      title: t("osinstall.amigaInstall.medium.chooseTitle"),
+      filters: [{ name: "Disc image", extensions: ["iso", "cue", "bin", "img"] }],
+    });
+    if (typeof picked === "string") setMedium(picked);
   }
 
   async function chooseKickstart() {
@@ -473,6 +496,18 @@ export function AmigaInstallPanel({
           choose={t("common.browse")}
           hint={t("osinstall.amigaInstall.kickstart.hint")}
         />
+        {/* ART-193. Optional on the screen because it is optional for some
+            packages; the refusal above says when it is not. */}
+        <Field
+          label={t("osinstall.amigaInstall.medium.label")}
+          value={medium}
+          empty={t("osinstall.amigaInstall.medium.none")}
+          onChoose={() => void chooseMedium()}
+          choose={t("common.browse")}
+          hint={t("osinstall.amigaInstall.medium.hint")}
+          clear={medium ? t("common.clear") : undefined}
+          onClear={medium ? () => setMedium(null) : undefined}
+        />
       </div>
 
       {/* The refusal. English, from Rust (ART-060), verbatim: a missing
@@ -529,6 +564,19 @@ export function AmigaInstallPanel({
           {preview.emulator && (
             <div style={{ fontSize: 12, wordBreak: "break-all" }}>
               {t("osinstall.amigaInstall.preview.emulator")}: {preview.emulator}
+            </div>
+          )}
+          {/* ART-193. Not in the power-mode block below: a disc going into
+              the machine is something the run does, like the machine window
+              itself, and design §4 says a person should not be surprised by
+              it. The volume shown is the one the **image itself states** —
+              read from the image, never from its filename. */}
+          {preview.medium && (
+            <div style={{ fontSize: 12, wordBreak: "break-all" }}>
+              {t("osinstall.amigaInstall.preview.medium", {
+                volume: preview.mediumVolume ?? "",
+              })}
+              : {preview.medium}
             </div>
           )}
           <p className="faint" style={{ fontSize: 11, margin: "6px 0 0" }}>

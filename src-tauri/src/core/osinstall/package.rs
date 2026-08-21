@@ -351,6 +351,61 @@ pub struct AmigaInstaller {
     /// one was needed. ART never fetches an overlay itself.
     #[serde(default)]
     pub overlays: Vec<InstallerOverlay>,
+    /// The medium this package's installer verifies before it will work —
+    /// see [`RequiredMedium`]. `None` for an installer that checks nothing,
+    /// which is the ordinary case.
+    #[serde(default)]
+    pub required_medium: Option<RequiredMedium>,
+}
+
+/// A disc a package's own installer insists on seeing (ART-193).
+///
+/// **Measured, and it is the reason this field exists.** Both AmigaOS 3.9
+/// BoingBags carry an `Updater` that verifies the original CD-ROM before it
+/// does anything, and each says so in its own printable strings — read on
+/// the host on 2026-08-21 from the owner's own archives:
+///
+/// ```text
+///   Checking AmigaOS 3.9 CD-ROM ...
+///   Failed to check AmigaOS 3.9 CD-ROM.
+///   Did you really insert a original AmigaOS 3.9 CD-ROM
+///   into a mounted CD-ROM drive?
+///   AmigaOS3.9:Videos/Angels.avi                     (45.15 and 45.19 both)
+///   AmigaOS3.9:Audio/Circle Orbital.mp3              (45.15)
+///   AmigaOS3.9:Audio/Circle - Orbital.mp3            (45.19)
+/// ```
+///
+/// Without that disc the program opens its own screen and never finishes —
+/// measured three times, up to 1 200 s, with not one file written.
+///
+/// **This is a medium the user has, not a protection to be worked around.**
+/// Supplying the disc the installer asks for is *meeting* its check. Nothing
+/// here decrypts anything, and ART deliberately does **not** satisfy such a
+/// check by extracting the handful of files a program happens to name: that
+/// would be satisfying a media check rather than meeting it.
+///
+/// **What this type says and what it does not.** It names the *volume* the
+/// installer looks for — a fact about the package, readable in the package's
+/// own binary, and shipped data like everything else in a recipe. It never
+/// names a file on the host: ART ships no Amiga media and never will, so
+/// *which* image is a fact about the run and arrives on the request
+/// (`commands::amigainstall::AmigaInstallRequest::medium`), exactly as the
+/// user's own Kickstart and the user's own package archives do.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequiredMedium {
+    /// The Amiga volume name the installer checks for — `AmigaOS3.9`,
+    /// **without** a trailing colon.
+    ///
+    /// A recipe naming a volume is refused everywhere else in this file
+    /// ([`AmigaInstaller::program`]), and this is not that: there the volume
+    /// would be one ART mounts, which is ART's decision to make. Here the
+    /// volume is the disc's *own* name, which neither ART nor the recipe
+    /// chooses — the disc carries it, and the command layer asks the image
+    /// what it is called rather than assuming.
+    pub volume: String,
+    /// What to call the disc in a sentence — *"the original AmigaOS 3.9
+    /// CD-ROM"*. Untranslated, like a package's `name` (ART-060).
+    pub name: String,
 }
 
 /// One overlay medium: where its files are inside its own archive, and where
@@ -604,6 +659,35 @@ fn validate_installer(package: &Package) -> CoreResult<()> {
         )?;
         refuse_shell_metacharacters("installer overlay path", &overlay.from)?;
         refuse_shell_metacharacters("installer overlay path", &overlay.to)?;
+    }
+    // A required medium is a **volume name**, not a path and not a device
+    // reference. A trailing colon is the mistake a recipe author will make —
+    // the installer's own strings carry one (`AmigaOS3.9:Videos/…`) — and
+    // letting it through would make ART compare `AmigaOS3.9:` against the
+    // name a disc actually states, `AmigaOS3.9`, and refuse the right disc.
+    if let Some(medium) = &installer.required_medium {
+        for (field, value) in [("volume", &medium.volume), ("name", &medium.name)] {
+            if value.trim().is_empty() {
+                return Err(CoreError::Malformed {
+                    format: "package".into(),
+                    detail: format!(
+                        "'{}': the installer's required_medium.{field} is empty",
+                        package.id
+                    ),
+                });
+            }
+            refuse_shell_metacharacters("required medium", value)?;
+        }
+        if medium.volume.contains(':') || medium.volume.contains('/') {
+            return Err(CoreError::Malformed {
+                format: "package".into(),
+                detail: format!(
+                    "'{}': the installer's required_medium.volume '{}' is a path or carries a \
+                     colon; it must be the disc's own volume name alone, as the image states it",
+                    package.id, medium.volume
+                ),
+            });
+        }
     }
     Ok(())
 }
@@ -1212,6 +1296,7 @@ mod tests {
             args: args.iter().map(|a| a.to_string()).collect(),
             minimum_version: None,
             overlays: Vec::new(),
+            required_medium: None,
         };
         let json = serde_json::json!({
             "id": "x",
@@ -1512,6 +1597,48 @@ mod tests {
     /// vanishes. `parse_all` — what `packages()` itself calls — catches it
     /// directly; this test constructs the collision without touching the
     /// real shipped list.
+    /// ART-193. Both BoingBags' `Updater`s verify the original AmigaOS 3.9
+    /// CD-ROM — their own printable strings say so, and each recipe's
+    /// `_why_required_medium` records the reading — so both must declare it.
+    /// The volume is written the way a disc states it: no colon, whatever the
+    /// installer's own `AmigaOS3.9:Videos/…` strings look like.
+    #[test]
+    fn both_boingbags_declare_the_disc_their_updater_verifies() {
+        for id in ["boingbag-39-1", "boingbag-39-2"] {
+            let package = by_id(id).unwrap();
+            let medium = package
+                .amiga_installer
+                .as_ref()
+                .and_then(|i| i.required_medium.as_ref())
+                .unwrap_or_else(|| panic!("{id} declares no required medium"));
+            assert_eq!(medium.volume, "AmigaOS3.9", "{id}");
+            assert!(!medium.volume.contains(':'), "{id}");
+            assert!(!medium.name.trim().is_empty(), "{id}");
+        }
+    }
+
+    /// A recipe author will copy the volume out of the installer's own
+    /// strings, colon and all. Left alone, `AmigaOS3.9:` would be compared
+    /// against the name a disc actually states — `AmigaOS3.9` — and the right
+    /// disc would be refused.
+    #[test]
+    fn a_required_medium_written_as_a_device_reference_is_refused() {
+        let json = serde_json::json!({
+            "id": "x",
+            "name": "X",
+            "media": "M",
+            "amiga_installer": {
+                "program": "C/Updater",
+                "required_medium": { "volume": "AmigaOS3.9:", "name": "the disc" }
+            },
+            "rules": [{ "from": "C", "to": "C", "kind": "subtree" }]
+        })
+        .to_string();
+        let err = parse(&json).unwrap_err();
+        assert!(matches!(err, CoreError::Malformed { .. }), "{err:?}");
+        assert!(err.to_string().contains("volume name"), "{err}");
+    }
+
     #[test]
     fn two_shipped_packages_sharing_an_id_are_refused() {
         let err = super::parse_all(&[BOINGBAG_39_1_JSON, BOINGBAG_39_1_JSON])

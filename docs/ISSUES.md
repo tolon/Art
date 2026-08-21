@@ -26,88 +26,96 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-193** 🔴 **A BoingBag's `Updater` verifies the original AmigaOS 3.9
-CD-ROM, and ART mounts no such volume — so the run starts, opens its window
-and never finishes** — *found 2026-08-21 by Task 7's run against the owner's
-own `BoingBag39-1 (1).lha`, not fixed*
-`src-tauri/src/core/amigainstall/run.rs::media_for` ·
-`src-tauri/src/core/osinstall/package.rs::AmigaInstaller` ·
-`src-tauri/src/core/winuae.rs::LaunchMedia`
+**ART-193** 🔴 **A BoingBag's `Updater` starts, prints nothing, opens
+no window and never returns — and the missing AmigaOS 3.9 CD-ROM, which this
+entry named as the cause, is not it** — *found 2026-08-21 by Task 7's run;
+the CD half **fixed** and the cause **falsified** by Task 9's, still not
+installing*
+`src-tauri/src/commands/amigainstall.rs::compose_medium` ·
+`src-tauri/src/core/winuae.rs::LaunchMedia::cd_image_path` ·
+`src-tauri/src/core/osinstall/package.rs::RequiredMedium`
 
-With [ART-188](#fixed) to [ART-192](#fixed) fixed, the owner's own `Updater`
-45.15 gets all the way to running: it loads, opens `resource.library` and its
-ReAction classes, and puts an *AmigaOS Updater* screen on the emulated
-display. Then nothing happens. Measured twice on the owner's own tree: **not
-one of the 3 795 files in the staged copy was written**, checked on the host
-while each run was live, and both runs ended only because the emulator was
-terminated deliberately — at 414 s and 422 s, neither reaching the deadline.
-WinUAE was consuming 3.14 s of host CPU per 5 s of wall clock throughout, so
-the emulated machine was executing rather than idle.
-
-**The program says what it is waiting for.** Its own printable strings:
+Both AmigaOS 3.9 BoingBag `Updater`s verify the original CD-ROM before they
+will install anything — their own printable strings say so, read on the host
+from the owner's own archives:
 
 ```text
   Checking AmigaOS 3.9 CD-ROM ...
   Failed to check AmigaOS 3.9 CD-ROM.
   Did you really insert a original AmigaOS 3.9 CD-ROM
   into a mounted CD-ROM drive?
-  AmigaOS3.9:Videos/Angels.avi
-  AmigaOS3.9:Audio/Circle Orbital.mp3
-  AmigaOS3.9:OS-Version3.9/Workbench3.9/WBStartup/AmiDock
+  AmigaOS3.9:Videos/Angels.avi                    (45.15 and 45.19)
+  AmigaOS3.9:Audio/Circle Orbital.mp3             (45.15)
+  AmigaOS3.9:Audio/Circle - Orbital.mp3           (45.19)
 ```
 
-So the program checks three named files on a volume called `AmigaOS3.9:`, and
-ART's run mounts three volumes — the tree copy, the package's unpacked wrapper,
-and ART's own work volume — none of which is that CD. The design never named
-this: §3 says what runs and where it runs *from*, and this is a fourth thing,
-what it runs *against*.
+Task 7 mounted no such volume, saw the run produce nothing in 414 s, 422 s and
+1 200 s, and **said in this entry that the missing CD was an inference and not
+a measurement** — *"whoever fixes this should expect to confirm it on the way,
+rather than assume it."* Task 9 did, and it is wrong.
 
-**Observed versus inferred, kept apart.** *Observed:* those strings are in the
-binary; the `Updater` starts, opens its own screen, and writes nothing for
-seven minutes while the emulated machine keeps executing. *Inferred:* that
-the missing CD is what it is stuck on. The *"Checking AmigaOS 3.9 CD-ROM …"*
-line was never seen — the `Updater`'s screen sits in front of the shell it was
-launched from and nothing captured what is behind it. This is much the best
-explanation of the evidence and it is not a measurement; whoever fixes this
-should expect to confirm it on the way, not assume it.
+## The CD half is built and proved
 
-**This is a medium the user has, not a protection to be worked around.** The
-owner's own `E:\amiga\Amigatolon\os39\AmigaOS39.iso` is the disc the tree was
-built from, and its volume name is already recorded in that tree's own
-`distribution.json` (`builtFrom[0].volumeName = "AmigaOS3.9"`). Supplying it is
-giving the installer the disc it asks for. **Extracting only the three files it
-names would not be** — that is satisfying a media check rather than meeting it,
-and ART's standing rule is that nothing here bypasses anything.
+`LaunchMedia` now carries a `cd_image_path`, and three lines were read out of
+WinUAE's own documentation rather than recalled — `cdimage0=<path>`
+(`Docs/winuaechangelog.txt`), `scsi=true` (uaescsi.device, also present in a
+WinUAE-written configuration on this machine) and `win32.map_cd_drives=true`
+(the GUI's *"CDFS automount CD/DVD drives"*, which mounts the image through
+WinUAE's own CDFS so *"there is no need to install Amiga-side CDFS anymore"*).
 
-**Why it is not fixed here.** `LaunchMedia` has no CD at all — no `cdimage0=`,
-no `uaescsi.device`, and the tree's CD filesystem (`L/CDFileSystem`,
-`Storage/DOSDrivers/CD0`) is not mounted by ART's generated script either. That
-is a feature in three layers (a recipe declaration for the medium a package
-requires, a fourth mount, and the AmigaDOS `Mount` that makes it visible), not
-a line. Filing it is the honest end of this round: the five defects above were
-each a line or two and are fixed; this one is a design gap and is named as one.
+**Measured on the running Amiga**, not asserted — `Info` and `Assign`, run by
+ART's own work volume against the owner's `AmigaOS39.iso`:
 
-**What the next person needs, measured rather than guessed.** The tree already
-carries both halves of the Amiga side: `L/CDFILESYSTEM` and
-`Storage/DOSDrivers/CD0`, whose own text reads `FileSystem = L:CDFileSystem`,
-`SectorSize = 2048`, `DosType = 0x43443031`, and — in a comment, because the
-real values live in the icon's tooltypes — `Device = scsi.device`, `Unit = 2`.
-So the missing pieces are: a `cdimage0=` in `core::winuae::LaunchMedia`
-(which has no CD field at all today), a recipe declaration naming the medium a
-package requires, and a `Mount` in the generated script pointing at the
-emulator's own CD device rather than at `scsi.device` unit 2. Three layers, and
-none of them guessable from the host — the last one in particular has to be
-tried against a booted system.
+```text
+  CD0:       467M   239593        0 100%   0  Read Only  AmigaOS3.9
+  Volumes:  Ram Disk [Mounted]  AmigaOS3.9 [Mounted]  Workbench [Mounted]  ARTWork [Mounted]
+```
 
-**One diagnostic was run and then withdrawn, and it is recorded because
-withdrawing it is the point.** `Assign AmigaOS3.9: DH0:` was tried through
-`core::winuae::real_version_hook` and the `Updater` still produced nothing in
-180 s — which looked like a clean elimination until the probe script was read
-back: it had no `ENV:` while the product's script did, so what it actually
-re-measured was [ART-192](#fixed)'s requester, not this. The hook's script now
-mirrors the product's line for line, and this elimination is **not** claimed.
-Someone closing this issue should re-run it rather than trust the paragraph
-that used to be here.
+and `List` shows all four files the two `Updater`s name, at the paths they
+name. A later probe with `LoadWB` shows the `AmigaOS3.9` disc icon on the
+Workbench. **`BoingBag39-1-UAE.lha`'s readme warns that *"possibly UAE will
+not recognize the AmigaOS 3.9 CD-ROM with its correct name"* and prescribes a
+manual `Assign AmigaOS3.9:`; measured, it does not bite, so ART's generated
+script gained no assign.** Nothing here decrypts anything: supplying the disc
+an installer asks for is meeting its check.
+
+The recipe declares the medium (`RequiredMedium { volume, name }`), the
+request supplies the file, and `compose_medium` opens the image and asks it
+its **own** volume name before anything is copied — a disc that states another
+name is refused naming both.
+
+## What is still wrong, and it is not the disc
+
+With that volume mounted under exactly the name the program looks for, the
+`Updater` **still writes nothing and never returns**. Four runs on 2026-08-21,
+the owner's own tree and ROM:
+
+| Run | `Updater` | Disc | Result |
+|---|---|---|---|
+| product `install` | 45.15 | mounted | 400 s, `EmulatorClosed` (terminated deliberately), **0 of 3 795 files written** |
+| probe, output redirected to the host | 45.15 | mounted | 180 s, **not one byte of output**, no return, 0 files written |
+| probe, output redirected to the host | 45.15 | **absent** | 180 s, identical in every respect |
+| probe, visible console | 45.19 (BoingBag 2's) | mounted | 180 s, identical |
+
+**Three things follow, and they are observations rather than readings of a
+disassembly.** It never prints its own *"Checking AmigaOS 3.9 CD-ROM …"*
+line, so it stops **before** the check this entry was named after. Its
+behaviour is byte-identical with and without the disc, so the disc is not what
+it is waiting on. And 45.19 behaves exactly like 45.15, so this is not
+45.15's own `Circle Orbital.mp3` misspelling either — a real difference
+between the two builds that the disc settles in 45.19's favour, and that
+changes nothing.
+
+*Observed:* no stdout, no window, no screen, no file written, no return, in
+four runs. *Not observed:* what it is waiting on. A program that prints
+nothing and opens nothing is characteristic of a wait on a port or a signal,
+and that is a guess; it is written here as one.
+
+**What Task 9 did not try**, so the next reader does not repeat it: running
+the package's own `Install` Installer script (deliberately not declared — it
+asks questions), a different Kickstart, a 68000/68030 preset, or WinUAE's own
+debugger. `Workbench` running (`IPrefs`, `ConClip`, `LoadWB`) was tried and
+changed nothing.
 
 
 **ART-187** 🔵 **A cancelled Amiga-side install leaves the last phase line
@@ -348,7 +356,8 @@ sharpens what closing it means.** That round never places a package file with
 `apply` at all — the Amiga's own installer writes them — so even a *successful*
 BoingBag install would leave `apply`'s handling of a first-time top-level
 drawer untested. And it was not successful ([ART-193](#open)), so nothing was
-written by anyone. This therefore needs the second of the two routes above, or
+written by anyone — nor did the second run, with the disc mounted. This
+therefore needs the second of the two routes above, or
 an explicit test against a real payload's real shape; the first route is now
 known not to reach it.
 
@@ -481,13 +490,14 @@ does not — so the first fact was true and the second was inferred from it. The
 first thing that ever asked for bytes was Task 8's run.
 
 **The Amiga-side route now runs, and still does not place a file** —
-*2026-08-21*. The round built to make this moot got the package's own
-`Updater` 45.15 loading, opening its libraries and putting its own screen on
-the emulated display, against the owner's own tree — and then it stops,
-because it verifies the original AmigaOS 3.9 CD-ROM on a volume ART does not
-mount ([ART-193](#open)). So this entry is unchanged in substance: **not one
-byte of either BoingBag has reached a tree by any route.** It closes when
-ART-193 does, and not before.
+*2026-08-21, twice*. The round built to make this moot got the package's own
+`Updater` 45.15 loading and running against the owner's own tree, and then it
+stops. The first day's reading — that it stops because it verifies the
+original AmigaOS 3.9 CD-ROM on a volume ART does not mount — was an inference,
+and the second day's run **mounted that disc under exactly the right name and
+measured no difference at all** ([ART-193](#open)). So this entry is unchanged
+in substance: **not one byte of either BoingBag has reached a tree by any
+route.** It closes when ART-193 does, and not before.
 
 
 **ART-152** 🔵 **ART sizes a WHDLoad launch's Fast RAM from a fixed setting,

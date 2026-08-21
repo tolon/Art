@@ -52,6 +52,27 @@ pub struct LaunchMedia {
     /// deserialises instead of failing to load.
     #[serde(default)]
     pub directories: Vec<DirMount>,
+    /// A CD image (`.iso`/`.cue`) placed in the emulated machine's CD drive.
+    ///
+    /// **ART-193.** A package's own installer may verify the medium it was
+    /// shipped on: AmigaOS 3.9's BoingBag `Updater` checks for named files on
+    /// a volume called `AmigaOS3.9:` — its own strings say so — and without a
+    /// CD it opens its screen and never finishes. Giving it the disc the tree
+    /// was built from is *meeting* that check, not bypassing one; nothing here
+    /// decrypts anything.
+    ///
+    /// **The path is data, and reading it is not this module's job** — the
+    /// same rule [`hardfile_shapes`](Self::hardfile_shapes) is written under.
+    /// Whether the image is really the disc a package asked for is decided
+    /// where the file can actually be opened (`commands/amigainstall.rs`, via
+    /// [`crate::core::iso::IsoImage::volume_name`]) and travels here as a
+    /// string.
+    ///
+    /// `#[serde(default)]` so a `LaunchMedia` stored before this field existed
+    /// still deserialises, and `None` emits nothing at all: a launch that
+    /// needs no disc gets the configuration it always got.
+    #[serde(default)]
+    pub cd_image_path: Option<String>,
 }
 
 /// A host folder mounted as an Amiga volume (WinUAE `filesystem2=`).
@@ -221,6 +242,45 @@ pub fn generate_uae_config(profile: &AmigaProfile, media: &LaunchMedia) -> CoreR
         let fp = checked_config_value("floppy image path", fp)?;
         lines.push(format!("floppy{i}={fp}"));
         lines.push(format!("floppy{i}type=0"));
+    }
+
+    // The CD drive (ART-193).
+    //
+    // Three lines, and each was read out of WinUAE's own documentation rather
+    // than recalled — this project has paid for guessing:
+    //
+    //   `cdimage0=<path>`      `Docs/winuaechangelog.txt`: *"cdimage0=<path to
+    //                          .cue/.iso> in config file, command line
+    //                          parameter -cdimage=<path to .cue/.iso> can also
+    //                          be used"*, and the key is in the binary's own
+    //                          option table as `cdimage%d`. The same file
+    //                          warns that a path may be followed by `,delay`
+    //                          — which is why `checked_config_value`'s comma
+    //                          rule matters here as much as it does for
+    //                          `hardfile2=`.
+    //   `scsi=true`            uaescsi.device. The changelog: *"cdimage0
+    //                          pointing to image file and uaescsi.device set
+    //                          in configuration: mount image on
+    //                          uaescsi.device:0"*. Confirmed as a real key in
+    //                          a WinUAE-written configuration on this machine
+    //                          (`E:\amiga\Caffeine\WinUaexec\Configurations\
+    //                          Caffeine_Storm.uae`, line 64).
+    //   `win32.map_cd_drives`  the GUI's *"CDFS automount CD/DVD drives"*.
+    //                          With uaescsi.device enabled this mounts the CD
+    //                          through WinUAE's own built-in CDFS — *"There is
+    //                          no need to install Amiga-side CDFS anymore"* —
+    //                          so the Amiga sees the disc under its own volume
+    //                          label without the tree's `L:CDFileSystem` being
+    //                          mounted at all. Same file, line 21.
+    //
+    // Emitted only when there is a disc: a launch with no CD gets exactly the
+    // configuration it got before this field existed, host CD/DVD drives
+    // included (which is to say, not mounted).
+    if let Some(ref cd) = media.cd_image_path {
+        let cd = checked_config_value("CD image path", cd)?;
+        lines.push("scsi=true".into());
+        lines.push("win32.map_cd_drives=true".into());
+        lines.push(format!("cdimage0={cd}"));
     }
 
     // Hard Drives (HDFs).
@@ -660,6 +720,73 @@ mod tests {
         assert!(!uae.contains("floppy5="));
     }
 
+    /// ART-193. A package's own installer can verify the medium it shipped
+    /// on, so a launch has to be able to put a disc in the machine — and the
+    /// three lines it takes were read out of WinUAE's own documentation, not
+    /// recalled. Measured end to end on 2026-08-21: with exactly these lines
+    /// the emulated A1200 reported `CD0: 467M ... Read Only AmigaOS3.9` and
+    /// listed `AmigaOS3.9` among its mounted volumes, which is the name the
+    /// `Updater` looks for.
+    #[test]
+    fn a_cd_image_reaches_the_configuration_with_the_device_that_mounts_it() {
+        let profile = AmigaProfile::a1200_aga();
+        let media = LaunchMedia {
+            kickstart_path: Some(r"C:\ROMs\kick31.rom".into()),
+            cd_image_path: Some(r"E:\amiga\Amigatolon\os39\AmigaOS39.iso".into()),
+            ..Default::default()
+        };
+
+        let uae = generate_uae_config(&profile, &media).unwrap();
+        assert!(
+            uae.contains(r"cdimage0=E:\amiga\Amigatolon\os39\AmigaOS39.iso"),
+            "{uae}"
+        );
+        assert!(
+            uae.contains("scsi=true"),
+            "uaescsi.device is what the image is mounted on"
+        );
+        assert!(
+            uae.contains("win32.map_cd_drives=true"),
+            "and WinUAE's own CDFS is what makes it an Amiga volume, so the tree's own L:CDFileSystem never has to be mounted"
+        );
+    }
+
+    /// A launch with no disc must be byte-for-byte the configuration ART
+    /// wrote before this field existed — in particular it must not turn on
+    /// uaescsi.device or start mounting the owner's physical CD/DVD drives
+    /// into an emulated Amiga that never asked for one.
+    #[test]
+    fn no_cd_image_emits_no_cd_lines_at_all() {
+        let profile = AmigaProfile::a1200_aga();
+        let media = LaunchMedia {
+            use_aros: true,
+            ..Default::default()
+        };
+        assert!(media.cd_image_path.is_none());
+
+        let uae = generate_uae_config(&profile, &media).unwrap();
+        assert!(!uae.contains("cdimage0="), "{uae}");
+        assert!(!uae.contains("scsi=true"), "{uae}");
+        assert!(!uae.contains("map_cd_drives"), "{uae}");
+    }
+
+    /// WinUAE reads a comma after a CD path as the start of its own `delay`
+    /// option (`Docs/winuaechangelog.txt`), so a disc image in a folder the
+    /// user named `Amiga, ISOs` would be silently misread rather than
+    /// refused — the same defect ART-142 fixed for directory mounts.
+    #[test]
+    fn a_comma_in_a_cd_image_path_is_rejected() {
+        let profile = AmigaProfile::a1200_aga();
+        let media = LaunchMedia {
+            cd_image_path: Some(r"E:\Amiga, ISOs\AmigaOS39.iso".into()),
+            use_aros: true,
+            ..Default::default()
+        };
+
+        let err = generate_uae_config(&profile, &media).unwrap_err();
+        assert!(matches!(err, CoreError::InvalidInput(_)));
+    }
+
     /// A path carrying a newline could otherwise inject arbitrary `.uae`
     /// directives into the generated configuration.
     #[test]
@@ -810,6 +937,7 @@ mod real_boot_hook {
                 boot_priority: 0,
                 read_only: false,
             }],
+            cd_image_path: None,
         };
 
         let config = generate_uae_config(&profile, &media).expect("ART must be able to write this");
@@ -1005,9 +1133,15 @@ mod real_version_hook {
             });
         }
 
+        // A disc in the emulated CD drive, when the question being asked is
+        // about one — `ART_BOOT_CD`. ART-193's whole diagnosis is that a
+        // package's installer verifies a medium ART did not mount, and
+        // "does the Amiga see it, and under what name" is a question about a
+        // running machine that no host-side reading can answer.
         let media = LaunchMedia {
             kickstart_path: Some(rom),
             directories,
+            cd_image_path: std::env::var("ART_BOOT_CD").ok(),
             ..LaunchMedia::default()
         };
 
