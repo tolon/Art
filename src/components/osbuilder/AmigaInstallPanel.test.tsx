@@ -279,7 +279,35 @@ describe("a refusal says which reason applies", () => {
     expect(screen.getByRole("checkbox").hasAttribute("disabled")).toBe(true);
   });
 
-  it("shows a too-old installer refusal verbatim, naming the archive that fixes it", async () => {
+// ART-202. The owner pressed the run button seven times against an
+  // unchanged request, and their operation log recorded every one of them:
+  // the refusal rendered 209 lines of JSX above the button, so on a maximised
+  // window pressing it changed nothing they could see.
+  it("says why beside the button as well, not only at the top of the panel", async () => {
+    previewMock.mockRejectedValue(
+      "'D:/pkg/BoingBag39-1-UAE.lha' is this package's update archive, not the package itself"
+    );
+    withChoices();
+    render(<AmigaInstallPanel treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
+
+    const atTop = await screen.findByTestId("amiga-install-refusal");
+    const atButton = await screen.findByTestId("amiga-install-refusal-at-run");
+    expect(atButton.textContent).toContain("update archive");
+
+    // And it is genuinely *at* the button — its immediate neighbour, not
+    // merely somewhere else on the same screen. "Follows the button" would
+    // pass with the two a thousand pixels apart, which is the defect.
+    const button = screen.getByRole("button", {
+      name: i18n.t("osinstall.amigaInstall.run"),
+    });
+    expect(atButton.nextElementSibling?.contains(button)).toBe(true);
+
+    // The top one stays: it is next to the fields the refusal is about.
+    expect(atTop).not.toBe(atButton);
+    expect(button.compareDocumentPosition(atTop) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+  });
+
+    it("shows a too-old installer refusal verbatim, naming the archive that fixes it", async () => {
     previewMock.mockRejectedValue(
       "'D:/pkg/BoingBag39-1.lha' carries Updater 45.13, and this package's installer has to be " +
         "at least 45.15 to run inside an emulator. Supply the package's update archive as well " +
