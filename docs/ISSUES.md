@@ -26,6 +26,56 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-203** 🔴 **A distribution tree cannot be built from the screen at
+all: the folder picker can only return a folder that exists, and `apply`
+refuses every folder that exists** — *found 2026-08-22, from the owner's
+question "neden işletim sistemi oluşturamıyorum?"*
+`src-tauri/src/core/osinstall/apply.rs` ·
+`src-tauri/src/commands/osinstall.rs::osinstall_destination_taken` ·
+`src/components/osbuilder/OsInstall.tsx::chooseDestination`
+
+`apply` opens with `SAFE_CREATE`: *"`root` must not already exist"*. The
+screen's destination is chosen with `open({ directory: true })`, and a folder
+picker **cannot return a folder that is not there** — the "New folder" button
+creates it, and it exists from that moment. Delete it by hand and there is
+nothing left to select.
+
+Measured on the owner's own machine: `E:\amiga\Amigatolon\os39\art1`,
+created 01:44, **empty**, and the Build button locked against it.
+
+**So the loop has no exit, and it never had one.** Every tree this project has
+ever built came from the env-gated test hook, which takes a path string and
+never sees a dialog. `docs/STATUS.md` already records what this looked like
+from the other side — *"three consecutive `ART-SAFETY-REFUSED` entries in the
+operation log over an existing destination"* — and the fix that round applied
+(`osinstall_destination_taken`, blocking before the button instead of failing
+after it) made the dead end **visible** without making it passable. That is
+worth keeping in mind on its own: a defect can be made honest and still not be
+fixed.
+
+**Proposed fix: narrow the refusal to what it is actually for.**
+`SAFE_CREATE`'s purpose is that ART never builds over somebody's data. **An
+empty directory holds no data.** So an existing directory is accepted when it
+is empty and refused when it is not, and the sentence for a non-empty one says
+which of the two it is. The idiom is already in this codebase, one module
+over: `packagevol::unpack` refuses with *"already has contents; a package is
+unpacked into an empty directory"*.
+
+`read_dir().next().is_some()` is the test, so a folder holding **anything at
+all** — including a hidden file, including a single `.DS_Store` — is still
+refused. Nothing is emptied, nothing is overwritten, and a file that was there
+before the build is still there after a refusal.
+
+`osinstall_destination_taken` answers the same question, so the screen and the
+engine cannot disagree about which destinations are usable — the disagreement
+this entry is about.
+
+**Not yet fixed.** The owner redirected this session to external research
+before more code was written, which is this project's own rule and the right
+call: the fix touches a safety rule, and a wiki describing how the established
+tool prepares these cards may say something about destinations that changes
+it.
+
 **ART-196** 🟠 **ART writes its scratch to the system drive and the user
 cannot move it** — *raised by the owner 2026-08-21, after their C: had already
 been filled once by ART's own test scratch*
