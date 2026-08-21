@@ -53,6 +53,8 @@ python scripts/iso-oracle-check.py                     # the disc reader vs 7-Zi
 python scripts/fat-oracle-check.py                     # the card's boot partition vs 7-Zip (needs 7z; not in CI)
 python scripts/pfs3-oracle-check.py                     # PFS3, both directions, vs hst-imager (needs hst.imager.exe; not in CI)
 python scripts/zoom-check.py                           # the shell's widths, in a real browser (needs `pnpm dev`)
+python scripts/osbuilder-strip-check.py                # the OS Builder's step strip: per kind, both languages,
+                                                       #   three Application Sizes (needs `pnpm dev`)
 python scripts/contrast-check.py                       # every colour pair in both themes, against WCAG (in CI)
 
 # Task 14's real run — the user's own media, not a fixture. `#[ignore]`d
@@ -955,15 +957,34 @@ screen.** Seven of the plan's eight tasks are done, on branch
 [ART-197](ISSUES.md) and [ART-198](ISSUES.md) are both closed, with tests and
 with every named mutation run and seen to fail.
 
-**Task 7 — driving it in the real application — has NOT been done, and it is
-the next action.** The owner had ART open while the round was written, so
-`cargo` could not replace a locked `amiga-retro-toolkit.exe` (`os error 5`);
-nothing was built and no step has been seen on a screen. What that leaves
-unproven is exactly what jsdom cannot reach: layout. The progress strip is a
-new row of controls, the Turkish labels run longer than the English, and
-`ART-118`'s renderer crash on this screen is still open. **Close ART, run
-`pnpm tauri build --no-bundle`, and walk the six steps in both languages**
-before this branch merges. The plan's Task 7 lists what to look at.
+**Task 7 is half done, and the half that is done was measured rather than
+looked at.** The layout question jsdom cannot answer now has numbers:
+`scripts/osbuilder-strip-check.py` drives the running frontend in headless
+Chrome and reports, per build kind, per language and per Application Size,
+what the strip actually measures. At 1280×900:
+
+| | z=1 | z=1.3 | z=2 |
+|---|---|---|---|
+| strip height | 49 px | 62.8 px | **186 px** |
+| strip overflow | 0 | 0 | 0 |
+| page horizontal scroll | 0 | 0 | 0 |
+
+**Both languages give identical numbers**, so the longer Turkish labels
+(*"Güncelleme paketleri"*, *"İşletim Sistemi Kurucusu"*) cost nothing here.
+The strip **wraps rather than clipping**: at Application Size 2 it takes about
+three rows and 186 px of vertical space, with nothing unreachable and no
+sideways scroll. That is `flexWrap` doing its job, and it is worth knowing
+before someone "fixes" it. The per-kind contents are right on screen too —
+boot-card 2 steps, prepare-volumes 2, install 4 — and no label rendered as a
+raw key or an unrendered `{{…}}` in either language.
+
+**What is still owed is the half that needs the owner's own material.** No
+panel has been driven end to end: the browser harness has no Tauri bridge, so
+every command a step issues fails there by construction. Build a tree, watch
+the result card name the folder, and confirm the **Güncelleme paketleri** step
+already has it — that is [ART-197](ISSUES.md) on a real screen, and it is the
+one claim this round exists for. `ART-118`'s renderer crash on this screen
+also remains open. The plan's Task 7 lists the walk.
 
 **What wave 1 changed, in one paragraph.** `src/lib/buildSession.ts` +
 `useBuildSession.ts` make the folder ART writes and the folder the next steps
