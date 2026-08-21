@@ -50,9 +50,47 @@
 //! wrong fix — §3's rule that ART says *which* of the possible reasons
 //! applies.
 //!
-//! A package that requires nothing reads no manifest at all: there is
-//! nothing to check, and refusing a hand-made tree over a requirement that
-//! does not exist would be ART claiming more than it knows (§89).
+//! ## Both refusals apply to every package, including one that requires
+//! nothing — fix round 1
+//!
+//! The first version read the tree **only** when the package declared a
+//! requirement: BoingBag 1 requires nothing, so a hand-made tree with no
+//! manifest was an explicitly permitted run. That was wrong, and wrong in
+//! this round's signature way.
+//!
+//! [`record_amiga_install`] cannot record into a tree that has no manifest.
+//! So the permitted run reached the emulator, the installer **worked**, the
+//! recording failed, `perform`'s closure returned `Err`, the copy was never
+//! promoted — and the user was told the install failed *after it had
+//! succeeded*. That is the third time in two days this round produced a true
+//! outcome reported as its opposite: ART-185 would have said "the installer
+//! ran and refused" about a program that never started, the stock `Updater`
+//! would have said the same about one that could not work, and this said "it
+//! failed" about one that did the job. §89 forbids all three.
+//!
+//! The defect was not in either half. It was in the gap between them, so the
+//! fix closes the gap rather than patching one side: [`applied`] is now read
+//! **unconditionally**, which makes "ART can account for this tree" and "ART
+//! can record a success into this tree" the same question, asked once.
+//!
+//! The alternatives were considered and are worse:
+//!
+//! - **Create a minimal manifest when there is none.** It would carry a
+//!   `release` ART does not know and an empty `files[]`, and put both in
+//!   front of `verify`, `collide` and
+//!   [`apply`](super::apply)'s own `classify_incoming`, which today refuses
+//!   outright when a tree has no manifest because it cannot say what adding
+//!   a component would replace. A synthesised empty one turns that honest
+//!   refusal into "nothing was there", which is a lie — the same
+//!   corrupt-a-different-consumer argument that ruled out synthesising
+//!   [`FileRecord`](super::apply::FileRecord)s.
+//! - **Record nothing and say so.** The next run's chain check would then
+//!   refuse BoingBag 2 on a tree that really does have BoingBag 1 — exactly
+//!   the "worse than no refusal" this module exists to avoid.
+//!
+//! §89 is still satisfied, because the two refusals stay two sentences: a
+//! manifest-less tree is told ART cannot say what is in it, and is never told
+//! that some package is missing, which ART would not know.
 
 use std::collections::{BTreeSet, VecDeque};
 use std::path::Path;
@@ -125,26 +163,38 @@ fn prerequisite_chain(package: &Package) -> CoreResult<Vec<String>> {
 /// Which of `package`'s prerequisites this tree does not have, in the order
 /// they must be installed. Empty when there is nothing to do.
 ///
-/// Reads the tree only when there is a requirement to check — see the module
-/// documentation.
+/// **[`applied`] is read before the chain is looked at, and unconditionally**
+/// — including for a package that requires nothing, which used to skip the
+/// read entirely (fix round 1). That single line is what keeps this in step
+/// with [`record_amiga_install`]: a tree this function accepts is a tree a
+/// successful run can be recorded into, because both go through the same
+/// read. See the module documentation for the ending that disagreement
+/// produced.
 pub fn missing_prerequisites(package: &Package, tree: &Path) -> CoreResult<Vec<String>> {
-    let chain = prerequisite_chain(package)?;
-    if chain.is_empty() {
-        return Ok(Vec::new());
-    }
     let have = applied(tree)?;
-    Ok(chain
+    Ok(prerequisite_chain(package)?
         .into_iter()
         .filter(|id| !have.contains(id))
         .collect::<Vec<String>>())
 }
 
-/// Refuse the run when the tree is missing something `package` needs.
+/// Refuse a run this tree cannot honestly carry.
+///
+/// Two reasons, and the caller does not choose between them because a reader
+/// of the message needs to know which applies: the tree is not one ART can
+/// account for at all, or it is missing a package `package` has to go on
+/// after. The first comes out of [`applied`], the second out of
+/// [`missing_prerequisites`].
+///
+/// **Named for the question rather than for one of its halves** (fix round
+/// 1). It was `refuse_unless_prerequisites_met`, and under that name it was
+/// natural to read a manifest-less tree as having no prerequisites to fail —
+/// which is how the two halves came to disagree.
 ///
 /// Called **before anything is copied** — the copy, the work volume and the
 /// package unpack all happen after this, so a refused run has changed
 /// nothing at all.
-pub fn refuse_unless_prerequisites_met(package: &Package, tree: &Path) -> CoreResult<()> {
+pub fn refuse_unless_installable(package: &Package, tree: &Path) -> CoreResult<()> {
     let missing = missing_prerequisites(package, tree)?;
     let Some(first) = missing.first() else {
         return Ok(());
@@ -259,7 +309,7 @@ mod tests {
         let tree = tree_with(dir.path(), &["workbench-base"]);
         let two = package::by_id("boingbag-39-2").unwrap();
 
-        let err = refuse_unless_prerequisites_met(&two, &tree).unwrap_err();
+        let err = refuse_unless_installable(&two, &tree).unwrap_err();
         let message = err.to_string();
 
         assert!(
@@ -290,7 +340,7 @@ mod tests {
             missing_prerequisites(&two, &tree).unwrap(),
             Vec::<String>::new()
         );
-        refuse_unless_prerequisites_met(&two, &tree).unwrap();
+        refuse_unless_installable(&two, &tree).unwrap();
     }
 
     /// The half that made the refusal usable at all. A BoingBag cannot be
@@ -326,6 +376,36 @@ mod tests {
         assert_eq!(manifest.release, "amigaos-3.9");
     }
 
+    /// ART never *creates* a `distribution.json` for a tree it did not build.
+    ///
+    /// The other way to make the two halves agree — considered in fix round 1
+    /// and rejected — is to let recording invent a manifest when there is
+    /// none. It would carry a `release` ART does not know and an empty
+    /// `files[]`, and put both in front of `verify`, `collide` and
+    /// `apply`'s own `classify_incoming`, which today refuses outright on a
+    /// manifest-less tree because it cannot say what adding a component would
+    /// replace; a synthesised empty one turns that honest refusal into
+    /// "nothing was there".
+    ///
+    /// **The choice is not observable from the outcome** — both ways make the
+    /// two halves agree, so `every_run_that_is_allowed_can_also_record_that_
+    /// it_worked` passes under either. Measured in fix round 1's mutation run:
+    /// swapping one for the other left the whole suite green. So it is
+    /// asserted directly, here, or the next reader could change the decision
+    /// without anything noticing.
+    #[test]
+    fn recording_never_creates_a_manifest_for_a_tree_art_did_not_build() {
+        let dir = scratch("no-invention");
+        let tree = dir.join("Workbench3.9");
+        std::fs::create_dir_all(&tree).unwrap();
+
+        assert!(record_amiga_install(&tree, "boingbag-39-1", "line").is_err());
+        assert!(
+            !tree.join(MANIFEST_FILE_NAME).exists(),
+            "ART must not write a distribution.json into a tree it did not build"
+        );
+    }
+
     /// Twice is once. Re-running a package is legitimate; a tree claiming it
     /// twice is not.
     #[test]
@@ -355,7 +435,7 @@ mod tests {
         std::fs::create_dir_all(&tree).unwrap();
         let two = package::by_id("boingbag-39-2").unwrap();
 
-        let message = refuse_unless_prerequisites_met(&two, &tree)
+        let message = refuse_unless_installable(&two, &tree)
             .unwrap_err()
             .to_string();
         assert!(
@@ -368,22 +448,114 @@ mod tests {
         );
     }
 
-    /// A package that needs nothing does not read the tree — so BoingBag 1
-    /// runs against a tree with no manifest at all, which is what §89 says
-    /// about claiming more than is known.
+    /// A package that requires nothing **still** needs a tree ART can account
+    /// for — the fix round 1 Major, from this side.
+    ///
+    /// This test asserted the opposite until 2026-08-21: BoingBag 1 requires
+    /// nothing, so the tree was never read and a hand-made folder was a
+    /// permitted run. On such a folder the installer would then work and
+    /// [`record_amiga_install`] would fail, and the user would be told the
+    /// install failed after it had succeeded.
+    ///
+    /// The refusal is the **manifest** one, never "a package is missing" —
+    /// asserted here, because a refusal naming BoingBag 3.9-1 about a tree
+    /// nobody can read would claim something ART does not know (§89).
     #[test]
-    fn a_package_that_requires_nothing_does_not_ask_the_tree_anything() {
+    fn a_package_that_requires_nothing_still_needs_a_tree_art_can_account_for() {
         let dir = scratch("no-requires");
         let tree = dir.join("nothing-here");
         std::fs::create_dir_all(&tree).unwrap();
         let one = package::by_id("boingbag-39-1").unwrap();
 
         assert!(one.requires.is_empty());
-        assert_eq!(
-            missing_prerequisites(&one, &tree).unwrap(),
-            Vec::<String>::new()
+        let message = refuse_unless_installable(&one, &tree)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            message.contains(MANIFEST_FILE_NAME),
+            "it must say ART cannot read this tree: {message}"
         );
-        refuse_unless_prerequisites_met(&one, &tree).unwrap();
+        assert!(
+            !message.contains("BoingBag"),
+            "and must not claim a package is missing, which it cannot know: {message}"
+        );
+
+        // And on a tree ART *can* account for it goes through — a refusal
+        // that fired either way would be no check at all.
+        let real = tree_with(dir.path(), &["workbench-base"]);
+        refuse_unless_installable(&one, &real).unwrap();
+    }
+
+    /// **The two halves have to agree, and this is the assertion that makes
+    /// them.**
+    ///
+    /// Fix round 1's Major was in neither half. `record_amiga_install`
+    /// refused a manifest-less tree while `missing_prerequisites` permitted a
+    /// run against one, and the gap between them turned a successful install
+    /// into a reported failure. So the property is asserted over every tree
+    /// shape rather than by one example: **whatever this module lets a run
+    /// start against, it must be able to record a success into.**
+    ///
+    /// A fresh tree per pair, because recording mutates the tree it is given.
+    #[allow(clippy::type_complexity)]
+    #[test]
+    fn every_run_that_is_allowed_can_also_record_that_it_worked() {
+        type MakeTree = Box<dyn Fn(&std::path::Path) -> std::path::PathBuf>;
+        let shapes: Vec<(&str, MakeTree)> = vec![
+            (
+                "no-manifest",
+                Box::new(|at: &std::path::Path| {
+                    let tree = at.join("Workbench3.9");
+                    std::fs::create_dir_all(&tree).unwrap();
+                    tree
+                }),
+            ),
+            (
+                "unreadable-manifest",
+                Box::new(|at: &std::path::Path| {
+                    let tree = at.join("Workbench3.9");
+                    std::fs::create_dir_all(&tree).unwrap();
+                    std::fs::write(tree.join(MANIFEST_FILE_NAME), b"{ not json").unwrap();
+                    tree
+                }),
+            ),
+            (
+                "empty-manifest",
+                Box::new(|at: &std::path::Path| tree_with(at, &[])),
+            ),
+            (
+                "base-only",
+                Box::new(|at: &std::path::Path| tree_with(at, &["workbench-base"])),
+            ),
+            (
+                "base-and-bb1",
+                Box::new(|at: &std::path::Path| {
+                    tree_with(at, &["workbench-base", "boingbag-39-1"])
+                }),
+            ),
+        ];
+
+        let mut allowed_any = 0usize;
+        for (shape, make) in &shapes {
+            for id in ["boingbag-39-1", "boingbag-39-2"] {
+                let dir = scratch(&format!("agree-{shape}-{id}"));
+                let tree = make(dir.path());
+                let package = package::by_id(id).unwrap();
+
+                let allowed = refuse_unless_installable(&package, &tree).is_ok();
+                let recordable = record_amiga_install(&tree, id, "line").is_ok();
+                assert!(
+                    !allowed || recordable,
+                    "{shape}/{id}: the run is allowed but its success could not be recorded \
+                     — the installer would work and ART would report that it failed"
+                );
+                allowed_any += usize::from(allowed);
+            }
+        }
+        assert!(
+            allowed_any >= 2,
+            "a check that allowed nothing at all would satisfy this vacuously"
+        );
     }
 
     /// A component the tree was *built* from counts as applied, without any
@@ -398,7 +570,7 @@ mod tests {
             missing_prerequisites(&two, &tree).unwrap(),
             Vec::<String>::new()
         );
-        refuse_unless_prerequisites_met(&two, &tree).unwrap();
+        refuse_unless_installable(&two, &tree).unwrap();
     }
 
     /// Transitive, and in install order. Built from a fabricated chain rather
@@ -436,6 +608,6 @@ mod tests {
         std::fs::write(tree.join(MANIFEST_FILE_NAME), b"{ not json").unwrap();
         let two = package::by_id("boingbag-39-2").unwrap();
 
-        assert!(refuse_unless_prerequisites_met(&two, &tree).is_err());
+        assert!(refuse_unless_installable(&two, &tree).is_err());
     }
 }

@@ -668,6 +668,46 @@ can never be a traversal. They are defence in depth, no test can reach them,
 and `copy_over`'s own documentation says so rather than letting a reader
 assume coverage.
 
+**Fix round 1** closed a Major that was in neither half but in the gap
+between them, and it is the same failure class a third time in two days: **a
+true outcome reported as its opposite.** `record_amiga_install` cannot write
+into a tree with no `distribution.json`, but `missing_prerequisites`
+deliberately did not read the tree for a package that requires nothing — so
+BoingBag 1 against a hand-made folder was an explicitly *permitted* run, the
+installer would have **worked**, the recording would have failed, the copy
+would never have been promoted, and the user would have been told the install
+failed after it succeeded. ART-185 would have said "the installer ran and
+refused" about a program that never started; the stock `Updater` would have
+said it about one that could not work; this said "it failed" about one that
+did the job. §89 forbids all three.
+
+Fixed by closing the gap rather than patching a side: `applied` is now read
+**unconditionally**, so "ART can account for this tree" and "ART can record a
+success into this tree" are the same question asked once, and
+`refuse_unless_prerequisites_met` was renamed `refuse_unless_installable`
+because the old name made a manifest-less tree read as one with no
+prerequisites to fail. The alternative — inventing a manifest when there is
+none — was rejected for the reason that ruled out synthesising `FileRecord`s:
+it would carry a `release` ART does not know and an empty `files[]` into
+`verify`, `collide` and `apply::classify_incoming`, which today refuses
+outright on a manifest-less tree because it cannot say what adding a component
+would replace. That decision is **not observable from the outcome** — both
+ways make the two halves agree — so it is asserted directly by
+`recording_never_creates_a_manifest_for_a_tree_art_did_not_build`, without
+which a mutation swapping one for the other left the suite green.
+
+Closed by **`every_run_that_is_allowed_can_also_record_that_it_worked`** (the
+property over five tree shapes, not one example) and
+**`a_run_compose_accepts_always_reaches_a_promotion_when_the_installer_succeeds`**
+(the ending that had no test at all), with
+`a_package_that_requires_nothing_still_needs_a_tree_art_can_account_for` and
+`boingbag_one_is_refused_on_a_tree_with_no_manifest` — the two tests that
+asserted the **opposite** until 2026-08-21 — beside them. Nine composition
+tests that had used a tree path pointing nowhere were given real distribution
+trees in the same round: three of them asserted only `is_err()` and would
+otherwise have gone on passing on the *chain* refusal instead of the guard
+each is named for.
+
 Still open from the same readme, and not this round's: UAE may not present the
 AmigaOS 3.9 CD under the name the installer expects, whose documented
 workaround is a manual `Assign AmigaOS3.9:`. Task 7 measures it.

@@ -439,7 +439,15 @@ fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
     // Here rather than in the job, because the *preview* has to refuse it too:
     // a screen that offered a confirm button for a run that cannot happen
     // would be a preview of nothing.
-    chain::refuse_unless_prerequisites_met(&package, &request.tree)?;
+    //
+    // It refuses a tree ART cannot account for at all as well, and that half
+    // is load-bearing rather than tidy (fix round 1): `record_if_succeeded`
+    // below cannot write into a tree with no `distribution.json`, so a run
+    // allowed against one would have reached the emulator, **worked**, and
+    // then failed at the recording — leaving the copy unpromoted and the user
+    // told the install failed after it had succeeded. Both halves go through
+    // one read in `chain`, so they cannot say different things again.
+    chain::refuse_unless_installable(&package, &request.tree)?;
 
     let volume = system_volume(request.system_volume.as_deref())?;
 
@@ -972,9 +980,55 @@ mod tests {
 
     /// A tree with something in it, so the copy is a real copy.
     fn tree_in(scratch: &ScratchDir) -> PathBuf {
+        tree_with_manifest(scratch, &["workbench-base"])
+    }
+
+    /// A folder with the same files and **no** `distribution.json` — not a
+    /// distribution tree, and since fix round 1 not something an Amiga-side
+    /// install may run against, because a success against it could not be
+    /// recorded. Two tests use it and both are about that refusal.
+    fn tree_without_manifest(scratch: &ScratchDir) -> PathBuf {
         let tree = scratch.join("Workbench3.9");
         std::fs::create_dir_all(tree.join("Libs")).unwrap();
         std::fs::write(tree.join("Libs/version.library"), b"the original").unwrap();
+        tree
+    }
+
+    /// A distribution tree whose `distribution.json` names `components`.
+    ///
+    /// **The manifest is always written.** A fixture without one refuses for
+    /// its own, different reason — "ART cannot say what this tree has" — and a
+    /// prerequisite test built on it would pass with the prerequisite check
+    /// deleted. `a_tree_with_no_manifest_is_a_different_refusal` in
+    /// `core::osinstall::chain` pins that other sentence.
+    fn tree_with_manifest(scratch: &ScratchDir, components: &[&str]) -> PathBuf {
+        use crate::core::osinstall::apply::{DistributionManifest, FileRecord};
+
+        let tree = tree_without_manifest(scratch);
+        let manifest = DistributionManifest {
+            release: "amigaos-3.9".into(),
+            built_from: Vec::new(),
+            files: components
+                .iter()
+                .map(|c| FileRecord {
+                    path: "Libs/version.library".into(),
+                    component: (*c).to_string(),
+                    media: "Workbench3.9".into(),
+                    sha256: String::new(),
+                    bytes: 12,
+                    protection: None,
+                    overwrote: None,
+                    host_path: None,
+                })
+                .collect(),
+            paired_rom: None,
+            amiga_installed: Vec::new(),
+        };
+        std::fs::write(
+            tree.join("distribution.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
         tree
     }
 
@@ -1013,7 +1067,9 @@ mod tests {
     /// see `the_installer_is_reached_through_the_package_volume_and_not_the_tree`.
     #[test]
     fn a_recipe_declaration_becomes_a_whole_amigados_command() {
-        let composed = compose(&request(Path::new("tree"))).unwrap();
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "compose-line");
+        let tree = tree_in(&scratch);
+        let composed = compose(&request(&tree)).unwrap();
 
         assert_eq!(composed.plan.system_volume, "DH0");
         assert_eq!(composed.plan.program, "ARTPkg:BoingBag3.9-1/C/Updater");
@@ -1038,7 +1094,9 @@ mod tests {
     /// `Updater` is not in the tree and cannot be put there (ART-166).
     #[test]
     fn the_installer_is_reached_through_the_package_volume_and_not_the_tree() {
-        let composed = compose(&request(Path::new("tree"))).unwrap();
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "compose-volume");
+        let tree = tree_in(&scratch);
+        let composed = compose(&request(&tree)).unwrap();
 
         assert!(
             composed
@@ -1068,7 +1126,9 @@ mod tests {
     /// root, which is right for none of the owner's real archives.
     #[test]
     fn no_drawer_named_takes_the_recipe_media_rather_than_the_root() {
-        let mut req = request(Path::new("tree"));
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "compose-media");
+        let tree = tree_in(&scratch);
+        let mut req = request(&tree);
         req.package_dir = None;
 
         let composed = compose(&req).unwrap();
@@ -1084,7 +1144,9 @@ mod tests {
     /// and the path carries no stray separator.
     #[test]
     fn a_package_at_the_volume_root_composes_without_a_separator() {
-        let mut req = request(Path::new("tree"));
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "compose-root");
+        let tree = tree_in(&scratch);
+        let mut req = request(&tree);
         req.package_dir = Some("  ".to_string());
         req.system_volume = Some("  DH3  ".to_string());
 
@@ -1104,8 +1166,10 @@ mod tests {
     /// case-insensitive, so a comparison that is not would let it through.
     #[test]
     fn a_tree_mounted_under_the_package_volumes_name_is_refused_at_composition() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "compose-shadow");
+        let tree = tree_in(&scratch);
         for hostile in [PACKAGE_VOLUME, "artpkg"] {
-            let mut req = request(Path::new("tree"));
+            let mut req = request(&tree);
             req.system_volume = Some(hostile.to_string());
 
             let err = compose(&req).unwrap_err();
@@ -1122,6 +1186,8 @@ mod tests {
     /// module cannot check.
     #[test]
     fn a_package_directory_that_leaves_the_volume_is_refused() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "compose-escape");
+        let tree = tree_in(&scratch);
         for hostile in [
             "../../Windows",
             "Pkg/../../..",
@@ -1133,7 +1199,7 @@ mod tests {
             ".",
             "Boing Bag",
         ] {
-            let mut req = request(Path::new("tree"));
+            let mut req = request(&tree);
             req.package_dir = Some(hostile.to_string());
             let composed = compose(&req);
             assert!(
@@ -1148,10 +1214,20 @@ mod tests {
     /// generated line.
     #[test]
     fn a_volume_that_is_not_a_bare_name_is_refused() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "compose-volname");
+        let tree = tree_in(&scratch);
         for hostile in ["DH0:", "DH0:Pkg", "My Volume"] {
-            let mut req = request(Path::new("tree"));
+            let mut req = request(&tree);
             req.system_volume = Some(hostile.to_string());
-            assert!(compose(&req).is_err(), "'{hostile}' must not compose");
+            // The message has to name the value, not merely be an error. The
+            // tree is a real distribution tree for the same reason (fix round
+            // 1): against a folder with no manifest this test would have
+            // passed on the *chain* refusal instead, whatever the volume said.
+            let err = compose(&req).unwrap_err().to_string();
+            assert!(
+                err.contains(hostile),
+                "'{hostile}' must be refused by name: {err}"
+            );
         }
     }
 
@@ -1162,7 +1238,9 @@ mod tests {
     /// and the result file the host is waiting on.
     #[test]
     fn a_run_that_would_reach_into_arts_own_volume_is_refused_at_composition() {
-        let mut req = request(Path::new("tree"));
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "compose-artwork");
+        let tree = tree_in(&scratch);
+        let mut req = request(&tree);
         req.system_volume = Some(WORK_VOLUME.to_string());
 
         let err = compose(&req).unwrap_err();
@@ -1177,7 +1255,9 @@ mod tests {
     /// boundary the content-layer round drew, unchanged (design §3).
     #[test]
     fn a_package_art_cannot_run_on_the_amiga_is_refused_by_name() {
-        let mut req = request(Path::new("tree"));
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "compose-no-installer");
+        let tree = tree_in(&scratch);
+        let mut req = request(&tree);
         req.package_id = "locale-turkish".to_string();
         let err = compose(&req).unwrap_err();
         assert!(err.to_string().contains("locale-turkish"), "got {err}");
@@ -1621,44 +1701,6 @@ mod tests {
     // ART-186: the chain is mandatory, and the refusal is in `compose`
     // -----------------------------------------------------------------
 
-    /// A tree with a real `distribution.json` naming `components`.
-    ///
-    /// **The manifest is always written.** A fixture without one refuses for
-    /// its own, different reason — "ART cannot say what this tree has" — and a
-    /// prerequisite test built on it would pass with the prerequisite check
-    /// deleted. `a_tree_with_no_manifest_is_a_different_refusal` in
-    /// `core::osinstall::chain` pins that other sentence.
-    fn tree_with_manifest(scratch: &ScratchDir, components: &[&str]) -> PathBuf {
-        use crate::core::osinstall::apply::{DistributionManifest, FileRecord};
-
-        let tree = tree_in(scratch);
-        let manifest = DistributionManifest {
-            release: "amigaos-3.9".into(),
-            built_from: Vec::new(),
-            files: components
-                .iter()
-                .map(|c| FileRecord {
-                    path: "Libs/version.library".into(),
-                    component: (*c).to_string(),
-                    media: "Workbench3.9".into(),
-                    sha256: String::new(),
-                    bytes: 12,
-                    protection: None,
-                    overwrote: None,
-                    host_path: None,
-                })
-                .collect(),
-            paired_rom: None,
-            amiga_installed: Vec::new(),
-        };
-        std::fs::write(
-            tree.join("distribution.json"),
-            serde_json::to_vec_pretty(&manifest).unwrap(),
-        )
-        .unwrap();
-        tree
-    }
-
     /// The defect, in one line: BoingBag 2 on a tree BoingBag 1 never touched
     /// used to compose cleanly. It is refused in `compose`, which is what
     /// makes the **preview** refuse it too — a screen that offered a confirm
@@ -1721,15 +1763,76 @@ mod tests {
         );
     }
 
-    /// BoingBag 1 requires nothing, so it composes against a tree with no
-    /// manifest at all — the check must not become "every run needs a manifest".
+    /// BoingBag 1 requires nothing and is **still** refused against a tree
+    /// with no `distribution.json` — fix round 1's Major, at the seam.
+    ///
+    /// This test asserted the opposite until 2026-08-21. The run was allowed,
+    /// and `record_if_succeeded` would then have failed on that same tree
+    /// *after the installer had worked*: the copy is kept, nothing is
+    /// promoted, and ART reports a failure about a success. The refusal is
+    /// the manifest one and names no package, because which packages such a
+    /// tree has is precisely what ART cannot say.
     #[test]
-    fn boingbag_one_composes_against_a_tree_with_no_manifest() {
+    fn boingbag_one_is_refused_on_a_tree_with_no_manifest() {
         let scratch = ScratchDir::new("art-amigainstall-cmd", "chain-none");
-        let tree = tree_in(&scratch);
+        let tree = tree_without_manifest(&scratch);
         assert!(!tree.join("distribution.json").exists());
 
-        compose(&request(&tree)).unwrap();
+        let err = compose(&request(&tree)).unwrap_err().to_string();
+        assert!(err.contains("distribution.json"), "got {err}");
+        assert!(
+            !err.contains("BoingBag"),
+            "it must not claim a package is missing: {err}"
+        );
+    }
+
+    /// **The ending that had no test: a run that worked, reported as failed.**
+    ///
+    /// `record_if_succeeded` is the last thing between a successful installer
+    /// and the promotion, and on a tree `compose` used to allow it was the
+    /// thing that failed. Asserted at the seam rather than inside one module:
+    /// for every tree, what `compose` accepts must reach a **promotion** when
+    /// the installer succeeds, and what it rejects must be rejected before a
+    /// single byte is copied.
+    #[test]
+    fn a_run_compose_accepts_always_reaches_a_promotion_when_the_installer_succeeds() {
+        for (tag, with_manifest) in [("accepted", true), ("rejected", false)] {
+            let scratch = ScratchDir::new("art-amigainstall-cmd", tag);
+            let tree = if with_manifest {
+                tree_with_manifest(&scratch, &["workbench-base"])
+            } else {
+                tree_without_manifest(&scratch)
+            };
+
+            let Ok(composed) = compose(&request(&tree)) else {
+                assert!(!with_manifest, "a tree with a manifest must be accepted");
+                assert!(
+                    copies_beside(&tree).is_empty(),
+                    "and a rejected run copies nothing"
+                );
+                continue;
+            };
+            assert!(
+                with_manifest,
+                "a tree with no manifest must not be accepted"
+            );
+
+            let plan = composed.plan.clone();
+            let (outcome, settlement) = perform(&tree, &Sink::default(), |copy, _sink| {
+                let outcome = RunOutcome::Succeeded;
+                record_if_succeeded(copy, &plan, &outcome)?;
+                Ok(outcome)
+            })
+            .unwrap();
+
+            assert_eq!(outcome, RunOutcome::Succeeded);
+            assert!(
+                matches!(settlement, SettlementReport::Promoted { .. }),
+                "a successful installer must end in a promotion, never in an error the \
+                 user reads as the install having failed"
+            );
+            assert!(chain::applied(&tree).unwrap().contains("boingbag-39-1"));
+        }
     }
 
     /// The recipe's overlay declaration reaches the unpack, translated into

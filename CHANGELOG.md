@@ -33,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hand. **Nothing is unlocked or worked around**: the package's own installer
   still does all the work.
 
+  ART also asks for a system folder it built. A folder from somewhere else
+  has no record of what is already in it, so ART could neither check the
+  order nor write down what it just installed — and an install it cannot
+  write down is one it would have had to report as failed after it worked.
+  It says so before starting rather than after.
+
   Still not reachable from the interface — that is the rest of this round.
 - **The first piece of running a package's own installer inside the
   emulator.** Some update packages cannot be installed by copying files
