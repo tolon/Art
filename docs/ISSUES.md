@@ -26,185 +26,6 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-201** 🟠 **The preview describes a run ART already knows cannot
-happen, because it never opens the archive it would run from** — *found
-2026-08-22 by the owner, whose operation log carries **seven** identical
-failed runs*
-`src-tauri/src/commands/amigainstall.rs::amiga_install_preview` ·
-`core/amigainstall/packagevol.rs`
-
-`amiga_install_preview` says so in its own doc comment: *"Reads recipe data and
-asks three `is_file` questions. It starts no process, **unpacks nothing**,
-copies nothing, and writes nothing."* So with the wrong archive in the
-package's own field, the preview renders a confident **"Ne çalışacak"** card
-— package, tree, emulator, disc, machine — and the refusal only arrives once
-the job has started and `packagevol::unpack` has extracted the archive and
-found no `BoingBag3.9-1` drawer.
-
-**This is §92's PREVIEW step not covering the input the run uses.** The
-preview's whole job is to be the read-only answer *before* the destructive one,
-and here it answers about a run that cannot occur. It is this project's named
-defect class exactly — a confident, wrong sentence — arriving as a summary card
-rather than as prose.
-
-**Nothing is destroyed by it**: `unpack` refuses before writing into the tree,
-and every one of the seven attempts copied nothing. The cost is the user's
-time and their trust in the card.
-
-**Fix**: the preview must ask the archive what it holds, the same question
-`unpack` asks — open it, check the declared drawer is there, and report a
-refusal instead of a plan. `ArchiveSource::open` already answers it cheaply
-(measured this session: opening all twelve `.lha` files in the owner's folder
-and reading each one's top-level name is fast enough to do per preview), and
-the panel already has a place to render a refusal. Do **not** settle for
-disabling the button: the card claiming a run is the defect, not the button
-being live.
-
-**ART-202** 🟠 **The answer to a button at the bottom of the panel renders
-at the top of it, so pressing it looks like nothing happened** — *found
-2026-08-22 by the owner: "kurucuyu amiga tarafında çalıştıra bastığımda
-ekranın üstüne hata mesajı fırlatıyor"; their operation log carries **seven**
-identical failed runs*
-`src/components/osbuilder/AmigaInstallPanel.tsx`
-
-The refusal box is rendered at line 521. The button that causes it is at line
-730 — **209 lines of JSX below it**, past the fields, the overlay note, the
-medium note and the preview card. On a maximised window the refusal is above
-the fold: the user presses, the screen does not visibly change, and the only
-honest conclusion available to them is that the button did nothing.
-
-**Seven identical entries in `operations.jsonl` are the measurement.** Not
-seven different attempts at a fix — the same request, unchanged, seven times.
-That is what a control that appears not to respond produces.
-
-**This project has already learned this once.** `OsInstall.tsx` carries the
-lesson in its own comment, from the owner's own words: a job that ended badly
-*"has to say so where the button is"*. The same rule was not applied to the
-panel next door.
-
-**Fix**: render the refusal (and the run error) beside the button as well as
-— or instead of — at the top. Scrolling the existing box into view is the
-weaker answer and should be the fallback, not the fix: a message the user has
-to be carried to is still a message they did not get where they were looking.
-Worth doing together with [ART-200](#open), which is the *content* of the same
-sentence, and with [ART-201](#open), which is why the run was ever attempted.
-
-**ART-200** 🟠 **ART names an archive, the user fetches it, and ART refuses
-it with a sentence that does not say it belongs in the other field** —
-*found 2026-08-22 by the owner, driving the Amiga-side install step*
-`src-tauri/src/core/amigainstall/packagevol.rs` ·
-`src-tauri/src/core/osinstall/recipes/packages/boingbag-39-1.json`
-
-The package takes **two** archives. `BoingBag39-1.lha` is the package itself
-and carries the drawer `BoingBag3.9-1`, where `C/Updater` lives.
-`BoingBag39-1-UAE.lha` is the *update* archive, carries `BoingBag3.9-1-UAE`,
-and is what [ART-186](#fixed) tells the user to go and get: the original's
-`Updater` is 45.13, which does not run under an emulator, and the UAE build is
-45.15.
-
-Put the second file in the first field and the refusal reads:
-
-> `invalid input: 'E:\amiga\Amigatolon\os39\BoingBag39-1-UAE.lha' carries no
-> 'BoingBag3.9-1' drawer, so it is not the archive this package's installer
-> lives in; it holds BoingBag3.9-1-UAE, BoingBag3.9-1-UAE.info`
-> · `ART-INPUT-INVALID`
-
-**The refusal is correct** — that archive really does not carry the drawer the
-installer lives in, and it lists what the archive *does* hold rather than
-leaving the user to guess. What is missing is the one sentence that ends the
-problem: **this is the update archive; it goes in the second field.**
-
-**ART has the fact in hand and does not use it.** `BoingBag3.9-1-UAE` is not an
-unknown name to ART: `boingbag-39-1.json` declares
-`amiga_installer.overlays = [{ "from": "BoingBag3.9-1-UAE/BoingBag3.9-1" }]`.
-The refusal already reads the archive's top-level drawers to say what it holds,
-so recognising that the drawer it found is the package's **own declared overlay
-drawer** costs one comparison against a value the recipe already carries.
-
-**This is the round's own rule broken by the round's own code.** CLAUDE.md:
-*"A refusal must be actionable. Name what is missing, and where order matters,
-name the order. A refusal a user can fix with one download must not look like
-one they cannot fix at all."* Here it is cheaper than a download — the file is
-already on disk, in the wrong box — and the sentence still does not say so. It
-is worse than the general case for one reason: **ART itself named this file.**
-`osinstall.amigaInstall.overlay.needed` tells the user to fetch precisely this
-archive, and then the program refuses it without connecting the two.
-
-**The screen is not silent about the two fields** —
-`osinstall.amigaInstall.overlayArchive.hint` and `overlay.needed` both explain
-it, and `overlay.needed` says outright *"Onu yukarıda ikinci arşiv olarak
-seçin."* That is what makes this a refusal defect rather than a labelling one:
-the guidance exists elsewhere on the screen and the refusal does not carry it
-to the place the user is actually looking, which is the error they just caused.
-
-**Fix**: when the supplied archive's top-level drawer matches a drawer the
-package's own `overlays` declare, refuse with a distinct, typed reason naming
-the field it belongs in, rather than the generic drawer mismatch. It is a
-`CoreError` variant and a sentence in both catalogues; the recipe already holds
-everything the check needs. Not the reverse case as well — a package archive
-offered as an overlay — without measuring whether that is a real mistake anyone
-makes.
-
-**ART-199** 🟠 **A step reports itself ready on a folder that is not a
-distribution tree, so the refusal arrives on the button instead of at the
-field** — *found 2026-08-22 by the owner driving wave 1's own screen, minutes
-after it was built*
-`src/lib/buildSteps.ts::readiness` · `src/pages/osbuilder/steps.tsx`
-
-`readiness` asks whether `session.tree.root` is a non-empty string. It does not
-ask whether the folder **is** a tree. So a step whose value points at an
-ordinary AmigaOS folder renders with no warning, looks ready, and answers only
-when the user presses:
-
-> ART bunu çalıştırmayacak
-> `operation refused to protect data: 'E:\amiga\Amigatolon\os39' holds no
-> distribution.json, so ART cannot say which packages it already has; point at
-> a distribution tree ART built` · `ART-SAFETY-REFUSED`
-
-**The refusal itself is correct and is not the defect.** It protects data, it
-names the folder, it says what is missing and what to point at, and nothing was
-copied — `refuse_unless_installable` ([ART-186](#fixed)) doing exactly its job.
-What is wrong is *when* it arrives and *where the user was looking*. This is the
-same class the round exists to close: the screen does not crash, does not warn,
-and leaves the reader not knowing what to do next — arriving through a field
-that looked answered rather than through a sentence.
-
-**It is also the case the design already predicted**, which is why this is filed
-rather than patched in place. §3 of
-[the flow design](superpowers/specs/2026-08-21-os-builder-flow-design.md)
-says a hand-picked folder is validated *at the moment of picking* —
-*"AmigaOS 3.9 tree, 1915 files"*, or *"no `distribution.json` here"* — and
-**never a refusal arriving minutes later**. That is wave 2's `describe_tree`
-command and its picker. Wave 1 deliberately shipped without them; what this
-entry records is that the gap is real on a screen, not only on paper.
-
-**Two things about how it was found are worth keeping.** It came from the
-owner driving the very screen the wave had just been written for, within
-minutes, after 828 frontend tests and a browser layout probe had all passed —
-the project's own pattern, again. And the value it refused on was **correct**:
-the session had faithfully carried the folder the packages panel was already
-pointing at, which is wave 1's migration working. A migration that had quietly
-dropped it would have looked *better* here, and been worse.
-
-**A second thing the same session showed, and it belongs to the same picker.**
-The owner pointed at `E:\amiga\ProjeART\dist-3.9`, chose the Turkish
-catalogs, and was refused: that package declares
-`requires_components: ["locale-base"]` (ART-162) and that tree carries only
-`workbench-base`. **That refusal is correct and is the good kind** — it names
-the missing component and says what to do — but the owner could only learn
-*which* of their nine trees carried `locale-base` by trying them. It is in the
-manifests: `dist-3.9` has `workbench-base` alone, `dist-3.9-l1` has
-`workbench-base` + `workbench-39` + `locale-base`, `dist-3.9-bb` already has
-`locale-turkish` installed. So the picker's row must say **what a tree
-carries**, not only that it is one: what a tree holds is exactly what decides
-whether the package being chosen can go on it.
-
-**Fix in wave 2**, with `describe_tree`: `readiness` gains a third answer
-between "ready" and "asks" — a folder that is set but does not describe as a
-tree — and the step says so at the field, in the user's own language, before
-the button. Until then the English refusal is the only thing that says it,
-which is [ART-060](#open) as well.
-
 **ART-196** 🟠 **ART writes its scratch to the system drive and the user
 cannot move it** — *raised by the owner 2026-08-21, after their C: had already
 been filled once by ART's own test scratch*
@@ -820,6 +641,277 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-202** 🟠 ✅ **The answer to a button at the bottom of the panel renders
+at the top of it, so pressing it looks like nothing happened** — *found
+2026-08-22 by the owner: "kurucuyu amiga tarafında çalıştıra bastığımda
+ekranın üstüne hata mesajı fırlatıyor"; their operation log carries **seven**
+identical failed runs*
+`src/components/osbuilder/AmigaInstallPanel.tsx`
+
+The refusal box is rendered at line 521. The button that causes it is at line
+730 — **209 lines of JSX below it**, past the fields, the overlay note, the
+medium note and the preview card. On a maximised window the refusal is above
+the fold: the user presses, the screen does not visibly change, and the only
+honest conclusion available to them is that the button did nothing.
+
+**Seven identical entries in `operations.jsonl` are the measurement.** Not
+seven different attempts at a fix — the same request, unchanged, seven times.
+That is what a control that appears not to respond produces.
+
+**This project has already learned this once.** `OsInstall.tsx` carries the
+lesson in its own comment, from the owner's own words: a job that ended badly
+*"has to say so where the button is"*. The same rule was not applied to the
+panel next door.
+
+**Fix**: render the refusal (and the run error) beside the button as well as
+— or instead of — at the top. Scrolling the existing box into view is the
+weaker answer and should be the fallback, not the fix: a message the user has
+to be carried to is still a message they did not get where they were looking.
+Worth doing together with [ART-200](#open), which is the *content* of the same
+sentence, and with [ART-201](#open), which is why the run was ever attempted.
+
+**Fixed 2026-08-22.** The markup became one `Refusal` component rendered
+twice: beside the fields the refusal is about, and beside the button that
+asked for it.
+
+The test asserts **adjacency**, not order — `atButton.nextElementSibling`
+contains the run button. *"Follows the button"* would pass with the two a
+thousand pixels apart, which is the defect itself. The first version of the
+test asserted that weaker thing and was also wrong about which side the box
+sits on; a warning belongs above its control.
+
+Test: `says why beside the button as well, not only at the top of the panel`
+(`AmigaInstallPanel.test.tsx`). **Mutated**: deleting the second render fails
+it.
+
+**ART-201** 🟠 ✅ **The preview describes a run ART already knows cannot
+happen, because it never opens the archive it would run from** — *found
+2026-08-22 by the owner, whose operation log carries **seven** identical
+failed runs*
+`src-tauri/src/commands/amigainstall.rs::amiga_install_preview` ·
+`core/amigainstall/packagevol.rs`
+
+`amiga_install_preview` says so in its own doc comment: *"Reads recipe data and
+asks three `is_file` questions. It starts no process, **unpacks nothing**,
+copies nothing, and writes nothing."* So with the wrong archive in the
+package's own field, the preview renders a confident **"Ne çalışacak"** card
+— package, tree, emulator, disc, machine — and the refusal only arrives once
+the job has started and `packagevol::unpack` has extracted the archive and
+found no `BoingBag3.9-1` drawer.
+
+**This is §92's PREVIEW step not covering the input the run uses.** The
+preview's whole job is to be the read-only answer *before* the destructive one,
+and here it answers about a run that cannot occur. It is this project's named
+defect class exactly — a confident, wrong sentence — arriving as a summary card
+rather than as prose.
+
+**Nothing is destroyed by it**: `unpack` refuses before writing into the tree,
+and every one of the seven attempts copied nothing. The cost is the user's
+time and their trust in the card.
+
+**Fix**: the preview must ask the archive what it holds, the same question
+`unpack` asks — open it, check the declared drawer is there, and report a
+refusal instead of a plan. `ArchiveSource::open` already answers it cheaply
+(measured this session: opening all twelve `.lha` files in the owner's folder
+and reading each one's top-level name is fast enough to do per preview), and
+the panel already has a place to render a refusal. Do **not** settle for
+disabling the button: the card claiming a run is the defect, not the button
+being live.
+
+**Fixed 2026-08-22.** The check sits in `compose`, which the preview and the
+run both go through, so the two cannot disagree about what is acceptable. With
+the wrong archive in the package's own field the preview now refuses instead
+of rendering a plan, and the run button is disabled rather than live — which
+is what would have stopped the seven attempts.
+
+**It refuses only what it is sure of.** A path that is not there is left to
+the panel's own missing-archive blocker, and an archive `ArchiveSource` cannot
+open is left to `unpack`: a false refusal here would turn a working run into a
+dead end, which is worse than the message this replaces.
+
+Tests: `the_preview_refuses_the_update_archive_in_the_packages_own_field`,
+`the_packages_own_archive_is_still_accepted` (a check that refused everything
+would have passed the first test and broken the product) and
+`a_missing_archive_is_not_refused_as_the_wrong_one`. **Mutated**: deleting the
+`compose` call fails both command-level tests.
+
+**ART-200** 🟠 ✅ **ART names an archive, the user fetches it, and ART refuses
+it with a sentence that does not say it belongs in the other field** —
+*found 2026-08-22 by the owner, driving the Amiga-side install step*
+`src-tauri/src/core/amigainstall/packagevol.rs` ·
+`src-tauri/src/core/osinstall/recipes/packages/boingbag-39-1.json`
+
+The package takes **two** archives. `BoingBag39-1.lha` is the package itself
+and carries the drawer `BoingBag3.9-1`, where `C/Updater` lives.
+`BoingBag39-1-UAE.lha` is the *update* archive, carries `BoingBag3.9-1-UAE`,
+and is what [ART-186](#fixed) tells the user to go and get: the original's
+`Updater` is 45.13, which does not run under an emulator, and the UAE build is
+45.15.
+
+Put the second file in the first field and the refusal reads:
+
+> `invalid input: 'E:\amiga\Amigatolon\os39\BoingBag39-1-UAE.lha' carries no
+> 'BoingBag3.9-1' drawer, so it is not the archive this package's installer
+> lives in; it holds BoingBag3.9-1-UAE, BoingBag3.9-1-UAE.info`
+> · `ART-INPUT-INVALID`
+
+**The refusal is correct** — that archive really does not carry the drawer the
+installer lives in, and it lists what the archive *does* hold rather than
+leaving the user to guess. What is missing is the one sentence that ends the
+problem: **this is the update archive; it goes in the second field.**
+
+**ART has the fact in hand and does not use it.** `BoingBag3.9-1-UAE` is not an
+unknown name to ART: `boingbag-39-1.json` declares
+`amiga_installer.overlays = [{ "from": "BoingBag3.9-1-UAE/BoingBag3.9-1" }]`.
+The refusal already reads the archive's top-level drawers to say what it holds,
+so recognising that the drawer it found is the package's **own declared overlay
+drawer** costs one comparison against a value the recipe already carries.
+
+**This is the round's own rule broken by the round's own code.** CLAUDE.md:
+*"A refusal must be actionable. Name what is missing, and where order matters,
+name the order. A refusal a user can fix with one download must not look like
+one they cannot fix at all."* Here it is cheaper than a download — the file is
+already on disk, in the wrong box — and the sentence still does not say so. It
+is worse than the general case for one reason: **ART itself named this file.**
+`osinstall.amigaInstall.overlay.needed` tells the user to fetch precisely this
+archive, and then the program refuses it without connecting the two.
+
+**The screen is not silent about the two fields** —
+`osinstall.amigaInstall.overlayArchive.hint` and `overlay.needed` both explain
+it, and `overlay.needed` says outright *"Onu yukarıda ikinci arşiv olarak
+seçin."* That is what makes this a refusal defect rather than a labelling one:
+the guidance exists elsewhere on the screen and the refusal does not carry it
+to the place the user is actually looking, which is the error they just caused.
+
+**Fix**: when the supplied archive's top-level drawer matches a drawer the
+package's own `overlays` declare, refuse with a distinct, typed reason naming
+the field it belongs in, rather than the generic drawer mismatch. It is a
+`CoreError` variant and a sentence in both catalogues; the recipe already holds
+everything the check needs. Not the reverse case as well — a package archive
+offered as an overlay — without measuring whether that is a real mistake anyone
+makes.
+
+**Fixed 2026-08-22.** `packagevol::archive_is` compares the archive's single
+top-level drawer against the recipe's own `media` **and** against its own
+declared overlay drawers, so the refusal can say the one thing that ends the
+problem: this is the update archive, put it in the update-archive field, and
+the archive carrying `BoingBag3.9-1` in the first.
+
+The decision is pure and stays in `core/amigainstall`, which still knows
+nothing about recipes — `commands/` opens the archive and maps between the
+two, exactly as that module's own comment requires.
+
+**Whole-name, case-insensitive.** `BoingBag3.9-1` is a character prefix of
+`BoingBag3.9-1-UAE`: a comparison that did not require the whole name would
+have called the update archive the package and this refusal would never have
+fired at all. `a_prefix_is_not_a_match_in_either_direction` says so. The fold
+is `to_lowercase` rather than ASCII-only, because a mismatch here would refuse
+a *valid* archive, which is worse than the message being improved.
+
+Tests: the six `archive_is` / `wrong_archive_sentence` tests in
+`packagevol.rs`, and `the_run_refuses_it_with_the_same_sentence` in
+`commands/amigainstall.rs`. **Mutated**: making the sentence generic fails all
+three field-naming assertions.
+
+**ART-199** 🟠 ✅ **A step reports itself ready on a folder that is not a
+distribution tree, so the refusal arrives on the button instead of at the
+field** — *found 2026-08-22 by the owner driving wave 1's own screen, minutes
+after it was built*
+`src/lib/buildSteps.ts::readiness` · `src/pages/osbuilder/steps.tsx`
+
+`readiness` asks whether `session.tree.root` is a non-empty string. It does not
+ask whether the folder **is** a tree. So a step whose value points at an
+ordinary AmigaOS folder renders with no warning, looks ready, and answers only
+when the user presses:
+
+> ART bunu çalıştırmayacak
+> `operation refused to protect data: 'E:\amiga\Amigatolon\os39' holds no
+> distribution.json, so ART cannot say which packages it already has; point at
+> a distribution tree ART built` · `ART-SAFETY-REFUSED`
+
+**The refusal itself is correct and is not the defect.** It protects data, it
+names the folder, it says what is missing and what to point at, and nothing was
+copied — `refuse_unless_installable` ([ART-186](#fixed)) doing exactly its job.
+What is wrong is *when* it arrives and *where the user was looking*. This is the
+same class the round exists to close: the screen does not crash, does not warn,
+and leaves the reader not knowing what to do next — arriving through a field
+that looked answered rather than through a sentence.
+
+**It is also the case the design already predicted**, which is why this is filed
+rather than patched in place. §3 of
+[the flow design](superpowers/specs/2026-08-21-os-builder-flow-design.md)
+says a hand-picked folder is validated *at the moment of picking* —
+*"AmigaOS 3.9 tree, 1915 files"*, or *"no `distribution.json` here"* — and
+**never a refusal arriving minutes later**. That is wave 2's `describe_tree`
+command and its picker. Wave 1 deliberately shipped without them; what this
+entry records is that the gap is real on a screen, not only on paper.
+
+**Two things about how it was found are worth keeping.** It came from the
+owner driving the very screen the wave had just been written for, within
+minutes, after 828 frontend tests and a browser layout probe had all passed —
+the project's own pattern, again. And the value it refused on was **correct**:
+the session had faithfully carried the folder the packages panel was already
+pointing at, which is wave 1's migration working. A migration that had quietly
+dropped it would have looked *better* here, and been worse.
+
+**A second thing the same session showed, and it belongs to the same picker.**
+The owner pointed at `E:\amiga\ProjeART\dist-3.9`, chose the Turkish
+catalogs, and was refused: that package declares
+`requires_components: ["locale-base"]` (ART-162) and that tree carries only
+`workbench-base`. **That refusal is correct and is the good kind** — it names
+the missing component and says what to do — but the owner could only learn
+*which* of their nine trees carried `locale-base` by trying them. It is in the
+manifests: `dist-3.9` has `workbench-base` alone, `dist-3.9-l1` has
+`workbench-base` + `workbench-39` + `locale-base`, `dist-3.9-bb` already has
+`locale-turkish` installed. So the picker's row must say **what a tree
+carries**, not only that it is one: what a tree holds is exactly what decides
+whether the package being chosen can go on it.
+
+**Fix in wave 2**, with `describe_tree`: `readiness` gains a third answer
+between "ready" and "asks" — a folder that is set but does not describe as a
+tree — and the step says so at the field, in the user's own language, before
+the button. Until then the English refusal is the only thing that says it,
+which is [ART-060](#open) as well.
+
+**Fixed 2026-08-22.** `core::osinstall::chain::describe_tree` answers what a
+folder is — whether it carries a `distribution.json`, which release, how many
+files, which components, and what has already been installed on the Amiga —
+and `osinstall_describe_tree` puts it one read-only command away from the
+field. `readiness` gains a third answer, `wrong-folder`, and the step says it
+where the folder was picked instead of leaving it to the button.
+
+**It never fails for a folder that is not a tree.** That is an answer
+(`is_tree: false` with a `problem`), not an error: *"you picked the wrong
+folder"* and *"the disk went away"* are different sentences and the caller has
+to be able to tell them apart.
+
+**Two things it deliberately does not do.** It does not accuse a folder ART
+has not looked at yet — `null` is not `false`, and an accusation while the
+answer is still in flight would be a confident wrong sentence of its own — and
+it does not accuse when the round trip failed, because that is not evidence
+about the user's folder. No folder still beats a bad one: with nothing chosen
+the step says *"pick one"*, since *"that is not a tree"* about nothing would be
+nonsense.
+
+The components half is answered too, and it was the second finding: the owner
+learned by trying which of nine trees carried `locale-base`, when every
+manifest says so. `TreeSummary::components` is sorted and deduplicated for the
+picker wave 2 builds on.
+
+Tests: `a_tree_describes_itself_by_release_files_and_components`,
+`a_folder_with_no_manifest_is_not_a_tree_and_says_why`,
+`a_folder_that_is_not_there_is_answered_rather_than_erroring`,
+`a_malformed_manifest_is_an_answer_not_a_panic`,
+`a_tree_reports_what_has_been_installed_on_the_amiga` (`chain.rs`); the
+`readiness, when ART has looked at the folder` group (`buildSteps.test.ts`);
+`says so at the step instead of leaving it to a refusal on the button`,
+`says nothing about a folder that is a tree` and `does not accuse the folder
+when ART could not look at all` (`steps.test.tsx`).
+
+**Mutated, and they fell**: deleting the step's `WrongFolder` fails the step
+test; making `readiness` ignore the answer fails both the unit test and the
+step test.
 
 **ART-197** 🟠 ✅ **The tree ART has just built is not carried to the step
 that needs it, so the user is asked to go and find ART's own output** —
