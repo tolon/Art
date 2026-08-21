@@ -26,6 +26,69 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-201** 🟠 **The preview describes a run ART already knows cannot
+happen, because it never opens the archive it would run from** — *found
+2026-08-22 by the owner, whose operation log carries **seven** identical
+failed runs*
+`src-tauri/src/commands/amigainstall.rs::amiga_install_preview` ·
+`core/amigainstall/packagevol.rs`
+
+`amiga_install_preview` says so in its own doc comment: *"Reads recipe data and
+asks three `is_file` questions. It starts no process, **unpacks nothing**,
+copies nothing, and writes nothing."* So with the wrong archive in the
+package's own field, the preview renders a confident **"Ne çalışacak"** card
+— package, tree, emulator, disc, machine — and the refusal only arrives once
+the job has started and `packagevol::unpack` has extracted the archive and
+found no `BoingBag3.9-1` drawer.
+
+**This is §92's PREVIEW step not covering the input the run uses.** The
+preview's whole job is to be the read-only answer *before* the destructive one,
+and here it answers about a run that cannot occur. It is this project's named
+defect class exactly — a confident, wrong sentence — arriving as a summary card
+rather than as prose.
+
+**Nothing is destroyed by it**: `unpack` refuses before writing into the tree,
+and every one of the seven attempts copied nothing. The cost is the user's
+time and their trust in the card.
+
+**Fix**: the preview must ask the archive what it holds, the same question
+`unpack` asks — open it, check the declared drawer is there, and report a
+refusal instead of a plan. `ArchiveSource::open` already answers it cheaply
+(measured this session: opening all twelve `.lha` files in the owner's folder
+and reading each one's top-level name is fast enough to do per preview), and
+the panel already has a place to render a refusal. Do **not** settle for
+disabling the button: the card claiming a run is the defect, not the button
+being live.
+
+**ART-202** 🟠 **The answer to a button at the bottom of the panel renders
+at the top of it, so pressing it looks like nothing happened** — *found
+2026-08-22 by the owner: "kurucuyu amiga tarafında çalıştıra bastığımda
+ekranın üstüne hata mesajı fırlatıyor"; their operation log carries **seven**
+identical failed runs*
+`src/components/osbuilder/AmigaInstallPanel.tsx`
+
+The refusal box is rendered at line 521. The button that causes it is at line
+730 — **209 lines of JSX below it**, past the fields, the overlay note, the
+medium note and the preview card. On a maximised window the refusal is above
+the fold: the user presses, the screen does not visibly change, and the only
+honest conclusion available to them is that the button did nothing.
+
+**Seven identical entries in `operations.jsonl` are the measurement.** Not
+seven different attempts at a fix — the same request, unchanged, seven times.
+That is what a control that appears not to respond produces.
+
+**This project has already learned this once.** `OsInstall.tsx` carries the
+lesson in its own comment, from the owner's own words: a job that ended badly
+*"has to say so where the button is"*. The same rule was not applied to the
+panel next door.
+
+**Fix**: render the refusal (and the run error) beside the button as well as
+— or instead of — at the top. Scrolling the existing box into view is the
+weaker answer and should be the fallback, not the fix: a message the user has
+to be carried to is still a message they did not get where they were looking.
+Worth doing together with [ART-200](#open), which is the *content* of the same
+sentence, and with [ART-201](#open), which is why the run was ever attempted.
+
 **ART-200** 🟠 **ART names an archive, the user fetches it, and ART refuses
 it with a sentence that does not say it belongs in the other field** —
 *found 2026-08-22 by the owner, driving the Amiga-side install step*
