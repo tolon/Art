@@ -1188,6 +1188,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     const refusals: LaunchRefusal[] = [
       { kind: "no-suitable-rom", machine: "a1200" },
       { kind: "no-rom-meets-whdload-minimum", machine: "a500" },
+      { kind: "no-whdload-machine-rom", machine: "a1200" },
       { kind: "no-system-volume" },
       { kind: "file-missing", path: "D:\\g\\a.adf" },
       { kind: "nothing-to-mount" },

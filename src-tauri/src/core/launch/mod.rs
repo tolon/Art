@@ -165,6 +165,25 @@ pub enum LaunchRefusal {
     /// requirement instead of leaving the user to guess why an otherwise
     /// working-looking ROM was not picked.
     NoRomMeetsWhdloadMinimum { machine: Machine },
+    /// The ROM folder holds no Kickstart for the machine a WHDLoad launch
+    /// runs on **at all** — ART-152's follow-up, and a distinct fact from
+    /// [`LaunchRefusal::NoRomMeetsWhdloadMinimum`] above.
+    ///
+    /// **Why this had to be split off.** Since ART-152 every WHDLoad launch
+    /// plans [`WHDLOAD_PROFILE_MACHINE`], and `best_rom` only considers a ROM
+    /// whose `models` list names that machine. A **Kickstart 3.1 rev 40.63
+    /// (A500/A600/A2000)** is a perfectly good, perfectly modern ROM that
+    /// names none of them — so a user whose only 3.x dump is that one now
+    /// gets refused on every WHDLoad title. That refusal is correct: a 40.63
+    /// A500 ROM is not an A1200, and launching it would produce something
+    /// broken. What was *wrong* was reporting it as
+    /// `NoRomMeetsWhdloadMinimum`, whose whole sentence is "your Kickstart is
+    /// too old" — a user holding Kickstart **3.1** reads that and goes
+    /// looking for a version that does not exist. The two cases need two
+    /// sentences, so they need two variants: this one says *which machine's*
+    /// Kickstart to add, that one says *how new* it must be, and each is
+    /// raised only when it is the true one.
+    NoWhdloadMachineRom { machine: Machine },
     /// A WHDLoad drawer needs a system to boot into, and ART owns none.
     NoSystemVolume,
     /// A path the plan needs turned out not to exist, once the command
@@ -274,9 +293,14 @@ pub const WHDLOAD_MIN_KICKSTART_MAJOR: u16 = 37;
 /// now defined as `core::profile::WHDLOAD_PROFILE_FAST_RAM_MB` — the Fast RAM
 /// `AmigaProfile::whdload_a1200` itself carries — so the shipped default, the
 /// profile and the Settings control are one value that cannot drift apart.
-/// Raising it in Settings still only ever *adds* headroom
-/// (`profile_for_request`'s `.max`), and lowering it never shrinks the
-/// profile's own 8 MB.
+///
+/// **A default, and nothing more.** `profile_for_request` uses whatever the
+/// user configured, exactly, in both directions: it briefly clamped a lower
+/// value up to this one, which meant a user who lowered Fast RAM in Settings
+/// was silently overruled. There is no documented Fast RAM floor to enforce —
+/// whdload.de's only stated memory requirement is 1.0 MiB *total*, which the
+/// profile's 2 MB of Chip RAM already meets — so this number's whole job is
+/// to be a sensible starting point, not a limit.
 pub const DEFAULT_WHDLOAD_FAST_RAM_MB: u32 = WHDLOAD_PROFILE_FAST_RAM_MB;
 
 /// The one machine every WHDLoad launch runs on, whatever chipset the
@@ -294,9 +318,16 @@ pub const DEFAULT_WHDLOAD_FAST_RAM_MB: u32 = WHDLOAD_PROFILE_FAST_RAM_MB;
 /// putting it before [`plan_for`]'s lookup rather than after: an A1200
 /// machine is matched against ROMs whose `models` list says `A1200`, and
 /// [`WHDLOAD_MIN_KICKSTART_MAJOR`] still applies on top, so a Kickstart 1.3
-/// dump can no more satisfy this machine than it could the A500 one — a user
-/// with no 3.x ROM gets [`LaunchRefusal::NoRomMeetsWhdloadMinimum`], never a
+/// dump can no more satisfy this machine than it could the A500 one — never a
 /// silent downgrade.
+///
+/// **It narrows which ROMs are eligible, and that is a real behaviour
+/// change.** `best_rom` matches on the ROM's own `models` list, so a
+/// Kickstart 3.1 rev 40.63 for the A500/A600/A2000 no longer suits a WHDLoad
+/// launch however new it is. Refusing is right — that ROM is not an A1200 —
+/// but the user has to be told *which* Kickstart to add rather than that
+/// theirs is too old, which is why [`LaunchRefusal::NoWhdloadMachineRom`]
+/// exists separately from [`LaunchRefusal::NoRomMeetsWhdloadMinimum`].
 pub const WHDLOAD_PROFILE_MACHINE: Machine = Machine::A1200;
 
 /// Which machine a stated chipset requirement asks for, falling back to the
@@ -316,7 +347,7 @@ pub fn machine_for(stated: Option<Chipset>, default: Machine) -> Machine {
 /// Whether a request is WHDLoad-shaped — see [`RequestKind::Hardfile`]'s own
 /// doc comment for why a plain hardfile is excluded. Backs two decisions, not
 /// one: [`WHDLOAD_MIN_KICKSTART_MAJOR`]'s floor on the chosen ROM (`plan_for`,
-/// below), and [`DEFAULT_WHDLOAD_FAST_RAM_MB`]'s headroom on the chosen
+/// below), and [`DEFAULT_WHDLOAD_FAST_RAM_MB`]'s Fast RAM on the chosen
 /// profile's memory (`commands/launch.rs::profile_for_request`). Both are
 /// facts about WHDLoad itself, not about hardfiles or drawers in general, so
 /// both read the same predicate rather than risking two definitions drifting
@@ -407,8 +438,23 @@ pub fn plan_for(request: &LaunchRequest) -> Result<LaunchPlan, LaunchRefusal> {
             Some(WHDLOAD_MIN_KICKSTART_MAJOR),
         )
         .cloned()
-        .ok_or(LaunchRefusal::NoRomMeetsWhdloadMinimum {
-            machine: request.machine,
+        // Which refusal is a diagnosis, not a formality: asking again
+        // without the floor separates "there is a Kickstart for this
+        // machine and it is too old" from "there is no Kickstart for this
+        // machine at all". Both refuse; only one of them is true at a time,
+        // and telling the user the wrong one sends them hunting for a
+        // Kickstart newer than the 3.1 they already own. See
+        // [`LaunchRefusal::NoWhdloadMachineRom`].
+        .ok_or_else(|| {
+            if best_rom(request.roms, request.machine, None).is_some() {
+                LaunchRefusal::NoRomMeetsWhdloadMinimum {
+                    machine: request.machine,
+                }
+            } else {
+                LaunchRefusal::NoWhdloadMachineRom {
+                    machine: request.machine,
+                }
+            }
         })?
     } else {
         best_rom(request.roms, request.machine, None)
@@ -588,6 +634,51 @@ mod tests {
         assert_eq!(profile.memory.fast_mb, DEFAULT_WHDLOAD_FAST_RAM_MB);
         assert_eq!(profile.memory.chip_kb, 2048);
         assert_eq!(profile.chipset, crate::core::profile::ChipsetModel::Aga);
+    }
+
+    /// ART-152's follow-up: the two WHDLoad ROM refusals are a diagnosis,
+    /// and each must be raised only when it is the true one. A Kickstart 3.1
+    /// rev 40.63 for the A500/A600/A2000 clears
+    /// [`WHDLOAD_MIN_KICKSTART_MAJOR`] comfortably and still does not suit
+    /// the A1200 the profile plans — reporting that as "too old" is the
+    /// wrong sentence, and the wrong variant is how it gets there.
+    #[test]
+    fn the_two_whdload_rom_refusals_each_describe_their_own_case() {
+        let kind = RequestKind::Whdload {
+            drawer: r"D:\g\Turrican".into(),
+            slave: "Turrican.Slave".into(),
+        };
+        let request = |roms: &[LaunchRom]| {
+            plan_for(&LaunchRequest {
+                machine: WHDLOAD_PROFILE_MACHINE,
+                roms,
+                kind: kind.clone(),
+                system_volume: Some(r"D:\sys\Workbench.hdf".into()),
+                one_click: true,
+            })
+            .unwrap_err()
+        };
+
+        // New enough, wrong machine: a 40.63 A500/A600/A2000 dump.
+        assert_eq!(
+            request(&[a500_kick31()]),
+            LaunchRefusal::NoWhdloadMachineRom {
+                machine: Machine::A1200
+            }
+        );
+        // Right machine, too old: an A1200 dump below the floor.
+        let old_a1200 = LaunchRom {
+            name: "Kickstart 1.3 (34.5) A1200".into(),
+            models: vec!["A1200".into()],
+            path: r"D:\roms\kick34005.A1200".into(),
+            major: Some(34),
+        };
+        assert_eq!(
+            request(&[old_a1200]),
+            LaunchRefusal::NoRomMeetsWhdloadMinimum {
+                machine: Machine::A1200
+            }
+        );
     }
 
     /// A ROM that does not suit is a refusal, not a black screen.
@@ -904,6 +995,14 @@ mod tests {
             })
             .unwrap(),
             serde_json::json!({ "kind": "no-rom-meets-whdload-minimum", "machine": "a500" })
+        );
+
+        assert_eq!(
+            serde_json::to_value(LaunchRefusal::NoWhdloadMachineRom {
+                machine: Machine::A1200
+            })
+            .unwrap(),
+            serde_json::json!({ "kind": "no-whdload-machine-rom", "machine": "a1200" })
         );
         assert_eq!(
             serde_json::to_value(LaunchRefusal::NoSystemVolume).unwrap(),

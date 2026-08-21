@@ -276,6 +276,17 @@ impl AmigaProfile {
     /// There is no hidden catalogue-derived fallback; if one is ever added it
     /// belongs here, in writing.
     ///
+    /// **The `name` is load-bearing, not decoration.** It is the only thing
+    /// that distinguishes this profile from [`Self::a1200_aga`] in the
+    /// generated WinUAE configuration — the two carry identical hardware
+    /// today, so every other line of the `.uae` is byte-identical, and
+    /// `generate_uae_config`'s `# Profile: {name}` header is what a test can
+    /// assert to prove *this* profile was the one used. A mutation swapping
+    /// `whdload_a1200()` for `a1200_aga()` went undetected until that header
+    /// was asserted. Keep the name distinct, and change it only alongside
+    /// the test that reads it
+    /// (`a_whdload_launch_of_an_ocs_title_writes_the_68020_2mb_chip_8mb_fast_config`).
+    ///
     /// Not part of [`Self::all_presets`] on purpose: that list is the
     /// Profile Studio's catalogue of **machines that existed**, and this is a
     /// launch configuration ART chose. Deliberately spelled out field by

@@ -1611,7 +1611,7 @@
         },
         "systemVolume": "Önyüklenebilir sistem (WHDLoad için)",
         "whdloadFastRam": "WHDLoad için ek Fast RAM",
-        "whdloadFastRamHint": "Bir WHDLoad başlatmasının Fast belleği — bir disket veya düz bir sabit disk için asla uygulanmaz. Her WHDLoad başlatması ART'ın WHDLoad A1200 profilinde çalışır (68020, 2 MB Chip, 8 MB Fast) ve bu profil zaten bu kadarını taşır; buradaki daha düşük bir değer ondan hiçbir şey eksiltmez. Fast belleğin yetersiz kalması, WHDLoad'un bir başlığı yükleyememesinin nedenidir (\"DOS-Error #103, yeterli bellek yok\").",
+        "whdloadFastRamHint": "Bir WHDLoad başlatmasının Fast belleği — bir disket veya düz bir sabit disk için asla uygulanmaz. Her WHDLoad başlatması ART'ın WHDLoad A1200 profilinde çalışır (68020, 2 MB Chip) ve buradaki değer ona eklenen Fast bellektir. Değeriniz olduğu gibi kullanılır; 0 dahil, ki bu başlatmaya hiç Fast bellek vermez. Fast belleğin yetersiz kalması, WHDLoad'un bir başlığı yükleyememesinin nedenidir (\"DOS-Error #103, yeterli bellek yok\"). Onay ekranı, hiçbir şey başlamadan önce belleği bildirir.",
         "allowWrite": "Bu oyunun kaydetmesine izin ver",
         "action": "Oynat",
         "planning": "Ne gerektiği hesaplanıyor…",
@@ -1642,6 +1642,7 @@
         "refusal": {
           "noSuitableRom": "ROM klasöründe {{machine}} için uygun bir Kickstart yok.",
           "noRomMeetsWhdloadMinimum": "WHDLoad, Kickstart 2.0 veya daha yenisini gerektiriyor; ROM klasörünüzde bunu karşılayan bir {{machine}} Kickstart'ı yok.",
+          "noWhdloadMachineRom": "WHDLoad başlıkları ART'ın {{machine}} profilinde çalışır; bu yüzden bu başlatma bir {{machine}} Kickstart 3.x istiyor. Başka bir model için olan Kickstart — örneğin A500/A600/A2000 için bir 3.1 — ne kadar yeni olursa olsun buna uymaz. ROM klasörünüze bir {{machine}} Kickstart'ı ekleyin.",
           "noSystemVolume": "Bu WHDLoad başlığı önyüklenebilir bir sistem gerektiriyor ve ayarlanmış değil.",
           "fileMissing": "'{{path}}' artık yok.",
           "nothingToMount": "Bu başlık takılacak bir disk belirtmiyor — WinUAE'nin yükleyeceği hiçbir şey yok."

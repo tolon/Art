@@ -34,10 +34,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not been measured on real material yet — the machine picker is there for
   exactly that case.
 
-- **The WHDLoad Fast RAM setting keeps working, and keeps your value.** It is
-  now the profile's own 8 MB by default rather than a separate number that
-  happened to match. Raising it still adds memory; lowering it never takes the
-  profile's 8 MB away.
+- **The WHDLoad Fast RAM setting keeps working, and now your value actually
+  wins.** It starts at the profile's own 8 MB. Raise it and the launch gets
+  more; **lower it and the launch gets less** — including 0, which really does
+  mean no Fast RAM. Until this release the 8 MB was a floor, so moving the
+  control down changed the number on screen and nothing else, without a word
+  of explanation. The confirmation screen states the memory a launch will use
+  before you press Start.
+
+#### Fixed
+- **A refusal that was true, but told you the wrong thing.** If your only
+  Kickstart 3.x is a **3.1 for the A500/A600/A2000**, WHDLoad launches now
+  stop and say so — that ROM is not an A1200, and starting it would give you
+  something broken. What it used to say was *"WHDLoad needs Kickstart 2.0 or
+  newer"*, which sends someone holding Kickstart **3.1** hunting for a version
+  that does not exist. It now says which Kickstart to add: an **A1200
+  Kickstart 3.x**, because that is the machine WHDLoad titles run on.
 
 ### Installing on the Amiga side — it works (2026-08-21)
 

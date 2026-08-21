@@ -316,6 +316,15 @@ fn refusal_error(refusal: LaunchRefusal) -> CoreError {
                  none for {machine:?} that meet it"
             )
         }
+        LaunchRefusal::NoWhdloadMachineRom { machine } => {
+            let name = format!("{machine:?}").to_uppercase();
+            format!(
+                "WHDLoad titles run on ART's {name} profile, so this launch needs an \
+                 {name} Kickstart 3.x. A Kickstart for another model — a 3.1 for the \
+                 A500/A600/A2000, say — does not suit it however new it is. Add an \
+                 {name} Kickstart to the ROM folder"
+            )
+        }
         LaunchRefusal::NoSystemVolume => {
             "no bootable system volume is configured for this WHDLoad title".to_string()
         }
@@ -481,10 +490,27 @@ fn profile_for(machine: Machine) -> AmigaProfile {
 /// untouched — CLAUDE.md is explicit that a WHDLoad launch "should adjust
 /// the memory of the profile it plans with, not redefine what an A500 is".
 ///
-/// `.max(...)` rather than a plain assignment: the WHDLoad profile already
-/// carries 8 MB of Fast RAM (`core::profile::WHDLOAD_PROFILE_FAST_RAM_MB`),
-/// and a user-configured value lower than that must not *shrink* it back
-/// down — only ever add headroom, never take it away.
+/// **The user's number is used exactly, including when it is lower.** This
+/// was `.max(profile.memory.fast_mb)` until the ART-152 review: the profile's
+/// own 8 MB acted as a floor, so a user who opened Settings and *lowered*
+/// Fast RAM watched the number change and nothing happen, with nothing said.
+/// That is "nothing changes unless the user changes it" broken from the
+/// other side — the user changed it and ART overruled them in silence — and
+/// a control that cannot lower is worse than no control, because it claims
+/// to do something it does not.
+///
+/// **There is no floor left to defend.** WHDLoad's only documented memory
+/// requirement is a *total* one — "a minimum of 1.0 MiB RAM"
+/// (<https://www.whdload.de/docs/en/need.html>) — and
+/// `AmigaProfile::whdload_a1200`'s 2 MB of Chip RAM meets it twice over
+/// before a single MB of Fast RAM is added. Nothing on that page states a
+/// Fast RAM minimum at all, so the 8 MB is a *default*, not a floor, and
+/// clamping to it was defending ART's own preference against the user's
+/// explicit instruction. Setting it to 0 is a supported choice; a title that
+/// then runs out of memory says so through WHDLoad's own DOS-Error #103, and
+/// the confirmation screen states the memory (`LaunchPreview::memory`)
+/// before anything starts, so the consequence is visible in advance rather
+/// than clamped away behind the user's back.
 ///
 /// **ART-152: which profile, not just how much memory.** A WHDLoad-shaped
 /// request on [`crate::core::launch::WHDLOAD_PROFILE_MACHINE`] gets
@@ -505,7 +531,7 @@ fn profile_for_request(kind: &RequestKind, machine: Machine, fast_ram_mb: u32) -
         profile_for(machine)
     };
     if whdload {
-        profile.memory.fast_mb = profile.memory.fast_mb.max(fast_ram_mb);
+        profile.memory.fast_mb = fast_ram_mb;
     }
     profile
 }
@@ -908,19 +934,28 @@ mod tests {
         assert_eq!(profile.memory.fast_mb, 0);
     }
 
-    /// The ART-152 WHDLoad profile already carries 8 MB of Fast RAM
-    /// (`core::profile::WHDLOAD_PROFILE_FAST_RAM_MB`) — a lower-than-stock
-    /// configured value must never shrink it back down, only ever add
-    /// headroom on top.
+    /// A value the user lowered is used, not clamped back up to the
+    /// profile's own 8 MB. This test asserted the opposite until the ART-152
+    /// review: the clamp meant a user could move the Settings slider down,
+    /// watch the number change and have ART quietly ignore them. There is no
+    /// documented Fast RAM floor to enforce — whdload.de states 1.0 MiB
+    /// *total*, which the profile's 2 MB of Chip RAM already meets.
     #[test]
-    fn a_configured_value_lower_than_the_stock_a1200_preset_never_shrinks_it() {
+    fn a_configured_value_lower_than_the_profile_is_used_not_clamped() {
         let kind = RequestKind::Hardfile {
             image: "Game.hdf".into(),
             whdload: true,
         };
-        let profile = profile_for_request(&kind, Machine::A1200, 2);
 
-        assert_eq!(profile.memory.fast_mb, 8);
+        assert_eq!(
+            profile_for_request(&kind, Machine::A1200, 2).memory.fast_mb,
+            2
+        );
+        // 0 is a supported choice, not a "leave it at the default" sentinel.
+        assert_eq!(
+            profile_for_request(&kind, Machine::A1200, 0).memory.fast_mb,
+            0
+        );
     }
 
     // ---- ART-152: the WHDLoad machine profile, as the .uae actually says --
@@ -1071,10 +1106,12 @@ mod tests {
         assert!(has_line(&config, "chipmem_size=4"), "{config}");
     }
 
-    /// The other direction: a Settings value below the profile's own 8 MB
-    /// never shrinks what the config asks for.
+    /// The other direction, in the file WinUAE actually reads: a Settings
+    /// value the user *lowered* reaches the generated config unchanged. A
+    /// control that silently refuses to go down is worse than no control —
+    /// it claims to do something it does not.
     #[test]
-    fn a_settings_value_below_the_profile_never_shrinks_the_generated_config() {
+    fn a_lowered_settings_value_reaches_the_generated_config() {
         let mut request = args(Media::WhdloadHardfile {
             file: "Game.hdf".into(),
             slave: "Game.Slave".into(),
@@ -1083,7 +1120,66 @@ mod tests {
 
         let config = uae_config_for(&request, &[a1200_rom()]);
 
-        assert!(has_line(&config, "fastmem_size=8"), "{config}");
+        assert!(has_line(&config, "fastmem_size=1"), "{config}");
+        // Lowering the memory must not have changed the machine either.
+        assert!(has_line(&config, "cpu_model=68020"), "{config}");
+        assert!(has_line(&config, "chipmem_size=4"), "{config}");
+    }
+
+    /// **The sentence a 40.63-only user gets.** A Kickstart 3.1 rev 40.63 is
+    /// a modern, perfectly good ROM that lists `A500`/`A600`/`A2000` and not
+    /// `A1200`, so since ART-152 it no longer suits a WHDLoad launch.
+    /// Refusing is right; reporting it as "your Kickstart is too old" is not,
+    /// because the user holding Kickstart **3.1** then goes looking for a
+    /// version that does not exist. The refusal must name the machine and
+    /// what suits it.
+    #[test]
+    fn a_40_63_a500_rom_is_refused_with_the_machine_not_with_too_old() {
+        let request = args(Media::WhdloadHardfile {
+            file: "Game.hdf".into(),
+            slave: "Game.Slave".into(),
+        });
+        let kick4063 = LaunchRom {
+            name: "Kickstart 3.1 (40.063) A500/A600/A2000".into(),
+            models: vec!["A500".into(), "A600".into(), "A2000".into()],
+            path: r"D:\roms\kick40063.A500".into(),
+            major: Some(40),
+        };
+
+        let preview = preview_for(&request, std::slice::from_ref(&kick4063));
+        assert_eq!(
+            preview.refusal,
+            Some(LaunchRefusal::NoWhdloadMachineRom {
+                machine: Machine::A1200
+            }),
+            "a 40.63 A500 ROM meets the Kickstart floor — the missing thing is the machine"
+        );
+
+        // The sentence itself, not just the variant: this is what the user
+        // reads, and it is the half that was wrong.
+        let message = refusal_error(preview.refusal.unwrap()).to_string();
+        // The whole phrase, not "A1200" and "3.x" found anywhere in the
+        // sentence: a message that names the A1200 profile and then asks for
+        // "a suitable Kickstart 3.x" tells the user nothing they can act on,
+        // and it passed a two-substring check (mutation M15).
+        assert!(
+            message.contains("needs an A1200 Kickstart 3.x"),
+            "the refusal must name the machine and the version together: {message}"
+        );
+        assert!(
+            message.contains("Add an A1200 Kickstart"),
+            "the refusal must say what to do about it: {message}"
+        );
+        assert!(
+            message.contains("A500/A600/A2000"),
+            "the message must name the ROM the user is holding: {message}"
+        );
+        for misleading in ["too old", "2.0 or newer", "newer"] {
+            assert!(
+                !message.contains(misleading),
+                "the refusal must not read as a version complaint: {message}"
+            );
+        }
     }
 
     /// An A1200 profile must not silently accept a Kickstart 1.3 dump.

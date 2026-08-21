@@ -1611,7 +1611,7 @@
         },
         "systemVolume": "Bootable system (for WHDLoad)",
         "whdloadFastRam": "WHDLoad Fast RAM headroom",
-        "whdloadFastRamHint": "Fast RAM for a WHDLoad launch — never applied to a floppy or a plain hardfile. Every WHDLoad launch runs on ART's WHDLoad A1200 profile (68020, 2 MB Chip, 8 MB Fast), which already carries this much; a lower value here never takes any away. Too little Fast RAM is what leaves WHDLoad unable to load a title (\"DOS-Error #103, not enough memory available\").",
+        "whdloadFastRamHint": "Fast RAM for a WHDLoad launch — never applied to a floppy or a plain hardfile. Every WHDLoad launch runs on ART's WHDLoad A1200 profile (68020, 2 MB Chip), and this is the Fast RAM added to it. Your value is used exactly, including 0, which gives the launch no Fast RAM at all; too little is what leaves WHDLoad unable to load a title (\"DOS-Error #103, not enough memory available\"). The confirmation screen states the memory before anything starts.",
         "allowWrite": "Allow this game to save",
         "action": "Play",
         "planning": "Working out what this needs…",
@@ -1642,6 +1642,7 @@
         "refusal": {
           "noSuitableRom": "No Kickstart in the ROM folder suits {{machine}}.",
           "noRomMeetsWhdloadMinimum": "WHDLoad needs Kickstart 2.0 or newer, and your ROM folder has no {{machine}} Kickstart that meets it.",
+          "noWhdloadMachineRom": "WHDLoad titles run on ART's {{machine}} profile, so this launch needs an {{machine}} Kickstart 3.x. A Kickstart for another model — a 3.1 for the A500/A600/A2000, say — does not suit it however new it is. Add an {{machine}} Kickstart to your ROM folder.",
           "noSystemVolume": "This WHDLoad title needs a bootable system, and none is set.",
           "fileMissing": "'{{path}}' no longer exists.",
           "nothingToMount": "This title names no disk to mount — there is nothing for WinUAE to load."

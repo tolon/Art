@@ -703,6 +703,64 @@ assignment, the Settings value dropped, the machine guard dropped, the
 Kickstart floor set to 0, and the profile's Fast RAM / Chip RAM / CPU /
 chipset each changed); every one was caught.
 
+## The review round, and two things it changed
+
+The whole-branch review checked both remaining concerns in the code rather
+than taking them from the report, and both were real.
+
+**1. The Settings control could not lower anything, and said nothing.**
+`profile_for_request` applied the user's number as
+`profile.memory.fast_mb.max(fast_ram_mb)`, so the profile's 8 MB was a
+**floor**: a user who opened Settings and lowered Fast RAM saw the number
+change, saw nothing happen, and was told nothing. That is "nothing changes
+unless the user changes it" broken from the other side — the user changed it
+and ART overruled them silently — and a control that cannot lower is worse
+than no control, because it claims to do something it does not. The clamp is
+gone; the user's value is used exactly, 0 included. **There was no floor to
+defend in the first place**: whdload.de's only documented memory requirement
+is 1.0 MiB *total*, which `whdload_a1200`'s 2 MB of Chip RAM meets twice over
+before a single MB of Fast RAM is added, and the page states no Fast RAM
+minimum at all. The consequence of setting 0 is disclosed rather than clamped
+away: the confirmation screen already states the memory
+(`LaunchPreview::memory`) before anything starts, and the Settings hint now
+says so in both languages.
+
+**2. A true refusal was delivered as a confidently wrong sentence.**
+`best_rom` matches on the ROM's own `models` list, so moving every WHDLoad
+launch to the A1200 means a **Kickstart 3.1 rev 40.63 (A500/A600/A2000)** — a
+modern, perfectly good dump that names none of those three — no longer suits
+one. Refusing is right: that ROM is not an A1200 and launching it would
+produce something broken. What was wrong was the variant it refused with.
+`NoRomMeetsWhdloadMinimum`'s whole sentence is *"your Kickstart is too old"*,
+so a user holding Kickstart **3.1** would read it and go looking for a version
+that does not exist. `plan_for` now asks a second time without the floor to
+tell the two cases apart, and raises the new
+`LaunchRefusal::NoWhdloadMachineRom` when the ROM folder holds nothing for the
+machine at all. Its sentence names the machine, the version and what to do:
+*"WHDLoad titles run on ART's A1200 profile, so this launch needs an A1200
+Kickstart 3.x. A Kickstart for another model — a 3.1 for the A500/A600/A2000,
+say — does not suit it however new it is. Add an A1200 Kickstart to your ROM
+folder."* Both languages, and the Rust-side `refusal_error` sentence too.
+
+Added by the review round:
+`commands::launch::tests::a_configured_value_lower_than_the_profile_is_used_not_clamped`
+(it asserted the **opposite** before — the clamp was tested *as* the intended
+behaviour),
+`commands::launch::tests::a_lowered_settings_value_reaches_the_generated_config`,
+`commands::launch::tests::a_40_63_a500_rom_is_refused_with_the_machine_not_with_too_old`,
+`core::launch::tests::the_two_whdload_rom_refusals_each_describe_their_own_case`,
+and the new variant's wire shape in
+`core::launch::tests::the_wire_shape_is_what_the_frontend_reads`.
+
+Five more mutations, all caught: the clamp put back, the refusal split
+collapsed each way, the new sentence made generic, and the sentence no longer
+naming the ROM the user is holding. **The generic-sentence mutation was not
+caught on the first attempt** — the test asserted `contains("A1200")` and
+`contains("3.x")` separately, and a message reading "runs on ART's A1200
+profile, so this launch needs a suitable Kickstart 3.x" satisfies both while
+telling the user nothing. It now asserts the phrase *"needs an A1200 Kickstart
+3.x"* whole. Two substrings that are individually true are not the sentence.
+
 **ART-193** 🔴 ✅ **A BoingBag's `Updater` started, printed nothing, opened
 nothing and never returned — because ART's script had never run the tree's own
 `AddDataTypes`** — *found 2026-08-21 by Task 7's run; its stated cause (the

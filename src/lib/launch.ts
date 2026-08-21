@@ -30,16 +30,22 @@ export const isMachine = isOneOf<Machine>("a500", "a1200");
  * reasoning and the sources live, including what whdload.de's requirements
  * page does and does not say.
  *
- * This is the shipped **default**, not a fixed value: a number the user has
- * set in Settings must survive, which is what `useRemembered` here is for.
+ * This is the shipped **default**, not a floor: a number the user set in
+ * Settings is used exactly, in both directions. It briefly acted as a floor,
+ * which meant lowering the control did nothing and said nothing — see
+ * `commands/launch.rs::profile_for_request`. whdload.de states no Fast RAM
+ * minimum at all (its only memory requirement is 1.0 MiB *total*, which the
+ * profile's 2 MB of Chip RAM already meets), so there was never a floor to
+ * defend.
  */
 export const DEFAULT_WHDLOAD_FAST_RAM_MB = 8;
 
 /**
  * WinUAE's 24-bit `fastmem_size=` tops out at 8 MB — the same ceiling
  * `AmigaProfile::whdload_a1200` already uses. `0` is a valid choice too: it
- * turns this setting off and leaves a WHDLoad launch on whatever Fast RAM
- * its profile already carries, which since ART-152 is the full 8 MB.
+ * really does give the launch no Fast RAM at all — a supported choice, not a
+ * "leave it at the default" sentinel, and the confirmation screen states the
+ * resulting memory before anything starts.
  */
 export const WHDLOAD_FAST_RAM_MAX_MB = 8;
 
@@ -85,6 +91,15 @@ export type LaunchRefusal =
    * actual requirement instead of a generic "no ROM suits this machine".
    */
   | { kind: "no-rom-meets-whdload-minimum"; machine: Machine }
+  /**
+   * ART-152: the ROM folder holds no Kickstart for the machine a WHDLoad
+   * launch runs on at all. Distinct from `"no-rom-meets-whdload-minimum"`
+   * because the two need opposite sentences — a Kickstart 3.1 rev 40.63 for
+   * the A500/A600/A2000 is new enough and still does not suit an A1200, and
+   * telling that user their ROM is too old sends them hunting for a version
+   * that does not exist.
+   */
+  | { kind: "no-whdload-machine-rom"; machine: Machine }
   | { kind: "no-system-volume" }
   | { kind: "file-missing"; path: string }
   | { kind: "nothing-to-mount" };
@@ -210,6 +225,11 @@ export function refusalPhrase(refusal: LaunchRefusal): Phrase {
     case "no-rom-meets-whdload-minimum":
       return {
         key: "collection.detail.play.refusal.noRomMeetsWhdloadMinimum",
+        params: { machine: refusal.machine.toUpperCase() },
+      };
+    case "no-whdload-machine-rom":
+      return {
+        key: "collection.detail.play.refusal.noWhdloadMachineRom",
         params: { machine: refusal.machine.toUpperCase() },
       };
     case "no-system-volume":
