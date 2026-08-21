@@ -2228,7 +2228,7 @@
     },
     "packages": {
       "heading": "Güncelleme paketleri",
-      "intro": "ART'ın ya da senin zaten kurduğun bir dağıtım ağacına resmi bir güncelleme — bir BoingBag, ya da Türkçe katalog paketi gibi resmi olmayan bir paket — ekle.",
+      "intro": "ART'ın ya da senin zaten kurduğun bir dağıtım ağacına bir BoingBag ya da başka bir güncelleme paketi ekle.",
       "scopeNote": "ART {{count}} güncelleme paketi için tarif gönderiyor — her biri dosyaların ve kendi hedeflerinin elle yazılmış bir listesidir — ve başka hiçbir arşive dokunmaz. Böyle bir tarifi olmayan bir paket, ya da kurulumu gerçek donanımda çalışma anında karar veren bir Amiga Installer betiği olan bir paket burada yerleştirilemez: ART'ın o kararı yeniden üretecek hiçbir şeyi yok.",
       "scopeBlocked": "Bunlardan {{count}} tanesi, arşivin kaç kopyası elinde olursa olsun, Windows üzerinden hiç yerleştirilemez — her biri nedenini aşağıda kendi satırında söylüyor.",
       "treeRoot": {

@@ -2228,7 +2228,7 @@
     },
     "packages": {
       "heading": "Update packages",
-      "intro": "Add an official update — a BoingBag, or an unofficial pack like the Turkish catalogs — onto a distribution tree ART, or you, already built.",
+      "intro": "Add a BoingBag or another update pack onto a distribution tree ART, or you, already built.",
       "scopeNote": "ART ships a recipe for {{count}} update packages — each one a hand-written list of files and their own destinations — and will touch no other archive. A package with no such recipe, or one whose own installer is an Amiga Installer script deciding what to do at run time on real hardware, cannot be placed here: there is nothing for ART to reproduce that decision with.",
       "scopeBlocked": "{{count}} of them cannot be placed from Windows at all, however many copies of the archive you have — each says why on its own row below.",
       "treeRoot": {
