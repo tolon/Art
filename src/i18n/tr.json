@@ -2346,7 +2346,7 @@
       "confirm": "Anlıyorum: bu masaüstünde bir emülatör penceresi açılacak ve ağacım ancak kurucunun kendisi başarı bildirirse değiştirilecek.",
       "run": "Kurucuyu Amiga tarafında çalıştır",
       "running": "Çalışıyor…",
-      "cancelled": "Koşu iptal edildi. Kopya atıldı ve kendi ağacınıza dokunulmadı.",
+      "cancelled": "Koşu iptal edildi ve kendi ağacınıza hiç dokunulmadı.",
       "report": {
         "heading": "Ne oldu"
       },

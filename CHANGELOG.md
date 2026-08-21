@@ -118,6 +118,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Beginner mode hides the machinery — the Amiga command line, the volume
   names — and hides nothing else; the warning, the four answers and the run
   itself are the same in both modes.
+
+  And if something goes wrong *while* the install is under way — not the
+  installer refusing, but ART losing its footing — the copy stays on disk and
+  ART now tells you where it is, in the same red box as the error. It was
+  already working that out and saying it; the screen was the one place it did
+  not arrive. A cancelled run no longer claims the copy was cleaned up
+  either: it says your own folder was never touched, which is true either
+  way, and if the copy could not be removed it says that too rather than the
+  opposite. While it runs, you also see which step it is on, not just a
+  percentage.
 - **Each BoingBag now says, in its own recipe, what the Amiga should
   run.** Both point at the `Updater` the package itself carries, with the
   update file it expects — read out of your own archives and out of each

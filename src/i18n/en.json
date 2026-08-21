@@ -2346,7 +2346,7 @@
       "confirm": "I understand: an emulator window will open on this desktop, and my tree is replaced only if the installer itself reports success.",
       "run": "Run the installer on the Amiga",
       "running": "Running…",
-      "cancelled": "The run was cancelled. The copy has been discarded and your own tree is untouched.",
+      "cancelled": "The run was cancelled, and your own tree was never touched.",
       "report": {
         "heading": "What happened"
       },

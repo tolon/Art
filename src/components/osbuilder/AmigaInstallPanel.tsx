@@ -146,6 +146,40 @@ export function AmigaInstallPanel({
   const [progress, setProgress] = useState<JobProgress | null>(null);
   const [jobError, setJobError] = useState<string | null>(null);
   const [wasCancelled, setWasCancelled] = useState(false);
+  /**
+   * ART's own last word about the run, taken off the **terminal** job event.
+   *
+   * This is fix round 1's Major, and it is the round's signature defect
+   * arriving through a door nobody had checked. A run that goes wrong
+   * *mid-flight* — not one of the four endings — leaves the copy on disk by
+   * design, and `commands/amigainstall.rs::perform` reports
+   * `"'<original>' was not touched; the copy ART installed into is at
+   * '<copy>'"` immediately before returning the error. That sentence travels
+   * as a `job-progress` **message**, and this panel used to render only
+   * `state.message` + the error code — so on the one path where a copy really
+   * is orphaned, the user was told it failed and never told where the
+   * evidence went. Exactly the thing the four endings were made distinct to
+   * prevent.
+   *
+   * It cannot be lost to the event throttle: `JobRegistry::update` always
+   * stores the message even when it does not emit, `finish` replaces only the
+   * *state*, and the terminal event ignores the throttle — so the last thing
+   * reported always arrives, on the same event the error does.
+   *
+   * Rendered for a failure **and** for a cancellation. The cancelled path has
+   * its own instance of the same defect: `perform` reports when a cancelled
+   * run's copy could **not** be removed, and the screen used to answer that
+   * with a flat translated "the copy has been discarded" — a wrong sentence
+   * about litter still sitting on the user's disk. That sentence no longer
+   * claims anything about the copy; ART's own line says what happened to it.
+   *
+   * The trade-off, stated rather than hidden: on an ordinary cancellation
+   * nothing new is reported at the end, so what shows is whatever the run
+   * last said (a staging line). True, and less informative than silence would
+   * be. Closing that properly means a `report` on the successful discard in
+   * Rust, which is not this task's to change.
+   */
+  const [lastReported, setLastReported] = useState<string | null>(null);
   const [result, setResult] = useState<AmigaInstallResult | null>(null);
 
   // The archives, wrapper first. The order is the wire's own: everything
@@ -203,6 +237,7 @@ export function AmigaInstallPanel({
     setResult(null);
     setJobError(null);
     setWasCancelled(false);
+    setLastReported(null);
     if (!request) {
       setPreview(null);
       setRefusal(null);
@@ -241,6 +276,10 @@ export function AmigaInstallPanel({
 
         job.current = null;
         setBusy(false);
+        // Before anything else: whatever ART reported last. See
+        // `lastReported` — on a mid-run failure this is the sentence naming
+        // where the copy was left.
+        setLastReported(update.message.trim() === "" ? null : update.message);
         if (update.state.state === "failed") {
           setJobError(`${update.state.message} (${update.state.error_code})`);
         } else if (update.state.state === "cancelled") {
@@ -299,6 +338,7 @@ export function AmigaInstallPanel({
     setBusy(true);
     setJobError(null);
     setWasCancelled(false);
+    setLastReported(null);
     setProgress(null);
     setResult(null);
     try {
@@ -571,17 +611,44 @@ export function AmigaInstallPanel({
       {jobError && (
         <div
           className="badge badge-err"
-          style={{ display: "block", padding: "6px 12px", fontSize: 12, marginBottom: 12 }}
+          data-testid="amiga-install-job-error"
+          style={{ display: "block", padding: "8px 10px", fontSize: 12, marginBottom: 12 }}
         >
-          {jobError}
+          <p style={{ margin: 0 }}>{jobError}</p>
+          {/* The Major of fix round 1: ART's own last word, which on a
+              mid-run failure names the tree it did not touch and the copy it
+              left behind. English, from Rust, verbatim (ART-060) — the same
+              rule the refusal above follows, and for the same reason: which
+              sentence it is *is* the content. */}
+          {lastReported && (
+            <p
+              data-testid="amiga-install-last-reported"
+              style={{ margin: "6px 0 0", wordBreak: "break-all" }}
+            >
+              {lastReported}
+            </p>
+          )}
         </div>
       )}
       {wasCancelled && (
         <div
           className="badge badge-warn"
-          style={{ display: "block", padding: "6px 12px", fontSize: 12, marginBottom: 12 }}
+          data-testid="amiga-install-cancelled"
+          style={{ display: "block", padding: "8px 10px", fontSize: 12, marginBottom: 12 }}
         >
-          {t("osinstall.amigaInstall.cancelled")}
+          {/* This sentence deliberately claims nothing about the copy. It
+              used to say the copy had been discarded, which is false on the
+              one cancelled path where the discard itself fails — and that
+              path is precisely the one ART reports on. */}
+          <p style={{ margin: 0 }}>{t("osinstall.amigaInstall.cancelled")}</p>
+          {lastReported && (
+            <p
+              data-testid="amiga-install-last-reported"
+              style={{ margin: "6px 0 0", wordBreak: "break-all" }}
+            >
+              {lastReported}
+            </p>
+          )}
         </div>
       )}
 
@@ -626,6 +693,16 @@ export function AmigaInstallPanel({
                   done: progress?.done ?? 0,
                   total: progress?.total ?? 0,
                 })}
+            {/* The phase ART is in, as ART reports it — English, from Rust
+                (ART-060). The same question as the Major, asked of the
+                *running* half of this channel: an install takes minutes and
+                the emulator's window is the only other sign of life, so the
+                line ART is already writing should not be thrown away. */}
+            {progress?.message?.trim() ? (
+              <span data-testid="amiga-install-phase" style={{ marginLeft: 8 }}>
+                {progress.message}
+              </span>
+            ) : null}
           </span>
         )}
       </div>

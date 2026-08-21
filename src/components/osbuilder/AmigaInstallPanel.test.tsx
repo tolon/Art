@@ -23,7 +23,7 @@
 // reason.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import i18n from "i18next";
 
@@ -33,6 +33,7 @@ import "@/i18n";
 import { useSettingsStore } from "@/stores/settingsStore";
 import type { AmigaInstallPreview, AmigaInstallResult, RunOutcome } from "@/lib/amigainstall";
 import type { PackageSummary } from "@/lib/osinstall";
+import type { JobProgress } from "@/lib/jobs";
 
 const previewMock = vi.hoisted(() => vi.fn());
 const runMock = vi.hoisted(() => vi.fn());
@@ -161,16 +162,24 @@ function withChoices() {
  *  ending the way the backend would. */
 let deliver: ((result: AmigaInstallResult) => void) | null = null;
 
+/** The one live `onJobProgress` handler, so a test can deliver a terminal
+ *  job event — the channel the Major of fix round 1 lives on. */
+let report: ((progress: JobProgress) => void) | null = null;
+
 beforeEach(() => {
   vi.clearAllMocks();
   deliver = null;
+  report = null;
   useSettingsStore.setState((state) => ({
     settings: { ...state.settings, uxMode: "beginner", winuaePath: null, remembered: {} },
   }));
   packagesMock.mockResolvedValue(PACKAGES);
   previewMock.mockResolvedValue(preview());
   runMock.mockResolvedValue(7);
-  onJobProgressMock.mockResolvedValue(() => {});
+  onJobProgressMock.mockImplementation(async (handler: (p: JobProgress) => void) => {
+    report = handler;
+    return () => {};
+  });
   onResultMock.mockImplementation(async (handler: (r: AmigaInstallResult) => void) => {
     deliver = handler;
     return () => {};
@@ -344,6 +353,17 @@ describe("the four endings stay four sentences on screen", () => {
     "emulator-closed": i18n.t("osinstall.amigaInstall.outcome.emulatorClosed", { seconds: 12 }),
   };
 
+  /** And the next step each one must carry. A defect that swaps two of
+   *  these keeps four distinct sentences and gives half the readers the
+   *  wrong instruction, which is the failure mode the four endings exist
+   *  to prevent. */
+  const NEXT: Record<string, string> = {
+    succeeded: i18n.t("osinstall.amigaInstall.next.succeeded"),
+    failed: i18n.t("osinstall.amigaInstall.next.failed"),
+    "timed-out": i18n.t("osinstall.amigaInstall.next.timedOut"),
+    "emulator-closed": i18n.t("osinstall.amigaInstall.next.emulatorClosed"),
+  };
+
   const ENDINGS: RunOutcome[] = [
     { kind: "succeeded" },
     { kind: "failed" },
@@ -370,11 +390,14 @@ describe("the four endings stay four sentences on screen", () => {
         if (kind === ending.kind) continue;
         expect(report).not.toContain(sentence);
       }
-      // And a different next step for each — "watch the window next time" is
-      // the wrong advice for a window the owner shut themselves.
+      // And *this ending's own* next step — "watch the window next time" is
+      // the wrong advice for a window the owner shut themselves. Asserted
+      // against the expected sentence rather than merely against being
+      // different from the outcome, which nothing plausible could break:
+      // swapping two endings' next steps round is a permutation, so it keeps
+      // them four and distinct and would sail past a distinctness check.
       const next = screen.getByTestId("amiga-install-next").textContent ?? "";
-      expect(next.length).toBeGreaterThan(0);
-      expect(next).not.toBe(outcome.textContent);
+      expect(next).toBe(NEXT[ending.kind]);
     });
   }
 
@@ -495,5 +518,134 @@ describe("the run itself", () => {
     await runToConfirmation();
     const refusal = await screen.findByTestId("amiga-install-refusal");
     expect(refusal.textContent).toContain("WinUAE was not found");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix round 1
+// ---------------------------------------------------------------------------
+
+describe("a run that goes wrong mid-flight still says where the copy is", () => {
+  /** What `commands/amigainstall.rs::perform` really reports on that path,
+   *  word for word, immediately before it returns the error. */
+  const REPORTED =
+    "'D:/amiga/os39' was not touched; the copy ART installed into is at 'D:/amiga/os39.art-run'";
+
+  // The Major of this task's review, and the round's signature defect coming
+  // in through a door nobody had checked: this is the **one** path where a
+  // copy really is orphaned, and it was the one path that said nothing about
+  // it. Every other ending was handled.
+  it("renders ART's own last word beside the error, naming the copy and the untouched tree", async () => {
+    await runToConfirmation();
+    report!({
+      id: 7,
+      title: "Installing BoingBag 3.9-1 on the Amiga",
+      done: 0,
+      total: null,
+      message: REPORTED,
+      state: { state: "failed", error_code: "ART-014", message: "the mount went away" },
+    });
+
+    const badge = await screen.findByTestId("amiga-install-job-error");
+    // The error itself is still there…
+    expect(badge.textContent).toContain("the mount went away");
+    expect(badge.textContent).toContain("ART-014");
+    // …and so is where the evidence went. Both paths, not just the error.
+    expect(badge.textContent).toContain("D:/amiga/os39.art-run");
+    expect(badge.textContent).toContain("was not touched");
+    expect(screen.getByTestId("amiga-install-last-reported").textContent).toBe(REPORTED);
+  });
+
+  it("says nothing extra when the run reported nothing at the end", async () => {
+    await runToConfirmation();
+    report!({
+      id: 7,
+      title: "Installing BoingBag 3.9-1 on the Amiga",
+      done: 0,
+      total: null,
+      message: "   ",
+      state: { state: "failed", error_code: "ART-014", message: "the mount went away" },
+    });
+
+    const badge = await screen.findByTestId("amiga-install-job-error");
+    expect(badge.textContent).toContain("the mount went away");
+    expect(screen.queryByTestId("amiga-install-last-reported")).toBeNull();
+  });
+
+  it("ignores a job that is not this panel's", async () => {
+    await runToConfirmation();
+    // The flush is the test. Written without it, this asserted before React
+    // had rendered anything the handler queued, so it passed with the job-id
+    // guard deleted — a test that could not fail, caught by mutating the
+    // guard rather than by reading the test (mutation MJ4, round 1).
+    await act(async () => {
+      report!({
+        id: 99,
+        title: "Something else entirely",
+        done: 0,
+        total: null,
+        message: REPORTED,
+        state: { state: "failed", error_code: "ART-014", message: "the mount went away" },
+      });
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId("amiga-install-job-error")).toBeNull();
+    expect(screen.queryByTestId("amiga-install-last-reported")).toBeNull();
+  });
+});
+
+describe("a cancelled run does not claim the copy was cleaned up when it was not", () => {
+  // The same defect as the Major, on the cancelled channel: `perform` reports
+  // when a cancelled run's copy could **not** be removed, and the screen used
+  // to answer that with a flat "the copy has been discarded".
+  it("shows what ART said about the copy it could not remove", async () => {
+    const said = "The cancelled run's copy could not be removed: Access is denied. (os error 5)";
+    await runToConfirmation();
+    report!({
+      id: 7,
+      title: "Installing BoingBag 3.9-1 on the Amiga",
+      done: 0,
+      total: null,
+      message: said,
+      state: { state: "cancelled", files_landed: null },
+    });
+
+    const badge = await screen.findByTestId("amiga-install-cancelled");
+    // The one thing that is true either way, in the user's own language.
+    expect(badge.textContent).toContain(i18n.t("osinstall.amigaInstall.cancelled"));
+    // And the thing only ART knows, verbatim.
+    expect(badge.textContent).toContain("could not be removed");
+    // The sentence that used to be here must not be: a copy still on disk
+    // described as discarded is the wrong sentence, not a rounding error.
+    expect(i18n.t("osinstall.amigaInstall.cancelled")).not.toMatch(/discard/i);
+    expect(badge.textContent).not.toMatch(/has been discarded/i);
+    // A cancellation is not a failure and must not go red.
+    expect(screen.queryByTestId("amiga-install-job-error")).toBeNull();
+  });
+});
+
+describe("while it is running", () => {
+  // The same question as the Major, asked of the running half of the job
+  // channel: an install takes minutes, and the phase ART reports is the only
+  // sign of life ART itself controls.
+  it("shows the phase ART reports, not only a percentage", async () => {
+    await runToConfirmation();
+    await act(async () => {
+      report!({
+        id: 7,
+        title: "Installing BoingBag 3.9-1 on the Amiga",
+        done: 3,
+        total: 10,
+        message: "Unpacking BoingBag39-1.lha",
+        state: { state: "running" },
+      });
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("amiga-install-phase").textContent).toBe(
+      "Unpacking BoingBag39-1.lha"
+    );
+    // …and the run is still running: a progress event is not an ending.
+    expect(screen.queryByTestId("amiga-install-report")).toBeNull();
+    expect(screen.queryByTestId("amiga-install-job-error")).toBeNull();
   });
 });
