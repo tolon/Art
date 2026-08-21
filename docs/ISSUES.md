@@ -123,6 +123,19 @@ the session had faithfully carried the folder the packages panel was already
 pointing at, which is wave 1's migration working. A migration that had quietly
 dropped it would have looked *better* here, and been worse.
 
+**A second thing the same session showed, and it belongs to the same picker.**
+The owner pointed at `E:miga\ProjeART\dist-3.9`, chose the Turkish
+catalogs, and was refused: that package declares
+`requires_components: ["locale-base"]` (ART-162) and that tree carries only
+`workbench-base`. **That refusal is correct and is the good kind** — it names
+the missing component and says what to do — but the owner could only learn
+*which* of their nine trees carried `locale-base` by trying them. It is in the
+manifests: `dist-3.9` has `workbench-base` alone, `dist-3.9-l1` has
+`workbench-base` + `workbench-39` + `locale-base`, `dist-3.9-bb` already has
+`locale-turkish` installed. So the picker's row must say **what a tree
+carries**, not only that it is one: what a tree holds is exactly what decides
+whether the package being chosen can go on it.
+
 **Fix in wave 2**, with `describe_tree`: `readiness` gains a third answer
 between "ready" and "asks" — a folder that is set but does not describe as a
 tree — and the step says so at the field, in the user's own language, before
