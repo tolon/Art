@@ -58,3 +58,8 @@ __pycache__/
 # around; the owner's rule is that nothing deletes from C:, so C: must not be
 # where test scratch accumulates in the first place.
 src-tauri/.cargo/config.toml
+
+# cargo-mutants output — measured and rejected as too slow for this repo
+# (10,570 mutants; one small file did not finish in ten minutes). Left ignored
+# so a future experiment does not litter the tree.
+src-tauri/mutants.out/
