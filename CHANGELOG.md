@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### One machine for WHDLoad, and it is an A1200 (2026-08-21)
+
+#### Changed
+- **Every WHDLoad launch now runs on one known-good machine: an Amiga 1200 —
+  68020, AGA, 2 MB Chip RAM and 8 MB Fast RAM, with a Kickstart 3.x ROM.**
+  Before this, ART picked the machine from the chipset the catalogue recorded
+  for the *original game*, so an OCS title launched on an A500 with 68000 and
+  512 KB of Chip RAM. But a WHDLoad title does not boot the game — it boots
+  AmigaDOS, which starts WHDLoad, which patches the game and then runs it, and
+  that is the machine worth getting right. One configuration that runs
+  essentially everything, instead of a different one per title.
+
+  Floppies and plain hard disk images are untouched: they still get the Amiga
+  their software was written for.
+
+  **You can still overrule it.** The per-title machine picker on a title's own
+  page wins over this choice, for that title alone, and the confirmation
+  screen names the machine before anything starts.
+
+  Two things this is honest about. WHDLoad's own requirements page states a
+  *minimum* — a 68000, 1 MB of RAM, Kickstart 2.0 — and gives no recommended
+  setup at all; the A1200 profile is what the community has settled on, well
+  above that minimum, not something WHDLoad itself asks for. And whether an
+  OCS-only title runs as happily here as on the A500 ART used to choose has
+  not been measured on real material yet — the machine picker is there for
+  exactly that case.
+
+- **The WHDLoad Fast RAM setting keeps working, and keeps your value.** It is
+  now the profile's own 8 MB by default rather than a separate number that
+  happened to match. Raising it still adds memory; lowering it never takes the
+  profile's 8 MB away.
+
 ### Installing on the Amiga side — it works (2026-08-21)
 
 #### Fixed

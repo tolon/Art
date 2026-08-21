@@ -27,6 +27,8 @@ pub mod whdload_boot;
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::profile::WHDLOAD_PROFILE_FAST_RAM_MB;
+
 /// The two facts about a candidate Kickstart this module's decision reads.
 ///
 /// Mirrors `core::rom::RomInfo` without depending on it — see the module
@@ -267,7 +269,35 @@ pub const WHDLOAD_MIN_KICKSTART_MAJOR: u16 = 37;
 /// Settings exposes it (`launch.whdloadFastRamMb`) so a title that needs more
 /// has somewhere to ask, and the "nothing changes unless the user changes it"
 /// rule means a value the user set there must survive.
-pub const DEFAULT_WHDLOAD_FAST_RAM_MB: u32 = 8;
+///
+/// **ART-152 made this the profile's number rather than a second one.** It is
+/// now defined as `core::profile::WHDLOAD_PROFILE_FAST_RAM_MB` — the Fast RAM
+/// `AmigaProfile::whdload_a1200` itself carries — so the shipped default, the
+/// profile and the Settings control are one value that cannot drift apart.
+/// Raising it in Settings still only ever *adds* headroom
+/// (`profile_for_request`'s `.max`), and lowering it never shrinks the
+/// profile's own 8 MB.
+pub const DEFAULT_WHDLOAD_FAST_RAM_MB: u32 = WHDLOAD_PROFILE_FAST_RAM_MB;
+
+/// The one machine every WHDLoad launch runs on, whatever chipset the
+/// catalogue records for the original game — ART-152, the owner's decision.
+///
+/// **This deliberately overrides [`machine_for`] for WHDLoad-shaped
+/// requests.** `machine_for` answers "which Amiga was this game written
+/// for?", which is the right question for a floppy and the wrong one for a
+/// WHDLoad install: what boots is AmigaDOS and WHDLoad, and only then the
+/// patched game. See [`crate::core::profile::AmigaProfile::whdload_a1200`] for the full reasoning,
+/// the sources, and — importantly — what has *not* been measured about
+/// running an OCS-only title here.
+///
+/// It changes the ROM choice as well as the profile, and that is the point of
+/// putting it before [`plan_for`]'s lookup rather than after: an A1200
+/// machine is matched against ROMs whose `models` list says `A1200`, and
+/// [`WHDLOAD_MIN_KICKSTART_MAJOR`] still applies on top, so a Kickstart 1.3
+/// dump can no more satisfy this machine than it could the A500 one — a user
+/// with no 3.x ROM gets [`LaunchRefusal::NoRomMeetsWhdloadMinimum`], never a
+/// silent downgrade.
+pub const WHDLOAD_PROFILE_MACHINE: Machine = Machine::A1200;
 
 /// Which machine a stated chipset requirement asks for, falling back to the
 /// user's own default when the catalogue states none.
@@ -296,6 +326,34 @@ pub fn is_whdload_shaped(kind: &RequestKind) -> bool {
         RequestKind::Whdload { .. } => true,
         RequestKind::Hardfile { whdload, .. } => *whdload,
         RequestKind::Floppies { .. } => false,
+    }
+}
+
+/// The machine a request actually launches on: [`WHDLOAD_PROFILE_MACHINE`]
+/// for anything WHDLoad-shaped, [`machine_for`]'s catalogue inference for
+/// everything else — ART-152.
+///
+/// The split is the whole decision in one function. A floppy still gets the
+/// Amiga its game was written for, because that is the machine the game
+/// itself talks to the hardware of; a WHDLoad title gets the one known-good
+/// machine, because what boots there is AmigaDOS and WHDLoad rather than the
+/// game. `stated` and `default` are ignored — not overridden, ignored — in
+/// the WHDLoad case, which is why they are still taken: the same call site
+/// serves both, so a future reader sees exactly what is being set aside.
+///
+/// This is *not* the last word. `commands/launch.rs::resolved_machine` still
+/// lets the user's own per-title choice (`LaunchArgs::machine_override`)
+/// outrank this, the same way it already outranks [`machine_for`] — a
+/// decision ART makes for the user must stay one the user can undo.
+pub fn machine_for_request(
+    kind: &RequestKind,
+    stated: Option<Chipset>,
+    default: Machine,
+) -> Machine {
+    if is_whdload_shaped(kind) {
+        WHDLOAD_PROFILE_MACHINE
+    } else {
+        machine_for(stated, default)
     }
 }
 
@@ -450,6 +508,86 @@ mod tests {
     #[test]
     fn a_title_that_states_no_chipset_takes_the_users_default() {
         assert_eq!(machine_for(None, Machine::A1200), Machine::A1200);
+    }
+
+    /// ART-152: a WHDLoad-shaped request takes the one known-good machine
+    /// whatever the catalogue says — including the case the whole decision
+    /// turns on, an OCS title on a user whose default is the A500, which
+    /// `machine_for` alone answers `A500` for.
+    #[test]
+    fn a_whdload_request_ignores_the_catalogues_chipset_and_plans_the_a1200() {
+        for kind in [
+            RequestKind::Whdload {
+                drawer: r"D:\g\Turrican".into(),
+                slave: "Turrican.Slave".into(),
+            },
+            RequestKind::Hardfile {
+                image: r"D:\g\Turrican.hdf".into(),
+                whdload: true,
+            },
+        ] {
+            for stated in [
+                Some(Chipset::Ocs),
+                Some(Chipset::Ecs),
+                Some(Chipset::Aga),
+                None,
+            ] {
+                assert_eq!(
+                    machine_for_request(&kind, stated, Machine::A500),
+                    Machine::A1200,
+                    "{kind:?} / {stated:?}"
+                );
+            }
+        }
+        // The same OCS answer `machine_for` gives on its own, so the
+        // assertion above is a real change of behaviour and not a
+        // restatement of the inference.
+        assert_eq!(
+            machine_for(Some(Chipset::Ocs), Machine::A500),
+            Machine::A500
+        );
+    }
+
+    /// The rule reaches WHDLoad-shaped requests and nothing else: a floppy
+    /// set and a plain (non-WHDLoad) hardfile still follow the catalogue.
+    #[test]
+    fn a_non_whdload_request_still_follows_the_catalogues_chipset() {
+        let floppies = RequestKind::Floppies {
+            images: vec![r"D:\g\a.adf".into()],
+        };
+        let plain = RequestKind::Hardfile {
+            image: r"D:\g\workbench.hdf".into(),
+            whdload: false,
+        };
+
+        for kind in [&floppies, &plain] {
+            assert_eq!(
+                machine_for_request(kind, Some(Chipset::Ocs), Machine::A500),
+                Machine::A500,
+                "{kind:?}"
+            );
+            assert_eq!(
+                machine_for_request(kind, Some(Chipset::Aga), Machine::A500),
+                Machine::A1200,
+                "{kind:?}"
+            );
+            assert_eq!(
+                machine_for_request(kind, None, Machine::A1200),
+                Machine::A1200,
+                "{kind:?}"
+            );
+        }
+    }
+
+    /// The shipped default, the profile's own Fast RAM and the number
+    /// Settings starts from are one value. Two constants that agree today
+    /// are what this asserts cannot happen.
+    #[test]
+    fn the_default_fast_ram_is_the_whdload_profiles_own() {
+        let profile = crate::core::profile::AmigaProfile::whdload_a1200();
+        assert_eq!(profile.memory.fast_mb, DEFAULT_WHDLOAD_FAST_RAM_MB);
+        assert_eq!(profile.memory.chip_kb, 2048);
+        assert_eq!(profile.chipset, crate::core::profile::ChipsetModel::Aga);
     }
 
     /// A ROM that does not suit is a refusal, not a black screen.

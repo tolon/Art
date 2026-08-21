@@ -1611,7 +1611,7 @@
         },
         "systemVolume": "Bootable system (for WHDLoad)",
         "whdloadFastRam": "WHDLoad Fast RAM headroom",
-        "whdloadFastRamHint": "Added to a WHDLoad launch's profile on top of its stock machine — never applied to a floppy or a plain hardfile. A stock A500 has 1 MB total and none of it Fast, which is exactly what left WHDLoad unable to load a title (\"DOS-Error #103, not enough memory available\").",
+        "whdloadFastRamHint": "Fast RAM for a WHDLoad launch — never applied to a floppy or a plain hardfile. Every WHDLoad launch runs on ART's WHDLoad A1200 profile (68020, 2 MB Chip, 8 MB Fast), which already carries this much; a lower value here never takes any away. Too little Fast RAM is what leaves WHDLoad unable to load a title (\"DOS-Error #103, not enough memory available\").",
         "allowWrite": "Allow this game to save",
         "action": "Play",
         "planning": "Working out what this needs…",

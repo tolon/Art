@@ -12,6 +12,18 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Fast RAM, in MB, in [`AmigaProfile::whdload_a1200`] — the shipped default
+/// for every WHDLoad launch, and the number Settings' own control
+/// (`launch.whdloadFastRamMb`) starts from before the user changes it.
+///
+/// Lives here rather than in `core::launch` because it is a property of the
+/// profile, and `core::launch::DEFAULT_WHDLOAD_FAST_RAM_MB` is defined as
+/// this constant so the two cannot drift: the value a user sees in Settings
+/// and the value the profile carries are one number, not two that agree
+/// today. See [`AmigaProfile::whdload_a1200`] for where 8 comes from and
+/// what the sources do and do not say.
+pub const WHDLOAD_PROFILE_FAST_RAM_MB: u32 = 8;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CpuModel {
@@ -209,6 +221,99 @@ impl AmigaProfile {
             },
             kickstart_version: "3.1".into(),
             preferred_rom_sha256: Some("e40a5dfb3d017ba335127d85ea15c34cb27a2444230e963b7b6a1e378774d9b4".into()),
+            custom_rom_path: None,
+            is_builtin: true,
+        }
+    }
+
+    /// The one machine every WHDLoad launch runs on — ART-152.
+    ///
+    /// **Why a named profile instead of the catalogue's own chipset.** A
+    /// WHDLoad launch used to take its machine from what the catalogue said
+    /// the *original game* needed: an OCS title got [`Self::a500_ocs`]
+    /// (68000, OCS, 512 KB Chip, no Fast RAM) with Fast RAM bolted on for
+    /// WHDLoad's headroom (ART-151). But the machine a WHDLoad launch needs
+    /// is not the machine the game was written for — WHDLoad is a *loader*
+    /// that runs under AmigaDOS on a modern Amiga and then hands the
+    /// patched game control. Sizing that machine per title means as many
+    /// launch configurations as there are catalogue entries, each of which
+    /// has to be right on its own; one known-good machine is the owner's
+    /// decision here, and it is the machine WHDLoad's own community
+    /// guidance is written around.
+    ///
+    /// **What the sources actually say.** WHDLoad's requirements page
+    /// (<https://www.whdload.de/docs/en/need.html>, read 2026-08-21) states
+    /// only a **floor** — a 68000, "a minimum of 1.0 MiB RAM (sometimes
+    /// more, it depends on the installed program)" and Kickstart 2.0 — and
+    /// gives no recommended configuration and no chip-versus-fast guidance
+    /// at all. So this profile is **not** WHDLoad's own recommendation and
+    /// must not be described as one: it is community consensus (68020, 2 MB
+    /// Chip, Fast RAM alongside, Kickstart 3.x — the stock A1200 plus a
+    /// Fast RAM expansion) sitting well above a floor that the page does
+    /// state. The floor itself is still enforced, separately and on the
+    /// ROM, by `core::launch::WHDLOAD_MIN_KICKSTART_MAJOR`.
+    ///
+    /// **68EC020, and the config still says `68020`.** A real A1200's CPU is
+    /// a 68EC020 — a 68020 with a 24-bit address bus — and
+    /// `core::winuae::generate_uae_config` maps [`CpuModel::M68020`] and
+    /// [`CpuModel::M68EC020`] to the same `cpu_model=68020`. Naming the real
+    /// part rather than the general one costs nothing in the generated
+    /// config and keeps the profile a description of an actual machine.
+    ///
+    /// **What is not established.** Whether routing an **OCS-only** title
+    /// through this AGA/68020 machine runs it as well as the A500/OCS/68000
+    /// machine ART used to pick has *not* been measured, and nothing in this
+    /// codebase or in the sources above settles it — AGA is backwards
+    /// compatible with OCS in hardware and WHDLoad slaves are written to be
+    /// installed on exactly this machine, but that is an argument, not a
+    /// measurement. The one title ART has measured (`1000 Miglia`, ART-151)
+    /// reached its own logo on A500/OCS/68000 with 8 MB Fast; it has not been
+    /// run on this profile. **The escape hatch is deliberate and not
+    /// silent**: `LaunchArgs::machine_override` — TitleDetail's per-title
+    /// machine picker — still outranks this choice, so a user who finds a
+    /// title unhappy here can put it back on an A500 for that title alone,
+    /// and the confirmation screen names the machine before anything starts.
+    /// There is no hidden catalogue-derived fallback; if one is ever added it
+    /// belongs here, in writing.
+    ///
+    /// Not part of [`Self::all_presets`] on purpose: that list is the
+    /// Profile Studio's catalogue of **machines that existed**, and this is a
+    /// launch configuration ART chose. Deliberately spelled out field by
+    /// field rather than derived from [`Self::a1200_aga`], so editing the
+    /// Profile Studio's A1200 cannot silently move what WHDLoad launches on.
+    pub fn whdload_a1200() -> Self {
+        Self {
+            id: "whdload-a1200".into(),
+            name: "WHDLoad A1200 (68020, 2MB Chip, 8MB Fast)".into(),
+            description: "The machine every WHDLoad launch runs on: 68EC020 @ 14 MHz, AGA, 2MB \
+                          Chip + 8MB Fast RAM, Kickstart 3.1"
+                .into(),
+            cpu: CpuModel::M68EC020,
+            cpu_speed_mhz: 14.18,
+            chipset: ChipsetModel::Aga,
+            memory: MemoryConfig {
+                chip_kb: 2048,
+                slow_kb: 0,
+                fast_mb: WHDLOAD_PROFILE_FAST_RAM_MB,
+                z3_fast_mb: 0,
+            },
+            floppy: FloppyConfig {
+                drive_count: 1,
+                speed_percent: 400,
+            },
+            display: DisplayConfig {
+                width: 1280,
+                height: 960,
+                fullscreen: false,
+                scanlines: false,
+            },
+            kickstart_version: "3.1".into(),
+            // No pinned hash: which Kickstart 3.x a WHDLoad launch boots is
+            // whichever suitable ROM the user actually owns, chosen by
+            // `core::launch::plan_for` against
+            // `WHDLOAD_MIN_KICKSTART_MAJOR`. Pinning one here would claim a
+            // ROM ART does not require.
+            preferred_rom_sha256: None,
             custom_rom_path: None,
             is_builtin: true,
         }

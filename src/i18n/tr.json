@@ -1611,7 +1611,7 @@
         },
         "systemVolume": "Önyüklenebilir sistem (WHDLoad için)",
         "whdloadFastRam": "WHDLoad için ek Fast RAM",
-        "whdloadFastRamHint": "Bir WHDLoad başlatmasının profiline, kendi standart makinesinin üstüne eklenir — bir disket veya düz bir sabit disk için asla uygulanmaz. Standart bir A500'ün toplam belleği 1 MB'tır ve hiçbiri Fast değildir; WHDLoad'un bir başlığı yükleyememesinin nedeni tam olarak buydu (\"DOS-Error #103, yeterli bellek yok\").",
+        "whdloadFastRamHint": "Bir WHDLoad başlatmasının Fast belleği — bir disket veya düz bir sabit disk için asla uygulanmaz. Her WHDLoad başlatması ART'ın WHDLoad A1200 profilinde çalışır (68020, 2 MB Chip, 8 MB Fast) ve bu profil zaten bu kadarını taşır; buradaki daha düşük bir değer ondan hiçbir şey eksiltmez. Fast belleğin yetersiz kalması, WHDLoad'un bir başlığı yükleyememesinin nedenidir (\"DOS-Error #103, yeterli bellek yok\").",
         "allowWrite": "Bu oyunun kaydetmesine izin ver",
         "action": "Oynat",
         "planning": "Ne gerektiği hesaplanıyor…",

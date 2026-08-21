@@ -379,31 +379,6 @@ answer to give: the package installs, through the emulator, the way every
 established distribution builder installs one.
 
 
-**ART-152** 🔵 **ART sizes a WHDLoad launch's Fast RAM from a fixed setting,
-never from what the slave itself states it needs** — *filed 2026-08-18,
-alongside ART-151's fix, deliberately not built there*
-`src-tauri/src/core/launch/mod.rs` ·
-
-WHDLoad's own autodoc (<https://www.whdload.de/docs/autodoc.html>, Overview)
-describes `ws_ExpMem` as "the expansion memory, an extra memory area which
-can optionally requested by the Slave-structure, it may be Chip- or
-Fast-memory dependently on what is available" — a per-title signal WHDLoad
-slave files already carry, and one ART's own catalogue reader does not read
-today. ART-151 fixed the immediate DOS-Error #103 with a flat default
-(`DEFAULT_WHDLOAD_FAST_RAM_MB`, user-adjustable in Settings) rather than this,
-on purpose: `ws_ExpMem` names what a slave *may request*, not the title's
-whole requirement (WHDLoad's own base memory need sits alongside it and is
-not itself exposed the same way), and reading it would mean another
-catalogue schema bump plus another rescan of every user's existing
-collection — real costs, not warranted by one measured failure.
-
-**What it would buy.** ART could size a WHDLoad launch's machine from what
-the slave itself states it needs, per title, rather than from one number every
-WHDLoad launch shares — closer to the real requirement for a title that needs
-more than the default, and no wasted headroom for one that needs less. Worth
-doing once more than one real title's memory failure has been measured, not
-before.
-
 **ART-159** 🟠 **Two of spec §5's three predicted hazards for AmigaOS 3.9 —
 `SetPatch`/the boot sequence, and the three language-variant trees — went
 untouched by every task on the branch and were recorded nowhere** — *found
@@ -623,6 +598,110 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-152** 🔵 ✅ **ART sized a WHDLoad launch's machine from the catalogue's
+own chipset — the Amiga the *game* was written for, not the Amiga WHDLoad
+runs on. Closed by one named, known-good WHDLoad machine profile instead of
+the per-title `ws_ExpMem` reading it was filed suggesting** — *filed
+2026-08-18 alongside ART-151; the owner ruled on the design 2026-08-21 and it
+was built the same day*
+`src-tauri/src/core/profile.rs::AmigaProfile::whdload_a1200` ·
+`src-tauri/src/core/launch/mod.rs::machine_for_request` ·
+`src-tauri/src/commands/launch.rs::profile_for_request`
+
+## What was filed, and why it was not built
+
+The original entry proposed reading `ws_ExpMem` out of each slave — WHDLoad's
+autodoc (<https://www.whdload.de/docs/autodoc.html>, Overview) describes it as
+"the expansion memory, an extra memory area which can optionally requested by
+the Slave-structure, it may be Chip- or Fast-memory dependently on what is
+available". The owner ruled against it: `ws_ExpMem` names what a slave *may*
+request rather than a title's whole requirement, reading it would cost a
+catalogue schema bump and a rescan of every user's collection, and it answers
+a smaller question than the one that was actually wrong.
+
+## What was actually wrong
+
+The memory was the symptom; the **machine** was the defect. A WHDLoad launch
+took its machine from `machine_for(catalogue chipset, user default)`, so an
+OCS title planned an A500 — 68000, OCS, 512 KB Chip, 512 KB Slow — with
+ART-151's Fast RAM bolted on top. But a WHDLoad title does not boot the game;
+it boots AmigaDOS, which starts WHDLoad, which patches the game and then runs
+it. Sizing that machine from the original game's chipset means as many launch
+configurations as there are catalogue entries, each of which has to be right
+on its own.
+
+## The fix
+
+One named profile, `AmigaProfile::whdload_a1200`: **68EC020, AGA, 2 MB Chip,
+8 MB Fast, Kickstart 3.x** — the owner's decision, and the machine WHDLoad's
+own community guidance is written around.
+`core::launch::machine_for_request` routes every WHDLoad-shaped request to
+`WHDLOAD_PROFILE_MACHINE` (`Machine::A1200`) whatever the catalogue says;
+floppies and plain hardfiles still follow the catalogue exactly as before.
+`DEFAULT_WHDLOAD_FAST_RAM_MB` is now *defined as* the profile's own
+`WHDLOAD_PROFILE_FAST_RAM_MB`, so the shipped default, the profile and the
+Settings control are one number rather than three that agree today.
+
+**The user's Settings value is untouched.** `launch.whdloadFastRamMb` is still
+remembered and still applied — as `.max()`, so raising it adds headroom and
+lowering it never shrinks the profile's own 8 MB. The per-title machine picker
+(`LaunchArgs::machine_override`) still outranks the whole decision.
+
+**Sources, and what they actually say.** whdload.de's requirements page
+(<https://www.whdload.de/docs/en/need.html>, read 2026-08-21) states only a
+**floor** — 68000, "a minimum of 1.0 MiB RAM (sometimes more, it depends on
+the installed program)", Kickstart 2.0 — and gives no recommended
+configuration and no chip-versus-fast guidance at all. So this profile is
+community consensus sitting well above a floor the page does state, and the
+code says so rather than dressing it as vendor doctrine. The floor itself is
+still enforced separately, on the ROM, by `WHDLOAD_MIN_KICKSTART_MAJOR` — an
+A1200 profile does not silently accept a Kickstart 1.3 dump, and a user with
+no 3.x ROM gets `NoRomMeetsWhdloadMinimum { machine: A1200 }`.
+
+## What is *not* claimed
+
+**Whether an OCS-only title runs as well here as on the A500 machine ART used
+to pick has not been measured.** AGA is backwards compatible with OCS in
+hardware and WHDLoad slaves are written to be installed on this machine, but
+that is an argument, not a measurement. The one title ART has measured
+(`1000 Miglia`, ART-151) reached its own logo on A500/OCS/68000 with 8 MB
+Fast; it has not been run on this profile. The caveat is recorded in
+`whdload_a1200`'s own doc comment, and the escape hatch is deliberate and
+visible: the per-title machine picker puts a title back on an A500 for that
+title alone, and the confirmation screen names the machine
+(`preview.plan.machine`) before anything starts. There is **no** hidden
+catalogue-derived fallback.
+
+An earlier draft of this entry carried a claim that WinUAE's 68020 "is not
+cycle-accurate and never will be". It was traced to a MiSTer FPGA forum
+thread — an aside about a different platform — and **removed** rather than
+written into the code: WinUAE's own release notes describe a maintained 68020
+cycle-exact mode (4.3.0 removed its internal idle cycles as a refinement
+toward real-world accuracy). Nothing supportable was found to replace it, so
+nothing was written.
+
+Regression tests, all failing against the pre-fix code:
+`commands::launch::tests::a_whdload_launch_of_an_ocs_title_writes_the_68020_2mb_chip_8mb_fast_config`,
+`commands::launch::tests::a_floppy_launch_of_an_ocs_title_still_writes_a_68000_ocs_config`,
+`commands::launch::tests::a_per_title_machine_choice_still_beats_the_whdload_profile_in_the_config`,
+`commands::launch::tests::a_raised_settings_value_reaches_the_generated_whdload_config`,
+`commands::launch::tests::a_settings_value_below_the_profile_never_shrinks_the_generated_config`,
+`commands::launch::tests::a_whdload_launch_refuses_a_kickstart_below_the_minimum_on_the_a1200`,
+`core::launch::tests::a_whdload_request_ignores_the_catalogues_chipset_and_plans_the_a1200`,
+`core::launch::tests::a_non_whdload_request_still_follows_the_catalogues_chipset`,
+`core::launch::tests::the_default_fast_ram_is_the_whdload_profiles_own`.
+
+The five config-level ones assert the **generated `.uae` text**, not the
+profile struct: `cpu_model=68020` is derived from `CpuModel::M68EC020` and
+`chipmem_size=4` is a 512 KB-unit conversion of 2048 KB, so the struct and the
+file are two different claims. Whole-line matching, not `contains` —
+`fastmem_size=8` is a prefix of `fastmem_size=80`. Eleven mutations were run
+against them (the rule removed, the rule over-applied, the named profile
+swapped for the Profile Studio's A1200 preset, `.max()` turned into an
+assignment, the Settings value dropped, the machine guard dropped, the
+Kickstart floor set to 0, and the profile's Fast RAM / Chip RAM / CPU /
+chipset each changed); every one was caught.
 
 **ART-193** 🔴 ✅ **A BoingBag's `Updater` started, printed nothing, opened
 nothing and never returned — because ART's script had never run the tree's own
@@ -4550,8 +4629,9 @@ WHDLoad's own error screen.
 *optional* extra memory area a slave may request — see the ExpMem quote
 above — so it names a **request**, not the title's total requirement, and
 reading it would need another catalogue schema bump and another rescan of
-every user's collection. Filed separately as ART-152 below rather than built
-here.
+every user's collection. Filed separately as ART-152 rather than built
+here — and closed there on 2026-08-21 by a named WHDLoad machine profile
+rather than by the per-title reading it suggested.
 
 Regression tests, all failing against the pre-fix code:
 `commands::launch::tests::a_whdload_hardfile_plans_the_configured_fast_ram`,

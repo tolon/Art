@@ -22,20 +22,24 @@ export type Machine = "a500" | "a1200";
 export const isMachine = isOneOf<Machine>("a500", "a1200");
 
 /**
- * Fast RAM, in MB, ART adds to a WHDLoad launch's profile (ART-151) — mirrors
- * `core::launch::DEFAULT_WHDLOAD_FAST_RAM_MB`, whose doc comment cites the
- * two sources this default comes from: whdload.de's own stated 1 MB
- * requirement floor, and `AmigaProfile::a1200_aga`'s already-vetted 8 MB
- * Fast RAM ("the ideal WHDLoad setup"), reused here rather than invented
- * fresh.
+ * Fast RAM, in MB, a WHDLoad launch runs with (ART-151, ART-152) — mirrors
+ * `core::launch::DEFAULT_WHDLOAD_FAST_RAM_MB`, which is in turn
+ * `core::profile::WHDLOAD_PROFILE_FAST_RAM_MB`: the Fast RAM the named
+ * WHDLoad machine profile (`AmigaProfile::whdload_a1200` — 68020, AGA, 2 MB
+ * Chip, 8 MB Fast) itself carries. That profile's doc comment is where the
+ * reasoning and the sources live, including what whdload.de's requirements
+ * page does and does not say.
+ *
+ * This is the shipped **default**, not a fixed value: a number the user has
+ * set in Settings must survive, which is what `useRemembered` here is for.
  */
 export const DEFAULT_WHDLOAD_FAST_RAM_MB = 8;
 
 /**
  * WinUAE's 24-bit `fastmem_size=` tops out at 8 MB — the same ceiling
- * `AmigaProfile::a1200_aga`'s own stock preset already uses. `0` is a valid
- * choice too: it turns this setting off and leaves a WHDLoad launch on
- * whatever Fast RAM its machine's stock preset already carries.
+ * `AmigaProfile::whdload_a1200` already uses. `0` is a valid choice too: it
+ * turns this setting off and leaves a WHDLoad launch on whatever Fast RAM
+ * its profile already carries, which since ART-152 is the full 8 MB.
  */
 export const WHDLOAD_FAST_RAM_MAX_MB = 8;
 

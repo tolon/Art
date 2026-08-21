@@ -26,8 +26,9 @@ use crate::core::hdf::detect_hardfile_shape;
 use crate::core::launch::extract::{unpack_floppies, unpack_hardfile};
 use crate::core::launch::whdload_boot::write_boot_dir;
 use crate::core::launch::{
-    is_whdload_shaped, machine_for, plan_for, Chipset, LaunchKind, LaunchPlan, LaunchRefusal,
-    LaunchRequest, LaunchRom, Machine, RequestKind, DEFAULT_WHDLOAD_FAST_RAM_MB,
+    is_whdload_shaped, machine_for_request, plan_for, Chipset, LaunchKind, LaunchPlan,
+    LaunchRefusal, LaunchRequest, LaunchRom, Machine, RequestKind, DEFAULT_WHDLOAD_FAST_RAM_MB,
+    WHDLOAD_PROFILE_MACHINE,
 };
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::core::profile::{AmigaProfile, MemoryConfig};
@@ -127,14 +128,21 @@ fn default_whdload_fast_ram_mb() -> u32 {
 }
 
 /// The machine a launch actually uses: the user's own per-title choice when
-/// there is one, otherwise `machine_for`'s inference from the catalogue's
-/// chipset and the user's default. `machine_override` is never folded into
+/// there is one, otherwise [`machine_for_request`] — which is
+/// [`crate::core::launch::WHDLOAD_PROFILE_MACHINE`] for a WHDLoad-shaped
+/// request (ART-152) and `machine_for`'s inference from the catalogue's
+/// chipset and the user's default for everything else.
+/// `machine_override` is never folded into
 /// `default_machine` before this call — doing that once made the per-title
 /// picker inert for any title with a stated chipset, because `machine_for`
-/// only consults its `default` argument when the chipset is `None`.
+/// only consults its `default` argument when the chipset is `None`. It stays
+/// outside the WHDLoad rule for the same reason and a stronger one: ART-152
+/// is a default ART chose, and this is the user saying otherwise for one
+/// title.
 fn resolved_machine(request: &LaunchArgs) -> Machine {
     request.machine_override.unwrap_or_else(|| {
-        machine_for(
+        machine_for_request(
+            &request_kind_from(request),
             chipset_from(request.chipset.as_deref()),
             request.default_machine,
         )
@@ -473,14 +481,30 @@ fn profile_for(machine: Machine) -> AmigaProfile {
 /// untouched — CLAUDE.md is explicit that a WHDLoad launch "should adjust
 /// the memory of the profile it plans with, not redefine what an A500 is".
 ///
-/// `.max(...)` rather than a plain assignment: `Machine::A1200` already
-/// carries 8 MB of Fast RAM in its stock preset (`AmigaProfile::a1200_aga`,
-/// "the ideal WHDLoad setup"), and a user-configured value lower than that
-/// must not *shrink* it back down — only ever add headroom, never take it
-/// away.
+/// `.max(...)` rather than a plain assignment: the WHDLoad profile already
+/// carries 8 MB of Fast RAM (`core::profile::WHDLOAD_PROFILE_FAST_RAM_MB`),
+/// and a user-configured value lower than that must not *shrink* it back
+/// down — only ever add headroom, never take it away.
+///
+/// **ART-152: which profile, not just how much memory.** A WHDLoad-shaped
+/// request on [`crate::core::launch::WHDLOAD_PROFILE_MACHINE`] gets
+/// `AmigaProfile::whdload_a1200` — the named, documented launch profile —
+/// rather than the Profile Studio's A1200 machine preset, so editing that
+/// preset cannot move what WHDLoad launches on. The `machine == A1200` guard
+/// is not redundant with `is_whdload_shaped`: the user's per-title picker
+/// (`LaunchArgs::machine_override`) can still put a WHDLoad title back on an
+/// A500, and when they do they must get the A500 they asked for — the stock
+/// preset plus ART-151's Fast RAM headroom, exactly the behaviour that
+/// measured `1000 Miglia` past DOS-Error #103 — not an AGA machine wearing
+/// an A500 label.
 fn profile_for_request(kind: &RequestKind, machine: Machine, fast_ram_mb: u32) -> AmigaProfile {
-    let mut profile = profile_for(machine);
-    if is_whdload_shaped(kind) {
+    let whdload = is_whdload_shaped(kind);
+    let mut profile = if whdload && machine == WHDLOAD_PROFILE_MACHINE {
+        AmigaProfile::whdload_a1200()
+    } else {
+        profile_for(machine)
+    };
+    if whdload {
         profile.memory.fast_mb = profile.memory.fast_mb.max(fast_ram_mb);
     }
     profile
@@ -807,6 +831,19 @@ mod tests {
         }
     }
 
+    /// The Kickstart the ART-152 profile's machine actually needs — an
+    /// A1200 3.1 ROM. A WHDLoad launch now plans `Machine::A1200`, so
+    /// [`a500_rom`] no longer suits one at all: that is the refusal working,
+    /// not a broken fixture.
+    fn a1200_rom() -> LaunchRom {
+        LaunchRom {
+            name: "Kickstart 3.1 (40.068) A1200".into(),
+            models: vec!["A1200".into()],
+            path: r"D:\roms\kick40068.A1200".into(),
+            major: Some(40),
+        }
+    }
+
     /// A WHDLoad-shaped hardfile gets the *configured* fast RAM folded into
     /// its profile — 16, not `DEFAULT_WHDLOAD_FAST_RAM_MB`'s 8, so this test
     /// cannot pass by coincidence with the default. `chip_kb`/`slow_kb` stay
@@ -871,10 +908,10 @@ mod tests {
         assert_eq!(profile.memory.fast_mb, 0);
     }
 
-    /// `Machine::A1200`'s stock preset already carries 8 MB of Fast RAM
-    /// (`AmigaProfile::a1200_aga`, "the ideal WHDLoad setup") — a
-    /// lower-than-stock configured value must never shrink it back down,
-    /// only ever add headroom on top.
+    /// The ART-152 WHDLoad profile already carries 8 MB of Fast RAM
+    /// (`core::profile::WHDLOAD_PROFILE_FAST_RAM_MB`) — a lower-than-stock
+    /// configured value must never shrink it back down, only ever add
+    /// headroom on top.
     #[test]
     fn a_configured_value_lower_than_the_stock_a1200_preset_never_shrinks_it() {
         let kind = RequestKind::Hardfile {
@@ -884,6 +921,197 @@ mod tests {
         let profile = profile_for_request(&kind, Machine::A1200, 2);
 
         assert_eq!(profile.memory.fast_mb, 8);
+    }
+
+    // ---- ART-152: the WHDLoad machine profile, as the .uae actually says --
+    //
+    // These assert the **generated configuration**, not the profile struct.
+    // A test that reads `profile.cpu` proves ART built the record it meant
+    // to; only the config text proves WinUAE is told. `cpu_model=` in
+    // particular is derived (`CpuModel::M68EC020` → `68020`) and
+    // `chipmem_size=` is a unit conversion (2048 KB → 4 × 512 KB), so the
+    // struct and the file are genuinely two different claims.
+
+    /// The route `launch_title_inner` takes, minus the media extraction:
+    /// resolve the machine, plan, build the profile, generate the config.
+    /// Assembled here rather than asserting on `profile_for_request` alone
+    /// so the machine decision and the config generation are exercised
+    /// together — a profile that never reaches `generate_uae_config` is what
+    /// this whole block exists to rule out.
+    fn uae_config_for(request: &LaunchArgs, roms: &[LaunchRom]) -> String {
+        let machine = resolved_machine(request);
+        let kind = request_kind_from(request);
+        let plan = plan_for(&LaunchRequest {
+            machine,
+            roms,
+            kind: kind.clone(),
+            system_volume: request.system_volume.clone(),
+            one_click: request.one_click,
+        })
+        .expect("these fixtures all supply a suitable ROM");
+        let profile = profile_for_request(&kind, plan.machine, request.whdload_fast_ram_mb);
+        generate_uae_config(
+            &profile,
+            &LaunchMedia {
+                kickstart_path: Some(plan.rom.path.clone()),
+                ..Default::default()
+            },
+        )
+        .expect("a synthetic profile and one ROM path must generate a config")
+    }
+
+    /// Whole-line, not substring: `fastmem_size=8` is a prefix of
+    /// `fastmem_size=80`, and `contains` would call that a pass.
+    fn has_line(config: &str, line: &str) -> bool {
+        config.lines().any(|l| l == line)
+    }
+
+    /// **The guard this decision stands on.** An OCS title, on a user whose
+    /// default machine is the A500 — the exact request that used to produce
+    /// a 68000/OCS/512 KB configuration — must now produce the ART-152
+    /// profile in the generated `.uae`: 68020, AGA, 2 MB Chip
+    /// (`chipmem_size=4`, in WinUAE's 512 KB units) and 8 MB Fast.
+    #[test]
+    fn a_whdload_launch_of_an_ocs_title_writes_the_68020_2mb_chip_8mb_fast_config() {
+        let mut request = args(Media::WhdloadHardfile {
+            file: "1000 Miglia.hdf".into(),
+            slave: "1000Miglia.Slave".into(),
+        });
+        request.chipset = Some("ocsecs".into());
+        request.default_machine = Machine::A500;
+
+        assert_eq!(resolved_machine(&request), Machine::A1200);
+
+        let config = uae_config_for(&request, &[a1200_rom(), a500_rom()]);
+
+        for expected in [
+            // Named, so this cannot pass on the Profile Studio's A1200
+            // machine preset, which happens to carry the same hardware
+            // today and could be edited tomorrow.
+            "# Profile: WHDLoad A1200 (68020, 2MB Chip, 8MB Fast)",
+            "cpu_model=68020",
+            "cpu_type=68020",
+            "chipset=aga",
+            "chipmem_size=4",
+            "bogomem_size=0",
+            "fastmem_size=8",
+        ] {
+            assert!(has_line(&config, expected), "missing {expected}\n{config}");
+        }
+    }
+
+    /// The profile is for WHDLoad launches and nothing else. The same OCS
+    /// title as a plain floppy set still gets the Amiga its game was written
+    /// for — 68000, OCS, no Fast RAM — because that is the machine the game
+    /// itself talks to the hardware of.
+    #[test]
+    fn a_floppy_launch_of_an_ocs_title_still_writes_a_68000_ocs_config() {
+        let mut request = args(Media::Floppies {
+            ordered: vec!["Disk1.adf".into()],
+        });
+        request.chipset = Some("ocsecs".into());
+        request.default_machine = Machine::A500;
+
+        assert_eq!(resolved_machine(&request), Machine::A500);
+
+        let config = uae_config_for(&request, &[a1200_rom(), a500_rom()]);
+
+        for expected in ["cpu_model=68000", "chipset=ocs", "fastmem_size=0"] {
+            assert!(has_line(&config, expected), "missing {expected}\n{config}");
+        }
+    }
+
+    /// A default ART chose must stay one the user can undo. Putting a
+    /// WHDLoad title back on an A500 by hand gives an A500 in the generated
+    /// config — with ART-151's Fast RAM headroom still folded in, since that
+    /// is what got `1000 Miglia` past DOS-Error #103 on exactly that
+    /// machine.
+    #[test]
+    fn a_per_title_machine_choice_still_beats_the_whdload_profile_in_the_config() {
+        let mut request = args(Media::WhdloadHardfile {
+            file: "1000 Miglia.hdf".into(),
+            slave: "1000Miglia.Slave".into(),
+        });
+        request.machine_override = Some(Machine::A500);
+
+        assert_eq!(resolved_machine(&request), Machine::A500);
+
+        let config = uae_config_for(&request, &[a1200_rom(), a500_rom()]);
+
+        for expected in [
+            "cpu_model=68000",
+            "chipset=ocs",
+            "chipmem_size=1",
+            "fastmem_size=8",
+        ] {
+            assert!(has_line(&config, expected), "missing {expected}\n{config}");
+        }
+    }
+
+    /// "Nothing changes unless the user changes it": a Settings value the
+    /// user raised must reach the generated config, not be overwritten by
+    /// the shipped default. 32 rather than a value the Settings control
+    /// itself offers — `WHDLOAD_FAST_RAM_MAX_MB` caps that at 8, WinUAE's
+    /// 24-bit `fastmem_size=` ceiling — because every in-range choice either
+    /// *is* the default or sits below it, and would pass by coincidence.
+    /// What this asserts is the plumbing: whatever number arrives, arrives.
+    #[test]
+    fn a_raised_settings_value_reaches_the_generated_whdload_config() {
+        let mut request = args(Media::WhdloadHardfile {
+            file: "Game.hdf".into(),
+            slave: "Game.Slave".into(),
+        });
+        request.whdload_fast_ram_mb = 32;
+
+        let config = uae_config_for(&request, &[a1200_rom()]);
+
+        assert!(has_line(&config, "fastmem_size=32"), "{config}");
+        // Raising the memory must not have quietly changed the machine.
+        assert!(has_line(&config, "cpu_model=68020"), "{config}");
+        assert!(has_line(&config, "chipmem_size=4"), "{config}");
+    }
+
+    /// The other direction: a Settings value below the profile's own 8 MB
+    /// never shrinks what the config asks for.
+    #[test]
+    fn a_settings_value_below_the_profile_never_shrinks_the_generated_config() {
+        let mut request = args(Media::WhdloadHardfile {
+            file: "Game.hdf".into(),
+            slave: "Game.Slave".into(),
+        });
+        request.whdload_fast_ram_mb = 1;
+
+        let config = uae_config_for(&request, &[a1200_rom()]);
+
+        assert!(has_line(&config, "fastmem_size=8"), "{config}");
+    }
+
+    /// An A1200 profile must not silently accept a Kickstart 1.3 dump.
+    /// `WHDLOAD_MIN_KICKSTART_MAJOR` is checked against the ROM, not the
+    /// machine, so moving every WHDLoad launch to the A1200 must not have
+    /// weakened it — and the refusal names the machine ART actually planned.
+    #[test]
+    fn a_whdload_launch_refuses_a_kickstart_below_the_minimum_on_the_a1200() {
+        let request = args(Media::WhdloadHardfile {
+            file: "Game.hdf".into(),
+            slave: "Game.Slave".into(),
+        });
+        let kick13 = LaunchRom {
+            name: "Kickstart 1.3 (34.5) A1200".into(),
+            models: vec!["A1200".into()],
+            path: r"D:\roms\kick34005.A1200".into(),
+            major: Some(34),
+        };
+
+        let preview = preview_for(&request, &[kick13]);
+
+        assert!(preview.plan.is_none(), "{:?}", preview.plan);
+        assert_eq!(
+            preview.refusal,
+            Some(LaunchRefusal::NoRomMeetsWhdloadMinimum {
+                machine: Machine::A1200
+            })
+        );
     }
 
     // ---- preview_for: what the confirmation screen is actually told -------
@@ -900,7 +1128,7 @@ mod tests {
         });
         request.whdload_fast_ram_mb = 16;
 
-        let preview = preview_for(&request, &[a500_rom()]);
+        let preview = preview_for(&request, &[a1200_rom()]);
 
         let memory = preview
             .memory
