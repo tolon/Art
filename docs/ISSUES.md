@@ -26,7 +26,47 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-188** 🔵 **The OS Builder rescans the whole medium every time, though
+**ART-195** 🟠 **Four preview jobs run at once on one medium, and the screen
+stacks all four** — *found 2026-08-21 by the owner driving the release build,
+screenshot in hand*
+`src/components/osbuilder/PackagePanel.tsx` ·
+`src-tauri/src/commands/osinstall.rs:1251`
+
+The owner asked what the changing number beside "Çalışıyor" meant. It is not
+one number changing: **four separate preview jobs were running at once**,
+counts 886 / 897 / 652 / 226, each on a different file
+(`Utilities/Amplifier/skins/OS3.9/eqmain.iff`, `…/titlebar.iff`,
+`Storage/Printers/HP_DeskJet_320`, `Libs/xad/Cpio`), and all four rendered
+stacked. The eye reads that as one figure jumping about.
+
+**Changing the component selection starts another preview and cancels
+nothing.** So every toggle leaves its predecessor running, and on a 468 MB
+AmigaOS 3.9 ISO that is several full walks of the same disc competing for the
+same drive. **This, not the absence of a cache, is why the preview felt
+slow** — [ART-194](#open) would help, but the work was being done four times
+over.
+
+Two more things visible in the same screenshot:
+
+- **Mixed languages in one line.** *"Previewing 1 component(s) of AmigaOS
+  3.9"* is English beside a Turkish *"Çalışıyor"*. The label is built in Rust
+  (`commands/osinstall.rs:1251`) and so is untranslated — [ART-060](#open)'s
+  family, but here it lands mid-sentence next to a translated word rather
+  than in an error nobody expected to read.
+- **`component(s)`** is a written-out plural where the catalogues have proper
+  plural forms.
+
+**What would close it.** A new preview supersedes the one before it —
+cancelled, not merely ignored, since the point is to stop the disk work. The
+job list should show one preview for one medium. `core/jobs` already carries a
+cancel flag and the runner already turns `CoreError::Cancelled` into a
+`Cancelled` state, so the mechanism exists.
+
+Found by driving the screen, which is exactly what the round's own report said
+had never been done: *"no run has ever been launched from the panel — every
+measurement went through the gated hook."*
+
+**ART-194** 🔵 **The OS Builder rescans the whole medium every time, though
 the machinery to avoid it already exists** — *proposed by the owner
 2026-08-21 while watching a real 468 MB ISO preview*
 `src-tauri/src/core/osinstall/scan.rs` ·
