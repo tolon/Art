@@ -100,3 +100,35 @@ describe("stepLabelKey", () => {
     }
   });
 });
+
+describe("readiness, when ART has looked at the folder (ART-199)", () => {
+  const withTree = sessionWith({ tree: { root: "E:\\dist", builtHere: false } });
+
+  it("says the folder is the wrong one when ART has looked and it is not a tree", () => {
+    // The owner pointed the Amiga-side step at their own AmigaOS folder. The
+    // step said ready, and the refusal arrived on the button.
+    expect(readiness(withTree, "paketler", false)).toBe("wrong-folder");
+    expect(readiness(withTree, "amiga-kurulum", false)).toBe("wrong-folder");
+  });
+
+  it("is ready once ART has looked and it is a tree", () => {
+    expect(readiness(withTree, "paketler", true)).toBe("ready");
+  });
+
+  it("does not accuse a folder ART has not looked at yet", () => {
+    // `null` is "not asked". Rendering "wrong folder" while the answer is
+    // still in flight would be a confident wrong sentence of its own.
+    expect(readiness(withTree, "paketler", null)).toBe("ready");
+  });
+
+  it("still asks first when there is no folder at all", () => {
+    // No folder beats a bad one: "pick one" is the useful sentence, and
+    // "that is not a tree" about nothing would be nonsense.
+    expect(readiness(sessionWith(), "paketler", false)).toBe("asks");
+  });
+
+  it("never accuses a step that does not read a tree", () => {
+    expect(readiness(withTree, "kart", false)).toBe("ready");
+    expect(readiness(withTree, "kaynak", false)).toBe("ready");
+  });
+});

@@ -703,7 +703,8 @@
       "amiga-kurulum": "Amiga'da kur",
       "kart": "Kart imajı",
       "birimler": "Birimleri hazırla",
-      "asksTree": "Bu adım bir AmigaOS klasörü üzerinde çalışır, henüz seçilmedi. Aşağıdan birini seç ya da önce bir tane kur:"
+      "asksTree": "Bu adım bir AmigaOS klasörü üzerinde çalışır, henüz seçilmedi. Aşağıdan birini seç ya da önce bir tane kur:",
+      "notATree": "Bu klasör ART'ın kurduğu bir AmigaOS klasörü değil: içinde distribution.json yok, bu yüzden ART içinde ne olduğunu ve bir paketin neyin yerine geçeceğini söyleyemez. Aşağıdan başka bir klasör seç ya da burada bir tane kur:"
     },
     "intro": "PiStorm üzerinde çalışan AmigaOS dağıtımları, her birinin sizden ne istediği ve elinizdekinin uyup uymadığı. ART hiçbir dağıtımı indirmez — siz indirir, ART'a dosyayı gösterirsiniz.",
     "notBuiltYet": "ART henüz dağıtım kartı yazamıyor. Bu ekran bir dağıtımın neye ihtiyaç duyduğunu söyler ve elinizdeki ROM ile kartı buna göre denetler.",

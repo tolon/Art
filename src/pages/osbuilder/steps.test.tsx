@@ -12,9 +12,17 @@
 // file is about routing and what a step hands its panel — `OsInstall.test.tsx`
 // and the two panel test files cover the real components.
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
+
+// ART-199: the steps now ask ART what the folder is. Mocked at the `@/lib`
+// wrapper, the boundary this suite mocks at everywhere else.
+const describeTreeMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/osinstall", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/osinstall")>()),
+  osinstallDescribeTree: describeTreeMock,
+}));
 
 vi.mock("@/lib/settings", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/settings")>()),
@@ -72,6 +80,19 @@ function renderAt(path: string, state?: unknown) {
     </MemoryRouter>
   );
 }
+
+beforeEach(() => {
+  // Answers "yes, a tree" unless a test says otherwise, so the cases that are
+  // not about ART-199 are unaffected by it.
+  describeTreeMock.mockReset().mockResolvedValue({
+    isTree: true,
+    release: "AmigaOS 3.9",
+    files: 1915,
+    components: ["workbench-base"],
+    amigaInstalled: [],
+    problem: null,
+  });
+});
 
 afterEach(() => {
   cleanup();
@@ -154,5 +175,52 @@ describe("a disc dropped on the panel", () => {
     renderAt("/os-builder", { path: "E:\\amiga\\iso\\AmigaOS39.iso" });
 
     expect(screen.getByTestId("install").textContent).toBe("E:\\amiga\\iso\\AmigaOS39.iso");
+  });
+});
+
+describe("a folder that is not a tree (ART-199)", () => {
+  it("says so at the step instead of leaving it to a refusal on the button", async () => {
+    // The owner pointed this step at their own AmigaOS folder. It showed no
+    // warning at all, and the refusal arrived when they pressed run — seven
+    // times, as their operation log records.
+    describeTreeMock.mockResolvedValue({
+      isTree: false,
+      release: null,
+      files: 0,
+      components: [],
+      amigaInstalled: [],
+      problem: "holds no distribution.json",
+    });
+    seed({
+      "buildSession.kind": "install",
+      "buildSession.tree": { root: "E:\\amiga\\os39", builtHere: false },
+    });
+    renderAt("/os-builder/paketler");
+
+    const said = await screen.findByTestId("step-wrong-folder");
+    expect(said.textContent).toMatch(/distribution\.json/);
+    expect(screen.queryByText(/osBuilder\.step\./)).toBeNull();
+  });
+
+  it("says nothing about a folder that is a tree", async () => {
+    seed({
+      "buildSession.kind": "install",
+      "buildSession.tree": { root: "E:\dist", builtHere: true },
+    });
+    renderAt("/os-builder/paketler");
+    await screen.findByTestId("packages");
+    expect(screen.queryByTestId("step-wrong-folder")).toBeNull();
+  });
+
+  it("does not accuse the folder when ART could not look at all", async () => {
+    // A failed round trip is not evidence about the user's folder.
+    describeTreeMock.mockRejectedValue(new Error("no IPC bridge"));
+    seed({
+      "buildSession.kind": "install",
+      "buildSession.tree": { root: "E:\dist", builtHere: true },
+    });
+    renderAt("/os-builder/paketler");
+    await screen.findByTestId("packages");
+    expect(screen.queryByTestId("step-wrong-folder")).toBeNull();
   });
 });

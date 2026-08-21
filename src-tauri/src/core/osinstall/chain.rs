@@ -95,6 +95,8 @@
 use std::collections::{BTreeSet, VecDeque};
 use std::path::Path;
 
+use serde::Serialize;
+
 use super::apply::{AmigaInstallRecord, DistributionManifest, MANIFEST_FILE_NAME};
 use super::package::{self, Package};
 use crate::core::error::{CoreError, CoreResult};
@@ -114,6 +116,84 @@ fn read_manifest(tree: &Path) -> CoreResult<DistributionManifest> {
         format: "distribution manifest".into(),
         detail: format!("'{}': {err}", path.display()),
     })
+}
+
+/// What a folder is, asked of the folder itself.
+///
+/// **ART-199.** A step that only knew whether *a path had been chosen* looked
+/// ready on any folder at all, and the user learned otherwise from a refusal
+/// on the button — the owner pointed the Amiga-side step at their own
+/// `os39` folder and got `ART-SAFETY-REFUSED` for their trouble. The refusal
+/// was right; it arrived in the wrong place and at the wrong time. This is the
+/// question the field can ask the moment a folder is picked.
+///
+/// **It never fails for a folder that is not a tree.** A missing or malformed
+/// `distribution.json` is an answer — `is_tree: false` with a `problem`
+/// saying which — not an error. An error here would put the burden back on
+/// the caller to tell "you picked the wrong folder" apart from "the disk went
+/// away", and those are different sentences.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TreeSummary {
+    /// Whether this folder carries a distribution ART can reason about.
+    pub is_tree: bool,
+    /// The release it was built from, when it is a tree.
+    pub release: Option<String>,
+    /// How many files the manifest accounts for.
+    pub files: usize,
+    /// Which components built it, sorted and without repeats.
+    ///
+    /// **This is what decides whether a package can go on it**, so the picker
+    /// shows it: the owner learned by trial which of nine trees carried
+    /// `locale-base`, when every manifest says so.
+    pub components: Vec<String>,
+    /// Packages whose own installer has already run on the Amiga against it.
+    pub amiga_installed: Vec<String>,
+    /// Why it is not a tree, when it is not. English, like every other
+    /// `CoreError` sentence (ART-060) — the screen adds its own.
+    pub problem: Option<String>,
+}
+
+/// See [`TreeSummary`].
+pub fn describe_tree(tree: &Path) -> TreeSummary {
+    let empty = |problem: String| TreeSummary {
+        is_tree: false,
+        release: None,
+        files: 0,
+        components: Vec::new(),
+        amiga_installed: Vec::new(),
+        problem: Some(problem),
+    };
+
+    if !tree.is_dir() {
+        return empty(format!("'{}' is not a folder", tree.display()));
+    }
+    let manifest = match read_manifest(tree) {
+        Ok(manifest) => manifest,
+        Err(err) => return empty(err.to_string()),
+    };
+
+    let mut components: Vec<String> = manifest
+        .files
+        .iter()
+        .map(|file| file.component.clone())
+        .collect::<BTreeSet<String>>()
+        .into_iter()
+        .collect();
+    components.sort();
+
+    TreeSummary {
+        is_tree: true,
+        release: Some(manifest.release),
+        files: manifest.files.len(),
+        components,
+        amiga_installed: manifest
+            .amiga_installed
+            .iter()
+            .map(|record| record.package.clone())
+            .collect(),
+        problem: None,
+    }
 }
 
 /// Every component and package id this tree already carries — the components
@@ -260,6 +340,75 @@ mod tests {
     /// ART-184: removes itself on `Drop`, so a panicking test cleans up too.
     fn scratch(tag: &str) -> ScratchDir {
         ScratchDir::new("art-osinstall-chain", tag)
+    }
+
+    // -----------------------------------------------------------------
+    // ART-199: what a folder is, asked of the folder.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn a_tree_describes_itself_by_release_files_and_components() {
+        let dir = scratch("describe-tree");
+        let tree = tree_with(
+            dir.path(),
+            &["workbench-base", "locale-base", "workbench-base"],
+        );
+
+        let said = describe_tree(&tree);
+        assert!(said.is_tree);
+        assert_eq!(said.release.as_deref(), Some("amigaos-3.9"));
+        assert_eq!(said.files, 3);
+        // Sorted and without repeats: the picker renders this, and what a tree
+        // carries is what decides whether a package can go on it.
+        assert_eq!(said.components, vec!["locale-base", "workbench-base"]);
+        assert!(said.problem.is_none());
+    }
+
+    #[test]
+    fn a_folder_with_no_manifest_is_not_a_tree_and_says_why() {
+        // The owner's own case: their `os39` folder is an AmigaOS folder, not
+        // a tree ART built, and the step showed it as ready.
+        let dir = scratch("describe-not-a-tree");
+        let folder = dir.join("os39");
+        std::fs::create_dir_all(&folder).unwrap();
+
+        let said = describe_tree(&folder);
+        assert!(!said.is_tree);
+        assert!(said.components.is_empty());
+        assert!(
+            said.problem.is_some(),
+            "a folder that is not a tree must say why, not merely answer no"
+        );
+    }
+
+    #[test]
+    fn a_folder_that_is_not_there_is_answered_rather_than_erroring() {
+        let dir = scratch("describe-absent");
+        let said = describe_tree(&dir.join("nothing-here"));
+        assert!(!said.is_tree);
+        assert!(said.problem.unwrap().contains("not a folder"));
+    }
+
+    #[test]
+    fn a_malformed_manifest_is_an_answer_not_a_panic() {
+        let dir = scratch("describe-malformed");
+        let tree = dir.join("dist");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(tree.join(MANIFEST_FILE_NAME), b"{ not json").unwrap();
+
+        let said = describe_tree(&tree);
+        assert!(!said.is_tree);
+        assert!(said.problem.is_some());
+    }
+
+    #[test]
+    fn a_tree_reports_what_has_been_installed_on_the_amiga() {
+        let dir = scratch("describe-amiga-installed");
+        let tree = tree_with(dir.path(), &["workbench-base"]);
+        record_amiga_install(&tree, "boingbag-39-1", "C:Updater AmigaOS-Update SYS:").unwrap();
+
+        let said = describe_tree(&tree);
+        assert_eq!(said.amiga_installed, vec!["boingbag-39-1"]);
     }
 
     fn file_from(component: &str) -> FileRecord {

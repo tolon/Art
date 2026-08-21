@@ -12,10 +12,12 @@
 // that answers the question, because a user told "no tree" and not told where
 // a tree comes from has been given nothing.
 
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useLocation } from "react-router-dom";
 
 import { readiness } from "@/lib/buildSteps";
+import { osinstallDescribeTree } from "@/lib/osinstall";
 import { useBuildSession } from "@/lib/useBuildSession";
 import { AmigaInstallPanel } from "@/components/osbuilder/AmigaInstallPanel";
 import { CardBuilder } from "@/components/osbuilder/CardBuilder";
@@ -46,6 +48,51 @@ function Asks() {
  * react to; the path string alone is value-equal and a dependency array would
  * treat it as no change.
  */
+/**
+ * What ART makes of the folder the session is pointing at (ART-199).
+ *
+ * `null` means "not asked yet, or ART could not look" — never "wrong". A
+ * failed round trip must not turn into an accusation about the user's folder;
+ * `readiness` treats `null` as ready and lets the engine's own refusal stand
+ * as the last word, which is where it was before this existed.
+ */
+function useTreeCheck(root: string | null): boolean | null {
+  const [isTree, setIsTree] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!root) {
+      setIsTree(null);
+      return;
+    }
+    let current = true;
+    osinstallDescribeTree(root)
+      .then((summary) => {
+        if (current) setIsTree(summary.isTree);
+      })
+      .catch(() => {
+        if (current) setIsTree(null);
+      });
+    return () => {
+      current = false;
+    };
+  }, [root]);
+  return isTree;
+}
+
+/** What a step says when the folder it was given is not a tree ART built. */
+function WrongFolder() {
+  const { t } = useTranslation();
+  return (
+    <div
+      className="badge badge-err"
+      data-testid="step-wrong-folder"
+      style={{ display: "block", padding: "8px 12px", marginBottom: 16, fontSize: 12 }}
+    >
+      {t("osBuilder.step.notATree")}{" "}
+      <Link to="/os-builder/kaynak">{t("osBuilder.step.kaynak")}</Link>
+    </div>
+  );
+}
+
 export function StepKaynak() {
   const location = useLocation();
   const dropped = (location.state as { path?: string } | null)?.path ?? null;
@@ -58,9 +105,12 @@ export function StepKaynak() {
 
 export function StepPaketler() {
   const { session, setTree, setPackages } = useBuildSession();
+  const isTree = useTreeCheck(session.tree.root);
+  const state = readiness(session, "paketler", isTree);
   return (
     <>
-      {readiness(session, "paketler") === "asks" && <Asks />}
+      {state === "asks" && <Asks />}
+      {state === "wrong-folder" && <WrongFolder />}
       <PackagePanel
         treeRoot={session.tree.root}
         onTreeRootChange={(root) => setTree({ root, builtHere: false })}
@@ -75,9 +125,12 @@ export function StepPaketler() {
 
 export function StepAmigaKurulum() {
   const { session, setTree } = useBuildSession();
+  const isTree = useTreeCheck(session.tree.root);
+  const state = readiness(session, "amiga-kurulum", isTree);
   return (
     <>
-      {readiness(session, "amiga-kurulum") === "asks" && <Asks />}
+      {state === "asks" && <Asks />}
+      {state === "wrong-folder" && <WrongFolder />}
       <AmigaInstallPanel
         treeRoot={session.tree.root}
         onTreeRootChange={(root) => setTree({ root, builtHere: false })}

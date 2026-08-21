@@ -43,8 +43,17 @@ export const STEP_IDS = [
 
 export type StepId = (typeof STEP_IDS)[number];
 
-/** Whether a step can act on what the session holds, or has to ask first. */
-export type Readiness = "ready" | "asks";
+/**
+ * Whether a step can act on what the session holds, or has to say something
+ * first.
+ *
+ * **`wrong-folder` is ART-199.** A step that knew only whether *a path had
+ * been chosen* looked ready on any folder at all: the owner pointed the
+ * Amiga-side step at their own AmigaOS folder, the step showed no warning, and
+ * the refusal arrived on the button — correct, and in the wrong place. Once
+ * `describe_tree` has answered, the field can say it where the field is.
+ */
+export type Readiness = "ready" | "asks" | "wrong-folder";
 
 /**
  * The steps one kind of build has.
@@ -77,11 +86,26 @@ export function stepsFor(kind: BuildKind): StepId[] {
  * inline, exactly as they do today — gating them on a value they never read
  * would invent a dependency that does not exist.
  */
-export function readiness(session: BuildSession, step: StepId): Readiness {
+export function readiness(
+  session: BuildSession,
+  step: StepId,
+  /**
+   * What `describe_tree` answered about `session.tree.root`, or `null` when
+   * nothing has asked yet.
+   *
+   * `null` is deliberately **not** treated as "wrong": rendering an accusation
+   * while the answer is still in flight would be a confident wrong sentence of
+   * exactly the kind this round exists to remove.
+   */
+  treeIsDistribution: boolean | null = null
+): Readiness {
   switch (step) {
     case "paketler":
     case "amiga-kurulum":
-      return hasTree(session) ? "ready" : "asks";
+      // No folder beats a bad one. "Pick one" is the useful sentence, and
+      // "that is not a tree" said about nothing would be nonsense.
+      if (!hasTree(session)) return "asks";
+      return treeIsDistribution === false ? "wrong-folder" : "ready";
     default:
       return "ready";
   }
