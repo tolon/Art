@@ -61,22 +61,54 @@ use crate::core::winuae::{
 
 /// How long a run may go without an answer before ART ends it.
 ///
-/// **This number is provisional and is not a measurement.** The design (§6)
-/// says explicitly that picking it is *"a judgement about real installers on a
-/// real machine, and it should be measured against the owner's own packages
+/// The design (§6) says picking this is *"a judgement about real installers on
+/// a real machine, and it should be measured against the owner's own packages
 /// rather than chosen — a BoingBag's `Updater` on this hardware has a running
 /// time, and the deadline should be a multiple of it, recorded with what it
 /// was measured from."*
 ///
-/// Nothing here has been run against a real `Updater` yet. **Task 8 of this
-/// round measures one and replaces this constant with the measured multiple,
-/// naming the package and the machine it was timed on.** Until then it is a
-/// placeholder chosen only to be longer than any plausible install, so that a
-/// slow-but-working run is never cut off and reported as a timeout it was not.
+/// ## What was measured, on 2026-08-21
+///
+/// Against the owner's own `BoingBag39-1 (1).lha` (`Updater` 45.15), their
+/// licensed Kickstart 40.68, WinUAE on the A1200/AGA preset (`cpu_speed=real`,
+/// so the emulated 68020 runs at A1200 speed), and a real 3 795-file AmigaOS
+/// 3.9 tree:
+///
+/// | What | Measured |
+/// |---|---|
+/// | Boot, `SetPatch`, its reset, second boot, up to the installer | ~25 s |
+/// | An `Updater` that **refuses** — answer written and read on the host | 16.0 s end to end |
+/// | An `Updater` that **starts work** | ran 414 s and 422 s in two runs and produced nothing; both ended by terminating the emulator |
+///
+/// ## What was *not* measured, and why this is not the multiple §6 asks for
+///
+/// **No successful install has been observed**, so there is no successful
+/// running time to take a multiple of. The reason is
+/// [`CoreError`](crate::core::error::CoreError)-shaped only in the report:
+/// ART-193 — a BoingBag's `Updater` checks for the original AmigaOS 3.9
+/// CD-ROM on a volume ART does not mount, and stalls. Until that is fixed,
+/// §6's sentence cannot be honoured, and writing a number here as though it
+/// had been would be exactly the *"guessed number wearing the clothes of a
+/// measured one"* this round was told not to produce.
+///
+/// So the value below is anchored to the one real over-run rather than to a
+/// successful install: 20 minutes was the guess, and the first real package to
+/// meet it exceeded it. Tripling it puts the deadline well clear of the
+/// running times the Amiga community reports for a BoingBag on real A1200
+/// hardware (tens of minutes, not hours), which is the class of machine this
+/// preset emulates at its own clock. **It is a bound, not a measurement of a
+/// finished install**, and the day ART-193 closes, this constant gets the
+/// multiple §6 actually asks for.
+///
+/// The cost of erring high is small and the cost of erring low is not: a
+/// deadline that is too long makes a genuinely stuck run take longer to be
+/// reported as stuck, while one that is too short reports a *working* install
+/// as a timeout and throws its copy away — a confidently wrong sentence, which
+/// is the failure this whole round exists to stop (§89).
 ///
 /// It is a default, not a policy: every run takes its deadline from
-/// [`RunLimits`], so the value travels as data and Task 8 changes one line.
-pub const PROVISIONAL_DEADLINE: Duration = Duration::from_secs(20 * 60);
+/// [`RunLimits`], so the value travels as data.
+pub const PROVISIONAL_DEADLINE: Duration = Duration::from_secs(60 * 60);
 
 /// How long to wait between two reads of the result file.
 ///
@@ -1543,9 +1575,26 @@ mod tests {
     }
 
     /// The default deadline is the provisional one, and it travels as data.
+    ///
+    /// It also has to stay clear of what a real package was actually seen to
+    /// take. The owner's own `Updater` 45.15 ran for **422 seconds** on
+    /// 2026-08-21 and had not finished; a deadline anywhere near that would
+    /// report a run that is merely slow as one nobody answered, which is the
+    /// wrong sentence and the wrong next step (§89). The number is named here
+    /// so that lowering the constant back towards it fails a test rather than
+    /// a user's install.
     #[test]
     fn the_deadline_comes_from_data_and_defaults_to_the_provisional_value() {
-        assert_eq!(RunLimits::default().deadline, PROVISIONAL_DEADLINE);
-        assert_eq!(RunLimits::default().poll_interval, POLL_INTERVAL);
+        const OBSERVED_UNFINISHED_RUN: Duration = Duration::from_secs(422);
+
+        let limits = RunLimits::default();
+        assert_eq!(limits.deadline, PROVISIONAL_DEADLINE);
+        assert_eq!(limits.poll_interval, POLL_INTERVAL);
+        assert!(
+            limits.deadline > OBSERVED_UNFINISHED_RUN * 4,
+            "a real package was still running at {OBSERVED_UNFINISHED_RUN:?}; a deadline of \
+             {:?} leaves too little room above it",
+            limits.deadline
+        );
     }
 }

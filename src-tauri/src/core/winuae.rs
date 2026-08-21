@@ -824,3 +824,212 @@ mod real_boot_hook {
         }
     }
 }
+
+#[cfg(test)]
+mod real_version_hook {
+    //! **Ask a booted tree what it is, and read the answer on the host.**
+    //!
+    //! The bar the Amiga-side install round sets for itself is that a
+    //! BoingBag'd tree *boots and shows its update* — and the method that
+    //! found this project's biggest defect applies: **ask the running system,
+    //! do not infer.** This project once shipped an AmigaOS **3.5** tree under
+    //! the name 3.9 because it booted cleanly and a copyright line was read as
+    //! proof. A directory name, a file size and a copyright line are each
+    //! consistent with several answers; `Version FULL` is not.
+    //!
+    //! It does not interrupt the tree's own `Startup-Sequence` to reach a
+    //! shell — a healthy tree resists interruption by design, which is itself
+    //! a thing this project learned by measuring. Instead it uses the same
+    //! mechanism [`crate::core::amigainstall`] uses for a run: ART's own work
+    //! volume, mounted at the highest boot priority, carrying one script ART
+    //! wrote. **The tree is mounted as data and is never written to.**
+    //!
+    //! The script asks four questions and redirects the answers to ART's own
+    //! volume, where the host reads them:
+    //!
+    //! - `Version FULL` — the running system's Kickstart and Workbench.
+    //! - `Version version.library FULL` — the library `Version` reports the
+    //!   Workbench number *from*, so the two can be compared rather than one
+    //!   being taken on trust.
+    //! - `Version workbench.library FULL`.
+    //! - `Version resource.library FULL` — because a real `Updater` failed
+    //!   against a real tree with `Cannot open "resource.library", version
+    //!   44.` (2026-08-21), and the difference between *the library is not
+    //!   there* and *the library is there and will not open* is the difference
+    //!   between two entirely different fixes.
+    //!
+    //! Gated and `#[ignore]`d, like every hook of this shape: it needs the
+    //! user's own tree, their own licensed Kickstart and an installed WinUAE,
+    //! none of which exist in CI.
+    //!
+    //! ```text
+    //!   ART_BOOT_TREE=E:\amiga\ProjeART\bb-run\p2 ^
+    //!   ART_BOOT_ROM="E:\...\Kickstart v3.1 rev 40.68 (1993)(Commodore)(A1200).rom" ^
+    //!   ART_WINUAE="C:\Program Files\WinUAE\winuae64.exe" ^
+    //!   cargo test ask_a_tree_its_version_when_asked -- --ignored --nocapture
+    //! ```
+
+    use super::*;
+    use crate::core::amigainstall::WORK_VOLUME;
+    use crate::core::profile::AmigaProfile;
+    use std::path::PathBuf;
+    use std::time::{Duration, Instant};
+
+    /// What the Amiga writes and the host reads.
+    const ANSWER: &str = "art-version.txt";
+    /// Written last, so the host never reads a half-written answer.
+    const DONE: &str = "art-version-done.txt";
+
+    /// The script, which is entirely ART's own text.
+    ///
+    /// `SetPatch` is here for the same reason it is in a run's script: a tree
+    /// carrying `Devs/AmigaOS ROM Update` is a tree whose disk libraries
+    /// expect it, and `SetPatch` **resets the machine** after loading it — so
+    /// the guard below is on a marker written *after* that line, or the second
+    /// pass would answer nothing.
+    ///
+    /// **The environment it builds deliberately mirrors
+    /// [`crate::core::amigainstall::workvol::startup_sequence`]'s** — the same
+    /// assigns, the same `LIBS: … Classes ADD`, the same `ENV:`, the same
+    /// `SetPatch`. An instrument that set up a *different* machine from the one
+    /// the product sets up would answer questions about a machine nobody runs,
+    /// and on 2026-08-21 a diagnostic run from this hook did exactly that: it
+    /// had no `ENV:` while the product script did, so what it measured was the
+    /// requester ART-192 had already fixed, not the question being asked. Keep
+    /// the two in step.
+    fn probe_script(volume: &str, extra: &str) -> String {
+        format!(
+            "; Written by ART to ask a tree what it is. It writes nothing to the tree.\n\
+             {volume}:C/Assign C: {volume}:C\n\
+             FailAt 2000000000\n\
+             If EXISTS {WORK_VOLUME}:{DONE}\n\
+             \x20 Echo \"ART: already asked.\"\n\
+             Else\n\
+             \x20 Assign SYS: {volume}:\n\
+             \x20 Assign S: {volume}:S\n\
+             \x20 Assign L: {volume}:L\n\
+             \x20 Assign LIBS: {volume}:Libs\n\
+             \x20 Assign LIBS: {volume}:Classes ADD\n\
+             \x20 Assign DEVS: {volume}:Devs\n\
+             \x20 Assign FONTS: {volume}:Fonts\n\
+             \x20 MakeDir RAM:T RAM:Clipboards RAM:ENV RAM:ENV/Sys\n\
+             \x20 Assign T: RAM:T\n\
+             \x20 Assign CLIPS: RAM:Clipboards\n\
+             \x20 Assign ENV: RAM:ENV\n\
+             \x20 Copy ENVARC: RAM:ENV ALL QUIET NOREQ\n\
+             \x20 If EXISTS {volume}:C/SetPatch\n\
+             \x20   {volume}:C/SetPatch QUIET\n\
+             \x20 EndIf\n\
+             \x20 Version >{WORK_VOLUME}:{ANSWER} FULL\n\
+             \x20 Version >>{WORK_VOLUME}:{ANSWER} version.library FULL\n\
+             \x20 Version >>{WORK_VOLUME}:{ANSWER} workbench.library FULL\n\
+             \x20 Version >>{WORK_VOLUME}:{ANSWER} resource.library FULL\n\
+             \x20 Version >>{WORK_VOLUME}:{ANSWER} FILE {volume}:Libs/resource.library FULL\n\
+             {extra}\
+             \x20 Echo >{WORK_VOLUME}:{DONE} \"done\"\n\
+             EndIf\n"
+        )
+    }
+
+    /// Extra AmigaDOS lines for one investigation, from `ART_BOOT_PROBE`,
+    /// `;`-separated and indented into the script's own arm.
+    ///
+    /// **The instrument stays general.** Today's question is why a real
+    /// `Updater` could not open `resource.library`; tomorrow's will be a
+    /// different one, and a hook that could only ask today's gets rewritten
+    /// every time — which is how a diagnostic stops being re-runnable, and the
+    /// next reader ends up re-trusting a report instead of repeating it.
+    ///
+    /// This is the **one** place in ART where a generated AmigaDOS line is not
+    /// ART's own text, and it is `#[cfg(test)]`, `#[ignore]`d, and gated on an
+    /// environment variable that exists only on the machine of the person
+    /// typing it. Nothing the product ships can reach it. The product's rule —
+    /// that a script ART generates is assembled only from strings ART authored,
+    /// enforced by [`crate::core::security::refuse_shell_metacharacters`] — is
+    /// unchanged, and is exactly why this can live nowhere but a hook.
+    fn extra_probes() -> String {
+        std::env::var("ART_BOOT_PROBE")
+            .unwrap_or_default()
+            .split(';')
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(|line| format!("  {line}\n"))
+            .collect()
+    }
+
+    #[test]
+    #[ignore = "opens WinUAE against the owner's own tree and ROM; run explicitly"]
+    fn ask_a_tree_its_version_when_asked() {
+        let (Ok(tree), Ok(rom), Ok(winuae)) = (
+            std::env::var("ART_BOOT_TREE"),
+            std::env::var("ART_BOOT_ROM"),
+            std::env::var("ART_WINUAE"),
+        ) else {
+            return;
+        };
+
+        let work = crate::core::ScratchDir::new("art-version", "probe");
+        std::fs::create_dir_all(work.join("S")).unwrap();
+        let script = probe_script("DH0", &extra_probes());
+        println!("--- the script ---\n{script}--- end ---");
+        std::fs::write(work.join("S/Startup-Sequence"), &script).unwrap();
+
+        let mut directories = vec![
+            DirMount {
+                host_path: tree.clone(),
+                volume: "DH0".into(),
+                label: "Workbench".into(),
+                boot_priority: 0,
+                read_only: false,
+            },
+            DirMount {
+                host_path: work.path().to_string_lossy().to_string(),
+                volume: "DH9".into(),
+                label: WORK_VOLUME.into(),
+                boot_priority: 10,
+                read_only: false,
+            },
+        ];
+        // An unpacked package, when the question being asked is about one —
+        // `ART_BOOT_PKG`, mounted as `DH8:` and never the boot device. The
+        // instrument needs it to be able to ask *why* a real installer
+        // refused, which is a question about the installer and the tree
+        // together and cannot be asked of either alone.
+        if let Ok(package) = std::env::var("ART_BOOT_PKG") {
+            directories.push(DirMount {
+                host_path: package,
+                volume: "DH8".into(),
+                label: "ARTPkg".into(),
+                boot_priority: -1,
+                read_only: false,
+            });
+        }
+
+        let media = LaunchMedia {
+            kickstart_path: Some(rom),
+            directories,
+            ..LaunchMedia::default()
+        };
+
+        let config = generate_uae_config(&AmigaProfile::a1200_aga(), &media).unwrap();
+        let mut process = launch_winuae_process(&PathBuf::from(&winuae), &config).unwrap();
+        println!("WinUAE pid {}", process.pid());
+
+        let started = Instant::now();
+        let done = work.join(DONE);
+        let deadline = Duration::from_secs(180);
+        while started.elapsed() < deadline && !done.is_file() {
+            std::thread::sleep(Duration::from_millis(500));
+            if !process.is_running().unwrap_or(false) {
+                break;
+            }
+        }
+        let waited = started.elapsed();
+        let _ = process.terminate();
+
+        match std::fs::read_to_string(work.join(ANSWER)) {
+            Ok(text) => println!("--- the tree's own answer, after {waited:.1?} ---\n{text}"),
+            Err(err) => println!("no answer after {waited:.1?}: {err}"),
+        }
+    }
+}

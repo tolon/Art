@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Installing on the Amiga side — the first run against real packages (2026-08-21)
+
+#### Fixed
+- **Five faults that only a real Amiga could show, and three of them would
+  have told you the wrong thing.** ART's Amiga-side install was run for the
+  first time against the owner's own AmigaOS BoingBags, and every one of these
+  came out of that sitting rather than out of a test.
+
+  Twice, ART was about to report *"nobody answered"* about an installer that
+  had answered clearly and at once — the exact kind of confidently wrong
+  sentence this whole area was rebuilt to prevent. In one case the installer
+  said no and its answer was thrown away; in the other the installer had never
+  been started at all, because loading AmigaOS 3.9's own ROM update restarts
+  the machine and ART mistook the restart for an install that had already
+  happened. Both now report what really occurred.
+
+  The other three were about the environment ART sets up for a package's own
+  installer: it now runs AmigaOS's own `SetPatch` the way your system folder's
+  own start-up does, it makes the ReAction classes visible where AmigaOS 3.9's
+  libraries expect them, and it builds `ENV:` the way a real boot builds it.
+  Without the second, the BoingBag installer refused to start; without the
+  third, it stopped on a *"Please insert volume ENV"* requester with nobody
+  there to answer it.
+
+#### Changed
+- **The waiting time before ART gives up on an install is now an hour, not
+  twenty minutes.** Twenty was a guess, and the first real package to meet it
+  went past it. Erring long only delays the news that a run is stuck; erring
+  short reports a working install as abandoned and throws its result away.
+
+#### Known limitation
+- **ART still cannot install an AmigaOS BoingBag.** The package's own
+  installer checks for the original AmigaOS 3.9 CD-ROM before it will do
+  anything, and ART does not yet put that disc in front of it. Everything up
+  to that point now works — your system folder is copied, the package is
+  unpacked, the emulator boots, the installer starts — and then it waits for a
+  disc that is not there. ART is not going to fake the check; the fix is to
+  hand it the disc you already own, and that is the next piece of work.
+  Nothing is at risk in the meantime: the install runs against a copy and your
+  own system folder is never touched, and ART tells you where the copy is
+  instead of pretending the install worked.
+
 ### Installing on the Amiga side — the groundwork (2026-08-20)
 
 #### Added

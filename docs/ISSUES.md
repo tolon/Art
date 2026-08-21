@@ -26,6 +26,90 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-193** 🔴 **A BoingBag's `Updater` verifies the original AmigaOS 3.9
+CD-ROM, and ART mounts no such volume — so the run starts, opens its window
+and never finishes** — *found 2026-08-21 by Task 7's run against the owner's
+own `BoingBag39-1 (1).lha`, not fixed*
+`src-tauri/src/core/amigainstall/run.rs::media_for` ·
+`src-tauri/src/core/osinstall/package.rs::AmigaInstaller` ·
+`src-tauri/src/core/winuae.rs::LaunchMedia`
+
+With [ART-188](#fixed) to [ART-192](#fixed) fixed, the owner's own `Updater`
+45.15 gets all the way to running: it loads, opens `resource.library` and its
+ReAction classes, and puts an *AmigaOS Updater* screen on the emulated
+display. Then nothing happens. Measured twice on the owner's own tree: **not
+one of the 3 795 files in the staged copy was written**, checked on the host
+while each run was live, and both runs ended only because the emulator was
+terminated deliberately — at 414 s and 422 s, neither reaching the deadline.
+WinUAE was consuming 3.14 s of host CPU per 5 s of wall clock throughout, so
+the emulated machine was executing rather than idle.
+
+**The program says what it is waiting for.** Its own printable strings:
+
+```text
+  Checking AmigaOS 3.9 CD-ROM ...
+  Failed to check AmigaOS 3.9 CD-ROM.
+  Did you really insert a original AmigaOS 3.9 CD-ROM
+  into a mounted CD-ROM drive?
+  AmigaOS3.9:Videos/Angels.avi
+  AmigaOS3.9:Audio/Circle Orbital.mp3
+  AmigaOS3.9:OS-Version3.9/Workbench3.9/WBStartup/AmiDock
+```
+
+So the program checks three named files on a volume called `AmigaOS3.9:`, and
+ART's run mounts three volumes — the tree copy, the package's unpacked wrapper,
+and ART's own work volume — none of which is that CD. The design never named
+this: §3 says what runs and where it runs *from*, and this is a fourth thing,
+what it runs *against*.
+
+**Observed versus inferred, kept apart.** *Observed:* those strings are in the
+binary; the `Updater` starts, opens its own screen, and writes nothing for
+seven minutes while the emulated machine keeps executing. *Inferred:* that
+the missing CD is what it is stuck on. The *"Checking AmigaOS 3.9 CD-ROM …"*
+line was never seen — the `Updater`'s screen sits in front of the shell it was
+launched from and nothing captured what is behind it. This is much the best
+explanation of the evidence and it is not a measurement; whoever fixes this
+should expect to confirm it on the way, not assume it.
+
+**This is a medium the user has, not a protection to be worked around.** The
+owner's own `E:\amiga\Amigatolon\os39\AmigaOS39.iso` is the disc the tree was
+built from, and its volume name is already recorded in that tree's own
+`distribution.json` (`builtFrom[0].volumeName = "AmigaOS3.9"`). Supplying it is
+giving the installer the disc it asks for. **Extracting only the three files it
+names would not be** — that is satisfying a media check rather than meeting it,
+and ART's standing rule is that nothing here bypasses anything.
+
+**Why it is not fixed here.** `LaunchMedia` has no CD at all — no `cdimage0=`,
+no `uaescsi.device`, and the tree's CD filesystem (`L/CDFileSystem`,
+`Storage/DOSDrivers/CD0`) is not mounted by ART's generated script either. That
+is a feature in three layers (a recipe declaration for the medium a package
+requires, a fourth mount, and the AmigaDOS `Mount` that makes it visible), not
+a line. Filing it is the honest end of this round: the five defects above were
+each a line or two and are fixed; this one is a design gap and is named as one.
+
+**What the next person needs, measured rather than guessed.** The tree already
+carries both halves of the Amiga side: `L/CDFILESYSTEM` and
+`Storage/DOSDrivers/CD0`, whose own text reads `FileSystem = L:CDFileSystem`,
+`SectorSize = 2048`, `DosType = 0x43443031`, and — in a comment, because the
+real values live in the icon's tooltypes — `Device = scsi.device`, `Unit = 2`.
+So the missing pieces are: a `cdimage0=` in `core::winuae::LaunchMedia`
+(which has no CD field at all today), a recipe declaration naming the medium a
+package requires, and a `Mount` in the generated script pointing at the
+emulator's own CD device rather than at `scsi.device` unit 2. Three layers, and
+none of them guessable from the host — the last one in particular has to be
+tried against a booted system.
+
+**One diagnostic was run and then withdrawn, and it is recorded because
+withdrawing it is the point.** `Assign AmigaOS3.9: DH0:` was tried through
+`core::winuae::real_version_hook` and the `Updater` still produced nothing in
+180 s — which looked like a clean elimination until the probe script was read
+back: it had no `ENV:` while the product's script did, so what it actually
+re-measured was [ART-192](#fixed)'s requester, not this. The hook's script now
+mirrors the product's line for line, and this elimination is **not** claimed.
+Someone closing this issue should re-run it rather than trust the paragraph
+that used to be here.
+
+
 **ART-187** 🔵 **A cancelled Amiga-side install leaves the last phase line
 on screen under a badge that says nothing about it** — *found 2026-08-21 in
 Task 6's review, ruled shippable*
@@ -259,6 +343,15 @@ ART-166 names, or a package whose files ART *can* read that genuinely
 introduces a top-level drawer (`locale-turkish` does not; it lands inside
 `Locale/`, which `locale-base` already makes).
 
+**The Amiga-side round ran on 2026-08-21 and did not close it, and the reason
+sharpens what closing it means.** That round never places a package file with
+`apply` at all — the Amiga's own installer writes them — so even a *successful*
+BoingBag install would leave `apply`'s handling of a first-time top-level
+drawer untested. And it was not successful ([ART-193](#open)), so nothing was
+written by anyone. This therefore needs the second of the two routes above, or
+an explicit test against a real payload's real shape; the first route is now
+known not to reach it.
+
 
 **ART-172** 🟠 **The content layer's spec §8.4 hazard — a language pack
 colliding with the base `Locale` — was never exercised either, and the run
@@ -292,6 +385,14 @@ ART-168 is a defect in one function in `core/lha` with a known fix and a
 known blast radius. This is a *verification* gap in the content layer, it
 outlives that fix, and nothing in the record would otherwise say that the
 cleanest-looking number the round produced was measuring the wrong thing.
+
+**Re-measured 2026-08-21 and still not exercised.** The owner's built tree
+`E:\amiga\ProjeART\dist-3.9-bb` was read directly: `locale-turkish`'s **36**
+files sit under `Locale/Catalogs/t<U+FFFD>rk<U+FFFD>e` while `locale-base`'s
+**597** sit under `Locale/Catalogs/TÜRKÇE`, and **not one of the 36 carries an
+`overwrote` record**. That tree predates ART-168's fix, so the number is the
+old one and the collision has still never happened. Closing this needs a tree
+**rebuilt** with the fixed reader — the fix is in, the measurement is not.
 
 
 **ART-166** 🔴 **Both BoingBag payload archives are password-encrypted ZIPs, so
@@ -379,6 +480,15 @@ plain files. **ZipCrypto does not encrypt names** — listing works, extraction
 does not — so the first fact was true and the second was inferred from it. The
 first thing that ever asked for bytes was Task 8's run.
 
+**The Amiga-side route now runs, and still does not place a file** —
+*2026-08-21*. The round built to make this moot got the package's own
+`Updater` 45.15 loading, opening its libraries and putting its own screen on
+the emulated display, against the owner's own tree — and then it stops,
+because it verifies the original AmigaOS 3.9 CD-ROM on a volume ART does not
+mount ([ART-193](#open)). So this entry is unchanged in substance: **not one
+byte of either BoingBag has reached a tree by any route.** It closes when
+ART-193 does, and not before.
+
 
 **ART-152** 🔵 **ART sizes a WHDLoad launch's Fast RAM from a fixed setting,
 never from what the slave itself states it needs** — *filed 2026-08-18,
@@ -437,6 +547,19 @@ has been booted (see FEATURES.md's 🟡 row). The point of this entry is that
 leave it unrecorded: a hazard predicted before the work and untouched after
 it should be visible in the register of what ART owes, beside ART-157, rather
 than only in a review nobody reads again.
+
+**Hazard 1 is now measured on a running system, and stays open only for
+hazard 2** — *2026-08-21, the Amiga-side round's real run*. The tree really
+does carry `C/SETPATCH` (placed by `workbench-base`) and
+`Devs/AMIGAOS ROM UPDATE` (127 956 bytes), and running `C:SetPatch QUIET`
+against it under the owner's Kickstart 40.68 demonstrably applies the update:
+the booted system then answers `workbench.library 45.102` and
+`version.library 45.1`, and its banner changes from *1985-1993
+Commodore-Amiga* to *1985-2000 Amiga International*. So the boot path is
+placed and works. What the entry above got right is that **nothing was
+running it** — ART's own generated boot did not, which is
+[ART-189](#fixed). **Hazard 2 — `Locale`, `Locale.Euro` and `Special-Locale`
+— is still untouched**, and that is why this stays open.
 
 **ART-130** 🔵 **A game can name the Kickstart it needs, and nothing offers to
 supply it** — *filed 2026-08-17, out of G10's design round; the reading half is
@@ -587,6 +710,190 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-192** 🟠 ✅ **The run built no `ENV:`, so a real installer stopped on a
+System Request nobody could answer** — *found 2026-08-21 by Task 7's run
+against the owner's own `BoingBag39-1 (1).lha`, fixed the same day*
+`src-tauri/src/core/amigainstall/workvol.rs::startup_sequence`
+
+Design §6's first hazard, met in the flesh. With ART-191 fixed the owner's
+`Updater` 45.15 got past `resource.library` and put this on the emulator's
+screen:
+
+```text
+  Please insert volume ENV in any drive     [ Retry ] [ Cancel ]
+```
+
+`startup_sequence` had assigned `SYS:`, `C:`, `S:`, `L:`, `LIBS:`, `DEVS:`,
+`FONTS:` and `T:`, and deliberately no `ENV:` — its own note said so and said
+why: *"If an installer turns out to need `ENV:`, the run will say so and the
+fix belongs with that measurement."* That was the right call, and this is the
+measurement it asked for.
+
+Fixed with the four lines a real `Startup-Sequence` uses, in its order:
+`MakeDir RAM:T RAM:Clipboards RAM:ENV RAM:ENV/Sys`, `Assign ENV: RAM:ENV`
+(with `T:` and `CLIPS:` beside it), and `Copy ENVARC: RAM:ENV ALL QUIET
+NOREQ` to populate it from the tree's own `Prefs/Env-Archive`. **`NOREQ` is
+load-bearing**: a missing `ENVARC:` must return a code, not open a second
+requester behind the first.
+
+`T:` moved from `RAM:` to `RAM:T` in the same change. It pointed at the root
+only to avoid a `MakeDir` whose return code could abort the script under
+`FailAt 21`; with ART-188 that objection is gone, and the conventional target
+is what an `Installer` writing to `T:` was tested against.
+
+Test: `the_whole_script_is_what_it_is` (exact-match) ·
+`commands::amigainstall::real_install_hook::install_a_real_package_when_asked`
+(gated, `#[ignore]`d).
+
+**ART-191** 🟠 ✅ **`LIBS:` carried only the tree's `Libs`, so
+`resource.library` could not initialise and a BoingBag `Updater` refused to
+start** — *found 2026-08-21 by Task 7's run, fixed the same day*
+`src-tauri/src/core/amigainstall/workvol.rs::startup_sequence`
+
+The owner's own `Updater` 45.15 ended immediately with
+
+```text
+  Cannot open "resource.library", version 44.
+```
+
+and every obvious reading of that sentence was wrong. The tree carries the
+library (`Libs/RESOURCE.LIBRARY`, `$VER: resource.library 44.102
+(29-Sep-99)`), so the version asked for is the version present, and `LIBS:`
+was pointed at the tree's own drawer — `List LIBS: PAT #?resource#?`, run on
+the Amiga through `core::winuae::real_version_hook`, listed it.
+
+**The library says why itself.** Its printable strings name five BOOPSI
+classes it opens — `gadgets/chooser.gadget`, `gadgets/clicktab.gadget`,
+`gadgets/listbrowser.gadget`, `gadgets/radiobutton.gadget`,
+`gadgets/speedbar.gadget` — which live in `SYS:Classes/Gadgets`. The tree
+carries them and **nothing had put them on `LIBS:`**. A class that will not
+open makes the library's initialisation fail, and a library that fails to
+initialise is `OpenLibrary` returning `NULL`.
+
+The tree's own `S/Startup-Sequence` does it in one line, and that line is now
+in ART's: `Assign LIBS: {sys}:Classes ADD`. `ADD` rather than a second
+assign, so `LIBS:` becomes both drawers in the order a real boot leaves them.
+
+**The proof is the change in behaviour, not the diagnosis.** With that one line
+added and nothing else changed, the same run stopped saying *"Cannot open
+resource.library"* and got as far as [ART-192](#fixed)'s requester. Two
+`Version` probes taken while diagnosing are deliberately **not** cited as
+evidence either way: AmigaDOS `Version` falls back to reading a file when it
+cannot open a library, so *OPENABLE at 44* was consistent with the library
+being unopenable, and it briefly read as a contradiction.
+
+**Why 116 unit tests could not catch it**: every one of them asserts what ART
+*writes*, and the script ART wrote was internally consistent. What was wrong
+was a fact about AmigaOS 3.9 that only a running AmigaOS 3.9 states.
+
+Test: `the_whole_script_is_what_it_is` ·
+`install_a_real_package_when_asked` (gated).
+
+**ART-190** 🔴 ✅ **The re-run guard read a marker written above `SetPatch`,
+and `SetPatch` reboots — so the installer was never invoked at all, and the
+run was on its way to being reported as a timeout** — *found 2026-08-21 by
+Task 7's run, fixed the same day*
+`src-tauri/src/core/amigainstall/workvol.rs` ·
+`src-tauri/src/core/amigainstall/mod.rs::INVOKED_FILE`
+
+The guard existed for design §6's third hazard — *"a package that reboots the
+Amiga … the work volume has to survive a reboot and not re-run the
+installation on the second pass"* — and it was right about that reboot and
+blind to the other one.
+
+`If EXISTS ARTWork:art-result.txt` tested the file the script writes as
+`started` near the top. Once ART-189 put the tree's own `SetPatch` into the
+script, and `SetPatch` **resets the machine** after loading a ROM update — the
+reason an AmigaOS 3.9 system appears to boot twice — the second pass found
+`started` already written, printed *"this install already ran. Not repeating
+it."* and stopped. Measured on the owner's own tree: the Amiga's screen said
+exactly that, and the `Updater` had never been invoked. The host would then
+have polled out its deadline and reported **timed out** for a run that was
+never made.
+
+Fixed by splitting the two questions the one file was answering.
+`art-result.txt` stays what the host reads; a second marker,
+`art-invoked.txt`, is written **below** `SetPatch` and directly above the
+installer, and the guard reads that. A reset `SetPatch` caused leaves it
+absent and the second pass carries on; a reset the installer caused leaves it
+present and the second pass stops, which is the case the guard was written
+for.
+
+Test: `a_reboot_before_the_installer_lets_the_second_pass_do_the_work` ·
+`a_second_boot_does_not_run_the_installer_again` ·
+`the_host_polls_the_name_the_script_redirects_to`, which now accounts for
+**every** redirection rather than only the ones it expected.
+
+**ART-189** 🟠 ✅ **ART's generated boot never ran the tree's own `SetPatch`,
+so an AmigaOS 3.9 tree met a 3.1 ROM** — *found 2026-08-21 while diagnosing
+ART-191, fixed the same day*
+`src-tauri/src/core/amigainstall/workvol.rs::startup_sequence`
+
+AmigaOS 3.5 and 3.9 are a disk-based operating system over a V40 or older
+Kickstart, and the thing that reconciles the two runs first in the tree's own
+`S/Startup-Sequence`, ahead of every assign it makes: `C:SetPatch QUIET`,
+which loads `Devs/AmigaOS ROM Update` (127 956 bytes in the owner's tree).
+ART's script boots ART's own volume, so nothing had run it.
+
+Fixed with `If EXISTS {sys}:C/SetPatch` + `{sys}:C/SetPatch QUIET`, below
+every assign so `DEVS:` resolves, above the installer so the libraries it
+opens are the updated ones. Guarded, because a tree carrying no `SetPatch`
+has no ROM update to load, and a missing-command failure directly above the
+installer would be a return code this script reserves for the installer.
+
+**Reported honestly: this did not fix ART-191** — the class assign did. What
+it demonstrably does is apply the update. With this line the booted tree
+answers `Kickstart 40.68, Workbench 45.1`, `workbench.library 45.102`,
+`version.library 45.1`, and its own banner changes from *1985-1993
+Commodore-Amiga* to *1985-2000 Amiga International*. Whether a given
+installer would fail without it has not been measured; what has is that the
+tree is now in the state its own boot puts it in. It also brought ART-190
+with it, which is the cost of the change and is recorded above.
+
+This is also the first half of [ART-159](#open)'s hazard 1 measured on a
+running system rather than predicted.
+
+Test: `the_trees_own_rom_update_is_loaded_before_the_installer` ·
+`the_whole_script_is_what_it_is`.
+
+**ART-188** 🔴 ✅ **A return code of 900 aborted ART's own script before it
+could report, so an installer that refused was on its way to being reported
+as a timeout** — *found 2026-08-21 by Task 7's first run against the owner's
+own material, fixed the same day*
+`src-tauri/src/core/amigainstall/workvol.rs::FAIL_AT`
+
+Design §6 named it: *"whatever writes it has to run even when the installer
+fails, or a failure and a hang look identical."* The script set `FailAt 21`,
+reasoned from the convention that AmigaDOS return codes are 0, 5, 10 and 20.
+
+**The convention is not a rule.** The owner's own `Updater` 45.15 ended with
+
+```text
+  Cannot open "resource.library", version 44.
+  ARTPkg:BoingBag3.9-1/C/Updater failed returncode 900
+```
+
+900 is far above 21, so AmigaDOS aborted the script at that line, the
+`If Warn` branch never ran, and the work volume was left holding exactly
+`started` — confirmed on the host by reading the file. The run then polled for
+the remainder of its twenty-minute deadline; left alone it would have reported
+**timed out**, *"nobody answered a question it asked"*, about an installer
+that had answered immediately and in plain words.
+
+Fixed by setting the fail level above any return code a program can express
+(`FailAt 2000000000`, a `LONG`) rather than above the ones convention says it
+will use. `If Warn` tests against `WARN` (5) and is unaffected by the fail
+level, so a non-zero code still reports `failed` — it now reports it instead
+of killing the script.
+
+**Verified against the same material**: the identical run then ended in
+16.0 s with `Failed`, not a timeout.
+
+Test: `a_failing_installer_cannot_abort_the_script_before_it_reports`, which
+now asserts the level against the measured 900 and names the number, so an
+edit that lowers it back into range fails there rather than on a desktop.
+
 
 **ART-186** 🟠 **Nothing enforced the BoingBag order, and nothing refused
 the `Updater` that cannot run under an emulator** — *both established

@@ -100,6 +100,37 @@ pub const PACKAGE_VOLUME: &str = "ARTPkg";
 /// for why it exists — on its own it is **not** an outcome.
 pub const MARK_STARTED: &str = "started";
 
+/// The file the generated script writes **immediately before** it invokes the
+/// installer, in the root of ART's work volume — and the file the re-run guard
+/// tests.
+///
+/// **Separate from [`RESULT_FILE`], and ART-190 is why.** The guard used to
+/// test [`RESULT_FILE`] itself, which the script writes as [`MARK_STARTED`]
+/// near the top; the reasoning was design §6's third hazard, *"a package that
+/// reboots the Amiga … the work volume has to survive a reboot and not re-run
+/// the installation on the second pass."*
+///
+/// That reasoning only covered a reboot **after** the installer. A reboot
+/// **before** it is not hypothetical: `SetPatch` loads a tree's own
+/// `Devs/AmigaOS ROM Update` and then resets the machine, which is why an
+/// AmigaOS 3.9 system appears to boot twice, and ART now runs it (ART-189).
+/// Measured on 2026-08-21 against the owner's own tree: the second pass found
+/// [`RESULT_FILE`] holding `started`, printed *"this install already ran. Not
+/// repeating it."* and stopped — so the installer never ran at all, and the
+/// host would have reported **timed out** for a run that was never made.
+///
+/// The two reboots need opposite answers, and one marker cannot give both. So
+/// the guard tests a marker written *below* `SetPatch`: a reset that `SetPatch`
+/// caused leaves it absent and the second pass carries on, while a reset the
+/// installer caused leaves it present and the second pass stops — which is the
+/// case the guard was written for.
+pub const INVOKED_FILE: &str = "art-invoked.txt";
+
+/// What [`INVOKED_FILE`] holds. Nothing reads it — the file's existence is the
+/// fact — but an empty file is harder to tell from a failed write, and a
+/// person looking at the work volume should find a word rather than a blank.
+pub const MARK_INVOKED: &str = "invoked";
+
 /// Written when the installer returned a non-warning, non-failing code.
 pub const MARK_OK: &str = "ok";
 

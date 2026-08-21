@@ -14,12 +14,25 @@
 use std::path::{Path, PathBuf};
 
 use super::{
-    claims_package_volume, claims_work_volume, PlannedRun, MARK_FAILED, MARK_OK, MARK_STARTED,
-    PACKAGE_VOLUME, RESULT_FILE, WORK_VOLUME,
+    claims_package_volume, claims_work_volume, PlannedRun, INVOKED_FILE, MARK_FAILED, MARK_INVOKED,
+    MARK_OK, MARK_STARTED, PACKAGE_VOLUME, RESULT_FILE, WORK_VOLUME,
 };
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::safety::atomic_write;
 use crate::core::security::refuse_shell_metacharacters;
+
+/// The fail level the generated script sets before it runs anything.
+///
+/// **Measured, not conventional — ART-188.** See
+/// [`startup_sequence`]'s own documentation for the run this came out of: the
+/// owner's `Updater` 45.15 returned **900**, the shipped `FailAt 21` aborted
+/// the script at that line, and a failure the Amiga had already reported was
+/// on its way to being told to the user as a timeout.
+///
+/// A `LONG` well above anything a return code can carry in practice, so the
+/// question is settled by range rather than by a guess about which numbers a
+/// program ART did not write will choose.
+const FAIL_AT: i64 = 2_000_000_000;
 
 /// Where the Amiga will write its result, seen from the host.
 ///
@@ -96,25 +109,70 @@ pub fn result_path(work_volume_dir: &Path) -> PathBuf {
 /// hazard being guarded against the `Echo` that writes it is the thing that
 /// cannot run.
 ///
-/// ## Why `FailAt 21`
+/// ## Why `FailAt` is set as high as it is (ART-188, measured)
 ///
 /// AmigaDOS aborts a script when a command's return code reaches `FailAt`,
 /// which defaults to 10. An installer that returns `FAIL` (20) would then end
 /// the script *before* the branch below could record anything, and the host
 /// would see a file saying only `started` — a failure wearing a hang's
-/// clothes. Raising the threshold above 20 keeps the script alive long enough
-/// to say which of the two it was, which is the whole reason the branch
-/// exists.
+/// clothes. That is design §6's own second hazard: *"whatever writes it has to
+/// run even when the installer fails, or a failure and a hang look
+/// identical."*
+///
+/// This shipped as `FailAt 21`, reasoned from the convention that AmigaDOS
+/// return codes are `0`, `5` (`WARN`), `10` (`ERROR`) and `20` (`FAIL`).
+/// **The convention is not a rule, and the owner's own BoingBag disproved it
+/// on the first real run** (2026-08-21, `BoingBag39-1 (1).lha`, `Updater`
+/// 45.15, Kickstart 40.68): the Amiga's own screen read
+///
+/// ```text
+///   Cannot open "resource.library", version 44.
+///   ARTPkg:BoingBag3.9-1/C/Updater failed returncode 900
+/// ```
+///
+/// 900 is far above 21, so the script aborted at that line, the branch below
+/// never ran, and the work volume was left holding exactly `started`. The host
+/// then polled for the rest of its deadline and would have reported **timed
+/// out** — *"nobody answered a question it asked"* — about an installer that
+/// had answered, immediately and clearly. §89 forbids that sentence, and this
+/// round exists precisely because three earlier defects produced one like it.
+///
+/// So the threshold is set above any return code a program can express rather
+/// than above the ones convention says it will use. `FailAt`'s argument is a
+/// `LONG` (`RCLIM/N`), and the value below is the largest round number well
+/// inside it. The measured 900 is the evidence; the value is not a multiple of
+/// it, because the next package's number is not ART's to predict either.
+///
+/// It does not disturb the branch: `If Warn` tests the previous command's
+/// return code against `WARN` (5) and is unaffected by the fail level, so a
+/// non-zero code still reports `failed` — it now reports it *instead of*
+/// killing the script.
 ///
 /// ## Why the run refuses to repeat itself
 ///
 /// Some installers reboot the Amiga when they are done. A reboot re-runs this
 /// script, and a second pass would run the installer again over a tree it has
-/// already changed. `If EXISTS` on the result file makes the second pass do
-/// nothing and leave the first pass's answer alone. When that answer is only
+/// already changed. `If EXISTS` on a marker makes the second pass do nothing
+/// and leave the first pass's answer alone. When that answer is only
 /// `started`, the host times out — which is honest: an installer that rebooted
 /// before recording anything has not been *observed* to succeed, and §89 does
 /// not allow ART to say it did.
+///
+/// **Which marker is the whole question, and testing the wrong one was
+/// ART-190.** The guard read [`RESULT_FILE`], which is written near the top —
+/// so it stopped the second pass of *any* reboot, including one that happened
+/// before the installer had run. And such a reboot is routine, not exotic: the
+/// `SetPatch` this script now runs (ART-189) resets the machine after loading
+/// a tree's ROM update, which is why an AmigaOS 3.9 system appears to boot
+/// twice. Measured on 2026-08-21 against the owner's own tree, the second pass
+/// printed *"this install already ran"* and stopped, and the installer was
+/// never invoked at all.
+///
+/// So the guard reads [`INVOKED_FILE`], written **below** `SetPatch` and
+/// directly above the installer. A reset `SetPatch` caused leaves it absent
+/// and the second pass carries on to do the work; a reset the installer caused
+/// leaves it present and the second pass stops, which is the case this guard
+/// was written for. See [`INVOKED_FILE`]'s own documentation.
 ///
 /// ## Why the assigns are here at all
 ///
@@ -126,22 +184,142 @@ pub fn result_path(work_volume_dir: &Path) -> PathBuf {
 /// [`crate::core::launch::whdload_boot::startup_sequence`], and two members of
 /// it are choices rather than transcription:
 ///
-/// - **`Assign T: RAM:`, not the conventional `MakeDir RAM:T` +
-///   `Assign T: RAM:T`.** `T:` is here at all because the Amiga `Installer`
-///   writes temporary files to it. It points at the root of `RAM:` so that no
-///   `MakeDir` is needed first: `MakeDir` on a directory that already exists
-///   sets a return code, and this script's entire job is to report a return
-///   code faithfully — a command whose failure is routine has no place above
-///   the installer.
-/// - **`ENV:` and `ENVARC:` are deliberately absent.** A real
-///   `Startup-Sequence` builds `ENV:` in `RAM:` and copies `ENVARC:` into it,
-///   which is several commands whose failure modes have not been measured
-///   here. If an installer turns out to need `ENV:`, the run will say so and
-///   the fix belongs with that measurement — adding it now would be asserting
-///   a need nobody has observed. Do not add it silently.
+/// What a real `Updater` actually needs was a thing to measure against the
+/// owner's own packages rather than assert here. It was measured on
+/// 2026-08-21, and the three sections below are what the measurement said.
 ///
-/// What a real `Updater` actually needs is a thing to measure against the
-/// owner's own packages, not to assert here.
+/// ## Why `ENV:` is built the way a real boot builds it (ART-192, measured)
+///
+/// `ENV:` and `ENVARC:` used to be **deliberately absent**, and the note that
+/// stood here said so in as many words: *"a real `Startup-Sequence` builds
+/// `ENV:` in `RAM:` and copies `ENVARC:` into it, which is several commands
+/// whose failure modes have not been measured here. If an installer turns out
+/// to need `ENV:`, the run will say so."*
+///
+/// **The run said so.** With `LIBS:` fixed below, the owner's own `Updater`
+/// 45.15 got past `resource.library` and put a `System Request` on screen:
+///
+/// ```text
+///   Please insert volume ENV in any drive     [ Retry ] [ Cancel ]
+/// ```
+///
+/// Nobody was there to answer it, which is precisely what a requester costs an
+/// unattended run — design §6's first hazard, met in the flesh.
+///
+/// So the four lines a real `Startup-Sequence` uses are here, in its order:
+/// `MakeDir RAM:T RAM:Clipboards RAM:ENV RAM:ENV/Sys`, the assigns for `ENV:`,
+/// `T:` and `CLIPS:`, and `Copy ENVARC: RAM:ENV ALL` to populate it — the
+/// tree's own `Prefs/Env-Archive`, reached through the `ENVARC:` assign
+/// AmigaDOS makes itself once `SYS:` points at the tree.
+///
+/// **The objection the old note raised has been removed rather than
+/// overruled.** It argued against `MakeDir` because *"`MakeDir` on a directory
+/// that already exists sets a return code, and this script's entire job is to
+/// report a return code faithfully"* — true when `FailAt` was 21, since a
+/// stray code could end the script. It is no longer: `FailAt` is now above
+/// anything a command can return (ART-188), and the only return code this
+/// script reads is the installer's own, tested by the `If Warn` directly below
+/// the invocation. An intermediate command's code is neither fatal nor
+/// reported.
+///
+/// `T:` moves with it, from `RAM:` to `RAM:T`. It pointed at the root of
+/// `RAM:` only to avoid that `MakeDir`; with the `MakeDir` there for `ENV:`
+/// anyway, the conventional target costs nothing and is what an Amiga
+/// `Installer` writing to `T:` will have been tested against.
+///
+/// `Copy` is given `ALL QUIET NOREQ`: `ALL` because a real boot copies the
+/// whole archive including `Sys/`, and **`NOREQ` because a requester is the
+/// one thing an unattended run cannot survive** — a missing `ENVARC:` must
+/// make `Copy` return a code, not open a second System Request behind the
+/// first.
+///
+/// One difference from a real boot, stated rather than hidden: these four
+/// lines sit **above** `SetPatch` here and below it there, so a `SetPatch`
+/// reset repeats them on the second pass. That costs one `MakeDir` on
+/// directories that already exist and one re-copy of `ENVARC:` into a `RAM:`
+/// the reset emptied anyway — nothing, since `RAM:` does not survive the
+/// reset. This is the order the fix was verified in and it was left there
+/// rather than tidied afterwards on reasoning alone.
+///
+/// ## Why `LIBS:` also carries the tree's `Classes` drawer (ART-191, measured)
+///
+/// With every assign above in place, the owner's own `Updater` 45.15 ended at
+/// once with
+///
+/// ```text
+///   Cannot open "resource.library", version 44.
+/// ```
+///
+/// The tree carries that library — `Libs/RESOURCE.LIBRARY`, whose own `$VER:`
+/// string reads `resource.library 44.102 (29-Sep-99)`, so the version asked
+/// for is the version present, and `LIBS:` really did resolve to the tree's
+/// drawer: probed on the running Amiga, `asl.library 45.4`,
+/// `amigaguide.library 44.4` and `icon.library 44.543` all opened from it.
+/// Only this one would not.
+///
+/// **The library says why itself.** Its printable strings name five BOOPSI
+/// classes it opens —
+///
+/// ```text
+///   gadgets/chooser.gadget      gadgets/clicktab.gadget
+///   gadgets/listbrowser.gadget  gadgets/radiobutton.gadget
+///   gadgets/speedbar.gadget
+/// ```
+///
+/// — and those live in `SYS:Classes/Gadgets`, which the tree carries and which
+/// **nothing had put on `LIBS:`**. A class that will not open makes the
+/// library's own initialisation fail, and a library that fails to initialise
+/// is `OpenLibrary` returning `NULL`, which is the sentence above.
+///
+/// The tree's own `S/Startup-Sequence` does it in one line, and this is that
+/// line:
+///
+/// ```text
+///   Assign >NIL: LIBS: SYS:Classes ADD
+/// ```
+///
+/// `ADD` rather than a second `Assign`: `LIBS:` becomes both drawers, in that
+/// order, which is what a real boot leaves and what every 3.9 library that
+/// opens a class expects.
+///
+/// ## Why the tree's own `SetPatch` runs (ART-189)
+///
+/// AmigaOS 3.5 and 3.9 are a disk-based operating system over a V40 (or older)
+/// Kickstart, and the thing that reconciles the two runs first in the tree's
+/// own `S/Startup-Sequence`, ahead of every assign it makes:
+///
+/// ```text
+///   C:SetPatch QUIET
+/// ```
+///
+/// It loads `Devs/AmigaOS ROM Update` (127 956 bytes in the owner's tree) over
+/// the ROM. ART's script boots ART's own volume, so nothing had run it, and
+/// the installer met a 3.1 ROM under a 3.9 system.
+///
+/// **Measured, and measured honestly: this was added while diagnosing the
+/// `resource.library` failure above and did not fix it** — the class assign
+/// did. What it demonstrably does is apply the update: with this line the
+/// booted tree answers `Kickstart 40.68, Workbench 45.1`,
+/// `workbench.library 45.102`, `version.library 45.1`, and its own
+/// copyright banner changes from `1985-1993 Commodore-Amiga` to
+/// `1985-2000 Amiga International`. Whether a given package's installer would
+/// fail without it has not been measured; what has is that a tree ART runs an
+/// installer against is now in the state the tree's own boot puts it in, which
+/// is the state its files were built for.
+///
+/// **This is the tree's own command, run as the tree's own boot runs it.** It
+/// is not ART patching anything, and it is not ART touching the user's
+/// `Startup-Sequence` (§1) — it is one line the medium ships, invoked by an
+/// explicit path on the mounted tree in the same style as the `C:` assign
+/// above.
+///
+/// It is guarded by `If EXISTS` rather than run unconditionally: a tree that
+/// carries no `SetPatch` is a tree that does not need one — AmigaOS 3.1 and
+/// earlier have no ROM update to load — and a missing-command failure directly
+/// above the installer would be a return code this script is supposed to
+/// reserve for the installer itself.
+///
+/// `QUIET` is the release's own wording on that line, not ART's choice.
 ///
 /// ## Why a `CD` may sit between the assigns and the installer
 ///
@@ -255,23 +433,33 @@ pub fn startup_sequence(run: &PlannedRun) -> CoreResult<String> {
     let sys = &run.system_volume;
     let work = WORK_VOLUME;
     let result = RESULT_FILE;
+    let invoked = INVOKED_FILE;
     let package = &run.package_id;
 
     Ok(format!(
         "; Written by ART to install '{package}'. One run, then a result.\n\
          {sys}:C/Assign C: {sys}:C\n\
-         FailAt 21\n\
-         If EXISTS {work}:{result}\n\
-         \x20 Echo \"ART: this install already ran. Not repeating it.\"\n\
+         FailAt {FAIL_AT}\n\
+         If EXISTS {work}:{invoked}\n\
+         \x20 Echo \"ART: the installer already ran on an earlier pass. Not repeating it.\"\n\
          Else\n\
          \x20 Echo >{work}:{result} \"{MARK_STARTED}\"\n\
          \x20 Assign SYS: {sys}:\n\
          \x20 Assign S: {sys}:S\n\
          \x20 Assign L: {sys}:L\n\
          \x20 Assign LIBS: {sys}:Libs\n\
+         \x20 Assign LIBS: {sys}:Classes ADD\n\
          \x20 Assign DEVS: {sys}:Devs\n\
          \x20 Assign FONTS: {sys}:Fonts\n\
-         \x20 Assign T: RAM:\n\
+         \x20 MakeDir RAM:T RAM:Clipboards RAM:ENV RAM:ENV/Sys\n\
+         \x20 Assign T: RAM:T\n\
+         \x20 Assign CLIPS: RAM:Clipboards\n\
+         \x20 Assign ENV: RAM:ENV\n\
+         \x20 Copy ENVARC: RAM:ENV ALL QUIET NOREQ\n\
+         \x20 If EXISTS {sys}:C/SetPatch\n\
+         \x20   {sys}:C/SetPatch QUIET\n\
+         \x20 EndIf\n\
+         \x20 Echo >{work}:{invoked} \"{MARK_INVOKED}\"\n\
          {cd_line}\
          \x20 {command}\n\
          \x20 If Warn\n\
@@ -397,18 +585,27 @@ mod tests {
         let expected = [
             "; Written by ART to install 'boingbag-39-1'. One run, then a result.",
             "DH0:C/Assign C: DH0:C",
-            "FailAt 21",
-            "If EXISTS ARTWork:art-result.txt",
-            "  Echo \"ART: this install already ran. Not repeating it.\"",
+            "FailAt 2000000000",
+            "If EXISTS ARTWork:art-invoked.txt",
+            "  Echo \"ART: the installer already ran on an earlier pass. Not repeating it.\"",
             "Else",
             "  Echo >ARTWork:art-result.txt \"started\"",
             "  Assign SYS: DH0:",
             "  Assign S: DH0:S",
             "  Assign L: DH0:L",
             "  Assign LIBS: DH0:Libs",
+            "  Assign LIBS: DH0:Classes ADD",
             "  Assign DEVS: DH0:Devs",
             "  Assign FONTS: DH0:Fonts",
-            "  Assign T: RAM:",
+            "  MakeDir RAM:T RAM:Clipboards RAM:ENV RAM:ENV/Sys",
+            "  Assign T: RAM:T",
+            "  Assign CLIPS: RAM:Clipboards",
+            "  Assign ENV: RAM:ENV",
+            "  Copy ENVARC: RAM:ENV ALL QUIET NOREQ",
+            "  If EXISTS DH0:C/SetPatch",
+            "    DH0:C/SetPatch QUIET",
+            "  EndIf",
+            "  Echo >ARTWork:art-invoked.txt \"invoked\"",
             "  PKG:C/Updater",
             "  If Warn",
             "    Echo >ARTWork:art-result.txt \"failed\"",
@@ -561,8 +758,8 @@ Delete SYS:#?",
             above,
             vec![
                 "DH0:C/Assign C: DH0:C",
-                "FailAt 21",
-                "If EXISTS ARTWork:art-result.txt",
+                "FailAt 2000000000",
+                "If EXISTS ARTWork:art-invoked.txt",
             ],
             "got:\n{ss}"
         );
@@ -606,14 +803,80 @@ Delete SYS:#?",
     /// return code reaches `FailAt`, which defaults to 10, so an installer
     /// returning `FAIL` (20) would end the run before the branch could record
     /// anything — and the host would read a hang where there was a refusal.
+    ///
+    /// **And 21 was not enough either — ART-188.** The owner's own
+    /// `BoingBag39-1 (1).lha` `Updater` 45.15 returned **900** on 2026-08-21,
+    /// which the shipped `FailAt 21` let abort the script; the work volume was
+    /// left holding `started` and the run was heading for a *timed out* report
+    /// about an installer that had already answered. So this asserts the level
+    /// against the number that was actually observed rather than against the
+    /// convention that missed it, and it names the number so a future edit
+    /// that lowers the level back into range fails here rather than on the
+    /// owner's desktop.
+    const MEASURED_REAL_RETURN_CODE: i64 = 900;
+
     #[test]
     fn a_failing_installer_cannot_abort_the_script_before_it_reports() {
         let ss = startup_sequence(&planned("PKG:C/Updater")).unwrap();
-        let failat = ss.find("FailAt 21").expect("the script must raise FailAt");
+
+        // Read the level out of the generated script rather than off the
+        // constant: what protects the run is the number the Amiga's shell
+        // sees, and a `FailAt` line that stopped being formatted from
+        // `FAIL_AT` would still satisfy a comparison between two constants.
+        let line = ss
+            .lines()
+            .find(|l| l.trim_start().starts_with("FailAt "))
+            .expect("the script must raise FailAt");
+        let level: i64 = line
+            .trim()
+            .trim_start_matches("FailAt ")
+            .parse()
+            .expect("FailAt takes a number");
+
+        let failat = ss.find(line).expect("the line is in the script");
         let invoke = ss.find("PKG:C/Updater").expect("the installer");
         assert!(
             failat < invoke,
             "FailAt must be raised before the installer runs:\n{ss}"
+        );
+        assert!(
+            level > MEASURED_REAL_RETURN_CODE,
+            "a real Updater returned {MEASURED_REAL_RETURN_CODE}; a fail level of {level} \
+             would abort the script before it could report that"
+        );
+    }
+
+    /// The ROM update the tree ships is loaded before the installer runs, and
+    /// only when the tree carries it.
+    ///
+    /// **ART-189, measured.** With every assign in place the owner's own
+    /// `Updater` still ended at once with `Cannot open "resource.library",
+    /// version 44.` — a library the tree carries at version 44.102. What was
+    /// missing is the line the tree's own `Startup-Sequence` runs eighth,
+    /// ahead of all of its assigns: `C:SetPatch QUIET`, which loads
+    /// `Devs/AmigaOS ROM Update` over a V40 Kickstart. Below every assign, so
+    /// `DEVS:` resolves; above the installer, so the libraries it opens are
+    /// the updated ones.
+    #[test]
+    fn the_trees_own_rom_update_is_loaded_before_the_installer() {
+        let ss = startup_sequence(&planned("PKG:C/Updater")).unwrap();
+
+        let guard = ss
+            .find("If EXISTS DH0:C/SetPatch")
+            .expect("SetPatch must be guarded: a tree without one does not need one");
+        let setpatch = ss
+            .find("DH0:C/SetPatch QUIET")
+            .expect("the tree's own SetPatch, by an explicit path on the tree");
+        let devs = ss.find("Assign DEVS:").expect("the DEVS: assign");
+        let invoke = ss.find("PKG:C/Updater").expect("the installer");
+
+        assert!(
+            devs < guard && guard < setpatch,
+            "SetPatch reads DEVS:AmigaOS ROM Update, so DEVS: must be assigned first:\n{ss}"
+        );
+        assert!(
+            setpatch < invoke,
+            "the ROM update must be in place before the installer opens a library:\n{ss}"
         );
     }
 
@@ -624,8 +887,8 @@ Delete SYS:#?",
     fn a_second_boot_does_not_run_the_installer_again() {
         let ss = startup_sequence(&planned("PKG:C/Updater")).unwrap();
         let guard = ss
-            .find(&format!("If EXISTS {WORK_VOLUME}:{RESULT_FILE}"))
-            .expect("a guard on the result file");
+            .find(&format!("If EXISTS {WORK_VOLUME}:{INVOKED_FILE}"))
+            .expect("a guard on the invoked marker");
         let else_at = guard + ss[guard..].find("\nElse\n").expect("an Else arm");
         let invoke = ss.find("PKG:C/Updater").expect("the installer");
         assert!(
@@ -645,6 +908,59 @@ Delete SYS:#?",
             !repeat_arm.contains(&format!("Echo >{WORK_VOLUME}:{RESULT_FILE}")),
             "a repeat boot must not rewrite the result file:\n{ss}"
         );
+    }
+
+    /// A reboot **before** the installer must leave the second pass free to do
+    /// the work — ART-190.
+    ///
+    /// The guard above stops a second pass, and the guard above is right for
+    /// the reboot it was written for: one the installer caused. It was wrong
+    /// for the other one, which this script now causes itself. `SetPatch`
+    /// loads a tree's `Devs/AmigaOS ROM Update` and resets the machine — the
+    /// reason an AmigaOS 3.9 system appears to boot twice — and with the guard
+    /// reading a marker written *above* that line, the second pass printed
+    /// "already ran" and stopped before the installer had ever been invoked.
+    /// Measured on the owner's own tree, 2026-08-21.
+    ///
+    /// So the marker the guard reads has to be written **below** `SetPatch`.
+    /// This asserts the ordering that makes the two reboots distinguishable,
+    /// which is the whole of the fix.
+    #[test]
+    fn a_reboot_before_the_installer_lets_the_second_pass_do_the_work() {
+        let ss = startup_sequence(&planned("PKG:C/Updater")).unwrap();
+
+        let guard = ss
+            .find(&format!("If EXISTS {WORK_VOLUME}:{INVOKED_FILE}"))
+            .expect("the re-run guard");
+        let setpatch = ss.find("DH0:C/SetPatch QUIET").expect("SetPatch");
+        let marker = ss
+            .find(&format!("Echo >{WORK_VOLUME}:{INVOKED_FILE}"))
+            .expect("the invoked marker");
+        let invoke = ss.find("PKG:C/Updater").expect("the installer");
+
+        assert!(
+            setpatch < marker && marker < invoke,
+            "the marker the guard reads must be written below SetPatch and above the \
+             installer, or a SetPatch reset skips the install entirely:\n{ss}"
+        );
+        assert_ne!(
+            INVOKED_FILE, RESULT_FILE,
+            "the guard's marker and the host's result file are different questions"
+        );
+        assert!(
+            guard < setpatch,
+            "the guard is still the outermost thing, so a second pass reaches it first:\n{ss}"
+        );
+
+        // And the started marker stays where it was: the host's three-way
+        // reading of `art-result.txt` (absent / started / an outcome) is not
+        // what changed.
+        let started = ss
+            .find(&format!(
+                "Echo >{WORK_VOLUME}:{RESULT_FILE} \"{MARK_STARTED}\""
+            ))
+            .expect("the started marker");
+        assert!(started < setpatch, "started is written first:\n{ss}");
     }
 
     /// Nothing ART generates is assembled from a string ART did not author.
@@ -846,6 +1162,14 @@ Delete SYS:#?",
     /// script's own redirections and compares it with the name the host will
     /// poll — so a script that redirected somewhere else, or a `result_path`
     /// that appended something, breaks it.
+    ///
+    /// **Every redirection is accounted for, not merely most of them.** The
+    /// script writes to two names now — the host's result file three times
+    /// (`started`, `failed`, `ok`) and the re-run guard's marker once
+    /// (ART-190) — and both must land on ART's own volume. A test that only
+    /// looked at the ones it expected would not notice a fourth appearing
+    /// somewhere else, which on this volume is the difference between ART
+    /// reading its own answer and reading nothing.
     #[test]
     fn the_host_polls_the_name_the_script_redirects_to() {
         let ss = startup_sequence(&planned("C:Updater")).unwrap();
@@ -855,16 +1179,28 @@ Delete SYS:#?",
             .skip(1)
             .map(|rest| rest.split_whitespace().next().unwrap_or(""))
             .collect();
-        assert_eq!(redirected.len(), 3, "started, failed and ok:\n{ss}");
 
         let polled = result_path(Path::new("host-side"));
-        let polled = polled.file_name().unwrap().to_string_lossy();
-        for target in redirected {
-            assert_eq!(
-                target,
-                format!("{WORK_VOLUME}:{polled}"),
-                "the script writes somewhere the host is not looking:\n{ss}"
-            );
-        }
+        let polled = format!(
+            "{WORK_VOLUME}:{}",
+            polled.file_name().unwrap().to_string_lossy()
+        );
+        let marker = format!("{WORK_VOLUME}:{INVOKED_FILE}");
+
+        assert_eq!(
+            redirected.iter().filter(|t| **t == polled).count(),
+            3,
+            "started, failed and ok:\n{ss}"
+        );
+        assert_eq!(
+            redirected.iter().filter(|t| **t == marker).count(),
+            1,
+            "the invoked marker, once:\n{ss}"
+        );
+        assert_eq!(
+            redirected.len(),
+            4,
+            "every redirection must be one of those two:\n{ss}"
+        );
     }
 }

@@ -1970,3 +1970,166 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod real_install_hook {
+    //! Run a real package's own installer against the owner's own tree — the
+    //! one thing every other test in this round cannot reach.
+    //!
+    //! Everything above this module is synthetic by design: a fixture LHA ART
+    //! itself wrote, a fake launcher, an injected clock. That is what makes
+    //! them fast and deterministic, and it is also their ceiling — a fixture
+    //! cannot tell anyone whether a twenty-five-year-old `Updater` finds the
+    //! volume it is looking for, how long it takes, or whether it asks a
+    //! question nobody is there to answer.
+    //!
+    //! So this hook takes the same shape as
+    //! [`crate::core::osinstall::apply`]'s `build_the_real_39_tree_when_asked`
+    //! and `core::winuae`'s `boot_a_distribution_tree_when_asked`: `#[ignore]`d,
+    //! gated on environment variables that only exist on the owner's machine,
+    //! and a silent `return` when they do not — so CI is green without it and
+    //! nothing here is ever written into the repository.
+    //!
+    //! **It opens an emulator window**, deliberately and one at a time, and
+    //! terminates it. Run it explicitly:
+    //!
+    //! ```text
+    //!   ART_AMIGA_TREE=E:\amiga\ProjeART\bb-run\p2 ^
+    //!   ART_AMIGA_ROM="E:\...\Kickstart v3.1 rev 40.68 (1993)(Commodore)(A1200).rom" ^
+    //!   ART_WINUAE="C:\Program Files\WinUAE\winuae64.exe" ^
+    //!   ART_AMIGA_PACKAGES="E:\...\BoingBag39-1 (1).lha" ^
+    //!   ART_AMIGA_PACKAGE_ID=boingbag-39-1 ^
+    //!   cargo test install_a_real_package_when_asked -- --ignored --nocapture
+    //! ```
+    //!
+    //! `ART_AMIGA_PACKAGES` is `;`-separated, because ART-186's second archive
+    //! is the whole point of one of the three paths this exists to walk.
+
+    use super::*;
+    use std::time::Instant;
+
+    /// A sink that prints every phase with the seconds since the run began.
+    ///
+    /// The elapsed time is the measurement this hook exists for as much as the
+    /// outcome is: design §6 says the deadline must be *"a multiple of"* a real
+    /// installer's running time on this machine, *"recorded with what it was
+    /// measured from"*, and a number nobody timed is the thing that rule
+    /// forbids.
+    struct Loud(Instant);
+
+    impl ProgressSink for Loud {
+        fn report(&self, done: u64, total: Option<u64>, message: &str) {
+            println!(
+                "[{:>7.1}s] {message}{}",
+                self.0.elapsed().as_secs_f64(),
+                match total {
+                    Some(total) => format!(" ({done}/{total})"),
+                    None => String::new(),
+                }
+            );
+        }
+        fn is_cancelled(&self) -> bool {
+            false
+        }
+    }
+
+    /// Files and total bytes under `root`, so the report can say what the
+    /// installer actually changed rather than that it said it worked.
+    fn measure(root: &Path) -> (usize, u64) {
+        fn walk(dir: &Path, files: &mut usize, bytes: &mut u64) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, files, bytes);
+                } else if let Ok(meta) = entry.metadata() {
+                    *files += 1;
+                    *bytes += meta.len();
+                }
+            }
+        }
+        let (mut files, mut bytes) = (0usize, 0u64);
+        walk(root, &mut files, &mut bytes);
+        (files, bytes)
+    }
+
+    #[test]
+    #[ignore = "opens WinUAE against the owner's own tree, ROM and packages; run explicitly"]
+    fn install_a_real_package_when_asked() {
+        let (Ok(tree), Ok(rom), Ok(winuae), Ok(packages), Ok(package_id)) = (
+            std::env::var("ART_AMIGA_TREE"),
+            std::env::var("ART_AMIGA_ROM"),
+            std::env::var("ART_WINUAE"),
+            std::env::var("ART_AMIGA_PACKAGES"),
+            std::env::var("ART_AMIGA_PACKAGE_ID"),
+        ) else {
+            return;
+        };
+
+        let tree = PathBuf::from(tree);
+        let archives: Vec<PathBuf> = packages
+            .split(';')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .collect();
+
+        let request = AmigaInstallRequest {
+            tree: tree.clone(),
+            package_id: package_id.clone(),
+            system_volume: None,
+            package_archives: archives.clone(),
+            package_dir: None,
+            kickstart: PathBuf::from(&rom),
+            profile: None,
+        };
+
+        let before = measure(&tree);
+        println!("tree before: {} files, {} bytes", before.0, before.1);
+        for archive in &archives {
+            println!("archive: {}", archive.display());
+        }
+
+        let started = Instant::now();
+        let sink = Loud(started);
+
+        let composed = match compose(&request) {
+            Ok(composed) => composed,
+            Err(err) => {
+                println!("REFUSED at compose after {:?}: {err}", started.elapsed());
+                println!("tree after: {:?}", measure(&tree));
+                return;
+            }
+        };
+        println!(
+            "command: {} (from {:?})",
+            command_line_of(&composed.plan),
+            composed.plan.working_directory
+        );
+        let profile = profile_for(request.profile.as_deref()).unwrap();
+
+        let result = install(
+            &composed,
+            &tree,
+            &archives,
+            &profile,
+            &PathBuf::from(&rom),
+            &PathBuf::from(&winuae),
+            &sink,
+        );
+        let elapsed = started.elapsed();
+
+        match result {
+            Ok((outcome, settlement)) => {
+                println!("outcome: {outcome:?}");
+                println!("settlement: {settlement:?}");
+            }
+            Err(err) => println!("ERROR after {elapsed:?}: {err}"),
+        }
+        println!("elapsed: {:.1}s", elapsed.as_secs_f64());
+        let after = measure(&tree);
+        println!("tree after: {} files, {} bytes", after.0, after.1);
+    }
+}
