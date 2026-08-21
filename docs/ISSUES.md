@@ -26,6 +26,62 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-200** 🟠 **ART names an archive, the user fetches it, and ART refuses
+it with a sentence that does not say it belongs in the other field** —
+*found 2026-08-22 by the owner, driving the Amiga-side install step*
+`src-tauri/src/core/amigainstall/packagevol.rs` ·
+`src-tauri/src/core/osinstall/recipes/packages/boingbag-39-1.json`
+
+The package takes **two** archives. `BoingBag39-1.lha` is the package itself
+and carries the drawer `BoingBag3.9-1`, where `C/Updater` lives.
+`BoingBag39-1-UAE.lha` is the *update* archive, carries `BoingBag3.9-1-UAE`,
+and is what [ART-186](#fixed) tells the user to go and get: the original's
+`Updater` is 45.13, which does not run under an emulator, and the UAE build is
+45.15.
+
+Put the second file in the first field and the refusal reads:
+
+> `invalid input: 'E:\amiga\Amigatolon\os39\BoingBag39-1-UAE.lha' carries no
+> 'BoingBag3.9-1' drawer, so it is not the archive this package's installer
+> lives in; it holds BoingBag3.9-1-UAE, BoingBag3.9-1-UAE.info`
+> · `ART-INPUT-INVALID`
+
+**The refusal is correct** — that archive really does not carry the drawer the
+installer lives in, and it lists what the archive *does* hold rather than
+leaving the user to guess. What is missing is the one sentence that ends the
+problem: **this is the update archive; it goes in the second field.**
+
+**ART has the fact in hand and does not use it.** `BoingBag3.9-1-UAE` is not an
+unknown name to ART: `boingbag-39-1.json` declares
+`amiga_installer.overlays = [{ "from": "BoingBag3.9-1-UAE/BoingBag3.9-1" }]`.
+The refusal already reads the archive's top-level drawers to say what it holds,
+so recognising that the drawer it found is the package's **own declared overlay
+drawer** costs one comparison against a value the recipe already carries.
+
+**This is the round's own rule broken by the round's own code.** CLAUDE.md:
+*"A refusal must be actionable. Name what is missing, and where order matters,
+name the order. A refusal a user can fix with one download must not look like
+one they cannot fix at all."* Here it is cheaper than a download — the file is
+already on disk, in the wrong box — and the sentence still does not say so. It
+is worse than the general case for one reason: **ART itself named this file.**
+`osinstall.amigaInstall.overlay.needed` tells the user to fetch precisely this
+archive, and then the program refuses it without connecting the two.
+
+**The screen is not silent about the two fields** —
+`osinstall.amigaInstall.overlayArchive.hint` and `overlay.needed` both explain
+it, and `overlay.needed` says outright *"Onu yukarıda ikinci arşiv olarak
+seçin."* That is what makes this a refusal defect rather than a labelling one:
+the guidance exists elsewhere on the screen and the refusal does not carry it
+to the place the user is actually looking, which is the error they just caused.
+
+**Fix**: when the supplied archive's top-level drawer matches a drawer the
+package's own `overlays` declare, refuse with a distinct, typed reason naming
+the field it belongs in, rather than the generic drawer mismatch. It is a
+`CoreError` variant and a sentence in both catalogues; the recipe already holds
+everything the check needs. Not the reverse case as well — a package archive
+offered as an overlay — without measuring whether that is a real mistake anyone
+makes.
+
 **ART-199** 🟠 **A step reports itself ready on a folder that is not a
 distribution tree, so the refusal arrives on the button instead of at the
 field** — *found 2026-08-22 by the owner driving wave 1's own screen, minutes
