@@ -26,6 +26,37 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-196** 🟠 **ART writes its scratch to the system drive and the user
+cannot move it** — *raised by the owner 2026-08-21, after their C: had already
+been filled once by ART's own test scratch*
+`src-tauri/src/commands/osinstall.rs::scratch_root_for` ·
+`preview_cache_dir` · `core/amigainstall`
+
+Everything ART stages goes through `std::env::temp_dir()`, which on Windows is
+`%TEMP%` on the **system drive**. The shipped app therefore writes preview
+extractions, staging roots and install scratch to `C:` whatever the user would
+prefer, and offers no way to say otherwise.
+
+This is not hypothetical here. On 2026-08-20 ART's *test* scratch put 169,291
+directories and roughly 987 GB into `%TEMP%` and filled a 2 TB system drive,
+after which hundreds of tests failed with `StorageFull` (ART-184). The tests
+were redirected off the system drive with a machine-local
+`.cargo/config.toml`; **the shipped product was not, and cannot be.**
+[ART-195](#open)'s 2,149 preview jobs each staged into `C:` on the owner's own
+machine.
+
+The owner's standing rule is that ART writes nothing to `C:`. Today the
+product cannot honour it.
+
+**What would close it.** A scratch location the user sets, remembered like
+every other setting (`src/lib/remembered.ts` with a guard), defaulting to
+`temp_dir()` so nothing changes for someone who never opens the setting. The
+paths themselves already carry counters and clean up on `Drop`; only the root
+needs to become a choice.
+
+Worth pairing with [ART-184](#open)'s remaining half — a sweep for what a
+crash leaves behind — since both are about scratch nobody asked for.
+
 **ART-195** 🟠 **Four preview jobs run at once on one medium, and the screen
 stacks all four** — *found 2026-08-21 by the owner driving the release build,
 screenshot in hand*
