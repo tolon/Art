@@ -696,6 +696,15 @@
     }
   },
   "osBuilder": {
+    "step": {
+      "hedef": "What are we building",
+      "kaynak": "Install media",
+      "paketler": "Update packages",
+      "amiga-kurulum": "Install on the Amiga",
+      "kart": "The card image",
+      "birimler": "Prepare volumes",
+      "asksTree": "This step works on an AmigaOS folder, and none has been chosen yet. Pick one below, or build one first:"
+    },
     "intro": "The AmigaOS distributions that run on a PiStorm, what each one needs from you, and whether what you have suits it. ART never downloads a distribution — you fetch it yourself and point ART at the file.",
     "notBuiltYet": "ART cannot write a distribution card yet. This screen tells you what a distribution requires and checks the ROM and card you have against it.",
     "what": {
