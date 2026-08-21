@@ -473,6 +473,16 @@ belongs beside G9/G16 rather than inside a launcher-metadata round.
 
 Design: [2026-08-17-g10-launcher-metadata-design.md](superpowers/specs/2026-08-17-g10-launcher-metadata-design.md) §6.
 
+**Decided 2026-08-21 by the owner: yes, ART should offer it — but in its own
+round, and always as a proposal.** Never as a side effect of a metadata pass,
+and never placing a ROM without the user agreeing to that specific placement.
+The reasoning that kept it out of G10 still holds and is the reason for the
+shape: putting a user's ROM onto their card touches ROM Manager, the licensed
+Amiga Forever decode path and the card's own layout, and those are the
+owner's decisions rather than something a scan does on their behalf. So the
+loop closes as *"this title asks for `kick34005.A500`; ART recognises it in
+your collection — place it?"*, never as a silent copy.
+
 **ART-118** 🟠 **The OS Builder's install screen has never been driven in a
 real browser past its headings — jsdom now covers what a browser could not,
 the crash itself is still unresolved** — *found 2026-08-15/16, Task 13's
@@ -532,6 +542,20 @@ first looks: embedding a PFS3 driver into a **foreign** card's existing RDB
 (one ART did not build) is the one case with no path in ART today.
 `hst-imager` does it; that is named in the refusal text. Not fixed — filed as
 future work, not implied to already work.
+
+**Decided 2026-08-21 by the owner: leave it. `hst-imager` stays the named
+fallback for this one gap.** Editing an existing RDB in place is the kind of
+operation that takes every partition on the card with it when it goes wrong,
+and the geometry evidence says it would go wrong: `create_rdb_layout` assumes
+16 heads / 63 sectors and a real CaffeineOS card is 12 / 256. There is no
+measured demand for it either — the case is narrow (embedding a PFS3 driver
+into a card **ART did not build**; ART's own cards already carry their
+drivers, and FFS needs none because Kickstart carries it). The refusal names
+`hst-imager` by name, which is what makes this a signposted boundary rather
+than a dead end.
+
+Revisit only if someone actually meets the case and `hst-imager` cannot serve
+it — not before.
 
 **ART-062** 🔵 **No language has been checked on screen**
 `src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
