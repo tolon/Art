@@ -55,6 +55,32 @@ the extraction cache, invalidated by the same three fields. The number that
 should go in this entry is how long the owner's own first scan of
 `AmigaOS39.iso` actually took — measure it rather than assert that it is slow.
 
+**Decided 2026-08-21 by the owner: build it, cached by default, with an
+explicit rescan the user can reach.**
+
+Two requirements, and the second is the sharper one.
+
+**Cached by default, because the wait is not the user's problem to
+understand.** Nobody should sit through a rescan of a disc that has not
+changed, and no screen should have to explain why it is doing it. The fast
+path is the ordinary path.
+
+**And a rescan the user can ask for, because the key can be right and the
+answer still wrong.** `(path, size, mtime)` catches a file that changed in
+place — but **a restored backup can preserve its timestamps**. Several
+AmigaOS 3.9 ISOs are in circulation and people also keep their own backups,
+so "same path, same size, same mtime, different disc" is a real arrangement
+rather than a theoretical one. The cache would then serve a stale answer with
+complete confidence, which is this project's most expensive failure shape —
+it does not crash, it just tells the user something untrue.
+
+So the rescan control is not a convenience. It is the escape hatch for the
+one case the cheap key cannot see, and the reason the cheap key is safe to
+use everywhere else.
+
+Per CLAUDE.md's "nothing changes unless the user changes it": if the user
+turns caching off or forces a rescan, that choice persists.
+
 **ART-187** 🔵 **A cancelled Amiga-side install leaves the last phase line
 on screen under a badge that says nothing about it** — *found 2026-08-21 in
 Task 6's review, ruled shippable*
