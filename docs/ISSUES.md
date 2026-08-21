@@ -26,6 +26,35 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-188** 🔵 **The OS Builder rescans the whole medium every time, though
+the machinery to avoid it already exists** — *proposed by the owner
+2026-08-21 while watching a real 468 MB ISO preview*
+`src-tauri/src/core/osinstall/scan.rs` ·
+`src-tauri/src/commands/osinstall.rs::preview_cache_key`
+
+Amiga files are small and numerous, so walking a disc is thousands of tiny
+reads and the preview visibly takes its time. The owner's suggestion: settle
+it once and compare against that afterwards.
+
+**Half of it is already built.** Archive extraction for the component preview
+is cached on `preview_cache_key` — `(path, mtime, size, member)` — hashed into
+a deterministic directory, so a second preview of the same archive does not
+extract it again. **The media scan has no equivalent**: `scan.rs` caches
+nothing, so every preview walks the disc from the start.
+
+**Identity from metadata, not from content.** The owner phrased it as taking a
+hash; hashing 468 MB costs about what the scan costs, so it would trade the
+problem for itself. `preview_cache_key`'s shape is the cheap one and it is
+already proven here: path plus size plus mtime is three constant-time reads,
+and all three stay put when a disc has not changed. Content hashing earns its
+keep where the question is "are these two files the same" — not "is this the
+same file I read last time".
+
+**What would close it.** The scan's result keyed the same way, stored beside
+the extraction cache, invalidated by the same three fields. The number that
+should go in this entry is how long the owner's own first scan of
+`AmigaOS39.iso` actually took — measure it rather than assert that it is slow.
+
 **ART-187** 🔵 **A cancelled Amiga-side install leaves the last phase line
 on screen under a badge that says nothing about it** — *found 2026-08-21 in
 Task 6's review, ruled shippable*
