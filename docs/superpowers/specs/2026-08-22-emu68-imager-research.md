@@ -203,6 +203,130 @@ recipe that assumes one folder is a recipe that cannot express this release.
 
 ---
 
+## 3a. The instructions page, read in full — ten things ART can act on
+
+`instructions.html` is the detailed page and it answers more about ART than
+anything else read this session. Each item below is quoted or paraphrased from
+it, with what it means for ART named.
+
+### 1. Media is identified by **content**, not by name — and ART identifies by volume name
+
+> The names of the ADF files and Kickstart ROMs are **not important**. You can
+> name them anything since the imager tool will **checksum and compare them to
+> a database of known good disk and ROM images**. This system prevents corrupt
+> or altered installations from causing issues.
+
+ART already does exactly this **for ROMs** — 154 Kickstart dumps generated from
+amitools' Remus database, verified on every CI run ([ART-104](../../ISSUES.md)).
+It does **not** do it for ADFs: `core/osinstall/scan.rs` matches media by the
+volume name inside the image. That is weaker in a specific way — a *modified*
+`Workbench3.2` still calls itself `Workbench3.2`.
+
+[ART-136](../../ISSUES.md) is the same lesson from the other side: the ADF path
+once assumed a **filename** convention no real file used, zero of 847. Volume
+names were the fix and they were the right fix; a content database is the next
+step, not a contradiction of it.
+
+### 2. Escom ADFs are defective, and the imager prefers Commodore/Cloanto
+
+> ADF images from the **Escom** Amiga distribution are missing, among other
+> things, **language files (keyboard layouts too)** and some tools. These
+> images, while usable, should be avoided — if Commodore or Cloanto ADF images
+> are available then the imager tool will **prioritise** their use.
+
+ART has no notion of an ADF's *provenance* and would use whichever it found.
+For a Turkish-facing tool, "missing keyboard layouts" is not a small defect.
+
+### 3. A named tool silently modifies ADFs
+
+> Certain tools (e.g. **DiskFlashback**) were noted as causing modifications to
+> the ADF, that while still useable, could cause the tool not to recognise
+> them.
+
+Worth knowing before ART's own hashes disagree with a user's disk and ART
+blames the disk.
+
+### 4. Emu68 wants **A1200** Kickstarts, whatever Amiga you have
+
+> Please note that **only A1200 versions** of the Kickstart ROMs are supported
+> as these are recommended for Emu68 **regardless of the Amiga model you are
+> using**.
+
+ART's ROM pairing (G9) reasons about version and machine from the tree and the
+card. This is a flat constraint of the *platform* that ART does not encode.
+
+### 5. The ROM each release wants, exactly
+
+| AmigaOS | Kickstart |
+|---|---|
+| 3.1 | 3.1 A1200 **40.68** |
+| 3.2 | 3.2 A1200 **47.96** |
+| 3.2.2.1 | 3.2.2 A1200 **47.111** |
+| 3.2.3 | 3.2.3 A1200 **47.115** |
+| 3.9 | 3.1 A1200 **40.68**, or **Kickstart 3.x A1200 Cloanto** |
+
+The owner's own material includes 40.68 and a licensed V47. Note 3.9 explicitly
+accepts a **Cloanto** ROM.
+
+### 6. The default layout, stated plainly
+
+> Emu68 loads files from a **FAT32** partition. Additionally, MBR partitions
+> with the Partition ID of **0x76** are identified by Emu68 as being
+> **separate Amiga drives**. … there can be a **maximum of 4 MBR partitions**.
+> … **By default, the Emu68 Imager creates one FAT32 partition and one 0x76
+> partition.** … You can have a maximum of **10 Amiga partitions** within the
+> 0x76 partition. This is **not** a limitation of AmigaOS — rather it's placed
+> within Emu68 Imager such that the interface does not become unwieldy.
+
+Three things settled: ART's model is right; the **default is 1 + 1**; and the
+ten-partition cap is a **UI choice, not a format rule** — so ART must not copy
+it as though it were one.
+
+### 7. `.vhd` as well as `.img` — ART writes only `.img`
+
+> a **.img** file is the fixed size of the image. For example, if you select
+> 32GiB you will need 32 GiB of space… Alternatively, you can use a **.vhd**
+> file which will **dynamically resize based on the contents**… recognised both
+> in WinUAE and Windows.
+
+ART's output is always a full-size `.img`. A 32 GiB card image costs 32 GiB of
+the user's disk — on a machine whose `C:` ART has already filled once
+([ART-196](../../ISSUES.md)). This is the cheapest real improvement on the list.
+
+### 8. UNC paths do not work
+
+> **UNC links will not work** due to limitations in one of the supporting tools
+> (HST-Imager).
+
+ART keeps `hst-imager` as a named fallback, so this limitation is ART's too on
+that path — and ART says nothing about it.
+
+### 9. WiFi credentials live on the image
+
+> Please bear in mind that your **wifi name and password are stored on the
+> image** should you use this option!
+
+If ART ever does G14's WiFi pre-seeding, that sentence has to come with it.
+
+### 10. The HDMI mode is fixed at boot
+
+> the output of your RaspberryPi is **fixed after boot**, and cannot be changed
+> without altering the `config.txt` file on the FAT32 partition.
+
+Which is another reason [ART-204](../../ISSUES.md) matters: `config.txt` is the
+only place some of these decisions can ever be changed.
+
+### And one about shape rather than facts
+
+The imager has a **Select Packages** screen — icon set (Standard vs
+GlowIcons), which languages, which software — and a **load/save settings** file
+written automatically *"if you ever need to re-run the install"*. ART's
+remembered settings already do the second. The first is what
+[the package catalogue](../../amiga-package-catalogue.md) would be the data
+for.
+
+---
+
 ## 4. `hdf2emu68` — the narrow tool, and what it does *not* do
 
 [github.com/PiStorm/hdf2emu68](https://github.com/PiStorm/hdf2emu68), README in
