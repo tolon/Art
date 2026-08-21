@@ -311,6 +311,72 @@ pub struct AmigaInstaller {
     /// such a drawer would be undeclarable if this refused one.
     #[serde(default)]
     pub args: Vec<String>,
+    /// The lowest `$VER:` version ART will launch this program at, written
+    /// the way AmigaOS writes it — `"45.15"`. `None` when nothing is known
+    /// to be wrong with any build of it, which is the ordinary case.
+    ///
+    /// **Measured, and it is the reason this field exists (ART-186).**
+    /// `BoingBag39-1.lha`'s own `C/Updater` states `$VER: Updater 45.13
+    /// (3.4.2001)`; `BoingBag39-1-UAE.lha`'s states `$VER: Updater 45.15
+    /// (17.4.2001)`, and that archive's readme says exactly what changed —
+    /// *"This archive contains a file, Updater 45.15, that fixes the
+    /// following problem: You can install the BoingBag on UAE now."* This
+    /// round launches that program **inside an emulator**, so 45.13 cannot
+    /// work; left alone it would fail, the generated script's `If Warn`
+    /// would write `failed`, and ART would report that the installer ran and
+    /// refused — about a program that could not have worked. §89 forbids
+    /// exactly that, so the run is refused before it starts instead.
+    ///
+    /// **A version, not a size.** `25 588` bytes is not an identity: it is
+    /// consistent with any build that happens to be that long, and reading a
+    /// coincidence as proof is the mistake that shipped an AmigaOS 3.5 tree
+    /// labelled 3.9. The `$VER:` string is the file's own statement about
+    /// itself, which is what "ask the artefact what it is; never infer it"
+    /// asks for. All three of the owner's real archives carry one, and
+    /// `the_owners_real_updaters_state_the_versions_this_recipe_relies_on`
+    /// re-reads them on demand.
+    #[serde(default)]
+    pub minimum_version: Option<String>,
+    /// Second and later media whose files are copied **over** the package's
+    /// own drawer before the installer is looked for, in the order written.
+    ///
+    /// The remedy the same readme prescribes: *"Simply update your old
+    /// BoingBag3.9-1 by copying the contents within the `BoingBag3.9-1`
+    /// drawer in this package to it."* Declared here as data so a fifth
+    /// package with the same shape is a JSON file, not a code path.
+    ///
+    /// Supplying one is the **user's** choice, not ART's: a copy downloaded
+    /// after 2001-04-20 already carries the fix, and
+    /// [`minimum_version`](Self::minimum_version) is what decides whether
+    /// one was needed. ART never fetches an overlay itself.
+    #[serde(default)]
+    pub overlays: Vec<InstallerOverlay>,
+}
+
+/// One overlay medium: where its files are inside its own archive, and where
+/// they land inside the package's drawer.
+///
+/// **`from` is a whole path from the overlay archive's own root, including
+/// that archive's top-level drawer**, because a real one is not shaped like
+/// the package it patches. Measured with 7-Zip 26.02 on 2026-08-21 against
+/// the owner's `BoingBag39-1-UAE.lha`: its seven entries sit under
+/// `BoingBag3.9-1-UAE\`, and the `Updater` is at
+/// `BoingBag3.9-1-UAE\BoingBag3.9-1\C\Updater` — one drawer deeper than the
+/// `BoingBag3.9-1\C\Updater` it replaces. Extracting it over the package with
+/// an overwrite policy would therefore have written a second, parallel
+/// drawer and left the old `Updater` exactly where it was; the archive had to
+/// be opened to find that out, which is why it was.
+///
+/// It doubles as the archive's identity: an archive carrying no such path is
+/// refused by name rather than silently contributing nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstallerOverlay {
+    /// `/`-separated, from the overlay archive's own root.
+    pub from: String,
+    /// `/`-separated, inside the package's own drawer. Empty — the default —
+    /// means the drawer itself, which is what the readme's remedy describes.
+    #[serde(default)]
+    pub to: String,
 }
 
 /// The flat shape a person actually edits. `id`/`media`/`rules`/`overrides`
@@ -505,7 +571,57 @@ fn validate_installer(package: &Package) -> CoreResult<()> {
         }
         refuse_shell_metacharacters("installer argument", arg)?;
     }
+    if let Some(minimum) = &installer.minimum_version {
+        if parse_version_pair(minimum).is_none() {
+            return Err(CoreError::Malformed {
+                format: "package".into(),
+                detail: format!(
+                    "'{}': the installer's minimum_version '{minimum}' is not a version and a \
+                     revision — AmigaOS writes one as '45.15'",
+                    package.id
+                ),
+            });
+        }
+    }
+    for overlay in &installer.overlays {
+        // `from` carries the overlay archive's own top-level drawer, so it is
+        // never empty; `to` is inside the package's drawer and an empty one
+        // means the drawer itself, which is what every overlay declared today
+        // says.
+        validate_path(
+            "package",
+            &package.id,
+            "amiga_installer.overlays[].from",
+            &overlay.from,
+            false,
+        )?;
+        validate_path(
+            "package",
+            &package.id,
+            "amiga_installer.overlays[].to",
+            &overlay.to,
+            true,
+        )?;
+        refuse_shell_metacharacters("installer overlay path", &overlay.from)?;
+        refuse_shell_metacharacters("installer overlay path", &overlay.to)?;
+    }
     Ok(())
+}
+
+/// `"45.15"` → `(45, 15)`; `None` for anything that is not two whole numbers
+/// separated by a dot.
+///
+/// Deliberately the same shape [`crate::core::amigaver`] reads out of a
+/// file's own `$VER:` marker, so a declaration and the thing it is compared
+/// against are never two different notions of a version. It is a separate
+/// two-line function rather than a call into that module because what is
+/// parsed here is a bare number a recipe author typed, not a marker found by
+/// substring search inside arbitrary bytes — the surrounding guards that
+/// module needs (bounded window, plausible-name check) have nothing to do
+/// here, and reusing it would mean writing `$VER: x 45.15` to make it fit.
+pub fn parse_version_pair(text: &str) -> Option<(u32, u32)> {
+    let (version, revision) = text.trim().split_once('.')?;
+    Some((version.trim().parse().ok()?, revision.trim().parse().ok()?))
 }
 
 /// Parse and validate one package's JSON — `recipe::parse`'s own validation
@@ -1094,6 +1210,8 @@ mod tests {
         let installer = AmigaInstaller {
             program: program.to_string(),
             args: args.iter().map(|a| a.to_string()).collect(),
+            minimum_version: None,
+            overlays: Vec::new(),
         };
         let json = serde_json::json!({
             "id": "x",
@@ -1198,6 +1316,94 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 0, "no package with an installer was checked");
+    }
+
+    // -----------------------------------------------------------------
+    // ART-186: the declaration a BoingBag 1 run needs
+    // -----------------------------------------------------------------
+
+    /// What the shipped recipes actually say. Both halves matter: BoingBag
+    /// 3.9-1 declares the minimum and the overlay because its own `Updater` is
+    /// 45.13, and BoingBag 3.9-2 declares **neither**, because no source says
+    /// any build of its 45.19 is unfit and inventing a requirement would be
+    /// §89's mistake from the other side.
+    #[test]
+    fn only_boingbag_one_declares_a_minimum_version_and_an_overlay() {
+        let one = super::by_id("boingbag-39-1")
+            .unwrap()
+            .amiga_installer
+            .unwrap();
+        assert_eq!(one.minimum_version.as_deref(), Some("45.15"));
+        assert_eq!(
+            one.overlays,
+            vec![InstallerOverlay {
+                from: "BoingBag3.9-1-UAE/BoingBag3.9-1".to_string(),
+                to: String::new(),
+            }],
+            "the overlay's `from` is a whole path from the UAE archive's own root, because that \
+             archive nests the drawer one level deeper than the package it patches"
+        );
+
+        let two = super::by_id("boingbag-39-2")
+            .unwrap()
+            .amiga_installer
+            .unwrap();
+        assert_eq!(two.minimum_version, None);
+        assert_eq!(two.overlays, Vec::new());
+    }
+
+    /// `"45.15"` is two integers or it is refused at parse time — so a `Some`
+    /// reaching the command layer always parses, and the command layer never
+    /// has to decide what a malformed one means.
+    #[test]
+    fn a_minimum_version_that_is_not_two_numbers_is_refused() {
+        for bad in ["45", "forty-five.fifteen", "45.", ".15", "", "45.15.3"] {
+            let json = serde_json::json!({
+                "id": "x",
+                "name": "X",
+                "media": "X",
+                "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ],
+                "amiga_installer": { "program": "C/Updater", "minimum_version": bad },
+            });
+            let err = parse(&json.to_string()).unwrap_err().to_string();
+            assert!(
+                err.contains("minimum_version"),
+                "'{bad}' must be refused by name, got {err}"
+            );
+        }
+        // And a well-formed one parses to the pair the run compares against.
+        assert_eq!(super::parse_version_pair("45.15"), Some((45, 15)));
+        assert_eq!(super::parse_version_pair("45.13"), Some((45, 13)));
+    }
+
+    /// An overlay path is a path inside an archive, and every gate a rule's
+    /// own `from` goes through applies to it — a recipe that could climb out
+    /// would be naming files outside the archive ART unpacked.
+    #[test]
+    fn an_overlay_path_that_leaves_its_archive_is_refused() {
+        for (from, to) in [
+            ("../outside", ""),
+            ("BoingBag3.9-1-UAE/../../outside", ""),
+            ("/absolute", ""),
+            ("", ""),
+            ("BoingBag3.9-1-UAE/BoingBag3.9-1", "../../outside"),
+            ("BoingBag3.9-1-UAE/BoingBag3.9-1", "/absolute"),
+        ] {
+            let json = serde_json::json!({
+                "id": "x",
+                "name": "X",
+                "media": "X",
+                "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ],
+                "amiga_installer": {
+                    "program": "C/Updater",
+                    "overlays": [ { "from": from, "to": to } ],
+                },
+            });
+            assert!(
+                parse(&json.to_string()).is_err(),
+                "'{from}' -> '{to}' must be refused"
+            );
+        }
     }
 
     /// An unknown id is refused by name, never defaulted to some other

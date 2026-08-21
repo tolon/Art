@@ -104,7 +104,7 @@ use crate::core::amigainstall::{
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::{JobId, ProgressSink};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
-use crate::core::osinstall::package;
+use crate::core::osinstall::{chain, package};
 use crate::core::profile::AmigaProfile;
 use crate::core::sources::install::Scratch;
 use crate::core::winuae::detect_winuae;
@@ -146,15 +146,23 @@ pub struct AmigaInstallRequest {
     /// adds that itself.
     #[serde(default)]
     pub system_volume: Option<String>,
-    /// The package's **own** archive — the wrapper the user downloaded,
-    /// `BoingBag39-1.lha`. ART unpacks it to a directory of its own and mounts
-    /// that as a third volume.
+    /// The package's **own** archives. The first is the wrapper the user
+    /// downloaded, `BoingBag39-1.lha`; ART unpacks it to a directory of its
+    /// own and mounts that as a third volume.
     ///
     /// **Required, and added by ART-185.** Nothing else can supply the
     /// installer: a BoingBag's payload cannot be placed into the tree from the
     /// host at all, which is why this round exists (ART-166), so the program
     /// the run executes is in no volume ART mounts unless it comes from here.
-    pub package_archive: PathBuf,
+    ///
+    /// **A list, and that is ART-186.** BoingBag 3.9-1's own `Updater` is
+    /// 45.13, which cannot install a BoingBag under an emulator; the fix
+    /// shipped as a second archive, and its own readme's remedy is to copy
+    /// that archive's `BoingBag3.9-1` drawer over the package's. So every
+    /// archive after the first is an **overlay medium**, matched against what
+    /// the recipe declares by what it actually carries rather than by the
+    /// order the user picked their files in.
+    pub package_archives: Vec<PathBuf>,
     /// Where the package's **own** files sit inside that unpacked wrapper,
     /// `/`-separated — `BoingBag3.9-1`, which is the drawer every one of the
     /// owner's real wrappers carries at its top level beside its icon.
@@ -199,11 +207,21 @@ pub struct AmigaInstallPreview {
     /// **third**, and the one ART-185 was missing. Named here for the same
     /// reason as `work_volume`: the user will see it on the Workbench.
     pub package_volume: String,
-    /// The package's own archive, as the user chose it.
-    pub package_archive: PathBuf,
-    /// Whether that archive is actually there. A preview that did not ask
-    /// would be describing a run with nothing to run.
-    pub package_archive_present: bool,
+    /// The package's own archives, as the user chose them — the wrapper
+    /// first, then any overlay medium.
+    pub package_archives: Vec<PathBuf>,
+    /// Whether **every** one of them is actually there. A preview that did not
+    /// ask would be describing a run with nothing to run; asking only about
+    /// the first would describe a run ART would refuse a moment later.
+    pub package_archives_present: bool,
+    /// The overlay media this package declares, by the path inside such an
+    /// archive that identifies one — so the screen can say what a second file
+    /// would have to be before the user goes looking for it (ART-186).
+    pub declared_overlays: Vec<String>,
+    /// The lowest version the package's installer may state, `"45.15"`, or
+    /// `None` when no build of it is known to be unfit. Named on the screen
+    /// because it is why a second archive may be needed at all.
+    pub minimum_installer_version: Option<String>,
     /// The drawer inside that archive the installer is expected in, or `None`
     /// for the archive's own root.
     pub package_dir: Option<String>,
@@ -298,6 +316,21 @@ struct Composed {
     /// (`C/Updater`) — likewise for the unpack's proof, and likewise not the
     /// same string as `plan.program`, which is the whole AmigaDOS path.
     installer_in_package: String,
+    /// The recipe's overlay declarations, translated into the record
+    /// `core::amigainstall` declares for itself.
+    ///
+    /// **The translation is this layer's job on purpose.** `core/amigainstall`
+    /// knows nothing about recipes and must not learn: CLAUDE.md's rule is
+    /// that a lower-level `core/` module declares its own record carrying only
+    /// what it reads, and `commands/` maps between the two — the shape
+    /// `core/rom/pairing.rs` and `commands/preload.rs::rom_pairing_for`
+    /// already set.
+    overlays: Vec<packagevol::Overlay>,
+    /// The recipe's `minimum_version`, parsed. `None` when the recipe declares
+    /// none, which is every package but BoingBag 3.9-1.
+    minimum_installer_version: Option<(u32, u32)>,
+    /// The same thing as the recipe wrote it, for the preview.
+    minimum_installer_version_text: Option<String>,
 }
 
 /// Refuse a value that cannot survive being written into the generated line.
@@ -397,6 +430,17 @@ fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
         )));
     };
 
+    // ART-186, and it is **before** anything is copied, unpacked or written:
+    // `perform` makes the tree copy, `install` builds two scratch volumes, and
+    // all of it happens after this line. A BoingBag 2 run against a tree
+    // BoingBag 1 never touched produces a system that boots and is quietly
+    // wrong, which is the failure this project already shipped once.
+    //
+    // Here rather than in the job, because the *preview* has to refuse it too:
+    // a screen that offered a confirm button for a run that cannot happen
+    // would be a preview of nothing.
+    chain::refuse_unless_prerequisites_met(&package, &request.tree)?;
+
     let volume = system_volume(request.system_volume.as_deref())?;
 
     // The drawer inside the **wrapper**, not inside the tree (ART-185). The
@@ -439,11 +483,32 @@ fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
 
     workvol::startup_sequence(&plan)?;
 
+    // The recipe's own declarations, translated — never carried across as the
+    // recipe's own type. See `Composed::overlays`.
+    let overlays: Vec<packagevol::Overlay> = installer
+        .overlays
+        .iter()
+        .map(|overlay| packagevol::Overlay {
+            from: overlay.from.clone(),
+            to: overlay.to.clone(),
+        })
+        .collect();
+    // `validate_installer` already refused a `minimum_version` that is not two
+    // integers, so a shipped recipe always parses. A `None` here can therefore
+    // only mean the recipe declared none.
+    let minimum_installer_version = installer
+        .minimum_version
+        .as_deref()
+        .and_then(package::parse_version_pair);
+
     Ok(Composed {
         plan,
         package_name: package.name,
         package_dir,
         installer_in_package,
+        overlays,
+        minimum_installer_version,
+        minimum_installer_version_text: installer.minimum_version.clone(),
     })
 }
 
@@ -545,7 +610,7 @@ fn perform(
 fn install(
     composed: &Composed,
     tree: &Path,
-    package_archive: &Path,
+    package_archives: &[PathBuf],
     profile: &AmigaProfile,
     kickstart: &Path,
     emulator: &Path,
@@ -560,10 +625,14 @@ fn install(
     sink.report(0, None, "Unpacking the package's own files");
     let package = Scratch::new()?;
     let unpacked = packagevol::unpack(
-        package_archive,
+        package_archives,
         package.path(),
-        composed.package_dir.as_deref(),
-        &composed.installer_in_package,
+        &packagevol::Layout {
+            drawer: composed.package_dir.as_deref(),
+            installer: &composed.installer_in_package,
+            overlays: &composed.overlays,
+            minimum_installer_version: composed.minimum_installer_version,
+        },
         sink,
     )?;
     for refusal in &unpacked.refused {
@@ -572,6 +641,20 @@ fn install(
             None,
             &format!("The package's archive carries an entry ART would not write — {refusal}"),
         );
+    }
+    // Said before the run, not only in the report afterwards: a run that
+    // worked because a second archive patched the first is not the same run
+    // as one of the first alone, and the user should be told which they got
+    // (ART-186).
+    for from in &unpacked.overlaid {
+        sink.report(
+            0,
+            None,
+            &format!("A second archive supplied '{from}' over the package's own files"),
+        );
+    }
+    if let Some(version) = &unpacked.installer_version {
+        sink.report(0, None, &format!("The installer states {version}"));
     }
 
     perform(tree, sink, |copy, sink| {
@@ -585,8 +668,46 @@ fn install(
             winuae_path: emulator,
             limits: RunLimits::default(),
         };
-        run(&request, sink)
+        let outcome = run(&request, sink)?;
+        record_if_succeeded(copy, plan, &outcome)?;
+        Ok(outcome)
     })
+}
+
+/// ART-186's other half: a run that says it worked writes that into the
+/// copy's own `distribution.json`.
+///
+/// Without it the prerequisite refusal `compose` now makes could never be
+/// satisfied — a BoingBag cannot be placed from the host at all, so if a
+/// successful Amiga-side run left no trace, BoingBag 2 would be refused for
+/// ever on a tree that really did have BoingBag 1.
+///
+/// Written into the **copy**, before [`settle`] decides whether the copy
+/// becomes the tree: that makes the record and the promotion one decision
+/// rather than two, and a record that could not be written takes
+/// [`perform`]'s existing failure path — the copy is kept, the original was
+/// never opened.
+///
+/// **A named function rather than three lines inside the closure**, because
+/// `install` cannot be driven to a successful outcome in a test without
+/// opening an emulator window on the owner's desktop, and a test that
+/// re-wrote this condition in its own closure would be testing its own copy
+/// of it. This is the real one, and the tests call it for all four endings.
+fn record_if_succeeded(copy: &Path, plan: &PlannedRun, outcome: &RunOutcome) -> CoreResult<()> {
+    if matches!(outcome, RunOutcome::Succeeded) {
+        chain::record_amiga_install(copy, &plan.package_id, &command_line_of(plan))?;
+    }
+    Ok(())
+}
+
+/// The AmigaDOS line a plan runs as, program and arguments joined by spaces —
+/// what the generated script carried, recorded in the tree's own manifest and
+/// in the operation log.
+fn command_line_of(plan: &PlannedRun) -> String {
+    std::iter::once(plan.program.clone())
+        .chain(plan.args.iter().cloned())
+        .collect::<Vec<String>>()
+        .join(" ")
 }
 
 /// The word the log records for an ending. English, like every other
@@ -625,8 +746,15 @@ pub fn amiga_install_preview(
         args: composed.plan.args,
         work_volume: WORK_VOLUME.to_string(),
         package_volume: PACKAGE_VOLUME.to_string(),
-        package_archive_present: request.package_archive.is_file(),
-        package_archive: request.package_archive,
+        package_archives_present: !request.package_archives.is_empty()
+            && request.package_archives.iter().all(|a| a.is_file()),
+        declared_overlays: composed
+            .overlays
+            .iter()
+            .map(|overlay| overlay.from.clone())
+            .collect(),
+        minimum_installer_version: composed.minimum_installer_version_text,
+        package_archives: request.package_archives,
         package_dir: composed.package_dir,
         result_file: RESULT_FILE.to_string(),
         deadline_seconds: RunLimits::default().deadline.as_secs(),
@@ -667,7 +795,7 @@ pub fn amiga_install_run(
 
     let plan = composed.plan.clone();
     let tree = request.tree.clone();
-    let package_archive = request.package_archive.clone();
+    let package_archives = request.package_archives.clone();
     let kickstart = request.kickstart.clone();
     let emulator = PathBuf::from(emulator);
     let log_path = oplog.path().to_path_buf();
@@ -675,10 +803,7 @@ pub fn amiga_install_run(
     let title = format!("Installing {} on the Amiga", composed.package_name);
 
     let for_log = tree.display().to_string();
-    let command_line = std::iter::once(plan.program.clone())
-        .chain(plan.args.iter().cloned())
-        .collect::<Vec<String>>()
-        .join(" ");
+    let command_line = command_line_of(&plan);
     let package_id = plan.package_id.clone();
 
     let id = spawn_job(
@@ -689,7 +814,7 @@ pub fn amiga_install_run(
             let result = install(
                 &composed,
                 &tree,
-                &package_archive,
+                &package_archives,
                 &profile,
                 &kickstart,
                 &emulator,
@@ -795,11 +920,18 @@ mod tests {
             tree: tree.to_path_buf(),
             package_id: "boingbag-39-1".to_string(),
             system_volume: None,
-            package_archive: PathBuf::from("BoingBag39-1.lha"),
+            package_archives: vec![PathBuf::from("BoingBag39-1.lha")],
             package_dir: None,
             kickstart: PathBuf::from("kick.rom"),
             profile: None,
         }
+    }
+
+    /// [`request`] for a package other than BoingBag 3.9-1.
+    fn request_for(tree: &Path, package_id: &str) -> AmigaInstallRequest {
+        let mut req = request(tree);
+        req.package_id = package_id.to_string();
+        req
     }
 
     /// A wrapper shaped like the owner's own `BoingBag39-1.lha`, measured with
@@ -815,9 +947,27 @@ mod tests {
         crate::core::lha::tests::make_lha_with(&[
             ("BoingBag3.9-1.info", b"icon"),
             ("BoingBag3.9-1/AmigaOS-Update", b"PK encrypted"),
-            ("BoingBag3.9-1/C/Updater", b"the updater"),
+            ("BoingBag3.9-1/C/Updater", updater(45, 15)),
             ("BoingBag3.9-1/Install", b"; the package's own script"),
         ])
+    }
+
+    /// An `Updater` that states its own version the way the real one does.
+    ///
+    /// ART-186: BoingBag 3.9-1's recipe declares a minimum of 45.15, so a
+    /// fixture whose `Updater` is the bytes `b"the updater"` is not a program
+    /// ART would launch at all — it says nothing about itself, and ART does
+    /// not launch what it cannot identify. The marker is placed after some
+    /// leading bytes because a real one is: 505 bytes into the owner's own
+    /// `BoingBag39-1.lha` `Updater`, 537 into the other two.
+    fn updater(version: u32, revision: u32) -> &'static [u8] {
+        // `make_lha_with` takes `&'static [u8]`, and the two builds this file
+        // needs are known at compile time.
+        match (version, revision) {
+            (45, 13) => b"\x00\x00\x03\xf3 hunk header \x00$VER: Updater 45.13 (3.4.2001)\x00",
+            (45, 15) => b"\x00\x00\x03\xf3 hunk header \x00$VER: Updater 45.15 (17.4.2001)\x00",
+            _ => unreachable!("only the two builds ART-186 measured"),
+        }
     }
 
     /// A tree with something in it, so the copy is a real copy.
@@ -1260,7 +1410,7 @@ mod tests {
         let err = install(
             &composed,
             &tree,
-            &archive,
+            std::slice::from_ref(&archive),
             &AmigaProfile::a1200_aga(),
             Path::new("no-such.rom"),
             Path::new("no-such.exe"),
@@ -1300,7 +1450,7 @@ mod tests {
         let err = install(
             &composed,
             &tree,
-            &archive,
+            std::slice::from_ref(&archive),
             &AmigaProfile::a1200_aga(),
             Path::new("no-such.rom"),
             Path::new("no-such.exe"),
@@ -1340,7 +1490,11 @@ mod tests {
             &archive,
             crate::core::lha::tests::make_lha_with(&[
                 ("BoingBag3.9-1.info", b"icon"),
-                ("BoingBag3.9-1/C/Updater", b"the updater"),
+                // A fit build: this test is about the traversal gate, and an
+                // `Updater` that said nothing about itself would be refused by
+                // ART-186's version check first, so the refusals it is
+                // asserting on would never be reported at all.
+                ("BoingBag3.9-1/C/Updater", updater(45, 15)),
                 ("../../Workbench3.9/Libs/version.library", b"planted"),
                 ("C:/Windows/System32/art.dll", b"planted"),
             ]),
@@ -1352,7 +1506,7 @@ mod tests {
         let _ = install(
             &composed,
             &tree,
-            &archive,
+            std::slice::from_ref(&archive),
             &AmigaProfile::a1200_aga(),
             Path::new("no-such.rom"),
             Path::new("no-such.exe"),
@@ -1444,7 +1598,7 @@ mod tests {
             "the user will see a third volume on the Workbench; say so"
         );
         assert!(
-            !preview.package_archive_present,
+            !preview.package_archives_present,
             "and it says the package's own archive is missing too"
         );
         assert_eq!(preview.result_file, RESULT_FILE);
@@ -1460,6 +1614,256 @@ mod tests {
         assert_eq!(
             std::fs::read(tree.join("Libs/version.library")).unwrap(),
             b"the original"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // ART-186: the chain is mandatory, and the refusal is in `compose`
+    // -----------------------------------------------------------------
+
+    /// A tree with a real `distribution.json` naming `components`.
+    ///
+    /// **The manifest is always written.** A fixture without one refuses for
+    /// its own, different reason — "ART cannot say what this tree has" — and a
+    /// prerequisite test built on it would pass with the prerequisite check
+    /// deleted. `a_tree_with_no_manifest_is_a_different_refusal` in
+    /// `core::osinstall::chain` pins that other sentence.
+    fn tree_with_manifest(scratch: &ScratchDir, components: &[&str]) -> PathBuf {
+        use crate::core::osinstall::apply::{DistributionManifest, FileRecord};
+
+        let tree = tree_in(scratch);
+        let manifest = DistributionManifest {
+            release: "amigaos-3.9".into(),
+            built_from: Vec::new(),
+            files: components
+                .iter()
+                .map(|c| FileRecord {
+                    path: "Libs/version.library".into(),
+                    component: (*c).to_string(),
+                    media: "Workbench3.9".into(),
+                    sha256: String::new(),
+                    bytes: 12,
+                    protection: None,
+                    overwrote: None,
+                    host_path: None,
+                })
+                .collect(),
+            paired_rom: None,
+            amiga_installed: Vec::new(),
+        };
+        std::fs::write(
+            tree.join("distribution.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        tree
+    }
+
+    /// The defect, in one line: BoingBag 2 on a tree BoingBag 1 never touched
+    /// used to compose cleanly. It is refused in `compose`, which is what
+    /// makes the **preview** refuse it too — a screen that offered a confirm
+    /// button here would be offering a run that cannot happen.
+    #[test]
+    fn boingbag_two_is_refused_on_a_tree_without_boingbag_one() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "chain");
+        let tree = tree_with_manifest(&scratch, &["workbench-base"]);
+
+        let mut req = request(&tree);
+        req.package_id = "boingbag-39-2".to_string();
+
+        let err = compose(&req).unwrap_err();
+        assert!(
+            err.to_string().contains("BoingBag 3.9-1"),
+            "the refusal must name what is missing: {err}"
+        );
+
+        // And the preview, which is the screen the user is actually looking
+        // at, refuses the same way rather than describing the run.
+        let err = amiga_install_preview(request_for(&tree, "boingbag-39-2"), None).unwrap_err();
+        assert!(err.to_string().contains("BoingBag 3.9-1"), "got {err}");
+    }
+
+    /// The same package on a tree that has BoingBag 1 composes. A refusal that
+    /// fired either way would be no check at all.
+    #[test]
+    fn boingbag_two_composes_once_the_tree_has_boingbag_one() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "chain-ok");
+        let tree = tree_with_manifest(&scratch, &["workbench-base", "boingbag-39-1"]);
+
+        let composed = compose(&request_for(&tree, "boingbag-39-2")).unwrap();
+        assert_eq!(composed.plan.package_id, "boingbag-39-2");
+    }
+
+    /// **Refused before anything is copied.** The whole tree copy, both
+    /// scratch volumes and the unpack all happen after `compose`, so a refused
+    /// run leaves the user's folder exactly as it was — no `.art-staged`
+    /// directory, no partial anything.
+    #[test]
+    fn a_refused_chain_copies_nothing_at_all() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "chain-nothing");
+        let tree = tree_with_manifest(&scratch, &["workbench-base"]);
+        let before = std::fs::read_dir(scratch.path()).unwrap().count();
+
+        assert!(compose(&request_for(&tree, "boingbag-39-2")).is_err());
+
+        assert!(
+            copies_beside(&tree).is_empty(),
+            "no copy may have been made"
+        );
+        assert_eq!(
+            std::fs::read_dir(scratch.path()).unwrap().count(),
+            before,
+            "and nothing at all was created"
+        );
+        assert_eq!(
+            std::fs::read(tree.join("Libs/version.library")).unwrap(),
+            b"the original"
+        );
+    }
+
+    /// BoingBag 1 requires nothing, so it composes against a tree with no
+    /// manifest at all — the check must not become "every run needs a manifest".
+    #[test]
+    fn boingbag_one_composes_against_a_tree_with_no_manifest() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "chain-none");
+        let tree = tree_in(&scratch);
+        assert!(!tree.join("distribution.json").exists());
+
+        compose(&request(&tree)).unwrap();
+    }
+
+    /// The recipe's overlay declaration reaches the unpack, translated into
+    /// `core::amigainstall`'s own record rather than carried across as the
+    /// recipe's type.
+    #[test]
+    fn the_recipes_overlay_and_minimum_version_reach_the_composed_run() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "overlay-decl");
+        let tree = tree_in(&scratch);
+
+        let composed = compose(&request(&tree)).unwrap();
+
+        assert_eq!(composed.minimum_installer_version, Some((45, 15)));
+        assert_eq!(
+            composed.overlays,
+            vec![packagevol::Overlay {
+                from: "BoingBag3.9-1-UAE/BoingBag3.9-1".to_string(),
+                to: String::new(),
+            }]
+        );
+
+        let preview = amiga_install_preview(request(&tree), None).unwrap();
+        assert_eq!(
+            preview.declared_overlays,
+            vec!["BoingBag3.9-1-UAE/BoingBag3.9-1".to_string()],
+            "the screen can say what a second file would have to be"
+        );
+        assert_eq!(preview.minimum_installer_version.as_deref(), Some("45.15"));
+    }
+
+    /// A run that says it succeeded records itself in the promoted tree's own
+    /// `distribution.json` — the half without which the refusal above could
+    /// never be satisfied, because a BoingBag cannot be placed from the host
+    /// at all.
+    ///
+    /// Driven through [`perform`] and [`record_if_succeeded`], the same two
+    /// functions the real run uses, with the emulator replaced by a closure:
+    /// no window opens on the owner's desktop.
+    #[test]
+    fn a_successful_run_records_itself_in_the_promoted_trees_manifest() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "record");
+        let tree = tree_with_manifest(&scratch, &["workbench-base"]);
+        let composed = compose(&request(&tree)).unwrap();
+        let plan = composed.plan.clone();
+
+        let (outcome, settlement) = perform(&tree, &Sink::default(), |copy, _sink| {
+            let outcome = RunOutcome::Succeeded;
+            record_if_succeeded(copy, &plan, &outcome)?;
+            Ok(outcome)
+        })
+        .unwrap();
+
+        assert_eq!(outcome, RunOutcome::Succeeded);
+        assert!(matches!(settlement, SettlementReport::Promoted { .. }));
+
+        let applied = chain::applied(&tree).unwrap();
+        assert!(
+            applied.contains("boingbag-39-1"),
+            "the tree must now say it has BoingBag 1: {applied:?}"
+        );
+
+        // And that is exactly what unblocks the next link in the chain.
+        compose(&request_for(&tree, "boingbag-39-2")).unwrap();
+    }
+
+    /// **Only** a successful run records anything. The other three endings
+    /// leave the tree saying what it said before, so a BoingBag 1 that failed,
+    /// timed out or was interrupted does not let BoingBag 2 through.
+    ///
+    /// All three are exercised through [`record_if_succeeded`] itself rather
+    /// than through a condition the test writes out again — a test carrying
+    /// its own copy of the rule passes however the real one is mutated.
+    #[test]
+    fn only_a_successful_run_records_anything() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "record-endings");
+        let tree = tree_with_manifest(&scratch, &["workbench-base"]);
+        let composed = compose(&request(&tree)).unwrap();
+        let plan = &composed.plan;
+
+        for ending in [
+            RunOutcome::Failed,
+            RunOutcome::TimedOut {
+                waited: std::time::Duration::from_secs(1200),
+            },
+            RunOutcome::EmulatorClosed {
+                waited: std::time::Duration::from_secs(3),
+            },
+        ] {
+            record_if_succeeded(&tree, plan, &ending).unwrap();
+            assert!(
+                !chain::applied(&tree).unwrap().contains("boingbag-39-1"),
+                "{ending:?} must record nothing"
+            );
+            assert!(
+                compose(&request_for(&tree, "boingbag-39-2")).is_err(),
+                "{ending:?} must leave the chain shut"
+            );
+        }
+
+        // The one that does, against the same tree, so the difference is the
+        // ending and nothing else.
+        record_if_succeeded(&tree, plan, &RunOutcome::Succeeded).unwrap();
+        assert!(chain::applied(&tree).unwrap().contains("boingbag-39-1"));
+        compose(&request_for(&tree, "boingbag-39-2")).unwrap();
+    }
+
+    /// A run whose *second* archive is missing is a run with nothing to run.
+    ///
+    /// The preview asks about **every** archive: with one present and one
+    /// absent, an `any`-shaped check would report the run as ready and the
+    /// user would meet the refusal after confirming.
+    #[test]
+    fn the_preview_asks_about_every_archive_not_just_the_first() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "preview-archives");
+        let tree = tree_in(&scratch);
+        let present = scratch.join("BoingBag39-1.lha");
+        std::fs::write(&present, boingbag_lha()).unwrap();
+
+        let mut req = request(&tree);
+        req.package_archives = vec![present.clone()];
+        assert!(
+            amiga_install_preview(req, None)
+                .unwrap()
+                .package_archives_present,
+            "one archive, and it is there"
+        );
+
+        let mut req = request(&tree);
+        req.package_archives = vec![present, scratch.join("BoingBag39-1-UAE.lha")];
+        assert!(
+            !amiga_install_preview(req, None)
+                .unwrap()
+                .package_archives_present,
+            "the second one is not, and the screen has to say so before the confirm button"
         );
     }
 }

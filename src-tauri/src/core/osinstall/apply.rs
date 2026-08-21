@@ -326,6 +326,43 @@ pub struct DistributionManifest {
     /// tree written by an older ART still reads back.
     #[serde(default)]
     pub paired_rom: Option<super::PairedRom>,
+    /// Packages whose **own installer ran on the Amiga** against this tree
+    /// and reported success — see [`super::chain`].
+    ///
+    /// A separate list rather than more [`FileRecord`]s, because it is a
+    /// different kind of knowledge and saying otherwise would be a lie ART
+    /// cannot back up: an Amiga Installer is a program ART did not write and
+    /// cannot supervise per file, so nothing here knows which files it wrote
+    /// or what they displaced. What is honestly known is that it ran and
+    /// said it worked, and that is exactly what this records.
+    ///
+    /// [`super::chain::missing_prerequisites`] reads it together with the
+    /// components named in [`files`](Self::files): a BoingBag cannot be
+    /// placed from the host at all (ART-166), so without this the chain it
+    /// is the second half of could never be satisfied and BoingBag 2 would
+    /// be refused for ever.
+    ///
+    /// `#[serde(default)]` so a tree written before this existed reads back
+    /// as "nothing has been installed on the Amiga", which is what was true
+    /// of it.
+    #[serde(default)]
+    pub amiga_installed: Vec<AmigaInstallRecord>,
+}
+
+/// One package's Amiga-side install, as [`DistributionManifest`] records it.
+///
+/// Deliberately only the two facts ART can vouch for: which package, and the
+/// AmigaDOS command line its own recipe named. No file list — see
+/// [`DistributionManifest::amiga_installed`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AmigaInstallRecord {
+    /// The package id, the same string [`super::package::Package::id`] and
+    /// [`FileRecord::component`] use, so one lookup answers both.
+    pub package: String,
+    /// What actually ran, program and arguments joined by spaces — the line
+    /// the generated AmigaDOS script carried.
+    pub command: String,
 }
 
 /// The manifest's own file name, at the distribution root.
@@ -977,6 +1014,7 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
         built_from,
         files,
         paired_rom: plan.paired_rom.clone(),
+        amiga_installed: Vec::new(),
     };
     write_manifest(root, &manifest)?;
 

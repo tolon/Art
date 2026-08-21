@@ -26,47 +26,6 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-186** 🟠 **Nothing enforces the BoingBag order, and nothing refuses
-the `Updater` that cannot run under an emulator** — *both established
-2026-08-21 from the owner's own material and sources*
-`src-tauri/src/core/osinstall/package.rs` · `recipes/packages/*.json` ·
-`src-tauri/src/commands/amigainstall.rs`
-
-Two requirements found together, both by opening the material rather than
-reasoning about it.
-
-**1. The chain is mandatory.** A clean AmigaOS 3.9, then BoingBag 1, then
-BoingBag 2, then optionally the community BoingBag 3 and 4 — which state
-their own requirement as "AmigaOS 3.9+BB2". Nothing in ART enforces it: a run
-of BoingBag 2 against a tree BoingBag 1 never touched would be accepted, and
-the result would boot and be quietly wrong. That is the same failure the
-AmigaOS 3.9 round already produced once, when a tree that booted cleanly
-turned out to be 3.5.
-
-The tree already carries the answer — `distribution.json`, written at its root
-by the OS-install engine, records which component and which medium every file
-came from. A recipe declares what it requires; a run whose prerequisite is
-missing is refused **before anything is copied**, naming what is missing and
-in what order.
-
-**2. BoingBag 1's `Updater` predates emulator support.** Measured against the
-owner's downloads: `BoingBag39-1.lha` carries `C/Updater` at **25,588 bytes,
-dated 2001-04-03**; `BoingBag39-1-UAE.lha` carries **25,732, dated
-2001-04-17**, and its readme says plainly *"You can install the BoingBag on
-UAE now."* The fix shipped 2001-04-20, so the owner's copy does not have it.
-This round launches that installer inside an emulator.
-
-Left alone, BoingBag 1 fails under UAE and the script's `If Warn` writes
-`failed` — so ART would report that the installer ran and refused, when it
-ran and could not work. The readme prescribes the remedy itself: copy the one
-file over. **Decided:** the recipe takes `BoingBag39-1-UAE.lha` as a second
-medium overriding `C/Updater`, and ART refuses to run BoingBag 1 with the old
-`Updater` and no overlay rather than launching something known not to work.
-
-Not yet measured, from the same readme: UAE may not present the AmigaOS 3.9
-CD under the name the installer expects, whose documented workaround is a
-manual `Assign AmigaOS3.9:`. Task 7 measures it.
-
 **ART-184** 🟠 **The test fixtures leak a scratch directory per run, for
 ever, and filled a 2 TB drive** — *found 2026-08-20 when the suite began
 failing with `StorageFull`*
@@ -606,6 +565,112 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-186** 🟠 **Nothing enforced the BoingBag order, and nothing refused
+the `Updater` that cannot run under an emulator** — *both established
+2026-08-21 from the owner's own material and sources, fixed the same day on
+`amiga-side-install`*
+`src-tauri/src/core/osinstall/chain.rs` · `core/osinstall/apply.rs` ·
+`core/amigainstall/packagevol.rs` · `recipes/packages/boingbag-39-1.json` ·
+`src-tauri/src/commands/amigainstall.rs`
+
+Two requirements found together, both by opening the material rather than
+reasoning about it.
+
+**1. The chain is mandatory.** A clean AmigaOS 3.9, then BoingBag 1, then
+BoingBag 2, then optionally the community BoingBag 3 and 4 — which state
+their own requirement as "AmigaOS 3.9+BB2". Nothing in ART enforced it: a run
+of BoingBag 2 against a tree BoingBag 1 never touched was accepted, and the
+result would boot and be quietly wrong. That is the same failure the AmigaOS
+3.9 round already produced once, when a tree that booted cleanly turned out
+to be 3.5.
+
+`core/osinstall/chain.rs` reads the `distribution.json` the OS-install engine
+already writes at the tree's root, and `compose` refuses a run whose
+prerequisite is missing **before anything is copied** — naming what is missing
+and in what order. A tree with no manifest at all is refused too, with its own
+sentence: ART cannot say what is in it, which is a different fix for the user
+than "install BoingBag 1 first".
+
+**The other half, without which the refusal would have been worse than no
+refusal.** A BoingBag cannot be placed from the host by any route (ART-166),
+so BoingBag 1 never appears among a tree's file records and BoingBag 2 would
+have been refused for ever on a tree that really had it. So a successful
+Amiga-side run records itself: `DistributionManifest::amiga_installed`, a
+`#[serde(default)]` list carrying only what ART can vouch for — which package
+ran, and the AmigaDOS line it ran as. No invented `FileRecord`s: an Amiga
+Installer is a program ART did not write and cannot supervise per file, and a
+manifest claiming a provenance nobody measured is the very failure it exists
+to prevent.
+
+**2. BoingBag 1's `Updater` predates emulator support.** Measured with 7-Zip
+26.02 against the owner's downloads in `E:\amiga\Amigatolon\os39`, and then
+by reading each extracted file's own `$VER:` marker rather than its length:
+
+| Archive | `C/Updater` | Dated | States |
+|---|---|---|---|
+| `BoingBag39-1.lha` | 25,588 | 2001-04-03 | `Updater 45.13 (3.4.2001)` |
+| `BoingBag39-1-UAE.lha` | 25,732 | 2001-04-17 | `Updater 45.15 (17.4.2001)` |
+| `BoingBag39-2.lha` | 42,676 | 2001-11-09 | `Updater 45.19 (9.11.2001)` |
+
+The UAE archive's readme names the build and what it fixes — *"This archive
+contains a file, Updater 45.15, that fixes the following problem: You can
+install the BoingBag on UAE now."* — and says a download made after
+2001-04-20 already carries it. The owner's is dated 2001-04-03. This round
+launches that installer inside an emulator, so left alone BoingBag 1 would
+fail, the script's `If Warn` would write `failed`, and ART would report that
+the installer ran and refused — about a program that could not work (§89).
+
+**The size is not the signal; the `$VER:` string is.** 25,588 bytes is
+consistent with any build that happens to be that long, and reading a
+coincidence as proof is how this project once shipped an AmigaOS 3.5 tree
+under the name 3.9. `boingbag-39-1.json` declares `minimum_version: "45.15"`
+and one overlay medium; `packagevol::unpack` takes a **list** of archives,
+copies the declared subtree over the package's drawer, then looks for the
+installer, then asks it what it is — and refuses an older or silent build by
+name, saying which archive to supply.
+
+**One thing the scouted design got wrong, and only reading the archive
+found it.** `BoingBag39-1-UAE.lha` nests its payload one drawer deeper than
+the package it patches — `BoingBag3.9-1-UAE\BoingBag3.9-1\C\Updater`, not
+`BoingBag3.9-1\C\Updater` — so extracting it over the package with
+`OverwritePolicy::Overwrite` would have written a parallel drawer and left
+45.13 exactly where it was. Each overlay is therefore extracted into a scratch
+directory of its own, through the same one gate, and the declared subtree
+copied over the drawer through `safe_join` and `core::safety::atomic`.
+
+Closed by **`boingbag_two_is_refused_on_a_tree_without_boingbag_one`** and
+**`an_overlay_replaces_the_packages_own_updater_and_the_older_build_loses`**,
+with `a_refused_chain_copies_nothing_at_all`,
+`a_tree_with_no_manifest_is_a_different_refusal`,
+`only_a_successful_run_records_anything`,
+`an_amiga_side_install_is_recorded_and_read_back`,
+`the_overlays_own_drawer_never_reaches_the_mount`,
+`the_stock_updater_alone_is_refused_and_the_message_says_what_to_supply`,
+`the_installer_is_looked_for_after_the_overlay_not_before`,
+`an_overlay_destination_that_leaves_the_drawer_is_refused` and
+`an_overlay_source_that_leaves_its_own_archive_is_refused` beside them. The
+measurement itself is re-runnable:
+`the_owners_real_updaters_state_the_versions_this_recipe_relies_on`, `#[ignore]`d
+behind `ART_OS39_FOLDER`, reads all three real archives through the production
+`unpack` and was run — 45.13, 45.15, 45.19, the stock archive alone refused,
+the pair accepted.
+
+Twenty-five mutations were put back. Twenty-three failed a named test; **one
+survived the first round and was disclosed and fixed** — the overlay's
+traversal test asserted only `is_err()`, and with `safe_join` swapped for
+`Path::join` the copy landed outside while the *version gate* refused the run
+a moment later, so the test passed against the defect it was written for. It
+now asserts which refusal fired and that nothing at all was written outside.
+**Two mutations are recorded as surviving on purpose**: the two `resolve`
+calls inside `copy_over`, whose input comes from `std::fs::read_dir` and so
+can never be a traversal. They are defence in depth, no test can reach them,
+and `copy_over`'s own documentation says so rather than letting a reader
+assume coverage.
+
+Still open from the same readme, and not this round's: UAE may not present the
+AmigaOS 3.9 CD under the name the installer expects, whose documented
+workaround is a manual `Assign AmigaOS3.9:`. Task 7 measures it.
 
 **ART-185** 🔴 **Nothing mounted the package, so the installer would
 never have started — and ART would have reported that it ran and refused** —

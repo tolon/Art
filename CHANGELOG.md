@@ -10,6 +10,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Installing on the Amiga side — the groundwork (2026-08-20)
 
 #### Added
+- **ART now refuses to install an update package out of order, and refuses
+  to run a BoingBag installer that cannot work.** Two things, both found by
+  reading the packages themselves.
+
+  The AmigaOS BoingBags are a chain: a clean 3.9, then BoingBag 1, then
+  BoingBag 2, then the optional community BoingBag 3 and 4. Installing one
+  out of order gives you a system that starts perfectly and is quietly the
+  wrong thing — the hardest kind of fault to notice. ART now reads what a
+  system folder was actually built from and says, before it copies anything,
+  which package has to go on first and in what order. A folder ART did not
+  build gets a different sentence, because that needs a different answer.
+
+  And BoingBag 3.9-1's own installer comes in two builds. The one in the
+  original download is from 3 April 2001 and cannot install under an
+  emulator at all; the fix, `Updater 45.15`, shipped seventeen days later in
+  a small separate archive. ART asks the program which build it is — not how
+  big the file is — and, if it is the older one, says so and names the
+  archive to add rather than starting an install that was always going to
+  fail. Add that second archive alongside the first and ART copies the newer
+  installer over, exactly as the archive's own readme tells you to do by
+  hand. **Nothing is unlocked or worked around**: the package's own installer
+  still does all the work.
+
+  Still not reachable from the interface — that is the rest of this round.
 - **The first piece of running a package's own installer inside the
   emulator.** Some update packages cannot be installed by copying files
   from Windows: the two AmigaOS BoingBags keep their payload locked with a

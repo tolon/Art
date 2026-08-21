@@ -73,6 +73,21 @@ describe("the four endings reach the frontend", () => {
     expect([...ts].sort()).toEqual([...rust].sort());
   });
 
+  it("carries the overlay a BoingBag 1 run may need (ART-186)", () => {
+    // The wrapper takes a **list**, not one path: BoingBag 3.9-1's own
+    // `Updater` is 45.13 and cannot install under an emulator, so a second
+    // archive supplies 45.15. A TypeScript declaration still saying `string`
+    // would make the one screen that matters unable to offer the second file.
+    expect(WRAPPER).toContain("packageArchives: string[];");
+    // And the preview says what that second file would have to be, and why —
+    // so the screen can name it before the user goes looking.
+    expect(COMMAND).toMatch(/pub declared_overlays: Vec<String>,/);
+    expect(COMMAND).toMatch(/pub minimum_installer_version: Option<String>,/);
+    expect(WRAPPER).toContain("declaredOverlays: string[];");
+    expect(WRAPPER).toContain("minimumInstallerVersion: string | null;");
+    expect(WRAPPER).toContain("packageArchivesPresent: boolean;");
+  });
+
   it("names the same event as the Rust", () => {
     const declared = COMMAND.match(/AMIGA_INSTALL_EVENT: &str = "([^"]+)"/);
     expect(declared?.[1]).toBe(AMIGA_INSTALL_EVENT);
@@ -86,10 +101,10 @@ describe("the four endings reach the frontend", () => {
     // required here too. Without the archive the installer is on no mounted
     // volume and the run reports that it said no about a program that never
     // started, which is the whole of ART-185.
-    expect(COMMAND).toMatch(/pub package_archive: PathBuf,/);
-    expect(COMMAND).not.toMatch(/#\[serde\(default\)\]\s*\r?\n\s*pub package_archive/);
-    expect(WRAPPER).toContain("packageArchive: string;");
-    expect(WRAPPER).not.toContain("packageArchive?");
+    expect(COMMAND).toMatch(/pub package_archives: Vec<PathBuf>,/);
+    expect(COMMAND).not.toMatch(/#\[serde\(default\)\]\s*\r?\n\s*pub package_archives/);
+    expect(WRAPPER).toContain("packageArchives: string[];");
+    expect(WRAPPER).not.toContain("packageArchives?");
 
     // And the third volume the run mounts is named on both sides, because
     // the user will see it on the Workbench (design §4).

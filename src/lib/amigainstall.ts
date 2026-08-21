@@ -77,13 +77,21 @@ export interface AmigaInstallRequest {
   /** The Amiga volume the tree is mounted as, e.g. `DH0`. A bare name with no
    *  colon; `null` takes ART's default. */
   systemVolume?: string | null;
-  /** The package's **own** archive — the wrapper the user downloaded,
-   *  `BoingBag39-1.lha`. ART unpacks it and mounts that as a third volume.
+  /** The package's **own** archives. The first is the wrapper the user
+   *  downloaded, `BoingBag39-1.lha`; ART unpacks it and mounts it as a third
+   *  volume.
    *
    *  Required, and added by ART-185: a BoingBag's payload cannot be placed
    *  into the tree from the host at all, which is why this round exists, so
-   *  the installer is on no volume ART mounts unless it comes from here. */
-  packageArchive: string;
+   *  the installer is on no volume ART mounts unless it comes from here.
+   *
+   *  **A list, and that is ART-186.** BoingBag 3.9-1's own `Updater` states
+   *  45.13, which cannot install a BoingBag under an emulator; the fix
+   *  shipped as a second archive, whose own readme says to copy its
+   *  `BoingBag3.9-1` drawer over the package's. Every archive after the first
+   *  is an overlay medium, matched by what it carries rather than by the
+   *  order it was picked in. */
+  packageArchives: string[];
   /** Where the package's own files sit inside that unpacked wrapper,
    *  `/`-separated — `BoingBag3.9-1`. `null` takes the package's own recipe
    *  `media`, which is that same drawer as shipped data; `""` means the
@@ -115,11 +123,21 @@ export interface AmigaInstallPreview {
   /** The volume the package's own unpacked wrapper is mounted as — the third,
    *  and the one ART-185 was missing. The user sees this one too. */
   packageVolume: string;
-  /** The package's own archive, as the user chose it. */
-  packageArchive: string;
-  /** Whether it is actually there. A preview that did not ask would be
-   *  describing a run with nothing to run. */
-  packageArchivePresent: boolean;
+  /** The package's own archives, as the user chose them — the wrapper first,
+   *  then any overlay medium. */
+  packageArchives: string[];
+  /** Whether **every** one of them is actually there. A preview that did not
+   *  ask would be describing a run with nothing to run; asking only about the
+   *  first would describe a run ART would refuse a moment later. */
+  packageArchivesPresent: boolean;
+  /** The overlay media this package declares, by the path inside such an
+   *  archive that identifies one — so the screen can say what a second file
+   *  would have to be before the user goes looking for it (ART-186). */
+  declaredOverlays: string[];
+  /** The lowest version the package's installer may state, `"45.15"`, or
+   *  `null` when no build of it is known to be unfit. Named on the screen
+   *  because it is why a second archive may be needed at all. */
+  minimumInstallerVersion: string | null;
   /** The drawer inside that archive the installer is expected in, or `null`
    *  for the archive's own root. */
   packageDir: string | null;

@@ -1214,7 +1214,21 @@ mod tests {
             art.boot_priority > user.boot_priority,
             "ART's volume must outrank the tree"
         );
-        assert_eq!(user.boot_priority, TREE_BOOT_PRIORITY);
+        // `i8::MIN` and **not** `TREE_BOOT_PRIORITY` (last round's review):
+        // `user` *is* the tree, so comparing its priority to the constant
+        // `media_for` assigned it reads that constant back to itself and would
+        // pass whatever value it were given. What is actually claimed is that
+        // nothing can be mounted below the tree, which is what makes ART's own
+        // volume the boot device however many volumes the run ends up with —
+        // and that claim is about the number, so the number is written here.
+        // Line 1296's `TREE_BOOT_PRIORITY` is a different claim and stays: the
+        // package volume is asserted to be *in the tree's class*, not to be a
+        // particular number.
+        assert_eq!(
+            user.boot_priority,
+            i8::MIN,
+            "the tree is mounted as data and must sit at the very bottom"
+        );
         assert_eq!(art.host_path, work.to_string_lossy());
         assert_eq!(user.host_path, tree.to_string_lossy());
         assert_eq!(

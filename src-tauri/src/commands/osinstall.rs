@@ -1154,6 +1154,7 @@ fn preview_component_collisions(
         built_from: Vec::new(),
         files: manifest_files,
         paired_rom: None,
+        amiga_installed: Vec::new(),
     };
     std::fs::write(
         scratch.join(MANIFEST_FILE_NAME),
@@ -1865,6 +1866,7 @@ mod tests {
             }],
             files,
             paired_rom: None,
+            amiga_installed: Vec::new(),
         };
         std::fs::write(
             tree.join(MANIFEST_FILE_NAME),
@@ -3225,6 +3227,7 @@ mod tests {
                 host_path: None,
             }],
             paired_rom: None,
+            amiga_installed: Vec::new(),
         };
         std::fs::write(
             dist_root.join(MANIFEST_FILE_NAME),
@@ -3551,6 +3554,7 @@ mod tests {
                 built_from: Vec::new(),
                 files: Vec::new(),
                 paired_rom: Some(paired),
+                amiga_installed: Vec::new(),
             };
             let manifest_value = serde_json::to_value(&manifest).unwrap();
             expect_keys(

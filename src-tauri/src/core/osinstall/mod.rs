@@ -53,6 +53,7 @@
 //! end of every task rather than only at the end of the feature.
 
 pub mod apply;
+pub mod chain;
 pub mod collide;
 pub mod package;
 pub mod plan;

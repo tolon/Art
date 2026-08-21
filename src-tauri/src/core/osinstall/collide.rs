@@ -809,6 +809,7 @@ mod tests {
                 host_path: None,
             }],
             paired_rom: None,
+            amiga_installed: Vec::new(),
         };
         std::fs::write(
             root.join(MANIFEST_FILE_NAME),

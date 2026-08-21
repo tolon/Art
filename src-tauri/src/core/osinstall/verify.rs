@@ -680,6 +680,7 @@ mod tests {
                 host_path: None,
             }],
             paired_rom: None,
+            amiga_installed: Vec::new(),
         }
     }
 
@@ -1101,6 +1102,7 @@ mod tests {
                 host_path: None,
             }],
             paired_rom: None,
+            amiga_installed: Vec::new(),
         };
 
         let report = verify_volume(&image, None, 1, &manifest).unwrap();

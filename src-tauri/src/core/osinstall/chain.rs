@@ -1,0 +1,441 @@
+//! What a tree has already had applied to it, and what a package needs first.
+//!
+//! **This module exists because of ART-186.** The packages are a chain: a
+//! clean AmigaOS 3.9, then BoingBag 1, then BoingBag 2, and only then the
+//! optional community BoingBag 3 and 4 — whose own release states its
+//! requirement as "AmigaOS 3.9+BB2". Practitioners agree from experience:
+//! one on forum.amiga.org reports installing "BB 1-4, one right after the
+//! other, all in a row".
+//!
+//! Nothing enforced it. A run of BoingBag 2 against a tree BoingBag 1 had
+//! never touched was accepted, and the result **boots and is quietly wrong**
+//! — which is the same failure this project already produced once, when a
+//! tree that booted cleanly turned out to be AmigaOS 3.5 rather than 3.9. A
+//! wrong system that starts is worse than one that refuses, because nothing
+//! tells the user which one they have.
+//!
+//! ## The tree already carries the answer, and it carries half of it
+//!
+//! [`DistributionManifest`] records, file by file, which component and which
+//! medium every byte came from, so the components a tree was built from can
+//! simply be read back. That is the half that was already there.
+//!
+//! The other half is new, and leaving it out would have made the refusal
+//! *worse* than no refusal at all. A BoingBag's payload is ZipCrypto-
+//! encrypted and ART cannot place one from the host by any route (ART-166) —
+//! that is the whole reason the Amiga-side round exists — so BoingBag 1
+//! never appears among a tree's file records, and a refusal reading only
+//! those would have refused BoingBag 2 for ever, on a tree that really did
+//! have BoingBag 1 installed. So a successful Amiga-side run records itself:
+//! [`record_amiga_install`], read back by [`applied`].
+//!
+//! **What it records is only what ART can vouch for.** An Amiga Installer is
+//! a program ART did not write and cannot supervise per file; it does not
+//! know which files were written or what they displaced. Writing invented
+//! [`FileRecord`](super::apply::FileRecord)s would make the tree claim a
+//! provenance nobody measured, which is precisely the failure the manifest
+//! exists to prevent. So the record says: this package's own installer ran,
+//! this is the line it ran as, and it reported success.
+//!
+//! ## Two refusals, not one, because they need different answers
+//!
+//! - A tree with **no `distribution.json`** is not a tree ART built, so ART
+//!   cannot say what is in it. The user's fix is to point at a distribution
+//!   tree.
+//! - A tree whose manifest is readable and **does not name the prerequisite**
+//!   is missing a package. The user's fix is to install that package first,
+//!   and the message names which, in the order they go on.
+//!
+//! Collapsing the two into one sentence would send half the readers to the
+//! wrong fix — §3's rule that ART says *which* of the possible reasons
+//! applies.
+//!
+//! A package that requires nothing reads no manifest at all: there is
+//! nothing to check, and refusing a hand-made tree over a requirement that
+//! does not exist would be ART claiming more than it knows (§89).
+
+use std::collections::{BTreeSet, VecDeque};
+use std::path::Path;
+
+use super::apply::{AmigaInstallRecord, DistributionManifest, MANIFEST_FILE_NAME};
+use super::package::{self, Package};
+use crate::core::error::{CoreError, CoreResult};
+
+/// Read a distribution tree's own `distribution.json`.
+fn read_manifest(tree: &Path) -> CoreResult<DistributionManifest> {
+    let path = tree.join(MANIFEST_FILE_NAME);
+    if !path.is_file() {
+        return Err(CoreError::SafetyRefused(format!(
+            "'{}' holds no {MANIFEST_FILE_NAME}, so ART cannot say which packages it already \
+             has; point at a distribution tree ART built",
+            tree.display()
+        )));
+    }
+    let text = std::fs::read_to_string(&path)?;
+    serde_json::from_str(&text).map_err(|err| CoreError::Malformed {
+        format: "distribution manifest".into(),
+        detail: format!("'{}': {err}", path.display()),
+    })
+}
+
+/// Every component and package id this tree already carries — the components
+/// its files came from, and the packages whose own installers ran on the
+/// Amiga against it.
+///
+/// The two are unioned rather than kept apart because callers ask one
+/// question: *is this thing in there?* A package id and a component id are
+/// the same string by construction — `RawPackage::into_package` builds the
+/// component from the package's own `id` — so one set answers it.
+pub fn applied(tree: &Path) -> CoreResult<BTreeSet<String>> {
+    let manifest = read_manifest(tree)?;
+    let mut ids: BTreeSet<String> = manifest
+        .files
+        .iter()
+        .map(|file| file.component.clone())
+        .collect();
+    ids.extend(manifest.amiga_installed.iter().map(|r| r.package.clone()));
+    Ok(ids)
+}
+
+/// Every package `package` needs before it, transitively, in the order they
+/// must be installed.
+///
+/// Transitive on purpose: BoingBag 3 and 4 declare BoingBag 2, which
+/// declares BoingBag 1, and a user starting from a clean tree needs to be
+/// told both — naming only the immediate one would send them round the same
+/// refusal twice.
+fn prerequisite_chain(package: &Package) -> CoreResult<Vec<String>> {
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut queue: VecDeque<String> = package.requires.iter().cloned().collect();
+    while let Some(id) = queue.pop_front() {
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        for need in package::by_id(&id)?.requires {
+            queue.push_back(need);
+        }
+    }
+    // `order` is the one place that decides application order, and it is
+    // given a transitively closed set so it can never refuse for the "not
+    // chosen" reason. A second sort here would be a second answer to a
+    // question that already has one.
+    package::order(&seen.into_iter().collect::<Vec<String>>())
+}
+
+/// Which of `package`'s prerequisites this tree does not have, in the order
+/// they must be installed. Empty when there is nothing to do.
+///
+/// Reads the tree only when there is a requirement to check — see the module
+/// documentation.
+pub fn missing_prerequisites(package: &Package, tree: &Path) -> CoreResult<Vec<String>> {
+    let chain = prerequisite_chain(package)?;
+    if chain.is_empty() {
+        return Ok(Vec::new());
+    }
+    let have = applied(tree)?;
+    Ok(chain
+        .into_iter()
+        .filter(|id| !have.contains(id))
+        .collect::<Vec<String>>())
+}
+
+/// Refuse the run when the tree is missing something `package` needs.
+///
+/// Called **before anything is copied** — the copy, the work volume and the
+/// package unpack all happen after this, so a refused run has changed
+/// nothing at all.
+pub fn refuse_unless_prerequisites_met(package: &Package, tree: &Path) -> CoreResult<()> {
+    let missing = missing_prerequisites(package, tree)?;
+    let Some(first) = missing.first() else {
+        return Ok(());
+    };
+    // Names, not ids, where ART has one: `boingbag-39-1` is ART's own
+    // bookkeeping and "BoingBag 3.9-1" is what is written on the thing the
+    // user downloaded.
+    let named: Vec<String> = missing
+        .iter()
+        .map(|id| match package::by_id(id) {
+            Ok(found) => found.name,
+            Err(_) => id.clone(),
+        })
+        .collect();
+    Err(CoreError::SafetyRefused(format!(
+        "'{}' has to go on after {}, and '{}' does not have {} yet — install {} first, in that \
+         order. Running it now would produce a system that boots and is quietly wrong.",
+        package.name,
+        named.join(", then "),
+        tree.display(),
+        if missing.len() == 1 { "it" } else { "them" },
+        named.first().map(String::as_str).unwrap_or(first)
+    )))
+}
+
+/// Record that `package_id`'s own installer ran on the Amiga against this
+/// tree and reported success.
+///
+/// Written into the tree's existing `distribution.json`, preserving every
+/// other field: this is an addition to the tree's account of itself, never a
+/// rewrite of it. A package already recorded is not recorded twice — a
+/// re-run of the same package is a legitimate thing to do and does not make
+/// the tree carry it twice.
+///
+/// Goes through `core::safety::atomic`, like every other write to this file:
+/// a half-written `distribution.json` is a tree that can no longer say what
+/// it is.
+pub fn record_amiga_install(tree: &Path, package_id: &str, command: &str) -> CoreResult<()> {
+    let mut manifest = read_manifest(tree)?;
+    if !manifest
+        .amiga_installed
+        .iter()
+        .any(|record| record.package == package_id)
+    {
+        manifest.amiga_installed.push(AmigaInstallRecord {
+            package: package_id.to_string(),
+            command: command.to_string(),
+        });
+    }
+    let text = serde_json::to_string_pretty(&manifest).map_err(|err| CoreError::Malformed {
+        format: "distribution manifest".into(),
+        detail: err.to_string(),
+    })?;
+    crate::core::safety::atomic::atomic_write(&tree.join(MANIFEST_FILE_NAME), text.as_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::osinstall::apply::FileRecord;
+    use crate::core::ScratchDir;
+
+    /// ART-184: removes itself on `Drop`, so a panicking test cleans up too.
+    fn scratch(tag: &str) -> ScratchDir {
+        ScratchDir::new("art-osinstall-chain", tag)
+    }
+
+    fn file_from(component: &str) -> FileRecord {
+        FileRecord {
+            path: format!("C/{component}"),
+            component: component.to_string(),
+            media: "Workbench3.9".into(),
+            sha256: String::new(),
+            bytes: 1,
+            protection: None,
+            overwrote: None,
+            host_path: None,
+        }
+    }
+
+    /// A tree with a real `distribution.json` naming `components`.
+    ///
+    /// **The manifest is always written**, even for the "nothing applied"
+    /// case, and that is the point: the trap this module's own tests were
+    /// warned about is a fixture with no manifest at all, where the refusal
+    /// fires because ART cannot read the tree rather than because the
+    /// prerequisite is missing. Those two are different errors here, and
+    /// `a_tree_with_no_manifest_is_a_different_refusal` pins the other one.
+    fn tree_with(at: &std::path::Path, components: &[&str]) -> std::path::PathBuf {
+        let tree = at.join("Workbench3.9");
+        std::fs::create_dir_all(&tree).unwrap();
+        let manifest = DistributionManifest {
+            release: "amigaos-3.9".into(),
+            built_from: Vec::new(),
+            files: components.iter().map(|c| file_from(c)).collect(),
+            paired_rom: None,
+            amiga_installed: Vec::new(),
+        };
+        std::fs::write(
+            tree.join(MANIFEST_FILE_NAME),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        tree
+    }
+
+    /// The defect ART-186 names, in one line: BoingBag 2 on a tree BoingBag 1
+    /// never touched.
+    #[test]
+    fn boingbag_two_is_refused_on_a_tree_that_never_had_boingbag_one() {
+        let dir = scratch("bb2-without-bb1");
+        let tree = tree_with(dir.path(), &["workbench-base"]);
+        let two = package::by_id("boingbag-39-2").unwrap();
+
+        let err = refuse_unless_prerequisites_met(&two, &tree).unwrap_err();
+        let message = err.to_string();
+
+        assert!(
+            message.contains("BoingBag 3.9-1"),
+            "the refusal must name what is missing: {message}"
+        );
+        assert!(
+            !message.contains(MANIFEST_FILE_NAME),
+            "and it must not be the 'ART cannot read this tree' refusal: {message}"
+        );
+        assert_eq!(
+            missing_prerequisites(&two, &tree).unwrap(),
+            vec!["boingbag-39-1".to_string()]
+        );
+    }
+
+    /// And the same package on a tree that *does* have it goes through — a
+    /// refusal that fires either way would be no check at all.
+    #[test]
+    fn boingbag_two_is_allowed_once_boingbag_one_is_recorded() {
+        let dir = scratch("bb2-with-bb1");
+        let tree = tree_with(dir.path(), &["workbench-base"]);
+        let two = package::by_id("boingbag-39-2").unwrap();
+
+        record_amiga_install(&tree, "boingbag-39-1", "ARTPkg:BoingBag3.9-1/C/Updater").unwrap();
+
+        assert_eq!(
+            missing_prerequisites(&two, &tree).unwrap(),
+            Vec::<String>::new()
+        );
+        refuse_unless_prerequisites_met(&two, &tree).unwrap();
+    }
+
+    /// The half that made the refusal usable at all. A BoingBag cannot be
+    /// placed from the host, so if the Amiga-side run left no trace, this
+    /// tree would look exactly like one that never had BoingBag 1 — and
+    /// BoingBag 2 would be refused for ever.
+    #[test]
+    fn an_amiga_side_install_is_recorded_and_read_back() {
+        let dir = scratch("record");
+        let tree = tree_with(dir.path(), &["workbench-base"]);
+
+        assert!(!applied(&tree).unwrap().contains("boingbag-39-1"));
+        record_amiga_install(
+            &tree,
+            "boingbag-39-1",
+            "ARTPkg:BoingBag3.9-1/C/Updater DH0:",
+        )
+        .unwrap();
+        assert!(applied(&tree).unwrap().contains("boingbag-39-1"));
+
+        let manifest = read_manifest(&tree).unwrap();
+        assert_eq!(manifest.amiga_installed.len(), 1);
+        assert_eq!(manifest.amiga_installed[0].package, "boingbag-39-1");
+        assert_eq!(
+            manifest.amiga_installed[0].command,
+            "ARTPkg:BoingBag3.9-1/C/Updater DH0:"
+        );
+        assert_eq!(
+            manifest.files.len(),
+            1,
+            "the rest of the tree's own account of itself survives"
+        );
+        assert_eq!(manifest.release, "amigaos-3.9");
+    }
+
+    /// Twice is once. Re-running a package is legitimate; a tree claiming it
+    /// twice is not.
+    #[test]
+    fn recording_the_same_package_twice_adds_one_row() {
+        let dir = scratch("record-twice");
+        let tree = tree_with(dir.path(), &["workbench-base"]);
+
+        record_amiga_install(&tree, "boingbag-39-1", "first").unwrap();
+        record_amiga_install(&tree, "boingbag-39-1", "second").unwrap();
+
+        let manifest = read_manifest(&tree).unwrap();
+        assert_eq!(manifest.amiga_installed.len(), 1);
+        assert_eq!(
+            manifest.amiga_installed[0].command, "first",
+            "the first run's own line stays; a re-run does not rewrite history"
+        );
+    }
+
+    /// The trap this module was warned about. A tree with no manifest is
+    /// refused too, but for its own reason and with its own sentence — a
+    /// test that only asserted "it refused" would pass against a prerequisite
+    /// check that never ran.
+    #[test]
+    fn a_tree_with_no_manifest_is_a_different_refusal() {
+        let dir = scratch("no-manifest");
+        let tree = dir.join("Workbench3.9");
+        std::fs::create_dir_all(&tree).unwrap();
+        let two = package::by_id("boingbag-39-2").unwrap();
+
+        let message = refuse_unless_prerequisites_met(&two, &tree)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            message.contains(MANIFEST_FILE_NAME),
+            "it must say ART cannot read this tree: {message}"
+        );
+        assert!(
+            !message.contains("BoingBag 3.9-1"),
+            "and it must not claim a package is missing, which it cannot know: {message}"
+        );
+    }
+
+    /// A package that needs nothing does not read the tree — so BoingBag 1
+    /// runs against a tree with no manifest at all, which is what §89 says
+    /// about claiming more than is known.
+    #[test]
+    fn a_package_that_requires_nothing_does_not_ask_the_tree_anything() {
+        let dir = scratch("no-requires");
+        let tree = dir.join("nothing-here");
+        std::fs::create_dir_all(&tree).unwrap();
+        let one = package::by_id("boingbag-39-1").unwrap();
+
+        assert!(one.requires.is_empty());
+        assert_eq!(
+            missing_prerequisites(&one, &tree).unwrap(),
+            Vec::<String>::new()
+        );
+        refuse_unless_prerequisites_met(&one, &tree).unwrap();
+    }
+
+    /// A component the tree was *built* from counts as applied, without any
+    /// Amiga-side record — the manifest's original half still answers.
+    #[test]
+    fn a_component_in_the_manifests_files_counts_as_applied() {
+        let dir = scratch("host-placed");
+        let tree = tree_with(dir.path(), &["workbench-base", "boingbag-39-1"]);
+        let two = package::by_id("boingbag-39-2").unwrap();
+
+        assert_eq!(
+            missing_prerequisites(&two, &tree).unwrap(),
+            Vec::<String>::new()
+        );
+        refuse_unless_prerequisites_met(&two, &tree).unwrap();
+    }
+
+    /// Transitive, and in install order. Built from a fabricated chain rather
+    /// than the shipped one, because today's shipped chain is only two deep
+    /// and a one-step-only implementation would pass against it.
+    #[test]
+    fn a_chain_two_deep_is_reported_whole_and_in_order() {
+        // `prerequisite_chain` resolves through `package::by_id`, so this
+        // exercises the real shipped graph: BoingBag 2 -> BoingBag 1.
+        let dir = scratch("chain");
+        let tree = tree_with(dir.path(), &["workbench-base"]);
+        let two = package::by_id("boingbag-39-2").unwrap();
+        assert_eq!(prerequisite_chain(&two).unwrap(), vec!["boingbag-39-1"]);
+
+        // And the ordering itself, over a chain that is genuinely two deep,
+        // through the same `package::order` this module defers to.
+        let ordered =
+            package::order(&["boingbag-39-2".to_string(), "boingbag-39-1".to_string()]).unwrap();
+        assert_eq!(ordered, vec!["boingbag-39-1", "boingbag-39-2"]);
+
+        assert_eq!(
+            missing_prerequisites(&two, &tree).unwrap(),
+            vec!["boingbag-39-1".to_string()]
+        );
+    }
+
+    /// A manifest that is there but is not JSON is not silently treated as an
+    /// empty tree — that would turn an unreadable tree into "nothing is
+    /// installed" and let the very run this module refuses go ahead.
+    #[test]
+    fn an_unreadable_manifest_refuses_rather_than_reading_as_empty() {
+        let dir = scratch("bad-manifest");
+        let tree = dir.join("Workbench3.9");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(tree.join(MANIFEST_FILE_NAME), b"{ not json").unwrap();
+        let two = package::by_id("boingbag-39-2").unwrap();
+
+        assert!(refuse_unless_prerequisites_met(&two, &tree).is_err());
+    }
+}
