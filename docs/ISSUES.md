@@ -559,6 +559,18 @@ looked at it in Turkish. Needs an actual run of `pnpm tauri dev` with the
 language switched to Turkish, working through PiStorm, the hard disk screen,
 and the Files function-key bar at a few window widths.
 
+**First real evidence, 2026-08-21.** The owner drove the release build, chose
+an old title, and read the new WHDLoad refusal on screen **in Turkish**: *"…bu
+başlatma bir A1200 Kickstart 3.x istiyor. Başka bir model için olan Kickstart
+— örneğin A500/A600/A2000 için bir 3.1 — ne kadar yeni olursa olsun buna
+uymaz."* Their verdict: *"gayet makul bir çözüm olmuş"*, and the launch then
+worked.
+
+That is one sentence, not the catalogue — but it is the first time any
+Turkish string in ART has been read on screen by someone who speaks it, and
+it was one of the hardest kind: a refusal that has to leave the reader knowing
+what to do next. The rest of the ~1129 keys remain unseen.
+
 **ART-060** 🔵 **Rust-side error sentences do not translate**
 `core/error.rs::CoreError`, `commands/whdload.rs::WhdloadRefusal` · Every
 `CoreError` variant's `Display` implementation, and `WhdloadRefusal { reason,
