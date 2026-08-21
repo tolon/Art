@@ -143,8 +143,11 @@ and `[pi4] arm_boost=1`.
    this file asks**, which is whether the config ART writes keeps all three
    stanzas or collapses them to the one board the user said they had. A card
    that boots only one board is not wrong, but it is a narrowing, and ART
-   should know which it is doing. **Unverified against ART's own writer — that
-   check has not been run.**
+   should know which it is doing. **This check has since been run, and the
+   answer was worse than a narrowing: [ART-204](../../ISSUES.md).** Feeding
+   this exact file to `merge_config_txt` returns **one** `kernel=` line out of
+   four, in the stealth stanza, leaving the three board stanzas with no kernel
+   at all.
 2. **`[ROMPATH]` is a placeholder the imager substitutes**, and the mechanism
    is `initramfs`: the comment says *"The ROM is selected through initramfs
    parameter… give the full name of your kickstart file which you have placed
@@ -375,9 +378,10 @@ here so nobody has to discover it twice.
 
 Nothing here is acted on yet. Each of these is a check ART has not run:
 
-1. **Does ART's generated `config.txt` keep all three GPIO stanzas?** If it
-   writes one `kernel=` line, a card built for one board will not boot another.
-   Read `core/card/payload.rs` against § 2 above.
+1. ~~**Does ART's generated `config.txt` keep all three GPIO stanzas?**~~
+   **Answered, and it is a defect: [ART-204](../../ISSUES.md).** It keeps one,
+   in the wrong stanza. This was the first of the seven checked and it is the
+   one that most likely explains why no card ART built has ever booted.
 2. **Does ART write a `cmdline.txt` equal to `sd.unit0=rw emmc.unit0=rw`?**
    The imager's is exactly that string.
 3. **Does ART pass the Kickstart by `initramfs`,** with the firmware before the
