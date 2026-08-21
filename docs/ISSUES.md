@@ -83,6 +83,23 @@ guard), the default is `temp_dir()` so nothing changes for a user who accepts
 it, and the setting stays changeable afterwards. A choice ART offers may not
 reset itself between runs.
 
+**Also decided: it is a Settings entry too, not only an installer question.**
+Asked once at install time, changeable at any time afterwards. Somebody who
+pressed Next without reading, or who later adds a disk, must not have to
+reinstall ART to move its scratch.
+
+That raises the one question a change-later setting always raises, and it
+should be answered deliberately rather than discovered: **what happens to
+scratch already sitting in the old place.** Three defensible answers -- move
+it, leave it, or leave it and say where it is -- and only the third is
+consistent with how ART already behaves everywhere else: it does not touch
+what it did not put there this run, and it tells the user where things went
+rather than tidying up on their behalf. Moving gigabytes silently while the
+user waits on a Settings screen is the wrong shape.
+
+The owner's rule stands over all of it: nothing ART writes goes to `C:` once
+they have said otherwise, and nothing deletes from `C:` at all.
+
 **ART-195** 🟠 **Four preview jobs run at once on one medium, and the screen
 stacks all four** — *found 2026-08-21 by the owner driving the release build,
 screenshot in hand*
