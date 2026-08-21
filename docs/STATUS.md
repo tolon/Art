@@ -1014,11 +1014,21 @@ only the fields this wave wires, and there are **six** routes rather than eight
 `OsInstall.tsx`.
 
 **Then wave 2**, as the design has it: the artefact picker with its list of
-trees ART already built, `describe_tree` (the only Rust this round needs),
-splitting `OsInstall.tsx`, and deleting the duplicated ROM and card fields
-rather than merely bypassing them. **Three of ART-197's four rows are still
-open** — the card image, the per-partition content folders, and the Kickstart
-asked for in three places — and they close there.
+trees ART already built, `describe_tree` (the only Rust this round needs, and
+what closes [ART-199](ISSUES.md)), splitting `OsInstall.tsx`, and deleting the
+duplicated ROM and card fields rather than merely bypassing them. **Three of
+ART-197's four rows are still open** — the card image, the per-partition
+content folders, and the Kickstart asked for in three places — and they close
+there.
+
+**And wave 3 must move "Verify against a card" off the install step.** The
+design's §4 already schedules it, but the owner reached the same conclusion
+from the screen on 2026-08-22 without being shown that sentence, which is the
+stronger evidence: the section checks the output of step 7 (*Birimleri
+hazırla*) while sitting on step 2, so it offers to verify something that does
+not exist yet. It is ART-197 inverted — a step asking about an artefact a
+*later* step produces — and it is one of the four original complaints
+("sections that do not belong on this screen") still standing on screen.
 
 **Two constraints that must not drift.** ART's output is an **image file** and
 never a physical card (`docs/owner-checklist.md` § 4 — the owner restated it
