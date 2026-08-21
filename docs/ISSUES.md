@@ -124,7 +124,7 @@ pointing at, which is wave 1's migration working. A migration that had quietly
 dropped it would have looked *better* here, and been worse.
 
 **A second thing the same session showed, and it belongs to the same picker.**
-The owner pointed at `E:miga\ProjeART\dist-3.9`, chose the Turkish
+The owner pointed at `E:\amiga\ProjeART\dist-3.9`, chose the Turkish
 catalogs, and was refused: that package declares
 `requires_components: ["locale-base"]` (ART-162) and that tree carries only
 `workbench-base`. **That refusal is correct and is the good kind** — it names
