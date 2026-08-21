@@ -941,6 +941,86 @@ Carried over from `roadmap.md`; a stage is not done until all of these hold.
 
 ## Picking up next session
 
+*Last touched: 2026-08-21, end of session. **Read this block first; the one
+below it is 2026-08-18 and is kept for the history, not for the order of
+work.***
+
+### Start here
+
+**A design is approved and waiting for its implementation plan.**
+[docs/superpowers/specs/2026-08-21-os-builder-flow-design.md](superpowers/specs/2026-08-21-os-builder-flow-design.md)
+(committed `ac5779d`). The next action is to invoke the **writing-plans**
+skill against it and produce the wave-1 plan — nothing has been implemented,
+and no code outside documents and comments was touched this session.
+
+**Why the round exists.** The owner drove the release build, reached the
+Amiga-side install panel, and said the OS Builder's flow is *"çok karmaşık
+gereksiz derecede uzun"* and — the sentence that matters — *"dağıtım ağacı
+için nereyi seçmeliyim anlamadım ben."* That is not a wording problem. ART
+produces an artefact and the very next step asks the user to go and find it,
+**four times over**; it was verified in code, not inferred
+([ART-197](ISSUES.md)). The owner approved a five-section design: eight steps
+as real sub-routes, one `BuildSession` store with a **mandatory** migration of
+the 22 existing remembered keys, a list-plus-folder artefact picker validated
+at the moment of picking, the panels rehomed, and four named mutations. Three
+waves. **Wave 1 carries [ART-197](ISSUES.md) and [ART-198](ISSUES.md), by the
+owner's own instruction.**
+
+**Two constraints that must not drift.** ART's output is an **image file** and
+never a physical card (`docs/owner-checklist.md` § 4 — the owner restated it
+mid-design, unprompted). And the Amiga-side install stays an *optional* step
+inside the wizard, offered the moment the tree is built.
+
+**Prior art is in the spec and was fetched, not recalled**: Emu68-Imager's own
+Quick Start states a nine-step Simple Mode, gives every path field a `Check`
+button that validates when you pick, and names its fields for things on the
+user's disk. ART's field is named for its own internal artefact and has
+nothing answering the Check. That comparison is what turned "too complex" into
+a specific defect — do not re-derive it, read § "Prior art" in the spec.
+
+### The panel was driven at last, and what that does and does not prove
+
+The owner opened `AmigaInstallPanel.tsx` for the first time and a **real
+refusal rendered on screen**: `operation refused to protect data:
+'E:\amiga\Amigatolon\hdf' holds no distribution.json…` `SAFETY-REFUSED`,
+with the Turkish half beneath it saying nothing was copied. The refusal is
+correct — that folder is a pile of HDFs, not a tree — and it is ART-186's
+`refuse_unless_installable` doing its job in front of a person.
+
+**FEATURES row 274 was still not flipped**, and the reason is the finding
+itself. The owner recalled having driven the panel and sent a screenshot; the
+screenshot is the **Collection Play** panel (`Akira`, `AkiraCD32.slave`,
+A1200 · Kickstart 40.68, *Başlatıldı (süreç 28408)*), which does not exercise
+`AmigaInstallPanel.tsx` at all. It was settled by asking ART's own record
+instead of arguing: `amiga_install_run` writes `"Run a package's own installer
+on the Amiga"` to the operation log on **every** run, success or failure
+(`commands/amigainstall.rs:996`), and `operations.jsonl` held 27 entries with
+none of them that one. **The mechanism was checked before the absence was read
+as evidence** — that order is the whole reason the negative means anything.
+What is owed now is narrower and clearer than the row says: a refusal has been
+seen; a **run** has not.
+
+### Also closed this session
+
+The 2026-08-21 documents pass that had labelled itself PARTIAL is finished
+(`5f5033c`): `docs/licenses.md` gained the five shipped dependencies it was
+missing and both licence files gained `hst-imager` (MIT, read from the
+`license.txt` beside `hst.imager.exe`); `CONTRIBUTING.md` regained `RECOMMEND`
+and the seven-gap count; `docs/owner-checklist.md` § 5 stopped saying a
+BoingBag'd tree is something nobody can do; the never-filed `ART-150` became
+`ART-148` in all twelve code comments; and `profile.rs` stopped promising
+spec § 33 user-defined profiles that `winuae_list_profiles` does not provide.
+
+### The tree, measured this session
+
+2260 Rust passed / 0 failed / 28 ignored · 784 frontend · `pnpm lint` clean
+(it had not been run in the previous pass) · `cargo fmt --check` clean ·
+clippy clean at `-D warnings`. A release binary was built
+(`pnpm tauri build --no-bundle`, 4 m 59 s) and driven by the owner. `main` is
+ahead of `origin/main` by three commits — **not pushed**; ask before pushing.
+
+---
+
 *Last touched: 2026-08-18. **The Collection is finished as a thing you keep,
 and it merged** — two pull requests, the repository's first: PR #1 (41 commits:
 the game index, the saved catalogue, artwork, the name tool) and PR #2 (the

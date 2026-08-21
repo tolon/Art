@@ -26,6 +26,69 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-197** 🟠 **The tree ART has just built is not carried to the step
+that needs it, so the user is asked to go and find ART's own output** —
+*found 2026-08-21 by the owner driving the release build: "dağıtım ağacı için
+nereyi seçmeliyim anlamadım ben"*
+`src/components/osbuilder/OsInstall.tsx` · `PackagePanel.tsx` ·
+`AmigaInstallPanel.tsx`
+
+`OsInstall` remembers where it **wrote** a distribution tree as
+`osinstall.destination`. The two panels rendered directly beneath it read the
+tree they **operate on** from a different key, `osinstall.packages.treeRoot`.
+Nothing joins the two: `setPackagesTreeRoot` is called at
+`OsInstall.tsx:1362` and `OsInstall.tsx:1378`, and both are the user picking
+a folder by hand. So a user who has just watched ART write 1915 files into a
+folder is asked, immediately below, to locate a "distribution tree" — a term
+that names nothing visible on their own disk.
+
+**It does not crash, warn or log.** It leaves the reader not knowing what to
+do next, which is this project's most expensive defect class arriving through
+a field label rather than a sentence. The owner, who has read every document
+in this repository, could not answer the field.
+
+**The same shape repeats three more times**, all four verified in the sources
+on 2026-08-21:
+
+| ART produces | Remembered as | The next step asks for | Under |
+|---|---|---|---|
+| the distribution tree | `osinstall.destination` | "Dağıtım ağacı" | `osinstall.packages.treeRoot` |
+| the card image | `cardBuilder.dest` | "Kart imajı" | `preload.image` |
+| the distribution tree | `osinstall.destination` | each partition's content folder | picked by hand, per partition |
+| — | — | a Kickstart ROM, in three places | `osinstall.rom`, `amigaInstall.kickstart`, `cardBuilder.kickstart` |
+
+**Fixed by wave 1 of
+[the OS Builder flow design](superpowers/specs/2026-08-21-os-builder-flow-design.md)**,
+and deliberately not by hand-wiring `destination` → `treeRoot`: one `BuildSession`
+makes the two the same variable, so the carry holds because there is nothing
+to forget rather than because someone remembered. The design names breaking
+that carry as the round's first required mutation.
+
+**ART-198** 🔵 **A sentence promises an official update and offers an
+unofficial one as its example, in both catalogues** — *found 2026-08-21 while
+reading the OS Builder's own strings; the owner's ruling is that a BoingBag
+needs no explaining at all*
+`src/i18n/en.json` · `src/i18n/tr.json`, key `osinstall.packages.intro`
+
+> EN: *"Add an **official** update — a BoingBag, or an **unofficial** pack like
+> the Turkish catalogs — onto a distribution tree ART, or you, already built."*
+> TR: *"ART'ın ya da senin zaten kurduğun bir dağıtım ağacına **resmi bir
+> güncelleme** — bir BoingBag, ya da Türkçe katalog paketi gibi **resmi olmayan**
+> bir paket — ekle."*
+
+The em-dash pair reads as an appositive to "an official update", so the
+sentence offers an unofficial pack as an example of an official one. The
+Turkish carries the contradiction faithfully, which is what a good translation
+of a bad sentence does — `pnpm test`'s parity check passes, because both
+catalogues are equally wrong.
+
+Second, and the owner's own point: the sentence is trying to explain what a
+BoingBag **is**. *"BoingBag'ı bütün Amiga camiası bilir, onu çevirmene gerek
+yok."* The name is known across the community; the screen should use it, not
+gloss it.
+
+Fixed in wave 1 alongside [ART-197](#open), both catalogues in one commit.
+
 **ART-196** 🟠 **ART writes its scratch to the system drive and the user
 cannot move it** — *raised by the owner 2026-08-21, after their C: had already
 been filled once by ART's own test scratch*

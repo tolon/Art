@@ -256,14 +256,23 @@ Rust is untouched apart from `describe_tree`.
 
 Three waves, each leaving the tree green and the application usable:
 
-1. **Session, migration, routes.** The store, the 22-key migration, the
-   sub-route table, the progress strip. No panel is rewritten yet; each is
-   mounted at its step and reads the session for the values it used to own.
+1. **Session, migration, routes — and the two filed defects.** The store, the
+   22-key migration, the sub-route table, the progress strip. No panel is
+   rewritten yet; each is mounted at its step and reads the session for the
+   values it used to own. **[ART-197](../../ISSUES.md) closes here**, because
+   the session is what closes it: `destination` and `packages.treeRoot`
+   become one `tree.root`, so the carry holds by structure rather than by
+   wiring. **[ART-198](../../ISSUES.md) closes here too** — the
+   `osinstall.packages.intro` sentence is corrected in both catalogues in one
+   commit, dropping the gloss on "BoingBag" as well as the
+   official/unofficial contradiction. It rides in this wave rather than
+   wave 3 at the owner's request: it is a one-line correction in two files
+   and there is no reason it should wait behind a restructuring.
 2. **The steps and the artefact picker.** `OsInstall.tsx` is split, the
    picker is built, `describe_tree` lands, the duplicated fields are deleted
    rather than merely bypassed.
-3. **Summary, verify, wording.** Step 8, the skipped-step sentences, the
-   field renames and the two-catalogue string fixes.
+3. **Summary, verify, wording.** Step 8, the skipped-step sentences, and the
+   field renames (`osinstall.tree.label` and its neighbours).
 
 ## What this design does not do
 
