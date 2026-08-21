@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Installing on the Amiga side — it works (2026-08-21)
+
+#### Fixed
+- **A package's own installer now actually installs.** Both AmigaOS 3.9 Boing
+  Bags run to completion on their own: Boing Bag 1 onto a real 3.9 tree, then
+  Boing Bag 2 onto that result, each finishing in under three minutes. Boot
+  the tree afterwards and ask it what it is, and it answers **Workbench 45.3**
+  where it used to answer Workbench 45.1.
+
+  Until today the installer started and then sat there for ever — no window,
+  no message, no files, nothing to report but a timeout. ART was starting it on
+  a machine that was missing one step of the Amiga's own boot: the line that
+  tells the system which file types it knows about. ART now runs it, exactly as
+  the tree's own start-up does, and the installer gets on with the job.
+
+  As before, **nothing is decrypted and no protection is worked around** — the
+  package opens its own files, on the Amiga, which is how these updates have
+  always been installed.
+
+- **The message you get when the disc is missing is now describing what really
+  happens.** Without your copy of the AmigaOS 3.9 CD, the installer gets as far
+  as its own check and then waits on an Amiga requester asking for the disc —
+  a question nobody is there to answer. ART still refuses before copying
+  anything and still tells you which disc it wants.
+
+#### Changed
+- **An install that stops answering is given 30 minutes instead of an hour.**
+  The old figure was a guess made when no install had ever finished; this one
+  is ten times the longest one that has.
+
+
 ### Installing on the Amiga side — the disc a package asks for (2026-08-21)
 
 #### Added

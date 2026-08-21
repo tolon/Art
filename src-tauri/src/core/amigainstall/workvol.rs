@@ -321,6 +321,75 @@ pub fn result_path(work_volume_dir: &Path) -> PathBuf {
 ///
 /// `QUIET` is the release's own wording on that line, not ART's choice.
 ///
+/// ## Why the tree's own `AddDataTypes` runs (ART-193, measured by bisection)
+///
+/// This is the line that made a real BoingBag install, and it was found by
+/// elimination rather than by reasoning — the reasoning had been wrong four
+/// times before it.
+///
+/// The tree's own `S/Startup-Sequence` runs, near the end of its boot:
+///
+/// ```text
+///   C:AddDataTypes REFRESH QUIET
+/// ```
+///
+/// which registers the descriptors in `DEVS:DataTypes` with
+/// `datatypes.library`. Nothing in ART's script had ever run it, so every
+/// install ART attempted ran against a `datatypes.library` with an **empty**
+/// descriptor list — a state a booted AmigaOS 3.9 is never in and which the
+/// tree's own files were therefore never built for.
+///
+/// **What that cost, measured on 2026-08-21** against the owner's own
+/// `BoingBag39-1 (1).lha` (`Updater` 45.15), their Kickstart 40.68 and their
+/// 3 795-file tree: the `Updater` started, opened nothing, printed nothing,
+/// wrote none of the files and **never returned**. `Status` run on the
+/// machine while it hung showed the process alive; four runs across two
+/// earlier rounds ended by terminating the emulator at 180 s, 400 s, 414 s
+/// and 1 200 s. It is a wait that never ends, inside a program with a
+/// ReAction GUI, and it is not a wait ART can see from the host.
+///
+/// **The bisection, one WinUAE run per row, each against a fresh copy of the
+/// same tree** — "installed" means `S/Startup-Sequence-BB3.9-1` present on
+/// the Amiga and the host tree grown from 3 795 files / 19 563 933 bytes to
+/// 3 859 / 20 135 854:
+///
+/// | Added to this script | Result |
+/// |---|---|
+/// | the tree's whole boot: assigns + `SetEnv Language` + `AddDataTypes` + `IPrefs` + `ConClip` + `Path` + `LoadWB` | **installed** |
+/// | `REXX:`/`PRINTERS:`/`KEYMAPS:`/`LOCALE:`/`HELP:` + `SetEnv Language` only | hung |
+/// | `LoadWB` only (Workbench really running, confirmed by `Status`) | hung |
+/// | `IPrefs` + `ConClip` + `LoadWB` | hung |
+/// | `AddDataTypes` + `IPrefs` + `ConClip` + `LoadWB` | **installed** |
+/// | **`AddDataTypes REFRESH QUIET` alone** | **installed**, byte-identical result |
+///
+/// So the missing `LOCALE:` assign is not it, a missing Workbench is not it,
+/// and `IPrefs` is not it — each of those was a plausible story and each is
+/// now a measured negative. One line is.
+///
+/// **Why it is placed here.** Below `SetPatch`, because `SetPatch` resets the
+/// machine and everything above it therefore runs twice; below the `DEVS:`
+/// and `LIBS: … Classes ADD` assigns, because the descriptors live in
+/// `DEVS:DataTypes` and the handlers they name live in `SYS:Classes/DataTypes`
+/// (ART-191's drawer); and above the installer, which is the whole point.
+/// That is also the tree's own order.
+///
+/// `If EXISTS` for the same reason `SetPatch` has one: a tree that carries no
+/// `AddDataTypes` is a tree that does not need one, and a missing-command
+/// failure directly above the installer would be a return code this script
+/// reserves for the installer itself. `REFRESH QUIET` is the release's own
+/// wording on that line, not ART's choice.
+///
+/// **What is not claimed.** *Observed:* with this line the install happens and
+/// without it the `Updater` hangs for ever, six runs, same tree, same
+/// package. *Not observed:* which call inside the program blocks. The
+/// `Updater`'s own code opens its user interface through H&P's
+/// `resource.library` before it opens `xadmaster.library` — read from the
+/// binary: `ReadArgs("UPDATEFILE/A, TARGETDIR/A")`, then
+/// `LockPubScreen("INSTALLER")` falling back to `LockPubScreen(NULL)`,
+/// `CreateMsgPort`, `OpenCatalog("Updater.catalog")`, then the window — so
+/// the wait is somewhere in that GUI, and saying more than that would be
+/// a story rather than a measurement.
+///
 /// ## Why a `CD` may sit between the assigns and the installer
 ///
 /// [`PlannedRun::working_directory`] carries the drawer the installer is run
@@ -458,6 +527,9 @@ pub fn startup_sequence(run: &PlannedRun) -> CoreResult<String> {
          \x20 Copy ENVARC: RAM:ENV ALL QUIET NOREQ\n\
          \x20 If EXISTS {sys}:C/SetPatch\n\
          \x20   {sys}:C/SetPatch QUIET\n\
+         \x20 EndIf\n\
+         \x20 If EXISTS {sys}:C/AddDataTypes\n\
+         \x20   {sys}:C/AddDataTypes REFRESH QUIET\n\
          \x20 EndIf\n\
          \x20 Echo >{work}:{invoked} \"{MARK_INVOKED}\"\n\
          {cd_line}\
@@ -604,6 +676,9 @@ mod tests {
             "  Copy ENVARC: RAM:ENV ALL QUIET NOREQ",
             "  If EXISTS DH0:C/SetPatch",
             "    DH0:C/SetPatch QUIET",
+            "  EndIf",
+            "  If EXISTS DH0:C/AddDataTypes",
+            "    DH0:C/AddDataTypes REFRESH QUIET",
             "  EndIf",
             "  Echo >ARTWork:art-invoked.txt \"invoked\"",
             "  PKG:C/Updater",
@@ -877,6 +952,47 @@ Delete SYS:#?",
         assert!(
             setpatch < invoke,
             "the ROM update must be in place before the installer opens a library:\n{ss}"
+        );
+    }
+
+    /// **ART-193, and the one line that made a real BoingBag install.**
+    ///
+    /// `AddDataTypes` registers `DEVS:DataTypes` with `datatypes.library`;
+    /// without it the owner's own `Updater` 45.15 hung for ever inside its
+    /// ReAction interface, and with it — and with nothing else added — the
+    /// same run installed. The ordering asserted here is what makes the line
+    /// able to do its job: the descriptors live in `DEVS:` and the handlers
+    /// they name live in `SYS:Classes/DataTypes`, so both assigns must be
+    /// above it, and it must be below `SetPatch` (which resets the machine,
+    /// so anything above it runs twice) and above the installer.
+    #[test]
+    fn the_trees_own_datatypes_are_registered_before_the_installer() {
+        let ss = startup_sequence(&planned("PKG:C/Updater")).unwrap();
+
+        let guard = ss
+            .find("If EXISTS DH0:C/AddDataTypes")
+            .expect("AddDataTypes must be guarded: a tree without one does not need one");
+        let add = ss
+            .find("DH0:C/AddDataTypes REFRESH QUIET")
+            .expect("the tree's own AddDataTypes, by an explicit path on the tree");
+        let devs = ss.find("Assign DEVS:").expect("the DEVS: assign");
+        let classes = ss
+            .find("Assign LIBS: DH0:Classes ADD")
+            .expect("the Classes drawer on LIBS:");
+        let setpatch = ss.find("DH0:C/SetPatch QUIET").expect("SetPatch");
+        let invoke = ss.find("PKG:C/Updater").expect("the installer");
+
+        assert!(
+            devs < guard && classes < guard,
+            "AddDataTypes reads DEVS:DataTypes and the handlers in SYS:Classes:\n{ss}"
+        );
+        assert!(
+            setpatch < add,
+            "SetPatch resets the machine, so this must sit below it or run twice:\n{ss}"
+        );
+        assert!(
+            add < invoke,
+            "the descriptors must be registered before the installer opens its interface:\n{ss}"
         );
     }
 

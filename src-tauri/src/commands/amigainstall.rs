@@ -619,8 +619,9 @@ fn compose_medium(
             Some(medium) => Err(CoreError::SafetyRefused(format!(
                 "'{package_id}''s installer verifies {} before it will do anything — it checks \
                  named files on a volume called '{}:'. Supply an image of your own copy of that \
-                 disc. Without it the installer opens its window and never finishes, and ART \
-                 would have nothing to report but a timeout.",
+                 disc. Without it the installer gets as far as its own check and then waits on \
+                 an AmigaDOS requester asking for that volume, which nobody is there to answer, \
+                 and ART would have nothing to report but a timeout.",
                 medium.name, medium.volume
             ))),
             None => Ok(None),

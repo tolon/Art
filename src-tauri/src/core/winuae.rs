@@ -1024,7 +1024,8 @@ mod real_version_hook {
     /// and on 2026-08-21 a diagnostic run from this hook did exactly that: it
     /// had no `ENV:` while the product script did, so what it measured was the
     /// requester ART-192 had already fixed, not the question being asked. Keep
-    /// the two in step.
+    /// the two in step — `AddDataTypes` (ART-193) is here for that reason and
+    /// no other, since a `Version` needs no datatypes at all.
     fn probe_script(volume: &str, extra: &str) -> String {
         format!(
             "; Written by ART to ask a tree what it is. It writes nothing to the tree.\n\
@@ -1047,6 +1048,9 @@ mod real_version_hook {
              \x20 Copy ENVARC: RAM:ENV ALL QUIET NOREQ\n\
              \x20 If EXISTS {volume}:C/SetPatch\n\
              \x20   {volume}:C/SetPatch QUIET\n\
+             \x20 EndIf\n\
+             \x20 If EXISTS {volume}:C/AddDataTypes\n\
+             \x20   {volume}:C/AddDataTypes REFRESH QUIET\n\
              \x20 EndIf\n\
              \x20 Version >{WORK_VOLUME}:{ANSWER} FULL\n\
              \x20 Version >>{WORK_VOLUME}:{ANSWER} version.library FULL\n\
@@ -1151,7 +1155,16 @@ mod real_version_hook {
 
         let started = Instant::now();
         let done = work.join(DONE);
-        let deadline = Duration::from_secs(180);
+        // Three minutes answers a `Version`; a probe that runs a real
+        // installer needs longer, and re-editing the constant per question is
+        // how an instrument stops being re-runnable. `ART_BOOT_DEADLINE` is
+        // in seconds.
+        let deadline = Duration::from_secs(
+            std::env::var("ART_BOOT_DEADLINE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(180),
+        );
         while started.elapsed() < deadline && !done.is_file() {
             std::thread::sleep(Duration::from_millis(500));
             if !process.is_running().unwrap_or(false) {
@@ -1161,8 +1174,18 @@ mod real_version_hook {
         let waited = started.elapsed();
         let _ = process.terminate();
 
-        match std::fs::read_to_string(work.join(ANSWER)) {
-            Ok(text) => println!("--- the tree's own answer, after {waited:.1?} ---\n{text}"),
+        // Read as **bytes**, not as a `String`. The Amiga writes Latin-1, and
+        // a single high-bit byte anywhere in the answer — a `List` of a
+        // drawer with an accented name, a `Status` line — made
+        // `read_to_string` fail and threw away an entire measured run
+        // (2026-08-21). An instrument that discards its own answer over an
+        // encoding detail is worse than one that shows a replacement
+        // character.
+        match std::fs::read(work.join(ANSWER)) {
+            Ok(bytes) => println!(
+                "--- the tree's own answer, after {waited:.1?} ---\n{}",
+                String::from_utf8_lossy(&bytes)
+            ),
             Err(err) => println!("no answer after {waited:.1?}: {err}"),
         }
     }
