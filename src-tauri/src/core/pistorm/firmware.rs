@@ -237,6 +237,31 @@ fn initramfs_line(config: &FirmwareConfig) -> String {
 const BLUETOOTH_OVERLAY: &str = "dtoverlay=disable-bt";
 
 /// Merge ART's firmware settings into an existing `config.txt`.
+/// Whether this `config.txt` selects its boot per board.
+///
+/// **ART-204.** A Raspberry Pi `config.txt` is a *conditional-section* format:
+/// `[pi4]`, `[all]`, `[gpio24=0]`. Emu68 uses it to boot a different kernel
+/// depending on which PiStorm is fitted — the board is detected **at boot**,
+/// from a GPIO, not chosen when the card is written. A real release therefore
+/// names `kernel=` once per stanza, and an `initramfs` that is a *firmware*
+/// rather than a Kickstart.
+///
+/// When a file is shaped like that, **the release knows its own boot layout
+/// and ART does not.** ART's single `kernel_file` is for the other case: a
+/// file it is writing from nothing, or a flat one it wrote itself.
+fn selects_boot_per_board(existing: &str) -> bool {
+    existing
+        .lines()
+        .map(str::trim)
+        .any(|line| line.starts_with("[gpio"))
+}
+
+/// The section a line belongs to — `""` before the first header.
+fn section_header(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    (trimmed.starts_with('[') && trimmed.ends_with(']')).then_some(trimmed)
+}
+
 pub fn merge_config_txt(config: &FirmwareConfig, existing: Option<&str>) -> String {
     let managed = managed_lines(config);
 
@@ -254,13 +279,27 @@ pub fn merge_config_txt(config: &FirmwareConfig, existing: Option<&str>) -> Stri
         return lines.join("\n");
     };
 
+    // ART-204. A file that boots a different kernel per board keeps its own
+    // `kernel=` and `initramfs` lines verbatim: they are the release's, one
+    // per stanza, and ART has one of each to offer. Everything else is merged
+    // as before — but **per section**, because that is what the format means.
+    let per_board = selects_boot_per_board(existing);
+
     let mut out: Vec<String> = Vec::new();
-    let mut written: Vec<&str> = Vec::new();
+    let mut written: Vec<(String, &str)> = Vec::new();
+    let mut section = String::new();
     let mut wrote_initramfs = false;
+    let mut names_the_kickstart = false;
     let mut has_bluetooth_overlay = false;
 
     for line in existing.lines() {
         let trimmed = line.trim();
+
+        if let Some(header) = section_header(line) {
+            section = header.to_string();
+            out.push(line.to_string());
+            continue;
+        }
 
         if trimmed.is_empty() || trimmed.starts_with('#') {
             out.push(line.to_string());
@@ -268,10 +307,21 @@ pub fn merge_config_txt(config: &FirmwareConfig, existing: Option<&str>) -> Stri
         }
 
         if trimmed.starts_with("initramfs") {
-            // Rewritten where it stands rather than appended, so a card that
-            // already names a Kickstart does not end up naming two.
+            if per_board {
+                // The stanza's own — a stealth firmware, or a ROM this
+                // release names for this board. Replacing it takes away the
+                // thing the stanza exists for.
+                if trimmed.contains(&config.kickstart_file) {
+                    names_the_kickstart = true;
+                }
+                out.push(line.to_string());
+                continue;
+            }
+            // Flat file: rewritten where it stands rather than appended, so a
+            // card that already names a Kickstart does not end up naming two.
             if !wrote_initramfs {
                 wrote_initramfs = true;
+                names_the_kickstart = true;
                 out.push(initramfs_line(config));
             }
             continue;
@@ -292,9 +342,20 @@ pub fn merge_config_txt(config: &FirmwareConfig, existing: Option<&str>) -> Stri
 
         if let Some((raw_key, _)) = trimmed.split_once('=') {
             let key = raw_key.trim();
+
+            // The release's per-board choice, left exactly as it is.
+            if per_board && key == "kernel" {
+                out.push(line.to_string());
+                continue;
+            }
+
             if let Some((managed_key, value)) = managed.iter().find(|(k, _)| *k == key) {
-                if !written.contains(managed_key) {
-                    written.push(managed_key);
+                // Keyed on **(section, key)**: the same key in two sections is
+                // two settings, not one written twice, and dropping the second
+                // is what left three boards with no kernel at all (ART-204).
+                let here = (section.clone(), *managed_key);
+                if !written.contains(&here) {
+                    written.push(here);
                     out.push(format!("{managed_key}={value}"));
                 }
                 continue;
@@ -309,20 +370,31 @@ pub fn merge_config_txt(config: &FirmwareConfig, existing: Option<&str>) -> Stri
         out.push(line.to_string());
     }
 
+    // A managed key is "missing" only when **no** section carried it. A
+    // per-board file keeps its own `kernel=` lines, so ART must not then
+    // append one of its own underneath them.
     let missing: Vec<&(&str, String)> = managed
         .iter()
-        .filter(|(key, _)| !written.contains(key))
+        .filter(|(key, _)| !written.iter().any(|(_, written_key)| written_key == key))
+        .filter(|(key, _)| !(per_board && *key == "kernel"))
         .collect();
 
     let needs_bluetooth = config.disable_bluetooth && !has_bluetooth_overlay;
+    // The Kickstart still has to be named somewhere, whatever shape the file
+    // is: keeping a release's own lines must not mean refusing to add ART's.
+    let needs_initramfs = if per_board {
+        !names_the_kickstart
+    } else {
+        !wrote_initramfs
+    };
 
-    if !missing.is_empty() || !wrote_initramfs || needs_bluetooth {
+    if !missing.is_empty() || needs_initramfs || needs_bluetooth {
         out.push(String::new());
         out.push("# Added by Amiga Retro Toolkit".to_string());
         for (key, value) in missing {
             out.push(format!("{key}={value}"));
         }
-        if !wrote_initramfs {
+        if needs_initramfs {
             out.push(initramfs_line(config));
         }
         if needs_bluetooth {
@@ -400,6 +472,175 @@ pub fn parse_config_txt(existing: &str) -> FirmwareConfig {
 
 #[cfg(test)]
 mod tests {
+
+    // -----------------------------------------------------------------
+    // ART-204: `config.txt` is a conditional-section format.
+    // -----------------------------------------------------------------
+
+    /// A `config.txt` shaped like the one a real Emu68 release ships: the
+    /// board is detected at boot from a GPIO, so **the same key appears once
+    /// per section** and each section names a different kernel.
+    ///
+    /// **The structure is the fixture.** Every `config.txt` this module was
+    /// tested against before ART-204 was a flat file ART had written itself,
+    /// which is a reader and a writer agreeing with each other — the shape
+    /// that already cost ART-032..035 and ART-079. The comment prose is not
+    /// copied; the sections, keys and order are, because those are what the
+    /// merge has to survive.
+    fn sectioned_config() -> &'static str {
+        "\
+# a real release's own file
+[pi4]
+arm_boost=1
+[all]
+arm_64bit=1
+total_mem=2048
+gpu_mem=32
+
+#-Pistorm detection-#
+gpio=0-27=ip
+gpio=0-27=pu
+
+## stealth: boots the stock Amiga when reset is held
+[gpio4=0]
+kernel=Emu68-pistorm32lite
+initramfs ps32lite-stealth-firmware.gz
+
+[all]
+## PiStorm32lite
+[gpio24=0]
+kernel=Emu68-pistorm32lite
+
+[all]
+## PiStorm16
+[gpio24=1]
+kernel=Emu68-pistorm16
+
+[all]
+## PiStorm
+[gpio17=0]
+kernel=Emu68-pistorm
+"
+    }
+
+    fn config_for(kernel: &str, rom: &str) -> FirmwareConfig {
+        FirmwareConfig {
+            kernel_file: kernel.to_string(),
+            kickstart_file: rom.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Lines, trimmed, that start with `what`.
+    fn lines_starting(text: &str, what: &str) -> Vec<String> {
+        text.lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with(what))
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn every_board_keeps_its_own_kernel() {
+        // The defect: four `kernel=` lines in, one out, and the three board
+        // stanzas left with none. A card written from a real release booted
+        // nothing on three of four boards.
+        let merged = merge_config_txt(
+            &config_for("Emu68-pistorm.gz", "kick.rom"),
+            Some(sectioned_config()),
+        );
+        let kernels = lines_starting(&merged, "kernel=");
+        assert_eq!(
+            kernels,
+            vec![
+                "kernel=Emu68-pistorm32lite",
+                "kernel=Emu68-pistorm32lite",
+                "kernel=Emu68-pistorm16",
+                "kernel=Emu68-pistorm",
+            ],
+            "a file that names a kernel per board keeps every one of them"
+        );
+    }
+
+    #[test]
+    fn every_gpio_stanza_survives() {
+        let merged = merge_config_txt(
+            &config_for("Emu68-pistorm.gz", "kick.rom"),
+            Some(sectioned_config()),
+        );
+        for stanza in [
+            "[gpio4=0]",
+            "[gpio24=0]",
+            "[gpio24=1]",
+            "[gpio17=0]",
+            "[pi4]",
+        ] {
+            assert!(
+                merged.lines().any(|line| line.trim() == stanza),
+                "{stanza} must survive the merge:\n{merged}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stanzas_own_initramfs_is_not_replaced_by_the_kickstart() {
+        // The stealth stanza loads a *firmware*, not a ROM. Rewriting it to
+        // the Kickstart takes away the thing that stanza exists for.
+        let merged = merge_config_txt(
+            &config_for("Emu68-pistorm.gz", "kick.rom"),
+            Some(sectioned_config()),
+        );
+        assert!(
+            merged.contains("initramfs ps32lite-stealth-firmware.gz"),
+            "the stealth stanza keeps its own firmware:\n{merged}"
+        );
+    }
+
+    #[test]
+    fn a_managed_key_is_rewritten_once_in_each_section_that_has_it() {
+        // `arm_64bit` appears in `[all]`. A file with it in two sections must
+        // come back with it in both — flat de-duplication is the defect.
+        let existing = "[all]\narm_64bit=0\n\n[pi4]\narm_64bit=0\n";
+        let merged = merge_config_txt(&config_for("k", "rom"), Some(existing));
+        assert_eq!(
+            lines_starting(&merged, "arm_64bit=").len(),
+            2,
+            "one per section, not one per file:\n{merged}"
+        );
+    }
+
+    #[test]
+    fn a_flat_config_still_behaves_exactly_as_before() {
+        // The common case, and the one every earlier test covered: a file ART
+        // wrote itself, one section, one kernel. Section-awareness must not
+        // change it.
+        let existing = "arm_64bit=1\nkernel=old-kernel\ninitramfs old.rom\n";
+        let merged = merge_config_txt(&config_for("Emu68-pistorm.gz", "kick.rom"), Some(existing));
+        assert_eq!(
+            lines_starting(&merged, "kernel="),
+            vec!["kernel=Emu68-pistorm.gz"]
+        );
+        assert_eq!(
+            lines_starting(&merged, "initramfs"),
+            vec!["initramfs kick.rom"]
+        );
+    }
+
+    #[test]
+    fn a_sectioned_file_still_gains_the_kickstart_it_had_no_line_for() {
+        // Keeping a file's own lines must not mean refusing to add ART's.
+        let merged = merge_config_txt(
+            &config_for("Emu68-pistorm.gz", "kick.rom"),
+            Some(sectioned_config()),
+        );
+        assert!(
+            merged
+                .lines()
+                .any(|line| line.trim() == "initramfs kick.rom"),
+            "the Kickstart still has to be named somewhere:\n{merged}"
+        );
+    }
+
     use super::*;
 
     #[test]
