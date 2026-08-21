@@ -66,6 +66,32 @@ Found by driving the screen, which is exactly what the round's own report said
 had never been done: *"no run has ever been launched from the panel — every
 measurement went through the gated hook."*
 
+**Worse than first filed, measured 2026-08-21 minutes later.** The owner
+pressed stop. Their words: *"durdurmadi yeni is acti"* -- it did not stop, it
+started another job.
+
+Two screenshots about a minute apart show the four visible counts going
+**down**: 886 to 876, 897 to 883, 652 to 566, 226 to 139, with different files
+in every row. A count does not fall within a job, so these are **not four jobs
+slowing down -- they are different jobs**. The panel shows the most recent four
+of a growing pile, and stop added to it.
+
+So there are two faults, and the second is the severe one:
+
+1. Preview jobs accumulate without bound; every toggle starts another walk of
+   the same 468 MB medium and cancels nothing.
+2. **The stop control does not cancel and appears to start a new preview.**
+
+Every other defect this round found told the user something untrue. This one
+*does* something untrue, on the one control a user reaches for when they want
+the machine to leave their disk alone. It is the worst instance of the
+session's defining class, and it was invisible to 2239 passing tests because
+nobody had pressed the button.
+
+The cause is not yet established. A missed `cancel` call and a new job
+appearing are different faults, and the owner has already been given two wrong
+explanations for this slowness -- the third has to be the measured one.
+
 **ART-194** 🔵 **The OS Builder rescans the whole medium every time, though
 the machinery to avoid it already exists** — *proposed by the owner
 2026-08-21 while watching a real 468 MB ISO preview*
