@@ -57,6 +57,32 @@ needs to become a choice.
 Worth pairing with [ART-184](#open)'s remaining half — a sweep for what a
 crash leaves behind — since both are about scratch nobody asked for.
 
+**Decided 2026-08-21 by the owner: ART asks at install time, and the default
+is the system drive.**
+
+*"ART kendi kurulumunda temp klasorunun nerede olacagini kullaniciya sormali,
+default olarak c diski olur ama belki kullanici baska bir disk yada klasor
+secebilir."*
+
+So the question is asked once, up front, with today's behaviour as the answer
+a user gets by pressing Next. Nobody who does not care is made to care, and
+anybody who does never has to discover a Settings page after their system
+drive has already filled.
+
+**One honest caveat about how, not whether.** ART ships an MSI (WiX) and an
+NSIS installer through `tauri build`, and adding a genuine custom dialog to
+either means owning a template rather than setting a flag — real work, and
+work that has to be done twice because there are two bundles. If that turns
+out to be disproportionate, the fallback that satisfies the same requirement
+is **asking on first run**: one question, once, before anything is staged,
+remembered like every other setting. It also covers a case the installer
+cannot — somebody running the executable without installing it.
+
+Whichever route: the answer is remembered (`src/lib/remembered.ts` with a
+guard), the default is `temp_dir()` so nothing changes for a user who accepts
+it, and the setting stays changeable afterwards. A choice ART offers may not
+reset itself between runs.
+
 **ART-195** 🟠 **Four preview jobs run at once on one medium, and the screen
 stacks all four** — *found 2026-08-21 by the owner driving the release build,
 screenshot in hand*
