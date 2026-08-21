@@ -26,6 +26,28 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-187** 🔵 **A cancelled Amiga-side install leaves the last phase line
+on screen under a badge that says nothing about it** — *found 2026-08-21 in
+Task 6's review, ruled shippable*
+`src/components/osbuilder/AmigaInstallPanel.tsx` ·
+`src-tauri/src/commands/amigainstall.rs`
+
+Cancel an install and the panel keeps showing whatever the run last reported
+— "Unpacking…", "Copying…" — beneath a badge that correctly claims nothing
+about the copy. Stale, not false: the line is visibly a phase rather than a
+verdict, which is why it was ruled acceptable rather than held.
+
+It is filed because the fix is small and the right one: Rust reports every
+other outcome and says nothing on a *successful* discard, so the screen has
+nothing to replace the last phase with. A `report` there lets the badge fall
+silent instead of leaving a sentence that has stopped being true.
+
+Worth keeping in the same family as the three defects this round was really
+about — a screen that keeps saying something after it stopped being so. The
+sibling found the same day was worse and is fixed: the cancelled badge used
+to assert *"the copy has been discarded"* over the top of ART's own *"could
+not be removed"*, so the screen contradicted the core.
+
 **ART-184** 🟠 **The test fixtures leak a scratch directory per run, for
 ever, and filled a 2 TB drive** — *found 2026-08-20 when the suite began
 failing with `StorageFull`*
