@@ -263,7 +263,7 @@ title on the A1200 profile is the claim** — not every OCS title in a
 collection. And a **Turkish** sentence has finally
 been read on a running screen by someone who speaks it: the new WHDLoad
 Kickstart refusal, judged clear, and the launch then worked
-([ART-062](docs/ISSUES.md#open)). That is one sentence out of 1767 keys, so the
+([ART-062](docs/ISSUES.md#open)). That is one sentence out of 1775 keys, so the
 language as a whole is still unseen — but it is no longer zero.
 
 **Still open, and each one is a concrete gap rather than a vague "try it and
