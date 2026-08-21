@@ -40,11 +40,25 @@ carries no mark. A guess and a statement look identical once they are on a
 screen, and ART's answer is to never let them.*
 
 **Play.** The Collection's detail panel has a Play button that hands a
-catalogued title straight to WinUAE. ART picks the machine from the title's
-own chipset, picks a Kickstart from your ROM folder, works out how much extra
-memory a WHDLoad title needs on top of the stock machine, shows all of that
-on a confirmation screen before anything starts, and **refuses rather than
-launches** when no ROM in your folder actually suits the title. A floppy set
+catalogued title straight to WinUAE. ART picks a Kickstart from your ROM
+folder, shows the machine, the ROM and the memory on a confirmation screen
+before anything starts, and **refuses rather than launches** when no ROM in
+your folder actually suits the title. Which machine depends on the shape. A
+floppy or a plain hardfile is planned from the title's own chipset. **A
+WHDLoad title is not**: it runs on one known-good profile — **A1200, AGA,
+68EC020, 2 MB Chip, 8 MB Fast, Kickstart 3.x** — because a WHDLoad title does
+not boot the game, it boots AmigaDOS, which starts WHDLoad, which patches the
+game. Sizing that machine from a 1988 game's chipset means as many launch
+configurations as there are titles, each of which has to be right on its own.
+This was a reasoned decision when it landed and it has since been measured:
+`1000 Miglia` (Simulmondo, 1992), an OCS-era self-booting WHDLoad hardfile
+this project had already played on the old A500/OCS path, was played again
+from the Collection afterwards and ran — on the default setting, where
+Automatic resolves to the A1200 profile, so nobody hand-picked the machine.
+One OCS-era title running is the claim, not every OCS title you own. Your own
+per-title machine choice still outranks the profile, and the Fast RAM
+figure is a default rather than a floor — set it lower, including to zero, and
+that is what the generated configuration says. A floppy set
 — plain `.adf` or `.rp9` — mounts and boots directly; a self-booting WHDLoad
 hardfile (most WHDLoad titles in a real collection) mounts the same way, with
 an off-by-default switch to make it writable so saves survive; a WHDLoad
@@ -87,9 +101,10 @@ independent to begin with — an ADF is an ADF whether it came off an A500 or an
 A4000, and FFS/OFS, RDB/HDF, LHA and ISO9660 are formats rather than machines.
 Where the machine *does* matter, it is data ART carries rather than a code path
 it hard-codes: built-in machine profiles ship for **A1000, A500, A500+, A600,
-A2000, A3000, A1200, A4000, CDTV and CD32**, and users add their own (spec
-§33). Kickstart identification, WinUAE configuration and the compatibility
-check all read those profiles.
+A2000, A3000, A1200, A4000, CDTV and CD32**. Kickstart identification,
+WinUAE configuration and the compatibility check all read those profiles.
+They are presets: profiles you define yourself are spec §33 and are not built
+yet.
 
 Commodore's 8-bit side is in scope too, and built: **C64 disk and tape
 images** (`.d64`, `.d71`, `.d81`, `.t64`) open in the same commander and copy
@@ -111,7 +126,9 @@ opened as panes of the same manager, walked into and copied out of — to a
 folder or straight into an Amiga volume; LHA WHDLoad detection with several
 archives installed to a disk at once; Kickstart ROM identification; machine
 profiles for the whole classic line; Gotek/FlashFloppy; PiStorm/Emu68; WinUAE
-launching; a background job queue with progress/cancel;
+launching; **AmigaOS installed from your own media**, host-side into a
+distribution tree and Amiga-side by running an update package's own installer
+inside the emulator; a background job queue with progress/cancel;
 an operation log; Beginner/Power User modes; and the drag-and-drop Workflow
 Engine behind "what can I do with this?".
 
@@ -138,18 +155,63 @@ itself** — no external tool required, though one can be configured as a
 fallback for two named gaps. One limit, said here rather than discovered later:
 **no card ART built has been flashed or booted.**
 
+**AmigaOS, built from your own install media.** Point ART at your own AmigaOS
+floppies or CD and it produces a **distribution tree** — a Windows folder that
+is the finished system volume file for file, with an Amiga-metadata `.uaem`
+sidecar beside each one and a `distribution.json` recording which component and
+which disc every file came from. It does not copy disks; a component is a named
+set of paths, because `ModulesA1200_3.2.adf` holds fourteen commands and
+thirteen of them are *older* than the ones `Workbench3.2` already carries.
+Releases are data, not code: AmigaOS 3.2 and 3.9 each ship as a JSON recipe.
+Both have been run against the owner's own media — the 36-disk 3.2 set and a
+469 MiB `AmigaOS39.iso` — and both trees boot to a clean Workbench under WinUAE
+with a licensed ROM. The 3.2 tree also boots off a PFS3 volume ART formatted
+and filled itself.
+
+**And it installs the BoingBags — by running their own installer, not by
+opening them.** An AmigaOS 3.9 update package is a job ART cannot do from
+Windows at all: the payload is a password-encrypted archive and the password
+lives inside the package's own Amiga-side `Updater`. **ART decrypts nothing and
+bypasses no protection.** Instead it does what every established distribution
+builder does — it runs the installer the way the package intends. ART mounts
+three volumes under WinUAE (a **copy** of your tree as data, the package as
+data, and its own one-file boot volume at the highest boot priority), boots a
+generated `Startup-Sequence`, runs the `Updater`, reads the one word the Amiga
+writes back, closes the emulator it started, and promotes the copy over your
+tree **only** when the installer reported success. Your original is never the
+thing being written to.
+
+Measured end to end on the owner's own material, 2026-08-21: **BoingBag 1 in
+169.1 s** (3 795 → 3 859 files), then **BoingBag 2 on that result in 138.1 s**
+(3 868 files). The result was then booted and **asked** rather than inferred —
+`version full` answered **`Workbench 45.3 (07-Dec-01)`**, where the same tree
+had answered `45.1 (13-Nov-00)` before.
+
+Three refusals come with it, and each names what to do next:
+
+- **The chain is enforced.** Clean 3.9, then BoingBag 1, then BoingBag 2. A run
+  whose prerequisite is missing is refused **before anything is copied** — a
+  BoingBag 2 applied to a tree BoingBag 1 never touched boots, and is quietly
+  wrong, which is the worst outcome available.
+- **An installer too old to run under an emulator is refused by its own
+  version.** `BoingBag39-1.lha` ships `Updater` 45.13, which cannot install a
+  BoingBag on UAE; ART reads the program's `$VER:` marker and names the archive
+  that fixes it (`BoingBag39-1-UAE.lha`, `Updater` 45.15) rather than launching
+  it to fail.
+- **The disc the installer verifies has to be there.** The `Updater` checks for
+  your AmigaOS 3.9 CD, so ART asks for an image of it up front instead of
+  letting the Amiga stop on a requester nobody is there to answer.
+
+One boundary, said plainly: the panel for this screen has never been driven by
+a person. Every run above went through the engine's own test hook.
+
 **Content-first detection**: what a file *is* comes from its bytes, not its
 name, so an `.img` holding a floppy is a floppy and a `.dat` holding an LHA
 still opens.
 
-Two directions a multi-selection cannot yet move in: image-to-image (copy
-one at a time instead) and, when copying a selection out of an image, as one
-atomic operation rather than several running together — see
-[docs/ISSUES.md](docs/ISSUES.md) (ART-064, ART-065).
-
 **Application Size** (Ctrl +/-/0, or Settings) scales the whole interface from
 70 % to 250 % and is remembered — as is every other choice ART offers. A
-right-hand-edge complaint at 130 % ([ART-099](docs/ISSUES.md#open)) did not
+right-hand-edge complaint at 130 % ([ART-099](docs/ISSUES.md#fixed)) did not
 reproduce when the running application was measured across seven screens and
 three sizes; what was real — content being clipped with no way to scroll to it
 — is fixed.
@@ -183,11 +245,29 @@ prevent.
 
 ### What still needs testing
 
-The owner has decided the remaining verification of Play happens by the
-community, not alone. One WHDLoad hardfile and one `.rp9` floppy title have
-run for real (above); the rest of what the Collection catalogues has not.
-Each of these is a concrete gap, not a vague "try it and see" — what to run
-and what a good or bad result looks like:
+The owner has decided the remaining verification happens by the community,
+not alone. This list is kept honest in both directions, so start with what has
+since stopped being a gap:
+
+**Proven since this section was written.** The shipped release build has been
+driven by a person rather than only by `pnpm tauri dev`, and it immediately
+found two defects nothing in 2260 tests had ([ART-195](docs/ISSUES.md#fixed),
+[ART-196](docs/ISSUES.md#open)) — which is the argument for this whole section.
+Titles have been played from the Collection panel by hand: an `.rp9` floppy
+title (`3D Demo`), and — on 2026-08-21, through the new A1200 WHDLoad profile —
+`Akira` (AGA) and `1000 Miglia` (OCS-era), both of which ran. `1000 Miglia` is
+the one that settles something, because this project had already played it on
+the *old* A500/OCS path: same file, same ROM folder, only the machine profile
+changed, and it was left on Automatic rather than hand-picked. **One OCS-era
+title on the A1200 profile is the claim** — not every OCS title in a
+collection. And a **Turkish** sentence has finally
+been read on a running screen by someone who speaks it: the new WHDLoad
+Kickstart refusal, judged clear, and the launch then worked
+([ART-062](docs/ISSUES.md#open)). That is one sentence out of 1767 keys, so the
+language as a whole is still unseen — but it is no longer zero.
+
+**Still open, and each one is a concrete gap rather than a vague "try it and
+see"** — what to run, and what a good or bad result looks like:
 
 1. **A bare `.adf` floppy set (no `.rp9` wrapper).** Only an `.rp9`-packaged
    floppy set has actually launched. Catalogue a folder holding a plain
@@ -234,6 +314,24 @@ and what a good or bad result looks like:
    the window, then reopen and check for the save. **Good:** the save is
    there. **Bad:** still nothing after a clean exit, which would mean the
    switch does not do what it claims.
+
+6. **The Amiga-side install screen, driven by a person.** The engine installs
+   both BoingBags (above) and every one of those runs went through its own
+   test hook, never the panel. On the OS Builder's Install screen, find
+   **"Run a package's own installer on the Amiga"**, choose your tree, the
+   package, its own archive and your Kickstart, and run one. **Good:** the confirmation names the machine
+   and the volumes, the progress stream moves, and the ending is one of four
+   distinct sentences with a next step. **Bad:** a sentence that is confidently
+   wrong about what happened — this round's signature defect — or an emulator
+   window that opens with no warning first.
+7. **A PiStorm card ART built, flashed and booted.** Everything on the code
+   side is finished, tested, and cross-checked against 7-Zip and `hst-imager`;
+   what is missing is a microSD card and a Pi. Build a card image, write it
+   with whatever card writer you already use (ART deliberately does not write
+   to raw devices), fit it and power on with HDMI attached. **Good:** Emu68
+   starts and the Amiga volumes ask to be formatted or mount. **Bad:**
+   anything else — and the image health check's report is the first thing to
+   send. **This is the project's 1.0 bar**, not a bigger version number.
 
 Found something? File it the way every other defect in this project is
 filed — see [docs/ISSUES.md](docs/ISSUES.md) for the format, and

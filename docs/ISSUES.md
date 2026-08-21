@@ -600,7 +600,7 @@ worked.
 That is one sentence, not the catalogue — but it is the first time any
 Turkish string in ART has been read on screen by someone who speaks it, and
 it was one of the hardest kind: a refusal that has to leave the reader knowing
-what to do next. The rest of the ~1129 keys remain unseen.
+what to do next. The rest of the 1767 keys remain unseen.
 
 **ART-060** 🔵 **Rust-side error sentences do not translate**
 `core/error.rs::CoreError`, `commands/whdload.rs::WhdloadRefusal` · Every
@@ -997,8 +997,11 @@ floppies and plain hardfiles still follow the catalogue exactly as before.
 Settings control are one number rather than three that agree today.
 
 **The user's Settings value is untouched.** `launch.whdloadFastRamMb` is still
-remembered and still applied — as `.max()`, so raising it adds headroom and
-lowering it never shrinks the profile's own 8 MB. The per-title machine picker
+remembered and still applied. *(It was applied as `.max()` when this paragraph
+was written, so the profile's 8 MB was a floor. **The review round below removed
+that clamp**: `profile_for_request` now assigns the user's number exactly, 0
+included. Kept in place rather than rewritten, because the clamp is what the
+review found — but it is not what the code does.)* The per-title machine picker
 (`LaunchArgs::machine_override`) still outranks the whole decision.
 
 **Sources, and what they actually say.** whdload.de's requirements page
@@ -1014,12 +1017,55 @@ no 3.x ROM gets `NoRomMeetsWhdloadMinimum { machine: A1200 }`.
 
 ## What is *not* claimed
 
-**Whether an OCS-only title runs as well here as on the A500 machine ART used
-to pick has not been measured.** AGA is backwards compatible with OCS in
-hardware and WHDLoad slaves are written to be installed on this machine, but
-that is an argument, not a measurement. The one title ART has measured
-(`1000 Miglia`, ART-151) reached its own logo on A500/OCS/68000 with 8 MB
-Fast; it has not been run on this profile. The caveat is recorded in
+**The decision was taken on an argument, and the argument is recorded because
+that is what it was.** Whether routing an OCS-only title through this AGA/68020
+machine runs it as well as the A500 machine ART used to pick was not measured
+when the profile was adopted. AGA is backwards compatible with OCS in hardware
+and WHDLoad slaves are written to be installed on exactly this machine — an
+argument, and this entry said so rather than dressing it as evidence.
+
+**It has since been measured, on the one title that makes it a one-variable
+comparison.** `1000 Miglia` (Simulmondo, 1992 — `1000 Miglia v1.2.hdf`, a
+self-booting WHDLoad hardfile from the owner's own collection) is the title ART
+had already launched successfully on the *old* A500/OCS/68000 path (ART-151),
+where it reached Simulmondo's own title logo. On 2026-08-21 the owner launched
+it again from the Collection panel with this profile in place, and **it ran**.
+Same file, same collection, same ROM folder; the machine profile is the only
+thing that changed.
+
+**Launched on the default setting, where Automatic resolves to the A1200
+profile.** The per-title machine picker was left on `Otomatik`/`Auto`, so
+`machine_override` was `None` and `machine_for_request` produced the A1200 by
+itself — the ordinary path a normal user gets, not a machine somebody chose to
+make the test pass, which is the obvious objection to a measurement like this
+and it does not apply. The Collection card showed this title's chipset as
+`Bilinmiyor` (unknown), so there was nothing in the catalogue to derive a
+machine from in any case: the routing rule produced the answer, not the data.
+The picker itself is built and present on the card (`Otomatik / A500 / A1200`),
+and it still outranks the profile — a decision ART makes for the user stays one
+the user can undo.
+
+**One OCS-era title, launched and running, is the whole claim** — not "OCS
+titles work on the A1200 profile", and no guarantee about the other ~1,697
+catalogued the same way (§10/§89).
+
+**A near miss worth keeping, because it is how the rule earns its keep.** An
+earlier launch the same day was nearly written down as this answer on the
+strength of *"it ran"*: `Akira` (ICE, 1994), from the same panel, with the
+confirmation screen reading `A1200 · Kickstart 40.68 (A1200) · 2048 KB Chip +
+8 MB Fast` — the decided profile exactly, read off the running application —
+and the game reaching its own menu. Checking **which** of the two `Akira`
+hardfiles it was is what stopped it: `AkiraCD32.slave` / `Akira v1.3 CD32.hdf`,
+catalogued **AGA (1200/4000)**. An AGA title on an AGA machine is the expected
+result and settles nothing. What that run *does* establish is separate and
+real: two WHDLoad titles have now been launched **by hand from the Collection
+panel** on this profile, ART picked the A1200 Kickstart out of the owner's own
+ROM folder both times — the concrete case behind this round's new refusal
+wording — and both ran. (A footnote, not a defect: `Akira`'s chipset badge read
+`~tahmin`, guessed. ART inferred it rather than reading it from something that
+states it, and said so, which is the Collection working as designed.)
+
+The reasoning and the measurement both sit in
 `whdload_a1200`'s own doc comment, and the escape hatch is deliberate and
 visible: the per-title machine picker puts a title back on an A500 for that
 title alone, and the confirmation screen names the machine
@@ -1039,7 +1085,10 @@ Regression tests, all failing against the pre-fix code:
 `commands::launch::tests::a_floppy_launch_of_an_ocs_title_still_writes_a_68000_ocs_config`,
 `commands::launch::tests::a_per_title_machine_choice_still_beats_the_whdload_profile_in_the_config`,
 `commands::launch::tests::a_raised_settings_value_reaches_the_generated_whdload_config`,
-`commands::launch::tests::a_settings_value_below_the_profile_never_shrinks_the_generated_config`,
+(a sixth, `a_settings_value_below_the_profile_never_shrinks_the_generated_config`,
+was listed here and no longer exists — the review round below deleted the clamp
+it asserted and replaced it with
+`a_lowered_settings_value_reaches_the_generated_config`),
 `commands::launch::tests::a_whdload_launch_refuses_a_kickstart_below_the_minimum_on_the_a1200`,
 `core::launch::tests::a_whdload_request_ignores_the_catalogues_chipset_and_plans_the_a1200`,
 `core::launch::tests::a_non_whdload_request_still_follows_the_catalogues_chipset`,
@@ -2309,7 +2358,7 @@ and each is a decision worth making deliberately:
   A GitHub release asset redirects to `objects.githubusercontent.com`, so this
   needs its own client with its own stated policy, not a relaxation of that one.
 - **Which release.** The archive name depends on the release line, and one name
-  means a different board in each ([ART-091](#open)). A fetch that resolves
+  means a different board in each ([ART-091](#fixed)). A fetch that resolves
   "latest" without the line would be the same defect with a network connection.
 - **Writing it.** Unpacking an archive onto a card that boots somebody's machine
   is a multi-file write and wants the same preview → backup → verify every other
@@ -2340,7 +2389,7 @@ relaxation wearing a different name.
 
 The other two obstacles recorded above stand as further reasons rather than as
 the deciding one: an archive name means a different board in each release line
-([ART-091](#open)), so a fetch that resolved "latest" without the line would
+([ART-091](#fixed)), so a fetch that resolved "latest" without the line would
 be that defect with a network connection; and unpacking an archive onto a card
 that boots somebody's machine is a multi-file write wanting the same
 preview → backup → verify every other write in ART has.
@@ -6499,7 +6548,7 @@ fallback in seconds.
 
 **ART-123** 🔵 ✅ **A failed `hst-imager` command reported a stack frame
 instead of what went wrong** — *found and fixed 2026-08-16, while diagnosing
-[ART-122](#open)*
+[ART-122](#fixed)*
 `src-tauri/src/tools/hst_imager.rs` · `last_meaningful_line` took the last
 non-empty line of the tool's output, which is right for the handled case —
 `hst-imager` prints one `[ERR] Partition 'dh9' not found` and stops — and
@@ -7404,7 +7453,7 @@ at one RDB, so on this card it would name fifteen partitions as unmountable when
 none of them is — the same false confidence in reverse that ART-084 was.
 
 Fix: model a card as a list of Amiga areas, and take the driver set as the union
-before deciding anything is missing. Depends on [ART-095](#open).
+before deciding anything is missing. Depends on [ART-095](#fixed).
 
 **Fixed 2026-08-13** with it. `CardImage::partitions_missing_driver` asks the
 whole card, and on the real MultibootOS image reports **nothing** where the
@@ -7465,7 +7514,7 @@ what the distributions' own documentation says about themselves.
 
 **ART-094** 🟡 **Overwriting a write-protected file is not checked either** — *fixed 2026-08-13*
 `core/volume/write/mod.rs` · `commands/volume_write.rs::replace_file` · The
-delete half of [ART-088](#open) is fixed: the writer honours the `d` bit and
+delete half of [ART-088](#fixed) is fixed: the writer honours the `d` bit and
 refuses unless the user has been asked. The **overwrite** half is not.
 
 AmigaDOS governs replacing a file's contents with the `w` bit, and a file with
@@ -7647,7 +7696,7 @@ which reviewed the above and closed what it left:
   A card whose image says nothing reports "unknown" rather than a guess.
 - **Named firmware sets are managed, not just listed**: create, duplicate,
   rename and activate, each through preview → backup → write. Deleting one is
-  [ART-092](#open), deliberately.
+  [ART-092](#fixed), deliberately.
 - ART-091 above, found in the same review.
 
 Still owed and named as such: fetching a kernel update from GitHub is not built
@@ -7683,7 +7732,7 @@ lives entirely in *when* the screen asked.
 Fixed by keying the cold start on the store's own `loaded` flag rather than on
 mount, with `sessionRestored` keeping it once-only. **This is the second time
 in one day that a defect survived a green suite and was found only by running
-the application** — see [ART-082](#open).
+the application** — see [ART-082](#fixed).
 
 **ART-088** 🟡 **The volume writer deletes a delete-protected entry without noticing the bit** — *fixed 2026-08-13*
 `src-tauri/src/core/volume/write/mod.rs::delete` · AmigaDOS refuses to delete a
@@ -7725,7 +7774,7 @@ asking again about `Turrican.info` after the user has agreed to delete
 `replace_file` passes `Override` deliberately: it deletes only so the same name
 can carry new bytes, and AmigaDOS governs overwriting with the `w` bit rather
 than `d`. **ART does not check `w` yet either** — that half is now
-[ART-094](#open) rather than a sentence at the bottom of this one.
+[ART-094](#fixed) rather than a sentence at the bottom of this one.
 
 Tests: `a_delete_protected_entry_is_refused_by_name` (and the entry is still
 there afterwards), `a_delete_protected_entry_goes_when_the_user_has_been_asked`,

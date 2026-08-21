@@ -260,15 +260,45 @@ impl AmigaProfile {
     /// part rather than the general one costs nothing in the generated
     /// config and keeps the profile a description of an actual machine.
     ///
-    /// **What is not established.** Whether routing an **OCS-only** title
-    /// through this AGA/68020 machine runs it as well as the A500/OCS/68000
-    /// machine ART used to pick has *not* been measured, and nothing in this
-    /// codebase or in the sources above settles it — AGA is backwards
-    /// compatible with OCS in hardware and WHDLoad slaves are written to be
-    /// installed on exactly this machine, but that is an argument, not a
-    /// measurement. The one title ART has measured (`1000 Miglia`, ART-151)
-    /// reached its own logo on A500/OCS/68000 with 8 MB Fast; it has not been
-    /// run on this profile. **The escape hatch is deliberate and not
+    /// **How this was decided, and what has since been measured.** The
+    /// question the profile raises is whether routing an **OCS-only** title
+    /// through an AGA/68020 machine runs it as well as the A500/OCS/68000
+    /// machine ART used to pick. When the profile was adopted, nothing
+    /// settled that: AGA is backwards compatible with OCS in hardware and
+    /// WHDLoad slaves are written to be installed on exactly this machine,
+    /// but that is an argument, not a measurement, and this note recorded
+    /// that the decision was taken on the argument. **That history stays
+    /// here**, because how a decision was made is worth as much as what it
+    /// was.
+    ///
+    /// **It has since been measured, on the one title that makes it a
+    /// one-variable comparison.** `1000 Miglia` (Simulmondo, 1992 —
+    /// `1000 Miglia v1.2.hdf`, a self-booting WHDLoad hardfile) is the title
+    /// ART had already launched successfully on the *old* A500/OCS/68000 path
+    /// (ART-151), where it reached Simulmondo's own title logo. On 2026-08-21
+    /// the owner launched it again from the Collection panel with this
+    /// profile in place, and it ran. Same file, same collection, same ROM
+    /// folder; the machine profile is the only thing that changed.
+    ///
+    /// **On the default setting, where Automatic resolves to this profile** —
+    /// the per-title picker was left on `Auto`, so
+    /// `machine_override` was `None` and
+    /// `core::launch::machine_for_request` produced the A1200 itself, which
+    /// is the ordinary path a user gets. Nobody hand-picked the machine, so
+    /// the obvious objection to the measurement does not apply. The
+    /// catalogue recorded this title's chipset as *unknown*, so there was
+    /// nothing to derive a machine from either — which is the routing rule
+    /// working rather than a coincidence.
+    ///
+    /// **One OCS-era title, launched and running, is the whole claim.** It is
+    /// not "OCS titles work here" and it guarantees nothing about the other
+    /// ~1,697 catalogued the same way in that collection — §10/§89: claim
+    /// only what ran. (An earlier `Akira` run was nearly recorded as this
+    /// answer and is not one: it is the CD32/AGA variant,
+    /// `AkiraCD32.slave` / `Akira v1.3 CD32.hdf`, and an AGA title on an AGA
+    /// machine is the expected result. Checking *which* hardfile it was is
+    /// what caught it.) **The escape hatch is
+    /// deliberate and not
     /// silent**: `LaunchArgs::machine_override` — TitleDetail's per-title
     /// machine picker — still outranks this choice, so a user who finds a
     /// title unhappy here can put it back on an A500 for that title alone,

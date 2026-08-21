@@ -64,10 +64,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Two things this is honest about. WHDLoad's own requirements page states a
   *minimum* — a 68000, 1 MB of RAM, Kickstart 2.0 — and gives no recommended
   setup at all; the A1200 profile is what the community has settled on, well
-  above that minimum, not something WHDLoad itself asks for. And whether an
-  OCS-only title runs as happily here as on the A500 ART used to choose has
-  not been measured on real material yet — the machine picker is there for
-  exactly that case.
+  above that minimum, not something WHDLoad itself asks for. And the question
+  it raises — does an OCS-era title run as happily here as on the A500 ART used
+  to choose? — was decided on reasoning rather than on a measurement.
+
+  **It has since been measured.** `1000 Miglia` (Simulmondo, 1992), the same
+  self-booting WHDLoad hardfile this project had already played on the old
+  A500/OCS path, was played again from the Collection after the A1200 profile
+  landed, and ran. Same file, same ROM folder — only the machine changed, and
+  it changed **by itself**: the machine picker was left on *Auto*, which
+  resolves to the A1200 profile, so this is the ordinary path rather than a
+  machine chosen by hand to make it work. That is **one** OCS-era title
+  running, not a promise about every OCS title you own; the per-title machine
+  picker is still there for the ones it is not.
 
 - **The WHDLoad Fast RAM setting keeps working, and now your value actually
   wins.** It starts at the profile's own 8 MB. Raise it and the launch gets

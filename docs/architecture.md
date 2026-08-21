@@ -27,7 +27,9 @@ core, not in the React UI.**
                    │
 ┌──────────────────▼───────────────────────────┐
 │  Amiga Core         core/                    │
-│  adf · hdf · lha · rdb · rom · collection    │
+│  adf · volume · hdf · rdb · lha · archive    │
+│  iso · cbm · rom · gameindex · launch        │
+│  card · osinstall · preload · amigainstall   │
 │  safety · security · jobs · oplog            │
 │  detect · hashing · analysis · profile       │
 │  (PLATFORM-INDEPENDENT — no tauri, no OS)    │
@@ -74,8 +76,11 @@ amiga-retro-toolkit/
 │   │       │   ├── types.rs    #       Workflow trait, Plan, WorkflowKind
 │   │       │   ├── registry.rs #       registry + engine
 │   │       │   └── builtin.rs  #       the catalogue of offered actions
-│   │       ├── adf/            #     bootblock, blocks, fs, extract, mutate...
-│   │       ├── lha/            #     archive, safe_extract, whdload
+│   │       ├── adf/            #     bootblock, blocks, fs, extract, create...
+│   │       ├── volume/        #     the only filesystem writer: mount, write/, journal
+│   │       ├── archive/       #     the one extraction gate (LHA, ZIP, 7z)
+│   │       ├── iso/, cbm/     #     ISO9660 discs; Commodore 8-bit images, read-only
+│   │       ├── lha/            #     LHA reading, safe_extract, whdload detection
 │   │       ├── hdf.rs, rdb.rs  #     hard disk images + partition tables
 │   │       ├── mbr.rs, fat32.rs #    SD card partition table + FAT32 boot partition
 │   │       ├── card/            #    a card as Vec<AmigaArea>; build.rs builds one
@@ -83,8 +88,12 @@ amiga-retro-toolkit/
 │   │       ├── osinstall/       #    media -> distribution tree (recipe, plan, apply, verify)
 │   │       ├── preload/         #    distribution tree -> a card's Amiga volumes
 │   │       │   └── native.rs   #       the VolumeFormatter that launches nothing
-│   │       ├── gotek.rs, pistorm.rs, winuae.rs, rom.rs, profile.rs
-│   │       ├── collection.rs, analysis.rs
+│   │       ├── amigainstall/   #    run a package's own installer inside WinUAE
+│   │       ├── layout/         #    a pile of files -> a staging tree
+│   │       ├── gameindex/      #    the title catalogue (core/collection.rs retired onto it)
+│   │       ├── launch/, artwork/, sources/, whdload/
+│   │       ├── gotek.rs, pistorm/, winuae.rs, rom/, profile.rs
+│   │       ├── hostfs.rs, dirsize.rs, amigaver.rs, analysis.rs
 │   │       └── recovery.rs, conversion.rs, binary.rs   # stubs, see FEATURES.md
 │   ├── capabilities/           #   Tauri 2 permission model
 │   ├── migrations/             #   SQLite migrations
@@ -98,9 +107,11 @@ amiga-retro-toolkit/
 ## The core independence rule
 
 `src-tauri/src/core/` compiles with **only `std` + `serde` + `sha2` + `thiserror`
-+ `delharc` + `zip` + `sevenz-rust2` + `fatfs` + `libpfs3`** — the three
-decompressors are read-only and sit behind `core/archive`'s single security
-gate, and `fatfs` creates the one filesystem ART writes that is not an Amiga
++ `delharc` + `zip` + `sevenz-rust2` + `quick-xml` + `fatfs` + `libpfs3`** — the
+three decompressors are read-only and sit behind `core/archive`'s single security
+gate; `quick-xml` reads exactly one thing, `rp9-manifest.xml` inside an `.rp9`
+package, and reads it *through* that gate rather than from a path, so the
+manifest's bytes are bounded before the parser sees them; and `fatfs` creates the one filesystem ART writes that is not an Amiga
 one: the FAT32 partition a PiStorm card's Raspberry Pi boots from. `libpfs3`
 is the PFS3 implementation — the volume format `core/preload` (G3 route
 native) writes and reads on a PiStorm card, with SD-2's OS install engine
@@ -313,7 +324,10 @@ See [security-model.md](security-model.md) for the full policy.
 ## State management
 
 - **Tauri `State`**: long-lived engine objects (`WorkflowEngine`).
-- **SQLite**: relational data (`recent_files`, `jobs`, future `collection`).
+- **SQLite**: relational data (`settings`, `recent_files`, `jobs`). The title
+  catalogue is **not** here — `core/gameindex/store.rs` keeps it as one JSON
+  file per scanned root, because it is rebuilt from a folder scan rather than
+  queried relationally.
 - **JSON store**: key/value preferences (`theme`, `uxMode`, `winuaePath`).
 - **Zustand**: live UI state mirroring the persisted stores.
 

@@ -7,10 +7,22 @@ ART is built as production software, not a demo. Every feature gets tests.
 | Layer | What | Where | Command |
 |-------|------|-------|---------|
 | Unit | Core logic (detection, hashing, workflow registry) | `src-tauri/src/**/*.rs` (`#[cfg(test)]`) | `cargo test` |
-| Integration | Cross-module flows (ADF → browser, LHA → extract) | `src-tauri/tests/` | `cargo test` |
-| Security | Path traversal, malformed input, oversized allocations | `src-tauri/tests/` | `cargo test` |
+| Integration | Cross-module flows (ADF → browser, LHA → extract) | `src-tauri/src/commands/*.rs` (`#[cfg(test)]`) | `cargo test` |
+| Security | Path traversal, malformed input, oversized allocations | alongside the module under test (`#[cfg(test)]`) | `cargo test` |
+| Frontend unit | Pure `src/lib` logic, i18n parity, `Phrase` keys | `src/**/*.test.ts` | `pnpm test` |
+| Frontend component | Real components in jsdom | `src/**/*.test.tsx` | `pnpm test` |
 | Frontend type-check | TS correctness | `src/**` | `pnpm lint` |
 | UI workflow | Drag-and-drop, navigation | (manual / future e2e) | manual |
+
+There is **no `src-tauri/tests/` directory.** Every Rust test in ART is an
+inline `#[cfg(test)]` module beside the code it tests, integration and security
+cases included — which is why `cargo test` runs the whole suite in one process
+and why a test that stages scratch has to name its own thread ([ART-182](ISSUES.md#fixed)).
+
+Frontend tests sit **next to the source** (`src/lib/mask.test.ts`), never in a
+`__tests__` directory. Vitest's environment is `node` by default and jsdom
+applies **only** to `src/**/*.test.tsx` — a component test written as `.ts`
+gets no DOM, which is a confusing failure rather than an obvious one.
 
 ## Current coverage
 
@@ -29,22 +41,31 @@ Two categories are mandatory for any change that touches user data:
 Regression tests for fixed defects are named in [ISSUES.md](ISSUES.md); a fix
 without a named test is not considered fixed.
 
-## What must be tested (per phase)
+## What must be tested, per format
 
-### Phase 1 — ADF + LHA
+The phase numbers this section used to carry ("Phase 1 — ADF + LHA") are the
+dead plan [roadmap.md](roadmap.md) says not to resurrect; the questions
+themselves still hold, so they are kept by format instead. A ⏳ marks a
+question about work that is **not built** — see [FEATURES.md](FEATURES.md) for
+what is.
+
+### ADF + LHA
 - Valid ADF, invalid ADF, bootable ADF, full ADF, nearly-full ADF.
 - OFS vs FFS detection.
 - File insertion, extraction, capacity checks.
 - Valid LHA, invalid LHA, extraction, **path traversal protection**.
 - WHDLoad detection (true positive + true negative).
 
-### Phase 4 — HDF
+### HDF + RDB
 - Valid HDF, malformed HDF, multi-partition HDF.
 - RDB parsing, filesystem detection.
-- Resize (expand safe; shrink creates a verified copy).
+- An embedded filesystem driver read back byte-for-byte, and the `PatchFlags`
+  value AmigaOS actually reads ([ART-126](ISSUES.md#fixed)).
+- ⏳ Resize (expand safe; shrink creates a verified copy) — not built.
 
-### Phase 7 — ROM + Binary
-- ROM checksum, size, identification.
+### ROM + Binary
+- ROM checksum, size, identification, and `NotChecked` kept apart from
+  `Invalid` ([ART-138](ISSUES.md#fixed)).
 - Hunk detection, executable vs data.
 
 ### Security (always)
@@ -134,11 +155,25 @@ claims it has happened.
 GitHub Actions runs on every push (Windows x64):
 
 ```bash
-pnpm lint                        # TS type-check
-cargo fmt --check                # Rust formatting
-cargo clippy --all-targets       # Rust lints
-cargo test                       # all unit + integration tests
-python scripts/oracle-check.py   # amitools oracle, both directions
-cargo deny check                 # licence + advisory audit
-pnpm tauri build                 # full production build
+pnpm lint                              # TS type-check (app + test tsconfig)
+pnpm test                              # frontend unit tests (Vitest)
+cargo fmt --check                      # Rust formatting
+cargo clippy --all-targets -- -D warnings   # Rust lints — blocking on purpose
+cargo test                             # all Rust tests
+python scripts/oracle-check.py         # amitools oracle, both directions
+python scripts/rom-table-check.py      # the Kickstart table against amitools' Remus data
+python scripts/contrast-check.py --quiet    # every colour pair, both themes, against WCAG
+cargo deny check                       # licence + advisory audit
+pnpm tauri build                       # full production build
 ```
+
+Clippy runs with `-D warnings` and is **blocking on purpose**: it previously
+ran with `continue-on-error`, and that hid a real correctness bug for months
+([ART-019](ISSUES.md#fixed)/[ART-020](ISSUES.md#fixed)). The oracle step is
+blocking too — ART's own tests cannot catch a format mistake its reader and
+writer both share, which is exactly what caught ART-032…035.
+
+Three oracles run **outside** CI because they need a tool the runner does not
+have: `scripts/iso-oracle-check.py` and `scripts/fat-oracle-check.py` need
+7-Zip, and `scripts/pfs3-oracle-check.py` needs `hst.imager.exe`. Run them
+locally when `core/iso`, `core/fat32` or `core/preload` moves.

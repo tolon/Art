@@ -112,8 +112,10 @@ assembled from a file name — the editor a checkout opens included.
 
 ## Raw-device operations
 
-Raw writes (SD cards for PiStorm, USB for Gotek preparation) are the most
-dangerous operations in ART. They require:
+**Not implemented, and deliberately so** — see FEATURES.md's "Raw device
+writes" row. ART builds a card *image* and leaves writing it to a device to
+the card writers that already exist. This section is therefore the standing
+requirement any future implementation has to meet, not a description of code:
 
 1. Explicit device selection (user picks the device, not a path).
 2. Full device information display (name, capacity, drive letter).
@@ -133,10 +135,17 @@ ART never registers file associations without asking.
 Errors must be understandable, not raw codes. ART prefers:
 
 ```
-HDF could not be resized.
 The filesystem could not be safely verified.
 The original image was not modified.
-Error ID: HDF-RESIZE-017
+Error ID: ART-SAFETY-REFUSED
 ```
 
 over opaque codes like `0x80004005`. Technical details go to logs.
+
+**Where the identifier comes from.** `CoreError::code()` is the registry —
+`ART-IO`, `ART-FORMAT-MALFORMED`, `ART-SAFETY-REFUSED`, `ART-PFS3-NON-ASCII-NAME`
+and the rest. They are user-facing, so treat them as stable. They are a
+*different* namespace from [ISSUES.md](ISSUES.md)'s `ART-NNN` defect ids, which
+identify a defect in this project rather than a class of failure in a running
+operation. The operation log records the `code()` one
+(`commands/oplog.rs::write_result` → `record.failure(e.code(), …)`).
