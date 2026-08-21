@@ -26,70 +26,6 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-204** 🔴 **`config.txt` is a conditional-section format and ART's
-merge treats it as a flat one, so a real Emu68 config comes out with three of
-its four boards unbootable** — *found 2026-08-22 by measurement, during the
-external research the owner asked for*
-`src-tauri/src/core/pistorm/firmware.rs::merge_config_txt`
-
-A Raspberry Pi `config.txt` is **sectioned**: `[pi4]`, `[all]`, `[gpio24=0]`,
-`[gpio17=0]`. The same key appears **once per section**, deliberately, and that
-is how Emu68 boots the right kernel for whichever PiStorm board is fitted — the
-board is detected at boot from a GPIO, not chosen when the card is written.
-
-`merge_config_txt` walks the file line by line with a flat `written: Vec<&str>`
-and, for a managed key it has already emitted once, **drops every later
-occurrence**. `kernel` is in `MANAGED_KEYS`. `initramfs` has the same shape
-through `wrote_initramfs`.
-
-**Measured, not reasoned about.** The real
-`Assets/AmigaFiles/EMU68Boot/config.txt` from the Emu68 Imager was fed to
-`merge_config_txt` with `kernel_file: "Emu68-pistorm.gz"`:
-
-```
-=== KERNEL LINES IN  ===        === KERNEL LINES OUT ===
-   kernel=Emu68-pistorm32lite      kernel=Emu68-pistorm.gz
-   kernel=Emu68-pistorm32lite
-   kernel=Emu68-pistorm16
-   kernel=Emu68-pistorm
-```
-
-Four in, **one out** — and it lands in the **first** stanza, `[gpio4=0]`, which
-is the *stealth* stanza (keyboard-reset held, boots the stock A1200). The
-`[gpio24=0]` (PiStorm32-lite), `[gpio24=1]` (PiStorm16) and `[gpio17=0]`
-(PiStorm) stanzas each come out **with no `kernel=` line at all**. The stealth
-stanza's own `initramfs ps32lite-stealth-firmware.gz` is replaced by
-`initramfs kick.rom`, so the firmware that stanza exists to load is gone too.
-
-**What that means on hardware.** A card written from a real Emu68 release boots
-no kernel on three of the four board configurations, and on the fourth loads
-the ROM in the stanza meant to bypass the PiStorm entirely. **`docs/STATUS.md`
-says no card ART has built has ever been flashed or booted.** This is a
-sufficient explanation for that, and it would not have been found by any test
-ART has, because every fixture in `firmware.rs` is a flat `config.txt` ART
-wrote itself — the same shape of blindness as a reader and a writer agreeing
-with each other ([ART-032](#fixed)…[ART-035](#fixed), [ART-079](#fixed)).
-
-**It is also §39/§40's rule broken while appearing to keep it.** The module
-comment is right that a user's `config.txt` must be edited in place rather than
-regenerated, and the code does edit in place — but "in place" for a sectioned
-file means *per section*, and dropping a line is not preserving it. A
-`cmdline.txt` merge has no sections and is unaffected.
-
-**Fix**: make the merge section-aware. Track the current section header, and
-key the "already written" set on `(section, key)` rather than on `key`. A
-managed key is then rewritten once **in each section it appears in**, and a
-section that never had it does not gain it. The `initramfs` handling needs the
-same treatment, and the value it writes has to be the stanza's own — a stealth
-stanza's firmware is not the Kickstart.
-
-**Open question the fix must answer, not assume**: when ART has one
-`kernel_file` and the file has three, what should each stanza get? The honest
-answer is probably that ART must not rewrite `kernel=` at all when the archive
-already names one per board — its own `kernel_file` is for the case where it is
-writing a `config.txt` from nothing. That is a design decision and is recorded
-here rather than taken.
-
 **ART-203** 🔴 **A distribution tree cannot be built from the screen at
 all: the folder picker can only return a folder that exists, and `apply`
 refuses every folder that exists** — *found 2026-08-22, from the owner's
@@ -755,6 +691,118 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-204** 🔴 ✅ **`config.txt` is a conditional-section format and ART's
+merge treats it as a flat one, so a real Emu68 config comes out with three of
+its four boards unbootable** — *found 2026-08-22 by measurement, during the
+external research the owner asked for*
+`src-tauri/src/core/pistorm/firmware.rs::merge_config_txt`
+
+A Raspberry Pi `config.txt` is **sectioned**: `[pi4]`, `[all]`, `[gpio24=0]`,
+`[gpio17=0]`. The same key appears **once per section**, deliberately, and that
+is how Emu68 boots the right kernel for whichever PiStorm board is fitted — the
+board is detected at boot from a GPIO, not chosen when the card is written.
+
+`merge_config_txt` walks the file line by line with a flat `written: Vec<&str>`
+and, for a managed key it has already emitted once, **drops every later
+occurrence**. `kernel` is in `MANAGED_KEYS`. `initramfs` has the same shape
+through `wrote_initramfs`.
+
+**Measured, not reasoned about.** The real
+`Assets/AmigaFiles/EMU68Boot/config.txt` from the Emu68 Imager was fed to
+`merge_config_txt` with `kernel_file: "Emu68-pistorm.gz"`:
+
+```
+=== KERNEL LINES IN  ===        === KERNEL LINES OUT ===
+   kernel=Emu68-pistorm32lite      kernel=Emu68-pistorm.gz
+   kernel=Emu68-pistorm32lite
+   kernel=Emu68-pistorm16
+   kernel=Emu68-pistorm
+```
+
+Four in, **one out** — and it lands in the **first** stanza, `[gpio4=0]`, which
+is the *stealth* stanza (keyboard-reset held, boots the stock A1200). The
+`[gpio24=0]` (PiStorm32-lite), `[gpio24=1]` (PiStorm16) and `[gpio17=0]`
+(PiStorm) stanzas each come out **with no `kernel=` line at all**. The stealth
+stanza's own `initramfs ps32lite-stealth-firmware.gz` is replaced by
+`initramfs kick.rom`, so the firmware that stanza exists to load is gone too.
+
+**What that means on hardware.** A card written from a real Emu68 release boots
+no kernel on three of the four board configurations, and on the fourth loads
+the ROM in the stanza meant to bypass the PiStorm entirely. **`docs/STATUS.md`
+says no card ART has built has ever been flashed or booted.** This is a
+sufficient explanation for that, and it would not have been found by any test
+ART has, because every fixture in `firmware.rs` is a flat `config.txt` ART
+wrote itself — the same shape of blindness as a reader and a writer agreeing
+with each other ([ART-032](#fixed)…[ART-035](#fixed), [ART-079](#fixed)).
+
+**It is also §39/§40's rule broken while appearing to keep it.** The module
+comment is right that a user's `config.txt` must be edited in place rather than
+regenerated, and the code does edit in place — but "in place" for a sectioned
+file means *per section*, and dropping a line is not preserving it. A
+`cmdline.txt` merge has no sections and is unaffected.
+
+**Fix**: make the merge section-aware. Track the current section header, and
+key the "already written" set on `(section, key)` rather than on `key`. A
+managed key is then rewritten once **in each section it appears in**, and a
+section that never had it does not gain it. The `initramfs` handling needs the
+same treatment, and the value it writes has to be the stanza's own — a stealth
+stanza's firmware is not the Kickstart.
+
+**Open question the fix must answer, not assume**: when ART has one
+`kernel_file` and the file has three, what should each stanza get? The honest
+answer is probably that ART must not rewrite `kernel=` at all when the archive
+already names one per board — its own `kernel_file` is for the case where it is
+writing a `config.txt` from nothing. That is a design decision and is recorded
+here rather than taken.
+
+**Fixed 2026-08-22.** `merge_config_txt` is section-aware: it tracks the
+current `[…]` header and keys its written-set on **`(section, key)`**, so the
+same key in two sections is two settings rather than one written twice.
+
+**And a file that boots per board keeps its own lines.** `selects_boot_per_board`
+answers whether the file carries any `[gpio…]` stanza. When it does, ART leaves
+every `kernel=` and every `initramfs` exactly as the release wrote them — the
+release knows its own boot layout and ART, holding one `kernel_file`, does not.
+ART's single kernel name is for the other case: a flat file, or one written
+from nothing. **The Kickstart is still named**, appended when no existing line
+already names it, because keeping a release's lines must not mean refusing to
+add ART's.
+
+**Measured against the real file, before and after:**
+
+| | before | after |
+|---|---|---|
+| `kernel=` lines | **1**, in the stealth stanza | **4**, each in its own |
+| `[gpio…]` stanzas with a kernel | 1 of 4 | 4 of 4 |
+| stealth `initramfs ps32lite-stealth-firmware.gz` | replaced by the ROM | **kept** |
+| Kickstart named | yes | yes |
+
+**The fixture is the structure, and that is the point.** Every `config.txt`
+this module was tested against before was a flat file ART had written itself —
+a reader and a writer agreeing with each other, which is the shape that already
+cost [ART-032](#fixed)…[ART-035](#fixed) and [ART-079](#fixed). The new fixture
+reproduces a real release's sections, keys and order.
+
+Tests: `every_board_keeps_its_own_kernel`, `every_gpio_stanza_survives`,
+`a_stanzas_own_initramfs_is_not_replaced_by_the_kickstart`,
+`a_managed_key_is_rewritten_once_in_each_section_that_has_it`,
+`a_flat_config_still_behaves_exactly_as_before`,
+`a_sectioned_file_still_gains_the_kickstart_it_had_no_line_for`.
+
+**Three mutations, three kills**: remove the per-board `kernel` guard and
+`every_board_keeps_its_own_kernel` fails; drop the section from the written-key
+and `a_managed_key_is_rewritten_once_in_each_section_that_has_it` fails; delete
+the per-board `initramfs` preservation and
+`a_stanzas_own_initramfs_is_not_replaced_by_the_kickstart` fails.
+
+**What this does NOT establish, said plainly.** A card ART builds has still
+never been booted. This fix stops `config.txt` losing lines it was destroying;
+it does not prove the result boots. One thing in particular is unsettled: ART
+appends `initramfs <rom>` in the file's **unconditional** tail, while the Emu68
+Imager substitutes a `[ROMPATH]` marker **inside each board stanza**. Whether
+the Pi's firmware resolves the ROM the same way from both positions is a
+question only a real boot answers, and it is the next thing to find out.
 
 **ART-202** 🟠 ✅ **The answer to a button at the bottom of the panel renders
 at the top of it, so pressing it looks like nothing happened** — *found
