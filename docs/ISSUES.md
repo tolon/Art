@@ -563,7 +563,7 @@ than a dead end.
 Revisit only if someone actually meets the case and `hst-imager` cannot serve
 it — not before.
 
-**ART-062** 🔵 **No language has been checked on screen**
+**ART-062** 🔵 **One Turkish sentence has been read on screen; the other 1766 keys have not**
 `src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
 was verified by `pnpm test`'s key-parity check and by reading the JSON — never
 by opening the running application and looking at a screen. Several Turkish
@@ -5242,6 +5242,19 @@ Kickstart floor — was never in question and needed no change: a 1.x ROM has
 no hard-disk filesystem to mount a bare `DOS\1` volume with regardless of
 geometry, so it is "not a DOS disk" on its own, independent of whatever
 `hardfile2=` geometry is in play.
+
+**The id churn left a dangling reference behind, corrected 2026-08-21.**
+Twelve comments across `core/launch/mod.rs`, `core/rom/mod.rs`,
+`commands/launch.rs` and `src/lib/launch.ts` attributed this floor to
+**ART-150** — an id that was never filed, in this file or in any commit that
+touched it (`git log --all -S"ART-150" -- docs/ISSUES.md` returns nothing,
+and 150 is a hole in the sequence between ART-149 and ART-151). It is the
+same renumbering the paragraph above describes, caught from the other side:
+this entry took the number 148 and the comments kept the one they had been
+heading for. All twelve now say ART-148. Nothing behaved differently either
+way — but this file's own header says these ids are stable and are where
+user-facing identifiers come from, so a citation pointing at nothing is a
+defect in that contract.
 
 **The fix.** `core::launch::WHDLOAD_MIN_KICKSTART_MAJOR` (37) is enforced as a
 floor on the *booted machine's* chosen ROM whenever a request is

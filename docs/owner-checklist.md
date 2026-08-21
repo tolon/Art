@@ -87,9 +87,17 @@ yani o iki oyun hiç yazmadı. Bu, özelliğin çalışmadığı anlamına gelmi
 ## 3.6 Türkçeyi ekranda gör (ART-062)
 
 **Neden sende:** Bu aşamada inen her Türkçe dize `pnpm test`'in anahtar
-denetiminden ve JSON okumasından geçti — ama **hiçbiri çalışan uygulamada
-ekranda görülmedi.** Anahtarların eşleşmesi, cümlenin doğru olduğunu ya da
-kutuya sığdığını söylemez.
+denetiminden ve JSON okumasından geçti — ama **1767 anahtarın 1766'sı çalışan
+uygulamada ekranda hâlâ görülmedi.** Anahtarların eşleşmesi, cümlenin doğru
+olduğunu ya da kutuya sığdığını söylemez.
+
+**Bir tanesi görüldü, 2026-08-21:** sürüm derlemesinde eski bir başlık
+seçtin ve yeni WHDLoad reddini Türkçe okudun — *"…bu başlatma bir A1200
+Kickstart 3.x istiyor…"* — *"gayet makul bir çözüm olmuş"* dedin, ardından
+başlatma çalıştı. Bu, ART'ta herhangi bir Türkçe cümlenin dilini bilen biri
+tarafından ekranda ilk okunuşu, ve en zor türden biriydi: okuyanı ne
+yapacağını bilerek bırakması gereken bir ret. Kalanı hâlâ görülmedi
+(ART-062).
 
 **Ne yap:** Yukarıdaki maddeleri yaparken zaten gezeceğin ekranlarda Türkçeye
 dikkat et. Özellikle bak:
@@ -126,13 +134,43 @@ sürüm numarası değil, bu.
 
 ---
 
-## 5. Sırada bekleyen, ama henüz sende olmayan
+## 5. Amiga tarafı kurulum ekranını elle sür
 
-**BoingBag'li bir ağacın açılması.** İçerik katmanının kapanış çıtasıydı ve
-karşılanmadı. Şu an *kimse* yapamaz: BoingBag yükleri şifreli ve yalnızca
-paketin kendi Amiga tarafındaki `Updater`'ı açabiliyor (ART-166).
+**Bu madde 2026-08-21'de değişti.** Burada eskiden *"BoingBag'li bir ağacın
+açılması — şu an kimse yapamaz"* yazıyordu. Artık oluyor, ve senin kendi
+malzemenle ölçüldü: `BoingBag39-1 (1).lha` **169,1 s**'de, ardından onun
+üstüne `BoingBag39-2.lha` **138,1 s**'de kuruldu (3 795 → 3 859 → 3 868
+dosya), ağaç yalnızca başarıda aslının yerine geçti. Sonra **soruldu, tahmin
+edilmedi**: açılan ağaç `version full`'e `Workbench 45.3 (07-Dec-01)`,
+`version.library 45.3`, `workbench.library 45.127` cevabını veriyor — eskiden
+`Workbench 45.1 (13-Nov-00)` diyordu. **Hiçbir şey şifre kırmıyor**: paketin
+kendi `Updater`'ı, emülatörün içinde, kendi yükünü kendisi açıyor (ART-166'nın
+duvarı bu yüzden yıkılmadı, dolaşıldı).
 
-**Amiga tarafı kurulum turu** bitince sende olacak. Unutulmasın diye burada.
+**Neden yine de sende:** bunların hepsi `#[ignore]`li bir test kancasından
+koştu — `compose` → `install`, komutun kullandığı yolun aynısı, ama **ekrandan
+değil.** `AmigaInstallPanel.tsx` bir insanın elinden hiç geçmedi ve bu projede
+kusurların çoğu tam orada çıktı.
+
+**Ne yap:**
+1. **İşletim Sistemi Kurucusu**'nu aç, Amiga tarafı kurulum paneline gel.
+2. 3.9 ağacını ve `BoingBag39-1 (1).lha`'yı seç, **önizlemeye bak** — önizleme
+   hiçbir şey başlatmamalı, hiçbir şey yazmamalı.
+3. Kur. **Dört sonun hangisi geldiğine bak**: başardı · kurucu reddetti ·
+   süre doldu · pencereyi sen kapattın. Dördü dört ayrı cümle ve dört ayrı
+   "şimdi ne yap" olmalı; ikisi aynı cümleyi veriyorsa bu bir kusurdur.
+4. **Diski takmadan da dene.** 3.9 CD'si bağlı değilken `Updater` kendi
+   *"Checking AmigaOS 3.9 CD-ROM…"* satırına gelip AmigaDOS'un
+   `Please insert volume AmigaOS3.9` isteğinde duruyor — ART bunu önden
+   reddetmeli ve **hiçbir şey kopyalamamalı**.
+5. Bir kurulumu **yarıda kes**. Ekran, kendi ağacına dokunulmadığını
+   söylemeli; kopyanın atıldığını **iddia etmemeli** eğer çekirdek atamadığını
+   söylüyorsa.
+
+**Tamam sayılır:** Paneli baştan sona sürdüysen ve gördüğün her sonun sana ne
+yapacağını söylediğini söyleyebiliyorsan. Bir yerde ART'ın yapmadığı bir şeyi
+yaptığını söylediğini gördüysen — bu, bu projenin en pahalı kusur sınıfı,
+hemen söyle.
 
 ---
 
@@ -140,6 +178,9 @@ paketin kendi Amiga tarafındaki `Updater`'ı açabiliyor (ART-166).
 
 - **AmigaOS 3.9 ağacı açılıyor**, ve gerçekten 3.9: `Workbench 45.1
   (13-Nov-00)`. Kendi CD'nden, 1879 dosya, WinUAE'de temiz.
+- **İki BoingBag de kuruldu** ve açılan ağaç bunu kendisi söylüyor:
+  `Workbench 45.3 (07-Dec-01)`. Senin kendi arşivlerinle, ürünün kendi
+  yolundan, 169,1 s + 138,1 s.
 - **Bir A500/A500+ Gotek'ten önyüklendi** (2026-08-12, fotoğraflı).
 - **AmigaOS 3.2 ağacı PFS3 biriminde açıldı**, lisanslı V47 ROM'la, duvar
   kâğıdı dahil.

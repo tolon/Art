@@ -7,8 +7,16 @@
 //! A500+, A600, A2000, A3000, A1200, A4000, CDTV and CD32. ART is not an A500
 //! tool that tolerates other Amigas, and the presets are what make that true
 //! rather than a claim — `AmigaProfile::all_presets` is what the WinUAE
-//! launcher and the compatibility check read. Users add their own on top
-//! (spec §33); a profile is data, not a code path.
+//! launcher and the compatibility check read.
+//!
+//! **Spec §33's user-defined profiles are not built.** `winuae_list_profiles`
+//! returns `all_presets()` and nothing else — there is no store, no editor and
+//! no route by which a profile of the user's own could reach this list. A
+//! profile is data rather than a code path, which is what would make that
+//! cheap to add, but "cheap to add" is not "supported" (§10, §89) and this
+//! comment claimed it was until 2026-08-21. The one thing a user can override
+//! today is per launch, not per profile: the Collection's machine picker, and
+//! Settings' Fast RAM value.
 
 use serde::{Deserialize, Serialize};
 

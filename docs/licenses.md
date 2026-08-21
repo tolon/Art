@@ -42,8 +42,13 @@ It is maintained manually and verified with `cargo deny check` (see
 | `sha2` | SHA256 hashing | MIT / Apache-2.0 |
 | `log` | Logging facade | MIT / Apache-2.0 |
 | `delharc` | LHA/LZH decompression | MIT / Apache-2.0 |
+| `ureq` | HTTP client — the repository mirrors (§41.5.3), pinned `=3.2.1`, `gzip` off | MIT / Apache-2.0 |
+| `tauri-plugin-drag` | Dragging a file *out* of the window into Explorer (Windows has no webview route for it) | MIT / Apache-2.0 |
 | `zip` | ZIP reading (deflate only; compression, encryption and the other codecs are off) | MIT |
 | `sevenz-rust2` | 7z reading (LZMA; the encoder is a dev-dependency for fixtures only) | MIT / Apache-2.0 |
+| `quick-xml` | XML reading, for one file: `rp9-manifest.xml` inside an `.rp9` package, read through `core/archive`'s gate rather than from a path | MIT |
+| `fatfs` | FAT32 — the PiStorm card's boot partition, the one filesystem ART writes that is not an Amiga one (`chrono` off, so a build repeats byte for byte) | MIT |
+| `trash` | The Windows Recycle Bin — **outside `core/`**, in `tools/recycle_bin.rs`, because it calls `IFileOperation` | MIT |
 | `libpfs3` | PFS3 filesystem implementation — writes and reads the volumes AmigaOS install (SD-2 G5) puts on a PiStorm card | **LGPL-3.0-or-later** (weak copyleft; the one non-permissive dependency in `core/`, compatible with ART's GPL-3.0-or-later but noted deliberately — `core/` is meant to be promotable to a standalone crate, which is exactly the reuse the project otherwise avoids constraining) |
 
 (Transitive dependencies are audited via `cargo deny check licenses`.)
@@ -76,6 +81,7 @@ them. Users must obtain them from official sources and respect their licenses.
 | WinUAE | Amiga emulator | https://www.winuae.net/ |
 | LHA | Archive tool (optional) | official Amiga archives |
 | FlashFloppy utilities | Gotek firmware config | https://github.com/keirf/FlashFloppy |
+| hst-imager | The named fallback for two typed gaps in ART's own PFS3/RDB writing ([ART-113](ISSUES.md), [ART-117](ISSUES.md)) — launched by `tools/hst_imager.rs`, never bundled | https://github.com/henrikstengaard/hst-imager — **MIT**, © Henrik Nørfjand Stengaard, read from the `license.txt` shipped beside `hst.imager.exe` in the 1.6.616 build on this machine rather than recalled |
 
 ## Test-only dependency (never shipped)
 

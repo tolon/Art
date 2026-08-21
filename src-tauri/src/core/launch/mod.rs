@@ -41,7 +41,7 @@ pub struct LaunchRom {
     pub path: String,
     /// Mirrors `core::rom::RomInfo::major` — see that field's doc comment
     /// for what "major" means and why it is not an identifier. `None` when
-    /// the ROM states no numeric version ART could read (ART-150): an AROS
+    /// the ROM states no numeric version ART could read (ART-148): an AROS
     /// replacement or an encrypted Amiga Forever dump ART has no key for.
     /// [`WHDLOAD_MIN_KICKSTART_MAJOR`] is the one thing this module reads it
     /// for, so a ROM with no known major can never satisfy that floor —
@@ -111,7 +111,7 @@ pub enum RequestKind {
     /// AmigaOS hardfile may need — and legitimately run on — a Kickstart
     /// older than WHDLoad ever supported. Getting this backwards in either
     /// direction is wrong: raising the floor for every hardfile would refuse
-    /// old-OS installs that work today; never raising it is ART-150, the bug
+    /// old-OS installs that work today; never raising it is ART-148, the bug
     /// this field exists to fix.
     Hardfile {
         image: String,
@@ -155,7 +155,7 @@ pub enum LaunchRefusal {
     NoSuitableRom { machine: Machine },
     /// The chosen machine has a suitable ROM for its model, but nothing new
     /// enough to meet WHDLoad's own stated minimum
-    /// ([`WHDLOAD_MIN_KICKSTART_MAJOR`]) — ART-150. A Kickstart 1.x machine
+    /// ([`WHDLOAD_MIN_KICKSTART_MAJOR`]) — ART-148. A Kickstart 1.x machine
     /// cannot run WHDLoad at all (whdload.de's requirements page:
     /// <https://www.whdload.de/docs/en/need.html>), and a bare `DOS\1` FFS
     /// hardfile with no RDB has no filesystem for a 1.x ROM to mount it
@@ -236,7 +236,7 @@ pub const MAX_FLOPPY_DRIVES: usize = 4;
 /// requirements page: <https://www.whdload.de/docs/en/need.html>. Applied as
 /// a floor on the **booted machine's** ROM ([`LaunchRom::major`]), never as a
 /// hardcoded machine choice: an A500 with a 3.1 ROM meets it exactly as well
-/// as an A1200 does (ART-150).
+/// as an A1200 does (ART-148).
 ///
 /// **This is not the same number a WHDLoad slave names.** A slave like
 /// `Turrican.slave` carries its own declared Kickstart — `kick34005.A500`,
@@ -395,7 +395,7 @@ pub fn machine_for_request(
 /// major ART could not read ([`LaunchRom::major`] is `None`) sorts below
 /// every known one — `Option<u16>`'s own `Ord` already orders `None` before
 /// `Some`, so this reads as plainly as it decides. Picking the newest
-/// suitable ROM rather than "first in scan order" (ART-150: that scan order
+/// suitable ROM rather than "first in scan order" (ART-148: that scan order
 /// is alphabetic, so a folder holding both a 1.3 and a 3.1 dump for the same
 /// machine picked the 1.3) is deliberate for two reasons: it is what a
 /// WHDLoad floor needs to be checkable — filtering by `min_major` first and
@@ -428,7 +428,7 @@ pub fn plan_for(request: &LaunchRequest) -> Result<LaunchPlan, LaunchRefusal> {
         }
     }
 
-    // A bare `.adf` boots on any Kickstart and must keep doing so (ART-150):
+    // A bare `.adf` boots on any Kickstart and must keep doing so (ART-148):
     // the floor below applies only when `is_whdload_shaped` says this
     // request is WHDLoad-shaped.
     let rom = if is_whdload_shaped(&request.kind) {
@@ -833,7 +833,7 @@ mod tests {
         }
     }
 
-    // ---- ART-150: WHDLoad's own Kickstart floor -----------------------
+    // ---- ART-148: WHDLoad's own Kickstart floor -----------------------
     //
     // <https://www.whdload.de/docs/en/need.html> states WHDLoad's minimum as
     // "Kickstart 2.0 (version 37)". `1000 Miglia` — a self-booting WHDLoad
@@ -845,7 +845,7 @@ mod tests {
     // halves of why the emulator said "not a DOS disk".
 
     /// A folder holding both a 1.3 and a 3.1 dump for the same machine must
-    /// plan the 3.1 — the 1.3 winning a name-sorted scan is exactly ART-150.
+    /// plan the 3.1 — the 1.3 winning a name-sorted scan is exactly ART-148.
     #[test]
     fn a_whdload_hardfile_with_a_1_3_and_a_3_1_available_plans_the_3_1() {
         let plan = plan_for(&LaunchRequest {

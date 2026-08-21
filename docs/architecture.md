@@ -190,8 +190,20 @@ The execute half of the pipeline is in place for operations that modify data:
 `commit_whole_file` (`commands/volume_write.rs`) validates the whole image
 before committing. Copying into a volume also has the **preview**
 step §92 asks for — `volume_plan_copy` reports the cost, the unstorable names
-and the collisions before anything is written. Delete and overwrite still tell
-the user what happened rather than what is about to.
+and the collisions before anything is written.
+
+**Delete has since gained the naming half of that step, but not the costed
+half** (re-read 2026-08-21). `src/lib/deletePlan.ts` decides what one F8
+removes *as data*, and `FileManager.tsx` asks about the entry and about the
+paired `.info` it found — both by name — before a single block is journalled;
+the whole batch then commits or rolls back as one (ART-081), so the icon is no
+longer a second operation with a second chance to half-finish. What it still
+does not have is `volume_plan_copy`'s other half: a panel stating the cost and
+the consequences of the whole act before the first question is asked.
+Overwrite is the same shape — the copy plan reports collisions for a
+directory, and the per-name policy dialog asks when one is actually hit, but a
+single-file copy carries its answer in ahead of the fact rather than being
+shown one.
 
 ## Writing into a volume: two strategies, one API
 

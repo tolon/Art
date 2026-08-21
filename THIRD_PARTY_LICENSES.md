@@ -96,6 +96,13 @@ with ART. Users must obtain them from their official sources:
 - **FlashFloppy** — MIT, by Keir Fraser. Source:
   https://github.com/keirf/FlashFloppy
 - **LHA** — license per upstream. Source: official Amiga archive tool sites.
+- **hst-imager** — MIT, © Henrik Nørfjand Stengaard. Source:
+  https://github.com/henrikstengaard/hst-imager. ART launches it through
+  `tools/hst_imager.rs` as the **named fallback** for the two typed gaps
+  `core/preload/native.rs` refuses by name (ART-113, ART-117); the native
+  path is the default and runs first for every step. The licence above was
+  read from the `license.txt` shipped beside `hst.imager.exe` in the
+  1.6.616 build, not recalled.
 
 ## Copyrighted content
 

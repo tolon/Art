@@ -179,7 +179,7 @@ fn resolved_machine(request: &LaunchArgs) -> Machine {
 ///
 /// **`whdload` on the request is not the same field it looks like.** It is
 /// `RequestKind::Hardfile::whdload` — whether `core::launch::plan_for` must
-/// enforce WHDLoad's own Kickstart floor (ART-150) — set from *which `Media`
+/// enforce WHDLoad's own Kickstart floor (ART-148) — set from *which `Media`
 /// variant this is*, never from anything the catalogue's `KickstartNeed`
 /// states. A WHDLoad slave's own declared Kickstart (`kick34005.A500`, say)
 /// is the ROM *WHDLoad itself* loads for the game once the machine is
@@ -1462,7 +1462,7 @@ mod tests {
     /// carried on the record for the title's provenance, not something a
     /// launch decision consults.
     ///
-    /// ART-150: `whdload` on the request kind must be `true` here — this is
+    /// ART-148: `whdload` on the request kind must be `true` here — this is
     /// exactly `1000 Miglia`'s own shape, and it is what tells `plan_for` to
     /// enforce WHDLoad's Kickstart floor instead of accepting any ROM that
     /// merely suits the machine's model.

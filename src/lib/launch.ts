@@ -83,7 +83,7 @@ export type LaunchNote = { kind: "more-disks-than-drives"; total: number; mounte
 export type LaunchRefusal =
   | { kind: "no-suitable-rom"; machine: Machine }
   /**
-   * ART-150: a WHDLoad title (a self-booting hardfile or a drawer+system
+   * ART-148: a WHDLoad title (a self-booting hardfile or a drawer+system
    * launch) found a ROM for the machine's model, but nothing new enough to
    * meet WHDLoad's own stated minimum — see
    * `core::launch::WHDLOAD_MIN_KICKSTART_MAJOR`'s doc comment for the cited

@@ -14,8 +14,10 @@ pnpm, MSVC Build Tools).
 2. Pick an issue from [docs/ISSUES.md](docs/ISSUES.md), or open one to discuss
    a change. **If you are looking for where help is wanted right now**, see
    [README.md § What still needs testing](README.md#what-still-needs-testing)
-   — five concrete, unverified Play scenarios, each with what to run and what
-   a good or bad result looks like. Trying one of these and reporting back
+   — seven concrete gaps, each with what to run and what a good or bad result
+   looks like. Five are Play scenarios; the other two are the Amiga-side
+   install screen driven by a person, and a PiStorm card ART built, flashed
+   and booted (the bar for 1.0). Trying one of these and reporting back
    (good or bad) is as useful as a code change.
 3. Branch from `main`.
 4. Follow the stage plan — **do not implement future-stage features** until the
@@ -48,7 +50,8 @@ pnpm, MSVC Build Tools).
 - **The core is platform-independent.** Never import `tauri` or Windows APIs
   inside `core/`.
 - **Never modify user data silently.** Follow the safety pipeline:
-  `SOURCE → ANALYZE → VALIDATE → PREVIEW → BACKUP → APPLY → VERIFY → REPORT`.
+  `SOURCE → ANALYZE → VALIDATE → RECOMMEND → PREVIEW → BACKUP → APPLY → VERIFY →
+  REPORT`.
 - **Never distribute copyrighted ROMs or commercial software.**
 
 ## Adding a translation

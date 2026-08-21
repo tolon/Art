@@ -797,7 +797,7 @@ mod tests {
         assert_eq!(
             info.major,
             Some(40),
-            "the ROM's own stated major (ART-150's floor reads exactly this)"
+            "the ROM's own stated major (ART-148's floor reads exactly this)"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
