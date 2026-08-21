@@ -26,68 +26,119 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-197** 🟠 **The tree ART has just built is not carried to the step
-that needs it, so the user is asked to go and find ART's own output** —
-*found 2026-08-21 by the owner driving the release build: "dağıtım ağacı için
-nereyi seçmeliyim anlamadım ben"*
-`src/components/osbuilder/OsInstall.tsx` · `PackagePanel.tsx` ·
-`AmigaInstallPanel.tsx`
+**ART-204** 🔴 **`config.txt` is a conditional-section format and ART's
+merge treats it as a flat one, so a real Emu68 config comes out with three of
+its four boards unbootable** — *found 2026-08-22 by measurement, during the
+external research the owner asked for*
+`src-tauri/src/core/pistorm/firmware.rs::merge_config_txt`
 
-`OsInstall` remembers where it **wrote** a distribution tree as
-`osinstall.destination`. The two panels rendered directly beneath it read the
-tree they **operate on** from a different key, `osinstall.packages.treeRoot`.
-Nothing joins the two: `setPackagesTreeRoot` is called at
-`OsInstall.tsx:1362` and `OsInstall.tsx:1378`, and both are the user picking
-a folder by hand. So a user who has just watched ART write 1915 files into a
-folder is asked, immediately below, to locate a "distribution tree" — a term
-that names nothing visible on their own disk.
+A Raspberry Pi `config.txt` is **sectioned**: `[pi4]`, `[all]`, `[gpio24=0]`,
+`[gpio17=0]`. The same key appears **once per section**, deliberately, and that
+is how Emu68 boots the right kernel for whichever PiStorm board is fitted — the
+board is detected at boot from a GPIO, not chosen when the card is written.
 
-**It does not crash, warn or log.** It leaves the reader not knowing what to
-do next, which is this project's most expensive defect class arriving through
-a field label rather than a sentence. The owner, who has read every document
-in this repository, could not answer the field.
+`merge_config_txt` walks the file line by line with a flat `written: Vec<&str>`
+and, for a managed key it has already emitted once, **drops every later
+occurrence**. `kernel` is in `MANAGED_KEYS`. `initramfs` has the same shape
+through `wrote_initramfs`.
 
-**The same shape repeats three more times**, all four verified in the sources
-on 2026-08-21:
+**Measured, not reasoned about.** The real
+`Assets/AmigaFiles/EMU68Boot/config.txt` from the Emu68 Imager was fed to
+`merge_config_txt` with `kernel_file: "Emu68-pistorm.gz"`:
 
-| ART produces | Remembered as | The next step asks for | Under |
-|---|---|---|---|
-| the distribution tree | `osinstall.destination` | "Dağıtım ağacı" | `osinstall.packages.treeRoot` |
-| the card image | `cardBuilder.dest` | "Kart imajı" | `preload.image` |
-| the distribution tree | `osinstall.destination` | each partition's content folder | picked by hand, per partition |
-| — | — | a Kickstart ROM, in three places | `osinstall.rom`, `amigaInstall.kickstart`, `cardBuilder.kickstart` |
+```
+=== KERNEL LINES IN  ===        === KERNEL LINES OUT ===
+   kernel=Emu68-pistorm32lite      kernel=Emu68-pistorm.gz
+   kernel=Emu68-pistorm32lite
+   kernel=Emu68-pistorm16
+   kernel=Emu68-pistorm
+```
 
-**Fixed by wave 1 of
-[the OS Builder flow design](superpowers/specs/2026-08-21-os-builder-flow-design.md)**,
-and deliberately not by hand-wiring `destination` → `treeRoot`: one `BuildSession`
-makes the two the same variable, so the carry holds because there is nothing
-to forget rather than because someone remembered. The design names breaking
-that carry as the round's first required mutation.
+Four in, **one out** — and it lands in the **first** stanza, `[gpio4=0]`, which
+is the *stealth* stanza (keyboard-reset held, boots the stock A1200). The
+`[gpio24=0]` (PiStorm32-lite), `[gpio24=1]` (PiStorm16) and `[gpio17=0]`
+(PiStorm) stanzas each come out **with no `kernel=` line at all**. The stealth
+stanza's own `initramfs ps32lite-stealth-firmware.gz` is replaced by
+`initramfs kick.rom`, so the firmware that stanza exists to load is gone too.
 
-**ART-198** 🔵 **A sentence promises an official update and offers an
-unofficial one as its example, in both catalogues** — *found 2026-08-21 while
-reading the OS Builder's own strings; the owner's ruling is that a BoingBag
-needs no explaining at all*
-`src/i18n/en.json` · `src/i18n/tr.json`, key `osinstall.packages.intro`
+**What that means on hardware.** A card written from a real Emu68 release boots
+no kernel on three of the four board configurations, and on the fourth loads
+the ROM in the stanza meant to bypass the PiStorm entirely. **`docs/STATUS.md`
+says no card ART has built has ever been flashed or booted.** This is a
+sufficient explanation for that, and it would not have been found by any test
+ART has, because every fixture in `firmware.rs` is a flat `config.txt` ART
+wrote itself — the same shape of blindness as a reader and a writer agreeing
+with each other ([ART-032](#fixed)…[ART-035](#fixed), [ART-079](#fixed)).
 
-> EN: *"Add an **official** update — a BoingBag, or an **unofficial** pack like
-> the Turkish catalogs — onto a distribution tree ART, or you, already built."*
-> TR: *"ART'ın ya da senin zaten kurduğun bir dağıtım ağacına **resmi bir
-> güncelleme** — bir BoingBag, ya da Türkçe katalog paketi gibi **resmi olmayan**
-> bir paket — ekle."*
+**It is also §39/§40's rule broken while appearing to keep it.** The module
+comment is right that a user's `config.txt` must be edited in place rather than
+regenerated, and the code does edit in place — but "in place" for a sectioned
+file means *per section*, and dropping a line is not preserving it. A
+`cmdline.txt` merge has no sections and is unaffected.
 
-The em-dash pair reads as an appositive to "an official update", so the
-sentence offers an unofficial pack as an example of an official one. The
-Turkish carries the contradiction faithfully, which is what a good translation
-of a bad sentence does — `pnpm test`'s parity check passes, because both
-catalogues are equally wrong.
+**Fix**: make the merge section-aware. Track the current section header, and
+key the "already written" set on `(section, key)` rather than on `key`. A
+managed key is then rewritten once **in each section it appears in**, and a
+section that never had it does not gain it. The `initramfs` handling needs the
+same treatment, and the value it writes has to be the stanza's own — a stealth
+stanza's firmware is not the Kickstart.
 
-Second, and the owner's own point: the sentence is trying to explain what a
-BoingBag **is**. *"BoingBag'ı bütün Amiga camiası bilir, onu çevirmene gerek
-yok."* The name is known across the community; the screen should use it, not
-gloss it.
+**Open question the fix must answer, not assume**: when ART has one
+`kernel_file` and the file has three, what should each stanza get? The honest
+answer is probably that ART must not rewrite `kernel=` at all when the archive
+already names one per board — its own `kernel_file` is for the case where it is
+writing a `config.txt` from nothing. That is a design decision and is recorded
+here rather than taken.
 
-Fixed in wave 1 alongside [ART-197](#open), both catalogues in one commit.
+**ART-203** 🔴 **A distribution tree cannot be built from the screen at
+all: the folder picker can only return a folder that exists, and `apply`
+refuses every folder that exists** — *found 2026-08-22, from the owner's
+question "neden işletim sistemi oluşturamıyorum?"*
+`src-tauri/src/core/osinstall/apply.rs` ·
+`src-tauri/src/commands/osinstall.rs::osinstall_destination_taken` ·
+`src/components/osbuilder/OsInstall.tsx::chooseDestination`
+
+`apply` opens with `SAFE_CREATE`: *"`root` must not already exist"*. The
+screen's destination is chosen with `open({ directory: true })`, and a folder
+picker **cannot return a folder that is not there** — the "New folder" button
+creates it, and it exists from that moment. Delete it by hand and there is
+nothing left to select.
+
+Measured on the owner's own machine: `E:\amiga\Amigatolon\os39\art1`,
+created 01:44, **empty**, and the Build button locked against it.
+
+**So the loop has no exit, and it never had one.** Every tree this project has
+ever built came from the env-gated test hook, which takes a path string and
+never sees a dialog. `docs/STATUS.md` already records what this looked like
+from the other side — *"three consecutive `ART-SAFETY-REFUSED` entries in the
+operation log over an existing destination"* — and the fix that round applied
+(`osinstall_destination_taken`, blocking before the button instead of failing
+after it) made the dead end **visible** without making it passable. That is
+worth keeping in mind on its own: a defect can be made honest and still not be
+fixed.
+
+**Proposed fix: narrow the refusal to what it is actually for.**
+`SAFE_CREATE`'s purpose is that ART never builds over somebody's data. **An
+empty directory holds no data.** So an existing directory is accepted when it
+is empty and refused when it is not, and the sentence for a non-empty one says
+which of the two it is. The idiom is already in this codebase, one module
+over: `packagevol::unpack` refuses with *"already has contents; a package is
+unpacked into an empty directory"*.
+
+`read_dir().next().is_some()` is the test, so a folder holding **anything at
+all** — including a hidden file, including a single `.DS_Store` — is still
+refused. Nothing is emptied, nothing is overwritten, and a file that was there
+before the build is still there after a refusal.
+
+`osinstall_destination_taken` answers the same question, so the screen and the
+engine cannot disagree about which destinations are usable — the disagreement
+this entry is about.
+
+**Not yet fixed.** The owner redirected this session to external research
+before more code was written, which is this project's own rule and the right
+call: the fix touches a safety rule, and a wiki describing how the established
+tool prepares these cards may say something about destinations that changes
+it.
 
 **ART-196** 🟠 **ART writes its scratch to the system drive and the user
 cannot move it** — *raised by the owner 2026-08-21, after their C: had already
@@ -663,7 +714,7 @@ worked.
 That is one sentence, not the catalogue — but it is the first time any
 Turkish string in ART has been read on screen by someone who speaks it, and
 it was one of the hardest kind: a refusal that has to leave the reader knowing
-what to do next. The rest of the 1767 keys remain unseen.
+what to do next. The other 1774 remain unseen.
 
 **ART-060** 🔵 **Rust-side error sentences do not translate**
 `core/error.rs::CoreError`, `commands/whdload.rs::WhdloadRefusal` · Every
@@ -704,6 +755,403 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-202** 🟠 ✅ **The answer to a button at the bottom of the panel renders
+at the top of it, so pressing it looks like nothing happened** — *found
+2026-08-22 by the owner: "kurucuyu amiga tarafında çalıştıra bastığımda
+ekranın üstüne hata mesajı fırlatıyor"; their operation log carries **seven**
+identical failed runs*
+`src/components/osbuilder/AmigaInstallPanel.tsx`
+
+The refusal box is rendered at line 521. The button that causes it is at line
+730 — **209 lines of JSX below it**, past the fields, the overlay note, the
+medium note and the preview card. On a maximised window the refusal is above
+the fold: the user presses, the screen does not visibly change, and the only
+honest conclusion available to them is that the button did nothing.
+
+**Seven identical entries in `operations.jsonl` are the measurement.** Not
+seven different attempts at a fix — the same request, unchanged, seven times.
+That is what a control that appears not to respond produces.
+
+**This project has already learned this once.** `OsInstall.tsx` carries the
+lesson in its own comment, from the owner's own words: a job that ended badly
+*"has to say so where the button is"*. The same rule was not applied to the
+panel next door.
+
+**Fix**: render the refusal (and the run error) beside the button as well as
+— or instead of — at the top. Scrolling the existing box into view is the
+weaker answer and should be the fallback, not the fix: a message the user has
+to be carried to is still a message they did not get where they were looking.
+Worth doing together with [ART-200](#open), which is the *content* of the same
+sentence, and with [ART-201](#open), which is why the run was ever attempted.
+
+**Fixed 2026-08-22.** The markup became one `Refusal` component rendered
+twice: beside the fields the refusal is about, and beside the button that
+asked for it.
+
+The test asserts **adjacency**, not order — `atButton.nextElementSibling`
+contains the run button. *"Follows the button"* would pass with the two a
+thousand pixels apart, which is the defect itself. The first version of the
+test asserted that weaker thing and was also wrong about which side the box
+sits on; a warning belongs above its control.
+
+Test: `says why beside the button as well, not only at the top of the panel`
+(`AmigaInstallPanel.test.tsx`). **Mutated**: deleting the second render fails
+it.
+
+**ART-201** 🟠 ✅ **The preview describes a run ART already knows cannot
+happen, because it never opens the archive it would run from** — *found
+2026-08-22 by the owner, whose operation log carries **seven** identical
+failed runs*
+`src-tauri/src/commands/amigainstall.rs::amiga_install_preview` ·
+`core/amigainstall/packagevol.rs`
+
+`amiga_install_preview` says so in its own doc comment: *"Reads recipe data and
+asks three `is_file` questions. It starts no process, **unpacks nothing**,
+copies nothing, and writes nothing."* So with the wrong archive in the
+package's own field, the preview renders a confident **"Ne çalışacak"** card
+— package, tree, emulator, disc, machine — and the refusal only arrives once
+the job has started and `packagevol::unpack` has extracted the archive and
+found no `BoingBag3.9-1` drawer.
+
+**This is §92's PREVIEW step not covering the input the run uses.** The
+preview's whole job is to be the read-only answer *before* the destructive one,
+and here it answers about a run that cannot occur. It is this project's named
+defect class exactly — a confident, wrong sentence — arriving as a summary card
+rather than as prose.
+
+**Nothing is destroyed by it**: `unpack` refuses before writing into the tree,
+and every one of the seven attempts copied nothing. The cost is the user's
+time and their trust in the card.
+
+**Fix**: the preview must ask the archive what it holds, the same question
+`unpack` asks — open it, check the declared drawer is there, and report a
+refusal instead of a plan. `ArchiveSource::open` already answers it cheaply
+(measured this session: opening all twelve `.lha` files in the owner's folder
+and reading each one's top-level name is fast enough to do per preview), and
+the panel already has a place to render a refusal. Do **not** settle for
+disabling the button: the card claiming a run is the defect, not the button
+being live.
+
+**Fixed 2026-08-22.** The check sits in `compose`, which the preview and the
+run both go through, so the two cannot disagree about what is acceptable. With
+the wrong archive in the package's own field the preview now refuses instead
+of rendering a plan, and the run button is disabled rather than live — which
+is what would have stopped the seven attempts.
+
+**It refuses only what it is sure of.** A path that is not there is left to
+the panel's own missing-archive blocker, and an archive `ArchiveSource` cannot
+open is left to `unpack`: a false refusal here would turn a working run into a
+dead end, which is worse than the message this replaces.
+
+Tests: `the_preview_refuses_the_update_archive_in_the_packages_own_field`,
+`the_packages_own_archive_is_still_accepted` (a check that refused everything
+would have passed the first test and broken the product) and
+`a_missing_archive_is_not_refused_as_the_wrong_one`. **Mutated**: deleting the
+`compose` call fails both command-level tests.
+
+**ART-200** 🟠 ✅ **ART names an archive, the user fetches it, and ART refuses
+it with a sentence that does not say it belongs in the other field** —
+*found 2026-08-22 by the owner, driving the Amiga-side install step*
+`src-tauri/src/core/amigainstall/packagevol.rs` ·
+`src-tauri/src/core/osinstall/recipes/packages/boingbag-39-1.json`
+
+The package takes **two** archives. `BoingBag39-1.lha` is the package itself
+and carries the drawer `BoingBag3.9-1`, where `C/Updater` lives.
+`BoingBag39-1-UAE.lha` is the *update* archive, carries `BoingBag3.9-1-UAE`,
+and is what [ART-186](#fixed) tells the user to go and get: the original's
+`Updater` is 45.13, which does not run under an emulator, and the UAE build is
+45.15.
+
+Put the second file in the first field and the refusal reads:
+
+> `invalid input: 'E:\amiga\Amigatolon\os39\BoingBag39-1-UAE.lha' carries no
+> 'BoingBag3.9-1' drawer, so it is not the archive this package's installer
+> lives in; it holds BoingBag3.9-1-UAE, BoingBag3.9-1-UAE.info`
+> · `ART-INPUT-INVALID`
+
+**The refusal is correct** — that archive really does not carry the drawer the
+installer lives in, and it lists what the archive *does* hold rather than
+leaving the user to guess. What is missing is the one sentence that ends the
+problem: **this is the update archive; it goes in the second field.**
+
+**ART has the fact in hand and does not use it.** `BoingBag3.9-1-UAE` is not an
+unknown name to ART: `boingbag-39-1.json` declares
+`amiga_installer.overlays = [{ "from": "BoingBag3.9-1-UAE/BoingBag3.9-1" }]`.
+The refusal already reads the archive's top-level drawers to say what it holds,
+so recognising that the drawer it found is the package's **own declared overlay
+drawer** costs one comparison against a value the recipe already carries.
+
+**This is the round's own rule broken by the round's own code.** CLAUDE.md:
+*"A refusal must be actionable. Name what is missing, and where order matters,
+name the order. A refusal a user can fix with one download must not look like
+one they cannot fix at all."* Here it is cheaper than a download — the file is
+already on disk, in the wrong box — and the sentence still does not say so. It
+is worse than the general case for one reason: **ART itself named this file.**
+`osinstall.amigaInstall.overlay.needed` tells the user to fetch precisely this
+archive, and then the program refuses it without connecting the two.
+
+**The screen is not silent about the two fields** —
+`osinstall.amigaInstall.overlayArchive.hint` and `overlay.needed` both explain
+it, and `overlay.needed` says outright *"Onu yukarıda ikinci arşiv olarak
+seçin."* That is what makes this a refusal defect rather than a labelling one:
+the guidance exists elsewhere on the screen and the refusal does not carry it
+to the place the user is actually looking, which is the error they just caused.
+
+**Fix**: when the supplied archive's top-level drawer matches a drawer the
+package's own `overlays` declare, refuse with a distinct, typed reason naming
+the field it belongs in, rather than the generic drawer mismatch. It is a
+`CoreError` variant and a sentence in both catalogues; the recipe already holds
+everything the check needs. Not the reverse case as well — a package archive
+offered as an overlay — without measuring whether that is a real mistake anyone
+makes.
+
+**Fixed 2026-08-22.** `packagevol::archive_is` compares the archive's single
+top-level drawer against the recipe's own `media` **and** against its own
+declared overlay drawers, so the refusal can say the one thing that ends the
+problem: this is the update archive, put it in the update-archive field, and
+the archive carrying `BoingBag3.9-1` in the first.
+
+The decision is pure and stays in `core/amigainstall`, which still knows
+nothing about recipes — `commands/` opens the archive and maps between the
+two, exactly as that module's own comment requires.
+
+**Whole-name, case-insensitive.** `BoingBag3.9-1` is a character prefix of
+`BoingBag3.9-1-UAE`: a comparison that did not require the whole name would
+have called the update archive the package and this refusal would never have
+fired at all. `a_prefix_is_not_a_match_in_either_direction` says so. The fold
+is `to_lowercase` rather than ASCII-only, because a mismatch here would refuse
+a *valid* archive, which is worse than the message being improved.
+
+Tests: the six `archive_is` / `wrong_archive_sentence` tests in
+`packagevol.rs`, and `the_run_refuses_it_with_the_same_sentence` in
+`commands/amigainstall.rs`. **Mutated**: making the sentence generic fails all
+three field-naming assertions.
+
+**ART-199** 🟠 ✅ **A step reports itself ready on a folder that is not a
+distribution tree, so the refusal arrives on the button instead of at the
+field** — *found 2026-08-22 by the owner driving wave 1's own screen, minutes
+after it was built*
+`src/lib/buildSteps.ts::readiness` · `src/pages/osbuilder/steps.tsx`
+
+`readiness` asks whether `session.tree.root` is a non-empty string. It does not
+ask whether the folder **is** a tree. So a step whose value points at an
+ordinary AmigaOS folder renders with no warning, looks ready, and answers only
+when the user presses:
+
+> ART bunu çalıştırmayacak
+> `operation refused to protect data: 'E:\amiga\Amigatolon\os39' holds no
+> distribution.json, so ART cannot say which packages it already has; point at
+> a distribution tree ART built` · `ART-SAFETY-REFUSED`
+
+**The refusal itself is correct and is not the defect.** It protects data, it
+names the folder, it says what is missing and what to point at, and nothing was
+copied — `refuse_unless_installable` ([ART-186](#fixed)) doing exactly its job.
+What is wrong is *when* it arrives and *where the user was looking*. This is the
+same class the round exists to close: the screen does not crash, does not warn,
+and leaves the reader not knowing what to do next — arriving through a field
+that looked answered rather than through a sentence.
+
+**It is also the case the design already predicted**, which is why this is filed
+rather than patched in place. §3 of
+[the flow design](superpowers/specs/2026-08-21-os-builder-flow-design.md)
+says a hand-picked folder is validated *at the moment of picking* —
+*"AmigaOS 3.9 tree, 1915 files"*, or *"no `distribution.json` here"* — and
+**never a refusal arriving minutes later**. That is wave 2's `describe_tree`
+command and its picker. Wave 1 deliberately shipped without them; what this
+entry records is that the gap is real on a screen, not only on paper.
+
+**Two things about how it was found are worth keeping.** It came from the
+owner driving the very screen the wave had just been written for, within
+minutes, after 828 frontend tests and a browser layout probe had all passed —
+the project's own pattern, again. And the value it refused on was **correct**:
+the session had faithfully carried the folder the packages panel was already
+pointing at, which is wave 1's migration working. A migration that had quietly
+dropped it would have looked *better* here, and been worse.
+
+**A second thing the same session showed, and it belongs to the same picker.**
+The owner pointed at `E:\amiga\ProjeART\dist-3.9`, chose the Turkish
+catalogs, and was refused: that package declares
+`requires_components: ["locale-base"]` (ART-162) and that tree carries only
+`workbench-base`. **That refusal is correct and is the good kind** — it names
+the missing component and says what to do — but the owner could only learn
+*which* of their nine trees carried `locale-base` by trying them. It is in the
+manifests: `dist-3.9` has `workbench-base` alone, `dist-3.9-l1` has
+`workbench-base` + `workbench-39` + `locale-base`, `dist-3.9-bb` already has
+`locale-turkish` installed. So the picker's row must say **what a tree
+carries**, not only that it is one: what a tree holds is exactly what decides
+whether the package being chosen can go on it.
+
+**Fix in wave 2**, with `describe_tree`: `readiness` gains a third answer
+between "ready" and "asks" — a folder that is set but does not describe as a
+tree — and the step says so at the field, in the user's own language, before
+the button. Until then the English refusal is the only thing that says it,
+which is [ART-060](#open) as well.
+
+**Fixed 2026-08-22.** `core::osinstall::chain::describe_tree` answers what a
+folder is — whether it carries a `distribution.json`, which release, how many
+files, which components, and what has already been installed on the Amiga —
+and `osinstall_describe_tree` puts it one read-only command away from the
+field. `readiness` gains a third answer, `wrong-folder`, and the step says it
+where the folder was picked instead of leaving it to the button.
+
+**It never fails for a folder that is not a tree.** That is an answer
+(`is_tree: false` with a `problem`), not an error: *"you picked the wrong
+folder"* and *"the disk went away"* are different sentences and the caller has
+to be able to tell them apart.
+
+**Two things it deliberately does not do.** It does not accuse a folder ART
+has not looked at yet — `null` is not `false`, and an accusation while the
+answer is still in flight would be a confident wrong sentence of its own — and
+it does not accuse when the round trip failed, because that is not evidence
+about the user's folder. No folder still beats a bad one: with nothing chosen
+the step says *"pick one"*, since *"that is not a tree"* about nothing would be
+nonsense.
+
+The components half is answered too, and it was the second finding: the owner
+learned by trying which of nine trees carried `locale-base`, when every
+manifest says so. `TreeSummary::components` is sorted and deduplicated for the
+picker wave 2 builds on.
+
+Tests: `a_tree_describes_itself_by_release_files_and_components`,
+`a_folder_with_no_manifest_is_not_a_tree_and_says_why`,
+`a_folder_that_is_not_there_is_answered_rather_than_erroring`,
+`a_malformed_manifest_is_an_answer_not_a_panic`,
+`a_tree_reports_what_has_been_installed_on_the_amiga` (`chain.rs`); the
+`readiness, when ART has looked at the folder` group (`buildSteps.test.ts`);
+`says so at the step instead of leaving it to a refusal on the button`,
+`says nothing about a folder that is a tree` and `does not accuse the folder
+when ART could not look at all` (`steps.test.tsx`).
+
+**Mutated, and they fell**: deleting the step's `WrongFolder` fails the step
+test; making `readiness` ignore the answer fails both the unit test and the
+step test.
+
+**ART-197** 🟠 ✅ **The tree ART has just built is not carried to the step
+that needs it, so the user is asked to go and find ART's own output** —
+*found 2026-08-21 by the owner driving the release build: "dağıtım ağacı için
+nereyi seçmeliyim anlamadım ben"*
+`src/components/osbuilder/OsInstall.tsx` · `PackagePanel.tsx` ·
+`AmigaInstallPanel.tsx`
+
+`OsInstall` remembers where it **wrote** a distribution tree as
+`osinstall.destination`. The two panels rendered directly beneath it read the
+tree they **operate on** from a different key, `osinstall.packages.treeRoot`.
+Nothing joins the two: `setPackagesTreeRoot` is called at
+`OsInstall.tsx:1362` and `OsInstall.tsx:1378`, and both are the user picking
+a folder by hand. So a user who has just watched ART write 1915 files into a
+folder is asked, immediately below, to locate a "distribution tree" — a term
+that names nothing visible on their own disk.
+
+**It does not crash, warn or log.** It leaves the reader not knowing what to
+do next, which is this project's most expensive defect class arriving through
+a field label rather than a sentence. The owner, who has read every document
+in this repository, could not answer the field.
+
+**The same shape repeats three more times**, all four verified in the sources
+on 2026-08-21:
+
+| ART produces | Remembered as | The next step asks for | Under |
+|---|---|---|---|
+| the distribution tree | `osinstall.destination` | "Dağıtım ağacı" | `osinstall.packages.treeRoot` |
+| the card image | `cardBuilder.dest` | "Kart imajı" | `preload.image` |
+| the distribution tree | `osinstall.destination` | each partition's content folder | picked by hand, per partition |
+| — | — | a Kickstart ROM, in three places | `osinstall.rom`, `amigaInstall.kickstart`, `cardBuilder.kickstart` |
+
+**Fixed by wave 1 of
+[the OS Builder flow design](superpowers/specs/2026-08-21-os-builder-flow-design.md)**,
+and deliberately not by hand-wiring `destination` → `treeRoot`: one `BuildSession`
+makes the two the same variable, so the carry holds because there is nothing
+to forget rather than because someone remembered. The design names breaking
+that carry as the round's first required mutation.
+
+**Fixed 2026-08-22**, wave 1 of the flow design, and by structure rather than
+by a wire. `src/lib/buildSession.ts` makes the folder ART writes and the folder
+the next steps operate on **one** value, `tree.root`; `OsInstall` no longer
+owns `osinstall.packages.treeRoot` at all, and a finished install writes the
+session (`builtHere: true`) from its own `osinstall-result` listener.
+
+**The code carried an objection to exactly this**, and it was answered rather
+than deleted. `OsInstall.tsx` said that overwriting a remembered pick the
+moment a build finishes is the "something changed without the user changing
+it" shape the remembered-settings rule forbids. Pressing Build **is** the user
+acting — they chose the folder and asked ART to fill it — and the change is now
+**stated on screen** (`osinstall.result.carried`, both catalogues) instead of
+being made silently. A carry the user cannot see is the same defect as one that
+never happened.
+
+**The migration lost nothing.** The design said 22 remembered keys; there are
+**36**, measured across `src/pages/OsBuilder.tsx` and
+`src/components/osbuilder/*.tsx`. Eleven are taken over by the session and
+seeded from the keys they replace — `tree.root` from
+`osinstall.packages.treeRoot`, falling back to `osinstall.destination`, in that
+order, so a user who picked a tree by hand finds their pick and a user who
+never picked finds the folder ART wrote into. The other twenty-five stay with
+their own panels, where a migration that never touches them cannot lose them.
+The legacy keys are read once, never written again and never deleted, so a
+rollback still finds them.
+
+Tests: `hands a finished install's destination to the session`, `says on screen
+which folder the next steps will act on` and `carries a tree the user picked by
+hand, without a build` (`OsInstall.test.tsx`); `hands the packages step the tree
+ART last wrote, with nothing wired by hand` and `leaves a tree the user picked
+by hand exactly where they put it` (`useBuildSession.test.tsx`); `falls back to
+the destination for a user who never picked a tree` and `reads the per-release
+key for every other release` (`buildSession.test.ts`).
+
+**Mutated, and they fell.** Deleting the `setTree` on a finished result fails
+the first; deleting the on-screen sentence fails the second; dropping the
+`osinstall.destination` fallback fails the sixth; reading the bare key instead
+of the per-release one fails the seventh. The third test turned out stronger
+than written — the path renders **twice**, once per panel, which is both panels
+reading the one session value.
+
+**Three of the four rows above are not closed by this.** The card image
+(`cardBuilder.dest` → `preload.image`), the per-partition content folders, and
+the Kickstart asked for in three places are wave 2's scope, when those panels
+are rehomed and the duplicated fields are deleted rather than bypassed.
+
+**ART-198** 🔵 ✅ **A sentence promises an official update and offers an
+unofficial one as its example, in both catalogues** — *found 2026-08-21 while
+reading the OS Builder's own strings; the owner's ruling is that a BoingBag
+needs no explaining at all*
+`src/i18n/en.json` · `src/i18n/tr.json`, key `osinstall.packages.intro`
+
+> EN: *"Add an **official** update — a BoingBag, or an **unofficial** pack like
+> the Turkish catalogs — onto a distribution tree ART, or you, already built."*
+> TR: *"ART'ın ya da senin zaten kurduğun bir dağıtım ağacına **resmi bir
+> güncelleme** — bir BoingBag, ya da Türkçe katalog paketi gibi **resmi olmayan**
+> bir paket — ekle."*
+
+The em-dash pair reads as an appositive to "an official update", so the
+sentence offers an unofficial pack as an example of an official one. The
+Turkish carries the contradiction faithfully, which is what a good translation
+of a bad sentence does — `pnpm test`'s parity check passes, because both
+catalogues are equally wrong.
+
+Second, and the owner's own point: the sentence is trying to explain what a
+BoingBag **is**. *"BoingBag'ı bütün Amiga camiası bilir, onu çevirmene gerek
+yok."* The name is known across the community; the screen should use it, not
+gloss it.
+
+Fixed in wave 1 alongside [ART-197](#open), both catalogues in one commit.
+
+**Fixed 2026-08-22**, both catalogues in one commit:
+
+> EN: *"Add a BoingBag or another update pack onto a distribution tree ART, or
+> you, already built."*
+> TR: *"ART'ın ya da senin zaten kurduğun bir dağıtım ağacına bir BoingBag ya da
+> başka bir güncelleme paketi ekle."*
+
+The official/unofficial pair is gone and so is the gloss. "Distribution tree"
+stays for now — renaming it is wave 3's scope, and two names in circulation for
+one thing would be worse than the one that is there.
+
+Tests: `does not offer an unofficial pack as an example of an official update`,
+`does not carry the same contradiction in Turkish` and `names a BoingBag
+without explaining what one is` (`src/i18n/copy.test.ts`). All three were
+watched failing against the sentences as they stood, before either was touched
+— which is the only reason a test written for a copy defect is worth anything.
 
 **ART-178** 🔵 ✅ **`useRemembered` hands back a fresh array identity when the
 persisted value lands, so every effect that depends on one runs twice with an

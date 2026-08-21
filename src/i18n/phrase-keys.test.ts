@@ -125,6 +125,7 @@ import {
   type Machine,
   type MountNote,
 } from "@/lib/launch";
+import { STEP_IDS, stepLabelKey } from "@/lib/buildSteps";
 
 /** Whether `dotted` (e.g. "whdload.outcome.installed") names a string leaf. */
 function isLeafKey(dotted: string): boolean {
@@ -1244,6 +1245,18 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     ];
     for (const kind of kinds) {
       expect(resolvesAtRuntime(launchKindPhrase(kind).key), kind.kind).toBe(true);
+    }
+  });
+
+  it("stepLabelKey: every OS Builder step resolves", () => {
+    // The progress strip builds its labels from the step id — a template, not
+    // a literal — so nothing in the build would catch a step whose label was
+    // never added: the strip would simply render `osBuilder.step.kart` at the
+    // user. Every id is enumerated here, and `stepsFor` cannot return one
+    // outside `STEP_IDS` (its own test asserts that), so this covers the
+    // strip whatever kind is being built.
+    for (const step of STEP_IDS) {
+      expect(resolvesAtRuntime(stepLabelKey(step)), step).toBe(true);
     }
   });
 });

@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### The OS Builder asks one thing at a time (2026-08-22)
+
+#### Changed
+- **The OS Builder is now a sequence of steps instead of one long page.** It
+  used to put every section of every job in a single scrolling column. Now
+  there is a strip along the top showing the steps for what you are actually
+  building — a card build is no longer shown the install's steps, or the other
+  way round — and one step is on screen at a time. Each step has its own
+  address, so Back and Forward work and you can jump straight to one.
+
+#### Fixed
+- **ART no longer asks you to go and find the folder it just made for you.**
+  After building an AmigaOS folder, the next steps — adding a BoingBag, running
+  a package's own installer on the Amiga — asked you to locate a "distribution
+  tree" of your own. It is the same folder ART had written a moment earlier,
+  and nothing joined the two. Now there is one folder: the one you built is the
+  one the next steps work on, and the result panel **tells you** that is what
+  will happen rather than changing it quietly underneath you. If you would
+  rather use a different folder, the picker is still there.
+
+- **A step opened on its own says what it needs.** Going straight to the update
+  packages step without a folder chosen used to show an empty card. It now says
+  what it works on and points at the step that answers the question.
+
+- **A sentence that contradicted itself.** The update packages step offered
+  "an official update — a BoingBag, or an unofficial pack…", which reads as an
+  unofficial pack being an example of an official one. It now simply says what
+  it does, in both languages, and stops explaining what a BoingBag is.
+
 ### The OS Builder stops rescanning your discs (2026-08-21)
 
 #### Fixed

@@ -353,6 +353,15 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // `overlayAdvicePhrase`, enumerated in the same place. The sixth is the
     // run button's `t(busy ? … : …)`, the same shape `PackagePanel.tsx`
     // already uses for its own.
-    expect(dynamicCalls).toBe(126);
+    // 126 → 127 (the OS Builder flow round, wave 1): `OsBuilder.tsx`'s
+    // progress strip renders `t(stepLabelKey(step))`. The strip's labels are
+    // built from the step id rather than written out, because the strip is
+    // driven by `stepsFor(kind)` — a card build and an install do not show
+    // the same steps, and a literal per step would be a list to keep in sync
+    // with the registry. Every id it can produce is enumerated in
+    // `phrase-keys.test.ts` (`stepLabelKey: every OS Builder step resolves`),
+    // and `stepsFor` cannot return an id outside `STEP_IDS` — its own test in
+    // `src/lib/buildSteps.test.ts` asserts that.
+    expect(dynamicCalls).toBe(127);
   });
 });

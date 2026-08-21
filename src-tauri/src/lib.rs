@@ -145,6 +145,7 @@ pub fn run() {
             commands::layout::layout_apply,
             commands::osinstall::osinstall_scan_media,
             commands::osinstall::osinstall_destination_taken,
+            commands::osinstall::osinstall_describe_tree,
             commands::osinstall::osinstall_plan,
             commands::osinstall::osinstall_rescan_media,
             commands::osinstall::osinstall_components,

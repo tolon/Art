@@ -106,6 +106,8 @@ use crate::core::iso::IsoImage;
 use crate::core::jobs::{JobId, ProgressSink};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::core::osinstall::package::RequiredMedium;
+use crate::core::osinstall::source::MediaSource;
+use crate::core::osinstall::source_archive::ArchiveSource;
 use crate::core::osinstall::{chain, package};
 use crate::core::profile::AmigaProfile;
 use crate::core::sources::install::Scratch;
@@ -570,6 +572,11 @@ fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
         .as_deref()
         .and_then(package::parse_version_pair);
 
+    // ART-200/ART-201: is the file in the package's own field actually the
+    // package? Asked here, so the preview refuses it too and the answer names
+    // the field to move it to when ART can tell.
+    refuse_wrong_package_archive(&package.media, &overlays, &request.package_archives)?;
+
     let medium = compose_medium(
         &package.id,
         installer.required_medium.as_ref(),
@@ -586,6 +593,49 @@ fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
         minimum_installer_version,
         minimum_installer_version_text: installer.minimum_version.clone(),
     })
+}
+
+/// Ask the supplied archive what it carries, **before anything is unpacked**.
+///
+/// **ART-201.** `amiga_install_preview` starts no process and unpacks nothing,
+/// so with the wrong file in the package's own field it used to render a
+/// confident summary — package, tree, emulator, disc, machine — for a run
+/// `packagevol::unpack` would refuse the moment the job started. The owner's
+/// operation log carried **seven** identical failed runs. A preview that
+/// describes a run that cannot happen is §92's PREVIEW step not covering the
+/// input the run uses, and it is this project's own named defect class: a
+/// confident, wrong sentence.
+///
+/// This sits in `compose`, which both the preview and the run go through, so
+/// the two cannot disagree about what is acceptable.
+///
+/// **It only refuses what it is sure of.** A path that is not there is left to
+/// the panel's own missing-archive blocker, and an archive `ArchiveSource`
+/// cannot open at all is left to `unpack` — refusing here on a file this
+/// reader merely does not understand would turn a working run into a false
+/// refusal, which is worse than the message this exists to improve.
+fn refuse_wrong_package_archive(
+    media: &str,
+    overlays: &[packagevol::Overlay],
+    archives: &[PathBuf],
+) -> CoreResult<()> {
+    let Some(first) = archives.first() else {
+        return Ok(());
+    };
+    if !first.is_file() {
+        return Ok(());
+    }
+    let Ok(source) = ArchiveSource::open(first) else {
+        return Ok(());
+    };
+    let holds = MediaSource::volume_name(&source).to_string();
+    let role = packagevol::archive_is(media, overlays, &holds);
+    if role == packagevol::ArchiveIs::ThePackage {
+        return Ok(());
+    }
+    Err(CoreError::InvalidInput(packagevol::wrong_archive_sentence(
+        first, media, &role, &holds,
+    )))
 }
 
 /// Match what the package's installer requires against what the user
@@ -2244,6 +2294,94 @@ mod tests {
     /// The preview asks about **every** archive: with one present and one
     /// absent, an `any`-shaped check would report the run as ready and the
     /// user would meet the refusal after confirming.
+    /// The owner's own `BoingBag39-1-UAE.lha`, in shape: its top level is
+    /// `BoingBag3.9-1-UAE`, with the package's own drawer **inside** it.
+    /// Measured against the real file with 7-Zip on 2026-08-22 — seven
+    /// entries, an icon beside the wrapper, `BoingBag3.9-1/C/Updater` two
+    /// levels down.
+    fn uae_lha() -> Vec<u8> {
+        crate::core::lha::tests::make_lha_with(&[
+            ("BoingBag3.9-1-UAE.info", b"icon"),
+            ("BoingBag3.9-1-UAE/BoingBag3.9-1.info", b"icon"),
+            ("BoingBag3.9-1-UAE/BoingBag3.9-1/C/Updater", updater(45, 15)),
+            ("BoingBag3.9-1-UAE/Readme", b"read me"),
+            ("BoingBag3.9-1-UAE/Readme.info", b"icon"),
+        ])
+    }
+
+    /// **ART-201.** The preview used to describe a run that could not happen.
+    #[test]
+    fn the_preview_refuses_the_update_archive_in_the_packages_own_field() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "preview-wrong-archive");
+        let tree = tree_in(&scratch);
+        let archive = scratch.join("BoingBag39-1-UAE.lha");
+        std::fs::write(&archive, uae_lha()).unwrap();
+
+        let mut req = request(&tree);
+        req.package_archives = vec![archive];
+
+        let err = amiga_install_preview(req, None)
+            .expect_err("the preview must refuse a run it can already see cannot happen");
+        let said = err.to_string();
+        assert!(
+            said.contains("update archive"),
+            "the preview's refusal must say what the file is: {said}"
+        );
+        assert!(
+            said.contains("update-archive field"),
+            "and where it belongs: {said}"
+        );
+    }
+
+    /// **ART-200.** The same refusal, reached through the run, so the two
+    /// cannot drift apart: both go through `compose`.
+    #[test]
+    fn the_run_refuses_it_with_the_same_sentence() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "run-wrong-archive");
+        let tree = tree_in(&scratch);
+        let archive = scratch.join("BoingBag39-1-UAE.lha");
+        std::fs::write(&archive, uae_lha()).unwrap();
+
+        let mut req = request(&tree);
+        req.package_archives = vec![archive];
+
+        let said = compose(&req).unwrap_err().to_string();
+        assert!(said.contains("update-archive field"), "{said}");
+    }
+
+    /// The package's own archive still passes — a check that refused
+    /// everything would pass the two tests above and break the product.
+    #[test]
+    fn the_packages_own_archive_is_still_accepted() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "preview-right-archive");
+        let tree = tree_in(&scratch);
+        let archive = scratch.join("BoingBag39-1.lha");
+        std::fs::write(&archive, boingbag_lha()).unwrap();
+
+        let mut req = request(&tree);
+        req.package_archives = vec![archive];
+
+        assert!(
+            amiga_install_preview(req, None).is_ok(),
+            "the real archive must still preview"
+        );
+    }
+
+    /// An archive that is not there is left to the panel's own missing-file
+    /// blocker, not turned into a drawer refusal — the two say different
+    /// things and the user needs the one that is true.
+    #[test]
+    fn a_missing_archive_is_not_refused_as_the_wrong_one() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "preview-absent-archive");
+        let tree = tree_in(&scratch);
+
+        let mut req = request(&tree);
+        req.package_archives = vec![scratch.join("nothing-here.lha")];
+
+        let preview = amiga_install_preview(req, None).expect("no refusal for an absent file");
+        assert!(!preview.package_archives_present);
+    }
+
     #[test]
     fn the_preview_asks_about_every_archive_not_just_the_first() {
         let scratch = ScratchDir::new("art-amigainstall-cmd", "preview-archives");

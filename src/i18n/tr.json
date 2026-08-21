@@ -696,6 +696,16 @@
     }
   },
   "osBuilder": {
+    "step": {
+      "hedef": "Ne yapıyoruz",
+      "kaynak": "Kurulum ortamı",
+      "paketler": "Güncelleme paketleri",
+      "amiga-kurulum": "Amiga'da kur",
+      "kart": "Kart imajı",
+      "birimler": "Birimleri hazırla",
+      "asksTree": "Bu adım bir AmigaOS klasörü üzerinde çalışır, henüz seçilmedi. Aşağıdan birini seç ya da önce bir tane kur:",
+      "notATree": "Bu klasör ART'ın kurduğu bir AmigaOS klasörü değil: içinde distribution.json yok, bu yüzden ART içinde ne olduğunu ve bir paketin neyin yerine geçeceğini söyleyemez. Aşağıdan başka bir klasör seç ya da burada bir tane kur:"
+    },
     "intro": "PiStorm üzerinde çalışan AmigaOS dağıtımları, her birinin sizden ne istediği ve elinizdekinin uyup uymadığı. ART hiçbir dağıtımı indirmez — siz indirir, ART'a dosyayı gösterirsiniz.",
     "notBuiltYet": "ART henüz dağıtım kartı yazamıyor. Bu ekran bir dağıtımın neye ihtiyaç duyduğunu söyler ve elinizdeki ROM ile kartı buna göre denetler.",
     "what": {
@@ -2189,6 +2199,7 @@
       "heading": "Kuruldu",
       "summary": "{{files}} dosya, {{directories}} klasör, toplam {{bytes}}.",
       "root": "Dağıtım ağacı: {{root}}",
+      "carried": "Güncelleme ve Amiga'da kurulum adımları bu klasör üzerinde çalışacak: {{root}}",
       "nextStep": "Bunu bir karta kopyalamak için OS Builder → Amiga birimlerini hazırla ekranını bu klasöre yönlendir."
     },
     "verify": {
@@ -2228,7 +2239,7 @@
     },
     "packages": {
       "heading": "Güncelleme paketleri",
-      "intro": "ART'ın ya da senin zaten kurduğun bir dağıtım ağacına resmi bir güncelleme — bir BoingBag, ya da Türkçe katalog paketi gibi resmi olmayan bir paket — ekle.",
+      "intro": "ART'ın ya da senin zaten kurduğun bir dağıtım ağacına bir BoingBag ya da başka bir güncelleme paketi ekle.",
       "scopeNote": "ART {{count}} güncelleme paketi için tarif gönderiyor — her biri dosyaların ve kendi hedeflerinin elle yazılmış bir listesidir — ve başka hiçbir arşive dokunmaz. Böyle bir tarifi olmayan bir paket, ya da kurulumu gerçek donanımda çalışma anında karar veren bir Amiga Installer betiği olan bir paket burada yerleştirilemez: ART'ın o kararı yeniden üretecek hiçbir şeyi yok.",
       "scopeBlocked": "Bunlardan {{count}} tanesi, arşivin kaç kopyası elinde olursa olsun, Windows üzerinden hiç yerleştirilemez — her biri nedenini aşağıda kendi satırında söylüyor.",
       "treeRoot": {

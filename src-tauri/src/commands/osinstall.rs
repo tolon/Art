@@ -90,6 +90,7 @@ use crate::core::oplog::{JsonlOperationLog, OperationOutcome, OperationRecord};
 use crate::core::osinstall::apply::{
     add_package, apply, ApplyOutcome, DistributionManifest, FileRecord, MANIFEST_FILE_NAME,
 };
+use crate::core::osinstall::chain::{self, TreeSummary};
 use crate::core::osinstall::collide::{self, CollisionReport, Incoming};
 use crate::core::osinstall::package::{self, Package};
 use crate::core::osinstall::plan::{
@@ -161,6 +162,15 @@ pub enum MediaScanResult {
 #[tauri::command]
 pub fn osinstall_destination_taken(destination: PathBuf) -> AppResult<bool> {
     Ok(destination.try_exists().unwrap_or(false))
+}
+
+/// What a folder is, so a field can say it the moment it is picked (ART-199).
+///
+/// Read-only, and it **never fails for a folder that is not a tree** — that is
+/// an answer, not an error. See `core::osinstall::chain::describe_tree`.
+#[tauri::command]
+pub fn osinstall_describe_tree(tree: PathBuf) -> AppResult<TreeSummary> {
+    Ok(chain::describe_tree(&tree))
 }
 
 #[tauri::command]

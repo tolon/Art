@@ -133,6 +133,92 @@ pub struct Overlay {
     pub to: String,
 }
 
+/// Which of a package's archives this one is, judged by the single top-level
+/// drawer it carries.
+///
+/// **ART-200/ART-201.** ART tells a user to go and fetch a package's *update*
+/// archive by name (`BoingBag39-1-UAE.lha` — its own `Updater` is 45.13, which
+/// cannot install under an emulator), and the user brings it back and supplies
+/// it as the package. Before this existed the answer was a generic drawer
+/// mismatch that listed what the archive held and never said the one thing
+/// that ends the problem: *this is the update archive, it goes in the other
+/// field*. ART had the fact in hand the whole time — the recipe declares the
+/// overlay's own drawer.
+///
+/// Judged from the archive's top-level name alone, so it can be asked
+/// **before** anything is unpacked. That is what lets the preview answer it
+/// (ART-201): `amiga_install_preview` used to describe a run — package, tree,
+/// emulator, disc, machine — that `unpack` would refuse a moment later, which
+/// is a confident wrong sentence in the shape of a summary card.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArchiveIs {
+    /// Its top-level drawer is the one the installer lives in.
+    ThePackage,
+    /// Its top-level drawer is the first segment of one of this package's own
+    /// declared overlays — so it is the update archive, in the wrong field.
+    TheUpdateArchive,
+    /// Neither. It may be another package's archive, or not a package at all.
+    Neither,
+}
+
+/// Compare two Amiga drawer names.
+///
+/// Case-insensitively, because AmigaDOS is. `to_lowercase` rather than
+/// `eq_ignore_ascii_case` so a non-ASCII drawer name in some future recipe is
+/// folded rather than silently mismatched — a mismatch here would refuse a
+/// *valid* archive, which is worse than the message this function exists to
+/// improve.
+///
+/// **Not the authoritative check.** `unpack` still resolves the drawer on the
+/// real filesystem and asks `is_dir`, which is the same question the mount
+/// will put to the emulator. This one only decides which sentence to say.
+fn drawer_names_equal(a: &str, b: &str) -> bool {
+    a.to_lowercase() == b.to_lowercase()
+}
+
+/// The drawer an overlay is copied *from* — its archive's own top level.
+fn overlay_drawer(overlay: &Overlay) -> &str {
+    overlay.from.split('/').next().unwrap_or("")
+}
+
+/// See [`ArchiveIs`].
+pub fn archive_is(media: &str, overlays: &[Overlay], top_level: &str) -> ArchiveIs {
+    if drawer_names_equal(media, top_level) {
+        return ArchiveIs::ThePackage;
+    }
+    if overlays
+        .iter()
+        .any(|overlay| drawer_names_equal(overlay_drawer(overlay), top_level))
+    {
+        return ArchiveIs::TheUpdateArchive;
+    }
+    ArchiveIs::Neither
+}
+
+/// What to say about an archive supplied as the package's own when it is not.
+///
+/// English, like every other `CoreError` sentence (ART-060) — the screen adds
+/// the half it can say in the user's language. **Actionable**, which is
+/// CLAUDE.md's rule and the whole of ART-200: a mistake the user can undo by
+/// moving one file between two fields must not read like one they cannot fix.
+pub fn wrong_archive_sentence(
+    archive: &std::path::Path,
+    media: &str,
+    role: &ArchiveIs,
+    holds: &str,
+) -> String {
+    match role {
+        ArchiveIs::TheUpdateArchive => format!(
+            "'{}' is this package's update archive, not the package itself — it carries '{holds}'.              Supply it in the update-archive field instead, and put the archive carrying '{media}'              in the package's own field.",
+            archive.display()
+        ),
+        _ => format!(
+            "'{}' carries no '{media}' drawer, so it is not the archive this package's installer              lives in; it holds {holds}",
+            archive.display()
+        ),
+    }
+}
+
 /// What the package is expected to look like once it is unpacked, and what
 /// must be true of it before the emulator is started.
 ///
@@ -597,6 +683,103 @@ fn what_it_holds(dir: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -----------------------------------------------------------------
+    // ART-200 / ART-201: which archive is this, judged before anything is
+    // unpacked.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn the_packages_own_archive_is_recognised_by_its_drawer() {
+        assert_eq!(
+            archive_is("BoingBag3.9-1", &uae_overlay(), "BoingBag3.9-1"),
+            ArchiveIs::ThePackage
+        );
+    }
+
+    #[test]
+    fn the_update_archive_is_recognised_as_the_update_archive() {
+        // The whole of ART-200: ART names this archive to the user, the user
+        // fetches it, and ART must not then refuse it as an unknown stranger.
+        assert_eq!(
+            archive_is("BoingBag3.9-1", &uae_overlay(), "BoingBag3.9-1-UAE"),
+            ArchiveIs::TheUpdateArchive
+        );
+    }
+
+    #[test]
+    fn a_prefix_is_not_a_match_in_either_direction() {
+        // `BoingBag3.9-1` is a character prefix of `BoingBag3.9-1-UAE`. A
+        // comparison that did not require the whole name would call the
+        // update archive the package, and the refusal would never fire.
+        assert_ne!(
+            archive_is("BoingBag3.9-1", &[], "BoingBag3.9-1-UAE"),
+            ArchiveIs::ThePackage
+        );
+        assert_ne!(
+            archive_is("BoingBag3.9-1-UAE", &[], "BoingBag3.9-1"),
+            ArchiveIs::ThePackage
+        );
+    }
+
+    #[test]
+    fn another_packages_archive_is_neither() {
+        assert_eq!(
+            archive_is("BoingBag3.9-1", &uae_overlay(), "BoingBag3.9-2"),
+            ArchiveIs::Neither
+        );
+    }
+
+    #[test]
+    fn drawer_names_are_compared_the_way_amigados_compares_them() {
+        // AmigaDOS is case-insensitive, so an archive spelling its drawer
+        // differently is still the package's own — refusing it would be a
+        // false refusal, which is worse than the generic message this whole
+        // change replaces.
+        assert_eq!(
+            archive_is("BoingBag3.9-1", &[], "boingbag3.9-1"),
+            ArchiveIs::ThePackage
+        );
+    }
+
+    #[test]
+    fn the_update_archive_refusal_names_the_field_to_move_it_to() {
+        // CLAUDE.md: a refusal must be actionable. This one is fixable by
+        // moving one file between two fields, so the sentence has to say so.
+        let said = wrong_archive_sentence(
+            std::path::Path::new("E:\\dl\\BoingBag39-1-UAE.lha"),
+            "BoingBag3.9-1",
+            &ArchiveIs::TheUpdateArchive,
+            "BoingBag3.9-1-UAE, BoingBag3.9-1-UAE.info",
+        );
+        assert!(
+            said.contains("update archive"),
+            "must name what the file is: {said}"
+        );
+        assert!(
+            said.contains("update-archive field"),
+            "must name the field it belongs in: {said}"
+        );
+        assert!(
+            said.contains("BoingBag3.9-1"),
+            "must name the drawer the right archive carries: {said}"
+        );
+    }
+
+    #[test]
+    fn an_unrecognised_archive_still_lists_what_it_held() {
+        // The old sentence was not wrong, only incomplete — it stays for the
+        // case where ART genuinely cannot say what the file is.
+        let said = wrong_archive_sentence(
+            std::path::Path::new("E:\\dl\\Euro-Update.lha"),
+            "BoingBag3.9-1",
+            &ArchiveIs::Neither,
+            "Euro-Update, Euro-Update.info",
+        );
+        assert!(said.contains("carries no 'BoingBag3.9-1' drawer"), "{said}");
+        assert!(said.contains("Euro-Update.info"), "{said}");
+    }
+
     use crate::core::jobs::{CancelToken, NoProgress, ProgressSink};
     use crate::core::lha::tests::{make_lha_with, make_lha_with_raw_names};
     use crate::core::ScratchDir;

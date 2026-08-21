@@ -87,7 +87,7 @@ yani o iki oyun hiç yazmadı. Bu, özelliğin çalışmadığı anlamına gelmi
 ## 3.6 Türkçeyi ekranda gör (ART-062)
 
 **Neden sende:** Bu aşamada inen her Türkçe dize `pnpm test`'in anahtar
-denetiminden ve JSON okumasından geçti — ama **1767 anahtarın 1766'sı çalışan
+denetiminden ve JSON okumasından geçti — ama **1775 anahtarın 1774'ü çalışan
 uygulamada ekranda hâlâ görülmedi.** Anahtarların eşleşmesi, cümlenin doğru
 olduğunu ya da kutuya sığdığını söylemez.
 

@@ -114,6 +114,7 @@ import {
 import { pistormIdentifyRom, type RomInfo } from "@/lib/pistorm";
 import { isFlag, isTextList, isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
+import { useBuildSession } from "@/lib/useBuildSession";
 import { fraction, onJobProgress, subscribeSafely, type JobProgress } from "@/lib/jobs";
 import { Field } from "@/components/osbuilder/Field";
 import { PackagePanel } from "@/components/osbuilder/PackagePanel";
@@ -311,34 +312,30 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   const [rescanNonce, setRescanNonce] = useState(0);
 
   /**
-   * The Packages section's own three remembered choices — a distribution
-   * tree that already exists, the folder holding update archives, and the
-   * package ids ticked. Not per-release the way `chosen` above is: a
-   * package id (`boingbag-39-1`) means the same thing regardless of which
-   * release built the tree it lands on.
+   * The tree, the folder holding update archives and the package ids ticked
+   * now live in the **session** (`@/lib/buildSession`), not in three keys of
+   * this screen's own.
    *
-   * Deliberately **not** auto-filled from a just-finished install the way
-   * `verifyDistRoot` below is — `verifyDistRoot` is session-only state, so
-   * filling it in costs nothing the user could lose, but these three are
-   * remembered, and overwriting a remembered pick the moment a build
-   * finishes is exactly the "something changed without the user changing
-   * it" shape CLAUDE.md's own rule forbids.
+   * **ART-197.** They used to be `osinstall.packages.treeRoot` and its two
+   * neighbours, while the folder this screen *wrote into* was
+   * `osinstall.destination` — two variables for one folder, joined by
+   * nothing. So a user who had just watched ART write 1915 files was asked,
+   * immediately below, to locate a "distribution tree": a term naming nothing
+   * visible on their own disk. The owner could not answer the field.
+   *
+   * The comment that stood here objected to filling the tree in from a
+   * finished build, on the grounds that overwriting a remembered pick without
+   * the user acting is exactly what the remembered-settings rule forbids.
+   * **That objection is answered rather than dropped.** Pressing Build *is*
+   * the user acting — they chose the folder and asked ART to fill it — and
+   * the change is stated on screen (`osinstall.result.carried`) instead of
+   * being made silently. A user who wants a different tree still picks one;
+   * the picker never goes away.
    */
-  const [packagesTreeRoot, setPackagesTreeRoot] = useRemembered<string | null>(
-    "osinstall.packages.treeRoot",
-    isTextOrNothing,
-    null
-  );
-  const [packagesFolder, setPackagesFolder] = useRemembered<string | null>(
-    "osinstall.packages.folder",
-    isTextOrNothing,
-    null
-  );
-  const [packagesChosen, setPackagesChosen] = useRemembered<string[]>(
-    "osinstall.packages.chosen",
-    isTextList,
-    []
-  );
+  const { session, setTree, setPackages } = useBuildSession();
+  const packagesTreeRoot = session.tree.root;
+  const packagesFolder = session.packages.folder;
+  const packagesChosen = session.packages.chosen;
 
   // --- what the screen is doing --------------------------------------------
   /**
@@ -618,11 +615,17 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         setBusy(false);
         setConfirmed(false);
         setVerifyDistRoot(r.destination);
+        // ART-197: the tree ART has just written **is** the tree the next
+        // steps act on. One variable, so the carry holds by structure rather
+        // than by anyone remembering to wire it — and the result card says so
+        // (`osinstall.result.carried`), because a carry the user cannot see
+        // is the same defect as one that never happened.
+        setTree({ root: r.destination, builtHere: true });
         installJob.current = null;
         setProgress(null);
       })
     );
-  }, []);
+  }, [setTree]);
 
   // The install's own progress. `job-progress` is application-wide, so every
   // update is checked against this screen's job id — an Aminet download
@@ -1351,6 +1354,11 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           <p className="faint" style={{ fontSize: 11, margin: "0 0 8px", wordBreak: "break-all" }}>
             {t("osinstall.result.root", { root: result.destination })}
           </p>
+          {/* ART-197: the screen may not change what the next step points at
+              without saying so. */}
+          <p className="muted" style={{ fontSize: 12, margin: "0 0 8px", wordBreak: "break-all" }}>
+            {t("osinstall.result.carried", { root: result.destination })}
+          </p>
           <p className="muted" style={{ fontSize: 12, margin: 0 }}>
             {t("osinstall.result.nextStep")}
           </p>
@@ -1359,11 +1367,11 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
 
       <PackagePanel
         treeRoot={packagesTreeRoot}
-        onTreeRootChange={setPackagesTreeRoot}
+        onTreeRootChange={(root) => setTree({ root, builtHere: false })}
         packageFolder={packagesFolder}
-        onPackageFolderChange={setPackagesFolder}
+        onPackageFolderChange={(folder) => setPackages({ folder })}
         chosen={packagesChosen}
-        onChosenChange={setPackagesChosen}
+        onChosenChange={(chosen) => setPackages({ chosen })}
       />
 
       {/* The other half of the same question, and deliberately a second
@@ -1375,7 +1383,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           else. */}
       <AmigaInstallPanel
         treeRoot={packagesTreeRoot}
-        onTreeRootChange={setPackagesTreeRoot}
+        onTreeRootChange={(root) => setTree({ root, builtHere: false })}
         packageFolder={packagesFolder}
       />
 

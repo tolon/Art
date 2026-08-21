@@ -102,6 +102,38 @@ export interface AmigaInstallPanelProps {
   packageFolder?: string | null;
 }
 
+/**
+ * A refusal, as the screen says it.
+ *
+ * The sentence in the middle is **Rust's, verbatim and in English** (ART-060):
+ * a missing prerequisite names what to install first and in what order, and an
+ * installer too old for an emulator names the archive that fixes it. Replacing
+ * it with one translated "it was refused" would lose the half that matters.
+ * The line under it is the half ART *can* say in the user's own language —
+ * that nothing was copied.
+ *
+ * A component, and rendered twice, because of ART-202: once beside the fields
+ * the refusal is about, once beside the button that asked for it.
+ */
+function Refusal({ text, testId }: { text: string; testId: string }) {
+  const { t } = useTranslation();
+  return (
+    <div
+      className="badge badge-err"
+      data-testid={testId}
+      style={{ display: "block", padding: "8px 10px", margin: "0 0 12px", fontSize: 12 }}
+    >
+      <p style={{ margin: "0 0 6px", fontWeight: 600 }}>
+        {t("osinstall.amigaInstall.refused.heading")}
+      </p>
+      <p style={{ margin: "0 0 6px" }}>{text}</p>
+      <p style={{ margin: 0, fontSize: 11 }}>
+        {t("osinstall.amigaInstall.refused.nothingCopied")}
+      </p>
+    </div>
+  );
+}
+
 export function AmigaInstallPanel({
   treeRoot,
   onTreeRootChange,
@@ -515,21 +547,7 @@ export function AmigaInstallPanel({
           installer too old for an emulator names the archive that fixes it.
           One translated line goes with it, saying the half ART can say in
           the user's own language — that nothing was copied. */}
-      {refusal && (
-        <div
-          className="badge badge-err"
-          data-testid="amiga-install-refusal"
-          style={{ display: "block", padding: "8px 10px", margin: "0 0 12px", fontSize: 12 }}
-        >
-          <p style={{ margin: "0 0 6px", fontWeight: 600 }}>
-            {t("osinstall.amigaInstall.refused.heading")}
-          </p>
-          <p style={{ margin: "0 0 6px" }}>{refusal}</p>
-          <p style={{ margin: 0, fontSize: 11 }}>
-            {t("osinstall.amigaInstall.refused.nothingCopied")}
-          </p>
-        </div>
-      )}
+      {refusal && <Refusal text={refusal} testId="amiga-install-refusal" />}
 
       {!request && !refusal && (
         <p className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
@@ -723,6 +741,16 @@ export function AmigaInstallPanel({
           </p>
         </div>
       )}
+
+      {/* ART-202: the same refusal, where the button is. It used to render
+          only at the top of the panel — 209 lines of JSX above this control —
+          so on a maximised window pressing the button changed nothing the
+          reader could see, and the honest conclusion available to them was
+          that it had done nothing. The owner's operation log recorded seven
+          identical runs of an unchanged request. `OsInstall.tsx` already
+          carried this lesson in the owner's own words: a job that ended badly
+          has to say so where the button is. */}
+      {refusal && <Refusal text={refusal} testId="amiga-install-refusal-at-run" />}
 
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <button

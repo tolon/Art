@@ -11,7 +11,14 @@ import { RomStudio } from "@/pages/RomStudio";
 import { HardDiskStudio } from "@/pages/HardDiskStudio";
 import { GotekStudio } from "@/pages/GotekStudio";
 import { PistormStudio } from "@/pages/PistormStudio";
-import { OsBuilder } from "@/pages/OsBuilder";
+import { OsBuilder, StepHedef } from "@/pages/OsBuilder";
+import {
+  StepAmigaKurulum,
+  StepBirimler,
+  StepKart,
+  StepKaynak,
+  StepPaketler,
+} from "@/pages/osbuilder/steps";
 import { ContentLayout } from "@/pages/ContentLayout";
 import { HexTools } from "@/pages/HexTools";
 import { CollectionStudio } from "@/pages/CollectionStudio";
@@ -71,7 +78,19 @@ export default function App() {
           <Route path="gotek" element={<GotekStudio />} />
           {/* Phase 6 & 7 — PiStorm & Forensic Hex Tools */}
           <Route path="pistorm" element={<PistormStudio />} />
-          <Route path="os-builder" element={<OsBuilder />} />
+          {/* The OS Builder is a sequence of steps, each its own sub-route, so
+              back/forward and a jump to a step work at the router level. The
+              parent still renders, which is what keeps `route::OS_BUILDER` a
+              real route for `builtin.rs` to point a workflow at. */}
+          <Route path="os-builder" element={<OsBuilder />}>
+            <Route index element={<Navigate to="hedef" replace />} />
+            <Route path="hedef" element={<StepHedef />} />
+            <Route path="kaynak" element={<StepKaynak />} />
+            <Route path="paketler" element={<StepPaketler />} />
+            <Route path="amiga-kurulum" element={<StepAmigaKurulum />} />
+            <Route path="kart" element={<StepKart />} />
+            <Route path="birimler" element={<StepBirimler />} />
+          </Route>
           <Route path="layout" element={<ContentLayout />} />
           <Route path="tools" element={<HexTools />} />
           {/* Phase 8 — Collection Studio */}

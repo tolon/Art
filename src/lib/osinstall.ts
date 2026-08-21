@@ -761,6 +761,33 @@ export async function osinstallDestinationTaken(destination: string): Promise<bo
   return invoke<boolean>("osinstall_destination_taken", { destination });
 }
 
+/**
+ * What a folder is, asked of the folder (ART-199).
+ *
+ * A step used to look ready on any folder at all, because all it knew was
+ * whether *a path had been chosen*; the user found out otherwise from a
+ * refusal on the button. This is the question a field can ask the moment a
+ * folder is picked.
+ *
+ * Read-only, and it does not throw for a folder that is not a tree — that is
+ * an answer, `isTree: false` with a `problem` saying which.
+ */
+export interface TreeSummary {
+  isTree: boolean;
+  release: string | null;
+  files: number;
+  /** Which components built it. What a tree carries is what decides whether a
+   *  package can go on it, so a picker showing trees shows this. */
+  components: string[];
+  amigaInstalled: string[];
+  /** Why it is not a tree, when it is not. English, from Rust (ART-060). */
+  problem: string | null;
+}
+
+export async function osinstallDescribeTree(tree: string): Promise<TreeSummary> {
+  return invoke<TreeSummary>("osinstall_describe_tree", { tree });
+}
+
 export function osinstallBlocker(input: {
   mediaFolder: string | null;
   destination: string | null;
