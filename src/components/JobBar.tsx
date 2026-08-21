@@ -49,6 +49,20 @@ export function JobBar() {
     const unsubscribe = subscribeSafely(() =>
       onJobProgress((update) => {
         setJobs((current) => {
+          // A superseded job is taken off the bar, not restated on it
+          // (ART-195). ART cancelled it because the user asked for a newer
+          // preview of the same thing; leaving a row behind would have turned
+          // a stack of running previews into a stack of cancelled ones, which
+          // is the complaint rather than the fix.
+          //
+          // The `notable` filter below also declines to render it, so this is
+          // belt and braces for what is *shown* — but it is the only thing
+          // that stops the list itself growing. The owner's session produced
+          // 2,149 preview jobs; 2,149 dead entries accumulating in this array
+          // for the life of the window is its own defect.
+          if (update.state.state === "superseded") {
+            return current.filter((j) => j.id !== update.id);
+          }
           const index = current.findIndex((j) => j.id === update.id);
           if (index === -1) return [...current, update];
           const next = [...current];

@@ -24,6 +24,8 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use serde::{Deserialize, Serialize};
+
 use crate::core::adf::bcpl::{read_bcpl_string, AmigaDate};
 use crate::core::adf::blocks::RootBlock;
 use crate::core::error::{CoreError, CoreResult};
@@ -38,7 +40,13 @@ use crate::core::volume::write::{dir, file};
 use crate::core::volume::{read_block_vec, VolumeGeometry};
 
 /// One thing found on install media: a file or a drawer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Serialize`/`Deserialize` because [`super::scan_cache`] keeps a whole
+/// medium's listing on disk between previews (ART-188) and stores these
+/// verbatim. **Changing a field here changes that on-disk shape**, so bump
+/// `scan_cache`'s own `SCAN_CACHE_SCHEMA` in the same commit — a listing
+/// written by an older ART must miss, never be half-read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MediaEntry {
     /// `/`-separated, relative to the media's own root. Never a leading
     /// slash, so it matches a [`super::PathRule::from`] value byte for byte.

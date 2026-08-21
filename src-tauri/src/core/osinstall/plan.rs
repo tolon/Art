@@ -114,9 +114,10 @@ use serde::{Deserialize, Serialize};
 
 use super::package::Package;
 use super::scan::{
-    find_media, find_packages, media_for, open_media, open_package, package_for, MediaMatch,
+    find_media, find_packages, media_for, open_media_cached, open_package, package_for, MediaMatch,
     PackageMedium,
 };
+use super::scan_cache::ScanCache;
 use super::source::MediaSource;
 use super::{Component, Condition, Recipe, RefusalReason, RuleKind};
 use crate::core::error::{CoreError, CoreResult};
@@ -338,6 +339,32 @@ pub struct InstallRequest {
     /// an index — a numbered choice would silently mean a different operating
     /// system the moment a recipe is added between two others.
     pub release: String,
+    /// Whether ART may reuse a medium's listing from an earlier scan
+    /// (ART-194). **Absent means [`ScanCachePolicy::Reuse`]** — the fast path
+    /// is the ordinary path, and a caller that has never heard of the cache
+    /// gets it. Only a user who deliberately switched it off sends
+    /// `Ignore`.
+    #[serde(default)]
+    pub scan_cache: ScanCachePolicy,
+}
+
+/// What the user decided about reusing an earlier scan.
+///
+/// A named two-state enum rather than a bare `bool`, because `#[serde(default)]`
+/// on a `bool` is `false`, and `false` would have meant *uncached* for every
+/// caller that did not know to say otherwise — the opposite of ART-194's first
+/// requirement. Here the default is the variant marked `#[default]`, and it
+/// says which one that is out loud.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ScanCachePolicy {
+    /// Reuse a listing whose medium's `(path, size, mtime)` are unchanged.
+    #[default]
+    Reuse,
+    /// Read every medium again, and record nothing. A cache the user switched
+    /// off that kept filling `%TEMP%` would be a control that quietly ignores
+    /// them.
+    Ignore,
 }
 
 /// `entry_path`, relative to `from` rather than to the media root. `from`
@@ -784,7 +811,26 @@ fn content_bytes(items: &[PlanItem]) -> u64 {
 }
 
 pub fn plan(request: &InstallRequest, recipe: &Recipe) -> CoreResult<InstallPlan> {
-    plan_over(request, recipe, &super::package::packages()?)
+    plan_with_cache(request, recipe, &ScanCache::off())
+}
+
+/// [`plan`], reusing a medium's listing from `cache` when the medium is
+/// unchanged (ART-194).
+///
+/// **The cache directory is the caller's, never this module's.** `core/` is
+/// platform-independent, and where a platform keeps scratch files is not a
+/// question it gets to answer — `core::artwork::cache` takes its directory the
+/// same way. `commands::osinstall` is the one production caller and passes
+/// `%TEMP%`, beside the extraction cache; `plan` itself passes
+/// [`ScanCache::off`], so a test or a future CLI shell that has not chosen a
+/// directory reads the medium every time rather than writing somewhere it did
+/// not ask for.
+pub fn plan_with_cache(
+    request: &InstallRequest,
+    recipe: &Recipe,
+    cache: &ScanCache,
+) -> CoreResult<InstallPlan> {
+    plan_over_with_cache(request, recipe, &super::package::packages()?, cache)
 }
 
 /// [`plan`]'s own body, parameterised over the package catalogue — so a
@@ -798,6 +844,15 @@ pub(super) fn plan_over(
     request: &InstallRequest,
     recipe: &Recipe,
     catalogue: &[Package],
+) -> CoreResult<InstallPlan> {
+    plan_over_with_cache(request, recipe, catalogue, &ScanCache::off())
+}
+
+fn plan_over_with_cache(
+    request: &InstallRequest,
+    recipe: &Recipe,
+    catalogue: &[Package],
+    cache: &ScanCache,
 ) -> CoreResult<InstallPlan> {
     let mut refusals: Vec<RefusalReason> = Vec::new();
 
@@ -874,7 +929,7 @@ pub(super) fn plan_over(
         // `refusals` as it goes, so anything it managed to say before
         // failing is kept; its *items* are dropped, which is right — a
         // component built from half an unreadable disk is not a component.
-        let mut source = match open_media(found_media) {
+        let mut source = match open_media_cached(found_media, cache) {
             Ok(source) => source,
             Err(e) => {
                 refusals.push(RefusalReason::MediaUnreadable {
@@ -1391,6 +1446,7 @@ mod plan_tests {
             chosen: vec!["extras".to_string()],
             destination: dir.join("dist"),
             excluded: Vec::new(),
+            scan_cache: Default::default(),
         };
         plan(&request, &recipe).unwrap()
     }
@@ -1466,6 +1522,7 @@ mod plan_tests {
             chosen: vec!["subtree-owner".to_string(), "file-writer".to_string()],
             destination: dir.join("dist"),
             excluded: Vec::new(),
+            scan_cache: Default::default(),
         };
         plan(&request, &recipe).unwrap()
     }
@@ -1511,6 +1568,7 @@ mod plan_tests {
             chosen: vec!["a".to_string()],
             destination: dir.join("dist"),
             excluded: Vec::new(),
+            scan_cache: Default::default(),
         };
         plan(&request, &recipe).unwrap()
     }
@@ -1551,6 +1609,7 @@ mod plan_tests {
             chosen: vec!["a".to_string()],
             destination: dir.join("dist"),
             excluded: Vec::new(),
+            scan_cache: Default::default(),
         };
         plan(&request, &recipe).unwrap()
     }
@@ -1596,6 +1655,7 @@ mod plan_tests {
             chosen: vec!["a".to_string(), "b".to_string()],
             destination: dir.join("dist"),
             excluded: Vec::new(),
+            scan_cache: Default::default(),
         };
         plan(&request, &recipe).unwrap()
     }
@@ -1663,6 +1723,7 @@ mod plan_tests {
             chosen: vec!["modules-a".to_string()],
             destination: dir.join("dist"),
             excluded: Vec::new(),
+            scan_cache: Default::default(),
         };
         plan(&request, &recipe).unwrap()
     }
@@ -1720,6 +1781,7 @@ mod plan_tests {
             chosen: vec!["a".to_string()],
             destination: dir.join("dist"),
             excluded: Vec::new(),
+            scan_cache: Default::default(),
         };
         let plan = plan(&request, &recipe).unwrap();
 
@@ -1800,6 +1862,7 @@ mod plan_tests {
             chosen: vec!["a".to_string()],
             destination: scratch.join("dist"),
             excluded: Vec::new(),
+            scan_cache: Default::default(),
         };
         let plan = plan(&request, &recipe).unwrap();
 
@@ -2026,6 +2089,7 @@ mod plan_tests {
             chosen: vec!["extras".to_string()],
             destination: scratch.join("dist"),
             excluded,
+            scan_cache: Default::default(),
         };
 
         // `Ok`, not `Err` — the whole point. `unwrap` here *is* the
@@ -2140,6 +2204,7 @@ mod plan_tests {
             chosen: vec!["workbench-base".to_string()],
             excluded: vec!["modules-a1200".to_string()],
             destination: dir.join("dist"),
+            scan_cache: Default::default(),
         };
         let excluded_plan = plan(&request, &recipe).unwrap();
 
@@ -2189,6 +2254,7 @@ mod plan_tests {
             chosen: vec!["workbench-base".to_string(), "extras".to_string()],
             excluded: vec!["extras".to_string()],
             destination: dir.join("dist"),
+            scan_cache: Default::default(),
         };
         let result = plan(&request, &recipe).unwrap();
 
@@ -2221,6 +2287,7 @@ mod plan_tests {
             chosen: vec![],
             excluded: vec!["workbench-base".to_string()],
             destination: dir.join("dist"),
+            scan_cache: Default::default(),
         };
         let result = plan(&request, &recipe).unwrap();
 
@@ -2386,6 +2453,7 @@ mod plan_tests {
             chosen: vec!["workbench-base".to_string()],
             destination: dir.join("dist"),
             excluded: Vec::new(),
+            scan_cache: Default::default(),
         };
 
         let plan = plan(&request, &recipe).unwrap();
@@ -2424,6 +2492,7 @@ mod plan_tests {
             chosen: vec!["workbench-base".to_string()],
             destination: dir.join("dist"),
             excluded: Vec::new(),
+            scan_cache: Default::default(),
         };
         let plan = plan(&request, &recipe).unwrap();
 
@@ -2501,6 +2570,7 @@ mod plan_tests {
             chosen: vec!["gamma".to_string(), "beta".to_string(), "alpha".to_string()],
             destination: dir.join("dist"),
             excluded: Vec::new(),
+            scan_cache: Default::default(),
         };
         plan(&request, &recipe).unwrap()
     }
@@ -2692,6 +2762,7 @@ mod plan_tests {
             packages: packages.iter().map(|s| s.to_string()).collect(),
             package_folder: package_folder.map(Path::to_path_buf),
             destination: dir.join("dist"),
+            scan_cache: Default::default(),
         }
     }
 

@@ -8,10 +8,10 @@
 // The test for which one a value is: would the user be annoyed to set it
 // again tomorrow? Then it belongs here.
 
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 
 import { useSettingsStore } from "@/stores/settingsStore";
-import { type Guard, recall, recallInto, remember } from "@/lib/remembered";
+import { type Guard, recall, recallInto, remember, sameRemembered } from "@/lib/remembered";
 
 /**
  * One remembered value and a setter that persists it.
@@ -32,8 +32,9 @@ export function useRemembered<T>(
 ): [T, (next: T) => void] {
   const stored = useSettingsStore((s) => s.settings.remembered);
   const update = useSettingsStore((s) => s.update);
+  const stabilised = useStabilised();
 
-  const value = recall(stored, key, isValid, fallback);
+  const value = stabilised(recall(stored, key, isValid, fallback));
 
   const set = useCallback(
     (next: T) => {
@@ -61,8 +62,9 @@ export function useRememberedShape<T extends object>(
 ): [T, (change: Partial<T>) => void] {
   const stored = useSettingsStore((s) => s.settings.remembered);
   const update = useSettingsStore((s) => s.update);
+  const stabilised = useStabilised();
 
-  const value = recallInto<T>(stored, key, spec, fallback);
+  const value = stabilised(recallInto<T>(stored, key, spec, fallback));
 
   const apply = useCallback(
     (change: Partial<T>) => {
@@ -77,4 +79,39 @@ export function useRememberedShape<T extends object>(
   );
 
   return [value, apply];
+}
+
+/**
+ * The same value as last render, when it *is* the same value.
+ *
+ * **ART-195, and ART-178's remaining half.** Both readers above rebuild what
+ * they return on every call: `recall` hands back the caller's inline
+ * `fallback` when nothing is stored, and `recallInto` constructs a fresh
+ * object every time, stored or not. A React dependency array compares by
+ * identity, so either one turns a `useEffect` into something that re-runs on
+ * every render — and the OS Builder's effects start disk work. That is how a
+ * single session reached 2,149 preview jobs, five of them inside two seconds,
+ * each one walking a 468 MB ISO.
+ *
+ * The comparison is `sameRemembered` — structural, which is the only kind
+ * that means anything for values that came out of JSON. It leaves the *value*
+ * exactly as it was: what is held back is a new reference to an unchanged
+ * value, never an update. A value that genuinely changes — the persisted read
+ * landing with something other than the default, or the user setting one —
+ * changes the identity in the same render it changes in, so nothing
+ * downstream is made to wait.
+ *
+ * A hook, so the memory is per component instance and per call site. Two
+ * different keys in one component get two different refs because they are two
+ * different `useRef` calls, in the fixed order React requires.
+ */
+function useStabilised(): <T>(next: T) => T {
+  const held = useRef<unknown>(undefined);
+  const seen = useRef(false);
+  return <T,>(next: T): T => {
+    if (seen.current && sameRemembered(held.current, next)) return held.current as T;
+    held.current = next;
+    seen.current = true;
+    return next;
+  };
 }

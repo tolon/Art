@@ -2127,7 +2127,13 @@
       "unreadable": "ART could not read that folder — check the path.",
       "empty": "No install disks found in that folder.",
       "found_one": "{{count}} install disk found: {{names}}.",
-      "found_other": "{{count}} install disks found: {{names}}."
+      "found_other": "{{count}} install disks found: {{names}}.",
+      "reuseScan": "Reuse the last scan of unchanged discs",
+      "reuseScanHelp": "ART recognises a disc by its path, size and date. A disc restored from a backup can keep all three and still be a different disc — use Scan again if what you see does not match what you put in.",
+      "rescan": "Scan again",
+      "rescanned_one": "{{count}} remembered scan dropped. The discs will be read again.",
+      "rescanned_other": "{{count}} remembered scans dropped. The discs will be read again.",
+      "rescannedNone": "Nothing was being remembered. The discs are read again anyway."
     },
     "rom": {
       "label": "Paired Kickstart",

@@ -73,6 +73,8 @@
 
 use crate::core::error::CoreError;
 
+use super::scan::MediaKind;
+use super::scan_cache::{listing_of, CachedSource};
 use super::source::{AdfSource, MediaSource};
 use super::source_archive::ArchiveSource;
 use super::source_cd::CdSource;
@@ -226,7 +228,34 @@ fn sources(tag: &str) -> Vec<(&'static str, Box<dyn MediaSource>)> {
         ("ArchiveSource/zip", zip_archive(tag)),
         ("ArchiveSource/lha", lha_archive(tag)),
         ("ArchiveSource/7z", sevenz_archive(tag)),
+        // ART-194. `CachedSource` answers `entry` and `walk` out of a stored
+        // listing rather than off the medium, which makes it a **sixth**
+        // implementation of these three answers — and the most dangerous one
+        // to get subtly wrong, because a divergence here shows up only on the
+        // second preview of a disc, after the first one looked right. Two of
+        // them, over the two backings whose listings differ most: a real
+        // AmigaDOS volume and a Joliet-pressed ISO.
+        ("CachedSource/adf", cached(floppy(tag), MediaKind::Floppy)),
+        ("CachedSource/disc", cached(disc(tag), MediaKind::Disc)),
     ]
+}
+
+/// Wrap an open source in the cache's own [`CachedSource`], through the same
+/// [`listing_of`] the cache stores.
+///
+/// `reopen` hands over **the very source the listing was read from**, once —
+/// so the three `read` questions below reach the real medium (which is the
+/// cache's own rule: it holds a listing, never bytes), while every listing
+/// question is answered from the stored listing alone. A second `reopen` would
+/// be a bug in `CachedSource`, so it panics rather than quietly rebuilding.
+fn cached(mut source: Box<dyn MediaSource>, kind: MediaKind) -> Box<dyn MediaSource> {
+    let listing = listing_of(source.as_mut(), kind).expect("the fixture has a listing");
+    let mut once = Some(source);
+    Box::new(CachedSource::new(listing, move || {
+        Ok(once
+            .take()
+            .expect("`CachedSource` opens the medium at most once"))
+    }))
 }
 
 #[test]

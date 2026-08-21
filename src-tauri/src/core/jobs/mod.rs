@@ -45,6 +45,18 @@ pub enum JobState {
         error_code: String,
         message: String,
     },
+    /// Cancelled by ART itself, because a newer job in the same lane made
+    /// this one's answer worthless before it could give it (ART-195).
+    ///
+    /// **Not a second cancellation mechanism** — a superseded job is stopped
+    /// through exactly the same [`CancelToken`] the user's Stop button flips,
+    /// and stops at exactly the same `is_cancelled()` check. What is
+    /// different is only who asked and therefore who needs telling: the user
+    /// asked for the *newer* preview, so the older one going away is not news
+    /// and the job bar drops it instead of stacking a row nobody wants. A
+    /// `Cancelled` row here would have replaced four stacked running previews
+    /// with four stacked cancelled ones.
+    Superseded,
 }
 
 impl JobState {

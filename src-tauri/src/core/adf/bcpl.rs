@@ -62,7 +62,7 @@ pub fn write_bcpl_string(buf: &mut [u8], offset: usize, s: &str, field_len: usiz
 /// `Default` is the Amiga epoch, 1978-01-01 00:00:00 — the same value
 /// [`AmigaDate::zero`] returns, and the right answer for a file whose date
 /// nothing is known about.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct AmigaDate {
     /// Days since 1978-01-01.
     pub days: u32,

@@ -141,3 +141,56 @@ export function isNumberBetween(min: number, max: number): Guard<number> {
   return (value: unknown): value is number =>
     typeof value === "number" && Number.isFinite(value) && value >= min && value <= max;
 }
+
+/**
+ * Whether two remembered values are the same value.
+ *
+ * **ART-195/ART-178.** `recall` hands back the caller's `fallback` when
+ * nothing is stored, and every call site spells that fallback inline —
+ * `useRemembered(key, isTextList, [])`. A fresh `[]` per render is a fresh
+ * *identity* per render, and a React dependency array compares identities.
+ * `recallInto` is worse: it builds a new object every single call, stored
+ * value or not.
+ *
+ * On the owner's machine that turned the OS Builder into a loop — the plan
+ * effect re-ran, planned (three full walks of a 468 MB ISO), set state, and
+ * re-ran again. 2,149 preview jobs in one session, five of them inside two
+ * seconds, and a Stop button that appeared to start another one because
+ * settling the cancelled preview's promise was itself a state change.
+ *
+ * This is what `useRemembered` compares with to decide whether to hand back
+ * the value it handed back last time. Structural, because that is the only
+ * comparison that means anything here: everything in this store came out of
+ * JSON, so it is a primitive, an array of them, or a plain object of them.
+ *
+ * **What this deliberately does not do** — ART-178's own objection to
+ * memoising here was that it would make "the value has not arrived yet" and
+ * "the value is the default" indistinguishable, ART-089 from the other side.
+ * It does not: a stored value that *differs* from the default still changes
+ * the identity the moment it lands, so every effect depending on it still
+ * runs. What stops changing is the identity of a value that did not change,
+ * and a reference difference with no value difference behind it is not
+ * information any caller could have used.
+ */
+export function sameRemembered(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((entry, at) => sameRemembered(entry, b[at]));
+  }
+  if (isPlainObject(a) && isPlainObject(b)) {
+    const keys = Object.keys(a);
+    if (keys.length !== Object.keys(b).length) return false;
+    return keys.every(
+      (key) => Object.prototype.hasOwnProperty.call(b, key) && sameRemembered(a[key], b[key])
+    );
+  }
+  // Two different primitives, or two things of different kinds. `Object.is`
+  // above already settled every case where they are the same one — including
+  // `NaN`, which `===` would get wrong.
+  return false;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}

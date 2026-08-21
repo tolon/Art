@@ -46,6 +46,14 @@ export type MediaScanResult =
   | { outcome: "found"; media: FoundMedia[] }
   | { outcome: "folder-unreadable"; folder: string };
 
+/**
+ * Whether ART may reuse a medium's listing from an earlier scan (ART-194).
+ *
+ * Kebab-case because the Rust enum is `#[serde(rename_all = "kebab-case")]`.
+ * Leaving the field off means `"reuse"` — the fast path is the ordinary one.
+ */
+export type ScanCachePolicy = "reuse" | "ignore";
+
 export interface InstallRequest {
   mediaFolder: string;
   /** The paired Kickstart, if supplied. `null` refuses any component whose
@@ -74,6 +82,12 @@ export interface InstallRequest {
   destination: string;
   /** Which shipped recipe to plan from — a `Recipe.release` string. */
   release: string;
+  /**
+   * Whether ART may reuse an unchanged medium's listing (ART-194). Optional,
+   * and absent means `"reuse"` — the Rust side's own `#[serde(default)]`, so
+   * the fast path costs no caller anything to opt into.
+   */
+  scanCache?: ScanCachePolicy;
 }
 
 /**
@@ -284,6 +298,23 @@ export async function osinstallScanMedia(mediaFolder: string): Promise<MediaScan
  *  cannot. Writes nothing (§92's PREVIEW). */
 export async function osinstallPlan(request: InstallRequest): Promise<PlanResult> {
   return invoke<PlanResult>("osinstall_plan", { request });
+}
+
+/**
+ * Forget every medium listing ART is holding, so the next preview reads the
+ * discs again. Answers how many were dropped.
+ *
+ * **The escape hatch, not a convenience** (ART-194). The cache is keyed on
+ * `(path, size, mtime)`, and a restored backup can keep its timestamps —
+ * several AmigaOS 3.9 ISOs circulate and people keep their own copies, so
+ * "same path, same size, same mtime, different disc" is real. Against that the
+ * cache answers with complete confidence and is wrong, which is the worst
+ * shape a defect takes here: it does not crash, it says something untrue.
+ *
+ * Removes only ART's own derived files under `%TEMP%`; nothing of the user's.
+ */
+export async function osinstallRescanMedia(): Promise<number> {
+  return invoke<number>("osinstall_rescan_media");
 }
 
 /**

@@ -2090,6 +2090,7 @@ mod tests {
             chosen: vec!["workbench-base".to_string()],
             excluded: vec!["modules-a1200".to_string()],
             destination: dir.join("dist"),
+            scan_cache: Default::default(),
         };
         let built_plan = crate::core::osinstall::plan::plan(&request, &recipe).unwrap();
         assert!(built_plan.refusals.is_empty(), "{:?}", built_plan.refusals);
@@ -2744,6 +2745,7 @@ mod tests {
             chosen,
             excluded: Vec::new(),
             destination: PathBuf::from(&dest),
+            scan_cache: Default::default(),
         };
 
         let found = crate::core::osinstall::scan::find_media(&request.media_folder).unwrap();
@@ -3089,6 +3091,7 @@ mod tests {
             chosen: Vec::new(),
             excluded: Vec::new(),
             destination: PathBuf::from(&dest),
+            scan_cache: Default::default(),
         };
         let recipe = crate::core::osinstall::recipe::amigaos_39().unwrap();
         let planned = crate::core::osinstall::plan::plan(&request, &recipe).unwrap();
@@ -3224,6 +3227,7 @@ mod tests {
             chosen: Vec::new(),
             excluded: Vec::new(),
             destination: PathBuf::from(&dest),
+            scan_cache: Default::default(),
         };
 
         let recipe = crate::core::osinstall::recipe::amigaos_39().unwrap();
@@ -3453,6 +3457,7 @@ mod tests {
             packages: packages.iter().map(|s| s.to_string()).collect(),
             package_folder: Some(packages_folder.to_path_buf()),
             destination: destination.to_path_buf(),
+            scan_cache: Default::default(),
         }
     }
 
@@ -4619,6 +4624,7 @@ mod tests {
             chosen: vec!["locale-base".to_string()],
             excluded: Vec::new(),
             destination: root.clone(),
+            scan_cache: Default::default(),
         };
         let recipe = crate::core::osinstall::recipe::amigaos_39().unwrap();
         let planned = crate::core::osinstall::plan::plan(&request, &recipe).unwrap();
@@ -4891,6 +4897,7 @@ mod tests {
             chosen: vec!["locale-base".to_string()],
             excluded: Vec::new(),
             destination: after.clone(),
+            scan_cache: Default::default(),
         };
         let recipe = crate::core::osinstall::recipe::amigaos_39().unwrap();
         let planned = crate::core::osinstall::plan::plan(&request, &recipe).unwrap();
