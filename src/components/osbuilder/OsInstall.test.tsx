@@ -43,7 +43,7 @@
 // still owed. See the narrowed ART-118 entry in `docs/ISSUES.md`.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import i18n from "i18next";
 
@@ -54,6 +54,7 @@ import type {
   InstallPlan,
   InstallRequest,
   MediaScanResult,
+  OsInstallResult,
   PlanItem,
   PlanResult,
   RefusalReason,
@@ -850,5 +851,83 @@ describe("the screen says what a layering component would replace (ART-175)", ()
       i18n.t("osinstall.replaces.failed", { error: "Error: the disc could not be read" })
     );
     expect(document.querySelectorAll('[data-testid="component-collision-row"]').length).toBe(0);
+  });
+});
+
+describe("the tree it builds is the tree the next steps get (ART-197)", () => {
+  /** Hand back the screen's own `osinstall-result` listener, so a finished
+   *  install can be announced the way the backend announces one. */
+  function captureAnnounce(): { current: ((r: OsInstallResult) => void) | null } {
+    const held: { current: ((r: OsInstallResult) => void) | null } = { current: null };
+    onResultMock.mockImplementation((fn: (r: OsInstallResult) => void) => {
+      held.current = fn;
+      return Promise.resolve(() => {});
+    });
+    return held;
+  }
+
+  const FINISHED: OsInstallResult = {
+    job_id: 1,
+    destination: "E:\\amiga\\dist-3.9",
+    outcome: { root: "E:\\amiga\\dist-3.9", files: 1915, directories: 75, bytes: 1024 },
+  };
+
+  it("hands a finished install's destination to the session", async () => {
+    // The defect: `OsInstall` remembered where it *wrote* under
+    // `osinstall.destination`, and the panels beneath it read a different
+    // key, `osinstall.packages.treeRoot`. Nothing joined them, so a user who
+    // had just watched ART write 1915 files was asked to go and find them.
+    const announce = captureAnnounce();
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+    await waitFor(() => expect(announce.current).not.toBeNull());
+
+    act(() => announce.current!(FINISHED));
+
+    await waitFor(() => {
+      const bag = useSettingsStore.getState().settings.remembered as Record<string, unknown>;
+      expect(bag["buildSession.tree"]).toEqual({
+        root: "E:\\amiga\\dist-3.9",
+        builtHere: true,
+      });
+    });
+  });
+
+  it("says on screen which folder the next steps will act on", async () => {
+    // A carry nobody can see is the same failure as a carry that does not
+    // happen: the screen must not change what the next step points at
+    // without saying so. This project's most expensive defects are the ones
+    // that leave the reader not knowing what happened.
+    const announce = captureAnnounce();
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+    await waitFor(() => expect(announce.current).not.toBeNull());
+
+    act(() => announce.current!(FINISHED));
+
+    await screen.findByText(
+      i18n.t("osinstall.result.carried", { root: "E:\\amiga\\dist-3.9" })
+    );
+    // Not the raw key, and not an unrendered interpolation.
+    expect(screen.queryByText(/osinstall\.result\.carried/)).toBeNull();
+    expect(screen.queryByText(/\{\{/)).toBeNull();
+  });
+
+  it("carries a tree the user picked by hand, without a build", async () => {
+    // The migration's own case, at the screen: a user upgrading into this
+    // build finds the packages panel pointing where they last pointed it.
+    seedRemembered({
+      ...FULL_FIELDS,
+      "osinstall.packages.treeRoot": "E:\\amiga\\picked-by-hand",
+    });
+    render(<OsInstall />);
+
+    // `PackagePanel` and `AmigaInstallPanel` each render the tree root through
+    // `Field`, as plain text beside their Browse button — so the path appears
+    // **twice**, once per panel, and that is the point: both are reading the
+    // one session value. `findAllByText`, because `findByText` refuses a
+    // multiple match.
+    const shown = await screen.findAllByText("E:\\amiga\\picked-by-hand");
+    expect(shown.length).toBe(2);
   });
 });

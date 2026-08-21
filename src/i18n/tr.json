@@ -2198,6 +2198,7 @@
       "heading": "Kuruldu",
       "summary": "{{files}} dosya, {{directories}} klasör, toplam {{bytes}}.",
       "root": "Dağıtım ağacı: {{root}}",
+      "carried": "Güncelleme ve Amiga'da kurulum adımları bu klasör üzerinde çalışacak: {{root}}",
       "nextStep": "Bunu bir karta kopyalamak için OS Builder → Amiga birimlerini hazırla ekranını bu klasöre yönlendir."
     },
     "verify": {

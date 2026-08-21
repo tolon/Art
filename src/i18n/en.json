@@ -2198,6 +2198,7 @@
       "heading": "Built",
       "summary": "{{files}} files, {{directories}} directories, {{bytes}} total.",
       "root": "Distribution tree: {{root}}",
+      "carried": "The update and Amiga-side install steps will act on this folder: {{root}}",
       "nextStep": "Point the card preparation screen (OS Builder → Prepare Amiga volumes) at this folder to copy it onto a card."
     },
     "verify": {
