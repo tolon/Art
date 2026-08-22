@@ -984,7 +984,7 @@ first thing this session can point at that produced something.** With
 recipe carries one component when it has carried two since ART-169, so it could
 never pass — the hook ran against their own `AmigaOS39.iso` and built a tree:
 **1242 files, 105 directories, 14.9 MB, 22.79 s**, `workbench-base` 450 +
-`workbench-39` 792, manifest written, into `E:\amiga\Amigatolon\os39art1`
+`workbench-39` 792, manifest written, into `E:\amiga\Amigatolon\os39\art1`
 — a folder that [ART-203](ISSUES.md) is the reason ART would write into at all.
 
 **Said plainly: that tree came from the engine's own hook, not from the
