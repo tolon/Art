@@ -2461,14 +2461,11 @@
       "warning": "Bunlardan bazıları yazarın izniyle kullanılıyor ve koşul taşıyor: {{names}}. Koşullar dosyalarla birlikte gider."
     },
     "entry": {
-      "userSupplied": "Bunu ART getiremez, sen vereceksin. {{why}}",
-      "alternatives": "{{names}} birbirinin alternatifi — birden fazlasını kurmak sorun değil.",
-      "reason": {
-        "userSupplied": "Bunun için kayıtlı bir kaynak yok.",
-        "mirror": "Bunun için henüz yapılandırılmış bir yansı yok.",
-        "githubRelease": "Bunun için henüz yapılandırılmış bir GitHub yansısı yok.",
-        "aminetSearch": "ART \"en güncel sürüm\" girdilerini henüz çözemez."
-      }
+      "userSupplied": "Bunu ART getiremez, sen vereceksin. Bunun için kayıtlı bir kaynak yok.",
+      "mirror": "Bunu ART getiremez — bunun için henüz yapılandırılmış bir yansı yok.",
+      "githubRelease": "Bunu ART getiremez — GitHub sürüm dosyalarını getirmek henüz yapılmadı.",
+      "aminetSearch": "Bunu ART getiremez — \"en güncel sürüm\" girdisini çözmek henüz yapılmadı.",
+      "alternatives": "{{names}} birbirinin alternatifi — birden fazlasını kurmak sorun değil."
     },
     "run": "Seçilen setleri indir",
     "running": "İndiriliyor…",

@@ -289,26 +289,31 @@ describe("the report shows six endings separately, never as five or fewer", () =
   });
 });
 
-describe("a mirror-kind entry is rendered like a user-supplied one, honestly", () => {
-  it("says ART cannot fetch it rather than offering a tick that cannot work", async () => {
+// Second re-review, item 1: a mirror entry used to be wrapped in
+// `bundles.entry.userSupplied` ("you supply it") the same as a genuinely
+// user-supplied one -- which is false for `mirror`. ART has simply not been
+// pointed at a mirror for it; that is not the user's to fix. This block
+// asserts the two now render *different*, individually true sentences, not
+// the same composed one (CLAUDE.md, "The failure that does not crash").
+describe("a mirror-kind entry gets its own true sentence, distinct from user-supplied", () => {
+  it("says no mirror is configured, never that the user must supply it", async () => {
     listMock.mockResolvedValue([IBROWSE_SET]);
     render(<BundlePanel />);
     await screen.findByText(i18n.t("bundles.heading"));
 
-    const sentence = i18n.t("bundles.entry.userSupplied", {
-      why: i18n.t("bundles.entry.reason.mirror"),
-    });
+    const sentence = i18n.t("bundles.entry.mirror");
     expect(await screen.findByText((text) => text.includes(sentence))).toBeTruthy();
+    // The false claim this item fixes: a mirror entry is not the user's to
+    // supply, so "you supply it" must not appear anywhere for it.
+    expect(screen.queryByText((text) => text.includes("you supply it"))).toBeNull();
   });
 
-  it("a user-supplied entry gets its own sentence too", async () => {
+  it("a user-supplied entry keeps its own true 'you supply it' sentence", async () => {
     listMock.mockResolvedValue([AG_SET]);
     render(<BundlePanel />);
     await screen.findByText(i18n.t("bundles.heading"));
 
-    const sentence = i18n.t("bundles.entry.userSupplied", {
-      why: i18n.t("bundles.entry.reason.userSupplied"),
-    });
+    const sentence = i18n.t("bundles.entry.userSupplied");
     expect(await screen.findByText((text) => text.includes(sentence))).toBeTruthy();
   });
 });
@@ -391,16 +396,23 @@ describe("the report names each entry, not just a count", () => {
 // 4/4 `github-release` — offering it a working-looking tick is offering
 // what ART cannot do (§10/§89).
 describe("github-release and aminet-search are unfetchable too, and say so honestly", () => {
-  it("a set that is entirely github-release names why and offers no working tick", async () => {
+  // Second re-review, item 1: this used to assert the composed
+  // `bundles.entry.userSupplied` sentence ("you supply it") for a
+  // `github-release` entry, which is false — ART simply has not built a
+  // GitHub-release fetch path; that is not the user's to bring. It now
+  // asserts the true, kind-specific sentence and that the false one is
+  // nowhere on screen.
+  it("a set that is entirely github-release names why, truthfully, and offers no working tick", async () => {
     listMock.mockResolvedValue([EMU68_SET]);
     render(<BundlePanel />);
     await screen.findByText(i18n.t("bundles.heading"));
 
-    const sentence = i18n.t("bundles.entry.userSupplied", {
-      why: i18n.t("bundles.entry.reason.githubRelease"),
-    });
+    const sentence = i18n.t("bundles.entry.githubRelease");
     // All four entries share the same reason — one sentence, four times.
     expect((await screen.findAllByText((text) => text.includes(sentence))).length).toBe(4);
+    // The false claim this item fixes: none of these is the user's to
+    // supply, so "you supply it" must not appear anywhere for them.
+    expect(screen.queryByText((text) => text.includes("you supply it"))).toBeNull();
 
     expect(
       await screen.findByText(i18n.t("bundles.fetchableCount", { fetchable: 0, total: 4 }))
@@ -410,15 +422,14 @@ describe("github-release and aminet-search are unfetchable too, and say so hones
     expect((checkbox as HTMLInputElement).disabled).toBe(true);
   });
 
-  it("an aminet-search entry gets its own reason, and a partly-fetchable set keeps its tick", async () => {
+  it("an aminet-search entry gets its own true sentence, and a partly-fetchable set keeps its tick", async () => {
     listMock.mockResolvedValue([AMISSL_SET]);
     render(<BundlePanel />);
     await screen.findByText(i18n.t("bundles.heading"));
 
-    const sentence = i18n.t("bundles.entry.userSupplied", {
-      why: i18n.t("bundles.entry.reason.aminetSearch"),
-    });
+    const sentence = i18n.t("bundles.entry.aminetSearch");
     expect(await screen.findByText((text) => text.includes(sentence))).toBeTruthy();
+    expect(screen.queryByText((text) => text.includes("you supply it"))).toBeNull();
 
     expect(
       await screen.findByText(i18n.t("bundles.fetchableCount", { fetchable: 1, total: 2 }))

@@ -91,20 +91,24 @@ function cannotFetch(kind: EntrySummary["kind"]): kind is UnfetchableKind {
   return kind !== "aminet";
 }
 
-/** The i18n key naming *why* ART cannot fetch one of the four unfetchable
- *  kinds — one sentence per kind, not one sentence shared across all of
- *  them, so "no mirror configured" and "no GitHub mirror configured" and
- *  "ART cannot resolve 'latest version' yet" stay distinct on screen. */
-function reasonKey(kind: UnfetchableKind): string {
+/** The i18n key for one of the four unfetchable kinds' own **complete**
+ *  sentence — never a shared wrapper with a reason spliced in. The four
+ *  kinds are not the same fact: `user-supplied` genuinely is the user's to
+ *  bring, so only that one says "you supply it"; `mirror`, `github-release`
+ *  and `aminet-search` are gaps in ART itself (no mirror configured, no
+ *  release-asset fetcher, no version-resolution engine) and telling a user
+ *  to supply one of those themselves would be false (CLAUDE.md, "The
+ *  failure that does not crash"). */
+function sentenceKey(kind: UnfetchableKind): string {
   switch (kind) {
     case "mirror":
-      return "bundles.entry.reason.mirror";
+      return "bundles.entry.mirror";
     case "user-supplied":
-      return "bundles.entry.reason.userSupplied";
+      return "bundles.entry.userSupplied";
     case "github-release":
-      return "bundles.entry.reason.githubRelease";
+      return "bundles.entry.githubRelease";
     case "aminet-search":
-      return "bundles.entry.reason.aminetSearch";
+      return "bundles.entry.aminetSearch";
   }
 }
 
@@ -487,7 +491,7 @@ function BundleCard({
               <span className="muted">
                 <strong>{entry.name}</strong>
                 {" — "}
-                {t("bundles.entry.userSupplied", { why: t(reasonKey(entry.kind)) })}
+                {t(sentenceKey(entry.kind))}
               </span>
             ) : (
               <span>{entry.name}</span>

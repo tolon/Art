@@ -2461,14 +2461,11 @@
       "warning": "Some of these are used with the author's permission and carry conditions: {{names}}. The conditions travel with the files."
     },
     "entry": {
-      "userSupplied": "ART cannot fetch this one — you supply it. {{why}}",
-      "alternatives": "{{names}} are alternatives — installing more than one is fine.",
-      "reason": {
-        "userSupplied": "No listed source exists for it.",
-        "mirror": "No mirror is configured for it yet.",
-        "githubRelease": "No GitHub mirror is configured for it yet.",
-        "aminetSearch": "ART cannot resolve a \"latest version\" entry yet."
-      }
+      "userSupplied": "ART cannot fetch this one — you supply it. No listed source exists for it.",
+      "mirror": "ART cannot fetch this one — no mirror is configured for it yet.",
+      "githubRelease": "ART cannot fetch this one — fetching GitHub release assets is not built yet.",
+      "aminetSearch": "ART cannot fetch this one — resolving a \"latest version\" entry is not built yet.",
+      "alternatives": "{{names}} are alternatives — installing more than one is fine."
     },
     "run": "Download the chosen sets",
     "running": "Downloading…",
