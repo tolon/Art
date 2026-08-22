@@ -1148,8 +1148,12 @@ describe("the screen says what a layering component would replace (ART-175)", ()
 
     await render39();
 
+    // **No stray "Error: " any more** (ART-060). This used to render
+    // `String(e)`, which on an `Error` object prepends the word "Error" to a
+    // sentence that is already introduced as a failure — the user read it
+    // twice. `errorText` takes the message.
     await screen.findByText(
-      i18n.t("osinstall.replaces.failed", { error: "Error: the disc could not be read" })
+      i18n.t("osinstall.replaces.failed", { error: "the disc could not be read" })
     );
     expect(document.querySelectorAll('[data-testid="component-collision-row"]').length).toBe(0);
   });

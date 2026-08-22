@@ -132,7 +132,7 @@ fn look_for_recovery(path: &Path) -> Option<PendingRecovery> {
             blocks: 0,
             can_apply: false,
             refusal: Some(format!(
-                "There is a file named like an ART journal next to this image, but ART                  cannot read it ({err}). Nothing has been touched."
+                "There is a file named like an ART journal next to this image, but ART cannot read it ({err}). Nothing has been touched."
             )),
             journal_path: journal_path_for(path).display().to_string(),
         }),

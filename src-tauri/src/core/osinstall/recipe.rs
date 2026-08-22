@@ -631,7 +631,7 @@ mod tests {
         assert_eq!(
             ids,
             vec!["workbench-base", "locale-base", "workbench-39"],
-            "the 3.9 overlay must be the last component declared — recipe order is what decides              which layer writes last (see this test's own doc comment)"
+            "the 3.9 overlay must be the last component declared — recipe order is what decides which layer writes last (see this test's own doc comment)"
         );
 
         let overlay = recipe
@@ -647,7 +647,7 @@ mod tests {
         assert_eq!(
             overrides,
             vec!["locale-base", "workbench-base"],
-            "the overlay collides with both layers for real — 12 of its 29 C commands replace a              3.5 command, and 32 of its Locale/Countries files are ones locale-base also places"
+            "the overlay collides with both layers for real — 12 of its 29 C commands replace a 3.5 command, and 32 of its Locale/Countries files are ones locale-base also places"
         );
 
         // The disc's own `OS-Version3.9/Workbench3.9` top level, in the
@@ -675,7 +675,7 @@ mod tests {
             .collect();
         assert_eq!(
             actual, expected,
-            "the overlay's rules must match the disc's own Workbench3.9 top level, drawer for              drawer — a rule missing here is a drawer of the 3.9 layer that stops being installed"
+            "the overlay's rules must match the disc's own Workbench3.9 top level, drawer for drawer — a rule missing here is a drawer of the 3.9 layer that stops being installed"
         );
         assert!(
             overlay

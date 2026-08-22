@@ -418,7 +418,7 @@ fn navigation_workflows() -> Vec<NavWorkflow> {
         nav(
             "lha.install_hdf",
             "Install to a hard disk",
-            "Put this package on a hard disk image — the drawer, its icon, and a              check that every file arrived.",
+            "Put this package on a hard disk image — the drawer, its icon, and a check that every file arrived.",
             route::WHDLOAD,
             Recommended,
             25,

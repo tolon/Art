@@ -67,6 +67,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
+// ART-060: a Rust sentence ART recognises comes back in the user's own
+// language; anything else is Rust's English verbatim, exactly as before.
+import { errorText } from "@/lib/errorText";
+
 import { hostParentDir } from "@/lib/hostPath";
 import {
   collisionGroupHeadingKey,
@@ -171,6 +175,7 @@ export type DroppedMedia = { path: string; arrivalKey: string } | null;
  */
 function InstallProgress({ progress }: { progress: JobProgress | null }) {
   const { t } = useTranslation();
+
   const pct = progress ? fraction(progress) : null;
   return (
     <div style={{ flex: 1, minWidth: 160, maxWidth: 420 }}>
@@ -672,7 +677,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         if (cancelled) return;
         setBasePlanResult(null);
         setEffectivePlanResult(null);
-        setPlanError(String(e));
+        setPlanError(errorText(t, e));
       });
     return () => {
       cancelled = true;
@@ -808,7 +813,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         setComponentPreview(null);
         // Named rather than swallowed: a preview that could not be produced
         // must not look like a preview that found nothing (§89).
-        setComponentPreviewError(String(e));
+        setComponentPreviewError(errorText(t, e));
       });
     return () => {
       cancelled = true;
@@ -898,7 +903,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
       setRescanNonce((n) => n + 1);
       if (mediaFolder) void osinstallScanMedia(mediaFolder).then(setMediaScan).catch(() => {});
     } catch (e) {
-      setPlanError(String(e));
+      setPlanError(errorText(t, e));
     }
   }
 
@@ -960,7 +965,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
       installJob.current = await osinstallApply(effectivePlan, destination);
       // `busy` clears on the result event, or here if the job never starts.
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
       setBusy(false);
       installJob.current = null;
       setProgress(null);
@@ -997,7 +1002,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     try {
       setVerifyReport(await osinstallVerify(verifyImage, verifySlot.value, verifyIndex, verifyDistRoot));
     } catch (e) {
-      setVerifyError(String(e));
+      setVerifyError(errorText(t, e));
     } finally {
       setVerifying(false);
     }

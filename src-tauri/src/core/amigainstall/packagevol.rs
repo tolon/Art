@@ -209,11 +209,14 @@ pub fn wrong_archive_sentence(
 ) -> String {
     match role {
         ArchiveIs::TheUpdateArchive => format!(
-            "'{}' is this package's update archive, not the package itself — it carries '{holds}'.              Supply it in the update-archive field instead, and put the archive carrying '{media}'              in the package's own field.",
+            "'{}' is this package's update archive, not the package itself — it carries '{holds}'. \
+             Supply it in the update-archive field instead, and put the archive \
+             carrying '{media}' in the package's own field.",
             archive.display()
         ),
         _ => format!(
-            "'{}' carries no '{media}' drawer, so it is not the archive this package's installer              lives in; it holds {holds}",
+            "'{}' carries no '{media}' drawer, so it is not the archive this \
+             package's installer lives in; it holds {holds}",
             archive.display()
         ),
     }

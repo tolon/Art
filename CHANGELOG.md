@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### The first error messages in Turkish, and twelve broken sentences (2026-08-23)
+
+#### Added
+- **Two of ART's refusals now appear in your own language** — the one about a
+  folder that already has something in it, and the one about handing a package
+  the wrong archive. Both keep the part that matters (which folder, which
+  archive, what it actually holds); everything else still shows ART's English
+  exactly as before.
+
+#### Fixed
+- **Twelve sentences carried a run of fourteen spaces in the middle**, from a
+  line continuation lost while the text was written. Three of them were
+  sentences you could actually meet, including the one about building into a
+  folder that is not empty.
+- An error introduced as a failure no longer says "Error:" a second time
+  inside itself, and an error with no id no longer prints an empty
+  "Error ID:" line under it.
+
 ### Cards get a second partition (2026-08-23)
 
 #### Added
