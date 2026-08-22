@@ -3,6 +3,7 @@
 
 pub mod parse;
 pub mod resolve;
+pub mod run;
 
 use serde::{Deserialize, Serialize};
 
