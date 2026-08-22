@@ -90,12 +90,14 @@ import {
   osinstallDestinationTaken,
   osinstallPlan,
   osinstallRescanMedia,
+  osinstallReleaseForMedia,
   osinstallScanMedia,
   osinstallVerify,
   parseOptionalSlot,
   parsePartitionIndex,
   pruneStaleExclusions,
   refusalPhrase,
+  wrongMediaFolder,
   rememberedComponentKey,
   type ScanCachePolicy,
   sanitizeChosen,
@@ -215,8 +217,36 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   const { t } = useTranslation();
 
   // --- what the user chose, remembered -------------------------------------
+  /**
+   * Which shipped recipe to plan from. `"AmigaOS 3.2"` is the fallback on
+   * purpose: it is what this screen has always planned, so nobody's
+   * remembered setup changes meaning because a second recipe arrived.
+   * `isInstallRelease` turns a hand-edited or since-removed value back into
+   * that default instead of putting it on screen.
+   *
+   * **First, because the folders below are keyed on it** (ART-207).
+   */
+  const [release, setRelease] = useRemembered<InstallRelease>(
+    "osinstall.release",
+    isInstallRelease,
+    "AmigaOS 3.2"
+  );
+
+  /**
+   * The folder holding this release's install media — remembered **per
+   * release** (ART-207), for the reason `rememberedComponentKey` already
+   * exists: a folder means something only inside the recipe that reads it.
+   *
+   * The owner chose AmigaOS 3.2 with the folder their 3.9 disc lives in
+   * still remembered, and every one of the 3.2 recipe's sixteen components
+   * refused `MediaMissing`. Sixteen true sentences that together said "a lot
+   * of programs are missing" about a folder that was simply the wrong one.
+   * A media folder cannot serve two releases — the owner keeps 3.9's disc in
+   * `Amigatolon\iso` and 3.2's ADFs in `Amigatolon\paketler` — so carrying
+   * one into the other can only ever produce that screen.
+   */
   const [mediaFolder, setMediaFolder] = useRemembered<string | null>(
-    "osinstall.mediaFolder",
+    rememberedComponentKey("osinstall.mediaFolder", release),
     isTextOrNothing,
     null
   );
@@ -237,23 +267,26 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     const folder = droppedMedia ? hostParentDir(droppedMedia.path) : null;
     if (folder) setMediaFolder(folder);
   }, [droppedMedia?.path, droppedMedia?.arrivalKey, setMediaFolder]);
+  /**
+   * **Not** per release, and that is the decision rather than an oversight
+   * (ART-207). A Kickstart is a property of the machine the tree is being
+   * built for, not of the release being installed: the owner's one licensed
+   * A1200 ROM is the right answer for 3.2 and for 3.9 alike, and making them
+   * pick it again per release would be a choice resetting itself for no
+   * reason anybody could state.
+   */
   const [romPath, setRomPath] = useRemembered<string | null>("osinstall.rom", isTextOrNothing, null);
+  /**
+   * Where the tree goes — per release, like the media folder above and for
+   * the same reason (ART-207). `E:\…\os39\art3` is a fine destination for a
+   * 3.9 build and a misleading one for a 3.2 build; a folder named for one
+   * release holding another release's tree is the quiet kind of wrongness
+   * `distribution.json` exists to make impossible.
+   */
   const [destination, setDestination] = useRemembered<string | null>(
-    "osinstall.destination",
+    rememberedComponentKey("osinstall.destination", release),
     isTextOrNothing,
     null
-  );
-  /**
-   * Which shipped recipe to plan from. `"AmigaOS 3.2"` is the fallback on
-   * purpose: it is what this screen has always planned, so nobody's
-   * remembered setup changes meaning because a second recipe arrived.
-   * `isInstallRelease` turns a hand-edited or since-removed value back into
-   * that default instead of putting it on screen.
-   */
-  const [release, setRelease] = useRemembered<InstallRelease>(
-    "osinstall.release",
-    isInstallRelease,
-    "AmigaOS 3.2"
   );
   /**
    * The components the user ticked, remembered **per release** — see
@@ -735,7 +768,54 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
 
   const basePlan = basePlanResult?.outcome === "planned" ? basePlanResult.plan : null;
   const effectivePlan = effectivePlanResult?.outcome === "planned" ? effectivePlanResult.plan : null;
-  const blocker = osinstallBlocker({ mediaFolder, destination, destinationTaken, plan: effectivePlanResult });
+
+  /**
+   * The volume names the scan actually read out of the folder — memoized on
+   * `mediaScan` itself so this is one identity per scan and not one per
+   * render. ART-195 was a fresh `[]` per render driving an effect into a
+   * loop; the effect below lists this among its dependencies.
+   */
+  const foundVolumeNames = useMemo(
+    () => (mediaScan?.outcome === "found" ? mediaScan.media.map((m) => m.volumeName) : []),
+    [mediaScan]
+  );
+  /**
+   * ART-208. Non-null when the folder holds media and this release wants
+   * none of it — the owner's own screen, where sixteen `MediaMissing`
+   * refusals meant one wrong folder rather than sixteen missing disks. A
+   * string or `null`, so it is a stable dependency for the lookup below.
+   */
+  const wrongFolder = effectivePlan ? wrongMediaFolder(effectivePlan, foundVolumeNames) : null;
+  const [releaseHolding, setReleaseHolding] = useState<string | null>(null);
+  useEffect(() => {
+    if (!wrongFolder) {
+      setReleaseHolding(null);
+      return;
+    }
+    let cancelled = false;
+    osinstallReleaseForMedia(foundVolumeNames)
+      .then((named) => {
+        if (!cancelled) setReleaseHolding(named);
+      })
+      // A folder ART cannot put a name to is the ordinary case, not an error
+      // worth a badge: the sentence without a release still says what is
+      // wrong and what to do about it.
+      .catch(() => {
+        if (!cancelled) setReleaseHolding(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [wrongFolder, foundVolumeNames]);
+
+  const blocker = osinstallBlocker({
+    mediaFolder,
+    destination,
+    destinationTaken,
+    plan: effectivePlanResult,
+    found: foundVolumeNames,
+    releaseHolding,
+  });
   const baseRomUnknown = basePlan ? hasRomUnknownRefusal(basePlan) : false;
 
   async function chooseMediaFolder() {
@@ -1154,7 +1234,19 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         </section>
       )}
 
-      {effectivePlan && effectivePlan.refusals.length > 0 && (
+      {/*
+        ART-208. One wrong folder is one sentence, not one absence per
+        component — so this whole card is suppressed for that case and the
+        sentence is said once, beside the button it blocks (`osinstallBlocker`
+        returns it; see the run card below). Sixteen copies of "this disk is
+        not in the folder", about a folder holding somebody else's release,
+        is sixteen true sentences adding up to a false impression: the owner
+        read them as "a lot of programs are missing".
+
+        The list stays for every other case, which is most of them — one
+        absent disk in an otherwise right folder has to say *which* disk.
+      */}
+      {effectivePlan && effectivePlan.refusals.length > 0 && !wrongFolder && (
         <section className="card" style={{ marginBottom: 16 }}>
           <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("osinstall.refusals.heading")}</h2>
           <ul className="muted" style={{ fontSize: 12, margin: 0, paddingLeft: 20 }}>
@@ -1337,6 +1429,17 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
             <span className="faint" style={{ fontSize: 11 }}>
               {t(blocker.key, blocker.params)}
             </span>
+          )}
+          {/*
+            ART-208's one click, beside the control it unblocks. The refusals
+            card above is suppressed for this case (see there), so this is the
+            only place the sentence appears — ART-202's rule, which the owner
+            stated for us: "aynı uyarı tek ekranda 2 tane".
+          */}
+          {wrongFolder && releaseHolding && isInstallRelease(releaseHolding) && (
+            <button className="btn btn-sm" onClick={() => setRelease(releaseHolding)}>
+              {t("osinstall.blocked.switchRelease", { release: releaseHolding })}
+            </button>
           )}
         </div>
       </section>

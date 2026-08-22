@@ -2103,6 +2103,9 @@
       "notPlanned": "Preview it first — nothing is built before you have seen what would be.",
       "folderUnreadable": "ART could not read that folder — check the path.",
       "refusals": "Resolve the refusal(s) first — nothing is built while the plan cannot proceed.",
+      "wrongFolder": "None of the disks in this folder are ones this release asks for. It holds: {{found}}. Choose the folder your install disks are in, or change the release above.",
+      "wrongFolderIsRelease": "The disks in this folder are not this release's — they are {{release}} media ({{found}}). Switch to {{release}}, or choose the folder your install disks are in.",
+      "switchRelease": "Switch to {{release}}",
       "nothingToInstall": "Nothing would be installed — choose at least one component.",
       "destinationExists": "Something already exists at {{path}}. ART never builds a distribution tree over what is already there — choose a name that does not exist yet, or move the old one aside."
     },

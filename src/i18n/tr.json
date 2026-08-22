@@ -2103,6 +2103,9 @@
       "notPlanned": "Önce önizle — ne olacağını görmeden hiçbir şey kurulmaz.",
       "folderUnreadable": "ART bu klasörü okuyamadı — yolu kontrol et.",
       "refusals": "Önce reddedilen(ler)i çöz — plan ilerleyemezken hiçbir şey kurulmaz.",
+      "wrongFolder": "Bu klasördeki disklerin hiçbiri bu sürümün istediklerinden değil. Klasörde bulunan: {{found}}. Kurulum disklerinin bulunduğu klasörü seç, ya da yukarıdan sürümü değiştir.",
+      "wrongFolderIsRelease": "Bu klasördeki diskler bu sürüme ait değil — {{release}} medyası ({{found}}). Sürümü {{release}} yap, ya da kurulum disklerinin bulunduğu klasörü seç.",
+      "switchRelease": "Sürümü {{release}} yap",
       "nothingToInstall": "Hiçbir şey kurulmayacak — en az bir bileşen seç.",
       "destinationExists": "{{path}} yolunda zaten bir şey var. ART, var olanın üzerine dağıtım ağacı kurmaz — henüz var olmayan bir ad seçin ya da eskisini kenara alın."
     },

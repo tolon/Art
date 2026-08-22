@@ -182,6 +182,49 @@ pub fn by_release(release: &str) -> CoreResult<Recipe> {
     }
 }
 
+/// Which shipped release's own install media these volume names are —
+/// `None` when they are nobody's, or more than one release's (ART-208).
+///
+/// **Why this exists.** The owner chose AmigaOS 3.2 with the folder holding
+/// their AmigaOS 3.9 disc still selected, and `plan()` answered with sixteen
+/// `MediaMissing` refusals: one per component, every one of them true, and
+/// together telling them "a lot of programs are missing" about a folder that
+/// was simply the wrong one. Sixteen correct sentences that add up to a wrong
+/// impression are this project's most expensive class of defect, and the
+/// information needed to replace them with one sentence was already in hand —
+/// the volume names read out of the folder, and every recipe ART ships.
+///
+/// **Ambiguity is answered with silence, deliberately.** A folder somebody
+/// keeps everything in matches two releases, and "both" is not something a
+/// one-click switch can act on; naming one of two at random would be the
+/// confident-and-wrong sentence again, in a smaller place. The caller's own
+/// fallback — "none of these disks are what this release asks for" — is true
+/// whatever the folder holds.
+///
+/// Compared with [`super::amiga_names_equal`], not `==`: this has to agree
+/// with `scan::media_for`, which is what produced the refusals being
+/// explained. A check that folded case differently could announce "this is
+/// your 3.9 folder" about a folder `plan()` had just refused every disk in.
+pub fn release_holding(found: &[String]) -> CoreResult<Option<String>> {
+    let mut matched: Vec<String> = Vec::new();
+    for release in releases() {
+        let recipe = by_release(release)?;
+        let holds_one = found.iter().any(|name| {
+            recipe
+                .components
+                .iter()
+                .any(|component| super::amiga_names_equal(name, &component.media))
+        });
+        if holds_one {
+            matched.push((*release).to_string());
+        }
+    }
+    match matched.len() {
+        1 => Ok(matched.pop()),
+        _ => Ok(None),
+    }
+}
+
 /// The `overrides` any shipped component declares, whichever kind of recipe
 /// ships it — a release's own component or a package (ART-170).
 ///
@@ -1265,5 +1308,77 @@ mod tests {
         let offered = super::releases();
         assert!(offered.contains(&"AmigaOS 3.2"), "got {offered:?}");
         assert!(offered.contains(&"AmigaOS 3.9"), "got {offered:?}");
+    }
+
+    // ART-208 --------------------------------------------------------------
+    //
+    // The owner chose AmigaOS 3.2 with the folder holding their AmigaOS 3.9
+    // disc still selected, and got sixteen `MediaMissing` refusals — one per
+    // component, each of them true, and together telling them "a lot of
+    // programs are missing" about a folder that was simply the wrong one.
+    //
+    // ART already knows better than that: it has the volume names it read out
+    // of the folder, and it has every shipped recipe. If the names it found
+    // are one release's own media, it can say which — and offer the switch
+    // instead of listing sixteen absences.
+
+    #[test]
+    fn names_the_release_whose_media_a_folder_actually_holds() {
+        let found = vec!["AmigaOS3.9".to_string()];
+        assert_eq!(
+            super::release_holding(&found).unwrap().as_deref(),
+            Some("AmigaOS 3.9")
+        );
+    }
+
+    #[test]
+    fn names_the_other_release_the_same_way_round() {
+        // Not a mirror for symmetry's sake: a check that answers "3.9" for
+        // everything would pass the test above.
+        let found = vec![
+            "Workbench3.2".to_string(),
+            "Locale-TR".to_string(),
+            "Storage3.2".to_string(),
+        ];
+        assert_eq!(
+            super::release_holding(&found).unwrap().as_deref(),
+            Some("AmigaOS 3.2")
+        );
+    }
+
+    #[test]
+    fn a_folder_is_identified_the_way_its_disks_are_matched() {
+        // `scan::media_for` folds case through `amiga_names_equal`, so a disc
+        // labelled in upper case still resolves. This has to fold the same
+        // way: identifying a folder by a stricter rule than the one that
+        // refused it would let ART announce "this is your 3.9 folder" about a
+        // folder whose disks it had just matched, or the reverse.
+        let found = vec!["AMIGAOS3.9".to_string()];
+        assert_eq!(
+            super::release_holding(&found).unwrap().as_deref(),
+            Some("AmigaOS 3.9")
+        );
+    }
+
+    #[test]
+    fn names_no_release_for_media_no_recipe_asks_for() {
+        let found = vec!["MyBackup".to_string(), "Games".to_string()];
+        assert_eq!(super::release_holding(&found).unwrap(), None);
+    }
+
+    #[test]
+    fn names_no_release_when_the_folder_holds_two_releases_media() {
+        // A folder somebody keeps everything in answers "both", and "both" is
+        // not an answer a one-click switch can act on. Saying nothing is
+        // better than naming one of two at random.
+        let found = vec!["Workbench3.2".to_string(), "AmigaOS3.9".to_string()];
+        assert_eq!(super::release_holding(&found).unwrap(), None);
+    }
+
+    #[test]
+    fn names_no_release_for_an_empty_folder() {
+        // "This folder holds no install media at all" is a different sentence
+        // the screen already has, and it must not be overwritten by a guess.
+        assert_eq!(super::release_holding(&[]).unwrap(), None);
     }
 }

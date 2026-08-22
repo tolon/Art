@@ -193,6 +193,19 @@ pub fn osinstall_scan_media(folder: PathBuf) -> AppResult<MediaScanResult> {
     }
 }
 
+/// Which shipped release these volume names are the install media of, if any
+/// (ART-208) — asked when a folder holds media and the chosen release wants
+/// none of it, so the screen can say "this is your AmigaOS 3.9 folder"
+/// instead of listing sixteen absences.
+///
+/// Volume names, not a folder: the caller has already scanned, and re-reading
+/// thirty-five ADFs to answer a question about names already in hand would be
+/// a second 31 MB pass for nothing.
+#[tauri::command]
+pub fn osinstall_release_for_media(volume_names: Vec<String>) -> AppResult<Option<String>> {
+    Ok(recipe::release_holding(&volume_names)?)
+}
+
 // ---------------------------------------------------------------------------
 // osinstall_plan
 // ---------------------------------------------------------------------------

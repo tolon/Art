@@ -294,6 +294,20 @@ export async function osinstallScanMedia(mediaFolder: string): Promise<MediaScan
   return invoke<MediaScanResult>("osinstall_scan_media", { folder: mediaFolder });
 }
 
+/**
+ * Which shipped release these volume names are the install media of, or
+ * `null` when they are nobody's or more than one release's (ART-208).
+ *
+ * Asked only when a folder holds media the chosen release wants none of, so
+ * the screen can say "this is your AmigaOS 3.9 folder" instead of listing
+ * one absence per component. Names, not a folder: they have already been
+ * read, and re-opening thirty-five ADFs to answer a question about names
+ * already in hand would be a second pass for nothing.
+ */
+export async function osinstallReleaseForMedia(volumeNames: string[]): Promise<string | null> {
+  return invoke<string | null>("osinstall_release_for_media", { volumeNames });
+}
+
 /** What installing the chosen components would do — or every reason it
  *  cannot. Writes nothing (§92's PREVIEW). */
 export async function osinstallPlan(request: InstallRequest): Promise<PlanResult> {
@@ -788,11 +802,68 @@ export async function osinstallDescribeTree(tree: string): Promise<TreeSummary> 
   return invoke<TreeSummary>("osinstall_describe_tree", { tree });
 }
 
+/**
+ * When a folder holds install media and this release wants **none** of it,
+ * the volume names it does hold — otherwise `null` (ART-208).
+ *
+ * The owner chose AmigaOS 3.2 with the folder holding their AmigaOS 3.9 disc
+ * still selected, and the screen answered with sixteen `MediaMissing`
+ * refusals: one per component, every one true, and together read as "a lot of
+ * programs are missing" about a folder that was simply the wrong one.
+ *
+ * **Every one of the four conditions is load-bearing, and each is a sentence
+ * this must not steal:**
+ *
+ *  - `found` non-empty — an empty folder is `osinstall.media.empty`, said the
+ *    moment it was picked. "None of these disks are the right ones" is a
+ *    claim about disks that are not there.
+ *  - no plan items — one absent disk in an otherwise right folder is a
+ *    *missing disk*, and telling that user their folder is wrong would be
+ *    false about the fifteen disks in it that are right.
+ *  - at least one refusal — with none there is nothing to explain.
+ *  - **every** refusal about media — an unreadable ROM, a destination
+ *    collision or an exclusive-group conflict is a different problem with a
+ *    different fix, and must never be papered over with a sentence about
+ *    folders.
+ *  - **not one refused disk is in the folder** — the sentence makes a
+ *    specific claim, so it is checked rather than inferred from an empty
+ *    plan. This is the condition the rest of the suite caught missing: a
+ *    fixture whose folder held `Workbench3.2` while a refusal said
+ *    `Workbench3.2` was absent got told its folder was somebody else's.
+ *
+ * The last check folds case with `toLowerCase`, which is **not** AmigaDOS's
+ * own folding (`amiga_names_equal`, which folds the Latin-1 accented range
+ * an international volume folds). It does not need to be, and the direction
+ * of the difference is why: these are names the Rust matcher has already
+ * refused to match, so a JS fold that calls two of them equal can only ever
+ * *withdraw* this sentence in favour of the per-disk list. It cannot produce
+ * the claim wrongly.
+ */
+export function wrongMediaFolder(plan: InstallPlan, found: string[]): string | null {
+  if (found.length === 0) return null;
+  if (plan.items.length > 0) return null;
+  if (plan.refusals.length === 0) return null;
+  const missing = plan.refusals.filter(
+    (refusal): refusal is Extract<RefusalReason, { refusal: "media-missing" }> =>
+      refusal.refusal === "media-missing"
+  );
+  if (missing.length !== plan.refusals.length) return null;
+  const inFolder = new Set(found.map((name) => name.toLowerCase()));
+  if (missing.some((refusal) => inFolder.has(refusal.volume_name.toLowerCase()))) return null;
+  return found.join(", ");
+}
+
 export function osinstallBlocker(input: {
   mediaFolder: string | null;
   destination: string | null;
   destinationTaken: boolean;
   plan: PlanResult | null;
+  /** Volume names the media scan actually found in the folder. */
+  found: string[];
+  /** Which shipped release those names are the install media of, when ART
+   *  can tell — `null` when they are nobody's, or more than one release's
+   *  (`recipe::release_holding`). */
+  releaseHolding: string | null;
 }): Phrase | null {
   if (!input.mediaFolder?.trim()) return { key: "osinstall.blocked.noFolder" };
   if (!input.destination?.trim()) return { key: "osinstall.blocked.noDestination" };
@@ -805,7 +876,18 @@ export function osinstallBlocker(input: {
   if (input.plan.outcome === "folder-unreadable") {
     return { key: "osinstall.blocked.folderUnreadable" };
   }
-  if (input.plan.plan.refusals.length > 0) return { key: "osinstall.blocked.refusals" };
+  if (input.plan.plan.refusals.length > 0) {
+    const wrongFolder = wrongMediaFolder(input.plan.plan, input.found);
+    if (wrongFolder) {
+      return input.releaseHolding
+        ? {
+            key: "osinstall.blocked.wrongFolderIsRelease",
+            params: { release: input.releaseHolding, found: wrongFolder },
+          }
+        : { key: "osinstall.blocked.wrongFolder", params: { found: wrongFolder } };
+    }
+    return { key: "osinstall.blocked.refusals" };
+  }
   if (input.plan.plan.items.length === 0) return { key: "osinstall.blocked.nothingToInstall" };
   return null;
 }
