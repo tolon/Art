@@ -1,0 +1,12 @@
+{
+  "id": "arsiv",
+  "order": 10,
+  "entries": [
+    { "id": "lha", "name": "LHA", "order": 10, "source": { "aminet": { "path": "util/arc/lha_68k" } } },
+    { "id": "lzx", "name": "LZX", "order": 20, "source": { "aminet": { "path": "util/arc/lzx121r1" } } },
+    { "id": "unzip", "name": "UnZip 5.52", "order": 30, "source": { "aminet": { "path": "util/arc/UnZIP552" } } },
+    { "id": "zip", "name": "Zip 2.32", "order": 40, "source": { "aminet": { "path": "util/arc/ZIP232" } } },
+    { "id": "xadmaster", "name": "XAD Master", "order": 50, "source": { "aminet": { "path": "util/arc/xadmaster020" } } },
+    { "id": "xpkuser", "name": "XPK User", "order": 60, "source": { "aminet": { "path": "util/pack/xpk_User" } } }
+  ]
+}

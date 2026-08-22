@@ -26,6 +26,7 @@
 //! hand-written prose from 1994. [`Claim`] carries that difference through to
 //! the UI so ART never presents a guess as a fact (§14, §34).
 
+pub mod bundle;
 pub mod cache;
 pub mod catalog;
 pub mod fetch;
