@@ -1,0 +1,10 @@
+{
+  "id": "emu68",
+  "order": 20,
+  "entries": [
+    { "id": "emu68-pistorm", "name": "Emu68 (PiStorm)", "order": 10, "source": { "github-release": { "repo": "michalsc/Emu68", "asset": "Emu68-pistorm.zip" } } },
+    { "id": "emu68-pistorm32lite", "name": "Emu68 (PiStorm32-lite)", "order": 20, "source": { "github-release": { "repo": "michalsc/Emu68", "asset": "Emu68-pistorm32lite.zip" } } },
+    { "id": "emu68tools", "name": "Emu68 Tools", "order": 30, "source": { "github-release": { "repo": "michalsc/Emu68-tools", "asset": "Emu68-tools.zip" } } },
+    { "id": "genet", "name": "GENet.device", "order": 40, "source": { "github-release": { "repo": "rondoval/emu68-genet-driver", "asset": "genet.device" } } }
+  ]
+}

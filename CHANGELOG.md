@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Package bundles — a curated catalogue you can download in order (2026-08-22)
+
+#### Added
+- **14 named sets of Amiga software, 62 packages, downloaded in one go.**
+  Pick a set — archivers, filesystems, shared libraries, networking,
+  graphics, the desktop, diagnostics, WHDLoad, and more — and ART fetches
+  every package in it, in order, into your download folder. A "download
+  everything" tick selects all 14 sets at once. The list is the Emu68
+  Imager's own 60-entry catalogue, checked entry by entry rather than
+  copied, plus the owner's own `tolunnet` and `tolunwifi`.
+- **A set ART cannot actually fetch does not offer a working-looking tick.**
+  Some packages point at an unconfigured mirror, a GitHub release ART has no
+  mirror for yet, a "latest version" search ART cannot resolve yet, or a
+  file only you can supply — each says so plainly, before you tick anything,
+  and a set where nothing at all can be fetched cannot be ticked. A set that
+  is only partly fetchable says how many of its packages ART can actually
+  get.
+- **The report after a run names every package, not just a count.** Six
+  distinct endings — downloaded, already had it, fetched but not placed
+  (something else already had that name), ART cannot fetch it, it failed,
+  or it was skipped when you cancelled — each with the detail that ending
+  carries: where a file landed, what already occupied its spot, why ART
+  refused it, or what went wrong.
+- **A package that carries a permission condition says so above the tick,**
+  before you choose it — never discovered only after the file is already on
+  your disk.
+- **Your ticked sets are remembered**, the same as every other choice in
+  ART: leave the screen and come back, and what you had chosen is still
+  chosen.
+
+#### Fixed
+- **Cancelling a bundle download now actually ends the run as cancelled.**
+  It used to report "finished" in the job bar while the report right below
+  it said some packages were skipped because you cancelled — two
+  contradictory sentences about the same run. The job bar and the report
+  now agree.
+- **A cache hit landing on a folder slot someone else had filled no longer
+  claims it is your own file.** If ART already had a package cached but the
+  library folder already held a same-named file from somewhere else, ART
+  used to say "you already have this" without ever comparing the two. It
+  now checks, and says the honest thing either way.
+
 ### Building a distribution, and a card that can boot (2026-08-22)
 
 #### Fixed

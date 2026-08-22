@@ -679,6 +679,48 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-213** 🟠 ✅ **A cold-cache download over an occupied library slot was
+reported as `Downloaded`, and the same gap let one narrower case through
+even after that was fixed** — *found and fixed 2026-08-22, package bundles
+branch (`bundle-catalogue`)*
+`src-tauri/src/core/sources/bundle/run.rs`
+
+A bundle entry that fetched real bytes from a mirror (not a cache hit) and
+then landed on a library slot a same-named file already occupied used to
+still come back `EntryOutcome::Downloaded` — the same "downloaded to
+`<path>`" sentence a genuine placement gets, even though `Library::place`'s
+`OverwritePolicy::Skip` had refused to touch the file already there. The
+bytes at that path were left exactly as they were and were not necessarily
+even the same size as what had just been fetched: a confident, wrong
+sentence about a file ART never wrote (CLAUDE.md, "The failure that does not
+crash" — "never claim what you did not do").
+
+**Fixed in two passes, because the first fix left a narrower case of the
+same defect standing.** The first gave the entry a sixth, honest outcome —
+`EntryOutcome::NotPlaced { existing }` — reached whenever
+`placement.skipped_existing` is true and the fetch was not answered from the
+cache. But a fetch that *was* answered from the cache (`fetched.from_cache`)
+still fired `AlreadyHave` on that flag **alone**, with nothing checked
+against the file actually sitting in the slot — a name is not an identity,
+and a user could have put an unrelated file under that name between two
+runs. The final review's own second pass narrowed that arm: when the fetch
+is a cache hit *and* the slot is occupied, the library file's bytes are
+hashed and compared against the cache's own (already-verified) SHA-256
+before choosing `AlreadyHave` (bytes match) or `NotPlaced` (they do not) —
+hashing only in that one narrow, ambiguous case, never on every entry.
+
+Tests: `a_cold_fetch_over_an_occupied_library_slot_is_not_placed_rather_than_downloaded`
+(the original gap — a real fetch over an occupied slot, asserting both the
+`NotPlaced` outcome and that the pre-existing file is left byte-for-byte
+untouched) and
+`a_cache_hit_over_a_slot_holding_a_different_file_is_not_placed_not_already_have`
+(the narrower case — a cache hit whose library copy was replaced with
+different bytes between two runs, asserting `NotPlaced` rather than the
+false `AlreadyHave`, and that the replacement file is left untouched). Both
+mutated and confirmed to fall: reverting the second fix's guard back to
+`fetched.from_cache` alone reproduces the false `AlreadyHave` and fails the
+newer test.
+
 **ART-212** 🟠 ✅ **A package chosen for another release still drove a run
 plan** — *found 2026-08-22 by the owner, on the OS Builder's fourth step*
 `src/components/osbuilder/AmigaInstallPanel.tsx`

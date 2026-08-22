@@ -104,6 +104,23 @@ with ART. Users must obtain them from their official sources:
   read from the `license.txt` shipped beside `hst.imager.exe` in the
   1.6.616 build, not recalled.
 
+## Amiga-side packages carried under permission
+
+Four entries in `core/sources/bundle`'s catalogue (§41.5.7) carry a
+`permission` field: ART's download screen shows a warning above the tick for
+each before it can be fetched, and this is the record the owner's own
+requirement — *"lisansa da ekleriz"* — asks for. ART is not the rights holder
+for any of these; the owner is obtaining the permissions separately.
+
+- **Picasso96** — © Individual Computers (Jens Schonfeld). Shareware; the
+  only legal purchase is from Individual Computers.
+- **iBrowse** — © the iBrowse development team. Demo build, distributed under
+  the Emu68 Imager's own permission from ibrowse-dev.net.
+- **SetPatch 44.38** — © Cloanto Corporation. Amiga Forever files, carried
+  under Cloanto's permission.
+- **Workbench-Library 40.5** — © Cloanto Corporation. Amiga Forever files,
+  carried under Cloanto's permission.
+
 ## Copyrighted content
 
 ART **never** distributes:

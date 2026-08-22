@@ -1,0 +1,8 @@
+{
+  "id": "whdload",
+  "order": 110,
+  "entries": [
+    { "id": "whdload", "name": "WHDLoad", "order": 10, "source": { "mirror": { "mirror": "whdload-de", "path": "whdload/WHDLoad_usr.lha" } } },
+    { "id": "whdloadwrapper", "name": "WHDLoadWrapper", "order": 20, "source": { "user-supplied": { "why": "its published address is an FTP search form, not a file path" } } }
+  ]
+}

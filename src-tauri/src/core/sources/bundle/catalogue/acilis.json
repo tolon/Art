@@ -1,0 +1,11 @@
+{
+  "id": "acilis",
+  "order": 90,
+  "entries": [
+    { "id": "reboot", "name": "Reboot", "order": 10, "source": { "aminet": { "path": "util/boot/reboot" } } },
+    { "id": "changebootpri", "name": "ChangeBootPri", "order": 20, "source": { "mirror": { "mirror": "thomas-rapp", "path": "downloads/" } } },
+    { "id": "skick", "name": "SKick 3.46", "order": 30, "source": { "aminet": { "path": "util/boot/skick346" } } },
+    { "id": "sysvars", "name": "Sysvars", "order": 40, "source": { "aminet": { "path": "util/boot/sysvars" } } },
+    { "id": "setdst", "name": "SetDST", "order": 50, "source": { "aminet": { "path": "util/time/SetDST" } } }
+  ]
+}

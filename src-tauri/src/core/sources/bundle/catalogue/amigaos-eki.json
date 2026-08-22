@@ -1,0 +1,10 @@
+{
+  "id": "amigaos-eki",
+  "order": 130,
+  "entries": [
+    { "id": "setpatch", "name": "SetPatch 44.38", "order": 10, "source": { "mirror": { "mirror": "cloanto-cdn", "path": "pub/amiga/SetPatch-44-38.lha" } },
+      "permission": { "holder": "Cloanto Corporation", "note": "Amiga Forever files, carried under Cloanto's permission" } },
+    { "id": "workbenchlibrary", "name": "Workbench-Library 40.5", "order": 20, "source": { "mirror": { "mirror": "cloanto-cdn", "path": "pub/amiga/Workbench-Library-40-5.lha" } },
+      "permission": { "holder": "Cloanto Corporation", "note": "Amiga Forever files, carried under Cloanto's permission" } }
+  ]
+}

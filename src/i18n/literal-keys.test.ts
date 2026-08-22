@@ -362,6 +362,25 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // `phrase-keys.test.ts` (`stepLabelKey: every OS Builder step resolves`),
     // and `stepsFor` cannot return an id outside `STEP_IDS` — its own test in
     // `src/lib/buildSteps.test.ts` asserts that.
-    expect(dynamicCalls).toBe(127);
+    // 127 -> 128 (package bundles, Task 7 -- "the screen"): BundlePanel.tsx
+    // reads each set's card heading as t(`bundles.set.${set.id}`). The 14
+    // ids are Rust-driven data (bundles_list), not a fixed list this scan
+    // could enumerate, so there is no per-id literal to find here --
+    // src/i18n/dead-keys.test.ts's template-literal-prefix rule is what
+    // proves every bundles.set.<id> leaf is actually reachable.
+    // 128 -> 129 (final fix wave, finding 2; re-review's item 1 kept the
+    // count unchanged): BundlePanel.tsx's `sentenceKey` (renamed from
+    // `reasonKey` when the false composed "you supply it" sentence was
+    // split into four complete, kind-specific ones) maps an entry's
+    // `EntrySummary["kind"]` to one of four top-level `bundles.entry.*`
+    // leaves (`userSupplied`, `mirror`, `githubRelease`, `aminetSearch`),
+    // and the render calls `t(sentenceKey(entry.kind))` -- one dynamic call
+    // site, same as the `t(reasonKey(entry.kind))` it replaced (the old
+    // wrapping `t("bundles.entry.userSupplied", { why: … })` was a literal
+    // call, not a dynamic one, so removing it does not move this count).
+    // `sentenceKey`'s own switch is exhaustive over `UnfetchableKind`, so
+    // every value it can return is enumerated by the type itself; there is
+    // nothing here for `dead-keys.test.ts` to miss.
+    expect(dynamicCalls).toBe(129);
   });
 });

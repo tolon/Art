@@ -1,0 +1,10 @@
+{
+  "id": "masaustu",
+  "order": 70,
+  "entries": [
+    { "id": "dopus416jr", "name": "Directory Opus 4.16JR", "order": 10, "exclusive_group": "dopus", "source": { "aminet": { "path": "util/dopus/DOpus416JRbin" } } },
+    { "id": "dopus417pre21", "name": "Directory Opus 4.17pre21", "order": 20, "exclusive_group": "dopus", "source": { "mirror": { "mirror": "dopus-free-fr", "path": "betas/DOpus417pre21.lzx" } } },
+    { "id": "vinced", "name": "ViNCEd", "order": 30, "source": { "aminet": { "path": "util/shell/ViNCEd" } } },
+    { "id": "clicon", "name": "CLICon", "order": 40, "source": { "aminet": { "path": "util/wb/CLICon" } } }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "id": "temel",
+  "order": 40,
+  "entries": [
+    { "id": "mui", "name": "MUI 3.8", "order": 10, "source": { "aminet": { "path": "util/libs/mui38usr" } } },
+    { "id": "reqtools", "name": "Reqtools", "order": 20, "source": { "aminet": { "path": "util/libs/Reqtools-Wide" } } },
+    { "id": "wizardlibrary", "name": "Wizard Library", "order": 30, "source": { "aminet": { "path": "util/libs/WizardLibrary" } } },
+    { "id": "installer", "name": "Installer 43.3", "order": 40, "source": { "aminet": { "path": "util/misc/Installer-43_3" } } },
+    { "id": "iconlib", "name": "PeterK's icon.library", "order": 50, "source": { "aminet-search": { "query": "iconlib" } } }
+  ]
+}

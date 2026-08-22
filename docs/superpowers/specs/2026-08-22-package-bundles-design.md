@@ -171,7 +171,7 @@ Jano Editor · Screentext *(purpose unverified — see above)*
 
 ### 9 · `whdload` (2)
 
-WHDLoad · WHDLoadWrapper ⚠ *(address is a search form, not a path)*
+WHDLoad · WHDLoadWrapper *(address is a search form, not a path)*
 
 ### 10 · `medya` (1)
 

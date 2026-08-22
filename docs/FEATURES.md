@@ -353,6 +353,7 @@ Both are designed — [design-software-sources.md](design-software-sources.md),
 | Aminet catalog sync / search / fetch | §41.5 | 🟡 |
 | Aminet install to HDF | §41.5 | ✅ | `sources_install_volume` — same unpack as the ADF path, then a Stage W folder copy |
 | Aminet update view | §41.5.6 | ✅ | `core/sources/installed.rs`; compares the recorded download against the catalogue |
+| Package bundles — a curated catalogue, downloaded in order | [design-package-bundles.md](superpowers/specs/2026-08-22-package-bundles-design.md) | ✅ | 14 sets, 62 entries, shipped as data (`core/sources/bundle/catalogue/*.json`); `core/sources/bundle/` (parse/resolve/run) + `commands/bundles.rs` + a section inside Aminet Studio (`BundlePanel.tsx`). Phase 1 is download-only — nothing installs onto an Amiga volume yet |
 | AI read-only assistant | §45.5 Stage A | ⏳ |
 | AI plan generation + Plan Cards | §45.5 Stage B | ⏳ |
 | AI full scenarios | §45.5 Stage C | ⏳ |
@@ -396,6 +397,31 @@ Note on "Show in Collection": ART's Collection indexes a folder, it is not a
 database rows are added to. The action therefore indexes the download folder
 rather than pretending to file one package away somewhere — §41.5.6's intent,
 honestly implemented against the Collection that exists.
+
+**Package bundles**, added 2026-08-22: a curated catalogue of 62 Amiga
+packages in 14 named sets — the Emu68 Imager's own 60-entry list, verified
+per entry rather than transcribed, plus the owner's `tolunnet` and
+`tolunwifi`. The user ticks sets (or the computed `hepsi` "everything") and
+ART downloads every entry in the catalogue's own order, sequentially,
+through the existing mirror engine and download trust pipeline — nothing
+here opens a new kind of connection. `EntrySource` is a closed enum with no
+URL variant (`aminet`, `aminet-search`, `github-release`, `mirror`,
+`user-supplied`), so an entry ART cannot honestly fetch today — a
+`user-supplied` file, an unconfigured `mirror`, every `aminet-search`
+("latest version") and every `github-release` — is refused *before* the
+tick with its own reason sentence, never offered a working-looking checkbox
+(§10/§89); a set with zero fetchable entries, like the shipped `emu68` (4/4
+`github-release`), cannot be ticked at all. Six distinct outcomes per entry
+(`Downloaded`, `AlreadyHave`, `NotPlaced`, `Refused`, `Failed`, `Skipped`)
+stay separate all the way to the screen, which lists every entry with the
+string its own outcome carries — not just a count. Cancelling ends the job
+`Cancelled`, never `Finished`, matching the report it already showed. A
+permission-flagged entry (`⚠` in the design doc) shows its condition above
+the tick, informational rather than a gate, and every one is bound to
+`THIRD_PARTY_LICENSES.md` by a test. The ticked sets are remembered across
+navigation, guarded, like every other choice in the product. `exclusiveGroup`
+and `requires` are recorded on the data but not yet enforced — installing
+onto an Amiga volume, where they will matter, is a separate design.
 
 ---
 

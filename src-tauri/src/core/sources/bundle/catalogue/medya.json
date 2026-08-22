@@ -1,0 +1,7 @@
+{
+  "id": "medya",
+  "order": 120,
+  "entries": [
+    { "id": "hippoplayer", "name": "Hippo Player", "order": 10, "source": { "aminet": { "path": "mus/play/hippoplayerupdate" } } }
+  ]
+}

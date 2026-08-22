@@ -119,18 +119,38 @@ impl SourcesState {
         }
     }
 
-    fn provider(&self) -> ProviderConfig {
+    // `pub(crate)` rather than private: `commands::bundles` needs the same
+    // configured Aminet mirrors, cache and library `commands::sources` itself
+    // reads, and building a second `SourcesState` for it would be a second
+    // source of the same configuration (ART-089's class of problem, one layer
+    // down).
+    pub(crate) fn provider(&self) -> ProviderConfig {
         self.provider
             .lock()
             .map(|p| p.clone())
             .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
     }
 
-    fn library(&self) -> Library {
+    pub(crate) fn library(&self) -> Library {
         self.library
             .lock()
             .map(|l| l.clone())
             .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
+    }
+
+    /// The download cache every fetch — a single package's or a whole
+    /// bundle's — verifies into before anything is placed in the library.
+    pub(crate) fn cache(&self) -> &CacheLayout {
+        &self.cache
+    }
+
+    /// The HTTP client every fetch goes through. Concrete, not `&dyn
+    /// MirrorClient`: the one caller outside this module
+    /// (`commands::bundles`) builds its own `DownloadContext` and coerces
+    /// this at the field, the same way `sources_sync` coerces it at a
+    /// function argument.
+    pub(crate) fn client(&self) -> &HttpMirrorClient {
+        &self.client
     }
 }
 

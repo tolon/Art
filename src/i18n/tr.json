@@ -2433,5 +2433,64 @@
       "emptyRoot": "Bu klasörde henüz hiçbir şey taranmadı — Güncelle'ye basın.",
       "titleCount": "{{count}} başlık"
     }
+  },
+  "bundles": {
+    "heading": "Paket setleri",
+    "intro": "Bir set seç, ART paketlerini sırayla indirme klasörüne indirsin. Düğmeye basmadan hiçbir şey inmez.",
+    "loading": "Paket setleri yükleniyor…",
+    "entryCount": "{{count}} paket",
+    "fetchableCount": "{{total}} paketten {{fetchable}} tanesi getirilebilir",
+    "set": {
+      "acilis": "Açılış — önyükleme menüleri, önyükleme önceliği, sistem saati",
+      "ag": "Ağ — TCP/IP, SSL, kablosuz, hız testi",
+      "amigaos-eki": "AmigaOS eki — Amiga Forever'dan SetPatch ve Workbench-Library",
+      "arsiv": "Arşivleyiciler — LHA, LZX, Zip ve arkalarındaki açıcılar",
+      "dosya-sistemi": "Dosya sistemleri — PFS3, FAT, SMB ve bunları bağlayan sürücüler",
+      "emu68": "Emu68 — PiStorm'un kendi 68k çekirdeği, araçları ve ağ sürücüsü",
+      "grafik": "Grafik — Picasso96 ve üzerine kurulu görüntü veri türleri",
+      "hepsi": "Getirilebilir her şey — ART'ın bir şey getirebildiği her set, birden",
+      "ibrowse": "iBrowse — web tarayıcısının demo sürümü",
+      "kabuk": "Kabuk araçları — yeniden adlandırma, toplu düzenleme, daha iyi bir komut satırı",
+      "masaustu": "Masaüstü — Directory Opus, ViNCEd, CLI kolaylıkları",
+      "medya": "Medya — Hippo Player modül ve örnek çalar",
+      "temel": "Temel — MUI, ReqTools, Installer, bir simge kütüphanesi",
+      "teshis": "Teşhis — SnoopDOS, SysInfo, BusTest, sağlama toplamları",
+      "whdload": "WHDLoad — yükleyicinin kendisi ve kendi kurulum sarmalayıcısı"
+    },
+    "permission": {
+      "warning": "Bunlardan bazıları yazarın izniyle kullanılıyor ve koşul taşıyor: {{names}}. Koşullar dosyalarla birlikte gider."
+    },
+    "entry": {
+      "userSupplied": "Bunu ART getiremez, sen vereceksin. Bunun için kayıtlı bir kaynak yok.",
+      "mirror": "Bunu ART getiremez — bunun için henüz yapılandırılmış bir yansı yok.",
+      "githubRelease": "Bunu ART getiremez — GitHub sürüm dosyalarını getirmek henüz yapılmadı.",
+      "aminetSearch": "Bunu ART getiremez — \"en güncel sürüm\" girdisini çözmek henüz yapılmadı.",
+      "alternatives": "{{names}} birbirinin alternatifi — birden fazlasını kurmak sorun değil."
+    },
+    "run": "Seçilen setleri indir",
+    "running": "İndiriliyor…",
+    "progress": "{{name}} — {{done}}/{{total}}",
+    "blocked": {
+      "nothingChosen": "Önce en az bir set seç."
+    },
+    "err": {
+      "listFailed": "Paket setleri yüklenemedi: {{error}}"
+    },
+    "result": {
+      "downloaded": "{{count}} indirildi",
+      "alreadyHave": "{{count}} tanesi zaten vardı",
+      "notPlaced": "{{count}} tanesi indirildi ama yerine konmadı — o adda bir şey klasörde zaten var",
+      "refused": "{{count}} tanesini ART getiremez",
+      "failed": "{{count}} tanesi başarısız",
+      "skipped": "İptal edince {{count}} tanesi atlandı",
+      "entry": {
+        "downloaded": "{{path}} konumuna indirildi",
+        "alreadyHave": "zaten klasöründe: {{path}}",
+        "notPlaced": "yerine konmadı — {{existing}} zaten orada",
+        "refused": "ART bunu getiremez: {{why}}",
+        "failed": "başarısız: {{error}}",
+        "skipped": "iptal edince atlandı"
+      }
+    }
   }
 }

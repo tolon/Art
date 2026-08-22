@@ -1,0 +1,15 @@
+{
+  "id": "ag",
+  "order": 50,
+  "entries": [
+    { "id": "tolunnet", "name": "tolunnet", "order": 10, "exclusive_group": "tcp", "source": { "user-supplied": { "why": "the owner's own TCP/IP stack, supplied by them rather than fetched" } } },
+    { "id": "miamidx", "name": "MiamiDX — Main", "order": 20, "exclusive_group": "tcp", "source": { "aminet": { "path": "comm/tcp/MiamiDx10cmain" } } },
+    { "id": "miamidx-mui", "name": "MiamiDX — MUI", "order": 30, "source": { "aminet": { "path": "comm/tcp/MiamiDx10c-MUI" } }, "requires": ["mui"] },
+    { "id": "amissl", "name": "AmiSSL", "order": 40, "source": { "aminet-search": { "query": "amissl os3" } } },
+    { "id": "prism2", "name": "Prism 2", "order": 50, "source": { "aminet": { "path": "driver/net/prism2v2" } } },
+    { "id": "aget", "name": "aget", "order": 60, "source": { "mirror": { "mirror": "uhc-tools", "path": "uhctools_os3.lha" } } },
+    { "id": "sntp", "name": "Sntp", "order": 70, "source": { "mirror": { "mirror": "uhc-tools", "path": "uhctools_os3.lha" } } },
+    { "id": "amispeedtest", "name": "Ami Speed Test", "order": 80, "source": { "aminet": { "path": "comm/net/AmiSpeedTest" } } },
+    { "id": "tolunwifi", "name": "tolunwifi", "order": 90, "source": { "user-supplied": { "why": "the owner's own WiFi package, supplied by them rather than fetched" } } }
+  ]
+}
