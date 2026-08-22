@@ -755,24 +755,62 @@ fn refuse_host_name_collisions(items: &[PlanItem]) -> CoreResult<()> {
     )))
 }
 
-/// Build the distribution tree `plan` describes under `root`.
+/// `SAFE_CREATE`'s question, asked once so the engine and the screen cannot
+/// answer it differently.
 ///
-/// `SAFE_CREATE` first: `root` must not already exist. Every medium named in
-/// `plan.media_paths` is then opened once, read-only, and hashed whole — the
-/// media is never modified by anything below this line. Items are placed one
-/// at a time, checking `sink.is_cancelled()` between them and never inside
-/// one, so stopping always leaves whole files behind. `distribution.json` is
-/// written only after every item has landed — see the module doc comment.
-pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreResult<ApplyOutcome> {
-    // SAFE_CREATE. Nothing below this line touches `root` or any medium
-    // until this has passed.
-    if root.exists() {
+/// **What the rule is actually for:** ART never builds over somebody's data.
+/// **An empty directory holds none.**
+///
+/// **ART-203.** It used to refuse anything that existed at all, and that made
+/// the screen unusable rather than safe: a folder picker
+/// (`open({ directory: true })`) can only return a folder that **exists** —
+/// its "New folder" button creates one, and it exists from that moment — so
+/// every destination a user could choose was refused. No distribution tree
+/// has ever been built from the screen; every one came from the env-gated
+/// test hook, which takes a path string and never sees a dialog.
+///
+/// The idiom is already in this codebase one module over:
+/// `core::amigainstall::packagevol::unpack` refuses with *"already has
+/// contents; a package is unpacked into an empty directory"*.
+///
+/// `read_dir().next().is_some()` is the test, so a folder holding **anything
+/// at all** — a hidden file included — is still refused. Three outcomes, three
+/// sentences: a file where a folder should be is not the same problem as a
+/// folder with somebody's work in it, and telling a user the wrong one sends
+/// them to the wrong fix.
+pub fn refuse_unless_free(root: &Path) -> CoreResult<()> {
+    if !root.exists() {
+        return Ok(());
+    }
+    if !root.is_dir() {
         return Err(CoreError::SafetyRefused(format!(
-            "'{}' already exists — a distribution tree is never built over one \
-             that is already there",
+            "'{}' is not a folder — a distribution tree is built into a folder,              and this is a file",
             root.display()
         )));
     }
+    let mut entries = std::fs::read_dir(root)?;
+    if entries.next().is_some() {
+        return Err(CoreError::SafetyRefused(format!(
+            "'{}' already has something in it — a distribution tree is never              built over one that is already there. Choose an empty folder, or a              new one",
+            root.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Build the distribution tree `plan` describes under `root`.
+///
+/// `SAFE_CREATE` first: `root` must be free — absent, or an **empty**
+/// directory. Every medium named in `plan.media_paths` is then opened once,
+/// read-only, and hashed whole — the media is never modified by anything below
+/// this line. Items are placed one at a time, checking `sink.is_cancelled()`
+/// between them and never inside one, so stopping always leaves whole files
+/// behind. `distribution.json` is written only after every item has landed —
+/// see the module doc comment.
+pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreResult<ApplyOutcome> {
+    // SAFE_CREATE. Nothing below this line touches `root` or any medium
+    // until this has passed.
+    refuse_unless_free(root)?;
 
     // A refused plan is not a smaller plan — `plan()` empties `items` and
     // `media_paths` the moment any refusal exists (see its own module doc),
@@ -2244,23 +2282,93 @@ mod tests {
         assert_eq!(record.bytes, 3, "the real size read, not the plan's 999");
     }
 
-    /// `SAFE_CREATE`. A distribution folder already there is somebody's work.
-    /// Strengthened past the brief's own `is_err()`: the folder the test
-    /// pre-created must come back out exactly as empty as it went in — a
-    /// version that only checked the return type could still pass while
-    /// happily writing into an existing folder before hitting some later
-    /// error.
+    /// `SAFE_CREATE`, and what it is actually for: **a distribution folder
+    /// with something in it is somebody's work.**
+    ///
+    /// Strengthened past the brief's own `is_err()` — what was already there
+    /// must come back out byte for byte. A version that only checked the
+    /// return type could pass while happily writing into the folder first and
+    /// failing later.
     #[test]
-    fn an_existing_destination_is_refused_never_written_into() {
+    fn an_existing_destination_with_anything_in_it_is_refused_never_written_into() {
         let (plan, dir) = planned();
         let root = dir.join("dist");
         std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("someone-elses-work.txt"), b"do not touch").unwrap();
+
         assert!(apply(&plan, &root, &NoProgress).is_err());
+
         assert_eq!(
             std::fs::read_dir(&root).unwrap().count(),
-            0,
+            1,
             "nothing was written into the folder that was already there"
         );
+        assert_eq!(
+            std::fs::read(root.join("someone-elses-work.txt")).unwrap(),
+            b"do not touch",
+            "and what was there is byte for byte what it was"
+        );
+    }
+
+    /// **ART-203.** An existing folder that is **empty** is accepted.
+    ///
+    /// The rule is that ART never builds over somebody's data, and an empty
+    /// directory holds none. Refusing it made the screen unusable: the folder
+    /// picker can only return a folder that *exists* — its "New folder" button
+    /// creates one, and it exists from that moment — so every destination a
+    /// user could choose was refused, and no tree was ever built from the
+    /// screen at all.
+    #[test]
+    fn an_existing_empty_destination_is_accepted() {
+        let (plan, dir) = planned();
+        let root = dir.join("dist");
+        std::fs::create_dir_all(&root).unwrap();
+
+        apply(&plan, &root, &NoProgress).expect("an empty folder holds no data to protect");
+        assert!(
+            root.join(MANIFEST_FILE_NAME).is_file(),
+            "and the tree really was built into it"
+        );
+    }
+
+    /// A hidden file is still a file. "Empty" means the directory yields
+    /// nothing at all, not "nothing that looks important".
+    #[test]
+    fn a_destination_holding_only_a_hidden_file_is_still_refused() {
+        let (plan, dir) = planned();
+        let root = dir.join("dist");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(".hidden"), b"x").unwrap();
+
+        assert!(apply(&plan, &root, &NoProgress).is_err());
+        assert!(root.join(".hidden").is_file());
+    }
+
+    /// A folder that is not there at all still works, which is the ordinary
+    /// case and the one every other test in this file relies on.
+    #[test]
+    fn a_destination_that_does_not_exist_is_created() {
+        let (plan, dir) = planned();
+        let root = dir.join("brand-new");
+        apply(&plan, &root, &NoProgress).unwrap();
+        assert!(root.join(MANIFEST_FILE_NAME).is_file());
+    }
+
+    /// A path that exists but is a **file** is refused — building a tree
+    /// "into" it is not a thing, and the sentence has to say which of the two
+    /// problems it is.
+    #[test]
+    fn a_destination_that_is_a_file_is_refused() {
+        let (plan, dir) = planned();
+        let root = dir.join("not-a-folder");
+        std::fs::write(&root, b"i am a file").unwrap();
+
+        let err = apply(&plan, &root, &NoProgress).unwrap_err().to_string();
+        assert!(
+            err.contains("not a folder"),
+            "the refusal says which problem it is: {err}"
+        );
+        assert_eq!(std::fs::read(&root).unwrap(), b"i am a file");
     }
 
     /// The rule G11 proved by measurement: removing `safe_join` genuinely

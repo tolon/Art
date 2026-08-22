@@ -2156,7 +2156,7 @@
       "label": "Şuraya kur",
       "none": "Hedef seçilmedi.",
       "chooseTitle": "Dağıtım ağacının nereye kurulacağını seç",
-      "hint": "Yeni bir klasör — ART zaten var olan bir klasörün üzerine kurmayı reddeder."
+      "hint": "Yeni ya da boş bir klasör. Seçme penceresinde Yeni klasör ile oluşturup seçebilirsin — ART yalnızca içinde bir şey olan klasörü reddeder."
     },
     "components": {
       "heading": "Bileşenler",
