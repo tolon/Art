@@ -471,8 +471,11 @@ export interface PackageSummary {
  *  list alone. Read-only; an unreadable folder answers the same way an empty
  *  one would (every package `available: false`) rather than refusing, so the
  *  checklist itself always renders. */
-export async function osinstallPackages(packageFolder: string): Promise<PackageSummary[]> {
-  return invoke<PackageSummary[]>("osinstall_packages", { packageFolder });
+export async function osinstallPackages(
+  packageFolder: string,
+  release: InstallRelease
+): Promise<PackageSummary[]> {
+  return invoke<PackageSummary[]>("osinstall_packages", { packageFolder, release });
 }
 
 /** The event `osinstall_collisions`'s own background job answers on. */

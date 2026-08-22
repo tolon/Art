@@ -73,6 +73,7 @@ const dialogOpenMock = vi.hoisted(() => vi.fn());
 const onJobProgressMock = vi.hoisted(() => vi.fn());
 const rescanMock = vi.hoisted(() => vi.fn());
 const releaseForMediaMock = vi.hoisted(() => vi.fn());
+const packagesMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/osinstall", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/osinstall")>()),
@@ -81,6 +82,7 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   osinstallPlan: planMock,
   osinstallRescanMedia: rescanMock,
   osinstallReleaseForMedia: releaseForMediaMock,
+  osinstallPackages: packagesMock,
   osinstallComponentCollisions: componentCollisionsMock,
   osinstallApply: applyMock,
   osinstallVerify: verifyMock,
@@ -331,6 +333,7 @@ beforeEach(() => {
   onJobProgressMock.mockReset().mockResolvedValue(() => {});
   rescanMock.mockReset().mockResolvedValue(1);
   releaseForMediaMock.mockReset().mockResolvedValue(null);
+  packagesMock.mockReset().mockResolvedValue([]);
   useSettingsStore.setState({ loaded: false, settings: DEFAULT_SETTINGS });
 });
 
@@ -935,6 +938,79 @@ describe("a folder that is simply the wrong one (ART-208)", () => {
   });
 });
 
+describe("the release the user picks is the release the whole screen is on (ART-209, ART-211)", () => {
+  // The owner chose AmigaOS 3.2 and the update-packages panel below still
+  // offered BoingBags — 3.9's archives, of which 3.2 has none: "3.2 ile 3.9
+  // secenekleri GUI'de karismis birbirine girmis."
+  //
+  // Two defects met here. The packages were never scoped by release at all
+  // (ART-209), and the release this screen owned was a *different variable*
+  // from the one the build session carried (ART-211) — so even a scoped
+  // panel mounted from the OS Builder's own step routes, which read the
+  // session, would have been handed the wrong answer.
+  //
+  // Asserted through what the panel actually asks for, not through what is
+  // stored: a test reading the remembered key would pass against a screen
+  // that stored the release correctly and still showed the other release's
+  // packages.
+  it("asks for the chosen release's packages, and asks again when it changes", async () => {
+    seedRemembered({
+      ...FULL_FIELDS,
+      "buildSession.packages": { folder: "E:\\archives", chosen: [] },
+    });
+    render(<OsInstall />);
+
+    await waitFor(() => expect(packagesMock).toHaveBeenCalled());
+
+    // **Every** call, never "some call" — and that is not pedantry, it is
+    // what a mutation caught. `PackagePanel` and `AmigaInstallPanel` both ask
+    // this same question, so `toHaveBeenCalledWith(...)` is satisfied by
+    // either one of them alone: hardcoding the release inside one panel left
+    // the first version of this test green, because the other panel still
+    // passed the right one. An assertion that one caller is correct says
+    // nothing at all about the other.
+    const releasesAsked = () => packagesMock.mock.calls.map((call) => call[1]);
+    expect(releasesAsked().length).toBeGreaterThan(0);
+    for (const asked of releasesAsked()) expect(asked).toBe("AmigaOS 3.2");
+    expect(packagesMock).toHaveBeenCalledWith("E:\\archives", "AmigaOS 3.2");
+
+    packagesMock.mockClear();
+    const picker = screen.getByRole("combobox", {
+      name: i18n.t("osinstall.release.label"),
+    }) as HTMLSelectElement;
+    await userEvent.selectOptions(picker, "AmigaOS 3.9");
+
+    await waitFor(() => expect(packagesMock).toHaveBeenCalled());
+    for (const asked of releasesAsked()) expect(asked).toBe("AmigaOS 3.9");
+  });
+
+  // **This one deliberately asserts on storage**, which the test above says
+  // it will not do — because for ART-211 storage is not an implementation
+  // detail, it *is* the channel. The OS Builder's step routes
+  // (`pages/osbuilder/steps.tsx`) mount `PackagePanel` and
+  // `AmigaInstallPanel` themselves and read `useBuildSession`, so the only
+  // thing connecting the picker on this screen to what those steps offer is
+  // the session's own remembered key. While this screen owned
+  // `osinstall.release` instead, the picker moved one variable and the steps
+  // read the other, and nothing in a test of this component alone could see
+  // it.
+  it("moves the build session's own release, which is what the steps read", async () => {
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+    await waitFor(() => expect(planMock).toHaveBeenCalled());
+
+    const picker = screen.getByRole("combobox", {
+      name: i18n.t("osinstall.release.label"),
+    }) as HTMLSelectElement;
+    await userEvent.selectOptions(picker, "AmigaOS 3.9");
+
+    await waitFor(() => {
+      const bag = useSettingsStore.getState().settings.remembered as Record<string, unknown>;
+      expect(bag["buildSession.release"]).toBe("AmigaOS 3.9");
+    });
+  });
+});
+
 describe("a refusal renders as a sentence, not a blank", () => {
   it("shows the real, translated refusal text", async () => {
     const refusedPlan: InstallPlan = {
@@ -1068,6 +1144,83 @@ describe("the screen says what a layering component would replace (ART-175)", ()
       i18n.t("osinstall.replaces.failed", { error: "Error: the disc could not be read" })
     );
     expect(document.querySelectorAll('[data-testid="component-collision-row"]').length).toBe(0);
+  });
+});
+
+describe("a release switch does not leave the other release's answers on screen (ART-210)", () => {
+  // The owner, driving the screen: "3.2 kurayım diyorsun, 3.9'un seçenekleri,
+  // hataları vb ekranda duruyor asla değişmiyor."
+  //
+  // Only two effects on this screen depended on `release` — the one that
+  // loads the component list and the one that re-plans. Everything *else* is
+  // a `useState` nothing invalidated, so a finished install's report, a
+  // failed preview, a plan error and a pending confirmation all survived a
+  // switch and sat there describing an operating system the user had moved
+  // away from. The plan updated underneath them, which made it worse: the
+  // screen then showed one release's plan beside another release's result.
+
+  /** Hand back the screen's own `osinstall-result` listener, so a finished
+   *  install can be announced the way the backend announces one. */
+  function captureAnnounce210(): { current: ((r: OsInstallResult) => void) | null } {
+    const held: { current: ((r: OsInstallResult) => void) | null } = { current: null };
+    onResultMock.mockImplementation((fn: (r: OsInstallResult) => void) => {
+      held.current = fn;
+      return Promise.resolve(() => {});
+    });
+    return held;
+  }
+
+  const FINISHED_39: OsInstallResult = {
+    job_id: 1,
+    destination: "E:\\amiga\\dist-3.9",
+    outcome: { root: "E:\\amiga\\dist-3.9", files: 1915, directories: 75, bytes: 1024 },
+  };
+
+  it("takes a finished install's report down when the release changes", async () => {
+    const announce = captureAnnounce210();
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+    await waitFor(() => expect(announce.current).not.toBeNull());
+
+    act(() => announce.current!(FINISHED_39));
+    expect(await screen.findByText(i18n.t("osinstall.result.heading"))).toBeTruthy();
+
+    const picker = screen.getByRole("combobox", {
+      name: i18n.t("osinstall.release.label"),
+    }) as HTMLSelectElement;
+    await userEvent.selectOptions(picker, "AmigaOS 3.9");
+
+    await waitFor(() =>
+      expect(screen.queryByText(i18n.t("osinstall.result.heading"))).toBeNull()
+    );
+  });
+
+  it("takes an answer a control gave down when the release changes", async () => {
+    // A second card, and a different mechanism on purpose: the report above
+    // is set by an event from the backend, this one by a button on the
+    // screen. One test that clears one piece of state proves one piece of
+    // state.
+    //
+    // "Scan again" is the right second case because **nothing else can
+    // clear it**. A plan error would be wiped by the re-plan a release
+    // switch triggers anyway, so a test built on one would pass against the
+    // defect exactly as happily as against the fix.
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+    await waitFor(() => expect(planMock).toHaveBeenCalled());
+
+    await userEvent.click(
+      screen.getByRole("button", { name: i18n.t("osinstall.media.rescan") })
+    );
+    const rescanned = i18n.t("osinstall.media.rescanned", { count: 1 });
+    expect(await screen.findByText(rescanned)).toBeTruthy();
+
+    const picker = screen.getByRole("combobox", {
+      name: i18n.t("osinstall.release.label"),
+    }) as HTMLSelectElement;
+    await userEvent.selectOptions(picker, "AmigaOS 3.9");
+
+    await waitFor(() => expect(screen.queryByText(rescanned)).toBeNull());
   });
 });
 

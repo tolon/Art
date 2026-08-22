@@ -469,10 +469,19 @@ pub struct PackageSummary {
 /// reflect what could actually be found. `osinstall_collisions` and
 /// `osinstall_add_package` are what actually open the folder for real and
 /// refuse by name when they cannot.
+///
+/// **Scoped to `release` (ART-209).** The owner chose AmigaOS 3.2 and was
+/// offered BoingBags, which are 3.9's; 3.2 has none. This used to take a
+/// folder and nothing else, so there was no release to scope by even in
+/// principle — see `package::Package::releases`. A release ART ships no
+/// packages for answers with an empty list, and the screen says so.
 #[tauri::command]
-pub fn osinstall_packages(package_folder: PathBuf) -> AppResult<Vec<PackageSummary>> {
+pub fn osinstall_packages(
+    package_folder: PathBuf,
+    release: String,
+) -> AppResult<Vec<PackageSummary>> {
     let found = find_packages(&package_folder).unwrap_or_default();
-    let packages = package::packages()?;
+    let packages = package::packages_for(&release)?;
     Ok(packages
         .into_iter()
         .map(|p| {
@@ -2109,7 +2118,7 @@ mod tests {
         std::fs::create_dir_all(&folder).unwrap();
         write_locale_turkish_archive(&folder, "turkish.lha", b"catalog bytes");
 
-        let summaries = osinstall_packages(folder).unwrap();
+        let summaries = osinstall_packages(folder, "AmigaOS 3.9".to_string()).unwrap();
         assert_eq!(summaries.len(), 3, "ART ships exactly three packages today");
 
         let turkish = summaries
@@ -2135,13 +2144,43 @@ mod tests {
     /// the `true` side would pass against a field hardcoded to `true`,
     /// which would put a package on the panel that `compose` refuses by
     /// name a moment after it is picked.
+    /// **ART-209.** The owner chose AmigaOS 3.2 and the update-packages
+    /// panel still offered BoingBags — 3.9's archives, of which 3.2 has none:
+    /// *"3.2 ile 3.9 secenekleri GUI'de karismis birbirine girmis."*
+    ///
+    /// The archive is deliberately **present** in the folder. The old
+    /// behaviour would have reported it available and offered the tick; the
+    /// question this test asks is not "was the file found" but "does this
+    /// package belong on the release being built", and those are different
+    /// questions that used to have one answer.
+    #[test]
+    fn osinstall_packages_offers_no_update_package_for_amigaos_32() {
+        let dir = scratch("packages-release-scope");
+        let folder = dir.join("packages");
+        std::fs::create_dir_all(&folder).unwrap();
+        write_locale_turkish_archive(&folder, "turkish.lha", b"catalog bytes");
+
+        let for_32 = osinstall_packages(folder.clone(), "AmigaOS 3.2".to_string()).unwrap();
+        assert!(
+            for_32.is_empty(),
+            "ART ships no update package for AmigaOS 3.2, got {:?}",
+            for_32.iter().map(|p| &p.id).collect::<Vec<_>>()
+        );
+
+        // ...and the same folder, for the release these packages do belong
+        // to, still offers all three. A filter that answered "none" for
+        // everything would pass the assertion above.
+        let for_39 = osinstall_packages(folder, "AmigaOS 3.9".to_string()).unwrap();
+        assert_eq!(for_39.len(), 3);
+    }
+
     #[test]
     fn osinstall_packages_says_which_packages_can_be_run_on_the_amiga() {
         let dir = scratch("packages-amiga-installable");
         let folder = dir.join("packages");
         std::fs::create_dir_all(&folder).unwrap();
 
-        let summaries = osinstall_packages(folder).unwrap();
+        let summaries = osinstall_packages(folder, "AmigaOS 3.9".to_string()).unwrap();
         for summary in &summaries {
             let declares = package::by_id(&summary.id)
                 .unwrap()
@@ -2175,7 +2214,7 @@ mod tests {
         let dir = scratch("packages-missing-folder");
         let missing = dir.join("does-not-exist");
 
-        let summaries = osinstall_packages(missing).unwrap();
+        let summaries = osinstall_packages(missing, "AmigaOS 3.9".to_string()).unwrap();
         assert_eq!(summaries.len(), 3);
         assert!(summaries.iter().all(|p| !p.available));
     }

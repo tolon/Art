@@ -115,7 +115,7 @@ import {
   refusalPhrase,
   type ApplyOutcome,
   type CollisionReport,
-  type PackageSummary,
+  type InstallRelease, type PackageSummary,
   type RefusalReason,
 } from "@/lib/osinstall";
 import { fraction, onJobProgress, subscribeSafely, type JobProgress } from "@/lib/jobs";
@@ -137,6 +137,13 @@ export interface PackagePanelProps {
    *  nothing until one is chosen anyway. */
   packageFolder?: string | null;
   onPackageFolderChange?: (path: string | null) => void;
+  /** Which AmigaOS release this build is for — **the packages offered are a
+   *  function of it** (ART-209). A BoingBag belongs on 3.9 and 3.2 has none;
+   *  before this prop existed the panel was handed every shipped package
+   *  whatever the picker said, so choosing 3.2 offered 3.9's updates. It is
+   *  the second layer of the owner's own model: a base, the updates that go
+   *  on that base, and the program sets that go on those. */
+  release: InstallRelease;
   /** The package ids the user has ticked. Controlled, the same way
    *  `OsInstall.tsx` owns `chosen` for release components — persisting it
    *  (or not) is the caller's decision, through `onChosenChange`. */
@@ -149,6 +156,7 @@ export function PackagePanel({
   onTreeRootChange,
   packageFolder = null,
   onPackageFolderChange,
+  release,
   chosen,
   onChosenChange,
 }: PackagePanelProps) {
@@ -180,7 +188,7 @@ export function PackagePanel({
       return;
     }
     let cancelled = false;
-    osinstallPackages(packageFolder)
+    osinstallPackages(packageFolder, release)
       .then((list) => {
         if (!cancelled) {
           setCatalogue(list);
@@ -196,7 +204,7 @@ export function PackagePanel({
     return () => {
       cancelled = true;
     };
-  }, [packageFolder]);
+  }, [packageFolder, release]);
 
   // Every chosen package the loaded catalogue says cannot be placed from
   // the host at all. Computed from the catalogue rather than from a

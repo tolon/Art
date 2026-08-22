@@ -218,19 +218,29 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
 
   // --- what the user chose, remembered -------------------------------------
   /**
-   * Which shipped recipe to plan from. `"AmigaOS 3.2"` is the fallback on
-   * purpose: it is what this screen has always planned, so nobody's
-   * remembered setup changes meaning because a second recipe arrived.
-   * `isInstallRelease` turns a hand-edited or since-removed value back into
-   * that default instead of putting it on screen.
+   * Which shipped recipe to plan from — **the build session's own value**,
+   * not a second one of this screen's (ART-211).
+   *
+   * `useBuildSession` has held `buildSession.release` and offered a
+   * `setRelease` since ART-197, and nothing called it: this screen owned
+   * `osinstall.release` instead, so the release the user picked and the
+   * release the session carried were two variables joined by nothing but a
+   * one-time legacy read that happens before the picker is ever touched.
+   * The OS Builder's step routes read the session, which is why they could
+   * not scope anything by release at all — the second layer of the owner's
+   * model (a base, the updates on that base, the program sets on those) had
+   * no way to ask what the base was.
+   *
+   * That is ART-197's own shape one field over, and CLAUDE.md states the
+   * rule it broke: the build's own values live in one place, and adding a
+   * field means adding it there rather than another `useRemembered` in a
+   * panel. The legacy key is still read once by the session's own fallback,
+   * so nobody's remembered choice is lost.
    *
    * **First, because the folders below are keyed on it** (ART-207).
    */
-  const [release, setRelease] = useRemembered<InstallRelease>(
-    "osinstall.release",
-    isInstallRelease,
-    "AmigaOS 3.2"
-  );
+  const { session, setTree, setPackages, setRelease } = useBuildSession();
+  const release = session.release;
 
   /**
    * The folder holding this release's install media — remembered **per
@@ -365,7 +375,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    * being made silently. A user who wants a different tree still picks one;
    * the picker never goes away.
    */
-  const { session, setTree, setPackages } = useBuildSession();
+
   const packagesTreeRoot = session.tree.root;
   const packagesFolder = session.packages.folder;
   const packagesChosen = session.packages.chosen;
@@ -490,6 +500,45 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
     return () => {
       cancelled = true;
     };
+  }, [release]);
+
+  /**
+   * **ART-210 — nothing computed for one release survives a switch to
+   * another.**
+   *
+   * The owner, driving this screen: *"3.2 kurayım diyorsun, 3.9'un
+   * seçenekleri, hataları vb ekranda duruyor asla değişmiyor."* Only two
+   * effects here depended on `release` — the component list above and the
+   * plan below. Every other answer on this screen is a `useState` nothing
+   * invalidated, so a finished install's report, a failed preview, a plan
+   * error and a half-asked confirmation all stayed put, describing an
+   * operating system the user had moved away from. The plan updating
+   * underneath them made it worse rather than better: one release's plan
+   * beside another release's result is a screen contradicting itself.
+   *
+   * **What is deliberately NOT cleared**, so a later reader does not "fix"
+   * it: the ROM (a property of the machine, not the release — ART-207), the
+   * media scan (its own effect re-runs, because ART-207 keyed the folder per
+   * release and the folder therefore changed too), and the Verify section,
+   * which names the tree and image it is talking about on screen and is not
+   * about the picker at all.
+   *
+   * **An honest limit.** This is a list, and a list can be forgotten: a
+   * future card added without a line here would sit stale exactly as these
+   * did. The structural answer is to remount the body on a `key={release}`,
+   * which cannot be forgotten — but that needs `release` owned by a parent,
+   * which is the `OsInstall.tsx` split already on the work list. Said here
+   * rather than discovered later.
+   */
+  useEffect(() => {
+    setResult(null);
+    setError(null);
+    setPlanError(null);
+    setComponentPreview(null);
+    setComponentPreviewError(null);
+    setPendingExclusion(null);
+    setRescanned(null);
+    setConfirmed(false);
   }, [release]);
 
   // Re-scan whatever folder was remembered, so one since emptied or moved is
@@ -1475,6 +1524,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         onPackageFolderChange={(folder) => setPackages({ folder })}
         chosen={packagesChosen}
         onChosenChange={(chosen) => setPackages({ chosen })}
+        release={release}
       />
 
       {/* The other half of the same question, and deliberately a second
@@ -1488,6 +1538,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         treeRoot={packagesTreeRoot}
         onTreeRootChange={(root) => setTree({ root, builtHere: false })}
         packageFolder={packagesFolder}
+        release={release}
       />
 
       <section className="card" style={{ marginBottom: 16 }}>

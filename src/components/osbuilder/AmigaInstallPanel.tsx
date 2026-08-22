@@ -81,7 +81,7 @@ import {
   type AmigaInstallRequest,
   type AmigaInstallResult,
 } from "@/lib/amigainstall";
-import { osinstallPackages, type PackageSummary } from "@/lib/osinstall";
+import { osinstallPackages, type InstallRelease, type PackageSummary } from "@/lib/osinstall";
 import { fraction, onJobProgress, subscribeSafely, type JobProgress } from "@/lib/jobs";
 import { isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
@@ -100,6 +100,12 @@ export interface AmigaInstallPanelProps {
    *  starting folder. The run itself takes whole file paths, never a folder:
    *  the second archive is chosen deliberately, not guessed at. */
   packageFolder?: string | null;
+  /** Which AmigaOS release this build is for — the packages offered are a
+   *  function of it (ART-209). This panel runs a package's own installer on
+   *  the Amiga, and a BoingBag is AmigaOS 3.9's; offering one on a 3.2 build
+   *  is offering to run an installer for an operating system that is not
+   *  there. */
+  release: InstallRelease;
 }
 
 /**
@@ -138,6 +144,7 @@ export function AmigaInstallPanel({
   treeRoot,
   onTreeRootChange,
   packageFolder = null,
+  release,
 }: AmigaInstallPanelProps) {
   const { t } = useTranslation();
   const power = usePowerMode();
@@ -250,7 +257,7 @@ export function AmigaInstallPanel({
       return;
     }
     let cancelled = false;
-    osinstallPackages(packageFolder)
+    osinstallPackages(packageFolder, release)
       .then((list) => {
         if (!cancelled) {
           setCatalogue(list);
@@ -266,7 +273,7 @@ export function AmigaInstallPanel({
     return () => {
       cancelled = true;
     };
-  }, [packageFolder]);
+  }, [packageFolder, release]);
 
   // §92's PREVIEW: read-only, recomputed whenever the request changes, and
   // the place every refusal lands — `compose` is shared with the run, so a

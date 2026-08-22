@@ -118,6 +118,7 @@ export function StepPaketler() {
         onPackageFolderChange={(folder) => setPackages({ folder })}
         chosen={session.packages.chosen}
         onChosenChange={(chosen) => setPackages({ chosen })}
+        release={session.release}
       />
     </>
   );
@@ -135,6 +136,7 @@ export function StepAmigaKurulum() {
         treeRoot={session.tree.root}
         onTreeRootChange={(root) => setTree({ root, builtHere: false })}
         packageFolder={session.packages.folder}
+        release={session.release}
       />
     </>
   );

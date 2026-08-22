@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Building a distribution, and a card that can boot (2026-08-22)
 
 #### Fixed
+- **Choosing an AmigaOS release now changes the whole screen, not half of it.**
+  Pick 3.2 and the update packages below used to still be 3.9's BoingBags —
+  of which 3.2 has none — while any report, error or answer left over from the
+  release you came from stayed exactly where it was. The packages offered are
+  now the chosen release's own, and everything the previous release had worked
+  out is cleared when you switch. Your Kickstart is left alone, because it
+  belongs to the machine you are building for rather than to the release.
+
 - **Each AmigaOS release remembers its own folders.** Choosing 3.2 used to
   leave the install-disks folder pointing wherever you last had it — and if
   that was your 3.9 disc, nothing could be built. The folder you install from

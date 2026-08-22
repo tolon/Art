@@ -12,6 +12,7 @@
   ],
   "id": "boingbag-39-2",
   "name": "BoingBag 3.9-2",
+  "releases": ["AmigaOS 3.9"],
   "media": "BoingBag3.9-2",
   "_why_distinguished_by_repeats_the_member": [
     "ART-167. Two of the owner's archives carry the top-level directory",

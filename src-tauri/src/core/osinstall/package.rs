@@ -199,7 +199,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use super::recipe::{validate_component, validate_path};
+use super::recipe::{self, validate_component, validate_path};
 use super::{Component, HostPlacementBlock, PathRule};
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::security::refuse_shell_metacharacters;
@@ -220,6 +220,31 @@ pub struct Package {
     /// Shown on screen. Not the id, and not translated — a package's name is
     /// its own, the way a volume name is (ART-060).
     pub name: String,
+    /// Which AmigaOS releases this package belongs on — the release recipe's
+    /// own names, e.g. `["AmigaOS 3.9"]` (**ART-209**).
+    ///
+    /// The owner chose AmigaOS 3.2 and was offered **BoingBags**, which are
+    /// 3.9's and of which 3.2 has none: *"3.2 ile 3.9 seçenekleri GUI'de
+    /// karışmış birbirine girmiş."* Nothing was filtering, because until this
+    /// field existed there was nothing to filter *by* — a package declared no
+    /// release, [`packages`] returned all of them, the command took no
+    /// release and neither panel was handed one. Four layers, none of which
+    /// could answer the question, so the answer became "show everything".
+    ///
+    /// It is the second layer of the model the owner stated: a **base** (the
+    /// release), the **updates** that go on that base, and the **program
+    /// sets** that go on those. Each layer's options are a function of the
+    /// one below it, and this field is what makes that expressible rather
+    /// than merely intended.
+    ///
+    /// **Required, not defaulted.** A default would have to be either "every
+    /// release" — today's defect made permanent — or one named release, which
+    /// is a guess about a package nobody has looked at. A JSON that omits it
+    /// fails to parse, which is the only answer that cannot be wrong quietly.
+    /// Every name is checked against [`recipe::releases`], so a package
+    /// naming a release ART ships no recipe for is refused rather than
+    /// becoming unreachable from every screen.
+    pub releases: Vec<String>,
     /// The archive's single top-level directory, read from inside it.
     pub media: String,
     /// The member holding the payload, for a package whose files sit inside
@@ -465,6 +490,8 @@ pub struct InstallerOverlay {
 struct RawPackage {
     id: String,
     name: String,
+    /// ART-209 — required on purpose; see `Package::releases`.
+    releases: Vec<String>,
     media: String,
     #[serde(default)]
     member: Option<String>,
@@ -540,6 +567,7 @@ impl RawPackage {
         Package {
             id: self.id,
             name: self.name,
+            releases: self.releases,
             media: self.media,
             member: self.member,
             distinguished_by: self.distinguished_by,
@@ -722,7 +750,51 @@ fn parse(json: &str) -> CoreResult<Package> {
     let package = raw.into_package();
     validate_component("package", &package.component)?;
     validate_installer(&package)?;
+    validate_releases(&package)?;
     Ok(package)
+}
+
+/// ART-209 — a package belongs to at least one release ART ships a recipe
+/// for, and says which.
+///
+/// Both halves are refusals rather than warnings. An empty list would put a
+/// package on no screen at all, silently; a name ART has no recipe for is the
+/// same thing with a typo behind it (`"AmigaOS 3.5"`), and both are the kind
+/// of quiet unreachability §89 exists to stop.
+fn validate_releases(package: &Package) -> CoreResult<()> {
+    if package.releases.is_empty() {
+        return Err(CoreError::Malformed {
+            format: "package".into(),
+            detail: format!("'{}': names no release", package.id),
+        });
+    }
+    for release in &package.releases {
+        if !recipe::releases().contains(&release.as_str()) {
+            return Err(CoreError::Malformed {
+                format: "package".into(),
+                detail: format!(
+                    "'{}': names release '{release}', which ART ships no recipe for",
+                    package.id
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// The shipped packages that belong on `release` — what a screen showing one
+/// release's updates must be handed (ART-209).
+///
+/// An unknown release answers with an empty list rather than an error: the
+/// caller is a screen asking "what goes on this?", and "nothing" is a true
+/// answer for a release ART ships no packages for. `by_release` refuses an
+/// unknown *recipe* name because building the wrong operating system is a
+/// different kind of harm.
+pub fn packages_for(release: &str) -> CoreResult<Vec<Package>> {
+    Ok(packages()?
+        .into_iter()
+        .filter(|p| p.releases.iter().any(|r| r == release))
+        .collect())
 }
 
 /// Parse and validate every JSON in `jsons`, then refuse if two share an id
@@ -908,6 +980,108 @@ mod tests {
     use super::*;
     use crate::core::osinstall::RuleKind;
 
+    /// One minimal package JSON with the `releases` list spelled by the
+    /// caller — for the two gate tests below, which are about the field and
+    /// not about any shipped file.
+    fn package_json_with_releases(releases: &str) -> String {
+        format!(
+            r#"{{
+                "id": "test-package",
+                "name": "Test package",
+                "media": "TestPackage",
+                "releases": {releases},
+                "rules": [{{ "from": "C/Thing", "to": "C/Thing", "kind": "file" }}]
+            }}"#
+        )
+    }
+
+    // ART-209 --------------------------------------------------------------
+    //
+    // The owner chose AmigaOS 3.2 and the update-packages panel below the
+    // component checklist still offered **BoingBags** — which are AmigaOS
+    // 3.9's, and of which 3.2 has none. Their words: "3.2 ile 3.9 seçenekleri
+    // GUI'de karışmış birbirine girmiş."
+    //
+    // The root cause was that no layer could answer the question: a package
+    // declared no release, `packages()` returned all of them, the command took
+    // no release, and neither panel was given one. So the answer defaulted to
+    // "show everything" — one screen offering two operating systems' parts,
+    // which is the defect a whole-branch review once called the worst on its
+    // list when the *component* checklist had it.
+    //
+    // `releases` is required rather than defaulted. A default would have to be
+    // either "all releases" (today's defect, made permanent) or one named
+    // release (a guess about a package nobody has looked at). A package whose
+    // JSON omits it fails to parse, which is the only answer that cannot be
+    // wrong quietly.
+
+    #[test]
+    fn every_shipped_package_names_the_releases_it_belongs_to() {
+        for package in super::packages().unwrap() {
+            assert!(
+                !package.releases.is_empty(),
+                "package '{}' names no release",
+                package.id
+            );
+            for release in &package.releases {
+                assert!(
+                    crate::core::osinstall::recipe::releases().contains(&release.as_str()),
+                    "package '{}' names release {release:?}, which ART ships no recipe for",
+                    package.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn all_three_shipped_packages_belong_to_amigaos_39() {
+        let for_39 = super::packages_for("AmigaOS 3.9").unwrap();
+        let ids: Vec<&str> = for_39.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["boingbag-39-1", "boingbag-39-2", "locale-turkish"],
+            "the two BoingBags and the Turkish catalogs from BoingBag 3.9-2"
+        );
+    }
+
+    #[test]
+    fn amigaos_32_is_offered_no_update_package_at_all() {
+        // Not "fewer" — none. ART ships no update package for AmigaOS 3.2
+        // today: a BoingBag is a 3.9 archive, and 3.2's own updates
+        // (`Update3.2.1`) arrive as a release component, not as a package.
+        // The screen has to be able to say that, which it cannot do while the
+        // list it is handed is the same list for every release.
+        let for_32 = super::packages_for("AmigaOS 3.2").unwrap();
+        assert!(
+            for_32.is_empty(),
+            "got {:?}",
+            for_32.iter().map(|p| &p.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_package_naming_a_release_art_does_not_ship_is_refused() {
+        // The shipped data is checked by the test above; this checks the
+        // *gate*, so a fourth package added later cannot name "AmigaOS 3.5"
+        // and be silently unreachable from every screen.
+        let json = package_json_with_releases(r#"["AmigaOS 3.5"]"#);
+        let err = super::parse(&json).expect_err("an unknown release must be refused");
+        assert!(
+            format!("{err}").contains("AmigaOS 3.5"),
+            "the refusal must name the release it did not recognise, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_package_naming_no_release_is_refused() {
+        let json = package_json_with_releases("[]");
+        let err = super::parse(&json).expect_err("an empty release list must be refused");
+        assert!(
+            format!("{err}").contains("release"),
+            "the refusal must say what is missing, got: {err}"
+        );
+    }
+
     /// Every shipped package parses and validates. This is the test that
     /// fails when a JSON file is added and its rules are wrong.
     #[test]
@@ -1010,7 +1184,7 @@ mod tests {
     #[test]
     fn a_package_that_says_nothing_about_placement_is_placeable() {
         let package = parse(
-            r#"{ "id": "x", "name": "X", "media": "X",
+            r#"{ "id": "x", "name": "X", "releases": ["AmigaOS 3.9"], "media": "X",
                  "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ] }"#,
         )
         .unwrap();
@@ -1175,7 +1349,7 @@ mod tests {
     #[test]
     fn a_package_that_names_no_installer_declares_none() {
         let package = parse(
-            r#"{ "id": "x", "name": "X", "media": "X",
+            r#"{ "id": "x", "name": "X", "releases": ["AmigaOS 3.9"], "media": "X",
                  "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ] }"#,
         )
         .unwrap();
@@ -1201,7 +1375,7 @@ mod tests {
         for key in ["amigaInstaller", "amiga_instaler", "why_no_installer"] {
             let json = serde_json::json!({
                 "id": "x",
-                "name": "X",
+                "name": "X", "releases": ["AmigaOS 3.9"],
                 "media": "X",
                 "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ],
                 key: { "program": "C/Updater", "args": ["AmigaOS-Update"] },
@@ -1223,7 +1397,7 @@ mod tests {
     fn a_note_to_a_human_is_still_allowed_through() {
         let json = serde_json::json!({
             "id": "x",
-            "name": "X",
+            "name": "X", "releases": ["AmigaOS 3.9"],
             "media": "X",
             "_why_this_exists": ["a note, kept in the file, ignored by ART"],
             "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ],
@@ -1245,7 +1419,7 @@ mod tests {
     fn a_package_path_fault_is_reported_against_the_package_file() {
         let json = serde_json::json!({
             "id": "x",
-            "name": "X",
+            "name": "X", "releases": ["AmigaOS 3.9"],
             "media": "X",
             "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ],
             // `..` climbs out, and `validate_path` is the only thing that
@@ -1278,7 +1452,7 @@ mod tests {
     fn args_given_as_one_line_are_refused_by_the_type() {
         let json = serde_json::json!({
             "id": "x",
-            "name": "X",
+            "name": "X", "releases": ["AmigaOS 3.9"],
             "media": "X",
             "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ],
             "amiga_installer": { "program": "C/Updater", "args": "AmigaOS-Update DH0:" },
@@ -1300,7 +1474,7 @@ mod tests {
         };
         let json = serde_json::json!({
             "id": "x",
-            "name": "X",
+            "name": "X", "releases": ["AmigaOS 3.9"],
             "media": "X",
             "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ],
             // The key is snake_case, like every other key in a shipped
@@ -1445,7 +1619,7 @@ mod tests {
         for bad in ["45", "forty-five.fifteen", "45.", ".15", "", "45.15.3"] {
             let json = serde_json::json!({
                 "id": "x",
-                "name": "X",
+                "name": "X", "releases": ["AmigaOS 3.9"],
                 "media": "X",
                 "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ],
                 "amiga_installer": { "program": "C/Updater", "minimum_version": bad },
@@ -1476,7 +1650,7 @@ mod tests {
         ] {
             let json = serde_json::json!({
                 "id": "x",
-                "name": "X",
+                "name": "X", "releases": ["AmigaOS 3.9"],
                 "media": "X",
                 "rules": [ { "from": "C/A", "to": "C/A", "kind": "file" } ],
                 "amiga_installer": {
@@ -1530,6 +1704,7 @@ mod tests {
     fn synthetic(id: &str, requires: &[&str]) -> Package {
         Package {
             id: id.to_string(),
+            releases: vec!["AmigaOS 3.9".to_string()],
             name: id.to_string(),
             media: "SyntheticMedia".to_string(),
             member: None,
@@ -1625,7 +1800,7 @@ mod tests {
     fn a_required_medium_written_as_a_device_reference_is_refused() {
         let json = serde_json::json!({
             "id": "x",
-            "name": "X",
+            "name": "X", "releases": ["AmigaOS 3.9"],
             "media": "M",
             "amiga_installer": {
                 "program": "C/Updater",

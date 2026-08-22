@@ -26,6 +26,18 @@
   ],
   "id": "boingbag-39-1",
   "name": "BoingBag 3.9-1",
+  "_why_releases": [
+    "ART-209. A BoingBag is an AmigaOS 3.9 archive and there is no such thing",
+    "as a BoingBag for 3.2 — 3.2's own updates arrive as a release component",
+    "(`Update3.2.1` in amigaos-3.2.json), not as a package. Until this field",
+    "existed nothing could say so, and the owner choosing AmigaOS 3.2 was",
+    "offered BoingBags on the screen below the component checklist.",
+    "",
+    "3.9 only, and not '3.9 and anything later': ART ships two recipes and a",
+    "third would be a new JSON file, at which point whether these apply to it",
+    "is a question somebody has to answer by looking, not a default."
+  ],
+  "releases": ["AmigaOS 3.9"],
   "media": "BoingBag3.9-1",
   "_why_no_distinguished_by": [
     "ART-167 gave a package a second identity fact for archives whose",

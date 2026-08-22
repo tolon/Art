@@ -128,7 +128,7 @@ function renderPanel() {
   // backend to scan `""`), so a test exercising the preview has to supply
   // one, the same way a real screen would once the user browsed for it.
   render(
-    <PackagePanel treeRoot="E:/tree" packageFolder="E:/packages" chosen={["boingbag-39-1"]} />
+    <PackagePanel release="AmigaOS 3.9" treeRoot="E:/tree" packageFolder="E:/packages" chosen={["boingbag-39-1"]} />
   );
 }
 
@@ -161,7 +161,7 @@ it("marks a collision the recipe did not declare", async () => {
 
 describe("the empty selection", () => {
   it("asks for nothing and shows no preview until a package is chosen", () => {
-    render(<PackagePanel treeRoot="E:/tree" chosen={[]} />);
+    render(<PackagePanel release="AmigaOS 3.9" treeRoot="E:/tree" chosen={[]} />);
     expect(collisionsMock).not.toHaveBeenCalled();
     expect(screen.queryAllByTestId("collision-row")).toHaveLength(0);
   });
@@ -238,7 +238,7 @@ describe("F3 — a remembered pick whose archive vanished can still be unticked"
       },
     ]);
     render(
-      <PackagePanel treeRoot="E:/tree" packageFolder="E:/packages" chosen={["boingbag-39-1"]} />
+      <PackagePanel release="AmigaOS 3.9" treeRoot="E:/tree" packageFolder="E:/packages" chosen={["boingbag-39-1"]} />
     );
 
     const box = (await screen.findByRole("checkbox", {
@@ -252,7 +252,7 @@ describe("F3 — a remembered pick whose archive vanished can still be unticked"
 
 describe("F3/F5 — a chosen set previews nothing until a package folder is chosen", () => {
   it("says so instead of asking the backend to scan an empty folder", () => {
-    render(<PackagePanel treeRoot="E:/tree" chosen={["boingbag-39-1"]} />);
+    render(<PackagePanel release="AmigaOS 3.9" treeRoot="E:/tree" chosen={["boingbag-39-1"]} />);
     expect(collisionsMock).not.toHaveBeenCalled();
     expect(screen.getByText(/Choose the update packages folder above/i)).toBeTruthy();
   });
@@ -279,7 +279,7 @@ describe("F10 — the add job's own outcome reaches the screen", () => {
 describe("N4 — an unknown remembered id is visible and untickable", () => {
   it("renders a row for a chosen id the loaded catalogue does not recognise", async () => {
     render(
-      <PackagePanel
+      <PackagePanel release="AmigaOS 3.9"
         treeRoot="E:/tree"
         packageFolder="E:/packages"
         chosen={["some-old-package-id"]}
@@ -332,7 +332,7 @@ const REAL_PACKAGES: PackageSummary[] = [
 describe("M3 — a package ART cannot place is not offered as though it can", () => {
   it("refuses the tick and says what the package needs, before anything is chosen", async () => {
     packagesMock.mockResolvedValue(REAL_PACKAGES);
-    render(<PackagePanel treeRoot="E:/tree" packageFolder="E:/packages" chosen={[]} />);
+    render(<PackagePanel release="AmigaOS 3.9" treeRoot="E:/tree" packageFolder="E:/packages" chosen={[]} />);
 
     const box = (await screen.findByRole("checkbox", {
       name: /BoingBag 3\.9-1/,
@@ -347,7 +347,7 @@ describe("M3 — a package ART cannot place is not offered as though it can", ()
   it("previews nothing and refuses to run for a remembered blocked pick", async () => {
     packagesMock.mockResolvedValue(REAL_PACKAGES);
     render(
-      <PackagePanel
+      <PackagePanel release="AmigaOS 3.9"
         treeRoot="E:/tree"
         packageFolder="E:/packages"
         chosen={["boingbag-39-1"]}
@@ -366,7 +366,7 @@ describe("M3 — a package ART cannot place is not offered as though it can", ()
   it("still lets a blocked package be ticked off again", async () => {
     packagesMock.mockResolvedValue(REAL_PACKAGES);
     render(
-      <PackagePanel
+      <PackagePanel release="AmigaOS 3.9"
         treeRoot="E:/tree"
         packageFolder="E:/packages"
         chosen={["boingbag-39-1"]}
@@ -396,7 +396,7 @@ describe("m6 — an entry name safe_join refused is shown, not only counted", ()
         refusedNames: ["../../Startup"],
       },
     ] satisfies PackageSummary[]);
-    render(<PackagePanel treeRoot="E:/tree" packageFolder="E:/packages" chosen={[]} />);
+    render(<PackagePanel release="AmigaOS 3.9" treeRoot="E:/tree" packageFolder="E:/packages" chosen={[]} />);
 
     expect(await screen.findByText(/\.\.\/\.\.\/Startup/)).toBeTruthy();
   });

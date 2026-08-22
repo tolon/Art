@@ -2786,6 +2786,7 @@ mod plan_tests {
         };
         Package {
             id: id.to_string(),
+            releases: vec!["AmigaOS 3.9".to_string()],
             name: id.to_string(),
             media: media.to_string(),
             member: None,
