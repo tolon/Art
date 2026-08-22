@@ -1,0 +1,10 @@
+{
+  "id": "teshis",
+  "order": 80,
+  "entries": [
+    { "id": "snoopdos", "name": "SnoopDOS", "order": 10, "source": { "aminet": { "path": "util/moni/SnoopDos" } } },
+    { "id": "sysinfo", "name": "SysInfo", "order": 20, "source": { "mirror": { "mirror": "download-d0-se", "path": "pub/SysInfo.lha" } } },
+    { "id": "bustest", "name": "BusTest", "order": 30, "source": { "aminet": { "path": "util/moni/bustest" } } },
+    { "id": "md5sum", "name": "MD5 Sum", "order": 40, "source": { "aminet": { "path": "util/crypt/MD5SUM" } } }
+  ]
+}

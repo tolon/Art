@@ -1,0 +1,14 @@
+{
+  "id": "kabuk",
+  "order": 100,
+  "entries": [
+    { "id": "srename", "name": "SRename", "order": 10, "source": { "aminet": { "path": "util/cli/SRename" } } },
+    { "id": "copyreplace", "name": "CopyReplace", "order": 20, "source": { "aminet": { "path": "util/sys/CopyReplace" } } },
+    { "id": "searchreplace", "name": "SearchReplace", "order": 30, "source": { "aminet": { "path": "text/misc/SearchReplace" } } },
+    { "id": "mecho", "name": "Mecho", "order": 40, "source": { "aminet": { "path": "util/batch/mecho" } } },
+    { "id": "tttool", "name": "TTTool", "order": 50, "source": { "aminet": { "path": "util/batch/TTTool" } } },
+    { "id": "rexxtricks", "name": "RexxTricks", "order": 60, "source": { "aminet": { "path": "util/rexx/RexxTricks_386" } } },
+    { "id": "janoeditor", "name": "Jano Editor", "order": 70, "source": { "aminet": { "path": "text/edit/JanoEditor" } } },
+    { "id": "screentext", "name": "Screentext", "order": 80, "source": { "mirror": { "mirror": "thomas-rapp", "path": "downloads/" } } }
+  ]
+}

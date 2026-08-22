@@ -1,0 +1,8 @@
+{
+  "id": "ibrowse",
+  "order": 140,
+  "entries": [
+    { "id": "ibrowse", "name": "iBrowse", "order": 10, "source": { "mirror": { "mirror": "ibrowse-dev", "path": "" } },
+      "permission": { "holder": "iBrowse development team", "note": "demo build; distributed under the Emu68 Imager's own permission from ibrowse-dev.net" } }
+  ]
+}

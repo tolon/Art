@@ -1,0 +1,12 @@
+{
+  "id": "dosya-sistemi",
+  "order": 30,
+  "entries": [
+    { "id": "pfs3", "name": "PFS3", "order": 10, "source": { "aminet": { "path": "disk/misc/PFS3_53" } } },
+    { "id": "fat95", "name": "Fat95", "order": 20, "source": { "aminet": { "path": "disk/misc/fat95" } } },
+    { "id": "filesysbox", "name": "File Sys Box", "order": 30, "source": { "aminet": { "path": "util/libs/filesysbox.m68k-amigaos" } } },
+    { "id": "smbfs", "name": "SMBFS", "order": 40, "source": { "aminet": { "path": "disk/misc/smb2fs.m68k-amigaos" } }, "requires": ["filesysbox"] },
+    { "id": "cfd133", "name": "CFD 1.33", "order": 50, "source": { "aminet": { "path": "driver/media/CFD133" } } },
+    { "id": "idefix97", "name": "IDEfix 97", "order": 60, "source": { "aminet": { "path": "driver/media/IDEfix97" } } }
+  ]
+}

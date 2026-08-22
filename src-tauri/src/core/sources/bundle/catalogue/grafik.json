@@ -1,0 +1,12 @@
+{
+  "id": "grafik",
+  "order": 60,
+  "entries": [
+    { "id": "picasso96", "name": "Picasso96", "order": 10, "source": { "aminet": { "path": "driver/video/Picasso96" } },
+      "permission": { "holder": "Individual Computers (Jens Schonfeld)", "note": "shareware; the only legal purchase is from Individual Computers" } },
+    { "id": "akgif", "name": "akGIF", "order": 20, "source": { "aminet": { "path": "util/dtype/akGIF-dt" } } },
+    { "id": "akjfif", "name": "akJFIF", "order": 30, "source": { "aminet": { "path": "util/dtype/akJFIF-dt" } } },
+    { "id": "akpng", "name": "akPNG", "order": 40, "source": { "aminet": { "path": "util/dtype/akPNG-dt" } } },
+    { "id": "aktiff", "name": "akTIFF", "order": 50, "source": { "aminet": { "path": "util/dtype/akTIFF-dt" } } }
+  ]
+}
