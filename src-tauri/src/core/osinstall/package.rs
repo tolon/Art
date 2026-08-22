@@ -561,6 +561,7 @@ impl RawPackage {
             condition: None,
             overrides: self.overrides,
             user_startup: Vec::new(),
+            activate: Vec::new(),
             exclusive_group: None,
             available: true,
         };
@@ -1725,6 +1726,7 @@ mod tests {
                 condition: None,
                 overrides: Vec::new(),
                 user_startup: Vec::new(),
+                activate: Vec::new(),
                 exclusive_group: None,
                 available: true,
             },

@@ -912,6 +912,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
         packages: [],
         packageMedia: {},
         userStartup: [],
+        activations: [],
       },
     };
     const ready = {
@@ -1037,6 +1038,12 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
         refusal: "package-not-placeable-on-host",
         package: "boingbag-39-1",
         block: "encrypted-payload",
+      },
+      {
+        refusal: "activation-source-missing",
+        component: "storage",
+        name: "NTSC",
+        from: "Storage/Monitors/NTSC",
       },
     ];
     for (const reason of reasons) {

@@ -200,6 +200,26 @@ pub struct PlanItem {
     pub bytes: u64,
 }
 
+/// One switch the finished tree will have flipped, and who asked for it.
+///
+/// Resolved at plan time from [`super::Component::activate`], and **checked
+/// against the plan's own items**: a component that asks to switch on a driver
+/// nothing places would otherwise produce a tree with a `Devs/DOSDrivers`
+/// entry copied from nowhere. See [`InstallPlan::activations`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlannedActivation {
+    /// The component that asked. Named so a screen can group them the way it
+    /// groups everything else.
+    pub component: String,
+    /// What it is called — `CD0`, `NTSC`.
+    pub name: String,
+    /// Where the media leaves it, `/`-separated.
+    pub from: String,
+    /// Where AmigaOS will look for it.
+    pub to: String,
+}
+
 /// What [`plan`] produces: either a full description of what would be
 /// written, or every reason it cannot proceed — never both. Any refusal at
 /// all empties `items` and `media_paths` (see the module doc comment); the
@@ -328,6 +348,15 @@ pub struct InstallPlan {
     /// carries no lines at all (see `mod.rs`'s fixtures comment), so this is
     /// empty in practice until a future component uses the field.
     pub user_startup: Vec<UserStartupContribution>,
+    /// What the finished tree will have switched **on** — see
+    /// [`super::Activation`] for the gap this closes and why nothing shipped
+    /// asks for any of it.
+    ///
+    /// `#[serde(default)]` for the reason `paired_rom` and `packages` carry
+    /// one: an `InstallPlan` round-trips through the wire, and one serialised
+    /// before this field existed must still deserialise.
+    #[serde(default)]
+    pub activations: Vec<PlannedActivation>,
 }
 
 /// What the user asked for.
@@ -635,6 +664,51 @@ fn detect_collisions(
         }
     }
     refusals
+}
+
+/// Every activation whose source **nothing on the plan places**.
+///
+/// A component asking to switch on `Storage/Monitors/NTSC` when no rule puts
+/// `NTSC` there would give a tree a `Devs/Monitors` entry copied from a file
+/// that is not on the disk — which `apply` would then either skip in silence
+/// or fail on halfway through. Refused at plan time, by name, with the path
+/// nobody writes (§89).
+///
+/// Compared through [`super::destination_key`] like every other destination
+/// question in this module: a Joliet-less disc yields `STORAGE/MONITORS/NTSC`
+/// where an ADF yields `Storage/Monitors/NTSC`, and those are one file.
+fn detect_missing_activations(
+    items: &[PlanItem],
+    activations: &[PlannedActivation],
+) -> Vec<RefusalReason> {
+    let placed: std::collections::BTreeSet<String> = items
+        .iter()
+        .map(|item| super::destination_key(&item.to))
+        .collect();
+
+    activations
+        .iter()
+        .filter(|activation| {
+            // **Exact, and that is the whole check.** A `Subtree` rule does
+            // not place a drawer and leave its contents implied: `expand_rules`
+            // walks the medium and emits one item per file inside it, so the
+            // file an activation names is on the plan by its own path or it is
+            // not on the medium at all.
+            //
+            // Written first with an "or any ancestor drawer is placed"
+            // fallback, on the assumption that a subtree was one item. The
+            // end-to-end test refused nothing when asked to switch on a
+            // monitor the medium does not carry — because the drawer was
+            // placed and the fallback took it. Reading `expand_rules` settled
+            // it; the fallback was not a safety net, it was the hole.
+            !placed.contains(&super::destination_key(&activation.from))
+        })
+        .map(|activation| RefusalReason::ActivationSourceMissing {
+            component: activation.component.clone(),
+            name: activation.name.clone(),
+            from: activation.from.clone(),
+        })
+        .collect()
 }
 
 /// Expand one component's rules against its already-opened medium into the
@@ -1149,6 +1223,25 @@ fn plan_over_with_cache(
         })
         .collect();
 
+    // Resolved from the same `components_on` the rules were, and checked
+    // against the items those rules produced — see `detect_missing_activations`.
+    let activations: Vec<PlannedActivation> = components_on
+        .iter()
+        .filter_map(|id| recipe.component(id))
+        .flat_map(|component| {
+            component
+                .activate
+                .iter()
+                .map(|activation| PlannedActivation {
+                    component: component.id.clone(),
+                    name: activation.name().to_string(),
+                    from: activation.from(),
+                    to: activation.to(),
+                })
+        })
+        .collect();
+    refusals.extend(detect_missing_activations(&items, &activations));
+
     let (items, media_paths, package_media) = if refusals.is_empty() {
         (items, media_paths, package_media)
     } else {
@@ -1157,6 +1250,13 @@ fn plan_over_with_cache(
         // for the same reason: half a package's files, with none of the ones
         // that could not be resolved, is not something to preview either.
         (Vec::new(), BTreeMap::new(), BTreeMap::new())
+    };
+    // A refusal empties what a preview would act on, and a switch to flip on
+    // a tree that will not be built is one of those things.
+    let activations = if refusals.is_empty() {
+        activations
+    } else {
+        Vec::new()
     };
     let (total_bytes, total_files) = tree_totals(&items);
 
@@ -1180,6 +1280,7 @@ fn plan_over_with_cache(
         packages,
         package_media,
         user_startup,
+        activations,
     })
 }
 
@@ -1568,6 +1669,7 @@ mod plan_tests {
                     condition: None,
                     overrides: vec![],
                     user_startup: vec![],
+                    activate: vec![],
                     exclusive_group: None,
                     available: true,
                 },
@@ -1583,6 +1685,7 @@ mod plan_tests {
                     condition: None,
                     overrides: vec![],
                     user_startup: vec![],
+                    activate: vec![],
                     exclusive_group: None,
                     available: true,
                 },
@@ -1630,6 +1733,7 @@ mod plan_tests {
                 condition: None,
                 overrides: vec![],
                 user_startup: vec![],
+                activate: vec![],
                 exclusive_group: None,
                 available: true,
             }],
@@ -1671,6 +1775,7 @@ mod plan_tests {
                 condition: None,
                 overrides: vec![],
                 user_startup: vec![],
+                activate: vec![],
                 exclusive_group: None,
                 available: true,
             }],
@@ -1714,6 +1819,7 @@ mod plan_tests {
             condition: None,
             overrides: vec![],
             user_startup: vec![],
+            activate: vec![],
             exclusive_group: None,
             available: true,
         };
@@ -1772,6 +1878,7 @@ mod plan_tests {
             condition,
             overrides: vec![],
             user_startup: vec![],
+            activate: vec![],
             exclusive_group: Some("modules".to_string()),
             available: true,
         };
@@ -1843,6 +1950,7 @@ mod plan_tests {
                 condition: None,
                 overrides: vec![],
                 user_startup: vec![],
+                activate: vec![],
                 exclusive_group: None,
                 available: true,
             }],
@@ -1924,6 +2032,7 @@ mod plan_tests {
                 condition: None,
                 overrides: vec![],
                 user_startup: vec![],
+                activate: vec![],
                 exclusive_group: None,
                 available: true,
             }],
@@ -2062,6 +2171,208 @@ mod plan_tests {
                 if group == "modules" && components.len() == 2
         ));
         assert!(plan.items.is_empty());
+    }
+
+    // ---- Activation (2026-08-23) ----
+
+    fn planned_activation(from: &str) -> PlannedActivation {
+        PlannedActivation {
+            component: "storage".into(),
+            name: from.rsplit('/').next().unwrap().into(),
+            from: from.into(),
+            to: format!("Devs/Monitors/{}", from.rsplit('/').next().unwrap()),
+        }
+    }
+
+    fn item_at(to: &str, is_dir: bool) -> PlanItem {
+        PlanItem {
+            component: "storage".into(),
+            media: "Storage3.2".into(),
+            from: to.into(),
+            to: to.into(),
+            is_dir,
+            bytes: 4,
+        }
+    }
+
+    /// A switch whose source the plan really places is fine.
+    #[test]
+    fn an_activation_whose_source_is_placed_is_not_a_refusal() {
+        let items = vec![item_at("Storage/Monitors/NTSC", false)];
+        let refusals =
+            detect_missing_activations(&items, &[planned_activation("Storage/Monitors/NTSC")]);
+        assert!(refusals.is_empty(), "{refusals:?}");
+    }
+
+    /// **A drawer being placed is not the file being placed.**
+    ///
+    /// This test asserted the opposite when it was written, on the assumption
+    /// that a `Subtree` rule produced one item for the drawer. It does not —
+    /// `expand_rules` walks the medium and emits one item per file — so
+    /// treating the drawer as sufficient accepted a monitor the medium does
+    /// not carry. The end-to-end test found it.
+    #[test]
+    fn a_drawer_alone_does_not_satisfy_an_activation_inside_it() {
+        let items = vec![item_at("Storage/Monitors", true)];
+        let refusals =
+            detect_missing_activations(&items, &[planned_activation("Storage/Monitors/NTSC")]);
+        assert_eq!(refusals.len(), 1, "{refusals:?}");
+    }
+
+    /// Nothing places it, so the tree would get a `Devs/Monitors` entry
+    /// copied from a file that is not on the disk. Refused **by name**, with
+    /// the path nobody writes.
+    #[test]
+    fn an_activation_nothing_places_is_refused_by_name() {
+        let items = vec![item_at("Storage/DOSDrivers", true)];
+        let refusals =
+            detect_missing_activations(&items, &[planned_activation("Storage/Monitors/NTSC")]);
+
+        assert!(
+            matches!(
+                refusals.as_slice(),
+                [RefusalReason::ActivationSourceMissing { component, name, from }]
+                    if component == "storage" && name == "NTSC" && from == "Storage/Monitors/NTSC"
+            ),
+            "{refusals:?}"
+        );
+    }
+
+    /// Compared through `destination_key` like every other destination
+    /// question here: a Joliet-less disc yields `STORAGE/MONITORS` where an
+    /// ADF yields `Storage/Monitors`, and those are one drawer (ART-012).
+    #[test]
+    fn the_source_is_matched_the_way_every_other_destination_is() {
+        let items = vec![item_at("STORAGE/MONITORS/NTSC", false)];
+        let refusals =
+            detect_missing_activations(&items, &[planned_activation("Storage/Monitors/NTSC")]);
+        assert!(refusals.is_empty(), "{refusals:?}");
+    }
+
+    /// A path that merely *starts* the same is not the file. Kept after the
+    /// prefix rule was removed, because an exact check has to stay exact.
+    #[test]
+    fn a_path_that_only_shares_a_prefix_does_not_satisfy_it() {
+        let items = vec![item_at("Storage/Monitors/NTSC-old", false)];
+        let refusals =
+            detect_missing_activations(&items, &[planned_activation("Storage/Monitors/NTSC")]);
+        assert_eq!(refusals.len(), 1, "{refusals:?}");
+    }
+
+    /// A recipe that asks to switch something on, planned for real.
+    ///
+    /// `switched_on` is placed by the media; `absent` is not. Which one the
+    /// component asks for is the caller's, so one helper serves both the
+    /// refusal and the acceptance.
+    fn plan_with_an_activation(tag: &str, ask_for: &str) -> InstallPlan {
+        let dir = crate::core::osinstall::fixtures::scratch(tag);
+        let folder = dir.join("media");
+        std::fs::create_dir(&folder).unwrap();
+        crate::core::osinstall::fixtures::media(
+            &folder,
+            "Shelf",
+            "shelf.adf",
+            &[("Storage/Monitors/NTSC", b"mon", 0)],
+        );
+
+        let recipe = Recipe {
+            release: "Test".to_string(),
+            components: vec![Component {
+                id: "storage".to_string(),
+                media: "Shelf".to_string(),
+                rules: vec![PathRule {
+                    from: "Storage/Monitors".to_string(),
+                    to: "Storage/Monitors".to_string(),
+                    kind: RuleKind::Subtree,
+                }],
+                required: true,
+                condition: None,
+                overrides: vec![],
+                user_startup: vec![],
+                activate: vec![super::super::Activation::Monitor {
+                    name: ask_for.to_string(),
+                }],
+                exclusive_group: None,
+                available: true,
+            }],
+        };
+
+        let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.2".to_string(),
+            media_folder: folder,
+            rom: None,
+            chosen: vec!["storage".to_string()],
+            destination: dir.join("dist"),
+            excluded: Vec::new(),
+            scan_cache: Default::default(),
+        };
+        plan(&request, &recipe).unwrap()
+    }
+
+    /// **Through `plan()` itself**, not through the check in isolation.
+    ///
+    /// Written after a mutation survived: removing the *call* to
+    /// `detect_missing_activations` broke nothing, because every test asked
+    /// the function directly. A guard that does not cover its own call site
+    /// is not a guard.
+    #[test]
+    fn plan_refuses_an_activation_whose_source_it_does_not_place() {
+        let plan = plan_with_an_activation("plan-activation-missing", "PAL");
+        assert!(
+            plan.refusals.iter().any(|r| matches!(
+                r,
+                RefusalReason::ActivationSourceMissing { name, .. } if name == "PAL"
+            )),
+            "{:?}",
+            plan.refusals
+        );
+        assert!(plan.items.is_empty(), "a refusal empties the plan");
+        assert!(
+            plan.activations.is_empty(),
+            "and a switch to flip on a tree that will not be built"
+        );
+    }
+
+    /// The other half: the one the media really carries is planned, carried
+    /// on `InstallPlan::activations`, and resolved to both its ends.
+    #[test]
+    fn plan_carries_an_activation_whose_source_it_places() {
+        let plan = plan_with_an_activation("plan-activation-ok", "NTSC");
+        assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
+        assert_eq!(plan.activations.len(), 1);
+        let activation = &plan.activations[0];
+        assert_eq!(activation.component, "storage");
+        assert_eq!(activation.name, "NTSC");
+        assert_eq!(activation.from, "Storage/Monitors/NTSC");
+        assert_eq!(
+            activation.to, "Devs/Monitors/NTSC",
+            "the drawer AmigaOS actually reads"
+        );
+    }
+
+    /// **Nothing shipped switches anything on.** Which monitor somebody
+    /// wants, and whether their Amiga has a CD drive, are facts about
+    /// somebody else's machine — the same reason `disable_bluetooth` is an
+    /// option ART offers rather than something it writes unasked. A recipe
+    /// quietly gaining one is a decision nobody made.
+    #[test]
+    fn no_shipped_recipe_switches_anything_on_by_itself() {
+        for recipe in [
+            super::super::recipe::amigaos_32().unwrap(),
+            super::super::recipe::amigaos_39().unwrap(),
+        ] {
+            for component in &recipe.components {
+                assert!(
+                    component.activate.is_empty(),
+                    "{} in {} asks to switch on {:?}",
+                    component.id,
+                    recipe.release,
+                    component.activate
+                );
+            }
+        }
     }
 
     #[test]
@@ -2665,6 +2976,7 @@ mod plan_tests {
         crate::core::osinstall::fixtures::media(&folder, "C", "c.adf", &[("z", b"three", 0)]);
 
         let make = |id: &str, media: &str, from: &str, lines: &[&str]| Component {
+            activate: vec![],
             id: id.to_string(),
             media: media.to_string(),
             rules: vec![PathRule {
@@ -2910,6 +3222,7 @@ mod plan_tests {
             condition: None,
             overrides: Vec::new(),
             user_startup: Vec::new(),
+            activate: vec![],
             exclusive_group: None,
             available: true,
         };

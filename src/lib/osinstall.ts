@@ -187,7 +187,15 @@ export type RefusalReason =
       paths: string[];
     }
   // ---- M3 / ART-166: a package ART cannot place from the host at all.
-  | { refusal: "package-not-placeable-on-host"; package: string; block: HostPlacementBlock };
+  | { refusal: "package-not-placeable-on-host"; package: string; block: HostPlacementBlock }
+  /** A component asks to switch something on that no rule puts on the tree.
+   *  See `Activation` on the Rust side for the gap this closes. */
+  | {
+      refusal: "activation-source-missing";
+      component: string;
+      name: string;
+      from: string;
+    };
 
 /** One file or directory `osinstallApply` would place in the distribution
  *  tree. */
@@ -213,6 +221,17 @@ export interface UserStartupContribution {
  * refusal at all empties `items` and `mediaPaths`; check `refusals.length`
  * to tell the two cases apart.
  */
+/** One switch the finished tree will have flipped, and who asked for it. */
+export interface PlannedActivation {
+  component: string;
+  /** `CD0`, `NTSC`. */
+  name: string;
+  /** Where the media leaves it — `Storage/Monitors/NTSC`. */
+  from: string;
+  /** Where AmigaOS will look — `Devs/Monitors/NTSC`. */
+  to: string;
+}
+
 export interface InstallPlan {
   release: string;
   items: PlanItem[];
@@ -221,6 +240,11 @@ export interface InstallPlan {
    *  path two components both write is counted once (ART-205). Not the bytes
    *  `apply` will read: an override reads two files and leaves one. */
   totalBytes: number;
+  /** What the finished tree will have switched **on** — a driver or commodity
+   *  the media leaves in `Storage/` or `Tools/Commodities`, copied to where
+   *  AmigaOS actually reads it. Empty unless a recipe asks; nothing shipped
+   *  does. */
+  activations: PlannedActivation[];
   /** The files the finished tree will hold, on the same one-per-destination
    *  rule. Not `items.length`, which is the work: the owner's real 3.9 disc
    *  planned 1517 items and produced 1242 files and 105 drawers. */
@@ -989,6 +1013,11 @@ export function refusalPhrase(reason: RefusalReason): Phrase {
       return {
         key: "osinstall.refusal.packageArchiveAmbiguous",
         params: { package: reason.package, media: reason.media, paths: reason.paths.join(", ") },
+      };
+    case "activation-source-missing":
+      return {
+        key: "osinstall.refusal.activationSourceMissing",
+        params: { name: reason.name, from: reason.from, component: reason.component },
       };
     case "package-not-placeable-on-host":
       // Keyed on the block, not on the refusal alone: what the user has to

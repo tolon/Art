@@ -159,6 +159,90 @@ pub struct PairedRom {
     pub requires_major: Option<u16>,
 }
 
+/// Something the install media puts on the **shelf**, that a working system
+/// has to have switched **on**.
+///
+/// # The gap this closes
+///
+/// AmigaOS ships its optional pieces in `Storage/`, and AmigaOS reads none of
+/// them: `Devs/DOSDrivers` is where a mount happens at boot, `Devs/Monitors`
+/// is where a screen mode becomes available, `WBStartup` is where a commodity
+/// starts. ART's recipes copy `DOSDrivers` and `Monitors` faithfully into
+/// `Storage/` — and stopped there, so **every tree ART has ever built has no
+/// CD drive and exactly one screen mode**, with the drivers for both sitting
+/// on the disk unused.
+///
+/// Found on 2026-08-23 by reading `jit06/emu68-bootstrap`, whose `library.sh`
+/// has three helpers for exactly this and whose own example script switches on
+/// `CD0`, `PC0` and `NTSC` before its card is finished. The Emu68 Imager's
+/// `ScreenModes` table is the same gap seen from another angle.
+///
+/// # Why a named kind and not a pair of paths
+///
+/// `{ "from": "Storage/DOSDrivers/CD0", "to": "Devs/DOSDrivers/CD0" }` would
+/// work and would put the same Amiga convention into every recipe that used
+/// it, to be got subtly wrong once. The convention belongs in one place, so a
+/// recipe says *what* to switch on and this type knows *where* both ends are.
+///
+/// # What ART does not do with it
+///
+/// **Nothing is switched on by default in a shipped recipe.** Which monitor a
+/// person wants, and whether their Amiga has a CD drive, are facts about
+/// somebody else's machine — the same reason `disable_bluetooth` is an option
+/// ART offers rather than something it writes unasked. This is the mechanism;
+/// choosing is the user's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum Activation {
+    /// `Tools/Commodities/<name>` -> `WBStartup/<name>`.
+    Commodity { name: String },
+    /// `Storage/DOSDrivers/<name>` -> `Devs/DOSDrivers/<name>`.
+    DosDriver { name: String },
+    /// `Storage/Monitors/<name>` -> `Devs/Monitors/<name>`.
+    Monitor { name: String },
+}
+
+impl Activation {
+    /// What it is called, for a sentence.
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Commodity { name } | Self::DosDriver { name } | Self::Monitor { name } => name,
+        }
+    }
+
+    /// Where the media left it.
+    pub fn from(&self) -> String {
+        match self {
+            Self::Commodity { name } => format!("Tools/Commodities/{name}"),
+            Self::DosDriver { name } => format!("Storage/DOSDrivers/{name}"),
+            Self::Monitor { name } => format!("Storage/Monitors/{name}"),
+        }
+    }
+
+    /// Where AmigaOS will actually look for it.
+    pub fn to(&self) -> String {
+        match self {
+            Self::Commodity { name } => format!("WBStartup/{name}"),
+            Self::DosDriver { name } => format!("Devs/DOSDrivers/{name}"),
+            Self::Monitor { name } => format!("Devs/Monitors/{name}"),
+        }
+    }
+
+    /// The icon beside it, which travels with it or does not exist.
+    ///
+    /// A commodity in `WBStartup` **needs** its `.info`: AmigaOS starts what
+    /// the icon says, not what the file is, and a `WBStartup` entry with no
+    /// icon is one Workbench never runs. Copied for all three kinds because a
+    /// driver without its icon is merely untidy, and one rule is easier to be
+    /// right about than three.
+    pub fn icon(&self) -> (String, String) {
+        (
+            format!("{}.info", self.from()),
+            format!("{}.info", self.to()),
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Component {
     pub id: String,
@@ -175,6 +259,10 @@ pub struct Component {
     /// Lines for `S:User-Startup`, written inside this component's own block.
     #[serde(default)]
     pub user_startup: Vec<String>,
+    /// What this component puts on the shelf that should be switched on — see
+    /// [`Activation`]. Empty in every shipped recipe on purpose.
+    #[serde(default)]
+    pub activate: Vec<Activation>,
     /// Only one of a group may be chosen — `"modules"` for the Modules disks.
     #[serde(default)]
     pub exclusive_group: Option<String>,
@@ -551,6 +639,16 @@ pub enum RefusalReason {
     },
     /// The ROM was not identified, so a `Condition` cannot be decided.
     RomUnknown,
+    /// A component asks to switch something on that no rule puts on the tree
+    /// — see [`Activation`]. Refused rather than skipped: a `Devs/Monitors`
+    /// entry copied from a file that is not on the disk is either a silent
+    /// omission or a failure halfway through the copy, and both are worse
+    /// than being told before anything is written.
+    ActivationSourceMissing {
+        component: String,
+        name: String,
+        from: String,
+    },
     /// Two components claim one destination and neither declared an override.
     DestinationCollision {
         path: String,
@@ -1099,6 +1197,7 @@ pub(crate) mod fixtures {
         super::Recipe {
             release: "Test OS".to_string(),
             components: vec![super::Component {
+                activate: vec![],
                 id: "base-c".to_string(),
                 media: "TestBase".to_string(),
                 rules: vec![super::PathRule {
@@ -1123,6 +1222,7 @@ pub(crate) mod fixtures {
     /// overwrite and the wrong one here.
     pub fn package_test_package() -> super::package::Package {
         let component = super::Component {
+            activate: vec![],
             id: "test-package".to_string(),
             media: "TestPack".to_string(),
             rules: vec![super::PathRule {
@@ -1203,6 +1303,7 @@ pub(crate) mod fixtures {
     /// Produce's about a file two things already claimed.
     pub fn package_test_package_two() -> super::package::Package {
         let component = super::Component {
+            activate: vec![],
             id: "test-package-two".to_string(),
             media: "TestPack2".to_string(),
             rules: vec![super::PathRule {

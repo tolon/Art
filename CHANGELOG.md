@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### A tree can switch its own drivers on (2026-08-23)
+
+#### Added
+- **Recipes can switch on what the install disks leave on the shelf.** AmigaOS
+  ships CD drivers, monitor drivers and commodities in `Storage/` and
+  `Tools/Commodities`, and reads none of them — it reads `Devs/DOSDrivers`,
+  `Devs/Monitors` and `WBStartup`. Every tree ART built until now had them all
+  on the shelf, which is why a finished card had no CD drive and one screen
+  mode. A recipe can now name what to switch on, and the icon goes with it.
+- **A recipe that asks for something the disks do not carry is refused before
+  anything is built**, naming what is missing and where it was expected.
+
+Nothing ART ships switches anything on by itself: which monitor you want, and
+whether your Amiga has a CD drive, are yours to say.
+
 ### The first error messages in Turkish, and twelve broken sentences (2026-08-23)
 
 #### Added

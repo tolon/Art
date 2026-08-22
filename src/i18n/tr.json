@@ -2139,7 +2139,8 @@
       "packageArchiveAmbiguous": "Güncelleme paketleri klasöründe \"{{package}}\"in ihtiyaç duyduğu {{media}} medya adını taşıyan birden fazla arşiv var: {{paths}}. İstediğin biri dışında hepsini kaldır.",
       "packageNotPlaceableOnHost": {
         "encryptedPayload": "\"{{package}}\" Windows üzerinden yerleştirilemez: dosyaları kilitli ve anahtar yalnızca paketin kendi Amiga tarafındaki Updater'ında. Tikini kaldır ve onun yerine Amiga'da o Updater ile kur."
-      }
+      },
+      "activationSourceMissing": "'{{component}}' {{name}} öğesini açmayı istiyor, ama bu planda '{{from}}' dosyasını ağaca koyan hiçbir şey yok. Onu sağlayan bileşeni seçin ya da etkinleştirmeyi reçeteden çıkarın."
     },
     "heading": "AmigaOS Kur",
     "intro": "Kendi AmigaOS kurulum disklerinden ya da diskinden, gerçek bir Amiga birimine kopyalanmaya hazır bir dağıtım ağacı oluştur.",

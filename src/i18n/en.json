@@ -2139,7 +2139,8 @@
       "packageArchiveAmbiguous": "More than one archive in the update packages folder carries the media name {{media}} that \"{{package}}\" needs: {{paths}}. Remove all but the one you want.",
       "packageNotPlaceableOnHost": {
         "encryptedPayload": "\"{{package}}\" cannot be placed from Windows: its files are locked and only the package's own Amiga-side Updater has the key. Untick it, and install it on the Amiga with that Updater instead."
-      }
+      },
+      "activationSourceMissing": "'{{component}}' asks to switch on {{name}}, but nothing on this plan puts '{{from}}' on the tree. Choose the component that supplies it, or take the activation out of the recipe."
     },
     "heading": "Install AmigaOS",
     "intro": "Build a distribution tree from your own AmigaOS install disks or disc, ready to copy onto a real Amiga volume.",

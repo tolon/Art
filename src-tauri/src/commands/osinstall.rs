@@ -2401,6 +2401,7 @@ mod tests {
             packages: Vec::new(),
             package_media: BTreeMap::new(),
             user_startup: Vec::new(),
+            activations: Vec::new(),
         };
         (dir, plan)
     }
@@ -2799,6 +2800,7 @@ mod tests {
             packages: Vec::new(),
             package_media: BTreeMap::new(),
             user_startup: Vec::new(),
+            activations: Vec::new(),
         };
 
         let preview =
@@ -3835,6 +3837,7 @@ mod tests {
                     "release",
                     "items",
                     "refusals",
+                    "activations",
                     "totalBytes",
                     "totalFiles",
                     "componentsOn",
@@ -4056,11 +4059,21 @@ mod tests {
                     | RefusalReason::PackageComponentMissing { .. }
                     | RefusalReason::PackageArchiveMissing { .. }
                     | RefusalReason::PackageArchiveAmbiguous { .. }
-                    | RefusalReason::PackageNotPlaceableOnHost { .. } => {}
+                    | RefusalReason::PackageNotPlaceableOnHost { .. }
+                    | RefusalReason::ActivationSourceMissing { .. } => {}
                 }
             }
 
             let cases: Vec<(RefusalReason, &str, &[&str])> = vec![
+                (
+                    RefusalReason::ActivationSourceMissing {
+                        component: "storage".into(),
+                        name: "NTSC".into(),
+                        from: "Storage/Monitors/NTSC".into(),
+                    },
+                    "activation-source-missing",
+                    &["refusal", "component", "name", "from"],
+                ),
                 (
                     RefusalReason::MediaMissing {
                         component: "extras".into(),

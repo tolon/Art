@@ -807,6 +807,95 @@ pub fn refuse_unless_free(root: &Path) -> CoreResult<()> {
 /// between them and never inside one, so stopping always leaves whole files
 /// behind. `distribution.json` is written only after every item has landed —
 /// see the module doc comment.
+/// Switch on what the media left on the shelf (`super::Activation`).
+///
+/// **Copies inside the tree, not from the media.** The source is a file
+/// `TreeWriter::place` has just written, which is why an activation is not a
+/// `PlanItem` and why `plan` checks the source is on the plan rather than
+/// finding out here (`detect_missing_activations`).
+///
+/// Its own function so a test can ask it of a tree built by hand — `apply`
+/// refuses a root that is not empty, so a test going through `apply` could
+/// only ever activate files the fixture media happens to carry, and the
+/// fixture carries no `.info` at all.
+fn switch_on(
+    root: &Path,
+    activations: &[super::plan::PlannedActivation],
+    outcome: &mut ApplyOutcome,
+    files: &mut Vec<FileRecord>,
+    total: u64,
+    sink: &dyn ProgressSink,
+) -> CoreResult<()> {
+    for activation in activations {
+        if sink.is_cancelled() {
+            return Err(if outcome.files > 0 {
+                CoreError::CancelledPartway {
+                    files: outcome.files,
+                }
+            } else {
+                CoreError::Cancelled
+            });
+        }
+        sink.report(total, Some(total), &activation.to);
+
+        // The icon is not optional for a commodity — AmigaOS starts what the
+        // `WBStartup` icon says, not what the file is — but a driver without
+        // one is merely untidy, so a missing icon is skipped rather than
+        // refused. The file itself is not: `plan` promised it would be there.
+        let pairs = [
+            (activation.from.clone(), activation.to.clone()),
+            (
+                format!("{}.info", activation.from),
+                format!("{}.info", activation.to),
+            ),
+        ];
+
+        for (from, to) in pairs {
+            let source = super::host_destination(root, &from)?;
+            if !source.is_file() {
+                continue;
+            }
+            let target = super::host_destination(root, &to)?;
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let bytes = std::fs::read(&source)?;
+            crate::core::safety::atomic::atomic_write(&target, &bytes)?;
+
+            // Recorded crediting the component that **asked** rather than the
+            // medium the bytes came from: `distribution.json` is the only
+            // account of that, and switching something back off needs it.
+            // `media` is empty for the same reason `S/User-Startup`'s is.
+            //
+            // Accounted the way the composed file is: a destination already
+            // written is a swap, not an addition (ART-124).
+            let previous = files
+                .iter()
+                .find(|f| super::same_destination(&f.path, &to))
+                .map(|f| f.bytes);
+            files.retain(|f| !super::same_destination(&f.path, &to));
+            match previous {
+                Some(previous) => outcome.bytes = outcome.bytes - previous + bytes.len() as u64,
+                None => {
+                    outcome.files += 1;
+                    outcome.bytes += bytes.len() as u64;
+                }
+            }
+            files.push(FileRecord {
+                path: to.clone(),
+                host_path: host_path_of(&to),
+                component: activation.component.clone(),
+                media: String::new(),
+                sha256: sha256_bytes(&bytes),
+                bytes: bytes.len() as u64,
+                protection: None,
+                overwrote: None,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// The thin wrapper, staging a nested package payload into the platform's own
 /// temp directory. **The product never calls it** —
 /// [`apply_staging_in`] is what the shell uses, because where ART stages work
@@ -953,6 +1042,17 @@ pub fn apply_staging_in(
         mut files,
         ..
     } = writer;
+
+    // Switches, before the composed file below: a commodity that lands in
+    // `WBStartup` here is on disk before anything writes a startup around it.
+    switch_on(
+        root,
+        &plan.activations,
+        &mut outcome,
+        &mut files,
+        total,
+        sink,
+    )?;
 
     // `S:User-Startup` — composed, not copied; see the module doc comment's
     // "S:User-Startup" section for all three decisions made here. Skipped
@@ -1501,6 +1601,7 @@ mod tests {
             paired_rom: None,
             media_paths,
             user_startup: Vec::new(),
+            activations: Vec::new(),
         };
         (plan, dir)
     }
@@ -1568,6 +1669,7 @@ mod tests {
             paired_rom: None,
             media_paths,
             user_startup: Vec::new(),
+            activations: Vec::new(),
         };
         (plan, dir)
     }
@@ -1630,6 +1732,7 @@ mod tests {
             paired_rom: None,
             media_paths,
             user_startup: Vec::new(),
+            activations: Vec::new(),
         };
 
         let root = dir.join("dist");
@@ -1743,6 +1846,7 @@ mod tests {
             paired_rom: None,
             media_paths,
             user_startup: Vec::new(),
+            activations: Vec::new(),
         };
 
         let root = dir.join("dist");
@@ -2006,6 +2110,209 @@ mod tests {
             outcome.files,
             "the manifest must name exactly the files ApplyOutcome counted"
         );
+    }
+
+    // ---- Activation: what the media leaves on the shelf, switched on ----
+    //
+    // AmigaOS reads `Devs/DOSDrivers` and `Devs/Monitors`, never `Storage/`.
+    // Every tree ART built before 2026-08-23 had its drivers on the shelf and
+    // none of them switched on, so a finished card had no CD drive and
+    // exactly one screen mode. Found by reading `jit06/emu68-bootstrap`,
+    // whose `library.sh` exists for this and nothing else.
+
+    fn activation(
+        component: &str,
+        from: &str,
+        to: &str,
+    ) -> crate::core::osinstall::plan::PlannedActivation {
+        crate::core::osinstall::plan::PlannedActivation {
+            component: component.to_string(),
+            name: to.rsplit('/').next().unwrap().to_string(),
+            from: from.to_string(),
+            to: to.to_string(),
+        }
+    }
+
+    /// A tree with something on the shelf, so `switch_on` has a real file to
+    /// move rather than a fixture's idea of one.
+    fn tree_with_a_shelf(tag: &str) -> (PathBuf, PathBuf) {
+        let dir = fixtures::scratch(&format!("activation-{tag}"));
+        let root = dir.join("dist");
+        std::fs::create_dir_all(root.join("Storage").join("Monitors")).unwrap();
+        std::fs::create_dir_all(root.join("Tools").join("Commodities")).unwrap();
+        std::fs::write(root.join("Storage/Monitors/NTSC"), b"monitor").unwrap();
+        std::fs::write(root.join("Tools/Commodities/Blanker"), b"commodity").unwrap();
+        std::fs::write(root.join("Tools/Commodities/Blanker.info"), b"icon").unwrap();
+        (dir, root)
+    }
+
+    /// **The switch is thrown, into the drawer AmigaOS actually reads.**
+    ///
+    /// Asserted against the filesystem: the whole point is that a file exists
+    /// where the operating system will look, and a check against the plan
+    /// could not see that.
+    #[test]
+    fn an_activation_copies_the_file_where_amigados_will_look_for_it() {
+        let (dir, root) = tree_with_a_shelf("monitor");
+        let mut outcome = ApplyOutcome {
+            root: root.clone(),
+            files: 0,
+            directories: 0,
+            bytes: 0,
+        };
+        let mut files = Vec::new();
+
+        switch_on(
+            &root,
+            &[activation(
+                "storage",
+                "Storage/Monitors/NTSC",
+                "Devs/Monitors/NTSC",
+            )],
+            &mut outcome,
+            &mut files,
+            0,
+            &NoProgress,
+        )
+        .unwrap();
+
+        assert!(
+            root.join("Storage/Monitors/NTSC").is_file(),
+            "the shelf copy stays where it was"
+        );
+        assert!(
+            root.join("Devs/Monitors/NTSC").is_file(),
+            "nothing landed in Devs/Monitors — the tree is what it always was"
+        );
+        assert_eq!(
+            std::fs::read(root.join("Devs/Monitors/NTSC")).unwrap(),
+            b"monitor",
+            "and it is the file, not an empty one"
+        );
+
+        assert_eq!(outcome.files, 1, "the tree gained exactly one file");
+        assert_eq!(outcome.bytes, 7);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "Devs/Monitors/NTSC");
+        assert_eq!(
+            files[0].component, "storage",
+            "credited to the component that asked, not the medium"
+        );
+        assert_eq!(
+            files[0].media, "",
+            "it came from inside the tree, not from a medium"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **The icon travels with it, and for a commodity that is not a
+    /// nicety**: AmigaOS starts what the `WBStartup` icon says, not what the
+    /// file is, so a commodity copied without its `.info` is a switch that
+    /// looks thrown and is not.
+    #[test]
+    fn a_commodity_takes_its_icon_with_it() {
+        let (dir, root) = tree_with_a_shelf("commodity");
+        let mut outcome = ApplyOutcome {
+            root: root.clone(),
+            files: 0,
+            directories: 0,
+            bytes: 0,
+        };
+        let mut files = Vec::new();
+
+        switch_on(
+            &root,
+            &[activation(
+                "workbench-base",
+                "Tools/Commodities/Blanker",
+                "WBStartup/Blanker",
+            )],
+            &mut outcome,
+            &mut files,
+            0,
+            &NoProgress,
+        )
+        .unwrap();
+
+        assert!(root.join("WBStartup/Blanker").is_file());
+        assert!(
+            root.join("WBStartup/Blanker.info").is_file(),
+            "without the icon, Workbench never runs it"
+        );
+        assert_eq!(outcome.files, 2, "the file and its icon");
+        assert_eq!(
+            files.iter().filter(|f| f.path.ends_with(".info")).count(),
+            1,
+            "and the manifest accounts for the icon too: {files:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A driver with no icon is merely untidy, so the missing `.info` is
+    /// skipped rather than failing the whole install. The file itself is not
+    /// optional — `plan` promised it would be there.
+    #[test]
+    fn a_missing_icon_is_skipped_and_not_an_error() {
+        let (dir, root) = tree_with_a_shelf("no-icon");
+        let mut outcome = ApplyOutcome {
+            root: root.clone(),
+            files: 0,
+            directories: 0,
+            bytes: 0,
+        };
+        let mut files = Vec::new();
+
+        switch_on(
+            &root,
+            &[activation(
+                "storage",
+                "Storage/Monitors/NTSC",
+                "Devs/Monitors/NTSC",
+            )],
+            &mut outcome,
+            &mut files,
+            0,
+            &NoProgress,
+        )
+        .unwrap();
+
+        assert!(root.join("Devs/Monitors/NTSC").is_file());
+        assert!(!root.join("Devs/Monitors/NTSC.info").exists());
+        assert_eq!(outcome.files, 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Switching the same thing on twice is one file, not two records. A
+    /// second run over a tree that already has it must not make the manifest
+    /// claim the tree gained something it did not (ART-124's rule, applied
+    /// here).
+    #[test]
+    fn switching_the_same_thing_on_twice_is_still_one_file() {
+        let (dir, root) = tree_with_a_shelf("twice");
+        let mut outcome = ApplyOutcome {
+            root: root.clone(),
+            files: 0,
+            directories: 0,
+            bytes: 0,
+        };
+        let mut files = Vec::new();
+        let switches = [activation(
+            "storage",
+            "Storage/Monitors/NTSC",
+            "Devs/Monitors/NTSC",
+        )];
+
+        switch_on(&root, &switches, &mut outcome, &mut files, 0, &NoProgress).unwrap();
+        switch_on(&root, &switches, &mut outcome, &mut files, 0, &NoProgress).unwrap();
+
+        assert_eq!(outcome.files, 1, "one file on disk, one in the count");
+        assert_eq!(outcome.bytes, 7, "and its bytes counted once");
+        assert_eq!(files.len(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// **ART-124 — the report has to describe the tree, not the work.**
@@ -2373,6 +2680,7 @@ mod tests {
             paired_rom: None,
             media_paths,
             user_startup: Vec::new(),
+            activations: Vec::new(),
         };
 
         let root = dir.join("dist");
