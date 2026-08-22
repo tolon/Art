@@ -363,7 +363,10 @@ mod tests {
     /// be asked. The same reason `export_adf_for_oracle_when_asked` exists.
     ///
     /// ```text
-    /// ART_CARD_ZIP=E:miga\Amigatolon\Emu68\Emu68-pistorm.zip     /// ART_CARD_ROM="E:miga\Amigatolon\kickstart\Kickstart v3.1 ... (A1200).rom"     /// ART_CARD_OUT=E:miga\ProjeART\card.img     ///   cargo test build_real_card_when_asked -- --nocapture
+    /// set ART_CARD_ZIP=E:\amiga\Amigatolon\Emu68\Emu68-pistorm.zip
+    /// set ART_CARD_ROM=E:\amiga\Amigatolon\kickstart\Kickstart v3.1 rev 40.68 (1993)(Commodore)(A1200).rom
+    /// set ART_CARD_OUT=E:\amiga\ProjeART\card.img
+    /// cargo test build_real_card_when_asked -- --nocapture --ignored
     /// ```
     ///
     /// `ART_CARD_GB` sets the size; it defaults to 2, which is the smallest

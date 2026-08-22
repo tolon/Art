@@ -236,6 +236,34 @@ fn initramfs_line(config: &FirmwareConfig) -> String {
 
 const BLUETOOTH_OVERLAY: &str = "dtoverlay=disable-bt";
 
+/// The line that opens ART's storage block, and the reason the block can be
+/// rewritten rather than accumulated.
+///
+/// The block is **section headers plus `dtoverlay=` lines**, so removing only
+/// the `dtoverlay=` lines leaves `[pi3] [pi02] [pi4] [all]` behind and the
+/// next save appends a whole new block underneath — which is what the first
+/// version of this did, and what
+/// `the_storage_block_is_written_once_however_often_the_card_is_saved`
+/// caught. The marker makes the extent of the block explicit: from this line
+/// to the `[all]` that closes it.
+const STORAGE_BLOCK_MARKER: &str =
+    "# Storage settings for Emu68 1.1 and newer — Amiga Retro Toolkit";
+
+/// The two overlays ART owns in `config.txt`, by name.
+///
+/// A `dtoverlay=sdhc,…` or `dtoverlay=emmc,…` line is **ART's**, dropped on
+/// merge and re-emitted from the current options rather than passed through.
+/// Without that the block would be appended again on every save and the file
+/// would end up carrying two contradictory settings — the same accumulation
+/// `initramfs` already had to be protected from.
+///
+/// Every other `dtoverlay=` is somebody else's and survives verbatim.
+const MANAGED_OVERLAYS: [&str; 2] = ["dtoverlay=sdhc,", "dtoverlay=emmc,"];
+
+fn is_managed_overlay(trimmed: &str) -> bool {
+    MANAGED_OVERLAYS.iter().any(|o| trimmed.starts_with(o))
+}
+
 /// Merge ART's firmware settings into an existing `config.txt`.
 /// Whether this `config.txt` selects its boot per board.
 ///
@@ -262,7 +290,26 @@ fn section_header(line: &str) -> Option<&str> {
     (trimmed.starts_with('[') && trimmed.ends_with(']')).then_some(trimmed)
 }
 
+/// The thin wrapper: no storage overlay block. Tests and any caller that has
+/// no `Emu68Options` to hand; the product goes through
+/// [`merge_config_txt_with_overlays`].
 pub fn merge_config_txt(config: &FirmwareConfig, existing: Option<&str>) -> String {
+    merge_config_txt_with_overlays(config, &[], existing)
+}
+
+/// [`merge_config_txt`], also writing `overlays` as one managed block at the
+/// end of the file.
+///
+/// `overlays` is [`super::options::storage_overlay_lines`]'s output: section
+/// headers and `dtoverlay=` lines together, already closed with `[all]`.
+/// Appended at the **end** deliberately — a section header inserted into the
+/// middle of a release's own `[gpio24=0]` stanzas would change which board
+/// the lines after it apply to, which is ART-204 from the other direction.
+pub fn merge_config_txt_with_overlays(
+    config: &FirmwareConfig,
+    overlays: &[String],
+    existing: Option<&str>,
+) -> String {
     let managed = managed_lines(config);
 
     let Some(existing) = existing.filter(|text| !text.trim().is_empty()) else {
@@ -274,6 +321,10 @@ pub fn merge_config_txt(config: &FirmwareConfig, existing: Option<&str>) -> Stri
         lines.push(initramfs_line(config));
         if config.disable_bluetooth {
             lines.push(BLUETOOTH_OVERLAY.to_string());
+        }
+        if !overlays.is_empty() {
+            lines.push(String::new());
+            lines.extend(overlays.iter().cloned());
         }
         lines.push(String::new());
         return lines.join("\n");
@@ -291,9 +342,29 @@ pub fn merge_config_txt(config: &FirmwareConfig, existing: Option<&str>) -> Stri
     let mut wrote_initramfs = false;
     let mut names_the_kickstart = false;
     let mut has_bluetooth_overlay = false;
+    // Inside ART's own storage block, which is dropped whole and re-emitted
+    // from the current options — see `STORAGE_BLOCK_MARKER`.
+    let mut in_storage_block = false;
 
     for line in existing.lines() {
         let trimmed = line.trim();
+
+        if in_storage_block {
+            // The block ends at the `[all]` it is written with. Consuming
+            // that header too is deliberate: it belongs to the block, and
+            // leaving it would make the next line inherit no filter when the
+            // block is gone — which is the same answer, but arrived at by
+            // accident rather than on purpose.
+            if trimmed == "[all]" {
+                in_storage_block = false;
+                section = String::new();
+            }
+            continue;
+        }
+        if trimmed == STORAGE_BLOCK_MARKER {
+            in_storage_block = true;
+            continue;
+        }
 
         if let Some(header) = section_header(line) {
             section = header.to_string();
@@ -328,6 +399,19 @@ pub fn merge_config_txt(config: &FirmwareConfig, existing: Option<&str>) -> Stri
         }
 
         if trimmed.starts_with("dtoverlay=") {
+            // An ART overlay line **outside** a marked block — somebody
+            // deleted the marker, or an older ART wrote one. Dropped, and
+            // re-emitted below from the current options.
+            //
+            // Its section headers are not dropped with it, because without
+            // the marker there is nothing that says where the block ended and
+            // eating a `[pi4]` the user wrote themselves would be worse than
+            // leaving an empty one. An empty board section is inert; this is
+            // untidy rather than wrong, and it is said here rather than left
+            // to be discovered.
+            if is_managed_overlay(trimmed) {
+                continue;
+            }
             if trimmed == BLUETOOTH_OVERLAY {
                 has_bluetooth_overlay = true;
                 // The user turning the option off is an instruction to remove
@@ -400,6 +484,20 @@ pub fn merge_config_txt(config: &FirmwareConfig, existing: Option<&str>) -> Stri
         if needs_bluetooth {
             out.push(BLUETOOTH_OVERLAY.to_string());
         }
+    }
+
+    if !overlays.is_empty() {
+        // The blank line separating the block belongs to the block. Without
+        // trimming first, the one written last time survives the round trip
+        // and a new one is added on top of it, so the file grows a blank line
+        // per save forever — which is the same accumulation the marker exists
+        // to stop, in its quietest form.
+        while out.last().is_some_and(|line| line.trim().is_empty()) {
+            out.pop();
+        }
+        out.push(String::new());
+        out.push(STORAGE_BLOCK_MARKER.to_string());
+        out.extend(overlays.iter().cloned());
     }
 
     out.push(String::new());
@@ -538,6 +636,101 @@ kernel=Emu68-pistorm
             .filter(|line| line.starts_with(what))
             .map(str::to_string)
             .collect()
+    }
+
+    fn storage_block() -> Vec<String> {
+        crate::core::pistorm::options::storage_overlay_lines(&Default::default())
+    }
+
+    /// Written twice, present once. The merge drops ART's own overlay lines
+    /// and re-emits them, so a card saved repeatedly does not accumulate
+    /// contradictory settings — which is what would have happened if
+    /// `dtoverlay=` lines had gone on being passed through verbatim.
+    #[test]
+    fn the_storage_block_is_written_once_however_often_the_card_is_saved() {
+        let config = FirmwareConfig::default();
+        let once = merge_config_txt_with_overlays(&config, &storage_block(), Some("gpu_mem=64\n"));
+        let twice = merge_config_txt_with_overlays(&config, &storage_block(), Some(&once));
+        let thrice = merge_config_txt_with_overlays(&config, &storage_block(), Some(&twice));
+
+        assert_eq!(twice, thrice, "the merge must settle");
+        assert_eq!(
+            twice.matches("dtoverlay=sdhc,").count(),
+            2,
+            "one per board section, no more: {twice}"
+        );
+        assert_eq!(twice.matches("dtoverlay=emmc,").count(), 1, "{twice}");
+    }
+
+    /// A setting the user changed reaches the file, rather than landing
+    /// beside the old one.
+    #[test]
+    fn changing_the_storage_setting_replaces_the_block_it_finds() {
+        use crate::core::pistorm::options::{storage_overlay_lines, Emu68Options, StorageExposure};
+
+        let config = FirmwareConfig::default();
+        let before = merge_config_txt_with_overlays(&config, &storage_block(), None);
+        assert!(before.contains("unit0=ro"), "{before}");
+
+        let writable = storage_overlay_lines(&Emu68Options {
+            storage_unit0: StorageExposure::ReadWrite,
+            ..Emu68Options::default()
+        });
+        let after = merge_config_txt_with_overlays(&config, &writable, Some(&before));
+
+        assert!(
+            !after.contains("unit0=ro"),
+            "the old setting is gone: {after}"
+        );
+        assert_eq!(after.matches("unit0=rw").count(), 3, "{after}");
+    }
+
+    /// Somebody else's `dtoverlay=` is not ART's to touch — only `sdhc` and
+    /// `emmc` are managed.
+    #[test]
+    fn an_overlay_art_does_not_own_survives_verbatim() {
+        let existing = "dtoverlay=vc4-kms-v3d\ndtoverlay=unicam,boot\ngpu_mem=64\n";
+        let merged = merge_config_txt_with_overlays(
+            &FirmwareConfig::default(),
+            &storage_block(),
+            Some(existing),
+        );
+        assert!(merged.contains("dtoverlay=vc4-kms-v3d"), "{merged}");
+        assert!(merged.contains("dtoverlay=unicam,boot"), "{merged}");
+    }
+
+    /// **ART-204 from the other direction.** The block carries section
+    /// headers, so appending it in the middle of a release's own `[gpio…]`
+    /// stanzas would change which board the lines after it apply to. It goes
+    /// at the end, after everything the release wrote.
+    #[test]
+    fn the_block_goes_after_a_releases_own_stanzas_never_between_them() {
+        let existing = sectioned_config();
+        let merged = merge_config_txt_with_overlays(
+            &FirmwareConfig::default(),
+            &storage_block(),
+            Some(existing),
+        );
+
+        let last_release_line = merged
+            .find("kernel=Emu68-pistorm\n")
+            .expect("the release's last stanza is still there");
+        let block_at = merged.find("[pi3]").expect("the block is there");
+        assert!(
+            block_at > last_release_line,
+            "the block must not split the release's own stanzas: {merged}"
+        );
+        // And every one of the release's own gpio stanzas still has its kernel.
+        assert_eq!(merged.matches("kernel=").count(), 4, "{merged}");
+    }
+
+    /// Nothing is written when there is nothing to write — the thin wrapper's
+    /// behaviour, unchanged, so every existing caller is unaffected.
+    #[test]
+    fn no_overlays_means_no_block_at_all() {
+        let merged = merge_config_txt(&FirmwareConfig::default(), Some("gpu_mem=64\n"));
+        assert!(!merged.contains("dtoverlay=sdhc"), "{merged}");
+        assert!(!merged.contains("[pi3]"), "{merged}");
     }
 
     #[test]

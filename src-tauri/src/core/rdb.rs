@@ -177,6 +177,33 @@ pub fn version_from_ver_string(data: &[u8]) -> Option<(u16, u16)> {
 /// ART-096, which is not a smaller limit but an unstated one.
 pub const DEFAULT_MAX_TRANSFER: u32 = 0x0001_FE00;
 
+// **The reference tool disagrees, and ART's number stands. Written down so
+// nobody has to re-derive the argument.**
+//
+// The Emu68 Imager's published `DiskDefaults` table (read 2026-08-22) gives:
+//
+// | Field | ART | Emu68 Imager |
+// |---|---|---|
+// | `Mask` | `0x7FFFFFFE` | `0x7ffffffe` — **agree** |
+// | `MaxTransfer` | `0x0001FE00` | `0xffffff` |
+// | `NumBuffers` | 600 | 300 |
+// | Boot priority | 0 | 1 (System), 99 (Work) |
+//
+// **ART's came from measuring the owner's own cards** — seventeen partitions
+// across three RDBs, without one exception (ART-096) — and two of those cards
+// boot. The imager's came from a default in a spreadsheet. A number measured
+// on hardware that works is stronger evidence than a number somebody chose,
+// and this project has already paid for adopting a figure without the
+// measurement behind it.
+//
+// The gap is not academic: `0xffffff` is 16 MiB against ART's 130 560 bytes,
+// and `MaxTransfer` is a field whose wrong value corrupts rather than slows —
+// which is the direction that argues for the conservative measured one.
+//
+// If a card ART builds is ever found not to boot *because of* one of these,
+// this note is where to start: the difference is known, it is not an
+// oversight, and changing one means measuring it rather than copying it.
+
 /// `Mask` — which memory addresses the driver may DMA into.
 ///
 /// `0x7FFFFFFE` is "anywhere in the low 2 GB, word-aligned". A mask of **zero**

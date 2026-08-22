@@ -96,6 +96,14 @@ jobs:
       - name: Check the ROM table against its source
         run: python scripts/rom-table-check.py
 
+      # CLAUDE.md's own warning, made into a gate: a Windows path written
+      # through a heredoc turns `\a` into a BEL byte and nothing fails. Found
+      # by hand twice — once ten days after it was committed, once on
+      # 2026-08-23 in a doc block telling the reader how to run a real-hardware
+      # hook. Twice by accident is enough.
+      - name: Check for stray control bytes
+        run: python scripts/control-byte-sweep.py
+
       # ART-196: everything ART stages goes through the scratch root the user
       # chose, and the value of that fix is entirely in the call site nobody
       # adds later. Pure Python over the crate's own source, with a short

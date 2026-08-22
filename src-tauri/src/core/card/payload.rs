@@ -32,9 +32,9 @@ use std::path::Path;
 use crate::core::archive;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::fat32::BootFile;
-use crate::core::pistorm::firmware::{merge_config_txt, FirmwareConfig};
+use crate::core::pistorm::firmware::{merge_config_txt_with_overlays, FirmwareConfig};
 use crate::core::pistorm::hardware::{kernel_archive, Emu68Line, KernelArchive, PistormHardware};
-use crate::core::pistorm::options::{merge_cmdline, Emu68Options};
+use crate::core::pistorm::options::{merge_cmdline, storage_overlay_lines, Emu68Options};
 
 /// The most one file in the Emu68 archive may decompress to.
 ///
@@ -182,7 +182,12 @@ fn payload_within(
     // which is what `merge_config_txt(None)` already means.
     files.push(BootFile {
         name: "config.txt".into(),
-        bytes: merge_config_txt(&firmware, existing_config.as_deref()).into_bytes(),
+        bytes: merge_config_txt_with_overlays(
+            &firmware,
+            &storage_overlay_lines(&spec.options),
+            existing_config.as_deref(),
+        )
+        .into_bytes(),
     });
 
     // `cmdline.txt` is **not** in the Emu68 archive — checked against the real
