@@ -52,6 +52,7 @@ pip install amitools && python scripts/oracle-check.py # independent cross-check
 python scripts/iso-oracle-check.py                     # the disc reader vs 7-Zip (needs 7z; not in CI)
 python scripts/fat-oracle-check.py                     # the card's boot partition vs 7-Zip (needs 7z; not in CI)
 python scripts/pfs3-oracle-check.py                     # PFS3, both directions, vs hst-imager (needs hst.imager.exe; not in CI)
+python scripts/catalogue-check.py                      # every shipped bundle path vs Aminet itself (not in CI, it leaves the machine)
 python scripts/zoom-check.py                           # the shell's widths, in a real browser (needs `pnpm dev`)
 python scripts/osbuilder-strip-check.py                # the OS Builder's step strip: per kind, both languages,
                                                        #   three Application Sizes (needs `pnpm dev`)
