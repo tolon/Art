@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildBlocker,
+  cardFsChoices,
   defaultPartition,
   findingPhrase,
   healthVerdict,
@@ -13,6 +14,7 @@ import {
   type CardIntakeItem,
   type HealthItem,
 } from "@/lib/cardBuild";
+import { fileSystemInputsFor } from "@/lib/fsDriver";
 import type { MbrPartition } from "@/lib/card";
 import { DEFAULT_EMU68_OPTIONS, DEFAULT_FIRMWARE_CONFIG } from "@/lib/pistorm";
 
@@ -38,6 +40,7 @@ const REQUEST: CardBuildRequest = {
   line: "stable",
   firmware: DEFAULT_FIRMWARE_CONFIG,
   options: DEFAULT_EMU68_OPTIONS,
+  file_systems: [],
   partitions: [defaultPartition()],
 };
 
@@ -195,5 +198,67 @@ describe("defaultPartition", () => {
     expect(part.fs_type).toBe("ffsstandard");
     expect(part.bootable).toBe(true);
     expect(part.drive_name).toBe("SDH0");
+  });
+});
+
+describe("PFS3 on the card builder (ART-084's own expiry condition)", () => {
+  it("offers PFS3, and does not offer SFS", () => {
+    const values = cardFsChoices("E:\\pfs3aio").map((choice) => choice.value);
+    expect(values).toContain("pfs3directscsi");
+    expect(values).toContain("pfs3standard");
+    expect(values).toContain("ffsstandard");
+    // The owner's own decision on 2026-08-22: the Emu68 Imager installs PFS3
+    // and not SFS, and nothing is known yet about the candidate crate's
+    // agreement with the real handler. `SFS — not supported yet` stays.
+    expect(values).not.toContain("sfs0");
+  });
+
+  /// **Shown, and not selectable.** ART ships no `pfs3aio` and never will, so
+  /// without one PFS3 cannot work — but hiding it would leave "why can I not
+  /// have PFS3" unanswerable, which is worse than saying so.
+  it("cannot pick PFS3 with no driver, and says which file is wanted", () => {
+    const withNothing = cardFsChoices(null);
+    const pfs3 = withNothing.find((choice) => choice.value === "pfs3directscsi");
+    expect(pfs3?.blocked).toEqual({
+      key: "cardBuilder.fs.needsDriver",
+      params: { file: "pfs3aio" },
+    });
+    // FFS is in Kickstart and needs nothing, so it is never blocked.
+    expect(withNothing.find((c) => c.value === "ffsstandard")?.blocked).toBeNull();
+  });
+
+  it("a driver unblocks it", () => {
+    const withDriver = cardFsChoices("E:\\amiga\\pfs3aio");
+    expect(withDriver.every((choice) => choice.blocked === null)).toBe(true);
+  });
+
+  /// The image ART-084 is actually about: a partition naming a filesystem
+  /// nothing on the card carries. Refused **before** the build rather than
+  /// produced and then explained.
+  it("refuses to build a PFS3 card with no driver, and names the file", () => {
+    const request = {
+      ...{ ...REQUEST, partitions: [{ ...defaultPartition(), fs_type: "pfs3directscsi" as const }] },
+      file_systems: [],
+    };
+    expect(buildBlocker(request, PLAN)).toEqual({
+      key: "cardBuilder.blocked.noDriver",
+      params: { file: "pfs3aio" },
+    });
+  });
+
+  it("builds once the driver is there", () => {
+    const request = {
+      ...{ ...REQUEST, partitions: [{ ...defaultPartition(), fs_type: "pfs3directscsi" as const }] },
+      file_systems: [{ path: "E:\\pfs3aio", dos_type: "PDS3" }],
+    };
+    expect(buildBlocker(request, PLAN)).toBeNull();
+  });
+
+  /// An FFS card must not have become harder to build. Kickstart carries FFS,
+  /// so nothing is required and nothing is embedded.
+  it("an FFS card still needs no driver at all", () => {
+    const request = { ...{ ...REQUEST, partitions: [{ ...defaultPartition(), fs_type: "ffsstandard" as const }] }, file_systems: [] };
+    expect(buildBlocker(request, PLAN)).toBeNull();
+    expect(fileSystemInputsFor("ffsstandard", "E:\\pfs3aio")).toEqual([]);
   });
 });

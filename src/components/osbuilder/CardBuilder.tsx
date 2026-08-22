@@ -34,7 +34,7 @@ import {
   onCardBuildResult,
   payloadBytes,
   warningPhrase,
-  CARD_FS_CHOICES,
+  cardFsChoices,
   type CardBuildPlan,
   type CardBuildRequest,
   type CardBuildResult,
@@ -59,6 +59,8 @@ import {
 } from "@/lib/pistormOptions";
 import { subscribeSafely } from "@/lib/jobs";
 import { isOneOf, isText, isTextOrNothing, isWholeNumberBetween } from "@/lib/remembered";
+import { fileSystemInputsFor } from "@/lib/fsDriver";
+import { FILESYSTEM_DRIVER_KEY } from "@/lib/preload";
 import { useRemembered, useRememberedShape } from "@/lib/useRemembered";
 import { usePowerMode } from "@/lib/uxmode";
 import { GIB, gibNumber as gb, mibNumber as mib } from "@/lib/size";
@@ -123,9 +125,23 @@ export function CardBuilder() {
     isWholeNumberBetween(1, 2_000_000),
     defaultPartition().size_mb
   );
+  /**
+   * The filesystem driver ART may embed — `pfs3aio`, from the user's own disk.
+   *
+   * **The same remembered key the volume step uses**, deliberately: it is one
+   * answer to one question, and asking for the same file twice in one wizard
+   * is the drift ART-197 was filed about. It folds into the build session
+   * proper when wave 2 rehomes these panels.
+   */
+  const [fsDriver, setFsDriver] = useRemembered<string | null>(
+    FILESYSTEM_DRIVER_KEY,
+    isTextOrNothing,
+    null
+  );
+  const fsChoices = cardFsChoices(fsDriver);
   const [fsType, setFsType] = useRemembered<AmigaHardDiskFs>(
     "cardBuilder.fsType",
-    isOneOf<AmigaHardDiskFs>(...CARD_FS_CHOICES.map((choice) => choice.value)),
+    isOneOf<AmigaHardDiskFs>(...fsChoices.map((choice) => choice.value)),
     defaultPartition().fs_type
   );
 
@@ -175,8 +191,20 @@ export function CardBuilder() {
     },
   ];
 
+  async function chooseFsDriver() {
+    const picked = await open({
+      multiple: false,
+      directory: false,
+      title: t("preload.driver.chooseTitle"),
+    });
+    if (typeof picked === "string") setFsDriver(picked);
+  }
+
   const request: CardBuildRequest = {
     archive: archive ?? "",
+    // Empty for FFS — Kickstart mounts that itself and a driver it never
+    // asks for is dead weight in the reserved area (`fileSystemInputsFor`).
+    file_systems: fileSystemInputsFor(fsType, fsDriver),
     kickstart,
     dest: dest ?? "",
     total_bytes: cardGb * GIB,
@@ -526,14 +554,35 @@ export function CardBuilder() {
                     value={fsType}
                     onChange={(e) => setFsType(e.target.value as AmigaHardDiskFs)}
                   >
-                    {CARD_FS_CHOICES.map((choice) => (
-                      <option key={choice.value} value={choice.value}>
+                    {fsChoices.map((choice) => (
+                      <option
+                        key={choice.value}
+                        value={choice.value}
+                        disabled={choice.blocked !== null}
+                      >
                         {choice.label}
+                        {choice.blocked ? ` — ${t(choice.blocked.key, choice.blocked.params)}` : ""}
                       </option>
                     ))}
                   </select>
                 </label>
               </div>
+
+              {/* ART ships no `pfs3aio` and never will, the same rule as the
+                  Kickstart above. Without one, PFS3 is shown and not
+                  selectable rather than hidden — "why can I not have PFS3"
+                  is a better question to be able to answer than to prevent
+                  somebody asking. */}
+              <Field
+                label={t("cardBuilder.advanced.fsDriver")}
+                value={fsDriver}
+                empty={t("preload.driver.none")}
+                onChoose={() => void chooseFsDriver()}
+                choose={t("common.browse")}
+                hint={t("cardBuilder.advanced.fsDriverHint")}
+                onClear={fsDriver ? () => setFsDriver(null) : undefined}
+                clear={t("common.clear")}
+              />
 
               <p className="faint" style={{ fontSize: 11, margin: 0 }}>
                 {t("cardBuilder.advanced.oneDisk")}

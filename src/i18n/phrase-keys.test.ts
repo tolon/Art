@@ -646,6 +646,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       line: "stable",
       firmware: DEFAULT_FIRMWARE_CONFIG,
       options: DEFAULT_EMU68_OPTIONS,
+      file_systems: [],
       partitions: [defaultPartition()],
     };
     const plan = {

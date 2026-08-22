@@ -22,6 +22,22 @@
 // forbids.
 
 import { invoke } from "@tauri-apps/api/core";
+
+/**
+ * Where the filesystem driver the user picked is remembered.
+ *
+ * **One key, two screens.** The card builder embeds a driver into the RDB it
+ * writes and the volume step embeds one into a card that already exists; that
+ * is one answer to one question — *which `pfs3aio` is yours* — and asking for
+ * the same file twice in one wizard is exactly the drift ART-197 was filed
+ * about. Named here rather than typed out in two components so the two cannot
+ * quietly stop matching.
+ *
+ * Keeps the `preload.` prefix it was born with: renaming it would lose every
+ * existing user's answer, and a setting that resets itself is the one outcome
+ * this project forbids outright.
+ */
+export const FILESYSTEM_DRIVER_KEY = "preload.driver";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type { CardReport } from "@/lib/card";

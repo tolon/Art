@@ -5,11 +5,11 @@ use std::path::PathBuf;
 use tauri::State;
 
 use super::oplog::{user_operation, write_result};
-use crate::core::error::CoreError;
+use crate::core::error::{CoreError, CoreResult};
 use crate::core::hdf::{create_hdf, open_hdf, HdfInfo};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::core::rdb::{version_from_ver_string, FileSystemSpec, PartitionSpec};
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 
 /// Open and inspect an HDF image.
 #[tauri::command]
@@ -45,7 +45,13 @@ pub struct FileSystemInput {
 /// memory* (§56) long before it is a bound on anything an Amiga would accept.
 const MAX_FILE_SYSTEM_BYTES: u64 = 2 * 1024 * 1024;
 
-fn read_file_systems(inputs: &[FileSystemInput]) -> AppResult<Vec<FileSystemSpec>> {
+/// Turn the screen's driver choices into what the RDB writer needs.
+///
+/// `pub(crate)` and `CoreResult` rather than `AppResult` since 2026-08-23:
+/// the card builder embeds drivers too now, and its own inner half returns
+/// `CoreResult`. Every failure here is already a `CoreError`; the command
+/// layer converts at its own edge, as it does everywhere else.
+pub(crate) fn read_file_systems(inputs: &[FileSystemInput]) -> CoreResult<Vec<FileSystemSpec>> {
     let mut specs = Vec::new();
     for input in inputs {
         let path = PathBuf::from(&input.path);
@@ -62,8 +68,7 @@ fn read_file_systems(inputs: &[FileSystemInput]) -> AppResult<Vec<FileSystemSpec
                 "'{}' is {size} bytes; a file system driver must be between 1 byte and {} MB",
                 input.path,
                 MAX_FILE_SYSTEM_BYTES / (1024 * 1024)
-            ))
-            .into());
+            )));
         }
 
         // A DOS type is three characters and a **number**, not four
@@ -76,8 +81,7 @@ fn read_file_systems(inputs: &[FileSystemInput]) -> AppResult<Vec<FileSystemSpec
             return Err(CoreError::InvalidInput(format!(
                 "'{}' is not a DOS type; it must be three characters and a digit, like PDS3",
                 input.dos_type
-            ))
-            .into());
+            )));
         }
         let dos_type = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3] - b'0']);
 
@@ -118,16 +122,18 @@ pub fn hdf_create(
     file_systems: Vec<FileSystemInput>,
     oplog: State<'_, JsonlOperationLog>,
 ) -> AppResult<HdfInfo> {
-    let result = read_file_systems(&file_systems).and_then(|specs| {
-        create_hdf(
-            &PathBuf::from(&path),
-            total_bytes,
-            is_rdb,
-            &partitions,
-            &specs,
-        )
-        .map_err(Into::into)
-    });
+    let result: AppResult<HdfInfo> = read_file_systems(&file_systems)
+        .map_err(AppError::from)
+        .and_then(|specs| {
+            create_hdf(
+                &PathBuf::from(&path),
+                total_bytes,
+                is_rdb,
+                &partitions,
+                &specs,
+            )
+            .map_err(Into::into)
+        });
 
     write_result(
         &oplog,

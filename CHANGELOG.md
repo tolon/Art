@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### PFS3 on the cards ART builds (2026-08-23)
+
+#### Added
+- **The card builder can write PFS3 partitions**, which is what every other
+  Amiga card builder uses and what both of the real PiStorm cards ART's own
+  card model was measured from actually carry. It offered only Fast File
+  System before, because it could not yet put a filesystem driver into the
+  card's partition table — it can now.
+- **Choose your own `pfs3aio`** under Advanced. ART ships none and never will,
+  the same as the Kickstart. Without one, PFS3 is shown but cannot be picked,
+  and says which file it wants rather than disappearing.
+- The driver you pick is the **same one** the volume step uses — chosen once,
+  not twice.
+
+Fast File System is unchanged and still needs nothing: Kickstart carries it.
+
 ### A card that keeps working when you update Emu68 (2026-08-23)
 
 #### Fixed

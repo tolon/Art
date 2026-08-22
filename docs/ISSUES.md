@@ -568,6 +568,74 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-217** 🟠 ✅ **The card builder could only write the filesystem
+nobody else uses** — *raised by the owner 2026-08-23 asking what the other
+projects chose; fixed the same day*
+`src/lib/cardBuild.ts::cardFsChoices` · `commands/card.rs::card_spec`
+
+**Every other builder in this space uses PFS3, and so do the owner's own
+cards.** Asked, and answered from five sources rather than one:
+
+| Where | Filesystem |
+|---|---|
+| The owner's two real PiStorm cards | **PFS3 throughout** (`PDS\3`, PFS3 19.2) — both boot |
+| Emu68 Imager, `DiskDefaults` | **PFS3** for `SDH0/Workbench` *and* `SDH1/Work` |
+| Emu68's own SD-preparation tutorial | **PFS3aio**, DosType `0x50465303`, embedded in the RDB |
+| HstWB Installer | **PFS3AIO v3.1** for most images; FFS only for *"unexpanded Amigas with only chip memory"* |
+| ART, until today | **FFS**, and nothing else |
+
+**ART's FFS was never a disagreement with them — it was a limitation with a
+stated expiry**, and `cardBuild.ts`'s own comment is what said so:
+
+> *"SD-1 embeds no filesystem driver in the RDB it writes, and a `PDS\3`
+> partition with no driver anywhere on the card is one an Amiga ignores in
+> silence — [ART-084](#fixed) … embedding the driver is SD-2's work and
+> **they come back with it**."*
+
+SD-2 did it. `create_rdb_layout` embeds, the amitools oracle extracts what it
+wrote back byte-for-byte, and a real Kickstart mounted the result once
+[ART-126](#fixed)'s wrong `PatchFlags` were corrected. The condition was met
+and the promise had not been kept.
+
+**What changed.** `CardBuildRequest` carries `file_systems`, resolved through
+the *same* `read_file_systems` the Hard Disk studio already used — not a
+second reader — and they reach the area's RDB. The screen offers PFS3 in both
+DosTypes and takes the driver through `fsDriver.ts`, which already knew which
+filesystems need one.
+
+**ART ships no `pfs3aio` and never will**, the same rule as the Kickstart. So
+a PFS3 choice with no driver is **shown and not selectable**, with the file it
+wants named — hiding it would leave *"why can I not have PFS3"* unanswerable,
+which is worse than saying so — and the build is refused before the plan with
+a sentence naming the same file. That refusal is the ART-084 image itself,
+caught at the one moment the user can still do something about it.
+
+**One key, two screens.** The driver is remembered under
+`FILESYSTEM_DRIVER_KEY` — the *same* key the volume step uses, because it is
+one answer to one question and asking for the same file twice in one wizard is
+the drift [ART-197](#fixed) was filed about. It keeps its `preload.` prefix
+deliberately: renaming would lose every existing user's answer.
+
+**SFS is still deliberately absent**, unchanged: the owner's own 2026-08-22
+decision, and the Emu68 Imager installs PFS3 and not SFS.
+
+*Tests:* 3 Rust (the driver reaches the finished card, **read back out of the
+image** rather than out of the request; a driver that will not state its
+version is refused before a byte is written; no driver is still a perfectly
+good FFS card) and 6 frontend.
+
+**Four mutations run, four fell:** the drivers dropped on the way to the area
+· a silent driver's version invented instead of refused · PFS3 selectable with
+no driver · the build gate removed.
+
+**Still owed from the same work-list item:** two partitions by default
+(`SDH0`/`Workbench` bootable plus `SDH1`/`Work`), which both the Imager's table
+and the owner's own cards have and ART still does not — that is a partition-list
+editor on a screen that has one set of controls, and it was not folded in here.
+The boot partition's size was **left alone on purpose**: the reference says
+200 MB, `mbr.rs` says 1.10 GiB, and ART's came from measuring the two cards
+that boot.
+
 **ART-215** 🟠 ✅ **A card ART builds would stop honouring its own
 storage settings the day the user updates Emu68** — *found 2026-08-23 by
 external research before item 7 was designed; fixed the same day*
