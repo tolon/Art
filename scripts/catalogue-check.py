@@ -19,6 +19,11 @@ TIMEOUT = 20
 
 
 def head_ok(url: str) -> tuple[bool, str]:
+    # A status check is enough here because Aminet was asked, not assumed: a
+    # HEAD on the entry-53 typo (packageutil/shell/ViNCEd, missing slash) and
+    # on a plain nonexistent path both came back a genuine HTTP 404, not a 200
+    # with a "not found" body. A mirror that answers every request 200 with an
+    # error page in the body would defeat this and need a body check instead.
     request = urllib.request.Request(url, method="HEAD")
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT) as answer:
@@ -44,7 +49,8 @@ def main() -> int:
                 url = AMINET + body["path"]
             else:
                 skipped += 1
-                print(f"  skip  {entry['id']:<20} ({kind} — needs a configured mirror)")
+                reason = "needs a GitHub API lookup" if kind == "github-release" else "needs a configured mirror"
+                print(f"  skip  {entry['id']:<20} ({kind} — {reason})")
                 continue
             ok, why = head_ok(url)
             checked += 1
