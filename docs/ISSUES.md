@@ -598,6 +598,69 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-221** 🟠 ✅ **Every tree ART built had its drivers on the shelf and
+none of them switched on** — *found 2026-08-23 by reviewing
+`jit06/emu68-bootstrap` at the owner's request*
+`src-tauri/src/core/osinstall/mod.rs::Activation` · `plan.rs` · `apply.rs`
+
+**AmigaOS reads `Devs/DOSDrivers` and `Devs/Monitors`. It reads nothing in
+`Storage/`.** ART's 3.2 recipe copies `DOSDrivers` and `Monitors` faithfully
+into `Storage/` and stops — which is what the media does, and which leaves a
+finished card with **no CD drive and exactly one screen mode**, the drivers
+for both sitting on the disk unused.
+
+Found by reading somebody else's toolchain: `emu68-bootstrap`'s `library.sh`
+exists for this and nothing else — `enable_commodity`, `enable_dosdriver`,
+`enable_monitor` — and its own example script switches on `CD0`, `PC0` and
+`NTSC` before its card is finished. The Emu68 Imager's `ScreenModes` table is
+the same gap from another angle.
+
+**A named kind, not a pair of paths.** `Activation::{Commodity, DosDriver,
+Monitor}` knows where both ends are, so a recipe says *what* to switch on and
+the Amiga convention lives in one place rather than in every recipe that uses
+it. The icon travels with it: AmigaOS starts what the `WBStartup` **icon**
+says, not what the file is, so a commodity copied without its `.info` is a
+switch that looks thrown and is not. A missing icon on a *driver* is skipped
+rather than refused — untidy, not broken.
+
+**Refused at plan time when nothing places the source.** A `Devs/Monitors`
+entry copied from a file that is not on the disk is either a silent omission
+or a failure halfway through, and both are worse than being told first. The
+refusal is typed, crosses the wire, and renders in both languages.
+
+**Nothing shipped switches anything on**, and a test enforces it. Which
+monitor somebody wants, and whether their Amiga has a CD drive, are facts
+about somebody else's machine — the same reason `disable_bluetooth` is an
+option ART offers rather than something it writes unasked.
+
+**Two defects the tests found while it was being written**, both mine:
+
+- The source check accepted any activation *under a placed drawer*, written on
+  the assumption that a `Subtree` rule is one item. It is not — `expand_rules`
+  walks the medium and emits one item per file — so the fallback accepted a
+  monitor the medium does not carry. The end-to-end test refused nothing and
+  reading `expand_rules` settled it. **The fallback was not a safety net, it
+  was the hole.**
+- A mutation removing the *call* to the check survived, because every test
+  asked the function directly. A guard that does not cover its own call site
+  is not a guard; the two `plan()`-level tests were written for that.
+
+*Tests:* 4 in `apply` (the switch lands where AmigaOS looks, asserted against
+the filesystem; the icon travels; a missing icon is skipped; switching twice is
+still one file) and 8 in `plan`.
+
+**Six mutations run, six fell:** never switch · drop the icon · count it twice
+· loosen the match to a prefix · drop the case fold · remove the check's call
+site. Plus one on the frontend: deleting the sentence's key fails
+`phrase-keys.test.ts`.
+
+**Not taken from that project, and why:** its `.icons` mechanism needs an
+`.info` writer (it shells out to `hst.amiga`); its `;BEGIN`/`;END`
+User-Startup wrapping ART already has, and ART's handles re-runs, stray
+markers and CRLF where theirs only appends when absent, so a **changed**
+contribution never updates. Its `get_generic_destination` heuristics are the
+"inspect and propose" ART deliberately left out of the package round.
+
 **ART-220** 🔴 ✅ **The storage overlay block inherited whatever filter
 the user's `config.txt` left open** — *found 2026-08-23, hours after
 [ART-215](#fixed) shipped it, by reading another project's real config file*

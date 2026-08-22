@@ -293,6 +293,7 @@ function planWith(componentsOn: string[]): InstallPlan {
     packages: [],
     packageMedia: {},
     userStartup: [],
+    activations: [],
   };
 }
 
@@ -513,6 +514,7 @@ describe("osinstallBlocker", () => {
         packages: [],
         packageMedia: {},
         userStartup: [],
+        activations: [],
       },
     };
   }
