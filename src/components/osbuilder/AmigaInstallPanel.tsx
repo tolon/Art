@@ -547,7 +547,6 @@ export function AmigaInstallPanel({
           installer too old for an emulator names the archive that fixes it.
           One translated line goes with it, saying the half ART can say in
           the user's own language — that nothing was copied. */}
-      {refusal && <Refusal text={refusal} testId="amiga-install-refusal" />}
 
       {!request && !refusal && (
         <p className="faint" style={{ fontSize: 11, margin: "0 0 12px" }}>
@@ -742,15 +741,23 @@ export function AmigaInstallPanel({
         </div>
       )}
 
-      {/* ART-202: the same refusal, where the button is. It used to render
-          only at the top of the panel — 209 lines of JSX above this control —
-          so on a maximised window pressing the button changed nothing the
-          reader could see, and the honest conclusion available to them was
-          that it had done nothing. The owner's operation log recorded seven
-          identical runs of an unchanged request. `OsInstall.tsx` already
-          carried this lesson in the owner's own words: a job that ended badly
-          has to say so where the button is. */}
-      {refusal && <Refusal text={refusal} testId="amiga-install-refusal-at-run" />}
+      {/* ART-202: the refusal, **once**, where the button is.
+          It used to render only at the top of the panel — 209 lines of JSX
+          above this control — so on a maximised window pressing the button
+          changed nothing the reader could see, and the honest conclusion
+          available to them was that it had done nothing. The owner's operation
+          log recorded seven identical runs of an unchanged request.
+          `OsInstall.tsx` already carried this lesson in the owner's own words:
+          a job that ended badly has to say so where the button is.
+
+          The first fix rendered it in **both** places, and the owner read the
+          result as two separate errors — *"aynı uyarı tek ekranda 2 tane"*.
+          They were right, and it is cheap to say why: a refusal means the
+          preview did not succeed, so there is no preview card and the panel is
+          short. The two boxes land within a screen of each other and duplicate
+          rather than reassure. One box, at the control, is what the rule
+          actually asks for. */}
+      {refusal && <Refusal text={refusal} testId="amiga-install-refusal" />}
 
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <button
