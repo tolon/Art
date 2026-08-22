@@ -1456,6 +1456,7 @@ mod tests {
             },
         ];
         let total_bytes = items.iter().map(|i| i.bytes).sum();
+        let total_files = items.iter().filter(|i| !i.is_dir).count() as u64;
 
         let plan = InstallPlan {
             release: "AmigaOS 3.2".into(),
@@ -1464,6 +1465,7 @@ mod tests {
             packages: Vec::new(),
             package_media: BTreeMap::new(),
             total_bytes,
+            total_files,
             components_on: vec!["modules-a1200".into()],
             paired_rom: None,
             media_paths,
@@ -1521,6 +1523,7 @@ mod tests {
             },
         ];
         let total_bytes = items.iter().map(|i| i.bytes).sum();
+        let total_files = items.iter().filter(|i| !i.is_dir).count() as u64;
 
         let plan = InstallPlan {
             release: "AmigaOS 3.9".into(),
@@ -1529,6 +1532,7 @@ mod tests {
             packages: Vec::new(),
             package_media: BTreeMap::new(),
             total_bytes,
+            total_files,
             components_on: vec!["workbench-base".into()],
             paired_rom: None,
             media_paths,
@@ -1587,6 +1591,10 @@ mod tests {
             packages: Vec::new(),
             package_media: BTreeMap::new(),
             total_bytes: 11,
+            // Two items, two destinations — they escape to one *host* name,
+            // which is the refusal this fixture exists for, but the plan's
+            // own count is of AmigaDOS destinations.
+            total_files: 2,
             components_on: vec!["workbench-base".into()],
             paired_rom: None,
             media_paths,
@@ -1696,6 +1704,10 @@ mod tests {
             packages: Vec::new(),
             package_media: BTreeMap::new(),
             total_bytes: 11,
+            // Two items, two destinations — they escape to one *host* name,
+            // which is the refusal this fixture exists for, but the plan's
+            // own count is of AmigaDOS destinations.
+            total_files: 2,
             components_on: vec!["workbench-base".into()],
             paired_rom: None,
             media_paths,
@@ -2078,6 +2090,89 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// **ART-205 — the plan predicts the tree, not the reading.**
+    ///
+    /// The byte half of [`the_report_counts_what_the_tree_holds_not_what_the_plan_did`]
+    /// above. `outcome.files` was taught to count destinations rather than
+    /// plan items by ART-124; `plan.total_bytes` went on summing every
+    /// non-directory item, so a destination two components write — which is
+    /// exactly what an `overrides` relationship *is* — was counted twice in
+    /// the prediction and once on disk. Measured on the owner's own AmigaOS
+    /// 3.9 disc: 17,579,966 predicted against 14,883,492 written, 18% over
+    /// and systematic.
+    ///
+    /// Asserted against the **filesystem**, for ART-124's own reason: a
+    /// number derived from `plan.items` is the number that was wrong, so it
+    /// cannot be the thing that checks it.
+    #[test]
+    fn the_plan_predicts_the_bytes_the_tree_will_hold_not_the_bytes_it_reads() {
+        // `classes` overrides `workbench-base` in the shipped 3.2 recipe —
+        // the same fixture the file-count half uses.
+        let (plan, dir) = fixtures::planned_with(
+            &["classes", "backdrops"],
+            &["Workbench3.2", "Classes3.2", "Install3.2", "Backdrops3.2"],
+            Some(47),
+        );
+        assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
+
+        // The fixture has to actually contain the shape this is about,
+        // otherwise the test is inert whatever the arithmetic does.
+        let mut claimed: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        for item in plan.items.iter().filter(|i| !i.is_dir) {
+            *claimed
+                .entry(crate::core::osinstall::destination_key(&item.to))
+                .or_default() += 1;
+        }
+        let overridden = claimed.values().filter(|n| **n > 1).count();
+        assert!(
+            overridden > 0,
+            "this test needs a plan where one destination is written twice"
+        );
+
+        let root = dir.join("dist");
+        let outcome = apply(&plan, &root, &NoProgress).unwrap();
+
+        // What the tree really holds: every file's real length off the
+        // filesystem, the sidecars and the manifest excluded the same way
+        // the file count excludes them.
+        fn weigh(dir: &Path, bytes: &mut u64, files: &mut u64) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    weigh(&path, bytes, files);
+                } else if !path
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("uaem"))
+                    && path.file_name().is_some_and(|n| n != MANIFEST_FILE_NAME)
+                {
+                    *bytes += std::fs::metadata(&path).unwrap().len();
+                    *files += 1;
+                }
+            }
+        }
+        let (mut on_disk_bytes, mut on_disk_files) = (0, 0);
+        weigh(&root, &mut on_disk_bytes, &mut on_disk_files);
+
+        assert_eq!(
+            outcome.bytes, on_disk_bytes,
+            "the report already describes the tree (ART-124); this is the baseline"
+        );
+        assert_eq!(
+            plan.total_bytes, on_disk_bytes,
+            "the plan predicted {} bytes; the tree holds {on_disk_bytes} \
+             ({overridden} destination(s) written twice)",
+            plan.total_bytes
+        );
+        assert_eq!(
+            plan.total_files, on_disk_files,
+            "the plan predicted {} files; the tree holds {on_disk_files}",
+            plan.total_files
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The coordinator's review, Critical 1, closed end to end. Before this
     /// fix, exclusion was applied by editing the `InstallPlan` *object* on
     /// the frontend — which left `plan.media_paths` untouched, so a
@@ -2242,6 +2337,7 @@ mod tests {
             packages: Vec::new(),
             package_media: BTreeMap::new(),
             total_bytes: 16,
+            total_files: 1,
             components_on: vec!["a".into()],
             paired_rom: None,
             media_paths,
@@ -3398,6 +3494,13 @@ mod tests {
                     outcome.bytes, planned.total_bytes,
                     "apply() wrote a different byte total than plan() predicted"
                 );
+                // The file half of the same prediction (ART-205). Directories
+                // are deliberately not predicted — `apply` creates the
+                // ancestors no rule names — so only these two are compared.
+                assert_eq!(
+                    outcome.files, planned.total_files,
+                    "apply() wrote a different file count than plan() predicted"
+                );
 
                 // This disc is real, fixed material (the owner's own AmigaOS
                 // 3.9 CD): these exact counts are pinned, not just checked
@@ -3406,9 +3509,18 @@ mod tests {
                 // pins its own real media's counts — a change here means the
                 // media folder or the recipe genuinely changed, worth
                 // knowing rather than a flaky assertion to loosen.
-                assert_eq!(outcome.files, 588, "files written");
-                assert_eq!(outcome.directories, 75, "directories written");
-                assert_eq!(outcome.bytes, 6_054_225, "file bytes written");
+                //
+                // **Re-measured 2026-08-22, and they had been stale since
+                // ART-169.** 588/75/6,054,225 is the *one*-component 3.9
+                // tree; the recipe has carried `workbench-39` over
+                // `workbench-base` since then, and ART-206 corrected the
+                // components assertion above without re-measuring these. The
+                // numbers below are this run's own output against
+                // `E:\amiga\Amigatolon\iso\AmigaOS39.iso`, 11.58 s on a
+                // release build.
+                assert_eq!(outcome.files, 1242, "files written");
+                assert_eq!(outcome.directories, 105, "directories written");
+                assert_eq!(outcome.bytes, 14_883_492, "file bytes written");
 
                 // Fix round 1, review item 2: the counts and sums above would
                 // pass just as well if every file landed empty. Name one
@@ -3430,7 +3542,13 @@ mod tests {
                     manifest.built_from.len()
                 );
                 assert_eq!(manifest.files.len(), outcome.files as usize);
-                assert_eq!(manifest.built_from.len(), planned.components_on.len());
+                // `built_from` is one record per **medium**, not per
+                // component — the two were the same number only while the
+                // 3.9 recipe had a single component, and ART-169's overlay
+                // reads the same disc, so it is 1 medium and 2 components
+                // now. Compared against the plan's own media, which is what
+                // the field actually records.
+                assert_eq!(manifest.built_from.len(), planned.media_paths.len());
             }
             Err(err) => {
                 // ART-153 and ART-155 are both fixed as of this task — a

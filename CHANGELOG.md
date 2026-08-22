@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### The install plan now predicts the tree, not the reading (2026-08-22)
+
+#### Fixed
+- **"What would be written" no longer over-states what you get.** When one
+  component replaces a file another component supplies — which is how an
+  AmigaOS overlay works — ART counted the file twice in its prediction and
+  wrote it once. On a real AmigaOS 3.9 build that was 17.6 MB predicted
+  against 14.9 MB written, 18% over, and 1517 items announced where 1242
+  files and 105 drawers landed. Both numbers now describe the finished
+  tree; measured against the owner's own 3.9 disc and 3.2 disks, the
+  prediction and the result are now identical (ART-205).
+- **The line above the file list says both numbers** — how many files and
+  how many bytes the tree will hold, and how many planned items that took —
+  so the list being longer than the file count is explained rather than
+  looking like a mistake.
+
 ### Package bundles — a curated catalogue you can download in order (2026-08-22)
 
 #### Added
