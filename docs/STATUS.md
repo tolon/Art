@@ -978,6 +978,25 @@ before someone "fixes" it. The per-kind contents are right on screen too —
 boot-card 2 steps, prepare-volumes 2, install 4 — and no label rendered as a
 raw key or an unrendered `{{…}}` in either language.
 
+**The install engine was proved on the owner's own material, and it is the
+first thing this session can point at that produced something.** With
+[ART-206](ISSUES.md) corrected — a real-material hook that asserted the 3.9
+recipe carries one component when it has carried two since ART-169, so it could
+never pass — the hook ran against their own `AmigaOS39.iso` and built a tree:
+**1242 files, 105 directories, 14.9 MB, 22.79 s**, `workbench-base` 450 +
+`workbench-39` 792, manifest written, into `E:miga\Amigatolon\os39rt1`
+— a folder that [ART-203](ISSUES.md) is the reason ART would write into at all.
+
+**Said plainly: that tree came from the engine's own hook, not from the
+screen.** Nobody has yet built a distribution from the OS Builder. The owner
+drove it and could not, which is what the round's defects were.
+
+**And the same run found [ART-205](ISSUES.md)**: the plan predicted 17 579 966
+bytes and 14 883 492 landed — **18% over, systematically**, because a file an
+overlay replaces is two plan items and one file on disk. Filed rather than
+patched: ART-156 was a different miscount in the same field and was diagnosed
+wrongly the first time.
+
 **Driving it found four defects in one sitting, and all four are fixed.**
 The owner reached the Amiga-side step and their operation log recorded
 **seven** identical failed runs — the same request, unchanged, seven times.
