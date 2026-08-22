@@ -368,6 +368,13 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // could enumerate, so there is no per-id literal to find here --
     // src/i18n/dead-keys.test.ts's template-literal-prefix rule is what
     // proves every bundles.set.<id> leaf is actually reachable.
-    expect(dynamicCalls).toBe(128);
+    // 128 -> 129 (final fix wave, finding 2): BundlePanel.tsx's `reasonKey`
+    // maps an entry's `EntrySummary["kind"]` to one of four
+    // `bundles.entry.reason.*` leaves, and the render calls
+    // `t(reasonKey(entry.kind))` -- the key comes from the mapper, not a
+    // literal at the call site. `reasonKey`'s own switch is exhaustive over
+    // `UnfetchableKind`, so every value it can return is enumerated by the
+    // type itself; there is nothing here for `dead-keys.test.ts` to miss.
+    expect(dynamicCalls).toBe(129);
   });
 });

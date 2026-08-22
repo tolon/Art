@@ -2439,6 +2439,7 @@
     "intro": "Bir set seç, ART paketlerini sırayla indirme klasörüne indirsin. Düğmeye basmadan hiçbir şey inmez.",
     "loading": "Paket setleri yükleniyor…",
     "entryCount": "{{count}} paket",
+    "fetchableCount": "{{total}} paketten {{fetchable}} tanesi getirilebilir",
     "set": {
       "acilis": "Açılış — önyükleme menüleri, önyükleme önceliği, sistem saati",
       "ag": "Ağ — TCP/IP, SSL, kablosuz, hız testi",
@@ -2447,6 +2448,7 @@
       "dosya-sistemi": "Dosya sistemleri — PFS3, FAT, SMB ve bunları bağlayan sürücüler",
       "emu68": "Emu68 — PiStorm'un kendi 68k çekirdeği, araçları ve ağ sürücüsü",
       "grafik": "Grafik — Picasso96 ve üzerine kurulu görüntü veri türleri",
+      "hepsi": "Hepsi — tüm setler birden",
       "ibrowse": "iBrowse — web tarayıcısının demo sürümü",
       "kabuk": "Kabuk araçları — yeniden adlandırma, toplu düzenleme, daha iyi bir komut satırı",
       "masaustu": "Masaüstü — Directory Opus, ViNCEd, CLI kolaylıkları",
@@ -2463,7 +2465,9 @@
       "alternatives": "{{names}} birbirinin alternatifi — birden fazlasını kurmak sorun değil.",
       "reason": {
         "userSupplied": "Bunun için kayıtlı bir kaynak yok.",
-        "mirror": "Bunun için henüz yapılandırılmış bir yansı yok."
+        "mirror": "Bunun için henüz yapılandırılmış bir yansı yok.",
+        "githubRelease": "Bunun için henüz yapılandırılmış bir GitHub yansısı yok.",
+        "aminetSearch": "ART \"en güncel sürüm\" girdilerini henüz çözemez."
       }
     },
     "run": "Seçilen setleri indir",
@@ -2481,7 +2485,15 @@
       "notPlaced": "{{count}} tanesi indirildi ama yerine konmadı — o adda bir şey klasörde zaten var",
       "refused": "{{count}} tanesini ART getiremez",
       "failed": "{{count}} tanesi başarısız",
-      "skipped": "İptal edince {{count}} tanesi atlandı"
+      "skipped": "İptal edince {{count}} tanesi atlandı",
+      "entry": {
+        "downloaded": "{{path}} konumuna indirildi",
+        "alreadyHave": "zaten klasöründe: {{path}}",
+        "notPlaced": "yerine konmadı — {{existing}} zaten orada",
+        "refused": "ART bunu getiremez: {{why}}",
+        "failed": "başarısız: {{error}}",
+        "skipped": "iptal edince atlandı"
+      }
     }
   }
 }

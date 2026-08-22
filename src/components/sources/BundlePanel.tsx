@@ -24,9 +24,12 @@ import {
   onBundleDownloadResult,
   type BundleReport,
   type BundleSummary,
+  type EntryReport,
   type EntrySummary,
 } from "@/lib/bundles";
 import { onJobProgress, type JobProgress } from "@/lib/jobs";
+import { isTextList } from "@/lib/remembered";
+import { useRemembered } from "@/lib/useRemembered";
 
 /** Tally of the six `EntryOutcome` kinds a finished report can hold. Six,
  *  not five — `not-placed` is Task 5 review's own Critical fix, and a report
@@ -74,11 +77,62 @@ function tally(report: BundleReport): OutcomeTally {
   return counts;
 }
 
-/** Entries this screen cannot honestly promise to fetch — a mirror ART has
- *  no configured registry for yet, or a file the catalogue says only the
- *  user can supply. Rendered with their own sentence, never a tick. */
-function cannotFetch(kind: EntrySummary["kind"]): boolean {
-  return kind === "mirror" || kind === "user-supplied";
+/** The three kinds this screen still cannot honestly promise to fetch, on
+ *  top of `mirror`. `resolve.rs` (`core/sources/bundle/resolve.rs`) refuses
+ *  every `aminet-search` and every `github-release` unconditionally too —
+ *  ART has no version-resolution engine and no GitHub mirror configured yet
+ *  — so a set built entirely of one of these (`emu68` is 4/4
+ *  `github-release`) must not offer a tick that can do nothing (§10/§89). */
+type UnfetchableKind = Exclude<EntrySummary["kind"], "aminet">;
+
+/** Entries this screen cannot honestly promise to fetch. Rendered with their
+ *  own sentence, never a tick. */
+function cannotFetch(kind: EntrySummary["kind"]): kind is UnfetchableKind {
+  return kind !== "aminet";
+}
+
+/** The i18n key naming *why* ART cannot fetch one of the four unfetchable
+ *  kinds — one sentence per kind, not one sentence shared across all of
+ *  them, so "no mirror configured" and "no GitHub mirror configured" and
+ *  "ART cannot resolve 'latest version' yet" stay distinct on screen. */
+function reasonKey(kind: UnfetchableKind): string {
+  switch (kind) {
+    case "mirror":
+      return "bundles.entry.reason.mirror";
+    case "user-supplied":
+      return "bundles.entry.reason.userSupplied";
+    case "github-release":
+      return "bundles.entry.reason.githubRelease";
+    case "aminet-search":
+      return "bundles.entry.reason.aminetSearch";
+  }
+}
+
+/** How many of a set's entries ART can actually fetch today. */
+function fetchableCount(entries: EntrySummary[]): number {
+  return entries.filter((entry) => !cannotFetch(entry.kind)).length;
+}
+
+/** One line per outcome kind, carrying whatever string that outcome itself
+ *  carries — `path`, `existing`, `why` or `error`. The count badges above
+ *  stay as a summary; this is the detail underneath naming which entries
+ *  and what happened to each (CLAUDE.md: "a refusal must be actionable" and
+ *  "a user told 'it failed' ... has been given nothing"). */
+function entrySentence(t: (key: string, options?: Record<string, unknown>) => string, entry: EntryReport): string {
+  switch (entry.outcome.outcome) {
+    case "downloaded":
+      return t("bundles.result.entry.downloaded", { path: entry.outcome.path });
+    case "already-have":
+      return t("bundles.result.entry.alreadyHave", { path: entry.outcome.path });
+    case "not-placed":
+      return t("bundles.result.entry.notPlaced", { existing: entry.outcome.existing });
+    case "refused":
+      return t("bundles.result.entry.refused", { why: entry.outcome.why });
+    case "failed":
+      return t("bundles.result.entry.failed", { error: entry.outcome.error });
+    case "skipped":
+      return t("bundles.result.entry.skipped");
+  }
 }
 
 /** Entries sharing a non-null `exclusiveGroup`, grouped in catalogue order. */
@@ -97,7 +151,14 @@ export function BundlePanel() {
   const { t } = useTranslation();
   const [sets, setSets] = useState<BundleSummary[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
-  const [chosen, setChosen] = useState<Record<string, boolean>>({});
+  // Which sets are ticked — remembered, not `useState`: "nothing changes
+  // unless the user changes it" holds for the whole product
+  // (CLAUDE.md, and the user's own words are "ürünün tamamı için"), and a
+  // set list is no exception just because an earlier pass here treated it
+  // as transient. A guarded `isTextList` means a hand-edited or stale
+  // settings file falls back to an empty selection rather than putting a
+  // bad value on screen.
+  const [chosenIds, setChosenIds] = useRemembered<string[]>("bundles.chosenSets", isTextList, []);
   const [busy, setBusy] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const [report, setReport] = useState<BundleReport | null>(null);
@@ -158,14 +219,25 @@ export function BundlePanel() {
   }, []);
 
   function toggleSet(id: string) {
-    setChosen((current) => ({ ...current, [id]: !current[id] }));
+    setChosenIds(
+      chosenIds.includes(id) ? chosenIds.filter((chosen) => chosen !== id) : [...chosenIds, id]
+    );
+  }
+
+  // The `hepsi` set the design specifies: "everything", computed rather than
+  // ever listed as catalogue data, so it cannot drift from the 14 shipped
+  // sets. A plain select-all control over their ids.
+  const allSetIds = useMemo(() => (sets ?? []).map((set) => set.id), [sets]);
+  const allChosen = allSetIds.length > 0 && allSetIds.every((id) => chosenIds.includes(id));
+  function toggleAll() {
+    setChosenIds(allChosen ? [] : allSetIds);
   }
 
   async function run() {
     setRunError(null);
     setReport(null);
     const ids = (sets ?? [])
-      .filter((set) => chosen[set.id])
+      .filter((set) => chosenIds.includes(set.id))
       .flatMap((set) => set.entries.map((entry) => entry.id));
     if (ids.length === 0) {
       setRunError(t("bundles.blocked.nothingChosen"));
@@ -204,24 +276,45 @@ export function BundlePanel() {
       )}
 
       {sets && sets.length > 0 && (
-        <div
-          style={{
-            display: "grid",
-            gap: 10,
-            gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-            marginTop: 8,
-          }}
-        >
-          {sets.map((set) => (
-            <BundleCard
-              key={set.id}
-              set={set}
-              checked={!!chosen[set.id]}
-              onToggle={() => toggleSet(set.id)}
+        <>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              gap: 6,
+              cursor: "pointer",
+              marginTop: 8,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={allChosen}
+              onChange={toggleAll}
               disabled={busy}
+              aria-label={t("bundles.set.hepsi")}
             />
-          ))}
-        </div>
+            <strong style={{ fontSize: 13 }}>{t("bundles.set.hepsi")}</strong>
+          </label>
+
+          <div
+            style={{
+              display: "grid",
+              gap: 10,
+              gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+              marginTop: 8,
+            }}
+          >
+            {sets.map((set) => (
+              <BundleCard
+                key={set.id}
+                set={set}
+                checked={chosenIds.includes(set.id)}
+                onToggle={() => toggleSet(set.id)}
+                disabled={busy}
+              />
+            ))}
+          </div>
+        </>
       )}
 
       <div
@@ -289,6 +382,23 @@ export function BundlePanel() {
               {t("bundles.result.skipped", { count: counts.skipped })}
             </div>
           )}
+
+          {/* The counts above are a summary; this names each entry and the
+              string its own outcome carries — which four ART could not
+              fetch and why, which one failed and how, where the rest
+              landed. A count alone cannot answer any of that. */}
+          <ul
+            data-testid="bundle-report-detail"
+            style={{ listStyle: "none", margin: "6px 0 0", padding: 0 }}
+          >
+            {report.entries.map((entry) => (
+              <li key={entry.id} style={{ padding: "2px 0" }}>
+                <strong>{entry.name}</strong>
+                {" — "}
+                {entrySentence(t, entry)}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </section>
@@ -318,6 +428,7 @@ function BundleCard({
   // already on disk.
   const flagged = set.entries.filter((entry) => entry.permission !== null);
   const groups = exclusiveGroups(set.entries);
+  const fetchable = fetchableCount(set.entries);
 
   return (
     <div className="card" style={{ padding: 10 }}>
@@ -337,8 +448,12 @@ function BundleCard({
         <input
           type="checkbox"
           checked={checked}
+          // Nothing can come of ticking a set ART cannot fetch a single
+          // entry from — `emu68` is 4/4 `github-release`, and offering a
+          // working-looking tick over it is exactly the "offer what it
+          // cannot do" defect §10/§89 forbid.
+          disabled={disabled || fetchable === 0}
           onChange={onToggle}
-          disabled={disabled}
           aria-label={`${set.id} — ${label}`}
         />
         <strong style={{ fontSize: 14 }}>{label}</strong>
@@ -346,6 +461,11 @@ function BundleCard({
       <div className="faint" style={{ fontSize: 11, marginTop: 2 }}>
         {t("bundles.entryCount", { count: set.entries.length })}
       </div>
+      {fetchable < set.entries.length && (
+        <div className="faint" style={{ fontSize: 11 }}>
+          {t("bundles.fetchableCount", { fetchable, total: set.entries.length })}
+        </div>
+      )}
 
       {/* Shown, never enforced (the spec's own correction): two entries
           sharing a group are alternatives *to install*, and downloading
@@ -367,12 +487,7 @@ function BundleCard({
               <span className="muted">
                 <strong>{entry.name}</strong>
                 {" — "}
-                {t("bundles.entry.userSupplied", {
-                  why:
-                    entry.kind === "mirror"
-                      ? t("bundles.entry.reason.mirror")
-                      : t("bundles.entry.reason.userSupplied"),
-                })}
+                {t("bundles.entry.userSupplied", { why: t(reasonKey(entry.kind)) })}
               </span>
             ) : (
               <span>{entry.name}</span>
