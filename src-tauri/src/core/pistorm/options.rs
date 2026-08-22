@@ -259,13 +259,23 @@ pub fn gated_for(options: &Emu68Options, hardware: PistormHardware) -> Emu68Opti
     gated
 }
 
+/// The two storage-driver prefixes Emu68 documents, and ART writes both.
+///
+/// `brcm-sdhc.device` is Pi Zero2/3A+/3B/3B+; `brcm-emmc.device` is Pi4B+/CM4
+/// — Emu68's own SD-preparation tutorial. Which one *binds* is Emu68's
+/// decision, taken from the hardware at boot, so writing both costs nothing
+/// and stops a card losing its setting when it changes board.
+pub const STORAGE_PREFIXES: [&str; 2] = ["sd", "emmc"];
+
 /// Every token name ART owns.
 ///
 /// The merge below uses this to tell "a token whose feature the user has just
 /// switched off" — which must be removed — from "a boot parameter that is none
-/// of ART's business" — which must survive untouched. Both storage prefixes are
-/// listed, so that changing the Pi from a 3A to a CM4 removes the stale `sd.*`
-/// tokens rather than leaving them beside the new `emmc.*` ones.
+/// of ART's business" — which must survive untouched. Both storage prefixes
+/// are listed, and since 2026-08-22 both are also always *written* — see
+/// [`STORAGE_PREFIXES`]. They stay listed here because a `verbose` or
+/// `low_speed` the user switches off still has to be removed from a line that
+/// already carries it, under either prefix.
 pub const MANAGED_TOKENS: &[&str] = &[
     "sd.unit0",
     "sd.verbose",
@@ -307,24 +317,102 @@ pub const MANAGED_TOKENS: &[&str] = &[
     "kickstart",
 ];
 
+/// The same storage settings again, as `config.txt` overlay lines — the
+/// mechanism a **newer** Emu68 reads (2026-08-22 research, see
+/// `docs/superpowers/specs/2026-08-22-emu68-boot-config.md`).
+///
+/// # Why both files carry it
+///
+/// Emu68's own `documentation/overlays.md`: *"Starting with Emu68 1.1 the use
+/// of cmdline.txt for adjusting Emu68 parameters is obsolete. Instead, device
+/// tree overlays can be injected through config.txt."* The storage settings
+/// moved to `sdhc.dtbo` / `emmc.dtbo`.
+///
+/// **The owner's own Emu68 has not moved yet, and that was measured rather
+/// than assumed.** Their `Emu68-pistorm.gz` is `1.1.0-alpha.1 (09.02.2026)`
+/// and its binary still contains every `sd.*` / `emmc.*` token ART writes,
+/// while *not* containing master's `whole-drive-access` property. So
+/// `cmdline.txt` is live for them and stays exactly as it is.
+///
+/// Writing both is what makes the card survive the day they update: an old
+/// Emu68 has no `sdhc.dtbo` to load and the Pi bootloader **silently ignores
+/// a missing overlay and keeps going**; a new one ignores the cmdline tokens.
+/// Neither mechanism has to guess which is live.
+///
+/// # Why the lines are board-conditional and not simply listed
+///
+/// `start.c` decides which storage driver to enable from the hardware —
+/// *"make brcm-emmc enabled on bcm2711 (Pi4, CM4, Pi400), disabled
+/// otherwise"* — **but only when the node was not loaded from an overlay.**
+/// An unconditional `dtoverlay=emmc` therefore enables `brcm-emmc` on a Pi3,
+/// which has no eMMC. The sections come from the Raspberry Pi documentation's
+/// own filter table: `[pi3]` is 3B/3B+/3A+/CM3/CM3+, `[pi02]` is the Zero 2 W,
+/// and `[pi4]` **already covers CM4 and CM4S** — which is why there is no
+/// `[cm4]` here. Closed with `[all]`, which *"resets all previously set
+/// filters"*, so nothing written after the block inherits one.
+pub fn storage_overlay_lines(options: &Emu68Options) -> Vec<String> {
+    let mut params = vec![format!("unit0={}", options.storage_unit0.token_value())];
+    if let Some(level) = options.storage_verbose {
+        params.push(format!("verbose={level}"));
+    }
+    if options.storage_low_speed {
+        params.push("low_speed".to_string());
+    }
+    if let Some(mhz) = options.storage_clock_mhz {
+        params.push(format!("clock={mhz}"));
+    }
+    let params = params.join(",");
+
+    vec![
+        "[pi3]".to_string(),
+        format!("dtoverlay=sdhc,{params}"),
+        "[pi02]".to_string(),
+        format!("dtoverlay=sdhc,{params}"),
+        "[pi4]".to_string(),
+        format!("dtoverlay=emmc,{params}"),
+        "[all]".to_string(),
+    ]
+}
+
 /// The tokens ART wants the line to contain, in documentation order.
 pub fn tokens_for(options: &Emu68Options, hardware: PistormHardware) -> Vec<String> {
     let options = gated_for(options, hardware);
-    let prefix = hardware.pi.storage_token_prefix();
     let mut tokens = Vec::new();
 
-    tokens.push(format!(
-        "{prefix}.unit0={}",
-        options.storage_unit0.token_value()
-    ));
-    if let Some(level) = options.storage_verbose {
-        tokens.push(format!("{prefix}.verbose={level}"));
-    }
-    if options.storage_low_speed {
-        tokens.push(format!("{prefix}.low_speed"));
-    }
-    if let Some(mhz) = options.storage_clock_mhz {
-        tokens.push(format!("{prefix}.clock={mhz}"));
+    // **Both prefixes, always** — the storage settings are written for
+    // `brcm-sdhc.device` *and* `brcm-emmc.device`, so one card serves a Pi3
+    // and a Pi4 (2026-08-22 research, `docs/superpowers/specs/2026-08-22-emu68-boot-config.md`).
+    //
+    // ART used to write only the prefix its configured Pi model implies. That
+    // was not wrong, but it made the card carry a setting that silently
+    // stopped applying the moment somebody moved it to the other board — and
+    // moving a card between boards is a thing people do with these.
+    //
+    // Safe because **Emu68 picks the driver itself, from the hardware**:
+    // `start.c` enables `brcm-emmc` on bcm2711 and `brcm-sdhc` otherwise, so
+    // the prefix that does not match sets properties on a device that is
+    // disabled. The Emu68 Imager writes both for the same reason, which is
+    // the practical evidence that both are tolerated.
+    //
+    // The `ro` default is Emu68's own, and its own SD-preparation tutorial
+    // warns against writing to unit 0 — the *whole card*, partition table and
+    // FAT32 boot partition included. ART does not adopt the Imager's `rw`:
+    // that serves the Imager's own Install-folder mechanism, which ART has
+    // no equivalent of.
+    for prefix in STORAGE_PREFIXES {
+        tokens.push(format!(
+            "{prefix}.unit0={}",
+            options.storage_unit0.token_value()
+        ));
+        if let Some(level) = options.storage_verbose {
+            tokens.push(format!("{prefix}.verbose={level}"));
+        }
+        if options.storage_low_speed {
+            tokens.push(format!("{prefix}.low_speed"));
+        }
+        if let Some(mhz) = options.storage_clock_mhz {
+            tokens.push(format!("{prefix}.clock={mhz}"));
+        }
     }
 
     if options.vbr_move {
@@ -591,20 +679,94 @@ mod tests {
         }
     }
 
+    /// **Both prefixes, whatever the Pi** — changed deliberately on
+    /// 2026-08-22, and this test used to assert the opposite.
+    ///
+    /// ART wrote only the prefix its configured model implies, which meant a
+    /// card carried from a Pi3 to a Pi4 silently stopped honouring the
+    /// setting. Emu68 picks the driver from the hardware itself, so the
+    /// prefix that does not match writes to a disabled device — and the Emu68
+    /// Imager writes both for the same reason.
     #[test]
-    fn the_storage_prefix_follows_the_pi() {
+    fn both_storage_prefixes_are_written_whatever_the_pi_is() {
         let options = Emu68Options {
             storage_unit0: StorageExposure::ReadWrite,
             storage_verbose: Some(1),
             ..Emu68Options::default()
         };
-        let on_a_pi3 = tokens_for(&options, a500()).join(" ");
-        assert!(on_a_pi3.contains("sd.unit0=rw"), "{on_a_pi3}");
-        assert!(on_a_pi3.contains("sd.verbose=1"), "{on_a_pi3}");
 
-        let on_a_cm4 = tokens_for(&options, a1200_cm4()).join(" ");
-        assert!(on_a_cm4.contains("emmc.unit0=rw"), "{on_a_cm4}");
-        assert!(!on_a_cm4.contains("sd."), "{on_a_cm4}");
+        for (what, hardware) in [("Pi3", a500()), ("CM4", a1200_cm4())] {
+            let line = tokens_for(&options, hardware).join(" ");
+            for expected in [
+                "sd.unit0=rw",
+                "emmc.unit0=rw",
+                "sd.verbose=1",
+                "emmc.verbose=1",
+            ] {
+                assert!(
+                    line.contains(expected),
+                    "on {what}, missing {expected}: {line}"
+                );
+            }
+        }
+    }
+
+    /// The `config.txt` half of the same settings, and the two must agree —
+    /// they are one choice written for two Emu68 generations.
+    #[test]
+    fn the_overlay_block_says_what_the_cmdline_says() {
+        let options = Emu68Options {
+            storage_unit0: StorageExposure::ReadWrite,
+            storage_verbose: Some(2),
+            storage_low_speed: true,
+            storage_clock_mhz: Some(40),
+            ..Emu68Options::default()
+        };
+        let lines = storage_overlay_lines(&options);
+        let block = lines.join("\n");
+
+        // Every parameter the cmdline carries, carried here too.
+        for param in ["unit0=rw", "verbose=2", "low_speed", "clock=40"] {
+            assert!(block.contains(param), "missing {param}: {block}");
+        }
+
+        // **The hazard this shape exists for.** `start.c` only picks the
+        // driver by hardware when the node was *not* loaded from an overlay,
+        // so an unconditional `dtoverlay=emmc` enables brcm-emmc on a Pi3.
+        // Every overlay line must sit under a board filter.
+        let mut section = String::new();
+        for line in &lines {
+            if line.starts_with('[') {
+                section = line.clone();
+            } else if line.starts_with("dtoverlay=sdhc") {
+                assert!(
+                    section == "[pi3]" || section == "[pi02]",
+                    "sdhc under {section}: {block}"
+                );
+            } else if line.starts_with("dtoverlay=emmc") {
+                assert!(section == "[pi4]", "emmc under {section}: {block}");
+            }
+        }
+
+        // `[pi4]` already covers CM4 and CM4S in the Raspberry Pi filter
+        // table, so a `[cm4]` section would be a second place to keep in step
+        // with the first.
+        assert!(!block.contains("[cm4]"), "{block}");
+
+        // Closed with `[all]`, which resets the filters — otherwise whatever
+        // ART or the user writes next inherits `[pi4]`.
+        assert_eq!(lines.last().map(String::as_str), Some("[all]"), "{block}");
+    }
+
+    /// The default is `ro`, in both files, and it is stated rather than left
+    /// to Emu68's own default — the same reasoning as `MaxTransfer` in
+    /// `rdb.rs`: an unstated value is not a conservative one.
+    #[test]
+    fn the_overlay_block_is_read_only_until_somebody_says_otherwise() {
+        let block = storage_overlay_lines(&Emu68Options::default()).join("\n");
+        assert!(block.contains("dtoverlay=sdhc,unit0=ro"), "{block}");
+        assert!(block.contains("dtoverlay=emmc,unit0=ro"), "{block}");
+        assert!(!block.contains("rw"), "{block}");
     }
 
     #[test]
@@ -711,14 +873,30 @@ mod tests {
         assert_eq!(order[2], "console=tty1");
     }
 
+    /// The other prefix is no longer *stale* — it is wanted — but a value
+    /// the user changed still has to reach **both**, and a card written by an
+    /// older ART carries only one.
+    ///
+    /// This is the same card the old
+    /// `a_stale_token_from_the_other_storage_prefix_is_cleaned_up` was about,
+    /// asking the question the new rule makes of it: the `rw` on the line is
+    /// ART's own token, so it is replaced with what the options now say, and
+    /// the prefix that was missing is added rather than left out.
     #[test]
-    fn a_stale_token_from_the_other_storage_prefix_is_cleaned_up() {
-        // A card built for a Pi 3 and moved to a CM4 would otherwise carry both
-        // `sd.unit0` and `emmc.unit0`, and the wrong one might win.
+    fn a_line_from_an_older_art_gains_the_prefix_it_lacks() {
         let existing = "root=/dev/x sd.unit0=rw sd.verbose=2";
         let merged = merge_cmdline(&Emu68Options::default(), a1200_cm4(), Some(existing));
-        assert!(!merged.contains("sd."), "{merged}");
+
+        assert!(merged.contains("sd.unit0=ro"), "{merged}");
         assert!(merged.contains("emmc.unit0=ro"), "{merged}");
+        assert!(
+            !merged.contains("verbose"),
+            "a verbose the options no longer ask for is still removed: {merged}"
+        );
+        assert!(merged.contains("root=/dev/x"), "{merged}");
+        // Once each, under each prefix — a merge that appended rather than
+        // replaced would read as two contradictory settings.
+        assert_eq!(merged.matches("unit0=").count(), 2, "{merged}");
     }
 
     #[test]
@@ -747,7 +925,7 @@ mod tests {
     fn an_empty_or_missing_line_gets_just_our_tokens() {
         for existing in [None, Some(""), Some("   \n ")] {
             let merged = merge_cmdline(&Emu68Options::default(), a500(), existing);
-            assert_eq!(merged, "sd.unit0=ro", "{existing:?}");
+            assert_eq!(merged, "sd.unit0=ro emmc.unit0=ro", "{existing:?}");
         }
     }
 

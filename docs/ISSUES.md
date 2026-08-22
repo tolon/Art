@@ -568,6 +568,108 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-215** 🟠 ✅ **A card ART builds would stop honouring its own
+storage settings the day the user updates Emu68** — *found 2026-08-23 by
+external research before item 7 was designed; fixed the same day*
+`src-tauri/src/core/pistorm/options.rs::storage_overlay_lines` ·
+`firmware.rs::merge_config_txt_with_overlays`
+
+**Emu68 moved the mechanism.** `documentation/overlays.md`: *"Starting with
+Emu68 1.1 the use of cmdline.txt for adjusting Emu68 parameters is obsolete.
+Instead, device tree overlays can be injected through config.txt."* The
+storage settings live in `sdhc.dtbo` / `emmc.dtbo` now, and master's
+`parse_cmdline` handles 28 tokens of which **none** is `sd.unit0`.
+
+**The hypothesis that came out of reading that was wrong, and the artefact
+refuted it.** The owner's Emu68 is `1.1.0-alpha.1`, so the reading said their
+card's `cmdline.txt` was already inert — a second [ART-204](#fixed). Then their
+own `Emu68-pistorm.gz` was decompressed and searched: it contains **all 35**
+tokens ART writes, and does *not* contain master's `whole-drive-access`. Their
+build still reads cmdline.txt. Five sources agreed with each other and with
+nothing that was on the disk; the sixth was the disk.
+
+**So ART writes both**, and each is ignored by the generation that does not
+use it. `cmdline.txt` keeps its tokens. `config.txt` gains a managed block:
+
+```
+[pi3]
+dtoverlay=sdhc,unit0=ro
+[pi02]
+dtoverlay=sdhc,unit0=ro
+[pi4]
+dtoverlay=emmc,unit0=ro
+[all]
+```
+
+**Board-conditional, and that is not tidiness.** `start.c` picks the storage
+driver from the hardware *"but only when the node was not loaded from an
+overlay"* — so an unconditional `dtoverlay=emmc` enables `brcm-emmc` on a Pi3,
+which has no eMMC. Sections from the Raspberry Pi filter table: `[pi3]` is
+3B/3B+/3A+/CM3/CM3+, `[pi02]` the Zero 2 W, and `[pi4]` **already covers CM4
+and CM4S**, which is why there is no `[cm4]`. Closed with `[all]`, which
+*"resets all previously set filters"*.
+
+Safe on an old Emu68 because the Pi bootloader *"silently ignores"* a missing
+overlay rather than failing the boot — verified before the lines were written,
+not after.
+
+**And both storage prefixes go on the cmdline now**, so a card carried from a
+Pi3 to a Pi4 does not silently lose the setting. Emu68 picks the driver
+itself, so the prefix that does not match writes to a disabled device; the
+Emu68 Imager writes both for the same reason.
+
+**`ro` stays ART's default**, on evidence rather than inertia: it is Emu68's
+own default, stated twice in its source, and its own SD-preparation tutorial
+warns off unit 0 — *the entire card*, partition table and FAT32 boot partition
+included. The Imager writes `rw` because *its* Install-folder mechanism needs
+it; ART has no such mechanism and does not adopt a number without its reason.
+
+*Tests:* 7 new (`options::the_overlay_block_says_what_the_cmdline_says`,
+`..._is_read_only_until_somebody_says_otherwise`,
+`both_storage_prefixes_are_written_whatever_the_pi_is`,
+`a_line_from_an_older_art_gains_the_prefix_it_lacks`, and four in `firmware`
+covering idempotence, replacement, foreign overlays and placement).
+
+**Five mutations run, five fell:** one prefix again · the overlays made
+unconditional · the closing `[all]` dropped · the block allowed to accumulate
+· a foreign `dtoverlay=` eaten.
+
+**One defect the tests found while being written**, and it is the reason the
+idempotence test exists: the first version dropped ART's `dtoverlay=` lines
+but left their section headers, so every save appended a fresh block under a
+growing skeleton of empty `[pi3] [pi02] [pi4] [all]`. The block is delimited
+by its own marker comment now and removed whole. A stated residue remains: if
+somebody deletes the marker line by hand, ART removes its overlay lines and
+leaves the bare headers, which are inert.
+
+**ART-216** 🔵 ✅ **A committed doc block told the reader to run a
+command against a path with a BEL byte in it** — *found 2026-08-23 by a
+control-byte sweep, the second instance in two days*
+`src-tauri/src/core/card/build.rs` · `scripts/control-byte-sweep.py`
+
+`E:\amiga` written through a heredoc arrives as `E:` + BEL + `miga`. The
+`build_real_card_when_asked` hook's own instructions carried three of them and
+had its line breaks eaten as well, so the whole block rendered as one line
+with stray `///` markers inside it. Nothing failed; the text was simply wrong,
+and it had been committed.
+
+CLAUDE.md already warns about this in as many words. What it did not have was
+anything that *finds* it — both instances were found by somebody sweeping by
+hand, one of them ten days late.
+
+**Now it is a build failure.** `scripts/control-byte-sweep.py` runs in CI.
+The hard part is that some control bytes here are real: an AmigaDOS DosType
+*is* `DOS\0`, `DOS\7`, `PDS\3`, `PFS\3`, and a sweep that flagged those
+would be switched off within a week. So the allow-list is **per file with a
+reason**, the same shape `scripts/scratch-root-sweep.py` uses — seven files,
+each saying which DosTypes it carries. An allow-listed file is still **not** a
+blind spot for a byte that is never data (BEL in a path, BS, VT, FF, ESC),
+which is its own mutation below.
+
+**Two mutations run, two fell:** the BEL put back in `build.rs` (named by file
+and line), and a `\b` added to an allow-listed file (caught, proving the
+allow-list does not blind it).
+
 **ART-196** 🟠 ✅ **ART wrote its scratch to the system drive and the
 user could not move it** — *raised by the owner 2026-08-21, after their C: had
 already been filled once by ART's own test scratch; fixed 2026-08-22*

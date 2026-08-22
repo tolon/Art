@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### A card that keeps working when you update Emu68 (2026-08-23)
+
+#### Fixed
+- **The storage settings are now written where both Emu68 generations look
+  for them.** Emu68 1.1 and newer read them from `config.txt` as device-tree
+  overlays; older ones read `cmdline.txt`. ART writes both, board by board, so
+  a card does not quietly stop honouring its own settings the day you update.
+- **One card serves a Pi3 and a Pi4.** The setting is written for both
+  storage drivers instead of only the one your configured Pi model uses, so
+  moving the card between boards does not lose it.
+- **The read-only default is confirmed and kept.** ART leaves the whole SD
+  card read-only to the Amiga, which is Emu68's own default — unit 0 is the
+  entire card, partition table and boot partition included. You can still
+  change it.
+- A doc block in ART's own source told the reader to run a command against a
+  corrupted path; a new check now fails the build on that class of mistake.
+
 ### ART asks where to do its working-out, and stops filling your C: (2026-08-22)
 
 #### Added
