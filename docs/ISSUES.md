@@ -598,6 +598,42 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-220** 🔴 ✅ **The storage overlay block inherited whatever filter
+the user's `config.txt` left open** — *found 2026-08-23, hours after
+[ART-215](#fixed) shipped it, by reading another project's real config file*
+`src-tauri/src/core/pistorm/options.rs::storage_overlay_lines`
+
+ART-215 appends its overlay block at the **end** of `config.txt`, opening with
+`[pi3]`. The Raspberry Pi documentation, quoted:
+
+> *"Filters of the same type replace each other … Filters of **different**
+> types can be combined by listing them one after the other … Use the `[all]`
+> filter to reset all previous filters and avoid unintentionally combining
+> different filter types."*
+
+**A real Emu68 `config.txt` ends inside a `[gpio4=…]` stanza.** Both
+`jit06/emu68-bootstrap`'s own `custom_cm4_config.txt` and ART's own
+`sectioned_config` fixture — measured for ART-204 — do exactly that. So
+`[pi3]` combined with the gpio filter it inherited, and the storage setting
+would have applied **only while that GPIO was in one state**. Silently, which
+is the whole reason ART-215 exists.
+
+**Fix: the block opens with `[all]` as well as closing with one.** One line,
+and the removal side needed the matching change — the block's *first* `[all]`
+is no longer its end, which the idempotence test caught within a second of the
+fix landing.
+
+**Found by the owner asking for a review of a project ART does not use**, and
+it is the sharpest case yet for this repository's first rule: reading Emu68's
+docs and the Pi's docs gave a design that looked right, and reading somebody
+else's **real file** showed it was not. ART-215's own spec had already said a
+missing overlay is harmless and that sections were needed; it did not think to
+ask what the file ends *in*.
+
+*Test:* `firmware::the_block_resets_a_filter_the_file_left_open`, over a file
+shaped like the real one, plus the opening `[all]` pinned in
+`options::the_overlay_block_says_what_the_cmdline_says`.
+
 **ART-219** 🟠 ✅ **Twelve sentences the user reads carried a run of
 fourteen spaces in the middle** — *found 2026-08-23 by extending the
 control-byte sweep, while measuring [ART-060](#open)*

@@ -364,6 +364,20 @@ pub fn storage_overlay_lines(options: &Emu68Options) -> Vec<String> {
     let params = params.join(",");
 
     vec![
+        // **Opens with `[all]`, and that is not symmetry.** The Raspberry Pi
+        // documentation: *"Filters of different types can be combined by
+        // listing them one after the other … Use the `[all]` filter to reset
+        // all previous filters and avoid unintentionally combining different
+        // filter types."*
+        //
+        // This block is appended at the **end** of the user's `config.txt`,
+        // and a real Emu68 file ends inside a `[gpio4=…]` stanza — both the
+        // `sectioned_config` fixture ART-204 was measured against and
+        // `jit06/emu68-bootstrap`'s own `custom_cm4_config.txt` do. Without
+        // this line `[pi3]` would combine with the gpio filter it inherited,
+        // and the storage setting would apply only while that GPIO happened
+        // to be in one state. Silently, which is the whole problem.
+        "[all]".to_string(),
         "[pi3]".to_string(),
         format!("dtoverlay=sdhc,{params}"),
         "[pi02]".to_string(),
@@ -753,8 +767,13 @@ mod tests {
         // with the first.
         assert!(!block.contains("[cm4]"), "{block}");
 
-        // Closed with `[all]`, which resets the filters — otherwise whatever
-        // ART or the user writes next inherits `[pi4]`.
+        // **Opened and closed with `[all]`.** Closed so nothing after it
+        // inherits `[pi4]`; opened because the block is appended to the end
+        // of a file that may itself end inside a `[gpio4=…]` stanza, and
+        // filters of *different* types combine rather than replace. Found by
+        // reading `jit06/emu68-bootstrap`'s real `custom_cm4_config.txt`,
+        // which ends in exactly that state.
+        assert_eq!(lines.first().map(String::as_str), Some("[all]"), "{block}");
         assert_eq!(lines.last().map(String::as_str), Some("[all]"), "{block}");
     }
 

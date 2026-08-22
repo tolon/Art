@@ -345,11 +345,21 @@ pub fn merge_config_txt_with_overlays(
     // Inside ART's own storage block, which is dropped whole and re-emitted
     // from the current options — see `STORAGE_BLOCK_MARKER`.
     let mut in_storage_block = false;
+    let mut storage_block_body_seen = false;
 
     for line in existing.lines() {
         let trimmed = line.trim();
 
         if in_storage_block {
+            // The block **opens** with an  too (see
+            // `storage_overlay_lines`), so the first one is not the end of it.
+            // Without this the removal stopped on line one and left the rest
+            // to be appended to on the next save — caught immediately by
+            // `the_storage_block_is_written_once_however_often_the_card_is_saved`.
+            if trimmed == "[all]" && !storage_block_body_seen {
+                storage_block_body_seen = true;
+                continue;
+            }
             // The block ends at the `[all]` it is written with. Consuming
             // that header too is deliberate: it belongs to the block, and
             // leaving it would make the next line inherit no filter when the
@@ -363,6 +373,7 @@ pub fn merge_config_txt_with_overlays(
         }
         if trimmed == STORAGE_BLOCK_MARKER {
             in_storage_block = true;
+            storage_block_body_seen = false;
             continue;
         }
 
@@ -722,6 +733,35 @@ kernel=Emu68-pistorm
         );
         // And every one of the release's own gpio stanzas still has its kernel.
         assert_eq!(merged.matches("kernel=").count(), 4, "{merged}");
+    }
+
+    /// **A file that ends inside a `[gpio…]` stanza does not capture the
+    /// block.**
+    ///
+    /// Found on 2026-08-23 by reading `jit06/emu68-bootstrap`'s own
+    /// `custom_cm4_config.txt`, which ends on `[gpio4=1] / initramfs kick.rom`
+    /// with no `[all]` after it — and ART's own `sectioned_config` fixture
+    /// ends the same way. The Raspberry Pi documentation is explicit that
+    /// filters of *different* types combine, so a block opening with `[pi3]`
+    /// would have meant "pi3 **and** gpio4=1" and the storage setting would
+    /// have applied in one boot mode only.
+    #[test]
+    fn the_block_resets_a_filter_the_file_left_open() {
+        let ends_in_a_gpio_stanza =
+            "kernel=Emu68-pistorm32lite\n[gpio4=0]\ninitramfs stealth.gz\n[gpio4=1]\ninitramfs kick.rom\n";
+        let merged = merge_config_txt_with_overlays(
+            &FirmwareConfig::default(),
+            &storage_block(),
+            Some(ends_in_a_gpio_stanza),
+        );
+
+        let after = &merged[merged.find("[gpio4=1]").expect("the stanza is kept")..];
+        let block_at = after.find("[pi3]").expect("the block is there");
+        let reset_at = after.find("[all]").expect("and it resets first");
+        assert!(
+            reset_at < block_at,
+            "an `[all]` must come between the file's open filter and ART's own: {merged}"
+        );
     }
 
     /// Nothing is written when there is nothing to write — the thin wrapper's
