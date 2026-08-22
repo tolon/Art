@@ -2156,7 +2156,7 @@
       "label": "Build into",
       "none": "No destination chosen.",
       "chooseTitle": "Choose where to build the distribution tree",
-      "hint": "A new folder — ART refuses to build into one that already exists."
+      "hint": "A new or empty folder. In the picker you can make one with New folder and choose it — ART refuses only a folder that already has something in it."
     },
     "components": {
       "heading": "Components",

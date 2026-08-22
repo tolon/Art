@@ -88,7 +88,8 @@ use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome, OperationRecord};
 use crate::core::osinstall::apply::{
-    add_package, apply, ApplyOutcome, DistributionManifest, FileRecord, MANIFEST_FILE_NAME,
+    add_package, apply, refuse_unless_free, ApplyOutcome, DistributionManifest, FileRecord,
+    MANIFEST_FILE_NAME,
 };
 use crate::core::osinstall::chain::{self, TreeSummary};
 use crate::core::osinstall::collide::{self, CollisionReport, Incoming};
@@ -159,9 +160,17 @@ pub enum MediaScanResult {
 /// A path that cannot be examined answers `false` — not because it is known
 /// to be free, but because `apply()` is the one that decides, and guessing
 /// "taken" here would block an install the engine would have allowed.
+///
+/// **ART-203.** This asks `apply`'s own question through `apply`'s own
+/// function rather than a second, similar one. It used to be
+/// `destination.try_exists()`, which was the same answer the engine gave —
+/// and both were wrong in the same way: a folder picker can only return a
+/// folder that exists, so every destination a user could choose read as taken.
+/// One question, one implementation, so the screen and the engine cannot
+/// disagree about which destinations are usable.
 #[tauri::command]
 pub fn osinstall_destination_taken(destination: PathBuf) -> AppResult<bool> {
-    Ok(destination.try_exists().unwrap_or(false))
+    Ok(refuse_unless_free(&destination).is_err())
 }
 
 /// What a folder is, so a field can say it the moment it is picked (ART-199).
@@ -1804,6 +1813,60 @@ pub fn osinstall_verify(
 mod tests {
     use super::*;
     use crate::core::jobs::NoProgress;
+    use crate::core::ScratchDir;
+
+    /// **ART-203.** The screen asks this while the folder is being picked, and
+    /// a folder picker can only hand back a folder that exists. If an empty
+    /// one read as taken, every destination a user could choose would be
+    /// blocked — which is what happened, and why no tree was ever built from
+    /// the screen.
+    #[test]
+    fn an_empty_directory_is_not_taken() {
+        let dir = ScratchDir::new("art-osinstall-cmd", "dest-empty");
+        let root = dir.join("dist");
+        std::fs::create_dir_all(&root).unwrap();
+        assert!(!osinstall_destination_taken(root).unwrap());
+    }
+
+    #[test]
+    fn a_directory_with_anything_in_it_is_taken() {
+        let dir = ScratchDir::new("art-osinstall-cmd", "dest-occupied");
+        let root = dir.join("dist");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("work.txt"), "mine").unwrap();
+        assert!(osinstall_destination_taken(root).unwrap());
+    }
+
+    #[test]
+    fn a_path_that_is_not_there_is_not_taken() {
+        let dir = ScratchDir::new("art-osinstall-cmd", "dest-absent");
+        assert!(!osinstall_destination_taken(dir.join("nothing-here")).unwrap());
+    }
+
+    /// The screen and the engine answer the same question through the same
+    /// function, so they cannot drift apart — which is the defect this whole
+    /// entry is about, seen from the other side.
+    #[test]
+    fn the_screen_and_the_engine_agree_about_every_shape() {
+        let dir = ScratchDir::new("art-osinstall-cmd", "dest-agree");
+        let empty = dir.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        let occupied = dir.join("occupied");
+        std::fs::create_dir_all(&occupied).unwrap();
+        std::fs::write(occupied.join("x"), "x").unwrap();
+        let absent = dir.join("absent");
+
+        for path in [empty, occupied, absent] {
+            let engine_refuses = refuse_unless_free(&path).is_err();
+            let screen_says_taken = osinstall_destination_taken(path.clone()).unwrap();
+            assert_eq!(
+                engine_refuses,
+                screen_says_taken,
+                "screen and engine disagree about {}",
+                path.display()
+            );
+        }
+    }
 
     /// **The wire, written down.** `src/lib/osinstall.ts` builds this object
     /// by hand; nothing else in either build checks that the two agree.

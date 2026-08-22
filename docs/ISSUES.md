@@ -26,56 +26,6 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-203** 🔴 **A distribution tree cannot be built from the screen at
-all: the folder picker can only return a folder that exists, and `apply`
-refuses every folder that exists** — *found 2026-08-22, from the owner's
-question "neden işletim sistemi oluşturamıyorum?"*
-`src-tauri/src/core/osinstall/apply.rs` ·
-`src-tauri/src/commands/osinstall.rs::osinstall_destination_taken` ·
-`src/components/osbuilder/OsInstall.tsx::chooseDestination`
-
-`apply` opens with `SAFE_CREATE`: *"`root` must not already exist"*. The
-screen's destination is chosen with `open({ directory: true })`, and a folder
-picker **cannot return a folder that is not there** — the "New folder" button
-creates it, and it exists from that moment. Delete it by hand and there is
-nothing left to select.
-
-Measured on the owner's own machine: `E:\amiga\Amigatolon\os39\art1`,
-created 01:44, **empty**, and the Build button locked against it.
-
-**So the loop has no exit, and it never had one.** Every tree this project has
-ever built came from the env-gated test hook, which takes a path string and
-never sees a dialog. `docs/STATUS.md` already records what this looked like
-from the other side — *"three consecutive `ART-SAFETY-REFUSED` entries in the
-operation log over an existing destination"* — and the fix that round applied
-(`osinstall_destination_taken`, blocking before the button instead of failing
-after it) made the dead end **visible** without making it passable. That is
-worth keeping in mind on its own: a defect can be made honest and still not be
-fixed.
-
-**Proposed fix: narrow the refusal to what it is actually for.**
-`SAFE_CREATE`'s purpose is that ART never builds over somebody's data. **An
-empty directory holds no data.** So an existing directory is accepted when it
-is empty and refused when it is not, and the sentence for a non-empty one says
-which of the two it is. The idiom is already in this codebase, one module
-over: `packagevol::unpack` refuses with *"already has contents; a package is
-unpacked into an empty directory"*.
-
-`read_dir().next().is_some()` is the test, so a folder holding **anything at
-all** — including a hidden file, including a single `.DS_Store` — is still
-refused. Nothing is emptied, nothing is overwritten, and a file that was there
-before the build is still there after a refusal.
-
-`osinstall_destination_taken` answers the same question, so the screen and the
-engine cannot disagree about which destinations are usable — the disagreement
-this entry is about.
-
-**Not yet fixed.** The owner redirected this session to external research
-before more code was written, which is this project's own rule and the right
-call: the fix touches a safety rule, and a wiki describing how the established
-tool prepares these cards may say something about destinations that changes
-it.
-
 **ART-196** 🟠 **ART writes its scratch to the system drive and the user
 cannot move it** — *raised by the owner 2026-08-21, after their C: had already
 been filled once by ART's own test scratch*
@@ -691,6 +641,95 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-203** 🔴 ✅ **A distribution tree cannot be built from the screen at
+all: the folder picker can only return a folder that exists, and `apply`
+refuses every folder that exists** — *found 2026-08-22, from the owner's
+question "neden işletim sistemi oluşturamıyorum?"*
+`src-tauri/src/core/osinstall/apply.rs` ·
+`src-tauri/src/commands/osinstall.rs::osinstall_destination_taken` ·
+`src/components/osbuilder/OsInstall.tsx::chooseDestination`
+
+`apply` opens with `SAFE_CREATE`: *"`root` must not already exist"*. The
+screen's destination is chosen with `open({ directory: true })`, and a folder
+picker **cannot return a folder that is not there** — the "New folder" button
+creates it, and it exists from that moment. Delete it by hand and there is
+nothing left to select.
+
+Measured on the owner's own machine: `E:\amiga\Amigatolon\os39\art1`,
+created 01:44, **empty**, and the Build button locked against it.
+
+**So the loop has no exit, and it never had one.** Every tree this project has
+ever built came from the env-gated test hook, which takes a path string and
+never sees a dialog. `docs/STATUS.md` already records what this looked like
+from the other side — *"three consecutive `ART-SAFETY-REFUSED` entries in the
+operation log over an existing destination"* — and the fix that round applied
+(`osinstall_destination_taken`, blocking before the button instead of failing
+after it) made the dead end **visible** without making it passable. That is
+worth keeping in mind on its own: a defect can be made honest and still not be
+fixed.
+
+**Proposed fix: narrow the refusal to what it is actually for.**
+`SAFE_CREATE`'s purpose is that ART never builds over somebody's data. **An
+empty directory holds no data.** So an existing directory is accepted when it
+is empty and refused when it is not, and the sentence for a non-empty one says
+which of the two it is. The idiom is already in this codebase, one module
+over: `packagevol::unpack` refuses with *"already has contents; a package is
+unpacked into an empty directory"*.
+
+`read_dir().next().is_some()` is the test, so a folder holding **anything at
+all** — including a hidden file, including a single `.DS_Store` — is still
+refused. Nothing is emptied, nothing is overwritten, and a file that was there
+before the build is still there after a refusal.
+
+`osinstall_destination_taken` answers the same question, so the screen and the
+engine cannot disagree about which destinations are usable — the disagreement
+this entry is about.
+
+**Fixed 2026-08-22**, and the research it waited for did not change the
+answer — the reference tool writes whole cards and never faces this question.
+
+`apply::refuse_unless_free` is now the one implementation of `SAFE_CREATE`'s
+question, and it answers **three** shapes with three sentences: a path that is
+not there is free; a path that is a **file** is refused as *"not a folder"*; a
+directory with anything in it is refused as *"already has something in it …
+choose an empty folder, or a new one"*. An **empty** directory is accepted,
+because the rule is that ART never builds over somebody's data and an empty
+directory holds none.
+
+`read_dir().next().is_some()` is the test, so a folder holding a single hidden
+file is still refused — *"empty"* means the directory yields nothing at all,
+not *"nothing that looks important"*.
+
+**`osinstall_destination_taken` now calls that same function.** It used to ask
+`try_exists()`, which was a *second* implementation that happened to agree with
+the engine's — and both were wrong the same way, which is exactly why the
+screen could say the refusal early and still not help. One question, one
+implementation.
+
+Both catalogues' `osinstall.destination.hint` changed with it: the field said
+*"A new folder — ART refuses to build into one that already exists"*, which
+described a rule the user could not satisfy. It now says a new **or empty**
+folder, and that the picker's *New folder* button is a way to make one.
+
+Tests: `an_existing_empty_destination_is_accepted`,
+`an_existing_destination_with_anything_in_it_is_refused_never_written_into`,
+`a_destination_holding_only_a_hidden_file_is_still_refused`,
+`a_destination_that_is_a_file_is_refused`,
+`a_destination_that_does_not_exist_is_created` (`apply.rs`);
+`an_empty_directory_is_not_taken`, `a_directory_with_anything_in_it_is_taken`,
+`a_path_that_is_not_there_is_not_taken` and
+`the_screen_and_the_engine_agree_about_every_shape`
+(`commands/osinstall.rs`) — that last one exists because the drift between the
+two answers *is* this entry, seen from the other side.
+
+**Mutated, and they fell**: accept an occupied folder and three tests fail
+including the byte-for-byte one; restore the old `root.exists()` rule and the
+empty-destination tests fail along with most of the file.
+
+**What is still owed**: nobody has yet built a tree from the screen. The dead
+end is gone; that it now works end to end on a real folder is a claim only
+driving it can make.
 
 **ART-204** 🔴 ✅ **`config.txt` is a conditional-section format and ART's
 merge treats it as a flat one, so a real Emu68 config comes out with three of
