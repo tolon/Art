@@ -917,6 +917,30 @@ function ArtworkSourcesSection() {
   );
 }
 
+/**
+ * Where downloads go — **all of them**, not only Aminet's (ART-214).
+ *
+ * The field was called "Aminet Download Folder" and its hint said "left
+ * empty, ART uses its own folder". Three things were wrong with that by the
+ * time the owner went looking for it:
+ *
+ *  - **The name had stopped being true.** Package sets download through the
+ *    same library, so somebody hunting for where their sets landed had no
+ *    reason to read a field labelled Aminet.
+ *  - **"ART uses its own folder" is not what happens.** `lib.rs` takes the
+ *    OS download folder, which on Windows is the user's own
+ *    `Downloads\Amiga Retro Toolkit` — their disk, not ART's. The owner read
+ *    the old sentence and reasonably concluded ART had chosen somewhere of
+ *    its own.
+ *  - **Changing it moves nothing.** `sources_relocate` moves one file between
+ *    subfolders *inside* a library; there is no whole-library move. So a user
+ *    who repoints this leaves everything already fetched behind, and nothing
+ *    said so.
+ *
+ * The default stays the OS download folder, and that is the owner's own
+ * decision rather than an oversight: *"varsayılan download alanı c olabilir
+ * onda sorun yok, bazı insanların tek diski olur."*
+ */
 function AminetDownloadField() {
   const { t } = useTranslation();
   const stored = useSettingsStore((s) => s.settings.aminetRoot);
