@@ -26,80 +26,6 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-196** 🟠 **ART writes its scratch to the system drive and the user
-cannot move it** — *raised by the owner 2026-08-21, after their C: had already
-been filled once by ART's own test scratch*
-`src-tauri/src/commands/osinstall.rs::scratch_root_for` ·
-`preview_cache_dir` · `core/amigainstall`
-
-Everything ART stages goes through `std::env::temp_dir()`, which on Windows is
-`%TEMP%` on the **system drive**. The shipped app therefore writes preview
-extractions, staging roots and install scratch to `C:` whatever the user would
-prefer, and offers no way to say otherwise.
-
-This is not hypothetical here. On 2026-08-20 ART's *test* scratch put 169,291
-directories and roughly 987 GB into `%TEMP%` and filled a 2 TB system drive,
-after which hundreds of tests failed with `StorageFull` (ART-184). The tests
-were redirected off the system drive with a machine-local
-`.cargo/config.toml`; **the shipped product was not, and cannot be.**
-[ART-195](#fixed)'s 2,149 preview jobs each staged into `C:` on the owner's own
-machine.
-
-The owner's standing rule is that ART writes nothing to `C:`. Today the
-product cannot honour it.
-
-**What would close it.** A scratch location the user sets, remembered like
-every other setting (`src/lib/remembered.ts` with a guard), defaulting to
-`temp_dir()` so nothing changes for someone who never opens the setting. The
-paths themselves already carry counters and clean up on `Drop`; only the root
-needs to become a choice.
-
-Worth pairing with [ART-184](#open)'s remaining half — a sweep for what a
-crash leaves behind — since both are about scratch nobody asked for.
-
-**Decided 2026-08-21 by the owner: ART asks at install time, and the default
-is the system drive.**
-
-*"ART kendi kurulumunda temp klasorunun nerede olacagini kullaniciya sormali,
-default olarak c diski olur ama belki kullanici baska bir disk yada klasor
-secebilir."*
-
-So the question is asked once, up front, with today's behaviour as the answer
-a user gets by pressing Next. Nobody who does not care is made to care, and
-anybody who does never has to discover a Settings page after their system
-drive has already filled.
-
-**One honest caveat about how, not whether.** ART ships an MSI (WiX) and an
-NSIS installer through `tauri build`, and adding a genuine custom dialog to
-either means owning a template rather than setting a flag — real work, and
-work that has to be done twice because there are two bundles. If that turns
-out to be disproportionate, the fallback that satisfies the same requirement
-is **asking on first run**: one question, once, before anything is staged,
-remembered like every other setting. It also covers a case the installer
-cannot — somebody running the executable without installing it.
-
-Whichever route: the answer is remembered (`src/lib/remembered.ts` with a
-guard), the default is `temp_dir()` so nothing changes for a user who accepts
-it, and the setting stays changeable afterwards. A choice ART offers may not
-reset itself between runs.
-
-**Also decided: it is a Settings entry too, not only an installer question.**
-Asked once at install time, changeable at any time afterwards. Somebody who
-pressed Next without reading, or who later adds a disk, must not have to
-reinstall ART to move its scratch.
-
-That raises the one question a change-later setting always raises, and it
-should be answered deliberately rather than discovered: **what happens to
-scratch already sitting in the old place.** Three defensible answers -- move
-it, leave it, or leave it and say where it is -- and only the third is
-consistent with how ART already behaves everywhere else: it does not touch
-what it did not put there this run, and it tells the user where things went
-rather than tidying up on their behalf. Moving gigabytes silently while the
-user waits on a Settings screen is the wrong shape.
-
-The owner's rule stands over all of it: nothing ART writes goes to `C:` once
-they have said otherwise, and nothing deletes from `C:` at all.
-
 **ART-187** 🔵 **A cancelled Amiga-side install leaves the last phase line
 on screen under a badge that says nothing about it** — *found 2026-08-21 in
 Task 6's review, ruled shippable*
@@ -642,6 +568,99 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-196** 🟠 ✅ **ART wrote its scratch to the system drive and the
+user could not move it** — *raised by the owner 2026-08-21, after their C: had
+already been filled once by ART's own test scratch; fixed 2026-08-22*
+`src-tauri/src/scratch.rs` · `src-tauri/src/commands/scratch.rs` ·
+`src/components/ScratchRootGate.tsx` · `scripts/scratch-root-sweep.py`
+
+**It was eighteen call sites, not one.** Preview extractions, install staging
+roots, unpacked packages, a launch's `.rp9` disks, the emulator's own generated
+`.uae`, the scan cache, a selection copy's cache — all of it went through
+`std::env::temp_dir()`, which on Windows is `%TEMP%` on the system drive.
+
+**One root, and `core/` still does not choose it.** `crate::scratch` holds the
+choice and validates it; it lives outside `core/` because where a platform
+stages work it will throw away is not a question `core/` gets to answer — the
+same rule `plan_with_cache` already states for its cache directory. Every
+`core/` function that stages now **takes** the directory. Where that would
+have rippled through 86 call sites (`plan`, `apply`, `add_package`,
+`open_package`), the bare name stayed as a thin wrapper and an explicit
+`*_staging_in` variant was added beside it — the split
+`scan_collection_directory` / `..._with` already uses. **The product calls the
+explicit one; the wrapper is for tests and a future CLI shell.**
+
+**A chosen root that cannot be reached is a refusal, never a fallback.** Once
+a user has said "not `C:`", quietly staging on `C:` because their drive is
+unplugged would be this project's most expensive class of defect. `root()`
+returns `AppError::ScratchUnavailable` — its own variant with its own id,
+**ART-SCRATCH-UNAVAILABLE** — naming the folder, why, and that nothing in it
+was moved or removed. Resolved **before** `spawn_job`, so the user hears it
+from the button they pressed rather than from a job that started and died.
+
+**Asked once, up front, exactly as decided.** *"ART kendi kurulumunda temp
+klasorunun nerede olacagini kullaniciya sormali, default olarak c diski olur
+ama belki kullanici baska bir disk yada klasor secebilir."* `ScratchRootGate`
+asks on first run and never again — including when the answer is "use the
+system drive", because that is still an answer. Not the installer: ART ships
+an MSI **and** an NSIS bundle and a real custom dialog means owning a template
+twice, while first-run also covers somebody running the executable without
+installing it. The entry's own named fallback, taken deliberately.
+
+**And it is a Settings entry too**, changeable at any time, showing what the
+default actually resolves to on this machine rather than describing it
+(ART-214's lesson). **Changing it moves nothing**: the answer names where the
+previous root was, and says nothing there was moved or removed — the third of
+the three defensible answers, and the only one consistent with how ART behaves
+everywhere else.
+
+**What is deliberately still on the system drive**, because it is kept data
+and not scratch: the operation log, the software catalogue, the artwork
+library and the checked-out files, all under Tauri's own per-app directories.
+The download folder keeps its own separate setting and its own default, which
+is the owner's call ([ART-214](#fixed)).
+
+**The nineteenth call site is a build failure now.**
+`scripts/scratch-root-sweep.py` reads the crate's own source, skips every
+`#[cfg(test)]` region, and fails on any production `std::env::temp_dir()`
+outside a short allow-list that states a reason per entry. It runs in CI.
+Proved by mutation: pointing one command back at `temp_dir()` makes it exit 1
+and name the line.
+
+*Tests:* 14 Rust (`scratch::*`, `commands::scratch::*`) and 9 frontend
+(`ScratchRootGate.test.tsx`).
+
+**Mutations run — eight, and eight fell:**
+
+| Mutation | What fell |
+|---|---|
+| an unreachable chosen root falls back to `temp_dir()` | both refusal tests |
+| the root is set before it is checked | both "the previous root stands" tests |
+| `is_dir()` only, no write probe, one sentence for both causes | the file-not-a-folder test |
+| one `temp_dir()` put back in a command | the sweep, by name and line |
+| the question is asked again every run | "says nothing once it has been asked" |
+| the remembered root is never pushed to Rust | all three start-up tests |
+| a folder Rust refused is remembered anyway | "a refused folder is not remembered" |
+| the start-up push's dependency array widened | "does not re-send on an unrelated change" |
+
+**Two survivors, disclosed.**
+
+- **The write probe's *failing* branch has no test.** Every passing test
+  exercises the probe succeeding; making a directory that exists and cannot be
+  written to needs an ACL change on Windows, which is a bench step. What is
+  tested is that the probe runs and **leaves nothing behind** — a probe file
+  in the user's own folder every time Settings opens would be litter ART put
+  there.
+- **A `useRef` guard in `ScratchRootGate` survived its own mutation** and was
+  **removed** rather than kept: the effect's dependency array already did the
+  job, so the ref was protection that protected nothing. Its test was inert
+  too — it re-rendered with everything unchanged — and was rewritten to change
+  an unrelated setting, which does fall when the dependencies are widened.
+
+**Still owed, and it was always the other half:** [ART-184](#open)'s sweep for
+what a crash leaves behind. This makes the root a choice; it does not tidy up
+after an ART that died mid-stage.
+
 **ART-205** 🟠 ✅ **The predicted size of a distribution was larger
 than the one that landed, whenever a component overrode another** — *found
 2026-08-22 by building the owner's real AmigaOS 3.9 tree; fixed the same day*
@@ -749,7 +768,7 @@ move. Repointing the field therefore leaves everything already fetched behind
 **Not a defect, and stated so it is not "fixed" later by mistake: the default
 stays the OS download folder.** The owner's decision, in their own words:
 *"varsayılan download alanı c olabilir onda sorun yok, bazı insanların tek
-diski olur."* [ART-196](#open)'s "ART writes to `C:`" is about **scratch** the
+diski olur."* [ART-196](#fixed)'s "ART writes to `C:`" is about **scratch** the
 user never asked for and cannot move; this is a visible, settable choice with
 a sensible platform default, and one-disk machines are the reason it is that
 default.
@@ -1993,8 +2012,9 @@ Tests: `a_second_open_is_answered_from_the_cache_and_not_from_the_medium` ·
 `asks the backend to forget what it remembered, and re-plans against the discs`
 (`OsInstall.test.tsx`).
 
-The cache lives under `%TEMP%`, beside the extraction cache, and so moves with
-[ART-196](#open) when the scratch root becomes a choice.
+The cache lives beside the extraction cache under whatever scratch root the
+user chose, which [ART-196](#fixed) made a setting — so it is no longer on the
+system drive unless that is where they left it.
 
 **ART-152** 🔵 ✅ **ART sized a WHDLoad launch's machine from the catalogue's
 own chipset — the Amiga the *game* was written for, not the Amiga WHDLoad

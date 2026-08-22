@@ -48,6 +48,28 @@ export interface AppSettings {
   /** Download folder for Aminet packages. The Rust side holds it only for the
    *  lifetime of the process, so it is remembered here (§41.5.6). */
   aminetRoot: string | null;
+  /**
+   * Where ART stages work it will throw away (ART-196).
+   *
+   * `null` is the platform's own temp directory — on Windows `%TEMP%`, on
+   * the **system drive**. That default is deliberate and is the owner's own
+   * ruling: *"default olarak c diski olur ama belki kullanıcı başka bir disk
+   * yada klasör seçebilir."* Nobody who does not care is made to care.
+   *
+   * Held in Rust only for the lifetime of the process, so it is remembered
+   * here and pushed back at start-up — the same shape `aminetRoot` above has,
+   * and for the same reason.
+   */
+  scratchRoot: string | null;
+  /**
+   * Whether ART has already asked where to stage.
+   *
+   * Separate from `scratchRoot` because "asked and told to use the default"
+   * and "never asked" are different states that would otherwise both read as
+   * `null`, and the first must not be asked again. A choice ART offers may
+   * not reset itself between runs, and neither may the asking.
+   */
+  scratchRootAsked: boolean;
   /** A custom mirror order. Null means "use the ones ART ships with", which is
    *  not the same as an empty list — an empty list would disable syncing. */
   aminetMirrors: StoredMirror[] | null;
@@ -209,6 +231,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   winuaePath: null,
   hstImagerPath: null,
   aminetRoot: null,
+  scratchRoot: null,
+  scratchRootAsked: false,
   aminetMirrors: null,
   artworkSources: null,
   sidebarCollapsed: false,
@@ -261,6 +285,9 @@ export async function getSettings(): Promise<AppSettings> {
       hstImagerPath:
         (await s.get<string>("hstImagerPath")) ?? DEFAULT_SETTINGS.hstImagerPath,
       aminetRoot: (await s.get<string>("aminetRoot")) ?? DEFAULT_SETTINGS.aminetRoot,
+      scratchRoot: (await s.get<string>("scratchRoot")) ?? DEFAULT_SETTINGS.scratchRoot,
+      scratchRootAsked:
+        (await s.get<boolean>("scratchRootAsked")) ?? DEFAULT_SETTINGS.scratchRootAsked,
       aminetMirrors:
         (await s.get<StoredMirror[]>("aminetMirrors")) ?? DEFAULT_SETTINGS.aminetMirrors,
       artworkSources:

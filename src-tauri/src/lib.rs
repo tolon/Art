@@ -12,6 +12,7 @@ mod commands;
 mod core;
 mod error;
 mod net;
+mod scratch;
 mod tools;
 
 use tauri::Manager;
@@ -113,6 +114,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::system::ping,
             commands::system::app_info,
+            commands::scratch::scratch_root,
+            commands::scratch::scratch_set_root,
             commands::workflow::plan_path,
             commands::workflow::run_workflow,
             commands::workflow::list_workflows,

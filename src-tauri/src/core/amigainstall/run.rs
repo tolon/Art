@@ -233,12 +233,17 @@ pub trait EmulatorLauncher {
 #[derive(Debug, Clone)]
 pub struct WinUaeLauncher {
     executable: PathBuf,
+    /// Where the generated `.uae` is written (ART-196). Carried rather than
+    /// asked of the platform, for the same reason every other staging site in
+    /// ART now carries it: the user's system drive is theirs.
+    scratch_root: PathBuf,
 }
 
 impl WinUaeLauncher {
-    pub fn new(executable: impl Into<PathBuf>) -> Self {
+    pub fn new(executable: impl Into<PathBuf>, scratch_root: impl Into<PathBuf>) -> Self {
         Self {
             executable: executable.into(),
+            scratch_root: scratch_root.into(),
         }
     }
 }
@@ -268,6 +273,7 @@ impl EmulatorLauncher for WinUaeLauncher {
         Ok(Box::new(WinUaeSession(launch_winuae_process(
             &self.executable,
             config_text,
+            &self.scratch_root,
         )?)))
     }
 }
@@ -317,6 +323,9 @@ pub struct RunRequest<'a> {
     /// `If Warn` writes [`MARK_FAILED`], and ART reports that the installer
     /// ran and said no about a program that never started.
     pub package_volume_dir: &'a Path,
+    /// Where the generated emulator configuration is written (ART-196).
+    /// Supplied by the caller, like every other staging root in ART.
+    pub scratch_root: &'a Path,
     /// The hardware the installer runs on.
     pub profile: &'a AmigaProfile,
     /// The user's **own** licensed Kickstart. ART ships none and never will,
@@ -479,7 +488,7 @@ pub fn media_for(request: &RunRequest) -> CoreResult<LaunchMedia> {
 /// The thin wrapper: a real WinUAE and a real clock. Everything it does beyond
 /// choosing those two is in [`run_with`].
 pub fn run(request: &RunRequest, sink: &dyn ProgressSink) -> CoreResult<RunOutcome> {
-    let launcher = WinUaeLauncher::new(request.winuae_path);
+    let launcher = WinUaeLauncher::new(request.winuae_path, request.scratch_root);
     run_with(request, &launcher, &RealClock::new(), sink)
 }
 
@@ -906,6 +915,10 @@ mod tests {
 
         fn request(&self) -> RunRequest<'_> {
             RunRequest {
+                // The fixture's own scratch, not the platform's: nothing here
+                // launches a real emulator, and a root that outlives the call
+                // is what the borrow needs anyway.
+                scratch_root: self.root.path(),
                 plan: &self.plan,
                 work_volume_dir: Path::new("placeholder"),
                 tree_dir: Path::new("placeholder"),

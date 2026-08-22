@@ -17,7 +17,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
 use super::oplog::{user_operation, write_result};
 use crate::core::error::CoreError;
@@ -439,12 +439,14 @@ fn mount_notes_for(request: &LaunchArgs, plan: &LaunchPlan) -> Vec<MountNote> {
 }
 
 /// Where a `.rp9`'s disks are unpacked to for one launch (Task 8).
-fn launch_dir_for(app: &AppHandle, id: &str) -> PathBuf {
-    app.path()
-        .app_data_dir()
-        .unwrap_or_else(|_| std::env::temp_dir())
-        .join("launch")
-        .join(id)
+///
+/// Under the scratch root, not the application data directory (ART-196):
+/// unpacked disks are thrown away and rewritten every launch, and on Windows
+/// `app_data_dir` is on the system drive whatever the user would prefer. `app`
+/// is still taken so the signature does not change shape when a future launch
+/// wants something that genuinely is application data.
+fn launch_dir_for(_app: &AppHandle, scratch_root: &Path, id: &str) -> PathBuf {
+    scratch_root.join("art-launch").join(id)
 }
 
 /// The one boot directory ART owns for a one-click WHDLoad launch (Task 10).
@@ -452,12 +454,8 @@ fn launch_dir_for(app: &AppHandle, id: &str) -> PathBuf {
 /// Not per-title: it is rewritten fresh before every Y2 launch from whatever
 /// slave, system and game device names that launch needs, so there is
 /// nothing in it worth keeping between titles.
-fn boot_dir_for(app: &AppHandle) -> PathBuf {
-    app.path()
-        .app_data_dir()
-        .unwrap_or_else(|_| std::env::temp_dir())
-        .join("launch")
-        .join("boot")
+fn boot_dir_for(_app: &AppHandle, scratch_root: &Path) -> PathBuf {
+    scratch_root.join("art-launch").join("boot")
 }
 
 /// The machine's built-in profile — CPU, chipset, memory, display — that
@@ -685,6 +683,7 @@ fn media_for_plan(
 fn launch_title_inner(
     request: &LaunchArgs,
     winuae_path: Option<&str>,
+    scratch_root: &Path,
     app: &AppHandle,
 ) -> Result<u32, CoreError> {
     let roms: Vec<LaunchRom> = scan_rom_directory(Path::new(&request.rom_dir))
@@ -707,8 +706,8 @@ fn launch_title_inner(
     })
     .map_err(refusal_error)?;
 
-    let launch_dir = launch_dir_for(app, &request.id);
-    let boot_dir = boot_dir_for(app);
+    let launch_dir = launch_dir_for(app, scratch_root, &request.id);
+    let boot_dir = boot_dir_for(app, scratch_root);
     let media = media_for_plan(request, &plan, &launch_dir, &boot_dir)?;
     let profile = profile_for_request(&kind, plan.machine, request.whdload_fast_ram_mb);
     let config_text = generate_uae_config(&profile, &media)?;
@@ -724,7 +723,7 @@ fn launch_title_inner(
         )
     })?;
 
-    launch_winuae(Path::new(&exe), &config_text)
+    launch_winuae(Path::new(&exe), &config_text, scratch_root)
 }
 
 /// Launch a catalogued title. Unpacks a `.rp9`'s disks or hardfile, writes
@@ -742,8 +741,10 @@ pub fn launch_title(
     app: AppHandle,
     oplog: State<'_, JsonlOperationLog>,
 ) -> AppResult<u32> {
-    let result: AppResult<u32> =
-        launch_title_inner(&request, winuae_path.as_deref(), &app).map_err(AppError::from);
+    let result: AppResult<u32> = crate::scratch::root().and_then(|scratch_root| {
+        launch_title_inner(&request, winuae_path.as_deref(), &scratch_root, &app)
+            .map_err(AppError::from)
+    });
 
     write_result(
         &oplog,

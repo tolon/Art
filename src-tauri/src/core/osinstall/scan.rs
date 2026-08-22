@@ -549,9 +549,31 @@ pub struct PackageMedium {
 
 /// Open a package archive as a [`MediaSource`] — the package counterpart of
 /// [`open_media`], and the one place the `member` distinction is acted on.
+///
+/// The thin wrapper, staging into the platform's own temp directory. The
+/// product never calls it: [`open_package_staging_in`] is what the shell uses,
+/// because where a nested payload is unpacked is the user's choice and not
+/// this module's (ART-196). Kept for tests and for a future CLI shell that has
+/// not chosen a directory — the same split
+/// `collection::scan_collection_directory` / `..._with` already uses.
 pub fn open_package(medium: &PackageMedium) -> CoreResult<Box<dyn MediaSource>> {
+    open_package_staging_in(medium, &std::env::temp_dir())
+}
+
+/// [`open_package`], unpacking a nested payload under `scratch_root`.
+///
+/// Only a `member` package touches `scratch_root` at all: a package whose
+/// files sit at the archive's own paths is read in place and stages nothing.
+pub fn open_package_staging_in(
+    medium: &PackageMedium,
+    scratch_root: &Path,
+) -> CoreResult<Box<dyn MediaSource>> {
     Ok(match &medium.member {
-        Some(member) => Box::new(ArchiveSource::open_nested(&medium.path, member)?),
+        Some(member) => Box::new(ArchiveSource::open_nested(
+            &medium.path,
+            member,
+            scratch_root,
+        )?),
         None => Box::new(ArchiveSource::open(&medium.path)?),
     })
 }

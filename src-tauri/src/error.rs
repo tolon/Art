@@ -14,6 +14,24 @@ pub enum AppError {
     #[error(transparent)]
     Core(#[from] CoreError),
 
+    /// The scratch root the user chose cannot be staged into right now —
+    /// unplugged, renamed, full, or read-only (ART-196).
+    ///
+    /// Its own variant rather than an `Other`, because it is the one failure
+    /// in this enum a user can always fix themselves, and the sentence has to
+    /// say how. Falling back to `std::env::temp_dir()` would be worse than
+    /// refusing: somebody who has told ART to stay off their system drive
+    /// would have it filled anyway, and nothing would say so.
+    #[error(
+        "ART stages its work in '{root}', and cannot right now: {why}.\n\nReconnect that \
+         folder, or choose another one under Settings, Scratch folder. Nothing already in it \
+         has been moved or removed."
+    )]
+    ScratchUnavailable {
+        root: std::path::PathBuf,
+        why: String,
+    },
+
     #[error("{0}")]
     Other(String),
 }
@@ -23,6 +41,7 @@ impl AppError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::Core(e) => e.code(),
+            Self::ScratchUnavailable { .. } => "ART-SCRATCH-UNAVAILABLE",
             Self::Other(_) => "ART-INTERNAL",
         }
     }
@@ -31,7 +50,10 @@ impl AppError {
     pub fn user_message(&self) -> String {
         match self {
             Self::Core(e) => e.user_message(),
-            Self::Other(msg) => format!("{msg}\n\nError ID: {}", self.code()),
+            // Every non-core variant renders through its own `#[error]`
+            // attribute and then gains the id, so a new one cannot ship
+            // without the line a user is meant to quote.
+            other => format!("{other}\n\nError ID: {}", self.code()),
         }
     }
 }

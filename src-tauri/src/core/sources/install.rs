@@ -54,15 +54,21 @@ pub struct InstallOutcome {
 /// than growing a second one (§41.5.3).
 ///
 /// The caller owns the scratch directory and it removes itself when dropped.
+///
+/// `scratch_root` is the caller's, never this module's (ART-196): where a
+/// platform stages work it will throw away is not a question `core/` gets to
+/// answer, the same rule `osinstall::plan_with_cache` states for its own
+/// cache directory. The shell hands it `crate::scratch::root()`.
 pub fn unpack_for_install(
     archive: &Path,
+    scratch_root: &Path,
     sink: &dyn ProgressSink,
 ) -> CoreResult<(Scratch, Vec<String>)> {
     if sink.is_cancelled() {
         return Err(CoreError::Cancelled);
     }
 
-    let scratch = Scratch::new()?;
+    let scratch = Scratch::in_dir(scratch_root)?;
     sink.report(0, None, "Unpacking");
 
     let extracted =
@@ -101,13 +107,19 @@ pub fn unpack_for_install(
 pub(crate) struct Scratch(PathBuf);
 
 impl Scratch {
-    pub(crate) fn new() -> CoreResult<Self> {
+    /// A fresh scratch directory under `root`.
+    ///
+    /// **`root` rather than `std::env::temp_dir()`** — ART-196. Everything
+    /// this type stages used to land on the system drive whatever the user
+    /// would have preferred; the root is now the shell's answer, and the
+    /// shell's answer is the user's.
+    pub(crate) fn in_dir(root: &Path) -> CoreResult<Self> {
         // The process id plus a counter is enough: two installs in the same
         // process must not share a directory, and two processes cannot.
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT: AtomicU64 = AtomicU64::new(0);
 
-        let path = std::env::temp_dir().join(format!(
+        let path = root.join(format!(
             "art-install-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
@@ -156,7 +168,7 @@ mod tests {
         let archive = dir.join("pkg.lha");
         std::fs::write(&archive, archive_with(&[])).unwrap();
 
-        let err = unpack_for_install(&archive, &NoProgress).unwrap_err();
+        let err = unpack_for_install(&archive, &std::env::temp_dir(), &NoProgress).unwrap_err();
         assert_eq!(err.code(), "ART-FORMAT-MALFORMED");
 
         std::fs::remove_dir_all(&dir).ok();
@@ -174,7 +186,8 @@ mod tests {
         )
         .unwrap();
 
-        let (scratch_dir, skipped) = unpack_for_install(&archive, &NoProgress).unwrap();
+        let (scratch_dir, skipped) =
+            unpack_for_install(&archive, &std::env::temp_dir(), &NoProgress).unwrap();
         assert!(skipped.is_empty());
         assert_eq!(
             std::fs::read(scratch_dir.path().join("Docs/readme.txt")).unwrap(),
@@ -202,7 +215,7 @@ mod tests {
         let archive = dir.join("pkg.lha");
         std::fs::write(&archive, archive_with(&[("hello.txt", b"hi")])).unwrap();
 
-        let err = unpack_for_install(&archive, &Cancelled).unwrap_err();
+        let err = unpack_for_install(&archive, &std::env::temp_dir(), &Cancelled).unwrap_err();
         assert_eq!(err.code(), "ART-CANCELLED");
 
         std::fs::remove_dir_all(&dir).ok();

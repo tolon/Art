@@ -473,16 +473,31 @@ impl WinUaeProcess {
 ///
 /// The sibling of [`launch_winuae`], which throws the handle away. Anything
 /// that has to be able to *stop* the emulator later must use this one.
-pub fn launch_winuae_process(winuae_path: &Path, config_text: &str) -> CoreResult<WinUaeProcess> {
-    launch_winuae_inner(winuae_path, config_text).map(|child| WinUaeProcess { child })
+pub fn launch_winuae_process(
+    winuae_path: &Path,
+    config_text: &str,
+    scratch_root: &Path,
+) -> CoreResult<WinUaeProcess> {
+    launch_winuae_inner(winuae_path, config_text, scratch_root).map(|child| WinUaeProcess { child })
 }
 
 /// Launch WinUAE with a generated configuration.
-pub fn launch_winuae(winuae_path: &Path, config_text: &str) -> CoreResult<u32> {
-    Ok(launch_winuae_process(winuae_path, config_text)?.release())
+///
+/// `scratch_root` is where the generated `.uae` is written — the caller's
+/// answer, never this module's (ART-196). See `crate::scratch`.
+pub fn launch_winuae(
+    winuae_path: &Path,
+    config_text: &str,
+    scratch_root: &Path,
+) -> CoreResult<u32> {
+    Ok(launch_winuae_process(winuae_path, config_text, scratch_root)?.release())
 }
 
-fn launch_winuae_inner(winuae_path: &Path, config_text: &str) -> CoreResult<std::process::Child> {
+fn launch_winuae_inner(
+    winuae_path: &Path,
+    config_text: &str,
+    scratch_root: &Path,
+) -> CoreResult<std::process::Child> {
     if !winuae_path.is_file() {
         return Err(CoreError::InvalidInput(format!(
             "WinUAE executable not found at '{}'",
@@ -503,7 +518,7 @@ fn launch_winuae_inner(winuae_path: &Path, config_text: &str) -> CoreResult<std:
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let seq = NEXT_LAUNCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let temp_config_path = std::env::temp_dir().join(format!("art_launch_{stamp}_{seq}.uae"));
+    let temp_config_path = scratch_root.join(format!("art_launch_{stamp}_{seq}.uae"));
     std::fs::write(&temp_config_path, config_text)?;
 
     // Arguments are passed as a structured argv, never through a shell, so
@@ -947,7 +962,8 @@ mod real_boot_hook {
         println!("--- config ---\n{config}\n--- end ---");
 
         if let Ok(winuae) = std::env::var("ART_WINUAE") {
-            let pid = launch_winuae(&PathBuf::from(&winuae), &config).expect("WinUAE must start");
+            let pid = launch_winuae(&PathBuf::from(&winuae), &config, &std::env::temp_dir())
+                .expect("WinUAE must start");
             println!("WinUAE started, pid {pid}");
         }
     }
@@ -1150,7 +1166,8 @@ mod real_version_hook {
         };
 
         let config = generate_uae_config(&AmigaProfile::a1200_aga(), &media).unwrap();
-        let mut process = launch_winuae_process(&PathBuf::from(&winuae), &config).unwrap();
+        let mut process =
+            launch_winuae_process(&PathBuf::from(&winuae), &config, &std::env::temp_dir()).unwrap();
         println!("WinUAE pid {}", process.pid());
 
         let started = Instant::now();

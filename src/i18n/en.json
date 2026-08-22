@@ -288,7 +288,12 @@
         "verificationFailed": "Verification failed",
         "done": "Done"
       }
-    }
+    },
+    "scratchRoot": "Scratch folder",
+    "scratchRootDefault": "ART stages its work in {{path}} — your system's own temporary folder.",
+    "scratchRootInUse": "ART stages its work in {{path}}.",
+    "scratchRootHint": "This is where ART unpacks and builds things on the way to somewhere else, and it can run to gigabytes. Changing it moves nothing: whatever is already staged stays where it is, and ART never deletes it for you.",
+    "scratchRootPrevious": "What ART had already staged is still in {{path}}. Nothing was moved or removed."
   },
   "status": {
     "healthy": "Healthy",
@@ -2494,6 +2499,15 @@
         "failed": "failed: {{error}}",
         "skipped": "skipped when you cancelled"
       }
+    }
+  },
+  "scratch": {
+    "ask": {
+      "heading": "Where should ART do its working-out?",
+      "body": "ART unpacks and builds things on the way to somewhere else — install disks, packages, disk images. That can run to gigabytes, and unless you say otherwise it goes on your system drive.",
+      "note": "You can change this at any time under Settings. Nothing is ever deleted from your system drive by ART.",
+      "keepDefault": "Use the system drive",
+      "choose": "Choose a folder…"
     }
   }
 }

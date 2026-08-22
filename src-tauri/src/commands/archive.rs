@@ -347,12 +347,13 @@ fn copy_into_volume(
     volume_index: usize,
     parent: u32,
     policy: OverwritePolicy,
+    scratch_root: &std::path::Path,
     progress: &dyn ProgressSink,
 ) -> CoreResult<(
     crate::core::volume::write::copy::CopyReport,
     crate::commands::volume_write::Committed,
 )> {
-    let scratch = crate::core::sources::install::Scratch::new()?;
+    let scratch = crate::core::sources::install::Scratch::in_dir(scratch_root)?;
 
     let (mut backend, entries, tree) = open_tree(file)?;
     let inside = child_of(dir, name);
@@ -429,6 +430,11 @@ pub fn archive_copy_to_volume(
     let emit_app = app.clone();
     let title = format!("Copying an archive into {}", image.display());
 
+    // Resolved here rather than inside the job: a scratch root that has
+    // gone away is the user's to fix, and they should hear it from the
+    // button they pressed (ART-196).
+    let scratch_root = crate::scratch::root()?;
+
     let id = spawn_job(&app, registry, &title, move |job_id, progress| {
         let outcome = copy_into_volume(
             &source,
@@ -438,6 +444,7 @@ pub fn archive_copy_to_volume(
             volume_index,
             parent,
             policy,
+            &scratch_root,
             progress,
         );
 
@@ -646,6 +653,7 @@ mod tests {
             0,
             0,
             OverwritePolicy::Skip,
+            &std::env::temp_dir(),
             &NoProgress,
         )
         .unwrap();
@@ -699,6 +707,7 @@ mod tests {
             0,
             0,
             OverwritePolicy::Skip,
+            &std::env::temp_dir(),
             &NoProgress,
         )
         .unwrap();

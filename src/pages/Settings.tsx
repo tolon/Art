@@ -4,6 +4,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 
 import { useSettingsStore } from "@/stores/settingsStore";
 import { getAppInfo } from "@/lib/api";
+import { scratchRoot, scratchSetRoot, type ScratchRootState } from "@/lib/scratch";
 import {
   artworkCheckSource,
   artworkDefaults,
@@ -311,6 +312,7 @@ export function SettingsPage() {
           onChange={(next) => void update({ lastCollectionDir: next })}
         />
         <AminetDownloadField />
+        <ScratchRootField />
       </section>
 
       <PlaySettingsSection />
@@ -991,6 +993,90 @@ function AminetDownloadField() {
             : t("settings.aminetRootHint")}
         </p>
       )}
+    </>
+  );
+}
+
+/**
+ * Where ART stages work it will throw away (ART-196).
+ *
+ * Not the same field as the download folder above it, and the difference is
+ * worth the two sentences on screen: a download is a file the user keeps, and
+ * scratch is a file ART makes and deletes. They can point at the same disk
+ * and usually will, but only one of them is what filled a 2 TB system drive.
+ *
+ * Three things this field has to say, and each is here because leaving it out
+ * has cost this project already:
+ *
+ *  - **What the default actually is**, spelled out rather than described.
+ *    "ART uses its own folder" was ART-214's exact sentence and it was not
+ *    true; this shows the real path.
+ *  - **That changing it moves nothing**, and where the old one was. ART does
+ *    not touch what it did not put there this run.
+ *  - **When ART cannot reach the chosen folder**, plainly, because in that
+ *    state nothing stages at all — it does not quietly fall back to the
+ *    system drive. This screen must never claim otherwise while the core is
+ *    refusing.
+ */
+function ScratchRootField() {
+  const { t } = useTranslation();
+  const stored = useSettingsStore((s) => s.settings.scratchRoot);
+  const update = useSettingsStore((s) => s.update);
+  const [state, setState] = useState<ScratchRootState | null>(null);
+  const [previous, setPrevious] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    scratchRoot()
+      .then(setState)
+      .catch(() => setState(null));
+  }, [stored]);
+
+  async function apply(next: string | null) {
+    setError(null);
+    try {
+      const change = await scratchSetRoot(next);
+      setState(change.root);
+      setPrevious(change.previous);
+      // Only remembered once Rust has accepted it — a folder ART refused is
+      // not a setting, and storing it would have the next run start with a
+      // root that does not work.
+      await update({ scratchRoot: next, scratchRootAsked: true });
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  return (
+    <>
+      <PathField
+        label={t("settings.scratchRoot")}
+        placeholder="D:\\Amiga\\scratch"
+        value={stored}
+        pick="folder"
+        onChange={(next) => void apply(next)}
+      />
+      {error ? (
+        <p className="badge badge-warn" style={{ fontSize: 11, margin: "-4px 0 0" }}>
+          {error}
+        </p>
+      ) : state?.unreachable ? (
+        <p className="badge badge-warn" style={{ fontSize: 11, margin: "-4px 0 0" }}>
+          {state.unreachable}
+        </p>
+      ) : (
+        <p className="faint" style={{ fontSize: 11, margin: "-4px 0 0" }}>
+          {state?.chosen
+            ? t("settings.scratchRootInUse", { path: state.chosen })
+            : t("settings.scratchRootDefault", { path: state?.default ?? "" })}{" "}
+          {t("settings.scratchRootHint")}
+        </p>
+      )}
+      {previous ? (
+        <p className="faint" style={{ fontSize: 11, margin: "-2px 0 0" }}>
+          {t("settings.scratchRootPrevious", { path: previous })}
+        </p>
+      ) : null}
     </>
   );
 }
