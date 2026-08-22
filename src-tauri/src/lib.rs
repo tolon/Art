@@ -277,6 +277,8 @@ pub fn run() {
             commands::whdload::whdload_install,
             commands::archives::archives_plan_install,
             commands::archives::archives_install,
+            commands::bundles::bundles_list,
+            commands::bundles::bundles_download,
         ])
         .run(tauri::generate_context!())
         .map_err(|e| {
