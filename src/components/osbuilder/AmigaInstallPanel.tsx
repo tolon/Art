@@ -242,10 +242,64 @@ export function AmigaInstallPanel({
   // sentence that says which disc and which volume. Requiring it here would
   // replace that with a silent grey panel for every package, including the
   // ones that need no disc at all.
+  /**
+   * The chosen package, **as the chosen release's own catalogue holds it**
+   * (ART-212).
+   *
+   * The owner reached the OS Builder's fourth step with AmigaOS 3.2 chosen.
+   * The list above correctly said ART carries no runnable package for 3.2 —
+   * [ART-209] doing its job — and directly underneath, this panel still
+   * showed `BoingBag39-1.lha`, `BoingBag39-2.lha`, `AmigaOS39.iso` and a
+   * full "what will run" card reading
+   * `ARTPkg:BoingBag3.9-1/C/Updater AmigaOS-Update DH0:`. A screen offering
+   * to run an installer for an operating system that is not there.
+   *
+   * `packageId` is remembered, and nothing checked it against what the
+   * release actually offers — the same gap `sanitizeChosen` closes for the
+   * component checklist, which this panel never had.
+   *
+   * **A `null` catalogue allows, it does not block** — and the first version
+   * of this fix had it the other way round, which the rest of this suite
+   * caught immediately. `null` means *not loaded*, which happens whenever no
+   * package folder has been chosen — and this panel is usable that way, with
+   * an archive picked by hand. Blocking on "not loaded" turned "we have not
+   * asked yet" into "the answer is no", which is a different sentence and a
+   * broken screen. Only a catalogue that has actually answered, and does not
+   * hold the id, refuses.
+   */
+  /** This release offers nothing that can be run on the Amiga — asked, not
+   *  assumed: `null` means nobody has asked yet (ART-212). */
+  const nothingRunnableHere = catalogue !== null && !catalogue.some((p) => p.amigaInstallable);
+
+  const packageBelongsHere = packageFolder
+    ? // A folder is set, so an answer is coming: **wait for it.** Previewing
+      // on the strength of a remembered id and retracting a moment later
+      // would put a wrong sentence on screen — briefly, but this project's
+      // own rule is that a confident wrong sentence is the expensive kind,
+      // and "briefly" is exactly long enough to be read and believed.
+      catalogue !== null && catalogue.some((p) => p.id === packageId)
+    : // No folder, so no answer is coming and none is owed. The panel is
+      // usable with an archive picked by hand, and refusing that would turn
+      // "we never asked" into "the answer is no".
+      true;
+
   const request: AmigaInstallRequest | null =
-    treeRoot && packageId && archive && kickstart
+    treeRoot && packageId && packageBelongsHere && archive && kickstart
       ? { tree: treeRoot, packageId, packageArchives: archives, kickstart, medium }
       : null;
+
+  /**
+   * A remembered id this release does not carry is dropped for good, once
+   * the catalogue has actually answered (ART-212).
+   *
+   * Guarded on `catalogue !== null` for ART-089's reason, and on
+   * `packageId !== null` so this cannot loop. `sanitizeChosen`'s own
+   * comment on `OsInstall.tsx` says the same thing about the same hazard.
+   */
+  useEffect(() => {
+    if (!catalogue || !packageId) return;
+    if (!catalogue.some((p) => p.id === packageId)) setPackageId(null);
+  }, [catalogue, packageId, setPackageId]);
 
   // The catalogue. Loaded whenever the package folder changes, `null` (never
   // `[]`) until something arrives, so "not loaded yet" and "loaded and empty"
@@ -314,9 +368,15 @@ export function AmigaInstallPanel({
     return () => {
       cancelled = true;
     };
-    // `request` is rebuilt on every render; its four parts are the identity.
+    // `request` is rebuilt on every render; its parts are the identity.
+    //
+    // `packageBelongsHere` is one of them (ART-212) and has to be: it is what
+    // flips the request from `null` to real once the catalogue answers, and a
+    // dependency list without it left the panel previewing nothing for ever —
+    // the request became valid and no effect ever noticed. A boolean, so it
+    // is a stable dependency and not a fresh identity per render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [treeRoot, packageId, archive, overlayArchive, kickstart, winuaePath]);
+  }, [treeRoot, packageId, archive, overlayArchive, kickstart, winuaePath, packageBelongsHere]);
 
   // The job's own progress. `job-progress` is application-wide, so every
   // update is checked against this panel's job id first.
@@ -501,6 +561,19 @@ export function AmigaInstallPanel({
         </label>
       ))}
 
+      {/*
+        ART-212. When this release carries nothing that can be run on the
+        Amiga at all, the sentence above says so and **the form stops there**.
+        The owner reached this step with AmigaOS 3.2 chosen and read exactly
+        that sentence — and then, underneath it, four filled-in fields naming
+        BoingBag39-1.lha, BoingBag39-2.lha and AmigaOS39.iso. Inputs for a run
+        that cannot be configured are not neutral: they are the screen
+        offering something it has just finished saying it does not have.
+
+        `catalogue === null` (no folder chosen, so nothing asked) still shows
+        them — the panel is usable with an archive picked by hand.
+      */}
+      {!nothingRunnableHere && (
       <div style={{ marginTop: 12 }}>
         <Field
           label={t("osinstall.amigaInstall.archive.label")}
@@ -548,6 +621,7 @@ export function AmigaInstallPanel({
           onClear={medium ? () => setMedium(null) : undefined}
         />
       </div>
+      )}
 
       {/* The refusal. English, from Rust (ART-060), verbatim: a missing
           prerequisite names what to install first and in what order, and an

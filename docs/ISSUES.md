@@ -679,6 +679,46 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-212** 🟠 ✅ **A package chosen for another release still drove a run
+plan** — *found 2026-08-22 by the owner, on the OS Builder's fourth step*
+`src/components/osbuilder/AmigaInstallPanel.tsx`
+
+With AmigaOS 3.2 chosen, the package list correctly said ART carries no
+runnable package for 3.2 — [ART-209](#fixed) working. Directly underneath it
+the panel still showed `BoingBag39-1.lha`, `BoingBag39-2.lha`,
+`AmigaOS39.iso` and a full **"what will run"** card reading
+`ARTPkg:BoingBag3.9-1/C/Updater AmigaOS-Update DH0:` — a plan to run an
+installer for an operating system that is not there.
+
+`packageId` is remembered and **nothing checked it against what the release
+offers**. The preview effect read the remembered id and never looked at the
+catalogue at all — the gap `sanitizeChosen` closes for the component
+checklist, which this panel never had.
+
+**Fixed 2026-08-22.** The request is built only from a package the loaded
+catalogue holds, a stale id is dropped for good once the catalogue has
+actually answered, and when the release carries nothing runnable the form
+stops after the sentence that says so — inputs for a run that cannot be
+configured are the screen offering what it has just said it does not have.
+
+**Two wrong turns on the way, recorded because each was caught by the suite
+rather than by thinking.** The first version blocked on `catalogue === null`,
+which means *not asked yet*: it turned "we never asked" into "the answer is
+no" and broke the panel's hand-picked-archive path — ten tests fell at once.
+The second added the check without adding it to the preview effect's
+dependency list, so the request went from `null` to valid and no effect ever
+noticed; the panel previewed nothing for ever.
+
+**And one thing the fix deliberately does *not* do**: a folder that is set
+but not yet answered now **waits** rather than previewing on the strength of
+a remembered id and retracting. Briefly wrong is long enough to be read and
+believed.
+
+Tests: `previews nothing for a package the chosen release does not carry`,
+`still previews the package the release does carry` (the other arm — a filter
+that previewed nothing would satisfy the first), and `shows no run form at all
+when the release carries nothing runnable`. Two mutations run and both fell.
+
 **ART-211** 🟠 ✅ **The release the user picked and the release the build
 carried were two variables** — *found 2026-08-22, tracing [ART-209](#fixed)*
 `src/components/osbuilder/OsInstall.tsx` · `src/lib/useBuildSession.ts`

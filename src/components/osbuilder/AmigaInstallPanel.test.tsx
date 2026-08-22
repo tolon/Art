@@ -206,6 +206,80 @@ async function runToConfirmation() {
   await waitFor(() => expect(runMock).toHaveBeenCalled());
 }
 
+describe("a package chosen for another release does not survive the switch (ART-212)", () => {
+  // The owner, on the OS Builder's fourth step with AmigaOS 3.2 chosen: the
+  // package list correctly said ART carries no runnable package for 3.2
+  // (ART-209 working), and directly underneath it the panel still showed
+  // BoingBag39-1.lha, BoingBag39-2.lha, AmigaOS39.iso and a full "what will
+  // run" card reading `ARTPkg:BoingBag3.9-1/C/Updater ...`.
+  //
+  // The preview was computed from the remembered `amigaInstall.package` and
+  // never looked at the catalogue at all, so an id the chosen release does
+  // not offer still drove a run plan. A screen offering to run an installer
+  // for an operating system that is not there is the same class as the
+  // sixteen refusals of ART-208: every line true of *something*, and the
+  // whole false.
+  it("previews nothing for a package the chosen release does not carry", async () => {
+    withChoices();
+    // AmigaOS 3.2 has no update package at all — what ART-209 makes
+    // `osinstallPackages` answer for it.
+    packagesMock.mockResolvedValue([]);
+
+    render(
+      <AmigaInstallPanel
+        release="AmigaOS 3.2"
+        treeRoot="D:/amiga/dist-3.2"
+        packageFolder="D:/pkg"
+      />
+    );
+
+    await waitFor(() => expect(packagesMock).toHaveBeenCalledWith("D:/pkg", "AmigaOS 3.2"));
+    // Never previewed, not merely un-rendered: a run plan for a package this
+    // release does not have is work ART should not even ask for.
+    expect(previewMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("amiga-install-preview")).toBeNull();
+  });
+
+  it("shows no run form at all when the release carries nothing runnable", async () => {
+    // The other half of what the owner saw. The sentence "ART carries no
+    // package with an installer for this release" was already on screen — and
+    // under it sat four filled-in fields naming the previous release's
+    // archives and disc. A form for a run that cannot be configured is the
+    // screen offering what it has just said it does not have.
+    withChoices();
+    packagesMock.mockResolvedValue([]);
+    render(
+      <AmigaInstallPanel
+        release="AmigaOS 3.2"
+        treeRoot="D:/amiga/dist-3.2"
+        packageFolder="D:/pkg"
+      />
+    );
+
+    expect(
+      await screen.findByText(i18n.t("osinstall.amigaInstall.package.none"))
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.queryByText(i18n.t("osinstall.amigaInstall.archive.label"))).toBeNull()
+    );
+    expect(screen.queryByText(i18n.t("osinstall.amigaInstall.medium.label"))).toBeNull();
+  });
+
+  it("still previews the package the release does carry", async () => {
+    // The other arm. A filter that previewed nothing at all would satisfy
+    // the test above and break the panel.
+    withChoices();
+    render(
+      <AmigaInstallPanel
+        release="AmigaOS 3.9"
+        treeRoot="D:/amiga/os39"
+        packageFolder="D:/pkg"
+      />
+    );
+    expect(await screen.findByTestId("amiga-install-preview")).toBeTruthy();
+  });
+});
+
 describe("before anything opens", () => {
   // "The emulator is a window on the owner's desktop. The confirmation says
   // so *before* it opens." An earlier round opened one repeatedly without
