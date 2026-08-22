@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use super::resolve::{resolve, Resolution};
 use super::BundleEntry;
+use crate::core::hashing::sha256_file;
 use crate::core::jobs::ProgressSink;
 use crate::core::lha::safe_extract::OverwritePolicy;
 use crate::core::sources::cache::CacheLayout;
@@ -101,6 +102,32 @@ pub fn download_entries(
                             &meta.name,
                             OverwritePolicy::Skip,
                         ) {
+                            // The narrow case (§5 of the review): the cache
+                            // already held this package *and* a file of the
+                            // same name already sat at the destination.
+                            // `fetched.from_cache` alone does not establish
+                            // that the two are the same file — a name is not
+                            // an identity — so this is the one branch that
+                            // actually asks the artefact, by comparing the
+                            // library file's bytes against the cache's own
+                            // (already-verified) sha256. Hashing only here,
+                            // never on every entry, is what keeps this cheap:
+                            // it runs exactly when the ambiguity exists.
+                            Ok(placement) if fetched.from_cache && placement.skipped_existing => {
+                                match sha256_file(&placement.path) {
+                                    Ok(existing_sha) if existing_sha == fetched.sha256 => {
+                                        EntryOutcome::AlreadyHave {
+                                            path: placement.path,
+                                        }
+                                    }
+                                    Ok(_) => EntryOutcome::NotPlaced {
+                                        existing: placement.path,
+                                    },
+                                    Err(e) => EntryOutcome::Failed {
+                                        error: e.to_string(),
+                                    },
+                                }
+                            }
                             Ok(placement) if fetched.from_cache => EntryOutcome::AlreadyHave {
                                 path: placement.path,
                             },
@@ -349,6 +376,56 @@ mod tests {
             std::fs::read(&existing_path).unwrap(),
             b"the user's own file",
             "the pre-existing file must be left untouched"
+        );
+    }
+
+    /// Finding 5 of the final review: a **cache hit** (`fetched.from_cache`)
+    /// over an occupied library slot used to fire `AlreadyHave` on
+    /// `from_cache` alone — a name is not an identity, and nothing had
+    /// established the file already in the library is the same file the
+    /// cache holds. Here it genuinely is not: the library copy was replaced
+    /// after the first run, so a second run must say `NotPlaced`, not claim
+    /// (falsely) that the library already holds this exact file.
+    #[test]
+    fn a_cache_hit_over_a_slot_holding_a_different_file_is_not_placed_not_already_have() {
+        let scratch = ScratchDir::new("art-bundle-run", "cachehit-mismatch");
+        let client = MockMirror::new().with_file(&url("util/arc/lha_68k"), b"lha bytes");
+        let mirrors = vec![Mirror::new("Test", BASE).unwrap()];
+        let cache = CacheLayout::new(scratch.join("cache"));
+        let library = Library::new(scratch.join("library"));
+        let ctx = DownloadContext {
+            aminet: &mirrors,
+            configured: &[],
+            client: &client,
+            cache: &cache,
+            library: &library,
+            subfolder: "sets",
+        };
+        let entries = vec![aminet_entry("lha", "util/arc/lha_68k")];
+
+        // First run: a genuine download, both cached and placed.
+        let first = download_entries(&entries, &ctx, &NoProgress);
+        let placed_path = match &first.entries[0].outcome {
+            EntryOutcome::Downloaded { path, .. } => path.clone(),
+            other => panic!("expected Downloaded on the first run, got {other:?}"),
+        };
+
+        // Something now replaces the library copy with different bytes —
+        // the user's own file under the same name, unrelated to the cached
+        // package.
+        std::fs::write(&placed_path, b"a completely different file").unwrap();
+
+        // Second run: the cache still holds the original bytes (a hit), but
+        // the library slot no longer matches them.
+        let second = download_entries(&entries, &ctx, &NoProgress);
+        match &second.entries[0].outcome {
+            EntryOutcome::NotPlaced { existing } => assert_eq!(existing, &placed_path),
+            other => panic!("expected NotPlaced, got {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read(&placed_path).unwrap(),
+            b"a completely different file",
+            "the replaced file must be left untouched"
         );
     }
 
