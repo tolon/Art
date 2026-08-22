@@ -188,19 +188,62 @@ pub fn bundles_download(
             subfolder: "",
         };
 
-        let report = download_entries(&entries, &ctx, progress);
+        let (report, outcome) = run_and_report_cancellation(&entries, &ctx, progress);
 
         let record = user_operation("Download package set");
         record_bundle_download(&log_path, record, &entries, &report);
 
+        // The report is emitted whether or not the run was cancelled — a
+        // cancelled run still names what happened to every entry reached
+        // before the cancel, and a user told only "cancelled" with no detail
+        // has been told nothing (CLAUDE.md: "a user told 'it failed' without
+        // being told where the evidence went has been given nothing").
         let _ = emit_app.emit(
             BUNDLE_DOWNLOAD_EVENT,
             BundleDownloadResult { job_id, report },
         );
-        Ok(())
+
+        // Said only *after* the event above, so the job's own terminal state
+        // (§54, §55) matches what the screen already shows.
+        outcome
     });
 
     Ok(id)
+}
+
+/// Run the download, and decide the job's own terminal state from what
+/// actually happened — factored out so it is testable without a live Tauri
+/// `AppHandle`, the same shape `install_archive_into_volume`
+/// (`commands/sources.rs`) gives its own job body.
+///
+/// `Ok(())` becomes `JobState::Finished`
+/// (`commands/jobs.rs::spawn_in_lane`); `Err(CoreError::Cancelled)` becomes
+/// `JobState::Cancelled`. Reporting `Ok(())` over a run the user cancelled
+/// would leave the job bar saying "finished" while the report right below it
+/// says "skipped when you cancelled" — the screen out-claiming the core,
+/// exactly the defect class CLAUDE.md names under "The failure that does not
+/// crash". The sibling guard is `commands/sources.rs:1304`
+/// ("the job must end Cancelled, not Completed"), which returns this same
+/// variant; this follows it rather than inventing a second shape.
+fn run_and_report_cancellation(
+    entries: &[BundleEntry],
+    ctx: &DownloadContext<'_>,
+    sink: &dyn crate::core::jobs::ProgressSink,
+) -> (BundleReport, CoreResult<()>) {
+    let report = download_entries(entries, ctx, sink);
+    // `download_entries` never returns an `Err` of its own — a cancelled run
+    // marks the entries it never reached `Skipped` instead, so that is what
+    // is checked here.
+    let cancelled = report
+        .entries
+        .iter()
+        .any(|entry| matches!(entry.outcome, EntryOutcome::Skipped));
+    let outcome = if cancelled {
+        Err(CoreError::Cancelled)
+    } else {
+        Ok(())
+    };
+    (report, outcome)
 }
 
 /// Record what a bundle download actually did — best-effort, and it must
@@ -342,13 +385,14 @@ mod tests {
     fn every_one_of_the_six_outcome_kinds_is_tallied_and_a_placement_counts_as_verified() {
         use crate::core::oplog::{JsonlOperationLog, OperationLog as _};
         use crate::core::sources::bundle::run::{EntryOutcome, EntryReport};
+        use crate::core::ScratchDir;
 
-        let dir = std::env::temp_dir().join(format!(
-            "art-bundles-oplog-{}",
-            crate::core::test_scratch_id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let log_path = dir.join("operations.jsonl");
+        // `ScratchDir` removes itself on `Drop`, including on the panicking
+        // path — a trailing `remove_dir_all` (the shape this replaces) is
+        // exactly what a red suite skips, which is the ART-184 pattern
+        // CLAUDE.md forbids by name.
+        let scratch = ScratchDir::new("art-bundles-oplog", "tally");
+        let log_path = scratch.join("operations.jsonl");
 
         let report = BundleReport {
             entries: vec![
@@ -422,7 +466,147 @@ mod tests {
         // outcomes: the run genuinely put something in the library, so it
         // must read as verified rather than as an undifferentiated failure.
         assert!(record.outcome.is_success());
+    }
 
-        let _ = std::fs::remove_dir_all(&dir);
+    /// Finding 4 of the final review: `bundles_download`'s job body used to
+    /// return `Ok(())` unconditionally, so a run the user cancelled ended
+    /// `JobState::Finished` — the job bar saying "finished" over a report
+    /// that says "skipped when you cancelled". `run_and_report_cancellation`
+    /// is the factored-out decision, tested here the way
+    /// `install_archive_into_volume` is tested directly in
+    /// `commands/sources.rs` rather than through a live Tauri job.
+    #[test]
+    fn a_cancelled_run_reports_cancelled_not_finished_but_still_carries_the_report() {
+        use crate::core::jobs::ProgressSink;
+        use crate::core::sources::bundle::{BundleEntry, EntrySource};
+        use crate::core::sources::mirror::tests::MockMirror;
+        use crate::core::sources::mirror::Mirror;
+        use crate::core::ScratchDir;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        const BASE: &str = "https://mirror.invalid/";
+
+        /// Cancels once the second entry's name is reported — deterministic,
+        /// the same shape `core::sources::bundle::run`'s own `CancelOn` test
+        /// sink uses.
+        struct CancelOn {
+            name: &'static str,
+            hit: AtomicBool,
+        }
+        impl ProgressSink for CancelOn {
+            fn report(&self, _done: u64, _total: Option<u64>, message: &str) {
+                if message == self.name {
+                    self.hit.store(true, Ordering::SeqCst);
+                }
+            }
+            fn is_cancelled(&self) -> bool {
+                self.hit.load(Ordering::SeqCst)
+            }
+        }
+
+        let scratch = ScratchDir::new("art-bundles-cancel", "job");
+        let client = MockMirror::new()
+            .with_file(&format!("{BASE}util/arc/lha_68k"), b"lha bytes")
+            .with_file(&format!("{BASE}util/arc/lzx121r1"), b"lzx bytes");
+        let mirrors = vec![Mirror::new("Test", BASE).unwrap()];
+        let cache = crate::core::sources::cache::CacheLayout::new(scratch.join("cache"));
+        let library = crate::core::sources::library::Library::new(scratch.join("library"));
+        let ctx = DownloadContext {
+            aminet: &mirrors,
+            configured: &[],
+            client: &client,
+            cache: &cache,
+            library: &library,
+            subfolder: "",
+        };
+        let entries = vec![
+            BundleEntry {
+                id: "lha".into(),
+                name: "lha".into(),
+                source: EntrySource::Aminet {
+                    path: "util/arc/lha_68k".into(),
+                },
+                order: 1,
+                exclusive_group: None,
+                requires: Vec::new(),
+                permission: None,
+            },
+            BundleEntry {
+                id: "lzx".into(),
+                name: "lzx".into(),
+                source: EntrySource::Aminet {
+                    path: "util/arc/lzx121r1".into(),
+                },
+                order: 2,
+                exclusive_group: None,
+                requires: Vec::new(),
+                permission: None,
+            },
+        ];
+
+        let sink = CancelOn {
+            name: "lzx",
+            hit: AtomicBool::new(false),
+        };
+        let (report, outcome) = run_and_report_cancellation(&entries, &ctx, &sink);
+
+        assert!(matches!(
+            report.entries[0].outcome,
+            EntryOutcome::Downloaded { .. }
+        ));
+        assert!(matches!(report.entries[1].outcome, EntryOutcome::Skipped));
+
+        let err = outcome.expect_err("a cancelled run must not report success");
+        assert_eq!(
+            err.code(),
+            "ART-CANCELLED",
+            "the job must end Cancelled, not Finished: {err}"
+        );
+    }
+
+    /// The counterpart: nothing cancelled, so the run must still end `Ok`.
+    /// Without this, a mutation that always returns `Err(Cancelled)` would
+    /// pass the test above and go unnoticed.
+    #[test]
+    fn an_uncancelled_run_still_reports_ok() {
+        use crate::core::sources::bundle::{BundleEntry, EntrySource};
+        use crate::core::sources::mirror::tests::MockMirror;
+        use crate::core::sources::mirror::Mirror;
+        use crate::core::ScratchDir;
+
+        const BASE: &str = "https://mirror.invalid/";
+
+        let scratch = ScratchDir::new("art-bundles-cancel", "no-cancel");
+        let client = MockMirror::new().with_file(&format!("{BASE}util/arc/lha_68k"), b"lha bytes");
+        let mirrors = vec![Mirror::new("Test", BASE).unwrap()];
+        let cache = crate::core::sources::cache::CacheLayout::new(scratch.join("cache"));
+        let library = crate::core::sources::library::Library::new(scratch.join("library"));
+        let ctx = DownloadContext {
+            aminet: &mirrors,
+            configured: &[],
+            client: &client,
+            cache: &cache,
+            library: &library,
+            subfolder: "",
+        };
+        let entries = vec![BundleEntry {
+            id: "lha".into(),
+            name: "lha".into(),
+            source: EntrySource::Aminet {
+                path: "util/arc/lha_68k".into(),
+            },
+            order: 1,
+            exclusive_group: None,
+            requires: Vec::new(),
+            permission: None,
+        }];
+
+        let (report, outcome) =
+            run_and_report_cancellation(&entries, &ctx, &crate::core::jobs::NoProgress);
+        assert!(matches!(
+            report.entries[0].outcome,
+            EntryOutcome::Downloaded { .. }
+        ));
+        assert!(outcome.is_ok());
     }
 }
