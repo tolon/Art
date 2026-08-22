@@ -2,6 +2,7 @@
 //! `docs/superpowers/specs/2026-08-22-package-bundles-design.md`.
 
 pub mod parse;
+pub mod resolve;
 
 use serde::{Deserialize, Serialize};
 
