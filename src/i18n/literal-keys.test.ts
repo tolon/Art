@@ -381,6 +381,13 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // `sentenceKey`'s own switch is exhaustive over `UnfetchableKind`, so
     // every value it can return is enumerated by the type itself; there is
     // nothing here for `dead-keys.test.ts` to miss.
-    expect(dynamicCalls).toBe(129);
+    // 129 -> 130 (PFS3 on the card builder, 2026-08-23): CardBuilder.tsx
+    // renders each filesystem choice's reason-it-cannot-be-picked as
+    // `t(choice.blocked.key, choice.blocked.params)`. `cardFsChoices` is the
+    // only producer of those Phrases and it returns exactly one key,
+    // `cardBuilder.fs.needsDriver`, so there is no family here to enumerate
+    // and nothing for dead-keys.test.ts to miss -- the key appears literally
+    // in `cardBuild.ts`.
+    expect(dynamicCalls).toBe(130);
   });
 });

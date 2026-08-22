@@ -131,6 +131,27 @@ pub struct CardBuildRequest {
     /// date format the user's own screen already knows how to make.
     #[serde(default)]
     pub built_at: Option<String>,
+    /// Filesystem drivers to embed in the Amiga disk's RDB — `pfs3aio`,
+    /// typically, from a file the **user** supplies.
+    ///
+    /// **This is what ART-084's own note said would bring PFS3 back.** The
+    /// card builder offered FFS and nothing else because SD-1 embedded no
+    /// driver, and a `PDS\3` partition with no driver anywhere on the card is
+    /// one an Amiga ignores in silence — so offering it would have been
+    /// offering that failure. G4 landed the embedding (verified both ways
+    /// against `rdbtool`, and by a real Kickstart once ART-126's `PatchFlags`
+    /// were fixed), which is the condition that note set.
+    ///
+    /// Empty is FFS-only and stays entirely valid: Kickstart carries FFS
+    /// itself and needs nothing here.
+    ///
+    /// ART ships no driver and never will — the same rule as the Kickstart
+    /// above it. Every other builder in this space uses PFS3 (the Emu68
+    /// Imager's own `DiskDefaults`, Emu68's own SD tutorial, HstWB Installer
+    /// for most of its images) and so do both of the real cards ART's card
+    /// model was measured from, but the binary is the user's to provide.
+    #[serde(default)]
+    pub file_systems: Vec<crate::commands::hdf::FileSystemInput>,
     /// The partitions of the card's one Amiga disk.
     ///
     /// One disk, taking whatever is left after the boot partition. Two and
@@ -217,8 +238,13 @@ pub const CARD_BUILD_EVENT: &str = "card-build-result";
 fn card_spec(
     request: &CardBuildRequest,
     boot_files: Vec<crate::core::fat32::BootFile>,
-) -> CardSpec {
-    CardSpec {
+) -> CoreResult<CardSpec> {
+    // Read before anything is laid out, so a driver that is missing, too
+    // large, or silent about its own version is a refusal on the screen the
+    // user is looking at rather than a half-built card.
+    let file_systems = crate::commands::hdf::read_file_systems(&request.file_systems)?;
+
+    Ok(CardSpec {
         total_bytes: request.total_bytes,
         boot_bytes: request.boot_bytes,
         label: request.label.clone(),
@@ -227,12 +253,13 @@ fn card_spec(
             // Whatever is left after the boot partition.
             size_bytes: 0,
             partitions: request.partitions.clone(),
-            // No driver is embedded: SD-1 writes FFS partitions, which
-            // Kickstart mounts itself. A PFS3 card needs `create_rdb_layout`'s
-            // driver embedding and a driver to embed — SD-2 (ART-084).
-            file_systems: Vec::new(),
+            // Whatever the user gave, usually nothing or one `pfs3aio`.
+            // Empty means FFS only, which Kickstart mounts itself — see
+            // `CardBuildRequest::file_systems` for why this used to be
+            // hard-coded empty (ART-084) and what changed.
+            file_systems,
         }],
-    }
+    })
 }
 
 /// The Kickstart a card is to carry, as an Amiga would have to read it.
@@ -309,7 +336,7 @@ fn payload_for(request: &CardBuildRequest) -> CoreResult<crate::core::card::payl
 #[tauri::command]
 pub fn card_plan_build(request: CardBuildRequest) -> AppResult<CardBuildPlan> {
     let payload = payload_for(&request)?;
-    let spec = card_spec(&request, Vec::new());
+    let spec = card_spec(&request, Vec::new())?;
     let layout = plan_card(spec.total_bytes, spec.boot_bytes, &[0])?;
 
     let mut warnings = vec![CardBuildWarning::VolumesUnformatted];
@@ -389,7 +416,7 @@ fn build_requested_card(
     let kernel_file = payload.kernel_file.clone();
 
     let image = Path::new(request.dest.trim());
-    let spec = card_spec(request, payload.files);
+    let spec = card_spec(request, payload.files)?;
     let built = build_card(image, &spec, progress)?;
 
     // G7: the manifest is written from the *finished* card, so it records what
@@ -791,6 +818,7 @@ mod tests {
             total_bytes: 2 * GIB,
             boot_bytes: 0,
             label: "ART CARD".into(),
+            file_systems: Vec::new(),
             hardware: PistormHardware {
                 amiga: AmigaTarget::A500,
                 variant: PistormVariant::Classic,
@@ -811,6 +839,125 @@ mod tests {
         }
     }
 
+    /// A driver the user supplied reaches the RDB of the card ART builds, and
+    /// the card read back afterwards says so.
+    ///
+    /// **This is ART-084's own expiry condition, met.** The card builder
+    /// offered FFS and nothing else because SD-1 embedded no driver, and its
+    /// note said PFS3 "comes back with it". Asserted against the **finished
+    /// image**, read through the same reader the Hard Disk studio uses, not
+    /// against the request — a request-shaped assertion would pass just as
+    /// well if `card_spec` dropped the drivers on the floor.
+    #[test]
+    fn a_driver_the_user_supplied_is_embedded_in_the_card_art_builds() {
+        use crate::core::jobs::NoProgress;
+        use crate::core::rdb::AmigaHardDiskFs;
+
+        let dir = scratch("pfs3-card");
+        let archive = emu68_zip(&dir);
+        let dest = dir.join("card.img");
+
+        // Not a real pfs3aio — ART ships none and a test may not either. What
+        // matters to the RDB writer is a driver that states its own version,
+        // which is what `$VER:` is for and what a real one carries.
+        let driver = dir.join("pfs3aio");
+        let mut bytes = b"$VER: pfs3aio 19.2 (1.1.99)\n".to_vec();
+        bytes.extend(std::iter::repeat_n(0u8, 2048));
+        std::fs::write(&driver, &bytes).unwrap();
+
+        let mut req = request(&archive, &dest);
+        req.partitions[0].fs_type = AmigaHardDiskFs::Pfs3DirectScsi;
+        req.file_systems = vec![crate::commands::hdf::FileSystemInput {
+            path: driver.display().to_string(),
+            dos_type: "PDS3".to_string(),
+            version: None,
+            revision: None,
+        }];
+
+        let spec = card_spec(&req, Vec::new()).unwrap();
+        assert_eq!(
+            spec.areas[0].file_systems.len(),
+            1,
+            "the driver has to reach the area the partitions are on"
+        );
+        // Read out of the driver's own `$VER:`, never asked of the user and
+        // never guessed — 0.0 would lose to whatever AmigaOS already has.
+        assert_eq!(spec.areas[0].file_systems[0].version, 19);
+        assert_eq!(spec.areas[0].file_systems[0].revision, 2);
+        assert_eq!(
+            spec.areas[0].file_systems[0].dos_type,
+            u32::from_be_bytes([b'P', b'D', b'S', 3]),
+            "`PDS3` is three characters and the byte 3, not the digit"
+        );
+
+        // And on the card itself, read back out of the file.
+        build_requested_card(&req, &NoProgress).unwrap();
+        let report = card_open(dest.display().to_string()).unwrap();
+        assert_eq!(
+            report.file_systems.len(),
+            1,
+            "the finished card must carry the driver: {:?}",
+            report.file_systems
+        );
+        assert!(
+            report.unmountable.is_empty(),
+            "and no partition may be left unmountable: {:?}",
+            report.unmountable
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A driver that will not say what version it is is refused, rather than
+    /// written with a version ART invented. Refused **before** the image is
+    /// laid out, so there is no half-built card to explain.
+    #[test]
+    fn a_driver_that_states_no_version_is_refused_before_anything_is_written() {
+        use crate::core::rdb::AmigaHardDiskFs;
+
+        let dir = scratch("pfs3-mute");
+        let archive = emu68_zip(&dir);
+        let dest = dir.join("card.img");
+
+        let driver = dir.join("silent-driver");
+        std::fs::write(&driver, vec![0u8; 4096]).unwrap();
+
+        let mut req = request(&archive, &dest);
+        req.partitions[0].fs_type = AmigaHardDiskFs::Pfs3DirectScsi;
+        req.file_systems = vec![crate::commands::hdf::FileSystemInput {
+            path: driver.display().to_string(),
+            dos_type: "PDS3".to_string(),
+            version: None,
+            revision: None,
+        }];
+
+        let err = match card_spec(&req, Vec::new()) {
+            Err(err) => err,
+            Ok(_) => panic!("a driver that states no version must be refused"),
+        };
+        assert!(
+            err.to_string().contains("does not say what version it is"),
+            "{err}"
+        );
+        assert!(!dest.exists(), "nothing may have been written: {err}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Nothing supplied is still entirely valid, and still means FFS — which
+    /// Kickstart mounts itself. The change must not make a driver compulsory.
+    #[test]
+    fn no_driver_is_still_a_perfectly_good_ffs_card() {
+        let dir = scratch("no-driver");
+        let archive = emu68_zip(&dir);
+        let req = request(&archive, &dir.join("card.img"));
+
+        let spec = card_spec(&req, Vec::new()).unwrap();
+        assert!(spec.areas[0].file_systems.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The screen asks for a card; this is the shape that comes out. **One
     /// Amiga disk taking whatever is left** — two and three disks are
     /// multiboot, which is SD-3's G16 and is not pretended at here.
@@ -820,7 +967,7 @@ mod tests {
         let archive = emu68_zip(&dir);
         let req = request(&archive, &dir.join("card.img"));
 
-        let spec = card_spec(&req, Vec::new());
+        let spec = card_spec(&req, Vec::new()).unwrap();
 
         assert_eq!(spec.total_bytes, 2 * GIB);
         assert_eq!(spec.boot_bytes, 0, "0 means the measured 1.10 GiB default");

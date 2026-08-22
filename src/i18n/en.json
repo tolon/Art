@@ -1794,7 +1794,9 @@
       "driveName": "Drive name",
       "partitionMb": "Partition size (MB)",
       "fsType": "Filesystem",
-      "oneDisk": "One Amiga disk, taking whatever is left after the boot partition. Several disks with a boot menu is multiboot, which is not built yet. Only the filesystems Kickstart carries are offered: a PFS3 partition with no driver on the card is one an Amiga ignores in silence."
+      "oneDisk": "One Amiga disk, taking whatever is left after the boot partition. Several disks with a boot menu is multiboot, which is not built yet. Only the filesystems Kickstart carries are offered: a PFS3 partition with no driver on the card is one an Amiga ignores in silence.",
+      "fsDriver": "Filesystem driver",
+      "fsDriverHint": "Your own pfs3aio, embedded in the card's partition table so the Amiga can mount a PFS3 partition. ART ships none — the same rule as the Kickstart. Fast File System needs nothing here: Kickstart carries it."
     },
     "actions": {
       "preview": "Preview",
@@ -1824,7 +1826,8 @@
       "noDestination": "Choose where the image goes.",
       "noPartitions": "The Amiga disk needs at least one partition.",
       "notPlanned": "Preview it first — nothing is written before you have seen what would be.",
-      "destExists": "That file is already there. ART will not build over it; choose another name."
+      "destExists": "That file is already there. ART will not build over it; choose another name.",
+      "noDriver": "This filesystem is not in Kickstart, so the card has to carry its own driver. Choose your {{file}} under Advanced, or pick Fast File System."
     },
     "manifest": {
       "finding": {
@@ -1884,6 +1887,9 @@
       "heading": "The card is built",
       "readBack": "Read back by ART's own card reader: {{disks}} Amiga disk(s), {{partitions}} partition(s).",
       "nextStep": "Flash it to a microSD card with your usual imager, then plug HDMI in before powering the Amiga on — the VPU only configures the port at boot."
+    },
+    "fs": {
+      "needsDriver": "needs {{file}}"
     }
   },
   "preload": {

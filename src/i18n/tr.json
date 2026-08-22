@@ -1794,7 +1794,9 @@
       "driveName": "Sürücü adı",
       "partitionMb": "Bölüm boyutu (MB)",
       "fsType": "Dosya sistemi",
-      "oneDisk": "Önyükleme bölümünden geriye kalanı alan tek bir Amiga diski. Önyükleme menüsüyle birden çok disk çoklu önyüklemedir ve henüz yapılmadı. Yalnızca Kickstart'ın kendi taşıdığı dosya sistemleri sunulur: sürücüsü kartta olmayan bir PFS3 bölümünü Amiga sessizce yok sayar."
+      "oneDisk": "Önyükleme bölümünden geriye kalanı alan tek bir Amiga diski. Önyükleme menüsüyle birden çok disk çoklu önyüklemedir ve henüz yapılmadı. Yalnızca Kickstart'ın kendi taşıdığı dosya sistemleri sunulur: sürücüsü kartta olmayan bir PFS3 bölümünü Amiga sessizce yok sayar.",
+      "fsDriver": "Dosya sistemi sürücüsü",
+      "fsDriverHint": "Kendi pfs3aio dosyanız; kartın bölüm tablosuna gömülür, böylece Amiga PFS3 bölümünü bağlayabilir. ART hiçbirini göndermez — Kickstart'la aynı kural. Fast File System için burada bir şey gerekmez: onu Kickstart taşır."
     },
     "actions": {
       "preview": "Önizle",
@@ -1824,7 +1826,8 @@
       "noDestination": "İmajın nereye yazılacağını seç.",
       "noPartitions": "Amiga diskinde en az bir bölüm olmalı.",
       "notPlanned": "Önce önizle — ne yazılacağını görmeden hiçbir şey yazılmaz.",
-      "destExists": "O dosya zaten var. ART üzerine yazmaz; başka bir ad seç."
+      "destExists": "O dosya zaten var. ART üzerine yazmaz; başka bir ad seç.",
+      "noDriver": "Bu dosya sistemi Kickstart'ta yok; kartın kendi sürücüsünü taşıması gerekiyor. Gelişmiş altından kendi {{file}} dosyanızı seçin ya da Fast File System'i seçin."
     },
     "manifest": {
       "finding": {
@@ -1884,6 +1887,9 @@
       "heading": "Kart oluşturuldu",
       "readBack": "ART'ın kendi kart okuyucusuyla geri okundu: {{disks}} Amiga diski, {{partitions}} bölüm.",
       "nextStep": "Alışık olduğun imaj aracıyla microSD karta yaz, sonra Amiga'yı açmadan önce HDMI'ı tak — VPU portu yalnızca açılışta yapılandırır."
+    },
+    "fs": {
+      "needsDriver": "{{file}} gerekiyor"
     }
   },
   "preload": {

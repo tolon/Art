@@ -15,7 +15,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type { CardReport, MbrPartition } from "@/lib/card";
-import type { AmigaHardDiskFs, PartitionSpec } from "@/lib/hdf";
+import { driverRequirement } from "@/lib/fsDriver";
+import type { AmigaHardDiskFs, FileSystemInput, PartitionSpec } from "@/lib/hdf";
 import type { Phrase } from "@/lib/phrase";
 import type {
   Emu68Line,
@@ -56,6 +57,12 @@ export interface CardBuildRequest {
    *  `core` has none, and the caller already knows the user's locale. Absent
    *  when planning: a plan writes nothing and has no date. */
   built_at?: string;
+  /** Filesystem drivers to embed in the Amiga disk's RDB.
+   *
+   *  Built by `fileSystemInputsFor` from the chosen filesystem and the
+   *  driver the user picked — empty for FFS, which Kickstart mounts itself.
+   *  See `CARD_FS_CHOICES` for why this took until 2026-08-23 to exist. */
+  file_systems: FileSystemInput[];
   /** The partitions of the card's one Amiga disk. */
   partitions: PartitionSpec[];
 }
@@ -333,16 +340,59 @@ export async function onCardBuildResult(
 /**
  * The filesystems this builder can give a partition an Amiga will **mount**.
  *
- * Only the two Kickstart carries. SD-1 embeds no filesystem driver in the RDB
- * it writes, and a `PDS\3` or `SFS\0` partition with no driver anywhere on the
- * card is one an Amiga ignores in silence — ART-084, the failure the Hard Disk
- * studio already labels. Offering them here would be offering that failure;
- * embedding the driver is SD-2's work and they come back with it (§89).
+ * **PFS3 is back, and the note that promised it is the reason.** This list
+ * held only the two Kickstart carries, because SD-1 embedded no driver in the
+ * RDB it wrote and a `PDS\3` partition with no driver anywhere on the card is
+ * one an Amiga ignores in silence (ART-084) — so offering it would have been
+ * offering that failure, and the note said it "comes back with it" once SD-2
+ * did the embedding. SD-2 did: `create_rdb_layout` embeds, `rdbtool` reads
+ * what it wrote back byte-for-byte, and a real Kickstart mounted the result
+ * once ART-126's wrong `PatchFlags` were fixed.
+ *
+ * **And PFS3 is what everyone else uses.** Both of the real cards ART's own
+ * card model was measured from are PFS3 throughout; the Emu68 Imager's
+ * `DiskDefaults` names PFS3 for both its partitions; Emu68's own SD tutorial
+ * walks the user through PFS3aio; HstWB Installer uses PFS3AIO for most of its
+ * images and keeps FFS for "unexpanded Amigas with only chip memory", which a
+ * PiStorm machine is the opposite of.
+ *
+ * **SFS is deliberately still absent** — the owner's own decision on
+ * 2026-08-22, recorded in the work list: the Emu68 Imager installs PFS3 and
+ * not SFS, and nothing is yet known about the candidate crate's agreement with
+ * the real handler.
+ *
+ * A choice whose driver is missing is offered but not selectable, with the
+ * reason on screen: ART ships no `pfs3aio` and never will, the same rule as
+ * the Kickstart.
  */
-export const CARD_FS_CHOICES: { value: AmigaHardDiskFs; label: string }[] = [
-  { value: "ffsstandard", label: "Fast File System (DOS\\1)" },
-  { value: "ffsdircache", label: "Fast File System DC (DOS\\3)" },
-];
+export interface CardFsChoice {
+  value: AmigaHardDiskFs;
+  label: string;
+  /** Why it cannot be picked right now, or null when it can. */
+  blocked: Phrase | null;
+}
+
+export function cardFsChoices(driverPath: string | null): CardFsChoice[] {
+  const needsDriver = (value: AmigaHardDiskFs): Phrase | null =>
+    driverRequirement(value).required && !driverPath
+      ? { key: "cardBuilder.fs.needsDriver", params: { file: driverRequirement(value).hint } }
+      : null;
+
+  return [
+    {
+      value: "pfs3directscsi",
+      label: "PFS3 (PDS\\3)",
+      blocked: needsDriver("pfs3directscsi"),
+    },
+    {
+      value: "pfs3standard",
+      label: "PFS3 (PFS\\3)",
+      blocked: needsDriver("pfs3standard"),
+    },
+    { value: "ffsstandard", label: "Fast File System (DOS\\1)", blocked: null },
+    { value: "ffsdircache", label: "Fast File System DC (DOS\\3)", blocked: null },
+  ];
+}
 
 /**
  * The Amiga disk's one partition, as ART proposes it.
@@ -403,6 +453,13 @@ export function buildBlocker(
   if (!request.archive.trim()) return { key: "cardBuilder.blocked.noArchive" };
   if (!request.dest.trim()) return { key: "cardBuilder.blocked.noDestination" };
   if (request.partitions.length === 0) return { key: "cardBuilder.blocked.noPartitions" };
+  // Before the plan, because it is the one thing here the user can fix
+  // without re-planning — and because a card whose partition names a
+  // filesystem nothing on it carries is the exact image ART-084 is about.
+  const needs = driverRequirement(request.partitions[0].fs_type);
+  if (needs.required && request.file_systems.length === 0) {
+    return { key: "cardBuilder.blocked.noDriver", params: { file: needs.hint } };
+  }
   if (!plan) return { key: "cardBuilder.blocked.notPlanned" };
   if (plan.dest_exists) return { key: "cardBuilder.blocked.destExists" };
   return null;
