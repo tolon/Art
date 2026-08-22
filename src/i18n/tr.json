@@ -1796,7 +1796,9 @@
       "fsType": "Dosya sistemi",
       "oneDisk": "Önyükleme bölümünden geriye kalanı alan tek bir Amiga diski. Önyükleme menüsüyle birden çok disk çoklu önyüklemedir ve henüz yapılmadı. Yalnızca Kickstart'ın kendi taşıdığı dosya sistemleri sunulur: sürücüsü kartta olmayan bir PFS3 bölümünü Amiga sessizce yok sayar.",
       "fsDriver": "Dosya sistemi sürücüsü",
-      "fsDriverHint": "Kendi pfs3aio dosyanız; kartın bölüm tablosuna gömülür, böylece Amiga PFS3 bölümünü bağlayabilir. ART hiçbirini göndermez — Kickstart'la aynı kural. Fast File System için burada bir şey gerekmez: onu Kickstart taşır."
+      "fsDriverHint": "Kendi pfs3aio dosyanız; kartın bölüm tablosuna gömülür, böylece Amiga PFS3 bölümünü bağlayabilir. ART hiçbirini göndermez — Kickstart'la aynı kural. Fast File System için burada bir şey gerekmez: onu Kickstart taşır.",
+      "workPartition": "Kendi dosyalarınız için ikinci bir bölüm (SDH1)",
+      "workPartitionHint": "Yukarıdaki sistem bölümünden kalanı alır. Çalıştığı bilinen iki PiStorm kartının da şekli bu, ve Emu68 Imager'ın varsayılan yaptığı da — kendi dosyalarınızı AmigaOS'un yaşadığı bölümün dışında tutar."
     },
     "actions": {
       "preview": "Önizle",

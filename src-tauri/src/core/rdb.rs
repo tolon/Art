@@ -226,6 +226,20 @@ pub const DEFAULT_NUM_BUFFERS: u32 = 600;
 pub struct PartitionSpec {
     pub drive_name: String,
     pub fs_type: AmigaHardDiskFs,
+    /// How big, in MB — or **`0` for "whatever is left"**, which only the
+    /// **last** partition may say.
+    ///
+    /// The same idiom `AreaSpec::size_bytes` and `CardSpec::boot_bytes`
+    /// already use, and it is here for the same reason: the two real PiStorm
+    /// cards ART's layout was measured from both carry `SDH0` and `SDH1`, and
+    /// a caller that wants that has to be able to say "system this big, the
+    /// rest for my files" without doing the cylinder arithmetic itself. A
+    /// screen recomputing `bytes_per_cyl` is a second copy of the rounding
+    /// that lives here, and a second copy is how the two start disagreeing.
+    ///
+    /// `0` anywhere but last is refused by name rather than resolved: two
+    /// partitions both claiming the remainder is a question with no answer,
+    /// and guessing one would be the confident-and-wrong shape (§89).
     pub size_mb: u32,
     pub bootable: bool,
     pub boot_priority: i8,
@@ -793,6 +807,22 @@ pub fn create_rdb_layout(
         ));
     }
 
+    // "The rest" is the last partition's alone. Checked before anything is
+    // laid out, and named — see `PartitionSpec::size_mb`.
+    if let Some(at) = partitions
+        .iter()
+        .enumerate()
+        .position(|(idx, p)| p.size_mb == 0 && idx + 1 < partitions.len())
+    {
+        return Err(CoreError::InvalidInput(format!(
+            "'{}' asks for whatever is left, but it is partition {} of {} — only the last one \
+             can, because two partitions cannot both have the remainder",
+            partitions[at].drive_name,
+            at + 1,
+            partitions.len()
+        )));
+    }
+
     // Refuse a layout that cannot hold what was asked for, rather than silently
     // shrinking the last partition to fit (spec §89).
     let usable_cylinders = cylinders - RESERVED_CYLINDERS;
@@ -908,9 +938,18 @@ pub fn create_rdb_layout(
             NO_BLOCK
         };
 
-        let req_bytes = (spec.size_mb as u64) * 1024 * 1024;
-        let req_cyls = req_bytes.div_ceil(bytes_per_cyl).max(1) as u32;
-        let high_cyl = current_cyl + req_cyls - 1;
+        // `0` is "the rest", and only the last partition can say it — the
+        // check above has already refused anything else. Everything from
+        // here to the last usable cylinder, which is what the *caller* would
+        // otherwise have to work out from `bytes_per_cyl` and
+        // `RESERVED_CYLINDERS`.
+        let high_cyl = if spec.size_mb == 0 {
+            cylinders - 1
+        } else {
+            let req_bytes = (spec.size_mb as u64) * 1024 * 1024;
+            let req_cyls = req_bytes.div_ceil(bytes_per_cyl).max(1) as u32;
+            current_cyl + req_cyls - 1
+        };
 
         let p_off = (part_block_num as usize) * BLOCK_SIZE;
         let p_slice = &mut image[p_off..p_off + BLOCK_SIZE];
@@ -1264,6 +1303,139 @@ mod dosenv_layout {
 
 #[cfg(test)]
 mod tests {
+    /// **`size_mb: 0` means the rest, and the rest is all of it.**
+    ///
+    /// Both of the real PiStorm cards carry `SDH0` and `SDH1`, which is the
+    /// shape this exists for. Asserted by **reading the partition blocks back
+    /// out of the image** — the caller's arithmetic is the thing being
+    /// replaced, so it cannot also be the thing that checks it.
+    #[test]
+    fn the_last_partition_can_ask_for_whatever_is_left() {
+        let total = 512 * 1024 * 1024;
+        let image = create_rdb_layout(
+            total,
+            &[
+                PartitionSpec {
+                    drive_name: "SDH0".into(),
+                    fs_type: AmigaHardDiskFs::FfsStandard,
+                    size_mb: 128,
+                    bootable: true,
+                    boot_priority: 1,
+                    num_buffers: 0,
+                },
+                PartitionSpec {
+                    drive_name: "SDH1".into(),
+                    fs_type: AmigaHardDiskFs::FfsStandard,
+                    size_mb: 0,
+                    bootable: false,
+                    boot_priority: 0,
+                    num_buffers: 0,
+                },
+            ],
+            &[],
+        )
+        .unwrap();
+
+        let first = read_partition_extent(&image.blocks, 1);
+        let second = read_partition_extent(&image.blocks, 2);
+
+        assert_eq!(
+            second.0,
+            first.1 + 1,
+            "the second partition starts where the first ends"
+        );
+
+        // The last cylinder of the disk, not one short and not one over. A
+        // partition that claims a cylinder the image does not have is one an
+        // Amiga will read past the end of.
+        let bytes_per_cyl = (16u64 * 63) * 512;
+        let cylinders = total.div_ceil(bytes_per_cyl) as u32;
+        assert_eq!(
+            second.1,
+            cylinders - 1,
+            "the rest is everything up to the last cylinder"
+        );
+
+        // And it really is most of the disk, not the 1-cylinder floor a
+        // `size_mb: 0` would otherwise round up to.
+        let claimed = (second.1 - second.0 + 1) as u64 * bytes_per_cyl;
+        assert!(
+            claimed > total / 2,
+            "the second partition got {claimed} bytes of {total}"
+        );
+    }
+
+    /// Two partitions cannot both have the remainder, so `0` anywhere but
+    /// last is refused **by name** rather than resolved into a guess.
+    #[test]
+    fn only_the_last_partition_may_ask_for_the_rest() {
+        let err = create_rdb_layout(
+            512 * 1024 * 1024,
+            &[
+                PartitionSpec {
+                    drive_name: "SDH0".into(),
+                    fs_type: AmigaHardDiskFs::FfsStandard,
+                    size_mb: 0,
+                    bootable: true,
+                    boot_priority: 1,
+                    num_buffers: 0,
+                },
+                PartitionSpec {
+                    drive_name: "SDH1".into(),
+                    fs_type: AmigaHardDiskFs::FfsStandard,
+                    size_mb: 64,
+                    bootable: false,
+                    boot_priority: 0,
+                    num_buffers: 0,
+                },
+            ],
+            &[],
+        )
+        .expect_err("a non-last partition asking for the rest must be refused");
+
+        let text = err.to_string();
+        assert!(text.contains("SDH0"), "the refusal must name it: {text}");
+        assert!(text.contains("1 of 2"), "and say where it is: {text}");
+    }
+
+    /// One partition asking for the rest is the ordinary single-partition
+    /// card, and must still fill the disk.
+    #[test]
+    fn a_lone_partition_asking_for_the_rest_takes_the_whole_disk() {
+        let total = 256 * 1024 * 1024;
+        let image = create_rdb_layout(
+            total,
+            &[PartitionSpec {
+                drive_name: "SDH0".into(),
+                fs_type: AmigaHardDiskFs::FfsStandard,
+                size_mb: 0,
+                bootable: true,
+                boot_priority: 1,
+                num_buffers: 0,
+            }],
+            &[],
+        )
+        .unwrap();
+
+        let bytes_per_cyl = (16u64 * 63) * 512;
+        let cylinders = total.div_ceil(bytes_per_cyl) as u32;
+        let (low, high) = read_partition_extent(&image.blocks, 1);
+        assert_eq!(low, RESERVED_CYLINDERS);
+        assert_eq!(high, cylinders - 1);
+    }
+
+    /// `LowCyl`/`HighCyl` straight out of the PART block, so the assertions
+    /// above read the image rather than the request.
+    fn read_partition_extent(image: &[u8], block: usize) -> (u32, u32) {
+        let base = block * BLOCK_SIZE;
+        // DosEnvec starts at longword 32 of the block; LowCyl and HighCyl are
+        // its longwords 9 and 10.
+        let env = base + 128 + 4 * 9;
+        let low = u32::from_be_bytes(image[env..env + 4].try_into().unwrap());
+        let high = u32::from_be_bytes(image[env + 4..env + 8].try_into().unwrap());
+        (low, high)
+    }
+
     #[test]
     fn a_driver_states_its_own_version() {
         // The real shape, from `pfs3aio`.

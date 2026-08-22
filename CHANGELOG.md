@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Cards get a second partition (2026-08-23)
+
+#### Added
+- **A card ART builds now has `SDH0` for the system and `SDH1` for your own
+  files**, which is the shape both known working PiStorm cards have and what
+  the Emu68 Imager makes by default. `SDH1` takes whatever is left after the
+  system partition. Switch it off under Advanced if you want one partition.
+
 ### PFS3 on the cards ART builds (2026-08-23)
 
 #### Added
