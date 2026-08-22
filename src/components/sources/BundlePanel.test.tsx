@@ -490,6 +490,43 @@ describe("a select-all control ticks every shipped set at once", () => {
       false
     );
   });
+
+  // Second re-review, item 3: `emu68`'s own card checkbox is individually
+  // `disabled` (0/4 entries fetchable), so select-all must not tick it —
+  // a control that ticks a box it has itself just greyed out is telling
+  // the user two contradictory things at once. Select-all here ticks fewer
+  // than all three shipped sets; that is the honest outcome, and nothing
+  // on screen may claim it selected "everything" when it selected two.
+  it("does not tick a set whose own checkbox is disabled because nothing in it is fetchable", async () => {
+    listMock.mockResolvedValue([ARSIV_SET, PICASSO_SET, EMU68_SET]);
+    render(<BundlePanel />);
+    const selectAll = await screen.findByRole("checkbox", { name: i18n.t("bundles.set.hepsi") });
+    const emu68Checkbox = screen.getByRole("checkbox", { name: /emu68/i }) as HTMLInputElement;
+    expect(emu68Checkbox.disabled).toBe(true);
+
+    await userEvent.click(selectAll);
+
+    expect((screen.getByRole("checkbox", { name: /arsiv/i }) as HTMLInputElement).checked).toBe(
+      true
+    );
+    expect((screen.getByRole("checkbox", { name: /grafik/i }) as HTMLInputElement).checked).toBe(
+      true
+    );
+    // The disabled set stays unticked — checked-and-disabled at once is
+    // exactly the contradiction this item fixes.
+    expect(emu68Checkbox.checked).toBe(false);
+    // The select-all control itself still reads as fully checked, because
+    // every set it is honestly able to tick now is ticked — it does not
+    // claim emu68 is selected too; that set's own checkbox, visibly
+    // unchecked and disabled, is what tells the truth about emu68.
+    expect((selectAll as HTMLInputElement).checked).toBe(true);
+
+    // Running only downloads the two fetchable sets' entries — emu68 was
+    // never ticked, so none of its entries are handed to the download call.
+    const runButton = screen.getByRole("button", { name: i18n.t("bundles.run") });
+    await userEvent.click(runButton);
+    expect(downloadMock).toHaveBeenCalledWith(["lha", "lzx", "picasso96", "akgif"]);
+  });
 });
 
 // Finding 9 of the final review: `chosen` lived in a plain `useState`, so

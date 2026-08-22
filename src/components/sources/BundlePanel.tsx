@@ -230,11 +230,20 @@ export function BundlePanel() {
 
   // The `hepsi` set the design specifies: "everything", computed rather than
   // ever listed as catalogue data, so it cannot drift from the 14 shipped
-  // sets. A plain select-all control over their ids.
-  const allSetIds = useMemo(() => (sets ?? []).map((set) => set.id), [sets]);
-  const allChosen = allSetIds.length > 0 && allSetIds.every((id) => chosenIds.includes(id));
+  // sets. A plain select-all control over their ids — but only the ids of
+  // sets with at least one fetchable entry. A set like `emu68` (4/4
+  // `github-release`) has its own card checkbox individually `disabled`
+  // (line ~460 below); ticking it here anyway would render it checked and
+  // disabled at once, telling the user two things at the same time.
+  // Second re-review, item 3.
+  const selectableSetIds = useMemo(
+    () => (sets ?? []).filter((set) => fetchableCount(set.entries) > 0).map((set) => set.id),
+    [sets]
+  );
+  const allChosen =
+    selectableSetIds.length > 0 && selectableSetIds.every((id) => chosenIds.includes(id));
   function toggleAll() {
-    setChosenIds(allChosen ? [] : allSetIds);
+    setChosenIds(allChosen ? [] : selectableSetIds);
   }
 
   async function run() {
