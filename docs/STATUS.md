@@ -968,6 +968,27 @@ been seen working by a person. If it works, say so here with the numbers; if it
 does not, that is the next defect and it is worth more than any item on the
 work list.
 
+**Done, 2026-08-22.** The OS Builder built a distribution tree from the
+screen: `E:miga\Amigatolon\os39rt5`, **1146 files, 126 directories,
+6 320 749 bytes** from **15 ADFs**, each recorded with its SHA-256, paired
+against the owner's Kickstart 40.68 (A1200). 2293 entries on disk — 1146
+files, 1146 `.uaem` sidecars and the manifest — and that arithmetic closes
+exactly.
+
+**Asked, not inferred**, which is the whole point: the folder sits under
+`os39` and `distribution.json` says `release: "AmigaOS 3.2"`. A directory
+name is consistent with several answers; the manifest is the tree's own
+statement about itself. `builtFrom` also shows `Locale-TR` (the owner's own
+language, in the tree) and `ModulesA1200_3.2`, switched on by the V40
+Kickstart's own condition — the conditional component a wrong hypothesis had
+been built on that morning, working.
+
+**It took six defects to get here, all six found by driving the screen.**
+[ART-207](ISSUES.md) and [ART-208](ISSUES.md) in the morning,
+[ART-209](ISSUES.md), [ART-210](ISSUES.md), [ART-211](ISSUES.md) and
+[ART-212](ISSUES.md) in the afternoon. Not one was reachable by a test that
+did not exist yet, and the owner found every one of them.
+
 **It was driven, and it did not get that far — twice over, for one reason.**
 On 2026-08-22 the owner chose AmigaOS 3.2 and the screen answered with sixteen
 `MediaMissing` refusals, which they read as *"bir sürü eksik program"*. The
