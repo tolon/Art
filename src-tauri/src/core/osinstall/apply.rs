@@ -784,14 +784,14 @@ pub fn refuse_unless_free(root: &Path) -> CoreResult<()> {
     }
     if !root.is_dir() {
         return Err(CoreError::SafetyRefused(format!(
-            "'{}' is not a folder — a distribution tree is built into a folder,              and this is a file",
+            "'{}' is not a folder — a distribution tree is built into a folder, and this is a file",
             root.display()
         )));
     }
     let mut entries = std::fs::read_dir(root)?;
     if entries.next().is_some() {
         return Err(CoreError::SafetyRefused(format!(
-            "'{}' already has something in it — a distribution tree is never              built over one that is already there. Choose an empty folder, or a              new one",
+            "'{}' already has something in it — a distribution tree is never built over one that is already there. Choose an empty folder, or a new one",
             root.display()
         )));
     }

@@ -67,6 +67,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
+// ART-060: a Rust sentence ART recognises comes back in the user's own
+// language; anything else is Rust's English verbatim, exactly as before.
+import { errorText } from "@/lib/errorText";
+
 import {
   amigaInstallPreview,
   amigaInstallRun,
@@ -123,6 +127,7 @@ export interface AmigaInstallPanelProps {
  */
 function Refusal({ text, testId }: { text: string; testId: string }) {
   const { t } = useTranslation();
+
   return (
     <div
       className="badge badge-err"
@@ -362,7 +367,7 @@ export function AmigaInstallPanel({
       .catch((e) => {
         if (cancelled) return;
         setPreview(null);
-        setRefusal(String(e));
+        setRefusal(errorText(t, e));
         setPreviewing(false);
       });
     return () => {
@@ -469,7 +474,7 @@ export function AmigaInstallPanel({
       // Every refusal is raised before the job starts, so this is the same
       // English sentence the preview would have shown — never a job that
       // could only have gone red a moment later.
-      setRefusal(String(e));
+      setRefusal(errorText(t, e));
       setBusy(false);
       job.current = null;
     }

@@ -1101,7 +1101,7 @@ mod tests {
         assert_eq!(
             info.checksum,
             RomChecksum::Invalid,
-            "one flipped bit in the body, and both structural marks intact —              exactly the case the label is for"
+            "one flipped bit in the body, and both structural marks intact — exactly the case the label is for"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1194,7 +1194,7 @@ mod tests {
             );
         }
         println!(
-            "named={named} placed={placed} total={total}              checksum: valid={sums} invalid={accused} not-checked={unchecked}"
+            "named={named} placed={placed} total={total} checksum: valid={sums} invalid={accused} not-checked={unchecked}"
         );
         assert!(total > 0, "'{dir}' held no ROM ART could read at all");
     }

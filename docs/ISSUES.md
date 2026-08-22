@@ -528,26 +528,56 @@ Turkish string in ART has been read on screen by someone who speaks it, and
 it was one of the hardest kind: a refusal that has to leave the reader knowing
 what to do next. The other 1774 remain unseen.
 
-**ART-060** 🔵 **Rust-side error sentences do not translate**
-`core/error.rs::CoreError`, `commands/whdload.rs::WhdloadRefusal` · Every
-`CoreError` variant's `Display` implementation, and `WhdloadRefusal { reason,
-suggestion }`'s two fields, are English sentences written in `core/` and
-`commands/`, reaching the UI verbatim regardless of the language chosen in
-Settings. `CoreError::user_message()` appends the stable `ART-*` id from
-`code()` to the English sentence for exactly this reason (§68) — the id was
-always meant to be the stable, quotable part — but nothing today keys off it
-to show a translated sentence instead. This is a design question worth
-recording, not answering here: `core/` may not depend on the frontend's
-`react-i18next` catalogue (CLAUDE.md's core-independence rule), so there are at
-least two ways forward — move the sentences into the frontend catalogue, keyed
-by `CoreError::code()` / a `WhdloadRefusal` reason code, and have the UI look
-them up instead of rendering the string Rust sent; or give `core/` its own
-minimal, dependency-free catalogue and have `Display` consult it. The first
-keeps `core/` exactly as independent as it is today but means every error path
-has to carry a stable key instead of (or alongside) a sentence, and duplicates
-some phrasing decisions between Rust and the JSON catalogues. The second keeps
-the sentence and its translation next to each other but adds a resource-lookup
-concept to a crate that currently has none. Neither is decided here.
+**ART-060** 🔵 **Rust-side error sentences do not translate** —
+*partly answered 2026-08-23; the mechanism is built and two sentences use it*
+`src/lib/errorText.ts` · `core/error.rs`
+
+**The design question this entry recorded is answered, and the answer is
+neither of the two it offered.** A free-text English sentence **cannot be
+translated** — a Turkish one can only be *built*, out of parts, on the side
+that has the catalogue. So ART neither moved the sentences into the frontend
+nor gave `core/` a catalogue: it **recognises** the sentences it produces,
+pulls the parts out, and rebuilds them.
+
+**Measured before designing.** 543 places in the crate construct a free-text
+`CoreError` (437 in `core/`, 106 in `commands/`; 294 `InvalidInput`, 160
+`Malformed`, 62 `SafetyRefused`). The owner's own `operations.jsonl`: 37
+operations, 10 failures, **two distinct sentences**. Translating 543 is a
+rewrite of the error layer; translating what a person actually met is a
+morning. The list grows when somebody meets something new.
+
+**What is built:** `parseError` splits ART's own `\n\nError ID: ` trailer —
+the one thing here that depends on ART's formatting, and `CoreError::user_message`
+is the single place that writes it. `errorPhrase` returns a `Phrase`, so
+`src/lib` stays free of the i18next singleton. Anything unrecognised comes back
+**exactly as Rust wrote it**, which is what happens today and is never worse.
+
+**The fragility is real and it is a build failure.** A recogniser is a regex
+over wording, and wording gets reworded — so **both ends pin the same
+sentence**: `core::error::tests::the_sentences_the_frontend_recognises_are_pinned_here`
+calls the real producers, and `errorText.test.ts` holds the literals copied
+from what they produce. Change either and a test fails pointing at the other.
+
+**Wired at the two screens where those two errors actually surface** — the
+tree build and the Amiga-side installer run. Not the other 132 `String(e)`
+sites: that is a codemod worth doing on its own, and doing it half-way here
+would be worse than saying so.
+
+**Two defects found while building it**, both in what a user reads:
+
+- `String(e)` on an `Error` prepends `Error: `, so a sentence already
+  introduced as a failure said it twice. `errorText` takes the message.
+- The first fallback rendered `Error ID:` with **nothing after it** when an
+  error carried no id — a line telling the user to quote something that is
+  not there. Its own key now, caught by `OsInstall.test.tsx`'s own test.
+
+**Four mutations run, four fell:** the Rust sentence reworded · the trailer's
+shape changed · the id no longer narrowing before the pattern · the captured
+parts dropped.
+
+**Still open**, and this is why it stays 🔵: 132 render sites still show
+Rust's English, and only two sentences are rebuilt. What changed is that the
+next one is a five-line addition rather than a design question.
 
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
@@ -567,6 +597,31 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-219** 🟠 ✅ **Twelve sentences the user reads carried a run of
+fourteen spaces in the middle** — *found 2026-08-23 by extending the
+control-byte sweep, while measuring [ART-060](#open)*
+`scripts/control-byte-sweep.py` · twelve files
+
+A Rust string that wraps ends its line with `\`, and the compiler eats the
+newline **and** the next line's indentation. Lose the `\` and the indentation
+stays — in the middle of the sentence. Nothing fails. Nothing warns.
+
+Found first in `core/amigainstall/packagevol.rs`, in a refusal a real person
+could meet, then in eleven more places. **Three are user-facing**, and one of
+them is `refuse_unless_free`'s *"already has something in it"* — the same
+refusal that appears three times in the owner's own operation log. Another is
+a workflow's description on the drop panel. The rest are test assertion
+messages, which are also sentences somebody reads.
+
+**Same family as [ART-216](#fixed)**, and now the same script catches both:
+`control-byte-sweep.py` gained a second check for a run of spaces inside a
+Rust string literal. The scanner **pairs quotes properly** rather than
+regexing — the naive pattern matched from a *closing* quote and reported the
+comment after it, which is how six of its first nineteen findings were things
+nobody had written. Deliberate alignment (a fixture reproducing Aminet's
+fixed-width INDEX, hst-imager's table, an aligned `println!`) is allow-listed
+**per file with a reason**, the same rule the DosType list uses.
 
 **ART-218** 🟠 ✅ **The card ART built had one partition, which is the
 one shape neither working card has** — *work-list item 6's other half, closed

@@ -231,7 +231,7 @@ mod tests {
         assert_eq!(collisions.collisions[0].destination, "Floppies/Disk.adf");
         assert!(
             collisions.already_in_place.is_empty(),
-            "the file on disk is not this item's own output — the fixture writes              `already here` where the source has different bytes"
+            "the file on disk is not this item's own output — the fixture writes `already here` where the source has different bytes"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

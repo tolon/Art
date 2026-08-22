@@ -1424,7 +1424,7 @@ mod tests {
         }
         assert!(
             root.join("Floppies").join("Good.adf").exists(),
-            "the item that landed is still there — which is exactly why the error has to              mention it"
+            "the item that landed is still there — which is exactly why the error has to mention it"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

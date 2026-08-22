@@ -251,6 +251,56 @@ pub type CoreResult<T> = Result<T, CoreError>;
 mod tests {
     use super::*;
 
+    /// **The sentences the frontend rebuilds in Turkish, pinned from this
+    /// side** (ART-060).
+    ///
+    /// `src/lib/errorText.ts` recognises two of ART's sentences and rebuilds
+    /// them from their parts, because a free-text English sentence cannot be
+    /// translated — only rebuilt. That recognition is a regex over wording,
+    /// and wording gets reworded.
+    ///
+    /// So both ends pin the same string. Change the sentence and **this**
+    /// test fails, pointing at the pattern that has to change with it; the
+    /// mirror image lives in `errorText.test.ts`. Neither side can drift
+    /// quietly, which is the only property that makes the recogniser
+    /// approach honest.
+    ///
+    /// The producers are `osinstall::apply::refuse_unless_free` and
+    /// `amigainstall::packagevol::unpack`. They are called here rather than
+    /// having their text copied, so this pins what actually ships.
+    #[test]
+    fn the_sentences_the_frontend_recognises_are_pinned_here() {
+        // 1. An occupied destination. The frontend keys on
+        //    `'…' already has something in it`.
+        let dir = crate::core::ScratchDir::new("art-error-pin", "occupied");
+        std::fs::write(dir.join("something"), b"x").unwrap();
+        let err = crate::core::osinstall::apply::refuse_unless_free(dir.path())
+            .expect_err("a folder with something in it is refused");
+        let text = err.user_message();
+
+        assert!(
+            text.starts_with("operation refused to protect data: '"),
+            "the frontend keys on this prefix: {text}"
+        );
+        assert!(
+            text.contains("' already has something in it"),
+            "the frontend keys on this phrase: {text}"
+        );
+        assert!(
+            text.ends_with("\n\nError ID: ART-SAFETY-REFUSED"),
+            "and on this trailer: {text}"
+        );
+
+        // 2. The trailer's exact shape, which is what `parseError` splits on.
+        //    One place writes it, and this is the check that it stays.
+        assert_eq!(
+            CoreError::NonUtf8Path.user_message(),
+            "path is not valid UTF-8\n\nError ID: ART-PATH-ENCODING",
+            "the `\\n\\nError ID: ` trailer is the frontend's only structural \
+             dependency on ART's formatting"
+        );
+    }
+
     #[test]
     fn every_variant_has_a_distinct_code() {
         let errors = [

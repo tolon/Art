@@ -4315,7 +4315,7 @@ mod tests {
         assert!(message.contains("Locked.txt"), "{message}");
         assert!(
             message.contains("nothing in this batch was deleted"),
-            "the refusal has to say the guarantee held, or the user cannot tell which              half of their selection is gone (F9): {message}"
+            "the refusal has to say the guarantee held, or the user cannot tell which half of their selection is gone (F9): {message}"
         );
 
         let names: Vec<String> = image.listing().into_iter().map(|e| e.name).collect();

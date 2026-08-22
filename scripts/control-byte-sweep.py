@@ -1,38 +1,43 @@
 #!/usr/bin/env python3
-r"""No stray control bytes in ART's own source and documentation.
+r"""No corrupted text in ART's own source and documentation.
 
-CLAUDE.md's own warning, made into a build failure:
+Two shapes of the same accident, both found by hand before anything found them,
+and both already committed when they were found.
+
+**One: a control byte.** CLAUDE.md's own warning ---
 
     Write paths through a file, never through a heredoc. A Windows path in a
     `<<'EOF'` block loses its backslash escapes -- `E:\amiga` arrives as `E:`
     plus a BEL byte.
 
-Nothing fails when that happens. The text is simply wrong, and it stays wrong:
-one instance was committed on 2026-08-12 and found ten days later only because
-somebody swept for control bytes by hand. A second was found in
-`core/card/build.rs` on 2026-08-23, again by hand, again already committed --
-three BEL bytes and three eaten line breaks in a doc block telling the reader
-how to run a real-hardware hook.
+Nothing fails when that happens. The text is simply wrong and stays wrong: one
+instance was committed on 2026-08-12 and found ten days later only because
+somebody swept by hand; a second was found in `core/card/build.rs` on
+2026-08-23, in a doc block telling the reader how to run a real-hardware hook.
 
-Twice by accident is the signal to stop finding it by accident.
+**Two: a lost line continuation.** A Rust string that wraps ends its line with
+`\`, and the compiler eats the newline *and* the next line's indentation. Lose
+the `\` and the indentation stays, in the middle of the sentence the user
+reads. Found on 2026-08-23 in `core/amigainstall/packagevol.rs` -- a refusal a
+real person could meet -- and then in eleven more places, one of them the
+refusal that appears most often in the owner's own operation log.
 
     python scripts/control-byte-sweep.py
 
-Exit 0 means every control byte in the tree is one somebody meant. Exit 1
-lists the rest, with the offending line.
+Exit 0 means every control byte in the tree is one somebody meant and no string
+carries a run of spaces nobody typed. Exit 1 lists the rest.
 
 ## The hard part, and how it is handled
 
-**Some control bytes here are real data.** An AmigaDOS DosType *is* four bytes
-with a small integer last -- `DOS\0`, `DOS\1`, `DOS\7`, `PDS\3`, `PFS\3` -- and
-those appear inside string literals and prose throughout the codebase. A sweep
-that flagged them would cry wolf until somebody switched it off, and a sweep
-that allowed 0x00-0x07 everywhere would have missed the BEL this script was
-written for, because BEL *is* 0x07.
+**Some of both are real.** An AmigaDOS DosType *is* four bytes with a small
+integer last -- `DOS\0`, `DOS\7`, `PDS\3`, `PFS\3` -- and a fixture reproducing
+Aminet's fixed-width INDEX really does line its columns up with spaces. A sweep
+that flagged those would be switched off within a week.
 
-So the allow-list is **per file, with a reason**, exactly like
-`scripts/scratch-root-sweep.py`. Adding a file to it is a decision somebody
-writes down, not a switch.
+So both allow-lists are **per file, with a reason**, exactly like
+`scripts/scratch-root-sweep.py`. Adding a file is a decision somebody writes
+down, not a switch. An allow-listed file is still not a blind spot for a byte
+that is never data.
 """
 
 from __future__ import annotations
@@ -48,8 +53,7 @@ TEXT_SUFFIXES = {
     ".yml", ".yaml", ".py", ".css", ".html",
 }
 
-# Files whose control bytes are AmigaDOS DosType data, not corruption. Each
-# entry says what the bytes are, so the next reader can check rather than trust.
+# Files whose control bytes are AmigaDOS DosType data, not corruption.
 ALLOWED = {
     "docs/ISSUES.md":
         r"`DOS\3` / `PDS\3` DosTypes quoted from two real PiStorm cards, and a "
@@ -59,7 +63,7 @@ ALLOWED = {
     "src-tauri/src/commands/amigainstall.rs":
         r"a BoingBag fixture's own archive member names carrying `\3`/`\4`",
     "src-tauri/src/core/dirsize.rs":
-        r"`DosType::new(*b\"DOS\\1\")` in two FFS fixtures",
+        r"`DosType::new(*b\"DOS\1\")` in two FFS fixtures",
     "src-tauri/src/core/mbr.rs":
         r"an `hst.imager rdb info` transcript quoting a `\1` DosType",
     "src-tauri/src/core/rdb.rs":
@@ -68,66 +72,160 @@ ALLOWED = {
         r"`PFS\3` and `PDS\3` -- the DosTypes the preload path formats",
 }
 
-# These are never data here. BEL is what a heredoc turns `\a` into; the others
-# are the same accident with a different letter (`\b`, `\v`, `\f`, `\e`).
-NEVER_DATA = {0x07: "BEL (a heredoc ate a `\\a`)", 0x08: "BS (`\\b`)",
-              0x0B: "VT (`\\v`)", 0x0C: "FF (`\\f`)", 0x1B: "ESC (`\\e`)"}
+# Never data here. BEL is what a heredoc turns `\a` into; the rest are the same
+# accident with a different letter (`\b`, `\v`, `\f`, `\e`).
+NEVER_DATA = {
+    0x07: r"BEL (a heredoc ate a `\a`)",
+    0x08: r"BS (`\b`)",
+    0x0B: r"VT (`\v`)",
+    0x0C: r"FF (`\f`)",
+    0x1B: r"ESC (`\e`)",
+}
+
+# A run of this many spaces *inside a Rust string literal* is a `\` line
+# continuation that went missing. Three would catch deliberate alignment; the
+# real thing leaves a run as long as the indentation, which is never small.
+GAP_RUN = 6
+
+# Files whose string literals line text up on purpose.
+GAP_ALLOWED = {
+    "src-tauri/src/core/sources/index.rs":
+        "a fixture reproducing Aminet's own fixed-width INDEX columns",
+    "src-tauri/src/core/sources/readme.rs":
+        "a fixture reproducing a readme's own wrapped, indented field",
+    "src-tauri/src/tools/hst_imager.rs":
+        "a fixture reproducing hst-imager's own table output",
+    "src-tauri/src/commands/osinstall.rs":
+        "a debug `println!` that lines its own labels up",
+    "src-tauri/src/core/sources/catalog/mod.rs":
+        "a fixture list whose entries carry aligned trailing size comments",
+    "src-tauri/src/core/osinstall/mod.rs":
+        "a fixture whose protection bits are noted in aligned trailing comments",
+}
 
 
-def offenders() -> list[tuple[str, int, int, str]]:
+def control_offenders() -> list[tuple[str, int, int, str]]:
     found: list[tuple[str, int, int, str]] = []
     for path in sorted(ROOT.rglob("*")):
         if not path.is_file() or path.suffix not in TEXT_SUFFIXES:
             continue
-        rel = path.relative_to(ROOT).as_posix()
-        if any(part in SKIP_DIRS for part in path.relative_to(ROOT).parts):
+        parts = path.relative_to(ROOT).parts
+        if any(part in SKIP_DIRS for part in parts):
             continue
+        rel = path.relative_to(ROOT).as_posix()
         try:
             text = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
         allowed = rel in ALLOWED
+        lines = text.splitlines()
         for i, ch in enumerate(text):
             code = ord(ch)
             if code >= 32 or ch in "\n\t":
                 continue
-            # An allow-listed file still may not carry a byte that is never
-            # data: `DOS\7` is real, but BEL in a *path* is the whole point of
-            # this script, and one file being allowed DosTypes must not make
-            # it a blind spot.
-            if allowed and code not in NEVER_DATA:
+            # An allow-listed file attests to DosType data. 0x07 is genuinely
+            # ambiguous -- it is BEL and it is `DOS\7` -- so there it is taken
+            # as data. Every other never-data byte is still reported, so the
+            # entry does not turn the file into a blind spot.
+            if allowed and (code not in NEVER_DATA or code == 0x07):
                 continue
-            if allowed and code in NEVER_DATA:
-                # 0x07 is genuinely ambiguous: it is BEL and it is `DOS\7`.
-                # In an allow-listed file it is treated as data, because that
-                # is what the entry attests. Any other never-data byte is not.
-                if code == 0x07:
-                    continue
             line_no = text.count("\n", 0, i) + 1
-            line = text.splitlines()[line_no - 1] if text.splitlines() else ""
+            line = lines[line_no - 1] if line_no <= len(lines) else ""
             found.append((rel, line_no, code, line.strip()[:120]))
     return found
 
 
+def string_literals(line: str) -> list[str]:
+    """The contents of each `"..."` on the line, quotes paired properly.
+
+    Written rather than regexed because the naive pattern matched from a
+    *closing* quote and reported the comment after it -- which is how six of
+    its first nineteen findings were things nobody had written.
+    """
+    out: list[str] = []
+    i, n = 0, len(line)
+    while i < n:
+        if line[i] != '"':
+            i += 1
+            continue
+        j = i + 1
+        buf: list[str] = []
+        while j < n:
+            if line[j] == "\\":
+                buf.append(line[j:j + 2])
+                j += 2
+                continue
+            if line[j] == '"':
+                break
+            buf.append(line[j])
+            j += 1
+        if j < n:
+            out.append("".join(buf))
+        i = j + 1
+    return out
+
+
+def gap_offenders() -> list[tuple[str, int, str]]:
+    run = " " * GAP_RUN
+    found: list[tuple[str, int, str]] = []
+    for path in sorted(ROOT.rglob("*.rs")):
+        parts = path.relative_to(ROOT).parts
+        if any(part in SKIP_DIRS for part in parts):
+            continue
+        rel = path.relative_to(ROOT).as_posix()
+        if rel in GAP_ALLOWED:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        for i, line in enumerate(text.split("\n")):
+            stripped = line.strip()
+            if stripped.startswith(("//", "/*", "*")):
+                continue
+            for literal in string_literals(line):
+                if run in literal.strip():
+                    found.append((rel, i + 1, stripped[:120]))
+                    break
+    return found
+
+
 def main() -> int:
-    bad = offenders()
-    if not bad:
+    bad = control_offenders()
+    gaps = gap_offenders()
+
+    if not bad and not gaps:
         print(
-            f"control-byte sweep: clean — {len(ALLOWED)} file(s) allow-listed for "
-            "AmigaDOS DosType data, no stray control bytes anywhere else"
+            "control-byte sweep: clean - %d file(s) allow-listed for AmigaDOS DosType "
+            "data and %d for deliberate alignment; no stray control bytes and no lost "
+            "line continuations anywhere else" % (len(ALLOWED), len(GAP_ALLOWED))
         )
         return 0
 
-    print("control-byte sweep: stray control bytes in tracked text\n")
-    for rel, line_no, code, line in bad:
-        what = NEVER_DATA.get(code, f"0x{code:02x}")
-        print(f"  {rel}:{line_no}  <{what}>  {line}")
-    print(
-        "\nAlmost always a Windows path written through a heredoc: `E:\\amiga` becomes\n"
-        "`E:` + BEL + `miga`, and nothing fails. Rewrite the file with the Write tool\n"
-        "or the editing tools. If the byte really is AmigaDOS data, add the file to\n"
-        "ALLOWED in this script with the reason."
-    )
+    if bad:
+        print("control-byte sweep: stray control bytes in tracked text\n")
+        for rel, line_no, code, line in bad:
+            what = NEVER_DATA.get(code, "0x%02x" % code)
+            print("  %s:%d  <%s>  %s" % (rel, line_no, what, line))
+        print(
+            "\nAlmost always a Windows path written through a heredoc: `E:\\amiga` becomes\n"
+            "`E:` + BEL + `miga`, and nothing fails. Rewrite the file with the Write tool\n"
+            "or the editing tools. If the byte really is AmigaDOS data, add the file to\n"
+            "ALLOWED in this script with the reason."
+        )
+
+    if gaps:
+        if bad:
+            print()
+        print("control-byte sweep: Rust strings carrying a run of spaces nobody typed\n")
+        for rel, line_no, line in gaps:
+            print("  %s:%d  %s" % (rel, line_no, line))
+        print(
+            "\nA wrapped Rust string keeps a `\\` at the end of the line; without it the\n"
+            "next line's indentation lands in the middle of the sentence the user reads.\n"
+            "If the alignment is deliberate, add the file to GAP_ALLOWED with the reason."
+        )
+
     return 1
 
 
