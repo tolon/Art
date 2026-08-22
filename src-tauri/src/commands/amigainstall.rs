@@ -807,6 +807,7 @@ fn perform(
 /// a scratch directory that removes itself: one holds a generated script plus
 /// the Amiga's one-word answer, already read by the time this returns; the
 /// other holds a copy of the package's own files, which the user still has.
+#[allow(clippy::too_many_arguments)]
 fn install(
     composed: &Composed,
     tree: &Path,
@@ -814,16 +815,17 @@ fn install(
     profile: &AmigaProfile,
     kickstart: &Path,
     emulator: &Path,
+    scratch_root: &Path,
     sink: &dyn ProgressSink,
 ) -> CoreResult<(RunOutcome, SettlementReport)> {
     let plan = &composed.plan;
-    let work = Scratch::new()?;
+    let work = Scratch::in_dir(scratch_root)?;
     workvol::build(work.path(), plan)?;
 
     // ART-185. Without this the installer the whole round exists to run is on
     // no volume the emulator can see.
     sink.report(0, None, "Unpacking the package's own files");
-    let package = Scratch::new()?;
+    let package = Scratch::in_dir(scratch_root)?;
     let unpacked = packagevol::unpack(
         package_archives,
         package.path(),
@@ -833,6 +835,7 @@ fn install(
             overlays: &composed.overlays,
             minimum_installer_version: composed.minimum_installer_version,
         },
+        scratch_root,
         sink,
     )?;
     for refusal in &unpacked.refused {
@@ -879,6 +882,7 @@ fn install(
             work_volume_dir: work.path(),
             tree_dir: copy,
             package_volume_dir: unpacked.root.as_path(),
+            scratch_root,
             profile,
             kickstart_path: kickstart,
             winuae_path: emulator,
@@ -1026,6 +1030,11 @@ pub fn amiga_install_run(
     let command_line = command_line_of(&plan);
     let package_id = plan.package_id.clone();
 
+    // Resolved here rather than inside the job: a scratch root that has
+    // gone away is the user's to fix, and they should hear it from the
+    // button they pressed (ART-196).
+    let scratch_root = crate::scratch::root()?;
+
     let id = spawn_job(
         &app,
         Arc::clone(&registry),
@@ -1038,6 +1047,7 @@ pub fn amiga_install_run(
                 &profile,
                 &kickstart,
                 &emulator,
+                &scratch_root,
                 progress,
             );
 
@@ -1735,6 +1745,7 @@ mod tests {
             &AmigaProfile::a1200_aga(),
             Path::new("no-such.rom"),
             Path::new("no-such.exe"),
+            &std::env::temp_dir(),
             &Sink::default(),
         )
         .unwrap_err();
@@ -1775,6 +1786,7 @@ mod tests {
             &AmigaProfile::a1200_aga(),
             Path::new("no-such.rom"),
             Path::new("no-such.exe"),
+            &std::env::temp_dir(),
             &sink,
         )
         .unwrap_err();
@@ -1831,6 +1843,7 @@ mod tests {
             &AmigaProfile::a1200_aga(),
             Path::new("no-such.rom"),
             Path::new("no-such.exe"),
+            &std::env::temp_dir(),
             &sink,
         );
 
@@ -2065,6 +2078,7 @@ mod tests {
         let disc = composed.medium.as_ref().unwrap().path.clone();
 
         let media = media_for(&RunRequest {
+            scratch_root: &std::env::temp_dir(),
             plan: &composed.plan,
             work_volume_dir: &work,
             tree_dir: &tree,
@@ -2561,6 +2575,7 @@ mod real_install_hook {
             &profile,
             &PathBuf::from(&rom),
             &PathBuf::from(&winuae),
+            &std::env::temp_dir(),
             &sink,
         );
         let elapsed = started.elapsed();

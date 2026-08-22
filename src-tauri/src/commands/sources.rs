@@ -641,15 +641,18 @@ pub fn sources_fetch(
 ///
 /// `pub(crate)` rather than private so `commands::archives` (and any future
 /// caller in this crate) can reach it without a second copy of this wrapper.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn install_archive_into_volume(
     archive: &std::path::Path,
     image: &std::path::Path,
     volume_index: usize,
     parent: u32,
     policy: OverwritePolicy,
+    scratch_root: &std::path::Path,
     progress: &dyn crate::core::jobs::ProgressSink,
 ) -> CoreResult<InstallOutcome> {
-    let (scratch, skipped) = crate::core::sources::install::unpack_for_install(archive, progress)?;
+    let (scratch, skipped) =
+        crate::core::sources::install::unpack_for_install(archive, scratch_root, progress)?;
 
     // Sidecars on: an archive may carry `.uaem` files, and a WHDLoad slave's
     // S and P bits are the difference between a game that starts and one that
@@ -728,6 +731,11 @@ pub fn sources_install_adf(
             .unwrap_or_else(|| archive.clone())
     );
 
+    // Resolved here rather than inside the job: a scratch root that has
+    // gone away is the user's to fix, and they should hear it from the
+    // button they pressed (ART-196).
+    let scratch_root = crate::scratch::root()?;
+
     let id = spawn_job(&app, registry, &title, move |job_id, progress| {
         // An ADF is a bare volume at index 0 — the same install, a different
         // destination (§41.5.3).
@@ -737,6 +745,7 @@ pub fn sources_install_adf(
             0,
             0,
             OverwritePolicy::default(),
+            &scratch_root,
             progress,
         );
 
@@ -960,6 +969,11 @@ pub fn sources_install_volume(
         image_path.display()
     );
 
+    // Resolved here rather than inside the job: a scratch root that has
+    // gone away is the user's to fix, and they should hear it from the
+    // button they pressed (ART-196).
+    let scratch_root = crate::scratch::root()?;
+
     let id = spawn_job(&app, registry, &title, move |job_id, progress| {
         let outcome = install_archive_into_volume(
             &archive_path,
@@ -967,6 +981,7 @@ pub fn sources_install_volume(
             volume_index,
             parent,
             policy,
+            &scratch_root,
             progress,
         );
 
@@ -1109,8 +1124,12 @@ mod tests {
         let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
         std::fs::write(&image, &bytes).unwrap();
 
-        let (scratch, _) =
-            crate::core::sources::install::unpack_for_install(&archive, &NoProgress).unwrap();
+        let (scratch, _) = crate::core::sources::install::unpack_for_install(
+            &archive,
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap();
         let folder = crate::core::volume::write::copy::HostFolder::new(scratch.path(), true);
         let (report, backup) = crate::commands::volume_write::run_copy_in_folder(
             &image,
@@ -1154,8 +1173,12 @@ mod tests {
         let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
         std::fs::write(&image, &bytes).unwrap();
 
-        let (scratch, _) =
-            crate::core::sources::install::unpack_for_install(&archive, &NoProgress).unwrap();
+        let (scratch, _) = crate::core::sources::install::unpack_for_install(
+            &archive,
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap();
         let folder = crate::core::volume::write::copy::HostFolder::new(scratch.path(), true);
         let (report, _) = crate::commands::volume_write::run_copy_in_folder(
             &image,
@@ -1215,6 +1238,7 @@ mod tests {
             0,
             0,
             crate::core::lha::OverwritePolicy::Skip,
+            &std::env::temp_dir(),
             &NoProgress,
         )
         .expect_err("a package larger than the floppy must be refused");
@@ -1294,6 +1318,7 @@ mod tests {
             0,
             0,
             crate::core::lha::OverwritePolicy::Skip,
+            &std::env::temp_dir(),
             &sink,
         )
         .expect_err("a cancelled install must not come back as a successful one");
@@ -1333,8 +1358,12 @@ mod tests {
         let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
         std::fs::write(&image, &bytes).unwrap();
 
-        let (scratch, _) =
-            crate::core::sources::install::unpack_for_install(&archive, &NoProgress).unwrap();
+        let (scratch, _) = crate::core::sources::install::unpack_for_install(
+            &archive,
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap();
         let folder = crate::core::volume::write::copy::HostFolder::new(scratch.path(), true);
 
         let plan =

@@ -52,7 +52,11 @@ pub fn winuae_launch(
 
     let media = with_detected_hardfile_shapes(media)?;
     let config_text = generate_uae_config(&profile, &media)?;
-    let pid = launch_winuae(&PathBuf::from(exe_path_str), &config_text)?;
+    let pid = launch_winuae(
+        &PathBuf::from(exe_path_str),
+        &config_text,
+        &crate::scratch::root()?,
+    )?;
     Ok(pid)
 }
 

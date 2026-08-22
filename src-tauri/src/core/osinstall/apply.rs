@@ -807,7 +807,27 @@ pub fn refuse_unless_free(root: &Path) -> CoreResult<()> {
 /// between them and never inside one, so stopping always leaves whole files
 /// behind. `distribution.json` is written only after every item has landed —
 /// see the module doc comment.
+/// The thin wrapper, staging a nested package payload into the platform's own
+/// temp directory. **The product never calls it** —
+/// [`apply_staging_in`] is what the shell uses, because where ART stages work
+/// it will throw away is the user's choice and not this module's (ART-196).
+/// Kept for tests and for a future CLI shell that has not chosen a directory,
+/// the same split `plan` / [`super::plan::plan_with_cache`] already has.
 pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreResult<ApplyOutcome> {
+    apply_staging_in(plan, root, &std::env::temp_dir(), sink)
+}
+
+/// [`apply`], unpacking any nested package payload under `scratch_root`.
+///
+/// Only a package declaring a `member` stages anything at all: install media
+/// and a package whose files sit at its archive's own paths are both read in
+/// place.
+pub fn apply_staging_in(
+    plan: &InstallPlan,
+    root: &Path,
+    scratch_root: &Path,
+    sink: &dyn ProgressSink,
+) -> CoreResult<ApplyOutcome> {
     // SAFE_CREATE. Nothing below this line touches `root` or any medium
     // until this has passed.
     refuse_unless_free(root)?;
@@ -888,7 +908,7 @@ pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreRe
     for (media, medium) in &plan.package_media {
         // The same question asked of a package archive, whose identity is
         // its single top-level directory read from inside the file.
-        let opened = super::scan::open_package(medium)?;
+        let opened = super::scan::open_package_staging_in(medium, scratch_root)?;
         if opened.volume_name() != media {
             return Err(CoreError::InvalidInput(format!(
                 "'{}' now carries '{}', not '{media}' — it was replaced since this plan was made",
@@ -1133,6 +1153,17 @@ pub fn add_package(
     archive: &Path,
     sink: &dyn ProgressSink,
 ) -> CoreResult<ApplyOutcome> {
+    add_package_staging_in(tree_root, package, archive, &std::env::temp_dir(), sink)
+}
+
+/// [`add_package`], unpacking a nested payload under `scratch_root` (ART-196).
+pub fn add_package_staging_in(
+    tree_root: &Path,
+    package: &super::package::Package,
+    archive: &Path,
+    scratch_root: &Path,
+    sink: &dyn ProgressSink,
+) -> CoreResult<ApplyOutcome> {
     // Before anything is opened, let alone written.
     let manifest_path = tree_root.join(MANIFEST_FILE_NAME);
     if !manifest_path.is_file() {
@@ -1160,7 +1191,7 @@ pub fn add_package(
         path: archive.to_path_buf(),
         member: package.member.clone(),
     };
-    let mut source = super::scan::open_package(&medium)?;
+    let mut source = super::scan::open_package_staging_in(&medium, scratch_root)?;
     if source.volume_name() != package.media {
         return Err(CoreError::InvalidInput(format!(
             "'{}' carries '{}', not '{}' — this is not the archive package '{}' names",

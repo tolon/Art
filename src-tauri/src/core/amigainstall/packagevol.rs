@@ -329,6 +329,7 @@ pub fn unpack(
     archives: &[PathBuf],
     into: &Path,
     layout: &Layout<'_>,
+    scratch_root: &Path,
     sink: &dyn ProgressSink,
 ) -> CoreResult<Unpacked> {
     let Some((archive, extra)) = archives.split_first() else {
@@ -396,7 +397,8 @@ pub fn unpack(
     let mut bytes = outcome.total_bytes;
     let mut overlaid = Vec::new();
     for medium in extra {
-        let (from, (added_files, added_bytes)) = apply_overlay(medium, &drawer_dir, layout, sink)?;
+        let (from, (added_files, added_bytes)) =
+            apply_overlay(medium, &drawer_dir, layout, scratch_root, sink)?;
         files += added_files;
         bytes += added_bytes;
         overlaid.push(from);
@@ -510,6 +512,7 @@ fn apply_overlay(
     medium: &Path,
     drawer_dir: &Path,
     layout: &Layout<'_>,
+    scratch_root: &Path,
     sink: &dyn ProgressSink,
 ) -> CoreResult<(String, (usize, u64))> {
     if layout.overlays.is_empty() {
@@ -523,7 +526,7 @@ fn apply_overlay(
     // Its own scratch directory, which removes itself on `Drop`: an overlay
     // archive's own files are not the package's, and unpacking them into the
     // mount would show the Amiga drawers nobody declared.
-    let staging = Scratch::new()?;
+    let staging = Scratch::in_dir(scratch_root)?;
     extract_whole(medium, staging.path(), sink)?;
 
     // Which declared overlay is this? Asked of what the archive actually
@@ -806,6 +809,7 @@ mod tests {
             std::slice::from_ref(&archive.to_path_buf()),
             into,
             &Layout::new(drawer, installer),
+            &std::env::temp_dir(),
             sink,
         )
     }
@@ -1364,7 +1368,14 @@ mod tests {
         let into = dir.join("pkg");
         let overlays = uae_overlay();
 
-        let unpacked = unpack(&[stock, uae], &into, &with_overlay(&overlays), &NoProgress).unwrap();
+        let unpacked = unpack(
+            &[stock, uae],
+            &into,
+            &with_overlay(&overlays),
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap();
 
         let landed = std::fs::read(into.join("BoingBag3.9-1/C/Updater")).unwrap();
         assert_eq!(
@@ -1411,7 +1422,14 @@ mod tests {
         let into = dir.join("pkg");
         let overlays = uae_overlay();
 
-        unpack(&[stock, uae], &into, &with_overlay(&overlays), &NoProgress).unwrap();
+        unpack(
+            &[stock, uae],
+            &into,
+            &with_overlay(&overlays),
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap();
 
         assert!(
             !into.join("BoingBag3.9-1-UAE").exists(),
@@ -1444,6 +1462,7 @@ mod tests {
             std::slice::from_ref(&stock),
             &into,
             &with_overlay(&overlays),
+            &std::env::temp_dir(),
             &NoProgress,
         )
         .unwrap_err();
@@ -1483,6 +1502,7 @@ mod tests {
             std::slice::from_ref(&archive),
             &into,
             &with_overlay(&overlays),
+            &std::env::temp_dir(),
             &NoProgress,
         )
         .unwrap_err();
@@ -1513,6 +1533,7 @@ mod tests {
             std::slice::from_ref(&archive),
             &into,
             &with_overlay(&overlays),
+            &std::env::temp_dir(),
             &NoProgress,
         )
         .unwrap();
@@ -1539,7 +1560,14 @@ mod tests {
         let into = dir.join("pkg");
         let overlays = uae_overlay();
 
-        let unpacked = unpack(&[stock, uae], &into, &with_overlay(&overlays), &NoProgress).unwrap();
+        let unpacked = unpack(
+            &[stock, uae],
+            &into,
+            &with_overlay(&overlays),
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap();
 
         assert!(into.join("BoingBag3.9-1/C/Updater").is_file());
         assert_eq!(unpacked.installer_version.as_deref(), Some("Updater 45.15"));
@@ -1568,6 +1596,7 @@ mod tests {
             &[stock, other],
             &into,
             &with_overlay(&overlays),
+            &std::env::temp_dir(),
             &NoProgress,
         )
         .unwrap_err();
@@ -1602,6 +1631,7 @@ mod tests {
             &[stock, uae],
             &into,
             &Layout::new(Some("BoingBag3.9-1"), "C/Updater"),
+            &std::env::temp_dir(),
             &NoProgress,
         )
         .unwrap_err();
@@ -1635,7 +1665,14 @@ mod tests {
             from: "BoingBag3.9-1-UAE/BoingBag3.9-1".to_string(),
             to: "../../outside".to_string(),
         }];
-        let err = unpack(&[stock, uae], &into, &with_overlay(&overlays), &NoProgress).unwrap_err();
+        let err = unpack(
+            &[stock, uae],
+            &into,
+            &with_overlay(&overlays),
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap_err();
 
         assert!(
             err.to_string().contains("is not a path inside the package"),
@@ -1696,6 +1733,7 @@ mod tests {
                     overlays: &overlays,
                     minimum_installer_version: None,
                 },
+                &std::env::temp_dir(),
                 &NoProgress,
             );
             // With no overlay archive given, nothing is applied and the run is
@@ -1712,6 +1750,7 @@ mod tests {
                     overlays: &overlays,
                     minimum_installer_version: None,
                 },
+                &std::env::temp_dir(),
                 &NoProgress,
             )
             .unwrap_err();
@@ -1731,6 +1770,7 @@ mod tests {
             &[],
             &dir.join("pkg"),
             &Layout::new(Some("BoingBag3.9-1"), "C/Updater"),
+            &std::env::temp_dir(),
             &NoProgress,
         )
         .unwrap_err();
@@ -1750,6 +1790,7 @@ mod tests {
             &[stock, dir.join("nowhere.lha")],
             &into,
             &with_overlay(&overlays),
+            &std::env::temp_dir(),
             &NoProgress,
         )
         .unwrap_err();
@@ -1820,6 +1861,7 @@ mod tests {
                 std::slice::from_ref(&archive),
                 &into,
                 &Layout::new(Some(drawer), installer),
+                &std::env::temp_dir(),
                 &NoProgress,
             )
             .unwrap_or_else(|err| panic!("{file}: {err}"));
@@ -1841,6 +1883,7 @@ mod tests {
             std::slice::from_ref(&stock),
             &dir.join("real-alone"),
             &with_overlay(&overlays),
+            &std::env::temp_dir(),
             &NoProgress,
         )
         .unwrap_err();
@@ -1851,6 +1894,7 @@ mod tests {
             &[stock, uae],
             &dir.join("real-pair"),
             &with_overlay(&overlays),
+            &std::env::temp_dir(),
             &NoProgress,
         )
         .unwrap();

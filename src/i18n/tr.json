@@ -288,7 +288,12 @@
         "verificationFailed": "Doğrulama başarısız",
         "done": "Tamamlandı"
       }
-    }
+    },
+    "scratchRoot": "Geçici çalışma klasörü",
+    "scratchRootDefault": "ART çalışmasını {{path}} içinde hazırlıyor — sisteminizin kendi geçici klasörü.",
+    "scratchRootInUse": "ART çalışmasını {{path}} içinde hazırlıyor.",
+    "scratchRootHint": "ART bir şeyi başka bir yere götürürken burada açar ve kurar; gigabaytları bulabilir. Burayı değiştirmek hiçbir şeyi taşımaz: halihazırda hazırlanmış olan olduğu yerde kalır, ART onu sizin için silmez.",
+    "scratchRootPrevious": "ART'ın daha önce hazırladıkları hâlâ {{path}} içinde. Hiçbir şey taşınmadı ya da silinmedi."
   },
   "status": {
     "healthy": "Sağlıklı",
@@ -2494,6 +2499,15 @@
         "failed": "başarısız: {{error}}",
         "skipped": "iptal edince atlandı"
       }
+    }
+  },
+  "scratch": {
+    "ask": {
+      "heading": "ART ara işlerini nerede yapsın?",
+      "body": "ART bir şeyi başka bir yere götürürken onu açar ve kurar — kurulum disketleri, paketler, disk imajları. Bu gigabaytları bulabilir ve siz aksini söylemedikçe sistem diskinize yazılır.",
+      "note": "Bunu istediğiniz zaman Ayarlar'dan değiştirebilirsiniz. ART sistem diskinizden hiçbir şey silmez.",
+      "keepDefault": "Sistem diskini kullan",
+      "choose": "Bir klasör seç…"
     }
   }
 }

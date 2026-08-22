@@ -114,8 +114,8 @@ use serde::{Deserialize, Serialize};
 
 use super::package::Package;
 use super::scan::{
-    find_media, find_packages, media_for, open_media_cached, open_package, package_for, MediaMatch,
-    PackageMedium,
+    find_media, find_packages, media_for, open_media_cached, open_package_staging_in, package_for,
+    MediaMatch, PackageMedium,
 };
 use super::scan_cache::ScanCache;
 use super::source::MediaSource;
@@ -877,7 +877,28 @@ pub fn plan_with_cache(
     recipe: &Recipe,
     cache: &ScanCache,
 ) -> CoreResult<InstallPlan> {
-    plan_over_with_cache(request, recipe, &super::package::packages()?, cache)
+    plan_with_cache_in(request, recipe, cache, &std::env::temp_dir())
+}
+
+/// [`plan_with_cache`], unpacking a nested package payload under
+/// `scratch_root` rather than under the platform's own temp directory.
+///
+/// **This is what the product calls** (ART-196). Reading a package with a
+/// `member` means writing its inner archive out first, and that is the user's
+/// disk to choose — the same reason `cache` is a parameter and not a guess.
+pub fn plan_with_cache_in(
+    request: &InstallRequest,
+    recipe: &Recipe,
+    cache: &ScanCache,
+    scratch_root: &Path,
+) -> CoreResult<InstallPlan> {
+    plan_over_with_cache(
+        request,
+        recipe,
+        &super::package::packages()?,
+        cache,
+        scratch_root,
+    )
 }
 
 /// [`plan`]'s own body, parameterised over the package catalogue — so a
@@ -892,7 +913,13 @@ pub(super) fn plan_over(
     recipe: &Recipe,
     catalogue: &[Package],
 ) -> CoreResult<InstallPlan> {
-    plan_over_with_cache(request, recipe, catalogue, &ScanCache::off())
+    plan_over_with_cache(
+        request,
+        recipe,
+        catalogue,
+        &ScanCache::off(),
+        &std::env::temp_dir(),
+    )
 }
 
 fn plan_over_with_cache(
@@ -900,6 +927,7 @@ fn plan_over_with_cache(
     recipe: &Recipe,
     catalogue: &[Package],
     cache: &ScanCache,
+    scratch_root: &Path,
 ) -> CoreResult<InstallPlan> {
     let mut refusals: Vec<RefusalReason> = Vec::new();
 
@@ -1076,7 +1104,7 @@ fn plan_over_with_cache(
                         path: archive.path.clone(),
                         member: package.member.clone(),
                     };
-                    let mut source = open_package(&medium)?;
+                    let mut source = open_package_staging_in(&medium, scratch_root)?;
                     items.extend(expand_rules(
                         &package.component,
                         source.as_mut(),

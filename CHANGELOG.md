@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ART asks where to do its working-out, and stops filling your C: (2026-08-22)
+
+#### Added
+- **A scratch folder you choose.** ART unpacks and builds things on the way
+  to somewhere else — install disks, packages, disk images — and that can run
+  to gigabytes. It asked you nowhere and put all of it on your system drive.
+  Now it asks once, on first run, with "use the system drive" as the answer
+  you get by pressing the first button, and the choice is changeable at any
+  time under **Settings → Scratch folder**.
+- **The field shows the real path** the default resolves to on your machine,
+  rather than describing it.
+
+#### Fixed
+- **Everything ART stages follows that choice** — preview extractions,
+  install staging, unpacked packages, a launch's disks, the emulator's own
+  configuration, the scan cache, a copy between volumes. Eighteen places
+  that each went to `%TEMP%` on their own.
+- **A scratch folder ART cannot reach stops the job and says so**, naming the
+  folder and what to do about it. It does not quietly go back to your system
+  drive.
+- **Changing the folder moves nothing and deletes nothing.** ART tells you
+  where the previous one was and leaves it exactly as it is.
+
+Your operation log, catalogue, artwork and downloads are unchanged: those are
+files you keep, not working-out, and the download folder has always had its
+own setting.
+
 ### The install plan now predicts the tree, not the reading (2026-08-22)
 
 #### Fixed

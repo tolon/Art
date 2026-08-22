@@ -96,6 +96,13 @@ jobs:
       - name: Check the ROM table against its source
         run: python scripts/rom-table-check.py
 
+      # ART-196: everything ART stages goes through the scratch root the user
+      # chose, and the value of that fix is entirely in the call site nobody
+      # adds later. Pure Python over the crate's own source, with a short
+      # named allow-list; fast enough to be free.
+      - name: Check every staging site goes through the scratch root
+        run: python scripts/scratch-root-sweep.py
+
       # The palette is a measurement, not a preference (ART-140). The light
       # theme once shipped 2.20:1 text inside its own success badge because it
       # had been judged by eye. This reads theme.css and fails below the

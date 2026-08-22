@@ -399,7 +399,7 @@ impl ArchiveSource {
     /// inner archive's paths are already volume-relative, and the resulting
     /// `volume_name` is set to the **wrapper's** top-level directory, not
     /// anything read from inside the payload.
-    pub fn open_nested(outer: &Path, member: &str) -> CoreResult<Self> {
+    pub fn open_nested(outer: &Path, member: &str, scratch_root: &Path) -> CoreResult<Self> {
         let mut wrapper = Self::open(outer)?;
         let normalized_member = Self::normalized(member);
         let (index, is_dir) = {
@@ -431,7 +431,7 @@ impl ArchiveSource {
         // archive on disk; there is no constructor over bytes. Removed on
         // both the success and the failure path, so a member that turns out
         // not to be an archive at all never leaves a leftover behind.
-        let tmp = Self::write_nested_temp_file(member, &bytes)?;
+        let tmp = Self::write_nested_temp_file(scratch_root, member, &bytes)?;
         let opened = (|| -> CoreResult<Self> {
             let mut inner = Self::open_flat(&tmp)?;
             inner.volume_name = wrapper.volume_name().to_string();
@@ -478,7 +478,11 @@ impl ArchiveSource {
     /// never from the name looking unique: a name that turns out to already
     /// exist is not reused, it is thrown away and a fresh one tried, up to
     /// [`NESTED_TEMP_ATTEMPTS`](Self::NESTED_TEMP_ATTEMPTS) times.
-    fn write_nested_temp_file(member: &str, bytes: &[u8]) -> CoreResult<PathBuf> {
+    fn write_nested_temp_file(
+        scratch_root: &Path,
+        member: &str,
+        bytes: &[u8],
+    ) -> CoreResult<PathBuf> {
         use std::io::Write;
         use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -500,7 +504,7 @@ impl ArchiveSource {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0);
             let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
-            let candidate = std::env::temp_dir().join(format!(".{stem}.art-tmp-{stamp}-{counter}"));
+            let candidate = scratch_root.join(format!(".{stem}.art-tmp-{stamp}-{counter}"));
 
             match std::fs::File::create_new(&candidate) {
                 Ok(mut file) => {
@@ -780,7 +784,8 @@ mod tests {
             ],
         );
 
-        let mut src = ArchiveSource::open_nested(&outer, "AmigaOS-Update").unwrap();
+        let mut src =
+            ArchiveSource::open_nested(&outer, "AmigaOS-Update", &std::env::temp_dir()).unwrap();
         // The volume name is the *wrapper's* top-level directory ("BB"),
         // never anything read from inside the payload — swapping outer and
         // inner identity here would still open, still read, and still be
@@ -816,14 +821,18 @@ mod tests {
         let barrier_a = barrier.clone();
         let handle_a = std::thread::spawn(move || {
             barrier_a.wait();
-            let mut src = ArchiveSource::open_nested(&outer_a, "AmigaOS-Update").unwrap();
+            let mut src =
+                ArchiveSource::open_nested(&outer_a, "AmigaOS-Update", &std::env::temp_dir())
+                    .unwrap();
             src.read("C/Version").unwrap()
         });
 
         let barrier_b = barrier.clone();
         let handle_b = std::thread::spawn(move || {
             barrier_b.wait();
-            let mut src = ArchiveSource::open_nested(&outer_b, "AmigaOS-Update").unwrap();
+            let mut src =
+                ArchiveSource::open_nested(&outer_b, "AmigaOS-Update", &std::env::temp_dir())
+                    .unwrap();
             src.read("C/Version").unwrap()
         });
 
@@ -843,7 +852,9 @@ mod tests {
             "bad.zip",
             &[("BB/AmigaOS-Update", b"not an archive, just bytes")],
         );
-        assert!(ArchiveSource::open_nested(&outer, "AmigaOS-Update").is_err());
+        assert!(
+            ArchiveSource::open_nested(&outer, "AmigaOS-Update", &std::env::temp_dir()).is_err()
+        );
     }
 
     /// A member the outer archive does not hold is refused by name.
@@ -851,7 +862,7 @@ mod tests {
     fn a_missing_member_is_refused_by_name() {
         let dir = scratch("archive-nested-missing");
         let outer = package_zip(&dir, "x.zip", &[("BB/Something", b"x")]);
-        let err = ArchiveSource::open_nested(&outer, "AmigaOS-Update")
+        let err = ArchiveSource::open_nested(&outer, "AmigaOS-Update", &std::env::temp_dir())
             .unwrap_err()
             .to_string();
         assert!(err.contains("AmigaOS-Update"), "got {err}");
@@ -898,7 +909,7 @@ mod tests {
 
         let before = count_leftover_temp_files();
 
-        let mut ok = ArchiveSource::open_nested(&good, MEMBER).unwrap();
+        let mut ok = ArchiveSource::open_nested(&good, MEMBER, &std::env::temp_dir()).unwrap();
         assert_eq!(ok.read("C/Version").unwrap(), b"cmd bytes");
         assert_eq!(
             count_leftover_temp_files(),
@@ -906,7 +917,7 @@ mod tests {
             "a successful open_nested left its extraction behind"
         );
 
-        assert!(ArchiveSource::open_nested(&bad, MEMBER).is_err());
+        assert!(ArchiveSource::open_nested(&bad, MEMBER, &std::env::temp_dir()).is_err());
         assert_eq!(
             count_leftover_temp_files(),
             before,
@@ -1058,7 +1069,9 @@ mod tests {
         let dir = scratch("archive-implicit-nested");
         let p = package_zip(&dir, "implicit-nested.zip", &[("BB/C/Assign", b"assign")]);
 
-        let err = ArchiveSource::open_nested(&p, "C").unwrap_err().to_string();
+        let err = ArchiveSource::open_nested(&p, "C", &std::env::temp_dir())
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("drawer"), "got {err}");
     }
 
@@ -1164,7 +1177,7 @@ mod tests {
             ],
         );
 
-        let Ok(src) = ArchiveSource::open_nested(&outer, "Payload") else {
+        let Ok(src) = ArchiveSource::open_nested(&outer, "Payload", &std::env::temp_dir()) else {
             return;
         };
         assert_eq!(src.refused_names(), &["BB/../../outside".to_string()]);

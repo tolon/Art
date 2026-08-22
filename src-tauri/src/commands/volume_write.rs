@@ -1933,12 +1933,10 @@ pub fn volume_copy_between_many(
 
     refuse_same_image(&source_image, &target_image)?;
 
-    let cache = {
-        use tauri::Manager;
-        app.path()
-            .app_cache_dir()
-            .unwrap_or_else(|_| std::env::temp_dir())
-    };
+    // The scratch root the user chose, not `app_cache_dir()` — on Windows
+    // that is the system drive whatever they would prefer, and a selection
+    // copy stages real Amiga bytes through it (ART-196).
+    let cache = crate::scratch::root()?;
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();

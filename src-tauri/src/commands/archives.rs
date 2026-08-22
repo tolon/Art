@@ -136,8 +136,20 @@ pub fn archives_plan_install(
     let emit_app = app.clone();
     let title = format!("Planning {} archives", archives.len());
 
+    // Resolved here rather than inside the job: a scratch root that has
+    // gone away is the user's to fix, and they should hear it from the
+    // button they pressed (ART-196).
+    let scratch_root = crate::scratch::root()?;
+
     let id = spawn_job(&app, registry, &title, move |job_id, progress| {
-        let plan = build_plan(&archives, &image_path, volume_index, parent, progress)?;
+        let plan = build_plan(
+            &archives,
+            &image_path,
+            volume_index,
+            parent,
+            &scratch_root,
+            progress,
+        )?;
         // Nothing is logged: §53 is about operations that change user data, and
         // this one writes nothing at all.
         let _ = emit_app.emit(ARCHIVES_PLAN_EVENT, ArchivesPlanResult { job_id, plan });
@@ -152,10 +164,11 @@ fn build_plan(
     image: &Path,
     volume_index: usize,
     parent: u32,
+    scratch_root: &Path,
     progress: &dyn ProgressSink,
 ) -> CoreResult<ArchivesPlan> {
-    let staging = Staging::new()?;
-    let (drawers, roots) = prepare_archives(archives, staging.path(), progress)?;
+    let staging = Staging::in_dir(scratch_root)?;
+    let (drawers, roots) = prepare_archives(archives, staging.path(), scratch_root, progress)?;
 
     // These roots are ART's own unpacked staging tree, not a folder the user
     // picked — the sidecar option (§4.2) is about copies from a real host
@@ -221,6 +234,11 @@ pub fn archives_install(
         image_path.display()
     );
 
+    // Resolved here rather than inside the job: a scratch root that has
+    // gone away is the user's to fix, and they should hear it from the
+    // button they pressed (ART-196).
+    let scratch_root = crate::scratch::root()?;
+
     let id = spawn_job(&app, registry, &title, move |job_id, progress| {
         let outcome = install_archives(
             &archives,
@@ -228,6 +246,7 @@ pub fn archives_install(
             volume_index,
             parent,
             policy,
+            &scratch_root,
             progress,
         );
 
@@ -269,19 +288,21 @@ pub fn archives_install(
     Ok(id)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn install_archives(
     archives: &[PathBuf],
     image: &Path,
     volume_index: usize,
     parent: u32,
     policy: OverwritePolicy,
+    scratch_root: &Path,
     progress: &dyn ProgressSink,
 ) -> CoreResult<(
     crate::core::volume::write::copy::CopyReport,
     crate::commands::volume_write::Committed,
 )> {
-    let staging = Staging::new()?;
-    let (drawers, roots) = prepare_archives(archives, staging.path(), progress)?;
+    let staging = Staging::in_dir(scratch_root)?;
+    let (drawers, roots) = prepare_archives(archives, staging.path(), scratch_root, progress)?;
     // Same as `build_plan` above: ART's own staging tree, so the sidecar
     // option does not apply.
     let selection = HostSelection::new(roots, true);
@@ -375,6 +396,7 @@ impl ProgressSink for BatchStep<'_> {
 fn prepare_archives(
     archives: &[PathBuf],
     staging: &Path,
+    scratch_root: &Path,
     progress: &dyn ProgressSink,
 ) -> CoreResult<(Vec<ArchiveDrawer>, Vec<PathBuf>)> {
     let total = archives.len() as u64;
@@ -404,7 +426,7 @@ fn prepare_archives(
             total,
             label: label.clone(),
         };
-        let (scratch, unpack_skipped) = unpack_for_install(archive, &step)?;
+        let (scratch, unpack_skipped) = unpack_for_install(archive, scratch_root, &step)?;
         let top = top_level_entries(scratch.path())?;
 
         let (drawer_name, content_root) = if top.len() == 1 && top[0].is_dir {
@@ -561,11 +583,13 @@ fn top_level_entries(dir: &Path) -> CoreResult<Vec<TopEntry>> {
 struct Staging(PathBuf);
 
 impl Staging {
-    fn new() -> CoreResult<Self> {
+    /// Under the scratch root the shell resolved, never
+    /// `std::env::temp_dir()` directly (ART-196).
+    fn in_dir(root: &Path) -> CoreResult<Self> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT: AtomicU64 = AtomicU64::new(0);
 
-        let path = std::env::temp_dir().join(format!(
+        let path = root.join(format!(
             "art-archives-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
@@ -643,7 +667,8 @@ mod tests {
 
         let staging = dir.join("staging");
         std::fs::create_dir_all(&staging).unwrap();
-        let (drawers, roots) = prepare_archives(&[archive], &staging, &NoProgress).unwrap();
+        let (drawers, roots) =
+            prepare_archives(&[archive], &staging, &std::env::temp_dir(), &NoProgress).unwrap();
 
         assert_eq!(drawers.len(), 1);
         assert_eq!(drawers[0].drawer, "Turrican");
@@ -669,7 +694,8 @@ mod tests {
 
         let staging = dir.join("staging");
         std::fs::create_dir_all(&staging).unwrap();
-        let (drawers, roots) = prepare_archives(&[archive], &staging, &NoProgress).unwrap();
+        let (drawers, roots) =
+            prepare_archives(&[archive], &staging, &std::env::temp_dir(), &NoProgress).unwrap();
 
         assert_eq!(drawers[0].drawer, "Loose Files");
         assert_eq!(roots[0], staging.join("Loose Files"));
@@ -689,7 +715,8 @@ mod tests {
 
         let staging = dir.join("staging");
         std::fs::create_dir_all(&staging).unwrap();
-        let (drawers, roots) = prepare_archives(&[archive], &staging, &NoProgress).unwrap();
+        let (drawers, roots) =
+            prepare_archives(&[archive], &staging, &std::env::temp_dir(), &NoProgress).unwrap();
 
         assert_eq!(drawers[0].drawer, "Doc");
         assert!(roots[0].join("Readme.txt").is_file());
@@ -716,7 +743,8 @@ mod tests {
         // renaming onto the staging directory itself.
         let staging = dir.join("staging");
         std::fs::create_dir_all(&staging).unwrap();
-        let err = prepare_archives(&[archive], &staging, &NoProgress).unwrap_err();
+        let err =
+            prepare_archives(&[archive], &staging, &std::env::temp_dir(), &NoProgress).unwrap_err();
         assert_eq!(err.code(), "ART-INPUT-INVALID");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -743,15 +771,23 @@ mod tests {
         let image = disk(&dir, "disk.adf");
         let archives = vec![a, b, c];
 
-        let plan = build_plan(&archives, &image, 0, 0, &NoProgress).unwrap();
+        let plan = build_plan(&archives, &image, 0, 0, &std::env::temp_dir(), &NoProgress).unwrap();
         assert_eq!(plan.drawers.len(), 3);
         assert_eq!(plan.drawers[0].drawer, "Turrican");
         assert_eq!(plan.drawers[1].drawer, "Xenon2");
         assert_eq!(plan.drawers[2].drawer, "Loose");
         assert!(plan.cost.fits(), "{:?}", plan.cost.shortfall());
 
-        let (report, _backup) =
-            install_archives(&archives, &image, 0, 0, OverwritePolicy::Skip, &NoProgress).unwrap();
+        let (report, _backup) = install_archives(
+            &archives,
+            &image,
+            0,
+            0,
+            OverwritePolicy::Skip,
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap();
         assert_eq!(
             report.files_copied, 4,
             "one file each for two, two for Loose"
@@ -792,14 +828,23 @@ mod tests {
         let before = std::fs::read(&image).unwrap();
         let archives = vec![a.clone(), b.clone()];
 
-        let err = build_plan(&archives, &image, 0, 0, &NoProgress).unwrap_err();
+        let err =
+            build_plan(&archives, &image, 0, 0, &std::env::temp_dir(), &NoProgress).unwrap_err();
         let message = err.to_string();
         assert!(message.contains("Turrican"), "{message}");
         assert!(message.contains("release-a.lha"), "{message}");
         assert!(message.contains("release-b.lha"), "{message}");
 
-        let err = install_archives(&archives, &image, 0, 0, OverwritePolicy::Skip, &NoProgress)
-            .unwrap_err();
+        let err = install_archives(
+            &archives,
+            &image,
+            0,
+            0,
+            OverwritePolicy::Skip,
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("Turrican"));
         assert_eq!(
             std::fs::read(&image).unwrap(),
@@ -827,7 +872,7 @@ mod tests {
         let before = std::fs::read(&image).unwrap();
         let archives = vec![a, b];
 
-        let plan = build_plan(&archives, &image, 0, 0, &NoProgress).unwrap();
+        let plan = build_plan(&archives, &image, 0, 0, &std::env::temp_dir(), &NoProgress).unwrap();
         assert!(!plan.cost.fits(), "a batch this large must not fit");
         let refusal = plan
             .cost
@@ -841,8 +886,16 @@ mod tests {
             "planning must never touch the image"
         );
 
-        let err = install_archives(&archives, &image, 0, 0, OverwritePolicy::Skip, &NoProgress)
-            .unwrap_err();
+        let err = install_archives(
+            &archives,
+            &image,
+            0,
+            0,
+            OverwritePolicy::Skip,
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap_err();
         assert_eq!(err.code(), "ART-SAFETY-REFUSED");
         assert_eq!(
             std::fs::read(&image).unwrap(),
@@ -912,8 +965,16 @@ mod tests {
         let before = std::fs::read(&image).unwrap();
 
         let sink = StopDuringUnpack(AtomicBool::new(false));
-        let err = install_archives(&archives, &image, 0, 0, OverwritePolicy::Skip, &sink)
-            .expect_err("a cancelled batch must not come back as a successful install");
+        let err = install_archives(
+            &archives,
+            &image,
+            0,
+            0,
+            OverwritePolicy::Skip,
+            &std::env::temp_dir(),
+            &sink,
+        )
+        .expect_err("a cancelled batch must not come back as a successful install");
 
         assert_eq!(
             err.code(),
@@ -974,7 +1035,7 @@ mod tests {
         std::fs::create_dir_all(&staging).unwrap();
 
         let sink = StopInsideUnpack(AtomicBool::new(false));
-        let err = prepare_archives(&[archive], &staging, &sink)
+        let err = prepare_archives(&[archive], &staging, &std::env::temp_dir(), &sink)
             .expect_err("a cancelled unpack must not come back as a prepared batch");
         assert_eq!(err.code(), "ART-CANCELLED", "{err}");
 
@@ -1009,7 +1070,7 @@ mod tests {
         let image = disk(&dir, "disk.adf");
 
         let sink = StopAtOnce(AtomicBool::new(false));
-        let err = build_plan(&archives, &image, 0, 0, &sink)
+        let err = build_plan(&archives, &image, 0, 0, &std::env::temp_dir(), &sink)
             .expect_err("a cancelled plan must not come back as a plan");
         assert_eq!(err.code(), "ART-CANCELLED", "{err}");
 
@@ -1061,8 +1122,16 @@ mod tests {
             copy_reports: AtomicU64::new(0),
             cancelled: AtomicBool::new(false),
         };
-        let err = install_archives(&archives, &image, 0, 0, OverwritePolicy::Skip, &sink)
-            .expect_err("a cancelled batch must not come back as a successful install");
+        let err = install_archives(
+            &archives,
+            &image,
+            0,
+            0,
+            OverwritePolicy::Skip,
+            &std::env::temp_dir(),
+            &sink,
+        )
+        .expect_err("a cancelled batch must not come back as a successful install");
 
         assert_eq!(
             err.code(),
@@ -1104,6 +1173,7 @@ mod tests {
             0,
             0,
             OverwritePolicy::Skip,
+            &std::env::temp_dir(),
             &AlwaysCancelled,
         )
         .unwrap_err();
@@ -1124,7 +1194,7 @@ mod tests {
     #[test]
     fn staging_removes_itself_on_drop() {
         let path = {
-            let staging = Staging::new().unwrap();
+            let staging = Staging::in_dir(&std::env::temp_dir()).unwrap();
             let path = staging.path().to_path_buf();
             assert!(path.is_dir(), "Staging::new must create the directory");
             path
@@ -1151,7 +1221,7 @@ mod tests {
 
         let image = disk(&dir, "disk.adf");
 
-        let plan = build_plan(&[a, b], &image, 0, 0, &NoProgress).unwrap();
+        let plan = build_plan(&[a, b], &image, 0, 0, &std::env::temp_dir(), &NoProgress).unwrap();
         assert!(!plan.cost.fits(), "this batch must be refused");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1209,7 +1279,8 @@ mod tests {
         )
         .unwrap();
 
-        let (scratch_dir, unpack_skipped) = unpack_for_install(&archive, &NoProgress).unwrap();
+        let (scratch_dir, unpack_skipped) =
+            unpack_for_install(&archive, &std::env::temp_dir(), &NoProgress).unwrap();
 
         // The safe entry landed, under the scratch root...
         assert!(scratch_dir.path().join("Evil").join("Game").is_file());
@@ -1263,7 +1334,8 @@ mod tests {
 
         let staging = dir.join("staging");
         std::fs::create_dir_all(&staging).unwrap();
-        let (drawers, roots) = prepare_archives(&[archive], &staging, &NoProgress).unwrap();
+        let (drawers, roots) =
+            prepare_archives(&[archive], &staging, &std::env::temp_dir(), &NoProgress).unwrap();
 
         // The safe entry still installs...
         assert_eq!(drawers[0].drawer, "Evil");

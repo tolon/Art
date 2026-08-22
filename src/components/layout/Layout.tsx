@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Outlet } from "react-router-dom";
 
 import { JobBar } from "@/components/JobBar";
+import { ScratchRootGate } from "@/components/ScratchRootGate";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import {
@@ -181,6 +182,10 @@ export function Layout() {
       <div className="app-main">
         <TopBar />
         <main className="app-content">
+          {/* Above the job bar and above every screen: it is asked once, and
+              until it is answered it is the first thing ART has to say
+              (ART-196). Renders nothing at all afterwards. */}
+          <ScratchRootGate />
           <JobBar />
           <Outlet context={{ analyses, dragOver }} />
         </main>

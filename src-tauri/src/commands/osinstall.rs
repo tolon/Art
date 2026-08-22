@@ -88,15 +88,15 @@ use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome, OperationRecord};
 use crate::core::osinstall::apply::{
-    add_package, apply, refuse_unless_free, ApplyOutcome, DistributionManifest, FileRecord,
-    MANIFEST_FILE_NAME,
+    add_package_staging_in, apply_staging_in, refuse_unless_free, ApplyOutcome,
+    DistributionManifest, FileRecord, MANIFEST_FILE_NAME,
 };
 use crate::core::osinstall::chain::{self, TreeSummary};
 use crate::core::osinstall::collide::{self, CollisionReport, Incoming};
 use crate::core::osinstall::package::{self, Package};
 use crate::core::osinstall::plan::{
-    detect_package_refusals, expand_rules, plan_with_cache, InstallPlan, InstallRequest, PlanItem,
-    ScanCachePolicy,
+    detect_package_refusals, expand_rules, plan_with_cache_in, InstallPlan, InstallRequest,
+    PlanItem, ScanCachePolicy,
 };
 use crate::core::osinstall::recipe;
 use crate::core::osinstall::scan::{
@@ -253,10 +253,19 @@ pub fn osinstall_plan(request: InstallRequest) -> AppResult<PlanResult> {
         });
     }
     let recipe = recipe::by_release(&request.release)?;
-    let cache = scan_cache_for(request.scan_cache);
+    // ART-196: the cache and any nested package payload both stage under the
+    // root the user chose, and a root that has gone away refuses here rather
+    // than writing to the system drive behind their back.
+    let scratch_root = crate::scratch::root()?;
+    let cache = scan_cache_for(request.scan_cache, &scratch_root);
     cache.sweep();
     Ok(PlanResult::Planned {
-        plan: Box::new(plan_with_cache(&request, &recipe, &cache)?),
+        plan: Box::new(plan_with_cache_in(
+            &request,
+            &recipe,
+            &cache,
+            &scratch_root,
+        )?),
     })
 }
 
@@ -272,9 +281,9 @@ pub fn osinstall_plan(request: InstallRequest) -> AppResult<PlanResult> {
 /// `sweep()` at every plan, matching how `sweep_stale_preview_scratch_dirs` is
 /// called: cheap (a `stat` per entry), and the only thing that ever removes an
 /// entry whose medium has gone away for good.
-fn scan_cache_for(policy: ScanCachePolicy) -> ScanCache {
+fn scan_cache_for(policy: ScanCachePolicy, scratch_root: &Path) -> ScanCache {
     match policy {
-        ScanCachePolicy::Reuse => ScanCache::in_dir(std::env::temp_dir()),
+        ScanCachePolicy::Reuse => ScanCache::in_dir(scratch_root),
         ScanCachePolicy::Ignore => ScanCache::off(),
     }
 }
@@ -296,7 +305,7 @@ fn scan_cache_for(policy: ScanCachePolicy) -> ScanCache {
 /// derived files, under this module's own prefix, inside `%TEMP%`.
 #[tauri::command]
 pub fn osinstall_rescan_media() -> AppResult<usize> {
-    Ok(ScanCache::in_dir(std::env::temp_dir()).forget_all())
+    Ok(ScanCache::in_dir(crate::scratch::root()?).forget_all())
 }
 
 // ---------------------------------------------------------------------------
@@ -569,8 +578,8 @@ const PREVIEW_SCRATCH_MAX_AGE: std::time::Duration = std::time::Duration::from_s
 /// cache hit that turns out to point at a just-swept file is caught by
 /// [`extract_package_items`]'s own existence check, never served as a wrong
 /// answer.
-fn sweep_stale_preview_scratch_dirs() {
-    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+fn sweep_stale_preview_scratch_dirs(scratch_root: &Path) {
+    let Ok(entries) = std::fs::read_dir(scratch_root) else {
         return;
     };
     let now = std::time::SystemTime::now();
@@ -632,10 +641,10 @@ fn preview_cache_key(archive_path: &Path, member: Option<&str>) -> CoreResult<Pr
 /// the same archive identity reuse the same directory on disk rather than
 /// growing a new one under `%TEMP%` on every checkbox toggle (F4's own "no
 /// cache" finding).
-fn preview_cache_dir(key: &PreviewCacheKey) -> PathBuf {
+fn preview_cache_dir(key: &PreviewCacheKey, scratch_root: &Path) -> PathBuf {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     key.hash(&mut hasher);
-    std::env::temp_dir().join(format!("{PREVIEW_SCRATCH_PREFIX}{:016x}", hasher.finish()))
+    scratch_root.join(format!("{PREVIEW_SCRATCH_PREFIX}{:016x}", hasher.finish()))
 }
 
 /// A ceiling on how many distinct archive identities [`PreviewCache`] keeps
@@ -781,6 +790,7 @@ fn extract_package_items(
     archive: &FoundPackage,
     total_files: &mut usize,
     total_bytes: &mut u64,
+    scratch_root: &Path,
     progress: &dyn ProgressSink,
 ) -> CoreResult<Vec<ExtractedItem>> {
     let key = preview_cache_key(&archive.path, package.member.as_deref())?;
@@ -817,7 +827,7 @@ fn extract_package_items(
         )));
     }
 
-    let dir = preview_cache_dir(&key);
+    let dir = preview_cache_dir(&key, scratch_root);
     std::fs::create_dir_all(&dir)?;
 
     let mut extracted = Vec::new();
@@ -863,6 +873,7 @@ fn extract_incoming_for_preview(
     package_folder: &Path,
     ordered: &[String],
     catalogue: &[Package],
+    scratch_root: &Path,
     progress: &dyn ProgressSink,
 ) -> CoreResult<Vec<ExtractedItem>> {
     let found = find_packages(package_folder)?;
@@ -888,6 +899,7 @@ fn extract_incoming_for_preview(
             archive,
             &mut total_files,
             &mut total_bytes,
+            scratch_root,
             progress,
         )?);
     }
@@ -909,6 +921,7 @@ fn preview_collisions(
     package_folder: &Path,
     ordered: &[String],
     catalogue: &[Package],
+    scratch_root: &Path,
     progress: &dyn ProgressSink,
 ) -> CoreResult<Vec<CollisionReport>> {
     if ordered.is_empty() {
@@ -932,8 +945,9 @@ fn preview_collisions(
             )));
         }
     }
-    sweep_stale_preview_scratch_dirs();
-    let incoming = extract_incoming_for_preview(package_folder, ordered, catalogue, progress)?;
+    sweep_stale_preview_scratch_dirs(scratch_root);
+    let incoming =
+        extract_incoming_for_preview(package_folder, ordered, catalogue, scratch_root, progress)?;
     let entries: Vec<Incoming> = incoming
         .iter()
         .map(|(to, component, bytes_at)| Incoming {
@@ -1108,7 +1122,7 @@ fn check_preview_ceilings(files: usize, bytes: u64) -> CoreResult<()> {
 /// Cleaned up by [`StagingDir`] rather than left for the hourly sweep, so a
 /// preview's staged AmigaOS bytes do not sit in `%TEMP%` after it has
 /// answered.
-fn scratch_root_for() -> PathBuf {
+fn scratch_root_for(scratch_root: &Path) -> PathBuf {
     use std::hash::{Hash, Hasher};
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -1126,7 +1140,7 @@ fn scratch_root_for() -> PathBuf {
     // `staging_is_removed_however_the_preview_ends` fail three runs in six.
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     std::thread::current().id().hash(&mut hasher);
-    std::env::temp_dir().join(format!(
+    scratch_root.join(format!(
         "{PREVIEW_SCRATCH_PREFIX}component-{}-{:08x}-{}",
         std::process::id(),
         hasher.finish() as u32,
@@ -1163,6 +1177,7 @@ impl Drop for StagingDir {
 fn preview_component_collisions(
     plan: &InstallPlan,
     components: &[String],
+    scratch_root: &Path,
     progress: &dyn ProgressSink,
 ) -> CoreResult<ComponentPreview> {
     let incoming_items = items_of(plan, components);
@@ -1170,13 +1185,13 @@ fn preview_component_collisions(
         return Ok(ComponentPreview::default());
     }
 
-    sweep_stale_preview_scratch_dirs();
+    sweep_stale_preview_scratch_dirs(scratch_root);
     // Unique per call, and removed however this call ends — see
     // `scratch_root_for` and `StagingDir`. Two concurrent previews of the same
     // components must not share a root: the second `remove_dir_all` would take
     // the first's staging with it and every Replace row would degrade to
     // "new" (review F3).
-    let staging = StagingDir(scratch_root_for());
+    let staging = StagingDir(scratch_root_for(scratch_root));
     let scratch = staging.0.clone();
     std::fs::create_dir_all(&scratch)?;
 
@@ -1359,13 +1374,19 @@ pub fn osinstall_component_collisions(
     let emit_app = app.clone();
     let registry = Arc::clone(&registry);
 
+    // Resolved here rather than inside the job: a scratch root that has
+    // gone away is the user's to fix, and they should hear it from the
+    // button they pressed (ART-196).
+    let scratch_root = crate::scratch::root()?;
+
     let id = spawn_job_in_lane(
         &app,
         registry,
         &title,
         COMPONENT_PREVIEW_LANE,
         move |job_id, progress| {
-            let preview = preview_component_collisions(&plan, &components, progress)?;
+            let preview =
+                preview_component_collisions(&plan, &components, &scratch_root, progress)?;
             let _ = emit_app.emit(
                 OSINSTALL_COMPONENT_COLLISIONS_EVENT,
                 OsInstallComponentCollisionsResult { job_id, preview },
@@ -1417,14 +1438,25 @@ pub fn osinstall_collisions(
     let emit_app = app.clone();
     let registry = Arc::clone(&registry);
 
+    // Resolved here rather than inside the job: a scratch root that has
+    // gone away is the user's to fix, and they should hear it from the
+    // button they pressed (ART-196).
+    let scratch_root = crate::scratch::root()?;
+
     let id = spawn_job_in_lane(
         &app,
         registry,
         &title,
         PACKAGE_PREVIEW_LANE,
         move |job_id, progress| {
-            let reports =
-                preview_collisions(&tree_root, &package_folder, &ordered, &catalogue, progress)?;
+            let reports = preview_collisions(
+                &tree_root,
+                &package_folder,
+                &ordered,
+                &catalogue,
+                &scratch_root,
+                progress,
+            )?;
             let _ = emit_app.emit(
                 OSINSTALL_COLLISIONS_EVENT,
                 OsInstallCollisionsResult { job_id, reports },
@@ -1584,6 +1616,11 @@ pub fn osinstall_add_package(
     let log_path = oplog.path().to_path_buf();
     let emit_app = app.clone();
 
+    // Resolved here rather than inside the job: a scratch root that has
+    // gone away is the user's to fix, and they should hear it from the
+    // button they pressed (ART-196).
+    let scratch_root = crate::scratch::root()?;
+
     let id = spawn_job(
         &app,
         Arc::clone(&registry),
@@ -1597,7 +1634,7 @@ pub fn osinstall_add_package(
             };
             let mut failure: Option<CoreError> = None;
             for (package, archive) in &resolved {
-                match add_package(&root, package, archive, progress) {
+                match add_package_staging_in(&root, package, archive, &scratch_root, progress) {
                     Ok(outcome) => {
                         total.files += outcome.files;
                         total.directories += outcome.directories;
@@ -1693,8 +1730,13 @@ pub fn osinstall_apply(
     let plan = request.plan;
     let root = request.destination;
 
+    // Resolved here rather than inside the job: a scratch root that has
+    // gone away is the user's to fix, and they should hear it from the
+    // button they pressed (ART-196).
+    let scratch_root = crate::scratch::root()?;
+
     let id = spawn_job(&app, registry, &title, move |job_id, progress| {
-        let outcome = apply(&plan, &root, progress);
+        let outcome = apply_staging_in(&plan, &root, &scratch_root, progress);
 
         // Background jobs run on their own thread and cannot carry a Tauri
         // `State` across it, so this logs through `write_to_path` rather
@@ -2254,8 +2296,15 @@ mod tests {
         // `osinstall_verify`'s own `verify_at` already are.
         let catalogue = package::packages().unwrap();
         let ordered = package::order(&["locale-turkish".to_string()]).unwrap();
-        let reports =
-            preview_collisions(&tree, &packages_dir, &ordered, &catalogue, &NoProgress).unwrap();
+        let reports = preview_collisions(
+            &tree,
+            &packages_dir,
+            &ordered,
+            &catalogue,
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap();
 
         assert_eq!(reports.len(), 1, "{reports:?}");
         assert_eq!(reports[0].path, TURKISH_CATALOG_ON_TREE);
@@ -2376,9 +2425,13 @@ mod tests {
             b"$VER: format 45.1 (1.1.00)",
         );
 
-        let preview =
-            preview_component_collisions(&plan, &["workbench-39".to_string()], &NoProgress)
-                .unwrap();
+        let preview = preview_component_collisions(
+            &plan,
+            &["workbench-39".to_string()],
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap();
 
         assert_eq!(preview.placed, 2, "both of the overlay's files are placed");
         assert_eq!(preview.reports.len(), 1, "{:?}", preview.reports);
@@ -2414,9 +2467,13 @@ mod tests {
         let (dir, plan) =
             plan_over_two_media("component-preview-counts", "workbench-39", same, same);
 
-        let preview =
-            preview_component_collisions(&plan, &["workbench-39".to_string()], &NoProgress)
-                .unwrap();
+        let preview = preview_component_collisions(
+            &plan,
+            &["workbench-39".to_string()],
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap();
 
         // Two files placed: `C/Format` lands on `workbench-base`'s identical
         // copy, `C/New` lands on nothing.
@@ -2464,9 +2521,13 @@ mod tests {
         ] {
             let (dir, plan) =
                 plan_over_two_media("component-preview-partition", "workbench-39", base, overlay);
-            let preview =
-                preview_component_collisions(&plan, &["workbench-39".to_string()], &NoProgress)
-                    .unwrap();
+            let preview = preview_component_collisions(
+                &plan,
+                &["workbench-39".to_string()],
+                &std::env::temp_dir(),
+                &NoProgress,
+            )
+            .unwrap();
             let replaced = preview.reports.len();
             assert!(preview.contested >= replaced, "{preview:?}");
             let unchanged = preview.contested - replaced;
@@ -2509,7 +2570,12 @@ mod tests {
             .map(|_| {
                 let plan = std::sync::Arc::clone(&plan);
                 std::thread::spawn(move || {
-                    preview_component_collisions(&plan, &["workbench-39".to_string()], &NoProgress)
+                    preview_component_collisions(
+                        &plan,
+                        &["workbench-39".to_string()],
+                        &std::env::temp_dir(),
+                        &NoProgress,
+                    )
                 })
             })
             .collect();
@@ -2543,7 +2609,7 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for _ in 0..64 {
             assert!(
-                seen.insert(scratch_root_for()),
+                seen.insert(scratch_root_for(&std::env::temp_dir())),
                 "a staging root repeated: {seen:?}"
             );
         }
@@ -2570,8 +2636,8 @@ mod tests {
             name.rsplit_once('-').unwrap().0.to_string()
         }
 
-        let mine = namespace_of(&scratch_root_for());
-        let theirs = std::thread::spawn(|| namespace_of(&scratch_root_for()))
+        let mine = namespace_of(&scratch_root_for(&std::env::temp_dir()));
+        let theirs = std::thread::spawn(|| namespace_of(&scratch_root_for(&std::env::temp_dir())))
             .join()
             .unwrap();
 
@@ -2623,14 +2689,25 @@ mod tests {
         );
 
         let before = staging_dirs().len();
-        preview_component_collisions(&plan, &["workbench-39".to_string()], &NoProgress).unwrap();
+        preview_component_collisions(
+            &plan,
+            &["workbench-39".to_string()],
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap();
         assert_eq!(
             staging_dirs().len(),
             before,
             "nothing left behind on success"
         );
 
-        let _ = preview_component_collisions(&plan, &["workbench-39".to_string()], &Stopped);
+        let _ = preview_component_collisions(
+            &plan,
+            &["workbench-39".to_string()],
+            &std::env::temp_dir(),
+            &Stopped,
+        );
         assert_eq!(
             staging_dirs().len(),
             before,
@@ -2655,8 +2732,13 @@ mod tests {
             b"$VER: format 45.1 (1.1.00)",
         );
 
-        let preview =
-            preview_component_collisions(&plan, &["locale-base".to_string()], &NoProgress).unwrap();
+        let preview = preview_component_collisions(
+            &plan,
+            &["locale-base".to_string()],
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap();
 
         assert_eq!(preview.reports.len(), 1, "{:?}", preview.reports);
         assert!(
@@ -2677,9 +2759,13 @@ mod tests {
         let same = b"$VER: format 44.5 (1.1.99)";
         let (dir, plan) = plan_over_two_media("component-preview-same", "workbench-39", same, same);
 
-        let preview =
-            preview_component_collisions(&plan, &["workbench-39".to_string()], &NoProgress)
-                .unwrap();
+        let preview = preview_component_collisions(
+            &plan,
+            &["workbench-39".to_string()],
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap();
 
         assert_eq!(preview.reports, Vec::new(), "{:?}", preview.reports);
         assert_eq!(
@@ -2715,7 +2801,8 @@ mod tests {
             user_startup: Vec::new(),
         };
 
-        let preview = preview_component_collisions(&plan, &[], &NoProgress).unwrap();
+        let preview =
+            preview_component_collisions(&plan, &[], &std::env::temp_dir(), &NoProgress).unwrap();
         assert_eq!(preview.placed, 0);
         assert_eq!(preview.reports, Vec::new());
 
@@ -2745,16 +2832,25 @@ mod tests {
             b"$VER: format 45.1 (1.1.00)",
         );
 
-        let first = preview_component_collisions(&plan, &["workbench-39".to_string()], &NoProgress)
-            .unwrap();
+        let first = preview_component_collisions(
+            &plan,
+            &["workbench-39".to_string()],
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap();
         assert_eq!(first.reports.len(), 1);
 
         // Now preview the *base* component instead. Nothing precedes it, so
         // nothing is in its way — and the previous call's staged `C/Format`
         // must not be mistaken for a file already on the tree.
-        let second =
-            preview_component_collisions(&plan, &["workbench-base".to_string()], &NoProgress)
-                .unwrap();
+        let second = preview_component_collisions(
+            &plan,
+            &["workbench-base".to_string()],
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap();
         assert_eq!(second.placed, 1);
         assert_eq!(
             second.reports,
@@ -2765,8 +2861,13 @@ mod tests {
 
         // And the same selection again answers the same way, from a root it
         // re-staged rather than one it accumulated into.
-        let again = preview_component_collisions(&plan, &["workbench-39".to_string()], &NoProgress)
-            .unwrap();
+        let again = preview_component_collisions(
+            &plan,
+            &["workbench-39".to_string()],
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap();
         assert_eq!(again.reports.len(), 1, "{:?}", again.reports);
         assert_eq!(again.placed, 2);
 
@@ -2795,8 +2896,13 @@ mod tests {
             b"$VER: format 45.1 (1.1.00)",
         );
 
-        let err = preview_component_collisions(&plan, &["workbench-39".to_string()], &Stopped)
-            .unwrap_err();
+        let err = preview_component_collisions(
+            &plan,
+            &["workbench-39".to_string()],
+            &std::env::temp_dir(),
+            &Stopped,
+        )
+        .unwrap_err();
         assert!(matches!(err, CoreError::Cancelled), "{err:?}");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -2906,9 +3012,13 @@ mod tests {
         );
 
         for id in &layering {
-            let preview =
-                preview_component_collisions(&plan, std::slice::from_ref(id), &NoProgress)
-                    .expect("the preview");
+            let preview = preview_component_collisions(
+                &plan,
+                std::slice::from_ref(id),
+                &std::env::temp_dir(),
+                &NoProgress,
+            )
+            .expect("the preview");
             let mut upgrades = 0usize;
             let mut downgrades = 0usize;
             let mut same = 0usize;
@@ -2981,8 +3091,15 @@ mod tests {
         let packages_dir = dir.join("does-not-exist-packages");
 
         let catalogue = package::packages().unwrap();
-        let reports =
-            preview_collisions(&tree, &packages_dir, &[], &catalogue, &NoProgress).unwrap();
+        let reports = preview_collisions(
+            &tree,
+            &packages_dir,
+            &[],
+            &catalogue,
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap();
         assert_eq!(reports, Vec::new());
     }
 
@@ -3005,8 +3122,15 @@ mod tests {
 
         let mut files = 0usize;
         let mut bytes = 0u64;
-        let first =
-            extract_package_items(package, archive, &mut files, &mut bytes, &NoProgress).unwrap();
+        let first = extract_package_items(
+            package,
+            archive,
+            &mut files,
+            &mut bytes,
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap();
         assert_eq!(first.len(), 1);
         assert!(first[0].2.is_file());
 
@@ -3039,8 +3163,15 @@ mod tests {
 
         let mut files2 = 0usize;
         let mut bytes2 = 0u64;
-        let second =
-            extract_package_items(package, archive, &mut files2, &mut bytes2, &NoProgress).unwrap();
+        let second = extract_package_items(
+            package,
+            archive,
+            &mut files2,
+            &mut bytes2,
+            &std::env::temp_dir(),
+            &NoProgress,
+        )
+        .unwrap();
         assert_eq!(second, first, "the cached extraction, unchanged");
     }
 
@@ -3063,8 +3194,15 @@ mod tests {
         let mut files = 0usize;
         let mut bytes = 0u64;
         let cancel = crate::core::osinstall::fixtures::CancelAfter::new(0);
-        let err =
-            extract_package_items(package, archive, &mut files, &mut bytes, &cancel).unwrap_err();
+        let err = extract_package_items(
+            package,
+            archive,
+            &mut files,
+            &mut bytes,
+            &std::env::temp_dir(),
+            &cancel,
+        )
+        .unwrap_err();
         assert!(matches!(err, CoreError::Cancelled), "{err}");
     }
 
@@ -3084,6 +3222,7 @@ mod tests {
             &packages_dir,
             &["locale-turkish".to_string()],
             &catalogue,
+            &std::env::temp_dir(),
             &cancel,
         )
         .unwrap_err();
@@ -3167,7 +3306,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&fresh);
         std::fs::create_dir_all(&fresh).unwrap();
 
-        sweep_stale_preview_scratch_dirs();
+        sweep_stale_preview_scratch_dirs(&std::env::temp_dir());
 
         assert!(!stale.exists(), "a stale scratch directory must be swept");
         assert!(fresh.exists(), "a fresh scratch directory must survive");

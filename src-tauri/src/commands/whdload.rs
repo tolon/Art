@@ -157,6 +157,7 @@ pub fn whdload_plan(
         &image_path,
         volume_index,
         dir_block.unwrap_or(0),
+        &crate::scratch::root()?,
     )?)
 }
 
@@ -165,6 +166,7 @@ fn build_plan(
     image: &Path,
     volume_index: usize,
     dir_block: u32,
+    scratch_root: &Path,
 ) -> CoreResult<WhdloadPlan> {
     // The verdict comes from the archive's own entry list, before anything is
     // unpacked — a package ART is not confident about should not cost the user
@@ -172,7 +174,7 @@ fn build_plan(
     let info = open_archive(archive)?;
     let verdict = detect_whdload(&info.entries);
 
-    let (scratch, unpack_skipped) = unpack_for_install(archive, &NoProgress)?;
+    let (scratch, unpack_skipped) = unpack_for_install(archive, scratch_root, &NoProgress)?;
     let entries = walk(scratch.path())?;
 
     // `analyse` failing here means the archive unpacked fine but holds no
@@ -461,8 +463,20 @@ pub fn whdload_install(
             .unwrap_or_default()
     );
 
+    // Resolved here rather than inside the job: a scratch root that has
+    // gone away is the user's to fix, and they should hear it from the
+    // button they pressed (ART-196).
+    let scratch_root = crate::scratch::root()?;
+
     let id = spawn_job(&app, registry, &title, move |job_id, progress| {
-        let outcome = run_install(&archive_path, &image_path, volume_index, parent, progress);
+        let outcome = run_install(
+            &archive_path,
+            &image_path,
+            volume_index,
+            parent,
+            &scratch_root,
+            progress,
+        );
 
         // §53's example is this operation by name. It records what went in,
         // where, how many files, and whether verification passed.
@@ -506,10 +520,11 @@ fn run_install(
     image: &Path,
     volume_index: usize,
     parent: u32,
+    scratch_root: &Path,
     sink: &dyn ProgressSink,
 ) -> CoreResult<WhdloadOutcome> {
     sink.report(0, None, "Checking the package");
-    let plan = build_plan(archive, image, volume_index, parent)?;
+    let plan = build_plan(archive, image, volume_index, parent, scratch_root)?;
     if !plan.can_install() {
         return Err(CoreError::SafetyRefused(
             plan.refusal
@@ -519,7 +534,7 @@ fn run_install(
     }
 
     sink.report(0, None, "Unpacking");
-    let (scratch, _) = unpack_for_install(archive, sink)?;
+    let (scratch, _) = unpack_for_install(archive, scratch_root, sink)?;
     let layout = plan.layout;
 
     let pack_root = if layout.root.is_empty() {
@@ -785,7 +800,7 @@ mod tests {
         let before = std::fs::read(&image).unwrap();
 
         // ---- the plan, which must write nothing ----
-        let plan = build_plan(&archive, &image, 0, 0).unwrap();
+        let plan = build_plan(&archive, &image, 0, 0, &std::env::temp_dir()).unwrap();
         assert_eq!(
             std::fs::read(&image).unwrap(),
             before,
@@ -806,7 +821,8 @@ mod tests {
         assert!(plan.drawer.ends_with(":Turrican"), "{}", plan.drawer);
 
         // ---- the install ----
-        let outcome = run_install(&archive, &image, 0, 0, &NoProgress).unwrap();
+        let outcome =
+            run_install(&archive, &image, 0, 0, &std::env::temp_dir(), &NoProgress).unwrap();
 
         assert_eq!(outcome.files, 3, "slave, executable, one data file");
         assert_eq!(
@@ -900,10 +916,11 @@ mod tests {
         let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
         std::fs::write(&image, &bytes).unwrap();
 
-        run_install(&archive, &image, 0, 0, &NoProgress).unwrap();
+        run_install(&archive, &image, 0, 0, &std::env::temp_dir(), &NoProgress).unwrap();
         let after_first = std::fs::read(&image).unwrap();
 
-        let err = run_install(&archive, &image, 0, 0, &NoProgress).unwrap_err();
+        let err =
+            run_install(&archive, &image, 0, 0, &std::env::temp_dir(), &NoProgress).unwrap_err();
         assert!(err.to_string().contains("already on that volume"), "{err}");
         assert_eq!(
             std::fs::read(&image).unwrap(),
@@ -983,7 +1000,7 @@ mod tests {
         let before = std::fs::read(&image).unwrap();
 
         let sink = StopDuringCopy(AtomicBool::new(false));
-        let err = run_install(&archive, &image, 0, 0, &sink)
+        let err = run_install(&archive, &image, 0, 0, &std::env::temp_dir(), &sink)
             .expect_err("a cancelled install must not come back as a successful one");
 
         assert_eq!(
@@ -1023,12 +1040,12 @@ mod tests {
         // Not a fault: the plan builds fine and reports why ART will not
         // install it — a genuinely broken archive is the one that still
         // throws, see `a_missing_pack_is_a_refusal_and_a_broken_archive_is_still_an_error`.
-        let plan = build_plan(&archive, &image, 0, 0).unwrap();
+        let plan = build_plan(&archive, &image, 0, 0, &std::env::temp_dir()).unwrap();
         assert!(
             plan.refusal.is_some(),
             "an archive with no slave must be refused, not errored"
         );
-        assert!(run_install(&archive, &image, 0, 0, &NoProgress).is_err());
+        assert!(run_install(&archive, &image, 0, 0, &std::env::temp_dir(), &NoProgress).is_err());
         assert_eq!(std::fs::read(&image).unwrap(), before);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1056,7 +1073,7 @@ mod tests {
         let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
         std::fs::write(&image, &bytes).unwrap();
 
-        let plan = build_plan(&ordinary, &image, 0, 0)
+        let plan = build_plan(&ordinary, &image, 0, 0, &std::env::temp_dir())
             .expect("a plan without a pack is still a plan, not an error");
         let refusal = plan
             .refusal
@@ -1079,7 +1096,7 @@ mod tests {
         let broken = dir.join("Broken.lha");
         std::fs::write(&broken, b"not an lha file at all").unwrap();
 
-        let err = build_plan(&broken, &image, 0, 0)
+        let err = build_plan(&broken, &image, 0, 0, &std::env::temp_dir())
             .expect_err("an unreadable archive must still be a real error");
         assert!(
             matches!(err, CoreError::Malformed { .. }),
@@ -1113,14 +1130,14 @@ mod tests {
         std::fs::write(&image, &bytes).unwrap();
         let before = std::fs::read(&image).unwrap();
 
-        let plan = build_plan(&archive, &image, 0, 0).unwrap();
+        let plan = build_plan(&archive, &image, 0, 0, &std::env::temp_dir()).unwrap();
         let refusal = plan
             .refusal
             .expect("a pack that does not fit must be refused");
         assert!(refusal.reason.contains("blocks"), "{refusal:?}");
         assert!(refusal.reason.contains("are free"), "{refusal:?}");
 
-        assert!(run_install(&archive, &image, 0, 0, &NoProgress).is_err());
+        assert!(run_install(&archive, &image, 0, 0, &std::env::temp_dir(), &NoProgress).is_err());
         assert_eq!(std::fs::read(&image).unwrap(), before);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1149,7 +1166,7 @@ mod tests {
         let (bytes, _) = ffs_volume(1760, DosType::new(*b"DOS\x01"));
         std::fs::write(&dest, &bytes).unwrap();
 
-        run_install(&archive, &dest, 0, 0, &NoProgress).unwrap();
+        run_install(&archive, &dest, 0, 0, &std::env::temp_dir(), &NoProgress).unwrap();
         let _ = std::fs::remove_file(&archive);
     }
 

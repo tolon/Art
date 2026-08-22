@@ -28,6 +28,7 @@ pub mod osinstall;
 pub mod panel;
 pub mod pistorm;
 pub mod preload;
+pub mod scratch;
 pub mod sources;
 pub mod system;
 pub mod volume;
