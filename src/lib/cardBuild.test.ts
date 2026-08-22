@@ -4,6 +4,7 @@ import {
   buildBlocker,
   cardFsChoices,
   defaultPartition,
+  defaultSecondPartition,
   findingPhrase,
   healthVerdict,
   intakeFills,
@@ -260,5 +261,43 @@ describe("PFS3 on the card builder (ART-084's own expiry condition)", () => {
     const request = { ...{ ...REQUEST, partitions: [{ ...defaultPartition(), fs_type: "ffsstandard" as const }] }, file_systems: [] };
     expect(buildBlocker(request, PLAN)).toBeNull();
     expect(fileSystemInputsFor("ffsstandard", "E:\\pfs3aio")).toEqual([]);
+  });
+});
+
+describe("the card's two partitions", () => {
+  /// Both real PiStorm cards carry `SDH0` and `SDH1`; ART offered one, which
+  /// is the one shape neither working card has.
+  it("proposes SDH0 for the system and SDH1 for the rest", () => {
+    expect(defaultPartition().drive_name).toBe("SDH0");
+    expect(defaultSecondPartition("ffsstandard").drive_name).toBe("SDH1");
+  });
+
+  /// `0` is the core's "whatever is left". The screen must not work the
+  /// remainder out itself — that is `bytes_per_cyl` rounding, and a second
+  /// copy of it is how the two start disagreeing.
+  it("asks the core for the rest rather than computing it", () => {
+    expect(defaultSecondPartition("ffsstandard").size_mb).toBe(0);
+  });
+
+  /// Only one of them boots, and it is the system one. Two bootable
+  /// partitions on a fresh card is a choice nobody made.
+  it("only the system partition is bootable", () => {
+    expect(defaultPartition().bootable).toBe(true);
+    expect(defaultSecondPartition("ffsstandard").bootable).toBe(false);
+  });
+
+  /// Measured: both cards say priority 1 for the bootable one, and so does
+  /// the Imager's table. With one bootable partition it changes nothing —
+  /// it is matching what the cards that boot actually carry.
+  it("the bootable partition uses the priority the real cards use", () => {
+    expect(defaultPartition().boot_priority).toBe(1);
+  });
+
+  /// The second partition is the same filesystem as the first, because it is
+  /// the same card and the same driver — a PFS3 system partition beside an
+  /// FFS work one would need two drivers to mount one disk.
+  it("the second partition follows the filesystem the first uses", () => {
+    expect(defaultSecondPartition("pfs3directscsi").fs_type).toBe("pfs3directscsi");
+    expect(defaultSecondPartition("ffsdircache").fs_type).toBe("ffsdircache");
   });
 });

@@ -568,6 +568,48 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-218** 🟠 ✅ **The card ART built had one partition, which is the
+one shape neither working card has** — *work-list item 6's other half, closed
+2026-08-23*
+`src-tauri/src/core/rdb.rs::create_rdb_layout` · `src/lib/cardBuild.ts`
+
+Both of the real PiStorm cards `docs/sd2-card-layout.md` was measured from
+carry **`SDH0` and `SDH1`** — CaffeineOS's Amiga area is exactly that pair,
+`SDH0` bootable at priority **1** — and the Emu68 Imager's own `DiskDefaults`
+names the same two, `Workbench` and `Work`. ART proposed one.
+
+**`size_mb: 0` now means "whatever is left"**, and only the **last** partition
+may say it. The same idiom `AreaSpec::size_bytes` and `CardSpec::boot_bytes`
+already use, and it is in the core for a reason worth stating: the alternative
+was the screen working the remainder out from `bytes_per_cyl` and
+`RESERVED_CYLINDERS`, which is a second copy of arithmetic that lives in
+`create_rdb_layout` — and a second copy is how the two start disagreeing.
+`0` on any earlier partition is refused **by name and position** rather than
+resolved: two partitions cannot both have the remainder, and picking one would
+be the confident-and-wrong shape.
+
+**A toggle, not a partition-list editor.** The reference layout is exactly two;
+three and more is multiboot, which is SD-3's G16. Building a general editor for
+a case nothing yet asks for would be offering a shape ART cannot finish (§96).
+The toggle is on by default and remembered like every other choice.
+
+**Boot priority 1 rather than 0** for the bootable partition. With a single
+bootable partition the two behave identically, so this is **not** a fix — it
+is matching what the cards that boot actually carry, and leaving room below it
+for a second. The second partition is not bootable, so ART does not invent a
+priority for it at all. (The Imager writes 99 there; with `bootable` false it
+changes nothing, and a number that changes nothing is a number to leave out.)
+
+*Tests:* 3 Rust reading `LowCyl`/`HighCyl` **back out of the image** — the
+caller's arithmetic is the thing being replaced, so it cannot also be the thing
+that checks it — plus 5 frontend over the proposed defaults.
+
+**Five mutations run, five fell:** "the rest" rounding to one cylinder again ·
+claiming one cylinder past the end · the ambiguity check removed · both
+partitions bootable · the priority back to 0.
+
+**Still not done, and it is not code:** no card ART builds has been flashed.
+
 **ART-217** 🟠 ✅ **The card builder could only write the filesystem
 nobody else uses** — *raised by the owner 2026-08-23 asking what the other
 projects chose; fixed the same day*

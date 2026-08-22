@@ -24,6 +24,7 @@ import {
   cardPlanBuild,
   cardCheckImage,
   defaultPartition,
+  defaultSecondPartition,
   findingPhrase,
   cardIntake,
   healthCheckPhrase,
@@ -58,7 +59,7 @@ import {
   isEmu68Line,
 } from "@/lib/pistormOptions";
 import { subscribeSafely } from "@/lib/jobs";
-import { isOneOf, isText, isTextOrNothing, isWholeNumberBetween } from "@/lib/remembered";
+import { isFlag, isOneOf, isText, isTextOrNothing, isWholeNumberBetween } from "@/lib/remembered";
 import { fileSystemInputsFor } from "@/lib/fsDriver";
 import { FILESYSTEM_DRIVER_KEY } from "@/lib/preload";
 import { useRemembered, useRememberedShape } from "@/lib/useRemembered";
@@ -139,6 +140,17 @@ export function CardBuilder() {
     null
   );
   const fsChoices = cardFsChoices(fsDriver);
+  /**
+   * A second partition for the user's own files, on by default.
+   *
+   * Remembered like every other choice: somebody who turns it off gets one
+   * partition next time too.
+   */
+  const [workPartition, setWorkPartition] = useRemembered(
+    "cardBuilder.workPartition",
+    isFlag,
+    true
+  );
   const [fsType, setFsType] = useRemembered<AmigaHardDiskFs>(
     "cardBuilder.fsType",
     isOneOf<AmigaHardDiskFs>(...fsChoices.map((choice) => choice.value)),
@@ -181,14 +193,24 @@ export function CardBuilder() {
   /** What was last dropped on this screen, and what it became (G15). */
   const [dropped, setDropped] = useState<CardIntakeItem[]>([]);
 
+  /**
+   * `SDH0` for the system, and `SDH1` for everything else — the shape both
+   * real cards have and the Imager's own default.
+   *
+   * A **toggle rather than a partition-list editor**, deliberately. The
+   * reference layout is exactly two; three and more is multiboot, which is
+   * SD-3's G16, and building a general editor for a case nothing yet asks for
+   * would be offering a shape ART cannot finish (§96).
+   */
   const partitions: PartitionSpec[] = [
     {
       drive_name: driveName,
       fs_type: fsType,
       size_mb: partitionMb,
       bootable: true,
-      boot_priority: 0,
+      boot_priority: defaultPartition().boot_priority,
     },
+    ...(workPartition ? [defaultSecondPartition(fsType)] : []),
   ];
 
   async function chooseFsDriver() {
@@ -573,6 +595,22 @@ export function CardBuilder() {
                   selectable rather than hidden — "why can I not have PFS3"
                   is a better question to be able to answer than to prevent
                   somebody asking. */}
+              <label
+                style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 12 }}
+              >
+                <input
+                  type="checkbox"
+                  checked={workPartition}
+                  onChange={(e) => setWorkPartition(e.target.checked)}
+                />
+                <span>
+                  {t("cardBuilder.advanced.workPartition")}
+                  <span className="faint" style={{ display: "block", fontSize: 11 }}>
+                    {t("cardBuilder.advanced.workPartitionHint")}
+                  </span>
+                </span>
+              </label>
+
               <Field
                 label={t("cardBuilder.advanced.fsDriver")}
                 value={fsDriver}

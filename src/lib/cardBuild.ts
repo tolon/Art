@@ -395,7 +395,36 @@ export function cardFsChoices(driverPath: string | null): CardFsChoice[] {
 }
 
 /**
- * The Amiga disk's one partition, as ART proposes it.
+ * The second partition, as ART proposes it: **`SDH1`, taking whatever is left**.
+ *
+ * **Measured, not adopted.** Both of the real PiStorm cards ART's card model
+ * came from carry `SDH0` *and* `SDH1` — CaffeineOS's area is exactly this
+ * pair, `SDH0` bootable at priority 1 — and the Emu68 Imager's own
+ * `DiskDefaults` names the same two, `Workbench` and `Work`. ART offered one
+ * partition until 2026-08-23, which is the one shape neither working card has.
+ *
+ * `size_mb: 0` is the core's "whatever is left", the idiom `AreaSpec.size_bytes`
+ * and `boot_bytes` already use. The screen deliberately does **not** work the
+ * remainder out itself: that is `bytes_per_cyl` rounding, it lives in
+ * `create_rdb_layout`, and a second copy of it is how the two start
+ * disagreeing.
+ *
+ * Not bootable, so its boot priority never decides anything and ART does not
+ * invent one. (The Imager writes 99 there; with `bootable` false it changes
+ * nothing, and a number that changes nothing is a number to leave out.)
+ */
+export function defaultSecondPartition(fs: AmigaHardDiskFs): PartitionSpec {
+  return {
+    drive_name: "SDH1",
+    fs_type: fs,
+    size_mb: 0,
+    bootable: false,
+    boot_priority: 0,
+  };
+}
+
+/**
+ * The Amiga disk's system partition, as ART proposes it.
  *
  * **FFS, because Kickstart mounts FFS itself.** SD-1 embeds no filesystem
  * driver in the RDB it writes, and a `PDS\3` partition with no driver anywhere
@@ -411,7 +440,11 @@ export function defaultPartition(): PartitionSpec {
     fs_type: "ffsstandard",
     size_mb: 512,
     bootable: true,
-    boot_priority: 0,
+    // **1, not 0** — both real cards say 1 for the bootable one, and so does
+    // the Imager's table. With a single bootable partition the two behave
+    // identically, so this is not a fix; it is matching what the cards that
+    // boot actually carry, and leaving room below for a second one.
+    boot_priority: 1,
   };
 }
 

@@ -1796,7 +1796,9 @@
       "fsType": "Filesystem",
       "oneDisk": "One Amiga disk, taking whatever is left after the boot partition. Several disks with a boot menu is multiboot, which is not built yet. Only the filesystems Kickstart carries are offered: a PFS3 partition with no driver on the card is one an Amiga ignores in silence.",
       "fsDriver": "Filesystem driver",
-      "fsDriverHint": "Your own pfs3aio, embedded in the card's partition table so the Amiga can mount a PFS3 partition. ART ships none — the same rule as the Kickstart. Fast File System needs nothing here: Kickstart carries it."
+      "fsDriverHint": "Your own pfs3aio, embedded in the card's partition table so the Amiga can mount a PFS3 partition. ART ships none — the same rule as the Kickstart. Fast File System needs nothing here: Kickstart carries it.",
+      "workPartition": "A second partition for your own files (SDH1)",
+      "workPartitionHint": "It takes whatever is left after the system partition above. This is the shape both known working PiStorm cards have, and what the Emu68 Imager makes by default — keeping your own files off the partition AmigaOS lives on."
     },
     "actions": {
       "preview": "Preview",
