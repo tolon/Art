@@ -72,6 +72,8 @@ const identifyRomMock = vi.hoisted(() => vi.fn());
 const dialogOpenMock = vi.hoisted(() => vi.fn());
 const onJobProgressMock = vi.hoisted(() => vi.fn());
 const rescanMock = vi.hoisted(() => vi.fn());
+const releaseForMediaMock = vi.hoisted(() => vi.fn());
+const packagesMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/osinstall", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/osinstall")>()),
@@ -79,6 +81,8 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   osinstallComponents: componentsMock,
   osinstallPlan: planMock,
   osinstallRescanMedia: rescanMock,
+  osinstallReleaseForMedia: releaseForMediaMock,
+  osinstallPackages: packagesMock,
   osinstallComponentCollisions: componentCollisionsMock,
   osinstallApply: applyMock,
   osinstallVerify: verifyMock,
@@ -286,12 +290,26 @@ function seedRemembered(overrides: Record<string, unknown>) {
   });
 }
 
+/**
+ * Every field set — for **both** releases, which is what "every field" means
+ * since ART-207 keyed the media folder and the destination per release the
+ * way `chosen` already was. The bare keys are AmigaOS 3.2's (see
+ * `rememberedComponentKey`: 3.2 is "the release before there was a picker"),
+ * the suffixed ones are 3.9's, and they hold **different paths** on purpose —
+ * a test that switches release can then tell which one the screen is using
+ * instead of watching one shared value stay put.
+ *
+ * The ROM is deliberately shared: a Kickstart belongs to the machine being
+ * built for, not to the release being installed.
+ */
 const FULL_FIELDS = {
   "osinstall.mediaFolder": "E:\\media",
   "osinstall.rom": "E:\\roms\\kick.rom",
   "osinstall.destination": "E:\\dist",
   "osinstall.chosen": [],
   "osinstall.excludedConditional": [],
+  "osinstall.mediaFolder.AmigaOS 3.9": "E:\\media39",
+  "osinstall.destination.AmigaOS 3.9": "E:\\dist39",
 };
 
 beforeEach(() => {
@@ -314,6 +332,8 @@ beforeEach(() => {
   dialogOpenMock.mockReset().mockResolvedValue(null);
   onJobProgressMock.mockReset().mockResolvedValue(() => {});
   rescanMock.mockReset().mockResolvedValue(1);
+  releaseForMediaMock.mockReset().mockResolvedValue(null);
+  packagesMock.mockReset().mockResolvedValue([]);
   useSettingsStore.setState({ loaded: false, settings: DEFAULT_SETTINGS });
 });
 
@@ -680,6 +700,89 @@ describe("choosing the release re-plans against it", () => {
   });
 });
 
+describe("a media folder belongs to the release it holds (ART-207)", () => {
+  // The owner chose AmigaOS 3.2 with the folder their AmigaOS 3.9 disc was
+  // in still remembered, and every one of the 3.2 recipe's sixteen
+  // components refused `MediaMissing` — sixteen true sentences that together
+  // told them "a lot of programs are missing" about a folder that was simply
+  // the wrong one. `chosen` and `excludedConditional` were already keyed per
+  // release (`rememberedComponentKey`) for exactly this reason, and the
+  // reason given there — "a component id means something only inside the
+  // recipe that declares it" — is true word for word of a media folder: a
+  // folder holding AmigaOS3.9 means nothing to the 3.2 recipe.
+  //
+  // The ROM is deliberately NOT part of this: a Kickstart is a property of
+  // the machine being built for, not of the release being installed, and the
+  // owner's one A1200 ROM is the right answer for both.
+  it("shows each release's own media folder, never the other's", async () => {
+    await renderFull();
+    expect(screen.getByText("E:\\media")).toBeTruthy();
+
+    const picker = screen.getByRole("combobox", {
+      name: i18n.t("osinstall.release.label"),
+    }) as HTMLSelectElement;
+    await userEvent.selectOptions(picker, "AmigaOS 3.9");
+    await waitFor(() => expect(componentsMock).toHaveBeenCalledWith("AmigaOS 3.9"));
+
+    expect(await screen.findByText("E:\\media39")).toBeTruthy();
+    expect(screen.queryByText("E:\\media")).toBeNull();
+  });
+
+  it("plans a release into its own destination, not the other release's", async () => {
+    await renderFull();
+    // `getAllByText`: the path is on screen more than once — this field, and
+    // the build session's own tree root, which is a different thing (ART-197)
+    // and is not what this test is about. So the assertion that matters is
+    // made against the request `plan()` is actually given, not the DOM.
+    expect(screen.getAllByText("E:\\dist").length).toBeGreaterThan(0);
+
+    const picker = screen.getByRole("combobox", {
+      name: i18n.t("osinstall.release.label"),
+    }) as HTMLSelectElement;
+    await userEvent.selectOptions(picker, "AmigaOS 3.9");
+
+    await waitFor(() =>
+      expect(planMock).toHaveBeenCalledWith(
+        expect.objectContaining({ release: "AmigaOS 3.9", destination: "E:\\dist39" })
+      )
+    );
+    // Not one 3.9 plan may name the folder the user set aside for their 3.2
+    // build — `toHaveBeenCalledWith` above would be satisfied by a single
+    // correct call among wrong ones.
+    const planned39 = planMock.mock.calls
+      .map((call) => call[0] as InstallRequest)
+      .filter((req) => req.release === "AmigaOS 3.9");
+    expect(planned39.length).toBeGreaterThan(0);
+    for (const req of planned39) {
+      expect(req.destination).not.toBe("E:\\dist");
+    }
+  });
+
+  it("keeps each release's own media folder when the user switches away and back", async () => {
+    await renderFull();
+
+    const picker = screen.getByRole("combobox", {
+      name: i18n.t("osinstall.release.label"),
+    }) as HTMLSelectElement;
+    await userEvent.selectOptions(picker, "AmigaOS 3.9");
+    await waitFor(() => expect(componentsMock).toHaveBeenCalledWith("AmigaOS 3.9"));
+
+    // The media row is the first of the three `Field`s on this screen —
+    // media, ROM, destination, in that order.
+    dialogOpenMock.mockResolvedValue("E:\\os39");
+    await userEvent.click(
+      screen.getAllByRole("button", { name: i18n.t("common.browse") })[0]
+    );
+    expect(await screen.findByText("E:\\os39")).toBeTruthy();
+
+    await userEvent.selectOptions(picker, "AmigaOS 3.2");
+    expect(await screen.findByText("E:\\media")).toBeTruthy();
+
+    await userEvent.selectOptions(picker, "AmigaOS 3.9");
+    expect(await screen.findByText("E:\\os39")).toBeTruthy();
+  });
+});
+
 describe("a disc dropped on the panel", () => {
   it("takes the folder from a disc dropped on the panel", async () => {
     // A JSX attribute string literal does not process `\\` as a JS escape
@@ -715,6 +818,196 @@ describe("a disc dropped on the panel", () => {
     // leave the hand-picked folder in place and never re-scan.
     rerender(<OsInstall droppedMedia={{ path: PATH, arrivalKey: "k2" }} />);
     await waitFor(() => expect(scanMediaMock).toHaveBeenCalledWith(FOLDER));
+  });
+});
+
+describe("a folder that is simply the wrong one (ART-208)", () => {
+  // The owner's own screen, reproduced: AmigaOS 3.2 chosen, and the folder
+  // still pointing at the one holding their AmigaOS 3.9 disc. Sixteen
+  // components, sixteen `MediaMissing` refusals, every one of them true —
+  // and what they read off the screen was "a lot of programs are missing".
+  const WRONG_FOLDER_REFUSALS: RefusalReason[] = [
+    { refusal: "media-missing", component: "workbench-base", volume_name: "Workbench3.2" },
+    { refusal: "media-missing", component: "install-libs", volume_name: "Install3.2" },
+    { refusal: "media-missing", component: "extras", volume_name: "Extras3.2" },
+  ];
+
+  /** A 3.2 build pointed at a folder holding exactly one AmigaOS 3.9 disc. */
+  async function renderWrongFolder(releaseHolding: string | null) {
+    scanMediaMock.mockReset().mockResolvedValue({
+      outcome: "found",
+      media: [
+        { path: "E:\\media\\AmigaOS39.iso", volumeName: "AmigaOS3.9", kind: "disc" },
+      ],
+    } satisfies MediaScanResult);
+    planMock.mockReset().mockImplementation((req: InstallRequest) =>
+      Promise.resolve({
+        outcome: "planned",
+        plan: {
+          release: "3.2",
+          items: [],
+          refusals: WRONG_FOLDER_REFUSALS,
+          totalBytes: 0,
+          componentsOn: ["workbench-base", "install-libs", ...req.chosen],
+          mediaPaths: {},
+          packages: [],
+          packageMedia: {},
+          userStartup: [],
+        },
+      } satisfies PlanResult)
+    );
+    releaseForMediaMock.mockReset().mockResolvedValue(releaseHolding);
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+    await waitFor(() => expect(planMock).toHaveBeenCalled());
+  }
+
+  it("says it once, instead of once per component", async () => {
+    await renderWrongFolder(null);
+
+    expect(
+      await screen.findByText(
+        i18n.t("osinstall.blocked.wrongFolder", { found: "AmigaOS3.9" })
+      )
+    ).toBeTruthy();
+
+    // And the three sentences it replaces are gone — computed the way the
+    // screen computes them, not typed out here where they could drift.
+    for (const refusal of WRONG_FOLDER_REFUSALS) {
+      const phrase = refusalPhrase(refusal);
+      expect(screen.queryByText(i18n.t(phrase.key, phrase.params))).toBeNull();
+    }
+  });
+
+  it("names the release the folder belongs to, and switching is one click", async () => {
+    await renderWrongFolder("AmigaOS 3.9");
+
+    expect(
+      await screen.findByText(
+        i18n.t("osinstall.blocked.wrongFolderIsRelease", {
+          release: "AmigaOS 3.9",
+          found: "AmigaOS3.9",
+        })
+      )
+    ).toBeTruthy();
+
+    const picker = screen.getByRole("combobox", {
+      name: i18n.t("osinstall.release.label"),
+    }) as HTMLSelectElement;
+    expect(picker.value).toBe("AmigaOS 3.2");
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: i18n.t("osinstall.blocked.switchRelease", { release: "AmigaOS 3.9" }),
+      })
+    );
+
+    // The button does the thing it names — the release actually changes,
+    // rather than the screen merely suggesting it.
+    await waitFor(() => expect(picker.value).toBe("AmigaOS 3.9"));
+  });
+
+  it("keeps the per-disk list when the folder is the right one", async () => {
+    // One disk absent from an otherwise right folder is a missing disk, and
+    // this screen must still say which. The guard that separates the two
+    // cases lives in `wrongMediaFolder`; this is it seen from the screen.
+    scanMediaMock.mockReset().mockResolvedValue({
+      outcome: "found",
+      media: [{ path: "E:\\media\\Disk1.adf", volumeName: "Workbench3.2", kind: "floppy" }],
+    } satisfies MediaScanResult);
+    planMock.mockReset().mockResolvedValue({
+      outcome: "planned",
+      plan: {
+        release: "3.2",
+        items: [],
+        refusals: [WRONG_FOLDER_REFUSALS[0]],
+        totalBytes: 0,
+        componentsOn: ["workbench-base"],
+        mediaPaths: {},
+        packages: [],
+        packageMedia: {},
+        userStartup: [],
+      },
+    } satisfies PlanResult);
+    releaseForMediaMock.mockReset().mockResolvedValue(null);
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+
+    const phrase = refusalPhrase(WRONG_FOLDER_REFUSALS[0]);
+    expect(await screen.findByText(i18n.t(phrase.key, phrase.params))).toBeTruthy();
+  });
+});
+
+describe("the release the user picks is the release the whole screen is on (ART-209, ART-211)", () => {
+  // The owner chose AmigaOS 3.2 and the update-packages panel below still
+  // offered BoingBags — 3.9's archives, of which 3.2 has none: "3.2 ile 3.9
+  // secenekleri GUI'de karismis birbirine girmis."
+  //
+  // Two defects met here. The packages were never scoped by release at all
+  // (ART-209), and the release this screen owned was a *different variable*
+  // from the one the build session carried (ART-211) — so even a scoped
+  // panel mounted from the OS Builder's own step routes, which read the
+  // session, would have been handed the wrong answer.
+  //
+  // Asserted through what the panel actually asks for, not through what is
+  // stored: a test reading the remembered key would pass against a screen
+  // that stored the release correctly and still showed the other release's
+  // packages.
+  it("asks for the chosen release's packages, and asks again when it changes", async () => {
+    seedRemembered({
+      ...FULL_FIELDS,
+      "buildSession.packages": { folder: "E:\\archives", chosen: [] },
+    });
+    render(<OsInstall />);
+
+    await waitFor(() => expect(packagesMock).toHaveBeenCalled());
+
+    // **Every** call, never "some call" — and that is not pedantry, it is
+    // what a mutation caught. `PackagePanel` and `AmigaInstallPanel` both ask
+    // this same question, so `toHaveBeenCalledWith(...)` is satisfied by
+    // either one of them alone: hardcoding the release inside one panel left
+    // the first version of this test green, because the other panel still
+    // passed the right one. An assertion that one caller is correct says
+    // nothing at all about the other.
+    const releasesAsked = () => packagesMock.mock.calls.map((call) => call[1]);
+    expect(releasesAsked().length).toBeGreaterThan(0);
+    for (const asked of releasesAsked()) expect(asked).toBe("AmigaOS 3.2");
+    expect(packagesMock).toHaveBeenCalledWith("E:\\archives", "AmigaOS 3.2");
+
+    packagesMock.mockClear();
+    const picker = screen.getByRole("combobox", {
+      name: i18n.t("osinstall.release.label"),
+    }) as HTMLSelectElement;
+    await userEvent.selectOptions(picker, "AmigaOS 3.9");
+
+    await waitFor(() => expect(packagesMock).toHaveBeenCalled());
+    for (const asked of releasesAsked()) expect(asked).toBe("AmigaOS 3.9");
+  });
+
+  // **This one deliberately asserts on storage**, which the test above says
+  // it will not do — because for ART-211 storage is not an implementation
+  // detail, it *is* the channel. The OS Builder's step routes
+  // (`pages/osbuilder/steps.tsx`) mount `PackagePanel` and
+  // `AmigaInstallPanel` themselves and read `useBuildSession`, so the only
+  // thing connecting the picker on this screen to what those steps offer is
+  // the session's own remembered key. While this screen owned
+  // `osinstall.release` instead, the picker moved one variable and the steps
+  // read the other, and nothing in a test of this component alone could see
+  // it.
+  it("moves the build session's own release, which is what the steps read", async () => {
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+    await waitFor(() => expect(planMock).toHaveBeenCalled());
+
+    const picker = screen.getByRole("combobox", {
+      name: i18n.t("osinstall.release.label"),
+    }) as HTMLSelectElement;
+    await userEvent.selectOptions(picker, "AmigaOS 3.9");
+
+    await waitFor(() => {
+      const bag = useSettingsStore.getState().settings.remembered as Record<string, unknown>;
+      expect(bag["buildSession.release"]).toBe("AmigaOS 3.9");
+    });
   });
 });
 
@@ -851,6 +1144,83 @@ describe("the screen says what a layering component would replace (ART-175)", ()
       i18n.t("osinstall.replaces.failed", { error: "Error: the disc could not be read" })
     );
     expect(document.querySelectorAll('[data-testid="component-collision-row"]').length).toBe(0);
+  });
+});
+
+describe("a release switch does not leave the other release's answers on screen (ART-210)", () => {
+  // The owner, driving the screen: "3.2 kurayım diyorsun, 3.9'un seçenekleri,
+  // hataları vb ekranda duruyor asla değişmiyor."
+  //
+  // Only two effects on this screen depended on `release` — the one that
+  // loads the component list and the one that re-plans. Everything *else* is
+  // a `useState` nothing invalidated, so a finished install's report, a
+  // failed preview, a plan error and a pending confirmation all survived a
+  // switch and sat there describing an operating system the user had moved
+  // away from. The plan updated underneath them, which made it worse: the
+  // screen then showed one release's plan beside another release's result.
+
+  /** Hand back the screen's own `osinstall-result` listener, so a finished
+   *  install can be announced the way the backend announces one. */
+  function captureAnnounce210(): { current: ((r: OsInstallResult) => void) | null } {
+    const held: { current: ((r: OsInstallResult) => void) | null } = { current: null };
+    onResultMock.mockImplementation((fn: (r: OsInstallResult) => void) => {
+      held.current = fn;
+      return Promise.resolve(() => {});
+    });
+    return held;
+  }
+
+  const FINISHED_39: OsInstallResult = {
+    job_id: 1,
+    destination: "E:\\amiga\\dist-3.9",
+    outcome: { root: "E:\\amiga\\dist-3.9", files: 1915, directories: 75, bytes: 1024 },
+  };
+
+  it("takes a finished install's report down when the release changes", async () => {
+    const announce = captureAnnounce210();
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+    await waitFor(() => expect(announce.current).not.toBeNull());
+
+    act(() => announce.current!(FINISHED_39));
+    expect(await screen.findByText(i18n.t("osinstall.result.heading"))).toBeTruthy();
+
+    const picker = screen.getByRole("combobox", {
+      name: i18n.t("osinstall.release.label"),
+    }) as HTMLSelectElement;
+    await userEvent.selectOptions(picker, "AmigaOS 3.9");
+
+    await waitFor(() =>
+      expect(screen.queryByText(i18n.t("osinstall.result.heading"))).toBeNull()
+    );
+  });
+
+  it("takes an answer a control gave down when the release changes", async () => {
+    // A second card, and a different mechanism on purpose: the report above
+    // is set by an event from the backend, this one by a button on the
+    // screen. One test that clears one piece of state proves one piece of
+    // state.
+    //
+    // "Scan again" is the right second case because **nothing else can
+    // clear it**. A plan error would be wiped by the re-plan a release
+    // switch triggers anyway, so a test built on one would pass against the
+    // defect exactly as happily as against the fix.
+    seedRemembered(FULL_FIELDS);
+    render(<OsInstall />);
+    await waitFor(() => expect(planMock).toHaveBeenCalled());
+
+    await userEvent.click(
+      screen.getByRole("button", { name: i18n.t("osinstall.media.rescan") })
+    );
+    const rescanned = i18n.t("osinstall.media.rescanned", { count: 1 });
+    expect(await screen.findByText(rescanned)).toBeTruthy();
+
+    const picker = screen.getByRole("combobox", {
+      name: i18n.t("osinstall.release.label"),
+    }) as HTMLSelectElement;
+    await userEvent.selectOptions(picker, "AmigaOS 3.9");
+
+    await waitFor(() => expect(screen.queryByText(rescanned)).toBeNull());
   });
 });
 

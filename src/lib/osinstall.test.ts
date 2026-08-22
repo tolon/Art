@@ -26,6 +26,7 @@ import {
   conditionalToggleAction,
   hasRomUnknownRefusal,
   isForcedOnByCondition,
+  osinstallBlocker,
   parseOptionalSlot,
   parsePartitionIndex,
   pruneStaleExclusions,
@@ -36,6 +37,8 @@ import {
   INSTALL_RELEASES,
   type ComponentDef,
   type InstallPlan,
+  type PlanResult,
+  type RefusalReason,
 } from "@/lib/osinstall";
 
 // ---------------------------------------------------------------------------
@@ -478,5 +481,143 @@ describe("parsePartitionIndex", () => {
     expect(parsePartitionIndex("-1")).toBeNull();
     expect(parsePartitionIndex("abc")).toBeNull();
     expect(parsePartitionIndex("")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The blocker — and the folder that is simply the wrong one (ART-208)
+// ---------------------------------------------------------------------------
+
+describe("osinstallBlocker", () => {
+  const MEDIA_MISSING = (component: string, volume: string): RefusalReason => ({
+    refusal: "media-missing",
+    component,
+    volume_name: volume,
+  });
+
+  function planned(input: {
+    refusals?: RefusalReason[];
+    items?: InstallPlan["items"];
+  }): PlanResult {
+    return {
+      outcome: "planned",
+      plan: {
+        release: "3.2",
+        items: input.items ?? [],
+        refusals: input.refusals ?? [],
+        totalBytes: 0,
+        componentsOn: [],
+        mediaPaths: {},
+        packages: [],
+        packageMedia: {},
+        userStartup: [],
+      },
+    };
+  }
+
+  const READY = {
+    mediaFolder: "E:\\media",
+    destination: "E:\\dist",
+    destinationTaken: false,
+    found: ["Workbench3.2"],
+    releaseHolding: null,
+  };
+
+  it("says nothing is wrong when a plan has items and no refusals", () => {
+    expect(
+      osinstallBlocker({
+        ...READY,
+        plan: planned({ items: [{ component: "workbench-base", media: "Workbench3.2", from: "DF0:C/Format", to: "C/Format", isDir: false, bytes: 10 }] }),
+      })
+    ).toBeNull();
+  });
+
+  // The owner's own screen, reduced: sixteen components, sixteen
+  // `MediaMissing` refusals, nothing installable — because the folder held
+  // their AmigaOS 3.9 disc and the release chosen was 3.2. Sixteen true
+  // sentences that together read as "a lot of programs are missing".
+  it("names the folder rather than the disks when nothing in it is wanted", () => {
+    const blocker = osinstallBlocker({
+      ...READY,
+      found: ["AmigaOS3.9"],
+      plan: planned({
+        refusals: [
+          MEDIA_MISSING("workbench-base", "Workbench3.2"),
+          MEDIA_MISSING("locale-tr", "Locale-TR"),
+          MEDIA_MISSING("storage", "Storage3.2"),
+        ],
+      }),
+    });
+    expect(blocker?.key).toBe("osinstall.blocked.wrongFolder");
+    expect(blocker?.params?.found).toBe("AmigaOS3.9");
+  });
+
+  it("names the release the folder does belong to, when ART can tell", () => {
+    const blocker = osinstallBlocker({
+      ...READY,
+      found: ["AmigaOS3.9"],
+      releaseHolding: "AmigaOS 3.9",
+      plan: planned({ refusals: [MEDIA_MISSING("workbench-base", "Workbench3.2")] }),
+    });
+    expect(blocker?.key).toBe("osinstall.blocked.wrongFolderIsRelease");
+    expect(blocker?.params?.release).toBe("AmigaOS 3.9");
+    expect(blocker?.params?.found).toBe("AmigaOS3.9");
+  });
+
+  // The distinction the whole entry rests on: one absent disk in an
+  // otherwise right folder is a missing disk, and telling that user "none of
+  // these disks are what this release wants" would be false about a folder
+  // holding fifteen disks it does want.
+  it("keeps the per-disk refusal when the folder is the right one and a disk is missing", () => {
+    const blocker = osinstallBlocker({
+      ...READY,
+      found: ["Workbench3.2", "Locale-TR"],
+      plan: planned({
+        refusals: [MEDIA_MISSING("storage", "Storage3.2")],
+        items: [{ component: "workbench-base", media: "Workbench3.2", from: "DF0:C/Format", to: "C/Format", isDir: false, bytes: 10 }],
+      }),
+    });
+    expect(blocker?.key).toBe("osinstall.blocked.refusals");
+  });
+
+  // The sentence claims something specific — "none of the disks in this
+  // folder are ones this release asks for" — so it has to be *checked*, not
+  // inferred from an empty plan. A folder holding a disk the recipe named
+  // gets the per-disk list, whatever else went wrong, because the claim
+  // would be false about that disk.
+  it("does not claim the folder is wrong when it holds a disk the recipe named", () => {
+    const blocker = osinstallBlocker({
+      ...READY,
+      found: ["Workbench3.2"],
+      plan: planned({ refusals: [MEDIA_MISSING("workbench-base", "Workbench3.2")] }),
+    });
+    expect(blocker?.key).toBe("osinstall.blocked.refusals");
+  });
+
+  // A refusal that is not about media at all — an unreadable ROM, a
+  // collision, an exclusive group — must never be papered over with a
+  // sentence about folders. It is a different problem with a different fix.
+  it("keeps the per-refusal list when something other than media is refused", () => {
+    const blocker = osinstallBlocker({
+      ...READY,
+      found: ["AmigaOS3.9"],
+      plan: planned({
+        refusals: [MEDIA_MISSING("workbench-base", "Workbench3.2"), { refusal: "rom-unknown" }],
+      }),
+    });
+    expect(blocker?.key).toBe("osinstall.blocked.refusals");
+  });
+
+  // "This folder holds no install media at all" is `osinstall.media.empty`'s
+  // sentence, said the moment the folder was picked. Restating it as "none of
+  // these are the right disks" would be a claim about disks that are not
+  // there.
+  it("keeps the per-refusal list when the folder holds no media at all", () => {
+    const blocker = osinstallBlocker({
+      ...READY,
+      found: [],
+      plan: planned({ refusals: [MEDIA_MISSING("workbench-base", "Workbench3.2")] }),
+    });
+    expect(blocker?.key).toBe("osinstall.blocked.refusals");
   });
 });

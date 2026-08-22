@@ -10,6 +10,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Building a distribution, and a card that can boot (2026-08-22)
 
 #### Fixed
+- **Choosing an AmigaOS release now changes the whole screen, not half of it.**
+  Pick 3.2 and the update packages below used to still be 3.9's BoingBags —
+  of which 3.2 has none — while any report, error or answer left over from the
+  release you came from stayed exactly where it was. The packages offered are
+  now the chosen release's own, and everything the previous release had worked
+  out is cleared when you switch. Your Kickstart is left alone, because it
+  belongs to the machine you are building for rather than to the release.
+
+- **Each AmigaOS release remembers its own folders.** Choosing 3.2 used to
+  leave the install-disks folder pointing wherever you last had it — and if
+  that was your 3.9 disc, nothing could be built. The folder you install from
+  and the folder you build into are now remembered per release, the way the
+  component ticks already were, so switching back and forth finds each setup
+  as you left it. Your Kickstart stays shared: it belongs to the machine
+  you are building for, not to the release.
+
+- **A folder that is simply the wrong one now says so, once.** Point ART at a
+  folder holding another release's disks and it used to answer with one line
+  per component — sixteen separate "this disk is not here" sentences, which
+  read like a lot of missing programs rather than one wrong folder. ART now
+  says it in a sentence, next to the button it is blocking, and when the
+  disks it found belong to a release ART knows, it names that release and
+  offers to switch with one click. A folder that *is* right but missing a
+  single disk still tells you exactly which disk — that never changed.
+
 - **You can choose a folder to build into again.** ART insisted the destination
   must not already exist — but the folder picker can only hand back a folder
   that *does*: its **New folder** button creates one, and from that moment it

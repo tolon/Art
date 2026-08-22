@@ -917,6 +917,8 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       destination: "E:\dist",
       destinationTaken: false,
       plan: planned,
+      found: ["Workbench3.2"],
+      releaseHolding: null,
     };
 
     const blockers = [
@@ -939,6 +941,37 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
         plan: { ...planned, plan: { ...planned.plan, items: [] } },
       }),
       osinstallBlocker({ ...ready, destinationTaken: true }),
+      // ART-208's two, which only arise together: a folder holding media,
+      // nothing in it this release wants, and every refusal about media.
+      osinstallBlocker({
+        ...ready,
+        found: ["AmigaOS3.9"],
+        plan: {
+          ...planned,
+          plan: {
+            ...planned.plan,
+            items: [],
+            refusals: [
+              { refusal: "media-missing", component: "workbench-base", volume_name: "Workbench3.2" },
+            ],
+          },
+        },
+      }),
+      osinstallBlocker({
+        ...ready,
+        found: ["AmigaOS3.9"],
+        releaseHolding: "AmigaOS 3.9",
+        plan: {
+          ...planned,
+          plan: {
+            ...planned.plan,
+            items: [],
+            refusals: [
+              { refusal: "media-missing", component: "workbench-base", volume_name: "Workbench3.2" },
+            ],
+          },
+        },
+      }),
     ];
     for (const blocker of blockers) {
       expect(blocker).not.toBeNull();

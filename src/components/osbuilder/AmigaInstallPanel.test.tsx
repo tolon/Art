@@ -198,7 +198,7 @@ afterEach(() => {
 /** Render, wait for the preview, tick the confirmation and press Run. */
 async function runToConfirmation() {
   withChoices();
-  render(<AmigaInstallPanel treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
+  render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
   await screen.findByTestId("amiga-install-preview");
   const user = userEvent.setup();
   await user.click(screen.getByRole("checkbox"));
@@ -206,12 +206,86 @@ async function runToConfirmation() {
   await waitFor(() => expect(runMock).toHaveBeenCalled());
 }
 
+describe("a package chosen for another release does not survive the switch (ART-212)", () => {
+  // The owner, on the OS Builder's fourth step with AmigaOS 3.2 chosen: the
+  // package list correctly said ART carries no runnable package for 3.2
+  // (ART-209 working), and directly underneath it the panel still showed
+  // BoingBag39-1.lha, BoingBag39-2.lha, AmigaOS39.iso and a full "what will
+  // run" card reading `ARTPkg:BoingBag3.9-1/C/Updater ...`.
+  //
+  // The preview was computed from the remembered `amigaInstall.package` and
+  // never looked at the catalogue at all, so an id the chosen release does
+  // not offer still drove a run plan. A screen offering to run an installer
+  // for an operating system that is not there is the same class as the
+  // sixteen refusals of ART-208: every line true of *something*, and the
+  // whole false.
+  it("previews nothing for a package the chosen release does not carry", async () => {
+    withChoices();
+    // AmigaOS 3.2 has no update package at all — what ART-209 makes
+    // `osinstallPackages` answer for it.
+    packagesMock.mockResolvedValue([]);
+
+    render(
+      <AmigaInstallPanel
+        release="AmigaOS 3.2"
+        treeRoot="D:/amiga/dist-3.2"
+        packageFolder="D:/pkg"
+      />
+    );
+
+    await waitFor(() => expect(packagesMock).toHaveBeenCalledWith("D:/pkg", "AmigaOS 3.2"));
+    // Never previewed, not merely un-rendered: a run plan for a package this
+    // release does not have is work ART should not even ask for.
+    expect(previewMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("amiga-install-preview")).toBeNull();
+  });
+
+  it("shows no run form at all when the release carries nothing runnable", async () => {
+    // The other half of what the owner saw. The sentence "ART carries no
+    // package with an installer for this release" was already on screen — and
+    // under it sat four filled-in fields naming the previous release's
+    // archives and disc. A form for a run that cannot be configured is the
+    // screen offering what it has just said it does not have.
+    withChoices();
+    packagesMock.mockResolvedValue([]);
+    render(
+      <AmigaInstallPanel
+        release="AmigaOS 3.2"
+        treeRoot="D:/amiga/dist-3.2"
+        packageFolder="D:/pkg"
+      />
+    );
+
+    expect(
+      await screen.findByText(i18n.t("osinstall.amigaInstall.package.none"))
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.queryByText(i18n.t("osinstall.amigaInstall.archive.label"))).toBeNull()
+    );
+    expect(screen.queryByText(i18n.t("osinstall.amigaInstall.medium.label"))).toBeNull();
+  });
+
+  it("still previews the package the release does carry", async () => {
+    // The other arm. A filter that previewed nothing at all would satisfy
+    // the test above and break the panel.
+    withChoices();
+    render(
+      <AmigaInstallPanel
+        release="AmigaOS 3.9"
+        treeRoot="D:/amiga/os39"
+        packageFolder="D:/pkg"
+      />
+    );
+    expect(await screen.findByTestId("amiga-install-preview")).toBeTruthy();
+  });
+});
+
 describe("before anything opens", () => {
   // "The emulator is a window on the owner's desktop. The confirmation says
   // so *before* it opens." An earlier round opened one repeatedly without
   // warning and that was a real annoyance.
   it("says an emulator window will open, before the run and in beginner mode", async () => {
-    render(<AmigaInstallPanel treeRoot={null} packageFolder={null} />);
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot={null} packageFolder={null} />);
     const warning = screen.getByTestId("emulator-window-warning");
     expect(warning.textContent).toBe(i18n.t("osinstall.amigaInstall.emulatorWindow"));
     expect(warning.textContent).toMatch(/emulator window/i);
@@ -220,20 +294,20 @@ describe("before anything opens", () => {
   });
 
   it("says the tree is copied and only replaced on success", () => {
-    render(<AmigaInstallPanel treeRoot={null} packageFolder={null} />);
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot={null} packageFolder={null} />);
     expect(screen.getByText(i18n.t("osinstall.amigaInstall.copyNote"))).toBeTruthy();
   });
 
   // The prerequisite chain is legible *before* the run, not only inside a
   // refusal — "refused" without the order is not a next step.
   it("names the order the packages go on in", () => {
-    render(<AmigaInstallPanel treeRoot={null} packageFolder={null} />);
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot={null} packageFolder={null} />);
     const note = screen.getByText(i18n.t("osinstall.amigaInstall.chainNote"));
     expect(note.textContent).toMatch(/BoingBag 3\.9-1.*BoingBag 3\.9-2/s);
   });
 
   it("offers only the packages whose own recipe declares an Amiga-side installer", async () => {
-    render(<AmigaInstallPanel treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
     await waitFor(() => expect(screen.getAllByTestId("amiga-package-row")).toHaveLength(2));
     const rows = screen.getAllByTestId("amiga-package-row").map((row) => row.textContent ?? "");
     expect(rows[0]).toContain("BoingBag 3.9-1");
@@ -249,7 +323,7 @@ describe("before anything opens", () => {
   });
 
   it("will not let the run be confirmed until a preview exists", () => {
-    render(<AmigaInstallPanel treeRoot={null} packageFolder={null} />);
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot={null} packageFolder={null} />);
     expect(screen.getByRole("checkbox").hasAttribute("disabled")).toBe(true);
     expect(
       screen.getByRole("button", { name: i18n.t("osinstall.amigaInstall.run") }).hasAttribute("disabled")
@@ -267,7 +341,7 @@ describe("a refusal says which reason applies", () => {
       "yet — install BoingBag 3.9-1 first, in that order.";
     previewMock.mockRejectedValue(said);
     withChoices();
-    render(<AmigaInstallPanel treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
 
     const refusal = await screen.findByTestId("amiga-install-refusal");
     expect(refusal.textContent).toContain("install BoingBag 3.9-1 first, in that order");
@@ -294,7 +368,7 @@ describe("a refusal says which reason applies", () => {
       "'D:/pkg/BoingBag39-1-UAE.lha' is this package's update archive, not the package itself"
     );
     withChoices();
-    render(<AmigaInstallPanel treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
 
     const boxes = await screen.findAllByTestId("amiga-install-refusal");
     expect(boxes.length).toBe(1);
@@ -316,7 +390,7 @@ describe("a refusal says which reason applies", () => {
         "— the one carrying BoingBag3.9-1-UAE/BoingBag3.9-1"
     );
     withChoices();
-    render(<AmigaInstallPanel treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
 
     const refusal = await screen.findByTestId("amiga-install-refusal");
     expect(refusal.textContent).toContain("45.15");
@@ -327,7 +401,7 @@ describe("a refusal says which reason applies", () => {
 describe("the second archive, before the refusal rather than after it (ART-186)", () => {
   it("names the version and the archive to go and find when only the wrapper is chosen", async () => {
     withChoices();
-    render(<AmigaInstallPanel treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
 
     const advice = await screen.findByTestId("amiga-install-overlay-advice");
     expect(advice.textContent).toContain("45.15");
@@ -345,7 +419,7 @@ describe("the second archive, before the refusal rather than after it (ART-186)"
       preview({ packageArchives: ["D:/pkg/a.lha", "D:/pkg/BoingBag39-1-UAE.lha"] })
     );
     withChoices();
-    const { unmount } = render(<AmigaInstallPanel treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
+    const { unmount } = render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
     let advice = await screen.findByTestId("amiga-install-overlay-advice");
     expect(advice.textContent).toBe(
       i18n.t("osinstall.amigaInstall.overlay.supplied", {
@@ -358,7 +432,7 @@ describe("the second archive, before the refusal rather than after it (ART-186)"
     previewMock.mockResolvedValue(
       preview({ minimumInstallerVersion: null, declaredOverlays: [], packageName: "BoingBag 3.9-2" })
     );
-    render(<AmigaInstallPanel treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
     await screen.findByTestId("amiga-install-preview");
     expect(screen.queryByTestId("amiga-install-overlay-advice")).toBeNull();
   });
@@ -370,7 +444,7 @@ describe("what a previewed run still lacks", () => {
       preview({ kickstartPresent: false, emulator: null, packageArchivesPresent: false })
     );
     withChoices();
-    render(<AmigaInstallPanel treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
 
     const blockers = await screen.findByTestId("amiga-install-blockers");
     expect(blockers.textContent).toContain("D:/roms/kick31.rom");
@@ -489,7 +563,7 @@ describe("where the copy is", () => {
 describe("beginner mode hides and never disables", () => {
   it("keeps the warning, the copy note and the run available, and hides only the machinery", async () => {
     withChoices();
-    render(<AmigaInstallPanel treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
     await screen.findByTestId("amiga-install-preview");
 
     // Hidden in beginner mode: the AmigaDOS command line and the volumes.
@@ -509,7 +583,7 @@ describe("beginner mode hides and never disables", () => {
   it("shows the command line and the three volumes in power mode", async () => {
     withChoices();
     useSettingsStore.setState((state) => ({ settings: { ...state.settings, uxMode: "power" } }));
-    render(<AmigaInstallPanel treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
 
     const detail = await screen.findByTestId("amiga-install-detail");
     expect(detail.textContent).toContain("ARTPkg:BoingBag3.9-1/C/Updater AmigaOS-Update DH0:");
@@ -531,7 +605,7 @@ describe("the run itself", () => {
         },
       },
     }));
-    render(<AmigaInstallPanel treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
+    render(<AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />);
     await screen.findByTestId("amiga-install-preview");
     const user = userEvent.setup();
     await user.click(screen.getByRole("checkbox"));

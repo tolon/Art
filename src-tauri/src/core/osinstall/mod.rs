@@ -1139,6 +1139,7 @@ pub(crate) mod fixtures {
         };
         super::package::Package {
             id: "test-package".to_string(),
+            releases: vec!["AmigaOS 3.9".to_string()],
             name: "Test package".to_string(),
             media: "TestPack".to_string(),
             member: None,
@@ -1218,6 +1219,7 @@ pub(crate) mod fixtures {
         };
         super::package::Package {
             id: "test-package-two".to_string(),
+            releases: vec!["AmigaOS 3.9".to_string()],
             name: "Test package two".to_string(),
             media: "TestPack2".to_string(),
             member: None,

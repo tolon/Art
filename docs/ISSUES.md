@@ -679,6 +679,262 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-212** 🟠 ✅ **A package chosen for another release still drove a run
+plan** — *found 2026-08-22 by the owner, on the OS Builder's fourth step*
+`src/components/osbuilder/AmigaInstallPanel.tsx`
+
+With AmigaOS 3.2 chosen, the package list correctly said ART carries no
+runnable package for 3.2 — [ART-209](#fixed) working. Directly underneath it
+the panel still showed `BoingBag39-1.lha`, `BoingBag39-2.lha`,
+`AmigaOS39.iso` and a full **"what will run"** card reading
+`ARTPkg:BoingBag3.9-1/C/Updater AmigaOS-Update DH0:` — a plan to run an
+installer for an operating system that is not there.
+
+`packageId` is remembered and **nothing checked it against what the release
+offers**. The preview effect read the remembered id and never looked at the
+catalogue at all — the gap `sanitizeChosen` closes for the component
+checklist, which this panel never had.
+
+**Fixed 2026-08-22.** The request is built only from a package the loaded
+catalogue holds, a stale id is dropped for good once the catalogue has
+actually answered, and when the release carries nothing runnable the form
+stops after the sentence that says so — inputs for a run that cannot be
+configured are the screen offering what it has just said it does not have.
+
+**Two wrong turns on the way, recorded because each was caught by the suite
+rather than by thinking.** The first version blocked on `catalogue === null`,
+which means *not asked yet*: it turned "we never asked" into "the answer is
+no" and broke the panel's hand-picked-archive path — ten tests fell at once.
+The second added the check without adding it to the preview effect's
+dependency list, so the request went from `null` to valid and no effect ever
+noticed; the panel previewed nothing for ever.
+
+**And one thing the fix deliberately does *not* do**: a folder that is set
+but not yet answered now **waits** rather than previewing on the strength of
+a remembered id and retracting. Briefly wrong is long enough to be read and
+believed.
+
+Tests: `previews nothing for a package the chosen release does not carry`,
+`still previews the package the release does carry` (the other arm — a filter
+that previewed nothing would satisfy the first), and `shows no run form at all
+when the release carries nothing runnable`. Two mutations run and both fell.
+
+**ART-211** 🟠 ✅ **The release the user picked and the release the build
+carried were two variables** — *found 2026-08-22, tracing [ART-209](#fixed)*
+`src/components/osbuilder/OsInstall.tsx` · `src/lib/useBuildSession.ts`
+
+`useBuildSession` has held `buildSession.release` and offered a `setRelease`
+since [ART-197](#fixed). **Nothing ever called it.** This screen owned
+`osinstall.release` through its own `useRemembered`, so the picker moved one
+variable while the session carried the other, joined by nothing but a one-time
+legacy read that happens before the picker is ever touched.
+
+That is ART-197's own shape, one field over, and CLAUDE.md states the rule it
+broke: *the build's own values live in one place, and adding a field means
+adding it there rather than another `useRemembered` in a panel.*
+
+**Why it mattered beyond tidiness.** The OS Builder's step routes
+(`pages/osbuilder/steps.tsx`) mount `PackagePanel` and `AmigaInstallPanel`
+themselves and read the **session**. So the steps could not scope anything by
+release even in principle — the second layer of the owner's own model (a base,
+the updates that go on that base, the program sets that go on those) had no way
+to ask what the base was.
+
+**Fixed 2026-08-22** — `OsInstall` takes `release` and `setRelease` from the
+session. One value, and the steps read the same one. The legacy key is still
+read once by the session's own fallback, so no remembered choice is lost.
+
+Test: `moves the build session's own release, which is what the steps read`.
+It deliberately asserts on the remembered key, and says why in place: for this
+defect storage is not an implementation detail, it **is** the channel between
+the screen and the steps, and a test of this component alone could not see the
+break. Mutation — the screen given back its own `useRemembered` — run and
+fallen.
+
+**ART-210** 🟠 ✅ **Everything one release's screen had computed stayed on
+screen after switching to another** — *found 2026-08-22 by the owner, driving
+the OS Builder*
+`src/components/osbuilder/OsInstall.tsx`
+
+Their words: *"3.2 kurayım diyorsun, 3.9'un seçenekleri, hataları vb ekranda
+duruyor asla değişmiyor."*
+
+Exactly two effects on that screen depended on `release`: the one loading the
+component list and the one re-planning. **Everything else was a `useState`
+nothing invalidated** — a finished install's report, a failed preview, a plan
+error, a half-asked confirmation, the answer "Scan again" gave. All of them
+survived a switch and went on describing an operating system the user had moved
+away from.
+
+The re-plan made it worse rather than better: one release's plan rendered beside
+another release's result is a screen contradicting itself, which is the class of
+defect this project's own rules call its most expensive.
+
+**Fixed 2026-08-22** — one effect on `[release]` clears them. What it
+deliberately does **not** clear is written beside it: the ROM (a property of the
+machine, not the release — [ART-207](#fixed)), the media scan (its own effect
+re-runs, because ART-207 keyed the folder per release so the folder changed
+too), and the Verify section, which names the tree and image it is talking about
+and is not about the picker.
+
+**One honest limit, recorded rather than discovered later.** A list can be
+forgotten: a card added later without a line in it would sit stale exactly as
+these did. The structural answer is remounting the body on `key={release}`,
+which cannot be forgotten — but that needs `release` owned by a parent, which is
+the `OsInstall.tsx` split already on the work list.
+
+Tests: `takes a finished install's report down when the release changes` (state
+set by a backend event) and `takes an answer a control gave down when the
+release changes` (state set by a button). The second uses **Scan again**
+specifically because nothing else can clear it — a test built on the plan error
+would have been wiped by the re-plan a switch triggers anyway, and so would have
+passed against the defect. Mutation — the effect deleted — run, and both fell.
+
+**ART-209** 🟠 ✅ **A 3.2 build was offered AmigaOS 3.9's BoingBags** —
+*found 2026-08-22 by the owner, driving the OS Builder*
+`src-tauri/src/core/osinstall/package.rs` · `commands/osinstall.rs` ·
+`PackagePanel.tsx` · `AmigaInstallPanel.tsx`
+
+*"3.2 ile 3.9 seçenekleri GUI'de karışmış birbirine girmiş."* A BoingBag is an
+AmigaOS 3.9 archive and **3.2 has none** — 3.2's own updates arrive as a release
+component (`Update3.2.1`), not as a package.
+
+**Root cause, at the source: no layer could answer the question.** A package
+declared no release; `packages()` returned all of them; `osinstall_packages`
+took a folder and nothing else; and neither panel was handed a release. Four
+layers, none of which could ask, so the answer became *show everything*.
+
+It is the same defect a whole-branch review once called the worst on its list —
+the component checklist rendering a hardcoded AmigaOS 3.2 catalogue whatever the
+picker said. That half was fixed; this half was never looked at. The working
+example sat in the same file: `osinstallComponents(release)` reads the release's
+own recipe.
+
+**Fixed 2026-08-22.** `Package::releases` is **required, not defaulted** — a
+default would have to be either "every release" (today's defect made permanent)
+or a guess about a package nobody has looked at, and a JSON omitting it now
+fails to parse. Every name is checked against `recipe::releases()`, so a package
+naming a release ART ships no recipe for is refused instead of becoming
+unreachable from every screen. `package::packages_for(release)` filters,
+`osinstall_packages` takes the release, and both panels are given it — from the
+session, which is [ART-211](#fixed).
+
+This is also the first place the owner's three-layer model is **enforced** rather
+than merely intended: a base, the updates that go on that base, and the program
+sets that go on those, each layer's options a function of the one below.
+
+Tests: `every_shipped_package_names_the_releases_it_belongs_to`,
+`all_three_shipped_packages_belong_to_amigaos_39`,
+`amigaos_32_is_offered_no_update_package_at_all`,
+`a_package_naming_a_release_art_does_not_ship_is_refused`,
+`a_package_naming_no_release_is_refused`,
+`osinstall_packages_offers_no_update_package_for_amigaos_32` (the archive
+deliberately **present**, so the test asks "does this belong on this release"
+rather than "was the file found"), and on the screen `asks for the chosen
+release's packages, and asks again when it changes`.
+
+**A survivor, disclosed.** That last test's first version passed against its own
+mutation. `PackagePanel` and `AmigaInstallPanel` both call `osinstallPackages`,
+so `toHaveBeenCalledWith(...)` was satisfied by whichever panel was still
+correct: hardcoding the release inside one of them left the test green. It now
+asserts that **every** call carries the right release, and the mutation falls.
+An assertion that one caller is correct says nothing about the other.
+
+**ART-208** 🟠 ✅ **Sixteen true refusals that together said something
+false** — *found 2026-08-22 by the owner, driving the OS Builder*
+`src/lib/osinstall.ts::wrongMediaFolder` · `osinstallBlocker` ·
+`src-tauri/src/core/osinstall/recipe.rs::release_holding`
+
+The owner chose AmigaOS 3.2 while the media folder still held the AmigaOS 3.9
+disc from the previous session ([ART-207](#fixed) is why it was still there).
+`plan()` answered correctly — sixteen components, sixteen `MediaMissing`
+refusals:
+
+```
+workbench-base, Workbench3.2 istiyor ve medya klasöründe bu birim adını taşıyan bir dosya yok.
+install-libs, Install3.2 istiyor ve medya klasöründe bu birim adını taşıyan bir dosya yok.
+… fourteen more
+```
+
+Every sentence true. What the owner read off the screen was **"bir sürü eksik
+program"** — a lot of missing programs — and went looking for disks that were
+never missing. This is the "failure that does not crash" exactly: nothing
+logged, nothing red, a confident screen and a wrong conclusion.
+
+**ART had everything needed to say it once.** It had just read the folder and
+knew what was in it (`AmigaOS3.9`), it knew what the recipe wanted, and it
+ships the 3.9 recipe too — so it can name the release the folder actually
+belongs to and offer the switch.
+
+**Fixed 2026-08-22.** `recipe::release_holding` answers "whose media is this?"
+from the shipped recipes, comparing with `amiga_names_equal` so it agrees with
+the `scan::media_for` that produced the refusals; two matching releases answer
+`None`, because "both" is not something a one-click switch can act on.
+`wrongMediaFolder` decides when the folder — not the disks — is the fact, and
+`osinstallBlocker` says it beside the button that is blocked, with the refusals
+card suppressed so the sentence appears **once** (ART-202's rule, in the
+owner's own words: *"aynı uyarı tek ekranda 2 tane"*).
+
+**The claim is checked, not inferred.** The first version fired on "no plan
+items and every refusal about media", and the existing suite caught it: a
+fixture whose folder held `Workbench3.2` while a refusal named `Workbench3.2`
+absent was told its folder was somebody else's. It now requires that **not one
+refused disk is in the folder**, which is what the sentence actually claims.
+The JS side folds case with `toLowerCase` rather than AmigaDOS's own folding,
+and the direction is why that is safe: these are names Rust already refused to
+match, so a looser fold can only withdraw the sentence in favour of the
+per-disk list, never produce it wrongly.
+
+Tests: `recipe::tests::names_the_release_whose_media_a_folder_actually_holds`,
+`names_the_other_release_the_same_way_round`,
+`names_no_release_for_media_no_recipe_asks_for`,
+`names_no_release_when_the_folder_holds_two_releases_media`,
+`names_no_release_for_an_empty_folder`,
+`a_folder_is_identified_the_way_its_disks_are_matched`; `osinstallBlocker`'s
+seven cases in `src/lib/osinstall.test.ts`; and on the screen,
+`says it once, instead of once per component`,
+`names the release the folder belongs to, and switching is one click`,
+`keeps the per-disk list when the folder is the right one`.
+
+Mutations run and fallen: the refusals card left unsuppressed (the sentence
+renders twice — the owner's own ART-202 complaint), the switch button removed,
+the folder-contents check removed (three tests, including the pre-existing
+`shows the real, translated refusal text`), and `amiga_names_equal` swapped for
+`==` (the case-fold test).
+
+**ART-207** 🟠 ✅ **A media folder outlived the release it belonged to** —
+*found 2026-08-22 by the owner, driving the OS Builder*
+`src/components/osbuilder/OsInstall.tsx`
+
+`chosen` and `excludedConditional` have been remembered **per release** since
+the picker arrived, and the reason is in that code's own comment: *a component
+id means something only inside the recipe that declares it.* The media folder
+and the destination were remembered in one key each, for all releases.
+
+That sentence is true word for word of a folder. The owner keeps AmigaOS 3.9's
+disc in `Amigatolon\iso` and 3.2's ADFs in `Amigatolon\paketler`; no folder can
+serve both. So switching the release changed the component list correctly and
+left behind a folder that could not possibly match — which is how they reached
+[ART-208](#fixed)'s screen. **The two are one story: this is the cause, and
+that is what it looked like.**
+
+**Fixed 2026-08-22** — `rememberedComponentKey` now keys `osinstall.mediaFolder`
+and `osinstall.destination` as well, so each release recalls its own. That
+function already answers the migration: for AmigaOS 3.2, "the release before
+there was a picker", the key stays the bare one, so nothing anybody stored has
+moved or been lost.
+
+**The ROM is deliberately not part of it.** A Kickstart is a property of the
+machine being built for, not of the release being installed: the owner's one
+licensed A1200 ROM is the right answer for 3.2 and 3.9 alike, and asking for it
+again per release would be a choice resetting itself for no reason anybody
+could state.
+
+Tests: `shows each release's own media folder, never the other's`,
+`plans a release into its own destination, not the other release's`,
+`keeps each release's own media folder when the user switches away and back`.
+Both mutations — each key put back to its bare form — were run and fell.
+
 **ART-206** 🔵 ✅ **A real-material check that could not pass at all** —
 *found 2026-08-22, on the way to [ART-205](#open)*
 `src-tauri/src/core/osinstall/apply.rs::build_the_real_39_tree_when_asked`

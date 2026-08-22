@@ -1,21 +1,28 @@
 # The Amiga packages a finished PiStorm system carries
 
-**What this is:** every Amiga-side package the **Emu68 Imager** installs onto a
-card, read from its own *What's Included* page on 2026-08-22, with its real
-source URL. It is a catalogue to build from, not a wish list — every entry here
-is on a card somebody is using today.
+**What this is:** every Amiga-side package the **Emu68 Imager** puts on a card,
+read from its own *What's Included* page and enumerated entry by entry, with
+its real source. It is a catalogue to build from, not a wish list — every entry
+here is on a card somebody is using today.
 
 **Why it exists:** the owner asked for it — *"Emu68-Imager'ın kullandığı Amiga
 paketleri var, onların da listesini ekleyelim; hatta daha güzelleri varsa
 onları da alalım."*
 
-**Where ART stands, stated first so the table is not misread:** ART installs
+**This document was rewritten on 2026-08-22, and the reason is the point.** Its
+first version said *"47 packages; 41 of them Aminet paths"*. That was a summary
+of the page, not a reading of it: the install list alone is **60 entries**, and
+the page has two more sections the first version folded into the same count.
+A catalogue assembled by summarising is a catalogue that is wrong in ways
+nobody can see. Everything below is enumerated in the page's own order.
+
+**Where ART stands, stated first so the tables are not misread:** ART installs
 **none** of these today. Its content layer places the user's own material and
 runs a package's own installer on the Amiga (`core/osinstall`,
-`core/amigainstall`); it has no catalogue of third-party Amiga software. What
-it does have is the machinery to get one — `core/sources` fetches from
-**configured mirrors, never an arbitrary URL** (§41.5.7), and **41 of the 47
-entries below are Aminet paths**, which is exactly the shape that engine takes.
+`core/amigainstall`). The design that turns this document into something ART
+can act on is
+[2026-08-22-package-bundles-design.md](superpowers/specs/2026-08-22-package-bundles-design.md)
+— 14 sets, 62 entries, download only in phase 1.
 
 **Nothing here is downloaded without the user asking.** ART's standing rule is
 that a fetch is user-initiated; a catalogue is a list of what *could* be
@@ -23,157 +30,163 @@ fetched, and this document does not change that.
 
 ---
 
-## How to read the Source column
+## The page has three sections, and only one of them is ART's business
 
-| Marking | Meaning for ART |
-|---|---|
-| **Aminet** | `aminet.net/package/…` — reachable through `core/sources/mirror.rs` as it stands |
-| **Vendor** | A specific site. Each needs its own configured mirror entry, or the user supplies the file |
-| **GitHub** | A release asset |
-| ⚠️ | A licence or distribution constraint that has to be answered before ART touches it |
+| Section | Entries | Is it ART's? |
+|---|---:|---|
+| Programs used by the tool | 6 | **No** — host-side Windows tools |
+| Included with the tool | 12 | **Mostly no** — the author's own or carried under a permission granted to *them* |
+| **Downloaded during image creation** | **60** | **Yes** — this is the catalogue |
 
----
+Folding these together is how the first version reached 47.
 
-## Emu68 itself
+### Programs used by the tool (host-side — not Amiga software)
 
-| Package | Source | What it is |
-|---|---|---|
-| Emu68 (PiStorm) | GitHub `michalsc/Emu68/releases` | The kernel. ART already handles this archive (`core/card/intake.rs`) |
-| Emu68 (PiStorm32-lite) | GitHub, same | The other board's kernel — see [ART-204](ISSUES.md) |
-| Emu68 Tools | GitHub `michalsc/Emu68-tools/releases/tag/nightly` | The Amiga-side drivers and tools that go with it |
-| Emu68Updater | bundled (Shaytan, mod. SupremeTurnip) | Updates Emu68 from the Amiga |
-| Emu68Info, Emu68meter | bundled (Flype) | Status and performance readouts |
+HST.Imager · HST.Amiga (both Henrik Nørfjand Stengaard) · HDF2Emu68 (Claude
+Schwartz, Tom-Cat) · DDTC · FindFreeSpace (both Tom-Cat) ·
+[Unlzx](https://aminet.net/util/arc/W95unlzx.lha).
 
-## Filesystems and storage drivers
+ART's own equivalents already exist (`core/card`, `core/volume`, `libpfs3`,
+`core/lha`) or are the `hst-imager` fallback it already keeps.
 
-| Package | Source | What it is |
-|---|---|---|
-| **PFS3** (`PFS3_53`) | Aminet `disk/misc/PFS3_53` | The filesystem ART already **writes** through `libpfs3`. The card needs the 68k handler itself |
-| Fat95 | Aminet `disk/misc/fat95` | Lets the Amiga read the FAT32 boot partition |
-| File Sys Box | Aminet `util/libs/filesysbox.m68k-amigaos` | The filesystem framework SMBFS and others need |
-| SMBFS (`smb2fs`) | Aminet `disk/misc/smb2fs.m68k-amigaos` | Windows shares from the Amiga |
-| CFD 1.33 | Aminet `driver/media/CFD133` | CompactFlash driver |
-| IDEfix 97 | Aminet `driver/media/IDEfix97` | IDE/ATAPI |
+### Included with the tool (bundled, not fetched)
 
-## Networking
+7Zip (LGPL) · **Roadshow Demo** ⚠ *"included with permission from Olaf Barthel
+and Andreas Magerl"* · **Picasso96 configuration file** ⚠ *"included with
+permission from Jens Schönfeld"* · ArewePal · AreWeOnline · CE · TomCopy ·
+TomDelete (Tom-Cat) · Emu68Info · Emu68meter · WaitforTask (Flype) ·
+Emu68Updater (Shaytan, mod. SupremeTurnip).
 
-| Package | Source | What it is |
-|---|---|---|
-| Roadshow (demo) | bundled ⚠️ *with permission; full version at roadshow.apc-tcp.de* | The TCP/IP stack. **The owner's own `tolunnet`/`tolunwifi` work sits in this space** |
-| MiamiDX 1.0c (main + MUI) | Aminet `comm/tcp/MiamiDx10cmain`, `…-MUI` | The alternative stack |
-| AmiSSL | Aminet, latest `amissl+os3` | TLS — without it nothing modern is reachable |
-| iBrowse (demo) | Vendor `ibrowse-dev.net` ⚠️ demo | The browser the imager pre-installs |
-| GENet.device | GitHub `rondoval/emu68-genet-driver` | The Pi's own Ethernet, as an Amiga device |
-| Prism 2 | Aminet `driver/net/prism2v2` | WiFi driver for Prism2 cards |
-| Ami Speed Test | Aminet `comm/net/AmiSpeedTest` | |
-| aget, Sntp | Vendor `uhc.driar.se/uhctools_os3.lha` | Fetch a URL; set the clock from a time server |
-| SetDST | Aminet `util/time/SetDST` | Daylight saving |
+**A permission granted to the Emu68 Imager is not a permission granted to ART.**
+The two ⚠ entries are carried by that tool under its own arrangement.
 
-## Graphics and the desktop
-
-| Package | Source | What it is |
-|---|---|---|
-| **Picasso96** | Aminet `driver/video/Picasso96` ⚠️ | RTG. The imager installs the free version and states plainly that *"the only location to purchase a legal copy of P96 is Individual Computers"*, on Jens Schönfeld's request. **Any ART use must carry that sentence** |
-| PeterK's `icon.library` | Aminet, latest `iconlib` | The icon library everything modern expects. [ART-127](ISSUES.md) was ART's tree lacking `icon.library` at all |
-| MUI 3.8 | Aminet `util/libs/mui38usr` | The toolkit MiamiDX and much else need |
-| Reqtools (Wide) | Aminet `util/libs/Reqtools-Wide` | |
-| Directory Opus 4.16JR | Aminet `util/dopus/DOpus416JRbin` | The file manager. ART's own Files screen is a commander in the same tradition |
-| Directory Opus 4.17pre21 | Vendor `dopus.free.fr` | The newer build |
-| CLICon | Aminet `util/wb/CLICon` | A shell from Workbench |
-| ViNCEd | Aminet `util/shell/ViNCEd` | A better console handler |
-| Hippo Player | Aminet `mus/play/hippoplayerupdate` | Module player |
-| Jano Editor | Aminet `text/edit/JanoEditor` | Text editor |
-
-## Datatypes — the thing that bit ART already
-
-| Package | Source |
-|---|---|
-| akGIF, akJFIF, akPNG, akTIFF | Aminet `util/dtype/akGIF-dt`, `akJFIF-dt`, `akPNG-dt`, `akTIFF-dt` |
-
-**Worth its own note.** [ART-193](ISSUES.md) was an install that hung for ever
-because `datatypes.library` had an **empty** descriptor list — ART's generated
-`Startup-Sequence` never ran `C:AddDataTypes`. These four are the descriptors a
-real system carries. A tree ART builds that then installs them is a tree whose
-datatypes list is not empty by accident.
-
-## Archivers
-
-| Package | Source |
-|---|---|
-| LHA | Aminet `util/arc/lha_68k` |
-| LZX | Aminet `util/arc/lzx121r1` |
-| UnZip 5.52 | Aminet `util/arc/UnZIP552` |
-| Zip 2.32 | Aminet `util/arc/ZIP232` |
-| XAD Master | Aminet `util/arc/xadmaster020` |
-| XPK User | Aminet `util/pack/xpk_User` |
-
-## System, shell and boot
-
-| Package | Source | Note |
-|---|---|---|
-| **SetPatch 44.38** | Vendor `cdn.cloanto.com/pub/amiga/SetPatch-44-38.lha` ⚠️ | [ART-159](ISSUES.md) is about `SetPatch` being unplaced in ART's own tree |
-| **Workbench Library 40.5** | Vendor `cdn.cloanto.com/pub/amiga/Workbench-Library-40-5.lha` ⚠️ | [ART-127](ISSUES.md) again — the tree lacked `workbench.library` |
-| Installer 43.3 | Aminet `util/misc/Installer-43_3` | **The Amiga Installer itself.** `core/amigainstall` runs package installers; several need this present |
-| SKick 3.46 | Aminet `util/boot/skick346` | Soft-kick a different Kickstart |
-| ChangeBootPri | Vendor `thomas-rapp.hier-im-netz.de` | Boot priority — ART writes this field in the RDB |
-| Reboot | Aminet `util/boot/reboot` | |
-| Sysvars | Aminet `util/boot/sysvars` | |
-| SnoopDOS | Aminet `util/moni/SnoopDos` | What a program is really opening — the Amiga-side equivalent of ART's operation log |
-| BusTest | Aminet `util/moni/bustest` | |
-| SysInfo | Vendor `download.d0.se/pub/SysInfo.lha` | |
-| MD5SUM | Aminet `util/crypt/MD5SUM` | Checks on the Amiga what ART checked on the host |
-| SRename, SearchReplace, CopyReplace, Mecho, TTTool, RexxTricks, Screentext, Wizard Library | Aminet / Thomas Rapp | Scripting and batch tools the imager's own install scripts lean on |
-
-## WHDLoad
-
-| Package | Source | Note |
-|---|---|---|
-| **WHDLoad** | Vendor `whdload.de/whdload/WHDLoad_usr.lha` | ART already installs WHDLoad packages onto images (its own WHDLoad screen) but does not place WHDLoad itself |
-| WHDLoadWrapper | Vendor `ftp2.grandis.nu` (Turran search) | *"The Imager already installs the latest WHDLoad Wrapper so they will have the most compatible settings applied."* ART's Collection knows 1698 titles and could use this |
-
-## Bundled small tools (Tom-Cat, Flype)
-
-`ArewePal`, `AreWeOnline`, `CE`, `TomCopy`, `TomDelete`, `WaitforTask` — shipped
-in the imager itself rather than downloaded. Not on Aminet; obtaining them
-means asking their authors.
+**Roadshow does not appear in ART's catalogue at all** — the owner wrote
+**tolunnet** in its place, and holds the distribution right to it.
 
 ---
 
-## What ART should take from this, and what it must not assume
+## The catalogue: what the Imager downloads and installs (60)
 
-**Take:** the *shape*. A catalogue is **data**, exactly as
-`core/osinstall/recipes/*.json` already is — a package is a name, a source, a
-destination and an install rule, not a code path. ART already has: a mirror
-client that refuses arbitrary URLs, an archive gate, `safe_join`, a job runner,
-and a manifest that records provenance per file. A catalogue entry is a small
-JSON file on top of machinery that exists.
+`Aminet` = reachable through `core/sources/mirror.rs` as it stands ·
+`GitHub` = a release asset · `Mirror` = a specific site needing its own
+configured mirror entry · `Search` = "latest version", resolved rather than
+pinned · ⚠ = a licence or permission constraint · ❗ = the source as printed
+cannot be used as written.
 
-**Do not assume better exists.** The owner asked whether there are *"daha
-güzelleri"* — nicer ones. **This document deliberately proposes none**, because
-recommending an Amiga package on recalled reputation is precisely the kind of
-claim this project has been burned by. What can be said honestly:
+| # | Package | Kind | Source |
+|---:|---|---|---|
+| 1 | Emu68 Tools | GitHub | `michalsc/Emu68-tools` releases (nightly) |
+| 2 | Emu68 (PiStorm) | GitHub | `michalsc/Emu68` releases |
+| 3 | Emu68 (PiStorm32-lite) | GitHub | `michalsc/Emu68` releases |
+| 4 | aget (UHC Tools) | Mirror | `uhc.driar.se/uhctools_os3.lha` |
+| 5 | akGIF | Aminet | `util/dtype/akGIF-dt` |
+| 6 | akJFIF | Aminet | `util/dtype/akJFIF-dt` |
+| 7 | akPNG | Aminet | `util/dtype/akPNG-dt` |
+| 8 | akTIFF | Aminet | `util/dtype/akTIFF-dt` |
+| 9 | PeterK's icon.library | Search | Aminet query `iconlib` |
+| 10 | Ami Speed Test | Aminet | `comm/net/AmiSpeedTest` |
+| 11 | iBrowse (demo) ⚠ | Mirror | `ibrowse-dev.net` |
+| 12 | AmiSSL | Search | Aminet query `amissl os3` |
+| 13 | BusTest | Aminet | `util/moni/bustest` |
+| 14 | CFD 1.33 | Aminet | `driver/media/CFD133` |
+| 15 | ChangeBootPri | Mirror | `thomas-rapp.hier-im-netz.de/downloads/` |
+| 16 | CLICon | Aminet | `util/wb/CLICon` |
+| 17 | CopyReplace | Aminet | `util/sys/CopyReplace` |
+| 18 | Directory Opus 4.16JR | Aminet | `util/dopus/DOpus416JRbin` |
+| 19 | Directory Opus 4.17pre21 | Mirror | `dopus.free.fr/betas/DOpus417pre21.lzx` |
+| 20 | Mecho | Aminet | `util/batch/mecho` |
+| 21 | Fat95 | Aminet | `disk/misc/fat95` |
+| 22 | File Sys Box | Aminet | `util/libs/filesysbox.m68k-amigaos` |
+| 23 | GENet.device | GitHub | `rondoval/emu68-genet-driver` |
+| 24 | Hippo Player | Aminet | `mus/play/hippoplayerupdate` |
+| 25 | IDEfix 97 | Aminet | `driver/media/IDEfix97` |
+| 26 | Installer 43.3 | Aminet | `util/misc/Installer-43_3` |
+| 27 | Jano Editor | Aminet | `text/edit/JanoEditor` |
+| 28 | LHA | Aminet | `util/arc/lha_68k` |
+| 29 | LZX | Aminet | `util/arc/lzx121r1` |
+| 30 | MD5 Sum | Aminet | `util/crypt/MD5SUM` |
+| 31 | MiamiDX — Main | Aminet | `comm/tcp/MiamiDx10cmain` |
+| 32 | MiamiDX — MUI | Aminet | `comm/tcp/MiamiDx10c-MUI` |
+| 33 | MUI 3.8 | Aminet | `util/libs/mui38usr` |
+| 34 | PFS3 | Aminet | `disk/misc/PFS3_53` |
+| 35 | Picasso96 (shareware) ⚠ | Aminet | `driver/video/Picasso96` |
+| 36 | Prism 2 | Aminet | `driver/net/prism2v2` |
+| 37 | Reboot | Aminet | `util/boot/reboot` |
+| 38 | Reqtools | Aminet | `util/libs/Reqtools-Wide` |
+| 39 | RexxTricks | Aminet | `util/rexx/RexxTricks_386` |
+| 40 | Screentext | Mirror | `thomas-rapp.hier-im-netz.de/downloads/` |
+| 41 | SearchReplace | Aminet | `text/misc/SearchReplace` |
+| 42 | SetDST | Aminet | `util/time/SetDST` |
+| 43 | SetPatch 44.38 ⚠ | Mirror | `cdn.cloanto.com/pub/amiga/SetPatch-44-38.lha` |
+| 44 | SKick 3.46 | Aminet | `util/boot/skick346` |
+| 45 | SMBFS | Aminet | `disk/misc/smb2fs.m68k-amigaos` |
+| 46 | SnoopDOS | Aminet | `util/moni/SnoopDos` |
+| 47 | Sntp (UHC Tools) | Mirror | `uhc.driar.se/uhctools_os3.lha` |
+| 48 | SRename | Aminet | `util/cli/SRename` |
+| 49 | SysInfo | Mirror | `download.d0.se/pub/SysInfo.lha` |
+| 50 | Sysvars | Aminet | `util/boot/sysvars` |
+| 51 | TTTool | Aminet | `util/batch/TTTool` |
+| 52 | UnZip 5.52 | Aminet | `util/arc/UnZIP552` |
+| 53 | ViNCEd ❗ | Aminet | `util/shell/ViNCEd` — **the page prints `packageutil/shell/ViNCEd`, a missing slash.** Verified against Aminet: v3.109, `ViNCEd.lha`, 881 447 bytes compressed, 2025-11-02 |
+| 54 | WHDLoad | Mirror | `whdload.de/whdload/WHDLoad_usr.lha` |
+| 55 | WHDLoadWrapper ❗⚠ | — | The page gives an **FTP search form** with query parameters (`ftp2.grandis.nu/…search.php?…&username=ftp%2Cany`), not a path. ART's "configured mirrors, never a caller-supplied URL" rule (§41.5.7) cannot accept it as written |
+| 56 | Wizard Library | Aminet | `util/libs/WizardLibrary` |
+| 57 | Workbench-Library 40.5 ⚠ | Mirror | `cdn.cloanto.com/pub/amiga/Workbench-Library-40-5.lha` |
+| 58 | XAD Master | Aminet | `util/arc/xadmaster020` |
+| 59 | XPK User | Aminet | `util/pack/xpk_User` |
+| 60 | ZIP 2.32 | Aminet | `util/arc/ZIP232` |
 
-- Several entries are pinned to **old versions** (`UnZIP552`, `ZIP232`,
-  `lzx121r1`, `MUI 3.8`, `MiamiDX 1.0c`). Whether a newer build exists and is
-  better is a question for the Aminet index, which **ART can already query** —
-  `core/sources` exists to answer exactly that.
-- **Roadshow vs MiamiDX** is a real choice the imager makes by shipping both.
-  The owner's own networking work is in this area and their preference
-  outranks any survey.
-- **AmiSSL** and **`icon.library`** are the two entries whose "latest version"
-  the imager resolves at run time rather than pinning — the maintainers ship
-  often enough that a pin goes stale. Anything ART does here needs the same.
+**Counted:** 45 Aminet · 3 GitHub · 10 Mirror · 2 Search (a third, #55, has no
+usable source at all). 45 + 3 + 10 + 2 = 60.
 
-**Answer the licences before the code.** Four entries carry a constraint that
-is not about redistribution alone: Picasso96 (Jens Schönfeld's statement must
-travel with it), Roadshow and iBrowse (demos), and the two Cloanto CDN files.
-The imager's own approach — **download at install time rather than bundle** —
-is the one that keeps it *"free and legal to distribute"*, and it is the same
-answer ART's own source policy already reached.
+### Plus two the Imager does not have
 
-## Sources
+| Package | Kind | Source | Note |
+|---|---|---|---|
+| **tolunnet** | own | `D:\Projeler\tolunnet` | The owner's own TCP/IP stack, in Roadshow's place. Distribution right held, so no ⚠ |
+| **tolunwifi** | own | the same | The owner's own WiFi package |
 
-- <https://mja65.github.io/Emu68-Imager/included.html> — read 2026-08-22; every URL above is quoted from it
-- <https://mja65.github.io/Emu68-Imager/packages.html> — the add-on mechanism and the WHDLoad Demos pack
-- <https://mja65.github.io/Emu68-Imager/amigautilities.html> — what runs on first boot
-- Full research: [superpowers/specs/2026-08-22-emu68-imager-research.md](superpowers/specs/2026-08-22-emu68-imager-research.md)
+**62 entries in ART's catalogue.**
+
+---
+
+## What still has to be answered before any of this becomes data
+
+- **Four ⚠ entries** — Picasso96, iBrowse, SetPatch, Workbench-Library. The
+  owner is obtaining the permissions; ART records them and warns on screen
+  regardless, and the catalogue entry carries the field that drives it.
+- **One ❗ with no usable source** — WHDLoadWrapper. Either a proper mirror
+  entry for grandis.nu, or the entry becomes `user-supplied`: ART names it and
+  says why it cannot fetch it.
+- **Screentext's purpose is unverified.** Thomas Rapp's downloads page could
+  not be fetched and no search result described it. It must not be filed under
+  a category on a guess.
+- **All 60 paths need checking against the live sources**, not against this
+  document. `scripts/catalogue-check.py` in the design is that check, and
+  entry 53 is why it exists.
+
+---
+
+## Beyond the Imager: what a larger distribution carries
+
+[AmiKit](https://www.amikit.amiga.sk/) ships **420 pre-installed programs** and
+**no AmigaOS or ROM** — the same division ART keeps. Its
+[changelog](https://file.amiga.sk/amikit/doc/changelog_win.html) names them with
+versions, and the great majority are Aminet packages. Two of its mechanisms are
+worth knowing about rather than copying: **Live Update**, which delivers updates
+after installation, and **RabbitHole**, a drop folder — *"simply place the
+archive into the RabbitHole folder and it gets installed automagically"* — which
+is a shape ART's own drag & drop pipeline already resembles.
+
+[HstWB Installer](https://hstwb.firstrealize.com/) takes the third road: the
+user picks from named packages (BestWB, BetterWB, ClassicWB, HstWB, Picasso96,
+DOpus, MUI, iGame, WHDLoad) but **downloads the archives themselves**. Its
+package manifest is worth reading — it was fetched rather than guessed, and it
+confirms three shapes ART already has. See the design document.
+
+**Sources:** [Emu68 Imager — What's
+Included](https://mja65.github.io/Emu68-Imager/included.html) (read 2026-08-22,
+enumerated) · [Aminet ViNCEd](https://aminet.net/package/util/shell/ViNCEd) ·
+[AmiKit changelog](https://file.amiga.sk/amikit/doc/changelog_win.html) ·
+[HstWB Installer](https://hstwb.firstrealize.com/) ·
+[classicwb-lite-package](https://github.com/henrikstengaard/classicwb-lite-package)

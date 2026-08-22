@@ -29,6 +29,7 @@
   ],
   "id": "locale-turkish",
   "name": "Türkçe catalogs (BoingBag 3.9-2)",
+  "releases": ["AmigaOS 3.9"],
   "media": "LocaleUpdate",
   "_why_distinguished_by": [
     "ART-167. `media` alone cannot name this archive: eight of the owner's",
