@@ -10,10 +10,14 @@
 // Selection is per **set**, not per entry: `bundles.intro` says "pick a set",
 // and every entry in a ticked set is handed to `bundlesDownload` in the
 // catalogue's own order. Entries ART cannot honestly promise to fetch today
-// — `user-supplied` files, and `mirror`-sourced ones (no named-mirror
-// registry exists yet, so every one of them resolves to `Refused`) — are
-// never offered a tick that implies otherwise (§10/§89): they get their own
-// sentence instead, inside the set's card.
+// — `user-supplied` files, `mirror`-sourced ones (no named-mirror registry
+// exists yet), `github-release` ones (no release-asset fetcher exists yet)
+// and `aminet-search` ones (no version-resolution engine exists yet); all
+// four resolve to `Refused` (`resolve.rs`, `core/sources/bundle/resolve.rs`)
+// — are never offered a tick that implies otherwise (§10/§89): each of the
+// four gets its own true sentence instead, inside the set's card. Only
+// `user-supplied` says "you supply it" — the other three are gaps in ART
+// itself, not the user's to bring.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
