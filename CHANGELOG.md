@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Building a distribution, and a card that can boot (2026-08-22)
+
+#### Fixed
+- **You can choose a folder to build into again.** ART insisted the destination
+  must not already exist — but the folder picker can only hand back a folder
+  that *does*: its **New folder** button creates one, and from that moment it
+  exists. So every folder you could choose was refused. ART now accepts a new
+  **or empty** folder and refuses only one with something already in it, which
+  is what the rule was always for: never building over your work. A folder
+  holding even a single hidden file is still refused, and so is a file.
+
+- **A card ART writes keeps the boot settings for every PiStorm board.**
+  `config.txt` names a different Emu68 kernel for each board — the Pi works out
+  which one is fitted when it starts. ART was keeping only the first and
+  dropping the rest, so a card came out able to boot one board and not the
+  others, and the one it kept was the setting meant for booting *without* the
+  PiStorm. Every board's settings now survive, and a release's own choices are
+  left exactly as it wrote them.
+
+- **When ART tells you which file to fetch, it recognises it when you bring it
+  back.** A BoingBag needs two archives — the package and its update — and ART
+  names the update archive by filename when it needs it. Supplying that file in
+  the first box used to produce a flat "this isn't the right archive". It now
+  says what the file is and which box it belongs in.
+
+- **The preview no longer describes a run that cannot happen.** It used to show
+  the package, the tree, the emulator and the disc for a run that would fail the
+  moment it started. It now checks the archive first and says so instead.
+
+- **A step tells you when the folder is not one ART built**, at the field,
+  rather than leaving it to an error when you press the button. And the reason a
+  run was refused is shown **at the button** — once, not twice.
+
+#### Changed
+- The destination field's hint described a rule you could not satisfy. It now
+  says a new or empty folder is fine, and that the picker's New folder button is
+  a way to make one.
+
 ### The OS Builder asks one thing at a time (2026-08-22)
 
 #### Changed

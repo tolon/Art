@@ -18,7 +18,7 @@ Update it at the end of any session that changes what works.
 
 | | |
 |---|---|
-| **Last updated** | 2026-08-22 (**The OS Builder is a sequence of steps, and the folder ART builds is carried to the steps that use it** — wave 1 of the flow design, on `osbuilder-wave-1` and **not merged**, because Task 7 was not done: the owner had ART open, `cargo` could not replace a locked `.exe`, and **no step has been seen on a screen**. [ART-197](ISSUES.md) and [ART-198](ISSUES.md) are closed with tests, and every named mutation was run and fell. The design's own key count was wrong — it says 22 remembered keys, there are 36 — so the migration is per key rather than per list: eleven taken over and seeded, twenty-five left where they are. See the session log for the rest. Before that, on 2026-08-21: **Both of the owner's BoingBags installed, and the booted tree says so.** [ART-193](ISSUES.md) is fixed and it was one line: ART's generated `Startup-Sequence` had never run the tree's own `C:AddDataTypes REFRESH QUIET`, so every install ran against a `datatypes.library` with an **empty** descriptor list — a state a booted AmigaOS 3.9 is never in — and the `Updater` hung for ever inside its own interface, opening nothing, printing nothing and writing nothing. Found by bisection, not by reasoning: a full boot environment installed, then assigns-only hung, `LoadWB` alone hung, `IPrefs`+`ConClip`+`LoadWB` hung, and **`AddDataTypes` alone installed**, byte-identically. Stack (4 096 → 65 536, confirmed on the machine) and the mounted CD were tested and are negatives with evidence. Through ART's own `compose` → `install` path on the owner's real material: `BoingBag39-1 (1).lha` in **169.1 s** (`Succeeded`, `Promoted`, 3 795 → 3 859 files), then `BoingBag39-2.lha` on that result in **138.1 s**. **Asked, not inferred**, the tree then answers `Workbench 45.3 (07-Dec-01)`, `version.library 45.3`, `workbench.library 45.127` where it used to answer `Workbench 45.1 (13-Nov-00)` — the round's own bar, met. `PROVISIONAL_DEADLINE` drops from a 60-minute guess to **30 minutes**, ten times the longest measured successful install. Both refusal paths still refuse and copy nothing, and the disc refusal is now true by measurement: without the disc the `Updater` reaches its own *"Checking AmigaOS 3.9 CD-ROM…"* line and stops on an AmigaDOS `Please insert volume AmigaOS3.9` requester nobody can answer. **Nothing decrypts anything and no password is bypassed** — the package's own `Updater` opens its own payload, inside the emulator.) |
+| **Last updated** | 2026-08-22 (**The engine builds a distribution from the owner's own material; the screen still has not.** A real AmigaOS 3.9 tree — 1242 files, 22.79 s — came out of the engine's own hook, while the owner driving the OS Builder could not produce one at all. Nine entries closed today, six of them found by them driving it, and [ART-204](ISSUES.md) — `config.txt` is a conditional-section format and the merge was flat, keeping one `kernel=` line out of four — is the likeliest reason no card ART built has ever booted. Everything is merged to `main` and pushed. **First action next session: drive the OS Builder and build a tree from it.** Before that: **The OS Builder is a sequence of steps, and the folder ART builds is carried to the steps that use it** — wave 1 of the flow design, on `osbuilder-wave-1` and **not merged**, because Task 7 was not done: the owner had ART open, `cargo` could not replace a locked `.exe`, and **no step has been seen on a screen**. [ART-197](ISSUES.md) and [ART-198](ISSUES.md) are closed with tests, and every named mutation was run and fell. The design's own key count was wrong — it says 22 remembered keys, there are 36 — so the migration is per key rather than per list: eleven taken over and seeded, twenty-five left where they are. See the session log for the rest. Before that, on 2026-08-21: **Both of the owner's BoingBags installed, and the booted tree says so.** [ART-193](ISSUES.md) is fixed and it was one line: ART's generated `Startup-Sequence` had never run the tree's own `C:AddDataTypes REFRESH QUIET`, so every install ran against a `datatypes.library` with an **empty** descriptor list — a state a booted AmigaOS 3.9 is never in — and the `Updater` hung for ever inside its own interface, opening nothing, printing nothing and writing nothing. Found by bisection, not by reasoning: a full boot environment installed, then assigns-only hung, `LoadWB` alone hung, `IPrefs`+`ConClip`+`LoadWB` hung, and **`AddDataTypes` alone installed**, byte-identically. Stack (4 096 → 65 536, confirmed on the machine) and the mounted CD were tested and are negatives with evidence. Through ART's own `compose` → `install` path on the owner's real material: `BoingBag39-1 (1).lha` in **169.1 s** (`Succeeded`, `Promoted`, 3 795 → 3 859 files), then `BoingBag39-2.lha` on that result in **138.1 s**. **Asked, not inferred**, the tree then answers `Workbench 45.3 (07-Dec-01)`, `version.library 45.3`, `workbench.library 45.127` where it used to answer `Workbench 45.1 (13-Nov-00)` — the round's own bar, met. `PROVISIONAL_DEADLINE` drops from a 60-minute guess to **30 minutes**, ten times the longest measured successful install. Both refusal paths still refuse and copy nothing, and the disc refusal is now true by measurement: without the disc the `Updater` reaches its own *"Checking AmigaOS 3.9 CD-ROM…"* line and stops on an AmigaDOS `Please insert volume AmigaOS3.9` requester nobody can answer. **Nothing decrypts anything and no password is bypassed** — the package's own `Updater` opens its own payload, inside the emulator.) |
 | **Version** | 0.8.5 — the first version published for other people to use. Deliberately not 1.0: 30 features are still amber ([FEATURES.md](FEATURES.md)), and as the row above says, what is left in SD-1 is not code: a card flashed and an A500 booted. That is the bar for 1.0, not a bigger number |
 | **Current stage** | **SD-1 complete** — every gap it names is built: the card's shape (G2), RDB filesystem embedding (G4), build manifest (G7), image health check (G8), a build as a drop target (G15), engine and screen throughout. **What is left in SD-1 is not code: a card flashed and an A500 booted.** **SD-2 in progress** — PFS3/FFS preload (G3/G5 route E and native, [ART-120](ISSUES.md): `NativeFormatter` writes both by default, `hst-imager` a named fallback for two known gaps), the layout policy (G11), OS install (G5) and ROM pairing (G9) have all landed, engine and screen; launcher metadata export (G10) is owed. **G9 closes against the pairing that actually failed under WinUAE with a licensed ROM (real hardware untouched)**: the real AmigaOS 3.2 tree that needs Kickstart 47 against a card carrying the user's real Kickstart 40 comes back `Unsuitable { needs: 47, found: Some(40), rom: "kick.rom" }`; the same recipe's own V40 build, which carries its compatibility modules, comes back `Paired` against the identical card. **G5's product boots.** AmigaOS 3.2 was built from the user's own media, carried onto a PFS3 volume through the native/fallback path in one unattended run ([ART-122](ISSUES.md) had to be fixed first: a partition is formatted and filled by one tool), and **booted to a clean Workbench** under WinUAE with their licensed V47 A1200 ROM — wallpaper and all, no requesters. Getting there found two defects nothing but a Kickstart could have found: [ART-126](ISSUES.md) (every RDB filesystem ART ever embedded was advertised with the wrong `PatchFlags`, so AmigaOS ignored the driver — the guru a user reported) and [ART-127](ISSUES.md) (the tree lacked `icon.library` and `workbench.library`, and its wallpapers were switched off on an assumption the running system has now corrected). **What that proves, stated precisely**: the code that accepted the disk is Kickstart's own `expansion.library` and the real `pfs3aio` 68k binary, executing — so the filesystem side is settled, not provisional. What it does **not** touch is the card path: WinUAE hands the volume over as a plain `.hdf` through `uaehf.device`, where a PiStorm has an MBR, an Amiga disk starting 1.1 GB in, and Emu68's `brcm-sdhc.device` in the way ([ART-095](ISSUES.md)'s shape). That, the FAT32 boot partition and Emu68's own start-up are the untested rung — not the mounting. The install screen now has jsdom coverage past its own headings, but a real browser session has still never driven it — the access violation that crashed headless Chrome/Edge is unresolved ([ART-118](ISSUES.md)). Reading a real card has a screen ([ART-095](ISSUES.md), [ART-097](ISSUES.md)); **no card ART built has been flashed or booted**. **A second AmigaOS release joined 3.2, and stopped a step short of the same bar.** `CdSource` (`core/osinstall/source_cd.rs`) reads an install CD as a second `MediaSource` beside the ADF one; `core/osinstall/recipes/amigaos-3.9.json` ships a first, single-component 3.9 recipe; a release picker (`recipe::by_release`) makes it reachable from the OS Builder, and a disc dropped on the panel now offers the OS Builder too. Run for real against the owner's own 469 MiB `AmigaOS39.iso`, the tree now **builds end to end** — 588 files, 75 directories, all 663 planned items — after three defects the real run found and fixed ([ART-153](ISSUES.md), [ART-154](ISSUES.md), [ART-155](ISSUES.md) — the last one mis-diagnosed first, corrected by measurement) and one it found and left open ([ART-156](ISSUES.md)). **The tree boots.** Mounted as a `filesystem2=` directory volume under WinUAE with the owner's licensed Kickstart 3.1 (`amiga-os-310-a1200.rom`, V40) on an A1200/AGA profile, it reaches a clean Workbench with no requester; the screen's copyright line is the 3.5/3.9 string (*1985-2000 Amiga International*), not the ROM's own 1985-1993, so what is on screen came from the tree. The configuration is the one ART writes itself (`core::winuae::generate_uae_config`), through `core::winuae::real_boot_hook::boot_a_distribution_tree_when_asked` — `#[ignore]`d, env-gated. It boots **without** the `First-Install`/`SetPatch` tree [ART-159](ISSUES.md) says is unplaced, so that hazard is real but not fatal to a base install. Measured on a release build the install takes **6.2 s**, not the 20 s first recorded under a debug build — and the general sluggishness reported while driving it was the debug build too: `pnpm tauri dev` burned 64% of a core while idle where the release binary burns 0.0% at 65 MB. **Driven by hand at last**, which immediately found two things 619 frontend tests had not: a refusal that protected data and said nothing on screen (three `ART-SAFETY-REFUSED` entries in the operation log over an existing destination — a failed job never emits `osinstall-result`, the only event the screen listened to), and a verify field labelled "Amiga volume image" with nothing to explain it. Both fixed, plus a progress bar the install never had |
 | **Build** | PASS |
@@ -949,146 +949,95 @@ work.***
 
 ### Start here
 
-**Wave 1 of the OS Builder flow round is code-complete and unproven on a
-screen.** Seven of the plan's eight tasks are done, on branch
-`osbuilder-wave-1`
-([the plan](superpowers/plans/2026-08-21-os-builder-wave-1.md), against
-[the design](superpowers/specs/2026-08-21-os-builder-flow-design.md)).
-[ART-197](ISSUES.md) and [ART-198](ISSUES.md) are both closed, with tests and
-with every named mutation run and seen to fail.
+**The engine builds a distribution. The screen still has not.** That sentence
+is the whole state of this round and everything below serves it.
 
-**Task 7 is half done, and the half that is done was measured rather than
-looked at.** The layout question jsdom cannot answer now has numbers:
-`scripts/osbuilder-strip-check.py` drives the running frontend in headless
-Chrome and reports, per build kind, per language and per Application Size,
-what the strip actually measures. At 1280×900:
+On 2026-08-22 the install engine was run against the owner's own
+`AmigaOS39.iso` and produced a real tree — **1242 files, 105 directories,
+14.9 MB, in 22.79 s**, `workbench-base` 450 + `workbench-39` 792, manifest
+written, into `E:\amiga\Amigatolon\os39\art1`. **That came from the
+engine's own `#[ignore]`d hook, not from the OS Builder.** The owner drove the
+screen the same evening and could not produce a distribution at all. Do not
+read the tree as proof the screen works.
 
-| | z=1 | z=1.3 | z=2 |
-|---|---|---|---|
-| strip height | 49 px | 62.8 px | **186 px** |
-| strip overflow | 0 | 0 | 0 |
-| page horizontal scroll | 0 | 0 | 0 |
+**First action tomorrow: drive the OS Builder and build a tree from it.**
+Everything needed is now in place — [ART-203](ISSUES.md) removed the dead end
+where every folder the picker could return was refused, and
+[ART-197](ISSUES.md) carries the result to the steps that use it. Neither has
+been seen working by a person. If it works, say so here with the numbers; if it
+does not, that is the next defect and it is worth more than any item on the
+work list.
 
-**Both languages give identical numbers**, so the longer Turkish labels
-(*"Güncelleme paketleri"*, *"İşletim Sistemi Kurucusu"*) cost nothing here.
-The strip **wraps rather than clipping**: at Application Size 2 it takes about
-three rows and 186 px of vertical space, with nothing unreachable and no
-sideways scroll. That is `flexWrap` doing its job, and it is worth knowing
-before someone "fixes" it. The per-kind contents are right on screen too —
-boot-card 2 steps, prepare-volumes 2, install 4 — and no label rendered as a
-raw key or an unrendered `{{…}}` in either language.
+### What closed on 2026-08-22, and what it cost to find
 
-**The install engine was proved on the owner's own material, and it is the
-first thing this session can point at that produced something.** With
-[ART-206](ISSUES.md) corrected — a real-material hook that asserted the 3.9
-recipe carries one component when it has carried two since ART-169, so it could
-never pass — the hook ran against their own `AmigaOS39.iso` and built a tree:
-**1242 files, 105 directories, 14.9 MB, 22.79 s**, `workbench-base` 450 +
-`workbench-39` 792, manifest written, into `E:\amiga\Amigatolon\os39\art1`
-— a folder that [ART-203](ISSUES.md) is the reason ART would write into at all.
+Nine entries: [ART-197](ISSUES.md), [ART-198](ISSUES.md),
+[ART-199](ISSUES.md), [ART-200](ISSUES.md), [ART-201](ISSUES.md),
+[ART-202](ISSUES.md), [ART-203](ISSUES.md), [ART-204](ISSUES.md),
+[ART-206](ISSUES.md). Six of them were found by the owner driving the screen,
+and the measurement they share is **seven identical failed runs** in
+`operations.jsonl` — the same request, unchanged, seven times, because the
+refusal rendered 209 lines above the button that caused it.
 
-**Said plainly: that tree came from the engine's own hook, not from the
-screen.** Nobody has yet built a distribution from the OS Builder. The owner
-drove it and could not, which is what the round's defects were.
+**Two are worth remembering past this round.**
 
-**And the same run found [ART-205](ISSUES.md)**: the plan predicted 17 579 966
-bytes and 14 883 492 landed — **18% over, systematically**, because a file an
-overlay replaces is two plan items and one file on disk. Filed rather than
-patched: ART-156 was a different miscount in the same field and was diagnosed
-wrongly the first time.
+[ART-204](ISSUES.md) is the likeliest reason no card ART built has ever booted:
+`config.txt` is a **conditional-section** format and the merge treated it as a
+flat one, so a real Emu68 file came out with **one** `kernel=` line out of
+four, in the stealth stanza, and three board stanzas with none. Measured, not
+reasoned about. No test could have caught it, because every `config.txt`
+fixture was a flat file ART had written itself — a reader and a writer agreeing
+with each other, the shape that already cost ART-032..035 and ART-079.
 
-**Driving it found four defects in one sitting, and all four are fixed.**
-The owner reached the Amiga-side step and their operation log recorded
-**seven** identical failed runs — the same request, unchanged, seven times.
-That number is the measurement the whole round turned on.
-[ART-199](ISSUES.md) (a step reported itself ready on a folder that was not a
-tree), [ART-200](ISSUES.md) (ART named an archive, the user fetched it, and
-ART refused it without saying it belonged in the other field),
-[ART-201](ISSUES.md) (the preview described a run it already had everything it
-needed to know could not happen) and [ART-202](ISSUES.md) (the answer to a
-button at the bottom of the panel rendered at the top of it, so pressing it
-looked like nothing happened) are all closed, with tests and with every
-mutation run and seen to fail. `describe_tree` — the design's own wave-2
-command — landed early because ART-199's honest fix needed it.
+[ART-203](ISSUES.md) is the reason no tree had ever been built from the screen:
+`apply` refused every folder that existed and a folder picker can only return
+one that does. `SAFE_CREATE` now means what it is for — never over somebody's
+data — and an empty directory holds none.
 
-**Not every refusal the owner met was a defect**, and saying which were not is
-part of the record: the Turkish catalogs were refused because `dist-3.9`
-carries only `workbench-base` and that package requires `locale-base`
-(ART-162), and the tree refusal on their own `os39` folder was
-`refuse_unless_installable` protecting data. Both were right. What was wrong
-was **when** and **where** they were said.
+**And one correction the owner made and was right about.** ART-202's first fix
+rendered the refusal in two places; they read it as two errors — *"aynı uyarı
+tek ekranda 2 tane"*. With ART-201 in place a refusal leaves no preview card,
+so the panel is short and both boxes land within a screen of each other. One
+box, at the control.
 
-**One thing was measured and not explained**: a line reading
-`BoingBag3.9-1-UAE\Readme.info` appeared on screen and no code path was found
-that renders it. What it is *not* was established — every one of the twelve
-`.lha` archives in the owner's folder was opened with ART's own reader and
-**none** has a refused entry name, and `what_it_holds` lists only the
-extraction directory's top level. Recorded as unexplained rather than given an
-invented cause, so the next session does not walk this road again.
+### The research, and the decision that came out of it
 
-**What is still owed is the half that needs the owner's own material.** No
-panel has been driven end to end: the browser harness has no Tauri bridge, so
-every command a step issues fails there by construction. Build a tree, watch
-the result card name the folder, and confirm the **Güncelleme paketleri** step
-already has it — that is [ART-197](ISSUES.md) on a real screen, and it is the
-one claim this round exists for. `ART-118`'s renderer crash on this screen
-also remains open. The plan's Task 7 lists the walk.
+The owner asked, mid-round, whether ART should be rebuilding what the **Emu68
+Imager** already does — *"bu şekilde karmaşık ve başarısız bir installer ile
+ilerlemeyelim"* — and then answered it: *"bizimkisi de çalışmalı"* and *"ART'ın
+amacı bir suit yapmak Amiga retro meraklılarına"*. **ART keeps building cards
+and the standard is that they work.** The incumbent is not a competitor to
+reason about; it is the reference implementation to measure against.
 
-**What wave 1 changed, in one paragraph.** `src/lib/buildSession.ts` +
-`useBuildSession.ts` make the folder ART writes and the folder the next steps
-operate on **one** value, seeded from the keys they replace so nothing a user
-had set went missing; `src/lib/buildSteps.ts` says which steps a build kind
-has; `OsBuilder.tsx` is now a shell with a progress strip and an `Outlet`, and
-the panels are mounted at six sub-routes under `/os-builder`.
+Four sources were read and quoted rather than recalled:
+[the research](superpowers/specs/2026-08-22-emu68-imager-research.md),
+[the argument](superpowers/specs/2026-08-22-should-art-build-cards.md),
+[the work list](superpowers/specs/2026-08-22-work-list.md) (12 items, ordered,
+each with its evidence) and
+[the package catalogue](amiga-package-catalogue.md) (47 Amiga packages with
+their real sources; 41 are Aminet paths, which is the shape `core/sources`
+already takes).
 
-**Two things the design got wrong, both measured rather than argued.** It says
-**22** remembered keys across the builder; there are **36** — so "migrate the
-22" taken literally would have left fourteen behind. Wave 1 takes over eleven
-and leaves twenty-five exactly where they are, which is why nothing could be
-lost. And two of the eleven are not literal keys at all:
-`rememberedComponentKey` suffixes `osinstall.chosen` and
-`osinstall.excludedConditional` per release, so a fixed key list would have
-silently dropped every selection made under AmigaOS 3.9.
+**It confirmed ART's card model** — MBR with `0x76` areas, one RDB each — from
+an independent implementation, and showed the reference tool drives the same
+`hst-imager` ART keeps as a fallback. **Two of the research's warnings are
+worth repeating**: read `docs/superpowers/specs/2026-08-22-work-list.md` §"what
+was NOT read" before treating the list as complete, and do **not** copy the
+imager's `MaxTransfer`/buffer defaults over ART's — ART's came from measuring
+the owner's own cards, which is the stronger evidence.
 
-**One deviation from the design, approved by the owner before any code was
-written.** The session is a typed **facade over `settingsStore`**, not a second
-Zustand store: a parallel store would have had to re-answer three bugs that one
-has already answered — a load landing after the user acted ([ART-089](ISSUES.md)),
-a fresh identity per render driving effects into a loop
-([ART-178](ISSUES.md)/[ART-195](ISSUES.md)), and a hand-edited value reaching
-the screen. Two smaller ones are stated in the plan: the session type carries
-only the fields this wave wires, and there are **six** routes rather than eight
-— `bilesenler` and `ozet` have no component to mount until wave 2 splits
-`OsInstall.tsx`.
+### After the screen is driven, the order is the work list
 
-**Then wave 2**, as the design has it: the artefact picker with its list of
-trees ART already built, `describe_tree` (the only Rust this round needs, and
-what closes [ART-199](ISSUES.md)), splitting `OsInstall.tsx`, and deleting the
-duplicated ROM and card fields rather than merely bypassing them. **Three of
-ART-197's four rows are still open** — the card image, the per-partition
-content folders, and the Kickstart asked for in three places — and they close
-there.
+[ART-205](ISSUES.md) first — the plan predicts 17.6 MB where 14.9 MB lands,
+**18% over and systematic**, because a file an overlay replaces is two plan
+items and one file on disk. It is what a progress bar divides by. Do not
+subtract the difference; decide what `total_bytes` is **for**.
 
-**And wave 3 must move "Verify against a card" off the install step.** The
-design's §4 already schedules it, but the owner reached the same conclusion
-from the screen on 2026-08-22 without being shown that sentence, which is the
-stronger evidence: the section checks the output of step 7 (*Birimleri
-hazırla*) while sitting on step 2, so it offers to verify something that does
-not exist yet. It is ART-197 inverted — a step asking about an artefact a
-*later* step produces — and it is one of the four original complaints
-("sections that do not belong on this screen") still standing on screen.
-
-**Two constraints that must not drift.** ART's output is an **image file** and
-never a physical card (`docs/owner-checklist.md` § 4 — the owner restated it
-mid-design, unprompted). And the Amiga-side install stays an *optional* step
-inside the wizard, offered the moment the tree is built.
-
-**Prior art is in the spec and was fetched, not recalled**: Emu68-Imager's own
-Quick Start states a nine-step Simple Mode, gives every path field a `Check`
-button that validates when you pick, and names its fields for things on the
-user's disk. ART's field is named for its own internal artefact and has
-nothing answering the Check. That comparison is what turned "too complex" into
-a specific defect — do not re-derive it, read § "Prior art" in the spec.
+Then [ART-196](ISSUES.md) (scratch on `C:`), then items 4–9 of the work list —
+identify install media by content rather than volume name (the imager's own
+table carries an `ADFSource` column, which is how it prefers Commodore and
+Cloanto images over Escom's, whose language and keyboard files are missing),
+`.vhd` output, and the 3.2.2.1/3.2.3 recipes whose media is spread across three
+folders a one-folder scan cannot express.
 
 ### The panel was driven at last, and what that does and does not prove
 
@@ -1125,17 +1074,16 @@ spec § 33 user-defined profiles that `winuae_list_profiles` does not provide.
 
 ### The tree, measured this session
 
-**2260 Rust passed / 0 failed / 28 ignored · 828 frontend passed / 72 files ·
-`pnpm lint` clean.** The Rust total is unchanged because this wave touched no
+**2290 Rust passed / 0 failed / 28 ignored · 837 frontend passed / 72 files ·
+`pnpm lint`, `cargo fmt --check` and clippy `-D warnings` all clean.** The Rust total is unchanged because this wave touched no
 Rust; the frontend total is 784 + 44, the tests this round added. i18n is
-**1775 leaf keys** in each catalogue, up 8 — six step labels, the sentence a
+**1776 leaf keys** in each catalogue, up 9 — six step labels, the sentence a
 step says when it is opened without a tree, and
 `osinstall.result.carried`.
 
-`main` was pushed at the start of the session (the four documents commits that
-had been sitting unpushed). Wave 1 is on **`osbuilder-wave-1`**, seven commits,
-**not merged and not pushed** — because Task 7 has not been done, and a branch
-whose screen has never been opened is not a branch to merge.
+**Everything is on `main` and pushed.** Wave 1 merged with `--no-ff`, then
+ART-204 and ART-203 as their own short-lived branches, each merged and deleted.
+`main` is equal to `origin/main` and the working tree is clean.
 
 **A trap worth remembering, met again today.** `pnpm tauri build | tail` was
 reported as exit code 0 while the build had actually failed: the pipeline's
@@ -1562,7 +1510,8 @@ Newest first. One line per session that changed what works.
 
 | Date | Change | Tests |
 |---|---|---|
-| 2026-08-22 | **The OS Builder's ten sections in one column become steps, and the tree ART builds is now the tree the next steps get** (branch `osbuilder-wave-1`, seven commits, **not merged**). Wave 1 of the flow design. [ART-197](ISSUES.md) closed **by structure rather than by a wire**: `src/lib/buildSession.ts` makes `osinstall.destination` and `osinstall.packages.treeRoot` one `tree.root`, so the carry holds because there is nothing to forget. The code carried an objection to filling the tree in from a finished build — the remembered-settings rule — and it was **answered rather than deleted**: pressing Build is the user acting, and the change is now stated on screen (`osinstall.result.carried`) instead of made silently. [ART-198](ISSUES.md) closed: a sentence that promised an official update and offered an unofficial pack as its example, in both catalogues, where parity had passed over it for months because both were equally wrong. **The design was measured and was wrong twice.** It says 22 remembered keys; there are **36** — taken literally, fourteen would have been left behind. Eleven are taken over and seeded from the keys they replace; twenty-five stay with their own panels, where a migration that never touches them cannot lose them; legacy keys are read once, never written again and never deleted, so a rollback still finds them. And two of the eleven are not literal keys at all — `rememberedComponentKey` suffixes them per release, so a fixed key list would have silently dropped every AmigaOS 3.9 selection. `OsBuilder.tsx` is now a shell (progress strip + `Outlet`) over six sub-routes; the drop path had to be carried on to `/os-builder/kaynak` with a pathname guard, or the shell — which renders on the child route too — would navigate for ever. **Every named mutation was run and every one fell**: break the carry, delete the on-screen sentence, drop the `destination` fallback, flatten the per-release key, stop a cold step asking, and stop the drop reaching its step. One test turned out stronger than written — the path renders twice, once per panel, which is both panels reading the one session value. **Task 7 was not done and the branch is not merged**: the owner had ART open, so `cargo` could not replace a locked `.exe` and no step has been seen on a screen. jsdom does no layout, so the strip's real width and the longer Turkish labels are still unproven. | 2260 Rust, 0 failed, 28 ignored; 828 frontend (784 + 44); `pnpm lint` clean |
+| 2026-08-22 | **The owner drove the OS Builder, six more defects fell out of it, and the research they asked for found the one that probably explains the cards.** [ART-199](ISSUES.md) a step reported itself ready on a folder that was not a tree — `describe_tree` landed early from wave 2 to answer it; [ART-200](ISSUES.md) ART named an archive, the owner fetched it, and ART refused it without saying it belonged in the other field; [ART-201](ISSUES.md) the preview described a run it already had everything it needed to know could not happen; [ART-202](ISSUES.md) the answer to a button at the bottom rendered at the top — **seven identical failed runs in `operations.jsonl`, the same request unchanged**, is the measurement. The first fix for that last one put the box in *both* places and the owner read it as two errors — *"aynı uyarı tek ekranda 2 tane"* — and was right: with ART-201 in place a refusal leaves no preview card, so the panel is short and both land within a screen. One box, at the control. **[ART-203](ISSUES.md)**: `apply` refused every folder that existed and a picker can only return one that does, so **no tree had ever been built from the screen** — `SAFE_CREATE` now means never over somebody's data, and an empty directory holds none; the screen and the engine ask it through one function. **[ART-204](ISSUES.md)**, from the research and measured rather than reasoned about: `config.txt` is a **conditional-section** format and the merge was flat, so a real Emu68 file came out with **one** `kernel=` line out of four — in the *stealth* stanza — and three board stanzas with none. Sufficient explanation for *no card ART built has ever booted*, and invisible to every test because every fixture was a flat file ART wrote itself. [ART-206](ISSUES.md): the real-material hook asserted the 3.9 recipe carries one component when it has carried two since ART-169, so it could never pass — corrected, it built the owner's own tree, **1242 files in 22.79 s**, which is the first thing this round produced. That run then found [ART-205](ISSUES.md), open: plan 17 579 966 bytes against 14 883 492 written, **18% over and systematic**. **Research, read and quoted rather than recalled**: the Emu68 Imager's own source and data tables confirm ART's card model (MBR + `0x76`, one RDB each) and show the reference tool drives the same `hst-imager` ART keeps as a fallback; 47 Amiga packages catalogued; a 12-item work list. The owner settled the scope question themselves — ART keeps building cards, *"bizimkisi de çalışmalı"*. **Still not shown: a distribution built from the screen.** | 2290 Rust, 0 failed, 28 ignored; 837 frontend; lint/fmt/clippy clean |
+| 2026-08-22 | **The OS Builder's ten sections in one column become steps, and the tree ART builds is now the tree the next steps get** (branch `osbuilder-wave-1`, merged to `main` the same day). Wave 1 of the flow design. [ART-197](ISSUES.md) closed **by structure rather than by a wire**: `src/lib/buildSession.ts` makes `osinstall.destination` and `osinstall.packages.treeRoot` one `tree.root`, so the carry holds because there is nothing to forget. The code carried an objection to filling the tree in from a finished build — the remembered-settings rule — and it was **answered rather than deleted**: pressing Build is the user acting, and the change is now stated on screen (`osinstall.result.carried`) instead of made silently. [ART-198](ISSUES.md) closed: a sentence that promised an official update and offered an unofficial pack as its example, in both catalogues, where parity had passed over it for months because both were equally wrong. **The design was measured and was wrong twice.** It says 22 remembered keys; there are **36** — taken literally, fourteen would have been left behind. Eleven are taken over and seeded from the keys they replace; twenty-five stay with their own panels, where a migration that never touches them cannot lose them; legacy keys are read once, never written again and never deleted, so a rollback still finds them. And two of the eleven are not literal keys at all — `rememberedComponentKey` suffixes them per release, so a fixed key list would have silently dropped every AmigaOS 3.9 selection. `OsBuilder.tsx` is now a shell (progress strip + `Outlet`) over six sub-routes; the drop path had to be carried on to `/os-builder/kaynak` with a pathname guard, or the shell — which renders on the child route too — would navigate for ever. **Every named mutation was run and every one fell**: break the carry, delete the on-screen sentence, drop the `destination` fallback, flatten the per-release key, stop a cold step asking, and stop the drop reaching its step. One test turned out stronger than written — the path renders twice, once per panel, which is both panels reading the one session value. **Task 7 was done in part, later the same day**: the strip was measured in a real browser at the owner's own window size (identical in both languages, wraps rather than clips), and then the owner drove the release build and found four more defects — see the row below. jsdom does no layout, so the strip's real width and the longer Turkish labels are still unproven. | 2260 Rust, 0 failed, 28 ignored; 828 frontend (784 + 44); `pnpm lint` clean |
 | 2026-08-21 | **The documents' correction pass finished the three files it had not reached, and one claim it could not settle was settled by asking the artefact.** `docs/licenses.md`'s Rust table was missing five dependencies ART actually ships (`ureq`, `tauri-plugin-drag`, `quick-xml`, `fatfs`, `trash`) and **`hst-imager` was absent from the external-tools table in both licence files** although ART launches it — every licence read from the crate's own `Cargo.toml` in `~/.cargo/registry`, and hst-imager's from the `license.txt` shipped beside `hst.imager.exe` (**MIT**, 1.6.616), neither recalled nor guessed. `CONTRIBUTING.md`'s safety pipeline regained `RECOMMEND` and its "five Play scenarios" became the seven gaps README now lists. `docs/owner-checklist.md` § 5 said *"şu an kimse yapamaz"* about a BoingBag'd tree and had rotted by its own test; it is now the measured result (169.1 s + 138.1 s, `Workbench 45.3`) and the item itself became **driving the Amiga-side panel by hand**. **The dangling id is closed**: twelve code comments cited `ART-150`, an id never filed and a hole between 149 and 151 — all now `ART-148`, with the churn recorded inside ART-148 as the other half of the renumbering that entry already describes. Two documents were caught claiming what is not built: `profile.rs`'s module doc still promised spec §33 user-defined profiles (`winuae_list_profiles` returns `all_presets()` and nothing else), and `architecture.md` still said delete tells the user what happened rather than what is about to — re-read in code, delete now has the **naming** half (`deletePlan.ts`, the `.info` question, one batch that rolls back whole) and not the **costed** half, so the sentence was split rather than deleted. ART-062's title was contradicted by its own body and now says what the body says. **The one row that was not flipped is the finding.** The owner recalled having driven the Amiga-side install panel and sent a screenshot; the screenshot is the **Collection Play** panel (`Akira`, `AkiraCD32.slave`, A1200 · Kickstart 40.68, *Başlatıldı (süreç 28408)*), which does not exercise `AmigaInstallPanel.tsx`. Settled by asking ART's own record rather than by arguing: `amiga_install_run` writes `"Run a package's own installer on the Amiga"` to the operation log on every run, success or failure (`commands/amigainstall.rs:996`), and `operations.jsonl` holds **27 entries and none of them that one** — today's three are `Launch a title`. So FEATURES row 274 and README stay as written. The mechanism was checked *before* the absence was read as evidence. | 2260 Rust, 0 failed, 28 ignored; 784 frontend; `pnpm lint` clean (it had not been run in the previous pass), fmt and clippy `-D warnings` clean |
 | 2026-08-21 | **The OS Builder's preview was starting on every render, not on every click — and then it stopped rescanning discs that had not changed** (branch `scan-cache`). [ART-195](ISSUES.md) and [ART-178](ISSUES.md) are the same defect at two magnitudes and are both closed. `recall` hands back the caller's inline `fallback` when nothing is stored, so `useRemembered(key, isTextList, [])` produced a **fresh array identity every render**; `OsInstall.tsx`'s plan effect depends on `chosen` and `excludedConditional`, so render → plan (three walks of a 468 MB ISO) → `setState` → render, without bound. `recallInto` was worse — a new object on every call, stored or not. The owner's `%TEMP%` settled it after they closed the app to make it stop: preview staging roots numbered to **2,149** in one session, five inside two seconds. **The Stop button was innocent** — it was always wired to `jobCancel`, and `preview_component_collisions` always checked `is_cancelled()`; what produced "another job" was the cancelled preview's promise settling, which is a state change, which fed the loop. Fixed by `sameRemembered` inside both hooks (identity settles, values do not — ART-178's own objection about "not arrived yet" does not bite, because a value that *differs* still lands) and by `spawn_job_in_lane`: a newer preview cancels the previous one through the same token and its entry leaves the registry, with a new `JobState::Superseded` so `JobBar` takes the row **off** rather than stacking a cancelled one. Why 619 frontend tests missed it: `rememberedComponentKey` returns the bare key for AmigaOS 3.2 and the fixtures seed exactly those, so 3.2 never looped; the owner was on 3.9, whose per-release keys nothing had ever written. [ART-194](ISSUES.md) then landed on top — `core::osinstall::scan_cache` keeps a medium's listing keyed on `(path, size, mtime)`, one `atomic_write`-n file per medium path with the identity **inside** it, so a changed disc overwrites its own entry instead of orphaning one the way `preview_cache_dir` does; anything not exactly right is a **miss**, never a partial read, and `CachedSource` is a sixth implementation in `source_contract.rs` so a cache cannot answer differently from the medium it cached. Cached by default, with **Scan again** and a remembered **Reuse the last scan** tickbox beside the media folder — the rescan is the escape hatch for a restored backup that kept its timestamps, which is the one case the cheap key cannot see. **Measured on the owner's own `AmigaOS39.iso`, release build:** one plan 370 ms cold / 207 ms with Windows holding the file, **26 ms warm (8x)**; four concurrent plans 437 ms, which is **1.18x** one plan — so contention was never the cost, the count was. | 2260 Rust, 784 frontend |
 | 2026-08-21 | **One known-good WHDLoad machine, decided by the owner** (branch `whdload-profile`). [ART-152](ISSUES.md) closed — not the per-title `ws_ExpMem` reading it was filed suggesting, which the owner ruled against, but a named profile: `AmigaProfile::whdload_a1200` (68EC020, AGA, 2 MB Chip, 8 MB Fast, Kickstart 3.x). `core::launch::machine_for_request` routes **every** WHDLoad-shaped request to it whatever chipset the catalogue records for the original game; floppies and plain hardfiles still follow the catalogue. The defect was the machine, not the memory: a WHDLoad title boots AmigaDOS and WHDLoad, not the game, so sizing that machine from the game's own chipset gave an OCS title a 68000/OCS/512 KB A500 with ART-151's Fast RAM bolted on. `DEFAULT_WHDLOAD_FAST_RAM_MB` is now *defined as* the profile's own `WHDLOAD_PROFILE_FAST_RAM_MB`, so default, profile and Settings control are one number; the user's Settings value is still remembered and still applied as `.max()`, and the per-title machine picker still outranks the whole decision. whdload.de's requirements page is cited for what it **actually says** — a floor (68000, 1.0 MiB, KS 2.0) and explicitly no recommended configuration — so the profile is recorded as community consensus above that floor, not vendor doctrine; the floor itself is still enforced on the ROM, and an A1200 profile still refuses a Kickstart 1.3 dump with `NoRomMeetsWhdloadMinimum { machine: A1200 }`. **Not measured, and said so in the code**: whether an OCS-only title runs as well on this machine as on the A500 ART used to pick. A draft caveat about WinUAE's 68020 not being cycle-accurate was traced to a MiSTer forum aside, contradicted by WinUAE's own release notes, and dropped rather than written. Nine new guards, five asserting the **generated `.uae` text** (`cpu_model=68020`, `chipset=aga`, `chipmem_size=4`, `fastmem_size=8`) rather than the profile struct, whole-line not `contains`; eleven mutations run against them, all caught. Then the review round found two real defects in it and both are fixed: the Settings control **could not lower anything** (the profile's 8 MB was applied as `.max()`, so a user who lowered Fast RAM was silently overruled — there is no documented Fast RAM floor to defend, whdload.de states 1.0 MiB *total* and the profile's 2 MB Chip meets it, so the user's value is now used exactly, 0 included), and a true refusal carried a **wrong sentence** (a Kickstart 3.1 rev 40.63 A500/A600/A2000 no longer suits the A1200 profile, and reporting that as `NoRomMeetsWhdloadMinimum` told a user holding 3.1 their ROM was too old — new `NoWhdloadMachineRom` names the machine, the version and what to add). Five more mutations, all caught; one of them **not** on the first attempt — `contains("A1200")` and `contains("3.x")` separately both pass on "needs a suitable Kickstart 3.x", so the guard now asserts the phrase whole. | 2239 Rust, 770 frontend |
