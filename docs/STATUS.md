@@ -969,7 +969,7 @@ does not, that is the next defect and it is worth more than any item on the
 work list.
 
 **Done, 2026-08-22.** The OS Builder built a distribution tree from the
-screen: `E:miga\Amigatolon\os39rt5`, **1146 files, 126 directories,
+screen: `E:\amiga\Amigatolon\os39\art5`, **1146 files, 126 directories,
 6 320 749 bytes** from **15 ADFs**, each recorded with its SHA-256, paired
 against the owner's Kickstart 40.68 (A1200). 2293 entries on disk — 1146
 files, 1146 `.uaem` sidecars and the manifest — and that arithmetic closes
