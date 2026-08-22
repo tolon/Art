@@ -362,6 +362,12 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // `phrase-keys.test.ts` (`stepLabelKey: every OS Builder step resolves`),
     // and `stepsFor` cannot return an id outside `STEP_IDS` — its own test in
     // `src/lib/buildSteps.test.ts` asserts that.
-    expect(dynamicCalls).toBe(127);
+    // 127 -> 128 (package bundles, Task 7 -- "the screen"): BundlePanel.tsx
+    // reads each set's card heading as t(`bundles.set.${set.id}`). The 14
+    // ids are Rust-driven data (bundles_list), not a fixed list this scan
+    // could enumerate, so there is no per-id literal to find here --
+    // src/i18n/dead-keys.test.ts's template-literal-prefix rule is what
+    // proves every bundles.set.<id> leaf is actually reachable.
+    expect(dynamicCalls).toBe(128);
   });
 });

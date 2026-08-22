@@ -40,6 +40,7 @@ pub const BUNDLE_DOWNLOAD_EVENT: &str = "bundle-download-result";
 /// nothing here is a URL, but a raw Aminet path is still more than the
 /// checklist needs to render a row).
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EntrySummary {
     pub id: String,
     pub name: String,
@@ -48,6 +49,13 @@ pub struct EntrySummary {
     /// can show where a file comes from without seeing the path itself.
     pub kind: &'static str,
     pub permission: Option<Permission>,
+    /// Task 7's own addition — `bundles_list` shipped without it, and the
+    /// screen needs it to render `tolunnet`/`miamidx` and the two Directory
+    /// Opus builds as alternatives (shown, never enforced: downloading both
+    /// is a legitimate thing to want). Same field `BundleEntry` already
+    /// carries; `camelCase` here matches `ComponentDef::exclusiveGroup` in
+    /// `commands/osinstall.rs`, the same shape on the OS Builder's side.
+    pub exclusive_group: Option<String>,
 }
 
 impl From<&BundleEntry> for EntrySummary {
@@ -57,6 +65,7 @@ impl From<&BundleEntry> for EntrySummary {
             name: entry.name.clone(),
             kind: entry_kind(&entry.source),
             permission: entry.permission.clone(),
+            exclusive_group: entry.exclusive_group.clone(),
         }
     }
 }
@@ -252,6 +261,27 @@ mod tests {
         let arsiv = sets.iter().find(|s| s.id == "arsiv").unwrap();
         assert_eq!(arsiv.entries.len(), 6);
         assert!(arsiv.entries.iter().all(|e| e.kind == "aminet"));
+    }
+
+    /// Task 7 (the screen): `tolunnet` and `miamidx` must reach the screen
+    /// still carrying `"tcp"`, so the panel can say they are alternatives
+    /// rather than silently offering two ticks with no connection between
+    /// them.
+    #[test]
+    fn the_two_tcp_stacks_are_listed_carrying_the_same_exclusive_group() {
+        let sets = bundles_list().unwrap();
+        let group = |id: &str| {
+            sets.iter()
+                .flat_map(|s| &s.entries)
+                .find(|e| e.id == id)
+                .unwrap_or_else(|| panic!("'{id}' is shipped"))
+                .exclusive_group
+                .clone()
+        };
+        assert_eq!(group("tolunnet"), Some("tcp".to_string()));
+        assert_eq!(group("miamidx"), Some("tcp".to_string()));
+        // An ordinary entry outside any group must not gain one by accident.
+        assert_eq!(group("lha"), None);
     }
 
     #[test]

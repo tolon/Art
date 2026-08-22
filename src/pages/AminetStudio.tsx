@@ -72,6 +72,7 @@ import {
 import type { PartialPhrase } from "@/lib/phrase";
 import { volumeScan } from "@/lib/volume";
 import { usePowerMode } from "@/lib/uxmode";
+import { BundlePanel } from "@/components/sources/BundlePanel";
 
 /** Ordering choices, in the words a user would use. Labels resolve through
  * `t()` at render time so switching language updates them without a reload. */
@@ -971,6 +972,8 @@ export function AminetStudio() {
           </div>
         )}
       </section>
+
+      <BundlePanel />
 
       {error && (
         <div className="badge badge-err" style={{ marginBottom: 12 }}>

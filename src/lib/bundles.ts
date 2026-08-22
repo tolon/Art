@@ -27,6 +27,14 @@ export interface EntrySummary {
   name: string;
   kind: EntryKind;
   permission: Permission | null;
+  /**
+   * Alternatives to *install*, never enforced — `tolunnet`/`miamidx` and the
+   * two Directory Opus builds each share one. Two entries carrying the same
+   * non-null value are shown as alternatives on the screen; nothing here
+   * disables either tick, because downloading both is a legitimate thing to
+   * want.
+   */
+  exclusiveGroup: string | null;
 }
 
 export interface BundleSummary {

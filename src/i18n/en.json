@@ -2433,5 +2433,55 @@
       "emptyRoot": "Nothing scanned in this folder yet — press Update.",
       "titleCount": "{{count}} titles"
     }
+  },
+  "bundles": {
+    "heading": "Package sets",
+    "intro": "Pick a set and ART downloads its packages, in order, into your download folder. Nothing is fetched until you press the button.",
+    "loading": "Loading the package sets…",
+    "entryCount": "{{count}} packages",
+    "set": {
+      "acilis": "Startup — boot menus, boot priority, the system clock",
+      "ag": "Networking — TCP/IP, SSL, wireless, speed testing",
+      "amigaos-eki": "AmigaOS extras — SetPatch and Workbench-Library, from Amiga Forever",
+      "arsiv": "Archivers — LHA, LZX, Zip and the unpackers behind them",
+      "dosya-sistemi": "Filesystems — PFS3, FAT, SMB and the drivers that mount them",
+      "emu68": "Emu68 — the PiStorm's own 68k core, its tools and its network driver",
+      "grafik": "Graphics — Picasso96 and the image datatypes built on it",
+      "ibrowse": "iBrowse — the demo build of the web browser",
+      "kabuk": "Shell tools — renaming, batch editing, a better command line",
+      "masaustu": "Desktop — Directory Opus, ViNCEd, CLI conveniences",
+      "medya": "Media — the Hippo Player module and sample player",
+      "temel": "Basics — MUI, ReqTools, the Installer, an icon library",
+      "teshis": "Diagnostics — SnoopDOS, SysInfo, BusTest, checksums",
+      "whdload": "WHDLoad — the loader itself, and its own installer wrapper"
+    },
+    "permission": {
+      "warning": "Some of these are used with the author's permission and carry conditions: {{names}}. The conditions travel with the files."
+    },
+    "entry": {
+      "userSupplied": "ART cannot fetch this one — you supply it. {{why}}",
+      "alternatives": "{{names}} are alternatives — installing more than one is fine.",
+      "reason": {
+        "userSupplied": "No listed source exists for it.",
+        "mirror": "No mirror is configured for it yet."
+      }
+    },
+    "run": "Download the chosen sets",
+    "running": "Downloading…",
+    "progress": "{{name}} — {{done}}/{{total}}",
+    "blocked": {
+      "nothingChosen": "Choose at least one set first."
+    },
+    "err": {
+      "listFailed": "Could not load the package sets: {{error}}"
+    },
+    "result": {
+      "downloaded": "{{count}} downloaded",
+      "alreadyHave": "{{count}} were already here",
+      "notPlaced": "{{count}} were fetched but not placed — something of that name is already in your folder",
+      "refused": "{{count}} ART cannot fetch",
+      "failed": "{{count}} failed",
+      "skipped": "{{count}} skipped when you cancelled"
+    }
   }
 }
