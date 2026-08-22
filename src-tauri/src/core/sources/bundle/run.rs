@@ -25,6 +25,13 @@ pub enum EntryOutcome {
     AlreadyHave {
         path: PathBuf,
     },
+    /// Fetched, but **not placed**: a file of that name is already in the
+    /// library and ART does not overwrite what the user already has. Nobody
+    /// established whether it is the same file — a name is not an identity
+    /// — so this is neither `Downloaded` nor `AlreadyHave`.
+    NotPlaced {
+        existing: PathBuf,
+    },
     /// ART will not fetch it, and said so before the run — a `user-supplied`
     /// entry, or a source with no configured mirror.
     Refused {
@@ -97,6 +104,20 @@ pub fn download_entries(
                             Ok(placement) if fetched.from_cache => EntryOutcome::AlreadyHave {
                                 path: placement.path,
                             },
+                            // The fetch itself was a real network transfer, but
+                            // nothing was written at the destination: a file of
+                            // that name was already there and ART does not
+                            // overwrite it. Reporting `Downloaded` here would be
+                            // exactly the "confident, wrong sentence" this
+                            // project singles out — the bytes at `path` are
+                            // whatever was already there, not what was just
+                            // fetched, and are not necessarily even the same
+                            // size as `fetched.bytes`.
+                            Ok(placement) if placement.skipped_existing => {
+                                EntryOutcome::NotPlaced {
+                                    existing: placement.path,
+                                }
+                            }
                             Ok(placement) => EntryOutcome::Downloaded {
                                 bytes: fetched.bytes,
                                 path: placement.path,
@@ -286,6 +307,49 @@ mod tests {
             second.entries[0].outcome,
             EntryOutcome::AlreadyHave { .. }
         ));
+    }
+
+    /// ART-review Critical: a cold-cache download (the fetch is real, not a
+    /// cache hit) over a library slot that already holds a file of the same
+    /// name must not be reported as `Downloaded` — nothing was written
+    /// there, and the pre-existing file is left byte-for-byte alone.
+    #[test]
+    fn a_cold_fetch_over_an_occupied_library_slot_is_not_placed_rather_than_downloaded() {
+        let scratch = ScratchDir::new("art-bundle-run", "occupied");
+        let client = MockMirror::new().with_file(&url("util/arc/lha_68k"), b"lha bytes");
+        let mirrors = vec![Mirror::new("Test", BASE).unwrap()];
+        let cache = CacheLayout::new(scratch.join("cache"));
+        let library = Library::new(scratch.join("library"));
+
+        // Something already sits at the destination the entry would resolve
+        // to — a file the user put there themselves, under the same name
+        // `resolve()` would give the fetched package.
+        let existing_dir = scratch.join("library").join("sets");
+        std::fs::create_dir_all(&existing_dir).unwrap();
+        let existing_path = existing_dir.join("lha_68k");
+        std::fs::write(&existing_path, b"the user's own file").unwrap();
+
+        let ctx = DownloadContext {
+            aminet: &mirrors,
+            configured: &[],
+            client: &client,
+            cache: &cache,
+            library: &library,
+            subfolder: "sets",
+        };
+        let entries = vec![aminet_entry("lha", "util/arc/lha_68k")];
+
+        let report = download_entries(&entries, &ctx, &NoProgress);
+
+        match &report.entries[0].outcome {
+            EntryOutcome::NotPlaced { existing } => assert_eq!(existing, &existing_path),
+            other => panic!("expected NotPlaced, got {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read(&existing_path).unwrap(),
+            b"the user's own file",
+            "the pre-existing file must be left untouched"
+        );
     }
 
     #[test]
