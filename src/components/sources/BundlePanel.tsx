@@ -240,6 +240,17 @@ export function BundlePanel() {
   // (line ~460 below); ticking it here anyway would render it checked and
   // disabled at once, telling the user two things at the same time.
   // Second re-review, item 3.
+  //
+  // Third re-review: stopping there just moved the same false claim one
+  // layer up — a fully checked control still carried the old "Everything —
+  // every set at once" label while an excluded set sat visibly unticked in
+  // the list, and a checked box named "everything" *is* the false claim
+  // when something is deliberately left out. `allChosen`/`toggleAll` below
+  // are unchanged (they were already honest: checked means "every set with
+  // something fetchable is ticked"); the fix is `bundles.set.hepsi`'s own
+  // text (`en.json`/`tr.json`), which now says exactly that instead of an
+  // unqualified "everything", so the label and the list can no longer
+  // disagree.
   const selectableSetIds = useMemo(
     () => (sets ?? []).filter((set) => fetchableCount(set.entries) > 0).map((set) => set.id),
     [sets]

@@ -2448,7 +2448,7 @@
       "dosya-sistemi": "Filesystems — PFS3, FAT, SMB and the drivers that mount them",
       "emu68": "Emu68 — the PiStorm's own 68k core, its tools and its network driver",
       "grafik": "Graphics — Picasso96 and the image datatypes built on it",
-      "hepsi": "Everything — every set at once",
+      "hepsi": "Everything fetchable — every set with something ART can fetch, at once",
       "ibrowse": "iBrowse — the demo build of the web browser",
       "kabuk": "Shell tools — renaming, batch editing, a better command line",
       "masaustu": "Desktop — Directory Opus, ViNCEd, CLI conveniences",

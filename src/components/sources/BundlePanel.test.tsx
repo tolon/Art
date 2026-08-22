@@ -497,7 +497,17 @@ describe("a select-all control ticks every shipped set at once", () => {
   // the user two contradictory things at once. Select-all here ticks fewer
   // than all three shipped sets; that is the honest outcome, and nothing
   // on screen may claim it selected "everything" when it selected two.
-  it("does not tick a set whose own checkbox is disabled because nothing in it is fetchable", async () => {
+  //
+  // Third re-review: the first fix stopped there and missed a second false
+  // claim in the same shape one layer up — a fully *checked* select-all
+  // still carried its old "Everything — every set at once" label while
+  // `emu68` sat right there, visibly unticked. A checked box labelled
+  // "everything" *is* a false claim when a set is deliberately excluded.
+  // The fix is the label, not the checked state: `bundles.set.hepsi` now
+  // says what the control actually selects — every set with something
+  // fetchable — so a fully-checked control and an excluded, unfetchable
+  // set no longer disagree.
+  it("does not tick a set whose own checkbox is disabled, and the control's own label does not claim otherwise", async () => {
     listMock.mockResolvedValue([ARSIV_SET, PICASSO_SET, EMU68_SET]);
     render(<BundlePanel />);
     const selectAll = await screen.findByRole("checkbox", { name: i18n.t("bundles.set.hepsi") });
@@ -513,13 +523,19 @@ describe("a select-all control ticks every shipped set at once", () => {
       true
     );
     // The disabled set stays unticked — checked-and-disabled at once is
-    // exactly the contradiction this item fixes.
+    // exactly the first contradiction this item fixed.
     expect(emu68Checkbox.checked).toBe(false);
     // The select-all control itself still reads as fully checked, because
-    // every set it is honestly able to tick now is ticked — it does not
-    // claim emu68 is selected too; that set's own checkbox, visibly
-    // unchecked and disabled, is what tells the truth about emu68.
+    // every set it is honestly able to tick now is ticked.
     expect((selectAll as HTMLInputElement).checked).toBe(true);
+    // But a checked box next to the *old* "Everything — every set at once"
+    // label would itself be the false claim this round's own re-review
+    // found: it asserts every set is selected while emu68 visibly is not.
+    // The control's label must say what it actually selects instead —
+    // "fetchable", not an unqualified "everything" — so a reader looking
+    // from the label to the list finds them agreeing, not contradicting.
+    expect(screen.queryByText("Everything — every set at once")).toBeNull();
+    expect(selectAll.getAttribute("aria-label")).not.toBe("Everything — every set at once");
 
     // Running only downloads the two fetchable sets' entries — emu68 was
     // never ticked, so none of its entries are handed to the download call.
