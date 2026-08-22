@@ -679,6 +679,50 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-214** 🟡 ✅ **The download folder was named for one of its two users,
+and its hint described a folder ART does not choose** — *found 2026-08-22 by
+the owner, minutes after the first real package-set download*
+`src/pages/Settings.tsx::AminetDownloadField` · `src/i18n/{en,tr}.json`
+
+43 packages landed in `C:\Users\ismoz\Downloads\Amiga Retro Toolkit` and the
+owner's reaction was *"ben ayarlamadım, default burayı yazmışsın"* — I did not
+set this, you wrote it as the default. They were right, and looking for where
+to change it surfaced three separate wrongnesses in one small field.
+
+**The name had stopped being true.** It read *"Aminet Download Folder"*.
+[ART-213](#fixed)'s package sets download through the same `Library`, so
+somebody hunting for where their sets went had no reason to read a field
+labelled Aminet. The feature grew and its label did not.
+
+**The hint described something that does not happen.** *"Left empty, ART uses
+its own folder"* — `lib.rs`'s default is `download_dir()`, the **operating
+system's** download folder, which on Windows is the user's own
+`Downloads\Amiga Retro Toolkit`. Their disk, not ART's. The sentence invited
+exactly the conclusion the owner drew, that ART had picked somewhere of its
+own.
+
+**Changing it moves nothing, and nothing said so.** `sources_relocate` moves
+one file between subfolders *inside* a library; there is no whole-library
+move. Repointing the field therefore leaves everything already fetched behind
+— silently. §92's own rule is that ART says what it did and did not do.
+
+**Not a defect, and stated so it is not "fixed" later by mistake: the default
+stays the OS download folder.** The owner's decision, in their own words:
+*"varsayılan download alanı c olabilir onda sorun yok, bazı insanların tek
+diski olur."* [ART-196](#open)'s "ART writes to `C:`" is about **scratch** the
+user never asked for and cannot move; this is a visible, settable choice with
+a sensible platform default, and one-disk machines are the reason it is that
+default.
+
+**Fixed 2026-08-22** — the field is *"Download folder"* / *"İndirme
+klasörü"*, its hint names both Aminet downloads and package sets, says the
+default is *your own* Downloads folder rather than ART's, and states that
+changing it affects only the next download. Both catalogues, same commit.
+
+The owner's own 43 files were moved to `E:\amiga\ProjeART\indirilenler` by
+hand in the same pass, because ART cannot move a library itself — which is
+worth its own entry if anyone ever wants it to.
+
 **ART-213** 🟠 ✅ **A cold-cache download over an occupied library slot was
 reported as `Downloaded`, and the same gap let one narrower case through
 even after that was fixed** — *found and fixed 2026-08-22, package bundles
