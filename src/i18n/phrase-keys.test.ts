@@ -905,6 +905,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
         ],
         refusals: [],
         totalBytes: 0,
+        totalFiles: 0,
         componentsOn: ["workbench-base"],
         mediaPaths: { Workbench3_2: "E:\\wb.adf" },
         packages: [],

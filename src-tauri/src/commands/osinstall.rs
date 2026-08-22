@@ -2341,7 +2341,11 @@ mod tests {
                 item(overrider, "OverlayDisk", "C/New", "C/New", 3),
             ],
             refusals: Vec::new(),
+            // Inert here — this fixture is about `preview`, which never
+            // reads either total. Left at zero rather than computed, so a
+            // reader is not invited to trust a number nothing checks.
             total_bytes: 0,
+            total_files: 0,
             components_on: vec!["workbench-base".to_string(), overrider.to_string()],
             paired_rom: None,
             media_paths,
@@ -2697,6 +2701,7 @@ mod tests {
             items: Vec::new(),
             refusals: Vec::new(),
             total_bytes: 0,
+            total_files: 0,
             components_on: Vec::new(),
             paired_rom: None,
             // A path that does not exist: reaching for it at all would fail.
@@ -3692,6 +3697,7 @@ mod tests {
                     "items",
                     "refusals",
                     "totalBytes",
+                    "totalFiles",
                     "componentsOn",
                     "pairedRom",
                     "mediaPaths",

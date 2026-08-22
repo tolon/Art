@@ -259,6 +259,7 @@ function planResultFor(req: InstallRequest): PlanResult {
       items,
       refusals: [],
       totalBytes: items.reduce((sum, item) => sum + item.bytes, 0),
+      totalFiles: items.filter((item) => !item.isDir).length,
       // ROM is V47 here, so "modules-a1200" (conditionMajor: 47) is not
       // forced on — the "condition-off" reasoning branch, not "rom-needed".
       // Release-aware, because ART-175's whole subject is a component that
@@ -427,7 +428,11 @@ describe("ticking a component changes what the screen will do", () => {
   it("reaches the request osinstallPlan is asked to plan, and what the plan section shows", async () => {
     await renderFull();
 
-    expect(document.body.textContent).toContain("1 items,");
+    // ART-205: the tree the plan predicts (one file) and the work it
+    // describes (one item), which are the same number only while nothing
+    // overrides anything.
+    expect(document.body.textContent).toContain("1 file, ");
+    expect(document.body.textContent).toContain("from 1 planned item.");
 
     const checkbox = screen.getByRole("checkbox", { name: "Extras3.2" }) as HTMLInputElement;
     expect(checkbox.checked).toBe(false);
@@ -446,7 +451,7 @@ describe("ticking a component changes what the screen will do", () => {
 
     // ...and what the user sees changes with it — a second plan item shown,
     // not just an API call nobody could see the effect of.
-    await waitFor(() => expect(document.body.textContent).toContain("2 items,"));
+    await waitFor(() => expect(document.body.textContent).toContain("from 2 planned items."));
   });
 });
 
@@ -848,6 +853,7 @@ describe("a folder that is simply the wrong one (ART-208)", () => {
           items: [],
           refusals: WRONG_FOLDER_REFUSALS,
           totalBytes: 0,
+          totalFiles: 0,
           componentsOn: ["workbench-base", "install-libs", ...req.chosen],
           mediaPaths: {},
           packages: [],
@@ -922,6 +928,7 @@ describe("a folder that is simply the wrong one (ART-208)", () => {
         items: [],
         refusals: [WRONG_FOLDER_REFUSALS[0]],
         totalBytes: 0,
+        totalFiles: 0,
         componentsOn: ["workbench-base"],
         mediaPaths: {},
         packages: [],
@@ -1018,6 +1025,7 @@ describe("a refusal renders as a sentence, not a blank", () => {
       items: [],
       refusals: [REFUSAL],
       totalBytes: 0,
+      totalFiles: 0,
       componentsOn: ["workbench-base", "install-libs"],
       mediaPaths: {},
       packages: [],

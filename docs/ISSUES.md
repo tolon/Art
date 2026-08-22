@@ -26,43 +26,6 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-205** 🟠 **The predicted size of a distribution is larger than the
-one that lands, whenever a component overrides another** — *found 2026-08-22 by
-building the owner's real AmigaOS 3.9 tree*
-`src-tauri/src/core/osinstall/plan.rs::content_bytes` · `apply.rs`
-
-Measured, on the owner's own `AmigaOS39.iso`, into a real folder:
-
-```
-items=1517   plan.total_bytes=17 579 966
-apply: files=1242 directories=105 bytes=14 883 492 in 22.79s
-difference = -2 696 474
-```
-
-The tree is correct — 1242 files, `workbench-base` 450 + `workbench-39` 792,
-the manifest written. What is wrong is the **prediction**.
-
-**Why, almost certainly:** 3.9 is two components and the second `overrides` the
-first ([ART-169](#fixed)). A file the overlay replaces is **two plan items and
-one file on disk**, so `plan.total_bytes` counts both and
-`ApplyOutcome::bytes` counts what landed. 1517 items against 1242 files is the
-same arithmetic from the other side.
-
-**Why it matters rather than being a rounding detail:** `total_bytes` is what a
-progress bar divides by and what a "this will need N MB" sentence would say.
-An over-statement of 2.7 MB on 14.9 MB is **18%**, and it is systematic, not
-noise. This project's own rule is that a number stated confidently and wrongly
-is the expensive kind of defect; a bar that reaches 85% and stops is exactly
-that shape.
-
-**Not yet diagnosed, and the entry says so.** The override explanation fits the
-counts but has not been proved — [ART-156](#fixed) was a *different*
-miscount in the same field (directory extents), diagnosed wrongly the first
-time and corrected by measurement. The fix is not to subtract 2.7 MB; it is to
-decide what `total_bytes` is **for** — bytes ART will read, or bytes that will
-exist afterwards — and make one function answer that one question, with the
-overriding case in a test.
-
 **ART-196** 🟠 **ART writes its scratch to the system drive and the user
 cannot move it** — *raised by the owner 2026-08-21, after their C: had already
 been filled once by ART's own test scratch*
@@ -679,6 +642,83 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-205** 🟠 ✅ **The predicted size of a distribution was larger
+than the one that landed, whenever a component overrode another** — *found
+2026-08-22 by building the owner's real AmigaOS 3.9 tree; fixed the same day*
+`src-tauri/src/core/osinstall/plan.rs::tree_totals` ·
+`src/components/osbuilder/OsInstall.tsx`
+
+**The override explanation was the right one, and it is now measured rather
+than "almost certainly".** A path two components both write is *two* plan
+items and *one* file on disk — that is what an `overrides` relationship is —
+and `content_bytes` summed items. [ART-124](#fixed) had already taught
+`ApplyOutcome::files` to count destinations instead of items and left the
+plan's own arithmetic alone, so the prediction and the result were computed
+two different ways about the same tree.
+
+**The fix is the semantic one the entry asked for, not a subtraction.**
+`total_bytes` now answers one question — *what will the tree hold* — by
+folding items on [`destination_key`] and keeping the **last** writer's size,
+the same key and the same last-writer-wins rule `apply`'s own
+`TreeWriter::record` applies. A second field, `total_files`, answers the same
+question about the file count, because `items.len()` was the identical defect
+from the other side: the screen told the owner **1517** where **1242** files
+and 105 drawers landed.
+
+**Measured on the owner's own material, both releases, after the fix:**
+
+```
+AmigaOS 3.9 (AmigaOS39.iso)    plan 14 883 492  apply 14 883 492   difference 0
+                               items 1517 -> files 1242, directories 105, 11.58 s
+AmigaOS 3.2 (15 ADFs)          plan 12 700 698  apply 12 700 698   difference 0
+                               items 4383 -> files 3954, directories 281
+```
+
+**Directories are deliberately not predicted.** `apply` creates the ancestors
+no rule names (`count_missing_prefixes`), so a count made in `plan` would be
+an under-statement nobody could act on — better absent than confidently wrong.
+
+**One thing it still cannot predict, stated rather than hidden**: a composed
+`S/User-Startup`. `apply` merges `plan.user_startup` into a file no `PlanItem`
+describes. Every shipped component contributes no lines, so the two agree
+today; a future recipe that contributes some makes this an under-statement.
+
+**The screen says both numbers.** *"1242 files, 14.9 MB total, from 1517
+planned items."* The second clause is why the list below it is longer than the
+first number — without it a user who counted rows would find the header
+wrong.
+
+*Tests:* `plan::a_destination_two_components_write_is_one_file_in_the_totals`,
+`plan::two_spellings_of_one_destination_are_one_file_in_the_totals`,
+`apply::the_plan_predicts_the_bytes_the_tree_will_hold_not_the_bytes_it_reads`
+(which weighs the real tree on disk rather than recomputing the plan's own
+formula, for [ART-124](#fixed)'s reason), plus the two real-material hooks
+above, which now compare `outcome.files` against `planned.total_files` as well
+as the bytes.
+
+**Three mutations run, three fell:**
+
+| Mutation | What fell |
+|---|---|
+| sum per item, not per destination (the defect itself) | all three |
+| directories contribute again ([ART-156](#fixed) put back) | the ART-156 test and the end-to-end one |
+| the **first** writer's size survives, not the last | both `plan` unit tests |
+
+**One survivor, disclosed:** the end-to-end test does *not* fall to the
+third mutation, because every fixture file is 4 bytes — first and last are
+the same number there. The two `plan` unit tests are what guard that half,
+and they use different sizes (100 against 250) for exactly that reason.
+
+**And it uncovered a real-material hook that could not pass.** The 3.9 hook
+still pinned 588 files / 75 directories / 6,054,225 bytes — the *one*-component
+tree from before [ART-169](#fixed) added `workbench-39`. [ART-206](#fixed)
+corrected that hook's component assertion without re-measuring its counts.
+Re-measured and re-pinned at 1242 / 105 / 14,883,492. Its last assertion was
+wrong in a second way: `manifest.built_from.len()` was compared with
+`components_on.len()`, and `built_from` records one entry per **medium** — the
+same disc serves both components, so it is 1 against 2. Compared against
+`planned.media_paths.len()`, which is what the field actually holds.
+
 **ART-214** 🟡 ✅ **The download folder was named for one of its two users,
 and its hint described a folder ART does not choose** — *found 2026-08-22 by
 the owner, minutes after the first real package-set download*
@@ -1022,7 +1062,7 @@ Tests: `shows each release's own media folder, never the other's`,
 Both mutations — each key put back to its bare form — were run and fell.
 
 **ART-206** 🔵 ✅ **A real-material check that could not pass at all** —
-*found 2026-08-22, on the way to [ART-205](#open)*
+*found 2026-08-22, on the way to [ART-205](#fixed)*
 `src-tauri/src/core/osinstall/apply.rs::build_the_real_39_tree_when_asked`
 
 The `#[ignore]`d hook that builds a 3.9 tree from a real disc asserted
@@ -1040,7 +1080,13 @@ matters is whether the thing is actually being asked.
 
 **Fixed 2026-08-22** — the assertion now names both components and says why.
 With it corrected the hook ran and built the owner's tree, which is how
-[ART-205](#open) was found.
+[ART-205](#fixed) was found.
+
+**And it was still not passing.** Closing ART-205 ran the hook to its end for
+the first time and found two more stale assertions in it: the pinned
+588/75/6,054,225 counts (the one-component tree, re-measured to
+1242/105/14,883,492) and `built_from.len() == components_on.len()`, which
+compares media with components. Both corrected there; the hook passes.
 
 **ART-203** 🔴 ✅ **A distribution tree cannot be built from the screen at
 all: the folder picker can only return a folder that exists, and `apply`

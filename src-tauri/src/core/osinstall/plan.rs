@@ -233,9 +233,44 @@ pub struct InstallPlan {
     /// the plan's 75 directory items, every one of the 588 file items being
     /// byte-exact.
     ///
+    /// **One destination is counted once, and that is ART-205.** A path two
+    /// components both write is one file on disk and *two* `items` — that is
+    /// what an `overrides` relationship is (ART-112 was a missing one) — so
+    /// the sum folds by [`super::destination_key`] and keeps the **last**
+    /// writer's size, exactly the rule `apply`'s own `TreeWriter::record`
+    /// applies to the bytes it accounts for. ART-124 taught
+    /// `ApplyOutcome::files` to count destinations rather than items and left
+    /// this field summing items: on the owner's own AmigaOS 3.9 disc,
+    /// `17,579,966` predicted against `14,883,492` written, 18% over and
+    /// systematic.
+    ///
+    /// **The one thing it cannot predict** is a composed `S/User-Startup`:
+    /// [`apply`](super::apply::apply) merges [`InstallPlan::user_startup`]
+    /// into a file no `PlanItem` describes. Every shipped component
+    /// contributes no lines, so the two agree today; a future recipe that
+    /// contributes some makes this an under-statement.
+    ///
     /// This is a progress bar's total, and the thing it is measuring progress
     /// through is bytes written, so it counts what gets written.
     pub total_bytes: u64,
+    /// How many **files the tree will hold** when [`apply`](super::apply::apply)
+    /// finishes — distinct destinations, the same fold
+    /// [`InstallPlan::total_bytes`] performs and the same number
+    /// `ApplyOutcome::files` reports afterwards.
+    ///
+    /// Its own field rather than `items.len()`, which is the count of the
+    /// *work*: 1517 plan items produced 1242 files and 105 drawers on the
+    /// owner's real 3.9 disc, and the screen quoting `items.len()` told them
+    /// 1517 (ART-205, the same arithmetic as `total_bytes` from the other
+    /// side). Directories are not predicted at all: `apply` creates the
+    /// ancestors no rule names (`count_missing_prefixes`), so a count made
+    /// here would be an under-statement nobody could act on.
+    ///
+    /// `#[serde(default)]` for the reason `paired_rom` and `packages` carry
+    /// one: an `InstallPlan` round-trips through the wire, and one serialised
+    /// before this field existed must still deserialise.
+    #[serde(default)]
+    pub total_files: u64,
     /// Every component id that is switched on — required, explicitly
     /// chosen, or turned on by its own [`Condition`] — regardless of
     /// whether its media could actually be found. Populated even when the
@@ -795,19 +830,31 @@ pub(crate) fn detect_package_refusals(
 /// [`MediaSource::walk`]. Then check the whole walked-out item list for
 /// file-level collisions, and sum. See the module doc comment for why
 /// refusals never stop the walk and why any refusal empties `items`.
-/// [`InstallPlan::total_bytes`] — the bytes of **file content** `apply()`
-/// will write, which is every item that is not a directory (ART-156).
+/// [`InstallPlan::total_bytes`] and [`InstallPlan::total_files`] — the tree
+/// `apply()` will leave behind, not the reading it will do to get there.
+///
+/// Two rules, one per defect that produced them:
+///
+/// - **A directory item contributes nothing** (ART-156). An ADF-sourced
+///   drawer reports `bytes: 0`, but a CD-sourced one reports its ISO9660
+///   extent length, and `apply()` turns both into a host folder with no
+///   content of its own.
+/// - **A destination is counted once** (ART-205), folded by
+///   [`super::destination_key`] with the **last** writer's size kept — the
+///   same key and the same last-writer-wins rule `apply`'s `TreeWriter::record`
+///   uses, because these two numbers describe the same tree and may not be
+///   worked out two different ways.
 ///
 /// Its own function rather than an inline `sum`, so a test can ask the real
-/// arithmetic instead of restating it: the defect this closes was one where
+/// arithmetic instead of restating it: the defect ART-156 closed was one where
 /// the plan and a test recomputing the same formula agreed with each other
 /// and with nothing that was actually written.
-fn content_bytes(items: &[PlanItem]) -> u64 {
-    items
-        .iter()
-        .filter(|item| !item.is_dir)
-        .map(|item| item.bytes)
-        .sum()
+fn tree_totals(items: &[PlanItem]) -> (u64, u64) {
+    let mut per_destination: BTreeMap<String, u64> = BTreeMap::new();
+    for item in items.iter().filter(|item| !item.is_dir) {
+        per_destination.insert(super::destination_key(&item.to), item.bytes);
+    }
+    (per_destination.values().sum(), per_destination.len() as u64)
 }
 
 pub fn plan(request: &InstallRequest, recipe: &Recipe) -> CoreResult<InstallPlan> {
@@ -1083,7 +1130,7 @@ fn plan_over_with_cache(
         // that could not be resolved, is not something to preview either.
         (Vec::new(), BTreeMap::new(), BTreeMap::new())
     };
-    let total_bytes = content_bytes(&items);
+    let (total_bytes, total_files) = tree_totals(&items);
 
     let paired_rom = rom_facts.map(|facts| super::PairedRom {
         name: facts.info.name.clone(),
@@ -1098,6 +1145,7 @@ fn plan_over_with_cache(
         items,
         refusals,
         total_bytes,
+        total_files,
         components_on,
         paired_rom,
         media_paths,
@@ -2402,10 +2450,63 @@ mod plan_tests {
             },
         ];
         assert_eq!(
-            content_bytes(&items),
-            100,
-            "the drawer's 2048 extent bytes are not content"
+            tree_totals(&items),
+            (100, 1),
+            "the drawer's 2048 extent bytes are not content, and it is not a file"
         );
+    }
+
+    /// **ART-205, at the arithmetic itself.** The end-to-end half is
+    /// `apply.rs`'s `the_plan_predicts_the_bytes_the_tree_will_hold_not_the_bytes_it_reads`,
+    /// which weighs a real tree on disk; this asks the one function directly,
+    /// over the shape an `overrides` relationship produces — two items, one
+    /// destination — so a regression is named here rather than only in a test
+    /// that has to build a tree to see it.
+    ///
+    /// The **later** item's size is the one that survives, because that is
+    /// the one whose bytes are on disk when `apply` finishes.
+    #[test]
+    fn a_destination_two_components_write_is_one_file_in_the_totals() {
+        let item = |component: &str, to: &str, bytes: u64| PlanItem {
+            component: component.into(),
+            media: "Workbench3.2".into(),
+            from: to.into(),
+            to: to.into(),
+            is_dir: false,
+            bytes,
+        };
+        let items = vec![
+            item("workbench-base", "C/Format", 100),
+            item("classes", "C/Format", 250),
+            item("classes", "C/New", 7),
+        ];
+        assert_eq!(
+            tree_totals(&items),
+            (257, 2),
+            "one file at 250 (the overrider's, written last) plus one at 7"
+        );
+    }
+
+    /// The same fold, through `destination_key` rather than through an exact
+    /// string: a Joliet-less disc yields `C/ASSIGN` where a package's ZIP
+    /// payload yields `C/Assign`, and `apply` writes **one** file — the same
+    /// reason `detect_collisions` keys on it (and the reason ~211 of a real
+    /// BoingBag's collisions were once invisible).
+    #[test]
+    fn two_spellings_of_one_destination_are_one_file_in_the_totals() {
+        let item = |component: &str, to: &str, bytes: u64| PlanItem {
+            component: component.into(),
+            media: "AmigaOS39".into(),
+            from: to.into(),
+            to: to.into(),
+            is_dir: false,
+            bytes,
+        };
+        let items = vec![
+            item("workbench-base", "C/ASSIGN", 100),
+            item("boingbag-39-1", "C/Assign", 250),
+        ];
+        assert_eq!(tree_totals(&items), (250, 1));
     }
 
     // ---- coverage beyond the brief's own six, closing gaps a

@@ -217,7 +217,14 @@ export interface InstallPlan {
   release: string;
   items: PlanItem[];
   refusals: RefusalReason[];
+  /** The bytes the finished tree will hold — one count per destination, so a
+   *  path two components both write is counted once (ART-205). Not the bytes
+   *  `apply` will read: an override reads two files and leaves one. */
   totalBytes: number;
+  /** The files the finished tree will hold, on the same one-per-destination
+   *  rule. Not `items.length`, which is the work: the owner's real 3.9 disc
+   *  planned 1517 items and produced 1242 files and 105 drawers. */
+  totalFiles: number;
   /** Every component id switched on — required, chosen, or turned on by its
    *  own condition — regardless of whether its media could be found. */
   componentsOn: string[];

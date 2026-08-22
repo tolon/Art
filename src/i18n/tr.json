@@ -2185,7 +2185,10 @@
     },
     "plan": {
       "heading": "Ne yazılacağı",
-      "summary": "{{items}} öge, toplam {{bytes}}."
+      "summary_one": "{{count}} dosya, toplam {{bytes}}",
+      "summary_other": "{{count}} dosya, toplam {{bytes}}",
+      "summaryItems_one": "{{count}} plan öğesinden.",
+      "summaryItems_other": "{{count}} plan öğesinden."
     },
     "run": {
       "heading": "Kur",

@@ -2185,7 +2185,10 @@
     },
     "plan": {
       "heading": "What would be written",
-      "summary": "{{items}} items, {{bytes}} total."
+      "summary_one": "{{count}} file, {{bytes}} total",
+      "summary_other": "{{count}} files, {{bytes}} total",
+      "summaryItems_one": "from {{count}} planned item.",
+      "summaryItems_other": "from {{count}} planned items."
     },
     "run": {
       "heading": "Build",

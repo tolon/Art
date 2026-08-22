@@ -1410,7 +1410,15 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
         <section className="card" style={{ marginBottom: 16 }}>
           <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("osinstall.plan.heading")}</h2>
           <p className="muted" style={{ fontSize: 12, margin: "4px 0 12px" }}>
-            {t("osinstall.plan.summary", { items: effectivePlan.items.length, bytes: size(effectivePlan.totalBytes) })}
+            {t("osinstall.plan.summary", {
+              count: effectivePlan.totalFiles,
+              bytes: size(effectivePlan.totalBytes),
+            })}{" "}
+            {/* The tree and the work are two numbers, and the second explains
+                why the list below is longer than the first: a file two
+                components both write is planned twice and lands once
+                (ART-205). */}
+            {t("osinstall.plan.summaryItems", { count: effectivePlan.items.length })}
           </p>
           <div
             style={{
