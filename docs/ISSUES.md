@@ -26,6 +26,43 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-205** 🟠 **The predicted size of a distribution is larger than the
+one that lands, whenever a component overrides another** — *found 2026-08-22 by
+building the owner's real AmigaOS 3.9 tree*
+`src-tauri/src/core/osinstall/plan.rs::content_bytes` · `apply.rs`
+
+Measured, on the owner's own `AmigaOS39.iso`, into a real folder:
+
+```
+items=1517   plan.total_bytes=17 579 966
+apply: files=1242 directories=105 bytes=14 883 492 in 22.79s
+difference = -2 696 474
+```
+
+The tree is correct — 1242 files, `workbench-base` 450 + `workbench-39` 792,
+the manifest written. What is wrong is the **prediction**.
+
+**Why, almost certainly:** 3.9 is two components and the second `overrides` the
+first ([ART-169](#fixed)). A file the overlay replaces is **two plan items and
+one file on disk**, so `plan.total_bytes` counts both and
+`ApplyOutcome::bytes` counts what landed. 1517 items against 1242 files is the
+same arithmetic from the other side.
+
+**Why it matters rather than being a rounding detail:** `total_bytes` is what a
+progress bar divides by and what a "this will need N MB" sentence would say.
+An over-statement of 2.7 MB on 14.9 MB is **18%**, and it is systematic, not
+noise. This project's own rule is that a number stated confidently and wrongly
+is the expensive kind of defect; a bar that reaches 85% and stops is exactly
+that shape.
+
+**Not yet diagnosed, and the entry says so.** The override explanation fits the
+counts but has not been proved — [ART-156](#fixed) was a *different*
+miscount in the same field (directory extents), diagnosed wrongly the first
+time and corrected by measurement. The fix is not to subtract 2.7 MB; it is to
+decide what `total_bytes` is **for** — bytes ART will read, or bytes that will
+exist afterwards — and make one function answer that one question, with the
+overriding case in a test.
+
 **ART-196** 🟠 **ART writes its scratch to the system drive and the user
 cannot move it** — *raised by the owner 2026-08-21, after their C: had already
 been filled once by ART's own test scratch*
@@ -641,6 +678,27 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-206** 🔵 ✅ **A real-material check that could not pass at all** —
+*found 2026-08-22, on the way to [ART-205](#open)*
+`src-tauri/src/core/osinstall/apply.rs::build_the_real_39_tree_when_asked`
+
+The `#[ignore]`d hook that builds a 3.9 tree from a real disc asserted
+
+> `"the shipped 3.9 recipe carries exactly one component today"`
+
+and the shipped recipe has carried **two** since [ART-169](#fixed) added
+`workbench-39`, the overlay that turns a 3.5 tree into a 3.9 one. So the hook
+failed before `apply()` ran, every time, for anybody who tried it.
+
+**A check nobody can run is a check that is not there.** It is the same class
+as [ART-182](#fixed)'s flakiness and as the seventeen tests that once passed
+against the very defect they were named for: green, red or unrunnable, what
+matters is whether the thing is actually being asked.
+
+**Fixed 2026-08-22** — the assertion now names both components and says why.
+With it corrected the hook ran and built the owner's tree, which is how
+[ART-205](#open) was found.
 
 **ART-203** 🔴 ✅ **A distribution tree cannot be built from the screen at
 all: the folder picker can only return a folder that exists, and `apply`

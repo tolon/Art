@@ -3352,10 +3352,15 @@ mod tests {
             "the real plan refused: {:?}",
             planned.refusals
         );
+        // The 3.9 recipe carried one component when this hook was written and
+        // carries two since ART-169 added `workbench-39`, the overlay that
+        // turns a 3.5 tree into a 3.9 one. The assertion said "exactly one"
+        // and so the hook could not pass at all — a real-material check nobody
+        // could run is a check that is not there.
         assert_eq!(
             planned.components_on,
-            vec!["workbench-base".to_string()],
-            "the shipped 3.9 recipe carries exactly one component today"
+            vec!["workbench-base".to_string(), "workbench-39".to_string()],
+            "3.9 is the base plus the overlay ART-169 added"
         );
 
         // ART-153 fixed (fix round 1): `apply()` now opens each medium
