@@ -13,6 +13,7 @@ import {
 import { isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { errorText } from "@/lib/errorText";
 
 export function GotekStudio() {
   const { t } = useTranslation();
@@ -63,7 +64,7 @@ export function GotekStudio() {
       // drive being reopened from last time is not: a USB stick that is simply
       // not plugged in is the normal state of a USB stick, and greeting the
       // user with a red box for it would be wrong.
-      if (announce) setError(String(e));
+      if (announce) setError(errorText(t, e));
     } finally {
       setBusy(false);
     }
@@ -134,7 +135,7 @@ export function GotekStudio() {
       await gotekSave(drivePath, config, slots);
       setStatusMsg(t("gotek.msg.saved"));
     } catch (e) {
-      setError(t("gotek.msg.saveFailed", { error: String(e) }));
+      setError(t("gotek.msg.saveFailed", { error: errorText(t, e) }));
     } finally {
       setBusy(false);
     }

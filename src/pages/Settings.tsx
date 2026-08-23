@@ -68,6 +68,7 @@ import {
 } from "@/lib/launch";
 import { isText, isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
+import { errorText } from "@/lib/errorText";
 
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -642,7 +643,7 @@ function OperationLogSection() {
         setRecords(recent);
         setLogPath(path);
       } catch (e) {
-        setError(String(e));
+        setError(errorText(t, e));
       }
     })();
   }, []);
@@ -660,7 +661,7 @@ function OperationLogSection() {
         await oplogExportTo(target);
       }
     } catch (e) {
-      setError(t("settings.oplog.exportFailed", { error: String(e) }));
+      setError(t("settings.oplog.exportFailed", { error: errorText(t, e) }));
     } finally {
       setBusy(false);
     }
@@ -844,7 +845,7 @@ function ArtworkSourcesSection() {
     } catch (e) {
       // Kept on screen so the user can go on editing, but not saved: a base
       // ART refused must not be the one waiting at the next launch.
-      setErrors((prev) => ({ ...prev, [changed.id]: String(e) }));
+      setErrors((prev) => ({ ...prev, [changed.id]: errorText(t, e) }));
     }
   }
 
@@ -969,7 +970,7 @@ function AminetDownloadField() {
       setInUse(library.root);
       await update({ aminetRoot: next });
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     }
   }
 
@@ -1043,7 +1044,7 @@ function ScratchRootField() {
       // root that does not work.
       await update({ scratchRoot: next, scratchRootAsked: true });
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     }
   }
 

@@ -54,6 +54,7 @@ import { isTextList, isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { size } from "@/lib/size";
 import { Field } from "@/components/osbuilder/Field";
+import { errorText } from "@/lib/errorText";
 
 /** The shipped defaults (`core/layout/policy.rs::Policy::default()`), mirrored
  *  here so the request has a policy to send and the retarget dropdown has
@@ -283,7 +284,7 @@ export function ContentLayout() {
     } catch (e) {
       pendingPlan.current = null;
       setPlan(null);
-      setError(String(e));
+      setError(errorText(t, e));
       setBusy(false);
     }
   }
@@ -299,7 +300,7 @@ export function ContentLayout() {
       pendingApply.current = await layoutApply(plan);
     } catch (e) {
       pendingApply.current = null;
-      setError(String(e));
+      setError(errorText(t, e));
       setBusy(false);
     }
   }
@@ -363,7 +364,7 @@ export function ContentLayout() {
       );
       setCollisionsUnknown(false);
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
       // The plan on screen still carries `retarget`'s in-plan-only
       // collisions — real, but blind to the disk. Saying nothing here would
       // let a stale, unverified list read as an all-clear to `layoutBlocker`,

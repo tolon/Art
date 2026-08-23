@@ -18,6 +18,7 @@ import {
   volumeSetAttributes,
   type AttributesView,
 } from "@/lib/volumeWrite";
+import { errorText } from "@/lib/errorText";
 
 /** `HSPARWED`, most significant first, with what each one actually does. */
 const BITS: Array<{
@@ -134,7 +135,7 @@ export function AttributesDialog({
         setProtection(found.protection);
         setComment(found.comment);
       })
-      .catch((e) => !cancelled && setError(String(e)));
+      .catch((e) => !cancelled && setError(errorText(t, e)));
     return () => {
       cancelled = true;
     };
@@ -160,7 +161,7 @@ export function AttributesDialog({
       onChanged();
       onClose();
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setBusy(false);
     }

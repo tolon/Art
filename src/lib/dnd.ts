@@ -41,6 +41,10 @@ export async function setupDragDrop(handler: DropHandler): Promise<() => void> {
           const analyses = await analyzePaths(payload.paths);
           handler.onDrop(analyses);
         } catch (e) {
+          // `String(e)` and not `errorText`: this is `src/lib`, which has no
+          // i18next singleton (CLAUDE.md), and the handler renders it. The
+          // sentence is built where it is shown, which is the whole shape of
+          // ART-060's answer.
           handler.onError?.(String(e));
         }
         break;

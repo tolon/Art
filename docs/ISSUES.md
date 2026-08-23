@@ -26,212 +26,6 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-187** 🔵 **A cancelled Amiga-side install leaves the last phase line
-on screen under a badge that says nothing about it** — *found 2026-08-21 in
-Task 6's review, ruled shippable*
-`src/components/osbuilder/AmigaInstallPanel.tsx` ·
-`src-tauri/src/commands/amigainstall.rs`
-
-Cancel an install and the panel keeps showing whatever the run last reported
-— "Unpacking…", "Copying…" — beneath a badge that correctly claims nothing
-about the copy. Stale, not false: the line is visibly a phase rather than a
-verdict, which is why it was ruled acceptable rather than held.
-
-It is filed because the fix is small and the right one: Rust reports every
-other outcome and says nothing on a *successful* discard, so the screen has
-nothing to replace the last phase with. A `report` there lets the badge fall
-silent instead of leaving a sentence that has stopped being true.
-
-Worth keeping in the same family as the three defects this round was really
-about — a screen that keeps saying something after it stopped being so. The
-sibling found the same day was worse and is fixed: the cancelled badge used
-to assert *"the copy has been discarded"* over the top of ART's own *"could
-not be removed"*, so the screen contradicted the core.
-
-**ART-184** 🟠 **The test fixtures leak a scratch directory per run, for
-ever, and filled a 2 TB drive** — *found 2026-08-20 when the suite began
-failing with `StorageFull`*
-`src-tauri/src/core/osinstall/mod.rs::fixtures::scratch` and every helper
-shaped like it
-
-**Measured, not inferred.** `%TEMP%` held **169,291** `art-*` directories
-averaging **6.1 MB** — roughly **987 GB**, on a system drive with 70 MB left.
-The oldest was stamped 01:49 and the newest 19:22 the same day, so this is one
-session's output. Hundreds of tests then failed with
-`Os { code: 112, kind: StorageFull }`, and every suite measurement taken that
-evening was worthless until the cause was found.
-
-Three things compound:
-
-1. **Every run gets a new name.** `fixtures::scratch` builds
-   `art-osinstall-{tag}-{pid}-{counter}`, then calls `remove_dir_all` on
-   *that* name — a name that by construction has never existed. Nothing
-   touches the previous run's directories.
-2. **Not every test removes its own.** `core/osinstall/apply.rs` creates
-   twelve and removes three. One measured run of its 49 tests left **41**
-   directories behind.
-3. **Nothing sweeps.** `core/osinstall`'s *production* code has
-   `sweep_stale_preview_scratch_dirs`, which removes its own scratch
-   directories after an hour. The test fixtures have no equivalent.
-
-A missing `remove_dir_all` is also skipped whenever a test panics, so a red
-suite leaks far more than a green one — which is the worst time for it.
-
-**What would close it.** Not a bigger disk and not a manual clean: a fixture
-that removes its directory on `Drop` rather than at the end of the happy path,
-so a panicking test cleans up too, plus the same hourly sweep the production
-side already has. Both are the shapes this codebase already uses elsewhere.
-
-**Worked around, not fixed:** `src-tauri/.cargo/config.toml` (git-ignored,
-machine-local) points `TMP`/`TEMP` at the project disk, because the owner's
-standing rule is that nothing deletes from `C:` — so `C:` must not be where
-this piles up. The leak is unchanged; it now accumulates somewhere that does
-not stop the machine.
-
-**ART-183** 🔵 **A misspelled key in a release recipe is still dropped in
-silence** — *found while fixing the same hole in packages, 2026-08-20*
-`src-tauri/src/core/osinstall/recipe.rs`
-
-`package.rs` now refuses an unrecognised key **by name** (`serde(flatten)`
-catch-all plus `check_unknown_keys`), because a recipe written
-`"amigaInstaller"` instead of `"amiga_installer"` used to parse to `Ok(None)`
-— silently dropped, and the symptom was "this package is not one this round
-can run", a lie that reads like a design decision.
-
-`recipe.rs`'s release recipes have exactly the same exposure and were left
-alone deliberately: wave D's Task 2 does not touch them, and changing a parser
-nobody measured is how a debt round becomes a defect round. The reasoning is
-recorded in `RawPackage`'s doc comment, where the next editor of either file
-will meet it.
-
-Note `deny_unknown_fields` is **not** the fix here and was tried: every
-shipped recipe carries `_why_…` documentation blocks, which it would reject.
-Whatever closes this has to allow a leading `_` and refuse the rest.
-
-**ART-179** 🔵 **Twenty-eight catalogue keys nothing renders** — *found
-2026-08-20 by `src/i18n/dead-keys.test.ts` on the day that check was written
-(ART-080 review, F2); allow-listed there rather than deleted*
-`src/i18n/en.json`, `src/i18n/tr.json` ·
-`src/i18n/dead-keys.test.ts::KEPT_WITHOUT_A_READER`
-
-A dead key is worse than a missing one: the parity test is satisfied, both
-languages agree, the string reads correctly to anyone grepping the JSON, and
-the screen says nothing. `files.hostDelete.confirm` was exactly that — written
-in both languages, never rendered, and a report claimed the user saw it. The
-check that now exists to prevent a repeat found twenty-eight more on its first
-run.
-
-They belong to features outside the round that found them, and each was
-checked by hand: none appears anywhere under `src/` in any form.
-
-| feature | keys |
-|---|---|
-| the home screen's statistics panel | `dashboard.statistics`, `dashboard.noStats` |
-| SD-2's per-distro note panel | ten under `distro.note.*` |
-| artwork wave B | `artwork.enabled`, `artwork.outcome.cachedBefore_one/_other` |
-| G10's empty states | `gameindex.empty`, `gameindex.noMatch`, `gameindex.statedBy` |
-| commander chrome | `files.pane.copyTitle`, `files.pane.deleteTitle`, `files.pane.folderSuffix` |
-| PiStorm card panel | `pistorm.card.configSets`, `pistorm.card.kernelFound` |
-| preload screen | `preload.card.heading`, `preload.tool.heading` |
-| miscellaneous | `app.name`, `common.continue`, `collection.status.indexed` |
-
-**Why they were not simply deleted.** Removing another feature's translated
-sentence — written in two languages, by someone, for a screen that was
-designed — is not a debt round's call to make in passing. Several read like a
-panel that was specified and then cut, and the right answer for those is
-probably "build the panel", not "lose the strings".
-
-**What would close it:** one pass per feature, deciding *render it* or *remove
-it*, and emptying `KEPT_WITHOUT_A_READER` as it goes. The list is closed in the
-meantime: a **new** dead key fails `dead-keys.test.ts`, which is the whole
-point — that cannot happen again without someone adding a line to the
-allow-list on purpose.
-
-
-**ART-171** 🟠 **The content layer's spec §8.3 hazard — `WBStartup` and
-`Devs` arriving on a tree for the first time — was never exercised, because
-no package file ever reached a tree** — *filed 2026-08-19 by the final
-whole-branch review (m4), deliberately not built there*
-`src-tauri/src/core/osinstall/recipes/packages/boingbag-39-1.json` ·
-`src-tauri/src/core/osinstall/apply.rs`
-
-The design spec predicted it: a BoingBag's payload carries `WBStartup` and
-`Devs` drawers that a base 3.9 tree may not have at all, so applying one is
-the first time `apply` creates a **new top-level drawer** on an existing
-tree rather than writing into one the release already made — including its
-`.uaem` sidecar, its manifest rows, and whatever `S:User-Startup` expects to
-find beside it.
-
-Nothing about that was measured, and the reason is ART-166: both BoingBag
-payloads are password-encrypted, so **not one file of either package has
-ever been placed**. The synthetic tests write into drawers the fixture tree
-already has; the one real run got as far as opening the payload.
-
-This is the same bookkeeping [ART-159](#open) does for the *previous*
-round's unexercised §5 hazards, and it is filed for the same reason: a
-predicted hazard that produced no component, no test and no issue is
-indistinguishable, six months later, from one that was handled.
-
-**What would close it.** Not a synthetic fixture — one exists and proves
-nothing about the real payload's shape. Either the Amiga-side install round
-ART-166 names, or a package whose files ART *can* read that genuinely
-introduces a top-level drawer (`locale-turkish` does not; it lands inside
-`Locale/`, which `locale-base` already makes).
-
-**The Amiga-side round succeeded on 2026-08-21 and still did not close it,
-which settles what closing it means.** Both BoingBags installed
-([ART-193](#fixed)) and BoingBag 1 really did create new top-level content on
-the tree — `WBStartup/ASyncWB`, `WBStartup/BenchTrash`,
-`Utilities/AMPlifier/…`, `Devs/NSDPatch.cfg-BB3.9-1`. **Every one of them was
-written by the Amiga's own `Updater` inside the emulator, and none by
-`apply`.** So the first of the two routes above is now known, by measurement
-rather than by prediction, not to exercise `apply` at all: this needs the
-second route — a package whose files ART can read that genuinely introduces a
-top-level drawer — or an explicit test against a real payload's real shape.
-
-
-**ART-172** 🟠 **The content layer's spec §8.4 hazard — a language pack
-colliding with the base `Locale` — was never exercised either, and the run
-that looked like it did was measuring a mangled name** — *filed 2026-08-19
-by the final whole-branch review (m4), deliberately not built there*
-`src-tauri/src/core/osinstall/recipes/packages/locale-turkish.json` ·
-`src-tauri/src/core/osinstall/collide.rs`
-
-The spec predicted that a language pack lands on top of catalogs the base
-release already placed: `AmigaOS39.iso`'s own
-`OS-Version3.9/Locale/Catalogs/türkçe` carries roughly the same ~34 catalog
-names `BoingBag39-2-turkce.lha` updates, measured with 7-Zip, and
-`locale-turkish` declares `overrides: ["locale-base"]` precisely because of
-it.
-
-The real run reported **0 rows of every collision class** — `rows=0
-upgrade=0 downgrade=0 same-version=0 unversioned=0` — and that number is not
-evidence that the collision does not happen. It is [ART-168](#fixed): the
-drawer name arrived as `t<U+FFFD>rk<U+FFFD>e`, so the incoming files were
-compared against a destination nothing had ever written, and every one of
-them classified as *new*. **No comparison against the base `Locale` ever
-took place.**
-
-So the hazard stands unexercised. **ART-168 is now fixed (2026-08-20), so
-this is the next thing to re-measure**, because the answer flips from "0 collisions" to "~34 of them" and the
-`declared` column, the `overrides` declaration and the whole five-class
-preview all get their first test against real material with a real overlap.
-
-**Why this is filed separately from ART-168** rather than folded into it:
-ART-168 is a defect in one function in `core/lha` with a known fix and a
-known blast radius. This is a *verification* gap in the content layer, it
-outlives that fix, and nothing in the record would otherwise say that the
-cleanest-looking number the round produced was measuring the wrong thing.
-
-**Re-measured 2026-08-21 and still not exercised.** The owner's built tree
-`E:\amiga\ProjeART\dist-3.9-bb` was read directly: `locale-turkish`'s **36**
-files sit under `Locale/Catalogs/t<U+FFFD>rk<U+FFFD>e` while `locale-base`'s
-**597** sit under `Locale/Catalogs/TÜRKÇE`, and **not one of the 36 carries an
-`overwrote` record**. That tree predates ART-168's fix, so the number is the
-old one and the collision has still never happened. Closing this needs a tree
-**rebuilt** with the fixed reader — the fix is in, the measurement is not.
-
-
 **ART-166** 🔴 **Both BoingBag payload archives are password-encrypted ZIPs, so
 neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task
 8's real run, on `content-layer`*
@@ -382,6 +176,35 @@ running it** — ART's own generated boot did not, which is
 [ART-189](#fixed). **Hazard 2 — `Locale`, `Locale.Euro` and `Special-Locale`
 — is still untouched**, and that is why this stays open.
 
+**Hazard 2 is now measured, 2026-08-23, and it is not academic.** The three
+trees were read off the owner's own `AmigaOS39.iso`:
+
+| tree | what it actually is |
+|---|---|
+| `OS-Version3.9/Locale` | the base locale content — **already placed**, by the `locale-base` component ART-162 added |
+| `OS-Version3.9/Locale.Euro/Countries` | 9 `.country` files — `deutschland`, `france`, `italia`, `nederland`, `españa`, `belgie`, `belgique`, `portugal`, `österreich` — the euro-currency replacements for country files `locale-base` already writes |
+| `OS-Version3.9/Special-Locale` | 245 nodes in three languages: **Czech** (123), **tükrçe** (65), **Russian** (57) |
+
+`Special-Locale` is not more catalogs. It is keymaps, printer drivers,
+`L/FileSystem_Trans` and — for Turkish — **the ISO-8859-9 (Latin-5) font set**:
+`topaz-iso9`, `times-iso9`, `courier-iso9`, `xen-iso9`, `diamond-iso9`,
+`emerald-iso9`, `garnet-iso9`, `personal-iso9`, `xhelvetica-iso9`, `topazt`
+and their `.font` descriptors. Those are the fonts that make ş, ğ, ı and İ
+render correctly. A Turkish system built from this disc without them has the
+catalogs and not the glyphs, which is precisely ART-127's shape — a tree that
+builds and verifies clean and is wrong on a running Amiga.
+
+**What is left is a scoping decision, not a measurement.** Both trees are
+ordinary optional components in recipe data: `Locale.Euro/Countries →
+Locale/Countries` with `overrides: ["locale-base"]`, and
+`Special-Locale/<language>` with `overrides: ["workbench-base",
+"workbench-39", "locale-base"]` and an `exclusive_group` so two languages
+cannot both claim `Devs/Keymaps`. What they are **not** is a debt round's call:
+each one is a new tick-box on the install screen and a statement about what
+ART offers. Left for the owner to scope, with the measurement above so that
+decision is one step rather than an investigation.
+
+
 **ART-130** 🔵 **A game can name the Kickstart it needs, and nothing offers to
 supply it** — *filed 2026-08-17, out of G10's design round; the reading half is
 built by G10, this is the half that was deliberately left out*
@@ -528,7 +351,418 @@ Turkish string in ART has been read on screen by someone who speaks it, and
 it was one of the hardest kind: a refusal that has to leave the reader knowing
 what to do next. The other 1774 remain unseen.
 
-**ART-060** 🔵 **Rust-side error sentences do not translate** —
+Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
+not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
+
+Every module with working logic has now been audited. The remaining `core`
+modules are stubs that only return `NotImplemented` (`recovery.rs`,
+`conversion.rs`, `binary.rs`, `validation.rs`) or hold types with no logic
+(`compatibility.rs`) — see [FEATURES.md](FEATURES.md) for their planned state.
+
+Two areas were reviewed and found sound, and are recorded here so nobody
+re-audits them without reason:
+
+- `core/analysis.rs` — the hex reader clamps both offset and length, and the
+  signature scan guards its window.
+- `core/profile.rs` — preset data only, no parsing of untrusted input.
+
+---
+
+## Fixed
+
+**ART-187** 🔵 ✅ **A cancelled Amiga-side install leaves the last phase line
+on screen under a badge that says nothing about it** — *found 2026-08-21 in
+Task 6's review, ruled shippable*
+`src/components/osbuilder/AmigaInstallPanel.tsx` ·
+`src-tauri/src/commands/amigainstall.rs`
+
+Cancel an install and the panel keeps showing whatever the run last reported
+— "Unpacking…", "Copying…" — beneath a badge that correctly claims nothing
+about the copy. Stale, not false: the line is visibly a phase rather than a
+verdict, which is why it was ruled acceptable rather than held.
+
+It is filed because the fix is small and the right one: Rust reports every
+other outcome and says nothing on a *successful* discard, so the screen has
+nothing to replace the last phase with. A `report` there lets the badge fall
+silent instead of leaving a sentence that has stopped being true.
+
+Worth keeping in the same family as the three defects this round was really
+about — a screen that keeps saying something after it stopped being so. The
+sibling found the same day was worse and is fixed: the cancelled badge used
+to assert *"the copy has been discarded"* over the top of ART's own *"could
+not be removed"*, so the screen contradicted the core.
+
+**Fixed 2026-08-23** — `commands/amigainstall.rs`'s cancel branch reports on a
+**successful** discard too, naming the tree it did not touch: *"The cancelled
+run's copy was removed; '…' was not touched"*. Only the failure was reported
+before, so the panel had nothing to replace the last phase line with.
+
+Test `a_cancelled_run_says_what_became_of_the_copy` asserts all three halves —
+that the removal is announced, that the original is named, and that nothing
+reads as a failure to remove when the removal worked. The mutation (silent on
+success, as it shipped) falls.
+
+
+**ART-184** 🟠 ✅ **The test fixtures leak a scratch directory per run, for
+ever, and filled a 2 TB drive** — *found 2026-08-20 when the suite began
+failing with `StorageFull`*
+`src-tauri/src/core/osinstall/mod.rs::fixtures::scratch` and every helper
+shaped like it
+
+**Measured, not inferred.** `%TEMP%` held **169,291** `art-*` directories
+averaging **6.1 MB** — roughly **987 GB**, on a system drive with 70 MB left.
+The oldest was stamped 01:49 and the newest 19:22 the same day, so this is one
+session's output. Hundreds of tests then failed with
+`Os { code: 112, kind: StorageFull }`, and every suite measurement taken that
+evening was worthless until the cause was found.
+
+Three things compound:
+
+1. **Every run gets a new name.** `fixtures::scratch` builds
+   `art-osinstall-{tag}-{pid}-{counter}`, then calls `remove_dir_all` on
+   *that* name — a name that by construction has never existed. Nothing
+   touches the previous run's directories.
+2. **Not every test removes its own.** `core/osinstall/apply.rs` creates
+   twelve and removes three. One measured run of its 49 tests left **41**
+   directories behind.
+3. **Nothing sweeps.** `core/osinstall`'s *production* code has
+   `sweep_stale_preview_scratch_dirs`, which removes its own scratch
+   directories after an hour. The test fixtures have no equivalent.
+
+A missing `remove_dir_all` is also skipped whenever a test panics, so a red
+suite leaks far more than a green one — which is the worst time for it.
+
+**What would close it.** Not a bigger disk and not a manual clean: a fixture
+that removes its directory on `Drop` rather than at the end of the happy path,
+so a panicking test cleans up too, plus the same hourly sweep the production
+side already has. Both are the shapes this codebase already uses elsewhere.
+
+**Worked around, not fixed:** `src-tauri/.cargo/config.toml` (git-ignored,
+machine-local) points `TMP`/`TEMP` at the project disk, because the owner's
+standing rule is that nothing deletes from `C:` — so `C:` must not be where
+this piles up. The leak is unchanged; it now accumulates somewhere that does
+not stop the machine.
+
+**Closed 2026-08-23 with the half that was owed** —
+`src-tauri/src/scratch.rs::sweep_crash_leftovers`.
+
+The fixture half landed with ART-196: `core::ScratchDir` removes its directory
+on `Drop`, so a panicking test cleans up too. What was still owed was the
+sweep for what a **crash** leaves — a killed job, a panic, a machine that lost
+power — and `root()` having made the location a choice did nothing about it.
+
+**Four conditions, all of them, and every one is a refusal rather than a
+filter**, because a sweep is a delete ART performs without being asked in a
+folder the user chose:
+
+1. **This process is the only ART.** An exclusive lock file, and **it fails
+   closed**: no lock, no sweep. A second instance's live staging is
+   indistinguishable from a dead one's leftovers by age, because a directory's
+   mtime does not move while a job writes three levels down inside it.
+2. **Directly inside the root**, never a descent.
+3. **Named `art-`, and a directory.** ART cannot prove it made a given folder
+   and this is the closest it gets.
+4. **Older than a day** — not the hour `sweep_stale_preview_scratch_dirs` uses
+   for its own narrow prefix. This one runs across everything ART stages, and
+   a card write or an install placing 1915 files is hours. An hour here would
+   eventually reap a directory a live job was filling, which costs more than
+   every leftover it would ever remove.
+
+Scheduled once per root per run, on its own thread, from `scratch_root()`
+rather than from start-up — the root is not known when the window opens, so a
+start-up hook would sweep the default folder and never the chosen one.
+
+**The sweep made two shipped sentences untrue, and they were rewritten in the
+same commit.** `settings.scratchRootHint` said *"ART never deletes it for
+you"* and `scratch.ask.note` said *"Nothing is ever deleted from your system
+drive by ART"*. Both now say exactly what the sweep does, in both languages,
+and `the_age_the_screen_promises_is_the_age_the_sweep_keeps` pins the constant
+to the sentence so widening the policy cannot quietly outrun the promise.
+
+**Six mutations, six fell** — prefix check dropped · age check dropped · a
+future stamp treated as ancient · `is_dir` dropped (this one **survived** the
+first attempt, because the test's stray file did not carry the prefix and was
+refused a step earlier; a file named `art-preload-run.log` was added and it
+fell) · the once-per-root ledger removed · the lock's fail-closed branch made
+fail-open. The lock test works in one process because Win32 sharing is per
+handle, not per process.
+
+
+**ART-183** 🔵 ✅ **A misspelled key in a release recipe is still dropped in
+silence** — *found while fixing the same hole in packages, 2026-08-20*
+`src-tauri/src/core/osinstall/recipe.rs`
+
+`package.rs` now refuses an unrecognised key **by name** (`serde(flatten)`
+catch-all plus `check_unknown_keys`), because a recipe written
+`"amigaInstaller"` instead of `"amiga_installer"` used to parse to `Ok(None)`
+— silently dropped, and the symptom was "this package is not one this round
+can run", a lie that reads like a design decision.
+
+`recipe.rs`'s release recipes have exactly the same exposure and were left
+alone deliberately: wave D's Task 2 does not touch them, and changing a parser
+nobody measured is how a debt round becomes a defect round. The reasoning is
+recorded in `RawPackage`'s doc comment, where the next editor of either file
+will meet it.
+
+Note `deny_unknown_fields` is **not** the fix here and was tried: every
+shipped recipe carries `_why_…` documentation blocks, which it would reject.
+Whatever closes this has to allow a leading `_` and refuse the rest.
+
+**Fixed 2026-08-23** — `recipe.rs::check_unknown_keys`, walking the JSON tree
+before deserialising, refusing the first key that is neither known at its
+level nor a `_…` note to a human.
+
+`deny_unknown_fields` is not the fix and was tried: every shipped recipe
+carries `_why_…` blocks — the measurements, with their dates, that make a
+recipe reviewable in a diff — and there is no way to enumerate those. Walked
+over `serde_json::Value` rather than caught with `#[serde(flatten)]`, because
+`Component` and `PathRule` derive `Eq` and a `Value` is not — putting a
+catch-all on the real types would change types the whole crate compares, to
+check a file.
+
+The message names the key, the level and what a note looks like, because the
+two mistakes this catches want different fixes: `userStartup` is a misspelling
+of a real field, `why_this_is_here` is a note whose author forgot the
+underscore.
+
+Five tests, and **one mutation is disclosed as surviving**: removing
+`sort_unstable` from `check_keys` changes nothing, because `serde_json`'s map
+is already ordered. It is kept anyway — a dependency enabling `preserve_order`
+would make it load-bearing — and the comment and the test doc both say so
+rather than leaving a guard that looks stronger than it is.
+
+
+**ART-179** 🔵 ✅ **Twenty-eight catalogue keys nothing renders** — *found
+2026-08-20 by `src/i18n/dead-keys.test.ts` on the day that check was written
+(ART-080 review, F2); allow-listed there rather than deleted*
+`src/i18n/en.json`, `src/i18n/tr.json` ·
+`src/i18n/dead-keys.test.ts::KEPT_WITHOUT_A_READER`
+
+A dead key is worse than a missing one: the parity test is satisfied, both
+languages agree, the string reads correctly to anyone grepping the JSON, and
+the screen says nothing. `files.hostDelete.confirm` was exactly that — written
+in both languages, never rendered, and a report claimed the user saw it. The
+check that now exists to prevent a repeat found twenty-eight more on its first
+run.
+
+They belong to features outside the round that found them, and each was
+checked by hand: none appears anywhere under `src/` in any form.
+
+| feature | keys |
+|---|---|
+| the home screen's statistics panel | `dashboard.statistics`, `dashboard.noStats` |
+| SD-2's per-distro note panel | ten under `distro.note.*` |
+| artwork wave B | `artwork.enabled`, `artwork.outcome.cachedBefore_one/_other` |
+| G10's empty states | `gameindex.empty`, `gameindex.noMatch`, `gameindex.statedBy` |
+| commander chrome | `files.pane.copyTitle`, `files.pane.deleteTitle`, `files.pane.folderSuffix` |
+| PiStorm card panel | `pistorm.card.configSets`, `pistorm.card.kernelFound` |
+| preload screen | `preload.card.heading`, `preload.tool.heading` |
+| miscellaneous | `app.name`, `common.continue`, `collection.status.indexed` |
+
+**Why they were not simply deleted.** Removing another feature's translated
+sentence — written in two languages, by someone, for a screen that was
+designed — is not a debt round's call to make in passing. Several read like a
+panel that was specified and then cut, and the right answer for those is
+probably "build the panel", not "lose the strings".
+
+**What would close it:** one pass per feature, deciding *render it* or *remove
+it*, and emptying `KEPT_WITHOUT_A_READER` as it goes. The list is closed in the
+meantime: a **new** dead key fails `dead-keys.test.ts`, which is the whole
+point — that cannot happen again without someone adding a line to the
+allow-list on purpose.
+
+**Triaged 2026-08-23, and it came apart into two halves that wanted opposite
+treatment.** Ten of the twenty-eight were **not dead at all**: the
+`distro.note.*` sentences are rendered by `OsBuilder.tsx` — `{t(key)}` over
+`selected.post_install_notes` — from keys the Rust-side distro registry
+names, and `dead-keys.test.ts` scanned only `src/`, so it could not see the
+file that names them. They had sat on the allow-list for three days under the
+reason *"the profiles ship, the per-distro note panel does not"*, which was
+simply untrue; the panel ships.
+
+**That is the finding, not the deletion.** An allow-list entry is where a
+checker's own blind spot goes to look reasonable — a wrong sentence, written
+down, believed, and about to be acted on: the first pass of this fix deleted
+all ten and only `distro-registry-keys.test.ts` stopped it. The scan now reads
+`DATA_FILES`, which holds `core/distro/registry.json`, so those keys are held
+by their reader rather than by a line in a list, and the next profile to name
+a note needs nobody to remember this. `dead-keys.test.ts`'s header now says
+**look for the reader before allow-listing a key.**
+
+**The other seventeen (eighteen leaves, one a pluralised pair) are gone**,
+each superseded or belonging to a screen nobody built: `app.name` (the shell
+reads `package.json`), `common.continue` (every dialog names its own verb),
+`files.pane.folderSuffix` (the TC presentation writes `[name]`),
+`files.pane.copyTitle`/`deleteTitle` (the function-key bar builds its tooltip
+from the action's own label and hint), the three `gameindex.*` empty states
+the studio renders its own of, both `preload.*.heading`s the panel replaced,
+and the artwork, collection, dashboard and PiStorm-card rows for features that
+do not exist. One of them was also **wrong**: `pistorm.card.kernelFound` still
+said *"Emu68.img is on the card"*, the sentence ART-103 corrected, lying in
+wait for whoever rendered it.
+
+Both catalogues went 1847 → 1819 leaves, nothing else moved, and the removed
+sentences are in the commit that removed them. `KEPT_WITHOUT_A_READER` is now
+empty and the mechanism is kept.
+
+**Mutations, both fell:** a planted dead key is named
+(`zzzDead`) · removing `registry.json` from `DATA_FILES` reports exactly the
+ten `distro.note.*` keys dead, so the new reader is load-bearing rather than
+decoration.
+
+
+**ART-172** 🟠 ✅ **The content layer's spec §8.4 hazard — a language pack
+colliding with the base `Locale` — was never exercised either, and the run
+that looked like it did was measuring a mangled name** — *filed 2026-08-19
+by the final whole-branch review (m4), deliberately not built there*
+`src-tauri/src/core/osinstall/recipes/packages/locale-turkish.json` ·
+`src-tauri/src/core/osinstall/collide.rs`
+
+The spec predicted that a language pack lands on top of catalogs the base
+release already placed: `AmigaOS39.iso`'s own
+`OS-Version3.9/Locale/Catalogs/türkçe` carries roughly the same ~34 catalog
+names `BoingBag39-2-turkce.lha` updates, measured with 7-Zip, and
+`locale-turkish` declares `overrides: ["locale-base"]` precisely because of
+it.
+
+The real run reported **0 rows of every collision class** — `rows=0
+upgrade=0 downgrade=0 same-version=0 unversioned=0` — and that number is not
+evidence that the collision does not happen. It is [ART-168](#fixed): the
+drawer name arrived as `t<U+FFFD>rk<U+FFFD>e`, so the incoming files were
+compared against a destination nothing had ever written, and every one of
+them classified as *new*. **No comparison against the base `Locale` ever
+took place.**
+
+So the hazard stands unexercised. **ART-168 is now fixed (2026-08-20), so
+this is the next thing to re-measure**, because the answer flips from "0 collisions" to "~34 of them" and the
+`declared` column, the `overrides` declaration and the whole five-class
+preview all get their first test against real material with a real overlap.
+
+**Why this is filed separately from ART-168** rather than folded into it:
+ART-168 is a defect in one function in `core/lha` with a known fix and a
+known blast radius. This is a *verification* gap in the content layer, it
+outlives that fix, and nothing in the record would otherwise say that the
+cleanest-looking number the round produced was measuring the wrong thing.
+
+**Re-measured 2026-08-21 and still not exercised.** The owner's built tree
+`E:\amiga\ProjeART\dist-3.9-bb` was read directly: `locale-turkish`'s **36**
+files sit under `Locale/Catalogs/t<U+FFFD>rk<U+FFFD>e` while `locale-base`'s
+**597** sit under `Locale/Catalogs/TÜRKÇE`, and **not one of the 36 carries an
+`overwrote` record**. That tree predates ART-168's fix, so the number is the
+old one and the collision has still never happened. Closing this needs a tree
+**rebuilt** with the fixed reader — the fix is in, the measurement is not.
+
+**Closed 2026-08-23. The hazard is real, it is measured, and the reason given
+for it was wrong.**
+
+`commands::osinstall::tests::the_language_pack_really_does_land_on_the_base_locale`
+builds `locale-base` from the owner's own `AmigaOS39.iso` and previews the
+owner's own `BoingBag39-2-turkce.lha` against it.
+
+**The census, against the `rows=0` the round reported:** **29 rows** — 12
+upgrades, 13 same-version, 2 downgrades, 2 unversioned — and **every one
+`declared=true`**, so `overrides: ["locale-base"]` covers all of them. The two
+downgrades are worth a second look on their own; a language pack moving two
+catalogs backwards is exactly what the five-class preview exists to show.
+
+**And the correction.** Two shipped documents said the collision happens
+because the disc spells the drawer `TÜRKÇE` and the pack spells it `türkçe`,
+so `fold_amiga_case`'s Latin-1 range is what brings them together —
+`locale-turkish.json`'s F1 note, presented as measured with ART's own reader,
+and the doc comment on
+`core::osinstall::fold_tests::a_destination_the_disc_and_a_package_spell_differently_is_one_place`.
+Building `locale-base` from that disc places **`türkçe`**, lower case, the
+same spelling the pack uses. Both spellings are on the disc — the upper-case
+form in all four path-table copies and under other directories — but not at
+the path this component reads.
+
+**Controlled arm, because reading could not settle it:** the whole measurement
+re-run with `fold_amiga_char` cut back to ASCII gave the **identical 29 rows**.
+So the Latin-1 range is not this package's reason. It is still right — it is
+what AmigaDOS does, and three tests in `core::osinstall` hold it, all three of
+which fail under that same cut — but it must not be cited as this one's
+justification, and both documents now say what was measured instead.
+
+
+**ART-171** 🟠 ✅ **The content layer's spec §8.3 hazard — `WBStartup` and
+`Devs` arriving on a tree for the first time — was never exercised, because
+no package file ever reached a tree** — *filed 2026-08-19 by the final
+whole-branch review (m4), deliberately not built there*
+`src-tauri/src/core/osinstall/recipes/packages/boingbag-39-1.json` ·
+`src-tauri/src/core/osinstall/apply.rs`
+
+The design spec predicted it: a BoingBag's payload carries `WBStartup` and
+`Devs` drawers that a base 3.9 tree may not have at all, so applying one is
+the first time `apply` creates a **new top-level drawer** on an existing
+tree rather than writing into one the release already made — including its
+`.uaem` sidecar, its manifest rows, and whatever `S:User-Startup` expects to
+find beside it.
+
+Nothing about that was measured, and the reason is ART-166: both BoingBag
+payloads are password-encrypted, so **not one file of either package has
+ever been placed**. The synthetic tests write into drawers the fixture tree
+already has; the one real run got as far as opening the payload.
+
+This is the same bookkeeping [ART-159](#open) does for the *previous*
+round's unexercised §5 hazards, and it is filed for the same reason: a
+predicted hazard that produced no component, no test and no issue is
+indistinguishable, six months later, from one that was handled.
+
+**What would close it.** Not a synthetic fixture — one exists and proves
+nothing about the real payload's shape. Either the Amiga-side install round
+ART-166 names, or a package whose files ART *can* read that genuinely
+introduces a top-level drawer (`locale-turkish` does not; it lands inside
+`Locale/`, which `locale-base` already makes).
+
+**The Amiga-side round succeeded on 2026-08-21 and still did not close it,
+which settles what closing it means.** Both BoingBags installed
+([ART-193](#fixed)) and BoingBag 1 really did create new top-level content on
+the tree — `WBStartup/ASyncWB`, `WBStartup/BenchTrash`,
+`Utilities/AMPlifier/…`, `Devs/NSDPatch.cfg-BB3.9-1`. **Every one of them was
+written by the Amiga's own `Updater` inside the emulator, and none by
+`apply`.** So the first of the two routes above is now known, by measurement
+rather than by prediction, not to exercise `apply` at all: this needs the
+second route — a package whose files ART can read that genuinely introduces a
+top-level drawer — or an explicit test against a real payload's real shape.
+
+**Closed 2026-08-23, and the measurement that closes it also says why the
+hazard had never fired.**
+
+`commands::osinstall::tests::a_package_creating_a_top_level_drawer_accounts_for_it`,
+`#[ignore]`d behind `ART_172_MEDIA` / `ART_172_PACKAGES`.
+
+**Why it never fired, read off the shipped recipe rather than guessed.**
+`workbench-39` is `required`, and among its thirteen rules are
+`OS-VERSION3.9/WORKBENCH3.9/LOCALE → Locale` and `…/WBSTARTUP → WBStartup`.
+Every top-level drawer a readable package in the catalogue could introduce is
+therefore already on every 3.9 tree ART builds — **including the two §8.3
+named**. The hazard was not unexercised because nobody got to it; it cannot
+occur with the content that ships. ART-193 had already settled the other
+route: both BoingBags really did add top-level content on the owner's tree,
+and every file of it was written by the Amiga's own `Updater`, not by `apply`.
+
+**So the code path is what got the test**, with the owner's own disc and the
+owner's own `BoingBag39-2-turkce.lha`; the only thing arranged is the
+*absence*, by removing the `Locale` drawer `workbench-39` placed — stated in
+the test rather than hidden behind a fixture, and asserted first, so a recipe
+that stops placing `Locale` fails the test instead of quietly making it
+vacuous. Measured: **36 files into a drawer that was not there, 36 new
+manifest rows.**
+
+**The first run refuted the test's own second assertion, which is the finding
+worth keeping.** It asserted every placed file must carry a `.uaem` sidecar —
+"a tree is only a system volume if the metadata came with the bytes". ART's
+rule is the opposite and is written down in `apply::settle_sidecar`: an
+archive states no AmigaDOS protection, date or comment at all
+(`source_archive.rs` calls its values *declared defaults, never a reading*),
+and §89 forbids treating a declared default as evidence. On a path the release
+placed the existing sidecar stands; on a path nothing ever wrote, **writing
+one would be ART claiming a fact it does not have**. The assertion is now the
+other way round — no invented metadata — and says why, because the plausible
+mistake is the one that was written first.
+
+
+**ART-060** 🔵 ✅ **Rust-side error sentences do not translate** —
 *partly answered 2026-08-23; the mechanism is built and two sentences use it*
 `src/lib/errorText.ts` · `core/error.rs`
 
@@ -575,28 +809,24 @@ would be worse than saying so.
 shape changed · the id no longer narrowing before the pattern · the captured
 parts dropped.
 
-**Still open**, and this is why it stays 🔵: 132 render sites still show
-Rust's English, and only two sentences are rebuilt. What changed is that the
-next one is a five-line addition rather than a design question.
+**What was still open when this was written**, and is not now: 132 render
+sites still showed Rust's English, and only two sentences were rebuilt. What
+changed first was that the next one became a five-line addition rather than a
+design question; the sites followed — see below.
 
-Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
-not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
+**Closed 2026-08-23 with the codemod the entry named.** All 124 remaining
+render sites across 27 files now go through `errorText(t, e)`; three
+`String(...)` sites are left on purpose in `src/lib/dnd.ts`, `src/lib/jobs.ts`
+and `src/pages/FileManager.tsx`, each with a comment saying it is not a render
+site — `src/lib` has no i18next singleton, which is the rule `Phrase` exists
+to keep.
 
-Every module with working logic has now been audited. The remaining `core`
-modules are stubs that only return `NotImplemented` (`recovery.rs`,
-`conversion.rs`, `binary.rs`, `validation.rs`) or hold types with no logic
-(`compatibility.rs`) — see [FEATURES.md](FEATURES.md) for their planned state.
+What stays true, and is now the design rather than the debt: two sentences are
+rebuilt in Turkish and everything else comes back exactly as Rust wrote it.
+That is the answer the owner chose — *translate what is met, with the id* —
+and the next sentence is a five-line addition to `RECOGNISERS` plus its pin at
+both ends.
 
-Two areas were reviewed and found sound, and are recorded here so nobody
-re-audits them without reason:
-
-- `core/analysis.rs` — the hex reader clamps both offset and length, and the
-  signature scan guards its window.
-- `core/profile.rs` — preset data only, no parsing of untrusted input.
-
----
-
-## Fixed
 
 **ART-223** 🟠 ✅ **The same Kickstart was asked for three times** —
 *[ART-197](#fixed)'s fourth row, wave 2, 2026-08-23*

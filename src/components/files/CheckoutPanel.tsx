@@ -23,6 +23,7 @@ import {
   describeCheckout,
   type CheckoutRow,
 } from "@/lib/checkout";
+import { errorText } from "@/lib/errorText";
 
 /** How often to re-hash the working copies while the panel is on screen. */
 const POLL_MS = 2000;
@@ -45,7 +46,7 @@ export function CheckoutPanel({
   const refresh = useCallback(() => {
     checkoutList()
       .then(setRows)
-      .catch((e) => onError(String(e)));
+      .catch((e) => onError(errorText(t, e)));
   }, [onError]);
 
   useEffect(() => {
@@ -63,7 +64,7 @@ export function CheckoutPanel({
       onChanged(row);
       refresh();
     } catch (e) {
-      onError(String(e));
+      onError(errorText(t, e));
     } finally {
       setBusy(null);
     }
@@ -81,7 +82,7 @@ export function CheckoutPanel({
       await checkoutDiscard(row.id);
       refresh();
     } catch (e) {
-      onError(String(e));
+      onError(errorText(t, e));
     } finally {
       setBusy(null);
     }
@@ -132,7 +133,7 @@ export function CheckoutPanel({
               style={{ fontSize: 11 }}
               disabled={busy !== null || missing}
               onClick={() => {
-                checkoutEdit(row.id, editor).catch((e) => onError(String(e)));
+                checkoutEdit(row.id, editor).catch((e) => onError(errorText(t, e)));
               }}
             >
               {t("components.checkout.openInEditor")}

@@ -1,6 +1,5 @@
 {
   "app": {
-    "name": "Amiga Retro Toolkit",
     "tagline": "The Swiss Army Knife for Amiga Files"
   },
   "nav": {
@@ -30,8 +29,6 @@
     "recent": "Recent",
     "noRecent": "No recent files yet. Drop something to begin.",
     "quickActions": "Quick Actions",
-    "statistics": "Collection Statistics",
-    "noStats": "Collection is empty.",
     "plan": {
       "title": "What can I do? — Universal Workflow Engine",
       "objectsAnalyzed_one": "{{count}} Object Analyzed",
@@ -60,7 +57,6 @@
   "common": {
     "comingLater": "Coming Later",
     "cancel": "Cancel",
-    "continue": "Continue",
     "ok": "OK",
     "open": "Open",
     "close": "Close",
@@ -292,7 +288,7 @@
     "scratchRoot": "Scratch folder",
     "scratchRootDefault": "ART stages its work in {{path}} — your system's own temporary folder.",
     "scratchRootInUse": "ART stages its work in {{path}}.",
-    "scratchRootHint": "This is where ART unpacks and builds things on the way to somewhere else, and it can run to gigabytes. Changing it moves nothing: whatever is already staged stays where it is, and ART never deletes it for you.",
+    "scratchRootHint": "This is where ART unpacks and builds things on the way to somewhere else, and it can run to gigabytes. Changing it moves nothing: whatever is already staged stays where it is. ART clears up after itself here — a staging folder of its own that a crash left behind, and that is more than a day old, is removed. Nothing else in the folder is ever touched.",
     "scratchRootPrevious": "What ART had already staged is still in {{path}}. Nothing was moved or removed."
   },
   "status": {
@@ -828,11 +824,9 @@
       "choose": "Choose folder…",
       "none": "No folder chosen",
       "needed": "Everything on this screen edits files on a card. Choose its boot folder — the FAT32 partition of a card you have written, or a folder you are assembling one in — and the rest becomes available.",
-      "kernelFound": "Emu68.img is on the card.",
       "kernelMissing": "No Emu68.img — the card will not start until the kernel is on it.",
       "kickstartsFound": "Kickstart images found: {{list}}",
       "kickstartsMissing": "No Kickstart image found on the card.",
-      "configSets": "Named firmware sets: {{list}}",
       "kernelVersion": "Emu68 on the card: {{version}}",
       "kernelUnknownVersion": "Emu68.img is on the card, but it does not state a version."
     },
@@ -1301,10 +1295,7 @@
       "truncated": "This folder holds more than ART will list — only the first entries are shown.",
       "empty": "Nothing here.",
       "filterNoMatch": "No files match “{{mask}}”.",
-      "folderSuffix": "(folder)",
-      "linkSuffix": "(link — not followed)",
-      "copyTitle": "Copy to the other pane",
-      "deleteTitle": "Delete from the disk"
+      "linkSuffix": "(link — not followed)"
     },
     "sort": {
       "name": "Name",
@@ -1514,7 +1505,6 @@
   "artwork": {
     "title": "Artwork sources",
     "intro": "Where ART looks for cover art, screenshots and icons. Nothing is fetched until you ask for it.",
-    "enabled": "Use this source",
     "indexMirror": "Index address",
     "imageMirror": "Picture address",
     "imageMirrorSame": "Same as the index address",
@@ -1541,9 +1531,7 @@
     "outcome": {
       "done": "{{written}} fetched, {{missed}} not found",
       "doneWithAdopted": "{{written}} fetched, {{adopted}} already on disk, {{missed}} not found",
-      "unreachable": "Could not be reached: {{note}}",
-      "cachedBefore_one": "{{count}} picture was already saved",
-      "cachedBefore_other": "{{count}} pictures were already saved"
+      "unreachable": "Could not be reached: {{note}}"
     },
     "local": {
       "action": "Use the pictures in my files",
@@ -1558,7 +1546,6 @@
       "library": "Library: {{dir}} ({{count}} titles)"
     },
     "status": {
-      "indexed": "Indexed {{count}} game/software title(s) in collection.",
       "scanning": "Scanning… you can carry on working while it runs.",
       "scanningLong": "Scanning games and indexing collection…"
     },
@@ -1899,7 +1886,6 @@
     "intro": "A card ART builds has partitions an Amiga can see and nothing inside them — the Amiga offers to format them on first boot. This formats them here instead, and copies your content in, so the card arrives ready.",
     "scope": "ART writes PFS3 and FFS itself by default, through its own writer — no external tool needed for an ordinary card. hst-imager, the same tool both existing PiStorm imagers stand on, stays as a named fallback for the two things ART's own writer cannot yet do: embedding a driver into a card's existing RDB in place, and an AmigaDOS name outside plain ASCII on a PFS3 volume. Set your own copy of it if either applies to this card.",
     "tool": {
-      "heading": "The tool",
       "label": "hst.imager",
       "none": "Not set",
       "hint": "ART does not bundle hst-imager — 137 MB beside the application is not a trade worth making. Set it once here or in Settings; it is remembered either way.",
@@ -1909,7 +1895,6 @@
       "untested": "ART's commands were written against {{tested}}. This is a different version — it may work perfectly, ART simply has not been run against it."
     },
     "card": {
-      "heading": "The card",
       "label": "Card image",
       "none": "No card chosen",
       "chooseTitle": "Choose the card image to prepare",
@@ -2429,10 +2414,7 @@
     },
     "guessed": "guessed",
     "guessedFrom": "Guessed from {{source}}, not declared",
-    "statedBy": "Declared by {{source}}",
     "kickstartNeeded": "Needs Kickstart {{image}}",
-    "empty": "No titles indexed yet. Choose a folder to index.",
-    "noMatch": "No title matches this filter.",
     "catalogue": {
       "folders": "Folders",
       "addFolder": "Add folder…",
@@ -2515,7 +2497,7 @@
     "ask": {
       "heading": "Where should ART do its working-out?",
       "body": "ART unpacks and builds things on the way to somewhere else — install disks, packages, disk images. That can run to gigabytes, and unless you say otherwise it goes on your system drive.",
-      "note": "You can change this at any time under Settings. Nothing is ever deleted from your system drive by ART.",
+      "note": "You can change this at any time under Settings. ART removes only its own staging folders, only in this folder, and only when they are more than a day old — never anything you put there.",
       "keepDefault": "Use the system drive",
       "choose": "Choose a folder…"
     }

@@ -8,6 +8,7 @@ import { useRecentFilesStore } from "@/stores/recentFilesStore";
 import { runWorkflow } from "@/lib/api";
 import { usePowerMode } from "@/lib/uxmode";
 import type { DroppedAnalysis, WorkflowInfo, WorkflowOutcome } from "@/types";
+import { errorText } from "@/lib/errorText";
 
 interface LayoutContext {
   analyses: DroppedAnalysis[];
@@ -162,7 +163,7 @@ function InteractiveDropResultCard({ analysis }: { analysis: DroppedAnalysis }) 
       setOutcome({
         workflow_id: action.id,
         success: false,
-        message: String(e),
+        message: errorText(t, e),
         verification: null,
       });
     } finally {

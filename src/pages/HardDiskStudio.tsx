@@ -30,6 +30,7 @@ import {
 } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { useOpenObject } from "@/stores/openObjectStore";
+import { errorText } from "@/lib/errorText";
 
 /** The filesystems the wizard offers. A remembered value that is not one of
  *  them — an older ART's, or a hand-edited file's — falls back rather than
@@ -209,7 +210,7 @@ export function HardDiskStudio() {
         setSelectedPart(hdfInfo.partitions[0]);
       }
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
       setInfo(null);
       setCard(null);
     } finally {
@@ -311,7 +312,7 @@ export function HardDiskStudio() {
         setSelectedPart(created.partitions[0]);
       }
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setBusy(false);
     }

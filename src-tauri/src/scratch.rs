@@ -147,6 +147,199 @@ fn usable(path: &Path) -> Result<(), String> {
     }
 }
 
+/// The prefix every scratch directory ART creates carries.
+///
+/// Production and tests alike: `art-osinstall-collisions-…`,
+/// `art-preload-…`, `art-launch-…`, `art-amigainstall-…`. It is the only
+/// thing that distinguishes ART's leavings from whatever else lives in the
+/// folder, which is why [`sweep_crash_leftovers`] removes nothing without it.
+const SCRATCH_PREFIX: &str = "art-";
+
+/// How stale a leftover has to be before the sweep will touch it.
+///
+/// **A day, not the hour `sweep_stale_preview_scratch_dirs` uses.** That one
+/// guards a single narrow prefix belonging to a preview that finishes in
+/// seconds. This one runs across everything ART stages, and ART stages some
+/// genuinely long work: a card write, or an install placing the owner's 1915
+/// files, is hours. An hour here would eventually reap a directory a live job
+/// was still filling — and a job that loses its staging mid-write is a worse
+/// outcome than a leftover that survives one more day.
+///
+/// Directory mtime is also the wrong clock for this on Windows: it moves when
+/// entries are added to *that* directory, not when a file three levels down
+/// is written. The margin is what covers the gap.
+const LEFTOVER_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// What one sweep did, so it can be logged rather than done in silence.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Swept {
+    /// Directories removed.
+    pub removed: usize,
+    /// Directories that matched the prefix and were **not** old enough.
+    pub too_new: usize,
+    /// Directories that matched and were old enough, but could not be
+    /// removed — in use, or a permission ART does not have.
+    pub failed: usize,
+}
+
+/// Whether this process can be sure it is the only ART running.
+///
+/// Fails **closed**: no lock means no sweep. A second instance's live staging
+/// directory is indistinguishable from a dead one's leftovers by age alone —
+/// mtime does not move while a job writes deep inside — so the only safe
+/// answer when ART cannot tell is to remove nothing and let the next run do
+/// it. A leftover costs disk; deleting a running job's staging costs the job.
+///
+/// The lock file is held for as long as the returned handle lives, which is
+/// the duration of the sweep. It is a dotfile, so it never matches
+/// [`SCRATCH_PREFIX`] and the sweep cannot reap its own lock.
+#[cfg(windows)]
+fn take_sweep_lock(root: &Path) -> Option<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    /// `dwShareMode = 0`: nobody else may open it at all while this handle is
+    /// alive, which is precisely the question being asked.
+    const EXCLUSIVE: u32 = 0;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .share_mode(EXCLUSIVE)
+        .open(root.join(".art-sweep.lock"))
+        .ok()
+}
+
+/// The same question where the Win32 sharing model does not exist.
+///
+/// ART ships on Windows; this arm exists so `core`-adjacent code still builds
+/// and tests run elsewhere. It does not lock, so it answers "yes, sweep" —
+/// stated plainly rather than left to look like a lock that works.
+#[cfg(not(windows))]
+fn take_sweep_lock(root: &Path) -> Option<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(root.join(".art-sweep.lock"))
+        .ok()
+}
+
+/// Remove what a crash left in `root` (ART-184's other half).
+///
+/// [`root`] made where ART stages a choice; it does not tidy up after an ART
+/// that died mid-stage. A killed job, a panic, a machine that lost power:
+/// each leaves a staging directory nothing will ever come back for, and the
+/// measured worst case for that class was 169,291 directories and ~987 GB.
+///
+/// **Four conditions, all of them, before anything is removed.** A sweep is a
+/// delete ART performs without being asked, in a folder the user chose, so
+/// every one of these is a refusal rather than a filter:
+///
+/// 1. **This process is the only ART** — see [`take_sweep_lock`].
+/// 2. **Directly inside the root.** Never a descent: ART's leftovers are
+///    top-level, and a recursive hunt through a folder the user pointed at
+///    would be ART walking somewhere it was not invited.
+/// 3. **Named [`SCRATCH_PREFIX`]**, and a directory. ART cannot prove it made
+///    a given folder, and this is the closest it gets; a user who points the
+///    root at a folder holding their own `art-…` directories is told so on
+///    the Settings screen, because the alternative is a silent policy.
+/// 4. **Older than [`LEFTOVER_MAX_AGE`].**
+///
+/// Best-effort throughout, like the sweep it is modelled on: a directory this
+/// pass cannot read or remove is counted and left, never escalated into a
+/// failure of whatever the caller was actually doing.
+pub fn sweep_crash_leftovers(root: &Path) -> Swept {
+    let mut swept = Swept::default();
+    let Some(_lock) = take_sweep_lock(root) else {
+        return swept;
+    };
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return swept;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(SCRATCH_PREFIX)
+        {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_dir() {
+            continue;
+        }
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        // `duration_since` fails on a directory stamped in the future — a
+        // clock change, or a file copied from a machine ahead of this one.
+        // Not old, then; leave it.
+        let Ok(age) = now.duration_since(modified) else {
+            swept.too_new += 1;
+            continue;
+        };
+        if age <= LEFTOVER_MAX_AGE {
+            swept.too_new += 1;
+            continue;
+        }
+        match std::fs::remove_dir_all(entry.path()) {
+            Ok(()) => swept.removed += 1,
+            Err(_) => swept.failed += 1,
+        }
+    }
+    swept
+}
+
+/// Sweep `root` at most once per root per run, on a thread of its own.
+///
+/// Called wherever the effective root becomes known, which is more than once
+/// — the start-up query and every Settings change both resolve one. Removing
+/// a thousand directories is seconds of I/O and belongs nowhere near a
+/// command's own latency, and the result is logged because a delete ART
+/// performed unasked is not something to do in silence.
+///
+/// Returns whether this call is the one that scheduled the sweep, so the
+/// "once per root, and a changed root is a new root" rule is a property a
+/// test can assert rather than a comment.
+pub fn sweep_once(root: &Path) -> bool {
+    use std::collections::HashSet;
+    static DONE: RwLock<Option<HashSet<PathBuf>>> = RwLock::new(None);
+
+    let root = root.to_path_buf();
+    {
+        let mut done = DONE
+            .write()
+            .expect("the sweep ledger lock is never held across a panic");
+        if !done.get_or_insert_with(HashSet::new).insert(root.clone()) {
+            return false;
+        }
+    }
+
+    // **Scheduled, not performed, under `cargo test`.** The whole suite runs
+    // in one process against one real `%TEMP%`, and a background thread
+    // deleting directories there as a side effect of asking a command a
+    // question is not something a test run should do — least of all in the
+    // folder ART-184 filled. The removal itself is tested by calling
+    // [`sweep_crash_leftovers`] against a directory the test owns.
+    #[cfg(not(test))]
+    std::thread::spawn(move || {
+        let swept = sweep_crash_leftovers(&root);
+        if swept.removed > 0 || swept.failed > 0 {
+            log::info!(
+                "Scratch sweep in {}: removed {}, still in use {}, too new to touch {}",
+                root.display(),
+                swept.removed,
+                swept.failed,
+                swept.too_new
+            );
+        }
+    });
+
+    true
+}
+
 /// Reset to the default. Tests only — the product changes the root through
 /// [`set`], and a test that left a chosen root behind would decide where the
 /// *next* test stages.
@@ -183,6 +376,214 @@ pub(crate) fn serially<T>(body: impl FnOnce() -> T) -> T {
 mod tests {
     use super::*;
     use crate::core::ScratchDir;
+
+    // ---- ART-184: what a crash leaves behind ----
+
+    /// Backdate `path`'s mtime by `age`, so a test can have an old directory
+    /// without waiting a day for one.
+    ///
+    /// **The alternative was a test that sleeps**, and this project has a
+    /// rule about those: anything timing-dependent gets an invariant rather
+    /// than a wait (ART-182). The clock is what the sweep reads, so the clock
+    /// is what the test sets.
+    fn backdate(path: &Path, age: std::time::Duration) {
+        stamp(path, std::time::SystemTime::now() - age);
+    }
+
+    /// Set one path's mtime, directory or file.
+    ///
+    /// **A directory needs `FILE_FLAG_BACKUP_SEMANTICS` on Windows** —
+    /// `File::open` on one is `PermissionDenied` without it, which is how the
+    /// first version of these tests failed. `FILE_WRITE_ATTRIBUTES` is the
+    /// access being asked for; neither read nor write data is wanted, and
+    /// asking for write on a directory fails on its own.
+    #[cfg(windows)]
+    fn stamp(path: &Path, when: std::time::SystemTime) {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        std::fs::OpenOptions::new()
+            .access_mode(FILE_WRITE_ATTRIBUTES)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+            .expect("open the path to stamp it")
+            .set_modified(when)
+            .expect("stamp it");
+    }
+
+    #[cfg(not(windows))]
+    fn stamp(path: &Path, when: std::time::SystemTime) {
+        std::fs::File::open(path)
+            .expect("open the path to stamp it")
+            .set_modified(when)
+            .expect("stamp it");
+    }
+
+    fn old_dir(root: &Path, name: &str) -> PathBuf {
+        let path = root.join(name);
+        std::fs::create_dir_all(path.join("staged")).expect("make a leftover");
+        std::fs::write(path.join("staged").join("file"), b"bytes").expect("fill it");
+        backdate(&path, LEFTOVER_MAX_AGE + std::time::Duration::from_secs(60));
+        path
+    }
+
+    /// The case the issue is about: ART died mid-stage, and the directory it
+    /// was filling is never coming back for.
+    #[test]
+    fn a_days_old_leftover_of_arts_own_is_removed_with_what_is_inside_it() {
+        let dir = ScratchDir::new("art-scratch-root", "sweep-old");
+        let stale = old_dir(dir.path(), "art-osinstall-collisions-deadbeef");
+
+        let swept = sweep_crash_leftovers(dir.path());
+
+        assert!(!stale.exists(), "a day-old leftover is what this is for");
+        assert_eq!(swept.removed, 1);
+        assert_eq!(swept.failed, 0);
+    }
+
+    /// **The one that must never fire.** A job still writing is the reason
+    /// the age is a day and not an hour, and a sweep that reaps live staging
+    /// costs more than every leftover it has ever removed.
+    #[test]
+    fn a_directory_younger_than_a_day_is_left_alone() {
+        let dir = ScratchDir::new("art-scratch-root", "sweep-young");
+        let live = dir.path().join("art-preload-in-flight");
+        std::fs::create_dir_all(&live).expect("make a live staging dir");
+
+        let swept = sweep_crash_leftovers(dir.path());
+
+        assert!(live.exists(), "a job may still be filling this");
+        assert_eq!(swept.removed, 0);
+        assert_eq!(swept.too_new, 1);
+    }
+
+    /// ART removes what ART named. The scratch root is a folder **the user
+    /// chose**, and it may be one they keep other things in.
+    #[test]
+    fn nothing_without_arts_own_prefix_is_touched_however_old_it_is() {
+        let dir = ScratchDir::new("art-scratch-root", "sweep-theirs");
+        let theirs = old_dir(dir.path(), "Workbench3.2-backup");
+        let also_theirs = dir.path().join("notes.txt");
+        std::fs::write(&also_theirs, b"mine").expect("write a file of the user's");
+        backdate(
+            &also_theirs,
+            LEFTOVER_MAX_AGE + std::time::Duration::from_secs(60),
+        );
+
+        // **A file carrying the prefix**, which is the case the `is_dir`
+        // check is the only thing standing in front of: `remove_dir_all` on a
+        // file fails, so without it this would be counted as a leftover ART
+        // could not remove and logged as "still in use" — a wrong sentence
+        // about a file nothing was ever going to delete.
+        let log = dir.path().join("art-preload-run.log");
+        std::fs::write(&log, b"a log somebody kept").expect("write it");
+        backdate(&log, LEFTOVER_MAX_AGE + std::time::Duration::from_secs(60));
+
+        let swept = sweep_crash_leftovers(dir.path());
+
+        assert!(theirs.exists(), "not ART's, whatever its age");
+        assert!(also_theirs.exists(), "a file is not a staging directory");
+        assert!(log.exists(), "nor is one that happens to be named like one");
+        assert_eq!(swept, Swept::default(), "and nothing was even considered");
+    }
+
+    /// **Top-level only.** A recursive hunt through a folder the user pointed
+    /// at would be ART walking somewhere it was not invited, and an
+    /// `art-…`-named directory *inside* the user's own tree is theirs.
+    #[test]
+    fn the_sweep_does_not_descend_into_what_it_is_not_removing() {
+        let dir = ScratchDir::new("art-scratch-root", "sweep-nested");
+        let theirs = dir.path().join("my-amiga-stuff");
+        std::fs::create_dir_all(&theirs).expect("make the user's folder");
+        let nested = old_dir(&theirs, "art-launch-old");
+
+        let swept = sweep_crash_leftovers(dir.path());
+
+        assert!(nested.exists(), "one level down is not ART's to sweep");
+        assert_eq!(swept.removed, 0);
+    }
+
+    /// A directory stamped in the future — a clock change, or a copy from a
+    /// machine ahead of this one — is not old. `duration_since` fails on it,
+    /// and failing to age something must not read as "old enough".
+    #[test]
+    fn a_directory_stamped_in_the_future_is_not_treated_as_ancient() {
+        let dir = ScratchDir::new("art-scratch-root", "sweep-future");
+        let ahead = dir.path().join("art-tomorrow");
+        std::fs::create_dir_all(&ahead).expect("make it");
+        stamp(
+            &ahead,
+            std::time::SystemTime::now() + std::time::Duration::from_secs(48 * 60 * 60),
+        );
+
+        let swept = sweep_crash_leftovers(dir.path());
+
+        assert!(ahead.exists());
+        assert_eq!(swept.removed, 0);
+        assert_eq!(swept.too_new, 1);
+    }
+
+    /// **The screen says "more than a day old" in two languages.** A sweep is
+    /// a delete ART performs without being asked, so the sentence that
+    /// describes it is part of the feature and not documentation of it — this
+    /// pins the two together, because changing the constant and leaving the
+    /// sentence would put a confident, wrong claim about deleting the user's
+    /// files on screen.
+    ///
+    /// Widening the policy means rewriting `settings.scratchRootHint` and
+    /// `scratch.ask.note` in `en.json` **and** `tr.json`, and this test is
+    /// where that is remembered.
+    #[test]
+    fn the_age_the_screen_promises_is_the_age_the_sweep_keeps() {
+        assert_eq!(
+            LEFTOVER_MAX_AGE,
+            std::time::Duration::from_secs(24 * 60 * 60),
+            "the two catalogues promise a day"
+        );
+    }
+
+    /// **The fail-closed branch, and it is the one that matters most.** If
+    /// ART cannot establish that it is the only instance, it removes nothing
+    /// — because a second instance's live staging looks exactly like a dead
+    /// one's leftovers from the outside.
+    ///
+    /// Testable in one process because Win32 sharing is per *handle*, not per
+    /// process: this test holding the lock exclusively is indistinguishable
+    /// from another ART holding it, which is the whole mechanism.
+    #[cfg(windows)]
+    #[test]
+    fn while_another_art_may_be_running_nothing_is_swept() {
+        let dir = ScratchDir::new("art-scratch-root", "sweep-locked");
+        let stale = old_dir(dir.path(), "art-osinstall-collisions-locked");
+
+        let held = take_sweep_lock(dir.path()).expect("this test takes the lock first");
+        let swept = sweep_crash_leftovers(dir.path());
+        assert!(stale.exists(), "a second instance may be filling this");
+        assert_eq!(swept, Swept::default(), "and the sweep did not even look");
+
+        // Released, and the same call now does the work — so the test is
+        // measuring the lock and not some other reason nothing happened.
+        drop(held);
+        let swept = sweep_crash_leftovers(dir.path());
+        assert!(!stale.exists());
+        assert_eq!(swept.removed, 1);
+    }
+
+    /// Once per root per run, and a **changed** root is a new root — the
+    /// Settings screen's whole point is that the answer can change.
+    #[test]
+    fn a_root_is_swept_once_a_run_and_a_new_root_is_swept_too() {
+        let first = ScratchDir::new("art-scratch-root", "sweep-once-a");
+        let second = ScratchDir::new("art-scratch-root", "sweep-once-b");
+
+        assert!(sweep_once(first.path()), "the first ask schedules it");
+        assert!(!sweep_once(first.path()), "the second does not");
+        assert!(!sweep_once(first.path()));
+        assert!(
+            sweep_once(second.path()),
+            "a different root is a different sweep"
+        );
+    }
 
     #[test]
     fn with_nothing_chosen_the_root_is_the_platforms_own_temp_dir() {

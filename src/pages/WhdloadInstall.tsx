@@ -36,6 +36,7 @@ import {
   type WhdloadPlan,
 } from "@/lib/whdload";
 import { useOpenObject } from "@/stores/openObjectStore";
+import { errorText } from "@/lib/errorText";
 
 export function WhdloadInstall() {
   const { t } = useTranslation();
@@ -118,7 +119,7 @@ export function WhdloadInstall() {
       setPlan(await whdloadPlan(archive, image, volumeIndex));
     } catch (e) {
       setPlan(null);
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setBusy(null);
     }
@@ -183,7 +184,7 @@ export function WhdloadInstall() {
       }
     } catch (e) {
       setVolumes(null);
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setBusy(null);
     }
@@ -196,7 +197,7 @@ export function WhdloadInstall() {
     try {
       pending.current = await whdloadInstall(archive, image, volumeIndex);
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
       setBusy(null);
       pending.current = null;
     }

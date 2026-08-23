@@ -54,6 +54,7 @@ import { usePowerMode } from "@/lib/uxmode";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { size } from "@/lib/size";
 import { Field } from "@/components/osbuilder/Field";
+import { errorText } from "@/lib/errorText";
 
 export function VolumePreload() {
   const { t } = useTranslation();
@@ -114,7 +115,7 @@ export function VolumePreload() {
         if (cancelled) return;
         setReport(null);
         setPicks([]);
-        setCardError(String(e));
+        setCardError(errorText(t, e));
       });
     return () => {
       cancelled = true;
@@ -179,7 +180,7 @@ export function VolumePreload() {
       setTool(await preloadProbe(toolPath));
     } catch (e) {
       setTool(null);
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setProbing(false);
     }
@@ -237,7 +238,7 @@ export function VolumePreload() {
       lastPlanned.current = fingerprint;
     } catch (e) {
       setPlan(null);
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setBusy(false);
     }
@@ -255,7 +256,7 @@ export function VolumePreload() {
       // `busy` is cleared by the result event, or here if the job never
       // starts. A cancelled or failed job is the job bar's to report.
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
       setBusy(false);
     }
   }

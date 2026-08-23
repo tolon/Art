@@ -62,12 +62,22 @@ pub fn scratch_root() -> AppResult<ScratchRootState> {
     let default = std::env::temp_dir().display().to_string();
     let chosen = crate::scratch::chosen().map(|p| p.display().to_string());
     Ok(match crate::scratch::root() {
-        Ok(path) => ScratchRootState {
-            in_use: Some(path.display().to_string()),
-            chosen,
-            default,
-            unreachable: None,
-        },
+        Ok(path) => {
+            // **Here, not at start-up.** The root is not known when the window
+            // opens: the frontend pushes the remembered one, and until it has,
+            // the effective root is the default. Sweeping the wrong folder
+            // first and the right one never is how a start-up hook would have
+            // behaved. This command resolves the root on every query and on
+            // every change, and `sweep_once` makes the repetition free
+            // (ART-184).
+            crate::scratch::sweep_once(&path);
+            ScratchRootState {
+                in_use: Some(path.display().to_string()),
+                chosen,
+                default,
+                unreachable: None,
+            }
+        }
         Err(err) => ScratchRootState {
             in_use: None,
             chosen,

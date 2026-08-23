@@ -32,6 +32,7 @@ import { isFlag, isOneOf, isText, isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { usePowerMode } from "@/lib/uxmode";
+import { errorText } from "@/lib/errorText";
 
 type MachineChoice = "auto" | Machine;
 const isMachineChoice = isOneOf<MachineChoice>("auto", "a500", "a1200");
@@ -226,7 +227,7 @@ export function TitleDetail({
       setPreview(await launchPlan(launchArgs()));
     } catch (e) {
       setPreview(null);
-      setLaunchError(String(e));
+      setLaunchError(errorText(t, e));
     } finally {
       setPlanning(false);
     }
@@ -238,7 +239,7 @@ export function TitleDetail({
     try {
       setLaunchedPid(await launchTitle(launchArgs(), winuaePath));
     } catch (e) {
-      setLaunchError(String(e));
+      setLaunchError(errorText(t, e));
     } finally {
       setLaunching(false);
     }
@@ -348,7 +349,7 @@ export function TitleDetail({
       onArtChanged();
       void loadPictures();
     } catch (e) {
-      setArtError(String(e));
+      setArtError(errorText(t, e));
     }
   }
 
@@ -361,7 +362,7 @@ export function TitleDetail({
       onArtChanged();
       void loadPictures();
     } catch (e) {
-      setArtError(String(e));
+      setArtError(errorText(t, e));
     }
   }
 

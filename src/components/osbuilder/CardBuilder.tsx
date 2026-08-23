@@ -68,6 +68,7 @@ import { useRemembered, useRememberedShape } from "@/lib/useRemembered";
 import { usePowerMode } from "@/lib/uxmode";
 import { GIB, gibNumber as gb, mibNumber as mib } from "@/lib/size";
 import { Field } from "@/components/osbuilder/Field";
+import { errorText } from "@/lib/errorText";
 
 /** Card sizes people actually buy. */
 const CARD_SIZES_GB = [2, 4, 8, 16, 32, 64, 128, 256];
@@ -305,7 +306,7 @@ export function CardBuilder() {
         if (fills.archive) setArchive(fills.archive);
         if (fills.kickstart) setKickstart(fills.kickstart);
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(errorText(t, e)));
     return () => {
       cancelled = true;
     };
@@ -350,7 +351,7 @@ export function CardBuilder() {
       lastPlanned.current = fingerprint;
     } catch (e) {
       setPlan(null);
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setBusy(false);
     }
@@ -364,7 +365,7 @@ export function CardBuilder() {
       // `busy` is cleared by the result event, or here if the job never
       // starts. A cancelled or failed job is the job bar's to report.
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
       setBusy(false);
     }
   }
@@ -387,7 +388,7 @@ export function CardBuilder() {
       setCheckedPath(target);
     } catch (e) {
       setReport(null);
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setChecking(false);
     }

@@ -768,12 +768,29 @@ fn perform(
         // for it. It is reported instead, so the copy is never left on disk
         // with nobody saying so.
         Err(CoreError::Cancelled) => {
-            if let Err(err) = staged.discard() {
-                sink.report(
+            // **Both endings are reported** (ART-187). Only the failure was,
+            // so a discard that worked left the panel showing whatever phase
+            // the run last announced -- "Unpacking...", "Copying..." -- under
+            // a badge that correctly claimed nothing about the copy. Stale
+            // rather than false, which is why it shipped; but a screen that
+            // goes on saying something after it stopped being so is the
+            // family this whole round was about.
+            //
+            // The core says it because the core is what knows. The screen
+            // asserting a discard over the top of ART's own "could not be
+            // removed" is the sibling defect, and it was worse.
+            let original = staged.original_path().display().to_string();
+            match staged.discard() {
+                Ok(()) => sink.report(
+                    0,
+                    None,
+                    &format!("The cancelled run's copy was removed; '{original}' was not touched"),
+                ),
+                Err(err) => sink.report(
                     0,
                     None,
                     &format!("The cancelled run's copy could not be removed: {err}"),
-                );
+                ),
             }
             Err(CoreError::Cancelled)
         }
@@ -1595,6 +1612,42 @@ mod tests {
             std::fs::read(tree.join("Libs/version.library")).unwrap(),
             b"the original",
             "and the original is exactly as it was"
+        );
+    }
+
+    /// **ART-187.** A discard that *worked* used to report nothing, so the
+    /// panel kept showing whatever phase the run last announced under a badge
+    /// that correctly claimed nothing about the copy. Stale, not false — and
+    /// a screen that goes on saying something after it stopped being so is
+    /// the family this round was about.
+    ///
+    /// Both endings are reported now, and the sentence names the original,
+    /// because "your tree was not touched" is the half the user actually
+    /// needs.
+    #[test]
+    fn a_cancelled_run_says_what_became_of_the_copy() {
+        let scratch = ScratchDir::new("art-amigainstall-cmd", "cancel-says");
+        let tree = tree_in(&scratch);
+        let sink = Sink::default();
+
+        let _ = perform(&tree, &sink, |_, _| Err(CoreError::Cancelled));
+
+        assert!(
+            sink.said("was removed"),
+            "a successful discard has to say so: {:?}",
+            sink.messages.lock().unwrap()
+        );
+        assert!(
+            sink.said(&tree.display().to_string()),
+            "and name the tree it did not touch: {:?}",
+            sink.messages.lock().unwrap()
+        );
+        // The screen may not out-claim the core: nothing here may read as a
+        // failure to remove when the removal worked.
+        assert!(
+            !sink.said("could not be removed"),
+            "{:?}",
+            sink.messages.lock().unwrap()
         );
     }
 
