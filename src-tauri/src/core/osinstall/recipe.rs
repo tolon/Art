@@ -848,6 +848,7 @@ mod tests {
                 "workbench-base",
                 "locale-base",
                 "workbench-39",
+                "keymaps",
                 "special-locale-turkish",
                 "locale-euro"
             ],
@@ -1654,6 +1655,68 @@ mod tests {
             checked >= 13,
             "this guard saw only {checked} font descriptors; the Turkish set alone is thirteen, \
              so it is looking in the wrong place"
+        );
+    }
+
+    /// **ART-226.** A system whose keyboard cannot be selected is not a matter
+    /// of taste, and until this component existed every tree ART built was
+    /// one: `Devs/Keymaps` came off the disc empty, the twenty-two keymaps sat
+    /// on the `Storage/Keymaps` shelf where nothing loads them, and the only
+    /// keymap available was the one in ROM — `usa`, whatever language the user
+    /// had chosen.
+    ///
+    /// Three things pinned here that nothing else can see:
+    ///
+    /// - **The source is the 3.9 overlay's shelf, not the 3.5 layer's.**
+    ///   `Workbench3.5/Storage` carries no Keymaps drawer; the shelf arrived
+    ///   with `Workbench3.9`. A rule pointed at the older path resolves to
+    ///   nothing and refuses at plan time, which is loud — but only against
+    ///   real media, and no unit test opens a disc.
+    /// - **`Subtree`, deliberately.** A `File` rule's `to` is whatever the
+    ///   author typed, and ART-225 is what that costs: thirteen descriptors
+    ///   retyped off a listing, spelled `.FONT`, invisible to the running
+    ///   system. A subtree rule carries the medium's own spelling for every
+    ///   child — including this drawer's `türkçe`, the one name here nobody
+    ///   could retype safely.
+    /// - **It declares no override**, and must not. `Devs/Keymaps` arrives
+    ///   from `workbench-base` as an empty drawer and `Workbench3.9/Devs` has
+    ///   no Keymaps at all, so nothing of anyone's is replaced. An override
+    ///   here would be a licence to overwrite a keymap set somebody else
+    ///   placed, bought for nothing.
+    #[test]
+    fn the_keymaps_component_takes_the_whole_shelf_art_226() {
+        let recipe = parse(AMIGAOS_39_JSON).unwrap();
+        let keymaps = recipe
+            .component("keymaps")
+            .expect("ART-226: the 3.9 recipe must offer the keymaps");
+
+        assert!(
+            !keymaps.required,
+            "the owner's call: a tick-box, because a few people will not want it"
+        );
+        assert_eq!(keymaps.media, "AmigaOS3.9");
+        assert!(
+            keymaps.overrides.is_empty(),
+            "the drawer this fills arrives empty; there is nothing here to override"
+        );
+        assert_eq!(
+            keymaps.rules,
+            vec![PathRule {
+                from: "OS-VERSION3.9/WORKBENCH3.9/STORAGE/KEYMAPS".into(),
+                to: "Devs/Keymaps".into(),
+                kind: RuleKind::Subtree,
+            }],
+            "the shelf, whole, into the drawer AmigaDOS actually loads from"
+        );
+
+        // Declared after the two layers that touch `Devs`, so that whatever
+        // order `apply` writes in, this drawer's contents land on top of an
+        // empty drawer rather than under a later copy of it.
+        let ids: Vec<&str> = recipe.components.iter().map(|c| c.id.as_str()).collect();
+        let at = |id: &str| ids.iter().position(|c| *c == id).unwrap();
+        assert!(
+            at("keymaps") > at("workbench-base") && at("keymaps") > at("workbench-39"),
+            "the keymaps go in after the layers that create Devs"
         );
     }
 

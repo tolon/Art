@@ -228,8 +228,48 @@ one chosen at build time. Measured for that build:
   `Devs/Keymaps` holds thirteen keymaps **each beside its `.info`**. That is
   what a working system looks like, so both go.
 
-Still the owner's: whether the component is `required` or a tick-box, and
-questions 2 and 3 above.
+**Built 2026-08-23/24 — a tick-box, on the owner's second thought.** Asked
+whether `required` or optional, they first said necessary and then refined it:
+*"dağıtımın içine konulabilir olsun, kutucuklu; bazı insanlar istemeyebilir ama
+az insan"*. So `keymaps` is `required: false`, declared after the two layers
+that touch `Devs`, one `Subtree` rule from the 3.9 overlay's shelf into
+`Devs/Keymaps`, and no `overrides` — the drawer it fills arrives empty and
+nothing of anyone's is replaced.
+
+**A `Subtree` rule and not a list of forty-four `File` rules, because
+[ART-225](#fixed) happened.** A `File` rule's `to` is whatever the author
+typed; a subtree rule carries the medium's own spelling for every child. This
+drawer's twenty-second entry is `türkçe`, and the run proves the choice:
+
+    keymaps: 44 entries, non-ASCII: ["türkçe", "türkçe.info"]
+
+That name was never typed into the recipe, into a test, or into this file's
+rule list — the disc carried it.
+
+**Measured against the owner's own disc**, all six components on
+(`apply::tests::build_the_real_39_language_components_when_asked`): **0
+refusals**, 2384 items, **1973 files** (44 more than before) / 194 directories
+/ 19 117 756 bytes in **16.28 s**. `keymaps` contributed 45 plan items — the 44
+entries plus the destination drawer a subtree rule always emits. No refusal
+means no collision either, which is what says declaring no override was right.
+
+**Mutations.** `required` flipped to `true` fails the recipe test on its own
+sentence; the destination changed to `Storage/Keymaps` likewise. A third was
+aimed at a `from` naming a path the disc lacks — and it **did not test what it
+was built to test**: `Workbench3.5/Storage/Keymaps` turns out to *exist* and be
+empty, so planning one item and no children is correct behaviour, not a silent
+failure. The concern behind it — that a mistyped subtree `from` might place
+nothing quietly — is **refuted** by reading `plan::expand_rules`, which calls
+`source.entry(&rule.from)` before every rule and pushes `MediaPathMissing` when
+it is `None`, subtree included; `a_path_the_recipe_expects_and_the_media_lacks_is_a_refusal_not_a_skip`
+already pins it. Recorded because a wrong elimination costs more than none.
+
+**Still open: questions 2 and 3.** `Locale3_9.lha` as a package (the keymap
+there is the same one, but the archive also carries `türkiye.country`, a
+2 520-byte `türkçe.language`, the flags and 15 font families), and whether the
+AmigaOS 3.2 recipe has the same hole — its `storage` component places
+`Keymaps → Storage/Keymaps` and nothing puts a copy in `Devs`, which is this
+entry's own shape in the other recipe, unverified.
 
 **ART-166** 🔴 **Both BoingBag payload archives are password-encrypted ZIPs, so
 neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task

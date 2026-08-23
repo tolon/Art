@@ -4082,6 +4082,7 @@ mod tests {
             // be exercised at all.
             chosen: vec![
                 "locale-base".to_string(),
+                "keymaps".to_string(),
                 "special-locale-turkish".to_string(),
                 "locale-euro".to_string(),
             ],
@@ -4115,10 +4116,11 @@ mod tests {
                 "workbench-base".to_string(),
                 "locale-base".to_string(),
                 "workbench-39".to_string(),
+                "keymaps".to_string(),
                 "special-locale-turkish".to_string(),
                 "locale-euro".to_string(),
             ],
-            "all five, in recipe order"
+            "all six, in recipe order"
         );
 
         // Per component, from the plan itself — the count each one
@@ -4266,6 +4268,69 @@ mod tests {
                 "{base} went missing — the base Fonts drawer must be untouched"
             );
         }
+
+        // **ART-226: the keymaps, and the one name this test refuses to
+        // spell.** Twenty-one of the twenty-two are ASCII and are pinned;
+        // the twenty-second is the disc's Turkish one, whose bytes are the
+        // whole reason this component uses a `Subtree` rule instead of a
+        // typed list. Asserting a spelling for it here would be retyping it
+        // in a second place — ART-225 in a test rather than in a recipe — so
+        // what is asserted is its *shape* (exactly one non-ASCII pair) and
+        // the run prints what it actually was.
+        const ASCII_KEYMAPS: [&str; 21] = [
+            "1251Q_US_RUS",
+            "1251_GB1_RUS",
+            "1251_GB_RUS",
+            "br",
+            "br2",
+            "br3-ABNT2",
+            "cat",
+            "cdn",
+            "ch1",
+            "ch2",
+            "d",
+            "dk",
+            "e",
+            "f",
+            "gb",
+            "i",
+            "n",
+            "po",
+            "s",
+            "si",
+            "usa2",
+        ];
+        let keymaps_dir = root.join("Devs").join("Keymaps");
+        let placed_keymaps: std::collections::BTreeSet<String> = std::fs::read_dir(&keymaps_dir)
+            .expect("ART-226: the tree must carry Devs/Keymaps")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| !n.ends_with(".uaem"))
+            .collect();
+
+        for name in ASCII_KEYMAPS {
+            assert!(
+                placed_keymaps.contains(name),
+                "Devs/Keymaps holds no entry spelled exactly '{name}'"
+            );
+            assert!(
+                placed_keymaps.contains(&format!("{name}.info")),
+                "Devs/Keymaps holds no icon for '{name}' — Emergency-Boot on this same disc \
+                 is a real bootable system and its Devs/Keymaps has one per keymap"
+            );
+        }
+        let non_ascii: Vec<&String> = placed_keymaps.iter().filter(|n| !n.is_ascii()).collect();
+        println!(
+            "keymaps: {} entries, non-ASCII: {non_ascii:?}",
+            placed_keymaps.len()
+        );
+        assert_eq!(
+            non_ascii.len(),
+            2,
+            "the disc's Turkish keymap and its icon, carried through by the medium's own \
+             spelling rather than retyped (ART-225); got {non_ascii:?}"
+        );
+        assert_eq!(placed_keymaps.len(), 44, "22 keymaps and their 22 icons");
 
         // The euro countries, asked of the disc rather than of a pinned hash:
         // read both source variants and check which one the tree holds.

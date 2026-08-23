@@ -2171,6 +2171,7 @@
         "os39": {
           "base": "Workbench 3.5 base layer",
           "euroCountries": "Euro currency country files",
+          "keymaps": "Keyboard layouts",
           "locale": "Locale — catalogs, languages, countries",
           "overlay": "Workbench 3.9 overlay",
           "turkishFonts": "Turkish fonts (ISO-8859-9)"
