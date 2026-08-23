@@ -820,9 +820,24 @@ mod fold_tests {
     }
 
     /// `destination_key` is the collision map's key, and it goes through the
-    /// same fold — the base disc writes `Locale/Catalogs/TÜRKÇE/x.catalog`
-    /// and the Turkish pack writes `Locale/Catalogs/türkçe/x.catalog`, which
-    /// under the old ASCII-only fold were two files.
+    /// same fold, so a name two sources spell with different case is one
+    /// destination — which is what AmigaDOS itself does, including across the
+    /// Latin-1 accented range.
+    ///
+    /// **Corrected 2026-08-23 (ART-172).** This used to say the case split was
+    /// measured on the owner's own disc: that `AmigaOS39.iso` writes
+    /// `Locale/Catalogs/TÜRKÇE` and the pack writes
+    /// `Locale/Catalogs/türkçe`. Building `locale-base` from that disc with
+    /// ART's own reader places **`türkçe`**, lower case, the same spelling the
+    /// pack uses — the upper-case form is on the disc, in its four path-table
+    /// copies and under other directories, but not at the path this component
+    /// reads. Re-running the whole ART-172 measurement with the fold cut back
+    /// to ASCII gave the identical 29 collision rows, so the accented range is
+    /// **not** what makes that pack and that disc meet.
+    ///
+    /// The property is kept and this test with it, because it is AmigaDOS's
+    /// rule and ART-012 depends on it — only the claim that this particular
+    /// pair of real files proves it was wrong.
     #[test]
     fn a_destination_the_disc_and_a_package_spell_differently_is_one_place() {
         let from_disc = "Locale/Catalogs/T\u{DC}RK\u{C7}E/workbench.catalog";

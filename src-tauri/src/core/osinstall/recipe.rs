@@ -11,8 +11,129 @@ use crate::core::error::{CoreError, CoreResult};
 const AMIGAOS_32_JSON: &str = include_str!("recipes/amigaos-3.2.json");
 const AMIGAOS_39_JSON: &str = include_str!("recipes/amigaos-3.9.json");
 
+/// Every key a recipe may carry, by the level it sits at.
+///
+/// **A misspelled key used to be dropped in silence** (ART-183). Writing
+/// `"userStartup"` for `"user_startup"` parsed cleanly to a component with no
+/// startup lines, and the symptom was a tree that quietly lacked something
+/// the recipe plainly asked for. `package.rs` closed the same hole for
+/// packages; this is the half that was left, deliberately, until somebody
+/// measured the other file's own data.
+///
+/// `deny_unknown_fields` is **not** the fix and was tried: every shipped
+/// recipe carries `_why_…` documentation blocks — the measurements, with
+/// their dates, that make a recipe reviewable in a diff — and there is no way
+/// to enumerate those. So a key beginning `_` is a note to a human and
+/// anything else is a person telling ART something ART did not hear.
+///
+/// Walked over the JSON rather than caught with `#[serde(flatten)]`, because
+/// `Component` and `PathRule` derive `Eq` and a `serde_json::Value` is not
+/// `Eq` — putting a catch-all on the real types would change types the whole
+/// crate compares, to check a file.
+const RECIPE_KEYS: &[&str] = &["release", "components"];
+const COMPONENT_KEYS: &[&str] = &[
+    "id",
+    "media",
+    "rules",
+    "required",
+    "condition",
+    "overrides",
+    "user_startup",
+    "activate",
+    "exclusive_group",
+    "available",
+];
+const RULE_KEYS: &[&str] = &["from", "to", "kind"];
+const CONDITION_KEYS: &[&str] = &["condition", "major"];
+const ACTIVATION_KEYS: &[&str] = &["kind", "name"];
+
+/// Refuse the first key that is neither known at its level nor a `_…` note.
+///
+/// The message names the key, where it is, and what a note looks like,
+/// because the two mistakes this catches want different fixes: `userStartup`
+/// is a misspelling of a real field, `why_this_is_here` is a note whose
+/// author forgot the underscore.
+fn check_keys(value: &serde_json::Value, allowed: &[&str], where_: &str) -> CoreResult<()> {
+    let Some(object) = value.as_object() else {
+        return Ok(());
+    };
+    // Sorted. `serde_json`'s own map is already ordered, so this is a no-op
+    // today and a mutation removing it survives — said here rather than left
+    // as a guard that guards nothing. It stays because `preserve_order` is a
+    // real `serde_json` feature any dependency can turn on, and the day one
+    // does, a file with two bad keys would start refusing by whichever key
+    // its author happened to type first.
+    let mut unknown: Vec<&str> = object
+        .keys()
+        .map(String::as_str)
+        .filter(|key| !key.starts_with('_') && !allowed.contains(key))
+        .collect();
+    unknown.sort_unstable();
+    if let Some(key) = unknown.first() {
+        return Err(CoreError::Malformed {
+            format: "recipe".into(),
+            detail: format!(
+                "{where_}: '{key}' is not a recipe key (keys are snake_case, and a note to a \
+                 human must begin with '_')"
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Every level of one recipe's JSON, checked before it is trusted.
+fn check_unknown_keys(json: &str) -> CoreResult<()> {
+    let value: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| CoreError::Malformed {
+            format: "recipe".into(),
+            detail: e.to_string(),
+        })?;
+
+    check_keys(&value, RECIPE_KEYS, "the recipe")?;
+
+    let Some(components) = value.get("components").and_then(|c| c.as_array()) else {
+        return Ok(());
+    };
+    for component in components {
+        // Named by its own id where it has one, so a refusal points at the
+        // component a person can find rather than at an index.
+        let id = component
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("a component with no id");
+        check_keys(component, COMPONENT_KEYS, &format!("component '{id}'"))?;
+
+        if let Some(condition) = component.get("condition") {
+            check_keys(
+                condition,
+                CONDITION_KEYS,
+                &format!("'{id}'\u{2019}s condition"),
+            )?;
+        }
+        if let Some(rules) = component.get("rules").and_then(|r| r.as_array()) {
+            for rule in rules {
+                check_keys(rule, RULE_KEYS, &format!("a rule of '{id}'"))?;
+            }
+        }
+        if let Some(activations) = component.get("activate").and_then(|a| a.as_array()) {
+            for activation in activations {
+                check_keys(
+                    activation,
+                    ACTIVATION_KEYS,
+                    &format!("an activation of '{id}'"),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Parse and validate a recipe.
 pub fn parse(json: &str) -> CoreResult<Recipe> {
+    // Before deserialising, so a misspelling is named rather than dropped
+    // (ART-183) — a component missing the thing it plainly asked for is the
+    // confident-and-wrong shape, not a parse error anybody would notice.
+    check_unknown_keys(json)?;
     let recipe: Recipe = serde_json::from_str(json).map_err(|e| CoreError::Malformed {
         format: "recipe".into(),
         detail: e.to_string(),
@@ -443,6 +564,98 @@ mod tests {
             ));
         }
         all
+    }
+
+    // ---- ART-183: a misspelled key is named, not dropped ----
+
+    /// The recipe this is all about: `user_startup` written the wrong way.
+    /// It used to parse to a component with no startup lines, and the symptom
+    /// was a tree quietly missing what the recipe plainly asked for.
+    #[test]
+    fn a_misspelled_component_key_is_refused_by_name() {
+        let json = r#"{
+            "release": "Test",
+            "components": [
+                { "id": "a", "media": "A", "rules": [], "userStartup": ["assign X: SYS:"] }
+            ]
+        }"#;
+        let err = parse(json).expect_err("a misspelled key must be refused");
+        let text = err.to_string();
+        assert!(text.contains("userStartup"), "name the key: {text}");
+        assert!(text.contains("'a'"), "and where it is: {text}");
+        assert!(
+            text.contains("must begin with '_'"),
+            "and what a note looks like, because the other mistake wants the other fix: {text}"
+        );
+    }
+
+    /// **The reason `deny_unknown_fields` is not the answer.** Every shipped
+    /// recipe carries these, and rejecting them would refuse ART's own data.
+    #[test]
+    fn a_note_to_a_human_is_kept() {
+        let json = r#"{
+            "_why_this_release": "measured off the owner's own disc, 2026-08-22",
+            "release": "Test",
+            "components": [
+                { "_why_": "the base", "id": "a", "media": "A", "rules": [] }
+            ]
+        }"#;
+        assert!(parse(json).is_ok(), "{:?}", parse(json));
+    }
+
+    /// Every level, not just the component: a rule and an activation are
+    /// where the other misspellings would land.
+    #[test]
+    fn a_misspelled_key_is_refused_at_every_level() {
+        for (json, needle) in [
+            (
+                r#"{"release":"T","components":[{"id":"a","media":"A","rules":[{"from":"C","to":"C","kind":"subtree","recursive":true}]}]}"#,
+                "recursive",
+            ),
+            (
+                r#"{"release":"T","components":[{"id":"a","media":"A","rules":[],"activate":[{"kind":"monitor","named":"NTSC"}]}]}"#,
+                "named",
+            ),
+            (
+                r#"{"release":"T","components":[{"id":"a","media":"A","rules":[],"condition":{"condition":"rom-older-than","majorVersion":40}}]}"#,
+                "majorVersion",
+            ),
+            (r#"{"release":"T","recipes":[],"components":[]}"#, "recipes"),
+        ] {
+            let err = parse(json).expect_err(needle);
+            assert!(err.to_string().contains(needle), "{needle}: {err}");
+        }
+    }
+
+    /// Two bad keys refuse the same way twice, and the same way every time.
+    ///
+    /// **Disclosed:** removing the `sort_unstable` does not fail this, because
+    /// `serde_json`'s map is already ordered. What this pins is the
+    /// *determinism*, which is the property that matters and which holds by
+    /// two mechanisms rather than one — see `check_keys`'s own comment for
+    /// why the redundant one stays.
+    #[test]
+    fn two_bad_keys_refuse_the_same_way_every_time() {
+        let json = r#"{
+            "release": "T",
+            "components": [{ "id": "a", "media": "A", "rules": [], "zzz": 1, "aaa": 2 }]
+        }"#;
+        let first = parse(json).unwrap_err().to_string();
+        for _ in 0..8 {
+            assert_eq!(parse(json).unwrap_err().to_string(), first);
+        }
+        assert!(
+            first.contains("aaa"),
+            "sorted, so the first is the first: {first}"
+        );
+    }
+
+    /// And the shipped recipes still parse, which is the check that this did
+    /// not close the hole by refusing ART's own data.
+    #[test]
+    fn every_shipped_recipe_still_parses() {
+        assert!(amigaos_32().is_ok());
+        assert!(amigaos_39().is_ok());
     }
 
     #[test]

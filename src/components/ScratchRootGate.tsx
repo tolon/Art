@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import { scratchSetRoot } from "@/lib/scratch";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { errorText } from "@/lib/errorText";
 
 /**
  * Where ART stages work it will throw away — asked once, up front (ART-196).
@@ -82,7 +83,7 @@ export function ScratchRootGate() {
       // root that does not work.
       await update({ scratchRoot: picked, scratchRootAsked: true });
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     }
   }
 

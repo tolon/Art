@@ -51,6 +51,7 @@ import { useRemembered } from "@/lib/useRemembered";
 import { useBuildSession } from "@/lib/useBuildSession";
 import { stepLabelKey, stepsFor, type StepId } from "@/lib/buildSteps";
 import type { BuildKind } from "@/lib/buildSession";
+import { errorText } from "@/lib/errorText";
 
 /** Card sizes people actually buy. Typed sizes are allowed too. */
 const CARD_SIZES_GB = [16, 32, 64, 128, 256];
@@ -190,7 +191,7 @@ export function StepHedef() {
 
   useEffect(() => {
     if (kind !== "distro") return;
-    distroProfiles().then(setProfiles).catch((e) => setError(String(e)));
+    distroProfiles().then(setProfiles).catch((e) => setError(errorText(t, e)));
   }, [kind]);
 
   const selected = profiles.find((entry) => entry.id === selectedId) ?? null;

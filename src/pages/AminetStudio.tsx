@@ -73,6 +73,7 @@ import type { PartialPhrase } from "@/lib/phrase";
 import { volumeScan } from "@/lib/volume";
 import { usePowerMode } from "@/lib/uxmode";
 import { BundlePanel } from "@/components/sources/BundlePanel";
+import { errorText } from "@/lib/errorText";
 
 /** Ordering choices, in the words a user would use. Labels resolve through
  * `t()` at render time so switching language updates them without a reload. */
@@ -268,7 +269,7 @@ export function AminetStudio() {
   const [error, setError] = useState<string | null>(null);
 
   const refreshStats = useCallback(() => {
-    sourcesStats().then(setStats).catch((e) => setError(String(e)));
+    sourcesStats().then(setStats).catch((e) => setError(errorText(t, e)));
   }, []);
 
   const refreshLibrary = useCallback(() => {
@@ -417,7 +418,7 @@ export function AminetStudio() {
           })
         );
       } catch (e) {
-        setError(String(e));
+        setError(errorText(t, e));
         setResults(null);
       }
     },
@@ -451,7 +452,7 @@ export function AminetStudio() {
       // validation is not the one waiting at the next launch.
       await saveSettings({ aminetRoot: picked });
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     }
   }
 
@@ -475,7 +476,7 @@ export function AminetStudio() {
       setProvider(await sourcesSetMirrors(edited));
       await saveSettings({ aminetMirrors: edited });
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
       throw e;
     }
   }
@@ -487,7 +488,7 @@ export function AminetStudio() {
     try {
       pending.current.action = await sourcesSync();
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
       setBusy(null);
       pending.current.action = null;
     }
@@ -515,7 +516,7 @@ export function AminetStudio() {
         overwrite,
       });
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
       setBusy(null);
       pending.current.action = null;
     }
@@ -542,7 +543,7 @@ export function AminetStudio() {
       await sourcesForgetDownload(row.reference.path);
       refreshUpdates();
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     }
   }
 
@@ -614,7 +615,7 @@ export function AminetStudio() {
         choice = usable[0].index;
       }
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
       setBusy(null);
       return;
     }
@@ -627,7 +628,7 @@ export function AminetStudio() {
         choice
       );
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
       setBusy(null);
       pending.current.action = null;
     }
@@ -671,7 +672,7 @@ export function AminetStudio() {
     try {
       pending.current.action = await sourcesInstallAdf(download.placement.path, adf);
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
       setBusy(null);
       pending.current.action = null;
     }

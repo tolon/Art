@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
 import { checksumBadge, romIdentify, romScanDir, type RomInfo } from "@/lib/rom";
+import { errorText } from "@/lib/errorText";
 
 export function RomStudio() {
   const { t } = useTranslation();
@@ -29,7 +30,7 @@ export function RomStudio() {
       setStatusMsg(t("rom.status.scanFound", { count: list.length }));
       if (list.length > 0) setSelectedRom(list[0]);
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setBusy(false);
     }
@@ -55,7 +56,7 @@ export function RomStudio() {
       setSelectedRom(info);
       setStatusMsg(t("rom.status.identified", { name: info.name }));
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setBusy(false);
     }

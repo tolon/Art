@@ -77,6 +77,7 @@ import {
   romSuitabilityNote,
   suggestedRomName,
 } from "@/lib/pistormRom";
+import { errorText } from "@/lib/errorText";
 
 const PROFILES: Emu68Profile[] = ["performance", "daily", "compatibility", "diagnostics"];
 
@@ -152,7 +153,7 @@ export function PistormStudio() {
   );
 
   useEffect(() => {
-    pistormHardwareMatrix().then(setMatrix).catch((e) => setError(String(e)));
+    pistormHardwareMatrix().then(setMatrix).catch((e) => setError(errorText(t, e)));
   }, []);
 
   // The notes and the token line both follow the hardware, and both come from
@@ -213,7 +214,7 @@ export function PistormStudio() {
       } catch (e) {
         // A folder reopened from last time may simply not be mounted, which is
         // the normal state of a card reader with no card in it.
-        if (announce) setError(String(e));
+        if (announce) setError(errorText(t, e));
       } finally {
         setBusy(false);
       }
@@ -250,7 +251,7 @@ export function PistormStudio() {
       // leaving the user to wonder whether anything happened (F5.3).
       tokenPanel.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     }
   }
 
@@ -291,7 +292,7 @@ export function PistormStudio() {
       const info = await pistormIdentifyRom(picked);
       setPendingRom({ source: picked, info, name: suggestedRomName(picked) });
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     }
   }
 
@@ -318,7 +319,7 @@ export function PistormStudio() {
       );
       await scan(cardPath, true);
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setBusy(false);
     }
@@ -331,7 +332,7 @@ export function PistormStudio() {
     try {
       setPreview(await pistormPreview(cardPath, setup));
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setBusy(false);
     }
@@ -351,7 +352,7 @@ export function PistormStudio() {
       );
       await scan(cardPath, true);
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setBusy(false);
     }
@@ -1067,13 +1068,13 @@ function ConfigSetsSection({
               onStatus(t("pistorm.sets.saved", { name }));
               onChanged();
             } catch (e) {
-              onError(String(e));
+              onError(errorText(t, e));
             }
           })();
         },
       });
     } catch (e) {
-      onError(String(e));
+      onError(errorText(t, e));
     }
   }
 
@@ -1095,13 +1096,13 @@ function ConfigSetsSection({
               );
               onChanged();
             } catch (e) {
-              onError(String(e));
+              onError(errorText(t, e));
             }
           })();
         },
       });
     } catch (e) {
-      onError(String(e));
+      onError(errorText(t, e));
     }
   }
 
@@ -1119,7 +1120,7 @@ function ConfigSetsSection({
       );
       onChanged();
     } catch (e) {
-      onError(String(e));
+      onError(errorText(t, e));
     }
   }
 
@@ -1132,7 +1133,7 @@ function ConfigSetsSection({
       onStatus(t("pistorm.sets.renamed", { from: renaming.from, to: renaming.to }));
       onChanged();
     } catch (e) {
-      onError(String(e));
+      onError(errorText(t, e));
     }
   }
 

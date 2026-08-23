@@ -29,8 +29,14 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: (opts: unknown) => openMock(opts),
 }));
 
+// The key **and** its parameters. A mock that returned the key alone would
+// hide whether a sentence carries the thing that makes it actionable — which
+// is the half `errorPhrase` exists to preserve (ART-060).
 vi.mock("react-i18next", () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string, params?: Record<string, unknown>) =>
+      params ? `${key} ${Object.values(params).join(" ")}` : key,
+  }),
 }));
 
 let settings: AppSettings = { ...DEFAULT_SETTINGS };

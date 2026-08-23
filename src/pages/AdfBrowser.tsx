@@ -21,6 +21,7 @@ import {
 import { isFlag, isOneOf } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { useOpenObject } from "@/stores/openObjectStore";
+import { errorText } from "@/lib/errorText";
 
 interface Breadcrumb {
   block: number | null;
@@ -112,7 +113,7 @@ export function AdfBrowser() {
       ]);
       adfValidate(p).then(setReport).catch(() => {});
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
       setInfo(null);
       setEntries([]);
     } finally {
@@ -131,7 +132,7 @@ export function AdfBrowser() {
         setInfo(i);
       }
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     }
   }
 
@@ -174,7 +175,7 @@ export function AdfBrowser() {
         }
       }
     } catch (e) {
-      setError(t("adf.msg.openDirFailed", { name: dirName, error: String(e) }));
+      setError(t("adf.msg.openDirFailed", { name: dirName, error: errorText(t, e) }));
     } finally {
       setBusy(false);
     }
@@ -206,7 +207,7 @@ export function AdfBrowser() {
       setSuccessMsg(t("adf.msg.createdImage", { name: newVolumeName }));
       await loadDisk(dest);
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setBusy(false);
     }
@@ -227,7 +228,7 @@ export function AdfBrowser() {
       const updated = await adfAddFile(path, currentDirBlock, sel);
       await applyMutation(updated, t("adf.msg.fileImported"));
     } catch (e) {
-      setError(t("adf.msg.addFileFailed", { error: String(e) }));
+      setError(t("adf.msg.addFileFailed", { error: errorText(t, e) }));
     } finally {
       setBusy(false);
     }
@@ -245,7 +246,7 @@ export function AdfBrowser() {
       setNewFolderName("");
       await applyMutation(updated, t("adf.msg.dirCreated", { name: created }));
     } catch (e) {
-      setError(t("adf.msg.createDirFailed", { error: String(e) }));
+      setError(t("adf.msg.createDirFailed", { error: errorText(t, e) }));
     } finally {
       setBusy(false);
     }
@@ -262,7 +263,7 @@ export function AdfBrowser() {
       const updated = await adfDeleteEntry(path, currentDirBlock, target.header_block);
       await applyMutation(updated, t("adf.msg.deleted", { name: target.name }));
     } catch (e) {
-      setError(t("adf.msg.deleteFailed", { name: target.name, error: String(e) }));
+      setError(t("adf.msg.deleteFailed", { name: target.name, error: errorText(t, e) }));
     } finally {
       setBusy(false);
     }
@@ -287,7 +288,7 @@ export function AdfBrowser() {
         t("adf.msg.renamed", { from: target.name, to: renameValue.trim() })
       );
     } catch (e) {
-      setError(t("adf.msg.renameFailed", { name: target.name, error: String(e) }));
+      setError(t("adf.msg.renameFailed", { name: target.name, error: errorText(t, e) }));
     } finally {
       setBusy(false);
     }
@@ -306,7 +307,7 @@ export function AdfBrowser() {
         t("adf.msg.extracted", { bytes: bytes.length, name: entry.name, dest })
       );
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setBusy(false);
     }

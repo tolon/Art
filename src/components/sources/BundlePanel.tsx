@@ -34,6 +34,7 @@ import {
 import { onJobProgress, type JobProgress } from "@/lib/jobs";
 import { isTextList } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
+import { errorText } from "@/lib/errorText";
 
 /** Tally of the six `EntryOutcome` kinds a finished report can hold. Six,
  *  not five — `not-placed` is Task 5 review's own Critical fix, and a report
@@ -182,7 +183,7 @@ export function BundlePanel() {
         if (!cancelled) setSets(result);
       })
       .catch((e) => {
-        if (!cancelled) setListError(String(e));
+        if (!cancelled) setListError(errorText(t, e));
       });
     return () => {
       cancelled = true;
@@ -276,7 +277,7 @@ export function BundlePanel() {
     try {
       pendingJob.current = await bundlesDownload(ids);
     } catch (e) {
-      setRunError(String(e));
+      setRunError(errorText(t, e));
       setBusy(false);
       pendingJob.current = null;
     }

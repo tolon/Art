@@ -279,6 +279,8 @@ export function awaitJobResult<TPayload extends { job_id: number }, TValue>(
         if (settled) return;
         settled = true;
         cleanup();
+        // Wrapped, not rendered: whoever catches this puts it on screen
+        // through `errorText`, and `src/lib` has no `t` (ART-060).
         reject(e instanceof Error ? e : new Error(String(e)));
       });
   });

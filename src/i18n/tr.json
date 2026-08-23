@@ -1,6 +1,5 @@
 {
   "app": {
-    "name": "Amiga Retro Toolkit",
     "tagline": "Amiga Dosyaları İçin İsviçre Çakısı"
   },
   "nav": {
@@ -30,8 +29,6 @@
     "recent": "Son Kullanılanlar",
     "noRecent": "Henüz dosya yok. Başlamak için bir şey bırakın.",
     "quickActions": "Hızlı İşlemler",
-    "statistics": "Koleksiyon İstatistikleri",
-    "noStats": "Koleksiyon boş.",
     "plan": {
       "title": "Ne yapabilirim? — Evrensel İş Akışı Motoru",
       "objectsAnalyzed_one": "{{count}} Nesne İncelendi",
@@ -60,7 +57,6 @@
   "common": {
     "comingLater": "Sonra Gelecek",
     "cancel": "İptal",
-    "continue": "Devam",
     "ok": "Tamam",
     "open": "Aç",
     "close": "Kapat",
@@ -292,7 +288,7 @@
     "scratchRoot": "Geçici çalışma klasörü",
     "scratchRootDefault": "ART çalışmasını {{path}} içinde hazırlıyor — sisteminizin kendi geçici klasörü.",
     "scratchRootInUse": "ART çalışmasını {{path}} içinde hazırlıyor.",
-    "scratchRootHint": "ART bir şeyi başka bir yere götürürken burada açar ve kurar; gigabaytları bulabilir. Burayı değiştirmek hiçbir şeyi taşımaz: halihazırda hazırlanmış olan olduğu yerde kalır, ART onu sizin için silmez.",
+    "scratchRootHint": "ART'ın bir yere giderken bir şeyleri açtığı ve kurduğu yer burasıdır; gigabaytlara çıkabilir. Burayı değiştirmek hiçbir şeyi taşımaz: hazırlanmış olan ne varsa yerinde kalır. ART burada kendi ardını toplar — bir çökmenin geride bıraktığı, bir günden eski kendi hazırlık klasörü silinir. Klasördeki başka hiçbir şeye asla dokunulmaz.",
     "scratchRootPrevious": "ART'ın daha önce hazırladıkları hâlâ {{path}} içinde. Hiçbir şey taşınmadı ya da silinmedi."
   },
   "status": {
@@ -828,11 +824,9 @@
       "choose": "Klasör seç…",
       "none": "Klasör seçilmedi",
       "needed": "Bu ekrandaki her şey bir kart üzerindeki dosyaları düzenler. Açılış klasörünü seçin — yazdığınız bir kartın FAT32 bölümü ya da bir tanesini hazırladığınız klasör — gerisi kullanılabilir hale gelsin.",
-      "kernelFound": "Kartta Emu68.img var.",
       "kernelMissing": "Emu68.img yok — çekirdek karta konulana kadar kart açılmaz.",
       "kickstartsFound": "Bulunan Kickstart dosyaları: {{list}}",
       "kickstartsMissing": "Kartta Kickstart dosyası bulunamadı.",
-      "configSets": "Adlandırılmış firmware setleri: {{list}}",
       "kernelVersion": "Karttaki Emu68: {{version}}",
       "kernelUnknownVersion": "Kartta Emu68.img var ama sürümünü belirtmiyor."
     },
@@ -1301,10 +1295,7 @@
       "truncated": "Bu klasör ART'ın listeleyeceğinden daha fazlasını içeriyor — yalnızca ilk girdiler gösteriliyor.",
       "empty": "Burada hiçbir şey yok.",
       "filterNoMatch": "“{{mask}}” ile eşleşen dosya yok.",
-      "folderSuffix": "(klasör)",
-      "linkSuffix": "(bağlantı — izlenmedi)",
-      "copyTitle": "Diğer bölmeye kopyala",
-      "deleteTitle": "Diskten sil"
+      "linkSuffix": "(bağlantı — izlenmedi)"
     },
     "sort": {
       "name": "Ad",
@@ -1514,7 +1505,6 @@
   "artwork": {
     "title": "Görsel kaynakları",
     "intro": "ART'ın kapak, ekran görüntüsü ve simge ararken bakacağı yerler. Siz istemeden hiçbir şey indirilmez.",
-    "enabled": "Bu kaynağı kullan",
     "indexMirror": "Dizin adresi",
     "imageMirror": "Görsel adresi",
     "imageMirrorSame": "Dizin adresiyle aynı",
@@ -1541,9 +1531,7 @@
     "outcome": {
       "done": "{{written}} getirildi, {{missed}} bulunamadı",
       "doneWithAdopted": "{{written}} getirildi, {{adopted}} zaten diskteydi, {{missed}} bulunamadı",
-      "unreachable": "Erişilemedi: {{note}}",
-      "cachedBefore_one": "{{count}} görsel zaten kayıtlıydı",
-      "cachedBefore_other": "{{count}} görsel zaten kayıtlıydı"
+      "unreachable": "Erişilemedi: {{note}}"
     },
     "local": {
       "action": "Dosyalarımdaki resimleri kullan",
@@ -1558,7 +1546,6 @@
       "library": "Kitaplık: {{dir}} ({{count}} başlık)"
     },
     "status": {
-      "indexed": "Koleksiyonda {{count}} oyun/yazılım başlığı dizinlendi.",
       "scanning": "Taranıyor… tarama sürerken siz işinize devam edebilirsiniz.",
       "scanningLong": "Oyunlar taranıyor ve koleksiyon dizinleniyor…"
     },
@@ -1899,7 +1886,6 @@
     "intro": "ART'ın oluşturduğu kartta Amiga'nın gördüğü bölümler var ama içleri boş — Amiga ilk açılışta onları biçimlendirmeyi önerir. Bu ekran onları burada biçimlendirir ve içeriğini kopyalar, böylece kart hazır gelir.",
     "scope": "ART, sıradan bir kart için PFS3'ü ve FFS'i varsayılan olarak kendi yazıcısıyla yazar — dış bir araca gerek yok. hst-imager — mevcut iki PiStorm imaj aracının da dayandığı araç — ART'ın kendi yazıcısının henüz yapamadığı iki şey için adı konmuş bir yedek olarak kalır: bir sürücüyü kartın mevcut RDB'sine yerinde gömmek, ve bir PFS3 biriminde düz ASCII dışındaki bir AmigaDOS adı. Bunlardan biri bu kart için geçerliyse kendi kopyanı ayarla.",
     "tool": {
-      "heading": "Araç",
       "label": "hst.imager",
       "none": "Ayarlanmadı",
       "hint": "ART hst-imager'ı paketlemiyor — uygulamanın yanında 137 MB değecek bir takas değil. Buradan ya da Ayarlar'dan bir kez ayarla; her iki durumda da hatırlanır.",
@@ -1909,7 +1895,6 @@
       "untested": "ART'ın komutları {{tested}} sürümüne göre yazıldı. Bu farklı bir sürüm — gayet iyi çalışabilir, ART yalnızca onunla denenmedi."
     },
     "card": {
-      "heading": "Kart",
       "label": "Kart imajı",
       "none": "Kart seçilmedi",
       "chooseTitle": "Hazırlanacak kart imajını seç",
@@ -2429,10 +2414,7 @@
     },
     "guessed": "tahmin",
     "guessedFrom": "{{source}} üzerinden tahmin edildi, beyan edilmedi",
-    "statedBy": "{{source}} tarafından beyan edildi",
     "kickstartNeeded": "Kickstart {{image}} gerekiyor",
-    "empty": "Henüz indekslenmiş başlık yok. İndekslenecek bir klasör seçin.",
-    "noMatch": "Bu filtreye uyan başlık yok.",
     "catalogue": {
       "folders": "Klasörler",
       "addFolder": "Klasör ekle…",
@@ -2515,7 +2497,7 @@
     "ask": {
       "heading": "ART ara işlerini nerede yapsın?",
       "body": "ART bir şeyi başka bir yere götürürken onu açar ve kurar — kurulum disketleri, paketler, disk imajları. Bu gigabaytları bulabilir ve siz aksini söylemedikçe sistem diskinize yazılır.",
-      "note": "Bunu istediğiniz zaman Ayarlar'dan değiştirebilirsiniz. ART sistem diskinizden hiçbir şey silmez.",
+      "note": "Bunu istediğiniz zaman Ayarlar'dan değiştirebilirsiniz. ART yalnızca kendi hazırlık klasörlerini, yalnızca bu klasörde ve yalnızca bir günden eski olduklarında siler — sizin koyduğunuz hiçbir şeyi asla.",
       "keepDefault": "Sistem diskini kullan",
       "choose": "Bir klasör seç…"
     }

@@ -11,13 +11,15 @@
 // The parity test asks "do the two catalogues match". This one asks the other
 // half: **is anything reaching this key at all.**
 //
-// ## Why an allow-list rather than zero
+// ## The allow-list is empty
 //
-// Some keys are genuinely reachable only from a screen state this project
-// cannot reach yet, and deleting them would lose a translated sentence
-// somebody wrote for a reason. Each entry below is named with why, so the list
-// is a record rather than a place to hide a mistake — and adding to it is a
-// deliberate act a reviewer can see.
+// It was not always (ART-179). An entry is still allowed — a key reachable
+// only from a screen state this project cannot reach yet, named with why, so
+// the list is a record rather than a place to hide a mistake. But an entry is
+// also where a checker's own blind spot goes to look reasonable: ten keys sat
+// here under a reason that was simply not true, because this scan could not
+// see the file that names them. **Before allow-listing a key, look for the
+// reader.** If one exists, teach `DATA_FILES` about it instead.
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -46,10 +48,36 @@ function sources(dir: string): string[] {
   });
 }
 
-const HAYSTACK = sources(SRC)
-  .filter((path) => !path.includes(join("src", "i18n")))
-  .map((path) => readFileSync(path, "utf8"))
-  .join("\n");
+/**
+ * Data files **outside `src/`** that name i18n keys.
+ *
+ * A reader does not have to be a `t()` call. The distro registry is a JSON
+ * file in the Rust tree whose `post_install_notes` are catalogue keys, and
+ * `OsBuilder.tsx` renders them with `{t(key)}` through a variable — so the
+ * ten `distro.note.*` sentences are on screen today while nothing under
+ * `src/` mentions them by name.
+ *
+ * **This scan missed them and they were nearly deleted for it** (ART-179).
+ * They spent a round on the allow-list under the reason "the per-distro note
+ * panel does not ship", which was not true; the panel shipped. A checker that
+ * cannot see a reader produces exactly the sentence this project is most
+ * expensive at — confident, wrong, and believed. Teaching it the reader is
+ * worth more than ten allow-list lines, because the next profile to name a
+ * note needs nobody to remember this.
+ *
+ * The keys appear here quoted and closed, so `isReachable`'s delimiter rule
+ * applies unchanged.
+ */
+const DATA_FILES = [
+  resolve(SRC, "..", "src-tauri", "src", "core", "distro", "registry.json"),
+];
+
+const HAYSTACK = [
+  ...sources(SRC)
+    .filter((path) => !path.includes(join("src", "i18n")))
+    .map((path) => readFileSync(path, "utf8")),
+  ...DATA_FILES.map((path) => readFileSync(path, "utf8")),
+].join("\n");
 
 const BACKTICK = String.fromCharCode(96);
 
@@ -85,84 +113,38 @@ function isReachable(key: string): boolean {
 }
 
 /**
- * Keys with no reader today, each with the reason it is kept.
+ * Keys with no reader, kept on purpose.
  *
- * i18next's plural suffixes are stripped before the lookup, so a pluralised
- * key is checked under its base name and does not need an entry here.
+ * **Empty, and that is the point** (ART-179). It held twenty-seven entries on
+ * the day this check was written, every one deferred with the same reasoning:
+ * removing another feature's translated sentence is not a debt round's call
+ * to make in passing. Triaged on 2026-08-23, they came apart into two halves
+ * that wanted opposite treatment:
+ *
+ * - **Ten were not dead.** The `distro.note.*` sentences are rendered by
+ *   `OsBuilder.tsx` from keys the Rust-side distro registry names, which this
+ *   scan could not see. They are kept, and `DATA_FILES` above now sees them,
+ *   so they are held by a reader rather than by a line here.
+ * - **Seventeen were dead and are gone** — eighteen leaves, one a pluralised
+ *   pair. Each had been superseded or belonged to a screen nobody built:
+ *   `app.name` (the shell reads `package.json`), `common.continue` (every
+ *   dialog names its own verb), `files.pane.folderSuffix` (the TC
+ *   presentation writes `[name]` instead), `files.pane.copyTitle` /
+ *   `deleteTitle` (the function-key bar builds its tooltip from the action's
+ *   own label), the three `gameindex.*` empty states the studio renders its
+ *   own of, both `preload.*.heading`s the panel replaced, and the artwork,
+ *   collection, dashboard and PiStorm-card rows for features that do not
+ *   exist. One of them, `pistorm.card.kernelFound`, still said "Emu68.img is
+ *   on the card" — the ART-103 sentence, wrong since that fix, waiting.
+ *
+ * **Nothing was lost.** The removed sentences are in the commit that removed
+ * them, and a feature that arrives writes the key it actually renders rather
+ * than inheriting one written for a screen nobody built.
+ *
+ * Adding an entry here is still allowed and is a decision a reviewer can see.
+ * An empty list means every key in both catalogues has a reader.
  */
-const KEPT_WITHOUT_A_READER: Record<string, string> = {
-  // ---------------------------------------------------------------------
-  // The 27 this check found on the day it was written (ART-179) — 28 leaf
-  // keys, of which two are one pluralised pair.
-  //
-  // Every one is **pre-existing** and belongs to a feature outside the round
-  // that added this test. Each was checked by hand: none appears anywhere
-  // under `src/` in any form. They are listed rather than deleted because
-  // removing another feature's translated sentence — written in two
-  // languages, by someone, for a screen that was designed — is not a debt
-  // round's call to make in passing. ART-179 is where they get triaged:
-  // render it, or remove it, one feature at a time.
-  //
-  // **The list is closed.** A *new* dead key fails this test, which is the
-  // whole point of F2 — the defect that prompted it was a key added and
-  // never rendered, and that cannot happen again without someone adding a
-  // line here on purpose.
-  // ---------------------------------------------------------------------
-  "app.name":
-    "the shell's own name, rendered from `package.json` rather than the catalogue",
-  "artwork.enabled":
-    "artwork wave B; a source-enabled toggle and a cache-hit count no screen shows yet",
-  "artwork.outcome.cachedBefore":
-    "artwork wave B; a source-enabled toggle and a cache-hit count no screen shows yet",
-  "collection.status.indexed":
-    "collection wave C; a status line the studio never grew",
-  "common.continue":
-    "a generic affirmative no dialog in ART uses — every one names its own verb",
-  "dashboard.noStats":
-    "the home screen's statistics panel, designed and not built",
-  "dashboard.statistics":
-    "the home screen's statistics panel, designed and not built",
-  "distro.note.amikit.adaptOnly":
-    "SD-2's distribution notes; the profiles ship, the per-distro note panel does not",
-  "distro.note.amikit.ownIt":
-    "SD-2's distribution notes; the profiles ship, the per-distro note panel does not",
-  "distro.note.baseline.boingBags":
-    "SD-2's distribution notes; the profiles ship, the per-distro note panel does not",
-  "distro.note.baseline.recipe":
-    "SD-2's distribution notes; the profiles ship, the per-distro note panel does not",
-  "distro.note.baseline.romFamily":
-    "SD-2's distribution notes; the profiles ship, the per-distro note panel does not",
-  "distro.note.baseline.yourMedia":
-    "SD-2's distribution notes; the profiles ship, the per-distro note panel does not",
-  "distro.note.caffeineos.download":
-    "SD-2's distribution notes; the profiles ship, the per-distro note panel does not",
-  "distro.note.caffeineos.network":
-    "SD-2's distribution notes; the profiles ship, the per-distro note panel does not",
-  "distro.note.coffinos.demoware":
-    "SD-2's distribution notes; the profiles ship, the per-distro note panel does not",
-  "distro.note.coffinos.romFamily":
-    "SD-2's distribution notes; the profiles ship, the per-distro note panel does not",
-  "files.pane.copyTitle":
-    "commander chrome — per-row tooltips and a folder suffix the TC presentation dropped",
-  "files.pane.deleteTitle":
-    "commander chrome — per-row tooltips and a folder suffix the TC presentation dropped",
-  "files.pane.folderSuffix":
-    "commander chrome — per-row tooltips and a folder suffix the TC presentation dropped",
-  "gameindex.empty":
-    "G10's empty and no-match states; the studio renders its own today",
-  "gameindex.noMatch":
-    "G10's empty and no-match states; the studio renders its own today",
-  "gameindex.statedBy":
-    "G10's empty and no-match states; the studio renders its own today",
-  "pistorm.card.configSets":
-    "PiStorm card panel rows for facts `read_card` does not yet report",
-  "pistorm.card.kernelFound":
-    "PiStorm card panel rows for facts `read_card` does not yet report",
-  "preload.card.heading":
-    "preload screen headings the panel replaced with its own",
-  "preload.tool.heading":
-    "preload screen headings the panel replaced with its own",
-};
+const KEPT_WITHOUT_A_READER: Record<string, string> = {};
 
 describe("the catalogue has no dead keys", () => {
   it("every key is reachable from somewhere in src/", () => {

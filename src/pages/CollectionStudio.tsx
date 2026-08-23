@@ -45,6 +45,7 @@ import { useRemembered } from "@/lib/useRemembered";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { Guessed } from "@/components/collection/Guessed";
 import { TitleDetail } from "@/components/collection/TitleDetail";
+import { errorText } from "@/lib/errorText";
 
 type ViewMode = "grid" | "table";
 type MediaFilter = "all" | "floppies" | "hardfile" | "whdload";
@@ -375,7 +376,7 @@ export function CollectionStudio() {
       setStatusMsg(t("cleanup.titleFixed", { name: proposed }));
       await reload();
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     }
   }
 
@@ -391,7 +392,7 @@ export function CollectionStudio() {
       setStatusMsg(t("cleanup.undone"));
       await reload();
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     }
   }
 
@@ -413,7 +414,7 @@ export function CollectionStudio() {
       setStatusMsg(t("cleanup.renamed", { name: renamed }));
       await reload();
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     }
   }
 
@@ -521,7 +522,7 @@ export function CollectionStudio() {
         pinned
       );
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
       setBusy(false);
       setArtBusy(false);
     }
@@ -555,7 +556,7 @@ export function CollectionStudio() {
     try {
       await artworkAdoptLocal(previews);
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
       setBusy(false);
       setArtBusy(false);
     }
@@ -599,7 +600,7 @@ export function CollectionStudio() {
       setScanDir(loaded.length === 1 ? loaded[0].root : null);
       setError(null);
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     }
   }
 
@@ -687,7 +688,7 @@ export function CollectionStudio() {
     try {
       await catalogueRefresh(root, mode);
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
       setBusy(false);
     }
   }
@@ -706,7 +707,7 @@ export function CollectionStudio() {
       if (sel !== rememberedDir) await updateSettings({ lastCollectionDir: sel });
       await reload();
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     }
   }
 
@@ -719,7 +720,7 @@ export function CollectionStudio() {
       await catalogueRemoveRoot(root);
       await reload();
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     }
   }
 

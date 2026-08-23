@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### ART tidies up after a crash, and says so (2026-08-23)
+
+#### Added
+- **A staging folder that ART died in the middle of is cleared up.** Only its
+  own, only in the scratch folder, only when more than a day old, and never
+  while a second copy of ART might be running — if ART cannot be sure it is
+  alone, it removes nothing. Nothing you put in that folder is ever touched.
+- The Settings and first-run screens now describe that, in both languages.
+  They used to say ART never deletes anything there, which stopped being true
+  the moment this was added.
+
+#### Fixed
+- **Cancel an Amiga-side install and ART now tells you what became of the
+  copy** — that it was removed and your own tree was not touched. It only
+  spoke up when the removal *failed*, so a cancelled run left the last phase
+  line sitting on screen with nothing to replace it.
+- Error messages: the remaining screens now show ART's own wording rather than
+  a raw `Error: …` echo, and an error with no identifier no longer prints an
+  empty **Error ID:** line telling you to quote something that is not there.
+- Seventeen sentences that were written into both language files and never
+  appeared on any screen have been removed. One of them said *"Emu68.img is on
+  the card"*, which stopped being the right file name months ago.
+- A misspelled key in a release recipe is now refused **by name** instead of
+  being dropped in silence — the failure it used to cause was a tree quietly
+  missing something the recipe plainly asked for.
+
 
 ### One Kickstart for the build (2026-08-23)
 

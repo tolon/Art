@@ -2948,6 +2948,340 @@ mod tests {
     /// all, and that the preview can say so — and it prints every row, so the
     /// comparison against ART-169's table is a reading rather than a
     /// recollection.
+    /// How many files the tree's own `distribution.json` accounts for.
+    ///
+    /// Read back through the real type, not by counting lines: a manifest
+    /// that no longer parses would otherwise read as "no rows" and make the
+    /// assertion that uses this pass for the wrong reason.
+    fn read_manifest_rows(tree: &Path) -> usize {
+        let text = std::fs::read_to_string(tree.join("distribution.json"))
+            .expect("the tree accounts for itself");
+        let manifest: crate::core::osinstall::apply::DistributionManifest =
+            serde_json::from_str(&text).expect("and the manifest still parses");
+        manifest.files.len()
+    }
+
+    /// Every file under `dir`, recursively. Sidecars included — the caller
+    /// filters them, because "which of these is a sidecar" is the question it
+    /// is asking.
+    fn walkdir_files(dir: &Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(next) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&next) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    out.push(path);
+                }
+            }
+        }
+        out
+    }
+
+    /// **ART-171: spec §8.3's hazard — a top-level drawer arriving on a tree
+    /// for the first time — and the measurement that says why it never has.**
+    ///
+    /// The prediction was that a package's payload carries drawers a base
+    /// tree may not have at all, so applying one would be the first time
+    /// `apply` **creates** a top-level drawer rather than writing into one the
+    /// release already made: its `.uaem` sidecar, its manifest rows, all of it
+    /// on a path nothing had claimed.
+    ///
+    /// **Why it has never happened, measured rather than assumed.** Read the
+    /// shipped AmigaOS 3.9 recipe: `workbench-39` is `required`, and among its
+    /// thirteen rules are `OS-VERSION3.9/WORKBENCH3.9/LOCALE → Locale` and
+    /// `…/WBSTARTUP → WBStartup`. Every top-level drawer a readable package
+    /// in the catalogue could introduce is therefore already on every 3.9 tree
+    /// ART builds — including the two §8.3 named. The hazard is not
+    /// unexercised because nobody got to it; it cannot occur with the content
+    /// that ships. ([ART-193](docs/ISSUES.md) settled the other route: both
+    /// BoingBags really did add top-level content on the owner's tree, and
+    /// every file of it was written by the Amiga's own `Updater` inside the
+    /// emulator, not by `apply`.)
+    ///
+    /// **So the code path is what needs the test, and it gets a real one.**
+    /// The tree is built from the owner's own disc and the payload is the
+    /// owner's own archive; the only thing this test arranges is the
+    /// *absence*, by removing the `Locale` drawer that `workbench-39` placed.
+    /// That is stated plainly rather than hidden behind a fixture: everything
+    /// `apply` then reads — the names, the bytes, the tree it writes into — is
+    /// real, and the drawer it has to create is genuinely not there.
+    #[test]
+    #[ignore = "needs the user's own AmigaOS 3.9 disc and language pack; set ART_172_MEDIA and ART_172_PACKAGES"]
+    fn a_package_creating_a_top_level_drawer_accounts_for_it() {
+        let (Ok(media), Ok(packages)) = (
+            std::env::var("ART_172_MEDIA"),
+            std::env::var("ART_172_PACKAGES"),
+        ) else {
+            eprintln!("skipped: set ART_172_MEDIA and ART_172_PACKAGES");
+            return;
+        };
+
+        let scratch = ScratchDir::new("art-171", "new-top-drawer");
+        let tree = scratch.path().join("tree");
+        let recipe = recipe::by_release("AmigaOS 3.9").expect("the shipped 3.9 recipe");
+
+        let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.9".to_string(),
+            media_folder: PathBuf::from(&media),
+            rom: None,
+            chosen: Vec::new(),
+            excluded: Vec::new(),
+            destination: tree.clone(),
+            scan_cache: Default::default(),
+        };
+        let plan = crate::core::osinstall::plan::plan(&request, &recipe).expect("plan the tree");
+        crate::core::osinstall::apply::apply(&plan, &tree, &NoProgress).expect("build the tree");
+
+        // **The measurement above, asserted.** If a future recipe stops
+        // placing `Locale`, this test is arranging an absence that is already
+        // there and the sentence in its doc comment has gone stale.
+        let locale = tree.join("Locale");
+        assert!(
+            locale.is_dir(),
+            "workbench-39 is required and places Locale; §8.3's hazard cannot \
+             occur while that is true, and this test's premise depends on it"
+        );
+        std::fs::remove_dir_all(&locale).expect("arrange the absence");
+
+        let package = crate::core::osinstall::package::by_id("locale-turkish")
+            .expect("the shipped Turkish pack");
+        let archive = PathBuf::from(&packages).join("BoingBag39-2-turkce.lha");
+        assert!(archive.is_file(), "{} is not there", archive.display());
+
+        let before = read_manifest_rows(&tree);
+        let outcome = crate::core::osinstall::apply::add_package_staging_in(
+            &tree,
+            &package,
+            &archive,
+            scratch.path(),
+            &NoProgress,
+        )
+        .expect("add the package onto the tree");
+
+        println!("\n=== ART-171: a top-level drawer arriving ===");
+        println!(
+            "placed {} files into a drawer that was not there",
+            outcome.files
+        );
+
+        // 1. The drawer exists, with the payload really in it.
+        assert!(locale.is_dir(), "the drawer has to have been created");
+        let catalogs = locale.join("Catalogs");
+        assert!(catalogs.is_dir(), "and the one below it");
+        let placed: Vec<PathBuf> = walkdir_files(&catalogs);
+        assert!(
+            !placed.is_empty(),
+            "a created drawer with nothing in it is the failure this is for"
+        );
+        println!("Locale/Catalogs now holds {} files", placed.len());
+
+        // 2. **No `.uaem` sidecar is invented for any of them, and that is
+        //    the correct answer** — which is the opposite of what this test
+        //    asserted when it was first written, and the first run said so.
+        //
+        //    The assumption was that a tree is only a system volume if
+        //    metadata came with the bytes, so a drawer created outside the
+        //    release's own pass is where a sidecar would be skipped. ART's
+        //    rule is the other way round and is written down in
+        //    `apply::settle_sidecar`: an archive states no AmigaDOS
+        //    protection, date or comment at all — `source_archive.rs` calls
+        //    its values *declared defaults, never a reading*, and §89 forbids
+        //    treating a declared default as evidence. On a path the release
+        //    placed, the sidecar already beside it therefore stands; on a path
+        //    nothing has ever written, there is nothing anybody has stated,
+        //    and writing one would be ART claiming a fact it does not have.
+        //
+        //    So the §8.3 bookkeeping for a first-time drawer is: real bytes,
+        //    a manifest row, and **no invented metadata**. Pinned here because
+        //    the plausible-looking mistake is the other one.
+        let invented: Vec<String> = placed
+            .iter()
+            .filter(|f| f.extension().and_then(|e| e.to_str()) == Some("uaem"))
+            .map(|f| f.display().to_string())
+            .collect();
+        assert!(
+            invented.is_empty(),
+            "an archive states nothing about AmigaDOS metadata; these were \
+             invented: {invented:?}"
+        );
+
+        // 3. The manifest accounts for them. A file on the tree that
+        //    `distribution.json` does not name cannot be removed, replaced or
+        //    explained later — it is exactly the bookkeeping §8.3 predicted
+        //    would be skipped on a first-time drawer.
+        let after = read_manifest_rows(&tree);
+        let added = after.saturating_sub(before);
+        println!("manifest rows: {before} -> {after} (+{added})");
+        assert!(
+            added > 0,
+            "the tree has to be able to account for what arrived in it"
+        );
+    }
+
+    /// **ART-172: spec §8.4's hazard, measured instead of predicted.**
+    ///
+    /// A language pack lands on top of catalogs the base release already
+    /// placed. The round that was supposed to exercise it reported `rows=0
+    /// upgrade=0 downgrade=0 same-version=0 unversioned=0` and that number
+    /// was measuring nothing: ART-168 decoded the archive's Latin-1 drawer
+    /// name as `t<U+FFFD>rk<U+FFFD>e`, so all 36 incoming files were compared
+    /// against a destination nothing had ever written and every one came back
+    /// *new*. The cleanest-looking number of the round was the wrong
+    /// question, answered confidently.
+    ///
+    /// **Why this could not be a synthetic fixture.** Both halves of the
+    /// hazard are properties of real bytes: the disc spells the drawer
+    /// `TÜRKÇE` in its Primary tree (no Joliet descriptor on `AmigaOS39.iso`
+    /// at all), and the archive spells it `türkçe` in Latin-1
+    /// (`74 FC 72 6B E7 65`). A fixture would encode whichever pair the
+    /// author believed in, which is exactly how the first measurement went
+    /// wrong. So this builds `locale-base` from the disc and previews the
+    /// real package against it.
+    ///
+    /// It prints the census and asserts the **shape** — that the two sides
+    /// meet at all, and that what meets is declared — rather than a row
+    /// count, because the count depends on which pressing and which
+    /// BoingBag the user has, and a hard-coded 34 would pass on one machine
+    /// and prove nothing on any.
+    ///
+    /// Read-only with respect to the user's material: the disc and the
+    /// archive are opened, and everything written goes into a scratch
+    /// directory that removes itself.
+    #[test]
+    #[ignore = "needs the user's own AmigaOS 3.9 disc and language pack; set ART_172_MEDIA and ART_172_PACKAGES"]
+    fn the_language_pack_really_does_land_on_the_base_locale() {
+        let (Ok(media), Ok(packages)) = (
+            std::env::var("ART_172_MEDIA"),
+            std::env::var("ART_172_PACKAGES"),
+        ) else {
+            eprintln!(
+                "skipped: set ART_172_MEDIA (folder holding AmigaOS39.iso) and \
+                 ART_172_PACKAGES (folder holding BoingBag39-2-turkce.lha)"
+            );
+            return;
+        };
+
+        let scratch = ScratchDir::new("art-172", "locale-collision");
+        let tree = scratch.path().join("tree");
+        let recipe = recipe::by_release("AmigaOS 3.9").expect("the shipped 3.9 recipe");
+
+        // `locale-base` only, plus whatever the recipe marks required. This is
+        // the smallest real tree the hazard can happen on.
+        let request = InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.9".to_string(),
+            media_folder: PathBuf::from(&media),
+            rom: None,
+            chosen: vec!["locale-base".to_string()],
+            excluded: Vec::new(),
+            destination: tree.clone(),
+            scan_cache: Default::default(),
+        };
+
+        let plan = crate::core::osinstall::plan::plan(&request, &recipe).expect("plan the tree");
+        println!("\n=== ART-172: the base tree ===");
+        println!("plan: {} items", plan.items.len());
+        for refusal in &plan.refusals {
+            println!("  refused: {refusal:?}");
+        }
+
+        let outcome = crate::core::osinstall::apply::apply(&plan, &tree, &NoProgress)
+            .expect("build the base tree");
+        println!("placed: {} files", outcome.files);
+
+        // What the disc actually wrote, so the comparison below is against a
+        // name that is on this disk rather than one this test believes in.
+        let catalogs = tree.join("Locale").join("Catalogs");
+        let drawers: Vec<String> = std::fs::read_dir(&catalogs)
+            .expect("the base release placed Locale/Catalogs")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        println!("Locale/Catalogs holds {} drawers", drawers.len());
+        let turkish: Vec<&String> = drawers
+            .iter()
+            .filter(|d| {
+                crate::core::osinstall::fold_amiga_case(d)
+                    == crate::core::osinstall::fold_amiga_case("türkçe")
+            })
+            .collect();
+        println!("  folding onto 'türkçe': {turkish:?}");
+        assert!(
+            !turkish.is_empty(),
+            "the disc's own Turkish catalog drawer is what the pack lands on; \
+             Locale/Catalogs held {drawers:?}"
+        );
+
+        // Now the pack, read by the fixed reader, previewed against that tree.
+        let catalogue = crate::core::osinstall::package::packages_for("AmigaOS 3.9")
+            .expect("the shipped package catalogue");
+        let ordered = vec!["locale-turkish".to_string()];
+        let reports = preview_collisions(
+            &tree,
+            &PathBuf::from(&packages),
+            &ordered,
+            &catalogue,
+            scratch.path(),
+            &NoProgress,
+        )
+        .expect("preview the language pack");
+
+        let mut by_class: BTreeMap<String, usize> = BTreeMap::new();
+        for report in &reports {
+            *by_class
+                .entry(
+                    format!("{:?}", report.collision)
+                        .split('{')
+                        .next()
+                        .unwrap()
+                        .trim()
+                        .to_string(),
+                )
+                .or_default() += 1;
+        }
+        println!("\n=== ART-172: the collision census ===");
+        println!("rows: {}", reports.len());
+        for (class, count) in &by_class {
+            println!("  {class:<20} {count}");
+        }
+        for report in reports.iter().take(5) {
+            println!(
+                "  e.g. {} declared={} {:?}",
+                report.path, report.declared, report.collision
+            );
+        }
+
+        // **The assertion the 0-row run could not make.** Not a count: that
+        // the hazard happens at all, and that every collision is one the
+        // package declared. An undeclared row would mean a package writing
+        // over something no `overrides` mentions, which is the thing the
+        // declaration exists to make visible.
+        assert!(
+            !reports.is_empty(),
+            "spec §8.4 predicted this collision and ART-168 hid it; an empty \
+             report here means it is hidden again"
+        );
+        let undeclared: Vec<&str> = reports
+            .iter()
+            .filter(|r| !r.declared)
+            .map(|r| r.path.as_str())
+            .collect();
+        assert!(
+            undeclared.is_empty(),
+            "locale-turkish declares overrides: [locale-base]; these were not \
+             covered by it: {undeclared:?}"
+        );
+    }
+
     #[test]
     #[ignore = "needs the user's own AmigaOS media; set ART_OSINSTALL_MEDIA and ART_OSINSTALL_ROM"]
     fn census_the_overlay_against_the_users_own_media_when_asked() {

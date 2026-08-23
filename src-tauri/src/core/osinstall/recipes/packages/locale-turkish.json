@@ -29,7 +29,9 @@
   ],
   "id": "locale-turkish",
   "name": "Türkçe catalogs (BoingBag 3.9-2)",
-  "releases": ["AmigaOS 3.9"],
+  "releases": [
+    "AmigaOS 3.9"
+  ],
   "media": "LocaleUpdate",
   "_why_distinguished_by": [
     "ART-167. `media` alone cannot name this archive: eight of the owner's",
@@ -54,20 +56,33 @@
     "eight also include `português` and `português-brasil`.",
     "",
     "**Correction (fix round 1, F1).** The note above used to say the base",
-    "disc spells this drawer `türkçe` too, `measured with 7z`. It does not:",
-    "read with ART's own `CdSource`, `AmigaOS39.iso` carries no Joliet",
-    "descriptor at all (its chain is Primary, Primary, Terminator), so ART",
-    "reads the Primary tree and gets `OS-VERSION3.9/LOCALE/CATALOGS/TÜRKÇE`",
-    "— upper case, `T U+00DC R K U+00C7 E`. 7-Zip lower-cases plain ISO9660",
-    "names as a display convention, which is why the first measurement",
+    "disc spells this drawer `türkçe` too, `measured with 7z`. 7-Zip",
+    "lower-cases plain ISO9660 names as a display convention, so it cannot",
+    "be asked this question at all — which is why the first measurement",
     "disagreed with the reader that actually does the work.",
     "",
-    "That is why `core::osinstall::fold_amiga_case` folds the Latin-1",
-    "accented range and not only ASCII: under the ASCII-only fold that",
-    "shipped, this package's `Locale/Catalogs/türkçe` and the base",
-    "component's `Locale/Catalogs/TÜRKÇE` were two different destinations,",
-    "so the ~34 catalogs `overrides: [locale-base]` is declared for did not",
-    "collide at all."
+    "**Correction 2 (ART-172, 2026-08-23), and this one is the measured**",
+    "**answer.** F1 replaced the 7z claim with the opposite one: that ART's",
+    "own `CdSource` reads the Primary tree and gets",
+    "`OS-VERSION3.9/LOCALE/CATALOGS/TÜRKÇE`, upper case. It does not.",
+    "`locale-base` was built from `AmigaOS39.iso` with ART's own reader and",
+    "the drawer it places is **`türkçe`**, lower case — the same spelling",
+    "this package uses. Both spellings are on the disc (the upper-case form",
+    "in all four path-table copies and under other directories), but not at",
+    "the path this component reads.",
+    "",
+    "So the two sides of this collision agree on spelling, and the",
+    "`fold_amiga_case` Latin-1 range is **not** what brings them together:",
+    "the same measurement re-run with the fold cut back to ASCII produced the",
+    "identical 29 collision rows. That range is still right — it is what",
+    "AmigaDOS does, and three tests in `core::osinstall` hold it — but it is",
+    "not this package's reason, and it should not be cited as one.",
+    "",
+    "The collision itself is real and is now measured rather than predicted:",
+    "29 rows against a freshly built `locale-base` — 12 upgrades, 13 the same",
+    "version, 2 downgrades and 2 unversioned — every one of them covered by",
+    "the `overrides` declared below. See",
+    "`commands::osinstall::tests::the_language_pack_really_does_land_on_the_base_locale`."
   ],
   "distinguished_by": "locale/catalogs/türkçe",
   "requires": [],
@@ -83,9 +98,17 @@
     "there would refuse a correct selection by name. `plan()` refuses the",
     "combination instead — see `package.rs`'s own module doc comment."
   ],
-  "requires_components": ["locale-base"],
-  "overrides": ["locale-base"],
+  "requires_components": [
+    "locale-base"
+  ],
+  "overrides": [
+    "locale-base"
+  ],
   "rules": [
-    { "from": "locale/catalogs", "to": "Locale/Catalogs", "kind": "subtree" }
+    {
+      "from": "locale/catalogs",
+      "to": "Locale/Catalogs",
+      "kind": "subtree"
+    }
   ]
 }

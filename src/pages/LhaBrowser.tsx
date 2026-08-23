@@ -12,6 +12,7 @@ import {
   type WhdloadResult,
 } from "@/lib/lha";
 import { useOpenObject } from "@/stores/openObjectStore";
+import { errorText } from "@/lib/errorText";
 
 /**
  * The catalogue key for a confidence badge — for everything except
@@ -67,7 +68,7 @@ export function LhaBrowser() {
       setPath(p);
       lhaDetectWhdload(p).then(setWhdload).catch(() => setWhdload(null));
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
       setInfo(null);
     } finally {
       setBusy(false);
@@ -92,7 +93,7 @@ export function LhaBrowser() {
       const out = await lhaExtract(path, dest);
       setOutcome(out);
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setBusy(false);
     }

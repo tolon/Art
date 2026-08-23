@@ -234,6 +234,7 @@ import {
   type ArchiveInfo,
 } from "@/lib/archive";
 import { cbmExtract, cbmExtractFile, cbmList, cbmOpen, type CbmInfo } from "@/lib/cbm";
+import { errorText } from "@/lib/errorText";
 
 type Side = "left" | "right";
 
@@ -489,6 +490,7 @@ function runJob(start: () => Promise<number>): Promise<JobOutcome> {
           }
         })
         .catch((err) => {
+          // Wrapped for a caller that renders it, not rendered here.
           finish(() => reject(err instanceof Error ? err : new Error(String(err))));
         });
     });
@@ -999,7 +1001,7 @@ export function FileManager() {
         }
         setFocused("left");
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(errorText(t, e)));
     // Keyed on the settings arriving, not on mount: see `settingsLoaded`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settingsLoaded]);
@@ -1066,7 +1068,7 @@ export function FileManager() {
         if (cursor) setAnchor((a) => ({ ...a, [side]: cursor }));
         setFocused(side);
       } catch (e) {
-        setPane(side, { ...emptyPane(), location: path, error: String(e) });
+        setPane(side, { ...emptyPane(), location: path, error: errorText(t, e) });
       }
     },
     [setPane, resetSelection]
@@ -1106,7 +1108,7 @@ export function FileManager() {
         resetSelection(side);
         setFocused(side);
       } catch (e) {
-        setPane(side, { ...emptyPane(), kind: "adf", location: path, host, error: String(e) });
+        setPane(side, { ...emptyPane(), kind: "adf", location: path, host, error: errorText(t, e) });
       }
     },
     [setPane, resetSelection]
@@ -1121,7 +1123,7 @@ export function FileManager() {
         resetSelection(side);
         setFocused(side);
       } catch (e) {
-        setPane(side, { ...emptyPane(), kind: "hdf", location: path, host, error: String(e) });
+        setPane(side, { ...emptyPane(), kind: "hdf", location: path, host, error: errorText(t, e) });
       }
     },
     [setPane, resetSelection]
@@ -1167,7 +1169,7 @@ export function FileManager() {
           location: path,
           image,
           host,
-          error: String(e),
+          error: errorText(t, e),
         });
       }
     },
@@ -1215,7 +1217,7 @@ export function FileManager() {
         resetSelection(side);
         setFocused(side);
       } catch (e) {
-        setPane(side, { ...emptyPane(), kind: "iso", location: path, host, error: String(e) });
+        setPane(side, { ...emptyPane(), kind: "iso", location: path, host, error: errorText(t, e) });
       }
     },
     [setPane, resetSelection]
@@ -1256,7 +1258,7 @@ export function FileManager() {
         resetSelection(side);
         setFocused(side);
       } catch (e) {
-        setPane(side, { ...emptyPane(), kind: "archive", location: path, host, error: String(e) });
+        setPane(side, { ...emptyPane(), kind: "archive", location: path, host, error: errorText(t, e) });
       }
     },
     [setPane, resetSelection, t]
@@ -1296,7 +1298,7 @@ export function FileManager() {
         resetSelection(side);
         setFocused(side);
       } catch (e) {
-        setPane(side, { ...emptyPane(), kind: "c64", location: path, host, error: String(e) });
+        setPane(side, { ...emptyPane(), kind: "c64", location: path, host, error: errorText(t, e) });
       }
     },
     [setPane, resetSelection]
@@ -1493,7 +1495,7 @@ export function FileManager() {
       else if (container === "archive") await openArchive(side, path, "", host);
       else await openCbm(side, path, host);
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
       setHint(null);
     } finally {
       setBusy(null);
@@ -2088,7 +2090,7 @@ export function FileManager() {
           );
           copyDestination.current = to;
         } catch (e) {
-          setError(String(e));
+          setError(errorText(t, e));
           setBusy(null);
         }
         return;
@@ -2111,7 +2113,7 @@ export function FileManager() {
             );
             copyDestination.current = to;
           } catch (e) {
-            setError(String(e));
+            setError(errorText(t, e));
             setBusy(null);
           }
           return;
@@ -2142,7 +2144,7 @@ export function FileManager() {
           );
           await refresh(to);
         } catch (e) {
-          setError(String(e));
+          setError(errorText(t, e));
         } finally {
           setBusy(null);
         }
@@ -2170,7 +2172,7 @@ export function FileManager() {
           );
           await refresh(to);
         } catch (e) {
-          setError(String(e));
+          setError(errorText(t, e));
         } finally {
           setBusy(null);
         }
@@ -2205,7 +2207,7 @@ export function FileManager() {
           );
           copyDestination.current = to;
         } catch (e) {
-          setError(String(e));
+          setError(errorText(t, e));
           setBusy(null);
         }
         return;
@@ -2227,7 +2229,7 @@ export function FileManager() {
             );
             copyDestination.current = to;
           } catch (e) {
-            setError(String(e));
+            setError(errorText(t, e));
             setBusy(null);
           }
           return;
@@ -2252,7 +2254,7 @@ export function FileManager() {
           );
           await refresh(to);
         } catch (e) {
-          setError(String(e));
+          setError(errorText(t, e));
         } finally {
           setBusy(null);
         }
@@ -2303,7 +2305,7 @@ export function FileManager() {
             );
             copyDestination.current = to;
           } catch (e) {
-            setError(String(e));
+            setError(errorText(t, e));
             setBusy(null);
           }
           return;
@@ -2327,7 +2329,7 @@ export function FileManager() {
             );
             setPlan({ plan: found, sources: [entry.path], names: [entry.name], side: to });
           } catch (e) {
-            setError(String(e));
+            setError(errorText(t, e));
           } finally {
             setBusy(null);
           }
@@ -2352,7 +2354,7 @@ export function FileManager() {
           );
           await refresh(to);
         } catch (e) {
-          setError(String(e));
+          setError(errorText(t, e));
         } finally {
           setBusy(null);
         }
@@ -2379,7 +2381,7 @@ export function FileManager() {
           );
           copyDestination.current = to;
         } catch (e) {
-          setError(String(e));
+          setError(errorText(t, e));
           setBusy(null);
         }
         return;
@@ -2405,7 +2407,7 @@ export function FileManager() {
         );
         await refresh(to);
       } catch (e) {
-        setError(String(e));
+        setError(errorText(t, e));
       } finally {
         setBusy(null);
       }
@@ -2468,7 +2470,7 @@ export function FileManager() {
             );
       copyDestination.current = pending.side;
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
       setBusy(null);
     }
   }
@@ -2632,7 +2634,7 @@ export function FileManager() {
         setBusy(null);
       } catch (e) {
         pendingPlan.current = null;
-        setError(String(e));
+        setError(errorText(t, e));
         setBusy(null);
       }
       return;
@@ -2665,7 +2667,7 @@ export function FileManager() {
         );
         await refresh(to);
       } catch (e) {
-        setError(String(e));
+        setError(errorText(t, e));
       } finally {
         setBusy(null);
       }
@@ -2698,7 +2700,7 @@ export function FileManager() {
         );
         copyDestination.current = to;
       } catch (e) {
-        setError(String(e));
+        setError(errorText(t, e));
         setBusy(null);
       }
       return;
@@ -2739,7 +2741,7 @@ export function FileManager() {
         );
         copyDestination.current = to;
       } catch (e) {
-        setError(String(e));
+        setError(errorText(t, e));
         setBusy(null);
       }
       return;
@@ -2836,7 +2838,7 @@ export function FileManager() {
       );
       await refresh(side);
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setBusy(null);
     }
@@ -2924,7 +2926,7 @@ export function FileManager() {
       );
       await refresh(side);
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setBusy(null);
     }
@@ -3261,7 +3263,7 @@ export function FileManager() {
       await refresh(from);
       await refresh(to);
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
       // Whatever failed, the panes are the truth about what is where now.
       await refresh(from);
       await refresh(to);
@@ -3317,9 +3319,9 @@ export function FileManager() {
       setMessage(t("files.status.checkedOut", { name: row.name }));
       // Best-effort: an editor that will not start is worth saying, but the
       // checkout itself succeeded and its path is on screen either way.
-      await checkoutEdit(row.id).catch((e) => setError(String(e)));
+      await checkoutEdit(row.id).catch((e) => setError(errorText(t, e)));
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setBusy(null);
     }
@@ -3344,7 +3346,7 @@ export function FileManager() {
       await volumeMakeDir(target.path, target.volumeIndex, target.dirBlock, name);
       await refresh(side);
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setBusy(null);
     }
@@ -3413,7 +3415,7 @@ export function FileManager() {
       );
       await refresh(side);
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setBusy(null);
     }
@@ -3487,7 +3489,7 @@ export function FileManager() {
     try {
       await startDrag({ item: [entry.path], icon: "" });
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     }
   }
 
@@ -3928,7 +3930,7 @@ export function FileManager() {
       );
       await refresh(pending.side);
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setBusy(null);
     }

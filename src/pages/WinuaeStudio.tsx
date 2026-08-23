@@ -15,6 +15,7 @@ import { romIdentify, type RomInfo } from "@/lib/rom";
 import { isFlag, isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { useOpenObject } from "@/stores/openObjectStore";
+import { errorText } from "@/lib/errorText";
 
 export function WinuaeStudio() {
   const { t } = useTranslation();
@@ -93,7 +94,7 @@ export function WinuaeStudio() {
         setSelectedProfile(profList.find((p) => p.id === profileId) ?? profList[0]);
       }
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     }
   }
 
@@ -183,7 +184,7 @@ export function WinuaeStudio() {
       );
       setStatusMsg(t("winuae.msg.launched", { pid, name: selectedProfile.name }));
     } catch (e) {
-      setError(t("winuae.err.launchFailed", { error: String(e) }));
+      setError(t("winuae.err.launchFailed", { error: errorText(t, e) }));
     } finally {
       setBusy(false);
     }

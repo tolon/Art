@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 
 import { hexRead, type HexChunk } from "@/lib/analysis";
 import { useOpenObject } from "@/stores/openObjectStore";
+import { errorText } from "@/lib/errorText";
 
 export function HexTools() {
   const { t } = useTranslation();
@@ -43,7 +44,7 @@ export function HexTools() {
       setOffset(targetOffset);
       setChunk(data);
     } catch (e) {
-      setError(String(e));
+      setError(errorText(t, e));
     } finally {
       setBusy(false);
     }

@@ -121,6 +121,7 @@ import {
 import { fraction, onJobProgress, subscribeSafely, type JobProgress } from "@/lib/jobs";
 import { formatBytes } from "@/lib/panel";
 import { Field } from "@/components/osbuilder/Field";
+import { errorText } from "@/lib/errorText";
 
 export interface PackagePanelProps {
   /** The distribution tree's own root — where `distribution.json` lives.
@@ -258,7 +259,7 @@ export function PackagePanel({
       .catch((e) => {
         if (!cancelled) {
           setCollisions(null);
-          setCollisionsError(String(e));
+          setCollisionsError(errorText(t, e));
         }
       });
     return () => {
@@ -348,7 +349,7 @@ export function PackagePanel({
       // `busy` clears on the job's own progress event, or here if the job
       // never actually started.
     } catch (e) {
-      setApplyError(String(e));
+      setApplyError(errorText(t, e));
       setBusy(false);
       applyJob.current = null;
     }

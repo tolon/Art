@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { volumeReadHead } from "@/lib/volumeWrite";
+import { errorText } from "@/lib/errorText";
 
 type Mode = "text" | "hex";
 
@@ -74,7 +75,7 @@ export function FileViewer({
         setTruncated(buffer.length === limit);
         setMode(looksBinary(buffer) ? "hex" : "text");
       })
-      .catch((e) => !cancelled && setError(String(e)));
+      .catch((e) => !cancelled && setError(errorText(t, e)));
 
     return () => {
       cancelled = true;
