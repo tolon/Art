@@ -428,6 +428,27 @@ first looks: embedding a PFS3 driver into a **foreign** card's existing RDB
 `hst-imager` does it; that is named in the refusal text. Not fixed — filed as
 future work, not implied to already work.
 
+**The premise is now confirmed on the owner's own copy** (2026-08-24, reading
+`CaffeineOS_Storm_9317.img` with ART's own `read_card` through
+`core::card::tests::read_real_card_when_asked`). This entry asserted
+CaffeineOS's geometry from memory of a card; the card is here and it agrees:
+
+    area at 1178599424  cyl=38488  heads=12  sectors=256  partitions=2  drivers=1
+      SDH0  PDS3  lo=2    hi=535    buffers=600
+      SDH1  PDS3  lo=536  hi=36194  buffers=600
+    partitions-missing-driver=0
+
+**12 heads, 256 sectors** — not the 16/63 `create_rdb_layout` builds — so
+writing a fresh RDB over that area really would invalidate both partitions,
+which is what the refusal exists for. Two other things fell out of the same
+read and are worth having: ART reads a **third-party** PiStorm card correctly
+end to end (a card ART did not build, from a distribution ART has nothing to
+do with), and the card's shape is the one `CLAUDE.md` describes from two
+cards — MBR, a FAT32 primary (type `0x0C`, LBA 2048, 1.10 GiB), one `0x76`
+area beginning **1.178 GB in** whose first four bytes are `RDSK`. That is a
+third independent measurement of the model `core/mbr`'s defaults were chosen
+from.
+
 **Decided 2026-08-21 by the owner: leave it. `hst-imager` stays the named
 fallback for this one gap.** Editing an existing RDB in place is the kind of
 operation that takes every partition on the card with it when it goes wrong,
