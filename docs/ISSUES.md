@@ -26,6 +26,110 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-227** 🟠 **ART runs a BoingBag's `Updater` exactly the way the one
+readable distribution builder does, and then stops — the fix-ups that builder
+performs *after* it are not done, and one of them is what activates BoingBag
+2's ROM update** — *found 2026-08-24 by the owner asking how other projects
+place BoingBags, and reading the one whose source can be read*
+`src-tauri/src/core/amigainstall/workvol.rs::startup_sequence` ·
+`…/recipes/packages/boingbag-39-1.json` · `…/boingbag-39-2.json`
+
+**One project, not four, and that is stated because the earlier round's
+research was at README level.** HstWB Installer is open source and its
+AmigaDOS scripts can be read; ClassicWB's OS39 package carries no BoingBag
+handling at all (it assumes an installed OS); AmiKit and CoffinOS ship no
+source. So what follows is measured from **one** primary source —
+`henrikstengaard/hstwb-installer`, `amiga/amiga-os-3.9/S/Amiga-OS-3.9/` — and
+generalising it to "how everyone does it" would be the confident-and-wrong
+shape this file exists for.
+
+**Where ART already agrees with it**, which is the part worth saying first:
+
+    ; HstWB, Install-Boing-Bag-1
+    SYS:T/BoingBags/BoingBag3.9-1/C/Updater SYS:T/BoingBags/BoingBag3.9-1/AmigaOS-Update "SYS:"
+
+ART's `PlannedRun` generates the same call — the package's own `Updater`, its
+own payload, the target volume — and nothing decrypts anything on either side.
+The only difference is where the **wrapper** is unpacked: HstWB runs `lha` on
+the Amiga, ART unpacks on the host and mounts the result as `ARTPkg:`, which is
+auditable in a way an Amiga-side extraction is not. That difference is a
+choice, not a gap.
+
+**What HstWB does after the `Updater` returns, and ART does not do at all.**
+`startup_sequence` emits assigns → `SetPatch` → `AddDataTypes` → the installer
+→ a result marker, and there is no step after the installer:
+
+*BoingBag 1*
+- `protect +prwed` on seven `C:` commands (`LoadMonDrvs`, `LoadResource`,
+  `MakeDir`, `MakeLink`, `SetEnv`, `WBInfo`, `WBRun`) and `+srwed` on three
+  `S:` scripts. Without the pure bit `Resident` refuses those commands.
+- `powerpc.library` / `warp.library` copied from the package's `PowerPC`
+  drawer **only if the tree already has one** — a WarpUp system is updated, a
+  non-WarpUp one is left alone.
+- Locale catalogs copied through its own `Copy-Locale` helper.
+
+*BoingBag 2*
+- HDToolBox's icon position (cosmetic).
+- A **second `Updater` run**, on `XAD-Update`, gated on
+  `Version SYS:Libs/xadmaster.library 10 FILE`.
+- **The ROM update rotation** — the one with teeth. `Devs/AmigaOS ROM Update`
+  is copied aside to `.old` (or `.old2`/`.old3`/`.old4`, first free name) and
+  `Devs/AmigaOS ROM Update.BB39-2` is copied over it.
+- `C/Installer` copied into `SYS:C` and `SYS:Utilities`.
+
+**The rotation matters, and that half is measured.** BoingBag 2's payload
+really does carry the suffixed file, read out of the owner's own
+`BoingBag39-2.lha` — ZipCrypto encrypts the bytes and leaves the **names** in
+clear, which is the same property [ART-166](#open) is filed on:
+
+| entry in `BoingBag3.9-2/AmigaOS-Update` | size |
+|---|---|
+| `Devs\AmigaOS ROM Update.BB39-2` | **321 768 bytes** |
+| `Devs\NSDPatch.cfg.BB39-2` | 32 635 bytes |
+
+So the `Updater` places a 321 KB ROM update **beside** the old one under a name
+nothing loads, and something has to move it. HstWB moves it. ART emits no line
+that could. (HstWB leaves `NSDPatch.cfg.BB39-2` alone — that file is
+user-editable configuration and a reference copy is the right shape for it.)
+
+**What is NOT measured, and the run that would settle it.** No BoingBag'd tree
+survives on this machine: `bb-run/p1`, `bb-run/p2`, `bb-run2/b1` and
+`dist-3.9-bb` all hold **3 795 files**, which is the *pre*-install count — the
+successful run went 3 795 → 3 859 and its promoted result is gone. So it is
+**not confirmed** that an ART-installed tree ends up with
+`Devs/AmigaOS ROM Update.BB39-2` un-rotated; what is confirmed is that the
+payload carries it and that ART's script cannot rotate it. One run of
+`real_install_hook::install_a_real_package_when_asked` with BoingBag 2, then
+`ls Devs/`, closes that gap — and it is worth doing before the fix, so the
+before-state is on record rather than inferred.
+
+Also unmeasured, and named because it is the honest alternative: whether the
+`Updater` performs any of these itself on some pressing. HstWB doing them
+*suggests* it does not, and a suggestion is not a measurement.
+
+**Why this is 🟠 and not 🔴.** The 2026-08-21 run's evidence stands — the tree
+boots and answers `Workbench 45.3 (07-Dec-01)`, `version.library 45.3`,
+`workbench.library 45.127`. Those are **disk** libraries and they really were
+updated. The ROM update is a different thing, loaded by `SetPatch`, and no
+claim ART has made covers it. Nothing said is false; something is incomplete.
+
+**The shape the fix should take, stated so the next round does not invent
+one.** These steps are **per package**, not per run, so they belong in the
+package recipe as data — the same rule the install recipes already follow ("a
+fourth package is a JSON file, not a code path"). `PlannedRun` grows a
+`post_install` list and `startup_sequence` emits it after the installer and
+before the result marker. Two things that must not be got wrong:
+
+- **Typed operations, not raw AmigaDOS lines.** `startup_sequence`'s whole
+  input surface is currently refused for shell metacharacters; a free-text
+  script field would drive a hole straight through that. A small vocabulary —
+  *protect*, *copy-if-target-exists*, *rotate-aside-then-replace*,
+  *run-if-library-older-than* — covers everything above and stays checkable.
+- **The result marker must still be the installer's.** A post-step that fails
+  is not the installer failing, and collapsing the two would produce exactly
+  the "four endings, one sentence" defect this project keeps meeting. A failed
+  fix-up needs its own ending.
+
 **ART-226** 🟠 **Every tree ART builds has an empty `Devs/Keymaps`, so whatever
 language the user chose they can only type on an American keyboard — and for
 Turkish the keymap is not on the CD at all** — *found 2026-08-24 by the owner,
@@ -104,6 +208,28 @@ round's:**
 **What must not happen**, stated because it is the tempting shortcut: ART does
 not author a keymap and does not ship one. `Locale3_9.lha` is the user's own
 file, exactly like every other package ART applies.
+
+**Question 1 answered by the owner, 2026-08-24: yes, and all of them.**
+*"klavye örtüsünü koyalım dağıtıma, biz bütün klavyeler olsun yaptığımız
+dağıtımda"* — every keymap the medium carries goes into `Devs/Keymaps`, not
+one chosen at build time. Measured for that build:
+
+- The shelf is on the **3.9 overlay**, not the 3.5 layer:
+  `OS-Version3.9/Workbench3.9/Storage/Keymaps` — **22 keymaps**, each with its
+  own `.info`, 44 entries: `1251Q_US_RUS`, `1251_GB1_RUS`, `1251_GB_RUS`, `br`,
+  `br2`, `br3-ABNT2`, `cat`, `cdn`, `ch1`, `ch2`, `d`, `dk`, `e`, `f`, `gb`,
+  `i`, `n`, `po`, `s`, `si`, `türkçe`, `usa2`. **`türkçe` is on that shelf** —
+  which narrows this entry's opening claim: the 3.9 CD does carry a Turkish
+  keymap after all, on the shelf where nothing selects it. `Locale3_9.lha`
+  remains the richer source (49 keymaps, and the country/language/flag files),
+  but it is no longer the *only* one.
+- **The icons belong too, and that is measured rather than assumed.** The CD
+  carries a real, bootable AmigaOS system in `Emergency-Boot`, and its
+  `Devs/Keymaps` holds thirteen keymaps **each beside its `.info`**. That is
+  what a working system looks like, so both go.
+
+Still the owner's: whether the component is `required` or a tick-box, and
+questions 2 and 3 above.
 
 **ART-166** 🔴 **Both BoingBag payload archives are password-encrypted ZIPs, so
 neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task
