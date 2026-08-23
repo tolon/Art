@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Both were built from a real AmigaOS 3.9 CD before being offered.
 
 #### Fixed
+- **The Turkish fonts are now fonts the Amiga can actually see.** They were
+  installed under names ending `.FONT`, and AmigaOS only recognises a font
+  descriptor spelled `.font` — so all thirteen were on the disk and none of
+  them appeared in any font list, including Preferences. Found by booting the
+  tree and opening the font requester. They are now written exactly as your
+  AmigaOS 3.9 CD spells them.
 - **The AmigaOS 3.9 component list now names its rows.** All five come off one
   disc, so every row read `AmigaOS3.9` — including the ones you are asked to
   tick. Each now says what it is, in both languages.

@@ -1602,6 +1602,61 @@ mod tests {
         }
     }
 
+    /// **A font descriptor is spelled `.font`, and ART-225 is why this is a
+    /// test rather than a convention.**
+    ///
+    /// `diskfont.library` matches the `.font` suffix **case-sensitively**. A
+    /// descriptor placed as `TOPAZ-ISO9.FONT` is not merely spelled oddly —
+    /// it does not exist as far as `AvailFonts`, every font requester and the
+    /// whole system are concerned. Measured on the owner's own machine, in
+    /// the shape this project asks for: one of thirteen descriptors had its
+    /// suffix lowered on the host while the emulator was running, the
+    /// requester was reopened, and **that one appeared while the other twelve
+    /// did not** — control and treatment in the same list, one variable, and
+    /// the base name left uppercase on purpose so the suffix was the only
+    /// thing that changed.
+    ///
+    /// Nothing else could have caught it. The tree built, verified clean,
+    /// planned exactly 63 items, and the round's own real-media test asserted
+    /// "thirteen family drawers each with a non-empty descriptor" — which was
+    /// true, and the fonts were invisible. This is the cheapest guard that
+    /// makes the class impossible in CI: no media, no emulator, one rule.
+    #[test]
+    fn every_font_descriptor_a_recipe_places_is_spelled_dot_font_art_225() {
+        let packages = super::super::package::packages().expect("the shipped packages must parse");
+        let mut checked = 0usize;
+        for release in super::releases() {
+            let recipe = super::by_release(release)
+                .unwrap_or_else(|e| panic!("the shipped {release} recipe must parse: {e}"));
+            let components = recipe
+                .components
+                .iter()
+                .chain(packages.iter().map(|p| &p.component));
+            for component in components {
+                for rule in &component.rules {
+                    let leaf = rule.to.rsplit('/').next().unwrap_or(&rule.to);
+                    if !leaf.to_ascii_lowercase().ends_with(".font") {
+                        continue;
+                    }
+                    checked += 1;
+                    assert!(
+                        leaf.ends_with(".font"),
+                        "{release}: '{}' places '{}', and diskfont.library will not see it — \
+                         a font descriptor's suffix is matched case-sensitively, so it has to \
+                         be spelled '.font' exactly, the way the medium itself spells it",
+                        component.id,
+                        rule.to
+                    );
+                }
+            }
+        }
+        assert!(
+            checked >= 13,
+            "this guard saw only {checked} font descriptors; the Turkish set alone is thirteen, \
+             so it is looking in the wrong place"
+        );
+    }
+
     /// **ART-159, hazard 2 — the owner's own language.** The disc's
     /// `Special-Locale/TÜRKÇE` branch is fonts and nothing else: 13 families,
     /// 13 `.font` descriptors, 37 size files, and no keymap, printer driver
@@ -1613,16 +1668,22 @@ mod tests {
     ///
     /// Three things this pins that nothing else can:
     ///
-    /// - **A family and its `.font` descriptor travel together.** AmigaOS
-    ///   finds a font through the descriptor; a directory placed without one
-    ///   is a font `diskfont.library` cannot see, and the tree would build
-    ///   and verify clean around it.
+    /// - **A family and its descriptor travel together.** AmigaOS finds a
+    ///   font through the descriptor; a directory placed without one is a
+    ///   font `diskfont.library` cannot see, and the tree would build and
+    ///   verify clean around it.
+    /// - **Each destination is the disc's own spelling, copied not retyped**
+    ///   (ART-225). The pairs below are the disc's, inconsistencies included:
+    ///   `FuturaB-ISO9.font` beside `courier-iso9.font`, `XHelvetica-iso9.font`
+    ///   beside `XCourier-ISO9.font`, and every descriptor's case differing
+    ///   from its own family drawer's. Tidying any of that would be ART
+    ///   renaming the user's file, and lowering a suffix that the medium
+    ///   spells lower is the difference between a font the system has and one
+    ///   it does not.
     /// - **No override, on purpose.** Zero of the thirteen names collide with
     ///   the base `Fonts` drawer, so declaring one would say this layer
     ///   replaces the system's fonts when it does not — and would license a
     ///   future rule to do so unmeasured.
-    /// - **Optional.** A tree without these boots and runs; it is only wrong
-    ///   for a Turkish user, and that is their tick-box to make.
     #[test]
     fn the_turkish_font_component_pairs_every_family_with_its_descriptor_art_159() {
         let recipe = parse(AMIGAOS_39_JSON).unwrap();
@@ -1641,51 +1702,57 @@ mod tests {
              override that replaces nothing is a licence to replace something later"
         );
 
+        // The disc's own thirteen, drawer and descriptor, in recipe order.
+        // Read off the owner's AmigaOS39.iso and cross-checked: 7-Zip and
+        // ART's own `distribution.json` agree byte for byte on all thirteen
+        // *base* font names from the same disc, so these are the names
+        // `CdSource` returns and not one tool's opinion of them.
+        const DISC: [(&str, &str); 13] = [
+            ("courier-iso9", "courier-iso9.font"),
+            ("diamond-iso9", "diamond-iso9.font"),
+            ("emerald-iso9", "emerald-iso9.font"),
+            ("futurab-iso9", "FuturaB-ISO9.font"),
+            ("garnet-iso9", "garnet-iso9.font"),
+            ("personal-iso9", "Personal-ISO9.font"),
+            ("times-iso9", "Times-ISO9.font"),
+            ("topaz-iso9", "Topaz-ISO9.font"),
+            ("topazt", "topazt.font"),
+            ("xcourier-iso9", "XCourier-ISO9.font"),
+            ("xen-iso9", "Xen-ISO9.font"),
+            ("xen-wide-iso9", "Xen-Wide-ISO9.font"),
+            ("xhelvetica-iso9", "XHelvetica-iso9.font"),
+        ];
+
         const DRAWER: &str = "OS-VERSION3.9/SPECIAL-LOCALE/TÜRKÇE/FONTS";
-        let mut families: Vec<&str> = Vec::new();
-        let mut descriptors: Vec<&str> = Vec::new();
-        for rule in &turkish.rules {
-            let from = rule
-                .from
-                .strip_prefix(&format!("{DRAWER}/"))
-                .unwrap_or_else(|| panic!("every rule comes out of {DRAWER}: {}", rule.from));
-            assert_eq!(
-                rule.to,
-                format!("Fonts/{from}"),
-                "a font keeps the disc's own spelling, in the Fonts drawer"
-            );
-            match rule.kind {
-                RuleKind::Subtree => families.push(from),
-                RuleKind::File => descriptors.push(
-                    from.strip_suffix(".FONT")
-                        .unwrap_or_else(|| panic!("a File rule here is a descriptor: {from}")),
-                ),
-            }
+        let mut expected: Vec<(String, String, RuleKind)> = Vec::new();
+        for (drawer, descriptor) in DISC {
+            // `from` stays in the Primary tree's all-caps spelling: it
+            // resolves (the real run refuses nothing), lookup is
+            // case-insensitive, and the drawer above these is not spelled the
+            // same in its Rock Ridge entry as in its Primary one.
+            let caps = drawer.to_ascii_uppercase();
+            expected.push((
+                format!("{DRAWER}/{caps}"),
+                format!("Fonts/{drawer}"),
+                RuleKind::Subtree,
+            ));
+            expected.push((
+                format!("{DRAWER}/{caps}.FONT"),
+                format!("Fonts/{descriptor}"),
+                RuleKind::File,
+            ));
         }
 
+        let actual: Vec<(String, String, RuleKind)> = turkish
+            .rules
+            .iter()
+            .map(|r| (r.from.clone(), r.to.clone(), r.kind))
+            .collect();
         assert_eq!(
-            families,
-            vec![
-                "COURIER-ISO9",
-                "DIAMOND-ISO9",
-                "EMERALD-ISO9",
-                "FUTURAB-ISO9",
-                "GARNET-ISO9",
-                "PERSONAL-ISO9",
-                "TIMES-ISO9",
-                "TOPAZ-ISO9",
-                "TOPAZT",
-                "XCOURIER-ISO9",
-                "XEN-ISO9",
-                "XEN-WIDE-ISO9",
-                "XHELVETICA-ISO9",
-            ],
-            "the thirteen families the disc's own TÜRKÇE/fonts drawer holds"
-        );
-        assert_eq!(
-            descriptors, families,
-            "every family must arrive with its own .FONT descriptor, and in the same order — \
-             a directory without one is a font AmigaOS cannot see"
+            actual, expected,
+            "each family arrives with its own descriptor, in the disc's own spelling — a \
+             missing descriptor is a font AmigaOS cannot see, and a retyped one is a font \
+             AmigaOS cannot see either (ART-225)"
         );
     }
 
