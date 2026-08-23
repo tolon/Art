@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Both were built from a real AmigaOS 3.9 CD before being offered.
 
 #### Fixed
+- **A BoingBag install finishes properly now.** BoingBag 2 ships a new ROM
+  update and its own installer leaves it beside the old one under a name the
+  Amiga never loads — so the update was on your disk and switched off. ART now
+  puts it in place and keeps the previous one beside it. BoingBag 1 leaves ten
+  files without the protection bits AmigaOS needs to make those commands
+  resident; those are set too, and ART says on screen what it changed.
 - **The Turkish fonts are now fonts the Amiga can actually see.** They were
   installed under names ending `.FONT`, and AmigaOS only recognises a font
   descriptor spelled `.font` — so all thirteen were on the disk and none of

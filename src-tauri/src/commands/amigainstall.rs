@@ -96,6 +96,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use super::jobs::{spawn_job, JobRegistry};
 use super::oplog::{user_operation, write_to_path};
+use crate::core::amigainstall::finish;
 use crate::core::amigainstall::run::{run, RunLimits, RunRequest};
 use crate::core::amigainstall::stage::{settle, stage_with, Settlement};
 use crate::core::amigainstall::{
@@ -371,6 +372,10 @@ struct Composed {
     /// `core/rom/pairing.rs` and `commands/preload.rs::rom_pairing_for`
     /// already set.
     overlays: Vec<packagevol::Overlay>,
+    /// ART-227: what to do to the copy after the installer succeeds, before
+    /// anything is promoted. Carried here rather than looked up again in
+    /// `perform`, so the preview and the run read one value.
+    post_install: Vec<crate::core::amigainstall::finish::PostStep>,
     /// The recipe's `minimum_version`, parsed. `None` when the recipe declares
     /// none, which is every package but BoingBag 3.9-1.
     minimum_installer_version: Option<(u32, u32)>,
@@ -590,6 +595,7 @@ fn compose(request: &AmigaInstallRequest) -> CoreResult<Composed> {
         package_dir,
         installer_in_package,
         overlays,
+        post_install: installer.post_install.clone(),
         minimum_installer_version,
         minimum_installer_version_text: installer.minimum_version.clone(),
     })
@@ -712,6 +718,29 @@ fn compose_medium(
     }))
 }
 
+/// One finished post-install step, as a sentence.
+///
+/// English, like every other `ProgressSink` line in this module — ART-060's
+/// mechanism covers `CoreError`, not progress text, and inventing a second
+/// half-translated surface here would be worse than one honest one.
+fn describe_applied(step: &finish::AppliedStep) -> String {
+    match step {
+        finish::AppliedStep::Protected { path, was, now } => {
+            format!("Protection bits on '{path}': {was} -> {now}")
+        }
+        finish::AppliedStep::Replaced {
+            target,
+            replacement,
+            backup: Some(backup),
+        } => format!("'{replacement}' is now '{target}'; the previous one is at '{backup}'"),
+        finish::AppliedStep::Replaced {
+            target,
+            replacement,
+            backup: None,
+        } => format!("'{replacement}' placed as '{target}'; there was nothing to replace"),
+    }
+}
+
 /// The machine the installer runs on.
 fn profile_for(id: Option<&str>) -> CoreResult<AmigaProfile> {
     let wanted = id
@@ -744,6 +773,7 @@ fn profile_for(id: Option<&str>) -> CoreResult<AmigaProfile> {
 /// whole polls. None of the three is inside a write.
 fn perform(
     tree: &Path,
+    post_install: &[finish::PostStep],
     sink: &dyn ProgressSink,
     run: impl FnOnce(&Path, &dyn ProgressSink) -> CoreResult<RunOutcome>,
 ) -> CoreResult<(RunOutcome, SettlementReport)> {
@@ -755,6 +785,46 @@ fn perform(
 
     match run(staged.copy_path(), sink) {
         Ok(outcome) => {
+            // **ART-227: what the installer left for somebody else to do.**
+            //
+            // Here, and only on `Succeeded`, for three reasons that are one
+            // reason: this is the last moment the copy is still only a copy.
+            // A failure below returns before `settle`, so nothing is
+            // promoted and the user's own tree is untouched — the same
+            // answer §92 gives everywhere else — and the `Err` arm further
+            // down is what says where the copy went.
+            //
+            // The other three endings get nothing. A tree the installer
+            // refused is not a tree to go on editing, and rotating a file
+            // into place there would be ART finishing a job that did not
+            // start.
+            if matches!(outcome, RunOutcome::Succeeded) && !post_install.is_empty() {
+                match finish::apply(staged.copy_path(), post_install) {
+                    Ok(applied) => {
+                        // Said out loud, one line each. A step that moved a
+                        // 321 KB ROM update into place is not a detail: the
+                        // whole reason it exists is that nothing else
+                        // reports it, and "never claim what you did not do"
+                        // has a mirror — say what you did.
+                        for step in &applied {
+                            sink.report(0, None, &describe_applied(step));
+                        }
+                    }
+                    Err(err) => {
+                        sink.report(
+                            0,
+                            None,
+                            &format!(
+                                "The installer succeeded, but ART could not finish the tree: \
+                                 {err}. '{}' was not touched; the copy is at '{}'",
+                                staged.original_path().display(),
+                                staged.copy_path().display()
+                            ),
+                        );
+                        return Err(err);
+                    }
+                }
+            }
             let settlement = settle(staged, &outcome)?;
             Ok((outcome, SettlementReport::from(settlement)))
         }
@@ -893,7 +963,7 @@ fn install(
         );
     }
 
-    perform(tree, sink, |copy, sink| {
+    perform(tree, &composed.post_install, sink, |copy, sink| {
         let request = RunRequest {
             plan,
             work_volume_dir: work.path(),
@@ -1568,7 +1638,7 @@ mod tests {
         let sink = Sink::cancelled();
         let ran = AtomicUsize::new(0);
 
-        let result = perform(&tree, &sink, |_, _| {
+        let result = perform(&tree, &[], &sink, |_, _| {
             ran.fetch_add(1, Ordering::Relaxed);
             Ok(RunOutcome::Succeeded)
         });
@@ -1594,7 +1664,7 @@ mod tests {
         let sink = Sink::default();
         let staged_at = std::sync::Mutex::new(PathBuf::new());
 
-        let result = perform(&tree, &sink, |copy, _| {
+        let result = perform(&tree, &[], &sink, |copy, _| {
             *staged_at.lock().unwrap() = copy.to_path_buf();
             // The copy exists at this moment, which is what makes its
             // absence afterwards mean something.
@@ -1630,7 +1700,7 @@ mod tests {
         let tree = tree_in(&scratch);
         let sink = Sink::default();
 
-        let _ = perform(&tree, &sink, |_, _| Err(CoreError::Cancelled));
+        let _ = perform(&tree, &[], &sink, |_, _| Err(CoreError::Cancelled));
 
         assert!(
             sink.said("was removed"),
@@ -1670,7 +1740,7 @@ mod tests {
             let sink = Sink::default();
             let wanted = outcome.clone();
 
-            let (ending, settlement) = perform(&tree, &sink, move |copy, _| {
+            let (ending, settlement) = perform(&tree, &[], &sink, move |copy, _| {
                 std::fs::write(copy.join("Libs/version.library"), b"installed").unwrap();
                 Ok(wanted)
             })
@@ -1704,7 +1774,7 @@ mod tests {
         let tree = tree_in(&scratch);
         let sink = Sink::default();
 
-        let (outcome, settlement) = perform(&tree, &sink, |copy, _| {
+        let (outcome, settlement) = perform(&tree, &[], &sink, |copy, _| {
             std::fs::write(copy.join("Libs/version.library"), b"installed").unwrap();
             Ok(RunOutcome::Succeeded)
         })
@@ -1740,7 +1810,7 @@ mod tests {
         let tree = tree_in(&scratch);
         let sink = Sink::default();
 
-        let result = perform(&tree, &sink, |_, _| {
+        let result = perform(&tree, &[], &sink, |_, _| {
             Err(CoreError::InvalidInput("the mount went away".into()))
         });
 
@@ -2235,7 +2305,7 @@ mod tests {
             );
 
             let plan = composed.plan.clone();
-            let (outcome, settlement) = perform(&tree, &Sink::default(), |copy, _sink| {
+            let (outcome, settlement) = perform(&tree, &[], &Sink::default(), |copy, _sink| {
                 let outcome = RunOutcome::Succeeded;
                 record_if_succeeded(copy, &plan, &outcome)?;
                 Ok(outcome)
@@ -2295,7 +2365,7 @@ mod tests {
         let composed = compose(&request(&tree)).unwrap();
         let plan = composed.plan.clone();
 
-        let (outcome, settlement) = perform(&tree, &Sink::default(), |copy, _sink| {
+        let (outcome, settlement) = perform(&tree, &[], &Sink::default(), |copy, _sink| {
             let outcome = RunOutcome::Succeeded;
             record_if_succeeded(copy, &plan, &outcome)?;
             Ok(outcome)

@@ -107,6 +107,35 @@
     "side."
   ],
   "amiga_installer": {
+      "_why_post_install": [
+        "ART-227, and this one is the whole reason the mechanism exists.",
+        "",
+        "BoingBag 2's `Updater` writes its ROM update as",
+        "`Devs/AmigaOS ROM Update.BB39-2` — **321 768 bytes** — and leaves it there,",
+        "beside the CD's own 127 956-byte `Devs/AmigaOS ROM Update`, under a name",
+        "`SetPatch` does not load. Measured on 2026-08-24 on the tree ART's own run",
+        "produced: both files present, the old one still the active one. So a tree that",
+        "reports itself BoingBag'd, and answers `Workbench 45.3` when asked, is running",
+        "the ROM update it had before. Nothing fails; the newer file is simply never",
+        "read.",
+        "",
+        "HstWB Installer does the same move — back the old one aside, copy the new one",
+        "over it — which is where this was found. ART does it on the host instead of in",
+        "the boot script, for the reasons `core::amigainstall::finish` gives.",
+        "",
+        "**`NSDPatch.cfg` is deliberately left alone.** BoingBag 1 leaves",
+        "`Devs/NSDPatch.cfg-BB3.9-1` and BoingBag 2 leaves `Devs/NSDPatch.cfg.BB39-2`",
+        "(the two packages do not even agree on the punctuation), and neither is rotated",
+        "here. That file is user-editable configuration; a reference copy beside it is",
+        "the right shape, and HstWB reaches the same conclusion by touching neither."
+      ],
+      "post_install": [
+        {
+          "step": "replace-keeping-backup",
+          "target": "Devs/AmigaOS ROM Update",
+          "replacement": "Devs/AmigaOS ROM Update.BB39-2"
+        }
+      ],
     "program": "C/Updater",
     "args": ["AmigaOS-Update"],
     "required_medium": { "volume": "AmigaOS3.9", "name": "the original AmigaOS 3.9 CD-ROM" }
