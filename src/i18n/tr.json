@@ -2171,6 +2171,7 @@
         "os39": {
           "base": "Workbench 3.5 taban katmanı",
           "euroCountries": "Euro para birimi ülke dosyaları",
+          "keymaps": "Klavye düzenleri",
           "locale": "Locale — katalog, dil ve ülke dosyaları",
           "overlay": "Workbench 3.9 katmanı",
           "turkishFonts": "Türkçe fontlar (ISO-8859-9)"

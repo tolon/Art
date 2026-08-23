@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fonts and replaces none of yours: the thirteen names share nothing with the
   fonts the base release installs, checked against the disc rather than
   assumed.
+- **AmigaOS 3.9: every keyboard layout, as a tick-box.** Your 3.9 disc keeps
+  twenty-two keyboard layouts on a shelf where AmigaOS never looks for them,
+  so a system ART built could only ever use the American one — whatever
+  language you chose. Tick the box and all twenty-two are installed where the
+  Amiga loads them from, each with its icon, Turkish included.
 - **AmigaOS 3.9: the euro-currency country files.** A second optional
   component replaces nine `.country` files — Österreich, Belgie, Belgique,
   Deutschland, España, France, Italia, Nederland, Portugal — with the disc's
