@@ -130,81 +130,6 @@ answer to give: the package installs, through the emulator, the way every
 established distribution builder installs one.
 
 
-**ART-159** 🟠 **Two of spec §5's three predicted hazards for AmigaOS 3.9 —
-`SetPatch`/the boot sequence, and the three language-variant trees — went
-untouched by every task on the branch and were recorded nowhere** — *found
-2026-08-19 by the whole-branch review (findings 8 and its §5 notes); filed in
-the fix pass, deliberately not built there*
-`src-tauri/src/core/osinstall/recipes/amigaos-3.9.json` ·
-
-The design spec named three hazards a 3.9 recipe would hit. One was met
-honestly and filed (ART-157, the Kickstart minimum). The other two produced
-no component, no test, no issue and no line in FEATURES/STATUS:
-
-1. **`SetPatch` and the boot sequence.** The spec named the disc's own
-   `First-Install` tree as carrying `c/SetPatch`, `loadwb`, `iprefs` and
-   `mount`, and warned that "the boot path is part of what must be placed".
-   The shipped recipe places `OS-VERSION3.9/WORKBENCH3.5/S` — the
-   Startup-Sequence itself — and nothing from `First-Install`. A
-   Startup-Sequence whose first line runs a `SetPatch` that is not in `C:`
-   is the single most likely reason a 3.9 tree fails to boot when somebody
-   finally tries, which is why this is High and not Low.
-2. **Language variants.** `Locale`, `Locale.Euro` and `Special-Locale` are
-   unaddressed. Whatever locale content lands does so incidentally, inside
-   the `STORAGE` subtree. AmigaOS 3.2's real run already showed this is the
-   class of mistake only a running system reveals (ART-127: a tree that
-   built and verified clean, and was missing `icon.library`).
-
-Not fixed here. Both belong to the recipe's second and third steps, which
-the spec itself makes conditional on the boot test in §4 — and no 3.9 tree
-has been booted (see FEATURES.md's 🟡 row). The point of this entry is that
-"blocked on a boot" is a reason to record something as owed, not a reason to
-leave it unrecorded: a hazard predicted before the work and untouched after
-it should be visible in the register of what ART owes, beside ART-157, rather
-than only in a review nobody reads again.
-
-**Hazard 1 is now measured on a running system, and stays open only for
-hazard 2** — *2026-08-21, the Amiga-side round's real run*. The tree really
-does carry `C/SETPATCH` (placed by `workbench-base`) and
-`Devs/AMIGAOS ROM UPDATE` (127 956 bytes), and running `C:SetPatch QUIET`
-against it under the owner's Kickstart 40.68 demonstrably applies the update:
-the booted system then answers `workbench.library 45.102` and
-`version.library 45.1`, and its banner changes from *1985-1993
-Commodore-Amiga* to *1985-2000 Amiga International*. So the boot path is
-placed and works. What the entry above got right is that **nothing was
-running it** — ART's own generated boot did not, which is
-[ART-189](#fixed). **Hazard 2 — `Locale`, `Locale.Euro` and `Special-Locale`
-— is still untouched**, and that is why this stays open.
-
-**Hazard 2 is now measured, 2026-08-23, and it is not academic.** The three
-trees were read off the owner's own `AmigaOS39.iso`:
-
-| tree | what it actually is |
-|---|---|
-| `OS-Version3.9/Locale` | the base locale content — **already placed**, by the `locale-base` component ART-162 added |
-| `OS-Version3.9/Locale.Euro/Countries` | 9 `.country` files — `deutschland`, `france`, `italia`, `nederland`, `españa`, `belgie`, `belgique`, `portugal`, `österreich` — the euro-currency replacements for country files `locale-base` already writes |
-| `OS-Version3.9/Special-Locale` | 245 nodes in three languages: **Czech** (123), **tükrçe** (65), **Russian** (57) |
-
-`Special-Locale` is not more catalogs. It is keymaps, printer drivers,
-`L/FileSystem_Trans` and — for Turkish — **the ISO-8859-9 (Latin-5) font set**:
-`topaz-iso9`, `times-iso9`, `courier-iso9`, `xen-iso9`, `diamond-iso9`,
-`emerald-iso9`, `garnet-iso9`, `personal-iso9`, `xhelvetica-iso9`, `topazt`
-and their `.font` descriptors. Those are the fonts that make ş, ğ, ı and İ
-render correctly. A Turkish system built from this disc without them has the
-catalogs and not the glyphs, which is precisely ART-127's shape — a tree that
-builds and verifies clean and is wrong on a running Amiga.
-
-**What is left is a scoping decision, not a measurement.** Both trees are
-ordinary optional components in recipe data: `Locale.Euro/Countries →
-Locale/Countries` with `overrides: ["locale-base"]`, and
-`Special-Locale/<language>` with `overrides: ["workbench-base",
-"workbench-39", "locale-base"]` and an `exclusive_group` so two languages
-cannot both claim `Devs/Keymaps`. What they are **not** is a debt round's call:
-each one is a new tick-box on the install screen and a statement about what
-ART offers. Left for the owner to scope, with the measurement above so that
-decision is one step rather than an investigation.
-
-
 **ART-130** 🔵 **A game can name the Kickstart it needs, and nothing offers to
 supply it** — *filed 2026-08-17, out of G10's design round; the reading half is
 built by G10, this is the half that was deliberately left out*
@@ -369,6 +294,242 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-159** 🟠 **Two of spec §5's three predicted hazards for AmigaOS 3.9 —
+`SetPatch`/the boot sequence, and the three language-variant trees — went
+untouched by every task on the branch and were recorded nowhere** — *found
+2026-08-19 by the whole-branch review (findings 8 and its §5 notes); filed in
+the fix pass, deliberately not built there*
+`src-tauri/src/core/osinstall/recipes/amigaos-3.9.json` ·
+
+The design spec named three hazards a 3.9 recipe would hit. One was met
+honestly and filed (ART-157, the Kickstart minimum). The other two produced
+no component, no test, no issue and no line in FEATURES/STATUS:
+
+1. **`SetPatch` and the boot sequence.** The spec named the disc's own
+   `First-Install` tree as carrying `c/SetPatch`, `loadwb`, `iprefs` and
+   `mount`, and warned that "the boot path is part of what must be placed".
+   The shipped recipe places `OS-VERSION3.9/WORKBENCH3.5/S` — the
+   Startup-Sequence itself — and nothing from `First-Install`. A
+   Startup-Sequence whose first line runs a `SetPatch` that is not in `C:`
+   is the single most likely reason a 3.9 tree fails to boot when somebody
+   finally tries, which is why this is High and not Low.
+2. **Language variants.** `Locale`, `Locale.Euro` and `Special-Locale` are
+   unaddressed. Whatever locale content lands does so incidentally, inside
+   the `STORAGE` subtree. AmigaOS 3.2's real run already showed this is the
+   class of mistake only a running system reveals (ART-127: a tree that
+   built and verified clean, and was missing `icon.library`).
+
+Not fixed here. Both belong to the recipe's second and third steps, which
+the spec itself makes conditional on the boot test in §4 — and no 3.9 tree
+has been booted (see FEATURES.md's 🟡 row). The point of this entry is that
+"blocked on a boot" is a reason to record something as owed, not a reason to
+leave it unrecorded: a hazard predicted before the work and untouched after
+it should be visible in the register of what ART owes, beside ART-157, rather
+than only in a review nobody reads again.
+
+**Hazard 1 is now measured on a running system, and stays open only for
+hazard 2** — *2026-08-21, the Amiga-side round's real run*. The tree really
+does carry `C/SETPATCH` (placed by `workbench-base`) and
+`Devs/AMIGAOS ROM UPDATE` (127 956 bytes), and running `C:SetPatch QUIET`
+against it under the owner's Kickstart 40.68 demonstrably applies the update:
+the booted system then answers `workbench.library 45.102` and
+`version.library 45.1`, and its banner changes from *1985-1993
+Commodore-Amiga* to *1985-2000 Amiga International*. So the boot path is
+placed and works. What the entry above got right is that **nothing was
+running it** — ART's own generated boot did not, which is
+[ART-189](#fixed). **Hazard 2 — `Locale`, `Locale.Euro` and `Special-Locale`
+— is still untouched**, and that is why this stays open.
+
+**Hazard 2 is now measured, 2026-08-23, and it is not academic.** The three
+trees were read off the owner's own `AmigaOS39.iso`:
+
+| tree | what it actually is |
+|---|---|
+| `OS-Version3.9/Locale` | the base locale content — **already placed**, by the `locale-base` component ART-162 added |
+| `OS-Version3.9/Locale.Euro/Countries` | 9 `.country` files — `deutschland`, `france`, `italia`, `nederland`, `españa`, `belgie`, `belgique`, `portugal`, `österreich` — the euro-currency replacements for country files `locale-base` already writes |
+| `OS-Version3.9/Special-Locale` | 245 nodes in three languages: **Czech** (123), **tükrçe** (65), **Russian** (57) |
+
+`Special-Locale` is not more catalogs. It is keymaps, printer drivers,
+`L/FileSystem_Trans` and — for Turkish — **the ISO-8859-9 (Latin-5) font set**:
+`topaz-iso9`, `times-iso9`, `courier-iso9`, `xen-iso9`, `diamond-iso9`,
+`emerald-iso9`, `garnet-iso9`, `personal-iso9`, `xhelvetica-iso9`, `topazt`
+and their `.font` descriptors. Those are the fonts that make ş, ğ, ı and İ
+render correctly. A Turkish system built from this disc without them has the
+catalogs and not the glyphs, which is precisely ART-127's shape — a tree that
+builds and verifies clean and is wrong on a running Amiga.
+
+**What is left is a scoping decision, not a measurement.** Both trees are
+ordinary optional components in recipe data: `Locale.Euro/Countries →
+Locale/Countries` with `overrides: ["locale-base"]`, and
+`Special-Locale/<language>` with `overrides: ["workbench-base",
+"workbench-39", "locale-base"]` and an `exclusive_group` so two languages
+cannot both claim `Devs/Keymaps`. What they are **not** is a debt round's call:
+each one is a new tick-box on the install screen and a statement about what
+ART offers. Left for the owner to scope, with the measurement above so that
+decision is one step rather than an investigation.
+
+**Hazard 2 is closed, 2026-08-23 — both trees are shipped as optional
+components and both were built from the owner's own disc.** The scoping call
+was theirs and they took it: yes to the Turkish fonts, yes to the euro country
+files.
+
+**What the measurement corrected in the entry above.** `Special-Locale` is
+245 nodes in three languages, as recorded — but the sentence naming keymaps,
+printer drivers and `L/FileSystem_Trans` describes the **Czech** branch. The
+Turkish one is fonts and nothing else: all 65 of its nodes sit under a single
+`fonts` drawer, with no keymap, no printer driver and no install script of its
+own. And the font list here was three short: `futurab-iso9`, `xcourier-iso9`
+and `xen-wide-iso9` were not in it. Thirteen families, thirteen `.font`
+descriptors, thirty-seven size files. Read by walking the disc's own Primary
+directory records in Python — not through ART and not through 7-Zip, which
+reads a different tree off the same disc and renders the drawer's name
+`t³rk?e`.
+
+**Two things this round learnt from the artefact that no plan had:**
+
+- **The disc's own Installer places neither drawer.** `OS-Version3.9/OS3.9Install`
+  (`$VER: Install 45.0`, 204 064 bytes) contains the string `Special-Locale`
+  nowhere, and `Locale.Euro` nowhere. Both are supplementary material a user
+  installs by hand, which is what makes `required: false` a measurement rather
+  than a judgement.
+- **The nine euro country files are the same length as the ones they
+  replace** — 586, 588, 590 and 592 bytes — and byte-for-byte different from
+  both `locale-base`'s copies and `workbench-39`'s, 9 of 9 by SHA-256. Equal
+  size proves nothing about a fixed-shape structure; only the hashes settle
+  it. The disc also carries a *second*, older euro set at
+  `Workbench3.5/Storage/Locale/Countries-Euro` (ten files, all differing from
+  these nine again), which already reaches the tree as `Storage/LOCALE/`
+  `COUNTRIES-EURO` where nothing selects it.
+
+**The shape the components took, and why.** `special-locale-turkish` names its
+thirteen families **one rule each** rather than taking the whole `Fonts`
+drawer, because taking a base drawer whole is allowed only by declaring an
+override over the base — and none of the thirteen ISO-8859-9 names collides
+with anything the base `Fonts` drawer holds, so declaring one would state a
+replacement that never happens and license a later rule to make one
+unmeasured. `locale-euro` does declare overrides, over `locale-base` **and**
+`workbench-39`, because it really replaces both, and it is declared last for
+the ordering reason [ART-224](#fixed) was filed about the same day.
+
+**Non-ASCII in a recipe path, for the first time.** The Primary tree spells
+the drawer `TÜRKÇE`, raw bytes `54 DC 52 4B C7 45` — Latin-1 Ü and Ç,
+uppercased the way ISO9660 uppercases every Primary name. `validate_path`
+accepts it and it matches the disc byte for byte, so nothing here rests on
+`fold_amiga_case`'s Latin-1 range. It does not reach [ART-113](#open) either:
+every destination is ASCII, so no non-ASCII name is ever asked of a PFS3
+volume.
+
+**Built from the owner's own `AmigaOS39.iso`, all five components on**
+(`apply::tests::build_the_real_39_language_components_when_asked`, `#[ignore]`d
+and env-gated on `ART_159_ISO`/`ART_159_DEST`): **0 refusals**, 2339 planned
+items, 19 016 030 bytes, applied in **16.30 s** to 1929 files and 194
+directories. `special-locale-turkish` contributed exactly 63 plan items and
+`locale-euro` 10 — nine `.country` files plus the `Locale/Countries` drawer its
+subtree rule targets, which is one more than the nine every document in this
+round quotes and is written down here because the expectation was 9 and the
+code was right.
+
+The empty `refusals` is the load-bearing number twice over: a `from` path no
+medium matches is a `MediaPathMissing` refusal, so it is what says the
+non-ASCII drawer resolves; and `detect_collisions` refuses an undeclared
+claim, so it is also what says the thirteen font families really share no name
+with the base drawer. On disk afterwards: 13 family drawers each with a
+non-empty `.FONT` descriptor, 74 entries under them (37 sizes and their 37
+`.uaem` sidecars), the base `TOPAZ`/`TIMES`/`COURIER`/`DIAMOND` descriptors
+untouched, and **9 of 9** euro country files matching the disc's euro copy
+rather than its base copy — read from the disc at test time, not pinned as a
+hash, so the comparison is against this pressing rather than against a number
+somebody typed.
+
+**Mutations.** Six against the recipe and catalogue guards, all six fell on
+their own sentence: `glowicons` back above `storage`; `locale-base` losing its
+`label_key`; `TOPAZT` losing its `.FONT` rule; `locale-euro` losing
+`workbench-39` from its overrides; a `label_key` with a typo; an orphaned
+catalogue label. **Two against the real-material hook fell on an *earlier*
+assertion than the one they were aimed at** — reordering `locale-euro` above
+the overlay was caught by the `components_on` order check, and pointing its
+`from` at the base drawer by the per-component item count — so the final
+byte-comparison's own sensitivity is **not** proven by mutation and is
+disclosed rather than claimed. What stands in its place is the assertion the
+loop makes before comparing: `assert_ne!(euro, base)` on every one of the nine,
+which is what fails if the two sources ever turn out to be the same file.
+
+Left for a boot rather than claimed: nobody has started a Turkish AmigaOS 3.9
+and looked at a ş. The fonts are placed, named and paired with their
+descriptors; that they render is the next thing a running system would answer.
+
+
+**ART-224** 🟠 ✅ **Two AmigaOS 3.2 components declared an override over
+`storage` and were declared above it, so both overrides silently did
+nothing — and one of them cost sixteen icons a user had asked for** —
+*found 2026-08-23 by a guard [ART-159](#fixed)'s round added, on
+`art-159-language-components`; filed and fixed in the same pass*
+`src-tauri/src/core/osinstall/recipes/amigaos-3.2.json`
+
+`plan()` emits items in recipe-declaration order and `apply`'s writer lets
+the last writer win, so a component that declares `overrides` only wins if it
+is declared **after** what it overrides. Declared above it, the override is
+still accepted — `detect_collisions` refuses an *undeclared* claim and has no
+opinion about order — so the plan is clean, the tree builds, the manifest is
+consistent, and the files are the wrong ones. Nothing crashes and nothing
+reports it.
+
+`glowicons` and `modules-a1200` both declared `overrides: ["storage"]` and
+both sat above `storage`, which was the last component in the file.
+
+**What each one actually cost, measured off the owner's own ADFs with
+amitools' `xdftool` rather than reasoned about:**
+
+- **`glowicons`: sixteen icons.** `GlowIcons3.2:Storage` and `Storage3.2`
+  meet on 16 `.info` files — 6 in `Storage/DOSDrivers` (`AUX`, `CD0`,
+  `MACCD0`, `PC0`, `PC1`, `RAD`) and 10 in `Storage/Monitors` (`A2024`,
+  `DblNTSC`, `DblPAL`, `Euro36`, `Euro72`, `Multiscan`, `NTSC`, `PAL`,
+  `Super72`, `VGAOnly`). Every pair differs in size the way the two icon
+  styles do: 1452 bytes against 476 for each monitor icon, and 1061/481,
+  1641/515, 1758/492, 1319/509 for the drivers. A user who ticked GlowIcons
+  got sixteen plain icons back, and the only place that would ever show is a
+  running Workbench.
+- **`modules-a1200`: nothing.** The one destination it shares with `storage`
+  is `C/LoadModule`, and the two disks carry the *same file* — both 11 816
+  bytes, both SHA-256
+  `35acfea734816965d271352f59c3643963f69c7e4b2469e3473c5f5a8a60fc14`.
+  Whichever wrote last, the bytes were identical. Stated rather than left
+  implied: this half was a false claim in the recipe, not a wrong tree.
+
+**Fixed 2026-08-23.** Both components moved below `storage`, `glowicons`
+last of all since it is the only one that overlays four others, each with a
+`_why_` note carrying the measurement above.
+`recipe::tests::every_override_is_declared_after_what_it_overrides` is the
+guard, and it is general: every component of every shipped release recipe,
+so the next recipe to declare an override cannot repeat this. It found both
+of these the first time it ran, which is the only reason they are in this
+file. **Mutation:** moving `storage` back to the end of the array — the exact
+state above — fails it on its own sentence
+(*"'modules-a1200' declares an override over 'storage' but is declared before
+it"*). The first attempt at that mutation produced invalid JSON and failed
+the test on a parse error instead; it is recorded because a mutation that
+fails for the wrong reason proves nothing, and the clean one was re-run.
+
+`src/lib/osinstall.test.ts`'s ART-175 list moved with them, and says so.
+
+**A second, quieter half, fixed in the same commit: the install screen
+labelled three AmigaOS 3.9 rows identically.** A component's row is labelled
+with its `media` — the volume it comes from — which for AmigaOS 3.2's sixteen
+disks is better than any sentence ART could write. AmigaOS 3.9 is five
+components off **one disc**, so every row read `AmigaOS3.9`, and two of them
+are tick-boxes the user is asked to decide about. True, identical, and
+useless. A recipe may now name an i18n key for its own row
+(`Component::label_key`), the 3.9 recipe names five, and
+`recipe::tests::a_recipe_whose_components_share_a_medium_labels_every_row`
+makes that non-optional exactly where the shape occurs — written that way
+round rather than "every component needs a label", because a rule forcing
+sixteen redundant keys onto the 3.2 recipe would be obeyed by writing sixteen
+worse labels. `src/i18n/recipe-component-keys.test.ts` resolves every
+declared key against **both** catalogues and refuses one nothing claims, and
+`dead-keys.test.ts` now reads the recipe files — added when the first recipe
+used a key rather than after a round nearly deleted five live labels, which
+is [ART-179](#fixed)'s whole lesson.
 
 **ART-187** 🔵 ✅ **A cancelled Amiga-side install leaves the last phase line
 on screen under a badge that says nothing about it** — *found 2026-08-21 in

@@ -266,6 +266,27 @@ pub struct Component {
     /// Only one of a group may be chosen — `"modules"` for the Modules disks.
     #[serde(default)]
     pub exclusive_group: Option<String>,
+    /// An **i18n key** for this component's own row on the install screen,
+    /// used in place of [`Component::media`] (ART-224).
+    ///
+    /// A row is normally labelled by the volume it comes from, which for the
+    /// AmigaOS 3.2 recipe is a different ADF per component and says exactly
+    /// what a person needs. The AmigaOS 3.9 recipe is five components off
+    /// **one disc**, so every row said `AmigaOS3.9` — three identical labels
+    /// before this field existed, two of them tick-boxes, and ART-159's two
+    /// new components would have made it five. Five true labels that a user
+    /// cannot tell apart are this project's confident-and-wrong shape in its
+    /// quietest form.
+    ///
+    /// A key rather than a string, for the same reason `core/distro`'s
+    /// `post_install_notes` are keys: the recipe is data in the Rust tree
+    /// with no compiler between it and the screen, and a Turkish user must
+    /// not read an English label. `recipe-component-keys.test.ts` checks
+    /// every one against **both** catalogues, and
+    /// [`recipe::tests::a_recipe_whose_components_share_a_medium_labels_every_row`]
+    /// is what makes declaring one non-optional where it matters.
+    #[serde(default)]
+    pub label_key: Option<String>,
     /// Registered but not built (CLAUDE.md, §96): shown as Coming Later.
     #[serde(default = "yes")]
     pub available: bool,
@@ -1225,6 +1246,7 @@ pub(crate) mod fixtures {
                 overrides: Vec::new(),
                 user_startup: Vec::new(),
                 exclusive_group: None,
+                label_key: None,
                 available: true,
             }],
         }
@@ -1250,6 +1272,7 @@ pub(crate) mod fixtures {
             overrides: vec!["base-c".to_string()],
             user_startup: Vec::new(),
             exclusive_group: None,
+            label_key: None,
             available: true,
         };
         super::package::Package {
@@ -1331,6 +1354,7 @@ pub(crate) mod fixtures {
             overrides: vec!["base-c".to_string(), "test-package".to_string()],
             user_startup: Vec::new(),
             exclusive_group: None,
+            label_key: None,
             available: true,
         };
         super::package::Package {

@@ -70,6 +70,14 @@ function sources(dir: string): string[] {
  */
 const DATA_FILES = [
   resolve(SRC, "..", "src-tauri", "src", "core", "distro", "registry.json"),
+  // The same shape, arriving a second time (ART-224): an install recipe may
+  // name an `osinstall.components.name.*` key for a component's own row, and
+  // `OsInstall.tsx` resolves it through a variable exactly as `OsBuilder.tsx`
+  // resolves a distro note. Added when the first recipe used one rather than
+  // after a round nearly deleted five live labels — which is the whole lesson
+  // of the paragraph above.
+  resolve(SRC, "..", "src-tauri", "src", "core", "osinstall", "recipes", "amigaos-3.2.json"),
+  resolve(SRC, "..", "src-tauri", "src", "core", "osinstall", "recipes", "amigaos-3.9.json"),
 ];
 
 const HAYSTACK = [

@@ -1106,8 +1106,18 @@ export interface ComponentDef {
   /** The volume name inside the image — shown as the row's own label,
    *  unlocalized, the same way the preload screen prints a partition's
    *  `drive_name` untranslated: this is what the Amiga side calls it, not a
-   *  sentence ART wrote. */
+   *  sentence ART wrote. Overridden by `labelKey` where the recipe names one. */
   media: string;
+  /** The recipe's own i18n key for this row (ART-224), or `null`.
+   *
+   *  `media` is the right label while every component comes off its own
+   *  volume, which is AmigaOS 3.2's whole sixteen-disk shape. AmigaOS 3.9 is
+   *  five components off **one disc**, so every row read `AmigaOS3.9` — true,
+   *  identical, and useless for deciding which box to tick. The recipe names
+   *  the key; the screen resolves it; `src/i18n/recipe-component-keys.test.ts`
+   *  checks every key against both catalogues, and the Rust side refuses a
+   *  recipe that shares a medium without labelling its rows. */
+  labelKey: string | null;
   required: boolean;
   available: boolean;
   /** `Condition::RomOlderThan { major }`, flattened by the command — `null`
@@ -1173,9 +1183,15 @@ export function componentDef(components: ComponentDef[], id: string): ComponentD
   return components.find((c) => c.id === id);
 }
 
-/** A component's own label — the volume name the recipe names, or the bare
- *  id when the loaded release does not hold it (a plan item from a release
- *  whose list has not arrived yet, never a fabricated volume name). */
+/** A component's own label **when the recipe names no i18n key for it** —
+ *  the volume name, or the bare id when the loaded release does not hold the
+ *  component (a plan item from a release whose list has not arrived yet,
+ *  never a fabricated volume name).
+ *
+ *  Deliberately not translation-aware. `src/lib` holds no i18next singleton
+ *  and never renders a sentence, so a row that has a `labelKey` is resolved
+ *  by the component that draws it — see `OsInstall.tsx`'s `label()`. This
+ *  stays the fallback both sides call. */
 export function componentLabel(components: ComponentDef[], id: string): string {
   return componentDef(components, id)?.media ?? id;
 }

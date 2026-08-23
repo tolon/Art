@@ -50,6 +50,7 @@ const RECIPE_DIR = resolve(__dirname, "..", "..", "src-tauri", "src", "core", "o
 interface RecipeComponent {
   id: string;
   media: string;
+  label_key?: string;
   required?: boolean;
   condition?: { condition: string; major?: number };
   exclusive_group?: string;
@@ -81,6 +82,7 @@ function catalogueOf(recipe: Recipe): ComponentDef[] {
   return recipe.components.map((c) => ({
     id: c.id,
     media: c.media,
+    labelKey: c.label_key ?? null,
     required: c.required ?? false,
     available: c.available ?? true,
     conditionMajor: c.condition?.condition === "rom-older-than" ? (c.condition.major ?? null) : null,
@@ -127,12 +129,20 @@ describe("every shipped recipe", () => {
         if (def.overrides.length > 0) declaring.push(`${recipe.release}/${def.id}`);
       }
     }
+    // **In recipe order, and the order moved** (ART-224, 2026-08-23).
+    // `modules-a1200` and `glowicons` were declared *above* `storage`, which
+    // they both override — and recipe order is what decides which layer
+    // writes last, so both overrides were inert. `glowicons` cost sixteen
+    // GlowIcons a user had ticked for. Both now sit after it, which is why
+    // this list reads in a different order than it used to; `locale-euro` is
+    // ART-159's new one.
     expect(declaring).toEqual([
       "AmigaOS 3.2/extras",
-      "AmigaOS 3.2/modules-a1200",
       "AmigaOS 3.2/classes",
+      "AmigaOS 3.2/modules-a1200",
       "AmigaOS 3.2/glowicons",
       "AmigaOS 3.9/workbench-39",
+      "AmigaOS 3.9/locale-euro",
     ]);
   });
 

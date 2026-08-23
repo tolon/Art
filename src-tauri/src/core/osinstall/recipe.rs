@@ -42,6 +42,7 @@ const COMPONENT_KEYS: &[&str] = &[
     "activate",
     "exclusive_group",
     "available",
+    "label_key",
 ];
 const RULE_KEYS: &[&str] = &["from", "to", "kind"];
 const CONDITION_KEYS: &[&str] = &["condition", "major"];
@@ -843,8 +844,28 @@ mod tests {
         let ids: Vec<&str> = recipe.components.iter().map(|c| c.id.as_str()).collect();
         assert_eq!(
             ids,
-            vec!["workbench-base", "locale-base", "workbench-39"],
-            "the 3.9 overlay must be the last component declared — recipe order is what decides which layer writes last (see this test's own doc comment)"
+            vec![
+                "workbench-base",
+                "locale-base",
+                "workbench-39",
+                "special-locale-turkish",
+                "locale-euro"
+            ],
+            "recipe order is what decides which layer writes last (see this test's own doc comment)"
+        );
+        // **What "last" turned out to mean** (ART-159, 2026-08-23). This test
+        // used to assert `workbench-39` was the final element of the array,
+        // and read that as the fix for ART-169. It is not: the fix is that the
+        // overlay is declared *after the two layers it overrides*, which is
+        // what `apply`'s last-writer-wins actually depends on. Two components
+        // that collide with neither of those layers now sit after it, and the
+        // ART-169 property is untouched — so the assertion says the property
+        // rather than the position. `every_override_is_declared_after_what_it_overrides`
+        // holds the same rule for every component of every shipped recipe.
+        let at = |id: &str| ids.iter().position(|c| *c == id).unwrap();
+        assert!(
+            at("workbench-39") > at("workbench-base") && at("workbench-39") > at("locale-base"),
+            "the 3.9 overlay must be declared after both layers it overrides"
         );
 
         let overlay = recipe
@@ -1484,6 +1505,233 @@ mod tests {
                     kind: RuleKind::Subtree,
                 },
             ]
+        );
+    }
+
+    /// **ART-169's positional half, generalised** — filed out of ART-159,
+    /// which is what made it necessary.
+    ///
+    /// `plan()` emits items in recipe-declaration order and `apply`'s writer
+    /// lets the last writer win, so a component that declares `overrides`
+    /// only wins if it is declared *after* what it overrides. Declared above
+    /// it, the override is still accepted by `detect_collisions` — the plan
+    /// does not refuse — and the older layer then writes last. Nothing
+    /// reports it: the tree builds, the manifest is consistent, and the files
+    /// are the wrong ones. That is this project's confident-and-wrong shape,
+    /// and until now the only thing holding it was one hardcoded id list in
+    /// `the_39_overlay_is_declared_last_required_and_over_both_layers` — a
+    /// list ART-159's two new components had to change, which is exactly when
+    /// a positional assertion stops meaning what it used to.
+    ///
+    /// Release recipes only. A package's `overrides` names a *release's*
+    /// component, and a package is applied after the whole release tree
+    /// exists, so "declared after" has no meaning across that boundary.
+    #[test]
+    fn every_override_is_declared_after_what_it_overrides() {
+        for release in super::releases() {
+            let recipe = super::by_release(release)
+                .unwrap_or_else(|e| panic!("the shipped {release} recipe must parse: {e}"));
+            let order: Vec<&str> = recipe.components.iter().map(|c| c.id.as_str()).collect();
+            for (index, component) in recipe.components.iter().enumerate() {
+                for over in &component.overrides {
+                    let Some(earlier) = order.iter().position(|id| id == over) else {
+                        // A cross-recipe override is somebody else's test —
+                        // `every_override_names_a_component_that_exists`.
+                        continue;
+                    };
+                    assert!(
+                        index > earlier,
+                        "{release}: '{}' declares an override over '{over}' but is declared \
+                         before it, so '{over}' writes last and the override silently does \
+                         nothing",
+                        component.id
+                    );
+                }
+            }
+        }
+    }
+
+    /// **ART-224.** The install screen labels a component's row with its
+    /// `media` — the volume it comes from — and for AmigaOS 3.2 that is a
+    /// different ADF per component and exactly what a person needs to read.
+    /// AmigaOS 3.9 is five components off **one disc**, so every row said
+    /// `AmigaOS3.9`: three identical labels before ART-159, two of them
+    /// tick-boxes the user is asked to decide about, and no way to tell which
+    /// was which. Nothing failed and nothing looked broken — which is why it
+    /// sat there through a driven session.
+    ///
+    /// So the rule is conditional on the shape that causes it: a recipe whose
+    /// components do not each name their own medium must label every row.
+    /// Written this way round rather than "every component everywhere needs a
+    /// label" because 3.2's sixteen volume names are better than any sentence
+    /// ART would write for them, and a rule that forced sixteen redundant keys
+    /// would be obeyed by writing sixteen worse labels.
+    #[test]
+    fn a_recipe_whose_components_share_a_medium_labels_every_row() {
+        for release in super::releases() {
+            let recipe = super::by_release(release)
+                .unwrap_or_else(|e| panic!("the shipped {release} recipe must parse: {e}"));
+
+            let mut media: Vec<&str> = recipe.components.iter().map(|c| c.media.as_str()).collect();
+            media.sort_unstable();
+            let distinct = {
+                let mut seen = media.clone();
+                seen.dedup();
+                seen.len()
+            };
+            if distinct == recipe.components.len() {
+                continue;
+            }
+
+            for component in &recipe.components {
+                let key = component.label_key.as_deref().unwrap_or_else(|| {
+                    panic!(
+                        "{release}: '{}' shares its medium with another component and declares \
+                         no label_key, so its row on screen is labelled '{}' — the same words \
+                         as the row above it",
+                        component.id, component.media
+                    )
+                });
+                assert!(
+                    key.starts_with("osinstall.components.name."),
+                    "{release}: '{}' labels itself with '{key}', outside the namespace this \
+                     screen owns — a row must not borrow a sentence written elsewhere",
+                    component.id
+                );
+            }
+        }
+    }
+
+    /// **ART-159, hazard 2 — the owner's own language.** The disc's
+    /// `Special-Locale/TÜRKÇE` branch is fonts and nothing else: 13 families,
+    /// 13 `.font` descriptors, 37 size files, and no keymap, printer driver
+    /// or install script (measured 2026-08-23 off the owner's `AmigaOS39.iso`
+    /// by reading its Primary directory records — the recipe file's own
+    /// `_why_this_component_exists` carries the numbers). They are the
+    /// ISO-8859-9 set, so without them a Turkish system has the catalogs and
+    /// not the glyphs for ş, ğ, ı and İ.
+    ///
+    /// Three things this pins that nothing else can:
+    ///
+    /// - **A family and its `.font` descriptor travel together.** AmigaOS
+    ///   finds a font through the descriptor; a directory placed without one
+    ///   is a font `diskfont.library` cannot see, and the tree would build
+    ///   and verify clean around it.
+    /// - **No override, on purpose.** Zero of the thirteen names collide with
+    ///   the base `Fonts` drawer, so declaring one would say this layer
+    ///   replaces the system's fonts when it does not — and would license a
+    ///   future rule to do so unmeasured.
+    /// - **Optional.** A tree without these boots and runs; it is only wrong
+    ///   for a Turkish user, and that is their tick-box to make.
+    #[test]
+    fn the_turkish_font_component_pairs_every_family_with_its_descriptor_art_159() {
+        let recipe = parse(AMIGAOS_39_JSON).unwrap();
+        let turkish = recipe
+            .component("special-locale-turkish")
+            .expect("ART-159: the 3.9 recipe must offer the Turkish ISO-8859-9 fonts");
+
+        assert!(
+            !turkish.required,
+            "a tree without the Turkish fonts still boots — this is a tick-box, not a layer"
+        );
+        assert_eq!(turkish.media, "AmigaOS3.9");
+        assert!(
+            turkish.overrides.is_empty(),
+            "the thirteen families collide with nothing in the base Fonts drawer, and an \
+             override that replaces nothing is a licence to replace something later"
+        );
+
+        const DRAWER: &str = "OS-VERSION3.9/SPECIAL-LOCALE/TÜRKÇE/FONTS";
+        let mut families: Vec<&str> = Vec::new();
+        let mut descriptors: Vec<&str> = Vec::new();
+        for rule in &turkish.rules {
+            let from = rule
+                .from
+                .strip_prefix(&format!("{DRAWER}/"))
+                .unwrap_or_else(|| panic!("every rule comes out of {DRAWER}: {}", rule.from));
+            assert_eq!(
+                rule.to,
+                format!("Fonts/{from}"),
+                "a font keeps the disc's own spelling, in the Fonts drawer"
+            );
+            match rule.kind {
+                RuleKind::Subtree => families.push(from),
+                RuleKind::File => descriptors.push(
+                    from.strip_suffix(".FONT")
+                        .unwrap_or_else(|| panic!("a File rule here is a descriptor: {from}")),
+                ),
+            }
+        }
+
+        assert_eq!(
+            families,
+            vec![
+                "COURIER-ISO9",
+                "DIAMOND-ISO9",
+                "EMERALD-ISO9",
+                "FUTURAB-ISO9",
+                "GARNET-ISO9",
+                "PERSONAL-ISO9",
+                "TIMES-ISO9",
+                "TOPAZ-ISO9",
+                "TOPAZT",
+                "XCOURIER-ISO9",
+                "XEN-ISO9",
+                "XEN-WIDE-ISO9",
+                "XHELVETICA-ISO9",
+            ],
+            "the thirteen families the disc's own TÜRKÇE/fonts drawer holds"
+        );
+        assert_eq!(
+            descriptors, families,
+            "every family must arrive with its own .FONT descriptor, and in the same order — \
+             a directory without one is a font AmigaOS cannot see"
+        );
+    }
+
+    /// **ART-159, hazard 2 — the euro country files.** Nine `.country` files
+    /// that are byte-for-byte different from the base release's namesakes
+    /// while being exactly the same length as them (586/588/590/592 bytes,
+    /// 9 of 9 different by SHA-256, measured 2026-08-23 off the owner's own
+    /// disc). Same size is why this is worth a component at all: it looks
+    /// like a duplicate and is not.
+    ///
+    /// The override list is the load-bearing part. It really does replace
+    /// both layers' copies, and `plan::detect_collisions` refuses an
+    /// undeclared claim at plan time — but only against real media, which no
+    /// unit test resolves, so dropping an entry here would turn every real
+    /// install with this box ticked into a refusal and nothing in CI would
+    /// notice.
+    #[test]
+    fn the_euro_country_component_replaces_both_layers_it_names_art_159() {
+        let recipe = parse(AMIGAOS_39_JSON).unwrap();
+        let euro = recipe
+            .component("locale-euro")
+            .expect("ART-159: the 3.9 recipe must offer the euro country files");
+
+        assert!(
+            !euro.required,
+            "euro currency is a choice, not a system need"
+        );
+        assert_eq!(euro.media, "AmigaOS3.9");
+        assert_eq!(
+            euro.rules,
+            vec![PathRule {
+                from: "OS-VERSION3.9/LOCALE.EURO/COUNTRIES".into(),
+                to: "Locale/Countries".into(),
+                kind: RuleKind::Subtree,
+            }],
+            "the nine files go where locale.library reads them — not onto the Storage shelf, \
+             where the disc's other, older euro set already lands"
+        );
+
+        let mut overrides: Vec<&str> = euro.overrides.iter().map(String::as_str).collect();
+        overrides.sort_unstable();
+        assert_eq!(
+            overrides,
+            vec!["locale-base", "workbench-39"],
+            "both layers place Locale/Countries and both are really overwritten; \
+             workbench-base is not named because its Storage rule is not in the way"
         );
     }
 

@@ -4024,6 +4024,231 @@ mod tests {
         }
     }
 
+    /// **ART-159's two language components, against the disc they were read
+    /// off.** Everything the recipe now claims about
+    /// `Special-Locale/TÜRKÇE` and `Locale.Euro` was measured by walking the
+    /// owner's own `AmigaOS39.iso` outside ART — this is the run that asks
+    /// ART the same questions and checks it answers the same way.
+    ///
+    /// Three things only a real disc can settle, and each is asserted rather
+    /// than printed:
+    ///
+    /// - **A non-ASCII `from` path resolves at all.** The Primary tree spells
+    ///   the drawer `TÜRKÇE` (raw bytes `54 DC 52 4B C7 45`), and every
+    ///   earlier rule in every shipped recipe is pure ASCII. A recipe path
+    ///   that no medium matches is a `MediaPathMissing` refusal, so an empty
+    ///   `refusals` here is the proof.
+    /// - **Nothing collides.** `special-locale-turkish` declares no
+    ///   `overrides`, and `plan::detect_collisions` refuses an undeclared
+    ///   claim — so the same empty `refusals`, with all three optional
+    ///   components on together, is what says the thirteen ISO-8859-9
+    ///   families really do share no name with the base `Fonts` drawer.
+    /// - **The euro country files win.** Nine names that `locale-base` and
+    ///   `workbench-39` also place, same length, different bytes. This reads
+    ///   both source variants straight off the disc and checks the tree got
+    ///   the euro one — which is what proves recipe *order* and the
+    ///   `overrides` declaration are both doing their job, the exact property
+    ///   ART-224 found two components in the 3.2 recipe silently missing.
+    ///
+    /// Read-only with respect to the user's material: the disc is opened, the
+    /// tree goes to `ART_159_DEST`.
+    #[test]
+    #[ignore = "needs the user's own AmigaOS 3.9 disc; set ART_159_ISO and ART_159_DEST"]
+    fn build_the_real_39_language_components_when_asked() {
+        let (Ok(iso), Ok(dest)) = (std::env::var("ART_159_ISO"), std::env::var("ART_159_DEST"))
+        else {
+            eprintln!(
+                "skipped: set ART_159_ISO (the AmigaOS39.iso itself) and ART_159_DEST \
+                 (an empty destination folder)"
+            );
+            return;
+        };
+
+        let iso_path = PathBuf::from(&iso);
+        let media_folder = iso_path
+            .parent()
+            .expect("ART_159_ISO names a file inside some folder")
+            .to_path_buf();
+        let root = PathBuf::from(&dest);
+
+        let request = crate::core::osinstall::plan::InstallRequest {
+            packages: Vec::new(),
+            package_folder: None,
+            release: "AmigaOS 3.9".to_string(),
+            media_folder,
+            rom: None,
+            // All three optional components at once, on purpose: the euro
+            // files have to meet `locale-base`'s copies for the override to
+            // be exercised at all.
+            chosen: vec![
+                "locale-base".to_string(),
+                "special-locale-turkish".to_string(),
+                "locale-euro".to_string(),
+            ],
+            excluded: Vec::new(),
+            destination: root.clone(),
+            scan_cache: Default::default(),
+        };
+
+        let recipe = crate::core::osinstall::recipe::amigaos_39().unwrap();
+        let planned = crate::core::osinstall::plan::plan(&request, &recipe).unwrap();
+
+        println!("=== ART-159: the plan ===");
+        println!("components_on={:?}", planned.components_on);
+        println!(
+            "items={} bytes={}",
+            planned.items.len(),
+            planned.total_bytes
+        );
+        for refusal in &planned.refusals {
+            println!("  refused: {refusal:?}");
+        }
+        assert!(
+            planned.refusals.is_empty(),
+            "a refusal here is either a `from` path the disc does not carry — including the \
+             non-ASCII TÜRKÇE drawer — or an undeclared collision: {:?}",
+            planned.refusals
+        );
+        assert_eq!(
+            planned.components_on,
+            vec![
+                "workbench-base".to_string(),
+                "locale-base".to_string(),
+                "workbench-39".to_string(),
+                "special-locale-turkish".to_string(),
+                "locale-euro".to_string(),
+            ],
+            "all five, in recipe order"
+        );
+
+        // Per component, from the plan itself — the count each one
+        // contributes, so a rule that silently matched nothing shows up as a
+        // zero rather than being lost in the total.
+        let mut per_component: std::collections::BTreeMap<&str, usize> =
+            std::collections::BTreeMap::new();
+        for item in &planned.items {
+            *per_component.entry(item.component.as_str()).or_default() += 1;
+        }
+        println!("plan items per component: {per_component:?}");
+        assert_eq!(
+            per_component.get("special-locale-turkish").copied(),
+            Some(63),
+            "13 .FONT descriptors + 37 size files + 13 family drawers"
+        );
+        // **10, not 9** — measured, and the expectation written first was
+        // wrong rather than the code. A `Subtree` rule emits the drawer it
+        // targets as an item of its own, so `Locale/Countries` is planned
+        // alongside the nine `.country` files even though `locale-base`
+        // plans it too. Harmless (creating a directory that exists is what
+        // `apply` does all day) and worth stating, because "9" is the number
+        // every other document in this round quotes.
+        assert_eq!(
+            per_component.get("locale-euro").copied(),
+            Some(10),
+            "nine .country files plus the Locale/Countries drawer the subtree rule targets"
+        );
+
+        let start = std::time::Instant::now();
+        let outcome = apply(&planned, &root, &NoProgress).expect("build the tree");
+        let elapsed = start.elapsed();
+        println!(
+            "=== ART-159: applied === files={} directories={} bytes={} in {:.2}s",
+            outcome.files,
+            outcome.directories,
+            outcome.bytes,
+            elapsed.as_secs_f64()
+        );
+
+        // The thirteen families, on disk, each with its descriptor beside it.
+        // Read off the tree rather than off the recipe, so a rule that
+        // resolved to nothing cannot pass.
+        const FAMILIES: [&str; 13] = [
+            "COURIER-ISO9",
+            "DIAMOND-ISO9",
+            "EMERALD-ISO9",
+            "FUTURAB-ISO9",
+            "GARNET-ISO9",
+            "PERSONAL-ISO9",
+            "TIMES-ISO9",
+            "TOPAZ-ISO9",
+            "TOPAZT",
+            "XCOURIER-ISO9",
+            "XEN-ISO9",
+            "XEN-WIDE-ISO9",
+            "XHELVETICA-ISO9",
+        ];
+        let fonts = root.join("Fonts");
+        let mut sizes = 0usize;
+        for family in FAMILIES {
+            let drawer = fonts.join(family);
+            let descriptor = fonts.join(format!("{family}.FONT"));
+            assert!(drawer.is_dir(), "{} is not a drawer", drawer.display());
+            let bytes = std::fs::read(&descriptor)
+                .unwrap_or_else(|e| panic!("{} should exist: {e}", descriptor.display()));
+            assert!(
+                !bytes.is_empty(),
+                "{} landed empty — a font AmigaOS would list and fail to open",
+                descriptor.display()
+            );
+            sizes += std::fs::read_dir(&drawer).unwrap().flatten().count();
+        }
+        println!("Turkish fonts: 13 families, {sizes} size files");
+        // 37 real sizes, plus one `.uaem` sidecar each — the sidecars are
+        // what `apply` writes beside every file, and counting the drawer
+        // rather than the plan is what makes this an on-disk check.
+        assert_eq!(sizes, 74, "37 size files and their 37 .uaem sidecars");
+
+        // And the base fonts are all still there, untouched. The measured
+        // claim behind "no overrides" is that these two sets are disjoint, so
+        // this is the half a collision would break.
+        for base in ["TOPAZ.FONT", "TIMES.FONT", "COURIER.FONT", "DIAMOND.FONT"] {
+            assert!(
+                fonts.join(base).is_file(),
+                "{} went missing — the base Fonts drawer must be untouched",
+                base
+            );
+        }
+
+        // The euro countries, asked of the disc rather than of a pinned hash:
+        // read both source variants and check which one the tree holds.
+        let mut source = CdSource::open(&iso_path).expect("open the disc");
+        const EURO: [&str; 9] = [
+            "\u{d6}STERREICH.COUNTRY",
+            "BELGIE.COUNTRY",
+            "BELGIQUE.COUNTRY",
+            "DEUTSCHLAND.COUNTRY",
+            "ESPA\u{d1}A.COUNTRY",
+            "FRANCE.COUNTRY",
+            "ITALIA.COUNTRY",
+            "NEDERLAND.COUNTRY",
+            "PORTUGAL.COUNTRY",
+        ];
+        let mut replaced = 0usize;
+        for name in EURO {
+            let euro = source
+                .read(&format!("OS-VERSION3.9/LOCALE.EURO/COUNTRIES/{name}"))
+                .unwrap_or_else(|e| panic!("the disc's euro {name}: {e}"));
+            let base = source
+                .read(&format!("OS-VERSION3.9/LOCALE/COUNTRIES/{name}"))
+                .unwrap_or_else(|e| panic!("the disc's base {name}: {e}"));
+            assert_ne!(
+                euro, base,
+                "{name}: the two sources are the same file, so this component places nothing \
+                 new and the recipe's own note is wrong"
+            );
+            let placed = std::fs::read(root.join("Locale/Countries").join(name))
+                .unwrap_or_else(|e| panic!("{name} should be in the tree: {e}"));
+            assert_eq!(
+                placed, euro,
+                "{name}: the tree holds the base copy, so `locale-euro`'s override lost — \
+                 either its `overrides` list or its position in the recipe"
+            );
+            replaced += 1;
+        }
+        println!("euro countries: {replaced} of 9 replaced the base copy");
+        assert_eq!(replaced, 9);
+    }
+
     // ---- Task 6: produce with a package, or add one afterwards ----------
 
     /// Every file in a tree, path -> bytes, with the manifest left out.

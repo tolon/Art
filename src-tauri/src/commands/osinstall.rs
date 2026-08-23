@@ -328,8 +328,17 @@ pub fn osinstall_rescan_media() -> AppResult<usize> {
 pub struct ComponentSummary {
     pub id: String,
     /// The volume name inside the image (`Workbench3.2`) — what the Amiga
-    /// side calls it, shown untranslated as the row's own label.
+    /// side calls it, shown untranslated as the row's own label **unless**
+    /// [`ComponentSummary::label_key`] names one.
     pub media: String,
+    /// The recipe's own i18n key for this row (ART-224), or `None` to fall
+    /// back to `media`.
+    ///
+    /// Not a sentence and not a translation — the key itself, resolved on the
+    /// screen. AmigaOS 3.9's five components all come off one disc, so `media`
+    /// labelled every row `AmigaOS3.9`; this is how a recipe says which row is
+    /// which without the command layer inventing a name for it.
+    pub label_key: Option<String>,
     pub required: bool,
     pub available: bool,
     /// [`Condition::RomOlderThan`]'s `major`, flattened — `None` for an
@@ -371,6 +380,7 @@ impl From<&crate::core::osinstall::Component> for ComponentSummary {
         Self {
             id: component.id.clone(),
             media: component.media.clone(),
+            label_key: component.label_key.clone(),
             required: component.required,
             available: component.available,
             condition_major: component.condition.and_then(|condition| match condition {
@@ -4039,7 +4049,7 @@ mod tests {
         /// `ComponentSummary` is the checklist on screen, so a key renamed
         /// on one side only would empty a row rather than fail a build —
         /// `src/lib/osinstall.ts`'s `ComponentDef` declares exactly these
-        /// seven.
+        /// nine.
         ///
         /// **The two `major` fields are pinned against both shipped
         /// recipes, and against each other (ART-157).** They carry numbers
@@ -4063,6 +4073,7 @@ mod tests {
                 &[
                     "id",
                     "media",
+                    "labelKey",
                     "required",
                     "available",
                     "conditionMajor",
