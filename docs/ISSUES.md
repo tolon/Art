@@ -26,6 +26,85 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-226** 🟠 **Every tree ART builds has an empty `Devs/Keymaps`, so whatever
+language the user chose they can only type on an American keyboard — and for
+Turkish the keymap is not on the CD at all** — *found 2026-08-24 by the owner,
+typing into the Turkish 3.9 tree ART had just built and booted*
+`src-tauri/src/core/osinstall/recipes/amigaos-3.9.json` ·
+`…/amigaos-3.2.json`
+
+The fonts were fixed ([ART-225](#fixed)) and the Workbench menus render `ç ü ş
+Ğ` correctly. The owner then tried to **type** them and could not: *"klavye
+örtüsünde türkçe yok, sadece amerikan var"*.
+
+**Measured, on the disc and in the tree rather than reasoned about:**
+
+- `KEYMAPS:` is assigned to `DEVS:Keymaps`, and a keymap is loaded from there
+  (`SetKeyMapDefault`, AmigaOS Keymap Library documentation).
+- The tree's `Devs/Keymaps` is **empty** — and so is the disc's
+  `OS-Version3.9/Workbench3.5/Devs/Keymaps`, which carries only its own
+  `Keymaps.info`. ART copies an empty drawer faithfully; this is not a copying
+  defect. The disc's twenty keymaps sit in `Storage/Keymaps`, which is the
+  *shelf*: nothing on it is selectable until something puts a copy in
+  `Devs/Keymaps`. The real Installer is what asks the user and copies one.
+- So the only keymap any ART-built system has is the one in ROM, `usa`. That
+  is true for a German, French or Italian tree exactly as much as for a
+  Turkish one, and no screen in ART mentions it.
+
+**And Turkish is worse than "not copied": the disc does not carry it.** 36
+distinct keymap names across the whole ISO, and not one Turkish
+(`OS-Version3.9`'s `Special-Locale/türkçe` branch is fonts and nothing else —
+[ART-159](#fixed) measured that).
+
+**The owner's own reasoning found it, and it was right.** *"Bir araştır, Türk
+bayrağı varsa keymap vardır"* — the disc ships
+`Workbench3.9/Locale/Flags/Keymaps/türkçe`, a flag icon for a keymap it does
+not have. The flag set is broader than the disc's keymaps (`a`, `be`, `cdn2`,
+`oe`, `usa0`…`usa3` are flagged and absent too), so a flag proves the keymap
+exists *in the AmigaOS world*, not on this medium — and it does exist.
+
+**Where it is: `Locale3_9.lha`, the official AmigaOS 3.9 Locale update, which
+the owner already has.** Measured against their copy:
+
+| | |
+|---|---|
+| `Locale3.9/Locale/Devs/Keymaps/türkçe` | **1 008 bytes** (+ `.info`, 2 730) |
+| keymaps in the archive | **49**, against the CD's 20 |
+| `Locale/Countries/türkiye.country` | 538 bytes |
+| `Locale/Languages/türkçe.language` | 2 520 bytes |
+| `Locale/Flags/Countries/türkiye`, `Flags/Keymaps/türkçe` | 420 / 544 bytes |
+| `Locale/Providers/Türkiye` | 1 598 bytes |
+| `Locale/Fonts/türkçe` | **15 font families** — a strict superset of the CD's 13, adding `AmigaSans-iso9` and `helveticagr-ISO9`, missing none |
+
+So the archive is a better source for Turkish than the CD in every respect ART
+already covers, and it is the only source for the two things ART cannot
+otherwise offer: the keymap and the country file.
+
+**Not fixed, because two of the three questions are the owner's, not a defect
+round's:**
+
+1. **Should ART place a keymap at all?** Copying one from `Storage/Keymaps`
+   into `Devs/Keymaps` is a change to what the user types with — small, but a
+   system-wide default, and the kind of thing §92 says to offer rather than
+   assume. A tick-box per language, or one that follows the chosen locale.
+2. **Should `Locale3_9.lha` become a source?** It is an archive, not the
+   install medium, so it is a **package** in ART's own vocabulary
+   (`core/osinstall/package.rs`, `source_archive.rs`) rather than a recipe
+   component — the shape `locale-turkish` already uses for
+   `BoingBag39-2-turkce.lha`. Whether it is offered as one package or as a
+   Turkish slice of one is a catalogue decision.
+3. **Does the 3.2 side have the same hole?** Almost certainly, and partly
+   measured already: the owner's `Locale-TR.adf` carries
+   `Support/Fonts/topaz_iso-8859-9` and `SevenAlone_iso-8859-9` — Turkish
+   fonts the 3.2 recipe's `locale-tr` component does **not** place, which is
+   [ART-159](#fixed)'s defect again in the other recipe — and no keymap
+   either. Not confirmed against the shipped rules yet; recorded so the next
+   round starts from a measurement rather than a suspicion.
+
+**What must not happen**, stated because it is the tempting shortcut: ART does
+not author a keymap and does not ship one. `Locale3_9.lha` is the user's own
+file, exactly like every other package ART applies.
+
 **ART-166** 🔴 **Both BoingBag payload archives are password-encrypted ZIPs, so
 neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task
 8's real run, on `content-layer`*
@@ -574,14 +653,18 @@ Same bytes on the volume — the Turkish catalogs are ISO-8859-9, so `ş` is
 `0xFE`, which Latin-1 draws as `þ`. Nothing about the text changed; the font
 did.
 
-**Stated precisely, because two of the three letters are not in that frame.**
-Arm 1 showed all three substitutions at once (`Ekran Baþlýk Çubuðu` for
-*Başlık Çubuğu* — `þ`, `ý`, `ð`) and `1.2TB kullanýmda`. Arm 2's frame shows
-`boş` and has `kull…` clipped at the window edge, so **`ş` is photographed in
-both arms and `ğ` and `ı` are photographed only in the broken one.** The
-mechanism is the same single font table for all three and there is no reason
-to expect them to differ — but that is a reason, not a measurement, and it is
-written here as one.
+**And then read on the running system rather than inferred.** The paragraph
+that stood here said `ş` was photographed in both arms while `ğ` and `ı`
+appeared only in the broken one, and refused to generalise from the shared
+font table. The owner then read the Workbench menus on the fixed tree and
+reported `ç`, `ü`, `ş` and `Ğ` all rendering — *"fontlar tamam"*. So the claim
+this entry was opened to withhold is now made, on the artefact's own word:
+**an AmigaOS 3.9 tree ART builds from the owner's media, with this component
+on, renders Turkish.**
+
+The two-arm comparison stays because it is what identifies the *cause* rather
+than the outcome: same window title, same bytes, `600.4GB boþ` under
+`topaz.font` and `600.4GB boş` under `TOPAZ-ISO9`, one variable.
 
 
 **ART-224** 🟠 ✅ **Two AmigaOS 3.2 components declared an override over
