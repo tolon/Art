@@ -275,6 +275,7 @@ function planResultFor(req: InstallRequest): PlanResult {
       packageMedia: {},
       userStartup: [],
       activations: [],
+      mediaStamps: {},
     },
   };
 }
@@ -861,6 +862,7 @@ describe("a folder that is simply the wrong one (ART-208)", () => {
           packageMedia: {},
           userStartup: [],
           activations: [],
+          mediaStamps: {},
         },
       } satisfies PlanResult)
     );
@@ -937,6 +939,7 @@ describe("a folder that is simply the wrong one (ART-208)", () => {
         packageMedia: {},
         userStartup: [],
         activations: [],
+        mediaStamps: {},
       },
     } satisfies PlanResult);
     releaseForMediaMock.mockReset().mockResolvedValue(null);
@@ -1035,6 +1038,7 @@ describe("a refusal renders as a sentence, not a blank", () => {
       packageMedia: {},
       userStartup: [],
       activations: [],
+      mediaStamps: {},
     };
     planMock.mockReset().mockResolvedValue({ outcome: "planned", plan: refusedPlan } satisfies PlanResult);
 

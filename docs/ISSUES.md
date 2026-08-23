@@ -598,6 +598,46 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-222** 🟠 ✅ **A different disc of the same name built silently while
+the screen described the old one** — *found 2026-08-23 while designing
+work-list item 4*
+`src-tauri/src/core/osinstall/plan.rs::MediaStamp` · `apply.rs`
+
+`apply` re-identifies every medium and refuses one that has been renamed,
+removed, or replaced by something that is not install media. What it could not
+see was **a different disc with the same volume name**. The plan recorded a
+path; the SHA-256 `apply` computes goes into `distribution.json` *after* the
+fact. Nothing compared, so swapping `Workbench3.2.adf` between the preview and
+the build produced a tree from one disc described by a preview of another.
+
+**The plan now records what it saw** — `(size, mtime)` per medium — and
+`apply` checks before it places a byte.
+
+**Why not a hash.** `plan` runs again on every component the user ticks, and
+hashing a 469 MB disc each time is what [ART-195](#fixed) was filed about. A
+`stat` is free and catches every ordinary swap. **What it does not catch, said
+plainly**: a disc restored from a backup that preserved its timestamps, the
+same size, different contents. That is [ART-194](#fixed)'s own documented case
+— *"same path, same size, same mtime, different disc is a real arrangement"* —
+and the answer is the one ART-194 already built: **Scan again**.
+
+A plan from an older ART carries no stamps, and an empty map means "nothing
+was recorded", never "everything changed" — tested, because the other reading
+would refuse every install after an upgrade.
+
+*Tests:* 3, the first of which **changes the file on disk after planning**
+rather than editing `media_stamps` by hand — a test written against the map
+would prove the comparison and not the stamping. Two mutations run, two fell:
+the plan stamping nothing, and `apply` comparing nothing.
+
+**How it was found, and it is worth recording.** Work-list item 4 asked for
+identification by content, motivated by Escom ADFs and DiskFlashback. Measured
+against the owner's own folder first: **35 volumes, no duplicates, a complete
+3.2 set including `Locale-TR`** — both motivations are 3.1 problems they do not
+have. What the Emu68-Imager FAQ *did* give was the principle, in its first
+line: *"the tool inspects file contents rather than filenames."* Applied to
+ART's own weak point instead of to somebody else's problem.
+
 **ART-221** 🟠 ✅ **Every tree ART built had its drivers on the shelf and
 none of them switched on** — *found 2026-08-23 by reviewing
 `jit06/emu68-bootstrap` at the owner's request*

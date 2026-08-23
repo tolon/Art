@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ART notices when the disc changed under it (2026-08-23)
+
+#### Fixed
+- **Swap an install disk between the preview and the build and ART now stops**,
+  naming the file. It checked the volume name, so a *different* disk of the
+  same name went through and built a tree the preview never described.
+
 ### A tree can switch its own drivers on (2026-08-23)
 
 #### Added
