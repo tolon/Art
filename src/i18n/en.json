@@ -1770,7 +1770,7 @@
       "label": "Kickstart ROM",
       "chooseTitle": "Choose a Kickstart ROM",
       "none": "No ROM chosen",
-      "hint": "Your own Kickstart. ART neither fetches nor bundles one. Without it the card is built and will not boot."
+      "hint": "One Kickstart for this build: the tree is paired against it, the emulator boots it, and it is the one written onto the card. Change it here and every step follows. ART ships none and never will — it has to be your own."
     },
     "size": {
       "label": "Card size"
@@ -2167,7 +2167,8 @@
       "none": "No ROM chosen.",
       "chooseTitle": "Choose the Kickstart ROM this AmigaOS will run on",
       "identified": "Identified: {{rom}}.",
-      "unreadable": "ART could not identify that file as a Kickstart ROM."
+      "unreadable": "ART could not identify that file as a Kickstart ROM.",
+      "hint": "One Kickstart for this build: the tree is paired against it, the emulator boots it, and it is the one written onto the card. Change it here and every step follows. ART ships none and never will — it has to be your own."
     },
     "destination": {
       "label": "Build into",
@@ -2351,7 +2352,7 @@
         "label": "Your own Kickstart ROM",
         "none": "No Kickstart chosen.",
         "chooseTitle": "Choose your own licensed Kickstart ROM",
-        "hint": "The emulator boots the tree with this. ART ships no Kickstart and never will — it has to be your own."
+        "hint": "One Kickstart for this build: the tree is paired against it, the emulator boots it, and it is the one written onto the card. Change it here and every step follows. ART ships none and never will — it has to be your own."
       },
       "preview": {
         "heading": "What will run",

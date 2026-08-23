@@ -115,6 +115,10 @@ export const LEGACY_KEYS = {
   packagesTreeRoot: "osinstall.packages.treeRoot",
   packagesFolder: "osinstall.packages.folder",
   packagesChosen: "osinstall.packages.chosen",
+  /** The card step's own Kickstart, before wave 2 made it one value. */
+  cardKickstart: "cardBuilder.kickstart",
+  /** The Amiga-side install step's own, likewise. */
+  amigaKickstart: "amigaInstall.kickstart",
   chosen: "osinstall.chosen",
   excludedConditional: "osinstall.excludedConditional",
 } as const;
@@ -200,6 +204,35 @@ export function seedTreeRoot(store: unknown): string | null {
  * has ticked components under the new key and has an empty `chosen` there
  * means an empty `chosen`, not "fall back to what the old key held".
  */
+/**
+ * The Kickstart this build is for, from whichever key the user's own history
+ * put one in.
+ *
+ * **Three panels asked for it and each remembered its own** — ART-197's fourth
+ * row. They are one question wearing three labels: the ROM the tree is paired
+ * against (G9), the ROM the emulator boots to run a package's installer, and
+ * the ROM written onto the card. A build where those differ is not a
+ * configuration, it is the mismatch G9's pairing check exists to catch.
+ *
+ * Order matters and is not alphabetical. `osinstall.rom` first because it is
+ * the one the pairing check reads and the one a user meets first; then the
+ * card's, then the emulator's. A user who only ever filled the last of the
+ * three still finds their ROM.
+ *
+ * Read once, like every other legacy key here — never written again and never
+ * deleted, so a rollback still finds them.
+ */
+export function seedRom(store: unknown): string | null {
+  const bag = bagOf(store);
+  const held = bagOf(bag[SESSION_KEYS.rom]);
+  if (isText(held.path)) return held.path;
+  return (
+    textAt(bag, LEGACY_KEYS.rom) ??
+    textAt(bag, LEGACY_KEYS.cardKickstart) ??
+    textAt(bag, LEGACY_KEYS.amigaKickstart)
+  );
+}
+
 export function seededComponents(store: unknown, release: InstallRelease): ComponentChoice {
   const bag = bagOf(store);
   const held = bag[SESSION_KEYS.components(release)];

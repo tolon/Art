@@ -762,3 +762,33 @@ describe("while it is running", () => {
     expect(screen.queryByTestId("amiga-install-job-error")).toBeNull();
   });
 });
+
+describe("one Kickstart for the build (ART-197's fourth row)", () => {
+  /// **Seeded through a key this panel never owned.** `osinstall.rom` belongs
+  /// to the install step; before wave 2 this panel read
+  /// `amigaInstall.kickstart` and would have shown nothing. Reverting it to
+  /// its own key fails here, which is the only thing that proves the panel
+  /// actually reads the session rather than merely compiling against it.
+  it("shows the Kickstart chosen on another step", async () => {
+    useSettingsStore.setState((state) => ({
+      settings: {
+        ...state.settings,
+        winuaePath: "C:/Program Files/WinUAE/winuae64.exe",
+        remembered: {
+          "amigaInstall.package": "boingbag-39-1",
+          "amigaInstall.archive": "D:/pkg/BoingBag39-1.lha",
+          // Deliberately *not* "amigaInstall.kickstart".
+          "osinstall.rom": "D:/roms/from-the-install-step.rom",
+        },
+      },
+    }));
+
+    render(
+      <AmigaInstallPanel release="AmigaOS 3.9" treeRoot="D:/amiga/os39" packageFolder="D:/pkg" />
+    );
+
+    expect(
+      await screen.findByText("D:/roms/from-the-install-step.rom")
+    ).toBeTruthy();
+  });
+});
