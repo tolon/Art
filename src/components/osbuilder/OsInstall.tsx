@@ -244,7 +244,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    *
    * **First, because the folders below are keyed on it** (ART-207).
    */
-  const { session, setTree, setPackages, setRelease } = useBuildSession();
+  const { session, setTree, setPackages, setRelease, setRom: setSessionRom } = useBuildSession();
   const release = session.release;
 
   /**
@@ -290,7 +290,21 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
    * pick it again per release would be a choice resetting itself for no
    * reason anybody could state.
    */
-  const [romPath, setRomPath] = useRemembered<string | null>("osinstall.rom", isTextOrNothing, null);
+  /**
+   * **One Kickstart for the build** (ART-197's fourth row, wave 2).
+   *
+   * This panel kept its own remembered key until 2026-08-23, so a user chose
+   * the same ROM here, on the install step and on the card step. They are one
+   * question wearing three labels — the ROM the tree is paired against, the
+   * ROM the emulator boots, and the ROM written onto the card — and a build
+   * where they differ is the mismatch G9's pairing check exists to catch.
+   *
+   * Changing it here changes it for the build, which the hint says out loud:
+   * a carry the user cannot see is the same defect as one that never
+   * happened (ART-197's own words).
+   */
+  const romPath = session.rom.path;
+  const setRomPath = setSessionRom;
   /**
    * Where the tree goes — per release, like the media folder above and for
    * the same reason (ART-207). `E:\…\os39\art3` is a fine destination for a
@@ -1101,6 +1115,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
           empty={t("osinstall.rom.none")}
           onChoose={() => void chooseRom()}
           choose={t("common.browse")}
+          hint={t("osinstall.rom.hint")}
         />
         {romError && (
           <p className="badge badge-err" style={{ fontSize: 11, margin: "0 0 12px", display: "inline-block" }}>

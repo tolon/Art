@@ -18,6 +18,8 @@ import { useOutletContext } from "react-router-dom";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
+import { useBuildSession } from "@/lib/useBuildSession";
+
 import {
   buildBlocker,
   cardBuild,
@@ -85,6 +87,7 @@ const LINES: Emu68Line[] = ["stable", "alpha11"];
 
 export function CardBuilder() {
   const { t } = useTranslation();
+  const { session, setRom } = useBuildSession();
   const powerMode = usePowerMode();
 
   // --- what the user chose, remembered ------------------------------------
@@ -93,11 +96,21 @@ export function CardBuilder() {
     isTextOrNothing,
     null
   );
-  const [kickstart, setKickstart] = useRemembered<string | null>(
-    "cardBuilder.kickstart",
-    isTextOrNothing,
-    null
-  );
+  /**
+   * **One Kickstart for the build** (ART-197's fourth row, wave 2).
+   *
+   * This panel kept its own remembered key until 2026-08-23, so a user chose
+   * the same ROM here, on the install step and on the card step. They are one
+   * question wearing three labels — the ROM the tree is paired against, the
+   * ROM the emulator boots, and the ROM written onto the card — and a build
+   * where they differ is the mismatch G9's pairing check exists to catch.
+   *
+   * Changing it here changes it for the build, which the hint says out loud:
+   * a carry the user cannot see is the same defect as one that never
+   * happened (ART-197's own words).
+   */
+  const kickstart = session.rom.path;
+  const setKickstart = setRom;
   const [dest, setDest] = useRemembered<string | null>(
     "cardBuilder.dest",
     isTextOrNothing,

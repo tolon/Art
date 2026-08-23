@@ -1770,7 +1770,7 @@
       "label": "Kickstart ROM",
       "chooseTitle": "Bir Kickstart ROM seç",
       "none": "ROM seçilmedi",
-      "hint": "Kendi Kickstart'ın. ART ROM indirmez, ROM dağıtmaz. ROM olmadan kart kurulur ama açılmaz."
+      "hint": "Bu yapı için tek Kickstart: ağaç onunla eşleştirilir, emülatör onu açar ve karta yazılan da odur. Buradan değiştirirseniz her adım onu izler. ART hiçbirini göndermez ve göndermeyecek — kendinizinki olmalı."
     },
     "size": {
       "label": "Kart boyutu"
@@ -2167,7 +2167,8 @@
       "none": "ROM seçilmedi.",
       "chooseTitle": "Bu AmigaOS'un üzerinde çalışacağı Kickstart ROM'unu seç",
       "identified": "Tanımlandı: {{rom}}.",
-      "unreadable": "ART bu dosyayı bir Kickstart ROM'u olarak tanımlayamadı."
+      "unreadable": "ART bu dosyayı bir Kickstart ROM'u olarak tanımlayamadı.",
+      "hint": "Bu yapı için tek Kickstart: ağaç onunla eşleştirilir, emülatör onu açar ve karta yazılan da odur. Buradan değiştirirseniz her adım onu izler. ART hiçbirini göndermez ve göndermeyecek — kendinizinki olmalı."
     },
     "destination": {
       "label": "Şuraya kur",
@@ -2351,7 +2352,7 @@
         "label": "Kendi Kickstart ROM'unuz",
         "none": "Kickstart seçilmedi.",
         "chooseTitle": "Kendi lisanslı Kickstart ROM'unuzu seçin",
-        "hint": "Emülatör ağacı bununla açar. ART hiçbir Kickstart getirmez ve getirmeyecek — sizin kendi ROM'unuz olmak zorunda."
+        "hint": "Bu yapı için tek Kickstart: ağaç onunla eşleştirilir, emülatör onu açar ve karta yazılan da odur. Buradan değiştirirseniz her adım onu izler. ART hiçbirini göndermez ve göndermeyecek — kendinizinki olmalı."
       },
       "preview": {
         "heading": "Ne çalışacak",

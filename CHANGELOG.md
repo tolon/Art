@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### One Kickstart for the build (2026-08-23)
+
+#### Fixed
+- **You are asked for your Kickstart once, not three times.** The install
+  step, the card step and the Amiga-side installer each remembered their own,
+  so the same ROM had to be found and picked three times — and nothing
+  stopped them quietly disagreeing. Change it anywhere and every step follows,
+  which each field now says.
+- Whichever of the three you had already filled is the one ART starts with;
+  nothing you chose is lost.
+
 ### ART notices when the disc changed under it (2026-08-23)
 
 #### Fixed

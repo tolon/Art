@@ -598,6 +598,57 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-223** 🟠 ✅ **The same Kickstart was asked for three times** —
+*[ART-197](#fixed)'s fourth row, wave 2, 2026-08-23*
+`src/lib/buildSession.ts::seedRom` · `OsInstall.tsx` · `CardBuilder.tsx` ·
+`AmigaInstallPanel.tsx`
+
+Three panels asked for a Kickstart and each remembered its own key:
+`osinstall.rom` (the ROM the tree is paired against, G9), `cardBuilder.kickstart`
+(the ROM written onto the card) and `amigaInstall.kickstart` (the ROM the
+emulator boots to run a package's installer). **They are one question wearing
+three labels**, and a build where they differ is not a configuration — it is
+the mismatch G9's pairing check exists to catch.
+
+One value now, `session.rom.path`, and each field says so: *"One Kickstart for
+this build … change it here and every step follows."* Stated rather than done
+quietly, which is ART-197's own rule about the tree carry: **a carry the user
+cannot see is the same defect as one that never happened.**
+
+**The migration loses nothing**, and the order is not alphabetical.
+`seedRom` reads `osinstall.rom` first (the key the pairing check uses and the
+one a user meets first), then the card's, then the emulator's — so a user who
+only ever ran a package installer, and never opened the install step, still
+finds their ROM. Read once, never written again, never deleted, like every
+legacy key wave 1 took over.
+
+**One case this deliberately cannot express**, said rather than hidden: an
+emulator ROM different from the card's — running an old installer under an
+older Kickstart while the card carries a newer one. It stays possible by
+changing the field for that run; it is simply not remembered separately any
+more, and the divergence it used to allow silently is the hazard the pairing
+check is for.
+
+*Tests:* 5 over `seedRom`'s order and fallbacks, 3 over the hook (**a ROM
+chosen in one panel is the ROM the next panel already has**, with nothing
+between them but the session), and 1 over `AmigaInstallPanel` seeded through
+`osinstall.rom` — a key that panel never owned, so reverting it to its own key
+fails.
+
+**Four mutations run, three fell** — dropping the two legacy keys from the
+seed, flipping the order, and not seeding at all. The fourth, reverting a
+panel to its own key, fell for `AmigaInstallPanel` once its test existed.
+
+**One survivor, disclosed: `CardBuilder.tsx` has no test file at all.** Nothing
+would catch that panel drifting back to its own key. The mechanism it uses is
+covered from three directions and the panel itself is not; a `CardBuilder`
+test is worth its own round rather than a hurried one here.
+
+**Still open from ART-197's table**, and this is wave 2's remainder: the card
+image (`cardBuilder.dest` → `preload.image`) and the per-partition content
+folders. Splitting `OsInstall.tsx` is on the work list too and has no
+user-visible value; it should be last.
+
 **ART-222** 🟠 ✅ **A different disc of the same name built silently while
 the screen described the old one** — *found 2026-08-23 while designing
 work-list item 4*

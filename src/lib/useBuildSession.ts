@@ -30,6 +30,7 @@ import {
   SESSION_KEYS,
   TREE_SPEC,
   isBuildKind,
+  seedRom,
   seedTreeRoot,
   seededComponents,
   type BuildKind,
@@ -76,7 +77,10 @@ export function useBuildSession(): BuildSessionApi {
   });
 
   const [rom, setRomShape] = useRememberedShape<{ path: string | null }>(SESSION_KEYS.rom, ROM_SPEC, {
-    path: recall(bag, LEGACY_KEYS.rom, isTextOrNothing, null),
+    // Through `seedRom`, which walks all three of the keys the three panels
+    // used to keep separately (ART-197's fourth row) rather than only the
+    // install step's own.
+    path: seedRom(bag),
   });
 
   // The migration, in one line: an absent `buildSession.tree` falls back to

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { seedTreeRoot, seededComponents, SESSION_KEYS } from "./buildSession";
+import { seedRom, seedTreeRoot, seededComponents, SESSION_KEYS } from "./buildSession";
 
 describe("seedTreeRoot", () => {
   it("prefers the session's own key once it exists", () => {
@@ -89,5 +89,50 @@ describe("seededComponents", () => {
       chosen: [],
       excludedConditional: [],
     });
+  });
+});
+
+describe("seedRom", () => {
+  /// Three panels asked for the same Kickstart and each remembered its own
+  /// (ART-197's fourth row). The migration has to find whichever of the three
+  /// a user's own history filled — losing a ROM they already chose would be
+  /// the settings-reset this project forbids outright.
+  it("prefers the session's own key once it exists", () => {
+    const bag = {
+      [SESSION_KEYS.rom]: { path: "E:\\roms\\new.rom" },
+      "osinstall.rom": "E:\\roms\\install.rom",
+      "cardBuilder.kickstart": "E:\\roms\\card.rom",
+      "amigaInstall.kickstart": "E:\\roms\\emulator.rom",
+    };
+    expect(seedRom(bag)).toBe("E:\\roms\\new.rom");
+  });
+
+  it("takes the install step's ROM first, because that is the one the pairing check reads", () => {
+    const bag = {
+      "osinstall.rom": "E:\\roms\\install.rom",
+      "cardBuilder.kickstart": "E:\\roms\\card.rom",
+      "amigaInstall.kickstart": "E:\\roms\\emulator.rom",
+    };
+    expect(seedRom(bag)).toBe("E:\\roms\\install.rom");
+  });
+
+  it("then the card step's", () => {
+    const bag = {
+      "cardBuilder.kickstart": "E:\\roms\\card.rom",
+      "amigaInstall.kickstart": "E:\\roms\\emulator.rom",
+    };
+    expect(seedRom(bag)).toBe("E:\\roms\\card.rom");
+  });
+
+  /// **The one that would have been lost.** A user who never used the install
+  /// step, and only ever ran a package installer, still has their ROM.
+  it("and finally the Amiga-side install step's, which nothing else would find", () => {
+    expect(seedRom({ "amigaInstall.kickstart": "E:\\roms\\emulator.rom" })).toBe(
+      "E:\\roms\\emulator.rom"
+    );
+  });
+
+  it("nothing chosen anywhere is null, not an empty string", () => {
+    expect(seedRom({})).toBeNull();
   });
 });

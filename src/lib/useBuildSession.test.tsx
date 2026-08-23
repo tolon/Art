@@ -31,9 +31,11 @@ function seed(remembered: Record<string, unknown>) {
 }
 
 function Probe() {
-  const { session, setTree } = useBuildSession();
+  const { session, setTree, setRom } = useBuildSession();
   return (
     <div>
+      <span data-testid="rom">{session.rom.path ?? "(none)"}</span>
+      <button onClick={() => setRom("E:\\roms\\chosen.rom")}>choose rom</button>
       <span data-testid="root">{session.tree.root ?? "(none)"}</span>
       <span data-testid="builtHere">{String(session.tree.builtHere)}</span>
       <span data-testid="chosen">{session.components.chosen.join(",")}</span>
@@ -43,6 +45,12 @@ function Probe() {
       <button onClick={() => setTree({ root: "E:\\picked", builtHere: false })}>pick</button>
     </div>
   );
+}
+
+/** A second panel. Nothing connects it to `Probe` but the session itself. */
+function OtherPanel() {
+  const { session } = useBuildSession();
+  return <span data-testid="other-rom">{session.rom.path ?? "(none)"}</span>;
 }
 
 afterEach(() => {
@@ -116,5 +124,42 @@ describe("useBuildSession", () => {
     rerender(<Identity />);
     expect(seen.length).toBeGreaterThanOrEqual(2);
     expect(seen[0]).toBe(seen[1]);
+  });
+});
+
+describe("one Kickstart for the build (ART-197's fourth row)", () => {
+  /// **The point of the row.** Three panels asked for the same ROM and each
+  /// remembered its own, so a user chose it three times. Choosing it in one
+  /// place now shows it in the other, with nothing wired between them.
+  it("a ROM chosen in one panel is the ROM the next panel already has", async () => {
+    seed({});
+    render(
+      <>
+        <Probe />
+        <OtherPanel />
+      </>
+    );
+    expect(screen.getByTestId("other-rom").textContent).toBe("(none)");
+
+    await userEvent.click(screen.getByText("choose rom"));
+
+    expect(screen.getByTestId("rom").textContent).toBe("E:\\roms\\chosen.rom");
+    expect(screen.getByTestId("other-rom").textContent).toBe(
+      "E:\\roms\\chosen.rom",
+      );
+  });
+
+  /// The migration, from the panel that would otherwise have lost it: a user
+  /// who only ever ran a package installer never touched `osinstall.rom`.
+  it("finds a ROM a user only ever chose on the Amiga-side install step", () => {
+    seed({ "amigaInstall.kickstart": "E:\\roms\\kick31.rom" });
+    render(<Probe />);
+    expect(screen.getByTestId("rom").textContent).toBe("E:\\roms\\kick31.rom");
+  });
+
+  it("and one they only ever chose on the card step", () => {
+    seed({ "cardBuilder.kickstart": "E:\\roms\\kick47.rom" });
+    render(<Probe />);
+    expect(screen.getByTestId("rom").textContent).toBe("E:\\roms\\kick47.rom");
   });
 });
