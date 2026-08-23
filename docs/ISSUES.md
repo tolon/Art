@@ -295,6 +295,110 @@ re-audits them without reason:
 
 ## Fixed
 
+**ART-225** 🟠 ✅ **Thirteen font descriptors were placed as `X.FONT` and the
+running Amiga could see none of them — `diskfont.library` matches the `.font`
+suffix case-sensitively** — *found 2026-08-23 by booting the tree
+[ART-159](#fixed) had just shipped and opening a font requester; filed and
+fixed in the same pass*
+`src-tauri/src/core/osinstall/recipes/amigaos-3.9.json`
+
+The AmigaOS 3.9 tree was built with `special-locale-turkish` on, booted under
+WinUAE with the owner's licensed Kickstart 40.68, and the Font preferences
+requester listed:
+
+    Action, CGTimes, CGTriumvirate, courier, diamond, emerald, garnet,
+    helvetica, LetterGothic, opal, ruby, sapphire, times, topaz, topaz6
+
+Fifteen fonts, and **not one of the thirteen ISO-8859-9 families** the
+component had just placed. The list is sorted case-insensitively (`helvetica`
+sits between `garnet` and `LetterGothic`), so `courier-iso9` would have sat
+between `courier` and `diamond`. It was not there. The files were: 13 drawers,
+13 descriptors, 37 size files, every one of them on the volume.
+
+**The cause, measured rather than reasoned.** ART's own `distribution.json`
+says `workbench-base` placed `Fonts/courier.font` and `Fonts/CGTimes.font` —
+mixed case — while `special-locale-turkish` placed `Fonts/COURIER-ISO9.FONT`.
+The recipe's `to` paths had been typed off the disc's **ISO9660 Primary**
+listing, which is all-caps; but this disc carries **Rock Ridge** name entries
+and `core/iso/directory.rs` prefers them (*"The Rock Ridge name wins when there
+is one"*), so what `CdSource` returns — and what a `Subtree` rule therefore
+places — is the disc's own mixed-case Amiga spelling. A `File` rule's `to` is
+verbatim, so the thirteen descriptors got the spelling the recipe author typed
+instead of the one the medium carries. All thirteen are spelled `.font` on the
+disc.
+
+**The one-variable experiment that settled it.** On the running machine, with
+the emulator up, exactly one of the thirteen descriptors was renamed on the
+host — `TOPAZ-ISO9.FONT` → `TOPAZ-ISO9.font`, suffix only, base name left
+uppercase — and the requester reopened. The list then read:
+
+    … times, topaz, TOPAZ-ISO9, topaz6
+
+**The one appeared; the other twelve did not.** Control and treatment in the
+same list, in the same screenshot, one variable. And because the base name
+stayed uppercase and it still worked, the finding is precise: it is the
+**suffix** case that matters, not the name's.
+
+**What makes this worth an entry of its own rather than a line in ART-159.**
+Nothing in ART could have caught it. The tree built, verified clean, planned
+exactly 63 items for this component, and ART-159's own real-media hook
+asserted *"thirteen family drawers each with a non-empty `.FONT` descriptor"* —
+which was **true**, and the fonts did not exist as far as the system was
+concerned. It is this project's signature failure: no crash, no refusal, no
+log line, and a confident wrong answer that only a screen reveals.
+
+There was a second trap inside the first: on Windows the obvious guard is
+vacuous. `fonts.join("courier-iso9.font").is_file()` answers `true` for a file
+actually named `COURIER-ISO9.FONT`, because NTFS is case-insensitive — so a
+test written the natural way would have gone on passing after the fix as
+happily as before it.
+
+**Fixed 2026-08-23.** All 26 destinations rewritten in the disc's own
+spelling, copied rather than retyped, inconsistencies included:
+`FuturaB-ISO9.font` beside `courier-iso9.font`, `XHelvetica-iso9.font` beside
+`XCourier-ISO9.font`, and every descriptor's case differing from its own family
+drawer's. Tidying any of that would be ART renaming the user's file. `from` is
+deliberately unchanged — it resolves (the real run refuses nothing), lookup is
+case-insensitive, and the `türkçe` drawer above these is not spelled the same
+in its Rock Ridge entry as in its Primary one.
+
+The names were not taken on one tool's word: 7-Zip and ART's own manifest were
+compared over the thirteen **base** font names off the same disc and agree byte
+for byte, which is what licenses 7-Zip's reading of the Turkish ones.
+
+Three guards, at three different distances from the defect:
+
+- `recipe::tests::every_font_descriptor_a_recipe_places_is_spelled_dot_font_art_225`
+  — every shipped recipe and package, no media, no emulator: a destination
+  ending in `.font` case-insensitively must end in exactly `.font`.
+- `recipe::tests::the_turkish_font_component_pairs_every_family_with_its_descriptor_art_159`
+  — the full 26-rule list pinned against the disc's spelling.
+- `apply::tests::build_the_real_39_language_components_when_asked` — on real
+  material, compares against the directory's **own entries** rather than
+  `Path::is_file` (the Windows trap above), and then asks the disc whether
+  every one of the 26 names is a name it actually spells, so a retyped
+  destination fails even when the invention looks plausible.
+
+The recipe's own note said the opposite of all this and has been rewritten
+where it stood: it claimed the disc's spelling is all-caps because that is what
+the Primary tree carries, and that AmigaDOS's case-insensitivity made the
+difference cosmetic. Both halves were false.
+
+**Mutations, and the one that was meant to survive.** Putting a single
+descriptor back to `.FONT` fails the first guard on its own sentence; retyping
+`FuturaB-ISO9.font` as the plausible `futurab-iso9.font` — still ending
+`.font`, so the first guard is happy — fails the second. The third mutation
+changed the recipe **and both places that pin its spelling**, which is what an
+author who retypes and then updates the failing test actually does: every CI
+guard went green, as intended, and the real-media hook caught it —
+
+    the disc spells no entry exactly 'futurab-iso9.font'; the recipe invented it
+
+That is the whole reason the hook asks the disc rather than trusting an array.
+A guard that only compares the recipe against a list somebody typed is a guard
+against typing slips, not against being wrong about the medium — and being
+wrong about the medium is what this entry is.
+
 **ART-159** 🟠 **Two of spec §5's three predicted hazards for AmigaOS 3.9 —
 `SetPatch`/the boot sequence, and the three language-variant trees — went
 untouched by every task on the branch and were recorded nowhere** — *found
@@ -455,9 +559,29 @@ disclosed rather than claimed. What stands in its place is the assertion the
 loop makes before comparing: `assert_ne!(euro, base)` on every one of the nine,
 which is what fails if the two sources ever turn out to be the same file.
 
-Left for a boot rather than claimed: nobody has started a Turkish AmigaOS 3.9
-and looked at a ş. The fonts are placed, named and paired with their
-descriptors; that they render is the next thing a running system would answer.
+**And the claim this entry withheld has now been made, for one letter.** The
+tree was booted, the owner set the system to Turkish, and the fonts turned out
+not to be there at all — [ART-225](#fixed), the whole of it. Once that was
+fixed the two-arm comparison came off the same window title, unchanged text,
+one variable:
+
+| `Workbench 68% dolu, 600.4GB …` | glyph |
+|---|---|
+| system font `topaz.font` (Latin-1) | **boþ** |
+| system font `TOPAZ-ISO9` | **boş** |
+
+Same bytes on the volume — the Turkish catalogs are ISO-8859-9, so `ş` is
+`0xFE`, which Latin-1 draws as `þ`. Nothing about the text changed; the font
+did.
+
+**Stated precisely, because two of the three letters are not in that frame.**
+Arm 1 showed all three substitutions at once (`Ekran Baþlýk Çubuðu` for
+*Başlık Çubuğu* — `þ`, `ý`, `ð`) and `1.2TB kullanýmda`. Arm 2's frame shows
+`boş` and has `kull…` clipped at the window edge, so **`ş` is photographed in
+both arms and `ğ` and `ı` are photographed only in the broken one.** The
+mechanism is the same single font table for all three and there is no reason
+to expect them to differ — but that is a reason, not a measurement, and it is
+written here as one.
 
 
 **ART-224** 🟠 ✅ **Two AmigaOS 3.2 components declared an override over

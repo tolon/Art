@@ -4159,53 +4159,111 @@ mod tests {
             elapsed.as_secs_f64()
         );
 
-        // The thirteen families, on disk, each with its descriptor beside it.
-        // Read off the tree rather than off the recipe, so a rule that
-        // resolved to nothing cannot pass.
-        const FAMILIES: [&str; 13] = [
-            "COURIER-ISO9",
-            "DIAMOND-ISO9",
-            "EMERALD-ISO9",
-            "FUTURAB-ISO9",
-            "GARNET-ISO9",
-            "PERSONAL-ISO9",
-            "TIMES-ISO9",
-            "TOPAZ-ISO9",
-            "TOPAZT",
-            "XCOURIER-ISO9",
-            "XEN-ISO9",
-            "XEN-WIDE-ISO9",
-            "XHELVETICA-ISO9",
+        // **The thirteen families, on disk, checked by their exact names.**
+        //
+        // ART-225 is why this is written the hard way. Windows is
+        // case-insensitive, so `fonts.join("courier-iso9.font").is_file()`
+        // answers `true` for a file actually named `COURIER-ISO9.FONT` — the
+        // very defect this now guards against, and the reason the first
+        // version of this block passed while the running Amiga could see none
+        // of these fonts. Every name below is compared against the directory's
+        // own entries, character for character.
+        //
+        // The pairs are the disc's own spelling, inconsistencies and all.
+        const DISC: [(&str, &str); 13] = [
+            ("courier-iso9", "courier-iso9.font"),
+            ("diamond-iso9", "diamond-iso9.font"),
+            ("emerald-iso9", "emerald-iso9.font"),
+            ("futurab-iso9", "FuturaB-ISO9.font"),
+            ("garnet-iso9", "garnet-iso9.font"),
+            ("personal-iso9", "Personal-ISO9.font"),
+            ("times-iso9", "Times-ISO9.font"),
+            ("topaz-iso9", "Topaz-ISO9.font"),
+            ("topazt", "topazt.font"),
+            ("xcourier-iso9", "XCourier-ISO9.font"),
+            ("xen-iso9", "Xen-ISO9.font"),
+            ("xen-wide-iso9", "Xen-Wide-ISO9.font"),
+            ("xhelvetica-iso9", "XHelvetica-iso9.font"),
         ];
+
         let fonts = root.join("Fonts");
+        let placed: std::collections::BTreeSet<String> = std::fs::read_dir(&fonts)
+            .expect("the tree must carry a Fonts drawer")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| !n.ends_with(".uaem"))
+            .collect();
+
         let mut sizes = 0usize;
-        for family in FAMILIES {
-            let drawer = fonts.join(family);
-            let descriptor = fonts.join(format!("{family}.FONT"));
-            assert!(drawer.is_dir(), "{} is not a drawer", drawer.display());
-            let bytes = std::fs::read(&descriptor)
-                .unwrap_or_else(|e| panic!("{} should exist: {e}", descriptor.display()));
+        for (drawer, descriptor) in DISC {
+            assert!(
+                placed.contains(drawer),
+                "the Fonts drawer holds no entry spelled exactly '{drawer}' — it holds {:?}",
+                placed
+                    .iter()
+                    .filter(|n| n.eq_ignore_ascii_case(drawer))
+                    .collect::<Vec<_>>()
+            );
+            assert!(
+                placed.contains(descriptor),
+                "the Fonts drawer holds no entry spelled exactly '{descriptor}'. ART-225: \
+                 diskfont.library matches the '.font' suffix case-sensitively, so a \
+                 descriptor spelled any other way is invisible to the running system, and \
+                 Windows' case-insensitive filesystem will not tell you. Entries that differ \
+                 only in case: {:?}",
+                placed
+                    .iter()
+                    .filter(|n| n.eq_ignore_ascii_case(descriptor))
+                    .collect::<Vec<_>>()
+            );
+            let bytes = std::fs::read(fonts.join(descriptor))
+                .unwrap_or_else(|e| panic!("{descriptor}: {e}"));
             assert!(
                 !bytes.is_empty(),
-                "{} landed empty — a font AmigaOS would list and fail to open",
-                descriptor.display()
+                "{descriptor} landed empty — a font AmigaOS would list and fail to open"
             );
-            sizes += std::fs::read_dir(&drawer).unwrap().flatten().count();
+            sizes += std::fs::read_dir(fonts.join(drawer))
+                .unwrap()
+                .flatten()
+                .count();
         }
-        println!("Turkish fonts: 13 families, {sizes} size files");
-        // 37 real sizes, plus one `.uaem` sidecar each — the sidecars are
-        // what `apply` writes beside every file, and counting the drawer
-        // rather than the plan is what makes this an on-disk check.
+        println!("Turkish fonts: 13 families, {sizes} entries under them");
+        // 37 real sizes, plus one `.uaem` sidecar each.
         assert_eq!(sizes, 74, "37 size files and their 37 .uaem sidecars");
+
+        // **And every one of those names is the medium's own**, asked of the
+        // disc rather than trusted from this array. This is the assertion that
+        // makes ART-225's whole class impossible on real material: a recipe
+        // author who retypes a destination instead of copying it fails here
+        // even if the spelling they invented happens to look plausible.
+        {
+            let mut disc = CdSource::open(&iso_path).expect("open the disc");
+            let listing: std::collections::BTreeSet<String> = disc
+                .walk("OS-VERSION3.9/SPECIAL-LOCALE")
+                .expect("the disc's Special-Locale drawer")
+                .into_iter()
+                .filter_map(|e| e.path.rsplit('/').next().map(str::to_string))
+                .collect();
+            for (drawer, descriptor) in DISC {
+                assert!(
+                    listing.contains(drawer),
+                    "the disc spells no entry exactly '{drawer}'; the recipe invented it"
+                );
+                assert!(
+                    listing.contains(descriptor),
+                    "the disc spells no entry exactly '{descriptor}'; the recipe invented it"
+                );
+            }
+            println!("all 26 names are the disc's own spelling");
+        }
 
         // And the base fonts are all still there, untouched. The measured
         // claim behind "no overrides" is that these two sets are disjoint, so
         // this is the half a collision would break.
-        for base in ["TOPAZ.FONT", "TIMES.FONT", "COURIER.FONT", "DIAMOND.FONT"] {
+        for base in ["topaz.font", "times.font", "courier.font", "diamond.font"] {
             assert!(
-                fonts.join(base).is_file(),
-                "{} went missing — the base Fonts drawer must be untouched",
-                base
+                placed.contains(base),
+                "{base} went missing — the base Fonts drawer must be untouched"
             );
         }
 
