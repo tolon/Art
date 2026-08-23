@@ -184,6 +184,37 @@
     "build behave differently from another on the same disc."
   ],
   "amiga_installer": {
+      "_why_post_install": [
+        "ART-227. The `Updater` finishes and leaves ten files without the protection",
+        "bits AmigaDOS needs from them. Measured on 2026-08-24 against the owner's own",
+        "material, on the tree ART's own BoingBag 1 run produced: every one of the seven",
+        "`C:` commands below reads `----rwed` afterwards (two of them carry no `.uaem`",
+        "at all, which is WinUAE's way of saying `default`), and `S/Start-Amplifier.rexx`",
+        "reads `----rwed` where it needs the script bit.",
+        "",
+        "**Why it matters rather than being tidy.** `Resident` refuses a command without",
+        "the `p` bit, and AmigaOS 3.9's own boot makes commands resident. A tree missing",
+        "these boots and then fails a line at a time, which is exactly the shape that",
+        "costs this project the most: nothing crashes and nothing says anything.",
+        "",
+        "The same ten files are what HstWB Installer sets, in the same two groups —",
+        "`+prwed` on the commands, `+srwed` on the scripts — which is where the list was",
+        "found. Every one of the ten was then checked to be present in the tree ART's own",
+        "run produced before it was written here, because `protect` refuses a file that",
+        "is not there rather than skipping it."
+      ],
+      "post_install": [
+        { "step": "protect", "path": "C/LoadMonDrvs", "add": "p" },
+        { "step": "protect", "path": "C/LoadResource", "add": "p" },
+        { "step": "protect", "path": "C/MakeDir", "add": "p" },
+        { "step": "protect", "path": "C/MakeLink", "add": "p" },
+        { "step": "protect", "path": "C/SetEnv", "add": "p" },
+        { "step": "protect", "path": "C/WBInfo", "add": "p" },
+        { "step": "protect", "path": "C/WBRun", "add": "p" },
+        { "step": "protect", "path": "S/Start-Amplifier.rexx", "add": "s" },
+        { "step": "protect", "path": "S/Startup-Sequence-BB3.9-1", "add": "s" },
+        { "step": "protect", "path": "S/Stream-Amplifier.rexx", "add": "s" }
+      ],
     "program": "C/Updater",
     "args": ["AmigaOS-Update"],
     "minimum_version": "45.15",

@@ -26,6 +26,296 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-166** 🔴 **Both BoingBag payload archives are password-encrypted ZIPs, so
+neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task
+8's real run, on `content-layer`*
+`src-tauri/src/core/osinstall/recipes/packages/boingbag-39-1.json` ·
+`…/boingbag-39-2.json`
+
+Both recipes name `member: "AmigaOS-Update"` — the payload archive stored
+inside the wrapper LHA. That member is a ZIP, and every entry in it is
+**ZipCrypto-encrypted**: 233 of 233 entries in BoingBag 3.9-1's payload
+(210 files, 23 folders) and 147 of 147 in 3.9-2's (121 files, 26 folders).
+Confirmed three independent ways — ART's own reader
+(`entry 42 of this ZIP cannot be read: Password required to decrypt file`;
+entry 128 for 3.9-2), 7-Zip 26.02 (`Encrypted = +`, `Method = ZipCrypto
+Deflate`, and `ERROR: Wrong password` on extraction), and the raw local file
+header, whose general-purpose flag word reads `0x0003` with bit 0 set.
+
+The password belongs to the BoingBag's own `Updater`, which the wrapper LHA
+carries beside the payload (`BoingBag3.9-1/C/Updater`, `C/GetLocale`) — an
+Amiga executable that has to run *on* an Amiga. Nothing about this is a bug in
+`core/archive`: the reader is right and the recipes are asking for bytes that
+are not readable on the host.
+
+Task 4 measured these recipes from the payload's **listing**, which ZipCrypto
+leaves in clear, and every test since has been synthetic — so the first time
+anything asked for the bytes was this run. That is exactly the gap Task 8
+exists to close.
+
+Left open, and deliberately not "fixed": circumventing the encryption is not
+ART's business, and the honest options are all design decisions rather than
+code changes — place the wrapper's loose files and let the Amiga's own
+`Updater` run at first boot, or withdraw both BoingBag recipes until there is
+a path that works. Whichever is chosen, spec §10/§89 says ART must not offer a
+package it cannot apply, and today it offers two.
+
+**The owner's decision, taken 2026-08-19 after external research and recorded
+here so nobody re-opens it by accident: no bypass of the password will be
+written.** The research is what settled it rather than taste — every
+established distribution builder (HstWB Installer, AmiKit, AmigaSYS,
+ClassicWB) installs a BoingBag by running the package's **own `Updater` inside
+an emulator**, where the password already lives, rather than by decrypting
+anything; HstWB's own README says so outright (*"HstWB Installer uses WinUAE
+or FS-UAE emulator to run the installation process"*). So the supported path
+exists and it is an Amiga-side one. That becomes **its own round**, not a
+continuation of this one, and it is cheaper than it sounds because
+`core/winuae::launch_winuae` already exists — what is missing is running it
+unattended and reading the result back.
+
+**What the screen does today, checked in the code rather than assumed
+(corrected 2026-08-19 by the final whole-branch review's M3 — the sentence
+that stood here said "the screen says so" and the screen did not).** When
+this was first written, `osinstall_packages` set `available` from
+`found.iter().any(|f| f.media == p.media)` alone, so a user with the real
+`BoingBag39-1.lha` in the folder got a live checkbox, no warning, and — on
+confirming — the reader's own raw English sentence, `entry 42 of this ZIP
+cannot be read: Password required to decrypt file`, whatever language they
+had chosen. The entry was right in its body about §10/§89 and wrong in its
+last line.
+
+Both are now true instead:
+
+- Both BoingBag recipes declare `"host_placement_block": "encrypted-payload"`
+  in their own JSON — data, not code, so the day the Amiga-side round lands
+  the block is deleted rather than an `if` hunted down.
+- The checklist gives such a package its own badge and its own sentence,
+  in both catalogues, naming what it needs (*its own Amiga-side Updater*)
+  rather than reporting that ART failed — and the row is **untickable**.
+  "Archive not found" is deliberately not reused: the archive is right
+  there.
+- A pick remembered from an earlier run still arrives checked, so the
+  preview is suppressed for that selection and the Add button is disabled;
+  the row stays tickable *off*, which is F3's rule and is not weakened.
+- `plan()` refuses the selection by type
+  (`RefusalReason::PackageNotPlaceableOnHost`) before the package folder is
+  even scanned, and `osinstall_collisions` refuses before opening an
+  archive — so a caller reaching the commands directly gets the same
+  answer, not the ZIP reader's.
+
+So the shipped BoingBag recipes stay, unplaceable and **said to be** so.
+
+Also worth recording as *my own* mistake rather than the material's: the
+payload's 234 entries were listed with 7-Zip early in the round and read as
+plain files. **ZipCrypto does not encrypt names** — listing works, extraction
+does not — so the first fact was true and the second was inferred from it. The
+first thing that ever asked for bytes was Task 8's run.
+
+**The Amiga-side route works, and this entry is now the record of why the
+host-side one still cannot** — *2026-08-21*. [ART-193](#fixed) is fixed, and
+both BoingBags installed on the owner's own material through ART's own
+`compose` → `install` path: BoingBag 1 in 169.1 s (3 795 → 3 859 files),
+BoingBag 2 on that result in 138.1 s, and the tree booted and answered
+`Workbench 45.3 (07-Dec-01)` where it used to answer `Workbench 45.1`.
+
+**So the files reach a tree — and not one of them was placed by `apply`.**
+The Amiga's own `Updater` writes them, inside the emulator, after the
+package's own code decrypts its own payload. Nothing here decrypts anything
+and no password is bypassed; the payload is as encrypted as it ever was, and
+host-side placement is as impossible as it ever was. This entry therefore
+stays open as the reason a BoingBag's rows are refused on the host screen —
+`host_placement_block: "encrypted-payload"` is still correct and still
+shipped. What has changed is that the sentence ART tells the user now has an
+answer to give: the package installs, through the emulator, the way every
+established distribution builder installs one.
+
+
+**ART-130** 🔵 **A game can name the Kickstart it needs, and nothing offers to
+supply it** — *filed 2026-08-17, out of G10's design round; the reading half is
+built by G10, this is the half that was deliberately left out*
+`src-tauri/src/core/gameindex/`, `src-tauri/src/core/rom/`, ROM Manager ·
+A WHDLoad slave at `ws_Version >= 16` declares the Kickstart image it needs by
+name (`kick34005.A500`, which WHDLoad loads from `DEVS:Kickstarts/`), by size
+and by CRC16 — documented in whdload.de's autodoc under
+`WHDLoad.Slave/--Overview--`. G10 reads all three fields, computes WHDLoad's
+own CRC-16/ARC (`core/hashing`), and **reports** which declared images are
+missing from the tree it is building. What it does not do is close the loop:
+ART holds a 154-dump Kickstart table, verified against amitools' Remus database
+on every CI run, so in many cases it could *identify* the needed image and
+offer to place it under the name the slave asks for.
+
+Left out on purpose rather than forgotten. Putting a user's ROM onto their card
+on their behalf reaches ROM Manager, the licensed-Amiga-Forever decode path
+([ART-128](#fixed)) and the card's own layout — decisions of theirs, not a side
+effect of a metadata pass. It is the same question G9 answers for the OS side
+("does this Kickstart suit this volume?") arriving from the games side, and it
+belongs beside G9/G16 rather than inside a launcher-metadata round.
+
+Design: [2026-08-17-g10-launcher-metadata-design.md](superpowers/specs/2026-08-17-g10-launcher-metadata-design.md) §6.
+
+**Decided 2026-08-21 by the owner: yes, ART should offer it — but in its own
+round, and always as a proposal.** Never as a side effect of a metadata pass,
+and never placing a ROM without the user agreeing to that specific placement.
+The reasoning that kept it out of G10 still holds and is the reason for the
+shape: putting a user's ROM onto their card touches ROM Manager, the licensed
+Amiga Forever decode path and the card's own layout, and those are the
+owner's decisions rather than something a scan does on their behalf. So the
+loop closes as *"this title asks for `kick34005.A500`; ART recognises it in
+your collection — place it?"*, never as a silent copy.
+
+**ART-118** 🟠 **The OS Builder's install screen has never been driven in a
+real browser past its headings — jsdom now covers what a browser could not,
+the crash itself is still unresolved** — *found 2026-08-15/16, Task 13's
+browser pass and Task 14's real run; narrowed 2026-08-19*
+`src/components/osbuilder/OsInstall.tsx` · A headless-Chrome probe confirmed
+the route, the new `Install` kind, and five resolved `h2` strings with no raw
+key and no `{{…}}`. Deeper interaction — filling the media/ROM/destination
+fields, ticking a component, running Plan, reading the confirmation panel or
+the refusals card, running Verify and reading its three states, switching to
+Turkish — crashed the renderer reproducibly with an access violation
+(`-1073741819`), in both Chrome and Edge and both headless modes, and was not
+resolved. Task 14's real run (`run_the_real_engine_against_the_users_own_media_when_asked`)
+exercised the same 26-component checklist and the modules-on-without-being-
+chosen path **through the Rust engine directly**, never through this screen —
+so the engine's own correctness is now evidenced far beyond the screen's own
+verification.
+
+**2026-08-19: `src/components/osbuilder/OsInstall.test.tsx` added — five jsdom
+component tests, the first automated coverage of this screen at all.**
+Mocked at the `@/lib/osinstall` / `@/lib/pistorm` / `@/lib/settings` boundary
+(the house pattern — see `useRomPairing.test.tsx`), not deeper, and the real
+component is rendered directly rather than a proxy harness. What is now
+covered:
+- The screen mounts **past its headings** with the media/ROM/destination
+  fields, the 26-entry component checklist, and the Build and Verify actions
+  all present and reachable — the thing no browser session could get past.
+- The whole rendered tree carries no raw i18next key shape and no literal
+  `{{…}}`, in **both English and Turkish** — the first time any language has
+  been checked against a running instance of this screen (`ART-062`).
+- Ticking a component in the checklist reaches the request `osinstallPlan` is
+  asked to plan and changes what the plan section shows — the checklist's
+  own wiring had never been exercised by anything before this.
+- A refusal renders as the real, translated sentence, not a blank card.
+
+What is still **not** covered, and why this stays open rather than closing:
+jsdom does no layout at all, so it cannot reproduce the access violation
+itself (a native renderer crash) or measure whether a long Turkish string
+overflows its container — that half of `ART-062` is unchanged and still a
+real-screen job. The crash's root cause is still unknown; a real
+`pnpm tauri dev` pass by a human, driving the screen against a real media
+folder (e.g. `E:\amiga\ProjeART\dist-3.2`), is still owed and is what would
+actually close this.
+
+**ART-117** 🟡 **`import_filesystem` refuses a foreign card's existing RDB —
+by design, but the gap has no other path today** — *found 2026-08-16 (Task 9),
+named for filing at Task 14*
+`src-tauri/src/core/preload/native.rs`, `core/card/build.rs` · `create_rdb_layout`
+builds an RDB **from scratch** on a fixed 16-head/63-sector LBA geometry; it
+cannot edit one already on disk. Real cards disagree with that geometry —
+CaffeineOS's RDB is 12 heads, 256 sectors — so writing a fresh RDB over an
+existing area would invalidate every partition already in it, and
+`NativeFormatter::import_filesystem` refuses by name rather than attempting
+it. A card ART itself built already carries its drivers (`build.rs` lays an
+RDB per area and embeds FSHD/LSEG at build time), and an FFS partition needs
+no driver at all — Kickstart carries FFS — so the gap is narrower than it
+first looks: embedding a PFS3 driver into a **foreign** card's existing RDB
+(one ART did not build) is the one case with no path in ART today.
+`hst-imager` does it; that is named in the refusal text. Not fixed — filed as
+future work, not implied to already work.
+
+**The premise is now confirmed on the owner's own copy** (2026-08-24, reading
+`CaffeineOS_Storm_9317.img` with ART's own `read_card` through
+`core::card::tests::read_real_card_when_asked`). This entry asserted
+CaffeineOS's geometry from memory of a card; the card is here and it agrees:
+
+    area at 1178599424  cyl=38488  heads=12  sectors=256  partitions=2  drivers=1
+      SDH0  PDS3  lo=2    hi=535    buffers=600
+      SDH1  PDS3  lo=536  hi=36194  buffers=600
+    partitions-missing-driver=0
+
+**12 heads, 256 sectors** — not the 16/63 `create_rdb_layout` builds — so
+writing a fresh RDB over that area really would invalidate both partitions,
+which is what the refusal exists for. Two other things fell out of the same
+read and are worth having: ART reads a **third-party** PiStorm card correctly
+end to end (a card ART did not build, from a distribution ART has nothing to
+do with), and the card's shape is the one `CLAUDE.md` describes from two
+cards — MBR, a FAT32 primary (type `0x0C`, LBA 2048, 1.10 GiB), one `0x76`
+area beginning **1.178 GB in** whose first four bytes are `RDSK`. That is a
+third independent measurement of the model `core/mbr`'s defaults were chosen
+from.
+
+**Decided 2026-08-21 by the owner: leave it. `hst-imager` stays the named
+fallback for this one gap.** Editing an existing RDB in place is the kind of
+operation that takes every partition on the card with it when it goes wrong,
+and the geometry evidence says it would go wrong: `create_rdb_layout` assumes
+16 heads / 63 sectors and a real CaffeineOS card is 12 / 256. There is no
+measured demand for it either — the case is narrow (embedding a PFS3 driver
+into a card **ART did not build**; ART's own cards already carry their
+drivers, and FFS needs none because Kickstart carries it). The refusal names
+`hst-imager` by name, which is what makes this a signposted boundary rather
+than a dead end.
+
+Revisit only if someone actually meets the case and `hst-imager` cannot serve
+it — not before.
+
+**ART-062** 🔵 **One Turkish sentence has been read on screen; the other 1766 keys have not**
+`src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
+was verified by `pnpm test`'s key-parity check and by reading the JSON — never
+by opening the running application and looking at a screen. Several Turkish
+strings are substantially longer than their English originals and sit in tight
+controls, so the check that remains is visual, not automatable:
+
+| Key | English | Turkish | Growth |
+|---|---|---|---|
+| `pistorm.saveSync` | "Save & Sync PiStorm SD" | "PiStorm SD'yi Kaydet ve Eşitle" | +36% |
+| `hardDisk.bootablePri` | "Bootable (Pri {{n}})" | "Önyüklenebilir (Öncelik {{n}})" | +50% |
+| `pistorm.profile.classic.badge` | "Cycle-Exact & Demos" | "Çevrim Hassasiyetli ve Demolar" | +58% |
+| FileManager function-key label | "View" | "Görüntüle" | 4 → 9 characters |
+| FileManager function-key label | "Grid" | "Izgara" | +50% |
+| job status | "Done" | "Tamamlandı" | +150% |
+| job status | "Failed" | "Başarısız" | +50% |
+
+The function-key bar (`src/components/files/FunctionKeys.tsx`) was inspected
+in source rather than run: its container carries `flexWrap: "wrap"` and each
+button `flex: "1 1 90px"`, and `.btn` in `src/styles/global.css` carries no
+`text-overflow` rule (only `.file-row-name` does), so the bar should wrap
+rather than clip. That makes it the most likely of the rows above to look
+merely cramped rather than the most likely to break outright — but nobody has
+looked at it in Turkish. Needs an actual run of `pnpm tauri dev` with the
+language switched to Turkish, working through PiStorm, the hard disk screen,
+and the Files function-key bar at a few window widths.
+
+**First real evidence, 2026-08-21.** The owner drove the release build, chose
+an old title, and read the new WHDLoad refusal on screen **in Turkish**: *"…bu
+başlatma bir A1200 Kickstart 3.x istiyor. Başka bir model için olan Kickstart
+— örneğin A500/A600/A2000 için bir 3.1 — ne kadar yeni olursa olsun buna
+uymaz."* Their verdict: *"gayet makul bir çözüm olmuş"*, and the launch then
+worked.
+
+That is one sentence, not the catalogue — but it is the first time any
+Turkish string in ART has been read on screen by someone who speaks it, and
+it was one of the hardest kind: a refusal that has to leave the reader knowing
+what to do next. The other 1774 remain unseen.
+
+Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
+not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
+
+Every module with working logic has now been audited. The remaining `core`
+modules are stubs that only return `NotImplemented` (`recovery.rs`,
+`conversion.rs`, `binary.rs`, `validation.rs`) or hold types with no logic
+(`compatibility.rs`) — see [FEATURES.md](FEATURES.md) for their planned state.
+
+Two areas were reviewed and found sound, and are recorded here so nobody
+re-audits them without reason:
+
+- `core/analysis.rs` — the hex reader clamps both offset and length, and the
+  signature scan guards its window.
+- `core/profile.rs` — preset data only, no parsing of untrusted input.
+
+---
+
+## Fixed
+
 **ART-227** 🟠 **ART runs a BoingBag's `Updater` exactly the way the one
 readable distribution builder does, and then stops — the fix-ups that builder
 performs *after* it are not done, and one of them is what activates BoingBag
@@ -325,295 +615,63 @@ AmigaOS 3.2 recipe has the same hole — its `storage` component places
 `Keymaps → Storage/Keymaps` and nothing puts a copy in `Devs`, which is this
 entry's own shape in the other recipe, unverified.
 
-**ART-166** 🔴 **Both BoingBag payload archives are password-encrypted ZIPs, so
-neither BoingBag recipe can place a single file** — *found 2026-08-19 by Task
-8's real run, on `content-layer`*
-`src-tauri/src/core/osinstall/recipes/packages/boingbag-39-1.json` ·
-`…/boingbag-39-2.json`
+**Fixed 2026-08-24, and verified on the owner's own material.**
+`core/amigainstall/finish.rs` — a typed vocabulary of two operations,
+`protect` and `replace-keeping-backup`, declared per package in
+`amiga_installer.post_install` and applied by `commands::amigainstall::perform`
+**on the host**, against the staged copy, between a `Succeeded` run and
+[`stage::settle`].
 
-Both recipes name `member: "AmigaOS-Update"` — the payload archive stored
-inside the wrapper LHA. That member is a ZIP, and every entry in it is
-**ZipCrypto-encrypted**: 233 of 233 entries in BoingBag 3.9-1's payload
-(210 files, 23 folders) and 147 of 147 in 3.9-2's (121 files, 26 folders).
-Confirmed three independent ways — ART's own reader
-(`entry 42 of this ZIP cannot be read: Password required to decrypt file`;
-entry 128 for 3.9-2), 7-Zip 26.02 (`Encrypted = +`, `Method = ZipCrypto
-Deflate`, and `ERROR: Wrong password` on extraction), and the raw local file
-header, whose general-purpose flag word reads `0x0003` with bit 0 set.
+**Host, not Amiga, and that is the design decision worth keeping.** HstWB does
+these as AmigaDOS lines because it has no host side while the install runs.
+ART has one, and moving the work there dissolved all three problems at once:
+no quoting (`Devs/AmigaOS ROM Update` has spaces, and `workvol` refuses `"`
+and whitespace on purpose — that refusal is right for an installer's own
+argument list and would have had to be weakened), no fifth `RunOutcome` (a
+failure is an ordinary `CoreError` raised *before* `settle`, so the copy is
+not promoted and the user's tree is untouched — §92's existing answer), and no
+emulator in the tests (all fifteen run in a tempdir).
 
-The password belongs to the BoingBag's own `Updater`, which the wrapper LHA
-carries beside the payload (`BoingBag3.9-1/C/Updater`, `C/GetLocale`) — an
-Amiga executable that has to run *on* an Amiga. Nothing about this is a bug in
-`core/archive`: the reader is right and the recipes are asking for bytes that
-are not readable on the host.
+**The run, end to end, on a fresh copy of a pre-BoingBag tree:**
 
-Task 4 measured these recipes from the payload's **listing**, which ZipCrypto
-leaves in clear, and every test since has been synthetic — so the first time
-anything asked for the bytes was this run. That is exactly the gap Task 8
-exists to close.
+| | |
+|---|---|
+| BoingBag 1 | `Succeeded`/`Promoted`, **169.1 s**, 3 863 files / 20 136 129 bytes |
+| BoingBag 2 | `Succeeded`/`Promoted`, **138.0 s**, 3 873 files / 20 855 334 bytes |
 
-Left open, and deliberately not "fixed": circumventing the encryption is not
-ART's business, and the honest options are all design decisions rather than
-code changes — place the wrapper's loose files and let the Amiga's own
-`Updater` run at first boot, or withdraw both BoingBag recipes until there is
-a path that works. Whichever is chosen, spec §10/§89 says ART must not offer a
-package it cannot apply, and today it offers two.
+BoingBag 1 reported all ten steps, one line each — `----rwed -> --p-rwed` for
+the seven commands, `----rwed -> -s--rwed` for the three scripts. The file
+count moved 3 859 → 3 863 and the bytes 20 135 997 → 20 136 129 against the
+un-fixed run earlier the same day, and that arithmetic closes exactly: four of
+the ten had no sidecar at all, so four were created, 4 × 33 = **132 bytes**.
 
-**The owner's decision, taken 2026-08-19 after external research and recorded
-here so nobody re-opens it by accident: no bypass of the password will be
-written.** The research is what settled it rather than taste — every
-established distribution builder (HstWB Installer, AmiKit, AmigaSYS,
-ClassicWB) installs a BoingBag by running the package's **own `Updater` inside
-an emulator**, where the password already lives, rather than by decrypting
-anything; HstWB's own README says so outright (*"HstWB Installer uses WinUAE
-or FS-UAE emulator to run the installation process"*). So the supported path
-exists and it is an Amiga-side one. That becomes **its own round**, not a
-continuation of this one, and it is cheaper than it sounds because
-`core/winuae::launch_winuae` already exists — what is missing is running it
-unattended and reading the result back.
+BoingBag 2 reported one line — *"'Devs/AmigaOS ROM Update.BB39-2' is now
+'Devs/AmigaOS ROM Update'; the previous one is at 'AmigaOS ROM Update.old'"* —
+and `Devs/` afterwards is what it should be:
 
-**What the screen does today, checked in the code rather than assumed
-(corrected 2026-08-19 by the final whole-branch review's M3 — the sentence
-that stood here said "the screen says so" and the screen did not).** When
-this was first written, `osinstall_packages` set `available` from
-`found.iter().any(|f| f.media == p.media)` alone, so a user with the real
-`BoingBag39-1.lha` in the folder got a live checkbox, no warning, and — on
-confirming — the reader's own raw English sentence, `entry 42 of this ZIP
-cannot be read: Password required to decrypt file`, whatever language they
-had chosen. The entry was right in its body about §10/§89 and wrong in its
-last line.
+    AmigaOS ROM Update        321 768   sha256 14a12599...
+    AmigaOS ROM Update.BB39-2 321 768   sha256 14a12599...   (the same file)
+    AmigaOS ROM Update.old    127 956   sha256 308ff5ea...   (with its sidecar)
 
-Both are now true instead:
+So `SetPatch` now loads BoingBag 2's ROM update, and the one it replaced is
+kept rather than lost.
 
-- Both BoingBag recipes declare `"host_placement_block": "encrypted-payload"`
-  in their own JSON — data, not code, so the day the Amiga-side round lands
-  the block is deleted rather than an `if` hunted down.
-- The checklist gives such a package its own badge and its own sentence,
-  in both catalogues, naming what it needs (*its own Amiga-side Updater*)
-  rather than reporting that ART failed — and the row is **untickable**.
-  "Archive not found" is deliberately not reused: the archive is right
-  there.
-- A pick remembered from an earlier run still arrives checked, so the
-  preview is suppressed for that selection and the Add button is disabled;
-  the row stays tickable *off*, which is F3's rule and is not weakened.
-- `plan()` refuses the selection by type
-  (`RefusalReason::PackageNotPlaceableOnHost`) before the package folder is
-  even scanned, and `osinstall_collisions` refuses before opening an
-  archive — so a caller reaching the commands directly gets the same
-  answer, not the ZIP reader's.
+**Mutations: seven against `finish.rs`, all seven fell** — dropping the
+missing-file refusal, dropping the letter check, overwriting the oldest backup
+instead of refusing, leaving a stale sidecar behind, not carrying the sidecar
+across, replacing without backing up, and joining the path instead of gating
+it through `safe_join`.
 
-So the shipped BoingBag recipes stay, unplaceable and **said to be** so.
+**What is deliberately still not done**, because nothing has measured a need
+for it against ART's own result: HstWB's WarpUp library copies, its locale
+catalogs, the HDToolBox icon position, the second `Updater` run for
+`XAD-Update`, and copying `C/Installer` into `SYS:C` and `SYS:Utilities`. Each
+becomes a variant in `finish.rs` on the day a measurement asks for one;
+building an operation for an unmeasured step is how a vocabulary grows past
+what anyone can check. `NSDPatch.cfg` is left alone on purpose — it is
+user-editable configuration and a reference copy beside it is the right shape,
+which is the same conclusion HstWB reaches by touching neither.
 
-Also worth recording as *my own* mistake rather than the material's: the
-payload's 234 entries were listed with 7-Zip early in the round and read as
-plain files. **ZipCrypto does not encrypt names** — listing works, extraction
-does not — so the first fact was true and the second was inferred from it. The
-first thing that ever asked for bytes was Task 8's run.
-
-**The Amiga-side route works, and this entry is now the record of why the
-host-side one still cannot** — *2026-08-21*. [ART-193](#fixed) is fixed, and
-both BoingBags installed on the owner's own material through ART's own
-`compose` → `install` path: BoingBag 1 in 169.1 s (3 795 → 3 859 files),
-BoingBag 2 on that result in 138.1 s, and the tree booted and answered
-`Workbench 45.3 (07-Dec-01)` where it used to answer `Workbench 45.1`.
-
-**So the files reach a tree — and not one of them was placed by `apply`.**
-The Amiga's own `Updater` writes them, inside the emulator, after the
-package's own code decrypts its own payload. Nothing here decrypts anything
-and no password is bypassed; the payload is as encrypted as it ever was, and
-host-side placement is as impossible as it ever was. This entry therefore
-stays open as the reason a BoingBag's rows are refused on the host screen —
-`host_placement_block: "encrypted-payload"` is still correct and still
-shipped. What has changed is that the sentence ART tells the user now has an
-answer to give: the package installs, through the emulator, the way every
-established distribution builder installs one.
-
-
-**ART-130** 🔵 **A game can name the Kickstart it needs, and nothing offers to
-supply it** — *filed 2026-08-17, out of G10's design round; the reading half is
-built by G10, this is the half that was deliberately left out*
-`src-tauri/src/core/gameindex/`, `src-tauri/src/core/rom/`, ROM Manager ·
-A WHDLoad slave at `ws_Version >= 16` declares the Kickstart image it needs by
-name (`kick34005.A500`, which WHDLoad loads from `DEVS:Kickstarts/`), by size
-and by CRC16 — documented in whdload.de's autodoc under
-`WHDLoad.Slave/--Overview--`. G10 reads all three fields, computes WHDLoad's
-own CRC-16/ARC (`core/hashing`), and **reports** which declared images are
-missing from the tree it is building. What it does not do is close the loop:
-ART holds a 154-dump Kickstart table, verified against amitools' Remus database
-on every CI run, so in many cases it could *identify* the needed image and
-offer to place it under the name the slave asks for.
-
-Left out on purpose rather than forgotten. Putting a user's ROM onto their card
-on their behalf reaches ROM Manager, the licensed-Amiga-Forever decode path
-([ART-128](#fixed)) and the card's own layout — decisions of theirs, not a side
-effect of a metadata pass. It is the same question G9 answers for the OS side
-("does this Kickstart suit this volume?") arriving from the games side, and it
-belongs beside G9/G16 rather than inside a launcher-metadata round.
-
-Design: [2026-08-17-g10-launcher-metadata-design.md](superpowers/specs/2026-08-17-g10-launcher-metadata-design.md) §6.
-
-**Decided 2026-08-21 by the owner: yes, ART should offer it — but in its own
-round, and always as a proposal.** Never as a side effect of a metadata pass,
-and never placing a ROM without the user agreeing to that specific placement.
-The reasoning that kept it out of G10 still holds and is the reason for the
-shape: putting a user's ROM onto their card touches ROM Manager, the licensed
-Amiga Forever decode path and the card's own layout, and those are the
-owner's decisions rather than something a scan does on their behalf. So the
-loop closes as *"this title asks for `kick34005.A500`; ART recognises it in
-your collection — place it?"*, never as a silent copy.
-
-**ART-118** 🟠 **The OS Builder's install screen has never been driven in a
-real browser past its headings — jsdom now covers what a browser could not,
-the crash itself is still unresolved** — *found 2026-08-15/16, Task 13's
-browser pass and Task 14's real run; narrowed 2026-08-19*
-`src/components/osbuilder/OsInstall.tsx` · A headless-Chrome probe confirmed
-the route, the new `Install` kind, and five resolved `h2` strings with no raw
-key and no `{{…}}`. Deeper interaction — filling the media/ROM/destination
-fields, ticking a component, running Plan, reading the confirmation panel or
-the refusals card, running Verify and reading its three states, switching to
-Turkish — crashed the renderer reproducibly with an access violation
-(`-1073741819`), in both Chrome and Edge and both headless modes, and was not
-resolved. Task 14's real run (`run_the_real_engine_against_the_users_own_media_when_asked`)
-exercised the same 26-component checklist and the modules-on-without-being-
-chosen path **through the Rust engine directly**, never through this screen —
-so the engine's own correctness is now evidenced far beyond the screen's own
-verification.
-
-**2026-08-19: `src/components/osbuilder/OsInstall.test.tsx` added — five jsdom
-component tests, the first automated coverage of this screen at all.**
-Mocked at the `@/lib/osinstall` / `@/lib/pistorm` / `@/lib/settings` boundary
-(the house pattern — see `useRomPairing.test.tsx`), not deeper, and the real
-component is rendered directly rather than a proxy harness. What is now
-covered:
-- The screen mounts **past its headings** with the media/ROM/destination
-  fields, the 26-entry component checklist, and the Build and Verify actions
-  all present and reachable — the thing no browser session could get past.
-- The whole rendered tree carries no raw i18next key shape and no literal
-  `{{…}}`, in **both English and Turkish** — the first time any language has
-  been checked against a running instance of this screen (`ART-062`).
-- Ticking a component in the checklist reaches the request `osinstallPlan` is
-  asked to plan and changes what the plan section shows — the checklist's
-  own wiring had never been exercised by anything before this.
-- A refusal renders as the real, translated sentence, not a blank card.
-
-What is still **not** covered, and why this stays open rather than closing:
-jsdom does no layout at all, so it cannot reproduce the access violation
-itself (a native renderer crash) or measure whether a long Turkish string
-overflows its container — that half of `ART-062` is unchanged and still a
-real-screen job. The crash's root cause is still unknown; a real
-`pnpm tauri dev` pass by a human, driving the screen against a real media
-folder (e.g. `E:\amiga\ProjeART\dist-3.2`), is still owed and is what would
-actually close this.
-
-**ART-117** 🟡 **`import_filesystem` refuses a foreign card's existing RDB —
-by design, but the gap has no other path today** — *found 2026-08-16 (Task 9),
-named for filing at Task 14*
-`src-tauri/src/core/preload/native.rs`, `core/card/build.rs` · `create_rdb_layout`
-builds an RDB **from scratch** on a fixed 16-head/63-sector LBA geometry; it
-cannot edit one already on disk. Real cards disagree with that geometry —
-CaffeineOS's RDB is 12 heads, 256 sectors — so writing a fresh RDB over an
-existing area would invalidate every partition already in it, and
-`NativeFormatter::import_filesystem` refuses by name rather than attempting
-it. A card ART itself built already carries its drivers (`build.rs` lays an
-RDB per area and embeds FSHD/LSEG at build time), and an FFS partition needs
-no driver at all — Kickstart carries FFS — so the gap is narrower than it
-first looks: embedding a PFS3 driver into a **foreign** card's existing RDB
-(one ART did not build) is the one case with no path in ART today.
-`hst-imager` does it; that is named in the refusal text. Not fixed — filed as
-future work, not implied to already work.
-
-**The premise is now confirmed on the owner's own copy** (2026-08-24, reading
-`CaffeineOS_Storm_9317.img` with ART's own `read_card` through
-`core::card::tests::read_real_card_when_asked`). This entry asserted
-CaffeineOS's geometry from memory of a card; the card is here and it agrees:
-
-    area at 1178599424  cyl=38488  heads=12  sectors=256  partitions=2  drivers=1
-      SDH0  PDS3  lo=2    hi=535    buffers=600
-      SDH1  PDS3  lo=536  hi=36194  buffers=600
-    partitions-missing-driver=0
-
-**12 heads, 256 sectors** — not the 16/63 `create_rdb_layout` builds — so
-writing a fresh RDB over that area really would invalidate both partitions,
-which is what the refusal exists for. Two other things fell out of the same
-read and are worth having: ART reads a **third-party** PiStorm card correctly
-end to end (a card ART did not build, from a distribution ART has nothing to
-do with), and the card's shape is the one `CLAUDE.md` describes from two
-cards — MBR, a FAT32 primary (type `0x0C`, LBA 2048, 1.10 GiB), one `0x76`
-area beginning **1.178 GB in** whose first four bytes are `RDSK`. That is a
-third independent measurement of the model `core/mbr`'s defaults were chosen
-from.
-
-**Decided 2026-08-21 by the owner: leave it. `hst-imager` stays the named
-fallback for this one gap.** Editing an existing RDB in place is the kind of
-operation that takes every partition on the card with it when it goes wrong,
-and the geometry evidence says it would go wrong: `create_rdb_layout` assumes
-16 heads / 63 sectors and a real CaffeineOS card is 12 / 256. There is no
-measured demand for it either — the case is narrow (embedding a PFS3 driver
-into a card **ART did not build**; ART's own cards already carry their
-drivers, and FFS needs none because Kickstart carries it). The refusal names
-`hst-imager` by name, which is what makes this a signposted boundary rather
-than a dead end.
-
-Revisit only if someone actually meets the case and `hst-imager` cannot serve
-it — not before.
-
-**ART-062** 🔵 **One Turkish sentence has been read on screen; the other 1766 keys have not**
-`src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
-was verified by `pnpm test`'s key-parity check and by reading the JSON — never
-by opening the running application and looking at a screen. Several Turkish
-strings are substantially longer than their English originals and sit in tight
-controls, so the check that remains is visual, not automatable:
-
-| Key | English | Turkish | Growth |
-|---|---|---|---|
-| `pistorm.saveSync` | "Save & Sync PiStorm SD" | "PiStorm SD'yi Kaydet ve Eşitle" | +36% |
-| `hardDisk.bootablePri` | "Bootable (Pri {{n}})" | "Önyüklenebilir (Öncelik {{n}})" | +50% |
-| `pistorm.profile.classic.badge` | "Cycle-Exact & Demos" | "Çevrim Hassasiyetli ve Demolar" | +58% |
-| FileManager function-key label | "View" | "Görüntüle" | 4 → 9 characters |
-| FileManager function-key label | "Grid" | "Izgara" | +50% |
-| job status | "Done" | "Tamamlandı" | +150% |
-| job status | "Failed" | "Başarısız" | +50% |
-
-The function-key bar (`src/components/files/FunctionKeys.tsx`) was inspected
-in source rather than run: its container carries `flexWrap: "wrap"` and each
-button `flex: "1 1 90px"`, and `.btn` in `src/styles/global.css` carries no
-`text-overflow` rule (only `.file-row-name` does), so the bar should wrap
-rather than clip. That makes it the most likely of the rows above to look
-merely cramped rather than the most likely to break outright — but nobody has
-looked at it in Turkish. Needs an actual run of `pnpm tauri dev` with the
-language switched to Turkish, working through PiStorm, the hard disk screen,
-and the Files function-key bar at a few window widths.
-
-**First real evidence, 2026-08-21.** The owner drove the release build, chose
-an old title, and read the new WHDLoad refusal on screen **in Turkish**: *"…bu
-başlatma bir A1200 Kickstart 3.x istiyor. Başka bir model için olan Kickstart
-— örneğin A500/A600/A2000 için bir 3.1 — ne kadar yeni olursa olsun buna
-uymaz."* Their verdict: *"gayet makul bir çözüm olmuş"*, and the launch then
-worked.
-
-That is one sentence, not the catalogue — but it is the first time any
-Turkish string in ART has been read on screen by someone who speaks it, and
-it was one of the hardest kind: a refusal that has to leave the reader knowing
-what to do next. The other 1774 remain unseen.
-
-Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
-not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
-
-Every module with working logic has now been audited. The remaining `core`
-modules are stubs that only return `NotImplemented` (`recovery.rs`,
-`conversion.rs`, `binary.rs`, `validation.rs`) or hold types with no logic
-(`compatibility.rs`) — see [FEATURES.md](FEATURES.md) for their planned state.
-
-Two areas were reviewed and found sound, and are recorded here so nobody
-re-audits them without reason:
-
-- `core/analysis.rs` — the hex reader clamps both offset and length, and the
-  signature scan guards its window.
-- `core/profile.rs` — preset data only, no parsing of untrusted input.
-
----
-
-## Fixed
 
 **ART-225** 🟠 ✅ **Thirteen font descriptors were placed as `X.FONT` and the
 running Amiga could see none of them — `diskfont.library` matches the `.font`

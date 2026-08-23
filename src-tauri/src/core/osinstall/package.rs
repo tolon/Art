@@ -381,6 +381,20 @@ pub struct AmigaInstaller {
     /// which is the ordinary case.
     #[serde(default)]
     pub required_medium: Option<RequiredMedium>,
+    /// What the tree needs done **after** this installer has run, and the
+    /// installer does not do itself (ART-227).
+    ///
+    /// Measured against the owner's own material rather than copied from
+    /// another builder's script: BoingBag 2's `Updater` leaves
+    /// `Devs/AmigaOS ROM Update.BB39-2` beside the old file under a name
+    /// nothing loads, and BoingBag 1 leaves seven `C:` commands without the
+    /// `p` bit that `Resident` needs. Both are ordinary file operations, so
+    /// ART performs them **on the host**, against the staged copy, before it
+    /// decides whether to promote — see
+    /// [`crate::core::amigainstall::finish`] for why that is better than
+    /// appending AmigaDOS lines to the boot script.
+    #[serde(default)]
+    pub post_install: Vec<crate::core::amigainstall::finish::PostStep>,
 }
 
 /// A disc a package's own installer insists on seeing (ART-193).
@@ -1473,6 +1487,7 @@ mod tests {
             minimum_version: None,
             overlays: Vec::new(),
             required_medium: None,
+            post_install: Vec::new(),
         };
         let json = serde_json::json!({
             "id": "x",
@@ -1901,5 +1916,88 @@ mod tests {
             .map(|p| p.id)
             .collect();
         assert_eq!(with_components, vec!["locale-turkish".to_string()]);
+    }
+
+    /// **ART-227.** What the two BoingBags need done after their own
+    /// `Updater` has run, pinned against the shipped data.
+    ///
+    /// Every path here was checked to exist in the tree ART's own run
+    /// produced before it was written into a recipe, because
+    /// [`crate::core::amigainstall::finish`] refuses a file that is not there
+    /// rather than skipping it — a list with one wrong name would turn every
+    /// BoingBag 1 install into a failure at the last step.
+    ///
+    /// The rotation is the one with teeth and is asserted whole: BoingBag 2's
+    /// `Updater` leaves a 321 768-byte ROM update under a name `SetPatch`
+    /// does not load, and without this step a tree reports itself updated
+    /// while running the ROM update it had before.
+    #[test]
+    fn the_boingbags_declare_what_their_updater_leaves_undone_art_227() {
+        use crate::core::amigainstall::finish::PostStep;
+
+        let packages = packages().expect("the shipped packages must parse");
+        let installer_of = |id: &str| {
+            packages
+                .iter()
+                .find(|p| p.id == id)
+                .unwrap_or_else(|| panic!("no shipped package '{id}'"))
+                .amiga_installer
+                .clone()
+                .unwrap_or_else(|| panic!("'{id}' declares no Amiga-side installer"))
+        };
+
+        // --- BoingBag 1: ten files, two groups of protection bits ----------
+        let one = installer_of("boingbag-39-1").post_install;
+        let expected_one: Vec<PostStep> = [
+            ("C/LoadMonDrvs", "p"),
+            ("C/LoadResource", "p"),
+            ("C/MakeDir", "p"),
+            ("C/MakeLink", "p"),
+            ("C/SetEnv", "p"),
+            ("C/WBInfo", "p"),
+            ("C/WBRun", "p"),
+            ("S/Start-Amplifier.rexx", "s"),
+            ("S/Startup-Sequence-BB3.9-1", "s"),
+            ("S/Stream-Amplifier.rexx", "s"),
+        ]
+        .into_iter()
+        .map(|(path, add)| PostStep::Protect {
+            path: path.into(),
+            add: add.into(),
+        })
+        .collect();
+        assert_eq!(
+            one, expected_one,
+            "the seven commands `Resident` needs the pure bit on, and the three scripts \
+             that need the script bit"
+        );
+
+        // --- BoingBag 2: the rotation --------------------------------------
+        assert_eq!(
+            installer_of("boingbag-39-2").post_install,
+            vec![PostStep::ReplaceKeepingBackup {
+                target: "Devs/AmigaOS ROM Update".into(),
+                replacement: "Devs/AmigaOS ROM Update.BB39-2".into(),
+            }],
+            "without this the 321 768-byte ROM update sits beside the old one under a \
+             name SetPatch does not load"
+        );
+
+        // --- and nothing else has grown one by accident --------------------
+        for package in &packages {
+            if package.id.starts_with("boingbag-") {
+                continue;
+            }
+            let steps = package
+                .amiga_installer
+                .as_ref()
+                .map(|i| i.post_install.len())
+                .unwrap_or(0);
+            assert_eq!(
+                steps, 0,
+                "'{}' declares post-install steps nobody has measured a need for",
+                package.id
+            );
+        }
     }
 }
