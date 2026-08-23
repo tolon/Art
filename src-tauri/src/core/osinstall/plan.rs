@@ -1739,6 +1739,7 @@ mod plan_tests {
                     user_startup: vec![],
                     activate: vec![],
                     exclusive_group: None,
+                    label_key: None,
                     available: true,
                 },
                 Component {
@@ -1755,6 +1756,7 @@ mod plan_tests {
                     user_startup: vec![],
                     activate: vec![],
                     exclusive_group: None,
+                    label_key: None,
                     available: true,
                 },
             ],
@@ -1803,6 +1805,7 @@ mod plan_tests {
                 user_startup: vec![],
                 activate: vec![],
                 exclusive_group: None,
+                label_key: None,
                 available: true,
             }],
         };
@@ -1845,6 +1848,7 @@ mod plan_tests {
                 user_startup: vec![],
                 activate: vec![],
                 exclusive_group: None,
+                label_key: None,
                 available: true,
             }],
         };
@@ -1889,6 +1893,7 @@ mod plan_tests {
             user_startup: vec![],
             activate: vec![],
             exclusive_group: None,
+            label_key: None,
             available: true,
         };
         let recipe = Recipe {
@@ -1948,6 +1953,7 @@ mod plan_tests {
             user_startup: vec![],
             activate: vec![],
             exclusive_group: Some("modules".to_string()),
+            label_key: None,
             available: true,
         };
         let recipe = Recipe {
@@ -2020,6 +2026,7 @@ mod plan_tests {
                 user_startup: vec![],
                 activate: vec![],
                 exclusive_group: None,
+                label_key: None,
                 available: true,
             }],
         };
@@ -2102,6 +2109,7 @@ mod plan_tests {
                 user_startup: vec![],
                 activate: vec![],
                 exclusive_group: None,
+                label_key: None,
                 available: true,
             }],
         };
@@ -2361,6 +2369,7 @@ mod plan_tests {
                     name: ask_for.to_string(),
                 }],
                 exclusive_group: None,
+                label_key: None,
                 available: true,
             }],
         };
@@ -3057,6 +3066,7 @@ mod plan_tests {
             overrides: vec![],
             user_startup: lines.iter().map(|s| s.to_string()).collect(),
             exclusive_group: None,
+            label_key: None,
             available: true,
         };
         let recipe = Recipe {
@@ -3292,6 +3302,7 @@ mod plan_tests {
             user_startup: Vec::new(),
             activate: vec![],
             exclusive_group: None,
+            label_key: None,
             available: true,
         };
         Package {

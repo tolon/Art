@@ -158,6 +158,7 @@ const COMPONENTS_32: ComponentDef[] = [
   {
     id: "workbench-base",
     media: "Workbench3.2",
+    labelKey: null,
     required: true,
     available: true,
     conditionMajor: null,
@@ -168,6 +169,7 @@ const COMPONENTS_32: ComponentDef[] = [
   {
     id: "install-libs",
     media: "Install3.2",
+    labelKey: null,
     required: true,
     available: true,
     conditionMajor: null,
@@ -178,6 +180,7 @@ const COMPONENTS_32: ComponentDef[] = [
   {
     id: "extras",
     media: "Extras3.2",
+    labelKey: null,
     required: false,
     available: true,
     conditionMajor: null,
@@ -188,6 +191,7 @@ const COMPONENTS_32: ComponentDef[] = [
   {
     id: "modules-a1200",
     media: "ModulesA1200_3.2",
+    labelKey: null,
     required: false,
     available: true,
     conditionMajor: 47,
@@ -201,6 +205,7 @@ const COMPONENTS_39: ComponentDef[] = [
   {
     id: "workbench-base",
     media: "AmigaOS3.9",
+    labelKey: null,
     required: true,
     available: true,
     conditionMajor: null,
@@ -216,6 +221,7 @@ const COMPONENTS_39: ComponentDef[] = [
   {
     id: "workbench-39",
     media: "AmigaOS3.9",
+    labelKey: null,
     required: true,
     available: true,
     conditionMajor: null,

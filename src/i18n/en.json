@@ -2167,6 +2167,15 @@
       "required": "Required",
       "loading": "Reading this release's components…",
       "unavailable": "ART could not read this release's components.",
+      "name": {
+        "os39": {
+          "base": "Workbench 3.5 base layer",
+          "euroCountries": "Euro currency country files",
+          "locale": "Locale — catalogs, languages, countries",
+          "overlay": "Workbench 3.9 overlay",
+          "turkishFonts": "Turkish fonts (ISO-8859-9)"
+        }
+      },
       "reason": {
         "required": "Always on — a working system needs it.",
         "romNeeded": "Choose the paired Kickstart to know whether this switches on by itself.",

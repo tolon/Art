@@ -75,6 +75,7 @@ import { hostParentDir } from "@/lib/hostPath";
 import {
   collisionGroupHeadingKey,
   collisionPhrase,
+  componentDef,
   componentLabel,
   confirmComponentOff,
   conditionalReason,
@@ -424,6 +425,26 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
   );
   const [componentsError, setComponentsError] = useState(false);
   const catalogue = components?.release === release ? components.list : null;
+  /**
+   * One component's row label (ART-224).
+   *
+   * `media` — the volume the component comes from — is what every row used
+   * to show, and for AmigaOS 3.2's sixteen disks it is better than any
+   * sentence ART could write. AmigaOS 3.9 is five components off one disc,
+   * so every row read `AmigaOS3.9`: three identical labels before ART-159
+   * added two more, two of them tick-boxes the user is asked to decide
+   * about. A recipe now names its own key where that happens, and the Rust
+   * side refuses a recipe that shares a medium without naming one.
+   *
+   * Resolved here rather than in `src/lib`, which holds no i18next singleton
+   * and returns `Phrase`s instead of sentences — a `labelKey` is a whole key
+   * with no parameters, so it needs no `Phrase` wrapper, only a `t` call at
+   * the place that draws it.
+   */
+  function label(id: string): string {
+    const key = componentDef(catalogue ?? [], id)?.labelKey;
+    return key ? t(key) : componentLabel(catalogue ?? [], id);
+  }
   const [mediaScan, setMediaScan] = useState<MediaScanResult | null>(null);
   const [rom, setRom] = useState<RomInfo | null>(null);
   const [romError, setRomError] = useState(false);
@@ -1216,7 +1237,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
               >
                 <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
                   <input type="checkbox" checked={checked} disabled={disabled} onChange={handleChange} />
-                  <strong>{def.media}</strong>
+                  <strong>{label(def.id)}</strong>
                   {def.required && (
                     <span className="badge badge-muted" style={{ fontSize: 10 }}>
                       {t("osinstall.components.required")}
@@ -1347,9 +1368,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
             <>
               <p className="muted" style={{ fontSize: 12, margin: "4px 0 10px" }}>
                 {t("osinstall.replaces.summary", {
-                  components: layeringOn
-                    .map((id) => componentLabel(catalogue ?? [], id))
-                    .join(", "),
+                  components: layeringOn.map(label).join(", "),
                   placed: componentPreview.placed,
                   // **`contested`, not `reports.length`** (review F4).
                   // `collide::preview` drops identical rows before returning,
@@ -1452,7 +1471,7 @@ export function OsInstall({ droppedMedia = null }: { droppedMedia?: DroppedMedia
             {groupByComponent(effectivePlan).map(({ component, items }) => (
               <div key={component} style={{ marginBottom: 8 }}>
                 <div className="muted" style={{ fontSize: 11, fontWeight: 600, margin: "6px 0 2px" }}>
-                  {componentLabel(catalogue ?? [], component)}
+                  {label(component)}
                 </div>
                 {items.map((item, i) => (
                   <div

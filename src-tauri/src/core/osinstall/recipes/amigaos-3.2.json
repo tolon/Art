@@ -168,19 +168,6 @@
       ]
     },
     {
-      "id": "modules-a1200",
-      "media": "ModulesA1200_3.2",
-      "condition": { "condition": "rom-older-than", "major": 47 },
-      "exclusive_group": "modules",
-      "rules": [
-        { "from": "C/LoadModule", "to": "C/LoadModule", "kind": "file" },
-        { "from": "LIBS/Modules", "to": "Libs/Modules", "kind": "subtree" },
-        { "from": "DEVS/A1200", "to": "Devs/A1200", "kind": "subtree" },
-        { "from": "LIBS/A1200", "to": "Libs/A1200", "kind": "subtree" }
-      ],
-      "overrides": ["storage"]
-    },
-    {
       "id": "update-3.2.1",
       "media": "Update3.2.1",
       "available": false,
@@ -201,18 +188,6 @@
         { "from": "Devs", "to": "Devs", "kind": "subtree" }
       ],
       "overrides": ["workbench-base"]
-    },
-    {
-      "id": "glowicons",
-      "media": "GlowIcons3.2",
-      "rules": [
-        { "from": "Devs", "to": "Devs", "kind": "subtree" },
-        { "from": "Prefs", "to": "Prefs", "kind": "subtree" },
-        { "from": "Storage", "to": "Storage", "kind": "subtree" },
-        { "from": "System", "to": "System", "kind": "subtree" },
-        { "from": "Tools", "to": "Tools", "kind": "subtree" }
-      ],
-      "overrides": ["workbench-base", "extras", "storage", "classes"]
     },
     {
       "id": "backdrops",
@@ -291,6 +266,70 @@
         { "from": "DefIcons", "to": "Storage/DefIcons", "kind": "subtree" },
         { "from": "Env-Archive", "to": "Storage/Env-Archive", "kind": "subtree" }
       ]
+    },
+    {
+      "_why_modules_a1200_moved_below_storage": [
+        "ART-224, found 2026-08-23 by the guard ART-159's round added",
+        "(`every_override_is_declared_after_what_it_overrides`). This component declared",
+        "`overrides: [\"storage\"]` and was declared **above** `storage`, and recipe order",
+        "is what decides which layer writes last — so `storage`'s copy won and the",
+        "declaration did nothing. `detect_collisions` accepts an override whichever way",
+        "round the two are declared, so nothing refused and nothing reported it.",
+        "",
+        "**What that cost here: nothing, measured rather than assumed.** The one",
+        "destination they share is `C/LoadModule`, and the two disks carry the *same",
+        "file*: `ModulesA1200_3.2:C/LoadModule` and `Storage3.2:C/LoadModule` are both",
+        "11 816 bytes and both SHA-256 `35acfea734816965d271352f59c3643963f69c7e4b2469e3",
+        "473c5f5a8a60fc14` (read out of the owner's own ADFs with amitools' `xdftool`).",
+        "Whichever wrote last, the bytes on the volume were the same. So this move is a",
+        "correction to what the recipe *says*, not to what any tree ever contained — and",
+        "the one thing it does change is `distribution.json`, which now records the file",
+        "as coming from the disk that claims it.",
+        "",
+        "Its sibling `glowicons` below was the same defect with real consequences."
+      ],
+      "id": "modules-a1200",
+      "media": "ModulesA1200_3.2",
+      "condition": { "condition": "rom-older-than", "major": 47 },
+      "exclusive_group": "modules",
+      "rules": [
+        { "from": "C/LoadModule", "to": "C/LoadModule", "kind": "file" },
+        { "from": "LIBS/Modules", "to": "Libs/Modules", "kind": "subtree" },
+        { "from": "DEVS/A1200", "to": "Devs/A1200", "kind": "subtree" },
+        { "from": "LIBS/A1200", "to": "Libs/A1200", "kind": "subtree" }
+      ],
+      "overrides": ["storage"]
+    },
+    {
+      "_why_glowicons_is_last": [
+        "ART-224, and this is the half that was really wrong. GlowIcons is an icon",
+        "overlay: it declares an override over `workbench-base`, `extras`, `storage` and",
+        "`classes` precisely because its whole purpose is to replace their `.info` files",
+        "with the colourful ones. It was declared **above** `storage`, so for every icon",
+        "the two disks share, the plain one won.",
+        "",
+        "**Sixteen files, counted off the owner's own ADFs (2026-08-23, amitools",
+        "`xdftool`).** `GlowIcons3.2:Storage` and `Storage3.2` meet on 16 `.info` files —",
+        "6 in `Storage/DOSDrivers` (AUX, CD0, MACCD0, PC0, PC1, RAD) and 10 in",
+        "`Storage/Monitors` (A2024, DblNTSC, DblPAL, Euro36, Euro72, Multiscan, NTSC,",
+        "PAL, Super72, VGAOnly). Every pair differs in size the way the two icon styles",
+        "do: 1452 bytes against 476 for each monitor icon, 1061/481, 1641/515,",
+        "1758/492, 1319/509 for the drivers. So a user who ticked GlowIcons got sixteen",
+        "plain icons back and nothing said so.",
+        "",
+        "Declared last of all, because it is the only component that overlays four",
+        "others."
+      ],
+      "id": "glowicons",
+      "media": "GlowIcons3.2",
+      "rules": [
+        { "from": "Devs", "to": "Devs", "kind": "subtree" },
+        { "from": "Prefs", "to": "Prefs", "kind": "subtree" },
+        { "from": "Storage", "to": "Storage", "kind": "subtree" },
+        { "from": "System", "to": "System", "kind": "subtree" },
+        { "from": "Tools", "to": "Tools", "kind": "subtree" }
+      ],
+      "overrides": ["workbench-base", "extras", "storage", "classes"]
     }
   ]
 }

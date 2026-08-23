@@ -563,6 +563,7 @@ impl RawPackage {
             user_startup: Vec::new(),
             activate: Vec::new(),
             exclusive_group: None,
+            label_key: None,
             available: true,
         };
         Package {
@@ -1728,6 +1729,7 @@ mod tests {
                 user_startup: Vec::new(),
                 activate: Vec::new(),
                 exclusive_group: None,
+                label_key: None,
                 available: true,
             },
         }

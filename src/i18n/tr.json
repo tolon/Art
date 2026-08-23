@@ -2167,6 +2167,15 @@
       "required": "Zorunlu",
       "loading": "Bu sürümün bileşenleri okunuyor…",
       "unavailable": "ART bu sürümün bileşenlerini okuyamadı.",
+      "name": {
+        "os39": {
+          "base": "Workbench 3.5 taban katmanı",
+          "euroCountries": "Euro para birimi ülke dosyaları",
+          "locale": "Locale — katalog, dil ve ülke dosyaları",
+          "overlay": "Workbench 3.9 katmanı",
+          "turkishFonts": "Türkçe fontlar (ISO-8859-9)"
+        }
+      },
       "reason": {
         "required": "Her zaman açık — çalışan bir sistem buna ihtiyaç duyar.",
         "romNeeded": "Bunun kendiliğinden açılıp açılmayacağını bilmek için önce eşlenen Kickstart'ı seç.",

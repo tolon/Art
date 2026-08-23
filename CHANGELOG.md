@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Turkish fonts and euro country files, and a row you can tell from the one above it (2026-08-23)
+
+#### Added
+- **AmigaOS 3.9: the Turkish ISO-8859-9 font set.** A new optional component
+  places the thirteen font families your 3.9 disc keeps in its
+  `Special-Locale/TÜRKÇE` drawer — the ones that carry ş, ğ, ı and İ. Without
+  them a Turkish system has the translations and not the letters. It adds
+  fonts and replaces none of yours: the thirteen names share nothing with the
+  fonts the base release installs, checked against the disc rather than
+  assumed.
+- **AmigaOS 3.9: the euro-currency country files.** A second optional
+  component replaces nine `.country` files — Österreich, Belgie, Belgique,
+  Deutschland, España, France, Italia, Nederland, Portugal — with the disc's
+  euro versions. They are exactly the same size as the ones they replace and
+  genuinely different files, which is why they are worth a tick-box.
+- Both were built from a real AmigaOS 3.9 CD before being offered.
+
+#### Fixed
+- **The AmigaOS 3.9 component list now names its rows.** All five come off one
+  disc, so every row read `AmigaOS3.9` — including the ones you are asked to
+  tick. Each now says what it is, in both languages.
+- **GlowIcons no longer loses sixteen icons to the Storage disk.** If you
+  ticked both, sixteen colourful icons — six disk drivers and ten monitors —
+  were quietly overwritten with the plain ones. ART knew GlowIcons was meant
+  to win and installed them in the wrong order.
+
 ### ART tidies up after a crash, and says so (2026-08-23)
 
 #### Added

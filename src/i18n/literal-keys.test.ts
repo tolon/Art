@@ -388,6 +388,17 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // `cardBuilder.fs.needsDriver`, so there is no family here to enumerate
     // and nothing for dead-keys.test.ts to miss -- the key appears literally
     // in `cardBuild.ts`.
-    expect(dynamicCalls).toBe(130);
+    // 130 -> 131 (a recipe names its own row label, ART-224): OsInstall.tsx's
+    // `label()` renders `t(def.labelKey)` for a component whose recipe names
+    // one, because AmigaOS 3.9's five components come off a single disc and
+    // every row was otherwise labelled `AmigaOS3.9`. The producer is recipe
+    // data in the Rust tree rather than a TypeScript union, so there is no
+    // exhaustive switch to enumerate here -- what stands in for it is
+    // `dead-keys.test.ts` reading the recipe files themselves (they are in
+    // its `DATA_FILES`), `recipe-component-keys.test.ts` resolving every
+    // declared key against both catalogues and refusing one nothing claims,
+    // and the Rust side refusing a recipe that shares a medium without
+    // labelling its rows.
+    expect(dynamicCalls).toBe(131);
   });
 });
