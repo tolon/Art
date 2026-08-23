@@ -956,6 +956,26 @@ pub fn apply_staging_in(
     let mut sources: BTreeMap<String, Box<dyn MediaSource>> = BTreeMap::new();
     let mut built_from = Vec::new();
     for (volume, path) in &plan.media_paths {
+        // **Is this still the disc the plan was made against?** The name
+        // check below asks whether it is still *a* Workbench3.2; this asks
+        // whether it is *the* one the user was shown. See
+        // `plan::MediaStamp` for what it catches and what it does not.
+        if let Some(stamped) = plan.media_stamps.get(volume) {
+            if let Some(now) = super::scan_cache::identity_of(path) {
+                if now.size != stamped.size || now.mtime_nanos != stamped.mtime_nanos {
+                    return Err(CoreError::InvalidInput(format!(
+                        "'{}' has changed since this install was previewed — it is {} bytes now \
+                         and was {}. The preview describes a different disc. Plan it \
+                         again, and use Scan again if the folder holds more than one \
+                         '{volume}'.",
+                        path.display(),
+                        now.size,
+                        stamped.size
+                    )));
+                }
+            }
+        }
+
         let identified = super::scan::identify(path).ok_or_else(|| {
             CoreError::InvalidInput(format!(
                 "'{}' no longer identifies as install media (expected volume '{volume}') — it \
@@ -1602,6 +1622,7 @@ mod tests {
             media_paths,
             user_startup: Vec::new(),
             activations: Vec::new(),
+            media_stamps: BTreeMap::new(),
         };
         (plan, dir)
     }
@@ -1670,6 +1691,7 @@ mod tests {
             media_paths,
             user_startup: Vec::new(),
             activations: Vec::new(),
+            media_stamps: BTreeMap::new(),
         };
         (plan, dir)
     }
@@ -1733,6 +1755,7 @@ mod tests {
             media_paths,
             user_startup: Vec::new(),
             activations: Vec::new(),
+            media_stamps: BTreeMap::new(),
         };
 
         let root = dir.join("dist");
@@ -1847,6 +1870,7 @@ mod tests {
             media_paths,
             user_startup: Vec::new(),
             activations: Vec::new(),
+            media_stamps: BTreeMap::new(),
         };
 
         let root = dir.join("dist");
@@ -2110,6 +2134,93 @@ mod tests {
             outcome.files,
             "the manifest must name exactly the files ApplyOutcome counted"
         );
+    }
+
+    // ---- Is this still the disc the preview described? ----
+    //
+    // `apply` asks whether the file is still *a* `Workbench3.2`. These ask
+    // whether it is *the* one. A different disc of the same name used to
+    // build silently while the screen described the old one.
+
+    /// **The disc was swapped between the preview and the build.**
+    ///
+    /// Asserted by changing the file on disk after planning, which is the
+    /// thing that actually happens — a check written against a hand-edited
+    /// `media_stamps` would prove the comparison and not the stamping.
+    #[test]
+    fn a_medium_that_changed_since_the_preview_is_refused_by_name() {
+        let (plan, dir) = fixtures::planned_with(&["workbench-base"], &["Workbench3.2"], Some(47));
+        assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
+        assert!(
+            !plan.media_stamps.is_empty(),
+            "the plan has to have recorded what it saw"
+        );
+
+        // Somebody puts a different disk of the same name in the folder.
+        let medium = plan
+            .media_paths
+            .get("Workbench3.2")
+            .expect("the plan resolved it")
+            .clone();
+        let mut bytes = std::fs::read(&medium).unwrap();
+        bytes.extend_from_slice(&[0u8; 512]);
+        std::fs::write(&medium, &bytes).unwrap();
+
+        let root = dir.join("dist");
+        let err = apply(&plan, &root, &NoProgress).expect_err("the swap must be refused");
+        let text = err.to_string();
+        assert!(
+            text.contains(&medium.display().to_string()),
+            "the refusal must name the medium: {text}"
+        );
+        assert!(
+            text.contains("previewed"),
+            "and say what is wrong with it: {text}"
+        );
+        assert!(
+            !root.exists() || std::fs::read_dir(&root).unwrap().next().is_none(),
+            "and nothing may have been written from the wrong disc"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The ordinary case still builds. A check that refused everything would
+    /// pass the test above and be useless.
+    #[test]
+    fn an_unchanged_medium_builds_exactly_as_before() {
+        let (plan, dir) = fixtures::planned_with(&["workbench-base"], &["Workbench3.2"], Some(47));
+        let root = dir.join("dist");
+        let outcome =
+            apply(&plan, &root, &NoProgress).expect("nothing changed, so nothing refuses");
+        assert!(outcome.files > 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A plan from an older ART carries no stamps at all, and must still
+    /// build — `#[serde(default)]` gives it an empty map, and an empty map
+    /// means "nothing was recorded", never "everything changed".
+    #[test]
+    fn a_plan_that_recorded_no_stamps_is_not_treated_as_a_changed_disc() {
+        let (mut plan, dir) =
+            fixtures::planned_with(&["workbench-base"], &["Workbench3.2"], Some(47));
+        plan.media_stamps.clear();
+
+        // Change the medium too, so the only thing letting this through is
+        // the absent stamp rather than the file happening to match.
+        let medium = plan.media_paths.get("Workbench3.2").unwrap().clone();
+        let mut bytes = std::fs::read(&medium).unwrap();
+        bytes.extend_from_slice(&[0u8; 512]);
+        std::fs::write(&medium, &bytes).unwrap();
+
+        let root = dir.join("dist");
+        assert!(
+            apply(&plan, &root, &NoProgress).is_ok(),
+            "an old plan must not be refused for a check it never recorded"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ---- Activation: what the media leaves on the shelf, switched on ----
@@ -2681,6 +2792,7 @@ mod tests {
             media_paths,
             user_startup: Vec::new(),
             activations: Vec::new(),
+            media_stamps: BTreeMap::new(),
         };
 
         let root = dir.join("dist");

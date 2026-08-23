@@ -2402,6 +2402,7 @@ mod tests {
             package_media: BTreeMap::new(),
             user_startup: Vec::new(),
             activations: Vec::new(),
+            media_stamps: BTreeMap::new(),
         };
         (dir, plan)
     }
@@ -2801,6 +2802,7 @@ mod tests {
             package_media: BTreeMap::new(),
             user_startup: Vec::new(),
             activations: Vec::new(),
+            media_stamps: BTreeMap::new(),
         };
 
         let preview =
@@ -3838,6 +3840,7 @@ mod tests {
                     "items",
                     "refusals",
                     "activations",
+                    "mediaStamps",
                     "totalBytes",
                     "totalFiles",
                     "componentsOn",

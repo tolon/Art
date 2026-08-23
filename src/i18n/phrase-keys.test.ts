@@ -913,6 +913,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
         packageMedia: {},
         userStartup: [],
         activations: [],
+        mediaStamps: {},
       },
     };
     const ready = {

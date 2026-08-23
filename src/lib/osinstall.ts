@@ -221,6 +221,16 @@ export interface UserStartupContribution {
  * refusal at all empties `items` and `mediaPaths`; check `refusals.length`
  * to tell the two cases apart.
  */
+/** What a medium looked like when the plan was made — enough to notice a
+ *  different disc of the same name, and deliberately not a hash: planning
+ *  runs again on every tick, and hashing a 469 MB disc each time is what
+ *  ART-195 was about. */
+export interface MediaStamp {
+  size: number;
+  /** 0 when the platform gave no modification time. */
+  mtimeNanos: number;
+}
+
 /** One switch the finished tree will have flipped, and who asked for it. */
 export interface PlannedActivation {
   component: string;
@@ -245,6 +255,10 @@ export interface InstallPlan {
    *  AmigaOS actually reads it. Empty unless a recipe asks; nothing shipped
    *  does. */
   activations: PlannedActivation[];
+  /** What each medium looked like when this plan was made, by volume name.
+   *  `apply` refuses a disc that has changed since the preview — the name
+   *  check alone could not tell one `Workbench3.2` from another. */
+  mediaStamps: Record<string, MediaStamp>;
   /** The files the finished tree will hold, on the same one-per-destination
    *  rule. Not `items.length`, which is the work: the owner's real 3.9 disc
    *  planned 1517 items and produced 1242 files and 105 drawers. */

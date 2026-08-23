@@ -200,6 +200,46 @@ pub struct PlanItem {
     pub bytes: u64,
 }
 
+/// What a medium looked like when the plan was made.
+///
+/// # The hole this closes
+///
+/// `apply` re-identifies every medium by **volume name** and refuses one that
+/// has been renamed, removed or replaced by something that is not install
+/// media at all. What it could not see was a *different disc with the same
+/// name*: swap `Workbench3.2.adf` for another `Workbench3.2.adf` between the
+/// preview and the build, and ART would build from the new one while the
+/// screen described the old one. The hash `apply` computes goes into
+/// `distribution.json` **after** the fact, so nothing compared.
+///
+/// Found on 2026-08-23 while reviewing `jit06/emu68-bootstrap`, whose own FAQ
+/// makes the principle its first line — *"the tool inspects file contents
+/// rather than filenames"* — and applied to ART's own weak point rather than
+/// to the problem that project has.
+///
+/// # Why `(size, mtime)` and not a hash
+///
+/// Free. `plan` runs again on every component the user ticks, and hashing a
+/// 469 MB disc each time is what ART-195 was filed about. A `stat` costs
+/// nothing and catches every ordinary swap, because a different file almost
+/// never has both the same length and the same modification time.
+///
+/// **What it does not catch, said plainly**: a disc restored from a backup
+/// that preserved its timestamps, of the same size, with different contents.
+/// That is ART-194's own documented case — *"same path, same size, same
+/// mtime, different disc is a real arrangement"* — and the answer to it is
+/// the same one: **Scan again**, which forgets every listing and reads the
+/// discs afresh.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaStamp {
+    pub size: u64,
+    /// `0` when the platform will not give a modification time — the check
+    /// then rests on size alone, which is weaker and is still better than
+    /// the name alone.
+    pub mtime_nanos: u64,
+}
+
 /// One switch the finished tree will have flipped, and who asked for it.
 ///
 /// Resolved at plan time from [`super::Component::activate`], and **checked
@@ -357,6 +397,15 @@ pub struct InstallPlan {
     /// before this field existed must still deserialise.
     #[serde(default)]
     pub activations: Vec<PlannedActivation>,
+    /// What each medium looked like when this plan was made — see
+    /// [`MediaStamp`]. Keyed by volume name, like [`InstallPlan::media_paths`].
+    ///
+    /// `#[serde(default)]`: an `InstallPlan` round-trips through the wire, and
+    /// one serialised before this field existed must still deserialise. An
+    /// empty map means "this plan recorded nothing", which `apply` reads as
+    /// nothing to check rather than as everything having changed.
+    #[serde(default)]
+    pub media_stamps: BTreeMap<String, MediaStamp>,
 }
 
 /// What the user asked for.
@@ -1242,6 +1291,24 @@ fn plan_over_with_cache(
         .collect();
     refusals.extend(detect_missing_activations(&items, &activations));
 
+    // Stamped from the paths the plan resolved, before anything empties them.
+    // A medium that cannot be stat-ed is simply not stamped: `apply` reads a
+    // missing stamp as "nothing was recorded", never as "it changed".
+    let media_stamps: BTreeMap<String, MediaStamp> = media_paths
+        .iter()
+        .filter_map(|(volume, path)| {
+            super::scan_cache::identity_of(path).map(|id| {
+                (
+                    volume.clone(),
+                    MediaStamp {
+                        size: id.size,
+                        mtime_nanos: id.mtime_nanos,
+                    },
+                )
+            })
+        })
+        .collect();
+
     let (items, media_paths, package_media) = if refusals.is_empty() {
         (items, media_paths, package_media)
     } else {
@@ -1281,6 +1348,7 @@ fn plan_over_with_cache(
         package_media,
         user_startup,
         activations,
+        media_stamps,
     })
 }
 
