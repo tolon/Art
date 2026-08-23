@@ -92,20 +92,48 @@ nothing loads, and something has to move it. HstWB moves it. ART emits no line
 that could. (HstWB leaves `NSDPatch.cfg.BB39-2` alone — that file is
 user-editable configuration and a reference copy is the right shape for it.)
 
-**What is NOT measured, and the run that would settle it.** No BoingBag'd tree
-survives on this machine: `bb-run/p1`, `bb-run/p2`, `bb-run2/b1` and
-`dist-3.9-bb` all hold **3 795 files**, which is the *pre*-install count — the
-successful run went 3 795 → 3 859 and its promoted result is gone. So it is
-**not confirmed** that an ART-installed tree ends up with
-`Devs/AmigaOS ROM Update.BB39-2` un-rotated; what is confirmed is that the
-payload carries it and that ART's script cannot rotate it. One run of
-`real_install_hook::install_a_real_package_when_asked` with BoingBag 2, then
-`ls Devs/`, closes that gap — and it is worth doing before the fix, so the
-before-state is on record rather than inferred.
+**Measured 2026-08-24, before any fix, exactly as this entry said it should
+be.** A pre-BoingBag 3.9 tree was copied (3 795 files; `Devs/AMIGAOS ROM
+UPDATE` = **127 956 bytes**, the CD's own), then both BoingBags were installed
+through `real_install_hook::install_a_real_package_when_asked` against the
+owner's own material: BB1 `Succeeded`/`Promoted` in **170.7 s** → 3 859 files,
+BB2 in **138.1 s** → **3 868 files / 20 533 434 bytes**, byte-identical to the
+2026-08-21 run this project already recorded. So the installs work and
+reproduce; what follows is what they leave behind.
 
-Also unmeasured, and named because it is the honest alternative: whether the
-`Updater` performs any of these itself on some pressing. HstWB doing them
-*suggests* it does not, and a suggestion is not a measurement.
+`Devs/` afterwards:
+
+| file | bytes | |
+|---|---|---|
+| `AMIGAOS ROM UPDATE` | **127 956** | the CD's own — **still the one `SetPatch` loads** |
+| `AmigaOS ROM Update.BB39-2` | **321 768** | BoingBag 2's — **inert, under a name nothing reads** |
+| `NSDPATCH.CFG` | 29 929 | the CD's own |
+| `NSDPatch.cfg-BB3.9-1` | 30 086 | BoingBag 1's |
+| `NSDPatch.cfg.BB39-2` | 32 635 | BoingBag 2's |
+
+**So the defect is confirmed on real material rather than inferred.** The
+whole tree carries four suffixed leftovers — those three plus
+`S/Startup-Sequence-BB3.9-1` — and HstWB rotates exactly one of them, the ROM
+update. The others are reference copies and leaving them is right.
+
+**A sentence of mine, corrected in the same pass.** Reading BoingBag 1's
+payload I said it leaves no suffixed file. It leaves `NSDPatch.cfg-BB3.9-1`;
+my search looked for `BB39` and BoingBag 1 spells its suffix `-BB3.9-1`. The
+two BoingBags do not agree with each other about the punctuation, which is
+itself a reason for the fix to name files rather than derive them from a
+pattern.
+
+**And the protection bits are measured too.** After ART's BoingBag 1, the
+seven commands HstWB sets `+prwed` on:
+
+    LoadMonDrvs ----rwed   LoadResource ----rwed   MakeDir ----rwed
+    MakeLink    ----rwed   WBInfo       ----rwed   SetEnv / WBRun: no .uaem
+
+**Not one has the `p` bit**, and `S/Start-Amplifier.rexx` is `----rwed` where
+HstWB sets `+srwed`. So the `Updater` does not set them and neither does ART —
+which also answers the alternative this entry named as honest: **the `Updater`
+does not perform these itself**, at least not on this pressing. That is now a
+measurement rather than a suggestion drawn from HstWB bothering to do them.
 
 **Why this is 🟠 and not 🔴.** The 2026-08-21 run's evidence stands — the tree
 boots and answers `Workbench 45.3 (07-Dec-01)`, `version.library 45.3`,
@@ -125,10 +153,36 @@ before the result marker. Two things that must not be got wrong:
   script field would drive a hole straight through that. A small vocabulary —
   *protect*, *copy-if-target-exists*, *rotate-aside-then-replace*,
   *run-if-library-older-than* — covers everything above and stays checkable.
+  **Build only what is measured as needed**: today that is *rotate* (the ROM
+  update) and *protect* (the missing `p` bits). The other three are HstWB's
+  and have not been shown necessary against ART's own result.
 - **The result marker must still be the installer's.** A post-step that fails
   is not the installer failing, and collapsing the two would produce exactly
   the "four endings, one sentence" defect this project keeps meeting. A failed
-  fix-up needs its own ending.
+  fix-up needs its own ending, which means a variant on `RunOutcome` rather
+  than a `Warn` folded into the existing two.
+- **The quoting problem, which is the reason this is not a small change.**
+  The file to rotate is `Devs/AmigaOS ROM Update` — **it has spaces in its
+  name** — and `core/amigainstall` cannot currently express that. Its own
+  module documentation says why, and says it deliberately:
+  `refuse_shell_metacharacters` refuses `"` *"since a quote changes where a
+  string ends"*, the generated line joins program and arguments with spaces,
+  and `one_token` therefore refuses any composed value carrying whitespace —
+  *"AmigaDOS names legitimately contain spaces, which is why this is a
+  refusal with a sentence and not a silent rewrite."* That refusal was right
+  for its case and is wrong for this one.
+
+  **The distinction that resolves it, stated so the fix does not simply
+  weaken the gate.** The quote ban exists because ART cannot tell a path from
+  a keyword in *an installer's own argument list* — a program it did not
+  write. A post-step's fields are different in kind: ART **defines** them as
+  paths, so it knows what they are and may quote them itself. The safe rule
+  is therefore: refuse `"` and control characters *inside* the value (which
+  `refuse_shell_metacharacters` already does), then emit the value wrapped in
+  quotes. Quoting is only dangerous when the string might contain a quote,
+  and here it provably cannot. `one_token` must **not** be applied to these
+  fields — that is the one existing check the new path deliberately does not
+  reuse, and the reason belongs in the code beside it.
 
 **ART-226** 🟠 **Every tree ART builds has an empty `Devs/Keymaps`, so whatever
 language the user chose they can only type on an American keyboard — and for
