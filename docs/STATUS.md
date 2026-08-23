@@ -703,9 +703,9 @@ alone, and two were not looked at. The two that matter:
   round trip itself now has its own tests (`src/lib/paneSession.ts`), added
   because the acceptance walk said it had none.
 
-### ⏳ PiStorm Image Builder — SD-0 … SD-5 (planned, not started)
+### ⏳ PiStorm Image Builder — SD-0 … SD-5 (SD-0, SD-1, SD-2 and SD-4 built; SD-3 and SD-5 planned)
 
-**This is the project's largest unbuilt feature and, per the user, its point.**
+**This was the project's largest unbuilt feature and, per the user, its point.** Read the table below with its own correction in mind: four of the six phases are built, SD-4 among them, and what SD-1 has left is a card flashed rather than a line of code.
 
 Gap analysis: [sd-appliance-gap-analysis.md](sd-appliance-gap-analysis.md)
 (2026-08-11, from the PiStorm multiboot architecture; rescoped 2026-08-12). It
@@ -797,7 +797,7 @@ one machine, not the line.
 | **SD-1** | The image has a shape: MBR + FAT32 boot partition (**G2 — done 2026-08-13/14, engine and screen**), RDB filesystem embedding FSHD/LSEG (**G4 — done**, also closed ART-084), build manifest (**G7 — done 2026-08-15**, with 7-Zip answering the half ART cannot check), image validation (**G8 — done 2026-08-15**), a build as a drop target (**G15 — done 2026-08-15**). **Every gap in SD-1 is built; what is left is a card flashed and booted** |
 | **SD-2** | Content, preloaded: PFS3 via `hst-imager` (**G3 route E — done 2026-08-15, engine *and* screen**; route D dropped: E was already proven and needs no Kickstart), OS install engine (**G5 — done 2026-08-16, engine *and* screen**), ROM pairing (**G9 — done 2026-08-17, engine *and* screen**: the preload screen says whether a card's Kickstart suits the volume about to be written, and warns without blocking), launcher metadata export (G10), layout policy (**G11 — done 2026-08-15, engine *and* screen**: a pile of dropped files becomes a staging tree, not yet driven against real material and no staging tree has reached a card) |
 | **SD-3** | It is *mine*: wallpaper, WiFi, prefs and Startup-Sequence, each edited in place (G14); multiboot as several complete environments and a boot menu (G16) |
-| **SD-4** | The flagship: native PFS3 write in ART (G3 route B) — its own brief; route D's harness becomes its oracle |
+| **SD-4** | ✅ **Built, and this row said otherwise until 2026-08-24.** It read *"the flagship: native PFS3 write in ART (G3 route B) — its own brief"*, which stopped being true when `libpfs3` arrived: `core/preload/native.rs` implements `VolumeFormatter` over it and over ART's own FFS writer, it is the **default** with `hst-imager` a named fallback for two typed gaps ([ART-120](ISSUES.md#fixed)), it is checked in both directions by an independent `hst-imager` oracle, and a PFS3 volume ART formatted booted a licensed Kickstart. Route D's harness never became its oracle because route D was dropped and the `hst-imager` one serves. What is left of SD-4 is nothing |
 | **SD-5** | Comfort: capacity planner and build profiles (G13) |
 
 *The old SD-2 ("the card exists") is gone with G1, and everything after it
@@ -967,6 +967,14 @@ closing it.** The open register is **five**: ART-166, ART-118, ART-062,
 ART-117, ART-130 — every remaining one is either the owner's standing decision
 or a job that needs a person at a screen. Merged to `main`; the two commits
 before this round were pushed at the start of it.
+
+**The whole list, in an order that can be walked top to bottom, is
+[superpowers/specs/2026-08-24-work-list.md](superpowers/specs/2026-08-24-work-list.md)**
+(2026-08-24, supersedes the 2026-08-22 one). Eighteen numbered steps plus a
+short "not in the sequence" list with reasons, and it carries the two
+corrections the refresh found — SD-4 is built, and the old A–E lettering is
+dropped rather than re-lettered. The four lines below are kept because they
+are what a reader of this block expects to see; the file is the list.
 
 **What is owed, in order, unchanged in shape:**
 
