@@ -10,3 +10,6 @@
 //! Nothing else in ART may open a connection.
 
 pub mod http_mirror;
+
+#[cfg(test)]
+mod live_aminet;
